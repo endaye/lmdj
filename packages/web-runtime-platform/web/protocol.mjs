@@ -36,10 +36,15 @@ export const HOST_OPERATIONS = Object.freeze([
   "audio.activate",
   "audio.suspend",
   "trigger",
-  "take.begin",
-  "take.stop",
-  "take.commit",
-  "take.recoverable.list",
+  "sequence.record.begin",
+  "sequence.record.event",
+  "sequence.record.flush",
+  "sequence.record.stop",
+  "sequence.record.switch-request",
+  "sequence.record.status",
+  "sequence.recovery.list",
+  "sequence.recovery.apply",
+  "sequence.recovery.discard",
   "host.close",
 ]);
 
@@ -54,6 +59,7 @@ export const HOST_NOTIFICATIONS = Object.freeze([
   "runtime.warning",
   "runtime.trigger_outcomes",
   "runtime.voice_state",
+  "sequence.bar_boundary",
   "capture.sealed",
 ]);
 
@@ -67,6 +73,9 @@ const SHORT_OPERATIONS = new Set([
   "sample.preview.set",
   "sample.preview.clear",
   "sample.stop",
+  "sequence.record.event",
+  "sequence.record.status",
+  "sequence.recovery.list",
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -280,6 +289,61 @@ function requireSampleOperationPayload(operation, payload) {
         (hasExactKeys(payload, ["slot", "kind"]) &&
           isUnsignedInteger(payload.slot, 63) &&
           payload.kind === "release");
+      break;
+    case "sequence.record.begin":
+      valid =
+        hasExactKeys(payload, [
+          "session_id",
+          "pattern_id",
+          "expected_revision",
+        ]) &&
+        UUID_PATTERN.test(payload.session_id) &&
+        UUID_PATTERN.test(payload.pattern_id) &&
+        isUnsignedInteger(payload.expected_revision);
+      break;
+    case "sequence.record.event":
+      valid =
+        hasExactKeys(payload, ["session_id", "event"]) &&
+        UUID_PATTERN.test(payload.session_id) &&
+        hasExactKeys(payload.event, ["slot", "velocity", "pressed"]) &&
+        validSlot(payload.event.slot) &&
+        isUnsignedInteger(payload.event.velocity, 127) &&
+        typeof payload.event.pressed === "boolean" &&
+        (payload.event.pressed
+          ? payload.event.velocity > 0
+          : payload.event.velocity === 0);
+      break;
+    case "sequence.record.flush":
+    case "sequence.record.stop":
+      valid =
+        hasExactKeys(payload, ["session_id", "command_id"]) &&
+        UUID_PATTERN.test(payload.session_id) &&
+        UUID_PATTERN.test(payload.command_id);
+      break;
+    case "sequence.record.switch-request":
+      valid =
+        hasExactKeys(payload, ["session_id", "next_pattern_id"]) &&
+        UUID_PATTERN.test(payload.session_id) &&
+        UUID_PATTERN.test(payload.next_pattern_id);
+      break;
+    case "sequence.record.status":
+    case "sequence.recovery.list":
+      valid =
+        hasExactKeys(payload, []) ||
+        (hasExactKeys(payload, ["project_id"]) &&
+          UUID_PATTERN.test(payload.project_id));
+      break;
+    case "sequence.recovery.apply":
+      valid =
+        hasExactKeys(payload, ["session_id", "destination_pattern_id"]) &&
+        UUID_PATTERN.test(payload.session_id) &&
+        (payload.destination_pattern_id === null ||
+          UUID_PATTERN.test(payload.destination_pattern_id));
+      break;
+    case "sequence.recovery.discard":
+      valid =
+        hasExactKeys(payload, ["session_id"]) &&
+        UUID_PATTERN.test(payload.session_id);
       break;
     default:
       return;

@@ -219,7 +219,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 33> operations{
+  static constexpr std::array<std::string_view, 38> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -248,10 +248,15 @@ bool supported_operation(std::string_view operation) {
       "audio.activate",
       "audio.suspend",
       "trigger",
-      "take.begin",
-      "take.stop",
-      "take.commit",
-      "take.recoverable.list",
+      "sequence.record.begin",
+      "sequence.record.event",
+      "sequence.record.flush",
+      "sequence.record.stop",
+      "sequence.record.switch-request",
+      "sequence.record.status",
+      "sequence.recovery.list",
+      "sequence.recovery.apply",
+      "sequence.recovery.discard",
       "host.close",
   };
   return std::find(operations.begin(), operations.end(), operation) !=
@@ -512,6 +517,7 @@ struct ControlBridge::Impl {
     }
     MessageSlot* outcome_message = nullptr;
     MessageSlot* voice_message = nullptr;
+    MessageSlot* boundary_message = nullptr;
     try {
       static_cast<void>(runtime.drain_capture());
 #if !defined(__EMSCRIPTEN__)
@@ -655,6 +661,37 @@ struct ControlBridge::Impl {
         }
         voice_message = nullptr;
       }
+
+      boundary_message = reserve_message();
+      if (boundary_message == nullptr) {
+        return;
+      }
+      const auto boundary = runtime.drain_sequence_bar_boundary();
+      if (!boundary.has_value()) {
+        boundary_message->state.store(
+            MessageState::free, std::memory_order_release);
+        boundary_message = nullptr;
+      } else if (!publish_message(
+                     *boundary_message,
+                     Json{
+                         {"protocol_version", 1},
+                         {"event", "sequence.bar_boundary"},
+                         {"payload",
+                          {{"session_id", boundary->session_id},
+                           {"pattern_id", boundary->pattern_id},
+                           {"runtime_frame", boundary->runtime_frame},
+                           {"generation", boundary->generation}}},
+                     },
+                     nullptr,
+                     false)) {
+        boundary_message->state.store(
+            MessageState::free, std::memory_order_release);
+        boundary_message = nullptr;
+        fail_control();
+        return;
+      } else {
+        boundary_message = nullptr;
+      }
     } catch (...) {
       if (outcome_message != nullptr) {
         outcome_message->state.store(
@@ -662,6 +699,10 @@ struct ControlBridge::Impl {
       }
       if (voice_message != nullptr) {
         voice_message->state.store(
+            MessageState::free, std::memory_order_release);
+      }
+      if (boundary_message != nullptr) {
+        boundary_message->state.store(
             MessageState::free, std::memory_order_release);
       }
       fail_control();

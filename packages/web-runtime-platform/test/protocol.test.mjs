@@ -131,10 +131,15 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "audio.activate",
     "audio.suspend",
     "trigger",
-    "take.begin",
-    "take.stop",
-    "take.commit",
-    "take.recoverable.list",
+    "sequence.record.begin",
+    "sequence.record.event",
+    "sequence.record.flush",
+    "sequence.record.stop",
+    "sequence.record.switch-request",
+    "sequence.record.status",
+    "sequence.recovery.list",
+    "sequence.recovery.apply",
+    "sequence.recovery.discard",
     "host.close",
   ]);
   assert.deepEqual(HOST_NOTIFICATIONS, [
@@ -148,6 +153,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "runtime.warning",
     "runtime.trigger_outcomes",
     "runtime.voice_state",
+    "sequence.bar_boundary",
     "capture.sealed",
   ]);
 });
@@ -414,6 +420,9 @@ test("uses exact operation-class deadlines", () => {
     "sample.preview.set",
     "sample.preview.clear",
     "sample.stop",
+    "sequence.record.event",
+    "sequence.record.status",
+    "sequence.recovery.list",
   ]) {
     assert.equal(deadlineForOperation(operation), DEADLINES_MS.short);
   }
@@ -428,6 +437,9 @@ test("uses exact operation-class deadlines", () => {
         "sample.preview.set",
         "sample.preview.clear",
         "sample.stop",
+        "sequence.record.event",
+        "sequence.record.status",
+        "sequence.recovery.list",
       ].includes(
         operation,
       ),

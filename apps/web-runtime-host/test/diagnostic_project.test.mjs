@@ -129,6 +129,12 @@ function diagnosticBindings(transport) {
       reloadSnapshot(patternId) {
         return send("snapshot.reload", {pattern_id: patternId});
       },
+      querySequenceStatus(projectId) {
+        return send("sequence.record.status", {project_id: projectId});
+      },
+      listSequenceRecovery(projectId) {
+        return send("sequence.recovery.list", {project_id: projectId});
+      },
     },
     diagnosticClient: {
       createProject(payload) {
@@ -276,6 +282,38 @@ test("reuses only a valid exact locator and replaces malformed values before tra
       assert.deepEqual(JSON.parse(storage.value()), result);
     }
   }
+});
+
+test("observes shared Sequence authority without acquiring Project ownership", async () => {
+  const fixture = coordinator({entries: [
+    {
+      operation: "sequence.record.status",
+      result: {state: "switching"},
+      verify({payload}) {
+        assert.deepEqual(payload, {project_id: PROJECT_ID});
+      },
+    },
+    {
+      operation: "sequence.recovery.list",
+      result: [{reason: "owner_lost"}],
+      verify({payload}) {
+        assert.deepEqual(payload, {project_id: PROJECT_ID});
+      },
+    },
+  ]});
+
+  assert.deepEqual(await fixture.coordinator.refreshSequenceAuthority(), {
+    state: "switching",
+    switch_pending: true,
+    recovery_count: 1,
+  });
+  assert.deepEqual(fixture.coordinator.diagnostics(), {
+    diagnostic_project_state: "idle",
+    diagnostic_sequence_state: "switching",
+    diagnostic_sequence_switch_pending: true,
+    diagnostic_sequence_recovery_count: 1,
+  });
+  fixture.transport.assertDrained();
 });
 
 test("fresh preparation creates, inspects, imports, assigns all pads, and publishes", async () => {

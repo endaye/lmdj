@@ -2461,6 +2461,150 @@ test("Chromium claimed asset.import publication hang becomes restart-required an
 });
 
 
+test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer status", async ({
+  browserName,
+  context,
+  page,
+}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(420_000);
+  await openPackagedHost(page);
+  await page.locator("#diagnostic-project-load").click();
+  await waitForDiagnosticProjectReady(page);
+  const descriptor = await page.evaluate((storageKey) =>
+    JSON.parse(localStorage.getItem(storageKey)),
+  DIAGNOSTIC_PROJECT_STORAGE_KEY);
+  await activateWithGesture(page);
+
+  const firstSessionId = crypto.randomUUID();
+  const firstCommandId = crypto.randomUUID();
+  const begun = await page.evaluate(({sessionId, patternId, expectedRevision}) =>
+    window.lmdjWebRuntimeController.beginSequence({
+      sessionId,
+      patternId,
+      expectedRevision,
+    }), {
+    sessionId: firstSessionId,
+    patternId: descriptor.pattern_id,
+    expectedRevision: PREPARED_PROJECT_REVISION,
+  });
+  expect(begun).toMatchObject({
+    state: "active",
+    sessionId: firstSessionId,
+    patternId: descriptor.pattern_id,
+    expectedRevision: PREPARED_PROJECT_REVISION,
+    transportAnchor: {bpm: 120, tickNumerator: 0},
+  });
+  const recorded = await page.evaluate(async ({sessionId}) => {
+    const press = await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId,
+      slot: 0,
+      velocity: 100,
+      pressed: true,
+    });
+    const release = await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId,
+      slot: 0,
+      velocity: 0,
+      pressed: false,
+    });
+    return {press, release};
+  }, {sessionId: firstSessionId});
+  expect(recorded.press.inputSequence).toBe(1);
+  expect(recorded.release.inputSequence).toBe(2);
+  expect(recorded.release.runtimeFrame).toBeGreaterThanOrEqual(
+    recorded.press.runtimeFrame,
+  );
+
+  const observer = await context.newPage();
+  await openPackagedHost(observer);
+  const observed = await observer.evaluate((projectId) =>
+    window.lmdjWebRuntimeController.querySequenceStatus(projectId),
+  descriptor.project_id);
+  expect(observed).toMatchObject({
+    state: "active",
+    sessionId: firstSessionId,
+    patternId: descriptor.pattern_id,
+    pendingEventCount: 0,
+  });
+  expect(await hostRequest(observer, "project.open", {
+    project_id: descriptor.project_id,
+    pattern_id: descriptor.pattern_id,
+  })).toMatchObject({ok: false, error: {code: "PROJECT_BUSY"}});
+  expect(await observer.evaluate(() =>
+    window.lmdjWebRuntimeController.refreshSequenceDiagnostics()))
+    .toEqual({state: "active", switch_pending: false, recovery_count: 0});
+  expect(await observer.evaluate(() =>
+    window.lmdjWebRuntimeController.close())).toBe(true);
+  await observer.close();
+
+  const stopped = await page.evaluate(({sessionId, commandId}) =>
+    window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
+  {sessionId: firstSessionId, commandId: firstCommandId});
+  expect(stopped).toMatchObject({
+    state: "inactive",
+    committedRevision: PREPARED_PROJECT_REVISION + 1,
+    replayed: false,
+  });
+  const replayed = await page.evaluate(({sessionId, commandId}) =>
+    window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
+  {sessionId: firstSessionId, commandId: firstCommandId});
+  expect(replayed).toMatchObject({
+    committedRevision: stopped.committedRevision,
+    replayed: true,
+  });
+
+  const secondSessionId = crypto.randomUUID();
+  const secondCommandId = crypto.randomUUID();
+  await page.evaluate(({sessionId, patternId, expectedRevision}) =>
+    window.lmdjWebRuntimeController.beginSequence({
+      sessionId,
+      patternId,
+      expectedRevision,
+    }), {
+    sessionId: secondSessionId,
+    patternId: descriptor.pattern_id,
+    expectedRevision: stopped.committedRevision,
+  });
+  await page.evaluate(async ({sessionId}) => {
+    await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 0, velocity: 127, pressed: true,
+    });
+    await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 0, velocity: 0, pressed: false,
+    });
+  }, {sessionId: secondSessionId});
+  const overdubbed = await page.evaluate(({sessionId, commandId}) =>
+    window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
+  {sessionId: secondSessionId, commandId: secondCommandId});
+  expect(overdubbed).toMatchObject({
+    committedRevision: stopped.committedRevision + 1,
+    replayed: false,
+  });
+  const truth = success(await hostRequest(page, "project.inspect", {}),
+    "Stage 9 inspect overdub truth");
+  const pattern = truth.project.patterns[descriptor.pattern_id];
+  expect(pattern.events).toHaveLength(2);
+  expect(pattern.events.every(({slot}) =>
+    slot.bank === 0 && slot.pad === 0)).toBe(true);
+  expect(pattern.events.map(({velocity}) => velocity).sort((left, right) =>
+    left - right)).toEqual([100, 127]);
+  expect(pattern.events[0].onset_tick).toBeLessThan(
+    pattern.events[1].onset_tick,
+  );
+  expect(pattern.events.every(({duration_tick: durationTick}) =>
+    durationTick > 0)).toBe(true);
+  expect(success(await hostRequest(page, "snapshot.reload", {
+    pattern_id: descriptor.pattern_id,
+  }), "Stage 9 reload-visible truth")).toMatchObject({
+    project_revision: overdubbed.committedRevision,
+    runtime_ready: true,
+  });
+  expect(await page.evaluate(() =>
+    window.lmdjWebRuntimeController.close())).toBe(true);
+});
+
+
 test("WebKit records capability limitation or completes protocol OPFS restart lifecycle smoke", async ({
   browserName,
   page,

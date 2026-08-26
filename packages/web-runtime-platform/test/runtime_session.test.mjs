@@ -10,28 +10,38 @@ const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const API = [
   "activateAudio",
+  "applySequenceRecovery",
+  "beginSequence",
   "clearSamplePreview",
   "close",
   "diagnostics",
+  "discardSequenceRecovery",
+  "flushSequence",
   "importProject",
   "importAssignSample",
   "inspectSample",
   "inspectProject",
   "listLocalProjects",
+  "listSequenceRecovery",
   "openProject",
   "queryWaveform",
+  "querySequenceStatus",
+  "recordSequenceEvent",
   "release",
   "reloadSnapshot",
   "requestMidi",
+  "requestPatternSwitch",
   "resetPad",
   "retryPrepare",
   "setSamplePreview",
   "start",
   "subscribeDiagnostics",
   "stopAll",
+  "stopSequence",
   "stopPad",
   "subscribeHostState",
   "subscribeRuntimeOutcome",
+  "subscribeSequenceBarBoundary",
   "subscribeVoiceState",
   "suspendAudio",
   "trigger",
@@ -473,6 +483,164 @@ test("owns the exact Host-neutral surface and lifecycle", async () => {
     errorDetails: {},
   });
   assert.equal(terminated(), 1);
+});
+
+test("bridges Sequence authority without browser musical-clock math", async () => {
+  const sessionId = "10000000-0000-4000-8000-000000000001";
+  const patternId = "20000000-0000-4000-8000-000000000002";
+  const nextPatternId = "20000000-0000-4000-8000-000000000003";
+  const commandId = "30000000-0000-4000-8000-000000000004";
+  const operations = [];
+  const baseStatus = {
+    state: "active",
+    session_id: sessionId,
+    pattern_id: patternId,
+    pending_pattern_id: null,
+    expected_revision: 5,
+    next_flush_seq: 0,
+    pending_event_count: 0,
+    effective_runtime_frame: null,
+  };
+  const mutation = {
+    ...baseStatus,
+    committed_revision: null,
+    replayed: false,
+    project_revision: 5,
+  };
+  const {session, emitNotification} = fixture({
+    send: async (envelope) => {
+      operations.push({operation: envelope.operation, payload: envelope.payload});
+      switch (envelope.operation) {
+        case "sequence.record.begin":
+          return success(envelope, {
+            ...mutation,
+            transport_anchor: {
+              runtime_frame: 48_000,
+              tick_numerator: 0,
+              bpm: 120,
+            },
+          });
+        case "sequence.record.event":
+          return success(envelope, {
+            ...mutation,
+            pending_event_count: 1,
+            runtime_frame: 48_120,
+            input_sequence: 1,
+          });
+        case "sequence.record.flush":
+        case "sequence.record.stop":
+          return success(envelope, {
+            ...mutation,
+            runtime_frame: 48_240,
+            pattern_publication: null,
+          });
+        case "sequence.record.switch-request":
+          return success(envelope, {
+            ...mutation,
+            state: "switching",
+            pending_pattern_id: nextPatternId,
+            effective_runtime_frame: 96_000,
+            pattern_publication: {
+              generation: 2,
+              activation_frame: 96_000,
+            },
+          });
+        case "sequence.record.status":
+          return success(envelope, {...baseStatus, project_revision: null});
+        case "sequence.recovery.list":
+          return success(envelope, {
+            candidates: [{
+              session_id: sessionId,
+              pattern_id: patternId,
+              bars: 1,
+              reason: "owner_lost",
+              event_count: 1,
+            }],
+            project_revision: null,
+          });
+        case "sequence.recovery.apply":
+          return success(envelope, mutation);
+        case "sequence.recovery.discard":
+          return success(envelope, {
+            session_id: sessionId,
+            discarded: true,
+            project_revision: null,
+          });
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  await session.start();
+  const boundaries = [];
+  session.subscribeSequenceBarBoundary((value) => boundaries.push(value));
+  const begun = await session.beginSequence({
+    sessionId,
+    patternId,
+    expectedRevision: 5,
+  });
+  assert.deepEqual(begun.transportAnchor, {
+    runtimeFrame: 48_000,
+    tickNumerator: 0,
+    bpm: 120,
+  });
+  const event = await session.recordSequenceEvent({
+    sessionId,
+    slot: 17,
+    velocity: 100,
+    pressed: true,
+  });
+  assert.equal(event.runtimeFrame, 48_120);
+  assert.equal(event.inputSequence, 1);
+  await session.flushSequence({sessionId, commandId});
+  const switched = await session.requestPatternSwitch({
+    sessionId,
+    nextPatternId,
+  });
+  assert.equal(switched.pendingPatternId, nextPatternId);
+  assert.equal(switched.effectiveRuntimeFrame, 96_000);
+  emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+  assert.deepEqual(boundaries, [{
+    sessionId,
+    patternId: nextPatternId,
+    runtimeFrame: 96_000,
+    generation: 2,
+  }]);
+  assert.equal(Object.isFrozen(boundaries[0]), true);
+  assert.equal((await session.querySequenceStatus()).state, "active");
+  assert.deepEqual(await session.listSequenceRecovery(), [{
+    sessionId,
+    patternId,
+    bars: 1,
+    reason: "owner_lost",
+    eventCount: 1,
+  }]);
+  await session.applySequenceRecovery({
+    sessionId,
+    destinationPatternId: null,
+  });
+  assert.equal(await session.discardSequenceRecovery(sessionId), true);
+  await session.stopSequence({sessionId, commandId});
+
+  const eventPayload = operations.find(
+    ({operation}) => operation === "sequence.record.event",
+  ).payload.event;
+  assert.deepEqual(eventPayload, {
+    slot: {bank: 1, pad: 1},
+    velocity: 100,
+    pressed: true,
+  });
+  assert.equal(Object.hasOwn(eventPayload, "runtime_frame"), false);
+  assert.equal(Object.hasOwn(eventPayload, "input_sequence"), false);
 });
 
 test("pushes immutable diagnostics and honors unsubscribe", async () => {

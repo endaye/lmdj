@@ -8,6 +8,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <random>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -30,12 +31,36 @@ using foundation::ErrorCode;
 
 constexpr std::uint32_t kSampleRate = 48'000;
 
+std::string generated_uuid() {
+  std::array<std::uint8_t, 16> bytes{};
+  std::random_device source;
+  for (auto& byte : bytes) {
+    byte = static_cast<std::uint8_t>(source());
+  }
+  bytes[6] = static_cast<std::uint8_t>((bytes[6] & 0x0fU) | 0x40U);
+  bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3fU) | 0x80U);
+  constexpr char digits[] = "0123456789abcdef";
+  std::string value;
+  value.reserve(36);
+  for (std::size_t index = 0; index < bytes.size(); ++index) {
+    if (index == 4 || index == 6 || index == 8 || index == 10) {
+      value.push_back('-');
+    }
+    value.push_back(digits[bytes[index] >> 4U]);
+    value.push_back(digits[bytes[index] & 0x0fU]);
+  }
+  return value;
+}
+
 std::chrono::milliseconds operation_deadline(std::string_view operation) {
   if (operation == "host.close") {
     return std::chrono::seconds(10);
   }
   if (operation == "host.status" || operation == "audio.activate" ||
       operation == "audio.suspend" || operation == "trigger" ||
+      operation == "sequence.record.event" ||
+      operation == "sequence.record.status" ||
+      operation == "sequence.recovery.list" ||
       operation == "sample.preview.set" ||
       operation == "sample.preview.clear" || operation == "sample.stop") {
     return std::chrono::seconds(1);
@@ -176,13 +201,18 @@ domain::Pattern pattern_value(const Json& value) {
   std::vector<domain::PatternEvent> parsed;
   parsed.reserve(events.size());
   for (const auto& event : events) {
-    require(exact_keys(event, {"slot", "step", "velocity"}));
-    const auto step = unsigned_field(event, "step", bars * 16U - 1U);
+    require(exact_keys(
+        event, {"slot", "onset_tick", "duration_tick", "velocity"}));
+    const auto loop_length = domain::pattern_length_ticks(
+        static_cast<std::uint8_t>(bars));
+    const auto onset = unsigned_field(event, "onset_tick", loop_length - 1U);
+    const auto duration = unsigned_field(event, "duration_tick", loop_length);
     const auto velocity = unsigned_field(event, "velocity", 127);
-    require(velocity != 0);
+    require(velocity != 0 && duration != 0 && duration <= loop_length - onset);
     parsed.push_back(domain::PatternEvent{
         slot_value(event.at("slot")),
-        static_cast<std::uint32_t>(step),
+        static_cast<std::uint32_t>(onset),
+        static_cast<std::uint32_t>(duration),
         static_cast<std::uint8_t>(velocity),
     });
   }
@@ -524,6 +554,19 @@ struct ControlRuntime::Impl {
     std::uint64_t project_revision;
   };
 
+  struct SequenceSession {
+    foundation::SequenceSessionId id;
+    foundation::PatternId pattern_id;
+    std::uint64_t next_input_sequence{1};
+  };
+
+  struct PendingSequenceBoundary {
+    foundation::SequenceSessionId session_id;
+    foundation::PatternId pattern_id;
+    std::uint64_t runtime_frame;
+    std::uint64_t generation;
+  };
+
   Impl(
       std::filesystem::path root,
       facade::Application owned_application,
@@ -540,6 +583,80 @@ struct ControlRuntime::Impl {
   bool session_available() const noexcept {
     return project_id.has_value() && project_revision.has_value() &&
            retained_project_path.has_value() && writer_lease.has_value();
+  }
+
+  foundation::Result<facade::SequenceMutationResult> record_sequence_pad(
+      domain::PadSlotId slot,
+      std::uint8_t velocity,
+      bool pressed) {
+    if (!active_sequence.has_value() || !retained_project_path.has_value()) {
+      return foundation::Result<facade::SequenceMutationResult>::failure(
+          Error{ErrorCode::invalid_argument, "no Sequence session is active"});
+    }
+    const auto runtime_frame = engine.telemetry().rendered_frames;
+    const auto input_sequence = active_sequence->next_input_sequence;
+    auto recorded = application.record_sequence_event({
+        *retained_project_path,
+        active_sequence->id,
+        facade::SequencePadEvent{
+            slot, velocity, runtime_frame, input_sequence, pressed},
+    });
+    if (recorded.has_value()) {
+      ++active_sequence->next_input_sequence;
+    }
+    return recorded;
+  }
+
+  foundation::Result<facade::SequenceMutationResult> stop_active_sequence() {
+    if (!active_sequence.has_value() || !retained_project_path.has_value()) {
+      return foundation::Result<facade::SequenceMutationResult>::failure(
+          Error{ErrorCode::invalid_argument, "no Sequence session is active"});
+    }
+    const auto session_id = active_sequence->id;
+    auto stopped = application.stop_sequence({
+        *retained_project_path,
+        session_id,
+        foundation::CommandId{generated_uuid()},
+        engine.telemetry().rendered_frames,
+    });
+    if (stopped.has_value()) {
+      active_sequence.reset();
+      if (stopped.value().committed_revision.has_value()) {
+        project_revision = *stopped.value().committed_revision;
+      }
+    }
+    return stopped;
+  }
+
+  foundation::Result<audio::PatternPublication> publish_project_pattern(
+      const foundation::PatternId& selected_pattern) {
+    if (!retained_project_path.has_value()) {
+      return foundation::Result<audio::PatternPublication>::failure(
+          Error{ErrorCode::invalid_argument, "no Project is open"});
+    }
+    auto snapshot = application.prepare_runtime_snapshot({
+        *retained_project_path,
+        selected_pattern,
+        limits,
+    });
+    if (!snapshot.has_value()) {
+      return foundation::Result<audio::PatternPublication>::failure(
+          snapshot.error());
+    }
+    auto pattern = audio::PreparedPatternView::from_snapshot(*snapshot.value());
+    if (!pattern.has_value()) {
+      return foundation::Result<audio::PatternPublication>::failure(
+          pattern.error());
+    }
+    const auto publication =
+        engine.publish_pattern_view(std::move(pattern.value()));
+    if (publication.result != audio::PatternPublishResult::accepted) {
+      return foundation::Result<audio::PatternPublication>::failure(Error{
+          ErrorCode::invalid_argument,
+          "runtime Pattern publication is unavailable",
+      });
+    }
+    return foundation::Result<audio::PatternPublication>::success(publication);
   }
 
   std::chrono::steady_clock::time_point clock_now() const noexcept {
@@ -895,14 +1012,49 @@ struct ControlRuntime::Impl {
           error.at("error"),
       };
     }
+    const auto current_pattern = engine.current_pattern_id();
+    const auto publish_pattern =
+        engine.telemetry().state == audio::RealtimeState::stopped ||
+        !current_pattern.has_value() ||
+        current_pattern->value() != selected_pattern;
+    std::optional<audio::PreparedPatternView> pattern;
+    if (publish_pattern) {
+      auto prepared_pattern =
+          audio::PreparedPatternView::from_snapshot(snapshot);
+      if (!prepared_pattern.has_value()) {
+        auto error = normalized_error(prepared_pattern.error());
+        return SnapshotResult{
+            false, false, std::nullopt, error.at("error")};
+      }
+      pattern.emplace(std::move(prepared_pattern.value()));
+    }
     if (preserve_saved_truth ? request_cancelled() : cancel_if_expired()) {
       auto error = timeout_error();
       return SnapshotResult{false, false, std::nullopt, error.at("error")};
+    }
+    if (pattern.has_value() &&
+        engine.telemetry().state == audio::RealtimeState::stopped) {
+      const auto cleared = engine.clear_pattern_view();
+      if (!cleared.has_value()) {
+        auto error = normalized_error(cleared.error());
+        return SnapshotResult{
+            false, false, std::nullopt, error.at("error")};
+      }
+      static_cast<void>(engine.reclaim_retired_patterns());
     }
     const auto publication = engine.publish_sample_bank(std::move(bank.value()));
     if (publication != audio::PublishResult::accepted) {
       auto error = state_error("runtime Bank publication is unavailable");
       return SnapshotResult{false, false, std::nullopt, error.at("error")};
+    }
+    if (pattern.has_value()) {
+      const auto pattern_publication =
+          engine.publish_pattern_view(std::move(*pattern));
+      if (pattern_publication.result !=
+          audio::PatternPublishResult::accepted) {
+        auto error = state_error("runtime Pattern publication is unavailable");
+        return SnapshotResult{false, false, std::nullopt, error.at("error")};
+      }
     }
     reserved_live_bytes = *aggregate;
     runtime_ready = true;
@@ -1240,10 +1392,13 @@ struct ControlRuntime::Impl {
   std::optional<std::string> project_id;
   std::optional<std::uint64_t> project_revision;
   std::optional<std::string> pattern_id;
+  std::optional<std::uint16_t> project_bpm;
   std::optional<std::string> runtime_bank_project_id;
   std::optional<std::uint64_t> runtime_revision;
   std::optional<TakeSession> active_take;
   std::optional<TakeSession> committable_take;
+  std::optional<SequenceSession> active_sequence;
+  std::optional<PendingSequenceBoundary> pending_sequence_boundary;
   std::optional<detail::AudioQuiescenceCoordinator> coordinator;
   std::optional<detail::ControlRuntimeClock> clock;
   std::set<std::string> import_tokens;
@@ -1451,6 +1606,7 @@ Json ControlRuntime::dispatch(
       if (impl_->state == Impl::State::running ||
           impl_->active_take.has_value() ||
           impl_->committable_take.has_value() ||
+          impl_->active_sequence.has_value() ||
           !impl_->sample_import_tokens.empty()) {
         return state_error();
       }
@@ -1485,6 +1641,7 @@ Json ControlRuntime::dispatch(
       impl_->project_id = project_id;
       impl_->project_revision = std::uint64_t{0};
       impl_->pattern_id = initial_pattern_id;
+      impl_->project_bpm = static_cast<std::uint16_t>(bpm);
       impl_->runtime_ready = false;
       impl_->runtime_revision.reset();
       impl_->trigger_admission = false;
@@ -1502,6 +1659,7 @@ Json ControlRuntime::dispatch(
       if (impl_->state == Impl::State::running ||
           impl_->active_take.has_value() ||
           impl_->committable_take.has_value() ||
+          impl_->active_sequence.has_value() ||
           !impl_->sample_import_tokens.empty()) {
         return state_error();
       }
@@ -1537,6 +1695,8 @@ Json ControlRuntime::dispatch(
       impl_->project_revision =
           inspected.at("project_revision").get<std::uint64_t>();
       impl_->pattern_id = selected_pattern;
+      impl_->project_bpm =
+          inspected_project.at("bpm").get<std::uint16_t>();
       if (switched) {
         impl_->runtime_ready = false;
         impl_->runtime_revision.reset();
@@ -2149,6 +2309,13 @@ Json ControlRuntime::dispatch(
             control.has_value()) {
           return *control;
         }
+        if (impl_->active_sequence.has_value()) {
+          const auto recorded = impl_->record_sequence_pad(
+              structured_slot, 0, false);
+          if (!recorded.has_value()) {
+            return normalized_error(recorded.error());
+          }
+        }
         return success({{"accepted", true}});
       }
       require(exact_keys(payload, {"slot", "velocity"}));
@@ -2176,8 +2343,270 @@ Json ControlRuntime::dispatch(
         return state_error(enqueue_failure_message(enqueued));
       }
       ++impl_->next_trigger_sequence;
+      if (impl_->active_sequence.has_value()) {
+        const auto recorded = impl_->record_sequence_pad(
+            domain::PadSlotId{
+                static_cast<std::uint8_t>(selected_slot / 16U),
+                static_cast<std::uint8_t>(selected_slot % 16U),
+            },
+            static_cast<std::uint8_t>(velocity),
+            true);
+        if (!recorded.has_value()) {
+          return normalized_error(recorded.error());
+        }
+      }
       return success(
           {{"sequence", sequence}, {"status", "enqueued"}});
+    }
+    if (operation == "sequence.record.begin") {
+      require(exact_keys(
+          payload, {"session_id", "pattern_id", "expected_revision"}));
+      require(sidecar.empty());
+      if (impl_->state != Impl::State::running ||
+          !impl_->session_available() || impl_->active_sequence.has_value() ||
+          impl_->active_take.has_value() ||
+          impl_->committable_take.has_value() ||
+          !impl_->project_bpm.has_value()) {
+        return state_error();
+      }
+      const auto session_id = uuid_field(payload, "session_id");
+      const auto selected_pattern = uuid_field(payload, "pattern_id");
+      const auto expected_revision =
+          unsigned_field(payload, "expected_revision");
+      const auto runtime_frame =
+          impl_->engine.current_pattern_origin_frame();
+      if (!runtime_frame.has_value()) {
+        return state_error("runtime Pattern clock is unavailable");
+      }
+      auto response = impl_->application.command({
+          {"operation", "sequence.record.begin"},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"session_id", session_id},
+          {"pattern_id", selected_pattern},
+          {"expected_revision", expected_revision},
+          {"runtime_frame", *runtime_frame},
+      });
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      impl_->active_sequence = Impl::SequenceSession{
+          foundation::SequenceSessionId{session_id},
+          foundation::PatternId{selected_pattern},
+      };
+      auto result = response.at("result");
+      result["project_revision"] = response.at("project_revision");
+      result["transport_anchor"] = {
+          {"runtime_frame", *runtime_frame},
+          {"tick_numerator", 0},
+          {"bpm", *impl_->project_bpm},
+      };
+      return success(std::move(result));
+    }
+    if (operation == "sequence.record.event") {
+      require(exact_keys(payload, {"session_id", "event"}));
+      require(sidecar.empty());
+      const auto session_id = uuid_field(payload, "session_id");
+      require(
+          impl_->active_sequence.has_value() &&
+          impl_->active_sequence->id.value() == session_id);
+      const auto& event = payload.at("event");
+      require(exact_keys(event, {"slot", "velocity", "pressed"}));
+      const auto selected_slot = slot_value(event.at("slot"));
+      const auto velocity = unsigned_field(event, "velocity", 127);
+      const auto pressed = bool_field(event, "pressed");
+      require((pressed && velocity != 0) || (!pressed && velocity == 0));
+      const auto runtime_frame = impl_->engine.telemetry().rendered_frames;
+      const auto input_sequence =
+          impl_->active_sequence->next_input_sequence;
+      auto response = impl_->application.command({
+          {"operation", "sequence.record.event"},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"session_id", session_id},
+          {"event",
+           {
+               {"slot", event.at("slot")},
+               {"velocity", velocity},
+               {"runtime_frame", runtime_frame},
+               {"input_sequence", input_sequence},
+               {"pressed", pressed},
+           }},
+      });
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      ++impl_->active_sequence->next_input_sequence;
+      auto result = response.at("result");
+      result["project_revision"] = response.at("project_revision");
+      result["runtime_frame"] = runtime_frame;
+      result["input_sequence"] = input_sequence;
+      static_cast<void>(selected_slot);
+      return success(std::move(result));
+    }
+    if (operation == "sequence.record.flush" ||
+        operation == "sequence.record.stop") {
+      require(exact_keys(payload, {"session_id", "command_id"}));
+      require(sidecar.empty());
+      const auto session_id = uuid_field(payload, "session_id");
+      const auto command_id = uuid_field(payload, "command_id");
+      if (impl_->active_sequence.has_value() &&
+          impl_->active_sequence->id.value() != session_id) {
+        return state_error();
+      }
+      const auto runtime_frame = impl_->engine.telemetry().rendered_frames;
+      std::optional<foundation::PatternId> recorded_pattern;
+      if (impl_->active_sequence.has_value() &&
+          impl_->active_sequence->id.value() == session_id) {
+        recorded_pattern = impl_->active_sequence->pattern_id;
+      }
+      auto response = impl_->application.command({
+          {"operation", std::string(operation)},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"session_id", session_id},
+          {"command_id", command_id},
+          {"runtime_frame", runtime_frame},
+      });
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      if (response.at("project_revision").is_number_unsigned()) {
+        impl_->project_revision =
+            response.at("project_revision").get<std::uint64_t>();
+      }
+      Json pattern_publication = nullptr;
+      const auto& sequence_result = response.at("result");
+      if (recorded_pattern.has_value() &&
+          sequence_result.at("committed_revision").is_number_unsigned() &&
+          sequence_result.at("replayed") == false &&
+          sequence_result.at("pattern_id").is_string() &&
+          sequence_result.at("pattern_id").get<std::string>() ==
+              recorded_pattern->value()) {
+        auto published = impl_->publish_project_pattern(*recorded_pattern);
+        if (!published.has_value()) {
+          fail_and_seal("sequence_pattern_publication_failed");
+          return normalized_error(published.error());
+        }
+        pattern_publication = {
+            {"generation", published.value().generation},
+            {"activation_frame", published.value().activation_frame},
+        };
+      }
+      if (operation == "sequence.record.flush" &&
+          impl_->active_sequence.has_value() &&
+          sequence_result.at("pattern_id").is_string()) {
+        impl_->active_sequence->pattern_id = foundation::PatternId{
+            sequence_result.at("pattern_id").get<std::string>()};
+        impl_->pattern_id = impl_->active_sequence->pattern_id.value();
+      }
+      if (operation == "sequence.record.stop" &&
+          impl_->active_sequence.has_value() &&
+          impl_->active_sequence->id.value() == session_id) {
+        impl_->active_sequence.reset();
+      }
+      auto result = response.at("result");
+      result["project_revision"] = response.at("project_revision");
+      result["runtime_frame"] = runtime_frame;
+      result["pattern_publication"] = std::move(pattern_publication);
+      return success(std::move(result));
+    }
+    if (operation == "sequence.record.switch-request") {
+      require(exact_keys(payload, {"session_id", "next_pattern_id"}));
+      require(sidecar.empty());
+      const auto session_id = uuid_field(payload, "session_id");
+      const auto next_pattern_id = uuid_field(payload, "next_pattern_id");
+      if (!impl_->active_sequence.has_value() ||
+          impl_->active_sequence->id.value() != session_id) {
+        return state_error();
+      }
+      auto response = impl_->application.command({
+          {"operation", "sequence.record.switch-request"},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"session_id", session_id},
+          {"next_pattern_id", next_pattern_id},
+      });
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      auto published = impl_->publish_project_pattern(
+          foundation::PatternId{next_pattern_id});
+      if (!published.has_value()) {
+        fail_and_seal("sequence_switch_publication_failed");
+        return normalized_error(published.error());
+      }
+      auto result = response.at("result");
+      if (!result.at("effective_runtime_frame").is_number_unsigned() ||
+          result.at("effective_runtime_frame").get<std::uint64_t>() !=
+              published.value().activation_frame) {
+        fail_and_seal("sequence_switch_clock_mismatch");
+        return internal_error();
+      }
+      impl_->pending_sequence_boundary = Impl::PendingSequenceBoundary{
+          foundation::SequenceSessionId{session_id},
+          foundation::PatternId{next_pattern_id},
+          published.value().activation_frame,
+          published.value().generation,
+      };
+      result["project_revision"] = response.at("project_revision");
+      result["pattern_publication"] = {
+          {"generation", published.value().generation},
+          {"activation_frame", published.value().activation_frame},
+      };
+      return success(std::move(result));
+    }
+    if (operation == "sequence.record.status" ||
+        operation == "sequence.recovery.list") {
+      require(
+          exact_keys(payload, {}) || exact_keys(payload, {"project_id"}));
+      require(sidecar.empty());
+      std::filesystem::path path;
+      if (payload.empty()) {
+        if (!impl_->retained_project_path.has_value()) {
+          return state_error();
+        }
+        path = *impl_->retained_project_path;
+      } else {
+        path = impl_->project_path(uuid_field(payload, "project_id"));
+      }
+      return impl_->facade_query({
+          {"operation", std::string(operation)},
+          {"project_path", path.generic_string()},
+      });
+    }
+    if (operation == "sequence.recovery.apply") {
+      require(exact_keys(
+          payload, {"session_id", "destination_pattern_id"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      uuid_field(payload, "session_id");
+      if (!payload.at("destination_pattern_id").is_null()) {
+        uuid_field(payload, "destination_pattern_id");
+      }
+      auto request = payload;
+      request["operation"] = "sequence.recovery.apply";
+      request["project_path"] =
+          impl_->retained_project_path->generic_string();
+      auto response = impl_->application.command(request);
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      if (response.at("project_revision").is_number_unsigned()) {
+        impl_->project_revision =
+            response.at("project_revision").get<std::uint64_t>();
+      }
+      return normalized_facade_success(response);
+    }
+    if (operation == "sequence.recovery.discard") {
+      require(exact_keys(payload, {"session_id"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      auto request = payload;
+      request["operation"] = "sequence.recovery.discard";
+      request["project_path"] =
+          impl_->retained_project_path->generic_string();
+      return impl_->facade_command(std::move(request));
     }
     if (operation == "take.begin") {
       require(exact_keys(payload, {"take_id", "expected_revision"}));
@@ -2301,7 +2730,7 @@ Json ControlRuntime::dispatch(
         return success({
             {"state", "audio-suspended"},
             {"changed", false},
-            {"sealed_take_id", nullptr},
+            {"stopped_sequence_id", nullptr},
         });
       }
       if (impl_->state != Impl::State::running) {
@@ -2314,10 +2743,17 @@ Json ControlRuntime::dispatch(
         impl_->trigger_admission = false;
         return state_error("audio quiescence is unavailable");
       }
-      std::optional<std::string> sealed_take;
+      std::optional<std::string> stopped_sequence;
+      std::optional<Error> sequence_failure;
+      if (impl_->active_sequence.has_value()) {
+        stopped_sequence = impl_->active_sequence->id.value();
+        const auto stopped = impl_->stop_active_sequence();
+        if (!stopped.has_value()) {
+          sequence_failure = stopped.error();
+        }
+      }
       std::optional<Error> capture_failure;
       if (impl_->active_take.has_value()) {
-        sealed_take = impl_->active_take->id;
         const auto finished = impl_->finish_capture(false);
         if (!finished.has_value()) {
           capture_failure = finished.error();
@@ -2326,14 +2762,31 @@ Json ControlRuntime::dispatch(
       if (impl_->cancel_if_expired()) {
         return timeout_error();
       }
+      const auto had_pending_pattern =
+          impl_->engine.pending_pattern_id().has_value();
       const auto cleanup = impl_->quiesce_and_stop_audio();
       if (impl_->cancel_if_expired()) {
         return timeout_error();
       }
-      if (capture_failure.has_value() || !cleanup.has_value()) {
-        const auto failure = capture_failure.has_value()
-                                 ? *capture_failure
-                                 : cleanup.error();
+      if (!sequence_failure.has_value() && cleanup.has_value() &&
+          (stopped_sequence.has_value() || had_pending_pattern) &&
+          impl_->pattern_id.has_value()) {
+        const auto refreshed =
+            impl_->prepare_and_publish(*impl_->pattern_id, true);
+        if (!refreshed.published) {
+          sequence_failure = Error{
+              ErrorCode::internal_error,
+              "stopped Sequence Pattern could not be published",
+          };
+        }
+      }
+      if (sequence_failure.has_value() || capture_failure.has_value() ||
+          !cleanup.has_value()) {
+        const auto failure = sequence_failure.has_value()
+                                 ? *sequence_failure
+                                 : capture_failure.has_value()
+                                       ? *capture_failure
+                                       : cleanup.error();
         fail_and_seal("audio_suspend_failed");
         return normalized_error(failure);
       }
@@ -2341,14 +2794,16 @@ Json ControlRuntime::dispatch(
       return success({
           {"state", "audio-suspended"},
           {"changed", true},
-          {"sealed_take_id",
-           sealed_take.has_value() ? Json(*sealed_take) : Json(nullptr)},
+          {"stopped_sequence_id",
+           stopped_sequence.has_value() ? Json(*stopped_sequence)
+                                        : Json(nullptr)},
       });
     }
     if (operation == "host.close") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
       std::optional<std::string> sealed_take;
+      std::optional<std::string> stopped_sequence;
       std::optional<Error> close_failure;
       bool close_timed_out = false;
       const auto observe_timeout = [&] {
@@ -2368,6 +2823,13 @@ Json ControlRuntime::dispatch(
           return state_error("audio quiescence is unavailable");
         }
         std::optional<Error> capture_failure;
+        if (impl_->active_sequence.has_value()) {
+          stopped_sequence = impl_->active_sequence->id.value();
+          const auto stopped = impl_->stop_active_sequence();
+          if (!stopped.has_value()) {
+            close_failure = stopped.error();
+          }
+        }
         if (impl_->active_take.has_value()) {
           sealed_take = impl_->active_take->id;
           const auto finished = impl_->finish_capture(false);
@@ -2420,8 +2882,9 @@ Json ControlRuntime::dispatch(
       impl_->writer_lease.reset();
       return success({
           {"state", "closed"},
-          {"sealed_take_id",
-           sealed_take.has_value() ? Json(*sealed_take) : Json(nullptr)},
+          {"stopped_sequence_id",
+           stopped_sequence.has_value() ? Json(*stopped_sequence)
+                                        : Json(nullptr)},
       });
     }
     return protocol_error();
@@ -2452,6 +2915,27 @@ ControlRuntime::drain_outcomes() {
   if (!validate_realtime_health()) {
     return {};
   }
+  return result;
+}
+
+std::optional<SequenceBarBoundaryEvent>
+ControlRuntime::drain_sequence_bar_boundary() {
+  if (!impl_->pending_sequence_boundary.has_value()) {
+    return std::nullopt;
+  }
+  const auto telemetry = impl_->engine.pattern_telemetry();
+  const auto& pending = *impl_->pending_sequence_boundary;
+  if (telemetry.current_generation != pending.generation ||
+      impl_->engine.telemetry().rendered_frames < pending.runtime_frame) {
+    return std::nullopt;
+  }
+  SequenceBarBoundaryEvent result{
+      pending.session_id.value(),
+      pending.pattern_id.value(),
+      pending.runtime_frame,
+      pending.generation,
+  };
+  impl_->pending_sequence_boundary.reset();
   return result;
 }
 

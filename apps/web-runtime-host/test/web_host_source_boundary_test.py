@@ -73,6 +73,9 @@ def main() -> int:
         / "realtime_audio_worklet.cpp"
     )
     runtime_pre = source_root / "web-runtime-pre.js"
+    runtime_session = platform_root / "web" / "runtime_session.mjs"
+    web_host_main = host_root / "src" / "main.mjs"
+    diagnostic_project = host_root / "src" / "diagnostic_project.mjs"
 
     required_files = [
         host_cmake,
@@ -90,6 +93,9 @@ def main() -> int:
         playwright_config,
         realtime_audio_worklet,
         runtime_pre,
+        runtime_session,
+        web_host_main,
+        diagnostic_project,
     ]
     for path in required_files:
         require(path.is_file(), f"required Task 6 source is missing: {path}")
@@ -101,6 +107,10 @@ def main() -> int:
     )
     bridge_source = (source_root / "bridge.cpp").read_text(encoding="utf-8")
     runtime_pre_source = runtime_pre.read_text(encoding="utf-8")
+    runtime_session_source = runtime_session.read_text(encoding="utf-8")
+    host_javascript = combined_text(
+        [runtime_session, web_host_main, diagnostic_project]
+    )
     cmake = combined_text([host_cmake, platform_cmake, root_cmake, product_cmake])
 
     forbidden_source = {
@@ -118,7 +128,9 @@ def main() -> int:
             "Project bundle layout knowledge"
         ),
         r"lmdj\.patch\.v1|lmdj\.materials\.v1": "retired Contract",
-        r"record\.(?:begin|stop|commit)": "retired Capture operation spelling",
+        r"(?<!sequence\.)\brecord\.(?:begin|stop|commit)": (
+            "retired Capture operation spelling"
+        ),
         r"lmdj/providers/|providers/local-|\blocal_proof_": (
             "Product-specific Provider wiring"
         ),
@@ -130,6 +142,45 @@ def main() -> int:
             re.search(pattern, source) is None,
             f"{description} found in Web Host production source",
         )
+
+    for pattern, description in {
+        r"\b(?:ProjectStore|SequenceJournal|TakeJournal)\b": (
+            "Project or journal implementation in browser JavaScript"
+        ),
+        r"sequence_pattern_fingerprint|fingerprintSequencePattern": (
+            "Sequence fingerprint implementation in browser JavaScript"
+        ),
+        r"quantize_onset_tick|normalize_duration_tick|kTickDenominator": (
+            "musical timing math in browser JavaScript"
+        ),
+        r'\b(?:onset_tick|duration_tick)\s*[:=].*[+*/%-]': (
+            "fallback tick sequencer in browser JavaScript"
+        ),
+        r"recovery/(?:active|sealed)|sequence\.jsonl": (
+            "Sequence journal layout knowledge in browser JavaScript"
+        ),
+    }.items():
+        require(
+            re.search(pattern, host_javascript) is None,
+            f"{description} found",
+        )
+
+    sequence_adapter = re.search(
+        r"function beginSequence\(.*?\n  async function reloadSnapshot\(",
+        runtime_session_source,
+        re.DOTALL,
+    )
+    require(sequence_adapter is not None, "Runtime Session Sequence adapter is missing")
+    require(
+        re.search(
+            r"performance\.(?:now|timeOrigin)|Date\.(?:now|UTC)|"
+            r"setInterval|requestAnimationFrame|Math\.(?:floor|round|ceil)",
+            sequence_adapter.group(0),
+        )
+        is None,
+        "Runtime Session Sequence adapter must not derive a musical clock or "
+        "run a JavaScript fallback sequencer",
+    )
 
     forbidden_cmake = {
         r"(?:lmdj::project_io|lmdj_project_io)": "direct Project I/O link",

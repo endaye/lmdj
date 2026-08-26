@@ -507,6 +507,95 @@ function normalizeAccepted(value, keys = ["accepted"]) {
   return value.accepted;
 }
 
+function normalizeSequenceStatus(value, extraKeys = []) {
+  const statusKeys = [
+    "state",
+    "session_id",
+    "pattern_id",
+    "pending_pattern_id",
+    "expected_revision",
+    "next_flush_seq",
+    "pending_event_count",
+    "effective_runtime_frame",
+  ];
+  if (
+    !exactKeys(value, [...statusKeys, ...extraKeys]) ||
+    !["inactive", "active", "switching", "recoverable"].includes(
+      value.state,
+    ) ||
+    !(value.session_id === null || UUID_PATTERN.test(value.session_id)) ||
+    !(value.pattern_id === null || UUID_PATTERN.test(value.pattern_id)) ||
+    !(value.pending_pattern_id === null ||
+      UUID_PATTERN.test(value.pending_pattern_id)) ||
+    !isUnsignedInteger(value.expected_revision) ||
+    !isUnsignedInteger(value.next_flush_seq) ||
+    !isUnsignedInteger(value.pending_event_count) ||
+    !(value.effective_runtime_frame === null ||
+      isUnsignedInteger(value.effective_runtime_frame))
+  ) {
+    throw protocolMismatch("Sequence status result is invalid");
+  }
+  return Object.freeze({
+    state: value.state,
+    sessionId: value.session_id,
+    patternId: value.pattern_id,
+    pendingPatternId: value.pending_pattern_id,
+    expectedRevision: value.expected_revision,
+    nextFlushSequence: value.next_flush_seq,
+    pendingEventCount: value.pending_event_count,
+    effectiveRuntimeFrame: value.effective_runtime_frame,
+  });
+}
+
+function normalizeSequenceMutation(value, extraKeys = []) {
+  const mutationKeys = [
+    "committed_revision",
+    "replayed",
+    "project_revision",
+    ...extraKeys,
+  ];
+  const status = normalizeSequenceStatus(value, mutationKeys);
+  if (
+    !(value.committed_revision === null ||
+      isUnsignedInteger(value.committed_revision)) ||
+    typeof value.replayed !== "boolean" ||
+    !(value.project_revision === null ||
+      isUnsignedInteger(value.project_revision))
+  ) {
+    throw protocolMismatch("Sequence mutation result is invalid");
+  }
+  return Object.freeze({
+    ...status,
+    committedRevision: value.committed_revision,
+    replayed: value.replayed,
+    projectRevision: value.project_revision,
+  });
+}
+
+function requireSequenceIdentity(value, name) {
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
+    throw new TypeError(`${name} must be a lowercase UUID`);
+  }
+  return value;
+}
+
+function normalizePatternPublication(value) {
+  if (value === null) {
+    return null;
+  }
+  if (
+    !exactKeys(value, ["generation", "activation_frame"]) ||
+    !isPositiveInteger(value.generation) ||
+    !isUnsignedInteger(value.activation_frame)
+  ) {
+    throw protocolMismatch("Sequence Pattern publication is invalid");
+  }
+  return Object.freeze({
+    generation: value.generation,
+    activationFrame: value.activation_frame,
+  });
+}
+
 function normalizeSnapshotPublication(value, expectedPatternId) {
   if (
     !exactKeys(value, [
@@ -1100,6 +1189,7 @@ function createRuntimeSessionController(options = {}) {
   const listenerDisposers = [];
   const hostStateListeners = new Set();
   const runtimeOutcomeListeners = new Set();
+  const sequenceBoundaryListeners = new Set();
   const diagnosticsListeners = new Set();
   const voiceStateListeners = new Set();
   const activePreviewSlots = new Set();
@@ -1936,6 +2026,38 @@ function createRuntimeSessionController(options = {}) {
       observeVoiceStates(notification.payload);
       return;
     }
+    if (notification.event === "sequence.bar_boundary") {
+      const value = notification.payload;
+      if (
+        !exactKeys(value, [
+          "session_id",
+          "pattern_id",
+          "runtime_frame",
+          "generation",
+        ]) ||
+        !UUID_PATTERN.test(value.session_id) ||
+        !UUID_PATTERN.test(value.pattern_id) ||
+        !isUnsignedInteger(value.runtime_frame) ||
+        !isPositiveInteger(value.generation)
+      ) {
+        fail("HOST_PROTOCOL_MISMATCH");
+        return;
+      }
+      const boundary = Object.freeze({
+        sessionId: value.session_id,
+        patternId: value.pattern_id,
+        runtimeFrame: value.runtime_frame,
+        generation: value.generation,
+      });
+      for (const listener of sequenceBoundaryListeners) {
+        try {
+          listener(boundary);
+        } catch {
+          // UI observers cannot alter the authoritative boundary stream.
+        }
+      }
+      return;
+    }
     if (notification.event === "runtime.warning") {
       if (
         notification.payload?.fatal === true &&
@@ -2133,6 +2255,12 @@ function createRuntimeSessionController(options = {}) {
     return () => runtimeOutcomeListeners.delete(listener);
   }
 
+  function subscribeSequenceBarBoundary(listener) {
+    requireFunction(listener, "Sequence Bar-boundary listener");
+    sequenceBoundaryListeners.add(listener);
+    return () => sequenceBoundaryListeners.delete(listener);
+  }
+
   function subscribeVoiceState(listener) {
     requireFunction(listener, "Voice state listener");
     if (voiceStateListeners.size >= VOICE_LISTENER_LIMIT) {
@@ -2162,6 +2290,242 @@ function createRuntimeSessionController(options = {}) {
 
   async function inspectProject() {
     return recoverableQuery("project.inspect", {});
+  }
+
+  function beginSequence(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["sessionId", "patternId", "expectedRevision"]) ||
+      !isUnsignedInteger(request.expectedRevision)
+    ) {
+      throw new TypeError("Sequence begin request is invalid");
+    }
+    const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
+    const patternId = requireSequenceIdentity(request.patternId, "patternId");
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest("sequence.record.begin", {
+        session_id: sessionId,
+        pattern_id: patternId,
+        expected_revision: request.expectedRevision,
+      });
+      const mutation = normalizeSequenceMutation(value, ["transport_anchor"]);
+      const anchor = value.transport_anchor;
+      if (
+        !exactKeys(anchor, ["runtime_frame", "tick_numerator", "bpm"]) ||
+        !isUnsignedInteger(anchor.runtime_frame) ||
+        !isUnsignedInteger(anchor.tick_numerator) ||
+        !isUnsignedInteger(anchor.bpm, 240) ||
+        anchor.bpm < 40
+      ) {
+        throw protocolMismatch("Sequence transport anchor is invalid");
+      }
+      return Object.freeze({
+        ...mutation,
+        transportAnchor: Object.freeze({
+          runtimeFrame: anchor.runtime_frame,
+          tickNumerator: anchor.tick_numerator,
+          bpm: anchor.bpm,
+        }),
+      });
+    });
+  }
+
+  function recordSequenceEvent(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["sessionId", "slot", "velocity", "pressed"]) ||
+      !isUnsignedInteger(request.slot, 63) ||
+      !isUnsignedInteger(request.velocity, 127) ||
+      typeof request.pressed !== "boolean" ||
+      (request.pressed ? request.velocity === 0 : request.velocity !== 0)
+    ) {
+      throw new TypeError("Sequence Pad event is invalid");
+    }
+    const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest("sequence.record.event", {
+        session_id: sessionId,
+        event: {
+          slot: flatSlotAddress(request.slot),
+          velocity: request.velocity,
+          pressed: request.pressed,
+        },
+      });
+      const mutation = normalizeSequenceMutation(
+        value,
+        ["runtime_frame", "input_sequence"],
+      );
+      if (
+        !isUnsignedInteger(value.runtime_frame) ||
+        !isPositiveInteger(value.input_sequence)
+      ) {
+        throw protocolMismatch("Sequence event clock is invalid");
+      }
+      return Object.freeze({
+        ...mutation,
+        runtimeFrame: value.runtime_frame,
+        inputSequence: value.input_sequence,
+      });
+    });
+  }
+
+  function commitSequenceBoundary(operation, request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["sessionId", "commandId"])
+    ) {
+      throw new TypeError("Sequence flush request is invalid");
+    }
+    const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
+    const commandId = requireSequenceIdentity(request.commandId, "commandId");
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest(operation, {
+        session_id: sessionId,
+        command_id: commandId,
+      });
+      const mutation = normalizeSequenceMutation(
+        value,
+        ["runtime_frame", "pattern_publication"],
+      );
+      if (!isUnsignedInteger(value.runtime_frame)) {
+        throw protocolMismatch("Sequence flush clock is invalid");
+      }
+      return Object.freeze({
+        ...mutation,
+        runtimeFrame: value.runtime_frame,
+        patternPublication: normalizePatternPublication(
+          value.pattern_publication,
+        ),
+      });
+    });
+  }
+
+  function flushSequence(request) {
+    return commitSequenceBoundary("sequence.record.flush", request);
+  }
+
+  function stopSequence(request) {
+    return commitSequenceBoundary("sequence.record.stop", request);
+  }
+
+  function requestPatternSwitch(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["sessionId", "nextPatternId"])
+    ) {
+      throw new TypeError("Sequence switch request is invalid");
+    }
+    const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
+    const nextPatternId = requireSequenceIdentity(
+      request.nextPatternId,
+      "nextPatternId",
+    );
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest("sequence.record.switch-request", {
+        session_id: sessionId,
+        next_pattern_id: nextPatternId,
+      });
+      return Object.freeze({
+        ...normalizeSequenceMutation(value, ["pattern_publication"]),
+        patternPublication: normalizePatternPublication(
+          value.pattern_publication,
+        ),
+      });
+    });
+  }
+
+  async function querySequenceStatus(projectId = null) {
+    const payload = projectId === null
+      ? {}
+      : {project_id: requireSequenceIdentity(projectId, "projectId")};
+    const value = await recoverableQuery("sequence.record.status", payload);
+    return normalizeSequenceStatus(value, ["project_revision"]);
+  }
+
+  async function listSequenceRecovery(projectId = null) {
+    const payload = projectId === null
+      ? {}
+      : {project_id: requireSequenceIdentity(projectId, "projectId")};
+    const value = await recoverableQuery("sequence.recovery.list", payload);
+    if (
+      !exactKeys(value, ["candidates", "project_revision"]) ||
+      !Array.isArray(value.candidates) ||
+      value.project_revision !== null
+    ) {
+      throw protocolMismatch("Sequence recovery inventory is invalid");
+    }
+    return Object.freeze(value.candidates.map((candidate) => {
+      if (
+        !exactKeys(candidate, [
+          "session_id",
+          "pattern_id",
+          "bars",
+          "reason",
+          "event_count",
+        ]) ||
+        !UUID_PATTERN.test(candidate.session_id) ||
+        !UUID_PATTERN.test(candidate.pattern_id) ||
+        ![1, 2, 4, 8].includes(candidate.bars) ||
+        typeof candidate.reason !== "string" ||
+        !isUnsignedInteger(candidate.event_count)
+      ) {
+        throw protocolMismatch("Sequence recovery candidate is invalid");
+      }
+      return Object.freeze({
+        sessionId: candidate.session_id,
+        patternId: candidate.pattern_id,
+        bars: candidate.bars,
+        reason: candidate.reason,
+        eventCount: candidate.event_count,
+      });
+    }));
+  }
+
+  function applySequenceRecovery(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["sessionId", "destinationPatternId"]) ||
+      !(request.destinationPatternId === null ||
+        typeof request.destinationPatternId === "string")
+    ) {
+      throw new TypeError("Sequence recovery request is invalid");
+    }
+    const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
+    const destinationPatternId = request.destinationPatternId === null
+      ? null
+      : requireSequenceIdentity(
+        request.destinationPatternId,
+        "destinationPatternId",
+      );
+    return serializeProjectAction(async () => normalizeSequenceMutation(
+      await boundedRequest("sequence.recovery.apply", {
+        session_id: sessionId,
+        destination_pattern_id: destinationPatternId,
+      }),
+    ));
+  }
+
+  function discardSequenceRecovery(sessionId) {
+    requireSequenceIdentity(sessionId, "sessionId");
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("sequence.recovery.discard", {
+        session_id: sessionId,
+      });
+      if (
+        !exactKeys(value, ["session_id", "discarded", "project_revision"]) ||
+        value.session_id !== sessionId ||
+        value.discarded !== true ||
+        value.project_revision !== null
+      ) {
+        throw protocolMismatch("Sequence recovery discard result is invalid");
+      }
+      return true;
+    });
   }
 
   async function reloadSnapshot(patternId) {
@@ -2745,6 +3109,15 @@ function createRuntimeSessionController(options = {}) {
     importAssignSample,
     openProject,
     inspectProject,
+    beginSequence,
+    recordSequenceEvent,
+    flushSequence,
+    stopSequence,
+    requestPatternSwitch,
+    querySequenceStatus,
+    listSequenceRecovery,
+    applySequenceRecovery,
+    discardSequenceRecovery,
     inspectSample,
     queryWaveform,
     updatePad,
@@ -2763,6 +3136,7 @@ function createRuntimeSessionController(options = {}) {
     subscribeDiagnostics,
     subscribeHostState,
     subscribeRuntimeOutcome,
+    subscribeSequenceBarBoundary,
     subscribeVoiceState,
     diagnostics,
   });
