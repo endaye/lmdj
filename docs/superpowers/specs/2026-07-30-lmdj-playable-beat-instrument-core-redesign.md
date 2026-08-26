@@ -17,6 +17,13 @@ Project BPM 的关系（Time-stretch）记入
 新事件，不保留隐藏原始 timing。§6.4、§8、§10.1、§12.1、§18.1 的 Take 措辞
 一并按该决策更正。
 
+勘误（2026-08-26 长素材配额与 BPM/Time-stretch 决策，
+[决策文件](../../prd/decisions/2026-08-26-long-material-quota-and-bpm-stretch.md)）：
+首部记入 open-questions 的「素材 BPM 与 Project BPM 的关系（Time-stretch）」
+已由该决策解决——sample 无 BPM 属性，全局 BPM 只驱动 Sequencer，
+Time-stretch 立为后续逐 Pad opt-in 的离线烘焙能力；prepared-PCM 资源模型
+定为 Bank 共享配额、数值由 Host manifest 注入。
+
 优先级：本设计在冲突处取代旧 Stage 1 Creator、`lmdj.patch.v1`、
 `lmdj.materials.v1` 与 Agent Orchestration 产品假设
 
