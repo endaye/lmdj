@@ -304,7 +304,46 @@ void test_assembly_composition_through_c_abi() {
   LMDJ_CHECK(error == nullptr);
 }
 
-void test_take_replay_identity_is_enforced_through_c_abi() {
+void test_sequence_surface_is_routed_through_c_abi() {
+  {
+    TempDirectory temp;
+    const auto config = config_json(temp.path());
+    lmdj_engine* engine = nullptr;
+    char* error = nullptr;
+    LMDJ_CHECK(
+        lmdj_engine_create(config.c_str(), &engine, &error) == LMDJ_STATUS_OK);
+    LMDJ_CHECK(error == nullptr);
+    const auto project = temp.path() / "sequence-surface.lmdj";
+    LMDJ_CHECK(command(engine,
+                       {{"operation", "project.create"},
+                        {"project_path", project.generic_string()},
+                        {"project_id", uuid(1)},
+                        {"bpm", 120}})
+                   .at("ok") == true);
+    check_facade_error(
+        command(engine,
+                {{"operation", "sequence.record.begin"},
+                 {"project_path", project.generic_string()},
+                 {"session_id", uuid(201)},
+                 {"pattern_id", uuid(10)},
+                 {"expected_revision", 0},
+                 {"runtime_frame", 0}}),
+        "NOT_FOUND");
+    const auto status = query(
+        engine,
+        {{"operation", "sequence.record.status"},
+         {"project_path", project.generic_string()}});
+    LMDJ_CHECK(status.at("ok") == true);
+    LMDJ_CHECK(status.at("result").at("state") == "inactive");
+    const auto recovery = query(
+        engine,
+        {{"operation", "sequence.recovery.list"},
+         {"project_path", project.generic_string()}});
+    LMDJ_CHECK(recovery.at("ok") == true);
+    LMDJ_CHECK(recovery.at("result").at("candidates").empty());
+    lmdj_engine_free(engine);
+    return;
+  }
   TempDirectory temp;
   const auto config = config_json(temp.path());
   lmdj_engine* engine = nullptr;
@@ -1200,7 +1239,7 @@ int main() {
     LMDJ_CHECK(LMDJ_CORE_C_API_VERSION == 1);
     test_create_command_query_and_owned_strings();
     test_assembly_composition_through_c_abi();
-    test_take_replay_identity_is_enforced_through_c_abi();
+    test_sequence_surface_is_routed_through_c_abi();
     test_asset_and_pad_replay_identity_through_c_abi();
     test_sample_operations_have_exact_shapes_and_private_errors();
     test_transport_failures_null_outputs_and_valid_facade_errors();

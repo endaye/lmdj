@@ -15,7 +15,6 @@ PROJECT_ID = "00000000-0000-4000-8000-000000000001"
 PATTERN_ID = "00000000-0000-4000-8000-000000000010"
 KICK_ASSET_ID = "00000000-0000-4000-8000-000000000101"
 SNARE_ASSET_ID = "00000000-0000-4000-8000-000000000102"
-TAKE_ID = "00000000-0000-4000-8000-000000000201"
 
 
 def canonical_json(value: object) -> str:
@@ -56,10 +55,14 @@ def pattern() -> dict:
         "pattern_id": PATTERN_ID,
         "bars": 1,
         "events": [
-            {"slot": slot(0, 0), "step": 0, "velocity": 127},
-            {"slot": slot(0, 1), "step": 4, "velocity": 127},
-            {"slot": slot(0, 0), "step": 8, "velocity": 127},
-            {"slot": slot(0, 1), "step": 12, "velocity": 127},
+            {"slot": slot(0, 0), "onset_tick": 0,
+             "duration_tick": 240, "velocity": 127},
+            {"slot": slot(0, 1), "onset_tick": 960,
+             "duration_tick": 240, "velocity": 127},
+            {"slot": slot(0, 0), "onset_tick": 1920,
+             "duration_tick": 240, "velocity": 127},
+            {"slot": slot(0, 1), "onset_tick": 2880,
+             "duration_tick": 240, "velocity": 127},
         ],
     }
 
@@ -73,6 +76,7 @@ def author_requests(project: Path) -> list[tuple[str, dict, int]]:
                 "project_path": str(project),
                 "project_id": PROJECT_ID,
                 "bpm": 120,
+                "initial_pattern": pattern(),
             },
             0,
         ),
@@ -133,51 +137,16 @@ def author_requests(project: Path) -> list[tuple[str, dict, int]]:
         (
             "command",
             {
-                "operation": "take.begin",
-                "project_path": str(project),
-                "take_id": TAKE_ID,
-                "expected_revision": 4,
-                "sample_rate": 48000,
-            },
-            4,
-        ),
-    ]
-    for pad, frame_offset in (
-        (0, 0),
-        (1, 24000),
-        (0, 48000),
-        (1, 72000),
-    ):
-        requests.append(
-            (
-                "command",
-                {
-                    "operation": "take.append",
-                    "project_path": str(project),
-                    "take_id": TAKE_ID,
-                    "event": {
-                        "slot": slot(0, pad),
-                        "frame_offset": frame_offset,
-                        "velocity": 127,
-                    },
-                },
-                4,
-            )
-        )
-    requests.append(
-        (
-            "command",
-            {
-                "operation": "take.commit",
+                "operation": "pad.assign",
                 "project_path": str(project),
                 "command_id": uuid(5),
                 "expected_revision": 4,
-                "take_id": TAKE_ID,
-                "pattern": pattern(),
+                "slot": slot(0, 0),
+                "asset_id": KICK_ASSET_ID,
             },
             5,
-        )
-    )
+        ),
+    ]
     return requests
 
 
@@ -369,7 +338,7 @@ def cli_author_mcp_consume(
     for surface, request, revision in author_requests(project):
         envelope = cli_request(cli, workspace, surface, request)
         check_success(envelope, revision)
-    journal = project / "recovery/active" / f"{TAKE_ID}.jsonl"
+    journal = project / "recovery/active/sequence.jsonl"
     assert not journal.exists()
     cli_inspect = cli_request(
         cli,
@@ -417,12 +386,16 @@ def mcp_author_cli_consume(
     mcp = MCP(library, workspace)
     for _surface, request, revision in author_requests(project):
         operation = request["operation"]
+        if operation == "project.create":
+            envelope = cli_request(cli, workspace, "command", request)
+            check_success(envelope, revision)
+            continue
         arguments = {
             key: value for key, value in request.items() if key != "operation"
         }
         envelope = mcp.tool(f"lmdj.{operation}", arguments)
         check_success(envelope, revision)
-    journal = project / "recovery/active" / f"{TAKE_ID}.jsonl"
+    journal = project / "recovery/active/sequence.jsonl"
     assert not journal.exists()
     mcp_inspect = mcp.tool(
         "lmdj.project.inspect",

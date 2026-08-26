@@ -661,7 +661,18 @@ void create_single_asset_project(
     std::uint32_t command_base,
     std::string asset_id,
     std::string pattern_id) {
-  check_success(application.command(create_request(project)), 0);
+  const auto created = application.create_initial_project(
+      InitialProjectRequest{
+          project,
+          ProjectId{std::string{kProjectId}},
+          120,
+          Pattern{
+              PatternId{pattern_id},
+              1,
+              {{PadSlotId{0, 0}, 0, 240, 127}},
+          },
+      });
+  LMDJ_CHECK(created.has_value());
   const auto imported = application.import_artifact_bytes(
       ArtifactBytesImportRequest{
           project,
@@ -682,42 +693,10 @@ void create_single_asset_project(
               1)),
       2);
 
-  const TakeId take_id{uuid(command_base + 2U)};
   check_success(
       application.command(
-          {
-              {"operation", "take.begin"},
-              {"project_path", project.generic_string()},
-              {"take_id", take_id.value()},
-              {"expected_revision", 2},
-              {"sample_rate", 48000},
-          }),
-      2);
-  const std::array events{
-      RawTakeEvent{PadSlotId{0, 0}, 0, 127},
-  };
-  LMDJ_CHECK(
-      application.append_realtime_take_events(project, take_id, events)
-          .has_value());
-  check_success(
-      application.command(
-          {
-              {"operation", "take.commit"},
-              {"project_path", project.generic_string()},
-              {"command_id", uuid(command_base + 3U)},
-              {"expected_revision", 2},
-              {"take_id", take_id.value()},
-              {"pattern",
-               {
-                   {"pattern_id", pattern_id},
-                   {"bars", 1},
-                   {"events",
-                    nlohmann::json::array(
-                        {{{"slot", slot(0, 0)},
-                          {"step", 0},
-                          {"velocity", 127}}})},
-               }},
-          }),
+          assign_request(
+              project, command_base + 3U, 0, asset_id, 2)),
       3);
 }
 

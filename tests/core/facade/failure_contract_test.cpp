@@ -574,6 +574,42 @@ void test_every_public_entry_converts_an_unexpected_throw_to_its_envelope() {
   check_typed("acquire_project_writer", [&] {
     return application.acquire_project_writer(project);
   });
+  const lmdj::foundation::SequenceSessionId sequence_session{uuid(789)};
+  const lmdj::foundation::PatternId sequence_pattern{uuid(781)};
+  check_typed("begin_sequence", [&] {
+    return application.begin_sequence(
+        {project, sequence_session, sequence_pattern, 0, 0});
+  });
+  check_typed("record_sequence_event", [&] {
+    return application.record_sequence_event(
+        {project, sequence_session, {{0, 0}, 100, 0, 1, true}});
+  });
+  check_typed("flush_sequence", [&] {
+    return application.flush_sequence(
+        {project, sequence_session, CommandId{uuid(790)}, 0});
+  });
+  check_typed("stop_sequence", [&] {
+    return application.stop_sequence(
+        {project, sequence_session, CommandId{uuid(791)}, 0});
+  });
+  check_typed("request_sequence_switch", [&] {
+    return application.request_sequence_switch(
+        {project, sequence_session, lmdj::foundation::PatternId{uuid(792)}});
+  });
+  check_typed("query_sequence_status", [&] {
+    return application.query_sequence_status({project});
+  });
+  check_typed("list_sequence_recovery", [&] {
+    return application.list_sequence_recovery({project});
+  });
+  check_typed("apply_sequence_recovery", [&] {
+    return application.apply_sequence_recovery(
+        {project, sequence_session, std::nullopt});
+  });
+  check_typed("discard_sequence_recovery", [&] {
+    return application.discard_sequence_recovery(
+        {project, sequence_session, std::nullopt});
+  });
 
   // JSON entries answer with the envelope form of the same failure, so a Host
   // reading JSON sees a well-formed refusal rather than a truncated response.

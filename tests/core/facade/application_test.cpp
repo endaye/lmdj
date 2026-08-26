@@ -657,7 +657,18 @@ void create_single_asset_project(
     std::uint32_t command_base,
     std::string asset_id,
     std::string pattern_id) {
-  check_success(application.command(create_request(project)), 0);
+  const auto created = application.create_initial_project(
+      InitialProjectRequest{
+          project,
+          ProjectId{std::string{kProjectId}},
+          120,
+          Pattern{
+              PatternId{pattern_id},
+              1,
+              {{PadSlotId{0, 0}, 0, 240, 127}},
+          },
+      });
+  LMDJ_CHECK(created.has_value());
   const auto imported = application.import_artifact_bytes(
       ArtifactBytesImportRequest{
           project,
@@ -678,42 +689,10 @@ void create_single_asset_project(
               1)),
       2);
 
-  const TakeId take_id{uuid(command_base + 2U)};
   check_success(
       application.command(
-          {
-              {"operation", "take.begin"},
-              {"project_path", project.generic_string()},
-              {"take_id", take_id.value()},
-              {"expected_revision", 2},
-              {"sample_rate", 48000},
-          }),
-      2);
-  const std::array events{
-      RawTakeEvent{PadSlotId{0, 0}, 0, 127},
-  };
-  LMDJ_CHECK(
-      application.append_realtime_take_events(project, take_id, events)
-          .has_value());
-  check_success(
-      application.command(
-          {
-              {"operation", "take.commit"},
-              {"project_path", project.generic_string()},
-              {"command_id", uuid(command_base + 3U)},
-              {"expected_revision", 2},
-              {"take_id", take_id.value()},
-              {"pattern",
-               {
-                   {"pattern_id", pattern_id},
-                   {"bars", 1},
-                   {"events",
-                    nlohmann::json::array(
-                        {{{"slot", slot(0, 0)},
-                          {"step", 0},
-                          {"velocity", 127}}})},
-               }},
-          }),
+          assign_request(
+              project, command_base + 3U, 0, asset_id, 2)),
       3);
 }
 
@@ -956,10 +935,25 @@ nlohmann::json pattern_json() {
 void create_golden_project(
     Application& application,
     const std::filesystem::path& project) {
-  auto response = application.command(create_request(project));
-  check_success(response, 0);
+  const auto created = application.create_initial_project(
+      InitialProjectRequest{
+          project,
+          ProjectId{std::string{kProjectId}},
+          120,
+          Pattern{
+              PatternId{std::string{kPatternId}},
+              1,
+              {
+                  {{0, 0}, 0, 240, 127},
+                  {{0, 1}, 960, 240, 127},
+                  {{0, 0}, 1920, 240, 127},
+                  {{0, 1}, 2880, 240, 127},
+              },
+          },
+      });
+  LMDJ_CHECK(created.has_value());
 
-  response = application.command(import_request(
+  auto response = application.command(import_request(
       project,
       1,
       kKickAssetId,
@@ -983,45 +977,7 @@ void create_golden_project(
   check_success(response, 4);
 
   response = application.command(
-      {
-          {"operation", "take.begin"},
-          {"project_path", project.generic_string()},
-          {"take_id", kTakeId},
-          {"expected_revision", 4},
-          {"sample_rate", 48000},
-      });
-  check_success(response, 4);
-  for (const auto& [pad, frame] :
-       std::vector<std::pair<std::uint32_t, std::uint64_t>>{
-           {0, 0},
-           {1, 24'000},
-           {0, 48'000},
-           {1, 72'000},
-       }) {
-    response = application.command(
-        {
-            {"operation", "take.append"},
-            {"project_path", project.generic_string()},
-            {"take_id", kTakeId},
-            {"event",
-             {
-                 {"slot", slot(0, pad)},
-                 {"frame_offset", frame},
-                 {"velocity", 127},
-             }},
-        });
-    check_success(response, 4);
-  }
-
-  response = application.command(
-      {
-          {"operation", "take.commit"},
-          {"project_path", project.generic_string()},
-          {"command_id", uuid(5)},
-          {"expected_revision", 4},
-          {"take_id", kTakeId},
-          {"pattern", pattern_json()},
-      });
+      assign_request(project, 5, 0, kKickAssetId, 4));
   check_success(response, 5);
 }
 
@@ -1109,20 +1065,19 @@ void test_all_operations_share_one_facade_and_revision_contract() {
           "bpm",
           "banks",
           "assets",
-          "takes",
           "patterns",
+          "sequence_settings",
       });
-  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v1");
+  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v3");
   LMDJ_CHECK(projected.at("revision") == 5);
-  LMDJ_CHECK(
-      projected.at("takes").at(kTakeId).at("events").size() == 4);
+  LMDJ_CHECK(projected.at("patterns").at(kPatternId).at("events").size() == 4);
 
   response = application.query(
       {
-          {"operation", "take.recoverable.list"},
+          {"operation", "sequence.recovery.list"},
           {"project_path", project.generic_string()},
       });
-  check_success(response, 5);
+  check_success(response, nullptr);
   LMDJ_CHECK(response.at("result").at("candidates").empty());
 
   response = application.query(
@@ -1471,7 +1426,7 @@ void test_render_recooks_after_restart_and_publishes_golden_atomically() {
   }
 }
 
-void test_typed_realtime_host_api_prepares_and_persists_take_batches() {
+void test_typed_sequence_host_api_prepares_records_and_recovers() {
   TempDirectory temp;
   const auto project = temp.path() / "typed-snapshot.lmdj";
   Application application(config(temp.path()));
@@ -1503,119 +1458,68 @@ void test_typed_realtime_host_api_prepares_and_persists_take_batches() {
       invalid_path.error().code ==
       lmdj::foundation::ErrorCode::invalid_argument);
 
-  const auto capture_project = temp.path() / "typed-capture.lmdj";
-  check_success(
-      application.command(create_request(capture_project)), 0);
-  const TakeId capture_take{uuid(202)};
-  check_success(
-      application.command(
-          {
-              {"operation", "take.begin"},
-              {"project_path", capture_project.generic_string()},
-              {"take_id", capture_take.value()},
-              {"expected_revision", 0},
-              {"sample_rate", 48000},
-          }),
-      0);
-  const std::vector<RawTakeEvent> events{
-      RawTakeEvent{PadSlotId{0, 0}, 0, 127},
-      RawTakeEvent{PadSlotId{1, 2}, 128, 96},
-      RawTakeEvent{PadSlotId{3, 15}, 256, 64},
-  };
-
-  const auto appended = application.append_realtime_take_events(
-      capture_project, capture_take, events);
-
-  LMDJ_CHECK(appended.has_value());
-  const auto committed = application.command(
-      {
-          {"operation", "take.commit"},
-          {"project_path", capture_project.generic_string()},
-          {"command_id", uuid(203)},
-          {"expected_revision", 0},
-          {"take_id", capture_take.value()},
-          {"pattern",
-           {
-               {"pattern_id", uuid(204)},
-               {"bars", 1},
-               {"events",
-                nlohmann::json::array(
-                    {
-                        {{"slot", slot(0, 0)},
-                         {"step", 0},
-                         {"velocity", 127}},
-                        {{"slot", slot(1, 2)},
-                         {"step", 1},
-                         {"velocity", 96}},
-                        {{"slot", slot(3, 15)},
-                         {"step", 2},
-                         {"velocity", 64}},
-                    })},
-           }},
-      });
-  check_success(committed, 1);
+  const auto capture_project = temp.path() / "typed-sequence.lmdj";
+  create_single_asset_project(
+      application, capture_project, mono_pcm16_wav(16), 200, uuid(204),
+      uuid(205));
+  const lmdj::foundation::SequenceSessionId session{uuid(202)};
+  const auto begun = application.begin_sequence(
+      {capture_project, session, PatternId{uuid(205)}, 3, 0});
+  LMDJ_CHECK(begun.has_value());
+  LMDJ_CHECK(
+      begun.value().status.state == lmdj::facade::SequenceRecordState::active);
+  LMDJ_CHECK(application.record_sequence_event({
+      capture_project, session, {{0, 0}, 96, 0, 1, true}}).has_value());
+  LMDJ_CHECK(application.record_sequence_event({
+      capture_project, session, {{0, 0}, 0, 12'000, 2, false}}).has_value());
+  const auto committed = application.flush_sequence(
+      {capture_project, session, CommandId{uuid(207)}, 12'000});
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().committed_revision == 4);
+  const auto stopped = application.stop_sequence(
+      {capture_project, session, CommandId{uuid(208)}, 12'001});
+  LMDJ_CHECK(stopped.has_value());
+  LMDJ_CHECK(
+      stopped.value().status.state == lmdj::facade::SequenceRecordState::inactive);
   const auto captured = application.query(
       {
           {"operation", "project.inspect"},
           {"project_path", capture_project.generic_string()},
       });
-  check_success(captured, 1);
+  check_success(captured, 4);
   const auto& persisted = captured.at("result")
                               .at("project")
-                              .at("takes")
-                              .at(capture_take.value())
+                              .at("patterns")
+                              .at(uuid(205))
                               .at("events");
-  LMDJ_CHECK(persisted.size() == events.size());
-  LMDJ_CHECK(persisted.at(0).at("frame_offset") == 0);
-  LMDJ_CHECK(persisted.at(1).at("frame_offset") == 128);
-  LMDJ_CHECK(persisted.at(2).at("frame_offset") == 256);
+  LMDJ_CHECK(persisted.size() == 1);
+  LMDJ_CHECK(persisted.at(0).at("onset_tick") == 0);
+  LMDJ_CHECK(persisted.at(0).at("duration_tick") == 480);
 
   const auto recovery_project = temp.path() / "typed-recovery.lmdj";
-  check_success(application.command(create_request(recovery_project)), 0);
-  const TakeId recovery_take{uuid(205)};
-  check_success(
-      application.command(
-          {
-              {"operation", "take.begin"},
-              {"project_path", recovery_project.generic_string()},
-              {"take_id", recovery_take.value()},
-              {"expected_revision", 0},
-              {"sample_rate", 48000},
-          }),
-      0);
-  LMDJ_CHECK(
-      application.append_realtime_take_events(
-                     recovery_project,
-                     recovery_take,
-                     std::span<const RawTakeEvent>{events}.first(1))
-          .has_value());
-  const auto invalid_reason = application.seal_realtime_take(
-      recovery_project, recovery_take, "revision_conflict");
-  LMDJ_CHECK(!invalid_reason.has_value());
-  LMDJ_CHECK(
-      invalid_reason.error().code ==
-      lmdj::foundation::ErrorCode::invalid_argument);
-  const auto sealed = application.seal_realtime_take(
-      recovery_project, recovery_take, "capture_incomplete");
-  LMDJ_CHECK(sealed.has_value());
-  const auto candidates = application.query(
-      {
-          {"operation", "take.recoverable.list"},
-          {"project_path", recovery_project.generic_string()},
-      });
-  check_success(candidates, 0);
-  LMDJ_CHECK(candidates.at("result").at("candidates").size() == 1);
-  LMDJ_CHECK(
-      candidates.at("result")
-              .at("candidates")
-              .at(0)
-              .at("reason") == "capture_incomplete");
-  LMDJ_CHECK(
-      candidates.at("result")
-              .at("candidates")
-              .at(0)
-              .at("events")
-              .size() == 1);
+  const auto recovery_pattern = uuid(209);
+  const auto recovery_session = lmdj::foundation::SequenceSessionId{uuid(210)};
+  {
+    Application owner(config(temp.path()));
+    create_single_asset_project(
+        owner, recovery_project, mono_pcm16_wav(16), 211, uuid(215),
+        recovery_pattern);
+    LMDJ_CHECK(owner.begin_sequence(
+        {recovery_project, recovery_session, PatternId{recovery_pattern}, 3, 0})
+                   .has_value());
+    LMDJ_CHECK(owner.record_sequence_event({
+        recovery_project, recovery_session, {{0, 0}, 80, 0, 1, true}})
+                   .has_value());
+  }
+  const auto candidates = application.list_sequence_recovery({recovery_project});
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().size() == 1);
+  LMDJ_CHECK(candidates.value().front().reason == "owner_lost");
+  LMDJ_CHECK(candidates.value().front().event_count == 1);
+  const auto recovered = application.apply_sequence_recovery(
+      {recovery_project, recovery_session, std::nullopt});
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(recovered.value().committed_revision == 4);
 }
 
 void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero() {
@@ -1766,23 +1670,14 @@ void test_byte_import_and_opaque_writer_lease_share_one_storage_platform() {
     LMDJ_CHECK(!invalid_import.has_value());
     LMDJ_CHECK(invalid_import.error().code == ErrorCode::invalid_argument);
 
-    const auto invalid_append = application.append_realtime_take_events(
-        project,
-        TakeId{"not-a-uuid"},
-        std::span<const RawTakeEvent>{});
-    LMDJ_CHECK(!invalid_append.has_value());
-    LMDJ_CHECK(invalid_append.error().code == ErrorCode::invalid_argument);
-
-    check_success(
-        application.command(
-            {
-                {"operation", "take.begin"},
-                {"project_path", project.generic_string()},
-                {"take_id", uuid(302)},
-                {"expected_revision", 1},
-                {"sample_rate", 48000},
-            }),
-        1);
+    const auto invalid_begin = application.begin_sequence(
+        {project,
+         lmdj::foundation::SequenceSessionId{"not-a-uuid"},
+         PatternId{uuid(302)},
+         1,
+         0});
+    LMDJ_CHECK(!invalid_begin.has_value());
+    LMDJ_CHECK(invalid_begin.error().code == ErrorCode::invalid_argument);
 
     const auto busy = competitor.acquire_project_writer(project);
     LMDJ_CHECK(!busy.has_value());
@@ -2104,16 +1999,21 @@ void test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation() {
       "project.create",
       "asset.import",
       "pad.assign",
-      "take.begin",
-      "take.append",
-      "take.commit",
+      "sequence.record.begin",
+      "sequence.record.event",
+      "sequence.record.flush",
+      "sequence.record.stop",
+      "sequence.record.switch-request",
+      "sequence.recovery.apply",
+      "sequence.recovery.discard",
       "render.offline",
       "provider.select",
       "provider.run",
   };
   const std::vector<std::string> queries{
       "project.inspect",
-      "take.recoverable.list",
+      "sequence.record.status",
+      "sequence.recovery.list",
       "snapshot.cook",
       "provider.list",
       "provider.selected",
@@ -2192,16 +2092,16 @@ void test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation() {
 
   const auto stale_begin = application.command(
       {
-          {"operation", "take.begin"},
+          {"operation", "sequence.record.begin"},
           {"project_path", project.generic_string()},
-          {"take_id", kTakeId},
+          {"session_id", kTakeId},
+          {"pattern_id", kPatternId},
           {"expected_revision", 1},
-          {"sample_rate", 48000},
+          {"runtime_frame", 0},
       });
   check_error(stale_begin, "REVISION_CONFLICT");
   LMDJ_CHECK(!std::filesystem::exists(
-      project / "recovery/active" /
-      (std::string(kTakeId) + ".jsonl")));
+      project / "recovery/active/sequence.jsonl"));
   auto inspected = application.query(
       {
           {"operation", "project.inspect"},
@@ -2327,11 +2227,10 @@ int main() {
     test_application_startup_cleans_incomplete_bundle_staging();
     test_project_bundle_host_paths_fail_closed();
     test_render_recooks_after_restart_and_publishes_golden_atomically();
-    test_typed_realtime_host_api_prepares_and_persists_take_batches();
+    test_typed_sequence_host_api_prepares_records_and_recovers();
     test_typed_initial_project_creation_persists_one_pattern_at_revision_zero();
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
     test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
-    test_take_commit_uses_captured_revision_and_replays_after_cleanup();
     test_asset_and_pad_replay_identity_is_enforced();
     test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation();
     test_provider_failures_are_errors_but_attempts_remain_queryable();
