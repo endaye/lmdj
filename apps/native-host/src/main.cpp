@@ -44,9 +44,10 @@ using lmdj::audio::RuntimeTriggerOutcomeEvent;
 using lmdj::facade::Application;
 using lmdj::foundation::Error;
 using lmdj::foundation::ErrorCode;
+using lmdj::foundation::CommandId;
 using lmdj::foundation::PatternId;
 using lmdj::foundation::Result;
-using lmdj::foundation::TakeId;
+using lmdj::foundation::SequenceSessionId;
 using lmdj::native_host::CaptureWriter;
 
 constexpr std::size_t kMaximumCommandBytes = 64U * 1024U;
@@ -461,9 +462,6 @@ class NativeHost final {
       if (name == "record.stop") {
         return record_stop(request);
       }
-      if (name == "record.commit") {
-        return record_commit(request);
-      }
       if (name == "status") {
         return status(request);
       }
@@ -606,7 +604,7 @@ class NativeHost final {
     if (!running_) {
       return invalid_request("Native Host is stopped");
     }
-    if (active_take_.has_value() &&
+    if (active_session_.has_value() &&
         engine_.capture_telemetry().state != CaptureState::active) {
       return invalid_request("recording Capture is not active");
     }
@@ -711,44 +709,46 @@ class NativeHost final {
   Json record_begin(const Json& request) {
     if (!exact_keys(
             request,
-            {"operation", "take_id", "expected_revision"})) {
+            {"operation", "session_id", "expected_revision"})) {
       return invalid_request("record.begin request shape is invalid");
     }
-    if (!running_ || active_take_.has_value() ||
-        committable_take_.has_value() || writer_ != nullptr) {
+    if (!running_ || active_session_.has_value() || writer_ != nullptr) {
       return invalid_request("Native Host cannot begin a recording now");
     }
-    const auto take = uuid_value(request, "take_id");
+    const auto session = uuid_value(request, "session_id");
     const auto revision = unsigned_value(request, "expected_revision");
-    if (!take.has_value() || !revision.has_value()) {
+    if (!session.has_value() || !revision.has_value()) {
       return invalid_request("record.begin identity is invalid");
     }
 
     Json begun;
     {
       std::lock_guard lock(facade_mutex_);
-      begun = application_.command({
-          {"operation", "take.begin"},
-          {"project_path", invocation_.project.string()},
-          {"take_id", *take},
-          {"expected_revision", *revision},
-          {"sample_rate", lmdj::audio::kRealtimeSampleRate},
+      const auto result = application_.begin_sequence({
+          invocation_.project,
+          SequenceSessionId{*session},
+          pattern_id_,
+          *revision,
+          engine_.telemetry().rendered_frames,
       });
+      begun = result.has_value()
+                  ? success_response(
+                        "sequence.record.begin",
+                        {{"session_id", *session},
+                         {"expected_revision", *revision}})
+                  : error_response(result.error());
     }
     if (!response_ok(begun)) {
       return begun;
     }
 
-    const TakeId take_id{*take};
+    const SequenceSessionId session_id{*session};
     try {
       writer_ = std::make_unique<CaptureWriter>(
-          engine_, application_, facade_mutex_, invocation_.project, take_id);
+          engine_, application_, facade_mutex_, invocation_.project, session_id);
       writer_->start();
     } catch (...) {
       writer_.reset();
-      std::lock_guard lock(facade_mutex_);
-      (void)application_.seal_realtime_take(
-          invocation_.project, take_id, "capture_incomplete");
       return error_response(
           "INTERNAL_ERROR", "Capture Writer failed to start");
     }
@@ -770,25 +770,22 @@ class NativeHost final {
       writer_->request_stop();
       writer_->join();
       writer_.reset();
-      std::lock_guard lock(facade_mutex_);
-      (void)application_.seal_realtime_take(
-          invocation_.project, take_id, "capture_incomplete");
       return error_response("IO_ERROR", "Capture arm timed out");
     }
-    active_take_ = take_id;
+    active_session_ = session_id;
     return success_response(
         "record.begin",
         {
-            {"take_id", *take},
+            {"session_id", *session},
             {"expected_revision", *revision},
         });
   }
 
-  Json finish_recording(bool allow_commit) {
-    if (!active_take_.has_value() || writer_ == nullptr) {
+  Json finish_recording(std::optional<CommandId> stop_command) {
+    if (!active_session_.has_value() || writer_ == nullptr) {
       return invalid_request("no recording is active");
     }
-    const auto take_id = *active_take_;
+    const auto session_id = *active_session_;
     const auto disarmed = engine_.disarm_capture();
     const auto reached_terminal =
         disarmed.has_value() &&
@@ -809,86 +806,53 @@ class NativeHost final {
     std::array<lmdj::audio::CapturedTriggerEvent, 64> discarded{};
     while (engine_.drain_capture(discarded) != 0) {
     }
-    const bool clean =
-        allow_commit && reached_terminal &&
+    bool clean =
+        stop_command.has_value() && reached_terminal &&
         capture.state == CaptureState::idle && failures == 0 &&
         persisted == captured;
-
-    std::optional<std::filesystem::path> recovery_path;
-    if (!clean) {
+    std::optional<std::uint64_t> committed_revision;
+    if (clean) {
       std::lock_guard lock(facade_mutex_);
-      const auto sealed = application_.seal_realtime_take(
-          invocation_.project, take_id, "capture_incomplete");
-      if (!sealed.has_value()) {
-        active_take_.reset();
+      const auto stopped = application_.stop_sequence({
+          invocation_.project,
+          session_id,
+          *stop_command,
+          engine_.telemetry().rendered_frames,
+      });
+      if (!stopped.has_value()) {
+        active_session_.reset();
         writer_.reset();
-        return error_response(sealed.error());
+        return error_response(stopped.error());
       }
-      recovery_path = sealed.value();
-      committable_take_.reset();
-    } else {
-      committable_take_ = take_id;
+      committed_revision = stopped.value().committed_revision;
     }
 
-    active_take_.reset();
+    active_session_.reset();
     writer_.reset();
     return success_response(
         "record.stop",
         {
-            {"take_id", take_id.value()},
+            {"session_id", session_id.value()},
             {"captured_events", captured},
             {"persisted_events", persisted},
             {"writer_failures", failures},
             {"clean", clean},
-            {"recovery_path",
-             recovery_path.has_value()
-                 ? Json(recovery_path->string())
+            {"committed_revision",
+             committed_revision.has_value()
+                 ? Json(*committed_revision)
                  : Json(nullptr)},
         });
   }
 
   Json record_stop(const Json& request) {
-    if (!exact_keys(request, {"operation"})) {
+    if (!exact_keys(request, {"operation", "command_id"})) {
       return invalid_request("record.stop request shape is invalid");
     }
-    return finish_recording(true);
-  }
-
-  Json record_commit(const Json& request) {
-    if (!exact_keys(
-            request,
-            {"operation", "command_id", "expected_revision", "pattern"})) {
-      return invalid_request("record.commit request shape is invalid");
-    }
-    if (!committable_take_.has_value()) {
-      return invalid_request("no clean stopped Take is available to commit");
-    }
     const auto command = uuid_value(request, "command_id");
-    const auto revision = unsigned_value(request, "expected_revision");
-    const auto pattern = request.find("pattern");
-    if (!command.has_value() || !revision.has_value() ||
-        pattern == request.end() || !pattern->is_object()) {
-      return invalid_request("record.commit identity or Pattern is invalid");
+    if (!command.has_value()) {
+      return invalid_request("record.stop command id is invalid");
     }
-    Json committed;
-    {
-      std::lock_guard lock(facade_mutex_);
-      committed = application_.command({
-          {"operation", "take.commit"},
-          {"project_path", invocation_.project.string()},
-          {"command_id", *command},
-          {"expected_revision", *revision},
-          {"take_id", committable_take_->value()},
-          {"pattern", *pattern},
-      });
-    }
-    if (response_ok(committed) ||
-        (committed.contains("error") &&
-         committed.at("error").value("code", "") ==
-             "REVISION_CONFLICT")) {
-      committable_take_.reset();
-    }
-    return committed;
+    return finish_recording(CommandId{*command});
   }
 
   Json status(const Json& request) const {
@@ -971,13 +935,9 @@ class NativeHost final {
                  {"writer_failures", writer_failures},
              }},
             {"coreaudio", std::move(coreaudio)},
-            {"active_take_id",
-             active_take_.has_value()
-                 ? Json(active_take_->value())
-                 : Json(nullptr)},
-            {"committable_take_id",
-             committable_take_.has_value()
-                 ? Json(committable_take_->value())
+            {"active_session_id",
+             active_session_.has_value()
+                 ? Json(active_session_->value())
                  : Json(nullptr)},
         });
   }
@@ -986,8 +946,8 @@ class NativeHost final {
     if (!exact_keys(request, {"operation"})) {
       return invalid_request("stop request shape is invalid");
     }
-    if (active_take_.has_value()) {
-      const auto stopped_recording = finish_recording(false);
+    if (active_session_.has_value()) {
+      const auto stopped_recording = finish_recording(std::nullopt);
       if (!response_ok(stopped_recording)) {
         return stopped_recording;
       }
@@ -1003,7 +963,7 @@ class NativeHost final {
     if (!exact_keys(request, {"operation"})) {
       return invalid_request("start request shape is invalid");
     }
-    if (active_take_.has_value()) {
+    if (active_session_.has_value()) {
       return invalid_request("cannot start while a recording is active");
     }
     const auto started = start_backend();
@@ -1017,22 +977,11 @@ class NativeHost final {
     if (!exact_keys(request, {"operation"})) {
       return invalid_request("quit request shape is invalid");
     }
-    if (active_take_.has_value()) {
-      const auto stopped_recording = finish_recording(false);
+    if (active_session_.has_value()) {
+      const auto stopped_recording = finish_recording(std::nullopt);
       if (!response_ok(stopped_recording)) {
         return stopped_recording;
       }
-    }
-    if (committable_take_.has_value()) {
-      std::lock_guard lock(facade_mutex_);
-      const auto sealed = application_.seal_realtime_take(
-          invocation_.project,
-          *committable_take_,
-          "capture_incomplete");
-      if (!sealed.has_value()) {
-        return error_response(sealed.error());
-      }
-      committable_take_.reset();
     }
     const auto stopped = stop_backend();
     if (!stopped.has_value()) {
@@ -1052,8 +1001,7 @@ class NativeHost final {
   std::unique_ptr<lmdj::audio::apple::CoreAudioOutput> output_;
 #endif
   std::unique_ptr<CaptureWriter> writer_;
-  std::optional<TakeId> active_take_;
-  std::optional<TakeId> committable_take_;
+  std::optional<SequenceSessionId> active_session_;
   std::uint64_t capture_baseline_ = 0;
   std::uint64_t last_persisted_events_ = 0;
   std::uint64_t last_writer_failures_ = 0;

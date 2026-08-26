@@ -386,10 +386,6 @@ def mcp_author_cli_consume(
     mcp = MCP(library, workspace)
     for _surface, request, revision in author_requests(project):
         operation = request["operation"]
-        if operation == "project.create":
-            envelope = cli_request(cli, workspace, "command", request)
-            check_success(envelope, revision)
-            continue
         arguments = {
             key: value for key, value in request.items() if key != "operation"
         }
@@ -691,6 +687,205 @@ def provider_binding_parity(
     }
 
 
+def sequence_cross_host_observer(
+    cli: Path,
+    library: Path,
+    temp_root: Path,
+) -> None:
+    workspace = temp_root / "sequence-observer-workspace"
+    workspace.mkdir()
+    project = temp_root / "sequence-observer.lmdj"
+    session_id = uuid(901)
+    mcp = MCP(library, workspace)
+    for _surface, request, revision in author_requests(project):
+        arguments = {
+            key: value for key, value in request.items() if key != "operation"
+        }
+        check_success(
+            mcp.tool(f"lmdj.{request['operation']}", arguments), revision
+        )
+    begun = mcp.tool(
+        "lmdj.sequence.record.begin",
+        {
+            "project_path": str(project),
+            "session_id": session_id,
+            "pattern_id": PATTERN_ID,
+            "expected_revision": 5,
+            "runtime_frame": 0,
+        },
+    )
+    check_success(begun, 5)
+    observed = cli_request(
+        cli,
+        workspace,
+        "query",
+        {
+            "operation": "sequence.record.status",
+            "project_path": str(project),
+        },
+    )
+    check_success(observed, None)
+    assert observed["result"]["state"] == "active"
+    assert observed["result"]["session_id"] == session_id
+    recorded = mcp.tool(
+        "lmdj.sequence.record.event",
+        {
+            "project_path": str(project),
+            "session_id": session_id,
+            "event": {
+                "slot": slot(0, 0),
+                "velocity": 100,
+                "runtime_frame": 1,
+                "input_sequence": 1,
+                "pressed": True,
+            },
+        },
+    )
+    check_success(recorded, 5)
+    mcp.close()
+
+    restarted_status = cli_request(
+        cli,
+        workspace,
+        "query",
+        {
+            "operation": "sequence.record.status",
+            "project_path": str(project),
+        },
+    )
+    check_success(restarted_status, None)
+    assert restarted_status["result"]["state"] == "recoverable"
+    assert restarted_status["result"]["session_id"] == session_id
+    recovery = cli_request(
+        cli,
+        workspace,
+        "query",
+        {
+            "operation": "sequence.recovery.list",
+            "project_path": str(project),
+        },
+    )
+    check_success(recovery, None)
+    assert recovery["result"]["candidates"] == [
+        {
+            "session_id": session_id,
+            "pattern_id": PATTERN_ID,
+            "bars": 1,
+            "reason": "owner_lost",
+            "event_count": 1,
+        }
+    ]
+    discarded = cli_request(
+        cli,
+        workspace,
+        "command",
+        {
+            "operation": "sequence.recovery.discard",
+            "project_path": str(project),
+            "session_id": session_id,
+        },
+    )
+    check_success(discarded, None)
+
+    replay_session_id = uuid(904)
+    flush_command_id = uuid(905)
+    mcp = MCP(library, workspace)
+    check_success(
+        mcp.tool(
+            "lmdj.sequence.record.begin",
+            {
+                "project_path": str(project),
+                "session_id": replay_session_id,
+                "pattern_id": PATTERN_ID,
+                "expected_revision": 5,
+                "runtime_frame": 0,
+            },
+        ),
+        5,
+    )
+    for event in (
+        {
+            "slot": slot(0, 0),
+            "velocity": 95,
+            "runtime_frame": 0,
+            "input_sequence": 1,
+            "pressed": True,
+        },
+        {
+            "slot": slot(0, 0),
+            "velocity": 0,
+            "runtime_frame": 12_000,
+            "input_sequence": 2,
+            "pressed": False,
+        },
+    ):
+        check_success(
+            mcp.tool(
+                "lmdj.sequence.record.event",
+                {
+                    "project_path": str(project),
+                    "session_id": replay_session_id,
+                    "event": event,
+                },
+            ),
+            5,
+        )
+    flushed = mcp.tool(
+        "lmdj.sequence.record.flush",
+        {
+            "project_path": str(project),
+            "session_id": replay_session_id,
+            "command_id": flush_command_id,
+            "runtime_frame": 12_000,
+        },
+    )
+    check_success(flushed, 6)
+    assert flushed["result"]["replayed"] is False
+    check_success(
+        mcp.tool(
+            "lmdj.sequence.record.stop",
+            {
+                "project_path": str(project),
+                "session_id": replay_session_id,
+                "command_id": uuid(906),
+                "runtime_frame": 12_001,
+            },
+        ),
+        6,
+    )
+    mcp.close()
+    before_replay = cli_request(
+        cli,
+        workspace,
+        "query",
+        {"operation": "project.inspect", "project_path": str(project)},
+    )
+    replayed = cli_request(
+        cli,
+        workspace,
+        "command",
+        {
+            "operation": "sequence.record.flush",
+            "project_path": str(project),
+            "session_id": replay_session_id,
+            "command_id": flush_command_id,
+            "runtime_frame": 12_000,
+        },
+    )
+    check_success(replayed, 6)
+    assert replayed["result"]["replayed"] is True
+    after_replay = cli_request(
+        cli,
+        workspace,
+        "query",
+        {"operation": "project.inspect", "project_path": str(project)},
+    )
+    assert after_replay == before_replay
+    assert len(
+        after_replay["result"]["project"]["patterns"][PATTERN_ID]["events"]
+    ) == 4
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         raise SystemExit(
@@ -713,6 +908,7 @@ def main() -> int:
         )
         sample_facade_parity(cli, library, workspace, temp_root)
         provider_binding_parity(cli, library, temp_root)
+        sequence_cross_host_observer(cli, library, temp_root)
     print("cli/mcp facade parity: passed")
     return 0
 
