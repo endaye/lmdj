@@ -4,6 +4,9 @@
 
 状态：规格已批准
 
+修订：2026-08-26 — §8.4 preflight/publish 验证边界。GitHub 不向只读身份暴露 Draft
+Release，Draft 专属验证从 preflight 移交 publish job（维护者批准，#335）。
+
 ## 1. 结论
 
 LMDJ 将 tag、GitHub Release 与部署从临时人工命令收敛为一个仓库拥有、分段授权、
@@ -432,12 +435,19 @@ exact-main 策略约束和 deployment 记录，不在单人维护者仓库伪造
 
 - canonical remote tag fetch、annotated/signed role、target 与 main ancestry；
 - intent、active identity、snapshot/provenance、merged-main CI run 与 channel gate；
-- numeric Release ID、Draft state、tag/name/prerelease/latest 与 body marker；
-- exact asset inventory、每个 size/digest、checksum signature、profile verifier；
-- deterministic plan 重建与 `plan_sha256` 对比；
 - 当前 GitHub actor、repository 与 event 类型 allowlist。
 
-publish job 必须再次读取并验证 Draft 的 immutable inputs，随后只执行一次设置
+（修订 2026-08-26，#335）GitHub 仅向具备 push/write 权限的身份暴露 Draft Release，
+只读 preflight token 读取 Draft 会收到 403，因此 Draft 专属验证不可能在只读阶段完成。
+原先分配给 preflight 的以下各项全部改由 publish job 在 `release` Environment 门之后、
+唯一 mutation 之前完成；mutation 前的保障不变，代价是坏的 Draft 输入在 Environment
+批准之后而非之前被拦下：
+
+- numeric Release ID、Draft state、tag/name/prerelease/latest 与 body marker；
+- exact asset inventory、每个 size/digest、checksum signature、profile verifier；
+- deterministic plan 重建与 `plan_sha256` 对比。
+
+publish job 必须读取并完整验证 Draft 的 immutable inputs，随后只执行一次设置
 `draft: false`、精确 `prerelease` 与精确 `make_latest` policy 的 transition。GitHub Release
 API 不提供本流程可依赖的强条件更新契约，因此这里不声称阻止 TOCTOU；流程通过 mutation 前
 最后一次完整验证和 mutation 后再次完整读取来检测并 fail closed，必要时按 numeric ID
