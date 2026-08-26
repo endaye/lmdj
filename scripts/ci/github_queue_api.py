@@ -537,6 +537,38 @@ class GitHubQueueClient:
             expected=tuple(range(200, 300)),
         )
 
+    def cancel_superseded_pull_runs(self, head_sha: str) -> tuple[int, ...]:
+        cancelled: list[int] = []
+        for status in ("in_progress", "queued"):
+            _, _, body = self._request(
+                "GET",
+                "/actions/workflows/ci.yml/runs"
+                f"?event=pull_request&status={status}"
+                f"&head_sha={head_sha}&per_page=100",
+                expected=(200,),
+            )
+            document = _object(_json(body), "workflow runs response")
+            runs = document.get("workflow_runs")
+            if not isinstance(runs, list):
+                raise ValueError("workflow runs response has no run list")
+            for value in runs:
+                run = _object(value, "workflow run")
+                run_id = run.get("id")
+                if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
+                    raise ValueError("workflow run has no numeric id")
+                # The server-side filters are convenience; the exact head SHA
+                # and event match here is the contract, so runs for newer
+                # pushes are never touched.
+                if run.get("head_sha") != head_sha or run.get("event") != "pull_request":
+                    continue
+                self._request(
+                    "POST",
+                    f"/actions/runs/{run_id}/cancel",
+                    expected=tuple(range(200, 300)),
+                )
+                cancelled.append(run_id)
+        return tuple(cancelled)
+
     def _required_checks(
         self, jobs: list[object], checks: list[object]
     ) -> tuple[RequiredCheck, ...]:
