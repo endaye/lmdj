@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="309c5789f915430b05fd69ef9e127d2f36ca497dc280f9db8f8812961aadf860">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="f8386393eec3c65421bb26b18b4851b59e2f19857e0357f3b1ecfec71126539f">
   <title id="title">Project I/O Module</title><desc id="description">Project Store、portable Bundle 与 journaled atomic publication</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -21,7 +21,7 @@
       <rect class="node-mask" x="46" y="146" width="228" height="104" rx="18"/>
       <rect class="node" x="50" y="150" width="220" height="96" rx="14"/>
       <text class="node-title" x="66" y="182">Project Truth</text>
-      <text class="node-detail" x="66" y="208">v1 read · v2 write</text>
+      <text class="node-detail" x="66" y="208">v1/v2 read · v3 write</text>
     </g>
     <g class="component kind-host">
       <rect class="node-mask" x="46" y="386" width="228" height="104" rx="18"/>
@@ -38,8 +38,8 @@
     <g class="component kind-core">
       <rect class="node-mask" x="766" y="266" width="248" height="104" rx="18"/>
       <rect class="node" x="770" y="270" width="240" height="96" rx="14"/>
-      <text class="node-title" x="786" y="302">Staging + Journal</text>
-      <text class="node-detail" x="786" y="328">Project + Sample import</text>
+      <text class="node-title" x="786" y="302">Journal Overlay</text>
+      <text class="node-detail" x="786" y="328">flush · receipt · recovery</text>
     </g>
     <g class="component kind-host">
       <rect class="node-mask" x="1136" y="146" width="228" height="104" rx="18"/>
@@ -54,6 +54,6 @@
       <text class="node-detail" x="1156" y="448">canonical export</text>
     </g>
   <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation + Authoring Domain.</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Failure model</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Directory-scoped Sample staging and journaled publication keep cancellation, crash and invalid bytes atomic and retryable.</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Failure model</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Manifest publication commits Project Truth; receipt enables replay, while owner loss preserves a fingerprint-gated recovery artifact.</div></foreignObject></g>
 <g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Forbidden boundary</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Bundle is transfer-only; Runtime Snapshot is never persisted as Project Truth.</div></foreignObject></g>
 </svg>

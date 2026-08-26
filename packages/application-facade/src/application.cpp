@@ -39,7 +39,6 @@
 #include <lmdj/project_io/project_bundle_transfer.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
-#include <lmdj/project_io/take_journal.hpp>
 #include <lmdj/project_io/workspace_cache.hpp>
 #include <lmdj/provider/capability.hpp>
 
@@ -83,7 +82,6 @@ namespace {
 using foundation::Error;
 using foundation::ErrorCode;
 
-constexpr std::uint32_t kSampleRate = 48'000;
 constexpr std::uint64_t kMaximumProjectBundleIndexBytes =
     4U * 1024U * 1024U;
 constexpr std::size_t kMaximumProjectBundleChunkBytes = 1024U * 1024U;
@@ -492,24 +490,6 @@ domain::Pattern pattern_value(const nlohmann::json& encoded) {
   };
 }
 
-domain::RawTakeEvent raw_event_value(const nlohmann::json& encoded) {
-  require(
-      exact_keys(encoded, {"slot", "frame_offset", "velocity"}),
-      "raw event shape is invalid");
-  const auto frame_offset =
-      unsigned_field(
-          encoded,
-          "frame_offset",
-          std::numeric_limits<std::uint32_t>::max());
-  const auto velocity = unsigned_field(encoded, "velocity", 127);
-  require(velocity > 0, "raw event velocity must be positive");
-  return domain::RawTakeEvent{
-      slot_value(encoded.at("slot")),
-      static_cast<std::uint32_t>(frame_offset),
-      static_cast<std::uint8_t>(velocity),
-  };
-}
-
 nlohmann::json slot_json(domain::PadSlotId slot) {
   return {{"bank", slot.bank}, {"pad", slot.pad}};
 }
@@ -524,14 +504,6 @@ nlohmann::json playback_json(const domain::PadPlayback& playback) {
       {"trigger_mode", trigger_mode_name(playback.trigger_mode)},
       {"gain_millidb", playback.gain_millidb},
       {"muted", playback.muted},
-  };
-}
-
-nlohmann::json raw_event_json(const domain::RawTakeEvent& event) {
-  return {
-      {"slot", slot_json(event.slot)},
-      {"frame_offset", event.frame_offset},
-      {"velocity", event.velocity},
   };
 }
 
@@ -3984,39 +3956,6 @@ struct Application::Impl {
         project_revision);
   }
 
-  foundation::Result<void> append_realtime_take_events(
-      const std::filesystem::path& project_path,
-      foundation::TakeId take_id,
-      std::span<const domain::RawTakeEvent> events) {
-    const auto encoded_path = project_path.generic_string();
-    if (!valid_utf8(encoded_path) || !project_path.is_absolute() ||
-        project_path.lexically_normal() != project_path ||
-        !domain::is_valid_uuid(take_id.value())) {
-      return foundation::Result<void>::failure(Error{
-          ErrorCode::invalid_argument,
-          "realtime take append request is invalid",
-      });
-    }
-    return journals.append_batch(project_path, std::move(take_id), events);
-  }
-
-  foundation::Result<std::filesystem::path> seal_realtime_take(
-      const std::filesystem::path& project_path,
-      foundation::TakeId take_id,
-      std::string_view reason) {
-    const auto encoded_path = project_path.generic_string();
-    if (!valid_utf8(encoded_path) || !project_path.is_absolute() ||
-        project_path.lexically_normal() != project_path ||
-        !domain::is_valid_uuid(take_id.value()) ||
-        reason != "capture_incomplete") {
-      return foundation::Result<std::filesystem::path>::failure(Error{
-          ErrorCode::invalid_argument,
-          "realtime take seal request is invalid",
-      });
-    }
-    return journals.seal(project_path, std::move(take_id), std::string(reason));
-  }
-
   nlohmann::json project_create(const nlohmann::json& request) {
     require(
         exact_keys(request,
@@ -4299,185 +4238,6 @@ struct Application::Impl {
              persisted->asset_id.has_value()
                  ? nlohmann::json(persisted->asset_id->value())
                  : nlohmann::json(nullptr)},
-            {"committed_revision",
-             applied.event.at("revision").get<std::uint64_t>()},
-            {"replayed", applied.replayed},
-        },
-        applied.state.revision);
-  }
-
-  nlohmann::json take_begin(const nlohmann::json& request) {
-    require(
-        exact_keys(
-            request,
-            {
-                "operation",
-                "project_path",
-                "take_id",
-                "expected_revision",
-                "sample_rate",
-            }),
-        "take.begin request shape is invalid");
-    const auto path = absolute_path_field(request, "project_path");
-    const auto take_id = uuid_field(request, "take_id");
-    const auto revision = unsigned_field(request, "expected_revision");
-    const auto sample_rate =
-        unsigned_field(request, "sample_rate", kSampleRate);
-    require(sample_rate == kSampleRate, "sample_rate must be 48000");
-    const auto loaded = projects.load(path);
-    if (!loaded.has_value()) {
-      return error_envelope(loaded.error());
-    }
-    if (loaded.value().revision != revision) {
-      return error_envelope(
-          Error{
-              ErrorCode::revision_conflict,
-              "take begin expected a different project revision",
-              {
-                  {"actual_revision", loaded.value().revision},
-                  {"expected_revision", revision},
-              },
-          });
-    }
-    const auto begun = journals.begin(
-        path,
-        foundation::TakeId{take_id},
-        revision,
-        static_cast<std::uint32_t>(sample_rate));
-    if (!begun.has_value()) {
-      return error_envelope(begun.error());
-    }
-    return success_envelope({{"take_id", take_id}}, loaded.value().revision);
-  }
-
-  nlohmann::json take_append(const nlohmann::json& request) {
-    require(
-        exact_keys(
-            request,
-            {"operation", "project_path", "take_id", "event"}),
-        "take.append request shape is invalid");
-    const auto path = absolute_path_field(request, "project_path");
-    const auto take_id = uuid_field(request, "take_id");
-    const auto event = raw_event_value(request.at("event"));
-    const auto loaded = projects.load(path);
-    if (!loaded.has_value()) {
-      return error_envelope(loaded.error());
-    }
-    const auto appended = journals.append(
-        path, foundation::TakeId{take_id}, event);
-    if (!appended.has_value()) {
-      return error_envelope(appended.error());
-    }
-    const auto take =
-        journals.read_active(path, foundation::TakeId{take_id});
-    if (!take.has_value()) {
-      return error_envelope(take.error());
-    }
-    return success_envelope(
-        {
-            {"take_id", take_id},
-            {"event_count", take.value().events.size()},
-        },
-        loaded.value().revision);
-  }
-
-  nlohmann::json take_commit(const nlohmann::json& request) {
-    require(
-        exact_keys(
-            request,
-            {
-                "operation",
-                "project_path",
-                "command_id",
-                "expected_revision",
-                "take_id",
-                "pattern",
-            }),
-        "take.commit request shape is invalid");
-    const auto path = absolute_path_field(request, "project_path");
-    const auto command_id = uuid_field(request, "command_id");
-    const auto revision = unsigned_field(request, "expected_revision");
-    const auto take_id = uuid_field(request, "take_id");
-    const auto pattern = pattern_value(request.at("pattern"));
-    const project_io::RecordTakeReplayIdentity replay_identity{
-        {
-            foundation::CommandId{command_id},
-            revision,
-        },
-        foundation::TakeId{take_id},
-        pattern,
-    };
-    const auto replay = projects.replay_record_take(
-        path, replay_identity);
-    if (!replay.has_value()) {
-      return error_envelope(replay.error());
-    }
-    if (replay.value().has_value()) {
-      const auto& persisted = *replay.value();
-      return success_envelope(
-          {
-              {"take_id", persisted.command.take.id.value()},
-              {"pattern_id", persisted.command.pattern.id.value()},
-              {"committed_revision",
-               persisted.outcome.event.at("revision")
-                   .get<std::uint64_t>()},
-              {"replayed", true},
-          },
-          persisted.outcome.state.revision);
-    }
-    const auto active = journals.read_active_journal(
-        path, foundation::TakeId{take_id});
-    if (!active.has_value()) {
-      return error_envelope(active.error());
-    }
-    if (revision != active.value().expected_revision) {
-      const auto sealed = journals.seal(
-          path,
-          foundation::TakeId{take_id},
-          "revision_conflict");
-      if (!sealed.has_value()) {
-        return error_envelope(sealed.error());
-      }
-      return error_envelope(
-          Error{
-              ErrorCode::revision_conflict,
-              "take commit revision does not match its captured revision",
-              {
-                  {"captured_revision",
-                   active.value().expected_revision},
-                  {"expected_revision", revision},
-              },
-          });
-    }
-    const auto committed = projects.execute_with_identity(
-        path,
-        domain::Command{
-            domain::RecordTake{
-                {
-                    foundation::CommandId{command_id},
-                    active.value().expected_revision,
-                },
-                active.value().take,
-                pattern,
-            },
-        });
-    if (!committed.has_value()) {
-      return error_envelope(committed.error());
-    }
-    const auto* persisted =
-        std::get_if<domain::RecordTake>(&committed.value().command);
-    if (persisted == nullptr) {
-      return error_envelope(
-          Error{
-              ErrorCode::invalid_project,
-              "persisted Take commit has the wrong command type",
-          });
-    }
-    const auto& applied = committed.value().outcome;
-    return success_envelope(
-        {
-            {"take_id", persisted->take.id.value()},
-            {"pattern_id", persisted->pattern.id.value()},
             {"committed_revision",
              applied.event.at("revision").get<std::uint64_t>()},
             {"replayed", applied.replayed},
@@ -4817,46 +4577,6 @@ struct Application::Impl {
         loaded.value().revision);
   }
 
-  nlohmann::json recoverable_list(const nlohmann::json& request) {
-    require(
-        exact_keys(request, {"operation", "project_path"}),
-        "take.recoverable.list request shape is invalid");
-    const auto path = absolute_path_field(request, "project_path");
-    const auto loaded = projects.load(path);
-    if (!loaded.has_value()) {
-      return error_envelope(loaded.error());
-    }
-    const auto listed = journals.list_recoverable(path);
-    if (!listed.has_value()) {
-      return error_envelope(listed.error());
-    }
-    auto candidates = nlohmann::json::array();
-    for (const auto& candidate : listed.value()) {
-      auto events = nlohmann::json::array();
-      for (const auto& event : candidate.take.events) {
-        events.push_back(raw_event_json(event));
-      }
-      candidates.push_back(
-          {
-              {"take_id", candidate.take.id.value()},
-              {"expected_revision", candidate.expected_revision},
-              {"reason", candidate.reason},
-              {"sample_rate", candidate.take.sample_rate},
-              {"events", std::move(events)},
-          });
-    }
-    std::sort(
-        candidates.begin(),
-        candidates.end(),
-        [](const auto& left, const auto& right) {
-          return left.at("take_id").template get<std::string>() <
-                 right.at("take_id").template get<std::string>();
-        });
-    return success_envelope(
-        {{"candidates", std::move(candidates)}},
-        loaded.value().revision);
-  }
-
   nlohmann::json snapshot_cook(const nlohmann::json& request) {
     require(
         exact_keys(
@@ -4947,7 +4667,6 @@ struct Application::Impl {
   std::optional<audio::RuntimePreparationLimits> sample_limits;
   project_io::ProjectStore projects;
   project_io::SequenceJournal sequence_journals;
-  project_io::TakeJournal journals;
   project_io::ProjectBundleTransfer bundle_transfers;
   project_io::WorkspaceCacheStore waveform_cache;
   provider::AttemptStore attempts;
@@ -5267,37 +4986,6 @@ foundation::Result<SampleMutationResult> Application::reset_sample_pad(
     return impl_->reset_sample_pad(request);
   } catch (...) {
     return foundation::Result<SampleMutationResult>::failure(Error{
-        ErrorCode::internal_error,
-        "unexpected Application Facade Host API failure",
-    });
-  }
-}
-
-foundation::Result<void> Application::append_realtime_take_events(
-    const std::filesystem::path& project_path,
-    foundation::TakeId take_id,
-    std::span<const domain::RawTakeEvent> events) {
-  try {
-    testing::invoke_api_entry_hook();
-    return impl_->append_realtime_take_events(
-        project_path, std::move(take_id), events);
-  } catch (...) {
-    return foundation::Result<void>::failure(Error{
-        ErrorCode::internal_error,
-        "unexpected Application Facade Host API failure",
-    });
-  }
-}
-
-foundation::Result<std::filesystem::path> Application::seal_realtime_take(
-    const std::filesystem::path& project_path,
-    foundation::TakeId take_id,
-    std::string_view reason) {
-  try {
-    testing::invoke_api_entry_hook();
-    return impl_->seal_realtime_take(project_path, std::move(take_id), reason);
-  } catch (...) {
-    return foundation::Result<std::filesystem::path>::failure(Error{
         ErrorCode::internal_error,
         "unexpected Application Facade Host API failure",
     });

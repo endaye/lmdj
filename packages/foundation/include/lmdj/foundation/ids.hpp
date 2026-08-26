@@ -47,7 +47,6 @@ struct CommandIdTag;
 struct AssetIdTag;
 struct PatternIdTag;
 struct SequenceSessionIdTag;
-struct TakeIdTag;
 struct AttemptIdTag;
 struct CandidateIdTag;
 
@@ -56,7 +55,6 @@ using CommandId = StrongId<CommandIdTag>;
 using AssetId = StrongId<AssetIdTag>;
 using PatternId = StrongId<PatternIdTag>;
 using SequenceSessionId = StrongId<SequenceSessionIdTag>;
-using TakeId = StrongId<TakeIdTag>;
 using AttemptId = StrongId<AttemptIdTag>;
 using CandidateId = StrongId<CandidateIdTag>;
 

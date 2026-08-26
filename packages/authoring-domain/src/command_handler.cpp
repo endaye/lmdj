@@ -90,33 +90,6 @@ foundation::Result<void> validate_pattern(const Pattern& pattern) {
   return foundation::Result<void>::success();
 }
 
-foundation::Result<void> validate_take(const RawTake& take) {
-  if (!is_valid_uuid(take.id.value())) {
-    return foundation::Result<void>::failure(
-        foundation::Error{
-            foundation::ErrorCode::invalid_argument,
-            "raw take id must be a lowercase UUID",
-        });
-  }
-  if (take.sample_rate != 48000) {
-    return foundation::Result<void>::failure(
-        foundation::Error{
-            foundation::ErrorCode::invalid_argument,
-            "raw take sample rate must be 48000",
-        });
-  }
-  for (const auto& event : take.events) {
-    if (!is_valid_slot(event.slot) || !valid_velocity(event.velocity)) {
-      return foundation::Result<void>::failure(
-          foundation::Error{
-              foundation::ErrorCode::invalid_argument,
-              "raw take event is invalid",
-          });
-    }
-  }
-  return foundation::Result<void>::success();
-}
-
 nlohmann::json command_event(
     std::string_view type,
     const CommandMeta& meta,
@@ -326,35 +299,6 @@ foundation::Result<AppliedCommand> apply_new_command(
   }
   return foundation::Result<AppliedCommand>::success(
       applied(std::move(copy), "sequence.settings_updated", command.meta));
-}
-
-foundation::Result<AppliedCommand> apply_new_command(
-    const ProjectState& state,
-    const RecordTake& command) {
-  const auto take_validation = validate_take(command.take);
-  if (!take_validation.has_value()) {
-    return foundation::Result<AppliedCommand>::failure(take_validation.error());
-  }
-  const auto pattern_validation = validate_pattern(command.pattern);
-  if (!pattern_validation.has_value()) {
-    return foundation::Result<AppliedCommand>::failure(
-        pattern_validation.error());
-  }
-  if (state.takes.contains(command.take.id) ||
-      state.patterns.contains(command.pattern.id)) {
-    return foundation::Result<AppliedCommand>::failure(
-        foundation::Error{
-            foundation::ErrorCode::duplicate_id,
-            "take or pattern id already exists",
-        });
-  }
-  auto copy = state;
-  copy.takes.emplace(command.take.id, command.take);
-  auto pattern = command.pattern;
-  pattern.events = merge_pattern_events({}, pattern.events);
-  copy.patterns.emplace(pattern.id, std::move(pattern));
-  return foundation::Result<AppliedCommand>::success(
-      applied(std::move(copy), "take.recorded", command.meta));
 }
 
 template <typename CommandType>

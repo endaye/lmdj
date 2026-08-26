@@ -139,7 +139,7 @@ function fixture() {
         state,
         error_code: null,
         product_build: TEST_PRODUCT_BUILD,
-        host_version: "1.2.15",
+        host_version: "2.0.0",
         protocol_version: 1,
       });
     },

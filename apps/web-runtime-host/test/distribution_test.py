@@ -201,7 +201,7 @@ class DistributionTest(unittest.TestCase):
     def test_index_identity_metadata_is_exactly_bound_to_manifest(self) -> None:
         index_path = self.root / "index.html"
         index = index_path.read_text(encoding="utf-8").replace(
-            'content="1.2.15"', 'content="999.0.0"', 1
+            'content="2.0.0"', 'content="999.0.0"', 1
         )
         index_path.write_text(index, encoding="utf-8", newline="\n")
         with self.assertRaises(self.module.DistributionError):

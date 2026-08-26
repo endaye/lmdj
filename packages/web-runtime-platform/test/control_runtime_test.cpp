@@ -72,7 +72,7 @@ constexpr std::string_view kCommittedPatternId =
     "00000000-0000-4000-8000-000000000011";
 constexpr std::string_view kAssetId =
     "00000000-0000-4000-8000-000000000101";
-constexpr std::string_view kTakeId =
+constexpr std::string_view kSequenceSessionId =
     "00000000-0000-4000-8000-000000000201";
 constexpr std::string_view kProtocolShapeRequestId =
     "01234567-89ab-cdef-0123-456789abcdef";
@@ -288,7 +288,7 @@ ProjectBundleFixture build_project_bundle_fixture(
       {"bundle_digest", std::string(64, '0')},
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.0.0"},
+      {"contract_version", "1.1.0"},
       {"entries", std::move(encoded_entries)},
       {"project_contract", "lmdj.project.v3"},
       {"project_id", project_id},
@@ -570,24 +570,6 @@ struct FakeCoordinator final {
       std::array<float, 128> right{};
       self.engine->render(left.data(), right.data(), 128);
     }
-    if (!self.workspace_root.empty() && !self.expected_take_id.empty()) {
-      try {
-        const auto sealed_directory =
-            self.workspace_root / "projects" /
-            (std::string(kProjectId) + ".lmdj") / "recovery/sealed";
-        const auto prefix = self.expected_take_id + "-capture_incomplete";
-        for (const auto& entry :
-             std::filesystem::directory_iterator(sealed_directory)) {
-          if (entry.is_regular_file() &&
-              entry.path().filename().string().starts_with(prefix)) {
-            self.observed_take_sealed = true;
-            break;
-          }
-        }
-      } catch (...) {
-        self.observed_take_sealed = false;
-      }
-    }
     if (self.driver != nullptr && self.engine != nullptr) {
       const auto deadline = std::chrono::steady_clock::now() +
                             std::chrono::seconds(1);
@@ -657,8 +639,6 @@ struct FakeCoordinator final {
 
   ContinuousAudioDriver* driver = nullptr;
   RealtimeEngine* engine = nullptr;
-  std::filesystem::path workspace_root;
-  std::string expected_take_id;
   bool succeed = true;
   bool begin_succeed = true;
   bool is_ready = true;
@@ -667,7 +647,6 @@ struct FakeCoordinator final {
   bool render_during_await = false;
   bool observed_capture_idle = false;
   bool observed_engine_running = false;
-  bool observed_take_sealed = false;
   bool quiescence_established = false;
   std::uint64_t callback_count_at_quiescence = 0;
   std::uint32_t timeout_ms = 0;
@@ -1118,7 +1097,7 @@ void test_exact_payloads_and_facade_owned_project_journey() {
   const auto& begun = check_exact_success(
       runtime->dispatch(
           "sequence.record.begin",
-          {{"session_id", kTakeId},
+          {{"session_id", kSequenceSessionId},
            {"pattern_id", kPatternId},
            {"expected_revision", 2}},
           {}),
@@ -1127,7 +1106,7 @@ void test_exact_payloads_and_facade_owned_project_journey() {
        "effective_runtime_frame", "committed_revision", "replayed",
        "project_revision", "transport_anchor"});
   LMDJ_CHECK(begun.at("state") == "active");
-  LMDJ_CHECK(begun.at("session_id") == kTakeId);
+  LMDJ_CHECK(begun.at("session_id") == kSequenceSessionId);
   LMDJ_CHECK(begun.at("pattern_id") == kPatternId);
   LMDJ_CHECK(begun.at("project_revision") == 2);
   LMDJ_CHECK(begun.at("transport_anchor").at("bpm") == 120);
@@ -1145,7 +1124,7 @@ void test_exact_payloads_and_facade_owned_project_journey() {
   const auto& stopped = check_exact_success(
       runtime->dispatch(
           "sequence.record.stop",
-          {{"session_id", kTakeId}, {"command_id", stop_command}},
+          {{"session_id", kSequenceSessionId}, {"command_id", stop_command}},
           {}),
       {"state", "session_id", "pattern_id", "pending_pattern_id",
        "expected_revision", "next_flush_seq", "pending_event_count",
@@ -1221,13 +1200,13 @@ void test_sequence_observer_busy_and_owner_loss_recovery() {
     check_success(owner->dispatch("audio.activate", Json::object(), {}));
     check_success(owner->dispatch(
         "sequence.record.begin",
-        {{"session_id", kTakeId},
+        {{"session_id", kSequenceSessionId},
          {"pattern_id", kPatternId},
          {"expected_revision", 2}},
         {}));
     check_success(owner->dispatch(
         "sequence.record.event",
-        {{"session_id", kTakeId},
+        {{"session_id", kSequenceSessionId},
          {"event",
           {{"slot", slot(0, 0)}, {"velocity", 100}, {"pressed", true}}}},
         {}));
@@ -1240,7 +1219,7 @@ void test_sequence_observer_busy_and_owner_loss_recovery() {
          "expected_revision", "next_flush_seq", "pending_event_count",
          "effective_runtime_frame", "project_revision"});
     LMDJ_CHECK(status.at("state") == "active");
-    LMDJ_CHECK(status.at("session_id") == kTakeId);
+    LMDJ_CHECK(status.at("session_id") == kSequenceSessionId);
     check_error(
         observer->dispatch(
             "project.open",
@@ -1255,7 +1234,7 @@ void test_sequence_observer_busy_and_owner_loss_recovery() {
           "sequence.recovery.list", {{"project_id", kProjectId}}, {}),
       {"candidates", "project_revision"});
   LMDJ_CHECK(recovery.at("candidates").size() == 1);
-  LMDJ_CHECK(recovery.at("candidates").at(0).at("session_id") == kTakeId);
+  LMDJ_CHECK(recovery.at("candidates").at(0).at("session_id") == kSequenceSessionId);
   LMDJ_CHECK(recovery.at("candidates").at(0).at("reason") == "owner_lost");
 }
 
@@ -1973,125 +1952,6 @@ void test_source_frame_limit_is_applied_once_before_44k1_publication() {
   }
 }
 
-[[maybe_unused]] void test_take_stop_drains_the_final_disarm_quantum() {
-  TempDirectory temp;
-  auto runtime = make_runtime(temp.path());
-  check_success(runtime->dispatch("project.create", create_payload(), {}));
-  const auto wav = mono_pcm16_wav(8);
-  import_and_assign(*runtime, wav, kAssetId, 751, 752, 0);
-  check_success(runtime->dispatch(
-      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-  FakeCoordinator coordinator;
-  LMDJ_CHECK(
-      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-          .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  OneShotAudioDriver audio(runtime->engine());
-  check_success(runtime->dispatch(
-      "take.begin",
-      {{"take_id", kTakeId}, {"expected_revision", 2}},
-      {}));
-  audio.render_one();
-  LMDJ_CHECK(
-      runtime->engine().capture_telemetry().state == CaptureState::active);
-
-  // These 20 events are admitted before the stop boundary but are not rendered
-  // until capture has entered disarm_pending.
-  for (std::uint32_t index = 0; index < 20; ++index) {
-    check_success(runtime->dispatch(
-        "trigger", {{"slot", 0}, {"velocity", 101}}, {}));
-  }
-  LMDJ_CHECK(
-      runtime->engine().capture_telemetry().captured_events == 0);
-  Json stopped;
-  std::thread stop_thread([&] {
-    stopped = runtime->dispatch("take.stop", Json::object(), {});
-  });
-  wait_until([&] {
-    return runtime->engine().capture_telemetry().state ==
-           CaptureState::disarm_pending;
-  });
-  audio.render_one();
-  stop_thread.join();
-  LMDJ_CHECK((
-      check_exact_success(
-          stopped, {"take_id", "project_revision", "status"}) ==
-      Json{{"take_id", kTakeId},
-           {"project_revision", 2},
-           {"status", "committable"}}));
-
-  // Events admitted after take.stop returns still play, but capture is idle
-  // and they must not enter the committable Take.
-  check_success(runtime->dispatch(
-      "trigger", {{"slot", 0}, {"velocity", 102}}, {}));
-  audio.render_one();
-  check_success(runtime->dispatch(
-      "take.commit",
-      {
-          {"command_id", uuid(753)},
-          {"expected_revision", 2},
-          {"pattern", empty_pattern(kCommittedPatternId)},
-      },
-      {}));
-
-  const auto inspected = inspect_project(temp.path(), kProjectId);
-  const auto& events = inspected.at("result")
-                           .at("project")
-                           .at("takes")
-                           .at(kTakeId)
-                           .at("events");
-  LMDJ_CHECK(events.size() == 20);
-  for (const auto& event : events) {
-    LMDJ_CHECK(event.at("velocity") == 101);
-  }
-}
-
-[[maybe_unused]] void test_take_stop_requests_an_acknowledged_final_worklet_quantum() {
-  TempDirectory temp;
-  auto runtime = make_runtime(temp.path());
-  check_success(runtime->dispatch("project.create", create_payload(), {}));
-  const auto wav = mono_pcm16_wav(8);
-  import_and_assign(*runtime, wav, kAssetId, 755, 756, 0);
-  check_success(runtime->dispatch(
-      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-  FakeCoordinator coordinator;
-  coordinator.engine = &runtime->engine();
-  coordinator.render_during_await = true;
-  LMDJ_CHECK(
-      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-          .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  OneShotAudioDriver audio(runtime->engine());
-  check_success(runtime->dispatch(
-      "take.begin",
-      {{"take_id", kTakeId}, {"expected_revision", 2}},
-      {}));
-  audio.render_one();
-  LMDJ_CHECK(
-      runtime->engine().capture_telemetry().state == CaptureState::active);
-
-  for (std::uint32_t index = 0; index < 20; ++index) {
-    check_success(runtime->dispatch(
-        "trigger", {{"slot", 0}, {"velocity", 101}}, {}));
-  }
-  const auto& stopped = check_exact_success(
-      runtime->dispatch(
-          "take.stop",
-          Json::object(),
-          {},
-          std::chrono::steady_clock::now() -
-              std::chrono::milliseconds(29'500)),
-      {"take_id", "project_revision", "status"});
-  LMDJ_CHECK(stopped.at("status") == "committable");
-  LMDJ_CHECK(coordinator.await_calls == 1);
-  LMDJ_CHECK(coordinator.observed_capture_idle);
-  LMDJ_CHECK(coordinator.begin_calls == 2);
-  const auto capture = runtime->engine().capture_telemetry();
-  LMDJ_CHECK(capture.state == CaptureState::idle);
-  LMDJ_CHECK(capture.captured_events == 20);
-  LMDJ_CHECK(capture.drained_events == 20);
-}
-
 void test_trigger_queue_full_is_admission_failure() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -2399,7 +2259,7 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     success.engine = &runtime->engine();
     check_success(runtime->dispatch(
         "sequence.record.begin",
-        {{"session_id", kTakeId},
+        {{"session_id", kSequenceSessionId},
          {"pattern_id", kPatternId},
          {"expected_revision", 2}},
         {}));
@@ -2414,7 +2274,7 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
         suspended ==
         Json{{"state", "audio-suspended"},
              {"changed", true},
-             {"stopped_sequence_id", kTakeId}}));
+             {"stopped_sequence_id", kSequenceSessionId}}));
     LMDJ_CHECK(success.called);
     LMDJ_CHECK(success.timeout_ms >= 1);
     LMDJ_CHECK(success.timeout_ms <= 1'000);
@@ -2431,335 +2291,6 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     LMDJ_CHECK(candidates.at("candidates").empty());
     LMDJ_CHECK(candidates.at("project_revision").is_null());
   }
-}
-
-[[maybe_unused]] void test_host_close_orders_capture_seal_quiescence_and_engine_stop() {
-  {
-    TempDirectory temp;
-    auto runtime = make_runtime(temp.path());
-    check_success(runtime->dispatch("project.create", create_payload(), {}));
-    const auto wav = mono_pcm16_wav(2'400);
-    import_and_assign(*runtime, wav, kAssetId, 831, 832, 0);
-    check_success(runtime->dispatch(
-        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    FakeCoordinator coordinator;
-    coordinator.engine = &runtime->engine();
-    coordinator.workspace_root = temp.path();
-    coordinator.expected_take_id = kTakeId;
-    LMDJ_CHECK(
-        ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-            .has_value());
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-    ContinuousAudioDriver driver(runtime->engine());
-    coordinator.driver = &driver;
-    check_success(runtime->dispatch(
-        "take.begin",
-        {{"take_id", kTakeId}, {"expected_revision", 2}},
-        {}));
-    wait_until([&] {
-      return runtime->engine().capture_telemetry().state ==
-             CaptureState::active;
-    });
-    check_success(runtime->dispatch(
-        "trigger", {{"slot", 0}, {"velocity", 103}}, {}));
-    wait_until([&] {
-      return runtime->engine().capture_telemetry().captured_events == 1;
-    });
-
-    const auto& closed = check_exact_success(
-        runtime->dispatch("host.close", Json::object(), {}),
-        {"state", "stopped_sequence_id"});
-    LMDJ_CHECK((
-        closed ==
-        Json{{"state", "closed"}, {"stopped_sequence_id", kTakeId}}));
-    LMDJ_CHECK(coordinator.called);
-    LMDJ_CHECK(coordinator.timeout_ms >= 1);
-    LMDJ_CHECK(coordinator.timeout_ms <= 10'000);
-    LMDJ_CHECK(coordinator.observed_capture_idle);
-    LMDJ_CHECK(coordinator.observed_take_sealed);
-    LMDJ_CHECK(coordinator.observed_engine_running);
-    LMDJ_CHECK(
-        runtime->engine().telemetry().state ==
-        lmdj::audio::RealtimeState::stopped);
-    check_error(
-        runtime->dispatch("host.status", Json::object(), {}),
-        "HOST_STATE_INVALID");
-
-    runtime.reset();
-    auto reopened = make_runtime(temp.path());
-    check_success(reopened->dispatch(
-        "project.open",
-        {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
-        {}));
-    const auto& recoverable = check_exact_success(
-        reopened->dispatch("take.recoverable.list", Json::object(), {}),
-        {"candidates", "project_revision"});
-    LMDJ_CHECK(recoverable.at("candidates").size() == 1);
-    LMDJ_CHECK(
-        recoverable.at("candidates").at(0).at("take_id") == kTakeId);
-  }
-
-  {
-    TempDirectory temp;
-    auto runtime = make_runtime(temp.path());
-    check_success(runtime->dispatch("project.create", create_payload(), {}));
-    const auto wav = mono_pcm16_wav(2'400);
-    import_and_assign(*runtime, wav, kAssetId, 841, 842, 0);
-    check_success(runtime->dispatch(
-        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    FakeCoordinator timeout;
-    timeout.succeed = false;
-    timeout.timeout = true;
-    timeout.engine = &runtime->engine();
-    timeout.workspace_root = temp.path();
-    timeout.expected_take_id = kTakeId;
-    LMDJ_CHECK(
-        ControlRuntimeAudioAccess::install(*runtime, timeout.seam())
-            .has_value());
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-    ContinuousAudioDriver driver(runtime->engine());
-    timeout.driver = &driver;
-    check_success(runtime->dispatch(
-        "take.begin",
-        {{"take_id", kTakeId}, {"expected_revision", 2}},
-        {}));
-    wait_until([&] {
-      return runtime->engine().capture_telemetry().state ==
-             CaptureState::active;
-    });
-
-    check_error(
-        runtime->dispatch("host.close", Json::object(), {}),
-        "INTERNAL_ERROR");
-    LMDJ_CHECK(timeout.called);
-    LMDJ_CHECK(timeout.timeout_ms >= 1);
-    LMDJ_CHECK(timeout.timeout_ms <= 10'000);
-    LMDJ_CHECK(timeout.observed_capture_idle);
-    LMDJ_CHECK(timeout.observed_take_sealed);
-    LMDJ_CHECK(timeout.observed_engine_running);
-    LMDJ_CHECK(timeout.quiescence_established);
-    LMDJ_CHECK(driver.stopped());
-    LMDJ_CHECK(
-        runtime->engine().telemetry().callback_count ==
-        timeout.callback_count_at_quiescence);
-    LMDJ_CHECK(
-        runtime->engine().telemetry().state ==
-        lmdj::audio::RealtimeState::stopped);
-    check_error(
-        runtime->dispatch("host.status", Json::object(), {}),
-        "HOST_STATE_INVALID");
-    check_error(
-        runtime->dispatch("audio.activate", Json::object(), {}),
-        "HOST_STATE_INVALID");
-  }
-}
-
-void corrupt_active_take_capture(ControlRuntime& runtime) {
-  std::array<float, 8> left{};
-  std::array<float, 8> right{};
-  runtime.engine().render(left.data(), right.data(), 8);
-  LMDJ_CHECK(
-      runtime.engine().capture_telemetry().state == CaptureState::active);
-  for (std::uint64_t sequence = 1;
-       sequence <= lmdj::audio::kRealtimeCaptureCapacity + 1;
-       ++sequence) {
-    LMDJ_CHECK(
-        runtime.engine().enqueue(
-            lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
-        lmdj::audio::EnqueueResult::accepted);
-    runtime.engine().render(left.data(), right.data(), 8);
-  }
-  LMDJ_CHECK(
-      runtime.engine().capture_telemetry().state ==
-      CaptureState::corrupted);
-}
-
-[[maybe_unused]] void test_capture_drop_control_drain_seals_and_fails_the_session() {
-  TempDirectory temp;
-  auto runtime = make_runtime(temp.path());
-  check_success(runtime->dispatch("project.create", create_payload(), {}));
-  const auto wav = mono_pcm16_wav(8);
-  import_and_assign(*runtime, wav, kAssetId, 861, 862, 0);
-  check_success(runtime->dispatch(
-      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-  FakeCoordinator coordinator;
-  LMDJ_CHECK(
-      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-          .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  check_success(runtime->dispatch(
-      "take.begin",
-      {{"take_id", kTakeId}, {"expected_revision", 2}},
-      {}));
-  corrupt_active_take_capture(*runtime);
-
-  const auto drained = runtime->drain_capture();
-  LMDJ_CHECK(!drained.has_value());
-  check_error(
-      runtime->dispatch("host.status", Json::object(), {}),
-      "HOST_STATE_INVALID");
-  runtime.reset();
-
-  auto reopened = make_runtime(temp.path());
-  check_success(reopened->dispatch(
-      "project.open",
-      {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
-      {}));
-  const auto recoverable = check_exact_success(
-      reopened->dispatch("take.recoverable.list", Json::object(), {}),
-      {"candidates", "project_revision"});
-  LMDJ_CHECK(recoverable.at("candidates").size() == 1);
-  LMDJ_CHECK(
-      recoverable.at("candidates").at(0).at("take_id") == kTakeId);
-}
-
-[[maybe_unused]] void test_outcome_drop_seals_the_active_take_and_never_resumes() {
-  TempDirectory temp;
-  auto runtime = make_runtime(temp.path());
-  check_success(runtime->dispatch("project.create", create_payload(), {}));
-  const auto wav = mono_pcm16_wav(1);
-  import_and_assign(*runtime, wav, kAssetId, 871, 872, 0);
-  check_success(runtime->dispatch(
-      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-  FakeCoordinator coordinator;
-  LMDJ_CHECK(
-      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-          .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  check_success(runtime->dispatch(
-      "take.begin",
-      {{"take_id", kTakeId}, {"expected_revision", 2}},
-      {}));
-  std::array<float, 1> left{};
-  std::array<float, 1> right{};
-  runtime->engine().render(left.data(), right.data(), 1);
-
-  std::uint64_t sequence = 1;
-  for (std::size_t batch = 0; batch < 4; ++batch) {
-    for (std::size_t index = 0;
-         index < lmdj::audio::kRealtimeQueueCapacity;
-         ++index, ++sequence) {
-      LMDJ_CHECK(
-          runtime->engine().enqueue(
-              lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
-          lmdj::audio::EnqueueResult::accepted);
-    }
-    runtime->engine().render(left.data(), right.data(), 1);
-    LMDJ_CHECK(runtime->drain_capture().has_value());
-    LMDJ_CHECK(runtime->drain_capture().has_value());
-  }
-  LMDJ_CHECK(
-      runtime->engine().enqueue(
-          lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
-      lmdj::audio::EnqueueResult::accepted);
-  runtime->engine().render(left.data(), right.data(), 1);
-  LMDJ_CHECK(
-      runtime->engine()
-              .trigger_outcome_telemetry()
-              .runtime_outcome_drops == 1);
-
-  LMDJ_CHECK(runtime->drain_outcomes().empty());
-  check_error(
-      runtime->dispatch("host.status", Json::object(), {}),
-      "HOST_STATE_INVALID");
-  check_error(
-      runtime->dispatch("audio.activate", Json::object(), {}),
-      "HOST_STATE_INVALID");
-  runtime.reset();
-
-  auto reopened = make_runtime(temp.path());
-  check_success(reopened->dispatch(
-      "project.open",
-      {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
-      {}));
-  const auto recoverable = check_exact_success(
-      reopened->dispatch("take.recoverable.list", Json::object(), {}),
-      {"candidates", "project_revision"});
-  LMDJ_CHECK(recoverable.at("candidates").size() == 1);
-  LMDJ_CHECK(
-      recoverable.at("candidates").at(0).at("take_id") == kTakeId);
-}
-
-[[maybe_unused]] void test_active_take_failure_still_quiesces_suspend_and_close() {
-  for (const auto operation : {"audio.suspend", "host.close"}) {
-    TempDirectory temp;
-    auto runtime = make_runtime(temp.path());
-    check_success(runtime->dispatch("project.create", create_payload(), {}));
-    const auto wav = mono_pcm16_wav(8);
-    import_and_assign(*runtime, wav, kAssetId, 851, 852, 0);
-    check_success(runtime->dispatch(
-        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    FakeCoordinator timeout;
-    timeout.succeed = false;
-    timeout.timeout = true;
-    timeout.engine = &runtime->engine();
-    LMDJ_CHECK(
-        ControlRuntimeAudioAccess::install(*runtime, timeout.seam())
-            .has_value());
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-    check_success(runtime->dispatch(
-        "take.begin",
-        {{"take_id", kTakeId}, {"expected_revision", 2}},
-        {}));
-    corrupt_active_take_capture(*runtime);
-
-    check_error(
-        runtime->dispatch(operation, Json::object(), {}),
-        "INTERNAL_ERROR");
-    LMDJ_CHECK(timeout.called);
-    LMDJ_CHECK(timeout.timeout_ms >= 1);
-    LMDJ_CHECK(
-        timeout.timeout_ms <=
-        (std::string_view(operation) == "audio.suspend" ? 1'000U
-                                                        : 10'000U));
-    LMDJ_CHECK(timeout.quiescence_established);
-    LMDJ_CHECK(timeout.observed_engine_running);
-    LMDJ_CHECK(
-        runtime->engine().telemetry().callback_count ==
-        timeout.callback_count_at_quiescence);
-    LMDJ_CHECK(
-        runtime->engine().telemetry().state ==
-        lmdj::audio::RealtimeState::stopped);
-    check_error(
-        runtime->dispatch("host.status", Json::object(), {}),
-        "HOST_STATE_INVALID");
-  }
-}
-
-[[maybe_unused]] void test_active_take_suspend_rechecks_deadline_after_quiescence() {
-  TempDirectory temp;
-  auto runtime = make_runtime(temp.path());
-  check_success(runtime->dispatch("project.create", create_payload(), {}));
-  const auto wav = mono_pcm16_wav(2'400);
-  import_and_assign(*runtime, wav, kAssetId, 881, 882, 0);
-  check_success(runtime->dispatch(
-      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-  FakeCoordinator coordinator;
-  LMDJ_CHECK(
-      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-          .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  ContinuousAudioDriver driver(runtime->engine());
-  check_success(runtime->dispatch(
-      "take.begin",
-      {{"take_id", kTakeId}, {"expected_revision", 2}},
-      {}));
-  wait_until([&] {
-    return runtime->engine().capture_telemetry().state ==
-           CaptureState::active;
-  });
-  coordinator.engine = &runtime->engine();
-  coordinator.driver = &driver;
-  coordinator.await_delay_ms = 1'050;
-
-  check_error(
-      runtime->dispatch("audio.suspend", Json::object(), {}),
-      "HOST_TIMEOUT");
-  LMDJ_CHECK(coordinator.called);
-  LMDJ_CHECK(driver.stopped());
-  check_error(
-      runtime->dispatch("host.status", Json::object(), {}),
-      "HOST_STATE_INVALID");
 }
 
 void test_audio_activation_rechecks_deadline_after_generation_ack() {
@@ -2865,72 +2396,6 @@ void test_audio_activation_rollback_rechecks_the_original_deadline() {
       lmdj::audio::RealtimeState::stopped);
 }
 
-[[maybe_unused]] void test_take_stop_and_host_close_recheck_exact_deadlines() {
-  {
-    TempDirectory temp;
-    auto runtime = make_runtime(temp.path());
-    check_success(runtime->dispatch("project.create", create_payload(), {}));
-    const auto wav = mono_pcm16_wav(8);
-    import_and_assign(*runtime, wav, kAssetId, 891, 892, 0);
-    check_success(runtime->dispatch(
-        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    FakeCoordinator coordinator;
-    LMDJ_CHECK(
-        ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-            .has_value());
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-    OneShotAudioDriver driver(runtime->engine());
-    check_success(runtime->dispatch(
-        "take.begin",
-        {{"take_id", kTakeId}, {"expected_revision", 2}},
-        {}));
-    driver.render_one();
-    LMDJ_CHECK(
-        runtime->engine().capture_telemetry().state == CaptureState::active);
-
-    check_error(
-        runtime->dispatch(
-            "take.stop",
-            Json::object(),
-            {},
-            std::chrono::steady_clock::now() -
-                std::chrono::milliseconds(29'950)),
-        "HOST_TIMEOUT");
-    check_error(
-        runtime->dispatch("host.status", Json::object(), {}),
-        "HOST_STATE_INVALID");
-  }
-
-  {
-    TempDirectory temp;
-    auto runtime = make_runtime(temp.path());
-    check_success(runtime->dispatch("project.create", create_payload(), {}));
-    const auto wav = mono_pcm16_wav(8);
-    import_and_assign(*runtime, wav, kAssetId, 893, 894, 0);
-    check_success(runtime->dispatch(
-        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    FakeCoordinator coordinator;
-    coordinator.await_delay_ms = 100;
-    LMDJ_CHECK(
-        ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-            .has_value());
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-
-    check_error(
-        runtime->dispatch(
-            "host.close",
-            Json::object(),
-            {},
-            std::chrono::steady_clock::now() -
-                std::chrono::milliseconds(9'950)),
-        "HOST_TIMEOUT");
-    LMDJ_CHECK(coordinator.called);
-    LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 0);
-    LMDJ_CHECK(
-        runtime->engine().reclaim_retired_bank_telemetry().count == 0);
-  }
-}
-
 void test_suspend_and_close_pass_only_the_original_remaining_budget() {
   for (const auto operation : {"audio.suspend", "host.close"}) {
     TempDirectory temp;
@@ -2958,107 +2423,6 @@ void test_suspend_and_close_pass_only_the_original_remaining_budget() {
     LMDJ_CHECK(coordinator.timeout_ms >= 1);
     LMDJ_CHECK(coordinator.timeout_ms <= 300);
   }
-}
-
-[[maybe_unused]] void test_suspend_and_close_stop_after_capture_acknowledgement_expires() {
-  for (const auto operation : {"audio.suspend", "host.close"}) {
-    TempDirectory temp;
-    auto runtime = make_runtime(temp.path());
-    check_success(runtime->dispatch("project.create", create_payload(), {}));
-    const auto wav = mono_pcm16_wav(8);
-    import_and_assign(*runtime, wav, kAssetId, 897, 898, 0);
-    check_success(runtime->dispatch(
-        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    FakeCoordinator coordinator;
-    LMDJ_CHECK(
-        ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-            .has_value());
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-    check_success(runtime->dispatch(
-        "take.begin",
-        {{"take_id", kTakeId}, {"expected_revision", 2}},
-        {}));
-    std::array<float, 1> left{};
-    std::array<float, 1> right{};
-    runtime->engine().render(left.data(), right.data(), 1);
-    LMDJ_CHECK(
-        runtime->engine().capture_telemetry().state == CaptureState::active);
-    const auto elapsed_budget =
-        operation == std::string_view("audio.suspend") ? 950 : 9'950;
-
-    check_error(
-        runtime->dispatch(
-            operation,
-            Json::object(),
-            {},
-            std::chrono::steady_clock::now() -
-                std::chrono::milliseconds(elapsed_budget)),
-        "HOST_TIMEOUT");
-    LMDJ_CHECK(coordinator.called);
-    LMDJ_CHECK(coordinator.await_calls >= 1);
-    LMDJ_CHECK(coordinator.timeout_ms >= 1);
-    LMDJ_CHECK(coordinator.timeout_ms <= 100);
-    LMDJ_CHECK(
-        runtime->engine().telemetry().state ==
-        lmdj::audio::RealtimeState::running);
-    LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 1);
-  }
-}
-
-[[maybe_unused]] void test_take_stop_stops_capture_batches_at_the_original_deadline() {
-  TempDirectory temp;
-  auto runtime = make_runtime(temp.path());
-  check_success(runtime->dispatch("project.create", create_payload(), {}));
-  const auto wav = mono_pcm16_wav(1);
-  import_and_assign(*runtime, wav, kAssetId, 899, 900, 0);
-  check_success(runtime->dispatch(
-      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-  FakeCoordinator coordinator;
-  LMDJ_CHECK(
-      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-          .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  check_success(runtime->dispatch(
-      "take.begin",
-      {{"take_id", kTakeId}, {"expected_revision", 2}},
-      {}));
-  std::array<float, 1> left{};
-  std::array<float, 1> right{};
-  runtime->engine().render(left.data(), right.data(), 1);
-  LMDJ_CHECK(
-      runtime->engine().capture_telemetry().state == CaptureState::active);
-
-  std::uint64_t sequence = 1;
-  for (std::size_t batch = 0; batch < 32; ++batch) {
-    for (std::size_t index = 0; index < 128; ++index, ++sequence) {
-      LMDJ_CHECK(
-          runtime->engine().enqueue(
-              lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
-          lmdj::audio::EnqueueResult::accepted);
-    }
-    runtime->engine().render(left.data(), right.data(), 1);
-    LMDJ_CHECK(runtime->drain_outcomes().size() == 64);
-    LMDJ_CHECK(runtime->drain_outcomes().size() == 64);
-  }
-  LMDJ_CHECK(
-      runtime->engine().capture_telemetry().captured_events ==
-      lmdj::audio::kRealtimeCaptureCapacity);
-  ContinuousAudioDriver driver(runtime->engine());
-  coordinator.engine = &runtime->engine();
-  coordinator.driver = &driver;
-
-  check_error(
-      runtime->dispatch(
-          "take.stop",
-          Json::object(),
-          {},
-          std::chrono::steady_clock::now() -
-              std::chrono::milliseconds(29'950)),
-      "HOST_TIMEOUT");
-  driver.stop();
-  const auto capture = runtime->engine().capture_telemetry();
-  LMDJ_CHECK(capture.drained_events >= 64);
-  LMDJ_CHECK(capture.drained_events < capture.captured_events);
 }
 
 void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
@@ -3426,93 +2790,6 @@ void test_bridge_routes_sample_operations_without_a_project_path() {
   const auto encoded_request = std::string(
       reinterpret_cast<const char*>(envelope.data()), envelope.size());
   LMDJ_CHECK(encoded_request.find("project_path") == std::string::npos);
-}
-
-[[maybe_unused]] void test_capture_drop_racing_the_post_drain_check_is_terminal() {
-  TempDirectory temp;
-  auto runtime = make_runtime(temp.path());
-  check_success(runtime->dispatch("project.create", create_payload(), {}));
-  const auto wav = mono_pcm16_wav(1);
-  import_and_assign(*runtime, wav, kAssetId, 991, 992, 0);
-  check_success(runtime->dispatch(
-      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-  FakeCoordinator coordinator;
-  LMDJ_CHECK(
-      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
-          .has_value());
-  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  check_success(runtime->dispatch(
-      "take.begin",
-      {{"take_id", kTakeId}, {"expected_revision", 2}},
-      {}));
-  std::array<float, 1> left{};
-  std::array<float, 1> right{};
-  runtime->engine().render(left.data(), right.data(), 1);
-  LMDJ_CHECK(
-      runtime->engine().capture_telemetry().state == CaptureState::active);
-
-  FakeProxy proxy;
-  auto bridge = make_bridge(*runtime, proxy);
-  const auto status_request_id = uuid(993);
-  const auto status = encode(request(
-      status_request_id, "host.status", Json::object()));
-  LMDJ_CHECK(
-      bridge->submit(status, {}) == BridgeSubmitStatus::accepted);
-  proxy.pump_one();
-  LMDJ_CHECK(
-      poll_message(*bridge).at("request_id") == status_request_id);
-  proxy.pump_one();
-  proxy.pump_one();
-  LMDJ_CHECK(proxy.tasks.empty());
-
-  std::uint64_t sequence = 1;
-  for (std::size_t batch = 0; batch < 32; ++batch) {
-    for (std::size_t index = 0; index < 128; ++index, ++sequence) {
-      LMDJ_CHECK(
-          runtime->engine().enqueue(
-              lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
-          lmdj::audio::EnqueueResult::accepted);
-    }
-    runtime->engine().render(left.data(), right.data(), 1);
-    LMDJ_CHECK(runtime->drain_outcomes().size() == 64);
-    LMDJ_CHECK(runtime->drain_outcomes().size() == 64);
-  }
-  LMDJ_CHECK(
-      runtime->engine().capture_telemetry().captured_events ==
-      lmdj::audio::kRealtimeCaptureCapacity);
-  LMDJ_CHECK(runtime->engine().capture_telemetry().capture_drops == 0);
-  for (std::size_t index = 0; index < 65; ++index, ++sequence) {
-    LMDJ_CHECK(
-        runtime->engine().enqueue(
-            lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
-        lmdj::audio::EnqueueResult::accepted);
-  }
-
-  proxy.capture_engine = &runtime->engine();
-  proxy.inject_capture_drop = true;
-  std::array<std::byte, 1> output{};
-  std::size_t required = 0;
-  LMDJ_CHECK(
-      bridge->poll(output, required) == BridgePollStatus::empty);
-  proxy.pump_one();
-  LMDJ_CHECK(
-      runtime->engine().capture_telemetry().capture_drops == 1);
-  LMDJ_CHECK(bridge->failed());
-  LMDJ_CHECK(
-      bridge->poll(output, required) == BridgePollStatus::failed);
-
-  runtime.reset();
-  auto reopened = make_runtime(temp.path());
-  check_success(reopened->dispatch(
-      "project.open",
-      {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
-      {}));
-  const auto recoverable = check_exact_success(
-      reopened->dispatch("take.recoverable.list", Json::object(), {}),
-      {"candidates", "project_revision"});
-  LMDJ_CHECK(recoverable.at("candidates").size() == 1);
-  LMDJ_CHECK(
-      recoverable.at("candidates").at(0).at("take_id") == kTakeId);
 }
 
 void test_bridge_defers_parse_dispatch_and_copies_fixed_slots() {

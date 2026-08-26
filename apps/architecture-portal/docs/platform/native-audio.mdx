@@ -15,9 +15,9 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 <BuildIdentity />
 
 ## 已实现范围
-<StatusBadge status="partial" /> 实时引擎、SPSC 队列、CoreAudio output 自动化 Probe 与 Native Host capture 已实现。
+<StatusBadge status="partial" /> 实时引擎、Pattern origin、整数 transport anchor、Bar-boundary SPSC、CoreAudio output 自动化 Probe 与 Native Host Sequence capture 已实现。
 ## 实时边界
-非实时线程准备 Snapshot/样本，实时回调只执行有界工作并向设备 buffer 写入。
+非实时线程准备 Snapshot/样本；实时回调只推进整数 transport、发布有界 Bar/Voice 状态并写设备 buffer。Project mutation、journal 与 quantization 永不进入回调。
 ## 自动化证据
 单元、stress 与 CoreAudio output 测试验证算法、队列和平台接线。
 ## 物理验收

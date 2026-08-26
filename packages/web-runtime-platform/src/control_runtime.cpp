@@ -549,11 +549,6 @@ std::string enqueue_failure_message(audio::EnqueueResult result) {
 struct ControlRuntime::Impl {
   enum class State { core_ready, running, audio_suspended, closed, failed };
 
-  struct TakeSession {
-    std::string id;
-    std::uint64_t project_revision;
-  };
-
   struct SequenceSession {
     foundation::SequenceSessionId id;
     foundation::PatternId pattern_id;
@@ -1131,169 +1126,6 @@ struct ControlRuntime::Impl {
     return success(std::move(result));
   }
 
-  foundation::Result<void> drain_capture_events() {
-    if (!active_take.has_value() || !retained_project_path.has_value()) {
-      return foundation::Result<void>::failure(Error{
-          ErrorCode::invalid_argument,
-          "no active realtime Take",
-      });
-    }
-    if (request_cancelled()) {
-      return foundation::Result<void>::failure(Error{
-          ErrorCode::internal_error,
-          "request deadline expired before Capture persistence",
-      });
-    }
-    std::array<audio::CapturedTriggerEvent, 64> captured{};
-    const auto count = engine.drain_capture(captured);
-    if (count == 0) {
-      return foundation::Result<void>::success();
-    }
-    std::array<domain::RawTakeEvent, 64> events{};
-    for (std::size_t index = 0; index < count; ++index) {
-      events[index] = domain::RawTakeEvent{
-          domain::PadSlotId{
-              static_cast<std::uint8_t>(captured[index].slot / 16U),
-              static_cast<std::uint8_t>(captured[index].slot % 16U),
-          },
-          captured[index].frame_offset,
-          captured[index].velocity,
-      };
-    }
-    auto appended = application.append_realtime_take_events(
-        *retained_project_path,
-        foundation::TakeId{active_take->id},
-        std::span<const domain::RawTakeEvent>(events.data(), count));
-    if (request_cancelled()) {
-      return foundation::Result<void>::failure(Error{
-          ErrorCode::internal_error,
-          "request deadline expired after Capture persistence",
-      });
-    }
-    return appended;
-  }
-
-  foundation::Result<void> drain_all_capture_events() {
-    while (engine.capture_telemetry().drained_events <
-           engine.capture_telemetry().captured_events) {
-      const auto drained = drain_capture_events();
-      if (!drained.has_value()) {
-        return drained;
-      }
-    }
-    return foundation::Result<void>::success();
-  }
-
-  foundation::Result<void> seal_take(const TakeSession& take) {
-    auto sealed = application.seal_realtime_take(
-        *retained_project_path,
-        foundation::TakeId{take.id},
-        "capture_incomplete");
-    if (!sealed.has_value()) {
-      return foundation::Result<void>::failure(sealed.error());
-    }
-    return foundation::Result<void>::success();
-  }
-
-  foundation::Result<void> seal_active_after_failure(Error failure) {
-    const auto sealed = seal_take(*active_take);
-    if (!sealed.has_value()) {
-      return sealed;
-    }
-    active_take.reset();
-    return foundation::Result<void>::failure(std::move(failure));
-  }
-
-  foundation::Result<void> finish_capture(bool make_committable) {
-    if (!active_take.has_value()) {
-      return foundation::Result<void>::failure(Error{
-          ErrorCode::invalid_argument,
-          "no active realtime Take",
-      });
-    }
-    trigger_admission = false;
-    if (!coordinator.has_value() ||
-        coordinator->await_quiescent == nullptr ||
-        coordinator->begin_rendering == nullptr) {
-      return seal_active_after_failure(Error{
-          ErrorCode::internal_error,
-          "audio capture acknowledgement is unavailable",
-      });
-    }
-    bool worklet_paused = false;
-    auto capture = engine.capture_telemetry().state;
-    while (capture != audio::CaptureState::idle &&
-           capture != audio::CaptureState::corrupted) {
-      if (capture == audio::CaptureState::active) {
-        const auto disarmed = engine.disarm_capture();
-        if (!disarmed.has_value()) {
-          return seal_active_after_failure(disarmed.error());
-        }
-      }
-      if (worklet_paused) {
-        const auto begun = coordinator->begin_rendering(
-            coordinator->context);
-        if (!begun.has_value()) {
-          return seal_active_after_failure(begun.error());
-        }
-        worklet_paused = false;
-      }
-      const auto timeout_ms = remaining_request_budget_ms();
-      if (timeout_ms == 0) {
-        return seal_active_after_failure(Error{
-            ErrorCode::internal_error,
-            "capture barrier timed out",
-        });
-      }
-      const auto quiescent = coordinator->await_quiescent(
-          coordinator->context, timeout_ms);
-      worklet_paused = true;
-      if (!quiescent.has_value()) {
-        return seal_active_after_failure(quiescent.error());
-      }
-      capture = engine.capture_telemetry().state;
-    }
-    if (capture == audio::CaptureState::corrupted) {
-      return seal_active_after_failure(Error{
-          ErrorCode::internal_error,
-          "realtime capture was corrupted",
-      });
-    }
-    const auto drained = drain_all_capture_events();
-    if (!drained.has_value()) {
-      return seal_active_after_failure(drained.error());
-    }
-    const auto take = *active_take;
-    if (make_committable) {
-      if (request_cancelled()) {
-        return foundation::Result<void>::failure(Error{
-            ErrorCode::internal_error,
-            "request deadline expired before audio rendering resumed",
-        });
-      }
-      const auto begun = coordinator->begin_rendering(
-          coordinator->context);
-      if (!begun.has_value()) {
-        return seal_active_after_failure(begun.error());
-      }
-      if (request_cancelled()) {
-        return foundation::Result<void>::failure(Error{
-            ErrorCode::internal_error,
-            "request deadline expired after audio rendering resumed",
-        });
-      }
-      committable_take = take;
-      active_take.reset();
-      trigger_admission = true;
-      return foundation::Result<void>::success();
-    }
-    const auto sealed = seal_take(take);
-    if (sealed.has_value()) {
-      active_take.reset();
-    }
-    return sealed;
-  }
-
   foundation::Result<void> quiesce_and_stop_audio() noexcept {
     trigger_admission = false;
     if (!coordinator.has_value() ||
@@ -1353,21 +1185,6 @@ struct ControlRuntime::Impl {
   void seal_all_noexcept() noexcept {
     try {
       static_cast<void>(abort_imports());
-      if (!retained_project_path.has_value()) {
-        active_take.reset();
-        committable_take.reset();
-        return;
-      }
-      if (active_take.has_value()) {
-        if (seal_take(*active_take).has_value()) {
-          active_take.reset();
-        }
-      }
-      if (committable_take.has_value()) {
-        if (seal_take(*committable_take).has_value()) {
-          committable_take.reset();
-        }
-      }
     } catch (...) {
     }
   }
@@ -1395,8 +1212,6 @@ struct ControlRuntime::Impl {
   std::optional<std::uint16_t> project_bpm;
   std::optional<std::string> runtime_bank_project_id;
   std::optional<std::uint64_t> runtime_revision;
-  std::optional<TakeSession> active_take;
-  std::optional<TakeSession> committable_take;
   std::optional<SequenceSession> active_sequence;
   std::optional<PendingSequenceBoundary> pending_sequence_boundary;
   std::optional<detail::AudioQuiescenceCoordinator> coordinator;
@@ -1604,8 +1419,6 @@ Json ControlRuntime::dispatch(
           payload, {"project_id", "bpm", "initial_pattern"}));
       require(sidecar.empty());
       if (impl_->state == Impl::State::running ||
-          impl_->active_take.has_value() ||
-          impl_->committable_take.has_value() ||
           impl_->active_sequence.has_value() ||
           !impl_->sample_import_tokens.empty()) {
         return state_error();
@@ -1657,8 +1470,6 @@ Json ControlRuntime::dispatch(
       require(exact_keys(payload, {"project_id", "pattern_id"}));
       require(sidecar.empty());
       if (impl_->state == Impl::State::running ||
-          impl_->active_take.has_value() ||
-          impl_->committable_take.has_value() ||
           impl_->active_sequence.has_value() ||
           !impl_->sample_import_tokens.empty()) {
         return state_error();
@@ -2389,8 +2200,6 @@ Json ControlRuntime::dispatch(
       require(sidecar.empty());
       if (impl_->state != Impl::State::running ||
           !impl_->session_available() || impl_->active_sequence.has_value() ||
-          impl_->active_take.has_value() ||
-          impl_->committable_take.has_value() ||
           !impl_->project_bpm.has_value()) {
         return state_error();
       }
@@ -2690,121 +2499,6 @@ Json ControlRuntime::dispatch(
           impl_->retained_project_path->generic_string();
       return impl_->facade_command(std::move(request));
     }
-    if (operation == "take.begin") {
-      require(exact_keys(payload, {"take_id", "expected_revision"}));
-      require(sidecar.empty());
-      if (impl_->state != Impl::State::running ||
-          !impl_->session_available() || impl_->active_take.has_value() ||
-          impl_->committable_take.has_value()) {
-        return state_error();
-      }
-      const auto take_id = uuid_field(payload, "take_id");
-      const auto revision = unsigned_field(payload, "expected_revision");
-      if (impl_->cancel_if_expired()) {
-        return timeout_error();
-      }
-      const auto begun = impl_->application.command(
-          {
-              {"operation", "take.begin"},
-              {"project_path",
-               impl_->retained_project_path->generic_string()},
-              {"take_id", take_id},
-              {"expected_revision", revision},
-              {"sample_rate", kSampleRate},
-          });
-      if (!begun.value("ok", false)) {
-        return normalized_facade_error(begun);
-      }
-      if (impl_->cancel_if_expired()) {
-        static_cast<void>(impl_->application.seal_realtime_take(
-            *impl_->retained_project_path,
-            foundation::TakeId{take_id},
-            "capture_incomplete"));
-        return timeout_error();
-      }
-      const auto armed = impl_->engine.arm_capture();
-      if (!armed.has_value()) {
-        impl_->application.seal_realtime_take(
-            *impl_->retained_project_path,
-            foundation::TakeId{take_id},
-            "capture_incomplete");
-        return normalized_error(armed.error());
-      }
-      const auto current_revision =
-          begun.at("project_revision").get<std::uint64_t>();
-      impl_->active_take = Impl::TakeSession{take_id, current_revision};
-      impl_->trigger_admission = true;
-      return success({
-          {"take_id", take_id},
-          {"project_revision", current_revision},
-          {"capture_state", "arm_pending"},
-      });
-    }
-    if (operation == "take.stop") {
-      require(exact_keys(payload, {}));
-      require(sidecar.empty());
-      if (impl_->state != Impl::State::running ||
-          !impl_->active_take.has_value()) {
-        return state_error();
-      }
-      const auto take = *impl_->active_take;
-      const auto finished = impl_->finish_capture(true);
-      if (impl_->cancel_if_expired()) {
-        return timeout_error();
-      }
-      if (!finished.has_value()) {
-        impl_->state = Impl::State::failed;
-        impl_->trigger_admission = false;
-        impl_->seal_all_noexcept();
-        return normalized_error(finished.error());
-      }
-      return success({
-          {"take_id", take.id},
-          {"project_revision", take.project_revision},
-          {"status", "committable"},
-      });
-    }
-    if (operation == "take.commit") {
-      require(exact_keys(
-          payload, {"command_id", "expected_revision", "pattern"}));
-      require(sidecar.empty());
-      if (!impl_->session_available() ||
-          !impl_->committable_take.has_value()) {
-        return state_error();
-      }
-      uuid_field(payload, "command_id");
-      unsigned_field(payload, "expected_revision");
-      pattern_value(payload.at("pattern"));
-      auto request = payload;
-      request["operation"] = "take.commit";
-      request["project_path"] =
-          impl_->retained_project_path->generic_string();
-      request["take_id"] = impl_->committable_take->id;
-      if (impl_->cancel_if_expired()) {
-        return timeout_error();
-      }
-      auto response = impl_->facade_command(std::move(request));
-      if (impl_->cancel_if_expired()) {
-        return timeout_error();
-      }
-      if (response.value("ok", false)) {
-        impl_->project_revision =
-            response.at("result").at("project_revision")
-                .get<std::uint64_t>();
-        impl_->committable_take.reset();
-      }
-      return response;
-    }
-    if (operation == "take.recoverable.list") {
-      require(exact_keys(payload, {}));
-      require(sidecar.empty());
-      if (!impl_->session_available()) {
-        return state_error();
-      }
-      return impl_->facade_query(
-          {{"operation", "take.recoverable.list"},
-           {"project_path", impl_->retained_project_path->generic_string()}});
-    }
     if (operation == "audio.suspend") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
@@ -2834,13 +2528,6 @@ Json ControlRuntime::dispatch(
           sequence_failure = stopped.error();
         }
       }
-      std::optional<Error> capture_failure;
-      if (impl_->active_take.has_value()) {
-        const auto finished = impl_->finish_capture(false);
-        if (!finished.has_value()) {
-          capture_failure = finished.error();
-        }
-      }
       if (impl_->cancel_if_expired()) {
         return timeout_error();
       }
@@ -2862,13 +2549,10 @@ Json ControlRuntime::dispatch(
           };
         }
       }
-      if (sequence_failure.has_value() || capture_failure.has_value() ||
-          !cleanup.has_value()) {
+      if (sequence_failure.has_value() || !cleanup.has_value()) {
         const auto failure = sequence_failure.has_value()
                                  ? *sequence_failure
-                                 : capture_failure.has_value()
-                                       ? *capture_failure
-                                       : cleanup.error();
+                                 : cleanup.error();
         fail_and_seal("audio_suspend_failed");
         return normalized_error(failure);
       }
@@ -2884,7 +2568,6 @@ Json ControlRuntime::dispatch(
     if (operation == "host.close") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
-      std::optional<std::string> sealed_take;
       std::optional<std::string> stopped_sequence;
       std::optional<Error> close_failure;
       bool close_timed_out = false;
@@ -2904,7 +2587,6 @@ Json ControlRuntime::dispatch(
           impl_->state = Impl::State::failed;
           return state_error("audio quiescence is unavailable");
         }
-        std::optional<Error> capture_failure;
         if (impl_->active_sequence.has_value()) {
           stopped_sequence = impl_->active_sequence->id.value();
           const auto stopped = impl_->stop_active_sequence();
@@ -2912,33 +2594,13 @@ Json ControlRuntime::dispatch(
             close_failure = stopped.error();
           }
         }
-        if (impl_->active_take.has_value()) {
-          sealed_take = impl_->active_take->id;
-          const auto finished = impl_->finish_capture(false);
-          if (!finished.has_value()) {
-            capture_failure = finished.error();
-          }
-        }
         observe_timeout();
         if (close_timed_out) {
           return timeout_error();
         }
         const auto cleanup = impl_->quiesce_and_stop_audio();
-        if (capture_failure.has_value() || !cleanup.has_value()) {
-          close_failure = capture_failure.has_value()
-                              ? *capture_failure
-                              : cleanup.error();
-        }
-      }
-      if (impl_->committable_take.has_value()) {
-        sealed_take = impl_->committable_take->id;
-        const auto take = *impl_->committable_take;
-        const auto sealed = impl_->seal_take(take);
-        if (!sealed.has_value()) {
-          impl_->state = Impl::State::failed;
-          close_failure = sealed.error();
-        } else {
-          impl_->committable_take.reset();
+        if (!cleanup.has_value()) {
+          close_failure = cleanup.error();
         }
       }
       const auto imports_released = impl_->abort_imports();
@@ -3044,29 +2706,16 @@ ControlRuntime::drain_voice_states() {
 }
 
 foundation::Result<void> ControlRuntime::drain_capture() {
-  const auto capture = impl_->engine.capture_telemetry();
-  if (capture.capture_drops != 0 ||
-      capture.state == audio::CaptureState::corrupted) {
-    fail_and_seal("capture_drop");
-    return foundation::Result<void>::failure(Error{
-        ErrorCode::internal_error,
-        "realtime capture was corrupted",
-    });
-  }
-  auto drained = impl_->drain_capture_events();
-  if (!drained.has_value() &&
-      drained.error().code != ErrorCode::invalid_argument) {
-    const auto failure = drained.error();
-    fail_and_seal("capture_persistence_failure");
-    return foundation::Result<void>::failure(failure);
-  }
   if (!validate_realtime_health()) {
     return foundation::Result<void>::failure(Error{
         ErrorCode::internal_error,
-        "realtime drain failed",
+        "realtime capture health check failed",
     });
   }
-  return drained;
+  std::array<audio::CapturedTriggerEvent, 64> discarded{};
+  while (impl_->engine.drain_capture(discarded) != 0) {
+  }
+  return foundation::Result<void>::success();
 }
 
 bool ControlRuntime::validate_realtime_health() noexcept {

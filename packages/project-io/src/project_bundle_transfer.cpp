@@ -212,7 +212,8 @@ foundation::Result<ParsedIndex> parse_index(std::string_view encoded) {
            "project_id",
            "uncompressed_bytes"}) ||
       index.at("contract") != "lmdj.project-bundle.v1" ||
-      index.at("contract_version") != "1.0.0" ||
+      (index.at("contract_version") != "1.0.0" &&
+       index.at("contract_version") != "1.1.0") ||
       index.at("compression") != "none" ||
       !index.at("project_contract").is_string() ||
       (index.at("project_contract") != "lmdj.project.v1" &&
@@ -416,7 +417,7 @@ foundation::Result<std::string> project_digest(
   nlohmann::json index{
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.0.0"},
+      {"contract_version", "1.1.0"},
       {"entries", std::move(encoded_entries)},
       {"project_contract", "lmdj.project.v3"},
       {"project_id", project_id.value()},

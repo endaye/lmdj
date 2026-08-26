@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+import os
 from pathlib import Path
 
 
@@ -25,16 +26,20 @@ def fail(message: str) -> None:
 
 
 def text_files(root: Path):
-    for path in root.rglob("*"):
-        if path.is_file() and path.suffix in TEXT_SUFFIXES:
-            yield path
+    excluded = {"node_modules", "build", "dist", ".next"}
+    for directory, names, files in os.walk(root):
+        names[:] = [name for name in names if name not in excluded]
+        for name in files:
+            path = Path(directory) / name
+            if path.suffix in TEXT_SUFFIXES:
+                yield path
 
 
 def main() -> int:
     app_owned = sorted(
         path.relative_to(REPO_ROOT).as_posix()
-        for path in (REPO_ROOT / "apps").rglob("*")
-        if path.is_file() and path.name in FORBIDDEN_APP_FILES
+        for path in text_files(REPO_ROOT / "apps")
+        if path.name in FORBIDDEN_APP_FILES
     )
     if app_owned:
         fail("shared Web Runtime sources remain app-owned: " + ", ".join(app_owned))

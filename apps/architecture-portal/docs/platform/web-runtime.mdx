@@ -22,11 +22,11 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 当前组成
 
-Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由共享 Web Runtime Platform `0.3.6`、Diagnostic Web Runtime Host `1.2.15` 与 Creator Web Host `1.5.5` 组成，并锁入 Product Build `1.0.36.0`。这次分配组合 Creator Capture UI F1–F5、Audio Runtime 渲染路径 96 帧线性斜坡 F6，以及 CI 发现的显式暂停竞态修复：共享 Platform 先提交 Host quiescence，再 suspend 浏览器 Context；两个 Host 绑定新的精确 Platform 身份。Creator 的提交前静音门与输入身份、`DUPLICATE_ID` 可恢复呈现、trim 握把指针模型与 Capture 模态面板只改变 Host 呈现，pre-commit Crop 只修改 Host-local ephemeral capture，都不改变 Facade 或 Project Truth。
+Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由 Web Runtime Platform `1.0.0`、Diagnostic Web Runtime Host `2.0.0` 与 Creator Web Host `2.0.0` 组成，并锁入 Product Build `1.0.37.0`。Stage 9 由共享 Runtime Session 桥接 Sequence recording、settings、next-Bar switch、receipt 与 recovery；Host 只呈现 authority state。
 
 ## 共享 Platform
 
-两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Host manifest 的 contract/id/version 必须命中 Product Assembly 注入的精确 allowlist；Host UI 不能自选 Product identity 或绕过 Facade。Stage 8 在同一有界 Host lane 上加入 Sample inspect、waveform、streamed import、update、reset、preview、release、stop 与 Snapshot retry，并把权威 Voice started/stopped/completed 状态按序投影给 Creator。Project 路径只由 retained current Project 注入，Browser payload 不得携带 `project_path`；verified sidecar 的长度、SHA-256、offset 与 final 标记在进入 Facade 前精确校验。
+两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Pointer、Keyboard、MIDI 在共享 Audio Runtime frame clock 上取得时间戳并按 `input_sequence` 串行；BPM anchor 和 Bar boundary 来自 Core，JavaScript 不实现 quantizer、fingerprint 或 fallback sequencer。Project 路径只由 retained current Project 注入，Browser payload 不得携带 `project_path`。
 
 Host preflight 的单次 Control Worker capability probe 使用 15 秒有界预算。CPU 或文件 I/O contention 可以推迟结果，但不能被解释成 OPFS primitive 缺失；明确 primitive 缺失、actual negative 或 Worker error 仍 fail closed 为 `UNSUPPORTED_WEB_RUNTIME`，deadline expiry 则为 `HOST_TIMEOUT`。无论 settle 原因如何，临时 Worker 与 Blob URL 都由 probe owner 清理。
 
@@ -50,7 +50,7 @@ pagehide 才进入 close。
 
 ## 自动化范围
 
-共享 C++/Node tests 固定 manifest、transport、input、recovery 与 realtime session；Creator 和 Diagnostic 的 packaged Playwright proof 分别验证创作旅程与诊断压力/Take/lifecycle 路径。WebKit capability smoke 只有在 mandatory primitive 可用时才能升级为完整自动化 PASS。
+共享 C++/Node tests 固定 manifest、transport、frame-stamped input、Sequence recovery 与 realtime session；Creator 和 Diagnostic 的 packaged Playwright proof 分别验证 Sequence 创作旅程与诊断压力/lifecycle 路径。WebKit capability smoke 只有在 mandatory primitive 可用时才能升级为完整自动化 PASS。
 
 ## 公共静态托管边界
 
@@ -74,7 +74,7 @@ Netlify 静态托管同一份已验证的 release `dist`，不运行该 Python s
 `docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
 
 发布工具、workflow、历史 Build 的 tag/Release 或任何部署证据，都不自动证明当前 Product
-Build `1.0.36.0`、历史 `1.0.31.0` / `1.0.30.0` / `1.0.29.0`、未通过审查的 `1.0.28.0` 或历史 Product Build `1.0.27.0` / `1.0.26.0` / `1.0.25.0` 已获得 remote verified tag、Release、Deploy ID、
+Build `1.0.37.0`、历史 `1.0.36.0` / `1.0.31.0` / `1.0.30.0` / `1.0.29.0`、未通过审查的 `1.0.28.0` 或更早 Product Build 已获得 remote verified tag、Release、Deploy ID、
 immutable URL、production publication 或 Channel promotion。Portal 只接受与精确 Product/Host 身份绑定并经审查的 evidence
 record；本地 Proof 或 PR Preview 不能替代公共部署证据。
 

@@ -143,7 +143,6 @@ void test_wrong_revision_returns_conflict_without_changing_state() {
   LMDJ_CHECK(result.error().code == ErrorCode::revision_conflict);
   LMDJ_CHECK(initial.revision == 0);
   LMDJ_CHECK(initial.assets.empty());
-  LMDJ_CHECK(initial.takes.empty());
   LMDJ_CHECK(initial.patterns.empty());
 }
 
@@ -545,7 +544,7 @@ void test_pattern_events_keep_slot_reference_through_pad_reassignment() {
       state,
       Command{CreatePattern{
           meta(kPatternCommand, 3),
-          {PatternId{kPattern1}, 1, {{PadSlotId{0, 0}, 0, 100}}},
+          {PatternId{kPattern1}, 1, {{PadSlotId{0, 0}, 0, 240, 100}}},
       }})
               .state;
   state = apply_or_throw(
@@ -561,22 +560,23 @@ void test_pattern_events_keep_slot_reference_through_pad_reassignment() {
   LMDJ_CHECK(resolved->id == AssetId{kAsset2});
 }
 
-void test_pattern_validation_enforces_velocity_bars_and_explicit_steps() {
+void test_pattern_validation_enforces_velocity_bars_and_tick_bounds() {
   const auto state = new_project();
   const auto invalid_velocity = Command{CreatePattern{
       meta(kPatternCommand, 0),
-      {PatternId{kPattern1}, 1, {{PadSlotId{0, 0}, 0, 0}}},
+      {PatternId{kPattern1}, 1, {{PadSlotId{0, 0}, 0, 240, 0}}},
   }};
   const auto invalid_bars = Command{CreatePattern{
       meta(kPatternCommand, 0),
-      {PatternId{kPattern1}, 3, {{PadSlotId{0, 0}, 0, 100}}},
+      {PatternId{kPattern1}, 3, {{PadSlotId{0, 0}, 0, 240, 100}}},
   }};
-  const auto invalid_step = Command{CreatePattern{
+  const auto invalid_onset = Command{CreatePattern{
       meta(kPatternCommand, 0),
-      {PatternId{kPattern1}, 1, {{PadSlotId{0, 0}, 16, 100}}},
+      {PatternId{kPattern1}, 1, {{PadSlotId{0, 0}, 3'840, 1, 100}}},
   }};
 
-  for (const auto& command : {invalid_velocity, invalid_bars, invalid_step}) {
+  for (const auto& command :
+       {invalid_velocity, invalid_bars, invalid_onset}) {
     const auto result = lmdj::domain::apply(state, command, {});
     LMDJ_CHECK(!result.has_value());
     LMDJ_CHECK(result.error().code == ErrorCode::invalid_argument);
@@ -705,7 +705,7 @@ int main() {
     test_import_asset_validates_id_and_complete_artifact_reference();
     test_assign_pad_rejects_invalid_asset_id_before_lookup();
     test_pattern_events_keep_slot_reference_through_pad_reassignment();
-    test_pattern_validation_enforces_velocity_bars_and_explicit_steps();
+    test_pattern_validation_enforces_velocity_bars_and_tick_bounds();
     test_create_pattern_rejects_invalid_pattern_id();
     test_merge_pattern_events_replaces_duplicates_and_orders_canonically();
     test_tick_pattern_validation_enforces_loop_remainder();

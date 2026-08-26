@@ -3,23 +3,19 @@ title: Project Contract
 area: contracts
 status: implemented
 owners: [core, product]
-contracts: [lmdj.project.v1, lmdj.project.v2]
-source_paths: [contracts/project/lmdj.project.v1.schema.json, contracts/project/lmdj.project.v2.schema.json, packages/authoring-domain]
+contracts: [lmdj.project.v3]
+source_paths: [contracts/project/lmdj.project.v1.schema.json, contracts/project/lmdj.project.v2.schema.json, contracts/project/lmdj.project.v3.schema.json, packages/authoring-domain]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
-<BuildIdentity kind="contracts" id="lmdj.project.v1" />
-
-<BuildIdentity kind="contracts" id="lmdj.project.v2" />
+<BuildIdentity kind="contracts" id="lmdj.project.v3" />
 
 ## 权威内容
-`lmdj.project.v1` 保持兼容读取；`lmdj.project.v2` 是当前写入真相，表达素材引用、Pad Slot、完整 per-Pad playback（trim、trigger mode、gain、mute）、Pattern 和创作结构。v1 缺失 playback 时读取层投影固定默认值，任何第一次成功 mutation 才原子写出 v2。
+`lmdj.project.v3 · 3.0.0` 是唯一当前写入真相：表达素材引用、Pad Slot、完整 per-Pad playback、BPM、`quantize_enabled`、`swing_percent`，以及 tick-native PPQ 960 Pattern events。Project I/O 可读取 v1/v2，并在第一次成功 mutation 前完成确定性总迁移；writer 永远只发出 v3。
 ## 明确排除
 Runtime Snapshot、Provider 选择、Attempt failure、设备句柄和 Host 偏好不属于 Project Truth。
 ## 引用不变量
 Pattern event 引用 Pad Slot，Slot 再关联 Asset；事件不直接绑定 Asset。playback 属于 Slot，不属于不可变 Asset，同一 WAV 可被多个 Slot 以不同参数引用。
 ## 使用方与证据
-Authoring Domain、Project I/O、Cooker 与 Facade 消费该 Contract，并由 schema、领域、dual-read/v2-write、Cook 与 packaged v1→v2 Creator Proof 验证。
-## 设计态（尚未实现）
-[2026-08-23 Sequence 录音语义决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)批准了下一档 Project Contract（精确 Contract ID 与 SemVer 见决策文件与实施计划，Stage 9 实施时进入活动 manifest）：删除 `takes` 与 raw-take 定义，Pattern 事件改为 tick-native（PPQ 960）的 `{slot, onset_tick, duration_tick, velocity}`，`quantize_enabled` 与 `swing_percent` 进入 Project Truth，v2 到下一档为确定性总迁移。v2 在 Stage 9 实施合入前仍是唯一当前写入真相；本节不改变上方由活动 manifest 派生的身份。
+Authoring Domain、Project I/O、Cooker 与 Facade 消费该 Contract，并由 schema、领域、v1/v2→v3 migration、Cook、headless 与 packaged browser Proof 验证。录音过程本身是 journal overlay；只有 flush 的 commit receipt 对应 revision 发布后，Pattern events 才进入 Project Truth。

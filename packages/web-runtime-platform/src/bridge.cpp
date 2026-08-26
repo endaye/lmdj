@@ -521,7 +521,6 @@ struct ControlBridge::Impl {
     MessageSlot* voice_message = nullptr;
     MessageSlot* boundary_message = nullptr;
     try {
-      static_cast<void>(runtime.drain_capture());
 #if !defined(__EMSCRIPTEN__)
       if (hooks.after_capture_drain != nullptr) {
         hooks.after_capture_drain(hooks.context);

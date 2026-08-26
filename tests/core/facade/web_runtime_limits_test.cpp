@@ -63,14 +63,12 @@ using lmdj::domain::CommandMeta;
 using lmdj::domain::PadPlayback;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
-using lmdj::domain::RawTakeEvent;
 using lmdj::domain::TriggerMode;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::PatternId;
 using lmdj::foundation::ProjectId;
-using lmdj::foundation::TakeId;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
 
@@ -80,8 +78,6 @@ constexpr std::string_view kKickAssetId =
     "00000000-0000-4000-8000-000000000101";
 constexpr std::string_view kSnareAssetId =
     "00000000-0000-4000-8000-000000000102";
-constexpr std::string_view kTakeId =
-    "00000000-0000-4000-8000-000000000201";
 constexpr std::string_view kPatternId =
     "00000000-0000-4000-8000-000000000010";
 constexpr std::string_view kCapability = "proof.candidate.v2";
@@ -920,93 +916,6 @@ void replace_sample_after_projection_load(void* opaque) noexcept {
 }
 
 
-
-nlohmann::json pattern_json() {
-  return {
-      {"pattern_id", kPatternId},
-      {"bars", 1},
-      {"events",
-       nlohmann::json::array(
-           {
-               {{"slot", slot(0, 0)}, {"step", 0}, {"velocity", 127}},
-               {{"slot", slot(0, 1)}, {"step", 4}, {"velocity", 127}},
-               {{"slot", slot(0, 0)}, {"step", 8}, {"velocity", 127}},
-               {{"slot", slot(0, 1)}, {"step", 12}, {"velocity", 127}},
-           })},
-  };
-}
-
-void create_golden_project(
-    Application& application,
-    const std::filesystem::path& project) {
-  auto response = application.command(create_request(project));
-  check_success(response, 0);
-
-  response = application.command(import_request(
-      project,
-      1,
-      kKickAssetId,
-      std::filesystem::absolute("tests/fixtures/audio/kick.wav"),
-      0));
-  check_success(response, 1);
-
-  response = application.command(import_request(
-      project,
-      2,
-      kSnareAssetId,
-      std::filesystem::absolute("tests/fixtures/audio/snare.wav"),
-      1));
-  check_success(response, 2);
-
-  response = application.command(
-      assign_request(project, 3, 0, kKickAssetId, 2));
-  check_success(response, 3);
-  response = application.command(
-      assign_request(project, 4, 1, kSnareAssetId, 3));
-  check_success(response, 4);
-
-  response = application.command(
-      {
-          {"operation", "take.begin"},
-          {"project_path", project.generic_string()},
-          {"take_id", kTakeId},
-          {"expected_revision", 4},
-          {"sample_rate", 48000},
-      });
-  check_success(response, 4);
-  for (const auto& [pad, frame] :
-       std::vector<std::pair<std::uint32_t, std::uint64_t>>{
-           {0, 0},
-           {1, 24'000},
-           {0, 48'000},
-           {1, 72'000},
-       }) {
-    response = application.command(
-        {
-            {"operation", "take.append"},
-            {"project_path", project.generic_string()},
-            {"take_id", kTakeId},
-            {"event",
-             {
-                 {"slot", slot(0, pad)},
-                 {"frame_offset", frame},
-                 {"velocity", 127},
-             }},
-        });
-    check_success(response, 4);
-  }
-
-  response = application.command(
-      {
-          {"operation", "take.commit"},
-          {"project_path", project.generic_string()},
-          {"command_id", uuid(5)},
-          {"expected_revision", 4},
-          {"take_id", kTakeId},
-          {"pattern", pattern_json()},
-      });
-  check_success(response, 5);
-}
 
 
 

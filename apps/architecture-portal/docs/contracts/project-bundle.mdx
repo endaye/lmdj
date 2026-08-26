@@ -16,11 +16,11 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 权威内容
 
-`lmdj.project-bundle.v1` 是 portable Project transfer envelope：canonical index 固定 Project ID、Project Contract、entry path/offset/bytes/SHA-256、总字节数和整个 Bundle digest；当前版本只允许无压缩 payload。
+`lmdj.project-bundle.v1 · 1.1.0` 是 portable Project transfer envelope：canonical index 固定 Project ID、Project Contract、entry path/offset/bytes/SHA-256、总字节数和整个 Bundle digest；当前版本只允许无压缩 payload。1.1 writer 发出 Project v3 identity，reader 为迁移继续接收 1.0 envelope 与 Project v1/v2。
 
 ## 与 Project Truth 的关系
 
-Bundle 只负责传输，不是新的创作真相。成功导入后，`lmdj.project.v1` 仍是权威 Project Truth；Runtime Snapshot、Provider/Attempt、Workspace/Host setting 与设备状态不进入 Bundle。
+Bundle 只负责传输，不是新的创作真相。成功导入后，Project v3 是权威 Project Truth；Runtime Snapshot、Provider/Attempt、Workspace/Host setting 与设备状态不进入 Bundle。
 
 ## 安全与发布
 

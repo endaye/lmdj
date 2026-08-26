@@ -282,16 +282,26 @@ GeneratedProject generated_project(
       Command{AssignPad{meta(), duplicate_mono_slot, mono_first}});
 
   std::vector<PatternEvent> events{
-      {mono_slot, 0, 127},
-      {reassigned_slot, 1, 126},
-      {stereo_slot, 2, 125},
-      {duplicate_mono_slot, 3, 124},
+      {mono_slot, 0, lmdj::domain::kSixteenthTicks, 127},
+      {reassigned_slot,
+       lmdj::domain::kSixteenthTicks,
+       lmdj::domain::kSixteenthTicks,
+       126},
+      {stereo_slot,
+       2 * lmdj::domain::kSixteenthTicks,
+       lmdj::domain::kSixteenthTicks,
+       125},
+      {duplicate_mono_slot,
+       3 * lmdj::domain::kSixteenthTicks,
+       lmdj::domain::kSixteenthTicks,
+       124},
   };
   for (std::uint32_t step = 4; step < 16; ++step) {
     const std::array slots{reassigned_slot, mono_slot, stereo_slot};
     events.push_back(PatternEvent{
         slots.at(rng.bounded(slots.size())),
-        step,
+        step * lmdj::domain::kSixteenthTicks,
+        lmdj::domain::kSixteenthTicks,
         static_cast<std::uint8_t>(1U + rng.bounded(127)),
     });
   }

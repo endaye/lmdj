@@ -173,7 +173,7 @@ TransferFixture build_fixture(
       {"bundle_digest", std::string(64, '0')},
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.0.0"},
+      {"contract_version", "1.1.0"},
       {"entries", std::move(encoded_entries)},
       {"project_contract", "lmdj.project.v3"},
       {"project_id", project_id},

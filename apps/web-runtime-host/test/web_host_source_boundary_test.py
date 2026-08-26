@@ -299,28 +299,6 @@ def main() -> int:
         is not None,
         "Control outcome drain must copy the bounded fixed array explicitly",
     )
-    capture_finish = re.search(
-        r"foundation::Result<void> finish_capture\(bool make_committable\)\s*"
-        r"\{(.*?)\n  \}",
-        control_runtime_source,
-        re.DOTALL,
-    )
-    require(capture_finish is not None, "Control capture finish barrier is missing")
-    capture_finish_body = capture_finish.group(1)
-    require(
-        "std::this_thread::yield()" not in capture_finish_body,
-        "Emscripten capture barriers must not busy-wait with a non-yielding "
-        "sched_yield implementation",
-    )
-    require(
-        "coordinator->await_quiescent" in capture_finish_body,
-        "capture barriers must request an acknowledged AudioWorklet quantum",
-    )
-    require(
-        "coordinator->begin_rendering" in capture_finish_body,
-        "successful take.stop must resume AudioWorklet rendering after the "
-        "acknowledged final quantum",
-    )
     realtime_audio_worklet_source = realtime_audio_worklet.read_text(
         encoding="utf-8"
     )
@@ -881,24 +859,19 @@ def main() -> int:
         "claimed publication hang observation must outlive its request "
         "deadline on a slow runner",
     )
-    visible_journey = re.search(
-        r'test\("Chromium visible diagnostic project completes the packaged '
-        r'runtime journey".*?\n\}\);',
+    sequence_journey = re.search(
+        r'test\("Stage 9 Chromium records, overdubs, replays, reloads, and '
+        r'exposes observer status".*?\n\}\);',
         browser_spec_text,
         re.DOTALL,
     )
-    require(visible_journey is not None, "visible packaged journey is missing")
-    take_outcome_proof = visible_journey.group(0).find(
-        "await proveExactOutcomes(page, takeAdmissions"
-    )
-    take_stop = visible_journey.group(0).find(
-        "stopTakeWithQuiescenceDiagnostics(page)"
-    )
+    require(sequence_journey is not None, "Stage 9 Sequence journey is missing")
     require(
-        take_outcome_proof >= 0 and take_outcome_proof < take_stop,
-        "packaged Take proof must settle exact realtime outcomes before the "
-        "stop barrier so slow OPFS persistence is not conflated with final "
-        "AudioWorklet quiescence",
+        "pendingEventCount: 0" in sequence_journey.group(0)
+        and "replayed: true" in sequence_journey.group(0)
+        and "snapshot.reload" in sequence_journey.group(0),
+        "packaged Sequence proof must observe a drained journal, prove the "
+        "idempotent stop boundary, and reload committed Project Truth",
     )
     runtime_gate = re.search(
         r"run_audio_worklet_conformance\(\)\s*\{(.*?)\n\}",

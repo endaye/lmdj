@@ -71,11 +71,6 @@ struct PatternEvent {
   std::uint32_t duration_tick;
   std::uint8_t velocity;
 
-  // Temporary source compatibility for the legacy runtime consumers removed
-  // by the subsequent tick-native runtime Task. It is never serialized by the
-  // v3 writer and is derived from onset_tick at construction time.
-  std::uint32_t step;
-
   PatternEvent(
       PadSlotId slot_value,
       std::uint32_t onset_tick_value,
@@ -84,18 +79,7 @@ struct PatternEvent {
       : slot(slot_value),
         onset_tick(onset_tick_value),
         duration_tick(duration_tick_value),
-        velocity(velocity_value),
-        step(onset_tick_value / kSixteenthTicks) {}
-
-  PatternEvent(
-      PadSlotId slot_value,
-      std::uint32_t legacy_step,
-      std::uint8_t velocity_value) noexcept
-      : PatternEvent(
-            slot_value,
-            legacy_step * kSixteenthTicks,
-            kSixteenthTicks,
-            velocity_value) {}
+        velocity(velocity_value) {}
 
   bool operator==(const PatternEvent& other) const noexcept {
     return slot == other.slot && onset_tick == other.onset_tick &&
@@ -111,22 +95,6 @@ struct Pattern {
   bool operator==(const Pattern&) const = default;
 };
 
-struct RawTakeEvent {
-  PadSlotId slot;
-  std::uint32_t frame_offset;
-  std::uint8_t velocity;
-
-  bool operator==(const RawTakeEvent&) const = default;
-};
-
-struct RawTake {
-  foundation::TakeId id;
-  std::uint32_t sample_rate;
-  std::vector<RawTakeEvent> events;
-
-  bool operator==(const RawTake&) const = default;
-};
-
 struct ProjectState {
   ProjectContract contract;
   foundation::ProjectId id;
@@ -136,7 +104,6 @@ struct ProjectState {
   std::uint8_t swing_percent;
   std::array<std::array<PadSlot, 16>, 4> banks;
   std::map<foundation::AssetId, Asset> assets;
-  std::map<foundation::TakeId, RawTake> takes;
   std::map<foundation::PatternId, Pattern> patterns;
 
   bool operator==(const ProjectState&) const = default;

@@ -288,7 +288,7 @@ test("unknown response rejects and clears another real pending Browser Main requ
 });
 
 
-test("processorerror seals an active Take and the failed session never resumes", async ({page}) => {
+test("processorerror seals an active Sequence and the failed session never resumes", async ({page}) => {
   test.setTimeout(120_000);
   await waitForFormalHost(page);
   expect((await activateFromClick(page)).ok).toBe(true);
@@ -298,7 +298,7 @@ test("processorerror seals an active Take and the failed session never resumes",
     const submit = window.__lmdjRealtimeFailureSubmit;
     const projectId = crypto.randomUUID();
     const patternId = crypto.randomUUID();
-    const takeId = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
     const created = await submit("project.create", {
       project_id: projectId,
       bpm: 120,
@@ -306,17 +306,32 @@ test("processorerror seals an active Take and the failed session never resumes",
     });
     const snapshot = await submit("snapshot.reload", {pattern_id: patternId});
     const activated = await submit("audio.activate", {});
-    const begun = await submit("take.begin", {
-      take_id: takeId,
+    const begun = await submit("sequence.record.begin", {
+      session_id: sessionId,
+      pattern_id: patternId,
       expected_revision: 0,
     });
-    return {projectId, patternId, takeId, created, snapshot, activated, begun};
+    const recorded = await submit("sequence.record.event", {
+      session_id: sessionId,
+      event: {slot: {bank: 0, pad: 0}, velocity: 100, pressed: true},
+    });
+    return {
+      projectId,
+      patternId,
+      sessionId,
+      created,
+      snapshot,
+      activated,
+      begun,
+      recorded,
+    };
   });
   for (const response of [
     identity.created,
     identity.snapshot,
     identity.activated,
     identity.begun,
+    identity.recorded,
   ]) expect(response.ok).toBe(true);
 
   const fatal = await page.evaluate(async () => {
@@ -339,13 +354,13 @@ test("processorerror seals an active Take and the failed session never resumes",
         project_id: projectId,
         pattern_id: patternId,
       }),
-      recoverable: await submit("take.recoverable.list", {}),
+      recoverable: await submit("sequence.recovery.list", {}),
     };
   }, identity);
   expect(recovery.opened.ok).toBe(true);
   expect(recovery.recoverable).toMatchObject({ok: true});
   expect(recovery.recoverable.result.candidates).toContainEqual(
-    expect.objectContaining({take_id: identity.takeId}),
+    expect.objectContaining({session_id: identity.sessionId}),
   );
 });
 

@@ -57,7 +57,7 @@ def write_project(source: Path) -> None:
         "transactions": [],
     }
     checkpoint = {
-        "contract": "lmdj.project.v1",
+        "contract": "lmdj.project.v3",
         "project_id": PROJECT_ID,
     }
     (source / "manifest.json").write_bytes(
@@ -74,9 +74,9 @@ def make_index(entries: list[dict], total: int) -> dict:
         "bundle_digest": "0" * 64,
         "compression": "none",
         "contract": "lmdj.project-bundle.v1",
-        "contract_version": "1.0.0",
+        "contract_version": "1.1.0",
         "entries": entries,
-        "project_contract": "lmdj.project.v1",
+        "project_contract": "lmdj.project.v3",
         "project_id": PROJECT_ID,
         "uncompressed_bytes": total,
     }
@@ -167,6 +167,7 @@ def test_pack_header_digest_payload_and_determinism(root: Path) -> None:
     ).hexdigest()
     assert index["bundle_digest"] == first_digest
     assert index["project_id"] == PROJECT_ID
+    assert index["project_contract"] == "lmdj.project.v3"
     assert [item["path"] for item in index["entries"]] == sorted(
         item["path"] for item in index["entries"]
     )
@@ -218,7 +219,19 @@ def test_index_and_payload_rejections(root: Path) -> None:
     valid_entries = [entry("a", b"a", 0), entry("b", b"b", 1)]
     valid_index = make_index(valid_entries, len(payload))
 
+    for contract in ("lmdj.project.v1", "lmdj.project.v2"):
+        legacy = copy.deepcopy(valid_index)
+        legacy["project_contract"] = contract
+        legacy["bundle_digest"] = project_bundle.bundle_digest(legacy)
+        path = root / f"valid-{contract}.lmdj"
+        write_bundle(path, legacy, payload)
+        assert project_bundle.read_bundle(path)[0]["project_contract"] == contract
+
     cases: list[tuple[str, dict, bytes, str]] = []
+    unsupported = copy.deepcopy(valid_index)
+    unsupported["project_contract"] = "lmdj.project.v4"
+    unsupported["bundle_digest"] = project_bundle.bundle_digest(unsupported)
+    cases.append(("project-contract", unsupported, payload, "unsupported"))
     invalid_paths = {
         "absolute": "/manifest.json",
         "dotdot": "history/../manifest.json",

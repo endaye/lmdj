@@ -1,108 +1,42 @@
 {
-  "begin": {
-    "operation": "take.begin",
-    "project_path": "$PROJECT_PATH",
-    "take_id": "00000000-0000-4000-8000-000000000201",
-    "expected_revision": 4,
-    "sample_rate": 48000
-  },
-  "events": [
-    {
-      "operation": "take.append",
-      "project_path": "$PROJECT_PATH",
-      "take_id": "00000000-0000-4000-8000-000000000201",
-      "event": {
-        "slot": {
-          "bank": 0,
-          "pad": 0
-        },
-        "frame_offset": 0,
-        "velocity": 127
-      }
-    },
-    {
-      "operation": "take.append",
-      "project_path": "$PROJECT_PATH",
-      "take_id": "00000000-0000-4000-8000-000000000201",
-      "event": {
-        "slot": {
-          "bank": 0,
-          "pad": 1
-        },
-        "frame_offset": 24000,
-        "velocity": 127
-      }
-    },
-    {
-      "operation": "take.append",
-      "project_path": "$PROJECT_PATH",
-      "take_id": "00000000-0000-4000-8000-000000000201",
-      "event": {
-        "slot": {
-          "bank": 0,
-          "pad": 0
-        },
-        "frame_offset": 48000,
-        "velocity": 127
-      }
-    },
-    {
-      "operation": "take.append",
-      "project_path": "$PROJECT_PATH",
-      "take_id": "00000000-0000-4000-8000-000000000201",
-      "event": {
-        "slot": {
-          "bank": 0,
-          "pad": 1
-        },
-        "frame_offset": 72000,
-        "velocity": 127
-      }
-    }
-  ],
-  "commit": {
-    "operation": "take.commit",
+  "create": {
+    "operation": "pattern.create",
     "project_path": "$PROJECT_PATH",
     "command_id": "00000000-0000-4000-8000-000000000005",
     "expected_revision": 4,
-    "take_id": "00000000-0000-4000-8000-000000000201",
-    "pattern": {
-      "pattern_id": "00000000-0000-4000-8000-000000000010",
-      "bars": 1,
-      "events": [
-        {
-          "slot": {
-            "bank": 0,
-            "pad": 0
-          },
-          "step": 0,
-          "velocity": 127
-        },
-        {
-          "slot": {
-            "bank": 0,
-            "pad": 1
-          },
-          "step": 4,
-          "velocity": 127
-        },
-        {
-          "slot": {
-            "bank": 0,
-            "pad": 0
-          },
-          "step": 8,
-          "velocity": 127
-        },
-        {
-          "slot": {
-            "bank": 0,
-            "pad": 1
-          },
-          "step": 12,
-          "velocity": 127
-        }
-      ]
-    }
+    "pattern_id": "00000000-0000-4000-8000-000000000010",
+    "bars": 1
+  },
+  "begin": {
+    "operation": "sequence.record.begin",
+    "project_path": "$PROJECT_PATH",
+    "session_id": "00000000-0000-4000-8000-000000000201",
+    "pattern_id": "00000000-0000-4000-8000-000000000010",
+    "expected_revision": 5,
+    "runtime_frame": 0
+  },
+  "events": [
+    {"slot": {"bank": 0, "pad": 0}, "velocity": 127, "runtime_frame": 0, "input_sequence": 1, "pressed": true},
+    {"slot": {"bank": 0, "pad": 0}, "velocity": 0, "runtime_frame": 12000, "input_sequence": 2, "pressed": false},
+    {"slot": {"bank": 0, "pad": 1}, "velocity": 127, "runtime_frame": 24000, "input_sequence": 3, "pressed": true},
+    {"slot": {"bank": 0, "pad": 1}, "velocity": 0, "runtime_frame": 36000, "input_sequence": 4, "pressed": false},
+    {"slot": {"bank": 0, "pad": 0}, "velocity": 127, "runtime_frame": 48000, "input_sequence": 5, "pressed": true},
+    {"slot": {"bank": 0, "pad": 0}, "velocity": 0, "runtime_frame": 60000, "input_sequence": 6, "pressed": false},
+    {"slot": {"bank": 0, "pad": 1}, "velocity": 127, "runtime_frame": 72000, "input_sequence": 7, "pressed": true},
+    {"slot": {"bank": 0, "pad": 1}, "velocity": 0, "runtime_frame": 84000, "input_sequence": 8, "pressed": false}
+  ],
+  "flush": {
+    "operation": "sequence.record.flush",
+    "project_path": "$PROJECT_PATH",
+    "session_id": "00000000-0000-4000-8000-000000000201",
+    "command_id": "00000000-0000-4000-8000-000000000006",
+    "runtime_frame": 96000
+  },
+  "stop": {
+    "operation": "sequence.record.stop",
+    "project_path": "$PROJECT_PATH",
+    "session_id": "00000000-0000-4000-8000-000000000201",
+    "command_id": "00000000-0000-4000-8000-000000000007",
+    "runtime_frame": 96001
   }
 }

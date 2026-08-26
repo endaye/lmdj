@@ -342,6 +342,22 @@ def input_schemas() -> dict[str, dict]:
                 "asset_id",
             ],
         ),
+        "lmdj.pattern.create": object_schema(
+            {
+                "project_path": path,
+                "command_id": uuid,
+                "expected_revision": uint,
+                "pattern_id": uuid,
+                "bars": {"type": "integer", "enum": [1, 2, 4, 8]},
+            },
+            [
+                "project_path",
+                "command_id",
+                "expected_revision",
+                "pattern_id",
+                "bars",
+            ],
+        ),
         "lmdj.sequence.record.begin": object_schema(
             {
                 "project_path": path,
@@ -394,6 +410,40 @@ def input_schemas() -> dict[str, dict]:
         ),
         "lmdj.sequence.record.status": object_schema(
             {"project_path": path}, ["project_path"],
+        ),
+        "lmdj.sequence.settings.update": object_schema(
+            {
+                "project_path": path,
+                "command_id": uuid,
+                "expected_revision": uint,
+                "session_id": {"oneOf": [uuid, {"type": "null"}]},
+                "runtime_frame": uint,
+                "bpm": {
+                    "oneOf": [
+                        {"type": "integer", "minimum": 40, "maximum": 240},
+                        {"type": "null"},
+                    ]
+                },
+                "quantize_enabled": {
+                    "oneOf": [{"type": "boolean"}, {"type": "null"}]
+                },
+                "swing_percent": {
+                    "oneOf": [
+                        {"type": "integer", "minimum": 50, "maximum": 75},
+                        {"type": "null"},
+                    ]
+                },
+            },
+            [
+                "project_path",
+                "command_id",
+                "expected_revision",
+                "session_id",
+                "runtime_frame",
+                "bpm",
+                "quantize_enabled",
+                "swing_percent",
+            ],
         ),
         "lmdj.sequence.recovery.list": object_schema(
             {"project_path": path}, ["project_path"],
@@ -485,6 +535,7 @@ def tool_table() -> tuple[Tool, ...]:
         ("lmdj.sample.reset_pad", "sample.reset_pad", "command"),
         ("lmdj.asset.import", "asset.import", "command"),
         ("lmdj.pad.assign", "pad.assign", "command"),
+        ("lmdj.pattern.create", "pattern.create", "command"),
         ("lmdj.sequence.record.begin", "sequence.record.begin", "command"),
         ("lmdj.sequence.record.event", "sequence.record.event", "command"),
         ("lmdj.sequence.record.flush", "sequence.record.flush", "command"),
@@ -495,6 +546,7 @@ def tool_table() -> tuple[Tool, ...]:
             "command",
         ),
         ("lmdj.sequence.record.status", "sequence.record.status", "query"),
+        ("lmdj.sequence.settings.update", "sequence.settings.update", "command"),
         ("lmdj.sequence.recovery.list", "sequence.recovery.list", "query"),
         ("lmdj.sequence.recovery.apply", "sequence.recovery.apply", "command"),
         ("lmdj.sequence.recovery.discard", "sequence.recovery.discard", "command"),

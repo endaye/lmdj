@@ -54,12 +54,16 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
 contract_versions = {
     name: (
-        "3.0.0"
-        if name == "project_v3"
+        "1.1.0"
+        if name == "project_bundle"
         else (
-            "2.0.0"
-            if name in {"assembly", "capability_v2", "project_v2"}
-            else "1.0.0"
+            "3.0.0"
+            if name == "project_v3"
+            else (
+                "2.0.0"
+                if name in {"assembly", "capability_v2", "project_v2"}
+                else "1.0.0"
+            )
         )
     )
     for name in schemas
@@ -406,11 +410,13 @@ assert set(project_bundle["required"]) == {
 assert project_bundle["properties"]["contract"]["const"] == (
     "lmdj.project-bundle.v1"
 )
-assert project_bundle["properties"]["contract_version"]["const"] == "1.0.0"
+assert project_bundle["properties"]["contract_version"]["const"] == "1.1.0"
 assert project_bundle["properties"]["compression"]["const"] == "none"
-assert project_bundle["properties"]["project_contract"]["const"] == (
-    "lmdj.project.v1"
-)
+assert project_bundle["properties"]["project_contract"]["enum"] == [
+    "lmdj.project.v1",
+    "lmdj.project.v2",
+    "lmdj.project.v3",
+]
 assert project_bundle["properties"]["entries"]["maxItems"] == 4096
 assert project_bundle["$defs"]["entry"]["properties"]["bytes"]["maximum"] == (
     67_108_864
@@ -453,7 +459,7 @@ foundation_manifest = load_json(
 assert foundation_manifest == {
     "contract": "lmdj.module.v1",
     "module": "foundation",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "api_version": 1,
     "dependencies": {},
 }

@@ -17,7 +17,7 @@
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
-#include <lmdj/project_io/take_journal.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
 #include <lmdj/project_io/workspace_cache.hpp>
 
 namespace lmdj::project_io {
@@ -816,7 +816,11 @@ nlohmann::json run_suite() {
       domain::CreatePattern command{
           domain::CommandMeta{foundation::CommandId{uuid("12")}, current.revision},
           domain::Pattern{foundation::PatternId{uuid("13")}, 1,
-                          {domain::PatternEvent{domain::PadSlotId{0, 0}, 0, 100}}}};
+                          {domain::PatternEvent{
+                              domain::PadSlotId{0, 0},
+                              0,
+                              domain::kSixteenthTicks,
+                              100}}}};
       (void)value(fault_store.execute(fault_bundle, domain::Command{command}),
                   "fault advance execute");
     } else if (action == "reopen") {
@@ -876,36 +880,71 @@ nlohmann::json run_suite() {
 
   report_progress("project-store-complete");
 
-  report_progress("take-journal-start");
-  project_io::TakeJournal journal{platform};
-  const foundation::TakeId take_id{uuid("4")};
-  success(journal.begin(bundle, take_id, 1, 48000), "TakeJournal begin");
-  success(journal.append(
-      bundle, take_id, domain::RawTakeEvent{domain::PadSlotId{0, 0}, 12, 101}),
-      "TakeJournal append");
-  const auto active = value(journal.read_active(bundle, take_id), "TakeJournal read");
-  require(active.events.size() == 1 && active.events.front().frame_offset == 12,
-          "TakeJournal parity");
-  report_progress("take-journal-initial-complete");
+  report_progress("sequence-journal-start");
+  project_io::SequenceJournal journal{platform};
+  const foundation::SequenceSessionId session_id{uuid("4")};
+  const foundation::PatternId recorded_pattern_id{uuid("5")};
+  success(
+      journal.begin(
+          bundle,
+          session_id,
+          recorded_pattern_id,
+          1,
+          std::string(64, 'a'),
+          0),
+      "SequenceJournal begin");
+  const std::array events{
+      domain::PatternEvent{domain::PadSlotId{0, 0}, 240, 120, 101},
+  };
+  const auto first_flush = value(
+      journal.append_flush(
+          bundle,
+          session_id,
+          foundation::CommandId{uuid("6")},
+          recorded_pattern_id,
+          0,
+          events),
+      "SequenceJournal append");
+  require(first_flush.flush_seq == 0, "SequenceJournal flush sequence");
+  const auto active = value(journal.read_active(bundle), "SequenceJournal read");
+  require(active.flushes.size() == 1 &&
+              active.flushes.front().canonical_events ==
+                  std::vector<domain::PatternEvent>(events.begin(), events.end()),
+          "SequenceJournal parity");
+  report_progress("sequence-journal-initial-complete");
 
-  // The Web storage adapter is invoked on the Host's single Control thread;
-  // native stress tests own true multi-threaded TakeJournal coverage. Exercise
-  // distinct Web Journal owners without nesting Asyncify-backed OPFS calls in
-  // child pthreads, which is not a production call shape.
+  // The Web storage adapter is invoked on the Host's single Control thread.
+  // Exercise distinct Web journal owners without nesting Asyncify-backed OPFS
+  // calls in child pthreads, which is not a production call shape.
   report_progress("multi-owner-append-start");
-  project_io::TakeJournal second_owner{platform};
-  project_io::TakeJournal third_owner{platform};
-  success(second_owner.append(
-      bundle, take_id,
-      domain::RawTakeEvent{domain::PadSlotId{0, 1}, 20, 90}),
-      "second-owner TakeJournal append");
-  success(third_owner.append(
-      bundle, take_id,
-      domain::RawTakeEvent{domain::PadSlotId{0, 2}, 20, 91}),
-      "third-owner TakeJournal append");
+  project_io::SequenceJournal second_owner{platform};
+  project_io::SequenceJournal third_owner{platform};
+  const std::array second_events{
+      domain::PatternEvent{domain::PadSlotId{0, 1}, 480, 120, 90},
+  };
+  const std::array third_events{
+      domain::PatternEvent{domain::PadSlotId{0, 2}, 720, 120, 91},
+  };
+  value(
+      second_owner.append_flush(
+          bundle,
+          session_id,
+          foundation::CommandId{uuid("7")},
+          recorded_pattern_id,
+          0,
+          second_events),
+      "second-owner SequenceJournal append");
+  value(
+      third_owner.append_flush(
+          bundle,
+          session_id,
+          foundation::CommandId{uuid("8")},
+          recorded_pattern_id,
+          0,
+          third_events),
+      "third-owner SequenceJournal append");
   require(
-      value(journal.read_active(bundle, take_id), "multi-owner read")
-              .events.size() == 3,
+      value(journal.read_active(bundle), "multi-owner read").flushes.size() == 3,
       "multi-owner append lost acknowledgement");
   report_progress("multi-owner-append-complete");
 
@@ -1038,7 +1077,7 @@ nlohmann::json run_suite() {
   return {
       {"complete", true},
       {"result", {
-          {"projectStore", "pass"}, {"takeJournal", "pass"},
+          {"projectStore", "pass"}, {"sequenceJournal", "pass"},
           {"replay", "pass"}, {"recovery", "pass"},
           {"appendContracts", "pass"}, {"lease", "pass"},
           {"mountFailure", "pass"}, {"idempotentRemove", "pass"},

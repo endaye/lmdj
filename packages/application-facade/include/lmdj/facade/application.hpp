@@ -295,14 +295,6 @@ class Application {
       const SampleUpdateRequest& request);
   foundation::Result<SampleMutationResult> reset_sample_pad(
       const SampleResetRequest& request);
-  foundation::Result<void> append_realtime_take_events(
-      const std::filesystem::path& project_path,
-      foundation::TakeId take_id,
-      std::span<const domain::RawTakeEvent> events);
-  foundation::Result<std::filesystem::path> seal_realtime_take(
-      const std::filesystem::path& project_path,
-      foundation::TakeId take_id,
-      std::string_view reason);
   foundation::Result<SequenceMutationResult> begin_sequence(
       const SequenceBeginRequest& request);
   foundation::Result<SequenceMutationResult> record_sequence_event(

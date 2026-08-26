@@ -553,7 +553,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   const result = await waitForResult(page);
 
   expect(result.projectStore).toBe("pass");
-  expect(result.takeJournal).toBe("pass");
+  expect(result.sequenceJournal).toBe("pass");
   expect(result.replay).toBe("pass");
   expect(result.recovery).toBe("pass");
   expect(result.appendContracts).toBe("pass");

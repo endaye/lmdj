@@ -51,8 +51,8 @@ class ControlRuntime final {
       std::chrono::steady_clock::time_point submitted_at);
   std::vector<audio::RuntimeTriggerOutcomeEvent> drain_outcomes();
   std::vector<audio::RuntimeVoiceStateEvent> drain_voice_states();
-  std::optional<SequenceBarBoundaryEvent> drain_sequence_bar_boundary();
   foundation::Result<void> drain_capture();
+  std::optional<SequenceBarBoundaryEvent> drain_sequence_bar_boundary();
   bool validate_realtime_health() noexcept;
   void fail_and_seal(std::string_view cause) noexcept;
   bool failed() const noexcept;

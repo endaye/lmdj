@@ -1,10 +1,10 @@
 {
   "contract": "lmdj.module.v1",
   "module": "web-runtime-platform",
-  "version": "0.3.6",
+  "version": "1.0.0",
   "api_version": 1,
   "dependencies": {
-    "application-facade": "1.4.5",
-    "audio-runtime": "0.5.1"
+    "application-facade": "2.0.0",
+    "audio-runtime": "1.0.0"
   }
 }

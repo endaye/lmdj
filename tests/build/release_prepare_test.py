@@ -511,28 +511,6 @@ class ReleasePrepareTest(unittest.TestCase):
         with self.assertRaisesRegex(PrepareError, "exact release target"):
             prepare(self.tag, self.context())
 
-    def test_real_exact_target_validator_accepts_all_supported_identity_kinds(self) -> None:
-        repository = GitRepository(ROOT)
-        target = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True,
-        ).stdout.strip()
-        cases = (
-            (
-                ReleaseKind.PRODUCT, CURRENT_PRODUCT_BUILD,
-                "web-runtime-host", "canary", CURRENT_PRODUCT_BUILD,
-            ),
-            (ReleaseKind.MODULE, "core-cli@1.0.17", "source-only", None, None),
-            (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
-            (ReleaseKind.PROVIDER, "local.proof.success@1.0.5", "source-only", None, None),
-        )
-        for kind, identity, profile, channel, snapshot in cases:
-            with self.subTest(kind=kind.value):
-                intent = ReleaseIntent(
-                    "fixture", kind, identity, target, Disposition.RELEASABLE, profile,
-                    ("evidence.md",), channel, snapshot, 1,
-                )
-                repository.validate_release_target(ROOT, intent)
-
     def test_failed_target_command_reports_a_sanitized_reason(self) -> None:
         def executor(vector, **kwargs):
             if vector[0] != "node":
@@ -1045,6 +1023,30 @@ def stage_release_bundle(**arguments):
                 [item.external_attr >> 16 & 0o777 for item in opened.infolist()],
                 [0o644, 0o644],
             )
+
+
+class ReleaseTargetValidationIntegrationTest(unittest.TestCase):
+    def test_real_exact_target_validator_accepts_all_supported_identity_kinds(self) -> None:
+        repository = GitRepository(ROOT)
+        target = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        cases = (
+            (
+                ReleaseKind.PRODUCT, CURRENT_PRODUCT_BUILD,
+                "web-runtime-host", "canary", CURRENT_PRODUCT_BUILD,
+            ),
+            (ReleaseKind.MODULE, "core-cli@2.0.0", "source-only", None, None),
+            (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
+            (ReleaseKind.PROVIDER, "local.proof.success@1.0.5", "source-only", None, None),
+        )
+        for kind, identity, profile, channel, snapshot in cases:
+            with self.subTest(kind=kind.value):
+                intent = ReleaseIntent(
+                    "fixture", kind, identity, target, Disposition.RELEASABLE, profile,
+                    ("evidence.md",), channel, snapshot, 1,
+                )
+                repository.validate_release_target(ROOT, intent)
 
 
 if __name__ == "__main__":

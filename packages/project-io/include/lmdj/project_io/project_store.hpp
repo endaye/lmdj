@@ -20,17 +20,6 @@ namespace lmdj::project_io {
 inline constexpr std::string_view kProjectWriterContract =
     "lmdj.project.v3";
 
-struct RecordTakeReplayIdentity {
-  domain::CommandMeta meta;
-  foundation::TakeId take_id;
-  domain::Pattern pattern;
-};
-
-struct RecordTakeReplay {
-  domain::RecordTake command;
-  domain::AppliedCommand outcome;
-};
-
 struct SequenceFlushIdentity {
   foundation::SequenceSessionId session_id;
   std::uint64_t flush_seq{};
@@ -113,9 +102,6 @@ class ProjectStore {
   import_artifact_with_identity(
       const std::filesystem::path& bundle,
       const ImportArtifactRequest& request);
-  foundation::Result<std::optional<RecordTakeReplay>> replay_record_take(
-      const std::filesystem::path& bundle,
-      const RecordTakeReplayIdentity& identity);
   foundation::Result<SequenceFlushExecution> execute_sequence_flush(
       const std::filesystem::path& bundle,
       const SequenceFlushIdentity& identity);

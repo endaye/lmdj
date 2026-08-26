@@ -37,8 +37,6 @@ using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
 using lmdj::domain::ProjectContract;
-using lmdj::domain::RawTake;
-using lmdj::domain::RawTakeEvent;
 using lmdj::domain::ResetPadPlayback;
 using lmdj::domain::TriggerMode;
 using lmdj::domain::UpdatePadPlayback;
@@ -370,7 +368,11 @@ CreatePattern create_pattern(
       Pattern{
           PatternId{test_uuid(pattern_id)},
           1,
-          {PatternEvent{PadSlotId{0, 0}, step, 100}},
+          {PatternEvent{
+              PadSlotId{0, 0},
+              step * lmdj::domain::kSixteenthTicks,
+              lmdj::domain::kSixteenthTicks,
+              100}},
       },
   };
 }
@@ -510,7 +512,8 @@ void test_canonical_checkpoint_round_trip_and_bundle_shape() {
       Pattern{
           pattern_id,
           1,
-          {PatternEvent{PadSlotId{0, 0}, 0, 100}},
+          {PatternEvent{
+              PadSlotId{0, 0}, 0, lmdj::domain::kSixteenthTicks, 100}},
       });
   ProjectStore store;
 
@@ -700,7 +703,6 @@ void test_v2_total_migration_discards_takes_and_is_byte_stable() {
   LMDJ_CHECK(migrated.value().contract == ProjectContract::v3);
   LMDJ_CHECK(migrated.value().quantize_enabled);
   LMDJ_CHECK(migrated.value().swing_percent == 50);
-  LMDJ_CHECK(migrated.value().takes.empty());
   const auto& events =
       migrated.value().patterns.at(PatternId{pattern_id}).events;
   LMDJ_CHECK(events.size() == 2);
@@ -1761,33 +1763,6 @@ void test_public_commands_reject_unsafe_ids_before_publishing() {
   const auto pattern_reopen = store.load(pattern_bundle);
   LMDJ_CHECK(pattern_reopen.has_value());
   LMDJ_CHECK(pattern_reopen.value().revision == 0);
-
-  const auto take_bundle = temp.path() / "take.lmdj";
-  LMDJ_CHECK(store.create(take_bundle, new_project()).has_value());
-  const auto take_manifest = read_bytes(take_bundle / "manifest.json");
-  const auto unsafe_take = store.execute(
-      take_bundle,
-      Command{lmdj::domain::RecordTake{
-          meta("take-command", 0),
-          {
-              lmdj::foundation::TakeId{"nested/take"},
-              48000,
-              {{PadSlotId{0, 0}, 123, 100}},
-          },
-          {
-              PatternId{test_uuid("safe-pattern")},
-              1,
-              {{PadSlotId{0, 0}, 0, 100}},
-          },
-      }});
-  LMDJ_CHECK(!unsafe_take.has_value());
-  LMDJ_CHECK(unsafe_take.error().code == ErrorCode::invalid_argument);
-  LMDJ_CHECK(read_bytes(take_bundle / "manifest.json") == take_manifest);
-  LMDJ_CHECK(
-      regular_file_count(take_bundle / "history/transactions") == 0);
-  const auto take_reopen = store.load(take_bundle);
-  LMDJ_CHECK(take_reopen.has_value());
-  LMDJ_CHECK(take_reopen.value().revision == 0);
 
   const auto asset_bundle = temp.path() / "asset.lmdj";
   const auto source = temp.path() / "source.wav";

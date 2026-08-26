@@ -59,14 +59,12 @@ using lmdj::domain::CommandMeta;
 using lmdj::domain::PadPlayback;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
-using lmdj::domain::RawTakeEvent;
 using lmdj::domain::TriggerMode;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::PatternId;
 using lmdj::foundation::ProjectId;
-using lmdj::foundation::TakeId;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
 
@@ -76,7 +74,7 @@ constexpr std::string_view kKickAssetId =
     "00000000-0000-4000-8000-000000000101";
 constexpr std::string_view kSnareAssetId =
     "00000000-0000-4000-8000-000000000102";
-constexpr std::string_view kTakeId =
+constexpr std::string_view kSequenceSessionId =
     "00000000-0000-4000-8000-000000000201";
 constexpr std::string_view kPatternId =
     "00000000-0000-4000-8000-000000000010";
@@ -492,7 +490,7 @@ FacadeBundleFixture facade_bundle_fixture(
   nlohmann::json index{
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.0.0"},
+      {"contract_version", "1.1.0"},
       {"entries", std::move(encoded_entries)},
       {"project_contract", "lmdj.project.v3"},
       {"project_id", std::move(declared_project_id)},
@@ -917,21 +915,6 @@ void replace_sample_after_projection_load(void* opaque) noexcept {
 
 
 
-nlohmann::json pattern_json() {
-  return {
-      {"pattern_id", kPatternId},
-      {"bars", 1},
-      {"events",
-       nlohmann::json::array(
-           {
-               {{"slot", slot(0, 0)}, {"step", 0}, {"velocity", 127}},
-               {{"slot", slot(0, 1)}, {"step", 4}, {"velocity", 127}},
-               {{"slot", slot(0, 0)}, {"step", 8}, {"velocity", 127}},
-               {{"slot", slot(0, 1)}, {"step", 12}, {"velocity", 127}},
-           })},
-  };
-}
-
 void create_golden_project(
     Application& application,
     const std::filesystem::path& project) {
@@ -1026,20 +1009,20 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "1.4.5"},
+           {"version", "2.0.0"},
            {"api_version", 2},
            {"dependencies",
             {
-                {"foundation", "0.2.0"},
-                {"authoring-domain", "0.2.0"},
-                {"project-io", "0.6.1"},
-                {"project-cooker", "0.3.0"},
-                {"audio-runtime", "0.5.1"},
+                {"foundation", "0.3.0"},
+                {"authoring-domain", "1.0.0"},
+                {"project-io", "1.0.0"},
+                {"project-cooker", "1.0.0"},
+                {"audio-runtime", "1.0.0"},
                 {"provider-sdk", "1.1.4"},
             }},
        }));
   LMDJ_CHECK(project_io.at("module") == "project-io");
-  LMDJ_CHECK(project_io.at("version") == "0.6.1");
+  LMDJ_CHECK(project_io.at("version") == "1.0.0");
 }
 
 void test_all_operations_share_one_facade_and_revision_contract() {
@@ -1210,6 +1193,11 @@ void test_project_bundle_discovery_and_import_are_typed_facade_apis() {
   LMDJ_CHECK(session.value().expected_index_bytes == fixture.index.size());
   stream_facade_bundle(application, token, fixture);
   const auto committed = application.commit_project_bundle_import(token);
+  if (!committed.has_value()) {
+    throw std::runtime_error(
+        "bundle import commit failed: " + committed.error().message + " " +
+        committed.error().details.dump());
+  }
   LMDJ_CHECK(committed.has_value());
   LMDJ_CHECK(committed.value().project_id.value() == kProjectId);
   LMDJ_CHECK(committed.value().pattern_id.value() == kPatternId);
@@ -1617,7 +1605,7 @@ void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero()
           Pattern{
               PatternId{uuid(993)},
               1,
-              {{PadSlotId{0, 0}, 0, 0}},
+              {{PadSlotId{0, 0}, 0, 240, 0}},
           },
       });
   LMDJ_CHECK(!invalid_pattern_event.has_value());
@@ -1750,155 +1738,6 @@ void test_render_rejects_symlinked_parent_and_never_reuses_crash_residue() {
       });
   check_error(rejected, "INVALID_ARGUMENT");
   LMDJ_CHECK(!std::filesystem::exists(project / "injected.wav"));
-}
-
-void test_take_commit_uses_captured_revision_and_replays_after_cleanup() {
-  TempDirectory temp;
-  const auto project = temp.path() / "captured-revision.lmdj";
-  Application application(config(temp.path()));
-  check_success(application.command(create_request(project)), 0);
-  check_success(
-      application.command(import_request(
-          project,
-          41,
-          kKickAssetId,
-          std::filesystem::absolute("tests/fixtures/audio/kick.wav"),
-          0)),
-      1);
-  check_success(
-      application.command(
-          assign_request(project, 42, 0, kKickAssetId, 1)),
-      2);
-
-  check_success(
-      application.command(
-          {
-              {"operation", "take.begin"},
-              {"project_path", project.generic_string()},
-              {"take_id", kTakeId},
-              {"expected_revision", 2},
-              {"sample_rate", 48000},
-          }),
-      2);
-  check_success(
-      application.command(
-          {
-              {"operation", "take.append"},
-              {"project_path", project.generic_string()},
-              {"take_id", kTakeId},
-              {"event",
-               {
-                   {"slot", slot(0, 0)},
-                   {"frame_offset", 0},
-                   {"velocity", 127},
-               }},
-          }),
-      2);
-  check_success(
-      application.command(
-          assign_request(project, 43, 1, kKickAssetId, 2)),
-      3);
-
-  const auto conflicted = application.command(
-      {
-          {"operation", "take.commit"},
-          {"project_path", project.generic_string()},
-          {"command_id", uuid(44)},
-          {"expected_revision", 3},
-          {"take_id", kTakeId},
-          {"pattern",
-           {
-               {"pattern_id", kPatternId},
-               {"bars", 1},
-               {"events",
-                nlohmann::json::array(
-                    {{{"slot", slot(0, 0)},
-                      {"step", 0},
-                      {"velocity", 127}}})},
-           }},
-      });
-  check_error(conflicted, "REVISION_CONFLICT");
-  auto inspected = application.query(
-      {
-          {"operation", "project.inspect"},
-          {"project_path", project.generic_string()},
-      });
-  check_success(inspected, 3);
-  LMDJ_CHECK(inspected.at("result").at("project").at("takes").empty());
-  const auto recoverable = application.query(
-      {
-          {"operation", "take.recoverable.list"},
-          {"project_path", project.generic_string()},
-      });
-  check_success(recoverable, 3);
-  LMDJ_CHECK(recoverable.at("result").at("candidates").size() == 1);
-  LMDJ_CHECK(
-      recoverable.at("result")
-          .at("candidates")
-          .at(0)
-          .at("expected_revision") == 2);
-
-  const auto replay_project = temp.path() / "replay.lmdj";
-  create_golden_project(application, replay_project);
-  const auto replay_request = nlohmann::json{
-      {"operation", "take.commit"},
-      {"project_path", replay_project.generic_string()},
-      {"command_id", uuid(5)},
-      {"expected_revision", 4},
-      {"take_id", kTakeId},
-      {"pattern", pattern_json()},
-  };
-  auto replayed = application.command(replay_request);
-  check_success(replayed, 5);
-  LMDJ_CHECK(replayed.at("result").at("committed_revision") == 5);
-  LMDJ_CHECK(replayed.at("result").at("replayed") == true);
-
-  check_success(
-      application.command(
-          assign_request(replay_project, 45, 2, kKickAssetId, 5)),
-      6);
-  Application fresh(config(temp.path()));
-  replayed = fresh.command(replay_request);
-  check_success(replayed, 6);
-  LMDJ_CHECK(replayed.at("result").at("committed_revision") == 5);
-  LMDJ_CHECK(replayed.at("result").at("replayed") == true);
-
-  auto cross_operation = replay_request;
-  cross_operation["command_id"] = uuid(3);
-  cross_operation["expected_revision"] = 2;
-  check_error(
-      fresh.command(cross_operation), "INVALID_ARGUMENT");
-
-  auto changed_revision = replay_request;
-  changed_revision["expected_revision"] = 5;
-  check_error(
-      fresh.command(changed_revision), "INVALID_ARGUMENT");
-
-  auto changed_take = replay_request;
-  changed_take["take_id"] = uuid(299);
-  check_error(fresh.command(changed_take), "INVALID_ARGUMENT");
-
-  auto changed_pattern_id = replay_request;
-  changed_pattern_id["pattern"]["pattern_id"] = uuid(99);
-  check_error(
-      fresh.command(changed_pattern_id), "INVALID_ARGUMENT");
-
-  auto changed_pattern_bars = replay_request;
-  changed_pattern_bars["pattern"]["bars"] = 2;
-  check_error(
-      fresh.command(changed_pattern_bars), "INVALID_ARGUMENT");
-
-  auto changed_pattern_event = replay_request;
-  changed_pattern_event["pattern"]["events"][0]["velocity"] = 126;
-  check_error(
-      fresh.command(changed_pattern_event), "INVALID_ARGUMENT");
-
-  replayed = fresh.command(replay_request);
-  check_success(replayed, 6);
-  LMDJ_CHECK(replayed.at("result").at("take_id") == kTakeId);
-  LMDJ_CHECK(replayed.at("result").at("pattern_id") == kPatternId);
-  LMDJ_CHECK(replayed.at("result").at("committed_revision") == 5);
-  LMDJ_CHECK(replayed.at("result").at("replayed") == true);
 }
 
 void test_asset_and_pad_replay_identity_is_enforced() {
@@ -2094,7 +1933,7 @@ void test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation() {
       {
           {"operation", "sequence.record.begin"},
           {"project_path", project.generic_string()},
-          {"session_id", kTakeId},
+          {"session_id", kSequenceSessionId},
           {"pattern_id", kPatternId},
           {"expected_revision", 1},
           {"runtime_frame", 0},

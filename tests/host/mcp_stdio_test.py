@@ -316,6 +316,22 @@ def expected_schemas() -> dict[str, dict]:
                 "asset_id",
             ],
         ),
+        "lmdj.pattern.create": object_schema(
+            {
+                "project_path": path,
+                "command_id": uuid,
+                "expected_revision": uint,
+                "pattern_id": uuid,
+                "bars": {"type": "integer", "enum": [1, 2, 4, 8]},
+            },
+            [
+                "project_path",
+                "command_id",
+                "expected_revision",
+                "pattern_id",
+                "bars",
+            ],
+        ),
         "lmdj.sequence.record.begin": object_schema(
             {
                 "project_path": path,
@@ -364,6 +380,40 @@ def expected_schemas() -> dict[str, dict]:
         ),
         "lmdj.sequence.record.status": object_schema(
             {"project_path": path}, ["project_path"],
+        ),
+        "lmdj.sequence.settings.update": object_schema(
+            {
+                "project_path": path,
+                "command_id": uuid,
+                "expected_revision": uint,
+                "session_id": {"oneOf": [uuid, {"type": "null"}]},
+                "runtime_frame": uint,
+                "bpm": {
+                    "oneOf": [
+                        {"type": "integer", "minimum": 40, "maximum": 240},
+                        {"type": "null"},
+                    ]
+                },
+                "quantize_enabled": {
+                    "oneOf": [{"type": "boolean"}, {"type": "null"}]
+                },
+                "swing_percent": {
+                    "oneOf": [
+                        {"type": "integer", "minimum": 50, "maximum": 75},
+                        {"type": "null"},
+                    ]
+                },
+            },
+            [
+                "project_path",
+                "command_id",
+                "expected_revision",
+                "session_id",
+                "runtime_frame",
+                "bpm",
+                "quantize_enabled",
+                "swing_percent",
+            ],
         ),
         "lmdj.sequence.recovery.list": object_schema(
             {"project_path": path}, ["project_path"],
@@ -644,9 +694,9 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
     assert module == {
         "contract": "lmdj.module.v1",
         "module": "core-mcp",
-        "version": "1.1.14",
+        "version": "2.0.0",
         "api_version": 2,
-        "dependencies": {"application-facade": "1.4.5"},
+        "dependencies": {"application-facade": "2.0.0"},
     }
     pyproject = tomllib.loads(
         (REPO_ROOT / "apps/core-mcp/pyproject.toml").read_text(
@@ -654,8 +704,8 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         )
     )
     assert pyproject["project"]["name"] == "lmdj-core-mcp"
-    assert pyproject["project"]["version"] == "1.1.14"
-    assert __version__ == "1.1.14"
+    assert pyproject["project"]["version"] == "2.0.0"
+    assert __version__ == "2.0.0"
     assert pyproject["project"]["dependencies"] == []
     assert pyproject["tool"]["lmdj"]["c-abi"] == "lmdj_core_c@1"
     host_paths = sorted(
@@ -830,7 +880,7 @@ def lifecycle(library: Path, temp_root: Path) -> None:
         "result": {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "lmdj-core-mcp", "version": "1.1.14"},
+            "serverInfo": {"name": "lmdj-core-mcp", "version": "2.0.0"},
         },
     }
     assert host.request(4, "ping")["result"] == {}
@@ -1174,6 +1224,7 @@ def tools_list(library: Path, temp_root: Path) -> None:
         ("lmdj.sample.reset_pad", "sample.reset_pad", "command"),
         ("lmdj.asset.import", "asset.import", "command"),
         ("lmdj.pad.assign", "pad.assign", "command"),
+        ("lmdj.pattern.create", "pattern.create", "command"),
         ("lmdj.sequence.record.begin", "sequence.record.begin", "command"),
         ("lmdj.sequence.record.event", "sequence.record.event", "command"),
         ("lmdj.sequence.record.flush", "sequence.record.flush", "command"),
@@ -1184,6 +1235,7 @@ def tools_list(library: Path, temp_root: Path) -> None:
             "command",
         ),
         ("lmdj.sequence.record.status", "sequence.record.status", "query"),
+        ("lmdj.sequence.settings.update", "sequence.settings.update", "command"),
         ("lmdj.sequence.recovery.list", "sequence.recovery.list", "query"),
         ("lmdj.sequence.recovery.apply", "sequence.recovery.apply", "command"),
         ("lmdj.sequence.recovery.discard", "sequence.recovery.discard", "command"),
@@ -1287,6 +1339,13 @@ def valid_arguments(temp_root: Path) -> dict[str, dict]:
             "slot": slot,
             "asset_id": None,
         },
+        "lmdj.pattern.create": {
+            "project_path": str(missing_project),
+            "command_id": uuid,
+            "expected_revision": 0,
+            "pattern_id": uuid,
+            "bars": 1,
+        },
         "lmdj.sequence.record.begin": {
             "project_path": str(missing_project),
             "session_id": uuid,
@@ -1320,6 +1379,16 @@ def valid_arguments(temp_root: Path) -> dict[str, dict]:
             "next_pattern_id": uuid,
         },
         "lmdj.sequence.record.status": {"project_path": str(missing_project)},
+        "lmdj.sequence.settings.update": {
+            "project_path": str(missing_project),
+            "command_id": uuid,
+            "expected_revision": 0,
+            "session_id": None,
+            "runtime_frame": 0,
+            "bpm": 120,
+            "quantize_enabled": None,
+            "swing_percent": None,
+        },
         "lmdj.sequence.recovery.list": {"project_path": str(missing_project)},
         "lmdj.sequence.recovery.apply": {
             "project_path": str(missing_project), "session_id": uuid,

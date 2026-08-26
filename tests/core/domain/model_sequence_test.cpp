@@ -536,7 +536,8 @@ MatrixEvidence run_generated_matrix(std::uint64_t first, std::uint64_t last) {
               Pattern{
                   observed_pattern,
                   1,
-                  {PatternEvent{observed_slot, 0, 127}},
+                  {PatternEvent{
+                      observed_slot, 0, lmdj::domain::kSixteenthTicks, 127}},
               },
           }};
         }

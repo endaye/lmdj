@@ -215,7 +215,6 @@ void test_ids_round_trip_through_json() {
   check_id_json_round_trip<lmdj::foundation::CommandId>("command-1");
   check_id_json_round_trip<lmdj::foundation::AssetId>("asset-1");
   check_id_json_round_trip<lmdj::foundation::PatternId>("pattern-1");
-  check_id_json_round_trip<lmdj::foundation::TakeId>("take-1");
   check_id_json_round_trip<lmdj::foundation::AttemptId>("attempt-1");
   check_id_json_round_trip<lmdj::foundation::CandidateId>("candidate-1");
 }

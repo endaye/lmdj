@@ -342,27 +342,27 @@ void test_initial_pattern_rejections_are_exact_and_write_nothing() {
       },
       {
           "velocity 0 is below the permitted range",
-          Pattern{good_id, 1, {{PadSlotId{0, 0}, 0, 0}}},
+          Pattern{good_id, 1, {{PadSlotId{0, 0}, 0, 240, 0}}},
           "pattern event is invalid",
       },
       {
           "velocity 128 is above the permitted range",
-          Pattern{good_id, 1, {{PadSlotId{0, 0}, 0, 128}}},
+          Pattern{good_id, 1, {{PadSlotId{0, 0}, 0, 240, 128}}},
           "pattern event is invalid",
       },
       {
-          "step equals the one-bar limit",
-          Pattern{good_id, 1, {{PadSlotId{0, 0}, 16, 100}}},
+          "onset tick equals the one-bar limit",
+          Pattern{good_id, 1, {{PadSlotId{0, 0}, 3'840, 1, 100}}},
           "pattern event is invalid",
       },
       {
-          "step equals the two-bar limit",
-          Pattern{good_id, 2, {{PadSlotId{0, 0}, 32, 100}}},
+          "onset tick equals the two-bar limit",
+          Pattern{good_id, 2, {{PadSlotId{0, 0}, 7'680, 1, 100}}},
           "pattern event is invalid",
       },
       {
           "slot is outside the pad grid",
-          Pattern{good_id, 1, {{PadSlotId{99, 0}, 0, 100}}},
+          Pattern{good_id, 1, {{PadSlotId{99, 0}, 0, 240, 100}}},
           "pattern event is invalid",
       },
       {
@@ -370,7 +370,8 @@ void test_initial_pattern_rejections_are_exact_and_write_nothing() {
           Pattern{
               good_id,
               1,
-              {{PadSlotId{0, 0}, 0, 100}, {PadSlotId{0, 1}, 0, 200}},
+              {{PadSlotId{0, 0}, 0, 240, 100},
+               {PadSlotId{0, 1}, 0, 240, 200}},
           },
           "pattern event is invalid",
       },
@@ -409,8 +410,12 @@ void test_initial_pattern_rejections_are_exact_and_write_nothing() {
                 PatternId{uuid(720U + bars)},
                 bars,
                 {{PadSlotId{0, 0},
-                  static_cast<std::uint32_t>(bars) * 16U - 1U, 127},
-                 {PadSlotId{0, 0}, 0, 1}},
+                  static_cast<std::uint32_t>(bars) *
+                          lmdj::domain::kBarTicks4x4 -
+                      1U,
+                  1,
+                  127},
+                 {PadSlotId{0, 0}, 0, 1, 1}},
             },
         });
     LMDJ_CHECK(created.has_value());

@@ -25,7 +25,6 @@
 
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
-#include <lmdj/project_io/take_journal.hpp>
 
 #include "publish_token.hpp"
 #include "testing_hooks.hpp"
@@ -55,7 +54,6 @@ constexpr std::uint64_t kMaximumArtifactBytes = 64U * 1024U * 1024U;
 using PersistedCommand = std::variant<
     domain::ImportAsset,
     domain::AssignPad,
-    domain::RecordTake,
     domain::CreatePattern,
     domain::MergePatternEvents,
     domain::UpdateSequenceSettings,
@@ -67,7 +65,6 @@ struct LoadedProject {
   domain::ProjectState state;
   std::map<foundation::CommandId, PersistedCommand> commands;
   std::map<foundation::CommandId, domain::CommandReceipt> receipts;
-  std::map<foundation::CommandId, foundation::TakeId> cleanup_obligations;
   std::map<foundation::CommandId, SequenceFlushIdentity>
       sequence_flush_identities;
   std::vector<std::string> transactions;
@@ -287,14 +284,6 @@ nlohmann::json playback_json(const domain::PadPlayback& playback) {
   };
 }
 
-nlohmann::json legacy_pattern_event_json(const domain::PatternEvent& event) {
-  return {
-      {"slot", slot_json(event.slot)},
-      {"step", event.step},
-      {"velocity", event.velocity},
-  };
-}
-
 nlohmann::json pattern_event_json(const domain::PatternEvent& event) {
   return {
       {"duration_tick", event.duration_tick},
@@ -304,22 +293,10 @@ nlohmann::json pattern_event_json(const domain::PatternEvent& event) {
   };
 }
 
-nlohmann::json raw_take_event_json(const domain::RawTakeEvent& event) {
-  return {
-      {"frame_offset", event.frame_offset},
-      {"slot", slot_json(event.slot)},
-      {"velocity", event.velocity},
-  };
-}
-
-nlohmann::json pattern_value_json(
-    const domain::Pattern& pattern,
-    bool legacy = false) {
+nlohmann::json pattern_value_json(const domain::Pattern& pattern) {
   auto events = nlohmann::json::array();
   for (const auto& event : pattern.events) {
-    events.push_back(
-        legacy ? legacy_pattern_event_json(event)
-               : pattern_event_json(event));
+    events.push_back(pattern_event_json(event));
   }
   return {
       {"bars", pattern.bars},
@@ -333,23 +310,6 @@ nlohmann::json pattern_json(const domain::Pattern& pattern) {
   return encoded;
 }
 
-nlohmann::json take_value_json(const domain::RawTake& take) {
-  auto events = nlohmann::json::array();
-  for (const auto& event : take.events) {
-    events.push_back(raw_take_event_json(event));
-  }
-  return {
-      {"events", std::move(events)},
-      {"sample_rate", take.sample_rate},
-  };
-}
-
-nlohmann::json take_json(const domain::RawTake& take) {
-  auto encoded = take_value_json(take);
-  encoded["id"] = take.id.value();
-  return encoded;
-}
-
 domain::ProjectState persisted_v3_projection(
     const domain::ProjectState& state) {
   auto projected = state;
@@ -358,7 +318,6 @@ domain::ProjectState persisted_v3_projection(
     projected.swing_percent = 50;
   }
   projected.contract = domain::ProjectContract::v3;
-  projected.takes.clear();
   for (auto& [id, pattern] : projected.patterns) {
     (void)id;
     pattern.events = domain::merge_pattern_events({}, pattern.events);
@@ -378,9 +337,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
                : nlohmann::json(nullptr)},
           {"pad", slot.id.pad},
       };
-      if (state.contract != domain::ProjectContract::v1) {
-        encoded_pad["playback"] = playback_json(slot.playback);
-      }
+      encoded_pad["playback"] = playback_json(slot.playback);
       pads.push_back(std::move(encoded_pad));
     }
     banks.push_back(
@@ -390,57 +347,30 @@ nlohmann::json project_json(const domain::ProjectState& state) {
         });
   }
 
-  if (state.contract == domain::ProjectContract::v3) {
-    auto assets = nlohmann::json::array();
-    for (const auto& [id, asset] : state.assets) {
-      assets.push_back(
-          {{"artifact", asset.artifact}, {"asset_id", id.value()}});
-    }
-    auto patterns = nlohmann::json::array();
-    for (const auto& [id, pattern] : state.patterns) {
-      auto encoded = pattern_value_json(pattern);
-      encoded["pattern_id"] = id.value();
-      patterns.push_back(std::move(encoded));
-    }
-    return {
-        {"assets", std::move(assets)},
-        {"banks", std::move(banks)},
-        {"bpm", state.bpm},
-        {"contract", kProjectWriterContract},
-        {"patterns", std::move(patterns)},
-        {"project_id", state.id.value()},
-        {"revision", state.revision},
-        {"sequence_settings",
-         {
-             {"quantize_enabled", state.quantize_enabled},
-             {"swing_percent", state.swing_percent},
-         }},
-    };
-  }
-
-  auto assets = nlohmann::json::object();
+  auto assets = nlohmann::json::array();
   for (const auto& [id, asset] : state.assets) {
-    assets[id.value()] = {{"artifact", asset.artifact}};
+    assets.push_back(
+        {{"artifact", asset.artifact}, {"asset_id", id.value()}});
   }
-  auto takes = nlohmann::json::object();
-  for (const auto& [id, take] : state.takes) {
-    takes[id.value()] = take_value_json(take);
-  }
-  auto patterns = nlohmann::json::object();
+  auto patterns = nlohmann::json::array();
   for (const auto& [id, pattern] : state.patterns) {
-    patterns[id.value()] = pattern_value_json(pattern, true);
+    auto encoded = pattern_value_json(pattern);
+    encoded["pattern_id"] = id.value();
+    patterns.push_back(std::move(encoded));
   }
   return {
       {"assets", std::move(assets)},
       {"banks", std::move(banks)},
       {"bpm", state.bpm},
-      {"contract",
-       state.contract == domain::ProjectContract::v1 ? "lmdj.project.v1"
-                                                     : "lmdj.project.v2"},
+      {"contract", kProjectWriterContract},
       {"patterns", std::move(patterns)},
       {"project_id", state.id.value()},
       {"revision", state.revision},
-      {"takes", std::move(takes)},
+      {"sequence_settings",
+       {
+           {"quantize_enabled", state.quantize_enabled},
+           {"swing_percent", state.swing_percent},
+       }},
   };
 }
 
@@ -565,7 +495,8 @@ foundation::Result<domain::PadSlotId> parse_slot(
 
 foundation::Result<domain::Pattern> parse_pattern(
     const nlohmann::json& input,
-    const std::filesystem::path& path) {
+    const std::filesystem::path& path,
+    bool allow_legacy_events = false) {
   try {
     if (!exact_object_keys(input, {"bars", "events", "id"}) ||
         !input.at("events").is_array()) {
@@ -596,7 +527,8 @@ foundation::Result<domain::Pattern> parse_pattern(
       const bool tick_event = exact_object_keys(
           encoded,
           {"duration_tick", "onset_tick", "slot", "velocity"});
-      if (!legacy_event && !tick_event) {
+      if ((!allow_legacy_events && legacy_event) ||
+          (!legacy_event && !tick_event)) {
         return foundation::Result<domain::Pattern>::failure(
             invalid_project("project pattern event shape is invalid", path));
       }
@@ -650,71 +582,44 @@ foundation::Result<domain::Pattern> parse_pattern(
   }
 }
 
-foundation::Result<domain::RawTake> parse_take(
+foundation::Result<void> validate_retired_capture(
+    std::string_view id,
     const nlohmann::json& input,
     const std::filesystem::path& path) {
   try {
-    if (!exact_object_keys(
-            input, {"events", "id", "sample_rate"}) ||
+    if (!domain::is_valid_uuid(id) ||
+        !exact_object_keys(input, {"events", "sample_rate"}) ||
         !input.at("events").is_array()) {
-      return foundation::Result<domain::RawTake>::failure(
-          invalid_project("project raw take shape is invalid", path));
+      return foundation::Result<void>::failure(
+          invalid_project("retired capture entry is invalid", path));
     }
-    const auto sample_rate =
-        unsigned_integer_value(input.at("sample_rate"));
+    const auto sample_rate = unsigned_integer_value(input.at("sample_rate"));
     if (!sample_rate.has_value() || *sample_rate != 48000) {
-      return foundation::Result<domain::RawTake>::failure(
-          invalid_project("project raw take metadata is invalid", path));
-    }
-    domain::RawTake take{
-        foundation::TakeId{input.at("id").get<std::string>()},
-        static_cast<std::uint32_t>(*sample_rate),
-        {},
-    };
-    if (!domain::is_valid_uuid(take.id.value()) ||
-        take.sample_rate != 48000) {
-      return foundation::Result<domain::RawTake>::failure(
-          invalid_project("project raw take metadata is invalid", path));
+      return foundation::Result<void>::failure(
+          invalid_project("retired capture metadata is invalid", path));
     }
     for (const auto& encoded : input.at("events")) {
-      if (!exact_object_keys(
-              encoded, {"frame_offset", "slot", "velocity"})) {
-        return foundation::Result<domain::RawTake>::failure(
-            invalid_project("project raw take event shape is invalid", path));
+      if (!exact_object_keys(encoded, {"frame_offset", "slot", "velocity"})) {
+        return foundation::Result<void>::failure(
+            invalid_project("retired capture event shape is invalid", path));
       }
-      const auto frame_offset =
-          unsigned_integer_value(encoded.at("frame_offset"));
-      const auto velocity =
-          unsigned_integer_value(encoded.at("velocity"));
+      const auto frame_offset = unsigned_integer_value(encoded.at("frame_offset"));
+      const auto velocity = unsigned_integer_value(encoded.at("velocity"));
+      const auto slot = parse_slot(encoded.at("slot"), path);
       if (!frame_offset.has_value() || !velocity.has_value() ||
-          *frame_offset >
-              std::numeric_limits<std::uint32_t>::max() ||
-          *velocity > std::numeric_limits<std::uint8_t>::max()) {
-        return foundation::Result<domain::RawTake>::failure(
-            invalid_project("project raw take event is invalid", path));
+          *frame_offset > std::numeric_limits<std::uint32_t>::max() ||
+          *velocity < 1 || *velocity > 127 || !slot.has_value()) {
+        return foundation::Result<void>::failure(
+            slot.has_value()
+                ? invalid_project("retired capture event is invalid", path)
+                : slot.error());
       }
-      auto slot = parse_slot(encoded.at("slot"), path);
-      if (!slot.has_value()) {
-        return foundation::Result<domain::RawTake>::failure(slot.error());
-      }
-      domain::RawTakeEvent event{
-          slot.value(),
-          static_cast<std::uint32_t>(*frame_offset),
-          static_cast<std::uint8_t>(*velocity),
-      };
-      if (event.velocity < 1 || event.velocity > 127) {
-        return foundation::Result<domain::RawTake>::failure(
-            invalid_project("project raw take event is invalid", path));
-      }
-      take.events.push_back(event);
     }
-    return foundation::Result<domain::RawTake>::success(std::move(take));
+    return foundation::Result<void>::success();
   } catch (const std::exception& exception) {
-    return foundation::Result<domain::RawTake>::failure(
+    return foundation::Result<void>::failure(
         invalid_project(
-            "project raw take could not be parsed",
-            path,
-            exception.what()));
+            "retired capture could not be parsed", path, exception.what()));
   }
 }
 
@@ -729,21 +634,7 @@ foundation::Result<domain::Pattern> parse_project_pattern(
   }
   auto encoded = input;
   encoded["id"] = id;
-  return parse_pattern(encoded, path);
-}
-
-foundation::Result<domain::RawTake> parse_project_take(
-    std::string_view id,
-    const nlohmann::json& input,
-    const std::filesystem::path& path) {
-  if (!domain::is_valid_uuid(id) ||
-      !exact_object_keys(input, {"events", "sample_rate"})) {
-    return foundation::Result<domain::RawTake>::failure(
-        invalid_project("project raw take entry is invalid", path));
-  }
-  auto encoded = input;
-  encoded["id"] = id;
-  return parse_take(encoded, path);
+  return parse_pattern(encoded, path, true);
 }
 
 foundation::Result<domain::ProjectState> parse_project(
@@ -1008,13 +899,14 @@ foundation::Result<domain::ProjectState> parse_project(
         }
       }
     } else {
-      // v1/v2 Take data is intentionally discarded by total migration.
+      // Retired v1/v2 capture data is validated and discarded by migration.
       for (auto iterator = input.at("takes").begin();
            iterator != input.at("takes").end(); ++iterator) {
-        auto take = parse_project_take(iterator.key(), iterator.value(), path);
-        if (!take.has_value()) {
+        auto capture = validate_retired_capture(
+            iterator.key(), iterator.value(), path);
+        if (!capture.has_value()) {
           return foundation::Result<domain::ProjectState>::failure(
-              take.error());
+              capture.error());
         }
       }
       for (auto iterator = input.at("patterns").begin();
@@ -1076,13 +968,6 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"meta", meta_json(value.meta)},
               {"slot", slot_json(value.slot)},
               {"type", "AssignPad"},
-          };
-        } else if constexpr (std::is_same_v<Type, domain::RecordTake>) {
-          return {
-              {"meta", meta_json(value.meta)},
-              {"pattern", pattern_json(value.pattern)},
-              {"take", take_json(value.take)},
-              {"type", "RecordTake"},
           };
         } else if constexpr (std::is_same_v<Type, domain::CreatePattern>) {
           return {
@@ -1223,26 +1108,6 @@ foundation::Result<PersistedCommand> parse_command(
               std::move(meta.value()),
               slot.value(),
               std::move(asset_id),
-          }});
-    }
-    if (type == "RecordTake") {
-      auto take = parse_take(input.at("take"), path);
-      auto pattern = parse_pattern(input.at("pattern"), path);
-      if (!take.has_value()) {
-        return foundation::Result<PersistedCommand>::failure(take.error());
-      }
-      if (!pattern.has_value()) {
-        return foundation::Result<PersistedCommand>::failure(pattern.error());
-      }
-      if (!exact_object_keys(input, {"meta", "pattern", "take", "type"})) {
-        return foundation::Result<PersistedCommand>::failure(
-            invalid_project("RecordTake transaction shape is invalid", path));
-      }
-      return foundation::Result<PersistedCommand>::success(
-          PersistedCommand{domain::RecordTake{
-              std::move(meta.value()),
-              std::move(take.value()),
-              std::move(pattern.value()),
           }});
     }
     if (type == "CreatePattern") {
@@ -1434,9 +1299,7 @@ PersistedCommand persisted_command(const domain::Command& command) {
       [](const auto& value) -> PersistedCommand {
         auto normalized = value;
         using Type = std::decay_t<decltype(value)>;
-        if constexpr (
-            std::is_same_v<Type, domain::CreatePattern> ||
-            std::is_same_v<Type, domain::RecordTake>) {
+        if constexpr (std::is_same_v<Type, domain::CreatePattern>) {
           normalized.pattern.events = domain::merge_pattern_events(
               {}, normalized.pattern.events);
         } else if constexpr (
@@ -1555,7 +1418,6 @@ foundation::Result<LoadedProject> load_project(
         {},
         {},
         {},
-        {},
     };
     for (const auto& encoded_path : manifest.at("transactions")) {
       const auto relative =
@@ -1596,25 +1458,6 @@ foundation::Result<LoadedProject> load_project(
       loaded.receipts.emplace(
           meta.command_id,
           domain::CommandReceipt{revision, applied.value().event});
-      if (transaction.value().contains("cleanup_take_id")) {
-        const auto cleanup_take_id =
-            foundation::TakeId{
-                transaction.value()
-                    .at("cleanup_take_id")
-                    .get<std::string>()};
-        const auto* record =
-            std::get_if<domain::RecordTake>(&command.value());
-        if (record == nullptr ||
-            !domain::is_valid_uuid(cleanup_take_id.value()) ||
-            cleanup_take_id != record->take.id) {
-          return foundation::Result<LoadedProject>::failure(
-              invalid_project(
-                  "project transaction cleanup obligation is invalid",
-                  bundle / relative));
-        }
-        loaded.cleanup_obligations.emplace(
-            meta.command_id, cleanup_take_id);
-      }
       if (transaction.value().contains("sequence_flush")) {
         try {
           const auto& encoded = transaction.value().at("sequence_flush");
@@ -2216,72 +2059,6 @@ foundation::Result<bool> publish_artifact(
              : foundation::Result<bool>::failure(created.error());
 }
 
-foundation::Result<bool> matching_active_journal(
-    const std::shared_ptr<ProjectStoragePlatform>& platform,
-    const std::filesystem::path& bundle,
-    const domain::RecordTake& record) {
-  const auto path =
-      bundle / "recovery/active" /
-      (record.take.id.value() + ".jsonl");
-  auto exists = platform->exists(path);
-  if (!exists.has_value()) {
-    return foundation::Result<bool>::failure(exists.error());
-  }
-  if (!exists.value()) {
-    return foundation::Result<bool>::success(false);
-  }
-  if (!domain::is_valid_uuid(record.take.id.value())) {
-    return foundation::Result<bool>::failure(
-        Error{ErrorCode::invalid_argument, "take id is not a safe file name"});
-  }
-  auto bytes = read_file_bytes(*platform, path);
-  if (!bytes.has_value()) {
-    return foundation::Result<bool>::failure(bytes.error());
-  }
-  const auto line_end = bytes.value().find('\n');
-  if (line_end == std::string::npos) {
-    return foundation::Result<bool>::failure(
-        invalid_project("active take journal could not be read", path));
-  }
-  try {
-    const auto header = parse_bounded_or_throw(
-        bytes.value().substr(0, line_end));
-    TakeJournal journal{platform};
-    const auto take =
-        journal.read_active(bundle, record.take.id);
-    if (!take.has_value()) {
-      return foundation::Result<bool>::failure(take.error());
-    }
-    return foundation::Result<bool>::success(
-        header.at("expected_revision").get<std::uint64_t>() ==
-            record.meta.expected_revision &&
-        take.value() == record.take);
-  } catch (const std::exception& exception) {
-    return foundation::Result<bool>::failure(
-        invalid_project(
-            "active take journal metadata could not be parsed",
-            path,
-            exception.what()));
-  }
-}
-
-foundation::Result<void> complete_journal_cleanup(
-    ProjectStoragePlatform& platform,
-    const std::filesystem::path& bundle,
-    const std::optional<foundation::TakeId>& cleanup_take_id) {
-  if (!cleanup_take_id.has_value()) {
-    return foundation::Result<void>::success();
-  }
-  const auto path =
-      bundle / "recovery/active" /
-      (cleanup_take_id->value() + ".jsonl");
-  const auto removed = platform.remove(path);
-  if (!removed.has_value()) {
-    return removed;
-  }
-  return foundation::Result<void>::success();
-}
-
 foundation::Result<domain::AppliedCommand> commit_loaded(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
@@ -2323,52 +2100,13 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   } else if (persisted_identity != nullptr) {
     *persisted_identity = command;
   }
-  bool journal_matches = false;
-  std::optional<foundation::TakeId> cleanup_take_id;
-  if (!replay_candidate) {
-    const auto* record = std::get_if<domain::RecordTake>(&command);
-    if (record != nullptr) {
-      const auto matching = matching_active_journal(platform, bundle, *record);
-      if (!matching.has_value()) {
-        return foundation::Result<domain::AppliedCommand>::failure(
-            matching.error());
-      }
-      journal_matches = matching.value();
-      if (journal_matches) {
-        cleanup_take_id = record->take.id;
-      }
-    }
-  }
-
   const auto applied =
       apply_command(loaded.state, command, loaded.receipts);
   if (!applied.has_value()) {
-    if (applied.error().code == ErrorCode::revision_conflict &&
-        journal_matches) {
-      const auto& record = std::get<domain::RecordTake>(command);
-      TakeJournal journal{platform};
-      const auto sealed =
-          journal.seal(bundle, record.take.id, "revision_conflict");
-      if (!sealed.has_value()) {
-        return foundation::Result<domain::AppliedCommand>::failure(
-            sealed.error());
-      }
-    }
     return foundation::Result<domain::AppliedCommand>::failure(
         applied.error());
   }
   if (applied.value().replayed) {
-    const auto obligation =
-        loaded.cleanup_obligations.find(meta.command_id);
-    if (obligation != loaded.cleanup_obligations.end()) {
-      cleanup_take_id = obligation->second;
-    }
-    const auto cleanup =
-        complete_journal_cleanup(*platform, bundle, cleanup_take_id);
-    if (!cleanup.has_value()) {
-      return foundation::Result<domain::AppliedCommand>::failure(
-          cleanup.error());
-    }
     return applied;
   }
 
@@ -2472,9 +2210,6 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
       {"event", applied.value().event},
       {"revision", revision},
   };
-  if (cleanup_take_id.has_value()) {
-    transaction["cleanup_take_id"] = cleanup_take_id->value();
-  }
   if (sequence_flush_identity.has_value()) {
     transaction["sequence_flush"] = {
         {"command_id", sequence_flush_identity->command_id.value()},
@@ -2617,12 +2352,6 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
   }
 
-  const auto cleanup =
-      complete_journal_cleanup(*platform, bundle, cleanup_take_id);
-  if (!cleanup.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        cleanup.error());
-  }
   return applied;
 }
 
@@ -2938,97 +2667,6 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::ResetPadPlayback& command) {
   return execute_persisted(platform_, bundle, PersistedCommand{command});
-}
-
-foundation::Result<std::optional<RecordTakeReplay>>
-ProjectStore::replay_record_take(
-    const std::filesystem::path& bundle,
-    const RecordTakeReplayIdentity& identity) {
-  if (!domain::is_valid_uuid(identity.meta.command_id.value())) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        Error{
-            ErrorCode::invalid_argument,
-            "command id is not a safe file name",
-        });
-  }
-  auto tree = validate_managed_bundle_tree(*platform_, bundle);
-  if (!tree.has_value()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        tree.error());
-  }
-  auto lock_result = platform_->acquire_writer(bundle);
-  if (!lock_result.has_value()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        lock_result.error());
-  }
-  auto lock = std::move(lock_result.value());
-  (void)lock;
-  tree = validate_managed_bundle_tree(*platform_, bundle);
-  if (!tree.has_value()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        tree.error());
-  }
-  auto loaded = load_project(*platform_, bundle);
-  if (!loaded.has_value()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        loaded.error());
-  }
-  const auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
-  if (!recovered.has_value()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        recovered.error());
-  }
-  const auto original =
-      loaded.value().commands.find(identity.meta.command_id);
-  if (original == loaded.value().commands.end()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::success(
-        std::nullopt);
-  }
-  const auto* record =
-      std::get_if<domain::RecordTake>(&original->second);
-  if (record == nullptr) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        Error{
-            ErrorCode::invalid_argument,
-            "command id belongs to a different command type",
-        });
-  }
-  if (record->meta.expected_revision != identity.meta.expected_revision ||
-      record->take.id != identity.take_id ||
-      record->pattern != identity.pattern) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        Error{
-            ErrorCode::invalid_argument,
-            "take commit replay identity does not match persisted RecordTake",
-        });
-  }
-  const auto receipt =
-      loaded.value().receipts.find(identity.meta.command_id);
-  if (receipt == loaded.value().receipts.end()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        invalid_project(
-            "persisted RecordTake receipt is missing",
-            bundle / "manifest.json"));
-  }
-  const auto cleanup =
-      loaded.value().cleanup_obligations.find(identity.meta.command_id);
-  if (cleanup != loaded.value().cleanup_obligations.end()) {
-    const auto completed =
-        complete_journal_cleanup(*platform_, bundle, cleanup->second);
-    if (!completed.has_value()) {
-      return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-          completed.error());
-    }
-  }
-  return foundation::Result<std::optional<RecordTakeReplay>>::success(
-      RecordTakeReplay{
-          *record,
-          domain::AppliedCommand{
-              std::move(loaded.value().state),
-              receipt->second.event,
-              true,
-          },
-      });
 }
 
 foundation::Result<std::optional<SequenceFlushExecution>>

@@ -15,7 +15,6 @@
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
-#include <lmdj/project_io/take_journal.hpp>
 
 #include "packages/project-io/src/testing_hooks.hpp"
 #include "tests/core/support/test.hpp"
@@ -28,24 +27,16 @@ using lmdj::domain::CreatePattern;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
-using lmdj::domain::RawTake;
-using lmdj::domain::RawTakeEvent;
-using lmdj::domain::RecordTake;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::PatternId;
 using lmdj::foundation::ProjectId;
-using lmdj::foundation::TakeId;
 using lmdj::project_io::ProjectStore;
-using lmdj::project_io::TakeJournal;
 using lmdj::project_io::testing::FaultPoint;
 
 enum class Boundary {
   before_manifest_commit,
-  after_manifest_commit,
-  active_journal,
-  sealed_candidate,
 };
 
 struct FaultCase {
@@ -94,26 +85,6 @@ constexpr std::array kCases{
         FaultPoint::manifest_publish,
         "manifest_publish",
         Boundary::before_manifest_commit,
-    },
-    FaultCase{
-        FaultPoint::active_journal_sync,
-        "active_journal_sync",
-        Boundary::active_journal,
-    },
-    FaultCase{
-        FaultPoint::active_journal_remove,
-        "active_journal_remove",
-        Boundary::after_manifest_commit,
-    },
-    FaultCase{
-        FaultPoint::active_directory_sync,
-        "active_directory_sync",
-        Boundary::after_manifest_commit,
-    },
-    FaultCase{
-        FaultPoint::sealed_directory_sync,
-        "sealed_directory_sync",
-        Boundary::sealed_candidate,
     },
 };
 
@@ -312,18 +283,8 @@ Pattern pattern(std::string_view id) {
   return Pattern{
       PatternId{test_uuid(id)},
       1,
-      {PatternEvent{PadSlotId{0, 0}, 0, 100}},
-  };
-}
-
-RawTake take(std::string_view id) {
-  return RawTake{
-      TakeId{test_uuid(id)},
-      48000,
-      {
-          RawTakeEvent{PadSlotId{0, 0}, 100, 96},
-          RawTakeEvent{PadSlotId{0, 1}, 200, 110},
-      },
+      {PatternEvent{
+          PadSlotId{0, 0}, 0, lmdj::domain::kSixteenthTicks, 100}},
   };
 }
 
@@ -348,28 +309,6 @@ void check_no_uncommitted_revision_one(
     }
     LMDJ_CHECK(!relative.starts_with("history/checkpoints/1."));
     LMDJ_CHECK(!relative.starts_with("history/transactions/1-"));
-  }
-}
-
-void begin_take(
-    TakeJournal& journal,
-    const std::filesystem::path& bundle,
-    const RawTake& recorded) {
-  LMDJ_CHECK(
-      journal.begin(
-                 bundle,
-                 recorded.id,
-                 0,
-                 recorded.sample_rate)
-          .has_value());
-}
-
-void append_take(
-    TakeJournal& journal,
-    const std::filesystem::path& bundle,
-    const RawTake& recorded) {
-  for (const auto& event : recorded.events) {
-    LMDJ_CHECK(journal.append(bundle, recorded.id, event).has_value());
   }
 }
 
@@ -668,124 +607,6 @@ void test_restart_classifies_committed_and_uncommitted_files() {
   LMDJ_CHECK(read_bytes(sentinel) == "must-survive");
 }
 
-void test_take_cleanup_faults_leave_replayable_obligation() {
-  for (const auto& fault : kCases) {
-    if (fault.boundary != Boundary::after_manifest_commit) {
-      continue;
-    }
-    TempDirectory temp(fault.name);
-    const auto bundle = temp.path() / "project.lmdj";
-    auto platform = lmdj::project_io::make_default_project_storage_platform();
-    ProjectStore store{platform};
-    TakeJournal journal{platform};
-    LMDJ_CHECK(store.create(bundle, new_project()).has_value());
-    const auto recorded = take("cleanup-take");
-    begin_take(journal, bundle, recorded);
-    append_take(journal, bundle, recorded);
-    const auto command = Command{RecordTake{
-        meta("record", 0),
-        recorded,
-        pattern("record-pattern"),
-    }};
-    const auto active =
-        bundle / "recovery/active" / (recorded.id.value() + ".jsonl");
-
-    lmdj::foundation::Result<lmdj::domain::AppliedCommand> result =
-        lmdj::foundation::Result<lmdj::domain::AppliedCommand>::failure(
-            lmdj::foundation::Error{
-                ErrorCode::internal_error,
-                "fault operation did not run",
-            });
-    {
-      FaultGuard guard(fault.point);
-      result = store.execute(bundle, command);
-      LMDJ_CHECK(injected_point_calls == 1);
-    }
-
-    LMDJ_CHECK(!result.has_value());
-    LMDJ_CHECK(result.error().code == ErrorCode::io_error);
-    LMDJ_CHECK(manifest_revision(bundle) == 1);
-    ProjectStore restarted;
-    const auto loaded = restarted.load(bundle);
-    LMDJ_CHECK(loaded.has_value());
-    LMDJ_CHECK(loaded.value().revision == 1);
-    LMDJ_CHECK(loaded.value().takes.contains(recorded.id));
-    const auto transaction =
-        bundle / "history/transactions" /
-        ("1-" + meta("record", 0).command_id.value() + ".json");
-    LMDJ_CHECK(
-        nlohmann::json::parse(read_bytes(transaction))
-            .at("cleanup_take_id") == recorded.id.value());
-    if (fault.point == FaultPoint::active_journal_remove) {
-      LMDJ_CHECK(std::filesystem::is_regular_file(active));
-    } else {
-      LMDJ_CHECK(!std::filesystem::exists(active));
-    }
-
-    const auto replayed = restarted.execute(bundle, command);
-    LMDJ_CHECK(replayed.has_value());
-    LMDJ_CHECK(replayed.value().replayed);
-    LMDJ_CHECK(replayed.value().state.revision == 1);
-    LMDJ_CHECK(!std::filesystem::exists(active));
-  }
-
-  for (const auto& fault : kCases) {
-    if (fault.boundary != Boundary::active_journal &&
-        fault.boundary != Boundary::sealed_candidate) {
-      continue;
-    }
-    TempDirectory temp(fault.name);
-    const auto bundle = temp.path() / "project.lmdj";
-    auto platform = lmdj::project_io::make_default_project_storage_platform();
-    ProjectStore store{platform};
-    TakeJournal journal{platform};
-    LMDJ_CHECK(store.create(bundle, new_project()).has_value());
-    const auto recorded = take("journal-take");
-    begin_take(journal, bundle, recorded);
-
-    if (fault.boundary == Boundary::active_journal) {
-      lmdj::foundation::Result<void> appended =
-          lmdj::foundation::Result<void>::success();
-      {
-        FaultGuard guard(fault.point);
-        appended =
-            journal.append(bundle, recorded.id, recorded.events.front());
-        LMDJ_CHECK(injected_point_calls == 1);
-      }
-      LMDJ_CHECK(!appended.has_value());
-      LMDJ_CHECK(appended.error().code == ErrorCode::io_error);
-      const auto active = journal.read_active_journal(bundle, recorded.id);
-      LMDJ_CHECK(active.has_value());
-      LMDJ_CHECK(active.value().expected_revision == 0);
-      LMDJ_CHECK(journal.list_recoverable(bundle).value().empty());
-    } else {
-      append_take(journal, bundle, recorded);
-      lmdj::foundation::Result<std::filesystem::path> sealed =
-          lmdj::foundation::Result<std::filesystem::path>::failure(
-              lmdj::foundation::Error{
-                  ErrorCode::internal_error,
-                  "fault operation did not run",
-              });
-      {
-        FaultGuard guard(fault.point);
-        sealed = journal.seal(bundle, recorded.id, "interrupted");
-        LMDJ_CHECK(injected_point_calls == 1);
-      }
-      LMDJ_CHECK(!sealed.has_value());
-      LMDJ_CHECK(sealed.error().code == ErrorCode::io_error);
-      LMDJ_CHECK(journal.read_active(bundle, recorded.id).has_value());
-      const auto candidates = journal.list_recoverable(bundle);
-      LMDJ_CHECK(candidates.has_value());
-      LMDJ_CHECK(candidates.value().size() == 1);
-      LMDJ_CHECK(candidates.value().front().take == recorded);
-    }
-
-    const auto loaded = ProjectStore{}.load(bundle);
-    LMDJ_CHECK(loaded.has_value());
-    LMDJ_CHECK(loaded.value().revision == 0);
-  }
-}
-
 void test_every_fault_point_is_observed_exactly_once() {
   std::set<std::size_t> declared_points;
   for (const auto& fault : kCases) {
@@ -815,7 +636,6 @@ int main() {
     test_sample_import_reclaims_its_fresh_incomplete_crash_residue();
     test_crash_after_sample_manifest_publication_recovers_new_truth();
     test_restart_classifies_committed_and_uncommitted_files();
-    test_take_cleanup_faults_leave_replayable_obligation();
     test_every_fault_point_is_observed_exactly_once();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

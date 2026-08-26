@@ -15,8 +15,8 @@ BUILD_ROOT = (REPO_ROOT / "build/core").resolve()
 REQUEST_ROOT = Path(__file__).resolve().parent / "requests"
 TIMEOUT_SECONDS = 20
 PATTERN_ID = "00000000-0000-4000-8000-000000000010"
-CONFLICT_TAKE_ID = "00000000-0000-4000-8000-000000000301"
-CONFLICT_PATTERN_ID = "00000000-0000-4000-8000-000000000310"
+RECOVERY_SESSION_ID = "00000000-0000-4000-8000-000000000301"
+SWITCH_PATTERN_ID = "00000000-0000-4000-8000-000000000310"
 KICK_ASSET_ID = "00000000-0000-4000-8000-000000000101"
 CAPABILITY = "proof.candidate.v2"
 
@@ -342,32 +342,60 @@ def proof(
             workspace,
             assembly,
             "command",
-            recorded["begin"],
+            recorded["create"],
         ),
-        4,
+        5,
     )
-    for event in recorded["events"]:
-        assert_success(
-            cli_request(
-                executable,
-                workspace,
-                assembly,
-                "command",
-                event,
-            ),
-            4,
-        )
-    committed = assert_success(
+    recorder = MCP(library, workspace, assembly)
+    begin = dict(recorded["begin"])
+    begin.pop("operation")
+    begun = assert_success(
+        recorder.tool("lmdj.sequence.record.begin", begin),
+        5,
+    )
+    assert begun["state"] == "active"
+    cross_host = assert_success(
         cli_request(
             executable,
             workspace,
             assembly,
-            "command",
-            recorded["commit"],
+            "query",
+            {
+                "operation": "sequence.record.status",
+                "project_path": str(project),
+            },
         ),
-        5,
+        None,
+    )
+    assert cross_host["session_id"] == recorded["begin"]["session_id"]
+    for event in recorded["events"]:
+        assert_success(
+            recorder.tool(
+                "lmdj.sequence.record.event",
+                {
+                    "project_path": str(project),
+                    "session_id": recorded["begin"]["session_id"],
+                    "event": event,
+                },
+            ),
+            5,
+        )
+    flush = dict(recorded["flush"])
+    flush.pop("operation")
+    committed = assert_success(
+        recorder.tool("lmdj.sequence.record.flush", flush),
+        6,
     )
     assert committed["replayed"] is False
+    replayed = assert_success(
+        recorder.tool("lmdj.sequence.record.flush", flush),
+        6,
+    )
+    assert replayed["replayed"] is True
+    stop = dict(recorded["stop"])
+    stop.pop("operation")
+    assert_success(recorder.tool("lmdj.sequence.record.stop", stop), 6)
+    recorder.close()
 
     inspected = cli_request(
         executable,
@@ -376,7 +404,7 @@ def proof(
         "query",
         {"operation": "project.inspect", "project_path": str(project)},
     )
-    project_result = assert_success(inspected, 5)["project"]
+    project_result = assert_success(inspected, 6)["project"]
     assert sum(len(bank["pads"]) for bank in project_result["banks"]) == 64
 
     cooked = assert_success(
@@ -391,7 +419,7 @@ def proof(
                 "pattern_id": PATTERN_ID,
             },
         ),
-        5,
+        6,
     )
     assert cooked["event_count"] == 4
     assert len(cooked["artifact_sha256s"]) == 2
@@ -410,7 +438,7 @@ def proof(
                 "output_path": str(output_wav),
             },
         ),
-        5,
+        6,
     )
     expected_sha = (
         REPO_ROOT / "tests/fixtures/golden/one_bar_120bpm.sha256"
@@ -539,7 +567,7 @@ def proof(
             "query",
             {"operation": "project.inspect", "project_path": str(project)},
         ),
-        5,
+        before_revision,
     )["project"]
     assert after_failure["revision"] == before_revision
     terminal = assert_success(
@@ -570,77 +598,146 @@ def proof(
             assembly,
             "command",
             {
-                "operation": "take.begin",
+                "operation": "pattern.create",
                 "project_path": str(project),
-                "take_id": CONFLICT_TAKE_ID,
-                "expected_revision": 5,
-                "sample_rate": 48000,
+                "command_id": "00000000-0000-4000-8000-000000000311",
+                "expected_revision": 6,
+                "pattern_id": SWITCH_PATTERN_ID,
+                "bars": 1,
             },
         ),
-        5,
+        7,
     )
-    assert_success(
-        cli_request(
-            executable,
-            workspace,
-            assembly,
-            "command",
+    owner = MCP(library, workspace, assembly)
+    begun = assert_success(
+        owner.tool(
+            "lmdj.sequence.record.begin",
             {
-                "operation": "take.append",
                 "project_path": str(project),
-                "take_id": CONFLICT_TAKE_ID,
+                "session_id": RECOVERY_SESSION_ID,
+                "pattern_id": PATTERN_ID,
+                "expected_revision": 7,
+                "runtime_frame": 0,
+            },
+        ),
+        7,
+    )
+    assert begun["state"] == "active"
+    assert_success(
+        owner.tool(
+            "lmdj.sequence.record.event",
+            {
+                "project_path": str(project),
+                "session_id": RECOVERY_SESSION_ID,
                 "event": {
                     "slot": {"bank": 0, "pad": 0},
-                    "frame_offset": 0,
                     "velocity": 100,
+                    "runtime_frame": 0,
+                    "input_sequence": 1,
+                    "pressed": True,
                 },
             },
         ),
-        5,
+        7,
     )
     assert_success(
+        owner.tool(
+            "lmdj.sequence.record.event",
+            {
+                "project_path": str(project),
+                "session_id": RECOVERY_SESSION_ID,
+                "event": {
+                    "slot": {"bank": 0, "pad": 0},
+                    "velocity": 0,
+                    "runtime_frame": 12000,
+                    "input_sequence": 2,
+                    "pressed": False,
+                },
+            },
+        ),
+        7,
+    )
+    rebased = assert_success(
+        owner.tool(
+            "lmdj.sequence.settings.update",
+            {
+                "project_path": str(project),
+                "command_id": "00000000-0000-4000-8000-000000000312",
+                "expected_revision": 7,
+                "session_id": RECOVERY_SESSION_ID,
+                "runtime_frame": 12000,
+                "bpm": 140,
+                "quantize_enabled": True,
+                "swing_percent": 50,
+            },
+        ),
+        8,
+    )
+    assert rebased["bpm"] == 140
+    switching = assert_success(
+        owner.tool(
+            "lmdj.sequence.record.switch-request",
+            {
+                "project_path": str(project),
+                "session_id": RECOVERY_SESSION_ID,
+                "next_pattern_id": SWITCH_PATTERN_ID,
+            },
+        ),
+        8,
+    )
+    boundary = switching["effective_runtime_frame"]
+    assert switching["pending_pattern_id"] == SWITCH_PATTERN_ID
+    switched = assert_success(
+        owner.tool(
+            "lmdj.sequence.record.flush",
+            {
+                "project_path": str(project),
+                "session_id": RECOVERY_SESSION_ID,
+                "command_id": "00000000-0000-4000-8000-000000000313",
+                "runtime_frame": boundary,
+            },
+        ),
+        9,
+    )
+    assert switched["pattern_id"] == SWITCH_PATTERN_ID
+    assert switched["pending_pattern_id"] is None
+    for sequence, (frame, velocity, pressed) in enumerate(
+        ((boundary + 1, 90, True), (boundary + 12000, 0, False)),
+        start=3,
+    ):
+        assert_success(
+            owner.tool(
+                "lmdj.sequence.record.event",
+                {
+                    "project_path": str(project),
+                    "session_id": RECOVERY_SESSION_ID,
+                    "event": {
+                        "slot": {"bank": 0, "pad": 1},
+                        "velocity": velocity,
+                        "runtime_frame": frame,
+                        "input_sequence": sequence,
+                        "pressed": pressed,
+                    },
+                },
+            ),
+            9,
+        )
+    observed = assert_success(
         cli_request(
             executable,
             workspace,
             assembly,
-            "command",
+            "query",
             {
-                "operation": "pad.assign",
+                "operation": "sequence.record.status",
                 "project_path": str(project),
-                "command_id": "00000000-0000-4000-8000-000000000006",
-                "expected_revision": 5,
-                "slot": {"bank": 0, "pad": 2},
-                "asset_id": KICK_ASSET_ID,
             },
         ),
-        6,
+        None,
     )
-    conflict = cli_request(
-        executable,
-        workspace,
-        assembly,
-        "command",
-        {
-            "operation": "take.commit",
-            "project_path": str(project),
-            "command_id": "00000000-0000-4000-8000-000000000007",
-            "expected_revision": 6,
-            "take_id": CONFLICT_TAKE_ID,
-            "pattern": {
-                "pattern_id": CONFLICT_PATTERN_ID,
-                "bars": 1,
-                "events": [
-                    {
-                        "slot": {"bank": 0, "pad": 0},
-                        "step": 0,
-                        "velocity": 100,
-                    }
-                ],
-            },
-        },
-        expected_exit=2,
-    )
-    assert_error(conflict, "REVISION_CONFLICT")
+    assert observed["session_id"] == RECOVERY_SESSION_ID
+    assert observed["pattern_id"] == SWITCH_PATTERN_ID
+    owner.close()
     recoverable = assert_success(
         cli_request(
             executable,
@@ -648,19 +745,42 @@ def proof(
             assembly,
             "query",
             {
-                "operation": "take.recoverable.list",
+                "operation": "sequence.recovery.list",
                 "project_path": str(project),
             },
         ),
-        6,
+        None,
     )["candidates"]
-    assert any(candidate["take_id"] == CONFLICT_TAKE_ID for candidate in recoverable)
+    candidate = next(
+        item for item in recoverable
+        if item["session_id"] == RECOVERY_SESSION_ID
+    )
+    assert candidate["pattern_id"] == SWITCH_PATTERN_ID
+    assert candidate["reason"] == "owner_lost"
+    recovered = assert_success(
+        cli_request(
+            executable,
+            workspace,
+            assembly,
+            "command",
+            {
+                "operation": "sequence.recovery.apply",
+                "project_path": str(project),
+                "session_id": RECOVERY_SESSION_ID,
+                "destination_pattern_id": None,
+            },
+        ),
+        10,
+    )
+    assert recovered["committed_revision"] == 10
 
     print("Project pads: 64")
     print("Golden audio: MATCH")
     print("CLI/MCP state parity: MATCH")
     print("Failed attempt project mutation: NONE")
-    print("Conflicted take recovery: SEALED")
+    print("Sequence flush replay: IDEMPOTENT")
+    print("Next-Bar switch: ACKNOWLEDGED")
+    print("Owner-loss recovery: APPLIED")
 
 
 def main() -> int:

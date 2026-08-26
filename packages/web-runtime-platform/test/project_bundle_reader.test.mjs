@@ -52,9 +52,9 @@ async function bundleFixture(payloads = [
   const digestSource = {
     compression: "none",
     contract: "lmdj.project-bundle.v1",
-    contract_version: "1.0.0",
+    contract_version: "1.1.0",
     entries,
-    project_contract: "lmdj.project.v1",
+    project_contract: "lmdj.project.v3",
     project_id: PROJECT_ID,
     uncompressed_bytes: offset,
   };

@@ -214,7 +214,8 @@ ProjectState apply_or_throw(const ProjectState& project, const Command& command)
 
 ProjectState project_with_pattern(
     const ArtifactRef& artifact,
-    std::vector<PatternEvent> events = {{PadSlotId{0, 0}, 0, 100}}) {
+    std::vector<PatternEvent> events = {
+        {PadSlotId{0, 0}, 0, 240, 100}}) {
   auto project = new_project();
   project = apply_or_throw(
       project,
@@ -505,7 +506,7 @@ void test_cooker_rejects_unassigned_slot() {
       project,
       Command{CreatePattern{
           meta(kPatternCommand, project.revision),
-          {PatternId{kPatternId}, 1, {{PadSlotId{0, 1}, 0, 100}}},
+          {PatternId{kPatternId}, 1, {{PadSlotId{0, 1}, 0, 240, 100}}},
       }});
   const auto result = lmdj::cooker::cook(
       project, PatternId{kPatternId}, resolver_for({}));
@@ -579,8 +580,8 @@ void test_cooker_rejects_cached_artifact_with_later_wrong_length() {
               PatternId{kPatternId},
               1,
               {
-                  {PadSlotId{0, 0}, 0, 100},
-                  {PadSlotId{0, 1}, 4, 96},
+                  {PadSlotId{0, 0}, 0, 240, 100},
+                  {PadSlotId{0, 1}, 960, 240, 96},
               },
           },
       }});
@@ -602,8 +603,8 @@ void test_cooker_decodes_each_unique_artifact_once() {
   const auto project = project_with_pattern(
       artifact,
       {
-          {PadSlotId{0, 0}, 0, 100},
-          {PadSlotId{0, 0}, 4, 96},
+          {PadSlotId{0, 0}, 0, 240, 100},
+          {PadSlotId{0, 0}, 960, 240, 96},
       });
   std::uint32_t resolve_count = 0;
   const auto result = lmdj::cooker::cook(

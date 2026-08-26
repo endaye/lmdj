@@ -100,8 +100,8 @@ test('current truth tracks the formal Web Host, candidate lifecycle, and evidenc
 
   const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');
   assert.match(proof, new RegExp(`Product Build \`${facts.product.version.replaceAll('.', '\\.')}\``));
-  assert.match(proof, /lmdj\.project\.v2/);
-  assert.match(proof, /Sample edit\/import\/preview\/replace\/reset\/retry/);
+  assert.match(proof, /lmdj\.project\.v3/);
+  assert.match(proof, /record→overdub→switch→trim→reload→recover/);
   assert.match(proof, /docs\/quality\/2026-08-11-web-runtime-hardening-acceptance\.md/);
   assert.match(proof, /docs\/quality\/2026-08-12-opfs-publication-recovery-acceptance\.md/);
   assert.match(proof, /1\.0\.16\.6[^\n]+abandoned/);

@@ -31,10 +31,10 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Formal Web Runtime Host `1.2.15` 已进入 Product Build `1.0.36.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.3.6`，不直接依赖 Facade、Audio Runtime 或 Project I/O；同构建私有协议仍为 `1`。本 Build 包含 Audio Runtime 渲染路径 96 帧线性斜坡（F6）的 Core Module 级联，并绑定 Platform 的显式暂停顺序修复：Host 完成 quiescence 后浏览器 `AudioContext` 才被 suspend。匹配 Product Build 的不可变快照状态与 provenance 由版本清单和 Portal 门禁派生，不在 current 页面手写生命周期结论。
+<StatusBadge status="implemented" /> Formal Web Runtime Host `2.0.0` 已进入 Product Build `1.0.37.0` Assembly。Host 只依赖 Web Runtime Platform `1.0.0`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。Diagnostic flow 现在覆盖 Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。
 Formal Web Runtime Host `1.2.10` 已进入 Product Build `1.0.24.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.3.1`。
 
-当前内部实现还保证 ControlBridge 先于 audio readiness 发布；该修复不改变公开 API、Contract、Assembly 或现有 Package/Product 身份。诊断 UI、协议 `1`、500-trigger、Take、restart-required 和成功路径没有新增能力。
+ControlBridge 先于 audio readiness 发布；Host 只转发 Runtime Session authority state。它不解析 Project/bundle/journal、不执行 quantization/fingerprint，也没有 JavaScript fallback sequencer。
 
 ## 目标边界
 
@@ -42,7 +42,7 @@ Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用�
 
 ## 分发与身份门禁
 
-`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：全部分发资产使用内容哈希文件名，canonical diagnostic distribution manifest 绑定 Product Build、Host `1.2.15`、Platform `0.3.6`、私有协议 `1`、固定 512 MiB heap、四项资源上限、固定 Emscripten 身份及精确资产 inventory。Browser Main 在装载 runtime 前校验完整形状与 canonical bytes；共享 native gate 在创建 proxy queue、OPFS、Facade 或 audio adapter 前再次验证 Product Assembly 注入的 Host/contract/version triple。Browser Main readiness 只在 ControlBridge 与 audio adapter 均已发布后变为可见。任何漂移、重复或迟到初始化均 fail closed 为 `HOST_PROTOCOL_MISMATCH`。该 ownership 协议不是公开跨版本 Contract。
+`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：内容哈希资产与 canonical manifest 绑定 Product Build `1.0.37.0`、Host `2.0.0`、Platform `1.0.0`、私有协议 `1`、固定 heap/资源上限、Emscripten 身份及精确 inventory。Browser Main 与 shared native gate 在创建 runtime owner 前双重校验这些身份，漂移、重复或迟到初始化均 fail closed。
 
 proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
 
@@ -81,7 +81,7 @@ reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior�
 evidence v1。official site response 的 `disabled: true` 被规范化为 `state: disabled` 并在
 smoke/Draft 前拒绝自动 enable；publication projection 接受并保留 Netlify UTC `Z`
 时间戳中的可选小数秒。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
-自动证明当前 Product Build `1.0.36.0` 或历史 Product Build `1.0.31.0` / `1.0.30.0` / `1.0.29.0` / 未通过审查的 `1.0.28.0` / `1.0.27.0` / `1.0.26.0` / `1.0.25.0` 已获得 remote verified tag、Release、Deploy ID、
+自动证明当前 Product Build `1.0.37.0` 或任何历史 Product Build 已获得 remote verified tag、Release、Deploy ID、
 immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
 工具测试或 PR Preview 上升为当前候选的公开部署结论。
 
@@ -93,17 +93,17 @@ Netlify 生产面将静态服务已验证的 release `dist`，与 Python proof-o
 
 ## 生命周期门禁
 
-普通 Trigger 与全部 `take.begin` 只在 `running` 接收。诊断 Project 的每个 awaited Host request 返回后都重新核对 page-lifetime admission；pagehide 后不得继续 import、assignment、final inspect 或 publication。修复结束后必须再次 `project.inspect`，且 final revision、诊断 Asset 与全部 64 个 Pad assignment 都匹配，才可请求 Snapshot publication。Transport 收到 unknown request ID，或已 settlement request 的重复 response 时，不再忽略：它原子进入 terminal、只调用一次 terminate、以 `HOST_PROTOCOL_MISMATCH` 拒绝全部其余 pending request，并清空 request identity。真实 Browser Main 测试在 scheduled production poll 前用 `transport.send(host.status)` 保持另一个 request pending，确认其 promise 收到同一 terminal error、pending ID 已清除且 notification 为零。`HOST_RESTART_REQUIRED` 即使晚于 invalidation 返回也保持 sticky，`HOST_PROTOCOL_MISMATCH` 同样 fail closed；两者都只触发一次终止清理，页面重建前 direct/queued Load 不得重试。
+Trigger 与 `sequence.record.begin` 只在 `running` 接收。Sequence pad admission 使用 Audio Runtime frame clock 和单调 `input_sequence`；next-Bar boundary、BPM anchor 与 receipt 全部来自 Core。pagehide/terminal 会先封闭新 admission，再有界释放 Worker、transport、AudioWorklet、writer lease 与 session owner；owner 丢失留下显式 recovery artifact。
 
 中断同步关闭 runtime admission、清除 pressed state，并按 epoch 只发一次 Control suspend/seal。恢复必须同时具备 Context `running`、正整数 current/ack generation 相等，以及一个真实用户 recovery probe 的唯一 `voice_started`；visibility 或 pageshow 本身不能完成恢复。
 
 ## 自动化证据
 
-`scripts/web-runtime-host.sh proof` 覆盖两次 clean build 的逐字节可复现性、deterministic inventory、proof-server headers/cache/no-follow ownership、双重 manifest gate，以及 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 全旅程。可见顺序固定为 `Load diagnostic project -> ready -> Activate audio -> running -> trigger`，并覆盖 create/import/64 assignments、reload reopen、500 个 admission/outcome、20+1 Take、失败与 lifecycle 路径。reload 后的 `project.open` 使用 60 秒有界 writer-handoff 预算；浏览器 Proof 仅在 Host 与诊断错误码都精确为 `HOST_TIMEOUT` 时允许一次整页恢复。terminal failure 会先封闭新请求，再给 responsive Control Worker 5 秒有界 grace 完成 OPFS writer release，超过 grace 才强制终止 Worker；Wasm AudioWorklet callback 本身的 quiescence 还受两个 caller budget 的上界约束，第二个 budget 后返回类型化 terminal failure。WebKit 只在 mandatory primitive 可用时执行完整 smoke；缺少能力时必须输出结构化 limitation。Product Build `1.0.21.0` 的 protected PR、exact merged-main CI 与 fresh local Proof 已分别绑定在 Stage 7 merged-main evidence；旧 Build 的结果不被继承。
+`scripts/web-runtime-host.sh proof` 覆盖可复现 build、distribution gates 与 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 旅程，包括 Project v3、500-trigger 压力、Sequence recording/status/switch/recovery、跨窗口 observer/busy、失败和 lifecycle。WebKit 只在 mandatory primitive 可用时执行完整 smoke；结构化 limitation 不会被写成物理证据。
 
 ## 非能力
 
-当前不能宣称 Creator 已具备完整 Sequence 编辑、离线安装/PWA 或生产部署，也不能把 WebKit automation 当作物理 Safari，或宣称 MIDI/iPad/延迟体验、`beta`/`stable` 已获准。
+当前不能宣称离线安装/PWA、生产部署、物理 Safari/MIDI/iPad/延迟体验或 `beta`/`stable` 已获准；自动化 Sequence evidence 不替代这些独立边界。
 
 ## 剩余验收边界
 

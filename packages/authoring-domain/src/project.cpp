@@ -44,7 +44,6 @@ foundation::Result<ProjectState> create_project(
       {},
       {},
       {},
-      {},
   };
   for (std::uint8_t bank = 0; bank < state.banks.size(); ++bank) {
     for (std::uint8_t pad = 0; pad < state.banks.at(bank).size(); ++pad) {

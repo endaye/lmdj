@@ -12,7 +12,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 <BuildIdentity kind="hosts" id="core-mcp" />
 
 ## 目的
-通过 MCP stdio 暴露受控 Core 工具，使自动化调用与 CLI 保持 Facade parity。
+Core MCP `2.0.0` 通过 MCP stdio 暴露受控 Core 工具，包括 Pattern create、Sequence recording/settings/recovery，使长生命周期 owner 与 CLI 保持 Facade parity。
 ## 协议边界
 Host 管理 initialize、工具 schema、structured content 与 JSON-RPC 错误；业务语义仍来自 Facade。
 ## 安全与状态

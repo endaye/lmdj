@@ -42,12 +42,6 @@ struct ResetPadPlayback {
   PadSlotId slot;
 };
 
-struct RecordTake {
-  CommandMeta meta;
-  RawTake take;
-  Pattern pattern;
-};
-
 struct CreatePattern {
   CommandMeta meta;
   Pattern pattern;
@@ -69,7 +63,6 @@ struct UpdateSequenceSettings {
 using Command = std::variant<
     ImportAsset,
     AssignPad,
-    RecordTake,
     CreatePattern,
     MergePatternEvents,
     UpdateSequenceSettings>;
