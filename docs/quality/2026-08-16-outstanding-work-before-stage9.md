@@ -288,20 +288,32 @@ temporary and must not graduate into the formal interface.
 Due before the first Capability implementation that parses structured Artifact
 bytes.
 
-### D4. Recording concurrency semantics
+### ~~D4. Recording concurrency semantics~~ — decided 2026-08-23, merged 2026-08-26
 
-Which unrelated Commands should not trigger a conflict, and whether selective
+~~Which unrelated Commands should not trigger a conflict, and whether selective
 rebase is allowed. The Core Proof uses "any revision change conflicts and seals
 the Take" for determinism; that cannot stand as the product rule. Affects the
-recording Journal, Take commit experience and a public Contract.
+recording Journal, Take commit experience and a public Contract.~~
 
-Due before Sequence/Take Contract enters product implementation — **Stage 9
-territory**, so this one likely needs settling first.
+**Decided 2026-08-23** ([#238](https://github.com/endaye/lmdj/issues/238),
+[decision](../prd/decisions/2026-08-23-sequence-recording-semantics.md),
+merged 2026-08-26 in [#324](https://github.com/endaye/lmdj/pull/324)):
+concurrency is classified — a closed selective-rebase allowlist (BPM,
+Quantize/Swing, armed-Pad Capture commit), Sample-class Commands fail while
+recording continues, unknown Commands fail closed; one Project-scoped session
+under the writer lease, idempotent flush, fingerprint-gated recovery.
+Implementation is Stage 9 Tasks
+[#267](https://github.com/endaye/lmdj/issues/267)–[#275](https://github.com/endaye/lmdj/issues/275).
 
-### D5. Take scope — events only, or audio bounce too
+### ~~D5. Take scope — events only, or audio bounce too~~ — decided 2026-08-23, merged 2026-08-26
 
-Determines the Take contract, Web Audio recording and Export Pack. Also
-Stage 9-adjacent.
+~~Determines the Take contract, Web Audio recording and Export Pack. Also
+Stage 9-adjacent.~~
+
+**Decided 2026-08-23** (same review and decision file as D4): events only —
+no Take product object and no audio bounce; the next Project Contract removes
+`takes` and records tick-native Pattern events; Export Pack derives only from
+Project Truth.
 
 ---
 
@@ -522,7 +534,8 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has). ~~D4
    (`4312a6de`). B4 remains open.
 3. ~~**C1**~~ — invalidated by measurement; superseded by the facade
    coverage-raise plan (machine list C6).
-4. **D4 + D5** — Stage 9 depends on them.
+4. ~~**D4 + D5** — Stage 9 depends on them.~~ — decided 2026-08-23, merged
+   2026-08-26 in #324; Stage 9 implementation Tasks #267–#275 are unblocked.
 5. **D1 + D2** — one review, before any long-material work.
 6. ~~**A2**~~ — done 2026-08-24 (rename to `native-host` + distribution
    contents rule; see the A2 section). (~~A3~~ decided and implemented
