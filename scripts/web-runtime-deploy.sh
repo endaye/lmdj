@@ -283,7 +283,7 @@ verify_signed_tag() {
     fail "trusted Product signing key import failed"
     return
   }
-  without_deploy_secrets git cat-file "$remote_tag_ref" >"$tag_file" 2>/dev/null || {
+  without_deploy_secrets git cat-file tag "$remote_tag_ref" >"$tag_file" 2>/dev/null || {
     fail "Product tag signature input is unavailable"
     return
   }

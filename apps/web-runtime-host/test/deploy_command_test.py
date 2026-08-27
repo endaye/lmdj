@@ -761,6 +761,11 @@ def verify_distribution(dist_root, repo_root):
             elif args[:2] == ["cat-file", "-t"]:
                 print(os.environ.get("FAKE_TAG_TYPE", "tag"))
             elif args[:1] == ["cat-file"]:
+                # Real git rejects a bare `cat-file <object>`; the fake must be
+                # exactly as strict, or an invalid invocation in the deploy
+                # script only fails on real runners (issue #349).
+                if len(args) != 3 or args[1] != "tag":
+                    raise SystemExit("git cat-file requires <type> <object>")
                 print(
                     "object " + target + "\\n"
                     "type commit\\n"
