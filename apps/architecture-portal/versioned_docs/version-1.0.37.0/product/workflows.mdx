@@ -1,0 +1,42 @@
+---
+title: 产品工作流
+area: product
+status: partial
+owners: [product, core]
+source_paths:
+  - docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md
+  - packages/application-facade
+  - packages/project-cooker
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 创作与保存
+
+Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth；Project I/O 负责事务式存取和录音会话 Journal。Host 不解析 Project bundle。
+
+## Sequence 录音
+
+[2026-08-23 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)已由 Stage 9 实现：录音向当前 Pattern 写入 tick-native PPQ 960 事件，没有 Take 产品对象或音频 bounce。会话 overlay 受 writer lease 保护；BPM 与 Quantize/Swing 选择性 rebase 后继续，Sample 类 mutation 失败但会话不被静默改写，flush 按 command/session/sequence identity 幂等并以 manifest 发布为 commit point。Pattern switch 在 Core 报告的下一 Bar 生效；owner-loss recovery artifact 必须通过原 Pattern fingerprint 或用户明确选择的有效目标后才能提交或丢弃。
+
+## Pad Capture pre-commit 编辑
+
+Creator 的录音会话是视口锚定的模态面板：固定几何（宽度 `min(44rem, calc(100vw - 2rem))`，最大高度 `calc(100dvh - 2rem)` 内部滚动），Header、固定高度波形/电平区与底部操作行三个固定区域，进入 recording 只换内容、不改变外框；打开时焦点落在当前阶段主操作，阶段切换若卸载被聚焦控件则焦点迁往新阶段主操作，Escape 在任意阶段关闭并先停止进行中的录音，关闭后焦点恢复发起按钮。录音后可在 Host-local ephemeral `CaptureBuffer` 里选择严格子区间并执行 **Crop to selection**。Crop 先准备精确 PCM、chunk 索引与增量 block peaks，再原子发布归零的新 buffer revision；缓存同时失效。它可重复执行，且 Commit 继续沿用原有 buffer + selection 接口。Project Truth 只在现有 Commit 成功后变化；当前没有 Undo、持久化 Asset 编辑、自动 silence trimming、fade、normalize 或其他 DSP。
+
+## Cook 与演奏
+
+Project Cooker 校验 Project Truth 和 Artifact，产生不可变 Runtime Snapshot；Audio Runtime 从快照准备样本并在实时路径消费事件。快照不会反写为 Project Truth。
+
+## Provider 尝试
+
+Workspace/Host 选择 Provider。Provider 接收 Artifact 输入和输出 sink；进行中的状态和失败记录在 Attempt Store，而非 Project Truth。
+
+## 产品装配
+
+Product Assembly 固定 Module、Host、Provider、Contract 及版本。Application Facade 是 Host 的唯一 Core 入口。
+
+## 验收分层
+
+单元/组件测试验证边界，Proof 验证组合，CI 验证目标环境，Product Build 固定交付身份，物理设备验收验证最终体验。
