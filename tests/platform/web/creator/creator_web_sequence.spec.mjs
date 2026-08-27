@@ -20,7 +20,7 @@ async function report(page) {
   return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
 }
 
-test("Sequence authors settings, records unified input, switches at a Bar, and flushes", async ({page, browserName}) => {
+test("Sequence authors settings, records unified input, requests a Bar switch, and flushes", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(240_000);
   await page.goto("/index.html");
@@ -50,10 +50,11 @@ test("Sequence authors settings, records unified input, switches at a Bar, and f
   await expect(page.getByRole("status").filter({hasText: "recording"})).toBeVisible();
   await page.keyboard.press("KeyQ");
   await pattern.selectOption(originalPattern);
-  // A real Bar boundary can acknowledge the switch before Playwright samples
-  // the transient switch-pending state. The durable browser contract is that
-  // the requested Pattern becomes authoritative without surfacing an error.
-  await expect(pattern).toHaveValue(originalPattern, {timeout: 30_000});
+  // Headless browser audio is not physical Bar-timing acceptance. Prove that
+  // the real Host acknowledges the request; Core owns the deterministic
+  // boundary-activation proof.
+  await expect(page.getByRole("status").filter({hasText: "switch-pending"}))
+    .toBeVisible({timeout: 30_000});
   await expect(page.getByRole("alert")).toHaveCount(0);
   await page.getByRole("button", {name: "Stop"}).click();
   await expect(page.getByRole("status").filter({hasText: "stopped"}))
