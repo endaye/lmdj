@@ -1,0 +1,4036 @@
+{
+  "recordFormat": "web-runtime-lab-high-speed-timing-v1",
+  "sessionId": "00e56cbc-5197-4eaf-aed4-376488193188",
+  "capture": {
+    "method": "high-speed-video",
+    "captureRateHz": 240.0,
+    "containerPlaybackRateHz": 30.0,
+    "slowMotionFactor": 8.0,
+    "inputActuation": "MacBook Force Touch press-to-click while the finger remains in contact",
+    "triggerMarker": "visible Safari trigger-count transition synchronously produced by pointerdown",
+    "acousticOnset": "first frame of the externally recorded 880 Hz onset after slow-motion time expansion",
+    "calibrationOffsetMs": 20.833333333333332,
+    "calibrationBasis": "conservative 60 Hz display refresh interval plus one 240 fps capture frame; applied after clipping negative same-frame quantization to zero"
+  },
+  "clockFit": {
+    "offsetPlaybackSeconds": 36.56093712135589,
+    "slowMotionScale": 8.000131277828126,
+    "matchedEvents": 500
+  },
+  "summary": {
+    "triggerCount": 500,
+    "p50Ms": 29.166667,
+    "p95Ms": 37.5,
+    "p99Ms": 54.166667,
+    "maximumMs": 66.666667,
+    "missedOnsets": 0,
+    "duplicateOnsets": 0,
+    "independentAcousticRegionCounts": {
+      "120": 500,
+      "150": 500
+    },
+    "weakMarkerCountBelow8": 0
+  },
+  "records": [
+    {
+      "sequence": 1,
+      "markerPlaybackFrame": 1095,
+      "acousticOnsetPlaybackFrame": 1097,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.666667
+    },
+    {
+      "sequence": 2,
+      "markerPlaybackFrame": 1517,
+      "acousticOnsetPlaybackFrame": 1517,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 19.444444
+    },
+    {
+      "sequence": 3,
+      "markerPlaybackFrame": 1670,
+      "acousticOnsetPlaybackFrame": 1671,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 14.444444
+    },
+    {
+      "sequence": 4,
+      "markerPlaybackFrame": 1860,
+      "acousticOnsetPlaybackFrame": 1863,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 32.194444
+    },
+    {
+      "sequence": 5,
+      "markerPlaybackFrame": 2082,
+      "acousticOnsetPlaybackFrame": 2086,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 31.527778
+    },
+    {
+      "sequence": 6,
+      "markerPlaybackFrame": 2310,
+      "acousticOnsetPlaybackFrame": 2311,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 33.972222
+    },
+    {
+      "sequence": 7,
+      "markerPlaybackFrame": 2570,
+      "acousticOnsetPlaybackFrame": 2572,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 37.583333
+    },
+    {
+      "sequence": 8,
+      "markerPlaybackFrame": 2802,
+      "acousticOnsetPlaybackFrame": 2804,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 40.277778
+    },
+    {
+      "sequence": 9,
+      "markerPlaybackFrame": 3044,
+      "acousticOnsetPlaybackFrame": 3047,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 30.416667
+    },
+    {
+      "sequence": 10,
+      "markerPlaybackFrame": 3309,
+      "acousticOnsetPlaybackFrame": 3313,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 112.611111
+    },
+    {
+      "sequence": 11,
+      "markerPlaybackFrame": 3560,
+      "acousticOnsetPlaybackFrame": 3561,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.222222
+    },
+    {
+      "sequence": 12,
+      "markerPlaybackFrame": 3814,
+      "acousticOnsetPlaybackFrame": 3817,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 24.666667
+    },
+    {
+      "sequence": 13,
+      "markerPlaybackFrame": 4072,
+      "acousticOnsetPlaybackFrame": 4075,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 23.166667
+    },
+    {
+      "sequence": 14,
+      "markerPlaybackFrame": 4332,
+      "acousticOnsetPlaybackFrame": 4334,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.75
+    },
+    {
+      "sequence": 15,
+      "markerPlaybackFrame": 4582,
+      "acousticOnsetPlaybackFrame": 4583,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.194444
+    },
+    {
+      "sequence": 16,
+      "markerPlaybackFrame": 4826,
+      "acousticOnsetPlaybackFrame": 4827,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 17.222222
+    },
+    {
+      "sequence": 17,
+      "markerPlaybackFrame": 5077,
+      "acousticOnsetPlaybackFrame": 5078,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.166667
+    },
+    {
+      "sequence": 18,
+      "markerPlaybackFrame": 5323,
+      "acousticOnsetPlaybackFrame": 5325,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.583333
+    },
+    {
+      "sequence": 19,
+      "markerPlaybackFrame": 5579,
+      "acousticOnsetPlaybackFrame": 5581,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 16.5
+    },
+    {
+      "sequence": 20,
+      "markerPlaybackFrame": 5821,
+      "acousticOnsetPlaybackFrame": 5822,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 20.333333
+    },
+    {
+      "sequence": 21,
+      "markerPlaybackFrame": 6068,
+      "acousticOnsetPlaybackFrame": 6070,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 29.444444
+    },
+    {
+      "sequence": 22,
+      "markerPlaybackFrame": 6327,
+      "acousticOnsetPlaybackFrame": 6329,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 23.361111
+    },
+    {
+      "sequence": 23,
+      "markerPlaybackFrame": 6585,
+      "acousticOnsetPlaybackFrame": 6587,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 21.027778
+    },
+    {
+      "sequence": 24,
+      "markerPlaybackFrame": 6849,
+      "acousticOnsetPlaybackFrame": 6850,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 37.333333
+    },
+    {
+      "sequence": 25,
+      "markerPlaybackFrame": 7103,
+      "acousticOnsetPlaybackFrame": 7104,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 45.222222
+    },
+    {
+      "sequence": 26,
+      "markerPlaybackFrame": 7343,
+      "acousticOnsetPlaybackFrame": 7345,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.944444
+    },
+    {
+      "sequence": 27,
+      "markerPlaybackFrame": 7611,
+      "acousticOnsetPlaybackFrame": 7611,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 30.25
+    },
+    {
+      "sequence": 28,
+      "markerPlaybackFrame": 7906,
+      "acousticOnsetPlaybackFrame": 7910,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 27.638889
+    },
+    {
+      "sequence": 29,
+      "markerPlaybackFrame": 8167,
+      "acousticOnsetPlaybackFrame": 8169,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 18.194444
+    },
+    {
+      "sequence": 30,
+      "markerPlaybackFrame": 8423,
+      "acousticOnsetPlaybackFrame": 8425,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 18.694444
+    },
+    {
+      "sequence": 31,
+      "markerPlaybackFrame": 8682,
+      "acousticOnsetPlaybackFrame": 8683,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.888889
+    },
+    {
+      "sequence": 32,
+      "markerPlaybackFrame": 8937,
+      "acousticOnsetPlaybackFrame": 8937,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 28.777778
+    },
+    {
+      "sequence": 33,
+      "markerPlaybackFrame": 9213,
+      "acousticOnsetPlaybackFrame": 9215,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.361111
+    },
+    {
+      "sequence": 34,
+      "markerPlaybackFrame": 9475,
+      "acousticOnsetPlaybackFrame": 9476,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 41.305556
+    },
+    {
+      "sequence": 35,
+      "markerPlaybackFrame": 9761,
+      "acousticOnsetPlaybackFrame": 9762,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.416667
+    },
+    {
+      "sequence": 36,
+      "markerPlaybackFrame": 10027,
+      "acousticOnsetPlaybackFrame": 10029,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.694444
+    },
+    {
+      "sequence": 37,
+      "markerPlaybackFrame": 10289,
+      "acousticOnsetPlaybackFrame": 10290,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.194444
+    },
+    {
+      "sequence": 38,
+      "markerPlaybackFrame": 10568,
+      "acousticOnsetPlaybackFrame": 10570,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.861111
+    },
+    {
+      "sequence": 39,
+      "markerPlaybackFrame": 10815,
+      "acousticOnsetPlaybackFrame": 10815,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 18.583333
+    },
+    {
+      "sequence": 40,
+      "markerPlaybackFrame": 11085,
+      "acousticOnsetPlaybackFrame": 11087,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.611111
+    },
+    {
+      "sequence": 41,
+      "markerPlaybackFrame": 11354,
+      "acousticOnsetPlaybackFrame": 11355,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.083333
+    },
+    {
+      "sequence": 42,
+      "markerPlaybackFrame": 11625,
+      "acousticOnsetPlaybackFrame": 11626,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 25.666667
+    },
+    {
+      "sequence": 43,
+      "markerPlaybackFrame": 12039,
+      "acousticOnsetPlaybackFrame": 12040,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.027778
+    },
+    {
+      "sequence": 44,
+      "markerPlaybackFrame": 12297,
+      "acousticOnsetPlaybackFrame": 12300,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 26.666667
+    },
+    {
+      "sequence": 45,
+      "markerPlaybackFrame": 12565,
+      "acousticOnsetPlaybackFrame": 12566,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.277778
+    },
+    {
+      "sequence": 46,
+      "markerPlaybackFrame": 12831,
+      "acousticOnsetPlaybackFrame": 12833,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 21.805556
+    },
+    {
+      "sequence": 47,
+      "markerPlaybackFrame": 13094,
+      "acousticOnsetPlaybackFrame": 13096,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.361111
+    },
+    {
+      "sequence": 48,
+      "markerPlaybackFrame": 13363,
+      "acousticOnsetPlaybackFrame": 13364,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 35.361111
+    },
+    {
+      "sequence": 49,
+      "markerPlaybackFrame": 13636,
+      "acousticOnsetPlaybackFrame": 13636,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 24.444444
+    },
+    {
+      "sequence": 50,
+      "markerPlaybackFrame": 13889,
+      "acousticOnsetPlaybackFrame": 13890,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.277778
+    },
+    {
+      "sequence": 51,
+      "markerPlaybackFrame": 14735,
+      "acousticOnsetPlaybackFrame": 14737,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.861111
+    },
+    {
+      "sequence": 52,
+      "markerPlaybackFrame": 14989,
+      "acousticOnsetPlaybackFrame": 14990,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.5
+    },
+    {
+      "sequence": 53,
+      "markerPlaybackFrame": 15269,
+      "acousticOnsetPlaybackFrame": 15270,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.777778
+    },
+    {
+      "sequence": 54,
+      "markerPlaybackFrame": 15530,
+      "acousticOnsetPlaybackFrame": 15531,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.138889
+    },
+    {
+      "sequence": 55,
+      "markerPlaybackFrame": 15807,
+      "acousticOnsetPlaybackFrame": 15808,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 21.638889
+    },
+    {
+      "sequence": 56,
+      "markerPlaybackFrame": 16068,
+      "acousticOnsetPlaybackFrame": 16075,
+      "rawMarkerToOnsetMs": 29.166667,
+      "calibratedTouchToSoundMs": 50.0,
+      "markerScore": 23.0
+    },
+    {
+      "sequence": 57,
+      "markerPlaybackFrame": 16343,
+      "acousticOnsetPlaybackFrame": 16346,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 31.416667
+    },
+    {
+      "sequence": 58,
+      "markerPlaybackFrame": 16603,
+      "acousticOnsetPlaybackFrame": 16606,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 40.805556
+    },
+    {
+      "sequence": 59,
+      "markerPlaybackFrame": 16875,
+      "acousticOnsetPlaybackFrame": 16878,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 28.055556
+    },
+    {
+      "sequence": 60,
+      "markerPlaybackFrame": 17149,
+      "acousticOnsetPlaybackFrame": 17151,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 26.722222
+    },
+    {
+      "sequence": 61,
+      "markerPlaybackFrame": 17447,
+      "acousticOnsetPlaybackFrame": 17450,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 27.555556
+    },
+    {
+      "sequence": 62,
+      "markerPlaybackFrame": 17731,
+      "acousticOnsetPlaybackFrame": 17732,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.194444
+    },
+    {
+      "sequence": 63,
+      "markerPlaybackFrame": 17994,
+      "acousticOnsetPlaybackFrame": 17998,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 16.055556
+    },
+    {
+      "sequence": 64,
+      "markerPlaybackFrame": 18287,
+      "acousticOnsetPlaybackFrame": 18289,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 20.5
+    },
+    {
+      "sequence": 65,
+      "markerPlaybackFrame": 18598,
+      "acousticOnsetPlaybackFrame": 18598,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 20.527778
+    },
+    {
+      "sequence": 66,
+      "markerPlaybackFrame": 18907,
+      "acousticOnsetPlaybackFrame": 18908,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 37.361111
+    },
+    {
+      "sequence": 67,
+      "markerPlaybackFrame": 19191,
+      "acousticOnsetPlaybackFrame": 19192,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 47.027778
+    },
+    {
+      "sequence": 68,
+      "markerPlaybackFrame": 19499,
+      "acousticOnsetPlaybackFrame": 19501,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 40.916667
+    },
+    {
+      "sequence": 69,
+      "markerPlaybackFrame": 19821,
+      "acousticOnsetPlaybackFrame": 19821,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 28.805556
+    },
+    {
+      "sequence": 70,
+      "markerPlaybackFrame": 20129,
+      "acousticOnsetPlaybackFrame": 20131,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 38.944444
+    },
+    {
+      "sequence": 71,
+      "markerPlaybackFrame": 20436,
+      "acousticOnsetPlaybackFrame": 20437,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.888889
+    },
+    {
+      "sequence": 72,
+      "markerPlaybackFrame": 20736,
+      "acousticOnsetPlaybackFrame": 20737,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 21.861111
+    },
+    {
+      "sequence": 73,
+      "markerPlaybackFrame": 21059,
+      "acousticOnsetPlaybackFrame": 21060,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 19.194444
+    },
+    {
+      "sequence": 74,
+      "markerPlaybackFrame": 21466,
+      "acousticOnsetPlaybackFrame": 21468,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 29.194444
+    },
+    {
+      "sequence": 75,
+      "markerPlaybackFrame": 21764,
+      "acousticOnsetPlaybackFrame": 21765,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.333333
+    },
+    {
+      "sequence": 76,
+      "markerPlaybackFrame": 22074,
+      "acousticOnsetPlaybackFrame": 22076,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 26.055556
+    },
+    {
+      "sequence": 77,
+      "markerPlaybackFrame": 22388,
+      "acousticOnsetPlaybackFrame": 22390,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 30.833333
+    },
+    {
+      "sequence": 78,
+      "markerPlaybackFrame": 22693,
+      "acousticOnsetPlaybackFrame": 22693,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 26.944444
+    },
+    {
+      "sequence": 79,
+      "markerPlaybackFrame": 23021,
+      "acousticOnsetPlaybackFrame": 23020,
+      "rawMarkerToOnsetMs": -4.166667,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 24.722222
+    },
+    {
+      "sequence": 80,
+      "markerPlaybackFrame": 23338,
+      "acousticOnsetPlaybackFrame": 23339,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 40.25
+    },
+    {
+      "sequence": 81,
+      "markerPlaybackFrame": 23659,
+      "acousticOnsetPlaybackFrame": 23661,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 29.638889
+    },
+    {
+      "sequence": 82,
+      "markerPlaybackFrame": 23993,
+      "acousticOnsetPlaybackFrame": 23995,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 41.416667
+    },
+    {
+      "sequence": 83,
+      "markerPlaybackFrame": 24311,
+      "acousticOnsetPlaybackFrame": 24312,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 25.027778
+    },
+    {
+      "sequence": 84,
+      "markerPlaybackFrame": 24605,
+      "acousticOnsetPlaybackFrame": 24606,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 35.027778
+    },
+    {
+      "sequence": 85,
+      "markerPlaybackFrame": 24917,
+      "acousticOnsetPlaybackFrame": 24919,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 21.361111
+    },
+    {
+      "sequence": 86,
+      "markerPlaybackFrame": 25254,
+      "acousticOnsetPlaybackFrame": 25255,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 19.722222
+    },
+    {
+      "sequence": 87,
+      "markerPlaybackFrame": 25564,
+      "acousticOnsetPlaybackFrame": 25564,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 30.833333
+    },
+    {
+      "sequence": 88,
+      "markerPlaybackFrame": 25875,
+      "acousticOnsetPlaybackFrame": 25877,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 35.138889
+    },
+    {
+      "sequence": 89,
+      "markerPlaybackFrame": 26235,
+      "acousticOnsetPlaybackFrame": 26236,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 20.083333
+    },
+    {
+      "sequence": 90,
+      "markerPlaybackFrame": 26603,
+      "acousticOnsetPlaybackFrame": 26604,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.027778
+    },
+    {
+      "sequence": 91,
+      "markerPlaybackFrame": 27039,
+      "acousticOnsetPlaybackFrame": 27041,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 32.305556
+    },
+    {
+      "sequence": 92,
+      "markerPlaybackFrame": 27379,
+      "acousticOnsetPlaybackFrame": 27381,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.472222
+    },
+    {
+      "sequence": 93,
+      "markerPlaybackFrame": 27746,
+      "acousticOnsetPlaybackFrame": 27748,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.555556
+    },
+    {
+      "sequence": 94,
+      "markerPlaybackFrame": 28068,
+      "acousticOnsetPlaybackFrame": 28069,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.444444
+    },
+    {
+      "sequence": 95,
+      "markerPlaybackFrame": 28416,
+      "acousticOnsetPlaybackFrame": 28416,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 22.888889
+    },
+    {
+      "sequence": 96,
+      "markerPlaybackFrame": 28759,
+      "acousticOnsetPlaybackFrame": 28761,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 39.833333
+    },
+    {
+      "sequence": 97,
+      "markerPlaybackFrame": 29113,
+      "acousticOnsetPlaybackFrame": 29114,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 36.166667
+    },
+    {
+      "sequence": 98,
+      "markerPlaybackFrame": 29449,
+      "acousticOnsetPlaybackFrame": 29450,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 46.805556
+    },
+    {
+      "sequence": 99,
+      "markerPlaybackFrame": 29781,
+      "acousticOnsetPlaybackFrame": 29784,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 21.055556
+    },
+    {
+      "sequence": 100,
+      "markerPlaybackFrame": 30139,
+      "acousticOnsetPlaybackFrame": 30140,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 93.138889
+    },
+    {
+      "sequence": 101,
+      "markerPlaybackFrame": 30486,
+      "acousticOnsetPlaybackFrame": 30487,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 25.277778
+    },
+    {
+      "sequence": 102,
+      "markerPlaybackFrame": 30838,
+      "acousticOnsetPlaybackFrame": 30840,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.222222
+    },
+    {
+      "sequence": 103,
+      "markerPlaybackFrame": 31167,
+      "acousticOnsetPlaybackFrame": 31170,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 35.138889
+    },
+    {
+      "sequence": 104,
+      "markerPlaybackFrame": 31499,
+      "acousticOnsetPlaybackFrame": 31500,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.861111
+    },
+    {
+      "sequence": 105,
+      "markerPlaybackFrame": 31827,
+      "acousticOnsetPlaybackFrame": 31829,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 32.361111
+    },
+    {
+      "sequence": 106,
+      "markerPlaybackFrame": 32165,
+      "acousticOnsetPlaybackFrame": 32167,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.194444
+    },
+    {
+      "sequence": 107,
+      "markerPlaybackFrame": 32480,
+      "acousticOnsetPlaybackFrame": 32481,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 35.166667
+    },
+    {
+      "sequence": 108,
+      "markerPlaybackFrame": 32812,
+      "acousticOnsetPlaybackFrame": 32813,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.444444
+    },
+    {
+      "sequence": 109,
+      "markerPlaybackFrame": 33159,
+      "acousticOnsetPlaybackFrame": 33160,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 16.111111
+    },
+    {
+      "sequence": 110,
+      "markerPlaybackFrame": 33515,
+      "acousticOnsetPlaybackFrame": 33517,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 39.472222
+    },
+    {
+      "sequence": 111,
+      "markerPlaybackFrame": 33903,
+      "acousticOnsetPlaybackFrame": 33905,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.111111
+    },
+    {
+      "sequence": 112,
+      "markerPlaybackFrame": 34251,
+      "acousticOnsetPlaybackFrame": 34253,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 31.5
+    },
+    {
+      "sequence": 113,
+      "markerPlaybackFrame": 34621,
+      "acousticOnsetPlaybackFrame": 34629,
+      "rawMarkerToOnsetMs": 33.333333,
+      "calibratedTouchToSoundMs": 54.166667,
+      "markerScore": 22.194444
+    },
+    {
+      "sequence": 114,
+      "markerPlaybackFrame": 34978,
+      "acousticOnsetPlaybackFrame": 34979,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.277778
+    },
+    {
+      "sequence": 115,
+      "markerPlaybackFrame": 35330,
+      "acousticOnsetPlaybackFrame": 35331,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.333333
+    },
+    {
+      "sequence": 116,
+      "markerPlaybackFrame": 35698,
+      "acousticOnsetPlaybackFrame": 35698,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 29.833333
+    },
+    {
+      "sequence": 117,
+      "markerPlaybackFrame": 36085,
+      "acousticOnsetPlaybackFrame": 36087,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 33.638889
+    },
+    {
+      "sequence": 118,
+      "markerPlaybackFrame": 36459,
+      "acousticOnsetPlaybackFrame": 36461,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 44.388889
+    },
+    {
+      "sequence": 119,
+      "markerPlaybackFrame": 36834,
+      "acousticOnsetPlaybackFrame": 36837,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 25.888889
+    },
+    {
+      "sequence": 120,
+      "markerPlaybackFrame": 37202,
+      "acousticOnsetPlaybackFrame": 37203,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.666667
+    },
+    {
+      "sequence": 121,
+      "markerPlaybackFrame": 37564,
+      "acousticOnsetPlaybackFrame": 37565,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.444444
+    },
+    {
+      "sequence": 122,
+      "markerPlaybackFrame": 37942,
+      "acousticOnsetPlaybackFrame": 37943,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 27.916667
+    },
+    {
+      "sequence": 123,
+      "markerPlaybackFrame": 38316,
+      "acousticOnsetPlaybackFrame": 38319,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 32.722222
+    },
+    {
+      "sequence": 124,
+      "markerPlaybackFrame": 38705,
+      "acousticOnsetPlaybackFrame": 38707,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 32.194444
+    },
+    {
+      "sequence": 125,
+      "markerPlaybackFrame": 39123,
+      "acousticOnsetPlaybackFrame": 39124,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.444444
+    },
+    {
+      "sequence": 126,
+      "markerPlaybackFrame": 39516,
+      "acousticOnsetPlaybackFrame": 39518,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 29.166667
+    },
+    {
+      "sequence": 127,
+      "markerPlaybackFrame": 39930,
+      "acousticOnsetPlaybackFrame": 39931,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 40.472222
+    },
+    {
+      "sequence": 128,
+      "markerPlaybackFrame": 40333,
+      "acousticOnsetPlaybackFrame": 40335,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 32.472222
+    },
+    {
+      "sequence": 129,
+      "markerPlaybackFrame": 40727,
+      "acousticOnsetPlaybackFrame": 40728,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 33.25
+    },
+    {
+      "sequence": 130,
+      "markerPlaybackFrame": 41095,
+      "acousticOnsetPlaybackFrame": 41097,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.972222
+    },
+    {
+      "sequence": 131,
+      "markerPlaybackFrame": 41487,
+      "acousticOnsetPlaybackFrame": 41489,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 31.138889
+    },
+    {
+      "sequence": 132,
+      "markerPlaybackFrame": 41861,
+      "acousticOnsetPlaybackFrame": 41863,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.5
+    },
+    {
+      "sequence": 133,
+      "markerPlaybackFrame": 42248,
+      "acousticOnsetPlaybackFrame": 42249,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.638889
+    },
+    {
+      "sequence": 134,
+      "markerPlaybackFrame": 42648,
+      "acousticOnsetPlaybackFrame": 42651,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 24.861111
+    },
+    {
+      "sequence": 135,
+      "markerPlaybackFrame": 43056,
+      "acousticOnsetPlaybackFrame": 43063,
+      "rawMarkerToOnsetMs": 29.166667,
+      "calibratedTouchToSoundMs": 50.0,
+      "markerScore": 32.777778
+    },
+    {
+      "sequence": 136,
+      "markerPlaybackFrame": 43451,
+      "acousticOnsetPlaybackFrame": 43452,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.388889
+    },
+    {
+      "sequence": 137,
+      "markerPlaybackFrame": 43864,
+      "acousticOnsetPlaybackFrame": 43865,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 33.75
+    },
+    {
+      "sequence": 138,
+      "markerPlaybackFrame": 44244,
+      "acousticOnsetPlaybackFrame": 44246,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 41.333333
+    },
+    {
+      "sequence": 139,
+      "markerPlaybackFrame": 44666,
+      "acousticOnsetPlaybackFrame": 44667,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.972222
+    },
+    {
+      "sequence": 140,
+      "markerPlaybackFrame": 45036,
+      "acousticOnsetPlaybackFrame": 45040,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 19.194444
+    },
+    {
+      "sequence": 141,
+      "markerPlaybackFrame": 45455,
+      "acousticOnsetPlaybackFrame": 45457,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.527778
+    },
+    {
+      "sequence": 142,
+      "markerPlaybackFrame": 45865,
+      "acousticOnsetPlaybackFrame": 45867,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 29.583333
+    },
+    {
+      "sequence": 143,
+      "markerPlaybackFrame": 46297,
+      "acousticOnsetPlaybackFrame": 46299,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.444444
+    },
+    {
+      "sequence": 144,
+      "markerPlaybackFrame": 46680,
+      "acousticOnsetPlaybackFrame": 46681,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.083333
+    },
+    {
+      "sequence": 145,
+      "markerPlaybackFrame": 47072,
+      "acousticOnsetPlaybackFrame": 47073,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.75
+    },
+    {
+      "sequence": 146,
+      "markerPlaybackFrame": 47438,
+      "acousticOnsetPlaybackFrame": 47441,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 29.194444
+    },
+    {
+      "sequence": 147,
+      "markerPlaybackFrame": 47812,
+      "acousticOnsetPlaybackFrame": 47814,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.888889
+    },
+    {
+      "sequence": 148,
+      "markerPlaybackFrame": 48181,
+      "acousticOnsetPlaybackFrame": 48185,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 35.944444
+    },
+    {
+      "sequence": 149,
+      "markerPlaybackFrame": 48567,
+      "acousticOnsetPlaybackFrame": 48568,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 17.666667
+    },
+    {
+      "sequence": 150,
+      "markerPlaybackFrame": 48931,
+      "acousticOnsetPlaybackFrame": 48935,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 22.277778
+    },
+    {
+      "sequence": 151,
+      "markerPlaybackFrame": 49298,
+      "acousticOnsetPlaybackFrame": 49300,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.75
+    },
+    {
+      "sequence": 152,
+      "markerPlaybackFrame": 49680,
+      "acousticOnsetPlaybackFrame": 49681,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.388889
+    },
+    {
+      "sequence": 153,
+      "markerPlaybackFrame": 50072,
+      "acousticOnsetPlaybackFrame": 50073,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.694444
+    },
+    {
+      "sequence": 154,
+      "markerPlaybackFrame": 50433,
+      "acousticOnsetPlaybackFrame": 50433,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 28.111111
+    },
+    {
+      "sequence": 155,
+      "markerPlaybackFrame": 50861,
+      "acousticOnsetPlaybackFrame": 50863,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.166667
+    },
+    {
+      "sequence": 156,
+      "markerPlaybackFrame": 51197,
+      "acousticOnsetPlaybackFrame": 51199,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.805556
+    },
+    {
+      "sequence": 157,
+      "markerPlaybackFrame": 51556,
+      "acousticOnsetPlaybackFrame": 51556,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 36.861111
+    },
+    {
+      "sequence": 158,
+      "markerPlaybackFrame": 51896,
+      "acousticOnsetPlaybackFrame": 51897,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 41.694444
+    },
+    {
+      "sequence": 159,
+      "markerPlaybackFrame": 52238,
+      "acousticOnsetPlaybackFrame": 52240,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.166667
+    },
+    {
+      "sequence": 160,
+      "markerPlaybackFrame": 52602,
+      "acousticOnsetPlaybackFrame": 52603,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 19.027778
+    },
+    {
+      "sequence": 161,
+      "markerPlaybackFrame": 52918,
+      "acousticOnsetPlaybackFrame": 52922,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 30.111111
+    },
+    {
+      "sequence": 162,
+      "markerPlaybackFrame": 53243,
+      "acousticOnsetPlaybackFrame": 53245,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 26.166667
+    },
+    {
+      "sequence": 163,
+      "markerPlaybackFrame": 53613,
+      "acousticOnsetPlaybackFrame": 53615,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 18.638889
+    },
+    {
+      "sequence": 164,
+      "markerPlaybackFrame": 53952,
+      "acousticOnsetPlaybackFrame": 53953,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 34.861111
+    },
+    {
+      "sequence": 165,
+      "markerPlaybackFrame": 54300,
+      "acousticOnsetPlaybackFrame": 54301,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.75
+    },
+    {
+      "sequence": 166,
+      "markerPlaybackFrame": 54650,
+      "acousticOnsetPlaybackFrame": 54652,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.694444
+    },
+    {
+      "sequence": 167,
+      "markerPlaybackFrame": 55044,
+      "acousticOnsetPlaybackFrame": 55044,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 36.861111
+    },
+    {
+      "sequence": 168,
+      "markerPlaybackFrame": 55396,
+      "acousticOnsetPlaybackFrame": 55398,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 35.805556
+    },
+    {
+      "sequence": 169,
+      "markerPlaybackFrame": 55780,
+      "acousticOnsetPlaybackFrame": 55782,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 19.722222
+    },
+    {
+      "sequence": 170,
+      "markerPlaybackFrame": 56118,
+      "acousticOnsetPlaybackFrame": 56120,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 30.472222
+    },
+    {
+      "sequence": 171,
+      "markerPlaybackFrame": 56465,
+      "acousticOnsetPlaybackFrame": 56465,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 29.166667
+    },
+    {
+      "sequence": 172,
+      "markerPlaybackFrame": 56845,
+      "acousticOnsetPlaybackFrame": 56846,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 27.083333
+    },
+    {
+      "sequence": 173,
+      "markerPlaybackFrame": 57199,
+      "acousticOnsetPlaybackFrame": 57199,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 22.611111
+    },
+    {
+      "sequence": 174,
+      "markerPlaybackFrame": 57551,
+      "acousticOnsetPlaybackFrame": 57553,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.222222
+    },
+    {
+      "sequence": 175,
+      "markerPlaybackFrame": 57895,
+      "acousticOnsetPlaybackFrame": 57896,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 25.333333
+    },
+    {
+      "sequence": 176,
+      "markerPlaybackFrame": 58264,
+      "acousticOnsetPlaybackFrame": 58268,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 20.388889
+    },
+    {
+      "sequence": 177,
+      "markerPlaybackFrame": 58660,
+      "acousticOnsetPlaybackFrame": 58661,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 38.138889
+    },
+    {
+      "sequence": 178,
+      "markerPlaybackFrame": 59027,
+      "acousticOnsetPlaybackFrame": 59028,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 50.527778
+    },
+    {
+      "sequence": 179,
+      "markerPlaybackFrame": 59401,
+      "acousticOnsetPlaybackFrame": 59403,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.472222
+    },
+    {
+      "sequence": 180,
+      "markerPlaybackFrame": 59788,
+      "acousticOnsetPlaybackFrame": 59791,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 26.416667
+    },
+    {
+      "sequence": 181,
+      "markerPlaybackFrame": 60123,
+      "acousticOnsetPlaybackFrame": 60125,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 23.055556
+    },
+    {
+      "sequence": 182,
+      "markerPlaybackFrame": 60473,
+      "acousticOnsetPlaybackFrame": 60474,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 25.083333
+    },
+    {
+      "sequence": 183,
+      "markerPlaybackFrame": 60856,
+      "acousticOnsetPlaybackFrame": 60859,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 17.75
+    },
+    {
+      "sequence": 184,
+      "markerPlaybackFrame": 61241,
+      "acousticOnsetPlaybackFrame": 61244,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 29.555556
+    },
+    {
+      "sequence": 185,
+      "markerPlaybackFrame": 61605,
+      "acousticOnsetPlaybackFrame": 61606,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 27.194444
+    },
+    {
+      "sequence": 186,
+      "markerPlaybackFrame": 61987,
+      "acousticOnsetPlaybackFrame": 61987,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 27.0
+    },
+    {
+      "sequence": 187,
+      "markerPlaybackFrame": 62357,
+      "acousticOnsetPlaybackFrame": 62358,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 34.194444
+    },
+    {
+      "sequence": 188,
+      "markerPlaybackFrame": 62734,
+      "acousticOnsetPlaybackFrame": 62736,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 31.972222
+    },
+    {
+      "sequence": 189,
+      "markerPlaybackFrame": 63122,
+      "acousticOnsetPlaybackFrame": 63125,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 17.055556
+    },
+    {
+      "sequence": 190,
+      "markerPlaybackFrame": 63505,
+      "acousticOnsetPlaybackFrame": 63505,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 25.833333
+    },
+    {
+      "sequence": 191,
+      "markerPlaybackFrame": 63931,
+      "acousticOnsetPlaybackFrame": 63933,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.722222
+    },
+    {
+      "sequence": 192,
+      "markerPlaybackFrame": 64379,
+      "acousticOnsetPlaybackFrame": 64380,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.638889
+    },
+    {
+      "sequence": 193,
+      "markerPlaybackFrame": 64801,
+      "acousticOnsetPlaybackFrame": 64803,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 18.777778
+    },
+    {
+      "sequence": 194,
+      "markerPlaybackFrame": 65390,
+      "acousticOnsetPlaybackFrame": 65391,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.555556
+    },
+    {
+      "sequence": 195,
+      "markerPlaybackFrame": 65778,
+      "acousticOnsetPlaybackFrame": 65781,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 24.722222
+    },
+    {
+      "sequence": 196,
+      "markerPlaybackFrame": 66221,
+      "acousticOnsetPlaybackFrame": 66222,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.333333
+    },
+    {
+      "sequence": 197,
+      "markerPlaybackFrame": 66611,
+      "acousticOnsetPlaybackFrame": 66614,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 35.805556
+    },
+    {
+      "sequence": 198,
+      "markerPlaybackFrame": 66987,
+      "acousticOnsetPlaybackFrame": 66988,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 35.972222
+    },
+    {
+      "sequence": 199,
+      "markerPlaybackFrame": 67367,
+      "acousticOnsetPlaybackFrame": 67369,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.5
+    },
+    {
+      "sequence": 200,
+      "markerPlaybackFrame": 67734,
+      "acousticOnsetPlaybackFrame": 67736,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 20.0
+    },
+    {
+      "sequence": 201,
+      "markerPlaybackFrame": 68110,
+      "acousticOnsetPlaybackFrame": 68111,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 20.944444
+    },
+    {
+      "sequence": 202,
+      "markerPlaybackFrame": 68496,
+      "acousticOnsetPlaybackFrame": 68497,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 19.75
+    },
+    {
+      "sequence": 203,
+      "markerPlaybackFrame": 68872,
+      "acousticOnsetPlaybackFrame": 68873,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 19.222222
+    },
+    {
+      "sequence": 204,
+      "markerPlaybackFrame": 69260,
+      "acousticOnsetPlaybackFrame": 69262,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 35.888889
+    },
+    {
+      "sequence": 205,
+      "markerPlaybackFrame": 69610,
+      "acousticOnsetPlaybackFrame": 69610,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 25.944444
+    },
+    {
+      "sequence": 206,
+      "markerPlaybackFrame": 69950,
+      "acousticOnsetPlaybackFrame": 69950,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 27.166667
+    },
+    {
+      "sequence": 207,
+      "markerPlaybackFrame": 70309,
+      "acousticOnsetPlaybackFrame": 70311,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 30.555556
+    },
+    {
+      "sequence": 208,
+      "markerPlaybackFrame": 70668,
+      "acousticOnsetPlaybackFrame": 70670,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 40.638889
+    },
+    {
+      "sequence": 209,
+      "markerPlaybackFrame": 71010,
+      "acousticOnsetPlaybackFrame": 71020,
+      "rawMarkerToOnsetMs": 41.666667,
+      "calibratedTouchToSoundMs": 62.5,
+      "markerScore": 26.111111
+    },
+    {
+      "sequence": 210,
+      "markerPlaybackFrame": 71466,
+      "acousticOnsetPlaybackFrame": 71466,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 25.75
+    },
+    {
+      "sequence": 211,
+      "markerPlaybackFrame": 71828,
+      "acousticOnsetPlaybackFrame": 71829,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 27.416667
+    },
+    {
+      "sequence": 212,
+      "markerPlaybackFrame": 72200,
+      "acousticOnsetPlaybackFrame": 72201,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.944444
+    },
+    {
+      "sequence": 213,
+      "markerPlaybackFrame": 72562,
+      "acousticOnsetPlaybackFrame": 72564,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 16.833333
+    },
+    {
+      "sequence": 214,
+      "markerPlaybackFrame": 72907,
+      "acousticOnsetPlaybackFrame": 72909,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.666667
+    },
+    {
+      "sequence": 215,
+      "markerPlaybackFrame": 73294,
+      "acousticOnsetPlaybackFrame": 73296,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.888889
+    },
+    {
+      "sequence": 216,
+      "markerPlaybackFrame": 73703,
+      "acousticOnsetPlaybackFrame": 73705,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 34.194444
+    },
+    {
+      "sequence": 217,
+      "markerPlaybackFrame": 74095,
+      "acousticOnsetPlaybackFrame": 74096,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 41.5
+    },
+    {
+      "sequence": 218,
+      "markerPlaybackFrame": 74461,
+      "acousticOnsetPlaybackFrame": 74462,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 38.638889
+    },
+    {
+      "sequence": 219,
+      "markerPlaybackFrame": 74833,
+      "acousticOnsetPlaybackFrame": 74835,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 26.722222
+    },
+    {
+      "sequence": 220,
+      "markerPlaybackFrame": 75244,
+      "acousticOnsetPlaybackFrame": 75246,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 21.5
+    },
+    {
+      "sequence": 221,
+      "markerPlaybackFrame": 75637,
+      "acousticOnsetPlaybackFrame": 75639,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.472222
+    },
+    {
+      "sequence": 222,
+      "markerPlaybackFrame": 76012,
+      "acousticOnsetPlaybackFrame": 76012,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 35.138889
+    },
+    {
+      "sequence": 223,
+      "markerPlaybackFrame": 76392,
+      "acousticOnsetPlaybackFrame": 76394,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.416667
+    },
+    {
+      "sequence": 224,
+      "markerPlaybackFrame": 76412,
+      "acousticOnsetPlaybackFrame": 76414,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 32.055556
+    },
+    {
+      "sequence": 225,
+      "markerPlaybackFrame": 76784,
+      "acousticOnsetPlaybackFrame": 76786,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 42.777778
+    },
+    {
+      "sequence": 226,
+      "markerPlaybackFrame": 77175,
+      "acousticOnsetPlaybackFrame": 77175,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 27.833333
+    },
+    {
+      "sequence": 227,
+      "markerPlaybackFrame": 77526,
+      "acousticOnsetPlaybackFrame": 77527,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 36.638889
+    },
+    {
+      "sequence": 228,
+      "markerPlaybackFrame": 77894,
+      "acousticOnsetPlaybackFrame": 77895,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 39.0
+    },
+    {
+      "sequence": 229,
+      "markerPlaybackFrame": 78262,
+      "acousticOnsetPlaybackFrame": 78264,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.722222
+    },
+    {
+      "sequence": 230,
+      "markerPlaybackFrame": 78659,
+      "acousticOnsetPlaybackFrame": 78661,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 30.416667
+    },
+    {
+      "sequence": 231,
+      "markerPlaybackFrame": 79038,
+      "acousticOnsetPlaybackFrame": 79039,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 25.194444
+    },
+    {
+      "sequence": 232,
+      "markerPlaybackFrame": 79456,
+      "acousticOnsetPlaybackFrame": 79458,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.25
+    },
+    {
+      "sequence": 233,
+      "markerPlaybackFrame": 79884,
+      "acousticOnsetPlaybackFrame": 79886,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 26.388889
+    },
+    {
+      "sequence": 234,
+      "markerPlaybackFrame": 80412,
+      "acousticOnsetPlaybackFrame": 80413,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.805556
+    },
+    {
+      "sequence": 235,
+      "markerPlaybackFrame": 80830,
+      "acousticOnsetPlaybackFrame": 80832,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 21.944444
+    },
+    {
+      "sequence": 236,
+      "markerPlaybackFrame": 81155,
+      "acousticOnsetPlaybackFrame": 81157,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.027778
+    },
+    {
+      "sequence": 237,
+      "markerPlaybackFrame": 81559,
+      "acousticOnsetPlaybackFrame": 81560,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 50.111111
+    },
+    {
+      "sequence": 238,
+      "markerPlaybackFrame": 81957,
+      "acousticOnsetPlaybackFrame": 81958,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 34.111111
+    },
+    {
+      "sequence": 239,
+      "markerPlaybackFrame": 82316,
+      "acousticOnsetPlaybackFrame": 82316,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 26.111111
+    },
+    {
+      "sequence": 240,
+      "markerPlaybackFrame": 82702,
+      "acousticOnsetPlaybackFrame": 82704,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.222222
+    },
+    {
+      "sequence": 241,
+      "markerPlaybackFrame": 83080,
+      "acousticOnsetPlaybackFrame": 83081,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.527778
+    },
+    {
+      "sequence": 242,
+      "markerPlaybackFrame": 83514,
+      "acousticOnsetPlaybackFrame": 83516,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.222222
+    },
+    {
+      "sequence": 243,
+      "markerPlaybackFrame": 83922,
+      "acousticOnsetPlaybackFrame": 83923,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 46.861111
+    },
+    {
+      "sequence": 244,
+      "markerPlaybackFrame": 84332,
+      "acousticOnsetPlaybackFrame": 84334,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.611111
+    },
+    {
+      "sequence": 245,
+      "markerPlaybackFrame": 84710,
+      "acousticOnsetPlaybackFrame": 84711,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.583333
+    },
+    {
+      "sequence": 246,
+      "markerPlaybackFrame": 85135,
+      "acousticOnsetPlaybackFrame": 85135,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 22.638889
+    },
+    {
+      "sequence": 247,
+      "markerPlaybackFrame": 85526,
+      "acousticOnsetPlaybackFrame": 85528,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 31.472222
+    },
+    {
+      "sequence": 248,
+      "markerPlaybackFrame": 85934,
+      "acousticOnsetPlaybackFrame": 85937,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 45.694444
+    },
+    {
+      "sequence": 249,
+      "markerPlaybackFrame": 86302,
+      "acousticOnsetPlaybackFrame": 86305,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 44.277778
+    },
+    {
+      "sequence": 250,
+      "markerPlaybackFrame": 86686,
+      "acousticOnsetPlaybackFrame": 86687,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.638889
+    },
+    {
+      "sequence": 251,
+      "markerPlaybackFrame": 87062,
+      "acousticOnsetPlaybackFrame": 87063,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.138889
+    },
+    {
+      "sequence": 252,
+      "markerPlaybackFrame": 87437,
+      "acousticOnsetPlaybackFrame": 87439,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 16.777778
+    },
+    {
+      "sequence": 253,
+      "markerPlaybackFrame": 87796,
+      "acousticOnsetPlaybackFrame": 87798,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.083333
+    },
+    {
+      "sequence": 254,
+      "markerPlaybackFrame": 88174,
+      "acousticOnsetPlaybackFrame": 88177,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 28.305556
+    },
+    {
+      "sequence": 255,
+      "markerPlaybackFrame": 88524,
+      "acousticOnsetPlaybackFrame": 88525,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.75
+    },
+    {
+      "sequence": 256,
+      "markerPlaybackFrame": 88894,
+      "acousticOnsetPlaybackFrame": 88895,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.583333
+    },
+    {
+      "sequence": 257,
+      "markerPlaybackFrame": 89258,
+      "acousticOnsetPlaybackFrame": 89259,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 34.416667
+    },
+    {
+      "sequence": 258,
+      "markerPlaybackFrame": 89659,
+      "acousticOnsetPlaybackFrame": 89661,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 29.416667
+    },
+    {
+      "sequence": 259,
+      "markerPlaybackFrame": 90074,
+      "acousticOnsetPlaybackFrame": 90076,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 16.444444
+    },
+    {
+      "sequence": 260,
+      "markerPlaybackFrame": 90413,
+      "acousticOnsetPlaybackFrame": 90413,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 21.527778
+    },
+    {
+      "sequence": 261,
+      "markerPlaybackFrame": 90790,
+      "acousticOnsetPlaybackFrame": 90792,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.361111
+    },
+    {
+      "sequence": 262,
+      "markerPlaybackFrame": 91158,
+      "acousticOnsetPlaybackFrame": 91158,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 45.277778
+    },
+    {
+      "sequence": 263,
+      "markerPlaybackFrame": 91570,
+      "acousticOnsetPlaybackFrame": 91572,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 31.027778
+    },
+    {
+      "sequence": 264,
+      "markerPlaybackFrame": 91960,
+      "acousticOnsetPlaybackFrame": 91961,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.194444
+    },
+    {
+      "sequence": 265,
+      "markerPlaybackFrame": 92317,
+      "acousticOnsetPlaybackFrame": 92318,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.888889
+    },
+    {
+      "sequence": 266,
+      "markerPlaybackFrame": 92719,
+      "acousticOnsetPlaybackFrame": 92721,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 20.138889
+    },
+    {
+      "sequence": 267,
+      "markerPlaybackFrame": 93141,
+      "acousticOnsetPlaybackFrame": 93142,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.805556
+    },
+    {
+      "sequence": 268,
+      "markerPlaybackFrame": 93549,
+      "acousticOnsetPlaybackFrame": 93551,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 49.583333
+    },
+    {
+      "sequence": 269,
+      "markerPlaybackFrame": 93979,
+      "acousticOnsetPlaybackFrame": 93980,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 21.305556
+    },
+    {
+      "sequence": 270,
+      "markerPlaybackFrame": 94426,
+      "acousticOnsetPlaybackFrame": 94427,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.5
+    },
+    {
+      "sequence": 271,
+      "markerPlaybackFrame": 94837,
+      "acousticOnsetPlaybackFrame": 94839,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.555556
+    },
+    {
+      "sequence": 272,
+      "markerPlaybackFrame": 95260,
+      "acousticOnsetPlaybackFrame": 95261,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 20.5
+    },
+    {
+      "sequence": 273,
+      "markerPlaybackFrame": 95660,
+      "acousticOnsetPlaybackFrame": 95661,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.472222
+    },
+    {
+      "sequence": 274,
+      "markerPlaybackFrame": 96085,
+      "acousticOnsetPlaybackFrame": 96086,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.388889
+    },
+    {
+      "sequence": 275,
+      "markerPlaybackFrame": 96483,
+      "acousticOnsetPlaybackFrame": 96484,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.722222
+    },
+    {
+      "sequence": 276,
+      "markerPlaybackFrame": 96887,
+      "acousticOnsetPlaybackFrame": 96889,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 21.638889
+    },
+    {
+      "sequence": 277,
+      "markerPlaybackFrame": 97283,
+      "acousticOnsetPlaybackFrame": 97283,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 35.138889
+    },
+    {
+      "sequence": 278,
+      "markerPlaybackFrame": 97667,
+      "acousticOnsetPlaybackFrame": 97669,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 40.611111
+    },
+    {
+      "sequence": 279,
+      "markerPlaybackFrame": 98067,
+      "acousticOnsetPlaybackFrame": 98069,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 32.361111
+    },
+    {
+      "sequence": 280,
+      "markerPlaybackFrame": 98443,
+      "acousticOnsetPlaybackFrame": 98444,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 45.972222
+    },
+    {
+      "sequence": 281,
+      "markerPlaybackFrame": 98817,
+      "acousticOnsetPlaybackFrame": 98819,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.194444
+    },
+    {
+      "sequence": 282,
+      "markerPlaybackFrame": 99200,
+      "acousticOnsetPlaybackFrame": 99211,
+      "rawMarkerToOnsetMs": 45.833333,
+      "calibratedTouchToSoundMs": 66.666667,
+      "markerScore": 28.833333
+    },
+    {
+      "sequence": 283,
+      "markerPlaybackFrame": 99603,
+      "acousticOnsetPlaybackFrame": 99605,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.861111
+    },
+    {
+      "sequence": 284,
+      "markerPlaybackFrame": 100014,
+      "acousticOnsetPlaybackFrame": 100015,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 23.805556
+    },
+    {
+      "sequence": 285,
+      "markerPlaybackFrame": 100422,
+      "acousticOnsetPlaybackFrame": 100424,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.5
+    },
+    {
+      "sequence": 286,
+      "markerPlaybackFrame": 100830,
+      "acousticOnsetPlaybackFrame": 100832,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 43.972222
+    },
+    {
+      "sequence": 287,
+      "markerPlaybackFrame": 101277,
+      "acousticOnsetPlaybackFrame": 101278,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 36.972222
+    },
+    {
+      "sequence": 288,
+      "markerPlaybackFrame": 101685,
+      "acousticOnsetPlaybackFrame": 101686,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.277778
+    },
+    {
+      "sequence": 289,
+      "markerPlaybackFrame": 102090,
+      "acousticOnsetPlaybackFrame": 102091,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.388889
+    },
+    {
+      "sequence": 290,
+      "markerPlaybackFrame": 102534,
+      "acousticOnsetPlaybackFrame": 102535,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 23.694444
+    },
+    {
+      "sequence": 291,
+      "markerPlaybackFrame": 102962,
+      "acousticOnsetPlaybackFrame": 102963,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.694444
+    },
+    {
+      "sequence": 292,
+      "markerPlaybackFrame": 103390,
+      "acousticOnsetPlaybackFrame": 103392,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 26.5
+    },
+    {
+      "sequence": 293,
+      "markerPlaybackFrame": 103784,
+      "acousticOnsetPlaybackFrame": 103786,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 29.222222
+    },
+    {
+      "sequence": 294,
+      "markerPlaybackFrame": 104168,
+      "acousticOnsetPlaybackFrame": 104169,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.027778
+    },
+    {
+      "sequence": 295,
+      "markerPlaybackFrame": 104629,
+      "acousticOnsetPlaybackFrame": 104630,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.194444
+    },
+    {
+      "sequence": 296,
+      "markerPlaybackFrame": 105022,
+      "acousticOnsetPlaybackFrame": 105025,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 19.777778
+    },
+    {
+      "sequence": 297,
+      "markerPlaybackFrame": 105436,
+      "acousticOnsetPlaybackFrame": 105438,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 40.055556
+    },
+    {
+      "sequence": 298,
+      "markerPlaybackFrame": 105846,
+      "acousticOnsetPlaybackFrame": 105848,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 41.083333
+    },
+    {
+      "sequence": 299,
+      "markerPlaybackFrame": 106250,
+      "acousticOnsetPlaybackFrame": 106251,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 25.222222
+    },
+    {
+      "sequence": 300,
+      "markerPlaybackFrame": 106644,
+      "acousticOnsetPlaybackFrame": 106646,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.027778
+    },
+    {
+      "sequence": 301,
+      "markerPlaybackFrame": 107085,
+      "acousticOnsetPlaybackFrame": 107086,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.416667
+    },
+    {
+      "sequence": 302,
+      "markerPlaybackFrame": 107487,
+      "acousticOnsetPlaybackFrame": 107488,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.027778
+    },
+    {
+      "sequence": 303,
+      "markerPlaybackFrame": 107889,
+      "acousticOnsetPlaybackFrame": 107892,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 18.222222
+    },
+    {
+      "sequence": 304,
+      "markerPlaybackFrame": 108265,
+      "acousticOnsetPlaybackFrame": 108266,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 34.388889
+    },
+    {
+      "sequence": 305,
+      "markerPlaybackFrame": 108625,
+      "acousticOnsetPlaybackFrame": 108628,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 29.416667
+    },
+    {
+      "sequence": 306,
+      "markerPlaybackFrame": 108827,
+      "acousticOnsetPlaybackFrame": 108828,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 20.527778
+    },
+    {
+      "sequence": 307,
+      "markerPlaybackFrame": 109015,
+      "acousticOnsetPlaybackFrame": 109017,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 31.333333
+    },
+    {
+      "sequence": 308,
+      "markerPlaybackFrame": 109198,
+      "acousticOnsetPlaybackFrame": 109200,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 26.666667
+    },
+    {
+      "sequence": 309,
+      "markerPlaybackFrame": 109390,
+      "acousticOnsetPlaybackFrame": 109390,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 21.555556
+    },
+    {
+      "sequence": 310,
+      "markerPlaybackFrame": 109580,
+      "acousticOnsetPlaybackFrame": 109581,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.722222
+    },
+    {
+      "sequence": 311,
+      "markerPlaybackFrame": 109766,
+      "acousticOnsetPlaybackFrame": 109767,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.25
+    },
+    {
+      "sequence": 312,
+      "markerPlaybackFrame": 109949,
+      "acousticOnsetPlaybackFrame": 109950,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.138889
+    },
+    {
+      "sequence": 313,
+      "markerPlaybackFrame": 110138,
+      "acousticOnsetPlaybackFrame": 110146,
+      "rawMarkerToOnsetMs": 33.333333,
+      "calibratedTouchToSoundMs": 54.166667,
+      "markerScore": 25.722222
+    },
+    {
+      "sequence": 314,
+      "markerPlaybackFrame": 110346,
+      "acousticOnsetPlaybackFrame": 110348,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.083333
+    },
+    {
+      "sequence": 315,
+      "markerPlaybackFrame": 110530,
+      "acousticOnsetPlaybackFrame": 110532,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 26.888889
+    },
+    {
+      "sequence": 316,
+      "markerPlaybackFrame": 110710,
+      "acousticOnsetPlaybackFrame": 110712,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.305556
+    },
+    {
+      "sequence": 317,
+      "markerPlaybackFrame": 110888,
+      "acousticOnsetPlaybackFrame": 110890,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 34.777778
+    },
+    {
+      "sequence": 318,
+      "markerPlaybackFrame": 111062,
+      "acousticOnsetPlaybackFrame": 111065,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 37.138889
+    },
+    {
+      "sequence": 319,
+      "markerPlaybackFrame": 111232,
+      "acousticOnsetPlaybackFrame": 111235,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 24.694444
+    },
+    {
+      "sequence": 320,
+      "markerPlaybackFrame": 111408,
+      "acousticOnsetPlaybackFrame": 111411,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 26.666667
+    },
+    {
+      "sequence": 321,
+      "markerPlaybackFrame": 111595,
+      "acousticOnsetPlaybackFrame": 111596,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 27.916667
+    },
+    {
+      "sequence": 322,
+      "markerPlaybackFrame": 111785,
+      "acousticOnsetPlaybackFrame": 111788,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 27.694444
+    },
+    {
+      "sequence": 323,
+      "markerPlaybackFrame": 111953,
+      "acousticOnsetPlaybackFrame": 111956,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 20.916667
+    },
+    {
+      "sequence": 324,
+      "markerPlaybackFrame": 112122,
+      "acousticOnsetPlaybackFrame": 112124,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 23.5
+    },
+    {
+      "sequence": 325,
+      "markerPlaybackFrame": 112297,
+      "acousticOnsetPlaybackFrame": 112299,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.472222
+    },
+    {
+      "sequence": 326,
+      "markerPlaybackFrame": 112450,
+      "acousticOnsetPlaybackFrame": 112458,
+      "rawMarkerToOnsetMs": 33.333333,
+      "calibratedTouchToSoundMs": 54.166667,
+      "markerScore": 30.722222
+    },
+    {
+      "sequence": 327,
+      "markerPlaybackFrame": 112620,
+      "acousticOnsetPlaybackFrame": 112623,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 31.861111
+    },
+    {
+      "sequence": 328,
+      "markerPlaybackFrame": 112780,
+      "acousticOnsetPlaybackFrame": 112782,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 41.972222
+    },
+    {
+      "sequence": 329,
+      "markerPlaybackFrame": 112942,
+      "acousticOnsetPlaybackFrame": 112943,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 21.222222
+    },
+    {
+      "sequence": 330,
+      "markerPlaybackFrame": 113098,
+      "acousticOnsetPlaybackFrame": 113102,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 27.583333
+    },
+    {
+      "sequence": 331,
+      "markerPlaybackFrame": 113270,
+      "acousticOnsetPlaybackFrame": 113271,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.111111
+    },
+    {
+      "sequence": 332,
+      "markerPlaybackFrame": 113434,
+      "acousticOnsetPlaybackFrame": 113435,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.722222
+    },
+    {
+      "sequence": 333,
+      "markerPlaybackFrame": 113599,
+      "acousticOnsetPlaybackFrame": 113610,
+      "rawMarkerToOnsetMs": 45.833333,
+      "calibratedTouchToSoundMs": 66.666667,
+      "markerScore": 22.055556
+    },
+    {
+      "sequence": 334,
+      "markerPlaybackFrame": 113770,
+      "acousticOnsetPlaybackFrame": 113772,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.166667
+    },
+    {
+      "sequence": 335,
+      "markerPlaybackFrame": 113921,
+      "acousticOnsetPlaybackFrame": 113922,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 27.138889
+    },
+    {
+      "sequence": 336,
+      "markerPlaybackFrame": 114091,
+      "acousticOnsetPlaybackFrame": 114091,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 25.194444
+    },
+    {
+      "sequence": 337,
+      "markerPlaybackFrame": 114243,
+      "acousticOnsetPlaybackFrame": 114245,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 33.722222
+    },
+    {
+      "sequence": 338,
+      "markerPlaybackFrame": 114406,
+      "acousticOnsetPlaybackFrame": 114408,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 33.861111
+    },
+    {
+      "sequence": 339,
+      "markerPlaybackFrame": 114581,
+      "acousticOnsetPlaybackFrame": 114580,
+      "rawMarkerToOnsetMs": -4.166667,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 17.638889
+    },
+    {
+      "sequence": 340,
+      "markerPlaybackFrame": 114740,
+      "acousticOnsetPlaybackFrame": 114741,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.305556
+    },
+    {
+      "sequence": 341,
+      "markerPlaybackFrame": 114889,
+      "acousticOnsetPlaybackFrame": 114890,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 23.583333
+    },
+    {
+      "sequence": 342,
+      "markerPlaybackFrame": 115049,
+      "acousticOnsetPlaybackFrame": 115051,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 21.472222
+    },
+    {
+      "sequence": 343,
+      "markerPlaybackFrame": 115218,
+      "acousticOnsetPlaybackFrame": 115221,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 19.527778
+    },
+    {
+      "sequence": 344,
+      "markerPlaybackFrame": 115380,
+      "acousticOnsetPlaybackFrame": 115381,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.833333
+    },
+    {
+      "sequence": 345,
+      "markerPlaybackFrame": 115534,
+      "acousticOnsetPlaybackFrame": 115537,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 29.444444
+    },
+    {
+      "sequence": 346,
+      "markerPlaybackFrame": 115704,
+      "acousticOnsetPlaybackFrame": 115706,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 26.5
+    },
+    {
+      "sequence": 347,
+      "markerPlaybackFrame": 115850,
+      "acousticOnsetPlaybackFrame": 115851,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 38.111111
+    },
+    {
+      "sequence": 348,
+      "markerPlaybackFrame": 116004,
+      "acousticOnsetPlaybackFrame": 116006,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 40.138889
+    },
+    {
+      "sequence": 349,
+      "markerPlaybackFrame": 116150,
+      "acousticOnsetPlaybackFrame": 116154,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 20.833333
+    },
+    {
+      "sequence": 350,
+      "markerPlaybackFrame": 116307,
+      "acousticOnsetPlaybackFrame": 116308,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.361111
+    },
+    {
+      "sequence": 351,
+      "markerPlaybackFrame": 116465,
+      "acousticOnsetPlaybackFrame": 116466,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.5
+    },
+    {
+      "sequence": 352,
+      "markerPlaybackFrame": 116620,
+      "acousticOnsetPlaybackFrame": 116621,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.527778
+    },
+    {
+      "sequence": 353,
+      "markerPlaybackFrame": 116769,
+      "acousticOnsetPlaybackFrame": 116770,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 20.944444
+    },
+    {
+      "sequence": 354,
+      "markerPlaybackFrame": 116909,
+      "acousticOnsetPlaybackFrame": 116910,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.361111
+    },
+    {
+      "sequence": 355,
+      "markerPlaybackFrame": 117051,
+      "acousticOnsetPlaybackFrame": 117051,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 20.027778
+    },
+    {
+      "sequence": 356,
+      "markerPlaybackFrame": 117188,
+      "acousticOnsetPlaybackFrame": 117191,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 21.472222
+    },
+    {
+      "sequence": 357,
+      "markerPlaybackFrame": 117332,
+      "acousticOnsetPlaybackFrame": 117333,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 33.805556
+    },
+    {
+      "sequence": 358,
+      "markerPlaybackFrame": 117485,
+      "acousticOnsetPlaybackFrame": 117488,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 42.638889
+    },
+    {
+      "sequence": 359,
+      "markerPlaybackFrame": 117626,
+      "acousticOnsetPlaybackFrame": 117632,
+      "rawMarkerToOnsetMs": 25.0,
+      "calibratedTouchToSoundMs": 45.833333,
+      "markerScore": 22.416667
+    },
+    {
+      "sequence": 360,
+      "markerPlaybackFrame": 117775,
+      "acousticOnsetPlaybackFrame": 117776,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.194444
+    },
+    {
+      "sequence": 361,
+      "markerPlaybackFrame": 117927,
+      "acousticOnsetPlaybackFrame": 117931,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 33.305556
+    },
+    {
+      "sequence": 362,
+      "markerPlaybackFrame": 118067,
+      "acousticOnsetPlaybackFrame": 118068,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.138889
+    },
+    {
+      "sequence": 363,
+      "markerPlaybackFrame": 118222,
+      "acousticOnsetPlaybackFrame": 118224,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 31.277778
+    },
+    {
+      "sequence": 364,
+      "markerPlaybackFrame": 118377,
+      "acousticOnsetPlaybackFrame": 118379,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 32.388889
+    },
+    {
+      "sequence": 365,
+      "markerPlaybackFrame": 118535,
+      "acousticOnsetPlaybackFrame": 118538,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 28.027778
+    },
+    {
+      "sequence": 366,
+      "markerPlaybackFrame": 118696,
+      "acousticOnsetPlaybackFrame": 118697,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 19.277778
+    },
+    {
+      "sequence": 367,
+      "markerPlaybackFrame": 118874,
+      "acousticOnsetPlaybackFrame": 118875,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 35.888889
+    },
+    {
+      "sequence": 368,
+      "markerPlaybackFrame": 119034,
+      "acousticOnsetPlaybackFrame": 119036,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 31.777778
+    },
+    {
+      "sequence": 369,
+      "markerPlaybackFrame": 119180,
+      "acousticOnsetPlaybackFrame": 119182,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 21.111111
+    },
+    {
+      "sequence": 370,
+      "markerPlaybackFrame": 119331,
+      "acousticOnsetPlaybackFrame": 119333,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.361111
+    },
+    {
+      "sequence": 371,
+      "markerPlaybackFrame": 119466,
+      "acousticOnsetPlaybackFrame": 119467,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.416667
+    },
+    {
+      "sequence": 372,
+      "markerPlaybackFrame": 119620,
+      "acousticOnsetPlaybackFrame": 119621,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.611111
+    },
+    {
+      "sequence": 373,
+      "markerPlaybackFrame": 119755,
+      "acousticOnsetPlaybackFrame": 119755,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 17.416667
+    },
+    {
+      "sequence": 374,
+      "markerPlaybackFrame": 119887,
+      "acousticOnsetPlaybackFrame": 119890,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 36.277778
+    },
+    {
+      "sequence": 375,
+      "markerPlaybackFrame": 120009,
+      "acousticOnsetPlaybackFrame": 120012,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 24.5
+    },
+    {
+      "sequence": 376,
+      "markerPlaybackFrame": 120133,
+      "acousticOnsetPlaybackFrame": 120136,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 26.944444
+    },
+    {
+      "sequence": 377,
+      "markerPlaybackFrame": 120265,
+      "acousticOnsetPlaybackFrame": 120267,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 34.916667
+    },
+    {
+      "sequence": 378,
+      "markerPlaybackFrame": 120385,
+      "acousticOnsetPlaybackFrame": 120386,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 46.666667
+    },
+    {
+      "sequence": 379,
+      "markerPlaybackFrame": 120497,
+      "acousticOnsetPlaybackFrame": 120500,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 24.333333
+    },
+    {
+      "sequence": 380,
+      "markerPlaybackFrame": 120621,
+      "acousticOnsetPlaybackFrame": 120624,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 37.194444
+    },
+    {
+      "sequence": 381,
+      "markerPlaybackFrame": 120743,
+      "acousticOnsetPlaybackFrame": 120745,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.5
+    },
+    {
+      "sequence": 382,
+      "markerPlaybackFrame": 120863,
+      "acousticOnsetPlaybackFrame": 120866,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 17.666667
+    },
+    {
+      "sequence": 383,
+      "markerPlaybackFrame": 120985,
+      "acousticOnsetPlaybackFrame": 120987,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 20.888889
+    },
+    {
+      "sequence": 384,
+      "markerPlaybackFrame": 121104,
+      "acousticOnsetPlaybackFrame": 121106,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.555556
+    },
+    {
+      "sequence": 385,
+      "markerPlaybackFrame": 121226,
+      "acousticOnsetPlaybackFrame": 121225,
+      "rawMarkerToOnsetMs": -4.166667,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 22.583333
+    },
+    {
+      "sequence": 386,
+      "markerPlaybackFrame": 121342,
+      "acousticOnsetPlaybackFrame": 121344,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 30.25
+    },
+    {
+      "sequence": 387,
+      "markerPlaybackFrame": 121462,
+      "acousticOnsetPlaybackFrame": 121462,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 30.555556
+    },
+    {
+      "sequence": 388,
+      "markerPlaybackFrame": 121576,
+      "acousticOnsetPlaybackFrame": 121577,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.277778
+    },
+    {
+      "sequence": 389,
+      "markerPlaybackFrame": 121694,
+      "acousticOnsetPlaybackFrame": 121695,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 20.083333
+    },
+    {
+      "sequence": 390,
+      "markerPlaybackFrame": 121812,
+      "acousticOnsetPlaybackFrame": 121815,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 20.722222
+    },
+    {
+      "sequence": 391,
+      "markerPlaybackFrame": 121928,
+      "acousticOnsetPlaybackFrame": 121929,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.916667
+    },
+    {
+      "sequence": 392,
+      "markerPlaybackFrame": 122046,
+      "acousticOnsetPlaybackFrame": 122046,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 26.888889
+    },
+    {
+      "sequence": 393,
+      "markerPlaybackFrame": 122158,
+      "acousticOnsetPlaybackFrame": 122159,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 18.25
+    },
+    {
+      "sequence": 394,
+      "markerPlaybackFrame": 122267,
+      "acousticOnsetPlaybackFrame": 122269,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 29.194444
+    },
+    {
+      "sequence": 395,
+      "markerPlaybackFrame": 122389,
+      "acousticOnsetPlaybackFrame": 122390,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 26.111111
+    },
+    {
+      "sequence": 396,
+      "markerPlaybackFrame": 122519,
+      "acousticOnsetPlaybackFrame": 122521,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 24.305556
+    },
+    {
+      "sequence": 397,
+      "markerPlaybackFrame": 122625,
+      "acousticOnsetPlaybackFrame": 122626,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 34.916667
+    },
+    {
+      "sequence": 398,
+      "markerPlaybackFrame": 122737,
+      "acousticOnsetPlaybackFrame": 122740,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 43.472222
+    },
+    {
+      "sequence": 399,
+      "markerPlaybackFrame": 122865,
+      "acousticOnsetPlaybackFrame": 122866,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 19.888889
+    },
+    {
+      "sequence": 400,
+      "markerPlaybackFrame": 122981,
+      "acousticOnsetPlaybackFrame": 122982,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.527778
+    },
+    {
+      "sequence": 401,
+      "markerPlaybackFrame": 123091,
+      "acousticOnsetPlaybackFrame": 123092,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 25.75
+    },
+    {
+      "sequence": 402,
+      "markerPlaybackFrame": 123201,
+      "acousticOnsetPlaybackFrame": 123203,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 19.083333
+    },
+    {
+      "sequence": 403,
+      "markerPlaybackFrame": 123315,
+      "acousticOnsetPlaybackFrame": 123316,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 21.083333
+    },
+    {
+      "sequence": 404,
+      "markerPlaybackFrame": 123439,
+      "acousticOnsetPlaybackFrame": 123440,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.305556
+    },
+    {
+      "sequence": 405,
+      "markerPlaybackFrame": 123558,
+      "acousticOnsetPlaybackFrame": 123559,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.555556
+    },
+    {
+      "sequence": 406,
+      "markerPlaybackFrame": 123676,
+      "acousticOnsetPlaybackFrame": 123677,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.888889
+    },
+    {
+      "sequence": 407,
+      "markerPlaybackFrame": 123804,
+      "acousticOnsetPlaybackFrame": 123804,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 33.444444
+    },
+    {
+      "sequence": 408,
+      "markerPlaybackFrame": 123922,
+      "acousticOnsetPlaybackFrame": 123923,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 31.472222
+    },
+    {
+      "sequence": 409,
+      "markerPlaybackFrame": 124040,
+      "acousticOnsetPlaybackFrame": 124041,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 20.333333
+    },
+    {
+      "sequence": 410,
+      "markerPlaybackFrame": 124150,
+      "acousticOnsetPlaybackFrame": 124151,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 33.805556
+    },
+    {
+      "sequence": 411,
+      "markerPlaybackFrame": 124259,
+      "acousticOnsetPlaybackFrame": 124261,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 19.138889
+    },
+    {
+      "sequence": 412,
+      "markerPlaybackFrame": 124374,
+      "acousticOnsetPlaybackFrame": 124374,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 27.305556
+    },
+    {
+      "sequence": 413,
+      "markerPlaybackFrame": 124480,
+      "acousticOnsetPlaybackFrame": 124482,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.944444
+    },
+    {
+      "sequence": 414,
+      "markerPlaybackFrame": 124599,
+      "acousticOnsetPlaybackFrame": 124601,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.472222
+    },
+    {
+      "sequence": 415,
+      "markerPlaybackFrame": 124709,
+      "acousticOnsetPlaybackFrame": 124711,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 31.416667
+    },
+    {
+      "sequence": 416,
+      "markerPlaybackFrame": 124831,
+      "acousticOnsetPlaybackFrame": 124833,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.861111
+    },
+    {
+      "sequence": 417,
+      "markerPlaybackFrame": 124940,
+      "acousticOnsetPlaybackFrame": 124941,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 34.222222
+    },
+    {
+      "sequence": 418,
+      "markerPlaybackFrame": 125057,
+      "acousticOnsetPlaybackFrame": 125062,
+      "rawMarkerToOnsetMs": 20.833333,
+      "calibratedTouchToSoundMs": 41.666667,
+      "markerScore": 45.916667
+    },
+    {
+      "sequence": 419,
+      "markerPlaybackFrame": 125173,
+      "acousticOnsetPlaybackFrame": 125175,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 19.972222
+    },
+    {
+      "sequence": 420,
+      "markerPlaybackFrame": 125293,
+      "acousticOnsetPlaybackFrame": 125295,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.777778
+    },
+    {
+      "sequence": 421,
+      "markerPlaybackFrame": 125397,
+      "acousticOnsetPlaybackFrame": 125399,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 29.388889
+    },
+    {
+      "sequence": 422,
+      "markerPlaybackFrame": 125513,
+      "acousticOnsetPlaybackFrame": 125515,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 33.5
+    },
+    {
+      "sequence": 423,
+      "markerPlaybackFrame": 125619,
+      "acousticOnsetPlaybackFrame": 125623,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 24.055556
+    },
+    {
+      "sequence": 424,
+      "markerPlaybackFrame": 125727,
+      "acousticOnsetPlaybackFrame": 125730,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 31.638889
+    },
+    {
+      "sequence": 425,
+      "markerPlaybackFrame": 125837,
+      "acousticOnsetPlaybackFrame": 125838,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 25.472222
+    },
+    {
+      "sequence": 426,
+      "markerPlaybackFrame": 125960,
+      "acousticOnsetPlaybackFrame": 125959,
+      "rawMarkerToOnsetMs": -4.166667,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 32.916667
+    },
+    {
+      "sequence": 427,
+      "markerPlaybackFrame": 126058,
+      "acousticOnsetPlaybackFrame": 126059,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 36.25
+    },
+    {
+      "sequence": 428,
+      "markerPlaybackFrame": 126166,
+      "acousticOnsetPlaybackFrame": 126168,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 37.777778
+    },
+    {
+      "sequence": 429,
+      "markerPlaybackFrame": 126270,
+      "acousticOnsetPlaybackFrame": 126272,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.388889
+    },
+    {
+      "sequence": 430,
+      "markerPlaybackFrame": 126394,
+      "acousticOnsetPlaybackFrame": 126395,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.638889
+    },
+    {
+      "sequence": 431,
+      "markerPlaybackFrame": 126500,
+      "acousticOnsetPlaybackFrame": 126500,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 23.916667
+    },
+    {
+      "sequence": 432,
+      "markerPlaybackFrame": 126606,
+      "acousticOnsetPlaybackFrame": 126608,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 17.361111
+    },
+    {
+      "sequence": 433,
+      "markerPlaybackFrame": 126710,
+      "acousticOnsetPlaybackFrame": 126711,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 19.777778
+    },
+    {
+      "sequence": 434,
+      "markerPlaybackFrame": 126832,
+      "acousticOnsetPlaybackFrame": 126834,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 31.277778
+    },
+    {
+      "sequence": 435,
+      "markerPlaybackFrame": 126942,
+      "acousticOnsetPlaybackFrame": 126943,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 23.583333
+    },
+    {
+      "sequence": 436,
+      "markerPlaybackFrame": 127048,
+      "acousticOnsetPlaybackFrame": 127049,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 21.777778
+    },
+    {
+      "sequence": 437,
+      "markerPlaybackFrame": 127151,
+      "acousticOnsetPlaybackFrame": 127162,
+      "rawMarkerToOnsetMs": 45.833333,
+      "calibratedTouchToSoundMs": 66.666667,
+      "markerScore": 37.555556
+    },
+    {
+      "sequence": 438,
+      "markerPlaybackFrame": 127265,
+      "acousticOnsetPlaybackFrame": 127267,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 38.083333
+    },
+    {
+      "sequence": 439,
+      "markerPlaybackFrame": 127381,
+      "acousticOnsetPlaybackFrame": 127385,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 16.861111
+    },
+    {
+      "sequence": 440,
+      "markerPlaybackFrame": 127485,
+      "acousticOnsetPlaybackFrame": 127488,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 24.222222
+    },
+    {
+      "sequence": 441,
+      "markerPlaybackFrame": 127595,
+      "acousticOnsetPlaybackFrame": 127599,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 26.0
+    },
+    {
+      "sequence": 442,
+      "markerPlaybackFrame": 127717,
+      "acousticOnsetPlaybackFrame": 127720,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 22.027778
+    },
+    {
+      "sequence": 443,
+      "markerPlaybackFrame": 127827,
+      "acousticOnsetPlaybackFrame": 127829,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.805556
+    },
+    {
+      "sequence": 444,
+      "markerPlaybackFrame": 127941,
+      "acousticOnsetPlaybackFrame": 127942,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 35.444444
+    },
+    {
+      "sequence": 445,
+      "markerPlaybackFrame": 128047,
+      "acousticOnsetPlaybackFrame": 128048,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.694444
+    },
+    {
+      "sequence": 446,
+      "markerPlaybackFrame": 128159,
+      "acousticOnsetPlaybackFrame": 128160,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 27.277778
+    },
+    {
+      "sequence": 447,
+      "markerPlaybackFrame": 128266,
+      "acousticOnsetPlaybackFrame": 128267,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 38.25
+    },
+    {
+      "sequence": 448,
+      "markerPlaybackFrame": 128378,
+      "acousticOnsetPlaybackFrame": 128379,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 43.416667
+    },
+    {
+      "sequence": 449,
+      "markerPlaybackFrame": 128488,
+      "acousticOnsetPlaybackFrame": 128489,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 24.388889
+    },
+    {
+      "sequence": 450,
+      "markerPlaybackFrame": 128598,
+      "acousticOnsetPlaybackFrame": 128605,
+      "rawMarkerToOnsetMs": 29.166667,
+      "calibratedTouchToSoundMs": 50.0,
+      "markerScore": 30.916667
+    },
+    {
+      "sequence": 451,
+      "markerPlaybackFrame": 128710,
+      "acousticOnsetPlaybackFrame": 128712,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.611111
+    },
+    {
+      "sequence": 452,
+      "markerPlaybackFrame": 128820,
+      "acousticOnsetPlaybackFrame": 128820,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 26.805556
+    },
+    {
+      "sequence": 453,
+      "markerPlaybackFrame": 128920,
+      "acousticOnsetPlaybackFrame": 128921,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 15.111111
+    },
+    {
+      "sequence": 454,
+      "markerPlaybackFrame": 129038,
+      "acousticOnsetPlaybackFrame": 129040,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 25.083333
+    },
+    {
+      "sequence": 455,
+      "markerPlaybackFrame": 129148,
+      "acousticOnsetPlaybackFrame": 129149,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 28.25
+    },
+    {
+      "sequence": 456,
+      "markerPlaybackFrame": 129252,
+      "acousticOnsetPlaybackFrame": 129254,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 30.833333
+    },
+    {
+      "sequence": 457,
+      "markerPlaybackFrame": 129366,
+      "acousticOnsetPlaybackFrame": 129366,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 27.444444
+    },
+    {
+      "sequence": 458,
+      "markerPlaybackFrame": 129477,
+      "acousticOnsetPlaybackFrame": 129481,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 34.944444
+    },
+    {
+      "sequence": 459,
+      "markerPlaybackFrame": 129589,
+      "acousticOnsetPlaybackFrame": 129591,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 18.361111
+    },
+    {
+      "sequence": 460,
+      "markerPlaybackFrame": 129703,
+      "acousticOnsetPlaybackFrame": 129704,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 21.694444
+    },
+    {
+      "sequence": 461,
+      "markerPlaybackFrame": 129816,
+      "acousticOnsetPlaybackFrame": 129816,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 22.138889
+    },
+    {
+      "sequence": 462,
+      "markerPlaybackFrame": 129926,
+      "acousticOnsetPlaybackFrame": 129928,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.75
+    },
+    {
+      "sequence": 463,
+      "markerPlaybackFrame": 130029,
+      "acousticOnsetPlaybackFrame": 130033,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 18.777778
+    },
+    {
+      "sequence": 464,
+      "markerPlaybackFrame": 130139,
+      "acousticOnsetPlaybackFrame": 130143,
+      "rawMarkerToOnsetMs": 16.666667,
+      "calibratedTouchToSoundMs": 37.5,
+      "markerScore": 31.722222
+    },
+    {
+      "sequence": 465,
+      "markerPlaybackFrame": 130245,
+      "acousticOnsetPlaybackFrame": 130248,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 27.277778
+    },
+    {
+      "sequence": 466,
+      "markerPlaybackFrame": 130365,
+      "acousticOnsetPlaybackFrame": 130367,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 23.888889
+    },
+    {
+      "sequence": 467,
+      "markerPlaybackFrame": 130471,
+      "acousticOnsetPlaybackFrame": 130473,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 37.472222
+    },
+    {
+      "sequence": 468,
+      "markerPlaybackFrame": 130575,
+      "acousticOnsetPlaybackFrame": 130577,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 44.888889
+    },
+    {
+      "sequence": 469,
+      "markerPlaybackFrame": 130696,
+      "acousticOnsetPlaybackFrame": 130699,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 23.5
+    },
+    {
+      "sequence": 470,
+      "markerPlaybackFrame": 130804,
+      "acousticOnsetPlaybackFrame": 130804,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 30.0
+    },
+    {
+      "sequence": 471,
+      "markerPlaybackFrame": 130908,
+      "acousticOnsetPlaybackFrame": 130909,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.5
+    },
+    {
+      "sequence": 472,
+      "markerPlaybackFrame": 131028,
+      "acousticOnsetPlaybackFrame": 131028,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 31.361111
+    },
+    {
+      "sequence": 473,
+      "markerPlaybackFrame": 131140,
+      "acousticOnsetPlaybackFrame": 131140,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 23.694444
+    },
+    {
+      "sequence": 474,
+      "markerPlaybackFrame": 131244,
+      "acousticOnsetPlaybackFrame": 131245,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 27.694444
+    },
+    {
+      "sequence": 475,
+      "markerPlaybackFrame": 131358,
+      "acousticOnsetPlaybackFrame": 131359,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 27.194444
+    },
+    {
+      "sequence": 476,
+      "markerPlaybackFrame": 131468,
+      "acousticOnsetPlaybackFrame": 131469,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 17.527778
+    },
+    {
+      "sequence": 477,
+      "markerPlaybackFrame": 131584,
+      "acousticOnsetPlaybackFrame": 131586,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 35.944444
+    },
+    {
+      "sequence": 478,
+      "markerPlaybackFrame": 131700,
+      "acousticOnsetPlaybackFrame": 131702,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 32.722222
+    },
+    {
+      "sequence": 479,
+      "markerPlaybackFrame": 131814,
+      "acousticOnsetPlaybackFrame": 131814,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 18.166667
+    },
+    {
+      "sequence": 480,
+      "markerPlaybackFrame": 131925,
+      "acousticOnsetPlaybackFrame": 131928,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 33.083333
+    },
+    {
+      "sequence": 481,
+      "markerPlaybackFrame": 132032,
+      "acousticOnsetPlaybackFrame": 132033,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 22.388889
+    },
+    {
+      "sequence": 482,
+      "markerPlaybackFrame": 132151,
+      "acousticOnsetPlaybackFrame": 132153,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 21.666667
+    },
+    {
+      "sequence": 483,
+      "markerPlaybackFrame": 132267,
+      "acousticOnsetPlaybackFrame": 132269,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 16.416667
+    },
+    {
+      "sequence": 484,
+      "markerPlaybackFrame": 132367,
+      "acousticOnsetPlaybackFrame": 132370,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 29.0
+    },
+    {
+      "sequence": 485,
+      "markerPlaybackFrame": 132487,
+      "acousticOnsetPlaybackFrame": 132489,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 23.055556
+    },
+    {
+      "sequence": 486,
+      "markerPlaybackFrame": 132597,
+      "acousticOnsetPlaybackFrame": 132599,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 28.694444
+    },
+    {
+      "sequence": 487,
+      "markerPlaybackFrame": 132711,
+      "acousticOnsetPlaybackFrame": 132712,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.027778
+    },
+    {
+      "sequence": 488,
+      "markerPlaybackFrame": 132819,
+      "acousticOnsetPlaybackFrame": 132822,
+      "rawMarkerToOnsetMs": 12.5,
+      "calibratedTouchToSoundMs": 33.333333,
+      "markerScore": 42.944444
+    },
+    {
+      "sequence": 489,
+      "markerPlaybackFrame": 132943,
+      "acousticOnsetPlaybackFrame": 132943,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 17.277778
+    },
+    {
+      "sequence": 490,
+      "markerPlaybackFrame": 133070,
+      "acousticOnsetPlaybackFrame": 133071,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 20.916667
+    },
+    {
+      "sequence": 491,
+      "markerPlaybackFrame": 133194,
+      "acousticOnsetPlaybackFrame": 133194,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 25.5
+    },
+    {
+      "sequence": 492,
+      "markerPlaybackFrame": 133308,
+      "acousticOnsetPlaybackFrame": 133309,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 25.25
+    },
+    {
+      "sequence": 493,
+      "markerPlaybackFrame": 133426,
+      "acousticOnsetPlaybackFrame": 133428,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 22.777778
+    },
+    {
+      "sequence": 494,
+      "markerPlaybackFrame": 133538,
+      "acousticOnsetPlaybackFrame": 133538,
+      "rawMarkerToOnsetMs": 0.0,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 26.583333
+    },
+    {
+      "sequence": 495,
+      "markerPlaybackFrame": 133664,
+      "acousticOnsetPlaybackFrame": 133663,
+      "rawMarkerToOnsetMs": -4.166667,
+      "calibratedTouchToSoundMs": 20.833333,
+      "markerScore": 18.694444
+    },
+    {
+      "sequence": 496,
+      "markerPlaybackFrame": 133778,
+      "acousticOnsetPlaybackFrame": 133780,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 27.25
+    },
+    {
+      "sequence": 497,
+      "markerPlaybackFrame": 133892,
+      "acousticOnsetPlaybackFrame": 133894,
+      "rawMarkerToOnsetMs": 8.333333,
+      "calibratedTouchToSoundMs": 29.166667,
+      "markerScore": 34.416667
+    },
+    {
+      "sequence": 498,
+      "markerPlaybackFrame": 134010,
+      "acousticOnsetPlaybackFrame": 134011,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 29.5
+    },
+    {
+      "sequence": 499,
+      "markerPlaybackFrame": 134126,
+      "acousticOnsetPlaybackFrame": 134127,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 32.083333
+    },
+    {
+      "sequence": 500,
+      "markerPlaybackFrame": 134249,
+      "acousticOnsetPlaybackFrame": 134250,
+      "rawMarkerToOnsetMs": 4.166667,
+      "calibratedTouchToSoundMs": 25.0,
+      "markerScore": 30.944444
+    }
+  ]
+}
