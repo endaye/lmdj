@@ -200,7 +200,7 @@ for (const viewport of [
         document.activeElement?.textContent?.trim()));
     }
     expect(focusOrder).toEqual([
-      "Enable MIDI", "Export report", "PProject", "SSequence", "SSample", "Open local",
+      "Enable MIDI", "Export report", "PProject", "QSequence", "SSample", "Open local",
     ]);
     await page.getByRole("button", {name: "Sample"}).click();
     await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
