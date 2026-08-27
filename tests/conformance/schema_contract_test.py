@@ -11,6 +11,7 @@ contract_root = repo_root / "contracts"
 schema_paths = {
     "project": contract_root / "project" / "lmdj.project.v1.schema.json",
     "project_v2": contract_root / "project" / "lmdj.project.v2.schema.json",
+    "project_v3": contract_root / "project" / "lmdj.project.v3.schema.json",
     "project_bundle": (
         contract_root / "project" / "lmdj.project-bundle.v1.schema.json"
     ),
@@ -53,9 +54,17 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
 contract_versions = {
     name: (
-        "2.0.0"
-        if name in {"assembly", "capability_v2", "project_v2"}
-        else "1.0.0"
+        "1.1.0"
+        if name == "project_bundle"
+        else (
+            "3.0.0"
+            if name == "project_v3"
+            else (
+                "2.0.0"
+                if name in {"assembly", "capability_v2", "project_v2"}
+                else "1.0.0"
+            )
+        )
     )
     for name in schemas
 }
@@ -152,6 +161,58 @@ assert playback["properties"]["gain_millidb"] == {
 }
 assert playback["properties"]["muted"] == {"type": "boolean"}
 
+project_v3 = schemas["project_v3"]
+assert set(project_v3["required"]) == {
+    "contract",
+    "project_id",
+    "revision",
+    "bpm",
+    "sequence_settings",
+    "banks",
+    "assets",
+    "patterns",
+}
+assert project_v3["properties"]["contract"]["const"] == "lmdj.project.v3"
+assert project_v3["properties"]["bpm"] == project["properties"]["bpm"]
+assert project_v3["properties"]["assets"]["type"] == "array"
+assert project_v3["properties"]["patterns"]["type"] == "array"
+assert "takes" not in project_v3["properties"]
+settings_v3 = project_v3["$defs"]["sequence_settings"]
+assert settings_v3["properties"]["quantize_enabled"] == {"type": "boolean"}
+assert settings_v3["properties"]["swing_percent"] == {
+    "type": "integer",
+    "minimum": 50,
+    "maximum": 75,
+}
+event_v3 = project_v3["$defs"]["pattern_event"]
+assert set(event_v3["required"]) == {
+    "slot",
+    "onset_tick",
+    "duration_tick",
+    "velocity",
+}
+assert "step" not in event_v3["properties"]
+assert event_v3["properties"]["duration_tick"]["minimum"] == 1
+assert event_v3["properties"]["velocity"] == {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": 127,
+}
+tick_limits = {}
+for rule in project_v3["$defs"]["pattern"]["allOf"]:
+    bars = rule["if"]["properties"]["bars"]["const"]
+    event_rules = rule["then"]["properties"]["events"]["items"]["properties"]
+    tick_limits[bars] = (
+        event_rules["onset_tick"]["maximum"],
+        event_rules["duration_tick"]["maximum"],
+    )
+assert tick_limits == {
+    1: (3839, 3840),
+    2: (7679, 7680),
+    4: (15359, 15360),
+    8: (30719, 30720),
+}
+
 capability = schemas["capability"]
 assert set(capability["required"]) == {
     "contract",
@@ -229,6 +290,10 @@ fixture_root = repo_root / "tests" / "fixtures" / "contracts"
 valid_project_v2 = load_json(fixture_root / "project-v2-valid.json")
 invalid_project_v2 = load_json(
     fixture_root / "project-v2-invalid-playback.json"
+)
+valid_project_v3 = load_json(fixture_root / "project-v3-valid.json")
+invalid_project_v3 = load_json(
+    fixture_root / "project-v3-invalid-event.json"
 )
 assert valid_project_v2["banks"][0]["pads"][0]["asset_id"] == (
     valid_project_v2["banks"][0]["pads"][1]["asset_id"]
@@ -345,11 +410,13 @@ assert set(project_bundle["required"]) == {
 assert project_bundle["properties"]["contract"]["const"] == (
     "lmdj.project-bundle.v1"
 )
-assert project_bundle["properties"]["contract_version"]["const"] == "1.0.0"
+assert project_bundle["properties"]["contract_version"]["const"] == "1.1.0"
 assert project_bundle["properties"]["compression"]["const"] == "none"
-assert project_bundle["properties"]["project_contract"]["const"] == (
-    "lmdj.project.v1"
-)
+assert project_bundle["properties"]["project_contract"]["enum"] == [
+    "lmdj.project.v1",
+    "lmdj.project.v2",
+    "lmdj.project.v3",
+]
 assert project_bundle["properties"]["entries"]["maxItems"] == 4096
 assert project_bundle["$defs"]["entry"]["properties"]["bytes"]["maximum"] == (
     67_108_864
@@ -392,7 +459,7 @@ foundation_manifest = load_json(
 assert foundation_manifest == {
     "contract": "lmdj.module.v1",
     "module": "foundation",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "api_version": 1,
     "dependencies": {},
 }
@@ -463,6 +530,23 @@ json_schema.check(
     "project-bundle-valid",
 )
 json_schema.check(valid_project_v2, project_v2, "project-v2-valid")
+json_schema.check(valid_project_v3, project_v3, "project-v3-valid")
+invalid_project_v3_violations = json_schema.validate(
+    invalid_project_v3, project_v3
+)
+assert any(
+    "duration_tick: above maximum 3840" in violation
+    for violation in invalid_project_v3_violations
+), invalid_project_v3_violations
+assert any(
+    "velocity: above maximum 127" in violation
+    for violation in invalid_project_v3_violations
+), invalid_project_v3_violations
+invalid_event_v3 = invalid_project_v3["patterns"][0]["events"][0]
+assert invalid_event_v3["duration_tick"] > (
+    invalid_project_v3["patterns"][0]["bars"] * 3840
+    - invalid_event_v3["onset_tick"]
+)
 invalid_project_v2_violations = json_schema.validate(
     invalid_project_v2, project_v2
 )

@@ -137,12 +137,14 @@ def _validate_index(index: dict) -> list[dict]:
         )
     if index["contract"] != "lmdj.project-bundle.v1":
         raise BundleError("bundle contract is not lmdj.project-bundle.v1")
-    if index["contract_version"] != "1.0.0":
-        raise BundleError("bundle contract version is not 1.0.0")
+    if index["contract_version"] not in {"1.0.0", "1.1.0"}:
+        raise BundleError("bundle contract version is unsupported")
     if index["compression"] != "none":
         raise BundleError("bundle compression must be none")
-    if index["project_contract"] != "lmdj.project.v1":
-        raise BundleError("bundle project contract is not lmdj.project.v1")
+    if index["project_contract"] not in {
+        "lmdj.project.v1", "lmdj.project.v2", "lmdj.project.v3"
+    }:
+        raise BundleError("bundle project contract is unsupported")
     if not isinstance(index["project_id"], str) or _UUID.fullmatch(
         index["project_id"]
     ) is None:
@@ -380,7 +382,7 @@ def _read_source_json(item: _SourceFile) -> object:
         ) from error
 
 
-def _load_project_id(source: Path, files: list[_SourceFile]) -> str:
+def _load_project_identity(source: Path, files: list[_SourceFile]) -> tuple[str, str]:
     required_directories = (
         "assets",
         "history/checkpoints",
@@ -412,12 +414,14 @@ def _load_project_id(source: Path, files: list[_SourceFile]) -> str:
     project_id = checkpoint.get("project_id") if isinstance(checkpoint, dict) else None
     if (
         not isinstance(checkpoint, dict)
-        or checkpoint.get("contract") != "lmdj.project.v1"
+        or checkpoint.get("contract") not in {
+            "lmdj.project.v1", "lmdj.project.v2", "lmdj.project.v3"
+        }
         or not isinstance(project_id, str)
         or _UUID.fullmatch(project_id) is None
     ):
         raise BundleError("managed Project initial checkpoint identity is invalid")
-    return project_id
+    return project_id, checkpoint["contract"]
 
 
 def _copy_source(item: _SourceFile, output: BinaryIO, expected_hash: str) -> None:
@@ -465,7 +469,7 @@ def pack_directory(
     files = _walk_source(source_path)
     # Inventory the complete tree before reading identity files so a symlinked
     # manifest/checkpoint is rejected without following it even transiently.
-    project_id = _load_project_id(source_path, files)
+    project_id, project_contract = _load_project_identity(source_path, files)
     entries = []
     offset = 0
     for item in files:
@@ -483,9 +487,9 @@ def pack_directory(
         "bundle_digest": "0" * 64,
         "compression": "none",
         "contract": "lmdj.project-bundle.v1",
-        "contract_version": "1.0.0",
+        "contract_version": "1.1.0",
         "entries": entries,
-        "project_contract": "lmdj.project.v1",
+        "project_contract": project_contract,
         "project_id": project_id,
         "uncompressed_bytes": offset,
     }

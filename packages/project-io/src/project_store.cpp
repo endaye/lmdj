@@ -24,7 +24,7 @@
 #include <picosha2.h>
 
 #include <lmdj/foundation/json.hpp>
-#include <lmdj/project_io/take_journal.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
 
 #include "publish_token.hpp"
 #include "testing_hooks.hpp"
@@ -54,8 +54,9 @@ constexpr std::uint64_t kMaximumArtifactBytes = 64U * 1024U * 1024U;
 using PersistedCommand = std::variant<
     domain::ImportAsset,
     domain::AssignPad,
-    domain::RecordTake,
     domain::CreatePattern,
+    domain::MergePatternEvents,
+    domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
     domain::UpdatePadPlayback,
     domain::ResetPadPlayback>;
@@ -64,7 +65,8 @@ struct LoadedProject {
   domain::ProjectState state;
   std::map<foundation::CommandId, PersistedCommand> commands;
   std::map<foundation::CommandId, domain::CommandReceipt> receipts;
-  std::map<foundation::CommandId, foundation::TakeId> cleanup_obligations;
+  std::map<foundation::CommandId, SequenceFlushIdentity>
+      sequence_flush_identities;
   std::vector<std::string> transactions;
 };
 
@@ -284,15 +286,8 @@ nlohmann::json playback_json(const domain::PadPlayback& playback) {
 
 nlohmann::json pattern_event_json(const domain::PatternEvent& event) {
   return {
-      {"slot", slot_json(event.slot)},
-      {"step", event.step},
-      {"velocity", event.velocity},
-  };
-}
-
-nlohmann::json raw_take_event_json(const domain::RawTakeEvent& event) {
-  return {
-      {"frame_offset", event.frame_offset},
+      {"duration_tick", event.duration_tick},
+      {"onset_tick", event.onset_tick},
       {"slot", slot_json(event.slot)},
       {"velocity", event.velocity},
   };
@@ -315,21 +310,19 @@ nlohmann::json pattern_json(const domain::Pattern& pattern) {
   return encoded;
 }
 
-nlohmann::json take_value_json(const domain::RawTake& take) {
-  auto events = nlohmann::json::array();
-  for (const auto& event : take.events) {
-    events.push_back(raw_take_event_json(event));
+domain::ProjectState persisted_v3_projection(
+    const domain::ProjectState& state) {
+  auto projected = state;
+  if (projected.contract != domain::ProjectContract::v3) {
+    projected.quantize_enabled = true;
+    projected.swing_percent = 50;
   }
-  return {
-      {"events", std::move(events)},
-      {"sample_rate", take.sample_rate},
-  };
-}
-
-nlohmann::json take_json(const domain::RawTake& take) {
-  auto encoded = take_value_json(take);
-  encoded["id"] = take.id.value();
-  return encoded;
+  projected.contract = domain::ProjectContract::v3;
+  for (auto& [id, pattern] : projected.patterns) {
+    (void)id;
+    pattern.events = domain::merge_pattern_events({}, pattern.events);
+  }
+  return projected;
 }
 
 nlohmann::json project_json(const domain::ProjectState& state) {
@@ -344,9 +337,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
                : nlohmann::json(nullptr)},
           {"pad", slot.id.pad},
       };
-      if (state.contract == domain::ProjectContract::v2) {
-        encoded_pad["playback"] = playback_json(slot.playback);
-      }
+      encoded_pad["playback"] = playback_json(slot.playback);
       pads.push_back(std::move(encoded_pad));
     }
     banks.push_back(
@@ -356,29 +347,30 @@ nlohmann::json project_json(const domain::ProjectState& state) {
         });
   }
 
-  auto assets = nlohmann::json::object();
+  auto assets = nlohmann::json::array();
   for (const auto& [id, asset] : state.assets) {
-    assets[id.value()] = {{"artifact", asset.artifact}};
+    assets.push_back(
+        {{"artifact", asset.artifact}, {"asset_id", id.value()}});
   }
-  auto takes = nlohmann::json::object();
-  for (const auto& [id, take] : state.takes) {
-    takes[id.value()] = take_value_json(take);
-  }
-  auto patterns = nlohmann::json::object();
+  auto patterns = nlohmann::json::array();
   for (const auto& [id, pattern] : state.patterns) {
-    patterns[id.value()] = pattern_value_json(pattern);
+    auto encoded = pattern_value_json(pattern);
+    encoded["pattern_id"] = id.value();
+    patterns.push_back(std::move(encoded));
   }
   return {
       {"assets", std::move(assets)},
       {"banks", std::move(banks)},
       {"bpm", state.bpm},
-      {"contract",
-       state.contract == domain::ProjectContract::v1 ? "lmdj.project.v1"
-                                                     : "lmdj.project.v2"},
+      {"contract", kProjectWriterContract},
       {"patterns", std::move(patterns)},
       {"project_id", state.id.value()},
       {"revision", state.revision},
-      {"takes", std::move(takes)},
+      {"sequence_settings",
+       {
+           {"quantize_enabled", state.quantize_enabled},
+           {"swing_percent", state.swing_percent},
+       }},
   };
 }
 
@@ -503,7 +495,8 @@ foundation::Result<domain::PadSlotId> parse_slot(
 
 foundation::Result<domain::Pattern> parse_pattern(
     const nlohmann::json& input,
-    const std::filesystem::path& path) {
+    const std::filesystem::path& path,
+    bool allow_legacy_events = false) {
   try {
     if (!exact_object_keys(input, {"bars", "events", "id"}) ||
         !input.at("events").is_array()) {
@@ -527,20 +520,34 @@ foundation::Result<domain::Pattern> parse_pattern(
       return foundation::Result<domain::Pattern>::failure(
           invalid_project("project pattern metadata is invalid", path));
     }
-    const auto step_limit =
-        static_cast<std::uint32_t>(pattern.bars) * 16;
+    const auto tick_limit = domain::pattern_length_ticks(pattern.bars);
     for (const auto& encoded : input.at("events")) {
-      if (!exact_object_keys(
-              encoded, {"slot", "step", "velocity"})) {
+      const bool legacy_event = exact_object_keys(
+          encoded, {"slot", "step", "velocity"});
+      const bool tick_event = exact_object_keys(
+          encoded,
+          {"duration_tick", "onset_tick", "slot", "velocity"});
+      if ((!allow_legacy_events && legacy_event) ||
+          (!legacy_event && !tick_event)) {
         return foundation::Result<domain::Pattern>::failure(
             invalid_project("project pattern event shape is invalid", path));
       }
-      const auto step = unsigned_integer_value(encoded.at("step"));
+      const auto onset_tick = unsigned_integer_value(
+          encoded.at(legacy_event ? "step" : "onset_tick"));
+      const auto duration_tick = legacy_event
+                                     ? std::optional<std::uint64_t>{
+                                           domain::kSixteenthTicks}
+                                     : unsigned_integer_value(
+                                           encoded.at("duration_tick"));
       const auto velocity =
           unsigned_integer_value(encoded.at("velocity"));
-      if (!step.has_value() || !velocity.has_value() ||
-          *step > std::numeric_limits<std::uint32_t>::max() ||
-          *velocity > std::numeric_limits<std::uint8_t>::max()) {
+      if (!onset_tick.has_value() || !duration_tick.has_value() ||
+          !velocity.has_value() ||
+          *onset_tick > std::numeric_limits<std::uint32_t>::max() ||
+          *duration_tick > std::numeric_limits<std::uint32_t>::max() ||
+          *velocity > std::numeric_limits<std::uint8_t>::max() ||
+          (legacy_event &&
+           *onset_tick >= static_cast<std::uint64_t>(pattern.bars) * 16U)) {
         return foundation::Result<domain::Pattern>::failure(
             invalid_project("project pattern event is invalid", path));
       }
@@ -550,16 +557,21 @@ foundation::Result<domain::Pattern> parse_pattern(
       }
       domain::PatternEvent event{
           slot.value(),
-          static_cast<std::uint32_t>(*step),
+          static_cast<std::uint32_t>(
+              legacy_event ? *onset_tick * domain::kSixteenthTicks
+                           : *onset_tick),
+          static_cast<std::uint32_t>(*duration_tick),
           static_cast<std::uint8_t>(*velocity),
       };
       if (event.velocity < 1 || event.velocity > 127 ||
-          event.step >= step_limit) {
+          event.onset_tick >= tick_limit || event.duration_tick == 0 ||
+          event.duration_tick > tick_limit - event.onset_tick) {
         return foundation::Result<domain::Pattern>::failure(
             invalid_project("project pattern event is invalid", path));
       }
       pattern.events.push_back(event);
     }
+    pattern.events = domain::merge_pattern_events({}, pattern.events);
     return foundation::Result<domain::Pattern>::success(std::move(pattern));
   } catch (const std::exception& exception) {
     return foundation::Result<domain::Pattern>::failure(
@@ -570,71 +582,44 @@ foundation::Result<domain::Pattern> parse_pattern(
   }
 }
 
-foundation::Result<domain::RawTake> parse_take(
+foundation::Result<void> validate_retired_capture(
+    std::string_view id,
     const nlohmann::json& input,
     const std::filesystem::path& path) {
   try {
-    if (!exact_object_keys(
-            input, {"events", "id", "sample_rate"}) ||
+    if (!domain::is_valid_uuid(id) ||
+        !exact_object_keys(input, {"events", "sample_rate"}) ||
         !input.at("events").is_array()) {
-      return foundation::Result<domain::RawTake>::failure(
-          invalid_project("project raw take shape is invalid", path));
+      return foundation::Result<void>::failure(
+          invalid_project("retired capture entry is invalid", path));
     }
-    const auto sample_rate =
-        unsigned_integer_value(input.at("sample_rate"));
+    const auto sample_rate = unsigned_integer_value(input.at("sample_rate"));
     if (!sample_rate.has_value() || *sample_rate != 48000) {
-      return foundation::Result<domain::RawTake>::failure(
-          invalid_project("project raw take metadata is invalid", path));
-    }
-    domain::RawTake take{
-        foundation::TakeId{input.at("id").get<std::string>()},
-        static_cast<std::uint32_t>(*sample_rate),
-        {},
-    };
-    if (!domain::is_valid_uuid(take.id.value()) ||
-        take.sample_rate != 48000) {
-      return foundation::Result<domain::RawTake>::failure(
-          invalid_project("project raw take metadata is invalid", path));
+      return foundation::Result<void>::failure(
+          invalid_project("retired capture metadata is invalid", path));
     }
     for (const auto& encoded : input.at("events")) {
-      if (!exact_object_keys(
-              encoded, {"frame_offset", "slot", "velocity"})) {
-        return foundation::Result<domain::RawTake>::failure(
-            invalid_project("project raw take event shape is invalid", path));
+      if (!exact_object_keys(encoded, {"frame_offset", "slot", "velocity"})) {
+        return foundation::Result<void>::failure(
+            invalid_project("retired capture event shape is invalid", path));
       }
-      const auto frame_offset =
-          unsigned_integer_value(encoded.at("frame_offset"));
-      const auto velocity =
-          unsigned_integer_value(encoded.at("velocity"));
+      const auto frame_offset = unsigned_integer_value(encoded.at("frame_offset"));
+      const auto velocity = unsigned_integer_value(encoded.at("velocity"));
+      const auto slot = parse_slot(encoded.at("slot"), path);
       if (!frame_offset.has_value() || !velocity.has_value() ||
-          *frame_offset >
-              std::numeric_limits<std::uint32_t>::max() ||
-          *velocity > std::numeric_limits<std::uint8_t>::max()) {
-        return foundation::Result<domain::RawTake>::failure(
-            invalid_project("project raw take event is invalid", path));
+          *frame_offset > std::numeric_limits<std::uint32_t>::max() ||
+          *velocity < 1 || *velocity > 127 || !slot.has_value()) {
+        return foundation::Result<void>::failure(
+            slot.has_value()
+                ? invalid_project("retired capture event is invalid", path)
+                : slot.error());
       }
-      auto slot = parse_slot(encoded.at("slot"), path);
-      if (!slot.has_value()) {
-        return foundation::Result<domain::RawTake>::failure(slot.error());
-      }
-      domain::RawTakeEvent event{
-          slot.value(),
-          static_cast<std::uint32_t>(*frame_offset),
-          static_cast<std::uint8_t>(*velocity),
-      };
-      if (event.velocity < 1 || event.velocity > 127) {
-        return foundation::Result<domain::RawTake>::failure(
-            invalid_project("project raw take event is invalid", path));
-      }
-      take.events.push_back(event);
     }
-    return foundation::Result<domain::RawTake>::success(std::move(take));
+    return foundation::Result<void>::success();
   } catch (const std::exception& exception) {
-    return foundation::Result<domain::RawTake>::failure(
+    return foundation::Result<void>::failure(
         invalid_project(
-            "project raw take could not be parsed",
-            path,
-            exception.what()));
+            "retired capture could not be parsed", path, exception.what()));
   }
 }
 
@@ -649,21 +634,7 @@ foundation::Result<domain::Pattern> parse_project_pattern(
   }
   auto encoded = input;
   encoded["id"] = id;
-  return parse_pattern(encoded, path);
-}
-
-foundation::Result<domain::RawTake> parse_project_take(
-    std::string_view id,
-    const nlohmann::json& input,
-    const std::filesystem::path& path) {
-  if (!domain::is_valid_uuid(id) ||
-      !exact_object_keys(input, {"events", "sample_rate"})) {
-    return foundation::Result<domain::RawTake>::failure(
-        invalid_project("project raw take entry is invalid", path));
-  }
-  auto encoded = input;
-  encoded["id"] = id;
-  return parse_take(encoded, path);
+  return parse_pattern(encoded, path, true);
 }
 
 foundation::Result<domain::ProjectState> parse_project(
@@ -676,7 +647,10 @@ foundation::Result<domain::ProjectState> parse_project(
                               : std::string{};
     const bool is_v1 = contract == "lmdj.project.v1";
     const bool is_v2 = contract == "lmdj.project.v2";
-    if (!exact_object_keys(
+    const bool is_v3 = contract == "lmdj.project.v3";
+    const bool legacy_shape =
+        (is_v1 || is_v2) &&
+        exact_object_keys(
             input,
             {
                 "assets",
@@ -687,14 +661,33 @@ foundation::Result<domain::ProjectState> parse_project(
                 "project_id",
                 "revision",
                 "takes",
-            }) ||
-        (!is_v1 && !is_v2) ||
+            }) &&
+        input.at("assets").is_object() &&
+        input.at("takes").is_object() &&
+        input.at("patterns").is_object();
+    const bool v3_shape =
+        is_v3 &&
+        exact_object_keys(
+            input,
+            {
+                "assets",
+                "banks",
+                "bpm",
+                "contract",
+                "patterns",
+                "project_id",
+                "revision",
+                "sequence_settings",
+            }) &&
+        input.at("assets").is_array() &&
+        input.at("patterns").is_array() &&
+        exact_object_keys(
+            input.at("sequence_settings"),
+            {"quantize_enabled", "swing_percent"});
+    if ((!legacy_shape && !v3_shape) ||
         !nonnegative_integer(input.at("revision")) ||
         !nonnegative_integer(input.at("bpm")) ||
-        !input.at("banks").is_array() ||
-        !input.at("assets").is_object() ||
-        !input.at("takes").is_object() ||
-        !input.at("patterns").is_object()) {
+        !input.at("banks").is_array()) {
       return foundation::Result<domain::ProjectState>::failure(
           invalid_project("project checkpoint contract is invalid", path));
     }
@@ -715,9 +708,25 @@ foundation::Result<domain::ProjectState> parse_project(
           invalid_project("project metadata is invalid", path));
     }
     auto state = std::move(created.value());
-    state.contract = is_v1 ? domain::ProjectContract::v1
-                           : domain::ProjectContract::v2;
+    state.contract = domain::ProjectContract::v3;
     state.revision = *revision;
+    if (is_v3) {
+      const auto swing = unsigned_integer_value(
+          input.at("sequence_settings").at("swing_percent"));
+      if (!input.at("sequence_settings")
+               .at("quantize_enabled")
+               .is_boolean() ||
+          !swing.has_value() ||
+          *swing < domain::kSwingPercentMin ||
+          *swing > domain::kSwingPercentMax) {
+        return foundation::Result<domain::ProjectState>::failure(
+            invalid_project("project sequence settings are invalid", path));
+      }
+      state.quantize_enabled = input.at("sequence_settings")
+                                   .at("quantize_enabled")
+                                   .get<bool>();
+      state.swing_percent = static_cast<std::uint8_t>(*swing);
+    }
 
     const auto& banks = input.at("banks");
     if (banks.size() != state.banks.size()) {
@@ -778,7 +787,7 @@ foundation::Result<domain::ProjectState> parse_project(
           state.banks.at(*bank).at(*pad).asset_id =
               foundation::AssetId{asset_id};
         }
-        if (is_v2) {
+        if (!is_v1) {
           auto playback = parse_playback(encoded_pad.at("playback"), path);
           if (!playback.has_value()) {
             return foundation::Result<domain::ProjectState>::failure(
@@ -789,11 +798,11 @@ foundation::Result<domain::ProjectState> parse_project(
       }
     }
 
-    for (auto iterator = input.at("assets").begin();
-         iterator != input.at("assets").end();
-         ++iterator) {
-      const auto& encoded = iterator.value();
-      if (!domain::is_valid_uuid(iterator.key()) ||
+    const auto parse_asset_entry = [&state, &path](
+                                       std::string_view id,
+                                       const nlohmann::json& encoded)
+        -> foundation::Result<void> {
+      if (!domain::is_valid_uuid(id) ||
           !exact_object_keys(encoded, {"artifact"}) ||
           !exact_object_keys(
               encoded.at("artifact"),
@@ -805,11 +814,11 @@ foundation::Result<domain::ProjectState> parse_project(
               .get<std::string>()
               .empty() ||
           !encoded.at("artifact").at("sha256").is_string()) {
-        return foundation::Result<domain::ProjectState>::failure(
+        return foundation::Result<void>::failure(
             invalid_project("project asset entry is invalid", path));
       }
       domain::Asset asset{
-          foundation::AssetId{iterator.key()},
+          foundation::AssetId{std::string{id}},
           foundation::ArtifactRef{
               encoded.at("artifact")
                   .at("sha256")
@@ -823,10 +832,39 @@ foundation::Result<domain::ProjectState> parse_project(
           },
       };
       if (!valid_sha256(asset.artifact.sha256)) {
-        return foundation::Result<domain::ProjectState>::failure(
+        return foundation::Result<void>::failure(
             invalid_project("project artifact reference is invalid", path));
       }
-      state.assets.emplace(asset.id, asset);
+      if (!state.assets.emplace(asset.id, asset).second) {
+        return foundation::Result<void>::failure(
+            invalid_project("project asset id is duplicated", path));
+      }
+      return foundation::Result<void>::success();
+    };
+    if (is_v3) {
+      for (const auto& encoded : input.at("assets")) {
+        if (!exact_object_keys(encoded, {"artifact", "asset_id"}) ||
+            !encoded.at("asset_id").is_string()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              invalid_project("project asset entry is invalid", path));
+        }
+        auto value = nlohmann::json{{"artifact", encoded.at("artifact")}};
+        auto parsed = parse_asset_entry(
+            encoded.at("asset_id").get<std::string>(), value);
+        if (!parsed.has_value()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              parsed.error());
+        }
+      }
+    } else {
+      for (auto iterator = input.at("assets").begin();
+           iterator != input.at("assets").end(); ++iterator) {
+        auto parsed = parse_asset_entry(iterator.key(), iterator.value());
+        if (!parsed.has_value()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              parsed.error());
+        }
+      }
     }
     for (const auto& bank : state.banks) {
       for (const auto& slot : bank) {
@@ -840,26 +878,47 @@ foundation::Result<domain::ProjectState> parse_project(
       }
     }
 
-    for (auto iterator = input.at("takes").begin();
-         iterator != input.at("takes").end();
-         ++iterator) {
-      auto take =
-          parse_project_take(iterator.key(), iterator.value(), path);
-      if (!take.has_value()) {
-        return foundation::Result<domain::ProjectState>::failure(take.error());
+    if (is_v3) {
+      for (const auto& encoded : input.at("patterns")) {
+        if (!exact_object_keys(
+                encoded, {"bars", "events", "pattern_id"}) ||
+            !encoded.at("pattern_id").is_string()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              invalid_project("project pattern entry is invalid", path));
+        }
+        auto value = encoded;
+        value["id"] = value.at("pattern_id");
+        value.erase("pattern_id");
+        auto pattern = parse_pattern(value, path);
+        if (!pattern.has_value() ||
+            !state.patterns.emplace(pattern.value().id, pattern.value()).second) {
+          return foundation::Result<domain::ProjectState>::failure(
+              pattern.has_value()
+                  ? invalid_project("project pattern id is duplicated", path)
+                  : pattern.error());
+        }
       }
-      state.takes.emplace(take.value().id, take.value());
-    }
-    for (auto iterator = input.at("patterns").begin();
-         iterator != input.at("patterns").end();
-         ++iterator) {
-      auto pattern = parse_project_pattern(
-          iterator.key(), iterator.value(), path);
-      if (!pattern.has_value()) {
-        return foundation::Result<domain::ProjectState>::failure(
-            pattern.error());
+    } else {
+      // Retired v1/v2 capture data is validated and discarded by migration.
+      for (auto iterator = input.at("takes").begin();
+           iterator != input.at("takes").end(); ++iterator) {
+        auto capture = validate_retired_capture(
+            iterator.key(), iterator.value(), path);
+        if (!capture.has_value()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              capture.error());
+        }
       }
-      state.patterns.emplace(pattern.value().id, pattern.value());
+      for (auto iterator = input.at("patterns").begin();
+           iterator != input.at("patterns").end(); ++iterator) {
+        auto pattern = parse_project_pattern(
+            iterator.key(), iterator.value(), path);
+        if (!pattern.has_value()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              pattern.error());
+        }
+        state.patterns.emplace(pattern.value().id, pattern.value());
+      }
     }
     return foundation::Result<domain::ProjectState>::success(std::move(state));
   } catch (const std::exception& exception) {
@@ -910,18 +969,40 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"slot", slot_json(value.slot)},
               {"type", "AssignPad"},
           };
-        } else if constexpr (std::is_same_v<Type, domain::RecordTake>) {
-          return {
-              {"meta", meta_json(value.meta)},
-              {"pattern", pattern_json(value.pattern)},
-              {"take", take_json(value.take)},
-              {"type", "RecordTake"},
-          };
         } else if constexpr (std::is_same_v<Type, domain::CreatePattern>) {
           return {
               {"meta", meta_json(value.meta)},
               {"pattern", pattern_json(value.pattern)},
               {"type", "CreatePattern"},
+          };
+        } else if constexpr (
+            std::is_same_v<Type, domain::MergePatternEvents>) {
+          auto events = nlohmann::json::array();
+          for (const auto& event : value.events) {
+            events.push_back(pattern_event_json(event));
+          }
+          return {
+              {"events", std::move(events)},
+              {"meta", meta_json(value.meta)},
+              {"pattern_id", value.pattern_id.value()},
+              {"type", "MergePatternEvents"},
+          };
+        } else if constexpr (
+            std::is_same_v<Type, domain::UpdateSequenceSettings>) {
+          return {
+              {"bpm",
+               value.bpm.has_value() ? nlohmann::json(*value.bpm)
+                                     : nlohmann::json(nullptr)},
+              {"meta", meta_json(value.meta)},
+              {"quantize_enabled",
+               value.quantize_enabled.has_value()
+                   ? nlohmann::json(*value.quantize_enabled)
+                   : nlohmann::json(nullptr)},
+              {"swing_percent",
+               value.swing_percent.has_value()
+                   ? nlohmann::json(*value.swing_percent)
+                   : nlohmann::json(nullptr)},
+              {"type", "UpdateSequenceSettings"},
           };
         } else if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample>) {
@@ -1029,26 +1110,6 @@ foundation::Result<PersistedCommand> parse_command(
               std::move(asset_id),
           }});
     }
-    if (type == "RecordTake") {
-      auto take = parse_take(input.at("take"), path);
-      auto pattern = parse_pattern(input.at("pattern"), path);
-      if (!take.has_value()) {
-        return foundation::Result<PersistedCommand>::failure(take.error());
-      }
-      if (!pattern.has_value()) {
-        return foundation::Result<PersistedCommand>::failure(pattern.error());
-      }
-      if (!exact_object_keys(input, {"meta", "pattern", "take", "type"})) {
-        return foundation::Result<PersistedCommand>::failure(
-            invalid_project("RecordTake transaction shape is invalid", path));
-      }
-      return foundation::Result<PersistedCommand>::success(
-          PersistedCommand{domain::RecordTake{
-              std::move(meta.value()),
-              std::move(take.value()),
-              std::move(pattern.value()),
-          }});
-    }
     if (type == "CreatePattern") {
       auto pattern = parse_pattern(input.at("pattern"), path);
       if (!pattern.has_value()) {
@@ -1063,6 +1124,85 @@ foundation::Result<PersistedCommand> parse_command(
               std::move(meta.value()),
               std::move(pattern.value()),
           }});
+    }
+    if (type == "MergePatternEvents") {
+      if (!exact_object_keys(
+              input, {"events", "meta", "pattern_id", "type"}) ||
+          !input.at("events").is_array() ||
+          !input.at("pattern_id").is_string()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "MergePatternEvents transaction shape is invalid", path));
+      }
+      const auto pattern_id =
+          input.at("pattern_id").get<std::string>();
+      if (!domain::is_valid_uuid(pattern_id)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "MergePatternEvents pattern id is invalid", path));
+      }
+      auto encoded_pattern = nlohmann::json{
+          {"bars", 8},
+          {"events", input.at("events")},
+          {"id", pattern_id},
+      };
+      auto parsed = parse_pattern(encoded_pattern, path);
+      if (!parsed.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(parsed.error());
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::MergePatternEvents{
+              std::move(meta.value()),
+              foundation::PatternId{pattern_id},
+              std::move(parsed.value().events),
+          }});
+    }
+    if (type == "UpdateSequenceSettings") {
+      if (!exact_object_keys(
+              input,
+              {"bpm",
+               "meta",
+               "quantize_enabled",
+               "swing_percent",
+               "type"}) ||
+          !(input.at("bpm").is_null() ||
+            nonnegative_integer(input.at("bpm"))) ||
+          !(input.at("quantize_enabled").is_null() ||
+            input.at("quantize_enabled").is_boolean()) ||
+          !(input.at("swing_percent").is_null() ||
+            nonnegative_integer(input.at("swing_percent")))) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "UpdateSequenceSettings transaction shape is invalid", path));
+      }
+      std::optional<std::uint16_t> bpm;
+      std::optional<bool> quantize_enabled;
+      std::optional<std::uint8_t> swing_percent;
+      if (!input.at("bpm").is_null()) {
+        const auto value = unsigned_integer_value(input.at("bpm"));
+        if (!value.has_value() ||
+            *value > std::numeric_limits<std::uint16_t>::max()) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project("UpdateSequenceSettings BPM is invalid", path));
+        }
+        bpm = static_cast<std::uint16_t>(*value);
+      }
+      if (!input.at("quantize_enabled").is_null()) {
+        quantize_enabled = input.at("quantize_enabled").get<bool>();
+      }
+      if (!input.at("swing_percent").is_null()) {
+        const auto value = unsigned_integer_value(input.at("swing_percent"));
+        if (!value.has_value() ||
+            *value > std::numeric_limits<std::uint8_t>::max()) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "UpdateSequenceSettings Swing is invalid", path));
+        }
+        swing_percent = static_cast<std::uint8_t>(*value);
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::UpdateSequenceSettings{
+              std::move(meta.value()), bpm, quantize_enabled, swing_percent}});
     }
     if (type == "ImportAssignSample") {
       if (!exact_object_keys(input, {"asset", "meta", "slot", "type"}) ||
@@ -1156,7 +1296,20 @@ foundation::Result<domain::AppliedCommand> apply_command(
 
 PersistedCommand persisted_command(const domain::Command& command) {
   return std::visit(
-      [](const auto& value) -> PersistedCommand { return value; }, command);
+      [](const auto& value) -> PersistedCommand {
+        auto normalized = value;
+        using Type = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Type, domain::CreatePattern>) {
+          normalized.pattern.events = domain::merge_pattern_events(
+              {}, normalized.pattern.events);
+        } else if constexpr (
+            std::is_same_v<Type, domain::MergePatternEvents>) {
+          normalized.events = domain::merge_pattern_events(
+              {}, normalized.events);
+        }
+        return PersistedCommand{std::move(normalized)};
+      },
+      command);
 }
 
 foundation::Result<domain::Command> legacy_command(
@@ -1256,9 +1409,8 @@ foundation::Result<LoadedProject> load_project(
     if (!checkpoint.has_value()) {
       return foundation::Result<LoadedProject>::failure(checkpoint.error());
     }
-    const bool replay_as_v1 =
-        initial.value().contract == domain::ProjectContract::v1 &&
-        checkpoint.value().contract == domain::ProjectContract::v1;
+    const bool checkpoint_is_v3 =
+        checkpoint_json.value().at("contract") == "lmdj.project.v3";
 
     LoadedProject loaded{
         std::move(initial.value()),
@@ -1292,9 +1444,6 @@ foundation::Result<LoadedProject> load_project(
                 "project transaction could not be replayed",
                 bundle / relative));
       }
-      if (replay_as_v1) {
-        applied.value().state.contract = domain::ProjectContract::v1;
-      }
       const auto revision =
           transaction.value().at("revision").get<std::uint64_t>();
       if (revision != applied.value().state.revision ||
@@ -1309,24 +1458,38 @@ foundation::Result<LoadedProject> load_project(
       loaded.receipts.emplace(
           meta.command_id,
           domain::CommandReceipt{revision, applied.value().event});
-      if (transaction.value().contains("cleanup_take_id")) {
-        const auto cleanup_take_id =
-            foundation::TakeId{
-                transaction.value()
-                    .at("cleanup_take_id")
-                    .get<std::string>()};
-        const auto* record =
-            std::get_if<domain::RecordTake>(&command.value());
-        if (record == nullptr ||
-            !domain::is_valid_uuid(cleanup_take_id.value()) ||
-            cleanup_take_id != record->take.id) {
+      if (transaction.value().contains("sequence_flush")) {
+        try {
+          const auto& encoded = transaction.value().at("sequence_flush");
+          SequenceFlushIdentity identity{
+              foundation::SequenceSessionId{
+                  encoded.at("session_id").get<std::string>()},
+              encoded.at("flush_seq").get<std::uint64_t>(),
+              foundation::CommandId{
+                  encoded.at("command_id").get<std::string>()},
+              foundation::PatternId{
+                  encoded.at("pattern_id").get<std::string>()},
+          };
+          const auto* merge =
+              std::get_if<domain::MergePatternEvents>(&command.value());
+          if (merge == nullptr ||
+              !domain::is_valid_uuid(identity.session_id.value()) ||
+              identity.command_id != meta.command_id ||
+              identity.pattern_id != merge->pattern_id) {
+            return foundation::Result<LoadedProject>::failure(
+                invalid_project(
+                    "project transaction Sequence flush identity is invalid",
+                    bundle / relative));
+          }
+          loaded.sequence_flush_identities.emplace(
+              meta.command_id, std::move(identity));
+        } catch (const std::exception& exception) {
           return foundation::Result<LoadedProject>::failure(
               invalid_project(
-                  "project transaction cleanup obligation is invalid",
-                  bundle / relative));
+                  "project transaction Sequence flush identity is invalid",
+                  bundle / relative,
+                  exception.what()));
         }
-        loaded.cleanup_obligations.emplace(
-            meta.command_id, cleanup_take_id);
       }
       loaded.state = applied.value().state;
       loaded.transactions.push_back(relative.generic_string());
@@ -1338,9 +1501,10 @@ foundation::Result<LoadedProject> load_project(
               manifest_path));
     }
 
-    if (checkpoint.value() != loaded.state ||
-        foundation::canonical_json(checkpoint_json.value()) !=
-            foundation::canonical_json(project_json(loaded.state))) {
+    if (checkpoint.value() != persisted_v3_projection(loaded.state) ||
+        (checkpoint_is_v3 &&
+         foundation::canonical_json(checkpoint_json.value()) !=
+             foundation::canonical_json(project_json(loaded.state)))) {
       return foundation::Result<LoadedProject>::failure(
           invalid_project(
               "project checkpoint does not match transaction replay",
@@ -1895,79 +2059,15 @@ foundation::Result<bool> publish_artifact(
              : foundation::Result<bool>::failure(created.error());
 }
 
-foundation::Result<bool> matching_active_journal(
-    const std::shared_ptr<ProjectStoragePlatform>& platform,
-    const std::filesystem::path& bundle,
-    const domain::RecordTake& record) {
-  const auto path =
-      bundle / "recovery/active" /
-      (record.take.id.value() + ".jsonl");
-  auto exists = platform->exists(path);
-  if (!exists.has_value()) {
-    return foundation::Result<bool>::failure(exists.error());
-  }
-  if (!exists.value()) {
-    return foundation::Result<bool>::success(false);
-  }
-  if (!domain::is_valid_uuid(record.take.id.value())) {
-    return foundation::Result<bool>::failure(
-        Error{ErrorCode::invalid_argument, "take id is not a safe file name"});
-  }
-  auto bytes = read_file_bytes(*platform, path);
-  if (!bytes.has_value()) {
-    return foundation::Result<bool>::failure(bytes.error());
-  }
-  const auto line_end = bytes.value().find('\n');
-  if (line_end == std::string::npos) {
-    return foundation::Result<bool>::failure(
-        invalid_project("active take journal could not be read", path));
-  }
-  try {
-    const auto header = parse_bounded_or_throw(
-        bytes.value().substr(0, line_end));
-    TakeJournal journal{platform};
-    const auto take =
-        journal.read_active(bundle, record.take.id);
-    if (!take.has_value()) {
-      return foundation::Result<bool>::failure(take.error());
-    }
-    return foundation::Result<bool>::success(
-        header.at("expected_revision").get<std::uint64_t>() ==
-            record.meta.expected_revision &&
-        take.value() == record.take);
-  } catch (const std::exception& exception) {
-    return foundation::Result<bool>::failure(
-        invalid_project(
-            "active take journal metadata could not be parsed",
-            path,
-            exception.what()));
-  }
-}
-
-foundation::Result<void> complete_journal_cleanup(
-    ProjectStoragePlatform& platform,
-    const std::filesystem::path& bundle,
-    const std::optional<foundation::TakeId>& cleanup_take_id) {
-  if (!cleanup_take_id.has_value()) {
-    return foundation::Result<void>::success();
-  }
-  const auto path =
-      bundle / "recovery/active" /
-      (cleanup_take_id->value() + ".jsonl");
-  const auto removed = platform.remove(path);
-  if (!removed.has_value()) {
-    return removed;
-  }
-  return foundation::Result<void>::success();
-}
-
 foundation::Result<domain::AppliedCommand> commit_loaded(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
     LoadedProject loaded,
     const PersistedCommand& command,
     const std::optional<ArtifactStage>& artifact_stage,
-    PersistedCommand* persisted_identity) {
+    PersistedCommand* persisted_identity,
+    const std::optional<SequenceFlushIdentity>& sequence_flush_identity =
+        std::nullopt) {
   const auto& meta = command_meta(command);
   if (!domain::is_valid_uuid(meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -2000,52 +2100,13 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   } else if (persisted_identity != nullptr) {
     *persisted_identity = command;
   }
-  bool journal_matches = false;
-  std::optional<foundation::TakeId> cleanup_take_id;
-  if (!replay_candidate) {
-    const auto* record = std::get_if<domain::RecordTake>(&command);
-    if (record != nullptr) {
-      const auto matching = matching_active_journal(platform, bundle, *record);
-      if (!matching.has_value()) {
-        return foundation::Result<domain::AppliedCommand>::failure(
-            matching.error());
-      }
-      journal_matches = matching.value();
-      if (journal_matches) {
-        cleanup_take_id = record->take.id;
-      }
-    }
-  }
-
   const auto applied =
       apply_command(loaded.state, command, loaded.receipts);
   if (!applied.has_value()) {
-    if (applied.error().code == ErrorCode::revision_conflict &&
-        journal_matches) {
-      const auto& record = std::get<domain::RecordTake>(command);
-      TakeJournal journal{platform};
-      const auto sealed =
-          journal.seal(bundle, record.take.id, "revision_conflict");
-      if (!sealed.has_value()) {
-        return foundation::Result<domain::AppliedCommand>::failure(
-            sealed.error());
-      }
-    }
     return foundation::Result<domain::AppliedCommand>::failure(
         applied.error());
   }
   if (applied.value().replayed) {
-    const auto obligation =
-        loaded.cleanup_obligations.find(meta.command_id);
-    if (obligation != loaded.cleanup_obligations.end()) {
-      cleanup_take_id = obligation->second;
-    }
-    const auto cleanup =
-        complete_journal_cleanup(*platform, bundle, cleanup_take_id);
-    if (!cleanup.has_value()) {
-      return foundation::Result<domain::AppliedCommand>::failure(
-          cleanup.error());
-    }
     return applied;
   }
 
@@ -2063,7 +2124,8 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   const auto validated_state =
       parse_project(encoded_state, bundle / "manifest.json");
   if (!validated_state.has_value() ||
-      validated_state.value() != applied.value().state) {
+      validated_state.value() !=
+          persisted_v3_projection(applied.value().state)) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -2148,11 +2210,26 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
       {"event", applied.value().event},
       {"revision", revision},
   };
-  if (cleanup_take_id.has_value()) {
-    transaction["cleanup_take_id"] = cleanup_take_id->value();
+  if (sequence_flush_identity.has_value()) {
+    transaction["sequence_flush"] = {
+        {"command_id", sequence_flush_identity->command_id.value()},
+        {"flush_seq", sequence_flush_identity->flush_seq},
+        {"pattern_id", sequence_flush_identity->pattern_id.value()},
+        {"session_id", sequence_flush_identity->session_id.value()},
+    };
   }
   const auto transaction_bytes =
       foundation::canonical_json(transaction) + "\n";
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  if (sequence_flush_identity.has_value()) {
+    const auto fault = testing::detail::invoke_fault(
+        testing::FaultPoint::sequence_transaction_write, transaction_final);
+    if (!fault.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          fault.error());
+    }
+  }
+#endif
   auto written = platform->create_immutable(
       transaction_final, byte_span(transaction_bytes));
   if (!written.has_value()) {
@@ -2165,6 +2242,17 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
 
   const auto checkpoint_bytes =
       foundation::canonical_json(project_json(applied.value().state)) + "\n";
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  if (sequence_flush_identity.has_value()) {
+    const auto fault = testing::detail::invoke_fault(
+        testing::FaultPoint::sequence_checkpoint_write, checkpoint_final);
+    if (!fault.has_value()) {
+      (void)platform->remove(transaction_final);
+      return foundation::Result<domain::AppliedCommand>::failure(
+          fault.error());
+    }
+  }
+#endif
   written = platform->create_immutable(
       checkpoint_final, byte_span(checkpoint_bytes));
   if (!written.has_value()) {
@@ -2234,6 +2322,18 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
             {{"stage", "manifest_settlement"}},
         });
   }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  if (sequence_flush_identity.has_value()) {
+    const auto fault = testing::detail::invoke_fault(
+        testing::FaultPoint::sequence_manifest_publish,
+        bundle / "manifest.json");
+    if (!fault.has_value()) {
+      detail::abort_publish();
+      return foundation::Result<domain::AppliedCommand>::failure(
+          fault.error());
+    }
+  }
+#endif
   written = platform->replace_complete(
       bundle / "manifest.json", byte_span(manifest_bytes));
   if (!written.has_value()) {
@@ -2252,12 +2352,6 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
   }
 
-  const auto cleanup =
-      complete_journal_cleanup(*platform, bundle, cleanup_take_id);
-  if (!cleanup.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        cleanup.error());
-  }
   return applied;
 }
 
@@ -2339,9 +2433,10 @@ foundation::Result<void> ProjectStore::create(
             "project bundle must end in .lmdj and start at revision zero",
         });
   }
-  const auto encoded = project_json(initial);
+  const auto persisted_initial = persisted_v3_projection(initial);
+  const auto encoded = project_json(persisted_initial);
   const auto validated = parse_project(encoded, bundle);
-  if (!validated.has_value() || validated.value() != initial) {
+  if (!validated.has_value() || validated.value() != persisted_initial) {
     return foundation::Result<void>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -2404,7 +2499,7 @@ foundation::Result<void> ProjectStore::create(
     auto existing_state =
         parse_project(existing_json.value(), checkpoint_final);
     if (!existing_state.has_value() ||
-        existing_state.value() != initial ||
+        existing_state.value() != persisted_initial ||
         existing_bytes.value() != checkpoint_bytes) {
       return foundation::Result<void>::failure(
           invalid_project(
@@ -2574,95 +2669,361 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
   return execute_persisted(platform_, bundle, PersistedCommand{command});
 }
 
-foundation::Result<std::optional<RecordTakeReplay>>
-ProjectStore::replay_record_take(
+foundation::Result<std::optional<SequenceFlushExecution>>
+ProjectStore::replay_sequence_flush(
     const std::filesystem::path& bundle,
-    const RecordTakeReplayIdentity& identity) {
-  if (!domain::is_valid_uuid(identity.meta.command_id.value())) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+    const SequenceFlushIdentity& identity) {
+  if (!domain::is_valid_uuid(identity.session_id.value()) ||
+      !domain::is_valid_uuid(identity.command_id.value()) ||
+      !domain::is_valid_uuid(identity.pattern_id.value())) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(
         Error{
             ErrorCode::invalid_argument,
-            "command id is not a safe file name",
+            "Sequence flush identity is invalid",
         });
   }
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        tree.error());
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(tree.error());
   }
-  auto lock_result = platform_->acquire_writer(bundle);
-  if (!lock_result.has_value()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        lock_result.error());
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(lease.error());
   }
-  auto lock = std::move(lock_result.value());
-  (void)lock;
-  tree = validate_managed_bundle_tree(*platform_, bundle);
-  if (!tree.has_value()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        tree.error());
-  }
+  auto operation = std::move(lease.value());
+  (void)operation;
   auto loaded = load_project(*platform_, bundle);
   if (!loaded.has_value()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        loaded.error());
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(loaded.error());
   }
   const auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
   if (!recovered.has_value()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        recovered.error());
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(recovered.error());
   }
-  const auto original =
-      loaded.value().commands.find(identity.meta.command_id);
+  const auto original = loaded.value().commands.find(identity.command_id);
   if (original == loaded.value().commands.end()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::success(
-        std::nullopt);
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::success(std::nullopt);
   }
-  const auto* record =
-      std::get_if<domain::RecordTake>(&original->second);
-  if (record == nullptr) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+  const auto stored_identity =
+      loaded.value().sequence_flush_identities.find(identity.command_id);
+  const auto* merge =
+      std::get_if<domain::MergePatternEvents>(&original->second);
+  if (stored_identity == loaded.value().sequence_flush_identities.end() ||
+      stored_identity->second != identity || merge == nullptr ||
+      merge->pattern_id != identity.pattern_id) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(
         Error{
             ErrorCode::invalid_argument,
-            "command id belongs to a different command type",
+            "Sequence flush identity does not match the persisted command",
         });
   }
-  if (record->meta.expected_revision != identity.meta.expected_revision ||
-      record->take.id != identity.take_id ||
-      record->pattern != identity.pattern) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-        Error{
-            ErrorCode::invalid_argument,
-            "take commit replay identity does not match persisted RecordTake",
-        });
-  }
-  const auto receipt =
-      loaded.value().receipts.find(identity.meta.command_id);
+  const auto receipt = loaded.value().receipts.find(identity.command_id);
   if (receipt == loaded.value().receipts.end()) {
-    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(
         invalid_project(
-            "persisted RecordTake receipt is missing",
+            "persisted Sequence flush receipt is missing",
             bundle / "manifest.json"));
   }
-  const auto cleanup =
-      loaded.value().cleanup_obligations.find(identity.meta.command_id);
-  if (cleanup != loaded.value().cleanup_obligations.end()) {
-    const auto completed =
-        complete_journal_cleanup(*platform_, bundle, cleanup->second);
-    if (!completed.has_value()) {
-      return foundation::Result<std::optional<RecordTakeReplay>>::failure(
-          completed.error());
-    }
-  }
-  return foundation::Result<std::optional<RecordTakeReplay>>::success(
-      RecordTakeReplay{
-          *record,
+  return foundation::Result<
+      std::optional<SequenceFlushExecution>>::success(
+      SequenceFlushExecution{
+          identity,
+          *merge,
           domain::AppliedCommand{
               std::move(loaded.value().state),
               receipt->second.event,
               true,
           },
       });
+}
+
+foundation::Result<std::optional<SequenceFlushExecution>>
+ProjectStore::replay_sequence_flush(
+    const std::filesystem::path& bundle,
+    const foundation::SequenceSessionId& session_id,
+    const foundation::CommandId& command_id) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(command_id.value())) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(
+        Error{ErrorCode::invalid_argument,
+              "Sequence flush replay identity is invalid"});
+  }
+  std::optional<SequenceFlushIdentity> identity;
+  {
+    auto tree = validate_managed_bundle_tree(*platform_, bundle);
+    if (!tree.has_value()) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::failure(tree.error());
+    }
+    auto lease = platform_->acquire_writer(bundle);
+    if (!lease.has_value()) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::failure(lease.error());
+    }
+    auto operation = std::move(lease.value());
+    (void)operation;
+    auto loaded = load_project(*platform_, bundle);
+    if (!loaded.has_value()) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::failure(loaded.error());
+    }
+    const auto recovered =
+        recover_uncommitted(*platform_, bundle, loaded.value());
+    if (!recovered.has_value()) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::failure(recovered.error());
+    }
+    if (!loaded.value().commands.contains(command_id)) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::success(std::nullopt);
+    }
+    const auto stored =
+        loaded.value().sequence_flush_identities.find(command_id);
+    if (stored == loaded.value().sequence_flush_identities.end() ||
+        stored->second.session_id != session_id) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Sequence flush identity does not match the persisted command",
+      });
+    }
+    identity = stored->second;
+  }
+  return replay_sequence_flush(bundle, *identity);
+}
+
+foundation::Result<SequenceFlushExecution>
+ProjectStore::execute_sequence_flush(
+    const std::filesystem::path& bundle,
+    const SequenceFlushIdentity& identity) {
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active(bundle);
+  if (!active.has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(active.error());
+  }
+  if (active.value().session_id != identity.session_id) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence flush session does not match the active Journal",
+        });
+  }
+  const auto flush = std::find_if(
+      active.value().flushes.begin(), active.value().flushes.end(),
+      [&identity](const auto& candidate) {
+        return candidate.flush_seq == identity.flush_seq;
+      });
+  if (flush == active.value().flushes.end() ||
+      flush->command_id != identity.command_id ||
+      flush->pattern_id != identity.pattern_id) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence flush identity is not durably journaled",
+        });
+  }
+  const domain::MergePatternEvents command{
+      {identity.command_id, flush->expected_revision},
+      identity.pattern_id,
+      flush->canonical_events,
+  };
+
+  auto committed = [&]() -> foundation::Result<domain::AppliedCommand> {
+    auto tree = validate_managed_bundle_tree(*platform_, bundle);
+    if (!tree.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+    }
+    auto lease = platform_->acquire_writer(bundle);
+    if (!lease.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(lease.error());
+    }
+    auto operation = std::move(lease.value());
+    (void)operation;
+    auto loaded = load_project(*platform_, bundle);
+    if (!loaded.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          loaded.error());
+    }
+    auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+    if (!recovered.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          recovered.error());
+    }
+    auto locked_active = journal.read_active(bundle);
+    if (!locked_active.has_value() ||
+        locked_active.value().session_id != identity.session_id) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          locked_active.has_value()
+              ? Error{
+                    ErrorCode::invalid_argument,
+                    "Sequence Journal changed before flush admission",
+                }
+              : locked_active.error());
+    }
+    const auto locked_flush = std::find_if(
+        locked_active.value().flushes.begin(),
+        locked_active.value().flushes.end(),
+        [&identity](const auto& candidate) {
+          return candidate.flush_seq == identity.flush_seq;
+        });
+    if (locked_flush == locked_active.value().flushes.end() ||
+        locked_flush->command_id != identity.command_id ||
+        locked_flush->pattern_id != identity.pattern_id ||
+        locked_flush->expected_revision != flush->expected_revision ||
+        locked_flush->canonical_events != flush->canonical_events) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "Sequence Journal changed before flush admission",
+          });
+    }
+    const auto existing =
+        loaded.value().sequence_flush_identities.find(identity.command_id);
+    if (loaded.value().receipts.contains(identity.command_id) &&
+        (existing == loaded.value().sequence_flush_identities.end() ||
+         existing->second != identity)) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "command id is bound to a different Sequence flush identity",
+          });
+    }
+    auto persisted = PersistedCommand{command};
+    return commit_loaded(
+        platform_, bundle, std::move(loaded.value()), persisted,
+        std::nullopt, nullptr, identity);
+  }();
+  if (!committed.has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        committed.error());
+  }
+
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto visibility_fault = testing::detail::invoke_fault(
+      testing::FaultPoint::sequence_receipt_reload,
+      bundle / "manifest.json");
+  if (!visibility_fault.has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        visibility_fault.error());
+  }
+#endif
+  auto visible = replay_sequence_flush(bundle, identity);
+  if (!visible.has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        visible.error());
+  }
+  if (!visible.value().has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        Error{
+            ErrorCode::io_error,
+            "Sequence flush receipt is not visible from the manifest head",
+        });
+  }
+  const auto pattern =
+      visible.value()->outcome.state.patterns.find(identity.pattern_id);
+  if (pattern == visible.value()->outcome.state.patterns.end()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        Error{
+            ErrorCode::invalid_project,
+            "Sequence flush target disappeared after manifest publication",
+        });
+  }
+  auto completed = journal.complete_flush(
+      bundle, identity.session_id, identity.flush_seq,
+      visible.value()->outcome.state.revision,
+      sequence_pattern_fingerprint(pattern->second));
+  if (!completed.has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        completed.error());
+  }
+  auto result = std::move(*visible.value());
+  result.outcome.replayed = committed.value().replayed;
+  return foundation::Result<SequenceFlushExecution>::success(
+      std::move(result));
+}
+
+foundation::Result<std::vector<SequenceRecoveryCandidate>>
+ProjectStore::reconcile_sequence_recovery(
+    const std::filesystem::path& bundle) {
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active(bundle);
+  if (!active.has_value()) {
+    if (active.error().code == ErrorCode::not_found) {
+      return journal.list_recoverable(bundle);
+    }
+    return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
+        active.error());
+  }
+  for (const auto& flush : active.value().flushes) {
+    if (flush.completed) {
+      continue;
+    }
+    const SequenceFlushIdentity identity{
+        active.value().session_id,
+        flush.flush_seq,
+        flush.command_id,
+        flush.pattern_id,
+    };
+    auto visible = replay_sequence_flush(bundle, identity);
+    if (!visible.has_value()) {
+      return foundation::Result<
+          std::vector<SequenceRecoveryCandidate>>::failure(visible.error());
+    }
+    if (!visible.value().has_value()) {
+      continue;
+    }
+    const auto pattern =
+        visible.value()->outcome.state.patterns.find(identity.pattern_id);
+    if (pattern == visible.value()->outcome.state.patterns.end()) {
+      return foundation::Result<
+          std::vector<SequenceRecoveryCandidate>>::failure(
+          Error{
+              ErrorCode::invalid_project,
+              "committed Sequence flush target is missing",
+          });
+    }
+    auto completed = journal.complete_flush(
+        bundle, identity.session_id, identity.flush_seq,
+        visible.value()->outcome.state.revision,
+        sequence_pattern_fingerprint(pattern->second));
+    if (!completed.has_value()) {
+      return foundation::Result<
+          std::vector<SequenceRecoveryCandidate>>::failure(completed.error());
+    }
+  }
+  active = journal.read_active(bundle);
+  if (!active.has_value()) {
+    return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
+        active.error());
+  }
+  const bool has_pending = std::any_of(
+      active.value().flushes.begin(), active.value().flushes.end(),
+      [](const auto& flush) { return !flush.completed; });
+  if (has_pending || active.value().flushes.empty()) {
+    auto sealed = journal.seal(
+        bundle, active.value().session_id, "owner_lost");
+    if (!sealed.has_value()) {
+      return foundation::Result<
+          std::vector<SequenceRecoveryCandidate>>::failure(sealed.error());
+    }
+  } else {
+    auto removed = journal.remove_active_if_complete(
+        bundle, active.value().session_id);
+    if (!removed.has_value()) {
+      return foundation::Result<
+          std::vector<SequenceRecoveryCandidate>>::failure(removed.error());
+    }
+  }
+  return journal.list_recoverable(bundle);
 }
 
 foundation::Result<ImportArtifactExecution>

@@ -76,12 +76,17 @@ function projectView(
     throw protocolMismatch("Project inspection response is invalid");
   }
   const project = inspected.project;
-  if (project.contract !== "lmdj.project.v1" ||
+  if (project.contract !== "lmdj.project.v3" ||
       project.project_id !== summary.projectId ||
       !integer(project.revision) ||
       project.revision !== inspected.project_revision ||
       !integer(project.bpm, 40) || project.bpm > 240 ||
-      !record(project.assets) || !Array.isArray(project.banks) ||
+      !record(project.assets) || !record(project.patterns) ||
+      !record(project.sequence_settings) ||
+      typeof project.sequence_settings.quantize_enabled !== "boolean" ||
+      !integer(project.sequence_settings.swing_percent, 50) ||
+      project.sequence_settings.swing_percent > 75 ||
+      !Array.isArray(project.banks) ||
       project.banks.length !== 4) {
     throw protocolMismatch("Project inspection truth is invalid");
   }
@@ -108,6 +113,19 @@ function projectView(
     }
   }
   const assignedPadCount = pads.filter(({assetId}) => assetId !== null).length;
+  const patterns = Object.entries(project.patterns).map(([patternId, value]) => {
+    if (!UUID_PATTERN.test(patternId) || !record(value) ||
+        ![1, 2, 4, 8].includes(value.bars as number)) {
+      throw protocolMismatch("Project Pattern inspection is invalid");
+    }
+    return Object.freeze({
+      patternId,
+      bars: value.bars as 1 | 2 | 4 | 8,
+    });
+  }).sort((left, right) => left.patternId.localeCompare(right.patternId));
+  if (!patterns.some(({patternId}) => patternId === summary.patternId)) {
+    throw protocolMismatch("Selected Project Pattern is unavailable");
+  }
   const assetCount = Object.keys(project.assets).length;
   if (assignedPadCount !== summary.assignedPadCount ||
       assetCount !== summary.assetCount) {
@@ -121,6 +139,11 @@ function projectView(
     assignedPadCount,
     key: "—",
     pads: Object.freeze(pads),
+    patterns: Object.freeze(patterns),
+    sequenceSettings: Object.freeze({
+      quantizeEnabled: project.sequence_settings.quantize_enabled,
+      swingPercent: project.sequence_settings.swing_percent,
+    }),
   });
 }
 

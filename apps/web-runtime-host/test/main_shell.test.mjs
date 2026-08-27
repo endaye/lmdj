@@ -89,6 +89,36 @@ function fixture() {
     async trigger() {
       return {sequence: 1, slot: 0, velocity: 100, source: "pointer"};
     },
+    async beginSequence(request) {
+      return {state: "active", sessionId: request.sessionId};
+    },
+    async recordSequenceEvent(request) {
+      return {state: "active", sessionId: request.sessionId};
+    },
+    async flushSequence(request) {
+      return {state: "active", sessionId: request.sessionId};
+    },
+    async stopSequence(request) {
+      return {state: "inactive", sessionId: request.sessionId};
+    },
+    async requestPatternSwitch(request) {
+      return {state: "switching", sessionId: request.sessionId};
+    },
+    async querySequenceStatus() {
+      return {state: "inactive"};
+    },
+    async listSequenceRecovery() {
+      return [];
+    },
+    async applySequenceRecovery(request) {
+      return {state: "inactive", sessionId: request.sessionId};
+    },
+    async discardSequenceRecovery() {
+      return true;
+    },
+    subscribeSequenceBarBoundary() {
+      return () => true;
+    },
     async close() {
       state = "closed";
       closed += 1;
@@ -109,7 +139,7 @@ function fixture() {
         state,
         error_code: null,
         product_build: TEST_PRODUCT_BUILD,
-        host_version: "1.2.15",
+        host_version: "2.0.0",
         protocol_version: 1,
       });
     },
@@ -129,6 +159,9 @@ function fixture() {
           diagnostic_project_generation: 7,
         }
         : {diagnostic_project_state: diagnosticState};
+    },
+    async refreshSequenceAuthority() {
+      return {state: "inactive", switch_pending: false, recovery_count: 0};
     },
   };
   const controller = createWebRuntimeHostController({
@@ -168,6 +201,17 @@ test("thin diagnostic controller delegates lifecycle and renders merged state", 
     slot: 0,
     velocity: 100,
     source: "pointer",
+  });
+  const sessionId = "00000000-0000-4000-8000-000000000201";
+  assert.deepEqual(await controller.beginSequence({sessionId}), {
+    state: "active",
+    sessionId,
+  });
+  assert.equal((await controller.querySequenceStatus()).state, "inactive");
+  assert.deepEqual(await controller.refreshSequenceDiagnostics(), {
+    state: "inactive",
+    switch_pending: false,
+    recovery_count: 0,
   });
   assert.equal(await controller.close(), true);
   assert.equal(closed(), 1);

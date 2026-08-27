@@ -73,6 +73,9 @@ def main() -> int:
         / "realtime_audio_worklet.cpp"
     )
     runtime_pre = source_root / "web-runtime-pre.js"
+    runtime_session = platform_root / "web" / "runtime_session.mjs"
+    web_host_main = host_root / "src" / "main.mjs"
+    diagnostic_project = host_root / "src" / "diagnostic_project.mjs"
 
     required_files = [
         host_cmake,
@@ -90,6 +93,9 @@ def main() -> int:
         playwright_config,
         realtime_audio_worklet,
         runtime_pre,
+        runtime_session,
+        web_host_main,
+        diagnostic_project,
     ]
     for path in required_files:
         require(path.is_file(), f"required Task 6 source is missing: {path}")
@@ -101,6 +107,10 @@ def main() -> int:
     )
     bridge_source = (source_root / "bridge.cpp").read_text(encoding="utf-8")
     runtime_pre_source = runtime_pre.read_text(encoding="utf-8")
+    runtime_session_source = runtime_session.read_text(encoding="utf-8")
+    host_javascript = combined_text(
+        [runtime_session, web_host_main, diagnostic_project]
+    )
     cmake = combined_text([host_cmake, platform_cmake, root_cmake, product_cmake])
 
     forbidden_source = {
@@ -118,7 +128,9 @@ def main() -> int:
             "Project bundle layout knowledge"
         ),
         r"lmdj\.patch\.v1|lmdj\.materials\.v1": "retired Contract",
-        r"record\.(?:begin|stop|commit)": "retired Capture operation spelling",
+        r"(?<!sequence\.)\brecord\.(?:begin|stop|commit)": (
+            "retired Capture operation spelling"
+        ),
         r"lmdj/providers/|providers/local-|\blocal_proof_": (
             "Product-specific Provider wiring"
         ),
@@ -130,6 +142,45 @@ def main() -> int:
             re.search(pattern, source) is None,
             f"{description} found in Web Host production source",
         )
+
+    for pattern, description in {
+        r"\b(?:ProjectStore|SequenceJournal|TakeJournal)\b": (
+            "Project or journal implementation in browser JavaScript"
+        ),
+        r"sequence_pattern_fingerprint|fingerprintSequencePattern": (
+            "Sequence fingerprint implementation in browser JavaScript"
+        ),
+        r"quantize_onset_tick|normalize_duration_tick|kTickDenominator": (
+            "musical timing math in browser JavaScript"
+        ),
+        r'\b(?:onset_tick|duration_tick)\s*[:=].*[+*/%-]': (
+            "fallback tick sequencer in browser JavaScript"
+        ),
+        r"recovery/(?:active|sealed)|sequence\.jsonl": (
+            "Sequence journal layout knowledge in browser JavaScript"
+        ),
+    }.items():
+        require(
+            re.search(pattern, host_javascript) is None,
+            f"{description} found",
+        )
+
+    sequence_adapter = re.search(
+        r"function beginSequence\(.*?\n  async function reloadSnapshot\(",
+        runtime_session_source,
+        re.DOTALL,
+    )
+    require(sequence_adapter is not None, "Runtime Session Sequence adapter is missing")
+    require(
+        re.search(
+            r"performance\.(?:now|timeOrigin)|Date\.(?:now|UTC)|"
+            r"setInterval|requestAnimationFrame|Math\.(?:floor|round|ceil)",
+            sequence_adapter.group(0),
+        )
+        is None,
+        "Runtime Session Sequence adapter must not derive a musical clock or "
+        "run a JavaScript fallback sequencer",
+    )
 
     forbidden_cmake = {
         r"(?:lmdj::project_io|lmdj_project_io)": "direct Project I/O link",
@@ -247,28 +298,6 @@ def main() -> int:
         )
         is not None,
         "Control outcome drain must copy the bounded fixed array explicitly",
-    )
-    capture_finish = re.search(
-        r"foundation::Result<void> finish_capture\(bool make_committable\)\s*"
-        r"\{(.*?)\n  \}",
-        control_runtime_source,
-        re.DOTALL,
-    )
-    require(capture_finish is not None, "Control capture finish barrier is missing")
-    capture_finish_body = capture_finish.group(1)
-    require(
-        "std::this_thread::yield()" not in capture_finish_body,
-        "Emscripten capture barriers must not busy-wait with a non-yielding "
-        "sched_yield implementation",
-    )
-    require(
-        "coordinator->await_quiescent" in capture_finish_body,
-        "capture barriers must request an acknowledged AudioWorklet quantum",
-    )
-    require(
-        "coordinator->begin_rendering" in capture_finish_body,
-        "successful take.stop must resume AudioWorklet rendering after the "
-        "acknowledged final quantum",
     )
     realtime_audio_worklet_source = realtime_audio_worklet.read_text(
         encoding="utf-8"
@@ -830,24 +859,19 @@ def main() -> int:
         "claimed publication hang observation must outlive its request "
         "deadline on a slow runner",
     )
-    visible_journey = re.search(
-        r'test\("Chromium visible diagnostic project completes the packaged '
-        r'runtime journey".*?\n\}\);',
+    sequence_journey = re.search(
+        r'test\("Stage 9 Chromium records, overdubs, replays, reloads, and '
+        r'exposes observer status".*?\n\}\);',
         browser_spec_text,
         re.DOTALL,
     )
-    require(visible_journey is not None, "visible packaged journey is missing")
-    take_outcome_proof = visible_journey.group(0).find(
-        "await proveExactOutcomes(page, takeAdmissions"
-    )
-    take_stop = visible_journey.group(0).find(
-        "stopTakeWithQuiescenceDiagnostics(page)"
-    )
+    require(sequence_journey is not None, "Stage 9 Sequence journey is missing")
     require(
-        take_outcome_proof >= 0 and take_outcome_proof < take_stop,
-        "packaged Take proof must settle exact realtime outcomes before the "
-        "stop barrier so slow OPFS persistence is not conflated with final "
-        "AudioWorklet quiescence",
+        "pendingEventCount: 0" in sequence_journey.group(0)
+        and "replayed: true" in sequence_journey.group(0)
+        and "snapshot.reload" in sequence_journey.group(0),
+        "packaged Sequence proof must observe a drained journal, prove the "
+        "idempotent stop boundary, and reload committed Project Truth",
     )
     runtime_gate = re.search(
         r"run_audio_worklet_conformance\(\)\s*\{(.*?)\n\}",

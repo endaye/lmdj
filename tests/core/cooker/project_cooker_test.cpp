@@ -70,13 +70,18 @@ using CookResult = decltype(lmdj::cooker::cook(
     std::declval<ArtifactResolver>()));
 
 using RuntimeSnapshotMemberTypes = decltype([] {
-  auto [project_id, project_revision, bpm, bars, pads, events] =
-      RuntimeSnapshot{ProjectId{kProjectId}, 0, 0, 0, {}, {}};
+  auto [project_id, pattern_id, project_revision, bpm, bars, ppq,
+        loop_length_ticks, pads,
+        events] = RuntimeSnapshot{
+      ProjectId{kProjectId}, PatternId{kPatternId}, 0, 0, 0, 0, 0, {}, {}};
   return std::tuple{
       std::type_identity<decltype(project_id)>{},
+      std::type_identity<decltype(pattern_id)>{},
       std::type_identity<decltype(project_revision)>{},
       std::type_identity<decltype(bpm)>{},
       std::type_identity<decltype(bars)>{},
+      std::type_identity<decltype(ppq)>{},
+      std::type_identity<decltype(loop_length_ticks)>{},
       std::type_identity<decltype(pads)>{},
       std::type_identity<decltype(events)>{},
   };
@@ -109,9 +114,12 @@ static_assert(std::is_same_v<
               RuntimeSnapshotMemberTypes,
               std::tuple<
                   std::type_identity<ProjectId>,
+                  std::type_identity<PatternId>,
                   std::type_identity<std::uint64_t>,
                   std::type_identity<std::uint16_t>,
                   std::type_identity<std::uint8_t>,
+                  std::type_identity<std::uint32_t>,
+                  std::type_identity<std::uint32_t>,
                   std::type_identity<std::vector<ResolvedPad>>,
                   std::type_identity<std::vector<ResolvedEvent>>>>);
 static_assert(std::is_same_v<
@@ -206,7 +214,8 @@ ProjectState apply_or_throw(const ProjectState& project, const Command& command)
 
 ProjectState project_with_pattern(
     const ArtifactRef& artifact,
-    std::vector<PatternEvent> events = {{PadSlotId{0, 0}, 0, 100}}) {
+    std::vector<PatternEvent> events = {
+        {PadSlotId{0, 0}, 0, 240, 100}}) {
   auto project = new_project();
   project = apply_or_throw(
       project,
@@ -380,6 +389,9 @@ void test_cooker_resolves_events_through_current_pad_slot() {
   LMDJ_CHECK(result.value()->bars == 1);
   LMDJ_CHECK(result.value()->events.size() == 1);
   LMDJ_CHECK((result.value()->events.at(0).slot == PadSlotId{0, 0}));
+  LMDJ_CHECK(result.value()->events.at(0).onset_tick == 0);
+  LMDJ_CHECK(result.value()->events.at(0).duration_tick == 240);
+  LMDJ_CHECK(result.value()->events.at(0).velocity == 100);
   LMDJ_CHECK(result.value()->events.at(0).sample->interleaved.size() == 2'400);
 }
 
@@ -494,7 +506,7 @@ void test_cooker_rejects_unassigned_slot() {
       project,
       Command{CreatePattern{
           meta(kPatternCommand, project.revision),
-          {PatternId{kPatternId}, 1, {{PadSlotId{0, 1}, 0, 100}}},
+          {PatternId{kPatternId}, 1, {{PadSlotId{0, 1}, 0, 240, 100}}},
       }});
   const auto result = lmdj::cooker::cook(
       project, PatternId{kPatternId}, resolver_for({}));
@@ -568,8 +580,8 @@ void test_cooker_rejects_cached_artifact_with_later_wrong_length() {
               PatternId{kPatternId},
               1,
               {
-                  {PadSlotId{0, 0}, 0, 100},
-                  {PadSlotId{0, 1}, 4, 96},
+                  {PadSlotId{0, 0}, 0, 240, 100},
+                  {PadSlotId{0, 1}, 960, 240, 96},
               },
           },
       }});
@@ -591,8 +603,8 @@ void test_cooker_decodes_each_unique_artifact_once() {
   const auto project = project_with_pattern(
       artifact,
       {
-          {PadSlotId{0, 0}, 0, 100},
-          {PadSlotId{0, 0}, 4, 96},
+          {PadSlotId{0, 0}, 0, 240, 100},
+          {PadSlotId{0, 0}, 960, 240, 96},
       });
   std::uint32_t resolve_count = 0;
   const auto result = lmdj::cooker::cook(
@@ -694,6 +706,34 @@ void test_cooker_rejects_invalid_trim_gain_and_trigger_values() {
   }
 }
 
+void test_cooker_rejects_invalid_tick_and_duration_bounds() {
+  const auto artifact = fixture_artifact("stereo.wav");
+  auto onset_at_loop_end = project_with_pattern(artifact);
+  onset_at_loop_end.patterns.at(PatternId{kPatternId})
+      .events.front().onset_tick = lmdj::domain::kBarTicks4x4;
+  auto zero_duration = project_with_pattern(artifact);
+  zero_duration.patterns.at(PatternId{kPatternId})
+      .events.front().duration_tick = 0;
+  auto duration_past_loop = project_with_pattern(artifact);
+  auto& past_loop = duration_past_loop.patterns.at(PatternId{kPatternId})
+                        .events.front();
+  past_loop.onset_tick = lmdj::domain::kBarTicks4x4 - 1;
+  past_loop.duration_tick = 2;
+
+  for (const auto* project : {
+           &onset_at_loop_end,
+           &zero_duration,
+           &duration_past_loop,
+       }) {
+    const auto result = lmdj::cooker::cook(
+        *project,
+        PatternId{kPatternId},
+        resolver_for({{artifact.sha256, fixture_bytes("stereo.wav")}}));
+    LMDJ_CHECK(!result.has_value());
+    LMDJ_CHECK(result.error().code == ErrorCode::invalid_project);
+  }
+}
+
 void test_cooker_returns_immutable_deterministic_snapshot_values() {
   const auto artifact = fixture_artifact("stereo.wav");
   const auto project = project_with_pattern(artifact);
@@ -710,9 +750,13 @@ void test_cooker_returns_immutable_deterministic_snapshot_values() {
   LMDJ_CHECK(second.has_value());
   static_assert(std::is_const_v<std::remove_reference_t<decltype(*first.value())>>);
   LMDJ_CHECK(first.value()->project_id == second.value()->project_id);
+  LMDJ_CHECK(first.value()->pattern_id == second.value()->pattern_id);
   LMDJ_CHECK(first.value()->project_revision == second.value()->project_revision);
   LMDJ_CHECK(first.value()->bpm == second.value()->bpm);
   LMDJ_CHECK(first.value()->bars == second.value()->bars);
+  LMDJ_CHECK(first.value()->ppq == lmdj::domain::kPpq);
+  LMDJ_CHECK(first.value()->loop_length_ticks ==
+             lmdj::domain::kBarTicks4x4);
   LMDJ_CHECK(first.value()->pads.size() == second.value()->pads.size());
   LMDJ_CHECK(first.value()->pads.at(0).slot == second.value()->pads.at(0).slot);
   LMDJ_CHECK(
@@ -723,7 +767,10 @@ void test_cooker_returns_immutable_deterministic_snapshot_values() {
       second.value()->pads.at(0).sample->interleaved);
   LMDJ_CHECK(first.value()->events.size() == second.value()->events.size());
   LMDJ_CHECK(first.value()->events.at(0).slot == second.value()->events.at(0).slot);
-  LMDJ_CHECK(first.value()->events.at(0).step == second.value()->events.at(0).step);
+  LMDJ_CHECK(first.value()->events.at(0).onset_tick ==
+             second.value()->events.at(0).onset_tick);
+  LMDJ_CHECK(first.value()->events.at(0).duration_tick ==
+             second.value()->events.at(0).duration_tick);
   LMDJ_CHECK(first.value()->events.at(0).velocity == second.value()->events.at(0).velocity);
   LMDJ_CHECK(first.value()->events.at(0).sample->interleaved ==
              second.value()->events.at(0).sample->interleaved);
@@ -748,6 +795,7 @@ int main() {
     test_cooker_prepares_44100_pcm_and_resolves_complete_playback();
     test_cooker_resolves_default_playback_over_the_full_prepared_source();
     test_cooker_rejects_invalid_trim_gain_and_trigger_values();
+    test_cooker_rejects_invalid_tick_and_duration_bounds();
     test_cooker_returns_immutable_deterministic_snapshot_values();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -15,7 +15,6 @@ PROJECT_ID = "00000000-0000-4000-8000-000000000001"
 PATTERN_ID = "00000000-0000-4000-8000-000000000010"
 KICK_ASSET_ID = "00000000-0000-4000-8000-000000000101"
 SNARE_ASSET_ID = "00000000-0000-4000-8000-000000000102"
-TAKE_ID = "00000000-0000-4000-8000-000000000201"
 
 
 def canonical_json(value: object) -> str:
@@ -159,10 +158,30 @@ def pattern() -> dict:
         "pattern_id": PATTERN_ID,
         "bars": 1,
         "events": [
-            {"slot": slot(0, 0), "step": 0, "velocity": 127},
-            {"slot": slot(0, 1), "step": 4, "velocity": 127},
-            {"slot": slot(0, 0), "step": 8, "velocity": 127},
-            {"slot": slot(0, 1), "step": 12, "velocity": 127},
+            {
+                "slot": slot(0, 0),
+                "onset_tick": 0,
+                "duration_tick": 240,
+                "velocity": 127,
+            },
+            {
+                "slot": slot(0, 1),
+                "onset_tick": 960,
+                "duration_tick": 240,
+                "velocity": 127,
+            },
+            {
+                "slot": slot(0, 0),
+                "onset_tick": 1920,
+                "duration_tick": 240,
+                "velocity": 127,
+            },
+            {
+                "slot": slot(0, 1),
+                "onset_tick": 2880,
+                "duration_tick": 240,
+                "velocity": 127,
+            },
         ],
     }
 
@@ -501,6 +520,7 @@ def facade_routing_and_exit_mapping(
                 "project_path": str(temp_root / "wrong-route.lmdj"),
                 "project_id": PROJECT_ID,
                 "bpm": 120,
+                "initial_pattern": pattern(),
             },
         ),
         ("command", {"operation": "provider.list"}),
@@ -555,6 +575,7 @@ def author_golden_project(
                 "project_path": str(project),
                 "project_id": PROJECT_ID,
                 "bpm": 120,
+                "initial_pattern": pattern(),
             },
             0,
         ),
@@ -615,60 +636,22 @@ def author_golden_project(
         (
             "command",
             {
-                "operation": "take.begin",
+                "operation": "pad.assign",
                 "project_path": str(project),
-                "take_id": TAKE_ID,
+                "command_id": uuid(5),
                 "expected_revision": 4,
-                "sample_rate": 48000,
+                "slot": slot(0, 0),
+                "asset_id": KICK_ASSET_ID,
             },
-            4,
+            5,
         ),
     ]
     for mode, request, revision in requests:
         response = run_request(executable, workspace, mode, request)
         check_success(response, revision)
 
-    for pad, frame_offset, event_count in (
-        (0, 0, 1),
-        (1, 24000, 2),
-        (0, 48000, 3),
-        (1, 72000, 4),
-    ):
-        response = run_request(
-            executable,
-            workspace,
-            "command",
-            {
-                "operation": "take.append",
-                "project_path": str(project),
-                "take_id": TAKE_ID,
-                "event": {
-                    "slot": slot(0, pad),
-                    "frame_offset": frame_offset,
-                    "velocity": 127,
-                },
-            },
-        )
-        check_success(response, 4)
-        assert response["result"]["event_count"] == event_count
-
-    commit_request = {
-        "operation": "take.commit",
-        "project_path": str(project),
-        "command_id": uuid(5),
-        "expected_revision": 4,
-        "take_id": TAKE_ID,
-        "pattern": pattern(),
-    }
-    response = run_request(
-        executable, workspace, "command", commit_request
-    )
-    check_success(response, 5)
-    assert response["result"]["committed_revision"] == 5
-    assert response["result"]["replayed"] is False
-    active_journal = (
-        project / "recovery" / "active" / f"{TAKE_ID}.jsonl"
-    )
+    commit_request = requests[-1][1]
+    active_journal = project / "recovery/active/sequence.jsonl"
     assert not active_journal.exists()
 
     inspected = run_request(
@@ -681,9 +664,7 @@ def author_golden_project(
     projected = inspected["result"]["project"]
     assert sum(len(bank["pads"]) for bank in projected["banks"]) == 64
     assert len(projected["assets"]) == 2
-    assert len(projected["takes"]) == 1
     assert len(projected["patterns"]) == 1
-    assert len(projected["takes"][TAKE_ID]["events"]) == 4
     assert len(projected["patterns"][PATTERN_ID]["events"]) == 4
     return project, commit_request, (project / "manifest.json").read_bytes()
 
@@ -843,9 +824,7 @@ def fresh_process_replay(
     check_success(response, 5)
     assert response["result"]["committed_revision"] == 5
     assert response["result"]["replayed"] is True
-    active_journal = (
-        project / "recovery" / "active" / f"{TAKE_ID}.jsonl"
-    )
+    active_journal = project / "recovery/active/sequence.jsonl"
     assert not active_journal.exists()
     assert (project / "manifest.json").read_bytes() == manifest_before
 

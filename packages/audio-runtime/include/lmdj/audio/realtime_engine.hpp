@@ -24,6 +24,8 @@ inline constexpr std::size_t kRealtimeQueueCapacity = 1'024;
 inline constexpr std::size_t kRealtimeVoiceCapacity = 128;
 inline constexpr std::size_t kRealtimeBankCapacity = 4;
 inline constexpr std::size_t kRealtimePublishQueueCapacity = 4;
+inline constexpr std::size_t kRealtimePatternCapacity = 4;
+inline constexpr std::size_t kRealtimePatternPublishQueueCapacity = 1;
 inline constexpr std::size_t kRealtimeCaptureCapacity = 4'096;
 inline constexpr std::size_t kRealtimeTriggerOutcomeCapacity = 4'096;
 // A legacy one-shot can publish both started and completed edges. Keep room
@@ -48,6 +50,30 @@ enum class PublishResult : std::uint8_t {
   events_pending,
   bank_slots_full,
   publish_queue_full,
+};
+
+enum class PatternPublishResult : std::uint8_t {
+  accepted,
+  project_mismatch,
+  publication_pending,
+  pattern_slots_full,
+  publish_queue_full,
+};
+
+struct PatternPublication {
+  PatternPublishResult result;
+  std::uint64_t generation;
+  std::uint64_t activation_frame;
+};
+
+struct PatternTelemetry {
+  std::uint64_t current_generation;
+  std::uint64_t pending_generation;
+  std::uint64_t pending_activation_frame;
+  std::uint64_t accepted_publications;
+  std::uint64_t applied_publications;
+  std::uint64_t reclaimed_patterns;
+  std::uint64_t publication_rejections;
 };
 
 enum class CaptureState : std::uint8_t {
@@ -243,6 +269,17 @@ class RealtimeEngine final {
   //     this exact release/acquire chain and the serialized control producer.
   // Applies the bank directly, and so requires quiescence, when stopped.
   PublishResult publish_sample_bank(PreparedSampleBank&& bank) noexcept;
+  // Control thread. The immutable view is applied immediately while stopped,
+  // or atomically at the next Bar boundary while running. Journal overlays
+  // remain Runtime-only and never mutate the source Runtime Snapshot.
+  PatternPublication publish_pattern_view(
+      PreparedPatternView&& pattern,
+      std::optional<std::uint64_t> activation_frame = std::nullopt) noexcept;
+  foundation::Result<void> clear_pattern_view() noexcept;
+  std::size_t reclaim_retired_patterns() noexcept;
+  std::optional<foundation::PatternId> current_pattern_id() const;
+  std::optional<foundation::PatternId> pending_pattern_id() const;
+  std::optional<std::uint64_t> current_pattern_origin_frame() const noexcept;
   // Control thread, concurrent with render. Frees only reclaimable banks,
   // which by construction hold no live Voice.
   ReclaimedBankTelemetry reclaim_retired_bank_telemetry() noexcept;
@@ -274,6 +311,7 @@ class RealtimeEngine final {
   // Counters are exact after quiescence and a best-effort snapshot while running.
   RealtimeTelemetry telemetry() const noexcept;
   BankTelemetry bank_telemetry() const noexcept;
+  PatternTelemetry pattern_telemetry() const noexcept;
   CaptureTelemetry capture_telemetry() const noexcept;
   RuntimeTriggerOutcomeTelemetry trigger_outcome_telemetry() const noexcept;
   RuntimeVoiceStateTelemetry voice_state_telemetry() const noexcept;
@@ -286,12 +324,20 @@ class RealtimeEngine final {
     retiring,
     reclaimable,
   };
+  enum class PatternState : std::uint8_t {
+    empty,
+    current,
+    pending,
+    reclaimable,
+  };
   static_assert(std::atomic<BankState>::is_always_lock_free);
+  static_assert(std::atomic<PatternState>::is_always_lock_free);
   static_assert(std::atomic<CaptureState>::is_always_lock_free);
   static_assert(
       std::atomic<RuntimeVoiceStateStreamState>::is_always_lock_free);
 
   static constexpr std::uint8_t kLegacyBankSlot = 0xff;
+  static constexpr std::uint8_t kNoPatternSlot = 0xff;
 
   struct BankSlot {
     std::optional<PreparedSampleBank> bank;
@@ -299,6 +345,19 @@ class RealtimeEngine final {
     std::size_t active_voices = 0;
     std::uint64_t generation = 0;
   };
+
+  struct PatternSlot {
+    std::optional<PreparedPatternView> pattern;
+    std::atomic<PatternState> state{PatternState::empty};
+    std::uint64_t generation = 0;
+  };
+
+  struct PatternPublishEntry {
+    std::uint8_t slot;
+    std::uint64_t generation;
+    std::uint64_t activation_frame;
+  };
+  static_assert(std::is_trivially_copyable_v<PatternPublishEntry>);
 
   struct Voice {
     std::uint64_t sequence = 0;
@@ -315,6 +374,8 @@ class RealtimeEngine final {
     std::uint32_t attack_frames_remaining = 0;
     bool releasing = false;
     std::uint32_t release_frames_remaining = 0;
+    std::uint64_t scheduled_release_frame = 0;
+    bool pattern_voice = false;
   };
 
   std::uint64_t legacy_availability_mask() const noexcept;
@@ -335,6 +396,13 @@ class RealtimeEngine final {
       std::uint32_t source_frame) noexcept;
   void stop_voice(Voice& voice, std::uint64_t runtime_frame) noexcept;
   void deactivate_voice(Voice& voice) noexcept;
+  void apply_published_pattern(
+      const PatternPublishEntry& publication,
+      std::uint64_t runtime_frame) noexcept;
+  void schedule_pattern_events(std::uint64_t runtime_frame) noexcept;
+  void start_pattern_voice(
+      const PreparedPatternEvent& event,
+      std::uint64_t loop_origin_frame) noexcept;
 
   std::array<std::vector<float>, kRealtimeSampleSlots> samples_;
   detail::FixedSpscQueue<PadControlEvent, kRealtimeQueueCapacity> queue_;
@@ -343,6 +411,12 @@ class RealtimeEngine final {
       std::uint8_t,
       kRealtimePublishQueueCapacity>
       publish_queue_;
+  std::array<PatternSlot, kRealtimePatternCapacity> pattern_slots_{};
+  detail::FixedSpscQueue<
+      PatternPublishEntry,
+      kRealtimePatternPublishQueueCapacity>
+      pattern_publish_queue_;
+  std::optional<PatternPublishEntry> audio_pending_pattern_;
   detail::FixedSpscQueue<
       CapturedTriggerEvent,
       kRealtimeCaptureCapacity>
@@ -360,7 +434,11 @@ class RealtimeEngine final {
   std::uint64_t preview_mask_ = 0;
   std::atomic<std::uint64_t> availability_mask_{0};
   std::atomic<std::uint8_t> current_bank_slot_{kLegacyBankSlot};
+  std::atomic<std::uint8_t> current_pattern_slot_{kNoPatternSlot};
   std::uint64_t next_bank_generation_ = 1;
+  std::uint64_t next_pattern_generation_ = 1;
+  std::atomic<std::uint64_t> pattern_origin_frame_{0};
+  std::size_t pattern_event_index_ = 0;
   std::atomic<RealtimeState> state_{RealtimeState::stopped};
   std::atomic<std::uint64_t> enqueued_events_{0};
   std::atomic<std::uint64_t> dequeued_events_{0};
@@ -383,6 +461,12 @@ class RealtimeEngine final {
   std::atomic<std::uint64_t> reclaimed_banks_{0};
   std::atomic<std::uint64_t> bank_slot_rejections_{0};
   std::atomic<std::uint64_t> publish_queue_drops_{0};
+  std::atomic<std::uint64_t> pending_pattern_generation_{0};
+  std::atomic<std::uint64_t> pending_pattern_activation_frame_{0};
+  std::atomic<std::uint64_t> accepted_pattern_publications_{0};
+  std::atomic<std::uint64_t> applied_pattern_publications_{0};
+  std::atomic<std::uint64_t> reclaimed_patterns_{0};
+  std::atomic<std::uint64_t> pattern_publication_rejections_{0};
   std::atomic<CaptureState> capture_state_{CaptureState::idle};
   std::atomic<std::uint64_t> captured_events_{0};
   std::atomic<std::uint64_t> drained_events_{0};

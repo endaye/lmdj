@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include <lmdj/domain/project.hpp>
 
@@ -49,8 +50,10 @@ void test_new_project_creates_all_64_addressable_pad_slots() {
 
   LMDJ_CHECK(result.has_value());
   const auto& project = result.value();
-  LMDJ_CHECK(project.contract == lmdj::domain::ProjectContract::v1);
+  LMDJ_CHECK(project.contract == lmdj::domain::ProjectContract::v3);
   LMDJ_CHECK(project.revision == 0);
+  LMDJ_CHECK(project.quantize_enabled);
+  LMDJ_CHECK(project.swing_percent == 50);
   LMDJ_CHECK(project.banks.size() == 4);
 
   std::uint32_t slot_count = 0;
@@ -65,6 +68,50 @@ void test_new_project_creates_all_64_addressable_pad_slots() {
     }
   }
   LMDJ_CHECK(slot_count == 64);
+}
+
+void test_tick_helpers_follow_locked_quantize_swing_and_duration_rules() {
+  using lmdj::domain::kBarTicks4x4;
+  using lmdj::domain::normalize_duration_tick;
+  using lmdj::domain::quantize_onset_tick;
+
+  LMDJ_CHECK(quantize_onset_tick(119, kBarTicks4x4, true, 50) == 0);
+  LMDJ_CHECK(quantize_onset_tick(120, kBarTicks4x4, true, 50) == 0);
+  LMDJ_CHECK(quantize_onset_tick(121, kBarTicks4x4, true, 50) == 240);
+  LMDJ_CHECK(
+      quantize_onset_tick(kBarTicks4x4 - 1, kBarTicks4x4, true, 50) == 0);
+  LMDJ_CHECK(quantize_onset_tick(240, kBarTicks4x4, true, 75) == 360);
+  LMDJ_CHECK(quantize_onset_tick(241, kBarTicks4x4, false, 75) == 241);
+  LMDJ_CHECK(
+      normalize_duration_tick(1'000, 1'300, 960, kBarTicks4x4) == 300);
+  LMDJ_CHECK(
+      normalize_duration_tick(1'000, 900, 960, kBarTicks4x4) == 1);
+  LMDJ_CHECK(
+      normalize_duration_tick(0, 9'000, 3'800, kBarTicks4x4) == 40);
+}
+
+void test_pattern_merge_is_last_write_wins_and_canonically_ordered() {
+  using lmdj::domain::PadSlotId;
+  using lmdj::domain::PatternEvent;
+  const std::vector<PatternEvent> stored{
+      {PadSlotId{1, 0}, 480, 120, 90},
+      {PadSlotId{0, 2}, 0, 240, 80},
+  };
+  const std::vector<PatternEvent> incoming{
+      {PadSlotId{1, 0}, 480, 300, 127},
+      {PadSlotId{0, 1}, 0, 120, 100},
+      {PadSlotId{0, 1}, 0, 60, 110},
+  };
+  const auto merged = lmdj::domain::merge_pattern_events(stored, incoming);
+
+  LMDJ_CHECK(merged.size() == 3);
+  LMDJ_CHECK((merged[0].slot == PadSlotId{0, 1}));
+  LMDJ_CHECK(merged[0].duration_tick == 60);
+  LMDJ_CHECK(merged[0].velocity == 110);
+  LMDJ_CHECK((merged[1].slot == PadSlotId{0, 2}));
+  LMDJ_CHECK((merged[2].slot == PadSlotId{1, 0}));
+  LMDJ_CHECK(merged[2].duration_tick == 300);
+  LMDJ_CHECK(merged[2].velocity == 127);
 }
 
 void test_pad_playback_defaults_are_project_v2_contract_values() {
@@ -116,15 +163,27 @@ void test_project_factory_rejects_non_contract_project_ids() {
   }
 }
 
+void test_sequence_session_id_is_a_distinct_strong_identity() {
+  const lmdj::foundation::SequenceSessionId first{kProjectId};
+  const lmdj::foundation::SequenceSessionId same{kProjectId};
+  const lmdj::foundation::SequenceSessionId different{
+      "00000000-0000-4000-8000-000000000002"};
+  LMDJ_CHECK(first == same);
+  LMDJ_CHECK(first != different);
+}
+
 }  // namespace
 
 int main() {
   try {
     test_uuid_validation_matches_project_contract_grammar();
     test_new_project_creates_all_64_addressable_pad_slots();
+    test_tick_helpers_follow_locked_quantize_swing_and_duration_rules();
+    test_pattern_merge_is_last_write_wins_and_canonically_ordered();
     test_pad_playback_defaults_are_project_v2_contract_values();
     test_project_factory_accepts_only_supported_bpm_range();
     test_project_factory_rejects_non_contract_project_ids();
+    test_sequence_session_id_is_a_distinct_strong_identity();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

@@ -85,6 +85,27 @@ test("renders the idle Record button without ever building the real browser cont
   expect(screen.getByRole("button", {name: "Record into Pad A1"})).toBeTruthy();
 });
 
+test("a Sequence Pad stop request preserves the take in the trimming overlay", async () => {
+  const {makeController, instances} = createFactory();
+  const phases: string[] = [];
+  const view = renderPanel({
+    makeController,
+    stopRequest: 0,
+    onPhaseChange: (phase) => phases.push(phase),
+  });
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(240_001).fill(0.25)], 0.25));
+  view.rerender(
+    <CapturePanel padLabel="Pad A1" onCommit={async () => ({kind: "committed"})}
+      onClose={() => {}} makeController={makeController} stopRequest={1}
+      onPhaseChange={(phase) => phases.push(phase)} />,
+  );
+  await screen.findByRole("button", {name: "Commit"});
+  expect(screen.getByRole("slider", {name: "Pad A1 Selection length"})
+    .getAttribute("max")).toBe("240000");
+  expect(phases).toContain("trimming");
+});
+
 test("opens as a modal dialog and moves focus to the phase's primary action (P2-D1/P2-D2)", () => {
   renderPanel();
   const dialog = screen.getByRole("dialog", {name: "Pad A1 Pad Capture"});

@@ -16,6 +16,11 @@ export interface ProjectPadView {
 export interface ProjectView extends LocalProjectSummary {
   key: "—";
   pads: readonly ProjectPadView[];
+  patterns: readonly Readonly<{patternId: string; bars: 1 | 2 | 4 | 8}>[];
+  sequenceSettings: Readonly<{
+    quantizeEnabled: boolean;
+    swingPercent: number;
+  }>;
 }
 
 export interface TransferProgress {
@@ -230,6 +235,97 @@ export interface CreatorSampleRuntimeSession extends CreatorRuntimeSession {
   stopAll(): Promise<boolean>;
   retryPrepare(patternId: string): Promise<SnapshotPublication>;
   subscribeVoiceState(listener: (event: RuntimeVoiceState) => void): () => void;
+}
+
+export type SequenceRecordState = "inactive" | "active" | "switching" | "recoverable";
+
+export interface SequenceStatus {
+  state: SequenceRecordState;
+  sessionId: string | null;
+  patternId: string | null;
+  pendingPatternId: string | null;
+  expectedRevision: number;
+  nextFlushSequence: number;
+  pendingEventCount: number;
+  effectiveRuntimeFrame: number | null;
+}
+
+export interface SequenceMutation extends SequenceStatus {
+  committedRevision: number | null;
+  replayed: boolean;
+  projectRevision: number | null;
+}
+
+export interface SequenceRecoveryCandidate {
+  sessionId: string;
+  patternId: string;
+  bars: 1 | 2 | 4 | 8;
+  reason: string;
+  eventCount: number;
+}
+
+export interface SequenceSettingsMutation {
+  committedRevision: number;
+  projectRevision: number;
+  bpm: number;
+  quantizeEnabled: boolean;
+  swingPercent: number;
+  replayed: boolean;
+  patternPublication: Readonly<{
+    generation: number;
+    activationFrame: number;
+  }> | null;
+}
+
+export interface PatternCreateMutation {
+  committedRevision: number;
+  projectRevision: number;
+  patternId: string;
+  bars: 1 | 2 | 4 | 8;
+  replayed: boolean;
+}
+
+export interface CreatorSequenceRuntimeSession extends CreatorSampleRuntimeSession {
+  createPattern(request: {
+    patternId: string;
+    bars: 1 | 2 | 4 | 8;
+    expectedRevision: number;
+  }): Promise<PatternCreateMutation>;
+  updateSequenceSettings(request: {
+    expectedRevision: number;
+    sessionId: string | null;
+    bpm: number | null;
+    quantizeEnabled: boolean | null;
+    swingPercent: number | null;
+  }): Promise<SequenceSettingsMutation>;
+  beginSequence(request: {
+    sessionId: string;
+    patternId: string;
+    expectedRevision: number;
+  }): Promise<SequenceMutation & {transportAnchor: {
+    runtimeFrame: number;
+    tickNumerator: number;
+    bpm: number;
+  }}>;
+  flushSequence(request: {sessionId: string; commandId: string}): Promise<SequenceMutation>;
+  stopSequence(request: {sessionId: string; commandId: string}): Promise<SequenceMutation>;
+  requestPatternSwitch(request: {
+    sessionId: string;
+    nextPatternId: string;
+  }): Promise<SequenceMutation>;
+  querySequenceStatus(projectId?: string | null): Promise<SequenceStatus>;
+  listSequenceRecovery(projectId?: string | null): Promise<readonly SequenceRecoveryCandidate[]>;
+  applySequenceRecovery(request: {
+    sessionId: string;
+    destinationPatternId: string | null;
+  }): Promise<SequenceMutation>;
+  discardSequenceRecovery(sessionId: string): Promise<boolean>;
+  subscribeSequenceBarBoundary(listener: (event: Readonly<{
+    sessionId: string;
+    patternId: string;
+    runtimeFrame: number;
+    generation: number;
+  }>) => void): () => boolean;
 }
 
 export type RuntimeSessionFactory = () => CreatorRuntimeSession;

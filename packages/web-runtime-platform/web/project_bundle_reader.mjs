@@ -117,9 +117,10 @@ async function validateIndex(indexBytes, fileSize, crypto) {
   }
   if (
     index.contract !== "lmdj.project-bundle.v1" ||
-    index.contract_version !== "1.0.0" ||
+    !["1.0.0", "1.1.0"].includes(index.contract_version) ||
     index.compression !== "none" ||
-    index.project_contract !== "lmdj.project.v1" ||
+    !["lmdj.project.v1", "lmdj.project.v2", "lmdj.project.v3"]
+      .includes(index.project_contract) ||
     !UUID_PATTERN.test(index.project_id) ||
     !SHA256_PATTERN.test(index.bundle_digest) ||
     !Array.isArray(index.entries) ||

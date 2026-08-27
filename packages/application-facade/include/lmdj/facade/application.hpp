@@ -158,6 +158,86 @@ struct SampleImportSession {
   std::uint64_t expected_bytes;
 };
 
+enum class SequenceRecordState : std::uint8_t {
+  inactive,
+  active,
+  switching,
+  recoverable,
+};
+
+struct SequenceBeginRequest {
+  std::filesystem::path project_path;
+  foundation::SequenceSessionId session_id;
+  foundation::PatternId pattern_id;
+  std::uint64_t expected_revision;
+  std::uint64_t runtime_frame;
+};
+
+struct SequencePadEvent {
+  domain::PadSlotId slot;
+  std::uint8_t velocity;
+  std::uint64_t runtime_frame;
+  std::uint64_t input_sequence;
+  bool pressed;
+};
+
+struct SequenceEventRequest {
+  std::filesystem::path project_path;
+  foundation::SequenceSessionId session_id;
+  SequencePadEvent event;
+};
+
+struct SequenceFlushRequest {
+  std::filesystem::path project_path;
+  foundation::SequenceSessionId session_id;
+  foundation::CommandId command_id;
+  std::uint64_t runtime_frame;
+};
+
+struct SequenceSwitchRequest {
+  std::filesystem::path project_path;
+  foundation::SequenceSessionId session_id;
+  foundation::PatternId next_pattern_id;
+  std::optional<std::uint64_t> runtime_frame{};
+};
+
+struct SequenceStatusRequest {
+  std::filesystem::path project_path;
+};
+
+struct SequenceRecoveryRequest {
+  std::filesystem::path project_path;
+  foundation::SequenceSessionId session_id;
+  std::optional<foundation::PatternId> destination_pattern_id;
+};
+
+struct SequenceStatus {
+  SequenceRecordState state{SequenceRecordState::inactive};
+  std::optional<foundation::SequenceSessionId> session_id;
+  std::optional<foundation::PatternId> pattern_id;
+  std::optional<foundation::PatternId> pending_pattern_id;
+  std::uint64_t expected_revision{};
+  std::uint64_t next_flush_seq{};
+  std::uint64_t pending_event_count{};
+  std::optional<std::uint64_t> effective_runtime_frame;
+
+  bool operator==(const SequenceStatus&) const = default;
+};
+
+struct SequenceMutationResult {
+  SequenceStatus status;
+  std::optional<std::uint64_t> committed_revision;
+  bool replayed{};
+};
+
+struct SequenceRecoveryInfo {
+  foundation::SequenceSessionId session_id;
+  foundation::PatternId pattern_id;
+  std::uint8_t bars{};
+  std::string reason;
+  std::uint64_t event_count{};
+};
+
 class Application {
  public:
   explicit Application(ApplicationConfig config);
@@ -216,14 +296,25 @@ class Application {
       const SampleUpdateRequest& request);
   foundation::Result<SampleMutationResult> reset_sample_pad(
       const SampleResetRequest& request);
-  foundation::Result<void> append_realtime_take_events(
-      const std::filesystem::path& project_path,
-      foundation::TakeId take_id,
-      std::span<const domain::RawTakeEvent> events);
-  foundation::Result<std::filesystem::path> seal_realtime_take(
-      const std::filesystem::path& project_path,
-      foundation::TakeId take_id,
-      std::string_view reason);
+  foundation::Result<SequenceMutationResult> begin_sequence(
+      const SequenceBeginRequest& request);
+  foundation::Result<SequenceMutationResult> record_sequence_event(
+      const SequenceEventRequest& request);
+  foundation::Result<SequenceMutationResult> flush_sequence(
+      const SequenceFlushRequest& request);
+  foundation::Result<SequenceMutationResult> stop_sequence(
+      const SequenceFlushRequest& request);
+  foundation::Result<SequenceMutationResult> request_sequence_switch(
+      const SequenceSwitchRequest& request);
+  void abandon_sequence_sessions() noexcept;
+  foundation::Result<SequenceStatus> query_sequence_status(
+      const SequenceStatusRequest& request) const;
+  foundation::Result<std::vector<SequenceRecoveryInfo>>
+  list_sequence_recovery(const SequenceStatusRequest& request) const;
+  foundation::Result<SequenceMutationResult> apply_sequence_recovery(
+      const SequenceRecoveryRequest& request);
+  foundation::Result<void> discard_sequence_recovery(
+      const SequenceRecoveryRequest& request);
 
  private:
   struct Impl;

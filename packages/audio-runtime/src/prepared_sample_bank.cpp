@@ -70,7 +70,248 @@ bool valid_playback(
          std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F;
 }
 
+foundation::Error invalid_timing(std::string message) {
+  return foundation::Error{
+      foundation::ErrorCode::invalid_argument,
+      std::move(message),
+  };
+}
+
+bool valid_bpm(std::uint16_t bpm) noexcept {
+  return bpm >= 40 && bpm <= 240;
+}
+
 }  // namespace
+
+foundation::Result<PreparedPatternView> PreparedPatternView::prepare(
+    const cooker::RuntimeSnapshot& snapshot,
+    std::span<const domain::PatternEvent> journal_overlay) {
+  if (!domain::is_valid_uuid(snapshot.project_id.value()) ||
+      !domain::is_valid_uuid(snapshot.pattern_id.value()) ||
+      !valid_bpm(snapshot.bpm) || snapshot.ppq != kTransportPpq ||
+      snapshot.loop_length_ticks == 0 ||
+      snapshot.loop_length_ticks !=
+          domain::pattern_length_ticks(snapshot.bars)) {
+    return foundation::Result<PreparedPatternView>::failure(
+        invalid_timing("runtime snapshot Pattern timing is invalid"));
+  }
+
+  std::array<bool, 64> available{};
+  for (const auto& pad : snapshot.pads) {
+    if (!domain::is_valid_slot(pad.slot)) {
+      return foundation::Result<PreparedPatternView>::failure(
+          invalid_timing("runtime snapshot Pattern Pad is invalid"));
+    }
+    available.at(global_slot(pad.slot)) = true;
+  }
+
+  std::vector<domain::PatternEvent> base;
+  base.reserve(snapshot.events.size());
+  for (const auto& event : snapshot.events) {
+    base.push_back(domain::PatternEvent{
+        event.slot,
+        event.onset_tick,
+        event.duration_tick,
+        event.velocity,
+    });
+  }
+  std::vector<domain::PatternEvent> overlay{
+      journal_overlay.begin(), journal_overlay.end()};
+  auto merged = domain::merge_pattern_events(base, overlay);
+
+  auto loop_frames = tick_boundary_frame(
+      snapshot.loop_length_ticks, snapshot.bpm, snapshot.ppq);
+  auto bar_frames = tick_boundary_frame(
+      domain::kBarTicks4x4, snapshot.bpm, snapshot.ppq);
+  if (!loop_frames.has_value() || !bar_frames.has_value() ||
+      loop_frames.value() == 0 || bar_frames.value() == 0) {
+    return foundation::Result<PreparedPatternView>::failure(
+        invalid_timing("runtime snapshot Pattern frame bounds overflowed"));
+  }
+
+  std::vector<PreparedPatternEvent> prepared;
+  prepared.reserve(merged.size());
+  for (const auto& event : merged) {
+    if (!domain::is_valid_slot(event.slot) || event.velocity < 1 ||
+        event.velocity > 127 ||
+        !available.at(global_slot(event.slot)) ||
+        event.onset_tick >= snapshot.loop_length_ticks ||
+        event.duration_tick < 1 ||
+        event.duration_tick >
+            snapshot.loop_length_ticks - event.onset_tick) {
+      return foundation::Result<PreparedPatternView>::failure(
+          invalid_timing("runtime snapshot Pattern event is invalid"));
+    }
+    auto start = tick_boundary_frame(
+        event.onset_tick, snapshot.bpm, snapshot.ppq);
+    auto release = tick_boundary_frame(
+        static_cast<std::uint64_t>(event.onset_tick) +
+            event.duration_tick,
+        snapshot.bpm,
+        snapshot.ppq);
+    if (!start.has_value() || !release.has_value() ||
+        start.value() >= loop_frames.value() ||
+        release.value() <= start.value() ||
+        release.value() > loop_frames.value()) {
+      return foundation::Result<PreparedPatternView>::failure(
+          invalid_timing("runtime snapshot Pattern event frame is invalid"));
+    }
+    prepared.push_back(PreparedPatternEvent{
+        event.slot,
+        event.onset_tick,
+        event.duration_tick,
+        event.velocity,
+        start.value(),
+        release.value(),
+    });
+  }
+  return foundation::Result<PreparedPatternView>::success(
+      PreparedPatternView{
+          snapshot.project_id,
+          snapshot.pattern_id,
+          snapshot.project_revision,
+          snapshot.bpm,
+          snapshot.ppq,
+          snapshot.loop_length_ticks,
+          loop_frames.value(),
+          bar_frames.value(),
+          std::move(prepared),
+          !journal_overlay.empty(),
+      });
+}
+
+foundation::Result<std::uint64_t> tick_numerator_at(
+    const TransportAnchor& anchor,
+    std::uint64_t runtime_frame) noexcept {
+  if (!valid_bpm(anchor.bpm) || runtime_frame < anchor.runtime_frame) {
+    return foundation::Result<std::uint64_t>::failure(
+        invalid_timing("transport anchor or frame is invalid"));
+  }
+  const auto delta = runtime_frame - anchor.runtime_frame;
+  const auto numerator = integrate_tick_numerator(
+      anchor.tick_numerator, delta, anchor.bpm);
+  if (!numerator.has_value()) {
+    return foundation::Result<std::uint64_t>::failure(
+        invalid_timing("transport tick numerator overflowed"));
+  }
+  return foundation::Result<std::uint64_t>::success(numerator.value());
+}
+
+foundation::Result<std::uint64_t> raw_tick_at(
+    const TransportAnchor& anchor,
+    std::uint64_t runtime_frame) noexcept {
+  auto numerator = tick_numerator_at(anchor, runtime_frame);
+  if (!numerator.has_value()) {
+    return foundation::Result<std::uint64_t>::failure(numerator.error());
+  }
+  return foundation::Result<std::uint64_t>::success(
+      whole_tick(numerator.value()));
+}
+
+foundation::Result<TransportAnchor> freeze_transport_bpm(
+    const TransportAnchor& anchor,
+    std::uint64_t runtime_frame,
+    std::uint16_t new_bpm) noexcept {
+  if (!valid_bpm(new_bpm)) {
+    return foundation::Result<TransportAnchor>::failure(
+        invalid_timing("transport BPM is outside the supported range"));
+  }
+  auto numerator = tick_numerator_at(anchor, runtime_frame);
+  if (!numerator.has_value()) {
+    return foundation::Result<TransportAnchor>::failure(numerator.error());
+  }
+  return foundation::Result<TransportAnchor>::success(
+      TransportAnchor{runtime_frame, numerator.value(), new_bpm});
+}
+
+foundation::Result<std::uint64_t> tick_boundary_frame(
+    std::uint64_t tick,
+    std::uint16_t bpm,
+    std::uint32_t ppq) noexcept {
+  if (!valid_bpm(bpm) || ppq != kTransportPpq) {
+    return foundation::Result<std::uint64_t>::failure(
+        invalid_timing("tick boundary timing is invalid"));
+  }
+  constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+  if (tick != 0 && tick > maximum / kTickDenominator) {
+    return foundation::Result<std::uint64_t>::failure(
+        invalid_timing("tick boundary numerator overflowed"));
+  }
+  const auto numerator = tick * kTickDenominator;
+  const auto rate = static_cast<std::uint64_t>(bpm) * ppq;
+  return foundation::Result<std::uint64_t>::success(
+      numerator / rate + (numerator % rate == 0 ? 0U : 1U));
+}
+
+PreparedPatternView::PreparedPatternView(
+    foundation::ProjectId project_id,
+    foundation::PatternId pattern_id,
+    std::uint64_t project_revision,
+    std::uint16_t bpm,
+    std::uint32_t ppq,
+    std::uint32_t loop_length_ticks,
+    std::uint64_t loop_frames,
+    std::uint64_t bar_frames,
+    std::vector<PreparedPatternEvent> events,
+    bool has_overlay)
+    : project_id_(std::move(project_id)),
+      pattern_id_(std::move(pattern_id)),
+      project_revision_(project_revision),
+      bpm_(bpm),
+      ppq_(ppq),
+      loop_length_ticks_(loop_length_ticks),
+      loop_frames_(loop_frames),
+      bar_frames_(bar_frames),
+      events_(std::move(events)),
+      has_overlay_(has_overlay) {}
+
+foundation::Result<PreparedPatternView> PreparedPatternView::from_snapshot(
+    const cooker::RuntimeSnapshot& snapshot) {
+  return prepare(snapshot, {});
+}
+
+foundation::Result<PreparedPatternView>
+PreparedPatternView::from_snapshot_with_overlay(
+    const cooker::RuntimeSnapshot& snapshot,
+    std::span<const domain::PatternEvent> journal_overlay) {
+  return prepare(snapshot, journal_overlay);
+}
+
+const foundation::ProjectId& PreparedPatternView::project_id() const noexcept {
+  return project_id_;
+}
+
+const foundation::PatternId& PreparedPatternView::pattern_id() const noexcept {
+  return pattern_id_;
+}
+
+std::uint64_t PreparedPatternView::project_revision() const noexcept {
+  return project_revision_;
+}
+
+std::uint16_t PreparedPatternView::bpm() const noexcept { return bpm_; }
+std::uint32_t PreparedPatternView::ppq() const noexcept { return ppq_; }
+
+std::uint32_t PreparedPatternView::loop_length_ticks() const noexcept {
+  return loop_length_ticks_;
+}
+
+std::uint64_t PreparedPatternView::loop_frames() const noexcept {
+  return loop_frames_;
+}
+
+std::uint64_t PreparedPatternView::bar_frames() const noexcept {
+  return bar_frames_;
+}
+
+const std::vector<PreparedPatternEvent>& PreparedPatternView::events()
+    const noexcept {
+  return events_;
+}
+
+bool PreparedPatternView::has_overlay() const noexcept {
+  return has_overlay_;
+}
 
 PreparedSampleBank::PreparedSampleBank(foundation::ProjectId project_id,
                                        std::uint64_t project_revision)

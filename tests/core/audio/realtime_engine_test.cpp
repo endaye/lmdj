@@ -7,10 +7,13 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <new>
 #include <span>
+#include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "tests/core/support/test.hpp"
 
@@ -56,6 +59,8 @@ using lmdj::audio::CaptureState;
 using lmdj::audio::PadControlEvent;
 using lmdj::audio::PadControlKind;
 using lmdj::audio::PreparedSampleBank;
+using lmdj::audio::PreparedPatternView;
+using lmdj::audio::PatternPublishResult;
 using lmdj::audio::PublishResult;
 using lmdj::audio::RealtimeEngine;
 using lmdj::audio::RealtimeState;
@@ -65,11 +70,18 @@ using lmdj::audio::RuntimeTriggerOutcome;
 using lmdj::audio::RuntimeTriggerOutcomeEvent;
 using lmdj::audio::TriggerEvent;
 using lmdj::cooker::ResolvedPlayback;
+using lmdj::cooker::ResolvedEvent;
+using lmdj::cooker::ResolvedPad;
+using lmdj::cooker::RuntimeSnapshot;
+using lmdj::domain::PadSlotId;
 using lmdj::domain::TriggerMode;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::ProjectId;
+using lmdj::foundation::PatternId;
 
 constexpr auto kProjectId = "00000000-0000-4000-8000-000000000001";
+constexpr auto kPatternA = "30000000-0000-4000-8000-000000000001";
+constexpr auto kPatternB = "30000000-0000-4000-8000-000000000002";
 
 constexpr std::uint32_t kRampFrames = lmdj::audio::kRealtimeRampFrames;
 constexpr float kRampScale = 1.0F / static_cast<float>(kRampFrames);
@@ -98,6 +110,49 @@ PreparedSampleBank bank_with_playback(
   auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, revision);
   LMDJ_CHECK(bank.set_sample(slot, sample, playback).has_value());
   return bank;
+}
+
+RuntimeSnapshot pattern_snapshot(
+    const char* pattern_id,
+    PadSlotId slot,
+    std::uint8_t velocity) {
+  auto sample = std::make_shared<const lmdj::cooker::PcmSample>(
+      lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, 1)});
+  return RuntimeSnapshot{
+      ProjectId{kProjectId},
+      PatternId{pattern_id},
+      1,
+      120,
+      1,
+      lmdj::domain::kPpq,
+      lmdj::domain::kBarTicks4x4,
+      {ResolvedPad{
+          slot,
+          lmdj::foundation::ArtifactRef{
+              std::string(64, 'a'), "audio/wav", 256},
+          sample,
+          ResolvedPlayback{
+              0, 128, TriggerMode::loop_gate, 1.0F, false},
+      }},
+      {ResolvedEvent{
+          slot,
+          0,
+          lmdj::domain::kBarTicks4x4,
+          velocity,
+          sample,
+      }},
+  };
+}
+
+void render_frames(RealtimeEngine& engine, std::uint64_t frames) {
+  std::array<float, 256> left{};
+  std::array<float, 256> right{};
+  while (frames != 0) {
+    const auto block = static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(frames, left.size()));
+    engine.render(left.data(), right.data(), block);
+    frames -= block;
+  }
 }
 
 PadControlEvent control(
@@ -1626,6 +1681,72 @@ void voice_shorter_than_the_ramp_multiplies_attack_and_boundary() {
   LMDJ_CHECK(engine.telemetry().active_voices == 0);
 }
 
+void publishes_immutable_patterns_at_the_next_bar_boundary() {
+  RealtimeEngine engine;
+  LMDJ_CHECK(!engine.current_pattern_origin_frame().has_value());
+  std::array<float, 128> old_sample{};
+  std::array<float, 128> next_sample{};
+  old_sample.fill(0.25F);
+  next_sample.fill(0.75F);
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+  const auto looping = ResolvedPlayback{
+      0, 128, TriggerMode::loop_gate, 1.0F, false};
+  LMDJ_CHECK(bank.set_sample(0, old_sample, looping).has_value());
+  LMDJ_CHECK(bank.set_sample(1, next_sample, looping).has_value());
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+
+  auto first = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 127));
+  const std::array overlay{lmdj::domain::PatternEvent{
+      PadSlotId{0, 1}, 0, lmdj::domain::kBarTicks4x4, 96}};
+  auto second = PreparedPatternView::from_snapshot_with_overlay(
+      pattern_snapshot(kPatternB, PadSlotId{0, 1}, 127),
+      overlay);
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(second.has_value());
+  const auto first_publication =
+      engine.publish_pattern_view(std::move(first.value()));
+  LMDJ_CHECK(first_publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(first_publication.activation_frame == 0);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternA});
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 0);
+  LMDJ_CHECK(engine.start().has_value());
+
+  render_frames(engine, 100);
+  const auto pending =
+      engine.publish_pattern_view(std::move(second.value()));
+  LMDJ_CHECK(pending.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(pending.activation_frame == 96'000);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternA});
+  LMDJ_CHECK(engine.pending_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation ==
+             pending.generation);
+
+  render_frames(engine, 95'899);
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) > 0.0F);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternA});
+  LMDJ_CHECK(engine.pending_pattern_id() == PatternId{kPatternB});
+
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 96'000);
+  LMDJ_CHECK(!engine.pending_pattern_id().has_value());
+  LMDJ_CHECK(engine.pattern_telemetry().current_generation ==
+             pending.generation);
+  LMDJ_CHECK(engine.pattern_telemetry().applied_publications == 2);
+  LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+  LMDJ_CHECK(!engine.clear_pattern_view().has_value());
+  engine.stop();
+  LMDJ_CHECK(engine.clear_pattern_view().has_value());
+  LMDJ_CHECK(!engine.current_pattern_id().has_value());
+  LMDJ_CHECK(!engine.current_pattern_origin_frame().has_value());
+  LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+}
+
 }  // namespace
 
 void* operator new(std::size_t size) { return ordinary_allocation(size); }
@@ -1699,4 +1820,5 @@ int main() {
   stop_voice_renders_a_full_ramp_tail_then_deactivates();
   releasing_voice_is_hard_killed_by_a_second_stop();
   voice_shorter_than_the_ramp_multiplies_attack_and_boundary();
+  publishes_immutable_patterns_at_the_next_bar_boundary();
 }

@@ -160,25 +160,25 @@ def input_schemas() -> dict[str, dict]:
         ["sidecar_bytes", "sidecar_sha256"],
     )
     velocity = {"type": "integer", "minimum": 1, "maximum": 127}
-    raw_event = object_schema(
+    sequence_velocity = {"type": "integer", "minimum": 0, "maximum": 127}
+    sequence_event = object_schema(
         {
             "slot": slot,
-            "frame_offset": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 4294967295,
-            },
-            "velocity": velocity,
+            "velocity": sequence_velocity,
+            "runtime_frame": uint,
+            "input_sequence": uint,
+            "pressed": {"type": "boolean"},
         },
-        ["slot", "frame_offset", "velocity"],
+        ["slot", "velocity", "runtime_frame", "input_sequence", "pressed"],
     )
     pattern_event = object_schema(
         {
             "slot": slot,
-            "step": {"type": "integer", "minimum": 0, "maximum": 127},
+            "onset_tick": uint,
+            "duration_tick": {"type": "integer", "minimum": 1},
             "velocity": velocity,
         },
-        ["slot", "step", "velocity"],
+        ["slot", "onset_tick", "duration_tick", "velocity"],
     )
     pattern = object_schema(
         {
@@ -217,6 +217,7 @@ def input_schemas() -> dict[str, dict]:
                     "minimum": 40,
                     "maximum": 240,
                 },
+                "initial_pattern": pattern,
             },
             ["project_path", "project_id", "bpm"],
         ),
@@ -341,43 +342,123 @@ def input_schemas() -> dict[str, dict]:
                 "asset_id",
             ],
         ),
-        "lmdj.take.begin": object_schema(
-            {
-                "project_path": path,
-                "take_id": uuid,
-                "expected_revision": uint,
-                "sample_rate": {"type": "integer", "const": 48000},
-            },
-            [
-                "project_path",
-                "take_id",
-                "expected_revision",
-                "sample_rate",
-            ],
-        ),
-        "lmdj.take.append": object_schema(
-            {
-                "project_path": path,
-                "take_id": uuid,
-                "event": raw_event,
-            },
-            ["project_path", "take_id", "event"],
-        ),
-        "lmdj.take.commit": object_schema(
+        "lmdj.pattern.create": object_schema(
             {
                 "project_path": path,
                 "command_id": uuid,
                 "expected_revision": uint,
-                "take_id": uuid,
-                "pattern": pattern,
+                "pattern_id": uuid,
+                "bars": {"type": "integer", "enum": [1, 2, 4, 8]},
             },
             [
                 "project_path",
                 "command_id",
                 "expected_revision",
-                "take_id",
-                "pattern",
+                "pattern_id",
+                "bars",
             ],
+        ),
+        "lmdj.sequence.record.begin": object_schema(
+            {
+                "project_path": path,
+                "session_id": uuid,
+                "pattern_id": uuid,
+                "expected_revision": uint,
+                "runtime_frame": uint,
+            },
+            [
+                "project_path",
+                "session_id",
+                "pattern_id",
+                "expected_revision",
+                "runtime_frame",
+            ],
+        ),
+        "lmdj.sequence.record.event": object_schema(
+            {
+                "project_path": path,
+                "session_id": uuid,
+                "event": sequence_event,
+            },
+            ["project_path", "session_id", "event"],
+        ),
+        "lmdj.sequence.record.flush": object_schema(
+            {
+                "project_path": path,
+                "session_id": uuid,
+                "command_id": uuid,
+                "runtime_frame": uint,
+            },
+            ["project_path", "session_id", "command_id", "runtime_frame"],
+        ),
+        "lmdj.sequence.record.stop": object_schema(
+            {
+                "project_path": path,
+                "session_id": uuid,
+                "command_id": uuid,
+                "runtime_frame": uint,
+            },
+            ["project_path", "session_id", "command_id", "runtime_frame"],
+        ),
+        "lmdj.sequence.record.switch-request": object_schema(
+            {
+                "project_path": path,
+                "session_id": uuid,
+                "next_pattern_id": uuid,
+            },
+            ["project_path", "session_id", "next_pattern_id"],
+        ),
+        "lmdj.sequence.record.status": object_schema(
+            {"project_path": path}, ["project_path"],
+        ),
+        "lmdj.sequence.settings.update": object_schema(
+            {
+                "project_path": path,
+                "command_id": uuid,
+                "expected_revision": uint,
+                "session_id": {"oneOf": [uuid, {"type": "null"}]},
+                "runtime_frame": uint,
+                "bpm": {
+                    "oneOf": [
+                        {"type": "integer", "minimum": 40, "maximum": 240},
+                        {"type": "null"},
+                    ]
+                },
+                "quantize_enabled": {
+                    "oneOf": [{"type": "boolean"}, {"type": "null"}]
+                },
+                "swing_percent": {
+                    "oneOf": [
+                        {"type": "integer", "minimum": 50, "maximum": 75},
+                        {"type": "null"},
+                    ]
+                },
+            },
+            [
+                "project_path",
+                "command_id",
+                "expected_revision",
+                "session_id",
+                "runtime_frame",
+                "bpm",
+                "quantize_enabled",
+                "swing_percent",
+            ],
+        ),
+        "lmdj.sequence.recovery.list": object_schema(
+            {"project_path": path}, ["project_path"],
+        ),
+        "lmdj.sequence.recovery.apply": object_schema(
+            {
+                "project_path": path,
+                "session_id": uuid,
+                "destination_pattern_id": {"oneOf": [uuid, {"type": "null"}]},
+            },
+            ["project_path", "session_id", "destination_pattern_id"],
+        ),
+        "lmdj.sequence.recovery.discard": object_schema(
+            {"project_path": path, "session_id": uuid},
+            ["project_path", "session_id"],
         ),
         "lmdj.snapshot.cook": object_schema(
             {"project_path": path, "pattern_id": uuid},
@@ -454,9 +535,21 @@ def tool_table() -> tuple[Tool, ...]:
         ("lmdj.sample.reset_pad", "sample.reset_pad", "command"),
         ("lmdj.asset.import", "asset.import", "command"),
         ("lmdj.pad.assign", "pad.assign", "command"),
-        ("lmdj.take.begin", "take.begin", "command"),
-        ("lmdj.take.append", "take.append", "command"),
-        ("lmdj.take.commit", "take.commit", "command"),
+        ("lmdj.pattern.create", "pattern.create", "command"),
+        ("lmdj.sequence.record.begin", "sequence.record.begin", "command"),
+        ("lmdj.sequence.record.event", "sequence.record.event", "command"),
+        ("lmdj.sequence.record.flush", "sequence.record.flush", "command"),
+        ("lmdj.sequence.record.stop", "sequence.record.stop", "command"),
+        (
+            "lmdj.sequence.record.switch-request",
+            "sequence.record.switch-request",
+            "command",
+        ),
+        ("lmdj.sequence.record.status", "sequence.record.status", "query"),
+        ("lmdj.sequence.settings.update", "sequence.settings.update", "command"),
+        ("lmdj.sequence.recovery.list", "sequence.recovery.list", "query"),
+        ("lmdj.sequence.recovery.apply", "sequence.recovery.apply", "command"),
+        ("lmdj.sequence.recovery.discard", "sequence.recovery.discard", "command"),
         ("lmdj.snapshot.cook", "snapshot.cook", "query"),
         ("lmdj.render.offline", "render.offline", "command"),
         ("lmdj.provider.list", "provider.list", "query"),

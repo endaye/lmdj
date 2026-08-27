@@ -342,27 +342,27 @@ void test_initial_pattern_rejections_are_exact_and_write_nothing() {
       },
       {
           "velocity 0 is below the permitted range",
-          Pattern{good_id, 1, {{PadSlotId{0, 0}, 0, 0}}},
+          Pattern{good_id, 1, {{PadSlotId{0, 0}, 0, 240, 0}}},
           "pattern event is invalid",
       },
       {
           "velocity 128 is above the permitted range",
-          Pattern{good_id, 1, {{PadSlotId{0, 0}, 0, 128}}},
+          Pattern{good_id, 1, {{PadSlotId{0, 0}, 0, 240, 128}}},
           "pattern event is invalid",
       },
       {
-          "step equals the one-bar limit",
-          Pattern{good_id, 1, {{PadSlotId{0, 0}, 16, 100}}},
+          "onset tick equals the one-bar limit",
+          Pattern{good_id, 1, {{PadSlotId{0, 0}, 3'840, 1, 100}}},
           "pattern event is invalid",
       },
       {
-          "step equals the two-bar limit",
-          Pattern{good_id, 2, {{PadSlotId{0, 0}, 32, 100}}},
+          "onset tick equals the two-bar limit",
+          Pattern{good_id, 2, {{PadSlotId{0, 0}, 7'680, 1, 100}}},
           "pattern event is invalid",
       },
       {
           "slot is outside the pad grid",
-          Pattern{good_id, 1, {{PadSlotId{99, 0}, 0, 100}}},
+          Pattern{good_id, 1, {{PadSlotId{99, 0}, 0, 240, 100}}},
           "pattern event is invalid",
       },
       {
@@ -370,7 +370,8 @@ void test_initial_pattern_rejections_are_exact_and_write_nothing() {
           Pattern{
               good_id,
               1,
-              {{PadSlotId{0, 0}, 0, 100}, {PadSlotId{0, 1}, 0, 200}},
+              {{PadSlotId{0, 0}, 0, 240, 100},
+               {PadSlotId{0, 1}, 0, 240, 200}},
           },
           "pattern event is invalid",
       },
@@ -409,8 +410,12 @@ void test_initial_pattern_rejections_are_exact_and_write_nothing() {
                 PatternId{uuid(720U + bars)},
                 bars,
                 {{PadSlotId{0, 0},
-                  static_cast<std::uint32_t>(bars) * 16U - 1U, 127},
-                 {PadSlotId{0, 0}, 0, 1}},
+                  static_cast<std::uint32_t>(bars) *
+                          lmdj::domain::kBarTicks4x4 -
+                      1U,
+                  1,
+                  127},
+                 {PadSlotId{0, 0}, 0, 1, 1}},
             },
         });
     LMDJ_CHECK(created.has_value());
@@ -573,6 +578,42 @@ void test_every_public_entry_converts_an_unexpected_throw_to_its_envelope() {
   });
   check_typed("acquire_project_writer", [&] {
     return application.acquire_project_writer(project);
+  });
+  const lmdj::foundation::SequenceSessionId sequence_session{uuid(789)};
+  const lmdj::foundation::PatternId sequence_pattern{uuid(781)};
+  check_typed("begin_sequence", [&] {
+    return application.begin_sequence(
+        {project, sequence_session, sequence_pattern, 0, 0});
+  });
+  check_typed("record_sequence_event", [&] {
+    return application.record_sequence_event(
+        {project, sequence_session, {{0, 0}, 100, 0, 1, true}});
+  });
+  check_typed("flush_sequence", [&] {
+    return application.flush_sequence(
+        {project, sequence_session, CommandId{uuid(790)}, 0});
+  });
+  check_typed("stop_sequence", [&] {
+    return application.stop_sequence(
+        {project, sequence_session, CommandId{uuid(791)}, 0});
+  });
+  check_typed("request_sequence_switch", [&] {
+    return application.request_sequence_switch(
+        {project, sequence_session, lmdj::foundation::PatternId{uuid(792)}});
+  });
+  check_typed("query_sequence_status", [&] {
+    return application.query_sequence_status({project});
+  });
+  check_typed("list_sequence_recovery", [&] {
+    return application.list_sequence_recovery({project});
+  });
+  check_typed("apply_sequence_recovery", [&] {
+    return application.apply_sequence_recovery(
+        {project, sequence_session, std::nullopt});
+  });
+  check_typed("discard_sequence_recovery", [&] {
+    return application.discard_sequence_recovery(
+        {project, sequence_session, std::nullopt});
   });
 
   // JSON entries answer with the envelope form of the same failure, so a Host

@@ -84,7 +84,6 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_project_store_tests
     lmdj_project_storage_platform_tests
     lmdj_project_bundle_transfer_tests
-    lmdj_take_journal_tests
     lmdj_project_cooker_sample_analysis_tests
     lmdj_project_cooker_tests
     lmdj_project_cooker_determinism_matrix_tests
@@ -101,6 +100,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_provider_spec_regression_tests
     lmdj_application_facade_tests
     lmdj_application_facade_failure_tests
+    lmdj_facade_sequence_surface_tests
     lmdj_facade_sample_surface_tests
     lmdj_facade_web_runtime_limit_tests
     lmdj_web_control_runtime_tests
@@ -112,6 +112,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_core_cli
     lmdj_native_host
     lmdj_core_c
+    lmdj_sequence_journal_tests
     lmdj_project_io_fault_matrix_tests
     lmdj_application_c_api_stress_tests
   )
@@ -227,8 +228,20 @@ lmdj_add_test(
   COMMAND
     "${Python3_EXECUTABLE}"
     tests/build/release_prepare_test.py
+    ReleasePrepareTest
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_prepare.exact_targets
+  TIER e2e
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/release_prepare_test.py
+    ReleaseTargetValidationIntegrationTest
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 180
 )
 
 lmdj_add_test(
@@ -280,24 +293,24 @@ lmdj_add_test(
 
 lmdj_add_test(
   NAME build.release_audit.repository_local
-  TIER contract
+  TIER e2e
   COMMAND
     "${Python3_EXECUTABLE}"
     tests/build/release_audit_test.py
     ReleaseAuditIntegrationTest.test_repository_local_audit_does_not_assume_current_intent_count
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  TIMEOUT 30
+  TIMEOUT 180
 )
 
 lmdj_add_test(
   NAME build.release_audit.snapshot_provenance
-  TIER contract
+  TIER e2e
   COMMAND
     "${Python3_EXECUTABLE}"
     tests/build/release_audit_test.py
     ReleaseAuditIntegrationTest.test_zero_intent_local_and_remote_audits_reject_corrupt_snapshot_provenance
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  TIMEOUT 30
+  TIMEOUT 180
 )
 
 lmdj_add_test(

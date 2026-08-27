@@ -10,25 +10,21 @@ Region, data-classification, and permission policy. Hosts receive the Assembly
 path explicitly; Provider selection remains Workspace/Host state and is never
 written into Project Truth.
 
-The Headless Core Proof intentionally treats every revision change during a
-recording as `REVISION_CONFLICT` and seals the recording for recovery. This
-Proof-only safety rule is superseded as product authority by the approved
-[2026-08-23 Sequence recording decision](../../docs/prd/decisions/2026-08-23-sequence-recording-semantics.md):
-the product classifies concurrency (a closed selective-rebase allowlist,
-Sample-class Commands failing while recording continues, unknown Commands
-failing closed) and records event-only Pattern data with no Take object. The
-Proof rule remains in effect in the implemented Core until Stage 9 ships.
+The implemented [2026-08-23 Sequence recording decision](../../docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)
+uses a closed selective-rebase allowlist, fails Sample-class and unknown
+Commands closed without silently rewriting the session, and records
+event-only Pattern data with no Take product object.
 
 ## Status
 
 - Designed: full new product/core architecture.
 - Implemented: Headless Core Proof, the Formal Native Host, Creator Web Host
-  `1.5.5`, Formal Web Runtime Host `1.2.15`, and their shared Web Runtime
-  Platform `0.3.6`, including the Stage 8 Sample Editor and Project Truth v2.
+  `2.0.0`, Formal Web Runtime Host `2.0.0`, and Web Runtime Platform
+  `1.0.0`, including Project Truth v3 and Stage 9 Sequence recording.
   Browser Hosts depend only on that Platform; Product Assembly owns exact Host
   identities and Provider catalog wiring.
 - Not implemented: installable/offline PWA behavior, Sample intelligence,
-  Sequence editing, production Providers, or cloud deployment.
+  general Pattern event editing/Undo, production Providers, or cloud deployment.
   Web automation and physical Touch/MIDI/audio acceptance remain distinct; all
   five required Web physical rows are `deferred / unverified`.
 

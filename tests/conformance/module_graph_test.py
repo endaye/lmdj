@@ -13,7 +13,7 @@ HOST_ROOT = REPO_ROOT / "apps"
 PROVIDER_ROOT = REPO_ROOT / "providers"
 FORBIDDEN_PACKAGE_REFERENCES = ("products/lmdj/", "apps/creator-web/")
 EXPECTED_WEB_HOST_DEPENDENCIES = {
-    "web-runtime-platform": "0.3.6",
+    "web-runtime-platform": "1.0.0",
 }
 
 
@@ -171,8 +171,8 @@ assert web_host_path == REPO_ROOT / "apps/web-runtime-host/module.json"
 assert web_host_manifest == {
     "contract": "lmdj.module.v1",
     "module": "web-runtime-host",
-    "version": "1.2.15",
-    "api_version": 1,
+    "version": "2.0.0",
+    "api_version": 2,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }
 creator_path, creator_manifest = host_manifests["creator-web"]
@@ -180,8 +180,8 @@ assert creator_path == REPO_ROOT / "apps/creator-web/module.json"
 assert creator_manifest == {
     "contract": "lmdj.module.v1",
     "module": "creator-web",
-    "version": "1.5.5",
-    "api_version": 1,
+    "version": "2.0.0",
+    "api_version": 2,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }
 verify_creator_package_identity(REPO_ROOT)

@@ -21,7 +21,7 @@ class CaptureWriter final {
       facade::Application& application,
       std::mutex& facade_mutex,
       std::filesystem::path project_path,
-      foundation::TakeId take_id);
+      foundation::SequenceSessionId session_id);
   ~CaptureWriter();
 
   CaptureWriter(const CaptureWriter&) = delete;
@@ -41,7 +41,7 @@ class CaptureWriter final {
   facade::Application& application_;
   std::mutex& facade_mutex_;
   std::filesystem::path project_path_;
-  foundation::TakeId take_id_;
+  foundation::SequenceSessionId session_id_;
   std::jthread thread_;
   std::atomic<bool> stop_requested_{false};
   std::atomic<std::uint64_t> persisted_events_{0};

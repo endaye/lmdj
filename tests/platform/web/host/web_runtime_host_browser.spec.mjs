@@ -277,44 +277,6 @@ async function recoverDiagnosticProjectAfterTimeout(page, originalError) {
 }
 
 
-async function stopTakeWithQuiescenceDiagnostics(page) {
-  return page.evaluate(async () => {
-    const samples = [];
-    const observe = () => {
-      const audioContext = window.__lmdjAudioContexts.at(-1);
-      samples.push({
-        elapsed_ms: Math.round(performance.now()),
-        audio_context_state: audioContext?.state ?? null,
-        worklet_state: window.Module?._lmdj_web_audio_state?.() ?? null,
-        worklet_fatal: window.Module?._lmdj_web_audio_fatal?.() ?? null,
-        worklet_gate: window.Module?._lmdj_web_audio_gate_state?.() ?? null,
-        worklet_in_flight:
-          window.Module?._lmdj_web_audio_in_flight?.() ?? null,
-        controller: window.lmdjWebRuntimeController.diagnostics(),
-      });
-      if (samples.length > 12) samples.shift();
-    };
-    observe();
-    const interval = window.setInterval(observe, 250);
-    try {
-      return await window.lmdjWebRuntimeHost.transport.send({
-        protocol_version: 1,
-        request_id: crypto.randomUUID(),
-        operation: "take.stop",
-        payload: {},
-      }, { deadlineMs: 30_000, sidecar: new Uint8Array() });
-    } catch (error) {
-      observe();
-      throw new Error(
-        `${error?.message ?? error}; quiescence diagnostics: ${JSON.stringify(samples)}`,
-      );
-    } finally {
-      window.clearInterval(interval);
-    }
-  });
-}
-
-
 async function enableDeadlineProof(page, settlementWatchdogMs = 1_000) {
   await page.addInitScript((watchdogMs) => {
     window.__LMDJ_WEB_HOST_DEADLINE_PROOF__ = Object.freeze({
@@ -1407,7 +1369,6 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     committedPatternId: crypto.randomUUID(),
     assetId: descriptor.asset_id,
     asset44100Id: crypto.randomUUID(),
-    takeId: crypto.randomUUID(),
   };
   expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime.js");
   expect(runtimeModuleRequests.filter(
@@ -1448,53 +1409,13 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   expect(await page.evaluate(() => window.lmdjWebRuntimeController.diagnostics()))
     .toMatchObject({ state: "running" });
 
-  expect(success(await hostRequest(page, "take.begin", {
-    take_id: identity.takeId,
-    expected_revision: PREPARED_PROJECT_REVISION,
-  }), "take.begin")).toMatchObject({
-    take_id: identity.takeId,
-    capture_state: "arm_pending",
-  });
-  await waitForCaptureState(page, "active");
-  const takeMarker = await observationMarker(page);
-  const takeAdmissions = await triggerThroughController(
-    page,
-    20,
-    fixtureMetadata.trigger_proof.pacing_ms,
-    101,
-  );
-  await proveExactOutcomes(page, takeAdmissions, takeMarker.notifications);
-  const stopped = success(await stopTakeWithQuiescenceDiagnostics(page), "take.stop");
-  expect(stopped).toMatchObject({ take_id: identity.takeId, status: "committable" });
-
-  const afterStopMarker = await observationMarker(page);
-  const afterStopAdmissions = await triggerThroughController(
-    page,
-    1,
-    fixtureMetadata.trigger_proof.pacing_ms,
-    102,
-  );
-  await proveExactOutcomes(
-    page,
-    afterStopAdmissions,
-    afterStopMarker.notifications,
-  );
-  const committedPattern = {
-    pattern_id: identity.committedPatternId,
-    bars: 2,
-    events: Array.from({ length: 20 }, (_, step) => ({
-      slot: { bank: 0, pad: 0 },
-      step,
-      velocity: 101,
-    })),
-  };
-  const committed = success(await hostRequest(page, "take.commit", {
+  const committed = success(await hostRequest(page, "pattern.create", {
     command_id: crypto.randomUUID(),
     expected_revision: PREPARED_PROJECT_REVISION,
-    pattern: committedPattern,
-  }), "take.commit");
+    pattern_id: identity.committedPatternId,
+    bars: 2,
+  }), "pattern.create");
   expect(committed).toMatchObject({
-    take_id: identity.takeId,
     pattern_id: identity.committedPatternId,
     project_revision: COMMITTED_PROJECT_REVISION,
   });
@@ -1503,13 +1424,10 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     "project.inspect after commit",
   );
   expect(inspectedAfterCommit.project_revision).toBe(COMMITTED_PROJECT_REVISION);
-  expect(inspectedAfterCommit.project.takes[identity.takeId].events).toHaveLength(20);
-  expect(inspectedAfterCommit.project.takes[identity.takeId].events
-    .every(({ velocity }) => velocity === 101)).toBe(true);
   expect(inspectedAfterCommit.project.patterns[identity.committedPatternId].events)
-    .toHaveLength(20);
-  expect(success(await hostRequest(page, "take.recoverable.list", {}),
-    "take.recoverable.list").candidates).toEqual([]);
+    .toEqual([]);
+  expect(success(await hostRequest(page, "sequence.recovery.list", {}),
+    "sequence.recovery.list").candidates).toEqual([]);
 
   await page.reload();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
@@ -1534,8 +1452,9 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     "project.inspect after restart",
   );
   expect(inspectedAfterRestart.project_revision).toBe(COMMITTED_PROJECT_REVISION);
-  expect(inspectedAfterRestart.project.takes[identity.takeId].events).toHaveLength(20);
-  expect(success(await hostRequest(page, "take.recoverable.list", {}),
+  expect(inspectedAfterRestart.project.patterns[identity.committedPatternId].events)
+    .toEqual([]);
+  expect(success(await hostRequest(page, "sequence.recovery.list", {}),
     "recoverable after restart").candidates).toEqual([]);
   await activateWithGesture(page);
   const restartMarker = await observationMarker(page);
@@ -2458,6 +2377,147 @@ test("Chromium claimed asset.import publication hang becomes restart-required an
   expect(await reopened.evaluate(() =>
     window.lmdjWebRuntimeController.close())).toBe(true);
   await reopened.close();
+});
+
+
+test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer status", async ({
+  browserName,
+  context,
+  page,
+}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(420_000);
+  await openPackagedHost(page);
+  await page.locator("#diagnostic-project-load").click();
+  await waitForDiagnosticProjectReady(page);
+  const descriptor = await page.evaluate((storageKey) =>
+    JSON.parse(localStorage.getItem(storageKey)),
+  DIAGNOSTIC_PROJECT_STORAGE_KEY);
+  await activateWithGesture(page);
+
+  const firstSessionId = crypto.randomUUID();
+  const firstCommandId = crypto.randomUUID();
+  const begun = await page.evaluate(({sessionId, patternId, expectedRevision}) =>
+    window.lmdjWebRuntimeController.beginSequence({
+      sessionId,
+      patternId,
+      expectedRevision,
+    }), {
+    sessionId: firstSessionId,
+    patternId: descriptor.pattern_id,
+    expectedRevision: PREPARED_PROJECT_REVISION,
+  });
+  expect(begun).toMatchObject({
+    state: "active",
+    sessionId: firstSessionId,
+    patternId: descriptor.pattern_id,
+    expectedRevision: PREPARED_PROJECT_REVISION,
+    transportAnchor: {bpm: 120, tickNumerator: 0},
+  });
+  const recorded = await page.evaluate(async ({sessionId}) => {
+    const press = await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId,
+      slot: 0,
+      velocity: 100,
+      pressed: true,
+    });
+    const release = await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId,
+      slot: 0,
+      velocity: 0,
+      pressed: false,
+    });
+    return {press, release};
+  }, {sessionId: firstSessionId});
+  expect(recorded.press.inputSequence).toBe(1);
+  expect(recorded.release.inputSequence).toBe(2);
+  expect(recorded.release.runtimeFrame).toBeGreaterThanOrEqual(
+    recorded.press.runtimeFrame,
+  );
+
+  const observer = await context.newPage();
+  await openPackagedHost(observer);
+  const observed = await observer.evaluate((projectId) =>
+    window.lmdjWebRuntimeController.querySequenceStatus(projectId),
+  descriptor.project_id);
+  expect(observed).toMatchObject({
+    state: "active",
+    sessionId: firstSessionId,
+    patternId: descriptor.pattern_id,
+    pendingEventCount: 0,
+  });
+  expect(await hostRequest(observer, "project.open", {
+    project_id: descriptor.project_id,
+    pattern_id: descriptor.pattern_id,
+  })).toMatchObject({ok: false, error: {code: "PROJECT_BUSY"}});
+  expect(await observer.evaluate(() =>
+    window.lmdjWebRuntimeController.refreshSequenceDiagnostics()))
+    .toEqual({state: "active", switch_pending: false, recovery_count: 0});
+  expect(await observer.evaluate(() =>
+    window.lmdjWebRuntimeController.close())).toBe(true);
+  await observer.close();
+
+  const stopped = await page.evaluate(({sessionId, commandId}) =>
+    window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
+  {sessionId: firstSessionId, commandId: firstCommandId});
+  expect(stopped).toMatchObject({
+    state: "inactive",
+    committedRevision: PREPARED_PROJECT_REVISION + 1,
+    replayed: false,
+  });
+  const replayed = await page.evaluate(({sessionId, commandId}) =>
+    window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
+  {sessionId: firstSessionId, commandId: firstCommandId});
+  expect(replayed).toMatchObject({
+    committedRevision: stopped.committedRevision,
+    replayed: true,
+  });
+
+  const secondSessionId = crypto.randomUUID();
+  const secondCommandId = crypto.randomUUID();
+  await page.evaluate(({sessionId, patternId, expectedRevision}) =>
+    window.lmdjWebRuntimeController.beginSequence({
+      sessionId,
+      patternId,
+      expectedRevision,
+    }), {
+    sessionId: secondSessionId,
+    patternId: descriptor.pattern_id,
+    expectedRevision: stopped.committedRevision,
+  });
+  await page.evaluate(async ({sessionId}) => {
+    await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 1, velocity: 127, pressed: true,
+    });
+    await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 1, velocity: 0, pressed: false,
+    });
+  }, {sessionId: secondSessionId});
+  const overdubbed = await page.evaluate(({sessionId, commandId}) =>
+    window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
+  {sessionId: secondSessionId, commandId: secondCommandId});
+  expect(overdubbed).toMatchObject({
+    committedRevision: stopped.committedRevision + 1,
+    replayed: false,
+  });
+  const truth = success(await hostRequest(page, "project.inspect", {}),
+    "Stage 9 inspect overdub truth");
+  const pattern = truth.project.patterns[descriptor.pattern_id];
+  expect(pattern.events).toHaveLength(2);
+  expect(pattern.events.map(({slot}) => `${slot.bank}:${slot.pad}`).sort())
+    .toEqual(["0:0", "0:1"]);
+  expect(pattern.events.map(({velocity}) => velocity).sort((left, right) =>
+    left - right)).toEqual([100, 127]);
+  expect(pattern.events.every(({duration_tick: durationTick}) =>
+    durationTick > 0)).toBe(true);
+  expect(success(await hostRequest(page, "snapshot.reload", {
+    pattern_id: descriptor.pattern_id,
+  }), "Stage 9 reload-visible truth")).toMatchObject({
+    project_revision: overdubbed.committedRevision,
+    runtime_ready: true,
+  });
+  expect(await page.evaluate(() =>
+    window.lmdjWebRuntimeController.close())).toBe(true);
 });
 
 

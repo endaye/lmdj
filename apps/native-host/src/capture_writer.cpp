@@ -15,12 +15,12 @@ CaptureWriter::CaptureWriter(
     facade::Application& application,
     std::mutex& facade_mutex,
     std::filesystem::path project_path,
-    foundation::TakeId take_id)
+    foundation::SequenceSessionId session_id)
     : engine_(engine),
       application_(application),
       facade_mutex_(facade_mutex),
       project_path_(std::move(project_path)),
-      take_id_(std::move(take_id)) {}
+      session_id_(std::move(session_id)) {}
 
 CaptureWriter::~CaptureWriter() {
   request_stop();
@@ -71,27 +71,34 @@ void CaptureWriter::run() {
       continue;
     }
 
-    std::vector<domain::RawTakeEvent> events;
-    events.reserve(count);
+    const auto origin = engine_.capture_telemetry().capture_origin_frame;
+    std::vector<facade::SequenceEventRequest> events;
+    events.reserve(count * 2U);
     for (std::size_t index = 0; index < count; ++index) {
       const auto& event = captured.at(index);
-      events.push_back(domain::RawTakeEvent{
-          domain::PadSlotId{
-              static_cast<std::uint8_t>(event.slot / 16U),
-              static_cast<std::uint8_t>(event.slot % 16U),
-          },
-          event.frame_offset,
-          event.velocity,
-      });
+      const domain::PadSlotId slot{
+          static_cast<std::uint8_t>(event.slot / 16U),
+          static_cast<std::uint8_t>(event.slot % 16U),
+      };
+      const auto runtime_frame = origin + event.frame_offset;
+      events.push_back(facade::SequenceEventRequest{
+          project_path_, session_id_,
+          facade::SequencePadEvent{
+              slot, event.velocity, runtime_frame, event.sequence * 2U, true}});
+      events.push_back(facade::SequenceEventRequest{
+          project_path_, session_id_,
+          facade::SequencePadEvent{
+              slot, 0, runtime_frame, event.sequence * 2U + 1U, false}});
     }
 
     std::lock_guard lock(facade_mutex_);
-    const auto appended = application_.append_realtime_take_events(
-        project_path_, take_id_, events);
-    if (!appended.has_value()) {
-      failure_ = appended.error();
-      failure_count_.store(1, std::memory_order_release);
-      return;
+    for (const auto& event : events) {
+      const auto recorded = application_.record_sequence_event(event);
+      if (!recorded.has_value()) {
+        failure_ = recorded.error();
+        failure_count_.store(1, std::memory_order_release);
+        return;
+      }
     }
     persisted_events_.fetch_add(count, std::memory_order_relaxed);
   }

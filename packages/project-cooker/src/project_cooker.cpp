@@ -165,14 +165,16 @@ bool valid_pattern(const domain::Pattern& pattern) {
         pattern.bars == 4 || pattern.bars == 8)) {
     return false;
   }
-  const auto step_limit = static_cast<std::uint32_t>(pattern.bars) * 16U;
+  const auto loop_length = domain::pattern_length_ticks(pattern.bars);
   for (const auto& event : pattern.events) {
     if (!domain::is_valid_slot(event.slot) || event.velocity == 0 ||
-        event.velocity > 127 || event.step >= step_limit) {
+        event.velocity > 127 || event.onset_tick >= loop_length ||
+        event.duration_tick == 0 ||
+        event.duration_tick > loop_length - event.onset_tick) {
       return false;
     }
   }
-  return true;
+  return domain::merge_pattern_events({}, pattern.events) == pattern.events;
 }
 
 struct DecodedArtifact {
@@ -399,7 +401,8 @@ foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
     }
     events.push_back(ResolvedEvent{
         event.slot,
-        event.step,
+        event.onset_tick,
+        event.duration_tick,
         event.velocity,
         sample->second,
     });
@@ -408,9 +411,12 @@ foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
   return foundation::Result<std::shared_ptr<const RuntimeSnapshot>>::success(
       std::make_shared<const RuntimeSnapshot>(RuntimeSnapshot{
           project.id,
+          pattern->second.id,
           project.revision,
           project.bpm,
           pattern->second.bars,
+          domain::kPpq,
+          domain::pattern_length_ticks(pattern->second.bars),
           std::move(pads),
           std::move(events),
       }));

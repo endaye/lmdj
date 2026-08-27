@@ -80,6 +80,11 @@ function fixture() {
           slot,
           assetId: `asset-${slot}`,
         })),
+        patterns: [{
+          patternId: "22222222-2222-4222-8222-222222222222",
+          bars: 1,
+        }],
+        sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
       },
     },
     runtime: {phase: "ready", errorCode: null},
@@ -1259,5 +1264,34 @@ describe("Creator input controller", () => {
         Object.defineProperty(document, "visibilityState", originalVisibility);
       }
     }
+  });
+
+  test("pointer, keyboard, and MIDI stop an armed capture Pad without triggering audio", async () => {
+    const value = fixture();
+    const midiInput = fakeMidiInput();
+    const stops: Array<{slot: number; source: string}> = [];
+    const controller = createCreatorInputController({
+      session: value.session,
+      getActiveBank: () => 2,
+      isAssigned: () => false,
+      getArmedCaptureSlot: () => 32,
+      onArmedCaptureStop: (slot, source) => stops.push({slot, source}),
+      requestMIDIAccess: async () => fakeMidiAccess(midiInput),
+      dispatch: value.dispatch,
+    });
+    expect(controller.pointerDown({type: "pointerdown", isPrimary: true, button: 0,
+      pointerId: 1, target: document.body}, 32)).toBe(true);
+    controller.pointerUp({type: "pointerup", pointerId: 1, target: document.body}, 32);
+    expect(controller.keyDown({code: "KeyQ", repeat: false, target: document.body})).toBe(true);
+    controller.keyUp({code: "KeyQ", target: document.body});
+    expect(await controller.enableMidi()).toBe(true);
+    midiInput.emit([0x90, 36, 100]);
+    expect(stops).toEqual([
+      {slot: 32, source: "pointer"},
+      {slot: 32, source: "keyboard"},
+      {slot: 32, source: "midi"},
+    ]);
+    expect(value.triggers).toEqual([]);
+    controller.dispose();
   });
 });

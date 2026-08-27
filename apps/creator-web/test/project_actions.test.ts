@@ -29,7 +29,7 @@ function inspectResult(projectId = PROJECT_ID) {
   return {
     project_revision: 3,
     project: {
-      contract: "lmdj.project.v1",
+      contract: "lmdj.project.v3",
       project_id: projectId,
       revision: 3,
       bpm: 120,
@@ -43,8 +43,8 @@ function inspectResult(projectId = PROJECT_ID) {
             : null,
         })),
       })),
-      patterns: {},
-      takes: {},
+      patterns: {[PATTERN_ID]: {bars: 1, events: []}},
+      sequence_settings: {quantize_enabled: true, swing_percent: 50},
     },
   };
 }

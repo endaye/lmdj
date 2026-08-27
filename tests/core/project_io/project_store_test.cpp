@@ -30,17 +30,17 @@ namespace {
 using lmdj::domain::Command;
 using lmdj::domain::CommandMeta;
 using lmdj::domain::CreatePattern;
+using lmdj::domain::MergePatternEvents;
 using lmdj::domain::Asset;
 using lmdj::domain::PadPlayback;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
 using lmdj::domain::ProjectContract;
-using lmdj::domain::RawTake;
-using lmdj::domain::RawTakeEvent;
 using lmdj::domain::ResetPadPlayback;
 using lmdj::domain::TriggerMode;
 using lmdj::domain::UpdatePadPlayback;
+using lmdj::domain::UpdateSequenceSettings;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
 using lmdj::foundation::ErrorCode;
@@ -49,6 +49,8 @@ using lmdj::foundation::ProjectId;
 using lmdj::project_io::ProjectStore;
 using lmdj::project_io::ProjectStoragePlatform;
 using lmdj::project_io::ProjectWriterLease;
+using lmdj::project_io::SequenceFlushIdentity;
+using lmdj::project_io::SequenceJournal;
 
 lmdj::foundation::Result<void> fail_manifest_publish(
     lmdj::project_io::testing::FaultPoint point,
@@ -366,7 +368,11 @@ CreatePattern create_pattern(
       Pattern{
           PatternId{test_uuid(pattern_id)},
           1,
-          {PatternEvent{PadSlotId{0, 0}, step, 100}},
+          {PatternEvent{
+              PadSlotId{0, 0},
+              step * lmdj::domain::kSixteenthTicks,
+              lmdj::domain::kSixteenthTicks,
+              100}},
       },
   };
 }
@@ -385,7 +391,12 @@ Pattern decode_pattern(const nlohmann::json& input) {
                 slot.at("bank").get<std::uint8_t>(),
                 slot.at("pad").get<std::uint8_t>(),
             },
-            encoded.at("step").get<std::uint32_t>(),
+            encoded.contains("step")
+                ? encoded.at("step").get<std::uint32_t>() * 240U
+                : encoded.at("onset_tick").get<std::uint32_t>(),
+            encoded.contains("duration_tick")
+                ? encoded.at("duration_tick").get<std::uint32_t>()
+                : 240U,
             encoded.at("velocity").get<std::uint8_t>(),
         });
   }
@@ -402,6 +413,48 @@ Command decode_create_pattern(const nlohmann::json& input) {
       },
       decode_pattern(input.at("pattern")),
   }};
+}
+
+nlohmann::json legacy_checkpoint(
+    nlohmann::json checkpoint,
+    std::string_view contract) {
+  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v3");
+  LMDJ_CHECK(
+      contract == "lmdj.project.v1" || contract == "lmdj.project.v2");
+  auto assets = nlohmann::json::object();
+  for (const auto& asset : checkpoint.at("assets")) {
+    assets[asset.at("asset_id").get<std::string>()] = {
+        {"artifact", asset.at("artifact")}};
+  }
+  auto patterns = nlohmann::json::object();
+  for (const auto& pattern : checkpoint.at("patterns")) {
+    auto events = nlohmann::json::array();
+    for (const auto& event : pattern.at("events")) {
+      events.push_back(
+          {
+              {"slot", event.at("slot")},
+              {"step", event.at("onset_tick").get<std::uint32_t>() / 240U},
+              {"velocity", event.at("velocity")},
+          });
+    }
+    patterns[pattern.at("pattern_id").get<std::string>()] = {
+        {"bars", pattern.at("bars")},
+        {"events", std::move(events)},
+    };
+  }
+  checkpoint["assets"] = std::move(assets);
+  checkpoint["contract"] = contract;
+  checkpoint["patterns"] = std::move(patterns);
+  checkpoint["takes"] = nlohmann::json::object();
+  checkpoint.erase("sequence_settings");
+  if (contract == "lmdj.project.v1") {
+    for (auto& bank : checkpoint["banks"]) {
+      for (auto& pad : bank["pads"]) {
+        pad.erase("playback");
+      }
+    }
+  }
+  return checkpoint;
 }
 
 void test_common_transactions_use_semantic_storage_obligations() {
@@ -450,24 +503,17 @@ void test_canonical_checkpoint_round_trip_and_bundle_shape() {
   LMDJ_CHECK(described.has_value());
   auto initial = new_project();
   const auto asset_id = AssetId{test_uuid("asset-1")};
-  const auto take_id = lmdj::foundation::TakeId{test_uuid("take-1")};
   const auto pattern_id = PatternId{test_uuid("pattern-1")};
   initial.assets.emplace(
       asset_id, Asset{asset_id, described.value()});
   initial.banks.at(0).at(0).asset_id = asset_id;
-  initial.takes.emplace(
-      take_id,
-      RawTake{
-          take_id,
-          48000,
-          {RawTakeEvent{PadSlotId{0, 0}, 1234, 100}},
-      });
   initial.patterns.emplace(
       pattern_id,
       Pattern{
           pattern_id,
           1,
-          {PatternEvent{PadSlotId{0, 0}, 0, 100}},
+          {PatternEvent{
+              PadSlotId{0, 0}, 0, lmdj::domain::kSixteenthTicks, 100}},
       });
   ProjectStore store;
 
@@ -491,7 +537,7 @@ void test_canonical_checkpoint_round_trip_and_bundle_shape() {
       checkpoint_bytes ==
       lmdj::foundation::canonical_json(checkpoint) + "\n");
   LMDJ_CHECK(checkpoint.size() == 8);
-  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v1");
+  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v3");
   LMDJ_CHECK(
       checkpoint.at("project_id") == initial.id.value());
   LMDJ_CHECK(!checkpoint.contains("id"));
@@ -504,26 +550,29 @@ void test_canonical_checkpoint_round_trip_and_bundle_shape() {
     LMDJ_CHECK(encoded_bank.at("pads").size() == 16);
     for (std::size_t pad = 0; pad < 16; ++pad) {
       const auto& encoded_pad = encoded_bank.at("pads").at(pad);
-      LMDJ_CHECK(encoded_pad.size() == 2);
+      LMDJ_CHECK(encoded_pad.size() == 3);
       LMDJ_CHECK(encoded_pad.at("pad") == pad);
       LMDJ_CHECK(!encoded_pad.contains("id"));
+      LMDJ_CHECK(encoded_pad.contains("playback"));
     }
   }
-  LMDJ_CHECK(checkpoint.at("assets").is_object());
-  LMDJ_CHECK(checkpoint.at("takes").is_object());
-  LMDJ_CHECK(checkpoint.at("patterns").is_object());
-  const auto& encoded_asset =
-      checkpoint.at("assets").at(asset_id.value());
-  LMDJ_CHECK(encoded_asset.size() == 1);
+  LMDJ_CHECK(checkpoint.at("assets").is_array());
+  LMDJ_CHECK(!checkpoint.contains("takes"));
+  LMDJ_CHECK(checkpoint.at("patterns").is_array());
+  LMDJ_CHECK(checkpoint.at("sequence_settings").at("quantize_enabled"));
+  LMDJ_CHECK(checkpoint.at("sequence_settings").at("swing_percent") == 50);
+  const auto& encoded_asset = checkpoint.at("assets").at(0);
+  LMDJ_CHECK(encoded_asset.size() == 2);
   LMDJ_CHECK(!encoded_asset.contains("id"));
-  const auto& encoded_take =
-      checkpoint.at("takes").at(take_id.value());
-  LMDJ_CHECK(encoded_take.size() == 2);
-  LMDJ_CHECK(!encoded_take.contains("id"));
-  const auto& encoded_pattern =
-      checkpoint.at("patterns").at(pattern_id.value());
-  LMDJ_CHECK(encoded_pattern.size() == 2);
+  LMDJ_CHECK(encoded_asset.at("asset_id") == asset_id.value());
+  const auto& encoded_pattern = checkpoint.at("patterns").at(0);
+  LMDJ_CHECK(encoded_pattern.size() == 3);
   LMDJ_CHECK(!encoded_pattern.contains("id"));
+  LMDJ_CHECK(encoded_pattern.at("pattern_id") == pattern_id.value());
+  LMDJ_CHECK(
+      encoded_pattern.at("events").at(0).at("onset_tick") == 0);
+  LMDJ_CHECK(
+      encoded_pattern.at("events").at(0).at("duration_tick") == 240);
 
   write_bytes(
       first_bundle / "assets" /
@@ -539,18 +588,26 @@ void test_canonical_checkpoint_round_trip_and_bundle_shape() {
       read_bytes(second_bundle / "history/checkpoints/0.json"));
 }
 
-void test_v1_load_is_read_only_and_first_authoring_mutation_writes_v2() {
+void test_v1_load_migrates_in_memory_and_first_mutation_writes_v3() {
   TempDirectory temp;
   const auto bundle = temp.path() / "migration.lmdj";
   ProjectStore store;
   LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+  write_bytes(
+      checkpoint_path,
+      lmdj::foundation::canonical_json(
+          legacy_checkpoint(read_json(checkpoint_path), "lmdj.project.v1")) +
+          "\n");
   const auto original_manifest = read_bytes(bundle / "manifest.json");
   const auto original_checkpoint =
       read_bytes(bundle / "history/checkpoints/0.json");
 
   const auto opened = store.load(bundle);
   LMDJ_CHECK(opened.has_value());
-  LMDJ_CHECK(opened.value().contract == ProjectContract::v1);
+  LMDJ_CHECK(opened.value().contract == ProjectContract::v3);
+  LMDJ_CHECK(opened.value().quantize_enabled);
+  LMDJ_CHECK(opened.value().swing_percent == 50);
   LMDJ_CHECK(read_bytes(bundle / "manifest.json") == original_manifest);
   LMDJ_CHECK(
       read_bytes(bundle / "history/checkpoints/0.json") ==
@@ -563,7 +620,7 @@ void test_v1_load_is_read_only_and_first_authoring_mutation_writes_v2() {
   };
   const auto committed = store.execute(bundle, command);
   LMDJ_CHECK(committed.has_value());
-  LMDJ_CHECK(committed.value().state.contract == ProjectContract::v2);
+  LMDJ_CHECK(committed.value().state.contract == ProjectContract::v3);
   LMDJ_CHECK(committed.value().state.revision == opened.value().revision + 1);
   LMDJ_CHECK(
       committed.value().state.banks.at(0).at(0).playback == command.playback);
@@ -571,7 +628,7 @@ void test_v1_load_is_read_only_and_first_authoring_mutation_writes_v2() {
   const auto manifest = read_json(bundle / "manifest.json");
   const auto checkpoint = read_json(
       bundle / manifest.at("head_checkpoint").get<std::filesystem::path>());
-  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v2");
+  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v3");
   const auto& playback =
       checkpoint.at("banks").at(0).at("pads").at(0).at("playback");
   LMDJ_CHECK(playback.size() == 5);
@@ -606,6 +663,181 @@ void test_v1_load_is_read_only_and_first_authoring_mutation_writes_v2() {
   LMDJ_CHECK(reopened.value() == committed.value().state);
 }
 
+void test_v2_total_migration_discards_takes_and_is_byte_stable() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "v2-total-migration.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto checkpoint_path = bundle / "history/checkpoints/0.json";
+  auto v2 = legacy_checkpoint(
+      read_json(checkpoint_path), "lmdj.project.v2");
+  const auto pattern_id = test_uuid("v2-migration-pattern");
+  v2["takes"][test_uuid("discarded-take")] = {
+      {"events",
+       nlohmann::json::array(
+           {{{"frame_offset", 42},
+             {"slot", {{"bank", 0}, {"pad", 0}}},
+             {"velocity", 90}}})},
+      {"sample_rate", 48000},
+  };
+  v2["patterns"][pattern_id] = {
+      {"bars", 1},
+      {"events",
+       nlohmann::json::array(
+           {{{"slot", {{"bank", 0}, {"pad", 2}}},
+             {"step", 3},
+             {"velocity", 70}},
+            {{"slot", {{"bank", 0}, {"pad", 1}}},
+             {"step", 1},
+             {"velocity", 80}},
+            {{"slot", {{"bank", 0}, {"pad", 2}}},
+             {"step", 3},
+             {"velocity", 110}}})},
+  };
+  write_bytes(
+      checkpoint_path, lmdj::foundation::canonical_json(v2) + "\n");
+  const auto legacy_bytes = read_bytes(checkpoint_path);
+
+  const auto migrated = store.load(bundle);
+  LMDJ_CHECK(migrated.has_value());
+  LMDJ_CHECK(migrated.value().contract == ProjectContract::v3);
+  LMDJ_CHECK(migrated.value().quantize_enabled);
+  LMDJ_CHECK(migrated.value().swing_percent == 50);
+  const auto& events =
+      migrated.value().patterns.at(PatternId{pattern_id}).events;
+  LMDJ_CHECK(events.size() == 2);
+  LMDJ_CHECK(events[0].onset_tick == 240);
+  LMDJ_CHECK(events[0].duration_tick == 240);
+  LMDJ_CHECK((events[0].slot == PadSlotId{0, 1}));
+  LMDJ_CHECK(events[1].onset_tick == 720);
+  LMDJ_CHECK(events[1].duration_tick == 240);
+  LMDJ_CHECK(events[1].velocity == 110);
+  LMDJ_CHECK(read_bytes(checkpoint_path) == legacy_bytes);
+
+  const UpdateSequenceSettings command{
+      meta("migrate-v2-settings", 0), {}, false, 75};
+  const auto committed = store.execute(bundle, Command{command});
+  LMDJ_CHECK(committed.has_value());
+  const auto manifest = read_json(bundle / "manifest.json");
+  const auto v3_path =
+      bundle / manifest.at("head_checkpoint").get<std::filesystem::path>();
+  const auto first_v3_bytes = read_bytes(v3_path);
+  const auto v3 = read_json(v3_path);
+  LMDJ_CHECK(v3.at("contract") == "lmdj.project.v3");
+  LMDJ_CHECK(!v3.contains("takes"));
+  LMDJ_CHECK(v3.at("assets").is_array());
+  LMDJ_CHECK(v3.at("patterns").is_array());
+  LMDJ_CHECK(
+      v3.at("patterns").at(0).at("events").at(0).at("onset_tick") == 240);
+  LMDJ_CHECK(
+      v3.at("patterns").at(0).at("events").at(1).at("velocity") == 110);
+
+  const auto replayed = store.execute(bundle, Command{command});
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(read_bytes(v3_path) == first_v3_bytes);
+}
+
+void test_tick_commands_round_trip_with_canonical_replay_identity() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "tick-command-round-trip.lmdj";
+  auto initial = new_project();
+  const auto pattern_id = PatternId{test_uuid("tick-command-pattern")};
+  initial.patterns.emplace(pattern_id, Pattern{pattern_id, 1, {}});
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, initial).has_value());
+
+  const Command command{MergePatternEvents{
+      meta("tick-command-merge", 0),
+      pattern_id,
+      {
+          {PadSlotId{1, 0}, 480, 120, 80},
+          {PadSlotId{0, 1}, 0, 240, 90},
+          {PadSlotId{1, 0}, 480, 300, 127},
+      },
+  }};
+  const auto committed = store.execute(bundle, command);
+  LMDJ_CHECK(committed.has_value());
+  const auto& events = committed.value().state.patterns.at(pattern_id).events;
+  LMDJ_CHECK(events.size() == 2);
+  LMDJ_CHECK((events[0].slot == PadSlotId{0, 1}));
+  LMDJ_CHECK((events[1].slot == PadSlotId{1, 0}));
+  LMDJ_CHECK(events[1].duration_tick == 300);
+  LMDJ_CHECK(events[1].velocity == 127);
+
+  const auto before_replay = managed_bundle_snapshot(bundle);
+  ProjectStore reopened_store;
+  const auto replayed = reopened_store.execute(bundle, command);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().state == committed.value().state);
+  LMDJ_CHECK(managed_bundle_snapshot(bundle) == before_replay);
+}
+
+void test_sequence_flush_identity_is_durable_and_replayable_after_cleanup() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "sequence-flush-identity.lmdj";
+  auto initial = new_project();
+  const auto pattern_id = PatternId{test_uuid("sequence-flush-pattern")};
+  const Pattern pattern{pattern_id, 1, {}};
+  initial.patterns.emplace(pattern_id, pattern);
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, initial).has_value());
+  SequenceJournal journal;
+  const auto session_id = lmdj::foundation::SequenceSessionId{
+      test_uuid("sequence-flush-session")};
+  LMDJ_CHECK(
+      journal
+          .begin(
+              bundle,
+              session_id,
+              pattern_id,
+              pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(pattern),
+              0)
+          .has_value());
+  const auto command_id = CommandId{test_uuid("sequence-flush-command")};
+  const std::vector events{
+      PatternEvent{PadSlotId{0, 0}, 0, 240, 100}};
+  const auto pending = journal.append_flush(
+      bundle, session_id, command_id, pattern_id, 0, events);
+  LMDJ_CHECK(pending.has_value());
+  const SequenceFlushIdentity identity{
+      session_id, pending.value().flush_seq, command_id, pattern_id};
+  const auto committed = store.execute_sequence_flush(bundle, identity);
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(!committed.value().outcome.replayed);
+
+  const auto transaction = read_json(
+      bundle / "history/transactions" /
+      ("1-" + command_id.value() + ".json"));
+  LMDJ_CHECK(transaction.at("sequence_flush").at("session_id") ==
+             session_id.value());
+  LMDJ_CHECK(transaction.at("sequence_flush").at("flush_seq") == 0);
+  LMDJ_CHECK(transaction.at("sequence_flush").at("command_id") ==
+             command_id.value());
+  LMDJ_CHECK(transaction.at("sequence_flush").at("pattern_id") ==
+             pattern_id.value());
+  LMDJ_CHECK(
+      journal.remove_active_if_complete(bundle, session_id).has_value());
+
+  ProjectStore restarted;
+  const auto replayed = restarted.replay_sequence_flush(bundle, identity);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().has_value());
+  LMDJ_CHECK(replayed.value()->outcome.replayed);
+  LMDJ_CHECK(replayed.value()->outcome.state.revision == 1);
+  LMDJ_CHECK(
+      replayed.value()->outcome.state.patterns.at(pattern_id).events == events);
+  const auto replayed_by_public_identity = restarted.replay_sequence_flush(
+      bundle, session_id, command_id);
+  LMDJ_CHECK(replayed_by_public_identity.has_value());
+  LMDJ_CHECK(replayed_by_public_identity.value().has_value());
+  LMDJ_CHECK(replayed_by_public_identity.value()->outcome.replayed);
+  LMDJ_CHECK(
+      replayed_by_public_identity.value()->identity == identity);
+}
+
 void test_nonzero_revision_v1_history_opens_without_migration() {
   TempDirectory temp;
   const auto bundle = temp.path() / "historical-v1.lmdj";
@@ -622,21 +854,22 @@ void test_nonzero_revision_v1_history_opens_without_migration() {
           .has_value());
 
   const auto checkpoint_path = bundle / "history/checkpoints/1.json";
-  auto historical = read_json(checkpoint_path);
-  historical["contract"] = "lmdj.project.v1";
-  for (auto& bank : historical["banks"]) {
-    for (auto& pad : bank["pads"]) {
-      pad.erase("playback");
-    }
-  }
+  auto historical = legacy_checkpoint(
+      read_json(checkpoint_path), "lmdj.project.v1");
   write_bytes(
       checkpoint_path,
       lmdj::foundation::canonical_json(historical) + "\n");
+  const auto initial_checkpoint = bundle / "history/checkpoints/0.json";
+  write_bytes(
+      initial_checkpoint,
+      lmdj::foundation::canonical_json(legacy_checkpoint(
+          read_json(initial_checkpoint), "lmdj.project.v1")) +
+          "\n");
   const auto before = managed_bundle_snapshot(bundle);
 
   const auto opened = store.load(bundle);
   LMDJ_CHECK(opened.has_value());
-  LMDJ_CHECK(opened.value().contract == ProjectContract::v1);
+  LMDJ_CHECK(opened.value().contract == ProjectContract::v3);
   LMDJ_CHECK(opened.value().revision == 1);
   LMDJ_CHECK(managed_bundle_snapshot(bundle) == before);
 }
@@ -687,7 +920,7 @@ void test_reset_pad_playback_persists_v2_defaults() {
       ResetPadPlayback{meta("reset-playback", 1), PadSlotId{0, 3}});
   LMDJ_CHECK(reset.has_value());
   LMDJ_CHECK(reset.value().state.revision == 2);
-  LMDJ_CHECK(reset.value().state.contract == ProjectContract::v2);
+  LMDJ_CHECK(reset.value().state.contract == ProjectContract::v3);
   LMDJ_CHECK(
       reset.value().state.banks.at(0).at(3).playback == PadPlayback{});
   const auto reopened = store.load(bundle);
@@ -726,11 +959,11 @@ void test_persisted_checkpoints_reject_non_contract_shapes() {
   auto missing_contract = valid;
   missing_contract.erase("contract");
   auto wrong_contract = valid;
-  wrong_contract["contract"] = "lmdj.project.v3";
+  wrong_contract["contract"] = "lmdj.project.v4";
   auto invalid_uuid = valid;
   invalid_uuid["project_id"] =
       "00000000-0000-4000-8000-00000000000A";
-  auto wrong_sample_rate = valid;
+  auto wrong_sample_rate = legacy_checkpoint(valid, "lmdj.project.v2");
   wrong_sample_rate["takes"][test_uuid("take-1")] = {
       {"events", nlohmann::json::array()},
       {"sample_rate", 44100},
@@ -1090,7 +1323,7 @@ void test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly() 
   const auto imported = store.import_assign_sample_bytes(bundle, request);
   LMDJ_CHECK(imported.has_value());
   LMDJ_CHECK(!imported.value().replayed);
-  LMDJ_CHECK(imported.value().state.contract == ProjectContract::v2);
+  LMDJ_CHECK(imported.value().state.contract == ProjectContract::v3);
   LMDJ_CHECK(imported.value().state.revision == 1);
   LMDJ_CHECK(imported.value().state.assets.size() == 1);
   const auto& pad = imported.value().state.banks.at(2).at(7);
@@ -1531,33 +1764,6 @@ void test_public_commands_reject_unsafe_ids_before_publishing() {
   LMDJ_CHECK(pattern_reopen.has_value());
   LMDJ_CHECK(pattern_reopen.value().revision == 0);
 
-  const auto take_bundle = temp.path() / "take.lmdj";
-  LMDJ_CHECK(store.create(take_bundle, new_project()).has_value());
-  const auto take_manifest = read_bytes(take_bundle / "manifest.json");
-  const auto unsafe_take = store.execute(
-      take_bundle,
-      Command{lmdj::domain::RecordTake{
-          meta("take-command", 0),
-          {
-              lmdj::foundation::TakeId{"nested/take"},
-              48000,
-              {{PadSlotId{0, 0}, 123, 100}},
-          },
-          {
-              PatternId{test_uuid("safe-pattern")},
-              1,
-              {{PadSlotId{0, 0}, 0, 100}},
-          },
-      }});
-  LMDJ_CHECK(!unsafe_take.has_value());
-  LMDJ_CHECK(unsafe_take.error().code == ErrorCode::invalid_argument);
-  LMDJ_CHECK(read_bytes(take_bundle / "manifest.json") == take_manifest);
-  LMDJ_CHECK(
-      regular_file_count(take_bundle / "history/transactions") == 0);
-  const auto take_reopen = store.load(take_bundle);
-  LMDJ_CHECK(take_reopen.has_value());
-  LMDJ_CHECK(take_reopen.value().revision == 0);
-
   const auto asset_bundle = temp.path() / "asset.lmdj";
   const auto source = temp.path() / "source.wav";
   write_bytes(source, "unsafe-id-source");
@@ -1812,7 +2018,10 @@ int main() {
     test_common_transactions_use_semantic_storage_obligations();
     test_default_store_remains_copy_list_initializable();
     test_canonical_checkpoint_round_trip_and_bundle_shape();
-    test_v1_load_is_read_only_and_first_authoring_mutation_writes_v2();
+    test_v1_load_migrates_in_memory_and_first_mutation_writes_v3();
+    test_v2_total_migration_discards_takes_and_is_byte_stable();
+    test_tick_commands_round_trip_with_canonical_replay_identity();
+    test_sequence_flush_identity_is_durable_and_replayable_after_cleanup();
     test_nonzero_revision_v1_history_opens_without_migration();
     test_v2_checkpoint_rejects_extra_playback_keys();
     test_reset_pad_playback_persists_v2_defaults();

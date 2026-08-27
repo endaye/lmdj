@@ -100,6 +100,19 @@ export type CreatorAction =
   | {type: "projects-loaded"; projects: LocalProjectSummary[]}
   | {type: "project-opening"}
   | {type: "project-ready"; project: ProjectView}
+  | {type: "project-revision-updated"; revision: number}
+  | {
+      type: "project-sequence-settings-updated";
+      revision: number;
+      bpm: number;
+      quantizeEnabled: boolean;
+      swingPercent: number;
+    }
+  | {
+      type: "project-pattern-created";
+      revision: number;
+      pattern: Readonly<{patternId: string; bars: 1 | 2 | 4 | 8}>;
+    }
   | {
       type: "project-error";
       errorCode: string;
@@ -175,6 +188,22 @@ export function isCreatorActionAllowed(
     case "project-ready":
       return state.runtime.phase === "ready" &&
         (state.project.phase === "opening" || state.transfer.phase === "importing");
+    case "project-revision-updated":
+      return hasReadyProject(state) && Number.isSafeInteger(action.revision) &&
+        action.revision >= (state.project.current?.revision ?? 0);
+    case "project-sequence-settings-updated":
+      return hasReadyProject(state) && Number.isSafeInteger(action.revision) &&
+        action.revision >= (state.project.current?.revision ?? 0) &&
+        Number.isInteger(action.bpm) && action.bpm >= 40 && action.bpm <= 240 &&
+        Number.isInteger(action.swingPercent) && action.swingPercent >= 50 &&
+        action.swingPercent <= 75;
+    case "project-pattern-created":
+      return hasReadyProject(state) && Number.isSafeInteger(action.revision) &&
+        action.revision >= (state.project.current?.revision ?? 0) &&
+        [1, 2, 4, 8].includes(action.pattern.bars) &&
+        !state.project.current?.patterns.some(
+          ({patternId}) => patternId === action.pattern.patternId,
+        );
     case "project-error":
       return state.runtime.phase === "ready" && (
         state.project.phase === "listing" ||
@@ -306,6 +335,43 @@ export function creatorReducer(
         audio: {phase: "inactive"},
         sample: preparedSampleState(action.project.revision),
         sampleProjectionRefresh: null,
+      };
+    case "project-revision-updated":
+      return state.project.current === null ? state : {
+        ...state,
+        project: {
+          ...state.project,
+          current: {...state.project.current, revision: action.revision},
+        },
+      };
+    case "project-sequence-settings-updated":
+      return state.project.current === null ? state : {
+        ...state,
+        project: {
+          ...state.project,
+          current: {
+            ...state.project.current,
+            revision: action.revision,
+            bpm: action.bpm,
+            sequenceSettings: {
+              quantizeEnabled: action.quantizeEnabled,
+              swingPercent: action.swingPercent,
+            },
+          },
+        },
+      };
+    case "project-pattern-created":
+      return state.project.current === null ? state : {
+        ...state,
+        project: {
+          ...state.project,
+          current: {
+            ...state.project.current,
+            revision: action.revision,
+            patterns: [...state.project.current.patterns, action.pattern]
+              .sort((left, right) => left.patternId.localeCompare(right.patternId)),
+          },
+        },
       };
     case "project-error":
       return {

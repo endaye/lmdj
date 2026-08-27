@@ -42,18 +42,30 @@ struct ResetPadPlayback {
   PadSlotId slot;
 };
 
-struct RecordTake {
-  CommandMeta meta;
-  RawTake take;
-  Pattern pattern;
-};
-
 struct CreatePattern {
   CommandMeta meta;
   Pattern pattern;
 };
 
-using Command = std::variant<ImportAsset, AssignPad, RecordTake, CreatePattern>;
+struct MergePatternEvents {
+  CommandMeta meta;
+  foundation::PatternId pattern_id;
+  std::vector<PatternEvent> events;
+};
+
+struct UpdateSequenceSettings {
+  CommandMeta meta;
+  std::optional<std::uint16_t> bpm;
+  std::optional<bool> quantize_enabled;
+  std::optional<std::uint8_t> swing_percent;
+};
+
+using Command = std::variant<
+    ImportAsset,
+    AssignPad,
+    CreatePattern,
+    MergePatternEvents,
+    UpdateSequenceSettings>;
 
 struct AppliedCommand;
 struct CommandReceipt;

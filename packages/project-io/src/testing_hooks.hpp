@@ -27,6 +27,13 @@ enum class FaultPoint {
   sample_after_artifact_creation,
   sample_after_manifest_preparation,
   sample_after_manifest_publication,
+  sequence_journal_write,
+  sequence_transaction_write,
+  sequence_checkpoint_write,
+  sequence_manifest_publish,
+  sequence_receipt_reload,
+  sequence_journal_completion,
+  sequence_journal_deletion,
   complete_read,
 };
 

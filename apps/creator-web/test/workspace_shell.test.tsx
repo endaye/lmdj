@@ -45,6 +45,11 @@ const ready: CreatorState = {
       bundleDigest: "a".repeat(64),
       key: "—",
       pads: Array.from({length: 64}, (_, slot) => ({slot, assetId: null})),
+      patterns: [{
+        patternId: "22222222-2222-4222-8222-222222222222",
+        bars: 1,
+      }],
+      sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
     },
   },
   runtime: {phase: "ready", errorCode: null},
@@ -65,16 +70,15 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   const sampleMode = screen.getByRole("button", {name: "Sample"});
   expect(sampleMode.hasAttribute("disabled")).toBe(false);
   expect(sampleMode.tabIndex).toBe(0);
-  for (const [mode, stage] of [
-    ["Sequence", 9],
-    ["Perform", 10],
-  ] as const) {
-    const button = screen.getByRole("button", {
-      name: `${mode} — available in Stage ${stage}`,
-    });
-    expect(button.hasAttribute("disabled")).toBe(true);
-    expect(button.tabIndex).toBe(-1);
-  }
+  const sequenceMode = screen.getByRole("button", {
+    name: "Sequence — open a playable Project first",
+  });
+  expect(sequenceMode.hasAttribute("disabled")).toBe(true);
+  const performMode = screen.getByRole("button", {
+    name: "Perform — available in Stage 10",
+  });
+  expect(performMode.hasAttribute("disabled")).toBe(true);
+  expect(performMode.tabIndex).toBe(-1);
 
   expect(screen.getByText("Key").nextElementSibling?.textContent).toBe("—");
   expect(screen.queryByText(/untitled/i)).toBeNull();
@@ -306,7 +310,7 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       return {
         project_revision: 3,
         project: {
-          contract: "lmdj.project.v1",
+          contract: "lmdj.project.v3",
           project_id: listedSummary.projectId,
           revision: 3,
           bpm: 120,
@@ -320,8 +324,8 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
                 : null,
             })),
           })),
-          patterns: {},
-          takes: {},
+          patterns: {[listedSummary.patternId]: {bars: 1, events: []}},
+          sequence_settings: {quantize_enabled: true, swing_percent: 50},
         },
       };
     },
@@ -506,7 +510,7 @@ function mutableSampleRuntimeFixture() {
   const inspectProject = () => ({
     project_revision: revision,
     project: {
-      contract: "lmdj.project.v1",
+      contract: "lmdj.project.v3",
       project_id: listedSummary.projectId,
       revision,
       bpm: listedSummary.bpm,
@@ -521,8 +525,8 @@ function mutableSampleRuntimeFixture() {
           asset_id: assigned.get(bank * 16 + pad) ?? null,
         })),
       })),
-      patterns: {},
-      takes: {},
+      patterns: {[listedSummary.patternId]: {bars: 1, events: []}},
+      sequence_settings: {quantize_enabled: true, swing_percent: 50},
     },
   });
   const fixture = sampleRuntimeFixture({
@@ -1188,7 +1192,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
       return {
         project_revision: revision,
         project: {
-          contract: "lmdj.project.v1",
+          contract: "lmdj.project.v3",
           project_id: listedSummary.projectId,
           revision,
           bpm: listedSummary.bpm,
@@ -1203,8 +1207,8 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
               asset_id: assigned.get(bank * 16 + pad) ?? null,
             })),
           })),
-          patterns: {},
-          takes: {},
+          patterns: {[listedSummary.patternId]: {bars: 1, events: []}},
+          sequence_settings: {quantize_enabled: true, swing_percent: 50},
         },
       };
     },
@@ -1599,7 +1603,7 @@ test("Open local switches Projects through one serialized visible selection", as
   const inspection = () => ({
     project_revision: opened.revision,
     project: {
-      contract: "lmdj.project.v1",
+      contract: "lmdj.project.v3",
       project_id: opened.projectId,
       revision: opened.revision,
       bpm: opened.bpm,
@@ -1613,8 +1617,8 @@ test("Open local switches Projects through one serialized visible selection", as
             : null,
         })),
       })),
-      patterns: {},
-      takes: {},
+      patterns: {[opened.patternId]: {bars: 1, events: []}},
+      sequence_settings: {quantize_enabled: true, swing_percent: 50},
     },
   });
   const fixture = runtimeFixture({

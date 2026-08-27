@@ -18,6 +18,8 @@ namespace {
 
 using lmdj::audio::EnqueueResult;
 using lmdj::audio::PreparedSampleBank;
+using lmdj::audio::PreparedPatternView;
+using lmdj::audio::TransportAnchor;
 using lmdj::audio::PublishResult;
 using lmdj::audio::RealtimeEngine;
 using lmdj::audio::RuntimePreparationLimits;
@@ -27,6 +29,7 @@ using lmdj::cooker::ResolvedPlayback;
 using lmdj::cooker::ResolvedPad;
 using lmdj::cooker::RuntimeSnapshot;
 using lmdj::domain::PadSlotId;
+using lmdj::domain::PatternEvent;
 using lmdj::domain::TriggerMode;
 using lmdj::foundation::ArtifactRef;
 using lmdj::foundation::ErrorCode;
@@ -55,9 +58,13 @@ std::shared_ptr<const PcmSample> pcm(std::uint32_t sample_rate,
 RuntimeSnapshot valid_snapshot() {
   return RuntimeSnapshot{
       ProjectId{kProjectId},
+      lmdj::foundation::PatternId{
+          "30000000-0000-4000-8000-000000000001"},
       7,
       120,
       1,
+      lmdj::domain::kPpq,
+      lmdj::domain::kBarTicks4x4,
       {
           ResolvedPad{
               PadSlotId{0, 0},
@@ -110,9 +117,13 @@ RuntimeSnapshot large_shared_snapshot(bool one_extra_frame) {
   }
   return RuntimeSnapshot{
       ProjectId{kProjectId},
+      lmdj::foundation::PatternId{
+          "30000000-0000-4000-8000-000000000001"},
       8,
       120,
       1,
+      lmdj::domain::kPpq,
+      lmdj::domain::kBarTicks4x4,
       std::move(pads),
       {},
   };
@@ -302,6 +313,47 @@ void accepts_exact_web_limits_and_rejects_boundary_plus_one() {
            .has_value());
 }
 
+void prepares_immutable_pattern_overlay_and_integer_timing() {
+  auto snapshot = valid_snapshot();
+  snapshot.events.push_back(lmdj::cooker::ResolvedEvent{
+      PadSlotId{0, 0}, 0, 240, 64, snapshot.pads.at(0).sample});
+  const std::array overlay{
+      PatternEvent{PadSlotId{0, 0}, 0, 480, 127},
+      PatternEvent{PadSlotId{3, 15}, 240, 240, 96},
+  };
+
+  auto prepared =
+      PreparedPatternView::from_snapshot_with_overlay(snapshot, overlay);
+  LMDJ_CHECK(prepared.has_value());
+  LMDJ_CHECK(prepared.value().project_id() == snapshot.project_id);
+  LMDJ_CHECK(prepared.value().pattern_id() == snapshot.pattern_id);
+  LMDJ_CHECK(prepared.value().ppq() == 960);
+  LMDJ_CHECK(prepared.value().loop_length_ticks() == 3'840);
+  LMDJ_CHECK(prepared.value().loop_frames() == 96'000);
+  LMDJ_CHECK(prepared.value().bar_frames() == 96'000);
+  LMDJ_CHECK(prepared.value().has_overlay());
+  LMDJ_CHECK(prepared.value().events().size() == 2);
+  LMDJ_CHECK(prepared.value().events().at(0).velocity == 127);
+  LMDJ_CHECK(prepared.value().events().at(0).duration_tick == 480);
+  LMDJ_CHECK(prepared.value().events().at(1).start_frame == 6'000);
+  LMDJ_CHECK(snapshot.events.size() == 1);
+  LMDJ_CHECK(snapshot.events.front().velocity == 64);
+  LMDJ_CHECK(snapshot.events.front().duration_tick == 240);
+
+  const TransportAnchor anchor{0, 0, 192};
+  LMDJ_CHECK(lmdj::audio::raw_tick_at(anchor, 62).value() == 3);
+  LMDJ_CHECK(lmdj::audio::raw_tick_at(anchor, 63).value() == 4);
+  LMDJ_CHECK(
+      lmdj::audio::tick_boundary_frame(4, 192).value() == 63);
+  const auto frozen = lmdj::audio::freeze_transport_bpm(
+      TransportAnchor{0, 0, 123}, 17, 97);
+  LMDJ_CHECK(frozen.has_value());
+  LMDJ_CHECK(frozen.value() == (TransportAnchor{17, 2'007'360, 97}));
+  LMDJ_CHECK(
+      lmdj::audio::tick_numerator_at(frozen.value(), 48).value() ==
+      4'894'080);
+}
+
 void bounded_preparation_rejects_before_allocation_and_retains_prior_bank() {
   auto prior = PreparedSampleBank::empty(ProjectId{kProjectId}, 6);
   const std::array<float, 2> prior_pcm{0.25F, 0.25F};
@@ -427,4 +479,5 @@ int main() {
   validates_resolved_playback_before_storing_fixed_values();
   accepts_exact_web_limits_and_rejects_boundary_plus_one();
   bounded_preparation_rejects_before_allocation_and_retains_prior_bank();
+  prepares_immutable_pattern_overlay_and_integer_timing();
 }

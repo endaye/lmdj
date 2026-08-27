@@ -9,7 +9,7 @@ add_library(
     src/project_store.cpp
     src/workspace_cache.cpp
     src/project_bundle_transfer.cpp
-    src/take_journal.cpp
+    src/sequence_journal.cpp
     ${lmdj_project_io_platform_source}
 )
 add_library(lmdj::project_io ALIAS lmdj_project_io)
@@ -64,7 +64,7 @@ if(BUILD_TESTING)
       src/project_store.cpp
       src/workspace_cache.cpp
       src/project_bundle_transfer.cpp
-      src/take_journal.cpp
+      src/sequence_journal.cpp
       src/native/storage_platform.cpp
   )
   target_include_directories(
@@ -179,32 +179,50 @@ if(BUILD_TESTING)
   )
 
   add_executable(
-    lmdj_take_journal_tests
-    "${CMAKE_SOURCE_DIR}/tests/core/project_io/take_journal_test.cpp"
+    lmdj_sequence_journal_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/project_io/sequence_journal_test.cpp"
   )
   target_include_directories(
-    lmdj_take_journal_tests
+    lmdj_sequence_journal_tests
     PRIVATE
       "${CMAKE_SOURCE_DIR}"
   )
   target_link_libraries(
-    lmdj_take_journal_tests
+    lmdj_sequence_journal_tests
     PRIVATE
       lmdj_project_io_testable
+      lmdj_picosha2
       nlohmann_json::nlohmann_json
+      Threads::Threads
   )
   target_compile_definitions(
-    lmdj_take_journal_tests
+    lmdj_sequence_journal_tests
     PRIVATE
       LMDJ_PROJECT_IO_TESTING=1
+      LMDJ_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
   )
-  lmdj_target_warnings(lmdj_take_journal_tests)
-  lmdj_target_sanitizers(lmdj_take_journal_tests)
+  lmdj_target_warnings(lmdj_sequence_journal_tests)
+  lmdj_target_sanitizers(lmdj_sequence_journal_tests)
   lmdj_add_test(
-    NAME project_io.take_journal
+    NAME project_io.sequence_journal
     TIER component
-    COMMAND lmdj_take_journal_tests
-    LABELS persistence
+    COMMAND lmdj_sequence_journal_tests
+    LABELS persistence concurrency
+  )
+  lmdj_add_test(
+    NAME project_io.sequence_journal_stress
+    TIER stress
+    COMMAND lmdj_sequence_journal_tests --stress
+    LABELS persistence concurrency
+    TIMEOUT 30
+  )
+  lmdj_add_test(
+    NAME project_io.sequence_fingerprint_vectors
+    TIER component
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/conformance/sequence_fingerprint_vector_test.py"
+    LABELS persistence conformance
   )
 
   add_executable(

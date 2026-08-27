@@ -17,7 +17,14 @@ namespace lmdj::domain {
 enum class ProjectContract : std::uint8_t {
   v1,
   v2,
+  v3,
 };
+
+inline constexpr std::uint32_t kPpq = 960;
+inline constexpr std::uint32_t kSixteenthTicks = 240;
+inline constexpr std::uint32_t kBarTicks4x4 = 3840;
+inline constexpr std::uint8_t kSwingPercentMin = 50;
+inline constexpr std::uint8_t kSwingPercentMax = 75;
 
 enum class TriggerMode : std::uint8_t {
   one_shot,
@@ -60,10 +67,24 @@ struct Asset {
 
 struct PatternEvent {
   PadSlotId slot;
-  std::uint32_t step;
+  std::uint32_t onset_tick;
+  std::uint32_t duration_tick;
   std::uint8_t velocity;
 
-  bool operator==(const PatternEvent&) const = default;
+  PatternEvent(
+      PadSlotId slot_value,
+      std::uint32_t onset_tick_value,
+      std::uint32_t duration_tick_value,
+      std::uint8_t velocity_value) noexcept
+      : slot(slot_value),
+        onset_tick(onset_tick_value),
+        duration_tick(duration_tick_value),
+        velocity(velocity_value) {}
+
+  bool operator==(const PatternEvent& other) const noexcept {
+    return slot == other.slot && onset_tick == other.onset_tick &&
+           duration_tick == other.duration_tick && velocity == other.velocity;
+  }
 };
 
 struct Pattern {
@@ -74,30 +95,15 @@ struct Pattern {
   bool operator==(const Pattern&) const = default;
 };
 
-struct RawTakeEvent {
-  PadSlotId slot;
-  std::uint32_t frame_offset;
-  std::uint8_t velocity;
-
-  bool operator==(const RawTakeEvent&) const = default;
-};
-
-struct RawTake {
-  foundation::TakeId id;
-  std::uint32_t sample_rate;
-  std::vector<RawTakeEvent> events;
-
-  bool operator==(const RawTake&) const = default;
-};
-
 struct ProjectState {
   ProjectContract contract;
   foundation::ProjectId id;
   std::uint64_t revision;
   std::uint16_t bpm;
+  bool quantize_enabled;
+  std::uint8_t swing_percent;
   std::array<std::array<PadSlot, 16>, 4> banks;
   std::map<foundation::AssetId, Asset> assets;
-  std::map<foundation::TakeId, RawTake> takes;
   std::map<foundation::PatternId, Pattern> patterns;
 
   bool operator==(const ProjectState&) const = default;
@@ -112,5 +118,20 @@ bool is_valid_slot(PadSlotId slot) noexcept;
 std::optional<Asset> resolve_slot_asset(
     const ProjectState& state,
     PadSlotId slot);
+
+std::uint32_t pattern_length_ticks(std::uint8_t bars) noexcept;
+std::uint32_t quantize_onset_tick(
+    std::uint64_t raw_tick,
+    std::uint32_t loop_length_ticks,
+    bool quantize_enabled,
+    std::uint8_t swing_percent) noexcept;
+std::uint32_t normalize_duration_tick(
+    std::uint64_t raw_attack_tick,
+    std::uint64_t raw_release_tick,
+    std::uint32_t onset_tick,
+    std::uint32_t loop_length_ticks) noexcept;
+std::vector<PatternEvent> merge_pattern_events(
+    const std::vector<PatternEvent>& stored,
+    const std::vector<PatternEvent>& incoming);
 
 }  // namespace lmdj::domain

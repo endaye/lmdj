@@ -211,6 +211,8 @@ export function createDiagnosticProjectCoordinator({
     typeof session?.openProject !== "function" ||
     typeof session?.inspectProject !== "function" ||
     typeof session?.reloadSnapshot !== "function" ||
+    typeof session?.querySequenceStatus !== "function" ||
+    typeof session?.listSequenceRecovery !== "function" ||
     typeof diagnosticClient?.createProject !== "function" ||
     typeof diagnosticClient?.importAsset !== "function" ||
     typeof diagnosticClient?.assignPad !== "function"
@@ -226,6 +228,9 @@ export function createDiagnosticProjectCoordinator({
   let queuedLoad = null;
   let admission = 0;
   let terminalResult = null;
+  let sequenceState;
+  let sequenceSwitchPending;
+  let sequenceRecoveryCount;
 
   function diagnostics() {
     const result = { diagnostic_project_state: state };
@@ -235,7 +240,36 @@ export function createDiagnosticProjectCoordinator({
     if (state === "ready" && generation !== undefined) {
       result.diagnostic_project_generation = generation;
     }
+    if (sequenceState !== undefined) {
+      result.diagnostic_sequence_state = sequenceState;
+      result.diagnostic_sequence_switch_pending = sequenceSwitchPending;
+      result.diagnostic_sequence_recovery_count = sequenceRecoveryCount;
+    }
     return Object.freeze(result);
+  }
+
+  async function refreshSequenceAuthority() {
+    const descriptor = loadOrCreateDiagnosticDescriptor({ storage, crypto });
+    const [status, recovery] = await Promise.all([
+      session.querySequenceStatus(descriptor.project_id),
+      session.listSequenceRecovery(descriptor.project_id),
+    ]);
+    if (
+      status === null ||
+      typeof status !== "object" ||
+      !["inactive", "active", "switching", "recoverable"].includes(status.state) ||
+      !Array.isArray(recovery)
+    ) {
+      throw typedError("HOST_PROTOCOL_MISMATCH");
+    }
+    sequenceState = status.state;
+    sequenceSwitchPending = status.state === "switching";
+    sequenceRecoveryCount = recovery.length;
+    return Object.freeze({
+      state: sequenceState,
+      switch_pending: sequenceSwitchPending,
+      recovery_count: sequenceRecoveryCount,
+    });
   }
 
   async function send(
@@ -485,5 +519,10 @@ export function createDiagnosticProjectCoordinator({
     }
   }
 
-  return Object.freeze({ load, invalidate, diagnostics });
+  return Object.freeze({
+    load,
+    invalidate,
+    refreshSequenceAuthority,
+    diagnostics,
+  });
 }

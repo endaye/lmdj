@@ -282,16 +282,26 @@ GeneratedProject generated_project(
       Command{AssignPad{meta(), duplicate_mono_slot, mono_first}});
 
   std::vector<PatternEvent> events{
-      {mono_slot, 0, 127},
-      {reassigned_slot, 1, 126},
-      {stereo_slot, 2, 125},
-      {duplicate_mono_slot, 3, 124},
+      {mono_slot, 0, lmdj::domain::kSixteenthTicks, 127},
+      {reassigned_slot,
+       lmdj::domain::kSixteenthTicks,
+       lmdj::domain::kSixteenthTicks,
+       126},
+      {stereo_slot,
+       2 * lmdj::domain::kSixteenthTicks,
+       lmdj::domain::kSixteenthTicks,
+       125},
+      {duplicate_mono_slot,
+       3 * lmdj::domain::kSixteenthTicks,
+       lmdj::domain::kSixteenthTicks,
+       124},
   };
   for (std::uint32_t step = 4; step < 16; ++step) {
     const std::array slots{reassigned_slot, mono_slot, stereo_slot};
     events.push_back(PatternEvent{
         slots.at(rng.bounded(slots.size())),
-        step,
+        step * lmdj::domain::kSixteenthTicks,
+        lmdj::domain::kSixteenthTicks,
         static_cast<std::uint8_t>(1U + rng.bounded(127)),
     });
   }
@@ -335,9 +345,12 @@ void check_snapshots_equal(
     const RuntimeSnapshot& first,
     const RuntimeSnapshot& second) {
   LMDJ_CHECK(first.project_id == second.project_id);
+  LMDJ_CHECK(first.pattern_id == second.pattern_id);
   LMDJ_CHECK(first.project_revision == second.project_revision);
   LMDJ_CHECK(first.bpm == second.bpm);
   LMDJ_CHECK(first.bars == second.bars);
+  LMDJ_CHECK(first.ppq == second.ppq);
+  LMDJ_CHECK(first.loop_length_ticks == second.loop_length_ticks);
   LMDJ_CHECK(first.pads.size() == second.pads.size());
   for (std::size_t index = 0; index < first.pads.size(); ++index) {
     const auto& left = first.pads.at(index);
@@ -360,7 +373,8 @@ void check_snapshots_equal(
     const auto& left = first.events.at(index);
     const auto& right = second.events.at(index);
     LMDJ_CHECK(left.slot == right.slot);
-    LMDJ_CHECK(left.step == right.step);
+    LMDJ_CHECK(left.onset_tick == right.onset_tick);
+    LMDJ_CHECK(left.duration_tick == right.duration_tick);
     LMDJ_CHECK(left.velocity == right.velocity);
     LMDJ_CHECK(left.sample != nullptr);
     LMDJ_CHECK(right.sample != nullptr);

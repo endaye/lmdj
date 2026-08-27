@@ -30,6 +30,7 @@ import {
   waveformWindowForViewport,
   type SamplePendingAction,
 } from "../state/sample_state";
+import type {CapturePhase} from "../state/capture_state";
 import {
   selectVisiblePads,
   type CreatorAction,
@@ -43,6 +44,11 @@ interface SampleSurfaceProps {
   controller?: ReturnType<typeof createCreatorInputController>;
   filePickIntent: {current: (slot: number) => void};
   dispatch: (action: CreatorAction) => void;
+  captureStopRequest?: number;
+  onCaptureSlotChange?(slot: number | null): void;
+  onCapturePhaseChange?(phase: CapturePhase): void;
+  onContinueCaptureInSequence?(): void;
+  closeCaptureAfterResolution?: boolean;
 }
 
 interface PendingFile {
@@ -132,6 +138,11 @@ export function SampleSurface({
   controller,
   filePickIntent,
   dispatch,
+  captureStopRequest = 0,
+  onCaptureSlotChange,
+  onCapturePhaseChange,
+  onContinueCaptureInSequence,
+  closeCaptureAfterResolution = false,
 }: SampleSurfaceProps) {
   const input = useRef<HTMLInputElement | null>(null);
   const fileSlot = useRef<number | null>(null);
@@ -153,6 +164,10 @@ export function SampleSurface({
   const previousAudioSuspended = useRef(audioSuspended);
   const inspect = sample.inspect;
   const selectedSlot = sample.selectedSlot;
+
+  useEffect(() => {
+    onCaptureSlotChange?.(captureSlot);
+  }, [captureSlot, onCaptureSlotChange]);
 
   const clearOwnedPreview = useCallback(() => {
     const owner = previewOwner.current;
@@ -809,6 +824,14 @@ export function SampleSurface({
           // onClose only clears state — a second .focus() here would race the
           // dialog's own restore.
           returnFocus={replaceReturnFocus.current}
+          stopRequest={captureStopRequest}
+          closeAfterResolution={closeCaptureAfterResolution}
+          {...(onCapturePhaseChange === undefined
+            ? {}
+            : {onPhaseChange: onCapturePhaseChange})}
+          {...(onContinueCaptureInSequence === undefined
+            ? {}
+            : {onContinueInSequence: onContinueCaptureInSequence})}
           onClose={() => setCaptureSlot(null)}
         />
       )}

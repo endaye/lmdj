@@ -1,0 +1,20 @@
+{
+  "contract": "lmdj.sequence-pattern-fingerprint-v1",
+  "vectors": [
+    {
+      "name": "empty-pattern",
+      "canonical_json": "{\"bars\":1,\"events\":[]}",
+      "sha256": "ac1f943dea4d2b1f597933228eb3c0d3d7dab5abcc8fbee5807ec4f2fe488dab"
+    },
+    {
+      "name": "one-event-key-order",
+      "canonical_json": "{\"bars\":1,\"events\":[{\"duration_tick\":240,\"onset_tick\":0,\"slot\":{\"bank\":0,\"pad\":0},\"velocity\":100}]}",
+      "sha256": "052083748b80c4f6ed4105b8a8549a0b7830fc884289cca9af350a545eee2656"
+    },
+    {
+      "name": "utf8-no-bom-no-newline",
+      "canonical_json": "{\"a\":\"节拍\",\"z\":true}",
+      "sha256": "9707b55743cfdce76c0429ac9b9bdc0b40c071a777e6c811763b58b0d73c4bfd"
+    }
+  ]
+}

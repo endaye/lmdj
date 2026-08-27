@@ -1,16 +1,14 @@
-const futureModes = [
-  {name: "Sequence", stage: 9},
-  {name: "Perform", stage: 10},
-] as const;
+const futureModes = [{name: "Perform", stage: 10}] as const;
 
-export type CreatorMode = "project" | "sample";
+export type CreatorMode = "project" | "sample" | "sequence";
 
 interface ModeRailProps {
   activeMode: CreatorMode;
   onSelect: (mode: CreatorMode) => void;
+  sequenceEnabled?: boolean;
 }
 
-export function ModeRail({activeMode, onSelect}: ModeRailProps) {
+export function ModeRail({activeMode, onSelect, sequenceEnabled = false}: ModeRailProps) {
   return (
     <nav className="mode-rail" aria-label="Creator modes">
       <button
@@ -21,6 +19,17 @@ export function ModeRail({activeMode, onSelect}: ModeRailProps) {
       >
         <span aria-hidden="true">P</span>
         <span className="mode-label">Project</span>
+      </button>
+      <button
+        className={`mode-button${activeMode === "sequence" ? " is-active" : ""}`}
+        type="button"
+        disabled={!sequenceEnabled}
+        aria-current={activeMode === "sequence" ? "page" : undefined}
+        aria-label={sequenceEnabled ? "Sequence" : "Sequence — open a playable Project first"}
+        onClick={() => onSelect("sequence")}
+      >
+        <span aria-hidden="true">Q</span>
+        <span className="mode-label">Sequence</span>
       </button>
       <button
         className={`mode-button${activeMode === "sample" ? " is-active" : ""}`}

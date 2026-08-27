@@ -5,7 +5,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -23,14 +22,9 @@ USAGE = (
 COMMAND_LIMIT = 64 * 1024
 PROJECT_ID = "00000000-0000-4000-8000-000000000001"
 STARTUP_PATTERN_ID = "00000000-0000-4000-8000-000000000010"
-RECORDED_PATTERN_ID = "00000000-0000-4000-8000-000000000011"
 KICK_ASSET_ID = "00000000-0000-4000-8000-000000000101"
 SNARE_ASSET_ID = "00000000-0000-4000-8000-000000000102"
-FIXTURE_TAKE_ID = "00000000-0000-4000-8000-000000000201"
-RECORDED_TAKE_ID = "00000000-0000-4000-8000-000000000202"
-FAILED_TAKE_ID = "00000000-0000-4000-8000-000000000203"
-CONFLICT_TAKE_ID = "00000000-0000-4000-8000-000000000204"
-CONFLICT_PATTERN_ID = "00000000-0000-4000-8000-000000000012"
+RECORDED_SESSION_ID = "00000000-0000-4000-8000-000000000202"
 
 
 def canonical_json(value: object) -> str:
@@ -112,19 +106,10 @@ def startup_pattern() -> dict:
         "pattern_id": STARTUP_PATTERN_ID,
         "bars": 1,
         "events": [
-            {"slot": slot(0, 0), "step": 0, "velocity": 127},
-            {"slot": slot(0, 1), "step": 4, "velocity": 127},
-        ],
-    }
-
-
-def recorded_pattern() -> dict:
-    return {
-        "pattern_id": RECORDED_PATTERN_ID,
-        "bars": 1,
-        "events": [
-            {"slot": slot(0, 0), "step": 0, "velocity": 100},
-            {"slot": slot(0, 1), "step": 8, "velocity": 110},
+            {"slot": slot(0, 0), "onset_tick": 0,
+             "duration_tick": 240, "velocity": 127},
+            {"slot": slot(0, 1), "onset_tick": 960,
+             "duration_tick": 240, "velocity": 127},
         ],
     }
 
@@ -145,6 +130,7 @@ def author_project(
             "project_path": str(project),
             "project_id": PROJECT_ID,
             "bpm": 120,
+            "initial_pattern": startup_pattern(),
         },
         0,
     )
@@ -195,44 +181,12 @@ def author_project(
         assembly,
         "command",
         {
-            "operation": "take.begin",
-            "project_path": str(project),
-            "take_id": FIXTURE_TAKE_ID,
-            "expected_revision": 4,
-            "sample_rate": 48000,
-        },
-        4,
-    )
-    for index, pad in enumerate((0, 1)):
-        cli_success(
-            cli,
-            workspace,
-            assembly,
-            "command",
-            {
-                "operation": "take.append",
-                "project_path": str(project),
-                "take_id": FIXTURE_TAKE_ID,
-                "event": {
-                    "slot": slot(0, pad),
-                    "frame_offset": index * 24000,
-                    "velocity": 127,
-                },
-            },
-            4,
-        )
-    cli_success(
-        cli,
-        workspace,
-        assembly,
-        "command",
-        {
-            "operation": "take.commit",
+            "operation": "pad.assign",
             "project_path": str(project),
             "command_id": uuid(5),
             "expected_revision": 4,
-            "take_id": FIXTURE_TAKE_ID,
-            "pattern": startup_pattern(),
+            "slot": slot(0, 0),
+            "asset_id": KICK_ASSET_ID,
         },
         5,
     )
@@ -405,7 +359,7 @@ def happy_path(
     }
     assert ready["result"]["resolved_pad_count"] == 2
     assert ready["result"]["project_revision"] == 5
-    assert ready["result"]["host_version"] == "1.0.1"
+    assert ready["result"]["host_version"] == "2.0.0"
     assert ready["result"]["product_build"] == PRODUCT_BUILD, (
         "Product Build mismatch: expected "
         f"{PRODUCT_BUILD} from products/lmdj/version.json, found "
@@ -455,7 +409,7 @@ def happy_path(
     begun = process.request(
         {
             "operation": "record.begin",
-            "take_id": RECORDED_TAKE_ID,
+            "session_id": RECORDED_SESSION_ID,
             "expected_revision": 5,
         }
     )
@@ -469,23 +423,13 @@ def happy_path(
             }
         )
         assert triggered["ok"] is True, (index, triggered)
-    stopped_recording = process.request({"operation": "record.stop"})
+    stopped_recording = process.request(
+        {"operation": "record.stop", "command_id": uuid(6)})
     assert stopped_recording["ok"] is True, stopped_recording
     assert stopped_recording["result"]["clean"] is True
     assert stopped_recording["result"]["captured_events"] == 21
     assert stopped_recording["result"]["persisted_events"] == 21
     assert stopped_recording["result"]["writer_failures"] == 0
-
-    committed = process.request(
-        {
-            "operation": "record.commit",
-            "command_id": uuid(6),
-            "expected_revision": 5,
-            "pattern": recorded_pattern(),
-        }
-    )
-    assert committed["ok"] is True, committed
-    assert committed["project_revision"] == 6
 
     reloaded = process.request(
         {"operation": "snapshot.reload", "pattern_id": STARTUP_PATTERN_ID}
@@ -515,13 +459,7 @@ def happy_path(
         {"operation": "project.inspect", "project_path": str(project)},
         6,
     )["project"]
-    assert len(inspected["takes"][RECORDED_TAKE_ID]["events"]) == 21
-    offsets = [
-        event["frame_offset"]
-        for event in inspected["takes"][RECORDED_TAKE_ID]["events"]
-    ]
-    assert offsets == sorted(offsets)
-    assert RECORDED_PATTERN_ID in inspected["patterns"]
+    assert len(inspected["patterns"][STARTUP_PATTERN_ID]["events"]) >= 2
 
 
 def sample_facade_snapshot_path(
@@ -582,142 +520,6 @@ def sample_facade_snapshot_path(
     process.quit()
 
 
-def writer_failure_path(
-    host: Path,
-    cli: Path,
-    workspace: Path,
-    assembly: Path,
-    project: Path,
-) -> None:
-    process = HostProcess(host, workspace, assembly, project)
-    assert process.read()["operation"] == "ready"
-    begun = process.request(
-        {
-            "operation": "record.begin",
-            "take_id": FAILED_TAKE_ID,
-            "expected_revision": 5,
-        }
-    )
-    assert begun["ok"] is True, begun
-    journal = project / "recovery" / "active" / f"{FAILED_TAKE_ID}.jsonl"
-    backup = journal.with_suffix(".backup")
-    journal.rename(backup)
-    journal.mkdir()
-    try:
-        assert process.request(
-            {"operation": "trigger", "slot": slot(0, 0), "velocity": 100}
-        )["ok"] is True
-        deadline = time.monotonic() + 5
-        failures = 0
-        while time.monotonic() < deadline:
-            status = process.request({"operation": "status"})
-            failures = status["result"]["capture"]["writer_failures"]
-            if failures == 1:
-                break
-            time.sleep(0.01)
-        assert failures == 1
-    finally:
-        journal.rmdir()
-        backup.rename(journal)
-
-    stopped = process.request({"operation": "record.stop"})
-    assert stopped["ok"] is True, stopped
-    assert stopped["result"]["clean"] is False
-    assert stopped["result"]["captured_events"] == 1
-    assert stopped["result"]["persisted_events"] == 0
-    assert stopped["result"]["writer_failures"] == 1
-    assert stopped["result"]["recovery_path"] is not None
-    process.quit()
-
-    candidates = cli_success(
-        cli,
-        workspace,
-        assembly,
-        "query",
-        {
-            "operation": "take.recoverable.list",
-            "project_path": str(project),
-        },
-        5,
-    )["candidates"]
-    candidate = next(
-        value for value in candidates if value["take_id"] == FAILED_TAKE_ID
-    )
-    assert candidate["reason"] == "capture_incomplete"
-
-
-def strict_revision_conflict_path(
-    host: Path,
-    cli: Path,
-    workspace: Path,
-    assembly: Path,
-    project: Path,
-) -> None:
-    process = HostProcess(host, workspace, assembly, project)
-    assert process.read()["operation"] == "ready"
-    assert process.request(
-        {
-            "operation": "record.begin",
-            "take_id": CONFLICT_TAKE_ID,
-            "expected_revision": 5,
-        }
-    )["ok"] is True
-    assert process.request(
-        {"operation": "trigger", "slot": slot(0, 0), "velocity": 100}
-    )["ok"] is True
-    stopped = process.request({"operation": "record.stop"})
-    assert stopped["ok"] is True
-    assert stopped["result"]["clean"] is True
-
-    cli_success(
-        cli,
-        workspace,
-        assembly,
-        "command",
-        {
-            "operation": "pad.assign",
-            "project_path": str(project),
-            "command_id": uuid(7),
-            "expected_revision": 5,
-            "slot": slot(0, 2),
-            "asset_id": KICK_ASSET_ID,
-        },
-        6,
-    )
-    conflict = process.request(
-        {
-            "operation": "record.commit",
-            "command_id": uuid(8),
-            "expected_revision": 6,
-            "pattern": {
-                "pattern_id": CONFLICT_PATTERN_ID,
-                "bars": 1,
-                "events": [
-                    {"slot": slot(0, 0), "step": 0, "velocity": 100}
-                ],
-            },
-        }
-    )
-    check_error(conflict, "REVISION_CONFLICT")
-    process.quit()
-
-    candidates = cli_success(
-        cli,
-        workspace,
-        assembly,
-        "query",
-        {
-            "operation": "take.recoverable.list",
-            "project_path": str(project),
-        },
-        6,
-    )["candidates"]
-    candidate = next(
-        value for value in candidates if value["take_id"] == CONFLICT_TAKE_ID
-    )
-    assert candidate["reason"] == "revision_conflict"
-
-
 def non_apple_real_device_contract(
     host: Path,
     workspace: Path,
@@ -755,21 +557,11 @@ def main() -> int:
         author_project(cli, workspace, assembly, base_project)
         happy_project = temp_root / "happy.lmdj"
         sample_project = temp_root / "sample.lmdj"
-        failure_project = temp_root / "failure.lmdj"
-        conflict_project = temp_root / "conflict.lmdj"
         shutil.copytree(base_project, happy_project)
         shutil.copytree(base_project, sample_project)
-        shutil.copytree(base_project, failure_project)
-        shutil.copytree(base_project, conflict_project)
         happy_path(host, cli, workspace, assembly, happy_project)
         sample_facade_snapshot_path(
             host, cli, workspace, assembly, sample_project
-        )
-        writer_failure_path(
-            host, cli, workspace, assembly, failure_project
-        )
-        strict_revision_conflict_path(
-            host, cli, workspace, assembly, conflict_project
         )
         non_apple_real_device_contract(
             host, workspace, assembly, base_project
