@@ -68,8 +68,6 @@ constexpr std::string_view kProjectId =
     "00000000-0000-4000-8000-000000000001";
 constexpr std::string_view kPatternId =
     "00000000-0000-4000-8000-000000000010";
-constexpr std::string_view kCommittedPatternId =
-    "00000000-0000-4000-8000-000000000011";
 constexpr std::string_view kAssetId =
     "00000000-0000-4000-8000-000000000101";
 constexpr std::string_view kSequenceSessionId =
