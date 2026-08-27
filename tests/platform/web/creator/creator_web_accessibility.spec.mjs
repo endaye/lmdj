@@ -130,7 +130,7 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   expect(manifest.distribution_contract).toBe("lmdj.creator-web.distribution.v1");
   expect(manifest.compatible_hosts).toEqual([
-    {host_id: "web-runtime-host", host_version: "1.2.15"},
+    {host_id: "web-runtime-host", host_version: "2.0.0"},
   ]);
   // capture_worklet ships as its own same-origin asset because the CSP below
   // (script-src 'self') rejects blob:/data: AudioWorklet module URLs.
@@ -190,10 +190,8 @@ for (const viewport of [
       expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
     }
     await expect(page.getByRole("button", {name: "Sample"})).toBeEnabled();
-    for (const mode of ["Sequence", "Perform"]) {
-      await expect(page.getByRole("button", {name: new RegExp(`^${mode}`)}))
-        .toBeDisabled();
-    }
+    await expect(page.getByRole("button", {name: "Sequence"})).toBeEnabled();
+    await expect(page.getByRole("button", {name: /^Perform/})).toBeDisabled();
     await page.getByRole("button", {name: "Activate audio"}).focus();
     const focusOrder = [];
     for (let index = 0; index < 6; index += 1) {
@@ -202,7 +200,7 @@ for (const viewport of [
         document.activeElement?.textContent?.trim()));
     }
     expect(focusOrder).toEqual([
-      "Enable MIDI", "Export report", "PProject", "SSample", "Open local", "Import .lmdj",
+      "Enable MIDI", "Export report", "PProject", "SSequence", "SSample", "Open local",
     ]);
     await page.getByRole("button", {name: "Sample"}).click();
     await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();

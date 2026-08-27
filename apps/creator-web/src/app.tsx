@@ -640,6 +640,7 @@ function Workspace({
   };
 
   const recordSequence = async () => {
+    await sequenceAuthoringTail.current;
     const project = stateRef.current.project.current;
     if (!isSequenceSession(session) || project === null ||
         stateRef.current.audio.phase !== "running") return;
@@ -648,7 +649,7 @@ function Workspace({
       const status = await beginSequenceJourney(session, {
         sessionId,
         patternId: sequence.selectedPatternId ?? project.patternId,
-        expectedRevision: project.revision,
+        expectedRevision: sequenceAuthoringRevision.current,
       });
       dispatchSequence({type: "recording", status, sessionId});
     } catch (error) {
