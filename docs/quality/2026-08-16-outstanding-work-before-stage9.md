@@ -256,24 +256,42 @@ Playwright clears `outputDir` at the start of every run.
 
 Carried from `docs/prd/open-questions.md`. Listed by when they become blocking.
 
-### D1. Long-material resource model — with D2, same review
+### ~~D1. Long-material resource model~~ — decided 2026-08-26, merged 2026-08-26
 
-Per-Pad 240,000 frames comes from the 64/128 MiB prepared-PCM budget. A 60 s
+~~Per-Pad 240,000 frames comes from the 64/128 MiB prepared-PCM budget. A 60 s
 sample needs 369 MB/Bank under the uniform model, over the 512 MiB fixed heap;
 a shared Bank quota supports ≈60 s on one Pad and ≈174 s stereo per Bank
 without raising it. Raising to 1 GiB is excluded by iPadOS single-page memory
-limits.
+limits.~~
 
-Touches Cooker Bank allocation, the `PreparedSampleBank` lock-free publication
+~~Touches Cooker Bank allocation, the `PreparedSampleBank` lock-free publication
 layout, manifest semantics, Facade validation, and a new "quota consumed by
-another Pad" failure class. (S8B-D10)
+another Pad" failure class. (S8B-D10)~~
 
-### D2. Loop material BPM time-stretch — with D1, same review
+**Decided 2026-08-26** ([#237](https://github.com/endaye/lmdj/issues/237),
+[decision](../prd/decisions/2026-08-26-long-material-quota-and-bpm-stretch.md),
+merged in [#339](https://github.com/endaye/lmdj/pull/339)): Bank-shared quota
+with no per-Pad cap; the quota model lives in Core, numbers are injected per
+Host manifest (the 512 MiB heap and Web values are browser-tier numbers);
+ingest (Host tier) and prepared (Core tier) split — capture and long-file
+import converge at one deterministic commit validation with a new
+`bank_quota_exhausted` failure class. Implementation is umbrella
+[#341](https://github.com/endaye/lmdj/issues/341), Tasks
+[#342](https://github.com/endaye/lmdj/issues/342)–[#346](https://github.com/endaye/lmdj/issues/346).
 
-Whether and how Loop material follows global BPM when its own BPM differs,
+### ~~D2. Loop material BPM time-stretch~~ — decided 2026-08-26, merged 2026-08-26
+
+~~Whether and how Loop material follows global BPM when its own BPM differs,
 including pitch-shift. Determines the Audio Runtime DSP scope and the
 Capability list. Most long material is BPM-following Loops, which is why this
-and D1 belong in one review.
+and D1 belong in one review.~~
+
+**Decided 2026-08-26** (same review and decision file as D1): samples carry no
+BPM property; global BPM drives the sequencer only and never alters sample
+playback speed or pitch (Koala-verified default). The v1 realtime engine stays
+zero-DSP; time-stretch becomes a named future per-Pad opt-in offline-baked
+capability, tracked as
+[#347](https://github.com/endaye/lmdj/issues/347).
 
 ### D3. Provider SDK Artifact byte access, both directions
 

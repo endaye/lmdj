@@ -185,6 +185,15 @@ class MergeQueueTest(unittest.TestCase):
             def cancel_validation(inner, run_id):
                 inner.cancel_calls.append(run_id)
 
+            superseded_pull_runs = ()
+            superseded_cancel_calls = []
+
+            def cancel_superseded_pull_runs(inner, head_sha):
+                inner.superseded_cancel_calls.append(head_sha)
+                if isinstance(inner.superseded_pull_runs, Exception):
+                    raise inner.superseded_pull_runs
+                return tuple(inner.superseded_pull_runs)
+
             def wait_validation(inner, run_id, timeout_seconds):
                 inner.validation_calls.append((run_id, timeout_seconds))
                 return inner.validation_results.pop(0)
@@ -1020,7 +1029,7 @@ class MergeQueueTest(unittest.TestCase):
         client.get_main_sha = get_main_sha
         report = self.run_item(client, clock=clock)
         self.assertEqual(report.code, "postcondition-mismatch")
-        self.assertEqual(clock.value, 30)
+        self.assertEqual(clock.value, self.mq.POST_MERGE_RECONCILIATION_SECONDS)
         self.assertEqual(post_merge_pull_reads, 1)
         self.assertEqual(post_merge_main_reads, 0)
         self.assertEqual(len(client.merge_calls), 1)
@@ -1041,6 +1050,110 @@ class MergeQueueTest(unittest.TestCase):
         report = self.run_item(client)
         self.assertEqual(report.code, "postcondition-mismatch")
         self.assertIn("reconciliation-errors:TimeoutError", report.evidence)
+
+    def test_lagging_merge_commit_sha_is_propagation_delay_not_mismatch(self):
+        """merged:true with a null merge_commit_sha while every durable fact
+        holds is API propagation delay (#304): the run closes as merged."""
+        client = self.client()
+        original_merge_pull = client.merge_pull
+
+        def merge_pull(number, payload):
+            result = original_merge_pull(number, payload)
+            client.pull = replace(client.pull, merge_commit_sha=None)
+            return result
+
+        client.merge_pull = merge_pull
+        clock = FakeClock()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "merged")
+        self.assertEqual(report.status, "merged")
+        self.assertTrue(report.ok)
+        self.assertEqual(report.merge_sha, SHA_C)
+        self.assertIn("pull-merge-sha-lagging", report.evidence)
+        # Accepted on the first reconciliation read: no spin, no TimeoutError.
+        self.assertEqual(clock.value, 0)
+        self.assertEqual(len(client.merge_calls), 1)
+
+    def test_lagging_echo_never_excuses_a_wrong_main_sha(self):
+        client = self.client()
+        original_merge_pull = client.merge_pull
+
+        def merge_pull(number, payload):
+            result = original_merge_pull(number, payload)
+            client.pull = replace(client.pull, merge_commit_sha=None)
+            client.main_sha = SHA_D
+            return result
+
+        client.merge_pull = merge_pull
+        report = self.run_item(client)
+        self.assertEqual(report.code, "postcondition-mismatch")
+        self.assertEqual(report.status, "blocked-after-reconciliation")
+        self.assertIn("pull-merge-sha:None", report.evidence)
+        self.assertIn(f"main-sha:{SHA_D}", report.evidence)
+
+    def test_lagging_echo_never_excuses_a_wrong_merge_tree(self):
+        client = self.client(merge_tree="different-tree")
+        original_merge_pull = client.merge_pull
+
+        def merge_pull(number, payload):
+            result = original_merge_pull(number, payload)
+            client.pull = replace(client.pull, merge_commit_sha=None)
+            return result
+
+        client.merge_pull = merge_pull
+        report = self.run_item(client)
+        self.assertEqual(report.code, "postcondition-mismatch")
+
+    def test_present_but_different_merge_sha_stays_a_hard_mismatch(self):
+        client = self.client()
+        original_merge_pull = client.merge_pull
+
+        def merge_pull(number, payload):
+            result = original_merge_pull(number, payload)
+            client.pull = replace(client.pull, merge_commit_sha=SHA_D)
+            return result
+
+        client.merge_pull = merge_pull
+        report = self.run_item(client)
+        self.assertEqual(report.code, "postcondition-mismatch")
+        self.assertIn(f"pull-merge-sha:{SHA_D}", report.evidence)
+
+    def test_dispatch_cancels_pull_runs_for_the_exact_head(self):
+        client = self.client(superseded_pull_runs=(777, 778))
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merged")
+        self.assertEqual(client.superseded_cancel_calls, [SHA_B])
+        self.assertIn("cancelled-pull-run:777", report.evidence)
+        self.assertIn("cancelled-pull-run:778", report.evidence)
+
+    def test_pull_run_cancellation_failure_is_non_fatal_evidence(self):
+        class CancelSweepError(Exception):
+            pass
+
+        client = self.client(superseded_pull_runs=CancelSweepError("boom"))
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merged")
+        self.assertTrue(report.ok)
+        self.assertIn("pull-run-cancel-error:CancelSweepError", report.evidence)
+
+    def test_synchronized_validation_never_sweeps_pull_runs(self):
+        """After update-branch, the queue consumes the synchronized run, so
+        the pull_request run for the new head must not be cancelled."""
+        validation = replace(
+            self.client().validation_results[0],
+            run_id=9101,
+            run_event="pull_request",
+            head_sha=SHA_D,
+            ticket=None,
+        )
+        client = self.client(
+            ancestor=False,
+            update_results=[self.mq.UpdateResult("accepted", SHA_D)],
+            validation_results=[validation],
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merged")
+        self.assertEqual(client.superseded_cancel_calls, [])
 
     def test_successful_merge_waits_for_eventually_consistent_pr_metadata(self):
         client = self.client()

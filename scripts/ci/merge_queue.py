@@ -25,7 +25,10 @@ MINIMUM_ATTEMPT_SECONDS = 30 * 60
 MAXIMUM_VALIDATION_SECONDS = 120 * 60
 POST_MERGE_RECONCILIATION_ATTEMPTS = 7
 POST_MERGE_RECONCILIATION_INTERVAL_SECONDS = 4
-POST_MERGE_RECONCILIATION_SECONDS = 30
+# Deadline for the reconciliation reads, not a spin budget: the loop is bounded
+# by the attempt count, and the widened window only keeps slow API reads from
+# converting a durable merge into a TimeoutError (issue #304).
+POST_MERGE_RECONCILIATION_SECONDS = 120
 GITHUB_ACTIONS_APP_ID = 15368
 REQUIRED_CHECKS = (
     "core (ubuntu-latest)",
@@ -80,6 +83,9 @@ _SAFE_SUMMARY_EVIDENCE = (
     re.compile(r"^(?:pull-merged|base-ancestor):(?:True|False|None)$"),
     re.compile(r"^(?:expected-head-tree|merge-tree|head-tree):(?:[0-9a-f]{40}|None)$"),
     re.compile(r"^(?:queue-seconds|execution-seconds):\d+(?:\.\d+)?$"),
+    re.compile(r"^pull-merge-sha-lagging$"),
+    re.compile(r"^cancelled-pull-run:\d+$"),
+    re.compile(r"^pull-run-cancel-error:[A-Z][A-Za-z0-9_]*(?:Error|Exception)$"),
 )
 
 
@@ -202,6 +208,7 @@ class QueueClient(Protocol):
         self, number: int, head_ref: str, inputs: Mapping[str, str]
     ) -> int: ...
     def cancel_validation(self, run_id: int) -> None: ...
+    def cancel_superseded_pull_runs(self, head_sha: str) -> tuple[int, ...]: ...
     def wait_validation(self, run_id: int, timeout_seconds: int) -> ValidationResult: ...
     def merge_pull(self, number: int, payload: Mapping[str, str]) -> MergeResult: ...
     def remove_label(self, number: int, label: str) -> None: ...
@@ -605,6 +612,23 @@ def run_queue_item(
             )
         run_ids.append(run_id)
 
+        # The queue never consumes the PR's own pull_request run for this head;
+        # on the shared runner pool it only serializes the validation run's
+        # jobs (issue #304). Failure to cancel is evidence, never terminal.
+        redundant_run_evidence: tuple[str, ...] = ()
+        if synchronized_run_id is None:
+            try:
+                cancelled_pull_runs = client.cancel_superseded_pull_runs(head)
+            except Exception as error:
+                redundant_run_evidence = (
+                    f"pull-run-cancel-error:{type(error).__name__}",
+                )
+            else:
+                redundant_run_evidence = tuple(
+                    f"cancelled-pull-run:{cancelled}"
+                    for cancelled in cancelled_pull_runs
+                )
+
         def cancel_dispatched_validation() -> tuple[str, ...]:
             if synchronized_run_id is not None:
                 return ()
@@ -698,6 +722,7 @@ def run_queue_item(
         base_is_ancestor: bool | None = None
         merge_tree: str | None = None
         postcondition_ok = False
+        merged_pull_sha_lagging = False
         reconciliation_errors: list[str] = []
         reconciliation_deadline = clock() + POST_MERGE_RECONCILIATION_SECONDS
 
@@ -723,13 +748,22 @@ def run_queue_item(
                 merge_tree = client.get_tree(
                     merge_sha, timeout_seconds=reconciliation_timeout()
                 ) if merge_sha else None
-                postcondition_ok = (
+                durable_postconditions_ok = (
                     bool(merge_sha)
                     and merged_pull_state is True
-                    and merged_pull_sha == merge_sha
                     and merged_main == merge_sha
                     and base_is_ancestor is True
                     and merge_tree == attempt.head_tree
+                )
+                # GitHub can echo merged:true with a null merge_commit_sha long
+                # after the merge is durable (issue #304); when every durable
+                # fact holds, a lagging echo is propagation delay, not a
+                # mismatch. A present-but-different SHA stays a hard mismatch.
+                merged_pull_sha_lagging = (
+                    durable_postconditions_ok and merged_pull_sha is None
+                )
+                postcondition_ok = durable_postconditions_ok and (
+                    merged_pull_sha == merge_sha or merged_pull_sha is None
                 )
             except Exception as error:
                 reconciliation_errors.append(type(error).__name__)
@@ -768,7 +802,9 @@ def run_queue_item(
                 f"head-tree:{attempt.head_tree}",
                 f"queue-seconds:{result.queue_seconds}",
                 f"execution-seconds:{result.execution_seconds}",
-            ),
+            )
+            + (("pull-merge-sha-lagging",) if merged_pull_sha_lagging else ())
+            + redundant_run_evidence,
             ok=True,
         )
 

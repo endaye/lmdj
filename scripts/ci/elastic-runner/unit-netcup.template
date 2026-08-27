@@ -1,0 +1,37 @@
+[Unit]
+Description=GitHub Actions Runner @NAME@
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=lmdj-runner-@INDEX@
+Group=lmdj-runner-@INDEX@
+WorkingDirectory=@WORKDIR@
+ExecStart=@WORKDIR@/runsvc.sh
+Restart=always
+RestartSec=5
+Slice=lmdj-ci.slice
+CPUWeight=@CPUWEIGHT@
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictNetworkInterfaces=~tailscale0
+InaccessiblePaths=/run/tailscale
+UMask=0007
+ReadWritePaths=@WORKDIR@ /var/lib/lmdj-runner-@INDEX@ /var/cache/lmdj-ccache /var/cache/lmdj-emsdk /var/cache/lmdj-playwright /var/cache/lmdj-npm
+Environment=CCACHE_DIR=/var/cache/lmdj-ccache
+Environment=CCACHE_UMASK=002
+Environment=CMAKE_BUILD_PARALLEL_LEVEL=4
+Environment=LMDJ_EMSDK_CACHE_ROOT=/var/cache/lmdj-emsdk
+Environment=LMDJ_BROWSER_CACHE_ROOT=/var/cache/lmdj-playwright
+Environment=npm_config_cache=/var/cache/lmdj-npm
+
+[Install]
+WantedBy=multi-user.target

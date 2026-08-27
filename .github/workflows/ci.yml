@@ -228,6 +228,29 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
+      # Allocated release intents may target pre-squash commits that no
+      # branch or tag reaches, so a fresh full clone lacks their objects and
+      # the repository-local audit reports them unverifiable. Long-lived
+      # runner workspaces masked this with leftover objects; hydrating by SHA
+      # makes the lane deterministic on any runner, new or old.
+      - name: Hydrate release intent target objects
+        run: |
+          python3 - <<'EOF'
+          import json, subprocess
+          data = json.load(open("docs/release-evidence/release-intents.json"))
+          revisions = [entry["target_revision"] for entry in data["entries"]]
+          revisions += [entry["target_revision"] for entry in data["historical_exceptions"]]
+          missing = [
+              revision for revision in revisions
+              if subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+                                capture_output=True).returncode != 0
+          ]
+          if missing:
+              subprocess.run(["git", "fetch", "--no-tags", "origin", *missing], check=True)
+              print("hydrated intent targets:", " ".join(missing))
+          else:
+              print("all intent targets already present")
+          EOF
       - run: python3 -m unittest discover -s tests/build -p 'release_*_test.py'
       - run: python3 tests/build/web_runtime_deploy_workflow_test.py
       - run: python3 tests/build/web_runtime_public_deployment_docs_test.py

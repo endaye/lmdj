@@ -113,7 +113,10 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
             self.direct_mapping(self.mapping_block(publish, "permissions", 4), 6),
             {"contents": "write", "actions": "read", "deployments": "read"},
         )
-        self.assertIn("scripts/release.sh verify-draft", preflight)
+        # GitHub hides Draft Releases from read-scoped identities, so a
+        # read-only preflight can never run verify-draft; the publish job
+        # owns draft verification (spec amendment 2026-08-26).
+        self.assertNotIn("scripts/release.sh verify-draft", preflight)
         self.assertIn("scripts/release.sh audit --remote --tag", preflight)
         verify_index = publish.index("scripts/release.sh verify-draft")
         audit_index = publish.index("scripts/release.sh audit --remote --tag")
@@ -168,6 +171,32 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
             "workflow_call", "web-runtime-deploy", "scripts/core.sh package",
         ):
             self.assertNotIn(forbidden, lowered)
+
+    def test_fresh_runner_fetch_credential_is_env_scoped_and_intents_hydrate_first(self) -> None:
+        for name in ("preflight", "publish"):
+            with self.subTest(job=name):
+                steps = self.steps(self.job(name))
+                hydrate_indexes = [
+                    index for index, step in enumerate(steps)
+                    if "Hydrate release intent target objects" in step
+                ]
+                self.assertEqual(len(hydrate_indexes), 1)
+                release_indexes = [
+                    index for index, step in enumerate(steps)
+                    if "scripts/release.sh" in step
+                ]
+                self.assertTrue(release_indexes)
+                self.assertLess(hydrate_indexes[0], min(release_indexes))
+                for index in (hydrate_indexes[0], *release_indexes):
+                    env = self.direct_mapping(
+                        self.mapping_block(steps[index], "env", 8), 10,
+                    )
+                    self.assertEqual(env.get("GIT_CONFIG_COUNT"), '"1"')
+                    self.assertEqual(
+                        env.get("GIT_CONFIG_KEY_0"),
+                        "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf",
+                    )
+                    self.assertEqual(env.get("GIT_CONFIG_VALUE_0"), "https://github.com/")
 
     def test_publication_finishes_with_exact_tag_read_only_audit(self) -> None:
         publish = self.job("publish")
