@@ -214,7 +214,7 @@ implementation detail. Record the outcome in `docs/prd/decision-log.md`, in
 | ~~A3~~ | ~~Build Manifest reproducibility — detached manifest, stripped archived copy, or drop the rebuild-and-compare claim~~ — **decided 2026-08-24**: detached sibling asset, payload-only archive, Contract and fields unchanged; [decision](../prd/decisions/2026-08-24-build-manifest-detached.md) ([#211](https://github.com/endaye/lmdj/issues/211)). The reshaping is now machine task A3 | first external distribution (`dev` Channel or above) | short |
 | ~~D1 + D2 product direction~~ / D1 accounting amendment | Bank-shared long-material model and Loop BPM semantics | **Direction decided 2026-08-26** ([#237](https://github.com/endaye/lmdj/issues/237), [decision](../prd/decisions/2026-08-26-long-material-quota-and-bpm-stretch.md), [#339](https://github.com/endaye/lmdj/pull/339)): no per-Pad cap; numbers per Host manifest; samples have no BPM and global BPM drives only the Sequencer; time-stretch remains [#347](https://github.com/endaye/lmdj/issues/347). **Implementation blocked 2026-08-27:** readiness correction [#358](https://github.com/endaye/lmdj/issues/358) found an unresolved four-user-Bank versus 64-Pad Runtime generation/publication total and Web pre-decode memory boundary. [#357](https://github.com/endaye/lmdj/issues/357) must merge the accounting/ingest amendment before #343; [#359](https://github.com/endaye/lmdj/issues/359) owns macOS Safari and physical iPadOS memory evidence after #346 | #357 decision amendment, then #359 physical acceptance |
 | ~~D3~~ | ~~Provider SDK Artifact byte access, both directions~~ | **Decided 2026-08-24** ([#206](https://github.com/endaye/lmdj/issues/206), [decision](../prd/decisions/2026-08-24-provider-artifact-byte-access.md)): capability-gated `ArtifactSource` in provider-sdk, both directions in the SDK layer; implementation deferred to the first Capability that parses structured Artifact bytes; option C permanently rejected | ~~design review~~ |
-| ~~D4 + D5~~ | ~~Recording concurrency semantics, and Take scope — events only or audio bounce too~~ | **Decided 2026-08-23** ([#238](https://github.com/endaye/lmdj/issues/238), [decision](../prd/decisions/2026-08-23-sequence-recording-semantics.md), merged 2026-08-26 in [#324](https://github.com/endaye/lmdj/pull/324)): events only, no Take object or audio bounce; classified concurrency with a closed selective-rebase allowlist, idempotent flush, fingerprint-gated recovery; implementation is Stage 9 Tasks #267–#275 | ~~design review~~ |
+| ~~D4 + D5~~ | ~~Recording concurrency semantics, and Take scope — events only or audio bounce too~~ | **Decided 2026-08-23 and delivered 2026-08-27** ([#238](https://github.com/endaye/lmdj/issues/238), [decision](../prd/decisions/2026-08-23-sequence-recording-semantics.md), decision PR [#324](https://github.com/endaye/lmdj/pull/324), delivery [#334](https://github.com/endaye/lmdj/pull/334), exact-main evidence [#356](https://github.com/endaye/lmdj/pull/356)): events only, no Take object or audio bounce; the original Stage 9 Task map #266–#275 is closed. Physical/manual acceptance remains separate under [#360](https://github.com/endaye/lmdj/issues/360), and the pending post-delivery review [#367](https://github.com/endaye/lmdj/pull/367) must be dispositioned without treating Task closure as proof that its findings are resolved | ~~design review and original delivery map complete~~ |
 
 P1, resolved 2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)):
 the [physical acceptance carry-forward rule](../prd/decisions/2026-08-24-physical-acceptance-carry-forward.md)
@@ -273,8 +273,14 @@ omitted and not called passed.
    2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)): rows re-run
    unless a recorded unchanged-tree derivation carries them, so M6 stays on
    the list and every future Build derives its own re-run set.
-3. ~~**F6**~~ — settled 2026-08-24 and combined into Product Build `1.0.36.0` / audio-runtime `0.5.1`, so M2 checks 1 and 5 can be re-run. **D4 + D5** — what
-   Stage 9 itself waits on.
+3. ~~**F6**~~ — settled 2026-08-24 and combined into Product Build `1.0.36.0` /
+   audio-runtime `0.5.1`, so M2 checks 1 and 5 can be re-run. ~~**D4 + D5**~~
+   were decided and their original Stage 9 delivery map merged in
+   [#334](https://github.com/endaye/lmdj/pull/334); Stage 9 now waits on neither
+   decision. Its unperformed physical/manual rows are tracked separately under
+   [#360](https://github.com/endaye/lmdj/issues/360), while pending review
+   [#367](https://github.com/endaye/lmdj/pull/367) records follow-up findings
+   that require their own disposition.
 4. **M7 + M8**, then **M9 + M10 + M11** — one session each, before any external
    distribution.
 5. **M5 + M6** — when the external interface and controller are on hand.

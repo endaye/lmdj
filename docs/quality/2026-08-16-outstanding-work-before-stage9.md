@@ -313,7 +313,7 @@ temporary and must not graduate into the formal interface.
 Due before the first Capability implementation that parses structured Artifact
 bytes.
 
-### ~~D4. Recording concurrency semantics~~ — decided 2026-08-23, merged 2026-08-26
+### ~~D4. Recording concurrency semantics~~ — decided 2026-08-23, delivery merged 2026-08-27
 
 ~~Which unrelated Commands should not trigger a conflict, and whether selective
 rebase is allowed. The Core Proof uses "any revision change conflicts and seals
@@ -327,10 +327,18 @@ concurrency is classified — a closed selective-rebase allowlist (BPM,
 Quantize/Swing, armed-Pad Capture commit), Sample-class Commands fail while
 recording continues, unknown Commands fail closed; one Project-scoped session
 under the writer lease, idempotent flush, fingerprint-gated recovery.
-Implementation is Stage 9 Tasks
-[#267](https://github.com/endaye/lmdj/issues/267)–[#275](https://github.com/endaye/lmdj/issues/275).
+The original implementation map was prerequisite #321, umbrella #265 and
+Stage 9 Tasks
+[#266](https://github.com/endaye/lmdj/issues/266)–[#275](https://github.com/endaye/lmdj/issues/275).
+It closed through delivery
+[#334](https://github.com/endaye/lmdj/pull/334) as Product Build `1.0.37.0`,
+with exact-main evidence added by [#356](https://github.com/endaye/lmdj/pull/356).
+That delivery status does not convert the physical/manual rows under
+[#360](https://github.com/endaye/lmdj/issues/360) into passes, and it does not
+resolve findings in the pending post-delivery review
+[#367](https://github.com/endaye/lmdj/pull/367).
 
-### ~~D5. Take scope — events only, or audio bounce too~~ — decided 2026-08-23, merged 2026-08-26
+### ~~D5. Take scope — events only, or audio bounce too~~ — decided 2026-08-23, delivery merged 2026-08-27
 
 ~~Determines the Take contract, Web Audio recording and Export Pack. Also
 Stage 9-adjacent.~~
@@ -338,7 +346,8 @@ Stage 9-adjacent.~~
 **Decided 2026-08-23** (same review and decision file as D4): events only —
 no Take product object and no audio bounce; the next Project Contract removes
 `takes` and records tick-native Pattern events; Export Pack derives only from
-Project Truth.
+Project Truth. The delivery and its remaining acceptance/review boundaries are
+recorded with D4 above.
 
 ---
 
@@ -559,8 +568,13 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has). ~~D4
    (`4312a6de`). B4 remains open.
 3. ~~**C1**~~ — invalidated by measurement; superseded by the facade
    coverage-raise plan (machine list C6).
-4. ~~**D4 + D5** — Stage 9 depends on them.~~ — decided 2026-08-23, merged
-   2026-08-26 in #324; Stage 9 implementation Tasks #267–#275 are unblocked.
+4. ~~**D4 + D5** — Stage 9 depends on them.~~ — decided in
+   [#324](https://github.com/endaye/lmdj/pull/324); the original delivery map
+   closed through [#334](https://github.com/endaye/lmdj/pull/334) on
+   2026-08-27. Physical/manual acceptance remains under
+   [#360](https://github.com/endaye/lmdj/issues/360), and pending review
+   [#367](https://github.com/endaye/lmdj/pull/367) is a separate remediation
+   boundary.
 5. ~~**D1 + D2 product direction**~~ — decided 2026-08-26; the bounded D1
    accounting and Web ingest-memory amendment [#357](https://github.com/endaye/lmdj/issues/357)
    remains mandatory before any long-material implementation.
