@@ -64,5 +64,5 @@ test("Sequence authors settings, records unified input, requests a Bar switch, a
   expect(evidence.semantic_state).toBe("stopped");
   expect(evidence.pending_event_count).toBe(0);
   expect(evidence.project_revision).toBe(evidence.expected_revision);
-  expect(evidence.effective_runtime_frame).toBeGreaterThanOrEqual(0);
+  expect(evidence.effective_runtime_frame).toBeNull();
 });
