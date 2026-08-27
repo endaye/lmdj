@@ -306,6 +306,7 @@ class Application {
       const SequenceFlushRequest& request);
   foundation::Result<SequenceMutationResult> request_sequence_switch(
       const SequenceSwitchRequest& request);
+  void abandon_sequence_sessions() noexcept;
   foundation::Result<SequenceStatus> query_sequence_status(
       const SequenceStatusRequest& request) const;
   foundation::Result<std::vector<SequenceRecoveryInfo>>

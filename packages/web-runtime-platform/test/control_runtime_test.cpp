@@ -1224,6 +1224,17 @@ void test_sequence_observer_busy_and_owner_loss_recovery() {
             {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
             {}),
         "PROJECT_BUSY");
+    owner->fail_and_seal("test_owner_loss");
+    const auto& recovery = check_exact_success(
+        observer->dispatch(
+            "sequence.recovery.list", {{"project_id", kProjectId}}, {}),
+        {"candidates", "project_revision"});
+    LMDJ_CHECK(recovery.at("candidates").size() == 1);
+    LMDJ_CHECK(
+        recovery.at("candidates").at(0).at("session_id") ==
+        kSequenceSessionId);
+    LMDJ_CHECK(
+        recovery.at("candidates").at(0).at("reason") == "owner_lost");
   }
 
   auto restarted = make_runtime(temp.path());

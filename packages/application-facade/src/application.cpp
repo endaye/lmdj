@@ -5072,6 +5072,10 @@ Application::request_sequence_switch(const SequenceSwitchRequest& request) {
   }
 }
 
+void Application::abandon_sequence_sessions() noexcept {
+  impl_->abandon_sequence_sessions();
+}
+
 foundation::Result<SequenceStatus> Application::query_sequence_status(
     const SequenceStatusRequest& request) const {
   try {

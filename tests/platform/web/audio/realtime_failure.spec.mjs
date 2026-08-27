@@ -40,7 +40,12 @@ async function installSubmissionHelper(page) {
     const encoder = new TextEncoder();
     const delay = (milliseconds) =>
       new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-    window.__lmdjRealtimeFailureSubmit = async (operation, payload) => {
+    window.__lmdjRealtimeFailureSubmit = async (
+      operation,
+      payload,
+      sidecar,
+    ) => {
+      const submittedSidecar = sidecar ?? new Uint8Array();
       const requestId = crypto.randomUUID();
       const envelope = encoder.encode(JSON.stringify({
         protocol_version: 1,
@@ -58,8 +63,8 @@ async function installSubmissionHelper(page) {
           [
             envelope,
             envelope.byteLength,
-            new Uint8Array(),
-            0,
+            submittedSidecar,
+            submittedSidecar.byteLength,
             performance.timeOrigin + deadline,
           ],
         );
@@ -299,17 +304,70 @@ test("processorerror seals an active Sequence and the failed session never resum
     const projectId = crypto.randomUUID();
     const patternId = crypto.randomUUID();
     const sessionId = crypto.randomUUID();
+    const importToken = crypto.randomUUID();
+    const assetId = crypto.randomUUID();
+    const frames = 480;
+    const wav = new Uint8Array(44 + frames * 2);
+    const view = new DataView(wav.buffer);
+    const ascii = (offset, value) => {
+      for (let index = 0; index < value.length; ++index) {
+        wav[offset + index] = value.charCodeAt(index);
+      }
+    };
+    ascii(0, "RIFF");
+    view.setUint32(4, 36 + frames * 2, true);
+    ascii(8, "WAVE");
+    ascii(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, 48_000, true);
+    view.setUint32(28, 96_000, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    ascii(36, "data");
+    view.setUint32(40, frames * 2, true);
+    for (let frame = 0; frame < frames; ++frame) {
+      view.setInt16(
+        44 + frame * 2,
+        Math.round(Math.sin(2 * Math.PI * 440 * frame / 48_000) * 8_000),
+        true,
+      );
+    }
+    const wavSha256 = [...new Uint8Array(
+      await crypto.subtle.digest("SHA-256", wav),
+    )].map((byte) => byte.toString(16).padStart(2, "0")).join("");
     const created = await submit("project.create", {
       project_id: projectId,
       bpm: 120,
       initial_pattern: {pattern_id: patternId, bars: 1, events: []},
+    });
+    const importBegun = await submit("sample.import.begin", {
+      import_token: importToken,
+      command_id: crypto.randomUUID(),
+      expected_revision: 0,
+      slot: {bank: 0, pad: 0},
+      asset_id: assetId,
+      byte_length: wav.byteLength,
+    });
+    const importChunked = await submit("sample.import.chunk", {
+      import_token: importToken,
+      offset: 0,
+      final: true,
+      sidecar: {
+        sidecar_bytes: wav.byteLength,
+        sidecar_sha256: wavSha256,
+      },
+    }, wav);
+    const importCommitted = await submit("sample.import.commit", {
+      import_token: importToken,
     });
     const snapshot = await submit("snapshot.reload", {pattern_id: patternId});
     const activated = await submit("audio.activate", {});
     const begun = await submit("sequence.record.begin", {
       session_id: sessionId,
       pattern_id: patternId,
-      expected_revision: 0,
+      expected_revision: 1,
     });
     const recorded = await submit("sequence.record.event", {
       session_id: sessionId,
@@ -320,19 +378,25 @@ test("processorerror seals an active Sequence and the failed session never resum
       patternId,
       sessionId,
       created,
+      importBegun,
+      importChunked,
+      importCommitted,
       snapshot,
       activated,
       begun,
       recorded,
     };
   });
-  for (const response of [
-    identity.created,
-    identity.snapshot,
-    identity.activated,
-    identity.begun,
-    identity.recorded,
-  ]) expect(response.ok).toBe(true);
+  for (const [operation, response] of Object.entries({
+    created: identity.created,
+    importBegun: identity.importBegun,
+    importChunked: identity.importChunked,
+    importCommitted: identity.importCommitted,
+    snapshot: identity.snapshot,
+    activated: identity.activated,
+    begun: identity.begun,
+    recorded: identity.recorded,
+  })) expect(response, operation).toMatchObject({ok: true});
 
   const fatal = await page.evaluate(async () => {
     window.lmdjWebRuntimeHostTest.dispatchProcessorError();

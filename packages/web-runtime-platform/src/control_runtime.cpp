@@ -1188,6 +1188,9 @@ struct ControlRuntime::Impl {
       static_cast<void>(abort_imports());
     } catch (...) {
     }
+    application.abandon_sequence_sessions();
+    active_sequence.reset();
+    pending_sequence_boundary.reset();
   }
 
   bool cancel_if_expired() noexcept {
