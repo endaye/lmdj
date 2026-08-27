@@ -6,7 +6,7 @@ test('implementation change requires a concrete impact declaration', () => {
   assert.deepEqual(checkDocumentationImpact({
     body: 'Documentation impact: none\nReason: ',
     changedFiles: ['packages/audio-runtime/src/engine.cpp'],
-  }), ['documentation impact reason is empty']);
+  }), ['documentation impact reason is empty — add a "Reason: <why this impact level is correct>" line to the PR body']);
 });
 
 test('affected implementation accepts required routes', () => {
@@ -23,28 +23,28 @@ test('none rejects unrelated portal churn and required needs a portal page', () 
   assert.deepEqual(checkDocumentationImpact({
     body: 'Documentation impact: none\nReason: internal comment only',
     changedFiles: ['packages/audio-runtime/src/engine.cpp', 'apps/architecture-portal/docs/product/workflows.mdx'],
-  }), ['documentation impact is none but current portal pages changed']);
+  }), ['documentation impact is none but current portal pages changed — either declare "Documentation impact: required" with "Affected portal pages:" routes, or drop the apps/architecture-portal/docs/ edits from this PR']);
   assert.deepEqual(checkDocumentationImpact({
     body: 'Documentation impact: required\nAffected portal pages: /core/modules/audio-runtime/\nReason: public behavior changed',
     changedFiles: ['packages/audio-runtime/src/engine.cpp'],
-  }), ['documentation impact is required but no current portal page changed']);
+  }), ['documentation impact is required but no current portal page changed — update the affected pages under apps/architecture-portal/docs/ in this PR, or declare "Documentation impact: none" with a reason if no portal truth changes']);
 });
 
 test('product build and assembly changes cannot opt out of current documentation', () => {
   assert.deepEqual(checkDocumentationImpact({
     body: 'Documentation impact: none\nReason: version metadata only',
     changedFiles: ['products/lmdj/version.json'],
-  }), ['Product Build or Assembly changes require documentation impact: required']);
+  }), ['Product Build or Assembly changes require documentation impact: required — declare "Documentation impact: required", list "Affected portal pages:" routes, and update the current portal pages plus the immutable snapshot obligation in the same Task']);
 
   assert.deepEqual(checkDocumentationImpact({
     body: 'Documentation impact: none\nReason: lock regeneration only',
     changedFiles: ['products/lmdj/assembly.lock.json'],
-  }), ['Product Build or Assembly changes require documentation impact: required']);
+  }), ['Product Build or Assembly changes require documentation impact: required — declare "Documentation impact: required", list "Affected portal pages:" routes, and update the current portal pages plus the immutable snapshot obligation in the same Task']);
 
   assert.deepEqual(checkDocumentationImpact({
     body: 'Documentation impact: none\nReason: product wiring only',
     changedFiles: ['products/lmdj/src/compiled_assembly.cpp'],
-  }), ['Product Build or Assembly changes require documentation impact: required']);
+  }), ['Product Build or Assembly changes require documentation impact: required — declare "Documentation impact: required", list "Affected portal pages:" routes, and update the current portal pages plus the immutable snapshot obligation in the same Task']);
 
   assert.deepEqual(checkDocumentationImpact({
     body: 'Documentation impact: required\nAffected portal pages: /assembly/lmdj/\nReason: allocate a testable Product Build',
