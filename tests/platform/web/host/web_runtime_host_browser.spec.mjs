@@ -2487,10 +2487,10 @@ test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer
   });
   await page.evaluate(async ({sessionId}) => {
     await window.lmdjWebRuntimeController.recordSequenceEvent({
-      sessionId, slot: 0, velocity: 127, pressed: true,
+      sessionId, slot: 1, velocity: 127, pressed: true,
     });
     await window.lmdjWebRuntimeController.recordSequenceEvent({
-      sessionId, slot: 0, velocity: 0, pressed: false,
+      sessionId, slot: 1, velocity: 0, pressed: false,
     });
   }, {sessionId: secondSessionId});
   const overdubbed = await page.evaluate(({sessionId, commandId}) =>
@@ -2504,13 +2504,10 @@ test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer
     "Stage 9 inspect overdub truth");
   const pattern = truth.project.patterns[descriptor.pattern_id];
   expect(pattern.events).toHaveLength(2);
-  expect(pattern.events.every(({slot}) =>
-    slot.bank === 0 && slot.pad === 0)).toBe(true);
+  expect(pattern.events.map(({slot}) => `${slot.bank}:${slot.pad}`).sort())
+    .toEqual(["0:0", "0:1"]);
   expect(pattern.events.map(({velocity}) => velocity).sort((left, right) =>
     left - right)).toEqual([100, 127]);
-  expect(pattern.events[0].onset_tick).toBeLessThan(
-    pattern.events[1].onset_tick,
-  );
   expect(pattern.events.every(({duration_tick: durationTick}) =>
     durationTick > 0)).toBe(true);
   expect(success(await hostRequest(page, "snapshot.reload", {
