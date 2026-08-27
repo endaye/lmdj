@@ -46,6 +46,10 @@ constexpr auto kMergeCommand = "10000000-0000-4000-8000-000000000006";
 constexpr auto kPlaybackCommand = "10000000-0000-4000-8000-000000000007";
 constexpr auto kResetCommand = "10000000-0000-4000-8000-000000000008";
 constexpr auto kImportAssignCommand = "10000000-0000-4000-8000-000000000009";
+constexpr auto kSequenceSettingsCommand1 =
+    "10000000-0000-4000-8000-00000000000a";
+constexpr auto kSequenceSettingsCommand2 =
+    "10000000-0000-4000-8000-00000000000b";
 constexpr auto kAsset1 = "20000000-0000-4000-8000-000000000001";
 constexpr auto kAsset2 = "20000000-0000-4000-8000-000000000002";
 constexpr auto kPattern1 = "30000000-0000-4000-8000-000000000001";
@@ -669,6 +673,22 @@ void test_sequence_settings_update_enforces_locked_ranges() {
   LMDJ_CHECK(updated.value().state.bpm == 240);
   LMDJ_CHECK(!updated.value().state.quantize_enabled);
   LMDJ_CHECK(updated.value().state.swing_percent == 75);
+
+  const auto quantize_only = apply_or_throw(
+      updated.value().state,
+      Command{UpdateSequenceSettings{
+          meta(kSequenceSettingsCommand1, 1), {}, true, {}}});
+  LMDJ_CHECK(quantize_only.state.bpm == 240);
+  LMDJ_CHECK(quantize_only.state.quantize_enabled);
+  LMDJ_CHECK(quantize_only.state.swing_percent == 75);
+
+  const auto bpm_only = apply_or_throw(
+      quantize_only.state,
+      Command{UpdateSequenceSettings{
+          meta(kSequenceSettingsCommand2, 2), 40, {}, {}}});
+  LMDJ_CHECK(bpm_only.state.bpm == 40);
+  LMDJ_CHECK(bpm_only.state.quantize_enabled);
+  LMDJ_CHECK(bpm_only.state.swing_percent == 75);
 
   for (const auto& command : {
            UpdateSequenceSettings{meta(kMergeCommand, 0), 39, {}, {}},

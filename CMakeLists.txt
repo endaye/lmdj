@@ -100,6 +100,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_provider_spec_regression_tests
     lmdj_application_facade_tests
     lmdj_application_facade_failure_tests
+    lmdj_facade_sequence_surface_tests
     lmdj_facade_sample_surface_tests
     lmdj_facade_web_runtime_limit_tests
     lmdj_web_control_runtime_tests
@@ -111,6 +112,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_core_cli
     lmdj_native_host
     lmdj_core_c
+    lmdj_sequence_journal_tests
     lmdj_project_io_fault_matrix_tests
     lmdj_application_c_api_stress_tests
   )
