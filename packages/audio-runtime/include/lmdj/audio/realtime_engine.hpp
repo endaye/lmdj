@@ -273,7 +273,8 @@ class RealtimeEngine final {
   // or atomically at the next Bar boundary while running. Journal overlays
   // remain Runtime-only and never mutate the source Runtime Snapshot.
   PatternPublication publish_pattern_view(
-      PreparedPatternView&& pattern) noexcept;
+      PreparedPatternView&& pattern,
+      std::optional<std::uint64_t> activation_frame = std::nullopt) noexcept;
   foundation::Result<void> clear_pattern_view() noexcept;
   std::size_t reclaim_retired_patterns() noexcept;
   std::optional<foundation::PatternId> current_pattern_id() const;

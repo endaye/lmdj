@@ -624,7 +624,8 @@ struct ControlRuntime::Impl {
   }
 
   foundation::Result<audio::PatternPublication> publish_project_pattern(
-      const foundation::PatternId& selected_pattern) {
+      const foundation::PatternId& selected_pattern,
+      std::optional<std::uint64_t> activation_frame = std::nullopt) {
     if (!retained_project_path.has_value()) {
       return foundation::Result<audio::PatternPublication>::failure(
           Error{ErrorCode::invalid_argument, "no Project is open"});
@@ -644,7 +645,7 @@ struct ControlRuntime::Impl {
           pattern.error());
     }
     const auto publication =
-        engine.publish_pattern_view(std::move(pattern.value()));
+        engine.publish_pattern_view(std::move(pattern.value()), activation_frame);
     if (publication.result != audio::PatternPublishResult::accepted) {
       return foundation::Result<audio::PatternPublication>::failure(Error{
           ErrorCode::invalid_argument,
@@ -2408,25 +2409,28 @@ Json ControlRuntime::dispatch(
           impl_->active_sequence->id.value() != session_id) {
         return state_error();
       }
+      const auto runtime_frame = impl_->engine.telemetry().rendered_frames;
       auto response = impl_->application.command({
           {"operation", "sequence.record.switch-request"},
           {"project_path", impl_->retained_project_path->generic_string()},
           {"session_id", session_id},
           {"next_pattern_id", next_pattern_id},
+          {"runtime_frame", runtime_frame},
       });
       if (!response.value("ok", false)) {
         return normalized_facade_error(response);
       }
+      const auto effective_runtime_frame =
+          response.at("result").at("effective_runtime_frame")
+              .get<std::uint64_t>();
       auto published = impl_->publish_project_pattern(
-          foundation::PatternId{next_pattern_id});
+          foundation::PatternId{next_pattern_id}, effective_runtime_frame);
       if (!published.has_value()) {
         fail_and_seal("sequence_switch_publication_failed");
         return normalized_error(published.error());
       }
       auto result = response.at("result");
-      if (!result.at("effective_runtime_frame").is_number_unsigned() ||
-          result.at("effective_runtime_frame").get<std::uint64_t>() !=
-              published.value().activation_frame) {
+      if (effective_runtime_frame != published.value().activation_frame) {
         fail_and_seal("sequence_switch_clock_mismatch");
         return internal_error();
       }

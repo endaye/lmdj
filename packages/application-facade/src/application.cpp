@@ -2319,8 +2319,15 @@ struct Application::Impl {
           sequence_error(ErrorCode::not_found,
                          "next Sequence Pattern was not found"));
     }
+    const auto switch_runtime_frame =
+        request.runtime_frame.value_or(runtime.last_runtime_frame);
+    if (switch_runtime_frame < runtime.last_runtime_frame) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Sequence switch runtime frame moved backwards"));
+    }
     auto current_numerator = audio::tick_numerator_at(
-        runtime.anchor, runtime.last_runtime_frame);
+        runtime.anchor, switch_runtime_frame);
     if (!current_numerator.has_value()) {
       return foundation::Result<SequenceMutationResult>::failure(
           current_numerator.error());
@@ -2351,6 +2358,7 @@ struct Application::Impl {
     runtime.pending_pattern_id = request.next_pattern_id;
     runtime.effective_runtime_frame =
         runtime.anchor.runtime_frame + frame_delta;
+    runtime.last_runtime_frame = switch_runtime_frame;
     auto switching = sequence_journals.set_state(
         request.project_path,
         runtime.session_id,
@@ -2762,12 +2770,19 @@ struct Application::Impl {
     require(
         exact_keys(request,
                    {"operation", "project_path", "session_id",
-                    "next_pattern_id"}),
+                    "next_pattern_id"}) ||
+            exact_keys(request,
+                       {"operation", "project_path", "session_id",
+                        "next_pattern_id", "runtime_frame"}),
         "sequence.record.switch-request request shape is invalid");
     const auto result = request_sequence_switch(SequenceSwitchRequest{
         absolute_path_field(request, "project_path"),
         foundation::SequenceSessionId{uuid_field(request, "session_id")},
         foundation::PatternId{uuid_field(request, "next_pattern_id")},
+        request.contains("runtime_frame")
+            ? std::optional<std::uint64_t>{
+                  unsigned_field(request, "runtime_frame")}
+            : std::nullopt,
     });
     if (!result.has_value()) {
       return error_envelope(result.error());

@@ -460,7 +460,8 @@ PublishResult RealtimeEngine::publish_sample_bank(
 }
 
 PatternPublication RealtimeEngine::publish_pattern_view(
-    PreparedPatternView&& pattern) noexcept {
+    PreparedPatternView&& pattern,
+    std::optional<std::uint64_t> requested_activation_frame) noexcept {
   if (pending_pattern_generation_.load(std::memory_order_acquire) != 0) {
     pattern_publication_rejections_.fetch_add(1, std::memory_order_relaxed);
     return PatternPublication{
@@ -499,7 +500,17 @@ PatternPublication RealtimeEngine::publish_pattern_view(
     const auto observed_frame =
         rendered_frames_.load(std::memory_order_acquire);
     activation_frame = observed_frame;
-    if (current != kNoPatternSlot) {
+    if (requested_activation_frame.has_value()) {
+      if (*requested_activation_frame < observed_frame) {
+        slot->pattern.reset();
+        slot->generation = 0;
+        pattern_publication_rejections_.fetch_add(
+            1, std::memory_order_relaxed);
+        return PatternPublication{
+            PatternPublishResult::publish_queue_full, 0, 0};
+      }
+      activation_frame = *requested_activation_frame;
+    } else if (current != kNoPatternSlot) {
       const auto origin =
           pattern_origin_frame_.load(std::memory_order_acquire);
       const auto bar_frames =
