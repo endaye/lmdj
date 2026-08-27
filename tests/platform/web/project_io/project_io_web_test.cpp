@@ -159,8 +159,8 @@ nlohmann::json prepare_sample_cache(
       domain::create_project(foundation::ProjectId{uuid("19")}, 120),
       "Sample Web Project create state");
   require(
-      initial.contract == domain::ProjectContract::v1,
-      "Sample Web Project did not start as v1");
+      initial.contract == domain::ProjectContract::v3,
+      "Sample Web Project did not start as v3");
   success(store.create(bundle, initial), "Sample Web Project create");
 
   const auto staging_root = sample_staging_root();
@@ -187,7 +187,7 @@ nlohmann::json prepare_sample_cache(
 
   return {
       {"revision", initial.revision},
-      {"contract", "lmdj.project.v1"},
+      {"contract", "lmdj.project.v3"},
       {"oldStagingPresent",
        value(
            platform->directory_exists(old_staging),
@@ -218,9 +218,9 @@ nlohmann::json mutate_sample_cache(
       "Sample Web Project import and assign");
   require(!imported.replayed, "first Sample import was replayed");
   require(
-      imported.state.contract == domain::ProjectContract::v2 &&
+      imported.state.contract == domain::ProjectContract::v3 &&
           imported.state.revision == 1,
-      "Sample import did not commit one v2 revision");
+      "Sample import did not commit one v3 revision");
   const auto replayed = value(
       store.import_assign_sample_bytes(bundle, request),
       "Sample Web Project exact replay");
@@ -263,7 +263,7 @@ nlohmann::json mutate_sample_cache(
 
   return {
       {"revision", imported.state.revision},
-      {"contract", "lmdj.project.v2"},
+      {"contract", "lmdj.project.v3"},
       {"replayed", replayed.replayed},
       {"padAssetId", pad.asset_id->value()},
       {"padPlayback", pad_playback_json(pad)},
@@ -298,7 +298,7 @@ nlohmann::json reopen_sample_cache(
   project_io::ProjectStore store{platform};
   const auto reopened = value(store.load(bundle), "Sample Web Project reopen");
   require(
-      reopened.contract == domain::ProjectContract::v2 &&
+      reopened.contract == domain::ProjectContract::v3 &&
           reopened.revision == 1,
       "reopened Sample Project changed revision or contract");
   const foundation::AssetId asset_id{uuid("22")};
@@ -324,7 +324,7 @@ nlohmann::json reopen_sample_cache(
 
   return {
       {"revision", reopened.revision},
-      {"contract", "lmdj.project.v2"},
+      {"contract", "lmdj.project.v3"},
       {"padAssetId", pad.asset_id->value()},
       {"padPlayback", pad_playback_json(pad)},
       {"assetCount", reopened.assets.size()},

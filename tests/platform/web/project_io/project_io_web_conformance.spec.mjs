@@ -444,17 +444,23 @@ test("Web Project I/O binds every mutation to its same-page platform owner", asy
   expect(result.postReleaseAcquisition).toBe("pass");
 });
 
-test("Web Project I/O creates and opens an untouched v1 Project", async ({context, browserName}) => {
+test("Web Project I/O creates and opens an untouched v3 Project", async ({context, browserName}) => {
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   const project = await trackedPage(context);
-  const bundle = `v1-round-trip-${Date.now()}`;
+  const bundle = `v3-round-trip-${Date.now()}`;
   await project.goto(
       `/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
   expect((await waitForResult(project)).revision).toBe(0);
   expect(await readCheckpointShape(project, bundle, 0)).toEqual({
-    contract: "lmdj.project.v1",
-    padKeys: ["asset_id", "pad"],
-    playbackKeys: [],
+    contract: "lmdj.project.v3",
+    padKeys: ["asset_id", "pad", "playback"],
+    playbackKeys: [
+      "gain_millidb",
+      "muted",
+      "trigger_mode",
+      "trim_end_frame",
+      "trim_start_frame",
+    ],
   });
   await project.close();
 });
@@ -479,7 +485,7 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
       `/project_io/project_io_web_test.html?action=prepare_sample_cache&bundle=${bundle}`);
   expect(await waitForResult(prepare)).toEqual({
     revision: 0,
-    contract: "lmdj.project.v1",
+    contract: "lmdj.project.v3",
     oldStagingPresent: true,
     stagingDirectories: [oldStagingToken],
   });
@@ -490,7 +496,7 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
       `/project_io/project_io_web_test.html?action=mutate_sample_cache&bundle=${bundle}`);
   expect(await waitForResult(mutate)).toEqual({
     revision: 1,
-    contract: "lmdj.project.v2",
+    contract: "lmdj.project.v3",
     replayed: true,
     padAssetId: assetId,
     padPlayback,
@@ -513,7 +519,7 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
       `/project_io/project_io_web_test.html?action=reopen_sample_cache&bundle=${bundle}`);
   expect(await waitForResult(reopen)).toEqual({
     revision: 1,
-    contract: "lmdj.project.v2",
+    contract: "lmdj.project.v3",
     padAssetId: assetId,
     padPlayback,
     assetCount: 1,
@@ -651,9 +657,15 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     await prepare.goto(`/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
     expect((await waitForResult(prepare)).revision).toBe(0);
     expect(await readCheckpointShape(prepare, bundle, 0)).toEqual({
-      contract: "lmdj.project.v1",
-      padKeys: ["asset_id", "pad"],
-      playbackKeys: [],
+      contract: "lmdj.project.v3",
+      padKeys: ["asset_id", "pad", "playback"],
+      playbackKeys: [
+        "gain_millidb",
+        "muted",
+        "trigger_mode",
+        "trim_end_frame",
+        "trim_start_frame",
+      ],
     });
     await writeFaultControl(
         prepare, `/lmdj-workspace/${bundle}.lmdj/manifest.json`, point);
@@ -668,25 +680,17 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     await restarted.goto(`/project_io/project_io_web_test.html?action=reopen&bundle=${bundle}`);
     const expectedRevision = replacementReachedCommit(point) ? 1 : 0;
     expect((await waitForResult(restarted)).revision).toBe(expectedRevision);
-    expect(await readCheckpointShape(restarted, bundle, expectedRevision)).toEqual(
-      expectedRevision === 0
-        ? {
-            contract: "lmdj.project.v1",
-            padKeys: ["asset_id", "pad"],
-            playbackKeys: [],
-          }
-        : {
-            contract: "lmdj.project.v2",
-            padKeys: ["asset_id", "pad", "playback"],
-            playbackKeys: [
-              "gain_millidb",
-              "muted",
-              "trigger_mode",
-              "trim_end_frame",
-              "trim_start_frame",
-            ],
-          },
-    );
+    expect(await readCheckpointShape(restarted, bundle, expectedRevision)).toEqual({
+      contract: "lmdj.project.v3",
+      padKeys: ["asset_id", "pad", "playback"],
+      playbackKeys: [
+        "gain_millidb",
+        "muted",
+        "trigger_mode",
+        "trim_end_frame",
+        "trim_start_frame",
+      ],
+    });
     await restarted.close();
     await prepare.close();
   }
