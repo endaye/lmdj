@@ -1,0 +1,36 @@
+---
+title: Authoring Domain
+area: core
+status: implemented
+owners: [core, product]
+module: authoring-domain
+source_paths: [packages/authoring-domain, tests/core/domain]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity kind="modules" id="authoring-domain" />
+
+<DiagramFrame title="Authoring Domain Module" diagramId="authoring-domain" />
+
+## 1. 目的与非职责
+维护 Project Truth、序列与命令语义；不执行存储、Cook、音频或 Provider 调用。
+## 2. 当前实现状态
+Project v3、每个 Pad 的完整 playback value、PPQ 960 tick-native Pattern event、BPM/Quantize/Swing，以及 assign/update/reset/replace/create-pattern 命令语义已实现；v1/v2 只作为迁移输入。
+## 3. 所有权与依赖
+Core/产品共同维护语义，仅依赖 Foundation。
+## 4. 架构与数据流
+命令进入 Handler，经 `expected_revision` 验证后产生新的权威创作状态；playback 属于 Pad Slot，Pattern event 只引用 Pad Slot。整数 quantizer 是唯一量化与 Swing 权威。
+## 5. API 与 Contract 边界
+领域对象遵循 active `lmdj.project.v3` Contract，不接受 Host 私有 JSON 形状；v1/v2 migration 不重新解释已退休字段。
+## 6. 状态、错误与生命周期
+Project Truth 可演进但不包含 Runtime Snapshot、Provider 选择或 Attempt failure。
+## 7. 产品使用方
+Project I/O、Project Cooker 和 Application Facade 使用领域模型。
+## 8. 测试与证据
+`project_test.cpp`、`command_handler_test.cpp`、`model_sequence_test.cpp` 覆盖 playback defaults、四模式、边界、冲突与 revision。
+## 9. 限制与下一门禁
+通用 Undo/Redo、协同编辑、Time-stretch 与 Artifact GC 不在当前实现声明内。
+## 10. 版本身份
+版本和依赖由模块清单及 Assembly Lock 生成。

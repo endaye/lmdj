@@ -1,0 +1,33 @@
+---
+title: Hosts 总览
+area: hosts
+status: partial
+owners: [hosts, core]
+source_paths:
+  - apps
+  - packages/application-facade
+  - products/lmdj/assembly.json
+  - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## Host 规则
+
+Native/CLI/MCP Host 只通过 Application Facade 调用 Core；浏览器 Host 只通过共享 Web Runtime Platform 间接使用 Facade。任何 Host 都不解析 Project Bundle，也不把协议/UI 逻辑下沉到 Core。
+
+## 当前清单
+
+CLI、MCP、Native Host、Formal Web Runtime Host 与 Creator Web Host 均以 `2.0.0` 锁入 Product Build `1.0.37.0` Assembly。五个 Host 只经 Application Facade（Web Host 经 Platform）使用 Project v3 与 Sequence recording；Native/Web 输入共享 Audio Runtime frame clock，Host 不解析 Project bundles 或复制 quantizer。
+Product Build `1.0.25.0` 的 G2 evidence-durability 级联锁定 CLI `1.0.14`、MCP `1.1.11`、Native Test Host `1.0.12`、Formal Web Runtime Host `1.2.11` 与 Creator Web Host `1.3.2`。
+CLI `1.0.13`、MCP `1.1.10`、Native Test Host `1.0.11`、Formal Web Runtime Host `1.2.10` 与 Creator Web Host `1.3.1` 已锁入 Product Build `1.0.24.0` Assembly。CLI/MCP/Native 通过 Facade 获得 Sample parity；两个 Web Host 只依赖共享 Web Runtime Platform `0.3.1`；Web Runtime Lab 仍是独立实验工具，不是正式 Host。
+
+## 生命周期
+
+每个 Host 负责进程/设备输入输出、调用取消和结果呈现；Core typed error 不应被抹成无结构文本。
+
+## 下一门禁
+
+Creator clean-source packaged Proof 与五条物理设备验收分别记录；后者仍为 `deferred / unverified`，并继续阻断 physical-pass、`beta` 和 `stable` 声明。

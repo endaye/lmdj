@@ -1,0 +1,46 @@
+---
+title: Input Platform
+area: platform
+status: partial
+owners: [product, platform]
+source_paths:
+  - docs/prd/open-questions.md
+  - docs/prd/questions/
+  - docs/superpowers/plans/2026-08-03-lmdj-foundation-input-hardening.md
+  - packages/web-runtime-platform/web/input_adapters.mjs
+  - packages/web-runtime-platform/web/runtime_session.mjs
+  - apps/web-runtime-host/src/main.mjs
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 状态
+
+<StatusBadge status="partial" /> Product Build `1.0.37.0` 的 Creator Web Host `2.0.0` 与 Diagnostic Web Runtime Host `2.0.0` 通过 Web Runtime Platform `1.0.0` 使用 64-Pad Pointer、Keyboard 与 Web MIDI adapter。三种输入以同一 Audio Runtime frame clock 和单调 `input_sequence` 驱动 live trigger 与 Sequence recording；`partial` 仅表示仍缺少完整物理输入/延迟矩阵。
+
+## 目标事件
+
+Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的 Sample inspect→`trigger(flatSlot, velocity, source)` admission，并保留归一化来源和 release/cancel identity。Project `{bank, pad}` 只在输入边界按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。
+
+Creator 默认键盘 mapping 使用 `KeyboardEvent.code`，按实体键盘与视觉 Pad 的共同上下顺序分配：`Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，`A S D F G H J K` 对应 Pad 9–16。Pad 上的 `kbd` 提示与 accessible name 均从同一个导出 mapping 派生，不维护第二份 Creator 键表；切换 Bank 只改变稳定的 16-Slot offset。
+
+Creator 在用户明确授权 Web MIDI 后监听每个可用 input，在 channels 1–16 上接受 Note On `36..51` 并保留 velocity；Note On velocity `0` 与对应 Note Off 释放 Pad，范围外 note 仍忽略。共享 Platform adapter 保留可选的单 channel filter，Creator 不启用该限制，也不按设备名称分支。
+
+## 生命周期
+
+普通输入只在 `running` admitted；拒绝输入不重放。Gate/Loop Gate release、Loop Toggle latch 与 Voice sequence 精确关联；blur/hidden/suspend/close 先禁 admission、清 preview、stop all，再暴露状态。恢复期只有 Context 与 generation 就绪后开启的一次真实用户 probe 例外；MIDI 断开清理状态，不合成 Trigger。
+
+## 自动化证据
+
+Node 回归覆盖 primary Pointer、Chromium 整数化 compatibility mouse coordinate suppression、Keyboard `code`/repeat/editable focus、MIDI channels 1–16、显式授权/velocity/disconnect/privacy，以及 admission/recovery。Creator 与 Diagnostic packaged Chromium journey 分别覆盖实际 DOM Pointer Pad、mapped Keyboard、sequence-addressed Trigger、lifecycle 与 recovery 路由；它们不替代物理设备测量。
+
+## 非能力
+
+当前不证明 MIDI Learn、Controller Profile、移动端触控质量或任何物理延迟阈值已经交付。
+
+## 状态升级证据
+
+物理行分别记录：macOS Safari Pointer 与 macOS Chrome Pointer 仍为 `deferred / unverified`；macOS Chrome physical MIDI 在 `1.0.20.0` 上因 Creator 的 Channel 1 filter 失败，随后在 `1.0.21.0` 用 AKAI MPD218 Channel 10 完成实体 UI 复验并通过；iPadOS Safari Touch 与 lifecycle 仍为 `deferred / unverified`。macOS Safari 的 Bundle import 人工检查未复现超过 20 秒的 `importing`，但不推导 Pointer 或 iPadOS 通过；MIDI 通过也不推导 Pointer performance 或其他设备通过。

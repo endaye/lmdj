@@ -1,0 +1,23 @@
+---
+title: Native Host
+area: hosts
+status: implemented
+owners: [hosts, audio]
+host: native-host
+source_paths: [apps/native-host, tests/host/native_host_test.py]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="hosts" id="native-host" />
+
+## 目的
+Native Host `2.0.0` 是正式无界面 Host（binary `lmdj-native-host`）：从真实 Project v3 经 Application Facade 进入控制面，并用 Audio Runtime frame clock、CaptureWriter 与实时数据面执行 Sequence recording 和设备验证；不承担产品 UI。它随每个分发包发出，分发成员资格受 `docs/governance/distribution-contents.md` 约束。
+## 数据流
+Pad input → Audio Runtime frame stamp → bounded CaptureWriter → Application Facade Sequence session/receipt；Snapshot/Voice 数据面独立进入设备输出。
+## 生命周期
+Host 管理设备开启、停止和 capture 文件；实时引擎所有权仍在 Audio Runtime。
+## 测试与证据
+Native host 测试验证协议与输出；物理听感和端到端延迟单独验收。
+## 限制
+它是薄 Host，不应扩展为隐藏的产品专属 Core。

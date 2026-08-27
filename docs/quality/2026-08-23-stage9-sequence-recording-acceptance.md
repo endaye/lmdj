@@ -7,9 +7,10 @@ Sequence recording across the Core, CLI/MCP/Native/Web Hosts and Creator.
 This ledger records only evidence actually produced from the local candidate.
 Draft PR [#334](https://github.com/endaye/lmdj/pull/334) exists at the pushed
 Task 8 head; its Draft routing, Docs/static, CI contract and PR Gate checks
-passed. The Task 9 revision, immutable Portal snapshot, full Ready-PR CI,
-merged-main, publication and promotion evidence remain pending until those
-boundaries occur.
+passed. Task 9 is committed locally and the immutable Portal snapshot has been
+generated from that exact revision. Push, full Ready-PR CI, merged-main,
+publication and promotion evidence remain pending until those boundaries
+occur.
 
 Documentation impact: required. Current routes updated by this Task include
 Assembly, Project and Bundle Contracts, Core Modules, Hosts, storage, Web
@@ -27,8 +28,10 @@ Facade, Audio Runtime and Web Runtime Platform are updated in the same Task.
 | Foundation | `0.3.0` |
 | Authoring Domain / Project I/O / Project Cooker / Audio Runtime / Web Runtime Platform | `1.0.0` |
 | Application Facade / CLI / MCP / Native Host / Web Runtime Host / Creator Web | `2.0.0` |
-| Task 9 exact revision | pending commit |
+| Task 9 exact revision | `e0f2de5b6453855f6def6407f962de8f8442c210` |
 | Assembly lock SHA-256 | `0aaab0918ad53a43a5e12b3d42a35ef38142343738637516d544d66ca21bef85` |
+| Portal snapshot metadata SHA-256 | `a73a85981fd88c07752310182bb0cb3237238fa6ff161e04e7e05de194e28c66` |
+| Portal snapshot sidebars SHA-256 | `0b53c96bf33887703ac2c93177f8ef18b23fb480ffd81bc31aeeaeba0ccdb9c8` |
 
 ## Automated acceptance contract
 
@@ -66,8 +69,11 @@ Facade, Audio Runtime and Web Runtime Platform are updated in the same Task.
 | WebKit capability gate | PASS: 2 passed, 14 non-capability cases skipped; structured limitation `UNSUPPORTED_WEB_RUNTIME` records missing `opfs`, `opfsSyncAccessHandle`, and `opfsWritableReplace` |
 | Creator build and `scripts/creator-web.sh test` | PASS: production Vite build, Creator 344/344, package 9/9, server 3/3, shared Platform 131/131 |
 | `npm --prefix apps/architecture-portal run check:current` | PASS: 59 tests, 37 docs pages, 10 diagram sources/20 outputs, production build and 42 routes |
-| Core full/coverage/proof and Creator packaged Playwright proof | pending final clean Task 10 revision |
-| Immutable `1.0.37.0 · canary` snapshot | pending Task 10 |
+| `scripts/core.sh proof` in the ext4 Task 10 verification worktree | PASS: 61/61 non-stress CTest registrations, schema/module/CLI/MCP parity, Golden WAV, failed-Attempt isolation, idempotent flush, next-Bar switch, owner-loss recovery, package acceptance and Assembly lock |
+| Core full/coverage and Creator packaged Playwright proof | pending final clean Task 10 revision |
+| `scripts/architecture-portal.sh version 1.0.37.0 canary` | PASS: snapshot generated from Task 9 revision `e0f2de5b6453855f6def6407f962de8f8442c210` |
+| `scripts/architecture-portal.sh check` after snapshot generation | PASS: immutable/current provenance, 59 tests, 37 current docs pages, 10 diagram sources/20 outputs, production build and 42 routes |
+| Immutable `1.0.37.0 · canary` snapshot | generated under `apps/architecture-portal/versioned_docs/version-1.0.37.0/`, `static/versions/1.0.37.0/`, `versioned_metadata/version-1.0.37.0.json` and `versioned_sidebars/version-1.0.37.0-sidebars.json` |
 
 ## Physical and manual rows
 
