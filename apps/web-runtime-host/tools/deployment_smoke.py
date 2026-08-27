@@ -62,6 +62,7 @@ ALLOWED_ASSET_ROLES = frozenset(
         "host_module",
         "host_style",
         "platform_module",
+        "product_identity",
         "runtime_script",
         "runtime_wasm",
     )

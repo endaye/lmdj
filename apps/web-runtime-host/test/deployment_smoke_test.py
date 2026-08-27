@@ -45,9 +45,16 @@ ASSET_LAYOUT = (
     ("runtime-session", ".mjs", "platform_module"),
     ("state-machine", ".mjs", "platform_module"),
     ("styles", ".css", "host_style"),
+    ("web-runtime-identity", ".mjs", "product_identity"),
 )
 LEGACY_OMITTED_ASSET_STEMS = frozenset(
-    ("diagnostic-client", "project-bundle-reader", "runtime-loader", "runtime-session")
+    (
+        "diagnostic-client",
+        "project-bundle-reader",
+        "runtime-loader",
+        "runtime-session",
+        "web-runtime-identity",
+    )
 )
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -297,7 +304,7 @@ class DeploymentSmokeTest(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                "asset_count": 13,
+                "asset_count": 14,
                 "host_version": "1.2.0",
                 "index_sha256": hashlib.sha256(
                     self.fixture.payloads["/index.html"]
@@ -360,7 +367,7 @@ class DeploymentSmokeTest(unittest.TestCase):
 
     def test_accepts_redundant_netlify_draft_noindex_header(self) -> None:
         self.fixture.duplicate_header = ("X-Robots-Tag", "noindex")
-        self.assertEqual(self.smoke()["asset_count"], 13)
+        self.assertEqual(self.smoke()["asset_count"], 14)
 
     def test_rejects_duplicate_security_header_values(self) -> None:
         self.fixture.duplicate_header = ("X-Robots-Tag", "index, follow")
@@ -398,7 +405,7 @@ class DeploymentSmokeTest(unittest.TestCase):
         self.fixture.content_type_overrides[main] = (
             "APPLICATION/JAVASCRIPT; CHARSET=UTF8"
         )
-        self.assertEqual(self.smoke()["asset_count"], 13)
+        self.assertEqual(self.smoke()["asset_count"], 14)
 
     def test_accepts_cache_control_with_optional_whitespace(self) -> None:
         main = next(
@@ -408,7 +415,7 @@ class DeploymentSmokeTest(unittest.TestCase):
         self.fixture.cache_overrides[main] = (
             "public,max-age=31536000,immutable"
         )
-        self.assertEqual(self.smoke()["asset_count"], 13)
+        self.assertEqual(self.smoke()["asset_count"], 14)
 
     def test_rejects_wrong_or_malformed_content_types(self) -> None:
         wasm = next(
@@ -498,7 +505,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             HTTPStatus.BAD_REQUEST,
             b"",
         )
-        self.assertEqual(self.smoke()["asset_count"], 13)
+        self.assertEqual(self.smoke()["asset_count"], 14)
 
     def test_rejects_wrong_or_nonempty_edge_traversal_rejection(self) -> None:
         for status, payload in (
@@ -543,7 +550,7 @@ class DeploymentSmokeTest(unittest.TestCase):
                 expected_host_version="1.2.0",
                 require_https=False,
             )["asset_count"],
-            13,
+            14,
         )
         with self.assertRaisesRegex(SmokeError, "request failed"):
             smoke_http(
@@ -704,7 +711,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             completed.stdout,
             json.dumps(
                 {
-                    "asset_count": 13,
+                    "asset_count": 14,
                     "host_version": "1.2.0",
                     "index_sha256": hashlib.sha256(
                         self.fixture.payloads["/index.html"]
