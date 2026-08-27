@@ -18,6 +18,9 @@ recurrences:
   - date: 2026-08-24
     occurrence: https://github.com/endaye/lmdj/pull/289
     observed_by: unknown
+  - date: 2026-08-27
+    occurrence: https://github.com/endaye/lmdj/pull/334
+    observed_by: claude-fable-5
 exit: skill:.agents/skills/lmdj-release/SKILL.md
 ---
 
