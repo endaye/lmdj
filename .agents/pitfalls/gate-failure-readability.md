@@ -24,6 +24,9 @@ recurrences:
   - date: 2026-08-26
     occurrence: https://github.com/endaye/lmdj/pull/319
     observed_by: Codex
+  - date: 2026-08-26
+    occurrence: https://github.com/endaye/lmdj/pull/348
+    observed_by: Claude Code (Fable 5)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -37,7 +40,11 @@ failures legible: name the failing projection (#148), surface the validation
 command detail (#149), keep the whole failure reason readable (#150), make a
 provenance failure name its remedy (#183), name an existing squash witness
 error (#218), surface exact-target audit detail (#227), and retain the sanitized
-subprocess reason when local release preparation fails after #319. Each was
+subprocess reason when local release preparation fails after #319. The portal
+documentation-impact gate repeated it on #348: "documentation impact must be
+required or none" named neither the exact line format it wanted nor that a
+body edit needs a fresh pull_request event (a rerun reuses the stale payload),
+turning a formatting slip into three diagnosis round-trips. Each was
 written as a one-off repair of one message, so the next new gate repeated the
 omission.
 
