@@ -198,7 +198,7 @@ struct SequenceSwitchRequest {
   std::filesystem::path project_path;
   foundation::SequenceSessionId session_id;
   foundation::PatternId next_pattern_id;
-  std::optional<std::uint64_t> runtime_frame;
+  std::optional<std::uint64_t> runtime_frame{};
 };
 
 struct SequenceStatusRequest {
