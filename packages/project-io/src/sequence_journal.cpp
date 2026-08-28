@@ -684,6 +684,9 @@ foundation::Result<JournalDocument> read_journal(
             flush.canonical_events = std::move(residual);
           }
         }
+        document.journal.pending_events = uncommitted_residual(
+            committed_flush.canonical_events,
+            document.journal.pending_events);
         document.journal.expected_revision =
             payload.value().at("committed_revision").get<std::uint64_t>();
         document.journal.pattern_fingerprint = fingerprint;

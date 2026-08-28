@@ -197,6 +197,27 @@ CMake/CTest, Docusaurus Architecture Portal.
   only these files and create a third local Conventional Commit without any
   remote transition.
 
+### Review Fix 3: committed residual in the latest durable tail
+
+- [x] **Step 19: Reproduce the tail-residual gap in RED.** Commit F0, fail its
+  journal completion, durably append F0's exact events plus a new key and a
+  same-key new value without appending another flush, then restart. Assert that
+  reconciliation must not expose exact committed events as recovery input; add
+  the equivalent-only tail case and an end-to-end Facade apply-once case.
+- [x] **Step 20: Subtract committed events from pending tail.** When a visible
+  receipt replays completion, apply the same exact canonical key/value
+  `uncommitted_residual` operation to the latest durable `pending_events` used
+  for later flush records. Preserve canonical ordering, `next_tail_seq`, and
+  `last_input_sequence`; retain new keys and same-key different values.
+- [x] **Step 21: Prove both residual outcomes.** Require A+B to recover only B,
+  A+A'+B to recover A'+B in order and apply once, and an equivalent-only tail
+  to leave neither candidate nor second Project revision.
+- [x] **Step 22: Verify and commit Review Fix 3.** Run focused, fast, full,
+  stress, Portal, dependency, active-tree, version, and production symbol
+  checks; append the external Review Fix 3 report; audit pitfalls; exact-stage
+  only these files and create a fourth local Conventional Commit without any
+  remote transition.
+
 ## Version Management
 
 Version impact: deferred to [#379](https://github.com/endaye/lmdj/issues/379).

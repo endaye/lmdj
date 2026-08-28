@@ -261,6 +261,13 @@ resolve 所有等价较晚 retry，而不是只按 `flush_seq <= F0`。非等价
 精确已提交 event，同-key 新值与新增 key 保留为 recovery residual。独立 case 还
 覆盖 F0 manifest 已提交但 completion 报错、其后 F1 等价 retry 已 append 的歧义态；
 restart reconcile 只回放 F0 receipt，不产生已提交工作的 candidate。
+第三次 re-review 补齐 latest-tail residual：若 F0 manifest/receipt 已提交但
+completion 报错，录音继续耐久写入 A+B 或 A+A'+B、且没有 append 较晚 flush，
+重启回放 F0 completion 也从当前 `pending_events` 扣除精确已提交 A。新增 B 与
+同-key 不同值 A' 保持 canonical 顺序成为唯一 recovery residual，显式 apply 只
+增加一次 revision；等价-only tail 被完全 resolve，不产生 candidate 或第二次写入。
+过滤不重置 `next_tail_seq`/`last_input_sequence`，因此后续 acknowledgement 的
+单调性证据仍连续。
 该 source disposition 不是 merge、Product
 Build、immutable snapshot、远端 CI 或物理验收证据；这些仍分别等待 #379、#380
 与 #360。

@@ -798,6 +798,84 @@ void test_earlier_completion_preserves_only_later_uncommitted_residual() {
       committed_batch);
 }
 
+void test_replayed_completion_subtracts_committed_events_from_durable_tail() {
+  const auto run_case = [](
+                            std::string_view label,
+                            const std::vector<PatternEvent>& committed_batch,
+                            const std::vector<PatternEvent>& durable_tail,
+                            const std::vector<PatternEvent>& expected_residual) {
+    TempDirectory temp(label);
+    ProjectStore store;
+    const auto bundle = create_bundle(temp, store);
+    SequenceJournal journal;
+    begin(journal, bundle);
+    const auto session_id = SequenceSessionId{std::string{kSessionId}};
+    const auto pattern_id = PatternId{std::string{kPatternId}};
+    const auto command_id = CommandId{uuid_for(160)};
+
+    const auto flush = journal.append_flush(
+        bundle, session_id, command_id, pattern_id, 0, committed_batch);
+    LMDJ_CHECK(flush.has_value());
+    {
+      FaultGuard fault(FaultPoint::sequence_journal_completion);
+      const auto ambiguous = store.execute_sequence_flush(
+          bundle,
+          {session_id, flush.value().flush_seq, command_id, pattern_id});
+      LMDJ_CHECK(!ambiguous.has_value());
+    }
+    LMDJ_CHECK(store.load(bundle).value().revision == 1);
+    LMDJ_CHECK(!journal.read_active(bundle).value().flushes.at(0).completed);
+    LMDJ_CHECK(
+        journal.append_tail(bundle, session_id, pattern_id, 0, 1, durable_tail)
+            .has_value());
+
+    ProjectStore restarted;
+    const auto candidates = restarted.reconcile_sequence_recovery(bundle);
+    LMDJ_CHECK(candidates.has_value());
+    if (expected_residual.empty()) {
+      LMDJ_CHECK(candidates.value().empty());
+      const auto no_active = journal.read_active(bundle);
+      LMDJ_CHECK(!no_active.has_value());
+      LMDJ_CHECK(no_active.error().code == ErrorCode::not_found);
+    } else {
+      LMDJ_CHECK(candidates.value().size() == 1);
+      const auto& recovered = candidates.value().front().journal;
+      LMDJ_CHECK(recovered.pending_events == expected_residual);
+      LMDJ_CHECK(recovered.next_tail_seq == 1);
+      LMDJ_CHECK(recovered.last_input_sequence == 1);
+      LMDJ_CHECK(std::ranges::all_of(
+          recovered.flushes,
+          [](const auto& candidate) { return candidate.completed; }));
+    }
+    const auto loaded = restarted.load(bundle);
+    LMDJ_CHECK(loaded.has_value());
+    LMDJ_CHECK(loaded.value().revision == 1);
+    LMDJ_CHECK(
+        loaded.value().patterns.at(pattern_id).events == committed_batch);
+  };
+
+  const auto exact = event(0, 0, 120, 90);
+  const auto committed_same_key = event(1, 240, 120, 50);
+  const auto replacement = event(1, 240, 240, 110);
+  const auto additional = event(2, 480, 120, 70);
+
+  run_case(
+      "tail-residual-new-key",
+      std::vector{exact},
+      std::vector{exact, additional},
+      std::vector{additional});
+  run_case(
+      "tail-residual-replacement",
+      std::vector{exact, committed_same_key},
+      std::vector{exact, replacement, additional},
+      std::vector{replacement, additional});
+  run_case(
+      "tail-residual-equivalent",
+      std::vector{exact, committed_same_key},
+      std::vector{exact, committed_same_key},
+      {});
+}
+
 void test_restart_reconciles_reload_visible_receipt_without_overdub() {
   TempDirectory temp("reconcile");
   ProjectStore store;
@@ -1063,6 +1141,7 @@ int main(int argc, char** argv) {
     test_earlier_completion_resolves_all_durable_equivalent_retries();
     test_ambiguous_committed_flush_resolves_later_equivalent_retry();
     test_earlier_completion_preserves_only_later_uncommitted_residual();
+    test_replayed_completion_subtracts_committed_events_from_durable_tail();
     test_complete_line_tail_corruption_fails_closed_with_uniform_evidence();
     test_one_project_session_and_monotonic_durable_flush_identity();
     test_writer_lease_contention_fails_before_begin();
