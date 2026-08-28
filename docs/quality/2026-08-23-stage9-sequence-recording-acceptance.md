@@ -52,7 +52,7 @@ Facade, Audio Runtime and Web Runtime Platform are updated in the same Task.
 | --- | --- |
 | Project Truth | v1/v2 deterministic read migration and v3-only writes with PPQ 960 Pattern events |
 | Recording | begin/event/flush/stop, overdub replacement, idempotent replay and a manifest publication commit point |
-| Concurrency | closed settings-only selective rebase, Sample mutation rejection, writer lease observer/busy and fail-closed unknown commands |
+| Concurrency | closed selective rebase for BPM, Quantize/Swing, and only the ongoing Pad Capture commit to its exact armed empty Pad; every other Sample mutation, changed/unarmed target, and unknown command fails closed without stopping the session |
 | Timing | Audio Runtime integer BPM anchor and Bar boundary; no Host quantizer, floating musical clock or fallback sequencer |
 | Switching | old Pattern remains active until the acknowledged next-Bar boundary |
 | Recovery | owner-loss artifact, fingerprint-gated original Pattern, explicit valid destination or discard |
@@ -70,7 +70,7 @@ Facade, Audio Runtime and Web Runtime Platform are updated in the same Task.
 | `bash tests/build/test_active_tree.sh` | PASS |
 | `PYTHONPATH=apps/core-mcp python3 tests/host/mcp_stdio_test.py build/core/dev/lib/liblmdj_core_c.so` | PASS: 10 fixtures |
 | `node --test packages/web-runtime-platform/test/project_bundle_reader.test.mjs packages/web-runtime-platform/test/protocol.test.mjs` | PASS: 28/28 |
-| `npm --prefix apps/creator-web test -- --run` | PASS: 344/344 across 19 files |
+| `npm --prefix apps/creator-web test -- --run` | PASS: 345/345 across 19 files for #374 source remediation; Product Build integration remains deferred to #379 |
 | `python3 scripts/version.py verify --version-file products/lmdj/version.json` | PASS: `1.0.37.0` |
 | `python3 tests/build/version_test.py` | PASS |
 | `scripts/core.sh build dev` | PASS with GCC 13.3 |

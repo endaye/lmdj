@@ -18,6 +18,12 @@ async function expectProjectRevision(page, expectedRevision) {
   expect(report.sample.project_revision).toBe(expectedRevision);
 }
 
+async function report(page) {
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", {name: "Export report"}).click();
+  return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
+}
+
 async function importV1SampleProject(page) {
   if (!sampleBundle) {
     throw new Error("LMDJ_CREATOR_WEB_SAMPLE_BUNDLE is required");
@@ -141,6 +147,52 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
+});
+
+test("armed Pad capture commits without stopping the active Sequence", async ({page}, testInfo) => {
+  test.skip(testInfo.project.name !== GRANTED);
+  test.setTimeout(600_000);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: 30_000,
+  });
+  await enterSampleEditor(page);
+  await selectPadWithoutPress(page, "Pad A1 — empty");
+  const panel = await recordAtLeast(page, "Pad A1", 1);
+
+  await panel.getByRole("button", {name: "Continue in Sequence"}).click();
+  await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
+  await page.getByRole("button", {name: "Record"}).click();
+  await expect(page.getByRole("status").filter({hasText: "recording"}))
+    .toBeVisible();
+
+  // The armed Pad stops only its capture. The Sequence session stays beneath
+  // the trim overlay and the armed hit itself is not recorded.
+  await page.keyboard.press("KeyQ");
+  await expect(panel.getByRole("slider", {name: "Pad A1 Selection length"}))
+    .toBeVisible({timeout: 30_000});
+  await panel.getByRole("button", {name: "Commit"}).click();
+  await expect(panel).toBeHidden({timeout: 180_000});
+  await expect(page.getByRole("status").filter({hasText: "recording"}))
+    .toBeVisible({timeout: 30_000});
+
+  // Once committed and rebased, the same Pad is a normal playable/recordable
+  // input for the still-active session.
+  await page.keyboard.press("KeyQ");
+  await page.getByRole("button", {name: "Stop"}).click();
+  await expect(page.getByRole("status").filter({hasText: "stopped"}))
+    .toBeVisible({timeout: 30_000});
+
+  const evidence = await report(page);
+  expect(evidence.sequence.semantic_state).toBe("stopped");
+  expect(evidence.sequence.project_revision)
+    .toBe(evidence.sequence.expected_revision);
+  expect(evidence.sequence.pending_event_count).toBe(0);
+  await page.getByRole("button", {name: "Sample"}).click();
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible({timeout: 30_000});
 });
 
 test("clamps a long take to the committable selection", async ({page}, testInfo) => {

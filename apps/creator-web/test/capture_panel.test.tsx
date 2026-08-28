@@ -115,6 +115,31 @@ test("opens as a modal dialog and moves focus to the phase's primary action (P2-
   );
 });
 
+test("releases native modal ownership while capture continues behind Sequence", () => {
+  const view = renderPanel({backgrounded: false});
+  const dialog = view.container.querySelector<HTMLDialogElement>(
+    ".capture-panel-dialog",
+  )!;
+  expect(dialog.open).toBe(true);
+
+  view.rerender(
+    <CapturePanel padLabel="Pad A1"
+      onCommit={async () => ({kind: "committed"})}
+      onClose={() => {}} backgrounded />,
+  );
+  expect(screen.queryByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeNull();
+  expect(view.container.querySelector(".capture-panel-background")?.hasAttribute("hidden"))
+    .toBe(true);
+
+  view.rerender(
+    <CapturePanel padLabel="Pad A1"
+      onCommit={async () => ({kind: "committed"})}
+      onClose={() => {}} backgrounded={false} />,
+  );
+  expect(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"})
+    .getAttribute("aria-modal")).toBe("true");
+});
+
 test("focus lands on Stop after entering recording and on Commit in trimming (P2-D2)", async () => {
   const {makeController, instances} = createFactory();
   renderPanel({makeController});

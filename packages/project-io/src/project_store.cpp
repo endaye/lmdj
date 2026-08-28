@@ -2379,11 +2379,21 @@ foundation::Result<std::optional<ActiveSequenceJournal>>
 admit_sequence_authoring(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
-    const PersistedCommand* command = nullptr) {
+    const PersistedCommand* command = nullptr,
+    const std::optional<foundation::SequenceSessionId>&
+        sequence_session_id = std::nullopt) {
   SequenceJournal journal{platform};
   auto active = journal.read_active(bundle);
   if (!active.has_value()) {
     if (active.error().code == ErrorCode::not_found) {
+      if (sequence_session_id.has_value()) {
+        return foundation::Result<
+            std::optional<ActiveSequenceJournal>>::failure(Error{
+            ErrorCode::invalid_argument,
+            "armed Capture commit has no active Sequence arm",
+            {{"reason", "armed_capture_not_armed"}},
+        });
+      }
       return foundation::Result<
           std::optional<ActiveSequenceJournal>>::success(std::nullopt);
     }
@@ -2394,9 +2404,48 @@ admit_sequence_authoring(
       command != nullptr
           ? std::get_if<domain::UpdateSequenceSettings>(command)
           : nullptr;
+  const auto* sample =
+      command != nullptr
+          ? std::get_if<domain::ImportAssignSample>(command)
+          : nullptr;
   if (settings != nullptr &&
       (active.value().state == SequenceSessionState::active ||
        active.value().state == SequenceSessionState::switching)) {
+    return foundation::Result<
+        std::optional<ActiveSequenceJournal>>::success(
+            std::optional<ActiveSequenceJournal>{std::move(active.value())});
+  }
+  if (sequence_session_id.has_value() && sample != nullptr &&
+      (active.value().state == SequenceSessionState::active ||
+       active.value().state == SequenceSessionState::switching)) {
+    if (active.value().session_id != *sequence_session_id) {
+      return foundation::Result<
+          std::optional<ActiveSequenceJournal>>::failure(Error{
+          ErrorCode::invalid_argument,
+          "armed Capture commit owner does not match",
+          {{"reason", "sequence_owner_mismatch"},
+           {"session_id", active.value().session_id.value()}},
+      });
+    }
+    if (!active.value().armed_capture_slot.has_value()) {
+      return foundation::Result<
+          std::optional<ActiveSequenceJournal>>::failure(Error{
+          ErrorCode::invalid_argument,
+          "armed Capture commit has no active target",
+          {{"reason", "armed_capture_not_armed"},
+           {"session_id", active.value().session_id.value()}},
+      });
+    }
+    if (*active.value().armed_capture_slot != sample->slot ||
+        active.value().expected_revision != sample->meta.expected_revision) {
+      return foundation::Result<
+          std::optional<ActiveSequenceJournal>>::failure(Error{
+          ErrorCode::invalid_argument,
+          "armed Capture commit target does not match",
+          {{"reason", "armed_capture_target_mismatch"},
+           {"session_id", active.value().session_id.value()}},
+      });
+    }
     return foundation::Result<
         std::optional<ActiveSequenceJournal>>::success(
         std::optional<ActiveSequenceJournal>{std::move(active.value())});
@@ -3454,7 +3503,8 @@ ProjectStore::import_assign_sample_bytes(
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
   }
-  auto admitted = admit_sequence_authoring(platform_, bundle);
+  auto admitted = admit_sequence_authoring(
+      platform_, bundle, &command, request.sequence_session_id);
   if (!admitted.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         admitted.error());
@@ -3466,13 +3516,28 @@ ProjectStore::import_assign_sample_bytes(
   }
 
   if (loaded.value().receipts.contains(request.meta.command_id)) {
-    return commit_loaded(
+    auto replayed = commit_loaded(
         platform_,
         bundle,
         std::move(loaded.value()),
         command,
         std::nullopt,
         nullptr);
+    if (!replayed.has_value()) {
+      return replayed;
+    }
+    if (request.sequence_session_id.has_value() && admitted.value().has_value() &&
+        replayed.value().state.revision > admitted.value()->expected_revision) {
+      SequenceJournal journal{platform_};
+      auto completed = journal.complete_armed_capture(
+          bundle, *request.sequence_session_id, request.slot,
+          replayed.value().state.revision);
+      if (!completed.has_value()) {
+        return foundation::Result<domain::AppliedCommand>::failure(
+            completed.error());
+      }
+    }
+    return replayed;
   }
 
   auto staged = stage_sample(
@@ -3515,6 +3580,17 @@ ProjectStore::import_assign_sample_bytes(
   if (!cleanup.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         cleanup.error());
+  }
+  if (request.sequence_session_id.has_value() && admitted.value().has_value() &&
+      outcome.value().state.revision > admitted.value()->expected_revision) {
+    SequenceJournal journal{platform_};
+    auto completed = journal.complete_armed_capture(
+        bundle, *request.sequence_session_id, request.slot,
+        outcome.value().state.revision);
+    if (!completed.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          completed.error());
+    }
   }
   return outcome;
 }

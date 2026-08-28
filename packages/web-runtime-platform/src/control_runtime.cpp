@@ -553,6 +553,7 @@ struct ControlRuntime::Impl {
     foundation::SequenceSessionId id;
     foundation::PatternId pattern_id;
     std::uint64_t next_input_sequence{1};
+    std::optional<domain::PadSlotId> armed_capture_slot;
   };
 
   struct PendingSequenceBoundary {
@@ -1620,10 +1621,15 @@ Json ControlRuntime::dispatch(
       return response;
     }
     if (operation == "sample.import.begin") {
-      require(exact_keys(
-          payload,
-          {"import_token", "command_id", "expected_revision", "slot",
-           "asset_id", "byte_length"}));
+      require(
+          exact_keys(
+              payload,
+              {"import_token", "command_id", "expected_revision", "slot",
+               "asset_id", "byte_length"}) ||
+          exact_keys(
+              payload,
+              {"import_token", "command_id", "expected_revision",
+               "sequence_session_id", "slot", "asset_id", "byte_length"}));
       require(sidecar.empty());
       if (!impl_->session_available()) {
         return state_error();
@@ -1634,6 +1640,11 @@ Json ControlRuntime::dispatch(
           unsigned_field(payload, "expected_revision");
       const auto selected_slot = slot_value(payload.at("slot"));
       const auto asset_id = uuid_field(payload, "asset_id");
+      const auto sequence_session_id = payload.contains("sequence_session_id")
+          ? std::optional<foundation::SequenceSessionId>{
+                foundation::SequenceSessionId{
+                    uuid_field(payload, "sequence_session_id")}}
+          : std::nullopt;
       const auto byte_length = unsigned_field(
           payload, "byte_length", impl_->limits.maximum_artifact_bytes);
       require(byte_length != 0);
@@ -1649,6 +1660,7 @@ Json ControlRuntime::dispatch(
               selected_slot,
               foundation::AssetId{asset_id},
               byte_length,
+              sequence_session_id,
           });
       if (!begun.has_value()) {
         return normalized_error(begun.error());
@@ -2199,8 +2211,13 @@ Json ControlRuntime::dispatch(
           {{"sequence", sequence}, {"status", "enqueued"}});
     }
     if (operation == "sequence.record.begin") {
-      require(exact_keys(
-          payload, {"session_id", "pattern_id", "expected_revision"}));
+      require(
+          exact_keys(
+              payload, {"session_id", "pattern_id", "expected_revision"}) ||
+          exact_keys(
+              payload,
+              {"session_id", "pattern_id", "expected_revision",
+               "armed_capture_slot"}));
       require(sidecar.empty());
       if (impl_->state != Impl::State::running ||
           !impl_->session_available() || impl_->active_sequence.has_value() ||
@@ -2211,6 +2228,12 @@ Json ControlRuntime::dispatch(
       const auto selected_pattern = uuid_field(payload, "pattern_id");
       const auto expected_revision =
           unsigned_field(payload, "expected_revision");
+      const auto armed_capture_slot =
+          !payload.contains("armed_capture_slot") ||
+                  payload.at("armed_capture_slot").is_null()
+              ? std::optional<domain::PadSlotId>{}
+              : std::optional<domain::PadSlotId>{
+                    slot_value(payload.at("armed_capture_slot"))};
       const auto runtime_frame =
           impl_->engine.current_pattern_origin_frame();
       if (!runtime_frame.has_value()) {
@@ -2223,6 +2246,12 @@ Json ControlRuntime::dispatch(
           {"pattern_id", selected_pattern},
           {"expected_revision", expected_revision},
           {"runtime_frame", *runtime_frame},
+          {"armed_capture_slot",
+           armed_capture_slot.has_value()
+               ? nlohmann::json{
+                     {"bank", armed_capture_slot->bank},
+                     {"pad", armed_capture_slot->pad}}
+               : nlohmann::json(nullptr)},
       });
       if (!response.value("ok", false)) {
         return normalized_facade_error(response);
@@ -2230,6 +2259,8 @@ Json ControlRuntime::dispatch(
       impl_->active_sequence = Impl::SequenceSession{
           foundation::SequenceSessionId{session_id},
           foundation::PatternId{selected_pattern},
+          1,
+          armed_capture_slot,
       };
       auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
@@ -2239,6 +2270,26 @@ Json ControlRuntime::dispatch(
           {"bpm", *impl_->project_bpm},
       };
       return success(std::move(result));
+    }
+    if (operation == "sequence.capture.disarm") {
+      require(exact_keys(payload, {"session_id", "slot"}));
+      require(sidecar.empty());
+      const auto session_id = uuid_field(payload, "session_id");
+      const auto selected_slot = slot_value(payload.at("slot"));
+      require(
+          impl_->active_sequence.has_value() &&
+          impl_->active_sequence->id.value() == session_id);
+      const auto disarmed = impl_->application.disarm_sequence_capture(
+          facade::SequenceCaptureDisarmRequest{
+              *impl_->retained_project_path,
+              foundation::SequenceSessionId{session_id},
+              selected_slot,
+          });
+      if (!disarmed.has_value()) {
+        return normalized_error(disarmed.error());
+      }
+      impl_->active_sequence->armed_capture_slot.reset();
+      return success({{"disarmed", true}});
     }
     if (operation == "sequence.settings.update") {
       require(exact_keys(

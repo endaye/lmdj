@@ -71,7 +71,7 @@ truth integration 与不可变快照分别由 #379、#380 负责。
 | --- | --- | --- |
 | H1 | #378 | 实现 writer-lease 内 journal admission、本地 begin-vs-authoring critical section、孤儿 journal 先 seal，以及 settings-only Store rebase；以 Project Store 与 Facade deterministic component cases 阻断回归 |
 | H2 | #376 | open |
-| H3 | #374 | open |
+| H3 | #374 | source remediation implemented locally: armed target/session/revision admission, journal rebase/disarm, Creator session-preserving trim overlay, and Core/Web/Creator regression coverage; Product identity integration remains #379 and immutable snapshot remains #380 |
 | M1 | #375 | open |
 | M2 | #373 | open |
 | M3 | #372 | open |
@@ -208,6 +208,16 @@ reducer 只允许从 `stopped` 进入 `trim-overlay`
 
 整改方向：要么实现 armed-pad 提交白名单并让 Creator 走会话内 overlay 路径，
 要么按治理规则把收窄补一条 PRD 决策/勘误，并让账本与规格一致。
+
+**#374 source remediation（2026-08-29）**：实现选择了设计已批准的第一条路径。
+Sequence begin 只登记开始录音前已经打开的空 Pad Capture；Project Store 在 writer
+lease 内只接纳 session、Pad 和 expected revision 全匹配的 `ImportAssignSample`，
+成功后用单个 checked journal record 同时 rebase revision 并消费 arm。失败提交和
+显式 disarm 都保留 pending events，Creator 不再先 Stop Sequence，而是在 active /
+switching underlay 上显示 trim overlay。Facade component、Web ControlRuntime、协议、
+Creator reducer/action 与 packaged Chromium journey 均增加回归证据。此处只记录本地
+source disposition，不宣称 #379 的版本集成、#380 的 immutable snapshot、PR/merge、
+Release 或 #360 的物理验收。
 
 ## 四、中危发现
 
@@ -459,7 +469,7 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
 | --- | --- |
 | 并发 begin-vs-authoring / 孤儿 journal 后先发 authoring command | H1 |
 | 边界后继续录音（任何层级都停在切槽确认） | H2 |
-| Sequence 内 trim overlay 全流程（会话存活、提交 rebase、冲突保留） | H3 |
+| Sequence 内 trim overlay 全流程（会话存活、提交 rebase、冲突保留） | #374 本地 source remediation 已补；集成证据等待 #379/#380 |
 | 未 flush 音的下一圈可听性 | M1 |
 | kill -9 / 硬崩溃后恢复候选出现 | M2 |
 | 提交后故障 + 同 `command_id` 重试 | M3 |

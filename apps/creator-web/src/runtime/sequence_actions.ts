@@ -11,6 +11,7 @@ export function isSequenceSession(value: unknown): value is CreatorSequenceRunti
     typeof session.beginSequence === "function" &&
     typeof session.createPattern === "function" &&
     typeof session.updateSequenceSettings === "function" &&
+    typeof session.disarmSequenceCapture === "function" &&
     typeof session.stopSequence === "function" &&
     typeof session.requestPatternSwitch === "function" &&
     typeof session.querySequenceStatus === "function" &&
@@ -20,9 +21,22 @@ export function isSequenceSession(value: unknown): value is CreatorSequenceRunti
     typeof session.subscribeSequenceBarBoundary === "function";
 }
 
+export function reconcileSequenceAuthoringRevision(
+  current: number,
+  projectRevision: number,
+  journalExpectedRevision: number,
+): number {
+  return Math.max(current, projectRevision, journalExpectedRevision);
+}
+
 export async function beginSequenceJourney(
   session: CreatorSequenceRuntimeSession,
-  request: {sessionId: string; patternId: string; expectedRevision: number},
+  request: {
+    sessionId: string;
+    patternId: string;
+    expectedRevision: number;
+    armedCaptureSlot?: number | null;
+  },
 ): Promise<SequenceMutation> {
   return session.beginSequence(request);
 }
@@ -33,6 +47,14 @@ export async function stopSequenceJourney(
   commandId: string,
 ): Promise<SequenceMutation> {
   return session.stopSequence({sessionId, commandId});
+}
+
+export async function disarmSequenceCaptureJourney(
+  session: CreatorSequenceRuntimeSession,
+  sessionId: string,
+  slot: number,
+): Promise<boolean> {
+  return session.disarmSequenceCapture({sessionId, slot});
 }
 
 export async function refreshSequenceJourney(

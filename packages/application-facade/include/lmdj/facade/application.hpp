@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -151,6 +152,24 @@ struct SampleImportBeginRequest {
   domain::PadSlotId slot;
   foundation::AssetId asset_id;
   std::uint64_t byte_length;
+  std::optional<foundation::SequenceSessionId> sequence_session_id;
+
+  SampleImportBeginRequest(
+      std::string import_token_value,
+      std::filesystem::path project_path_value,
+      domain::CommandMeta meta_value,
+      domain::PadSlotId slot_value,
+      foundation::AssetId asset_id_value,
+      std::uint64_t byte_length_value,
+      std::optional<foundation::SequenceSessionId> sequence_session_id_value =
+          std::nullopt)
+      : import_token(std::move(import_token_value)),
+        project_path(std::move(project_path_value)),
+        meta(std::move(meta_value)),
+        slot(slot_value),
+        asset_id(std::move(asset_id_value)),
+        byte_length(byte_length_value),
+        sequence_session_id(std::move(sequence_session_id_value)) {}
 };
 
 struct SampleImportSession {
@@ -171,6 +190,21 @@ struct SequenceBeginRequest {
   foundation::PatternId pattern_id;
   std::uint64_t expected_revision;
   std::uint64_t runtime_frame;
+  std::optional<domain::PadSlotId> armed_capture_slot;
+
+  SequenceBeginRequest(
+      std::filesystem::path project_path_value,
+      foundation::SequenceSessionId session_id_value,
+      foundation::PatternId pattern_id_value,
+      std::uint64_t expected_revision_value,
+      std::uint64_t runtime_frame_value,
+      std::optional<domain::PadSlotId> armed_capture_slot_value = std::nullopt)
+      : project_path(std::move(project_path_value)),
+        session_id(std::move(session_id_value)),
+        pattern_id(std::move(pattern_id_value)),
+        expected_revision(expected_revision_value),
+        runtime_frame(runtime_frame_value),
+        armed_capture_slot(armed_capture_slot_value) {}
 };
 
 struct SequencePadEvent {
@@ -199,6 +233,12 @@ struct SequenceSwitchRequest {
   foundation::SequenceSessionId session_id;
   foundation::PatternId next_pattern_id;
   std::optional<std::uint64_t> runtime_frame{};
+};
+
+struct SequenceCaptureDisarmRequest {
+  std::filesystem::path project_path;
+  foundation::SequenceSessionId session_id;
+  domain::PadSlotId slot;
 };
 
 struct SequenceStatusRequest {
@@ -306,6 +346,8 @@ class Application {
       const SequenceFlushRequest& request);
   foundation::Result<SequenceMutationResult> request_sequence_switch(
       const SequenceSwitchRequest& request);
+  foundation::Result<void> disarm_sequence_capture(
+      const SequenceCaptureDisarmRequest& request);
   void abandon_sequence_sessions() noexcept;
   foundation::Result<SequenceStatus> query_sequence_status(
       const SequenceStatusRequest& request) const;

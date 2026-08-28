@@ -128,6 +128,34 @@ nlohmann::json slot_json(domain::PadSlotId slot) {
   return {{"bank", slot.bank}, {"pad", slot.pad}};
 }
 
+std::optional<domain::PadSlotId> optional_slot(
+    const nlohmann::json& input,
+    std::string_view key) {
+  const auto found = input.find(std::string{key});
+  if (found == input.end() || found->is_null()) {
+    return std::nullopt;
+  }
+  if (!found->is_object() || found->size() != 2 ||
+      !found->contains("bank") || !found->contains("pad") ||
+      !found->at("bank").is_number_unsigned() ||
+      !found->at("pad").is_number_unsigned()) {
+    throw std::runtime_error("armed Capture slot shape is invalid");
+  }
+  const auto bank = found->at("bank").get<std::uint64_t>();
+  const auto pad = found->at("pad").get<std::uint64_t>();
+  if (bank > 255 || pad > 255) {
+    throw std::runtime_error("armed Capture slot is invalid");
+  }
+  const domain::PadSlotId slot{
+      static_cast<std::uint8_t>(bank),
+      static_cast<std::uint8_t>(pad),
+  };
+  if (!domain::is_valid_slot(slot)) {
+    throw std::runtime_error("armed Capture slot is invalid");
+  }
+  return slot;
+}
+
 nlohmann::json event_json(const domain::PatternEvent& event) {
   return {
       {"duration_tick", event.duration_tick},
@@ -264,6 +292,10 @@ nlohmann::json journal_json(const ActiveSequenceJournal& journal) {
     flushes.push_back(std::move(encoded));
   }
   return {
+      {"armed_capture_slot",
+       journal.armed_capture_slot.has_value()
+           ? nlohmann::json(slot_json(*journal.armed_capture_slot))
+           : nlohmann::json(nullptr)},
       {"bars", journal.bars},
       {"expected_revision", journal.expected_revision},
       {"flushes", std::move(flushes)},
@@ -289,7 +321,9 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
         input.at("next_flush_seq").get<std::uint64_t>(),
         parse_state(input.at("state").get<std::string>()),
         {},
+        std::nullopt,
     };
+    journal.armed_capture_slot = optional_slot(input, "armed_capture_slot");
     if (!domain::is_valid_uuid(journal.session_id.value()) ||
         !domain::is_valid_uuid(journal.pattern_id.value()) ||
         !valid_bars(journal.bars) ||
@@ -367,6 +401,7 @@ foundation::Result<JournalDocument> read_journal(
           0,
           SequenceSessionState::active,
           {},
+          std::nullopt,
       },
       0,
   };
@@ -406,7 +441,10 @@ foundation::Result<JournalDocument> read_journal(
             0,
             SequenceSessionState::active,
             {},
+            std::nullopt,
         };
+        document.journal.armed_capture_slot =
+            optional_slot(payload.value(), "armed_capture_slot");
         if (!domain::is_valid_uuid(document.journal.session_id.value()) ||
             !domain::is_valid_uuid(document.journal.pattern_id.value()) ||
             !valid_bars(document.journal.bars) ||
@@ -480,6 +518,33 @@ foundation::Result<JournalDocument> read_journal(
           throw std::runtime_error("Sequence rebase metadata is invalid");
         }
         document.journal.expected_revision = expected_revision;
+      } else if (kind == "capture-complete") {
+        const auto slot = optional_slot(payload.value(), "slot");
+        const auto committed_revision =
+            payload.value().at("committed_revision").get<std::uint64_t>();
+        if (!slot.has_value() ||
+            document.journal.armed_capture_slot != slot ||
+            committed_revision <= document.journal.expected_revision ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching) ||
+            std::any_of(
+                document.journal.flushes.begin(),
+                document.journal.flushes.end(),
+                [](const auto& flush) { return !flush.completed; })) {
+          throw std::runtime_error(
+              "armed Capture completion metadata is invalid");
+        }
+        document.journal.expected_revision = committed_revision;
+        document.journal.armed_capture_slot.reset();
+      } else if (kind == "capture-disarm") {
+        const auto slot = optional_slot(payload.value(), "slot");
+        if (!slot.has_value() ||
+            document.journal.armed_capture_slot != slot ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching)) {
+          throw std::runtime_error("armed Capture disarm metadata is invalid");
+        }
+        document.journal.armed_capture_slot.reset();
       } else if (kind == "switch") {
         const auto pattern_id = foundation::PatternId{
             payload.value().at("pattern_id").get<std::string>()};
@@ -608,10 +673,13 @@ foundation::Result<void> SequenceJournal::begin(
     foundation::PatternId pattern_id,
     std::uint8_t bars,
     std::string pattern_fingerprint,
-    std::uint64_t expected_revision) {
+    std::uint64_t expected_revision,
+    std::optional<domain::PadSlotId> armed_capture_slot) {
   if (!domain::is_valid_uuid(session_id.value()) ||
       !domain::is_valid_uuid(pattern_id.value()) || !valid_bars(bars) ||
-      !lowercase_sha256(pattern_fingerprint)) {
+      !lowercase_sha256(pattern_fingerprint) ||
+      (armed_capture_slot.has_value() &&
+       !domain::is_valid_slot(*armed_capture_slot))) {
     return foundation::Result<void>::failure(
         Error{ErrorCode::invalid_argument, "Sequence begin metadata is invalid"});
   }
@@ -646,6 +714,10 @@ foundation::Result<void> SequenceJournal::begin(
         });
   }
   const auto payload = nlohmann::json{
+      {"armed_capture_slot",
+       armed_capture_slot.has_value()
+           ? nlohmann::json(slot_json(*armed_capture_slot))
+           : nlohmann::json(nullptr)},
       {"bars", bars},
       {"contract", kJournalContract},
       {"expected_revision", expected_revision},
@@ -868,6 +940,100 @@ foundation::Result<void> SequenceJournal::rebase(
   return append_record(
       platform_, bundle, document.value(),
       {{"expected_revision", expected_revision}, {"kind", "rebase"}});
+}
+
+foundation::Result<void> SequenceJournal::complete_armed_capture(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    domain::PadSlotId slot,
+    std::uint64_t committed_revision) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_slot(slot)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture completion identity is invalid",
+    });
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id ||
+      journal.armed_capture_slot != slot ||
+      committed_revision <= journal.expected_revision ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching) ||
+      std::any_of(
+          journal.flushes.begin(), journal.flushes.end(),
+          [](const auto& flush) { return !flush.completed; })) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture completion does not match the active session",
+        {{"reason", "armed_capture_target_mismatch"}},
+    });
+  }
+  return append_record(
+      platform_, bundle, document.value(),
+      {{"committed_revision", committed_revision},
+       {"kind", "capture-complete"},
+       {"slot", slot_json(slot)}});
+}
+
+foundation::Result<void> SequenceJournal::disarm_capture(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    domain::PadSlotId slot) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_slot(slot)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture disarm identity is invalid",
+    });
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture disarm does not match the active session",
+        {{"reason", "sequence_owner_mismatch"}},
+    });
+  }
+  if (!journal.armed_capture_slot.has_value()) {
+    return foundation::Result<void>::success();
+  }
+  if (journal.armed_capture_slot != slot) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture disarm target does not match",
+        {{"reason", "armed_capture_target_mismatch"}},
+    });
+  }
+  return append_record(
+      platform_, bundle, document.value(),
+      {{"kind", "capture-disarm"}, {"slot", slot_json(slot)}});
 }
 
 foundation::Result<void> SequenceJournal::switch_pattern(

@@ -53,7 +53,10 @@ export function reduceSequence(
     case "authority":
       return {
         ...state,
-        phase: action.status.state === "recoverable" ? "recovery" :
+        phase: state.phase === "trim-overlay" &&
+          (action.status.state === "active" || action.status.state === "switching")
+          ? "trim-overlay" :
+          action.status.state === "recoverable" ? "recovery" :
           action.status.state === "switching" ? "switch-pending" :
           action.status.state === "active" ? "recording" : "stopped",
         status: action.status,
@@ -73,8 +76,12 @@ export function reduceSequence(
       if (state.phase !== "recording") return state;
       return {...state, phase: "switch-pending", status: action.status};
     case "boundary":
-      if (state.phase !== "switch-pending") return state;
-      return {...state, phase: "recording", status: action.status,
+      if (state.phase !== "switch-pending" &&
+          !(state.phase === "trim-overlay" && state.status?.state === "switching")) {
+        return state;
+      }
+      return {...state, phase: state.phase === "trim-overlay" ? "trim-overlay" : "recording",
+        status: action.status,
         selectedPatternId: action.patternId};
     case "stopped":
       if (!["recording", "switch-pending", "flushing"].includes(state.phase)) return state;
@@ -82,13 +89,22 @@ export function reduceSequence(
         sessionId: null, lastCommandId: action.commandId, errorCode: null};
     case "recovery":
       if (state.phase === "recording" || state.phase === "flushing" ||
-          state.phase === "switch-pending") return state;
+          state.phase === "switch-pending" || state.phase === "trim-overlay") {
+        return state;
+      }
       return {...state, phase: action.candidates.length === 0 ? "stopped" : "recovery",
         recovery: Object.freeze([...action.candidates])};
     case "trim-overlay":
-      return state.phase === "stopped" ? {...state, phase: "trim-overlay"} : state;
+      return ["stopped", "recording", "switch-pending"].includes(state.phase)
+        ? {...state, phase: "trim-overlay"}
+        : state;
     case "trim-closed":
-      return state.phase === "trim-overlay" ? {...state, phase: "stopped"} : state;
+      if (state.phase !== "trim-overlay") return state;
+      return {
+        ...state,
+        phase: state.status?.state === "active" ? "recording" :
+          state.status?.state === "switching" ? "switch-pending" : "stopped",
+      };
     case "failed":
       return {...state, errorCode: action.errorCode};
   }

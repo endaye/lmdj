@@ -49,6 +49,11 @@ interface SampleSurfaceProps {
   onCapturePhaseChange?(phase: CapturePhase): void;
   onContinueCaptureInSequence?(): void;
   closeCaptureAfterResolution?: boolean;
+  captureBackgrounded?: boolean;
+  sequenceCapture?: Readonly<{
+    sessionId: string;
+    expectedRevision: number;
+  }>;
 }
 
 interface PendingFile {
@@ -143,6 +148,8 @@ export function SampleSurface({
   onCapturePhaseChange,
   onContinueCaptureInSequence,
   closeCaptureAfterResolution = false,
+  captureBackgrounded = false,
+  sequenceCapture,
 }: SampleSurfaceProps) {
   const input = useRef<HTMLInputElement | null>(null);
   const fileSlot = useRef<number | null>(null);
@@ -517,12 +524,19 @@ export function SampleSurface({
     slot: number,
     invoke: (
       active: CreatorSampleRuntimeSession,
-      options: {slot: number; expectedRevision: number; signal: AbortSignal},
+      options: {
+        slot: number;
+        expectedRevision: number;
+        sequenceSessionId?: string;
+        signal: AbortSignal;
+      },
     ) => Promise<SampleMutationResolution>,
+    capture?: Readonly<{sessionId: string; expectedRevision: number}>,
   ): Promise<ImportOutcome> => {
     if (session === undefined || sample.pendingAction !== null ||
       operationPending.current !== null) return BUSY_OUTCOME;
-    const expectedRevision = sample.savedRevision ?? state.project.current?.revision;
+    const expectedRevision = capture?.expectedRevision ??
+      sample.savedRevision ?? state.project.current?.revision;
     if (expectedRevision === null || expectedRevision === undefined) return BUSY_OUTCOME;
     const assigned = isAssigned(slot);
     const pending = Object.freeze({
@@ -540,6 +554,9 @@ export function SampleSurface({
       const resolution = await invoke(session, {
         slot,
         expectedRevision,
+        ...(capture === undefined
+          ? {}
+          : {sequenceSessionId: capture.sessionId}),
         signal: controller.signal,
       });
       previewOwner.current = null;
@@ -583,6 +600,7 @@ export function SampleSurface({
   ) => runImportJourney(
     slot,
     (active, options) => captureCommitJourney(active, buffer, selection, options),
+    sequenceCapture,
   );
 
   const chooseFile = (slot: number) => {
@@ -826,13 +844,17 @@ export function SampleSurface({
           returnFocus={replaceReturnFocus.current}
           stopRequest={captureStopRequest}
           closeAfterResolution={closeCaptureAfterResolution}
+          backgrounded={captureBackgrounded}
           {...(onCapturePhaseChange === undefined
             ? {}
             : {onPhaseChange: onCapturePhaseChange})}
           {...(onContinueCaptureInSequence === undefined
             ? {}
             : {onContinueInSequence: onContinueCaptureInSequence})}
-          onClose={() => setCaptureSlot(null)}
+          onClose={() => {
+            onCapturePhaseChange?.("idle");
+            setCaptureSlot(null);
+          }}
         />
       )}
       {pendingCaptureSlot === null ? null : (

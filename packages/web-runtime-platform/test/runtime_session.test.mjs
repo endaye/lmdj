@@ -17,6 +17,7 @@ const API = [
   "createPattern",
   "diagnostics",
   "discardSequenceRecovery",
+  "disarmSequenceCapture",
   "flushSequence",
   "importProject",
   "importAssignSample",
@@ -586,6 +587,8 @@ test("bridges Sequence authority without browser musical-clock math", async () =
             discarded: true,
             project_revision: null,
           });
+        case "sequence.capture.disarm":
+          return success(envelope, {disarmed: true});
         default:
           return success(envelope, defaultResult(envelope.operation));
       }
@@ -598,6 +601,7 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     sessionId,
     patternId,
     expectedRevision: 5,
+    armedCaptureSlot: 17,
   });
   assert.deepEqual(begun.transportAnchor, {
     runtimeFrame: 48_000,
@@ -677,6 +681,7 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     destinationPatternId: null,
   });
   assert.equal(await session.discardSequenceRecovery(sessionId), true);
+  assert.equal(await session.disarmSequenceCapture({sessionId, slot: 17}), true);
   await session.stopSequence({sessionId, commandId});
 
   const eventPayload = operations.find(
@@ -704,6 +709,9 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     quantize_enabled: false,
     swing_percent: 60,
   });
+  assert.deepEqual(operations.find(
+    ({operation}) => operation === "sequence.capture.disarm",
+  ).payload, {session_id: sessionId, slot: {bank: 1, pad: 1}});
 });
 
 test("pushes immutable diagnostics and honors unsubscribe", async () => {
@@ -1384,6 +1392,7 @@ test("Sample import streams one bounded hashed sidecar and commits one typed res
   assert.deepEqual(await session.importAssignSample(file, {
     slot: 63,
     expectedRevision: 3,
+    sequenceSessionId: "10000000-0000-4000-8000-000000000001",
     onProgress(value) {
       progress.push(value);
     },
@@ -1402,10 +1411,11 @@ test("Sample import streams one bounded hashed sidecar and commits one typed res
   const begin = calls[0].envelope.payload;
   assert.deepEqual(Object.keys(begin).sort(), [
     "asset_id", "byte_length", "command_id", "expected_revision",
-    "import_token", "slot",
+    "import_token", "sequence_session_id", "slot",
   ]);
   assert.equal(begin.import_token, importToken);
   assert.equal(begin.expected_revision, 3);
+  assert.equal(begin.sequence_session_id, "10000000-0000-4000-8000-000000000001");
   assert.deepEqual(begin.slot, {bank: 3, pad: 15});
   assert.equal(begin.byte_length, 1_048_576);
   assert.notEqual(begin.command_id, begin.import_token);

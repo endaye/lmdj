@@ -1,4 +1,5 @@
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -25,6 +26,7 @@ using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
 using lmdj::facade::ArtifactBytesImportRequest;
 using lmdj::facade::InitialProjectRequest;
+using lmdj::facade::SampleImportBeginRequest;
 using lmdj::facade::SequenceRecordState;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
@@ -78,7 +80,8 @@ ApplicationConfig config(const std::filesystem::path& root) {
       nullptr,
       {},
       {},
-      std::nullopt,
+      lmdj::audio::RuntimePreparationLimits{
+          1'048'576, 240'000, 67'108'864, 134'217'728},
       nullptr,
   };
 }
@@ -431,6 +434,160 @@ void test_settings_rebase_and_pattern_creation_are_authoritative() {
   LMDJ_CHECK(created.at("result").at("bars") == 4);
 }
 
+void test_armed_capture_commit_rebases_without_losing_pending_events() {
+  TempDirectory temp;
+  const auto project = temp.path() / "armed-capture.lmdj";
+  const PatternId pattern_id{uuid(80)};
+  const SequenceSessionId session_id{uuid(81)};
+  const PadSlotId armed_slot{0, 1};
+  const auto wav = read_bytes("tests/fixtures/audio/kick.wav");
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+
+  const auto begun = application.begin_sequence(
+      {project, session_id, pattern_id, 2, 0, armed_slot});
+  LMDJ_CHECK(begun.has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 0, 1, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 12'000, 2, false}})
+                 .has_value());
+  const auto armed_event = application.record_sequence_event(
+      {project, session_id, {armed_slot, 100, 12'001, 3, true}});
+  LMDJ_CHECK(!armed_event.has_value());
+  LMDJ_CHECK(armed_event.error().details.contains("reason"));
+  LMDJ_CHECK(
+      armed_event.error().details.at("reason") == "armed_capture_in_progress");
+
+  const auto unarmed_begin = application.begin_sample_import(
+      SampleImportBeginRequest{
+          uuid(82),
+          project,
+          CommandMeta{CommandId{uuid(83)}, 2},
+          PadSlotId{0, 2},
+          AssetId{uuid(84)},
+          wav.size(),
+          session_id,
+      });
+  LMDJ_CHECK(!unarmed_begin.has_value());
+  LMDJ_CHECK(unarmed_begin.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(unarmed_begin.error().details.contains("reason"));
+  LMDJ_CHECK(
+      unarmed_begin.error().details.at("reason") ==
+      "armed_capture_target_mismatch");
+  auto active = application.query_sequence_status({project});
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().state == SequenceRecordState::active);
+  LMDJ_CHECK(active.value().pending_event_count == 1);
+  LMDJ_CHECK(active.value().expected_revision == 2);
+
+  const auto invalid_token = uuid(85);
+  LMDJ_CHECK(application.begin_sample_import(
+      SampleImportBeginRequest{
+          invalid_token,
+          project,
+          CommandMeta{CommandId{uuid(86)}, 2},
+          armed_slot,
+          AssetId{uuid(87)},
+          wav.size(),
+          session_id,
+      }).has_value());
+  const std::vector<std::byte> invalid_wav(wav.size(), std::byte{0});
+  LMDJ_CHECK(application.append_sample_import(
+      invalid_token, 0, invalid_wav, true).has_value());
+  const auto invalid_commit = application.commit_sample_import(invalid_token);
+  LMDJ_CHECK(!invalid_commit.has_value());
+  active = application.query_sequence_status({project});
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().state == SequenceRecordState::active);
+  LMDJ_CHECK(active.value().pending_event_count == 1);
+  LMDJ_CHECK(active.value().expected_revision == 2);
+
+  const auto token = uuid(88);
+  LMDJ_CHECK(application.begin_sample_import(
+      SampleImportBeginRequest{
+          token,
+          project,
+          CommandMeta{CommandId{uuid(89)}, 2},
+          armed_slot,
+          AssetId{uuid(90)},
+          wav.size(),
+          session_id,
+      }).has_value());
+  LMDJ_CHECK(application.append_sample_import(token, 0, wav, true).has_value());
+  const auto committed = application.commit_sample_import(token);
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().committed_revision == 3);
+  active = application.query_sequence_status({project});
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().state == SequenceRecordState::active);
+  LMDJ_CHECK(active.value().pending_event_count == 1);
+  LMDJ_CHECK(active.value().expected_revision == 3);
+
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {armed_slot, 110, 12'002, 4, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {armed_slot, 0, 24'000, 5, false}})
+                 .has_value());
+  const auto stopped = application.stop_sequence(
+      {project, session_id, CommandId{uuid(91)}, 24'001});
+  LMDJ_CHECK(stopped.has_value());
+  LMDJ_CHECK(stopped.value().committed_revision == 4);
+
+  lmdj::project_io::ProjectStore reopened;
+  const auto reloaded = reopened.load(project);
+  LMDJ_CHECK(reloaded.has_value());
+  LMDJ_CHECK(reloaded.value().banks.at(0).at(1).asset_id == AssetId{uuid(90)});
+  const auto& events = reloaded.value().patterns.at(pattern_id).events;
+  LMDJ_CHECK(events.size() == 2);
+  LMDJ_CHECK(events.at(0).slot == PadSlotId(0, 0));
+  LMDJ_CHECK(events.at(1).slot == armed_slot);
+}
+
+void test_cancelled_armed_capture_keeps_sequence_active_and_disarms_commit() {
+  TempDirectory temp;
+  const auto project = temp.path() / "cancelled-capture.lmdj";
+  const PatternId pattern_id{uuid(92)};
+  const SequenceSessionId session_id{uuid(93)};
+  const PadSlotId armed_slot{0, 1};
+  const auto wav = read_bytes("tests/fixtures/audio/kick.wav");
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+  LMDJ_CHECK(application.begin_sequence(
+      {project, session_id, pattern_id, 2, 0, armed_slot}).has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 0, 1, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 1, 2, false}})
+                 .has_value());
+  LMDJ_CHECK(application.disarm_sequence_capture(
+      {project, session_id, armed_slot}).has_value());
+  const auto status = application.query_sequence_status({project});
+  LMDJ_CHECK(status.has_value());
+  LMDJ_CHECK(status.value().state == SequenceRecordState::active);
+  LMDJ_CHECK(status.value().pending_event_count == 1);
+
+  const auto rejected = application.begin_sample_import(
+      SampleImportBeginRequest{
+          uuid(94),
+          project,
+          CommandMeta{CommandId{uuid(95)}, 2},
+          armed_slot,
+          AssetId{uuid(96)},
+          wav.size(),
+          session_id,
+      });
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().details.contains("reason"));
+  LMDJ_CHECK(
+      rejected.error().details.at("reason") == "armed_capture_not_armed");
+  LMDJ_CHECK(application.stop_sequence(
+      {project, session_id, CommandId{uuid(97)}, 1}).has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -441,6 +598,8 @@ int main() {
     test_begin_cannot_cross_an_authoring_admission();
     test_orphan_journal_is_sealed_before_authoring();
     test_settings_rebase_and_pattern_creation_are_authoritative();
+    test_armed_capture_commit_rebases_without_losing_pending_events();
+    test_cancelled_armed_capture_keeps_sequence_active_and_disarms_commit();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

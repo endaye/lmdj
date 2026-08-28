@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -40,6 +41,7 @@ struct ActiveSequenceJournal {
   std::uint64_t next_flush_seq{};
   SequenceSessionState state{SequenceSessionState::active};
   std::vector<SequenceFlushRecord> flushes;
+  std::optional<domain::PadSlotId> armed_capture_slot;
 
   bool operator==(const ActiveSequenceJournal&) const = default;
 };
@@ -66,7 +68,8 @@ class SequenceJournal {
       foundation::PatternId pattern_id,
       std::uint8_t bars,
       std::string pattern_fingerprint,
-      std::uint64_t expected_revision);
+      std::uint64_t expected_revision,
+      std::optional<domain::PadSlotId> armed_capture_slot = std::nullopt);
   foundation::Result<ActiveSequenceJournal> read_active(
       const std::filesystem::path& bundle) const;
   foundation::Result<SequenceFlushRecord> append_flush(
@@ -90,6 +93,15 @@ class SequenceJournal {
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,
       std::uint64_t expected_revision);
+  foundation::Result<void> complete_armed_capture(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      domain::PadSlotId slot,
+      std::uint64_t committed_revision);
+  foundation::Result<void> disarm_capture(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      domain::PadSlotId slot);
   foundation::Result<void> switch_pattern(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,
