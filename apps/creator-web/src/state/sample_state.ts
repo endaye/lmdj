@@ -205,9 +205,7 @@ const PRIVATE_KEY_TERMS = [
 ] as const;
 const SNAPSHOT_RESOURCE_TOKENS = new Set([
   "artifact_bytes",
-  "decoded_frames_per_pad",
-  "prepared_bank_bytes",
-  "live_bank_bytes",
+  "resident_bytes",
 ]);
 const SNAPSHOT_STORAGE_CONDITIONS = new Set([
   "project_busy",

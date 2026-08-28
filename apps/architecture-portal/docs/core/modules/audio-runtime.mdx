@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 准备样本、调度 Pattern/Pad 事件并离线或实时渲染；不修改 Project Truth。
 ## 2. 当前实现状态
-Audio Runtime `1.0.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。实时线程只消费不可变 Runtime Snapshot 与固定队列，不执行 quantization、Project mutation 或 journal I/O。
+Audio Runtime `1.0.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。Prepared PCM 不再设置单 Pad 帧数上限：每个 16-Pad user Bank 使用独立字节账本，同时受 generation 总账本约束；resident bytes 由 publication owner 另行核算。实时线程只消费不可变 Runtime Snapshot 与固定队列，不执行 quantization、Project mutation 或 journal I/O。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Project Cooker；平台输出位于适配边界。
 ## 4. 架构与数据流
@@ -25,7 +25,7 @@ Runtime Snapshot → Sample Bank/Pattern origin 发布 → fixed SPSC control �
 ## 5. API 与 Artifact 边界
 消费不可变快照、resolved playback 与已准备样本，不在实时回调解析 Project/WAV、分配内存、加锁或调用 Host。
 ## 6. 状态、错误与并发
-固定 SPSC 队列和压力测试覆盖 control/Voice 并发；overflow fail closed，实时路径避免无界工作。
+固定 SPSC 队列和压力测试覆盖 control/Voice 并发；overflow fail closed，实时路径避免无界工作。准备阶段按剩余字节的较小约束判定失败，约束相等时稳定返回 Bank failure；Bank、generation 与 transient residency 三类失败不互相冒充。
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 ## 8. 测试与证据
