@@ -1272,16 +1272,36 @@ void test_sequence_switch_prepares_before_selecting_bar_boundary() {
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
   ContinuousAudioDriver audio(runtime->engine());
   check_success(runtime->dispatch(
-      "sequence.record.begin",
-      {{"session_id", kSequenceSessionId},
-       {"pattern_id", kPatternId},
-       {"expected_revision", 1}},
+      "sequence.settings.update",
+      {{"command_id", "00000000-0000-4000-8000-000000000099"},
+       {"expected_revision", 1},
+       {"session_id", nullptr},
+       {"bpm", 132},
+       {"quantize_enabled", nullptr},
+       {"swing_percent", nullptr}},
       {}));
-
-  constexpr std::uint64_t kBarFrames = 96'000;
   wait_until([&] {
-    return runtime->engine().telemetry().rendered_frames % kBarFrames >=
-           kBarFrames - 128;
+    return runtime->engine().pattern_telemetry().pending_generation == 0;
+  });
+  const auto& begun = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.begin",
+          {{"session_id", kSequenceSessionId},
+           {"pattern_id", kPatternId},
+           {"expected_revision", 2}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "transport_anchor"});
+  const auto bar_frames = lmdj::audio::tick_boundary_frame(
+      lmdj::domain::kBarTicks4x4, 132, lmdj::audio::kTransportPpq);
+  LMDJ_CHECK(bar_frames.has_value());
+  const auto anchor_frame =
+      begun.at("transport_anchor").at("runtime_frame").get<std::uint64_t>();
+  wait_until([&] {
+    return runtime->engine().telemetry().rendered_frames >=
+           anchor_frame + bar_frames.value() - 128;
   });
   const auto& switched = check_exact_success(
       runtime->dispatch(
