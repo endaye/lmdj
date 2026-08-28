@@ -59,7 +59,7 @@
 
 - `SequenceBeginRequest::armed_capture_slot: std::optional<domain::PadSlotId>` records the only Pad eligible for Capture rebase.
 - `SampleImportBeginRequest::sequence_session_id: std::optional<foundation::SequenceSessionId>` explicitly classifies an import as the approved Capture commit.
-- `SequenceJournal::complete_armed_capture(bundle, session_id, slot, committed_revision)` advances `expected_revision` and consumes the arm in one checked journal record.
+- `SequenceJournal::prepare_armed_capture(...)` durably binds the exact session, slot, expected revision, command, asset, and artifact before Project publication; `complete_armed_capture(...)` verifies that identity, advances `expected_revision`, and consumes the arm.
 - `SequenceJournal::disarm_capture(bundle, session_id, slot)` consumes an abandoned arm without changing Project revision or pending events.
 - `CreatorSequenceRuntimeSession.beginSequence(...armedCaptureSlot)` and `importAssignSample(...sequenceSessionId)` transport identities; `disarmSequenceCapture({sessionId, slot})` closes cancel/discard authority.
 
@@ -139,6 +139,33 @@ Affected current Portal routes:
 - `/operations/testing-and-proof/`
 
 The Task also updates the approved Sequence design/decision, Stage 9 review disposition, and Stage 9 acceptance ledger. No immutable snapshot is created here; #379 and #380 own final identity integration and corrected immutable evidence.
+
+---
+
+### Task 2: Review fix for interrupted Capture publication and packaged persistence proof
+
+**Files:**
+
+- Modify: `packages/project-io/include/lmdj/project_io/sequence_journal.hpp`
+- Modify: `packages/project-io/src/sequence_journal.cpp`
+- Modify: `packages/project-io/src/project_store.cpp`
+- Modify: `tests/core/project_io/fault_matrix_test.cpp`
+- Modify: `tests/platform/web/creator/creator_web_capture.spec.mjs`
+- Modify: `docs/superpowers/plans/2026-08-29-stage9-armed-pad-capture.md`
+- Modify: `docs/quality/2026-08-27-stage9-sequence-recording-review.md`
+- Modify: `docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md`
+- Modify: current Architecture Portal routes already declared above
+- Modify: `.agents/pitfalls/acceptance-journey-truncation.md`
+- Modify: `.agents/skills/issue-done/SKILL.md`
+
+- [x] Reproduce the manifest-published/journal-incomplete window with the existing post-publication fault hook and a fresh UI retry command identity.
+- [x] Append a durable Capture precommit marker before Project publication. Bind session, armed slot, expected revision, original command, asset, and exact artifact identity; reject a changed retry without mutating either Project or journal.
+- [x] On a matching retry, validate the original transaction command, receipt, event, assigned Pad, asset, artifact, and exact `N + 1` revision before replaying and completing the journal. On restart, perform the same receipt-driven reconciliation before sealing owner loss.
+- [x] Prove the reconciled session can append/commit a later flush and stop cleanly without a second Sample mutation.
+- [x] Strengthen the packaged Creator journey to record A2 before the armed A1 stop, reject the stop hit from Sequence, record A1 only after commit, stop, reload/reopen, and inspect exact persisted revision, event delta/order/count, Pad assignment, Asset, and WAV artifact identity.
+- [x] Record the second `acceptance-journey-truncation` recurrence and absorb it into the `issue-done` prerequisite as a leg-by-leg far-side evidence map.
+
+Review-fix verification uses the same Version Management and Documentation Impact decisions as Task 1. Version allocation remains deferred to #379; current Portal/review/acceptance truth changes are required, while immutable snapshots remain untouched. The independently shared running-audio BPM-update → immediate switch failure remains outside #374 and is reported against #375 rather than hidden by this journey.
 
 ## External Boundaries
 

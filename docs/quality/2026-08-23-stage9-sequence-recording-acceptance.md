@@ -91,6 +91,24 @@ Facade, Audio Runtime and Web Runtime Platform are updated in the same Task.
 | Hosts | CLI/MCP parity, Native CaptureWriter and Web Runtime/Creator journeys use the Application Facade |
 | Evidence privacy | reports contain semantic state, session/receipt identities, revisions and counters, never samples or local paths |
 
+### #374 review-fix acceptance
+
+Armed-Pad Capture publication now has a durable precommit boundary before the
+Project manifest commit point. A retry with a fresh UI command/asset identity
+may reconcile only the exact original session, armed slot, expected revision
+and artifact bytes. It must validate the original transaction command,
+receipt/event, committed revision, Asset and Pad assignment before completing
+the journal; any mismatch fails closed without a second Project mutation.
+Restart recovery applies the same receipt check before owner-loss sealing.
+
+The packaged Creator gate records assigned A2 before the armed A1 stop gesture,
+proves that stop gesture is absent from Sequence, records A1 only after Capture
+commit, stops, reloads/reopens, and inspects Project Truth. The exact acceptance
+is revision `48`, one A2 and one A1 event added in that order (no third armed-hit
+event), A1 assigned to the newly committed Asset, and an `audio/wav` artifact.
+The unrelated running-audio BPM-update → immediate switch failure remains a
+#375 blocker and is not removed from the full Proof journey.
+
 ## Automated verification
 
 | Command | Result |
@@ -102,7 +120,7 @@ Facade, Audio Runtime and Web Runtime Platform are updated in the same Task.
 | `bash tests/build/test_active_tree.sh` | PASS |
 | `PYTHONPATH=apps/core-mcp python3 tests/host/mcp_stdio_test.py build/core/dev/lib/liblmdj_core_c.so` | PASS: 10 fixtures |
 | `node --test packages/web-runtime-platform/test/project_bundle_reader.test.mjs packages/web-runtime-platform/test/protocol.test.mjs` | PASS: 28/28 |
-| `npm --prefix apps/creator-web test -- --run` | PASS: 345/345 across 19 files for #374 source remediation; Product Build integration remains deferred to #379 |
+| `npm --prefix apps/creator-web test -- --run` | PASS: 348/348 across 19 files for #374 review fix; Product Build integration remains deferred to #379 |
 | `python3 scripts/version.py verify --version-file products/lmdj/version.json` | PASS: `1.0.37.0` |
 | `python3 tests/build/version_test.py` | PASS |
 | `scripts/core.sh build dev` | PASS with GCC 13.3 |

@@ -219,6 +219,20 @@ Creator reducer/action 与 packaged Chromium journey 均增加回归证据。此
 source disposition，不宣称 #379 的版本集成、#380 的 immutable snapshot、PR/merge、
 Release 或 #360 的物理验收。
 
+**#374 independent review fix（2026-08-29）**：复核发现首次实现仍把 Project
+manifest/receipt 发布放在 `capture-complete` journal record 之前；该窗口失败时，
+Project 已到 `N + 1`，journal 与内存 runtime 却仍 armed 于 `N`，而 Creator 重试会
+生成新的 command/asset identity。修正现在于发布前追加 durable Capture precommit，
+绑定 exact session、slot、expected revision、原 command/asset 与 artifact identity。
+同 bytes 的新 UI command 只在原 transaction、receipt、event、Asset、Pad assignment
+及 `N + 1` revision 全部吻合时 replay 原提交并完成 journal/runtime rebase；不同 bytes
+或任一 identity/truth 冲突均 fail closed 且不二次 mutation。restart recovery 也先以同一
+receipt 规则完成 journal，再进入 owner-loss seal。故障矩阵覆盖 manifest 已发布/
+journal 未完成、冲突 retry、fresh-command retry、后续 flush/stop 与 restart；packaged
+Creator case 另以 A2→armed A1 stop→commit→A1→Stop→reload 的次序检查 exact persisted
+event delta/order/count、Pad/Asset/WAV 与 revision。共享 running-audio BPM update→immediate
+switch 的 publication failure 仍单列为 #375 集成 blocker，不以移动步骤或弱化断言隐藏。
+
 ## 四、中危发现
 
 ### M1 SR-D13「下一圈可听」未接线：journal 叠加音在产品中不存在

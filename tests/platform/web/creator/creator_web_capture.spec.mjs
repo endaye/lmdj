@@ -24,6 +24,54 @@ async function report(page) {
   return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
 }
 
+async function installProjectInspectProbe(page) {
+  await page.addInitScript(() => {
+    let exposed;
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {
+      configurable: true,
+      get() {
+        return exposed;
+      },
+      set(nativeHost) {
+        const nativeTransport = nativeHost.transport;
+        nativeHost.transport = Object.freeze({
+          send(...arguments_) {
+            return nativeTransport.send(...arguments_);
+          },
+          subscribe(...arguments_) {
+            return nativeTransport.subscribe(...arguments_);
+          },
+          subscribeFailure(...arguments_) {
+            return nativeTransport.subscribeFailure(...arguments_);
+          },
+          terminate(...arguments_) {
+            return nativeTransport.terminate(...arguments_);
+          },
+          get terminated() {
+            return nativeTransport.terminated;
+          },
+          get terminalOwnerReleased() {
+            return nativeTransport.terminalOwnerReleased;
+          },
+        });
+        exposed = nativeHost;
+      },
+    });
+  });
+}
+
+async function inspectProjectTruth(page) {
+  const response = await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "project.inspect",
+      payload: {},
+    }));
+  expect(response.ok).toBe(true);
+  return response.result;
+}
+
 async function importV1SampleProject(page) {
   if (!sampleBundle) {
     throw new Error("LMDJ_CREATOR_WEB_SAMPLE_BUNDLE is required");
@@ -152,8 +200,10 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
 test("armed Pad capture commits without stopping the active Sequence", async ({page}, testInfo) => {
   test.skip(testInfo.project.name !== GRANTED);
   test.setTimeout(600_000);
+  await installProjectInspectProbe(page);
   await page.goto("/index.html");
   await importV1SampleProject(page);
+  const initialTruth = await inspectProjectTruth(page);
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
     timeout: 30_000,
@@ -167,6 +217,16 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
   await page.getByRole("button", {name: "Record"}).click();
   await expect(page.getByRole("status").filter({hasText: "recording"}))
     .toBeVisible();
+
+  const patternId = await page.getByRole("combobox", {name: "Pattern"})
+    .inputValue();
+  const initialEvents = structuredClone(
+    initialTruth.project.patterns[patternId].events,
+  );
+
+  // A distinct non-armed Pad is ordinary Sequence input before the Capture
+  // stop gesture. This event must survive the Capture commit/rebase boundary.
+  await page.keyboard.press("KeyW");
 
   // The armed Pad stops only its capture. The Sequence session stays beneath
   // the trim overlay and the armed hit itself is not recorded.
@@ -190,6 +250,44 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
   expect(evidence.sequence.project_revision)
     .toBe(evidence.sequence.expected_revision);
   expect(evidence.sequence.pending_event_count).toBe(0);
+
+  await page.reload();
+  await expect(page.getByRole("button", {name: "Open Project 00000000"}))
+    .toBeVisible({timeout: 60_000});
+  await page.getByRole("button", {name: "Open Project 00000000"}).click();
+  await expect(page.getByRole("heading", {name: "Project 00000000"}))
+    .toBeVisible({timeout: 120_000});
+  const persisted = await inspectProjectTruth(page);
+  expect(persisted.project_revision).toBe(48);
+  expect(persisted.project.revision).toBe(48);
+
+  const persistedEvents = persisted.project.patterns[patternId].events;
+  expect(persistedEvents).toHaveLength(initialEvents.length + 2);
+  const addedEvents = structuredClone(persistedEvents);
+  for (const initialEvent of initialEvents) {
+    const exact = JSON.stringify(initialEvent);
+    const index = addedEvents.findIndex((event) => JSON.stringify(event) === exact);
+    expect(index).toBeGreaterThanOrEqual(0);
+    addedEvents.splice(index, 1);
+  }
+  expect(addedEvents).toHaveLength(2);
+  expect(addedEvents.map(({slot}) => slot)).toEqual([
+    {bank: 0, pad: 1},
+    {bank: 0, pad: 0},
+  ]);
+  expect(addedEvents.every((event) =>
+    Object.keys(event).sort().join(",") ===
+      "duration_tick,onset_tick,slot,velocity" &&
+    event.duration_tick > 0 && event.velocity > 0)).toBe(true);
+
+  const assignedAsset = persisted.project.banks[0].pads[0].asset_id;
+  expect(assignedAsset).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  expect(persisted.project.assets[assignedAsset]).toEqual({
+    artifact: expect.objectContaining({media_type: "audio/wav"}),
+  });
+
   await page.getByRole("button", {name: "Sample"}).click();
   await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
     .toBeVisible({timeout: 30_000});

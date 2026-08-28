@@ -3073,6 +3073,65 @@ ProjectStore::reconcile_sequence_recovery(
     return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
         active.error());
   }
+  if (active.value().capture_commit.has_value()) {
+    const auto& capture = *active.value().capture_commit;
+    auto loaded = load_project(*platform_, bundle);
+    if (!loaded.has_value()) {
+      return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
+          loaded.error());
+    }
+    const auto receipt = loaded.value().receipts.find(capture.command_id);
+    if (receipt != loaded.value().receipts.end()) {
+      const auto recorded = loaded.value().commands.find(capture.command_id);
+      const auto* sample =
+          recorded != loaded.value().commands.end()
+              ? std::get_if<domain::ImportAssignSample>(&recorded->second)
+              : nullptr;
+      const auto asset = loaded.value().state.assets.find(capture.asset_id);
+      const auto expected_event = nlohmann::json{
+          {"command_id", capture.command_id.value()},
+          {"revision", capture.expected_revision + 1},
+          {"type", "sample.imported_assigned"},
+      };
+      if (sample == nullptr ||
+          sample->meta.command_id != capture.command_id ||
+          sample->meta.expected_revision != capture.expected_revision ||
+          sample->asset.id != capture.asset_id ||
+          sample->asset.artifact != capture.artifact ||
+          sample->slot != capture.slot ||
+          receipt->second.committed_revision != capture.expected_revision + 1 ||
+          receipt->second.event != expected_event ||
+          loaded.value().state.revision != capture.expected_revision + 1 ||
+          asset == loaded.value().state.assets.end() ||
+          asset->second != sample->asset ||
+          loaded.value()
+                  .state.banks.at(capture.slot.bank)
+                  .at(capture.slot.pad)
+                  .asset_id != capture.asset_id) {
+        return foundation::Result<
+            std::vector<SequenceRecoveryCandidate>>::failure(Error{
+            ErrorCode::invalid_project,
+            "durable armed Capture receipt does not match Project Truth",
+            {{"reason", "armed_capture_recovery_conflict"},
+             {"remedy",
+              "inspect the committed Capture receipt and recover owner loss"}},
+        });
+      }
+      auto completed = journal.complete_armed_capture(
+          bundle, active.value().session_id, capture.command_id, capture.slot,
+          receipt->second.committed_revision);
+      if (!completed.has_value()) {
+        return foundation::Result<
+            std::vector<SequenceRecoveryCandidate>>::failure(
+            completed.error());
+      }
+      active = journal.read_active(bundle);
+      if (!active.has_value()) {
+        return foundation::Result<
+            std::vector<SequenceRecoveryCandidate>>::failure(active.error());
+      }
+    }
+  }
   for (const auto& flush : active.value().flushes) {
     if (flush.completed) {
       continue;
@@ -3515,6 +3574,110 @@ ProjectStore::import_assign_sample_bytes(
         scavenged.error());
   }
 
+  if (admitted.value().has_value() &&
+      admitted.value()->capture_commit.has_value()) {
+    const auto& capture = *admitted.value()->capture_commit;
+    const auto recovery_conflict = [](std::string message) {
+      return foundation::Result<domain::AppliedCommand>::failure(Error{
+          ErrorCode::invalid_argument,
+          std::move(message),
+          {{"reason", "armed_capture_recovery_conflict"},
+           {"remedy",
+            "retry the original captured bytes for the armed Pad"}},
+      });
+    };
+    if (!request.sequence_session_id.has_value() ||
+        admitted.value()->session_id != *request.sequence_session_id ||
+        capture.slot != request.slot ||
+        capture.expected_revision != request.meta.expected_revision ||
+        capture.artifact != artifact) {
+      return recovery_conflict(
+          "armed Capture retry does not match the durable commit identity");
+    }
+    const domain::ImportAssignSample durable_command{
+        domain::CommandMeta{capture.command_id, capture.expected_revision},
+        domain::Asset{capture.asset_id, capture.artifact},
+        capture.slot,
+    };
+    const PersistedCommand persisted = durable_command;
+    const auto receipt = loaded.value().receipts.find(capture.command_id);
+    if (receipt != loaded.value().receipts.end()) {
+      const auto recorded = loaded.value().commands.find(capture.command_id);
+      const auto* recorded_sample =
+          recorded != loaded.value().commands.end()
+              ? std::get_if<domain::ImportAssignSample>(&recorded->second)
+              : nullptr;
+      const auto expected_event = nlohmann::json{
+          {"command_id", capture.command_id.value()},
+          {"revision", capture.expected_revision + 1},
+          {"type", "sample.imported_assigned"},
+      };
+      const auto asset = loaded.value().state.assets.find(capture.asset_id);
+      if (recorded_sample == nullptr ||
+          recorded_sample->meta.command_id != capture.command_id ||
+          recorded_sample->meta.expected_revision !=
+              capture.expected_revision ||
+          recorded_sample->asset.id != capture.asset_id ||
+          recorded_sample->asset.artifact != capture.artifact ||
+          recorded_sample->slot != capture.slot ||
+          receipt->second.committed_revision != capture.expected_revision + 1 ||
+          receipt->second.event != expected_event ||
+          loaded.value().state.revision != capture.expected_revision + 1 ||
+          asset == loaded.value().state.assets.end() ||
+          asset->second != durable_command.asset ||
+          loaded.value()
+                  .state.banks.at(capture.slot.bank)
+                  .at(capture.slot.pad)
+                  .asset_id != capture.asset_id) {
+        return recovery_conflict(
+            "durable armed Capture receipt does not match Project Truth");
+      }
+    } else if (loaded.value().state.revision != capture.expected_revision ||
+               loaded.value().commands.contains(capture.command_id)) {
+      return recovery_conflict(
+          "durable armed Capture precommit does not match Project Truth");
+    }
+
+    std::optional<ArtifactStage> stage;
+    std::optional<StagedSample> resumed_staging;
+    if (receipt == loaded.value().receipts.end()) {
+      auto staged = stage_sample(
+          *platform_, bundle, capture.command_id.value(), request.bytes);
+      if (!staged.has_value()) {
+        return foundation::Result<domain::AppliedCommand>::failure(
+            staged.error());
+      }
+      resumed_staging = std::move(staged.value());
+      stage = ArtifactStage{
+          resumed_staging->payload, capture.artifact, {}, false};
+    }
+    auto reconciled = commit_loaded(
+        platform_, bundle, std::move(loaded.value()), persisted,
+        std::move(stage), nullptr);
+    if (resumed_staging.has_value()) {
+      const auto cleanup = platform_->remove_tree(resumed_staging->directory);
+      if (!reconciled.has_value()) {
+        return reconciled;
+      }
+      if (!cleanup.has_value()) {
+        return foundation::Result<domain::AppliedCommand>::failure(
+            cleanup.error());
+      }
+    }
+    if (!reconciled.has_value()) {
+      return reconciled;
+    }
+    SequenceJournal journal{platform_};
+    auto completed = journal.complete_armed_capture(
+        bundle, *request.sequence_session_id, capture.command_id, capture.slot,
+        reconciled.value().state.revision);
+    if (!completed.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          completed.error());
+    }
+    return reconciled;
+  }
+
   if (loaded.value().receipts.contains(request.meta.command_id)) {
     auto replayed = commit_loaded(
         platform_,
@@ -3525,17 +3688,6 @@ ProjectStore::import_assign_sample_bytes(
         nullptr);
     if (!replayed.has_value()) {
       return replayed;
-    }
-    if (request.sequence_session_id.has_value() && admitted.value().has_value() &&
-        replayed.value().state.revision > admitted.value()->expected_revision) {
-      SequenceJournal journal{platform_};
-      auto completed = journal.complete_armed_capture(
-          bundle, *request.sequence_session_id, request.slot,
-          replayed.value().state.revision);
-      if (!completed.has_value()) {
-        return foundation::Result<domain::AppliedCommand>::failure(
-            completed.error());
-      }
     }
     return replayed;
   }
@@ -3558,6 +3710,19 @@ ProjectStore::import_assign_sample_bytes(
     const auto cleanup = cleanup_staging();
     return foundation::Result<domain::AppliedCommand>::failure(
         cleanup.has_value() ? staged_fault.error() : cleanup.error());
+  }
+
+  if (request.sequence_session_id.has_value() && admitted.value().has_value()) {
+    SequenceJournal journal{platform_};
+    auto prepared = journal.prepare_armed_capture(
+        bundle, *request.sequence_session_id, request.meta.command_id,
+        request.asset_id, request.slot, artifact,
+        request.meta.expected_revision);
+    if (!prepared.has_value()) {
+      const auto cleanup = cleanup_staging();
+      return foundation::Result<domain::AppliedCommand>::failure(
+          cleanup.has_value() ? prepared.error() : cleanup.error());
+    }
   }
 
   auto outcome = commit_loaded(
@@ -3585,7 +3750,8 @@ ProjectStore::import_assign_sample_bytes(
       outcome.value().state.revision > admitted.value()->expected_revision) {
     SequenceJournal journal{platform_};
     auto completed = journal.complete_armed_capture(
-        bundle, *request.sequence_session_id, request.slot,
+        bundle, *request.sequence_session_id, request.meta.command_id,
+        request.slot,
         outcome.value().state.revision);
     if (!completed.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(

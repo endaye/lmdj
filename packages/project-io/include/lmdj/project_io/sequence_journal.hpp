@@ -32,6 +32,16 @@ struct SequenceFlushRecord {
   bool operator==(const SequenceFlushRecord&) const = default;
 };
 
+struct SequenceCaptureCommit {
+  foundation::CommandId command_id;
+  foundation::AssetId asset_id;
+  domain::PadSlotId slot;
+  foundation::ArtifactRef artifact;
+  std::uint64_t expected_revision{};
+
+  bool operator==(const SequenceCaptureCommit&) const = default;
+};
+
 struct ActiveSequenceJournal {
   foundation::SequenceSessionId session_id;
   foundation::PatternId pattern_id;
@@ -42,6 +52,7 @@ struct ActiveSequenceJournal {
   SequenceSessionState state{SequenceSessionState::active};
   std::vector<SequenceFlushRecord> flushes;
   std::optional<domain::PadSlotId> armed_capture_slot;
+  std::optional<SequenceCaptureCommit> capture_commit;
 
   bool operator==(const ActiveSequenceJournal&) const = default;
 };
@@ -93,9 +104,18 @@ class SequenceJournal {
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,
       std::uint64_t expected_revision);
+  foundation::Result<void> prepare_armed_capture(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      foundation::CommandId command_id,
+      foundation::AssetId asset_id,
+      domain::PadSlotId slot,
+      foundation::ArtifactRef artifact,
+      std::uint64_t expected_revision);
   foundation::Result<void> complete_armed_capture(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,
+      foundation::CommandId command_id,
       domain::PadSlotId slot,
       std::uint64_t committed_revision);
   foundation::Result<void> disarm_capture(

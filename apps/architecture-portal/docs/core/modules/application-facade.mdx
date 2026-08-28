@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
 ## 2. 当前实现状态
-Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。当前 source 把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。选择性 rebase 是封闭白名单：除 BPM、Quantize/Swing 外，只允许 Sequence begin 时登记的空 Pad Capture 以同 session、同 Pad、同 expected revision 提交；成功提交同步推进 journal/runtime revision 并消费 arm，失败或取消不清空 pending events。
+Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。当前 source 把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。选择性 rebase 是封闭白名单：除 BPM、Quantize/Swing 外，只允许 Sequence begin 时登记的空 Pad Capture 以同 session、同 Pad、同 expected revision 提交。Project publication 前先 durable 记录原 command/asset/artifact identity；manifest 已发布而 completion 中断时，fresh UI retry 或 restart 只有在 transaction、receipt、revision、Asset 与 Pad Truth 精确吻合时才完成原提交并推进 journal/runtime，冲突则 fail closed 且不重复 mutation。失败或取消不清空 pending events。
 ## 3. 所有权与依赖
 依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。
 ## 4. 架构与数据流
