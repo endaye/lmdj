@@ -25,9 +25,17 @@ describe("Sequence state machine", () => {
       status: status("switching", {pendingPatternId: "pattern-2"}),
     });
     expect(switching.selectedPatternId).toBe("pattern-1");
+    expect(reduceSequence(switching, {
+      type: "boundary", patternId: "pattern-2",
+      status: status("switching", {pendingPatternId: "pattern-2"}),
+    })).toBe(switching);
+    expect(reduceSequence(switching, {
+      type: "boundary", patternId: "pattern-3",
+      status: status("active", {patternId: "pattern-3", effectiveRuntimeFrame: null}),
+    })).toBe(switching);
     const acknowledged = reduceSequence(switching, {
       type: "boundary", patternId: "pattern-2",
-      status: status("active", {patternId: "pattern-2"}),
+      status: status("active", {patternId: "pattern-2", effectiveRuntimeFrame: null}),
     });
     expect(acknowledged.selectedPatternId).toBe("pattern-2");
     const flushing = reduceSequence(acknowledged, {type: "flushing", commandId: "command-1"});
