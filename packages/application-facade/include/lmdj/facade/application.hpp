@@ -242,6 +242,7 @@ struct SequenceMutationResult {
   SequenceStatus status;
   std::optional<std::uint64_t> committed_revision;
   bool replayed{};
+  std::optional<foundation::PatternId> committed_pattern_id;
 };
 
 struct SequenceRecoveryInfo {

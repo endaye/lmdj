@@ -106,12 +106,20 @@ callback. A successful flush or Stop publishes the clean committed view, so a
 pending event is audible from the next Bar and cannot survive as a stale or
 duplicate overlay after commit.
 
+The review fix makes the publication handoff linearizable: Audio Runtime marks
+the mailbox generation callback-owned before a producer can replace it, so a
+view already claimed for a Bar cannot be invalidated between dequeue and apply.
+It also preserves pending events across an active-session BPM rebuild, schedules
+a clean committed view on owner-loss sealing, and returns the durable committed
+Pattern identity needed for exact Stop replay after a clean-publication failure.
+
 | Source boundary | Fresh local evidence |
 | --- | --- |
 | Facade owner/generation/replace/reject/flush projection | PASS: `facade.sequence_surface` |
 | Audio same-boundary newest-view wins, zero realtime allocation/free | PASS: `audio.realtime_engine` |
+| Deterministic claimed-boundary race keeps onset zero and exact phase | PASS: `audio.realtime_engine` |
 | Concurrent accepted = applied + superseded + pending conservation | PASS: `audio.snapshot_publication_stress` |
-| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; live hit → next-Bar repeat → rejected event unchanged → Stop → next-Bar clean committed repeat |
+| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; BPM rebuild retains overlay; owner loss removes it; failed clean publication recovers through exact Stop replay |
 | Focused suite | PASS: 4/4 |
 | `scripts/core.sh test dev full` | PASS: 79/79 |
 | `scripts/core.sh test dev stress` | PASS: 4/4 |

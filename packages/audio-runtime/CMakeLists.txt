@@ -64,7 +64,10 @@ if(BUILD_TESTING)
     "${CMAKE_SOURCE_DIR}/tests/core/audio/realtime_engine_test.cpp"
   )
   target_include_directories(
-    lmdj_realtime_engine_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+    lmdj_realtime_engine_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src"
   )
   target_link_libraries(
     lmdj_realtime_engine_tests PRIVATE lmdj::audio_runtime

@@ -608,6 +608,13 @@ struct ControlRuntime::Impl {
       const foundation::PatternId& selected_pattern,
       std::optional<std::uint64_t> activation_frame = std::nullopt,
       std::span<const domain::PatternEvent> overlay = {}) {
+    if (fail_next_pattern_publication) {
+      fail_next_pattern_publication = false;
+      return foundation::Result<audio::PatternPublication>::failure(Error{
+          ErrorCode::invalid_argument,
+          "injected runtime Pattern publication failure",
+      });
+    }
     if (!retained_project_path.has_value()) {
       return foundation::Result<audio::PatternPublication>::failure(
           Error{ErrorCode::invalid_argument, "no Project is open"});
@@ -642,7 +649,7 @@ struct ControlRuntime::Impl {
   }
 
   foundation::Result<std::optional<audio::PatternPublication>>
-  publish_pending_sequence_overlay() {
+  publish_pending_sequence_overlay(bool force = false) {
     if (!active_sequence.has_value() || !retained_project_path.has_value()) {
       return foundation::Result<std::optional<audio::PatternPublication>>::failure(
           Error{ErrorCode::invalid_argument, "no Sequence session is active"});
@@ -655,7 +662,7 @@ struct ControlRuntime::Impl {
       return foundation::Result<std::optional<audio::PatternPublication>>::failure(
           overlay.error());
     }
-    if (overlay.value().generation ==
+    if (!force && overlay.value().generation ==
         active_sequence->published_overlay_generation) {
       return foundation::Result<std::optional<audio::PatternPublication>>::success(
           std::nullopt);
@@ -1238,6 +1245,15 @@ struct ControlRuntime::Impl {
       static_cast<void>(abort_imports());
     } catch (...) {
     }
+    if (active_sequence.has_value()) {
+      try {
+        // The journal overlay is Runtime-only. Seal the failed owner by
+        // replacing any queued or active overlay with committed Project Truth
+        // at the normal Bar boundary before abandoning the Facade session.
+        static_cast<void>(publish_project_pattern(active_sequence->pattern_id));
+      } catch (...) {
+      }
+    }
     application.abandon_sequence_sessions();
     active_sequence.reset();
     pending_sequence_boundary.reset();
@@ -1263,6 +1279,7 @@ struct ControlRuntime::Impl {
   std::optional<std::string> project_id;
   std::optional<std::uint64_t> project_revision;
   std::optional<std::string> pattern_id;
+  bool fail_next_pattern_publication = false;
   std::optional<std::uint16_t> project_bpm;
   std::optional<std::string> runtime_bank_project_id;
   std::optional<std::uint64_t> runtime_revision;
@@ -2341,16 +2358,29 @@ Json ControlRuntime::dispatch(
           response.at("result").at("bpm").get<std::uint16_t>();
       nlohmann::json publication = nullptr;
       if (!payload.at("bpm").is_null()) {
-        auto published = impl_->publish_project_pattern(
-            foundation::PatternId{*impl_->pattern_id});
-        if (!published.has_value()) {
-          fail_and_seal("sequence_settings_publication_failed");
-          return normalized_error(published.error());
+        std::optional<audio::PatternPublication> pattern_publication;
+        if (impl_->active_sequence.has_value()) {
+          auto published = impl_->publish_pending_sequence_overlay(true);
+          if (!published.has_value()) {
+            fail_and_seal("sequence_settings_publication_failed");
+            return normalized_error(published.error());
+          }
+          pattern_publication = published.value();
+        } else {
+          auto published = impl_->publish_project_pattern(
+              foundation::PatternId{*impl_->pattern_id});
+          if (!published.has_value()) {
+            fail_and_seal("sequence_settings_publication_failed");
+            return normalized_error(published.error());
+          }
+          pattern_publication = published.value();
         }
-        publication = {
-            {"generation", published.value().generation},
-            {"activation_frame", published.value().activation_frame},
-        };
+        if (pattern_publication.has_value()) {
+          publication = {
+              {"generation", pattern_publication->generation},
+              {"activation_frame", pattern_publication->activation_frame},
+          };
+        }
       }
       auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
@@ -2433,12 +2463,25 @@ Json ControlRuntime::dispatch(
             response.at("project_revision").get<std::uint64_t>();
       }
       Json pattern_publication = nullptr;
-      const auto& sequence_result = response.at("result");
+      auto result = response.at("result");
+      if (result.contains("committed_pattern_id") &&
+          result.at("committed_pattern_id").is_string()) {
+        recorded_pattern = foundation::PatternId{
+            result.at("committed_pattern_id").get<std::string>()};
+      }
+      result.erase("committed_pattern_id");
+      if (operation == "sequence.record.stop" &&
+          impl_->active_sequence.has_value() &&
+          impl_->active_sequence->id.value() == session_id) {
+        // Facade commit is already terminal even when publication fails. Drop
+        // the transient owner now so an exact command replay can recover the
+        // clean publication from its durable flush identity.
+        impl_->active_sequence.reset();
+      }
       if (recorded_pattern.has_value() &&
-          sequence_result.at("committed_revision").is_number_unsigned()) {
+          result.at("committed_revision").is_number_unsigned()) {
         auto published = impl_->publish_project_pattern(*recorded_pattern);
         if (!published.has_value()) {
-          fail_and_seal("sequence_pattern_publication_failed");
           return normalized_error(published.error());
         }
         pattern_publication = {
@@ -2448,17 +2491,11 @@ Json ControlRuntime::dispatch(
       }
       if (operation == "sequence.record.flush" &&
           impl_->active_sequence.has_value() &&
-          sequence_result.at("pattern_id").is_string()) {
+          result.at("pattern_id").is_string()) {
         impl_->active_sequence->pattern_id = foundation::PatternId{
-            sequence_result.at("pattern_id").get<std::string>()};
+            result.at("pattern_id").get<std::string>()};
         impl_->pattern_id = impl_->active_sequence->pattern_id.value();
       }
-      if (operation == "sequence.record.stop" &&
-          impl_->active_sequence.has_value() &&
-          impl_->active_sequence->id.value() == session_id) {
-        impl_->active_sequence.reset();
-      }
-      auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
       result["runtime_frame"] = runtime_frame;
       result["pattern_publication"] = std::move(pattern_publication);
@@ -2852,6 +2889,11 @@ foundation::Result<void> detail::ControlRuntimeAudioAccess::install(
   }
   runtime.impl_->coordinator = coordinator;
   return foundation::Result<void>::success();
+}
+
+void detail::ControlRuntimeAudioAccess::fail_next_pattern_publication(
+    ControlRuntime& runtime) noexcept {
+  runtime.impl_->fail_next_pattern_publication = true;
 }
 
 foundation::Result<void> detail::ControlRuntimeClockAccess::install(

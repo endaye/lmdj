@@ -17,15 +17,15 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 准备样本、调度 Pattern/Pad 事件并离线或实时渲染；不修改 Project Truth。
 ## 2. 当前实现状态
-Audio Runtime `1.0.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。当前 source 可在同一 Project/Pattern/next-Bar boundary 上以较新 immutable view 取代 pending overlay，并显式计数 superseded generation；实时线程只消费不可变 Runtime 输入与固定队列，不执行 quantization、Project mutation 或 journal I/O。
+Audio Runtime `1.0.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。当前 source 以 atomic generation mailbox 线性化 immutable Pattern publication：control 只取代尚未被 callback claim 的同 Project/Pattern/next-Bar view，已 claim 的 view 保留原 boundary，较新的 view 重算到下一 Bar；实时线程只消费不可变 Runtime 输入与有界状态，不执行 quantization、Project mutation 或 journal I/O。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Project Cooker；平台输出位于适配边界。
 ## 4. 架构与数据流
-Runtime Snapshot + 可选 pending overlay → immutable Prepared Pattern publication → fixed SPSC control 与 Voice-state/Bar-boundary 队列 → 音频线程在同一 boundary 只保留最新 generation → 输出 sink；preview、overlay 与 transport anchor 只属于 Runtime，不进入 Project Truth。
+Runtime Snapshot + 可选 pending overlay → immutable Prepared Pattern slot → atomic generation mailbox claim → fixed SPSC control 与 Voice-state/Bar-boundary 队列 → Bar-boundary apply → 输出 sink；preview、overlay 与 transport anchor 只属于 Runtime，不进入 Project Truth。
 ## 5. API 与 Artifact 边界
 消费不可变快照、resolved playback 与已准备样本，不在实时回调解析 Project/WAV、分配内存、加锁或调用 Host。
 ## 6. 状态、错误与并发
-固定 SPSC 队列和压力测试覆盖 control/Voice/Pattern publication 并发；同边界旧 generation 只标记为 control-thread reclaimable，callback 不析构 view，overflow fail closed，实时路径避免无界工作。
+atomic claimed marker 消除 generation 更新与 callback ownership 之间的竞态窗口；固定 SPSC 队列和压力测试覆盖 control/Voice 并发，旧 Pattern slot 只由 control thread reclaim，callback 不析构 view，overflow fail closed，实时路径避免无界工作。
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 ## 8. 测试与证据

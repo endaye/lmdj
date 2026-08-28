@@ -2008,7 +2008,7 @@ struct Application::Impl {
     }
     return foundation::Result<SequenceMutationResult>::success(
         SequenceMutationResult{runtime_status(inserted->second), std::nullopt,
-                               false});
+                               false, std::nullopt});
   }
 
   foundation::Result<SequenceMutationResult> record_sequence_event(
@@ -2086,7 +2086,8 @@ struct Application::Impl {
     runtime.last_runtime_frame = request.event.runtime_frame;
     runtime.last_input_sequence = request.event.input_sequence;
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{runtime_status(runtime), std::nullopt, false});
+        SequenceMutationResult{
+            runtime_status(runtime), std::nullopt, false, std::nullopt});
   }
 
   static void finalize_unreleased(SequenceRuntime& runtime, bool clear) {
@@ -2159,6 +2160,7 @@ struct Application::Impl {
                 status,
                 replayed.value()->outcome.state.revision,
                 true,
+                replayed.value()->identity.pattern_id,
             });
       }
       return foundation::Result<SequenceMutationResult>::failure(
@@ -2183,6 +2185,7 @@ struct Application::Impl {
               runtime_status(runtime),
               runtime.last_committed_revision,
               true,
+              runtime.last_flush_identity->pattern_id,
           });
     }
 
@@ -2249,13 +2252,15 @@ struct Application::Impl {
             removed.error());
       }
       const auto revision = runtime.expected_revision;
+      const auto committed_pattern_id = runtime.pattern_id;
       const auto replayed = execution.has_value() &&
                             execution->outcome.replayed;
       sequence_sessions.erase(found);
       SequenceStatus status;
       status.expected_revision = revision;
       return foundation::Result<SequenceMutationResult>::success(
-          SequenceMutationResult{status, revision, replayed});
+          SequenceMutationResult{
+              status, revision, replayed, committed_pattern_id});
     }
 
     if (switch_due) {
@@ -2294,6 +2299,9 @@ struct Application::Impl {
                 ? std::optional<std::uint64_t>{runtime.expected_revision}
                 : std::nullopt,
             execution.has_value() && execution->outcome.replayed,
+            execution.has_value()
+                ? std::optional<foundation::PatternId>{runtime.pattern_id}
+                : std::nullopt,
         });
   }
 
@@ -2408,7 +2416,8 @@ struct Application::Impl {
           switching.error());
     }
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{runtime_status(runtime), std::nullopt, false});
+        SequenceMutationResult{
+            runtime_status(runtime), std::nullopt, false, std::nullopt});
   }
 
   foundation::Result<SequenceStatus> query_sequence_status(
@@ -2659,7 +2668,8 @@ struct Application::Impl {
     SequenceStatus status;
     status.expected_revision = committed_revision;
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{status, committed_revision, replayed});
+        SequenceMutationResult{
+            status, committed_revision, replayed, std::nullopt});
   }
 
   foundation::Result<void> discard_sequence_recovery(
@@ -2753,6 +2763,9 @@ struct Application::Impl {
                                          ? nlohmann::json(*result.committed_revision)
                                          : nlohmann::json(nullptr);
     encoded["replayed"] = result.replayed;
+    if (result.committed_pattern_id.has_value()) {
+      encoded["committed_pattern_id"] = result.committed_pattern_id->value();
+    }
     return encoded;
   }
 

@@ -11,11 +11,13 @@
 #include <new>
 #include <span>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "tests/core/support/test.hpp"
+#include "testing_hooks.hpp"
 
 namespace {
 
@@ -1818,6 +1820,69 @@ void newest_same_boundary_pattern_supersedes_overlay_without_realtime_free() {
   LMDJ_CHECK(engine.reclaim_retired_patterns() == 3);
 }
 
+void publication_claim_race_preserves_the_claimed_boundary_and_phase() {
+  RealtimeEngine engine;
+  auto initial = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+  const std::array pending_event{lmdj::domain::PatternEvent{
+      PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 100}};
+  auto pending = PreparedPatternView::from_snapshot_with_overlay(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64), pending_event);
+  auto replacement = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 100));
+  LMDJ_CHECK(initial.has_value());
+  LMDJ_CHECK(pending.has_value());
+  LMDJ_CHECK(replacement.has_value());
+  LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+             PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  render_frames(engine, 100);
+
+  const auto pending_publication =
+      engine.publish_pattern_view(std::move(pending.value()));
+  LMDJ_CHECK(pending_publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(pending_publication.activation_frame == 96'000);
+  render_frames(engine, 95'899);
+
+  struct ClaimGate final {
+    std::atomic<bool> claimed{false};
+    std::atomic<bool> release{false};
+  } gate;
+  lmdj::audio::testing::PatternClaimHook hook{
+      &gate,
+      [](void* context) noexcept {
+        auto& claim_gate = *static_cast<ClaimGate*>(context);
+        claim_gate.claimed.store(true, std::memory_order_release);
+        while (!claim_gate.release.load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+      }};
+  lmdj::audio::testing::set_pattern_claim_hook(&hook);
+
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  std::thread callback([&] { engine.render(left.data(), right.data(), 2); });
+  while (!gate.claimed.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  const auto replacement_publication =
+      engine.publish_pattern_view(std::move(replacement.value()));
+  gate.release.store(true, std::memory_order_release);
+  callback.join();
+
+  LMDJ_CHECK(replacement_publication.result ==
+             PatternPublishResult::accepted);
+  LMDJ_CHECK(replacement_publication.activation_frame == 192'000);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 96'000);
+  LMDJ_CHECK(engine.current_pattern_has_overlay() == true);
+
+  render_frames(engine, 95'999);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 96'000);
+  render_frames(engine, 1);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 192'000);
+  LMDJ_CHECK(engine.current_pattern_has_overlay() == false);
+}
+
 }  // namespace
 
 void* operator new(std::size_t size) { return ordinary_allocation(size); }
@@ -1893,4 +1958,5 @@ int main() {
   voice_shorter_than_the_ramp_multiplies_attack_and_boundary();
   publishes_immutable_patterns_at_the_next_bar_boundary();
   newest_same_boundary_pattern_supersedes_overlay_without_realtime_free();
+  publication_claim_race_preserves_the_claimed_boundary_and_phase();
 }

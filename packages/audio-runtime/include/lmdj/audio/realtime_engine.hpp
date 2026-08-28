@@ -25,7 +25,6 @@ inline constexpr std::size_t kRealtimeVoiceCapacity = 128;
 inline constexpr std::size_t kRealtimeBankCapacity = 4;
 inline constexpr std::size_t kRealtimePublishQueueCapacity = 4;
 inline constexpr std::size_t kRealtimePatternCapacity = 4;
-inline constexpr std::size_t kRealtimePatternPublishQueueCapacity = 4;
 inline constexpr std::size_t kRealtimeCaptureCapacity = 4'096;
 inline constexpr std::size_t kRealtimeTriggerOutcomeCapacity = 4'096;
 // A legacy one-shot can publish both started and completed edges. Keep room
@@ -415,10 +414,6 @@ class RealtimeEngine final {
       kRealtimePublishQueueCapacity>
       publish_queue_;
   std::array<PatternSlot, kRealtimePatternCapacity> pattern_slots_{};
-  detail::FixedSpscQueue<
-      PatternPublishEntry,
-      kRealtimePatternPublishQueueCapacity>
-      pattern_publish_queue_;
   std::optional<PatternPublishEntry> audio_pending_pattern_;
   detail::FixedSpscQueue<
       CapturedTriggerEvent,
@@ -464,7 +459,11 @@ class RealtimeEngine final {
   std::atomic<std::uint64_t> reclaimed_banks_{0};
   std::atomic<std::uint64_t> bank_slot_rejections_{0};
   std::atomic<std::uint64_t> publish_queue_drops_{0};
-  std::atomic<std::uint64_t> pending_pattern_generation_{0};
+  // A generation-valued single-slot mailbox is the pattern publication
+  // linearization point. The control thread may replace an unclaimed
+  // generation; render marks it claimed with CAS before touching the slot.
+  std::atomic<std::uint64_t> queued_pattern_generation_{0};
+  std::atomic<std::uint64_t> audio_pending_pattern_generation_{0};
   std::atomic<std::uint64_t> accepted_pattern_publications_{0};
   std::atomic<std::uint64_t> applied_pattern_publications_{0};
   std::atomic<std::uint64_t> superseded_pattern_publications_{0};

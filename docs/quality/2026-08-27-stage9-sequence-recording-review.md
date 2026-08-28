@@ -218,10 +218,13 @@ reducer 只允许从 `stopped` 进入 `trim-overlay`
 projection；Web Runtime Platform 在 accepted event 后把 committed Runtime Snapshot
 与 projection 组合并发布到下一 Bar，flush/Stop 后发布 clean committed view；Audio
 Runtime 只允许同 Project、同 Pattern、同 activation boundary 的新 view 取代旧 view，
-callback 通过固定队列保留最新 generation，把旧 slot 标成 control-thread
-reclaimable，且不分配、不释放、不加锁。Facade owner/replace/reject/flush component
-case、Audio same-boundary + stress case 与真实 ControlRuntime
-create→import/assign→activate→begin→live trigger→next Bar→reject→Stop→next Bar journey
+atomic generation mailbox 先把 generation 标记为 callback-owned，再把旧 slot 标成
+control-thread reclaimable，避免 producer generation 先行造成 boundary onset 丢失，
+且不分配、不释放、不加锁。active-session BPM 更新强制重发 snapshot + overlay；owner
+loss 先排入 clean committed view；Stop 的 durable replay result 保留 committed Pattern
+identity，可在一次 publication failure 后重试恢复。Facade owner/replace/reject/flush
+component case、Audio deterministic claim-race + stress case 与真实 ControlRuntime
+create→import/assign→activate→begin→live trigger→BPM→next Bar→owner loss / Stop replay journey
 共同固定无重复、无空洞、无陈旧 overlay 的源代码边界。版本分配仍归 #379，immutable
 Portal snapshot 仍归 #380；本段不宣称已 merge、已集成 Product identity 或物理听感通过。
 

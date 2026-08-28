@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Audio Runtime Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="5e812729b8deb71368ae36635024f4a8ec13581a4f63e1ad3fc6e1566e620251">
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Audio Runtime Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="181c8c6b9a289e56d1c92c0da3ccaba60bbf28511b60db0fdf43fd28a645f5eb">
   <title id="title">Audio Runtime Module</title><desc id="description">不可变快照、pending overlay、整数 transport 与有界实时输出</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -13,7 +13,7 @@
   <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">不可变快照、pending overlay、整数 transport 与有界实时输出</text>
 
   <g class="connection"><path class="edge-mask" d="M 300 238 H 355 V 238 H 410"/><path class="edge" d="M 300 238 H 355 V 238 H 410" marker-end="url(#arrow)"/></g>
-<g class="connection"><path class="edge-mask" d="M 680 238 H 740 V 238 H 800"/><path class="edge" d="M 680 238 H 740 V 238 H 800" marker-end="url(#arrow)"/><text x="740" y="229">immutable publication</text></g>
+<g class="connection"><path class="edge-mask" d="M 680 238 H 740 V 238 H 800"/><path class="edge" d="M 680 238 H 740 V 238 H 800" marker-end="url(#arrow)"/><text x="740" y="229">generation mailbox</text></g>
 <g class="connection"><path class="edge-mask" d="M 1040 238 H 1115 V 238 H 1190"/><path class="edge" d="M 1040 238 H 1115 V 238 H 1190" marker-end="url(#arrow)"/></g>
 
     <g class="component kind-host">
@@ -32,7 +32,7 @@
       <rect class="node-mask" x="796" y="186" width="248" height="104" rx="18"/>
       <rect class="node" x="800" y="190" width="240" height="96" rx="14"/>
       <text class="node-title" x="816" y="222">Realtime Engine</text>
-      <text class="node-detail" x="816" y="248">latest view · Bar clock</text>
+      <text class="node-detail" x="816" y="248">atomic claim · Bar clock</text>
     </g>
     <g class="component kind-host">
       <rect class="node-mask" x="1186" y="186" width="238" height="104" rx="18"/>
@@ -41,7 +41,7 @@
       <text class="node-detail" x="1206" y="248">device · generation</text>
     </g>
   <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation + Project Cooker.</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Concurrency</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Same-boundary views supersede in fixed queues; old slots are reclaimed only on the control thread.</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Concurrency</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Control may replace only an unclaimed mailbox generation; claimed views keep their exact Bar boundary and old slots are reclaimed only on the control thread.</div></foreignObject></g>
 <g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Forbidden boundary</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No allocation, destruction, lock, Project mutation, quantization or journal I/O on the realtime thread.</div></foreignObject></g>
 </svg>
 </main><script>const diagram=document.querySelector('svg');function applyTheme(theme){diagram.setAttribute('data-theme',theme);document.body.setAttribute('data-theme',theme)}const requested=new URLSearchParams(location.search).get('theme');if(requested==='light'||requested==='dark')applyTheme(requested);window.addEventListener('message',(event)=>{const data=event.data;if(data&&data.type==='lmdj-diagram-theme'&&(data.theme==='light'||data.theme==='dark'))applyTheme(data.theme)});</script></body></html>

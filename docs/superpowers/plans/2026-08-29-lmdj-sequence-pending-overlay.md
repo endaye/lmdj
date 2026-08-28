@@ -4,9 +4,9 @@
 
 **Goal:** Make accepted, unflushed Sequence events audible from the next Bar through the production Facade → Web control bridge → Audio Runtime path, then replace the overlay with committed Runtime truth without duplicate hits, gaps, or stale overlay state.
 
-**Architecture:** The Application Facade exposes an immutable, session-owned projection of the current in-memory pending events without making them Project Truth. The Web Runtime control thread prepares a `PreparedPatternView` from the committed Runtime Snapshot plus that projection and publishes it for the next Bar. Audio Runtime accepts a newer immutable view for the same pending Pattern/activation boundary, coalesces older views on the realtime thread without allocation, locking, destruction, or Project access, and accounts for superseded generations explicitly.
+**Architecture:** The Application Facade exposes an immutable, session-owned projection of the current in-memory pending events without making them Project Truth. The Web Runtime control thread prepares a `PreparedPatternView` from the committed Runtime Snapshot plus that projection and publishes it for the next Bar. Audio Runtime uses one atomic generation mailbox as the publication linearization point: the control thread may supersede only an unclaimed same-boundary view, while the realtime thread first marks a generation claimed and then owns its boundary application without allocation, locking, destruction, stale rejection, or Project access.
 
-**Tech Stack:** C++20, nlohmann/json, CMake/CTest, fixed SPSC realtime queues, Docusaurus Architecture Portal.
+**Tech Stack:** C++20, nlohmann/json, CMake/CTest, atomic generation mailbox plus fixed realtime queues, Docusaurus Architecture Portal.
 
 ## Global Constraints
 
@@ -82,7 +82,7 @@
 
 - [x] **Step 4: Implement bounded realtime-safe supersession and observe GREEN**
 
-  Let a control-thread publication supersede only the currently pending publication for the same Project, Pattern, and activation frame. Queue immutable prepared views in fixed storage; at callback entry drain queued candidates, mark older pending slots reclaimable, increment `superseded_publications`, and retain only the newest candidate for the boundary. Clear pending telemetry with a generation compare/exchange so a newer concurrent publication cannot be erased by an older apply. Never reset a `PreparedPatternView` on the audio thread.
+  Let a control-thread publication supersede only the currently unclaimed publication for the same Project, Pattern, and activation frame. Publish the immutable prepared slot through one atomic generation mailbox. At callback entry atomically mark the mailbox generation claimed before transferring it to audio-owned pending state; a concurrent publisher that loses the replacement CAS recomputes from the reserved callback end frame, so the claimed view applies at its original boundary and the replacement moves to the following Bar. Mark superseded slots control-thread reclaimable and count them explicitly. Never reject a claimed view because a newer generation exists, and never reset a `PreparedPatternView` on the audio thread.
 
 - [x] **Step 5: Write the production-path Web control test and observe RED**
 
@@ -90,7 +90,11 @@
 
 - [x] **Step 6: Wire Facade projection through Web control and observe GREEN**
 
-  Track the last published overlay generation in the active Web Sequence session. After each accepted Facade event, query the typed projection; if its generation advanced and no different Pattern switch is pending, prepare the committed snapshot with `from_snapshot_with_overlay` and publish it. Reclaim retired Pattern slots on the control thread before publication. On successful flush or Stop, always publish the clean committed Pattern for the recorded Pattern, including idempotent replay, so overlay-to-commit cannot leave a stale view. Keep #376 switch-boundary flushing unchanged.
+  Track the last published overlay generation in the active Web Sequence session. After each accepted Facade event, query the typed projection; if its generation advanced and no different Pattern switch is pending, prepare the committed snapshot with `from_snapshot_with_overlay` and publish it. A BPM update during the session force-rebuilds committed snapshot + current overlay at the existing pending boundary. Reclaim retired Pattern slots on the control thread before publication. On abandon/cancellation/fail-and-seal, schedule the clean committed view before releasing the owner. On successful flush or Stop, preserve the committed Pattern identity in the Facade result and always publish the clean committed Pattern, including an exact idempotent replay after a publication failure. Keep #373 persistence and #376 switch-boundary flushing unchanged.
+
+- [x] **Step 6a: Close review race and lifecycle regressions with RED → GREEN evidence**
+
+  Add a deterministic callback-claim race gate proving a superseding publication cannot cancel a view already claimed for onset zero; extend the production journey through an active-session BPM change; render an overlay before owner loss and prove clean removal at the following Bar; inject one post-commit clean-publication failure and prove exact Stop replay recovers from the durable Pattern identity. These tests must fail against the original queue/generation ordering and Host lifecycle behavior before the production fixes.
 
 - [x] **Step 7: Update current documentation and generated diagrams**
 
