@@ -2293,7 +2293,8 @@ struct Application::Impl {
       runtime.in_flight_flush.reset();
     }
 
-    if (replayed_in_flight_command && !runtime.pending_events.empty()) {
+    if (replayed_in_flight_command &&
+        (!runtime.pending_events.empty() || !runtime.pressed.empty())) {
       return foundation::Result<SequenceMutationResult>::success(
           SequenceMutationResult{
               runtime_status(runtime),

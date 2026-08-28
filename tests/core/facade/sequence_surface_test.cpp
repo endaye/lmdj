@@ -410,6 +410,59 @@ void test_post_commit_retry_preserves_later_events_for_a_new_command() {
       project / "recovery/active/sequence.jsonl"));
 }
 
+void test_post_commit_stop_retry_preserves_later_unreleased_press() {
+  TempDirectory temp;
+  const auto project = temp.path() / "post-commit-stop-retry.lmdj";
+  const PatternId pattern_id{uuid(70)};
+  const SequenceSessionId session_id{uuid(71)};
+  auto platform = std::make_shared<JournalCompletionFailurePlatform>(
+      lmdj::project_io::make_default_project_storage_platform());
+  Application application(config(temp.path(), platform));
+  create_recordable_project(application, project, pattern_id);
+
+  LMDJ_CHECK(
+      application.begin_sequence({project, session_id, pattern_id, 2, 0})
+          .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 0, 1, true}})
+                 .has_value());
+  const lmdj::facade::SequenceFlushRequest first_stop{
+      project, session_id, CommandId{uuid(72)}, 12'000};
+  platform->arm();
+  const auto failed = application.stop_sequence(first_stop);
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK(failed.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(platform->triggered());
+
+  lmdj::project_io::ProjectStore store{platform};
+  LMDJ_CHECK(store.load(project).value().revision == 3);
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 90, 24'000, 2, true}})
+                 .has_value());
+
+  const auto replayed = application.stop_sequence(first_stop);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().committed_revision == 3);
+  LMDJ_CHECK(replayed.value().status.state == SequenceRecordState::active);
+  LMDJ_CHECK(replayed.value().status.session_id == session_id);
+  LMDJ_CHECK(std::filesystem::exists(
+      project / "recovery/active/sequence.jsonl"));
+
+  const auto stopped = application.stop_sequence(
+      {project, session_id, CommandId{uuid(73)}, 36'000});
+  LMDJ_CHECK(stopped.has_value());
+  LMDJ_CHECK(!stopped.value().replayed);
+  LMDJ_CHECK(stopped.value().committed_revision == 4);
+  LMDJ_CHECK(stopped.value().status.state == SequenceRecordState::inactive);
+  const auto loaded = store.load(project);
+  LMDJ_CHECK(loaded.has_value());
+  LMDJ_CHECK(loaded.value().revision == 4);
+  LMDJ_CHECK(loaded.value().patterns.at(pattern_id).events.size() == 2);
+  LMDJ_CHECK(!std::filesystem::exists(
+      project / "recovery/active/sequence.jsonl"));
+}
+
 void test_older_flush_replay_preserves_pending_events() {
   TempDirectory temp;
   const auto project = temp.path() / "older-flush-replay.lmdj";
@@ -818,6 +871,7 @@ int main() {
   try {
     test_sequence_lifecycle_idempotence_and_mutation_exclusion();
     test_post_commit_retry_preserves_later_events_for_a_new_command();
+    test_post_commit_stop_retry_preserves_later_unreleased_press();
     test_older_flush_replay_preserves_pending_events();
     test_project_command_collision_does_not_poison_sequence_journal();
     test_prior_sequence_collision_does_not_poison_new_session();
