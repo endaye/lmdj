@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 事务式保存/加载 Project Truth、导入/导出 portable Project Bundle，并维护 Sequence journal overlay、flush receipt 与 recovery artifact；不 Cook、渲染或拥有 Host UI。
 ## 2. 当前实现状态
-Project I/O `1.0.0` 的 Store、Sequence Journal、streaming Bundle parser/packer、v1/v2 读取与 v3-only 写出、Workspace Cache 和 crash-safe publication 已实现。flush 以 manifest replacement 为 commit point，并把 command/session/flush identity 与 committed revision 写入可幂等重放的 receipt。当前 source 还要求所有普通 authoring mutation 在持有 writer lease 后重读 active Sequence Journal；存在 active journal 时只有 `UpdateSequenceSettings` 属于既有白名单，其成功提交由 Store 同步 rebase journal。
+Project I/O `1.0.0` 的 Store、Sequence Journal、streaming Bundle parser/packer、v1/v2 读取与 v3-only 写出、Workspace Cache 和 crash-safe publication 已实现。flush 以 manifest replacement 为 commit point，并把 command/session/flush identity 与 committed revision 写入可幂等重放的 receipt；同一 `command_id` 的相同 journal append 返回原 record，冲突 payload 在写入前失败。当前 source 还要求所有普通 authoring mutation 在持有 writer lease 后重读 active Sequence Journal；存在 active journal 时只有 `UpdateSequenceSettings` 属于既有白名单，其成功提交由 Store 同步 rebase journal。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Authoring Domain；平台适配不能改变领域语义。
 ## 4. 架构与数据流
@@ -29,7 +29,7 @@ Facade 提交 Project、Bundle stream、bounded Sample bytes 或 Sequence flush�
 ## 7. 产品使用方
 Application Facade 使用；Host 不直接解析 bundle。
 ## 8. 测试与证据
-Project store、v1/v2→v3 migration、atomic Sample transaction、Sequence journal/receipt/recovery、writer-lease 内 direct-authoring refusal/settings rebase、Bundle 1.0/1.1 round trip/publication、fault matrix、distinct-platform publication ownership、Native link-count 与 Web/native storage platform contract 测试。
+Project store、v1/v2→v3 migration、atomic Sample transaction、Sequence journal/receipt/recovery、post-commit same-bundle retry/restart、writer-lease 内 direct-authoring refusal/settings rebase、Bundle 1.0/1.1 round trip/publication、fault matrix、distinct-platform publication ownership、Native link-count 与 Web/native storage platform contract 测试。
 ## 9. 限制与下一门禁
 云同步和协同冲突策略未批准，不能从本地存储能力推断。
 ## 10. 版本身份

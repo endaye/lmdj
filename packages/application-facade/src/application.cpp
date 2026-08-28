@@ -1645,6 +1645,7 @@ struct Application::Impl {
     std::map<domain::PadSlotId, PressedSequencePad> pressed;
     std::optional<foundation::PatternId> pending_pattern_id;
     std::optional<std::uint64_t> effective_runtime_frame;
+    std::optional<project_io::SequenceFlushRecord> in_flight_flush;
     std::optional<project_io::SequenceFlushIdentity> last_flush_identity;
     std::optional<std::uint64_t> last_committed_revision;
     std::unique_ptr<project_io::ProjectWriterLease> lease;
@@ -2052,6 +2053,7 @@ struct Application::Impl {
         std::nullopt,
         std::nullopt,
         std::nullopt,
+        std::nullopt,
         std::move(lease.value()),
     };
     auto [inserted, ok] = sequence_sessions.emplace(key, std::move(runtime));
@@ -2208,7 +2210,7 @@ struct Application::Impl {
         return foundation::Result<SequenceMutationResult>::success(
             SequenceMutationResult{
                 status,
-                replayed.value()->outcome.state.revision,
+                replayed.value()->committed_revision,
                 true,
             });
       }
@@ -2218,17 +2220,8 @@ struct Application::Impl {
                          {{"reason", "sequence_owner_mismatch"}}));
     }
     auto& runtime = found->second;
-    if (request.runtime_frame < runtime.last_runtime_frame) {
-      return foundation::Result<SequenceMutationResult>::failure(
-          sequence_error(ErrorCode::invalid_argument,
-                         "Sequence flush frame moved backwards"));
-    }
-    const bool switch_due = runtime.effective_runtime_frame.has_value() &&
-                            request.runtime_frame >=
-                                *runtime.effective_runtime_frame;
     if (runtime.last_flush_identity.has_value() &&
-        runtime.last_flush_identity->command_id == request.command_id &&
-        runtime.pending_events.empty()) {
+        runtime.last_flush_identity->command_id == request.command_id) {
       return foundation::Result<SequenceMutationResult>::success(
           SequenceMutationResult{
               runtime_status(runtime),
@@ -2236,12 +2229,87 @@ struct Application::Impl {
               true,
           });
     }
+    const bool replaying_in_flight_command =
+        runtime.in_flight_flush.has_value() &&
+        runtime.in_flight_flush->command_id == request.command_id;
+    auto replay_persisted_command = [&]() -> foundation::Result<
+        std::optional<SequenceMutationResult>> {
+      auto replayed = projects.replay_sequence_flush(
+          request.project_path, runtime.session_id, request.command_id);
+      if (!replayed.has_value()) {
+        return foundation::Result<
+            std::optional<SequenceMutationResult>>::failure(
+            replayed.error());
+      }
+      if (!replayed.value().has_value()) {
+        return foundation::Result<
+            std::optional<SequenceMutationResult>>::success(std::nullopt);
+      }
+      return foundation::Result<
+          std::optional<SequenceMutationResult>>::success(
+          SequenceMutationResult{
+              runtime_status(runtime),
+              replayed.value()->committed_revision,
+              true,
+          });
+    };
+    if (!replaying_in_flight_command) {
+      auto replayed = replay_persisted_command();
+      if (!replayed.has_value()) {
+        return foundation::Result<SequenceMutationResult>::failure(
+            replayed.error());
+      }
+      if (replayed.value().has_value()) {
+        return foundation::Result<SequenceMutationResult>::success(
+            std::move(*replayed.value()));
+      }
+    }
+    if (!replaying_in_flight_command &&
+        request.runtime_frame < runtime.last_runtime_frame) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Sequence flush frame moved backwards"));
+    }
+    const bool switch_due = runtime.effective_runtime_frame.has_value() &&
+                            request.runtime_frame >=
+                                *runtime.effective_runtime_frame;
 
-    finalize_unreleased(runtime, stop || switch_due);
-    runtime.last_runtime_frame = request.runtime_frame;
+    if (!replaying_in_flight_command) {
+      finalize_unreleased(runtime, stop || switch_due);
+      runtime.last_runtime_frame = request.runtime_frame;
+    }
     std::optional<project_io::SequenceFlushExecution> execution;
     const bool was_switching = runtime.pending_pattern_id.has_value();
-    if (!runtime.pending_events.empty()) {
+    bool replayed_in_flight_command = false;
+    if (runtime.in_flight_flush.has_value()) {
+      const auto& flush = *runtime.in_flight_flush;
+      project_io::SequenceFlushIdentity identity{
+          runtime.session_id,
+          flush.flush_seq,
+          flush.command_id,
+          flush.pattern_id,
+      };
+      auto committed = projects.execute_sequence_flush(
+          request.project_path, identity);
+      if (!committed.has_value()) {
+        return foundation::Result<SequenceMutationResult>::failure(
+            committed.error());
+      }
+      execution.emplace(std::move(committed.value()));
+      runtime.expected_revision = execution->outcome.state.revision;
+      std::erase_if(
+          runtime.pending_events,
+          [&flush](const auto& pending) {
+            return std::ranges::find(flush.canonical_events, pending) !=
+                   flush.canonical_events.end();
+          });
+      runtime.last_flush_identity = identity;
+      runtime.last_committed_revision = runtime.expected_revision;
+      ++runtime.next_flush_seq;
+      replayed_in_flight_command = flush.command_id == request.command_id;
+      runtime.in_flight_flush.reset();
+    }
+    if (!replayed_in_flight_command && !runtime.pending_events.empty()) {
       if (was_switching) {
         auto active = sequence_journals.set_state(
             request.project_path,
@@ -2263,6 +2331,7 @@ struct Application::Impl {
         return foundation::Result<SequenceMutationResult>::failure(
             appended.error());
       }
+      runtime.in_flight_flush = appended.value();
       project_io::SequenceFlushIdentity identity{
           runtime.session_id,
           appended.value().flush_seq,
@@ -2281,6 +2350,17 @@ struct Application::Impl {
       runtime.last_flush_identity = identity;
       runtime.last_committed_revision = runtime.expected_revision;
       ++runtime.next_flush_seq;
+      runtime.in_flight_flush.reset();
+    }
+
+    if (replayed_in_flight_command &&
+        (!runtime.pending_events.empty() || !runtime.pressed.empty())) {
+      return foundation::Result<SequenceMutationResult>::success(
+          SequenceMutationResult{
+              runtime_status(runtime),
+              runtime.last_committed_revision,
+              true,
+          });
     }
 
     if (stop) {
