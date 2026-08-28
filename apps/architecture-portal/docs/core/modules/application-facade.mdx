@@ -25,7 +25,7 @@ Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Pr
 ## 5. API 与 Contract 边界
 C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；Bundle/Sample streaming API 不暴露 Project path 或 internals；Assembly Loader 校验锁定身份。
 ## 6. 状态、错误与并发
-错误翻译保留公共类别；本地 Sequence mutex 只负责进程内 admission 排序，Project I/O 仍在 writer lease 内重判持久 authority；C API stress 验证并发生命周期。
+错误翻译保留公共类别；Runtime Snapshot 准备复用 Audio Runtime 的 overflow-checked Bank/generation 账本，长 Sample 不再被单 Pad 帧数规则提前拒绝，失败不会修改 Project Truth 或替换已发布 generation。本地 Sequence mutex 只负责进程内 admission 排序，Project I/O 仍在 writer lease 内重判持久 authority；C API stress 验证并发生命周期。
 ## 7. 产品使用方
 CLI、MCP、Native Host，以及通过 Web Runtime Platform 接入的 Creator/Diagnostic Web Host。
 ## 8. 测试与证据

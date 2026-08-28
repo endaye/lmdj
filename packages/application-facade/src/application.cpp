@@ -614,6 +614,12 @@ std::string_view sample_public_message(ErrorCode code) {
       return "Project could not be validated";
     case ErrorCode::cook_failed:
       return "Sample runtime preparation failed";
+    case ErrorCode::bank_quota_exhausted:
+      return "why: the selection exceeds the Sample Bank quota; remedy: "
+             "shorten it, free another Pad, or target another Bank";
+    case ErrorCode::project_quota_exhausted:
+      return "why: the selection exceeds the Sample Project quota; remedy: "
+             "shorten it or remove prepared Samples, then retry";
     case ErrorCode::io_error:
       return "Sample storage operation failed";
     case ErrorCode::permission_denied:
@@ -1193,6 +1199,60 @@ Error runtime_preparation_limit_error(
           {"resource", std::move(resource)},
           {"observed", observed},
           {"limit", limit},
+      },
+  };
+}
+
+Error runtime_bank_quota_error(
+    domain::PadSlotId slot,
+    std::uint64_t requested_bytes,
+    std::uint64_t requested_frames,
+    std::uint64_t remaining_bytes,
+    std::uint64_t quota_bytes,
+    const std::vector<nlohmann::json>& consumed) {
+  return Error{
+      ErrorCode::bank_quota_exhausted,
+      "Bank prepared-PCM quota exhausted; why: the committed selection "
+      "does not fit in this Bank; remedy: shorten or remove samples in the "
+      "same Bank, then retry",
+      {
+          {"bank", slot.bank},
+          {"requested_bytes", requested_bytes},
+          {"requested_frames", requested_frames},
+          {"remaining_bytes", remaining_bytes},
+          {"remaining_frames", remaining_bytes / sizeof(float)},
+          {"quota_bytes", quota_bytes},
+          {"consumed", consumed},
+      },
+  };
+}
+
+Error runtime_project_quota_error(
+    std::uint64_t requested_bytes,
+    std::uint64_t requested_frames,
+    std::uint64_t project_used_bytes,
+    std::uint64_t project_remaining_bytes,
+    std::uint64_t project_quota_bytes,
+    const std::array<std::uint64_t, 4>& bank_bytes) {
+  auto banks = nlohmann::json::array();
+  for (std::uint8_t bank = 0; bank < bank_bytes.size(); ++bank) {
+    banks.push_back({
+        {"bank", bank},
+        {"prepared_bytes", bank_bytes.at(bank)},
+    });
+  }
+  return Error{
+      ErrorCode::project_quota_exhausted,
+      "Project prepared-PCM quota exhausted; why: the committed selection "
+      "does not fit in the current generation; remedy: shorten or remove "
+      "samples in the Project, then retry",
+      {
+          {"requested_bytes", requested_bytes},
+          {"requested_frames", requested_frames},
+          {"project_used_bytes", project_used_bytes},
+          {"project_remaining_bytes", project_remaining_bytes},
+          {"project_quota_bytes", project_quota_bytes},
+          {"banks", std::move(banks)},
       },
   };
 }
@@ -3701,20 +3761,6 @@ struct Application::Impl {
       return foundation::Result<SampleMutationResult>::failure(
           metadata.error());
     }
-    if (!sample_limits.has_value() ||
-        !sample_limits->allows_decoded_frames_per_pad(
-            metadata.value().source_frames)) {
-      return foundation::Result<SampleMutationResult>::failure(Error{
-          ErrorCode::unsupported_audio,
-          "Sample exceeds the active decoded frame limit",
-          {{"resource", "decoded_frames_per_pad"},
-           {"observed", metadata.value().source_frames},
-           {"limit",
-            sample_limits.has_value()
-                ? sample_limits->maximum_decoded_frames_per_pad
-                : 0U}},
-      });
-    }
     const auto committed = projects.import_assign_sample_bytes(
         state.request.project_path,
         project_io::ProjectStore::ImportAssignSampleBytesRequest{
@@ -4380,29 +4426,15 @@ struct Application::Impl {
                     limits->maximum_artifact_bytes));
           }
           auto bytes = projects.read_artifact(path, artifact);
-          if (!bytes.has_value() || !limits.has_value()) {
-            return bytes;
-          }
-          const auto metadata = cooker::inspect_wav(bytes.value());
-          if (!metadata.has_value()) {
-            return foundation::Result<std::vector<std::byte>>::failure(
-                metadata.error());
-          }
-          if (!limits->allows_decoded_frames_per_pad(
-                  metadata.value().source_frames)) {
-            return foundation::Result<std::vector<std::byte>>::failure(
-                runtime_preparation_limit_error(
-                    "decoded_frames_per_pad",
-                    metadata.value().source_frames,
-                    limits->maximum_decoded_frames_per_pad));
-          }
           return bytes;
         });
     if (!cooked.has_value() || !limits.has_value()) {
       return cooked;
     }
 
-    std::uint64_t prospective_bank_bytes = 0;
+    std::array<std::uint64_t, 4> prospective_bank_bytes{};
+    std::array<std::vector<nlohmann::json>, 4> consumed{};
+    std::uint64_t prospective_generation_bytes = 0;
     for (const auto& pad : cooked.value()->pads) {
       if (pad.sample == nullptr || pad.sample->channels == 0 ||
           pad.sample->interleaved.size() % pad.sample->channels != 0) {
@@ -4424,33 +4456,50 @@ struct Application::Impl {
                 "runtime preparation PCM byte length overflowed",
             });
       }
-      const auto total = audio::checked_runtime_byte_sum(
-          prospective_bank_bytes, sample_bytes.value());
-      if (!total.has_value()) {
+      const auto assessment = audio::assess_runtime_quota(
+          prospective_bank_bytes.at(pad.slot.bank),
+          prospective_generation_bytes,
+          sample_bytes.value(),
+          *limits);
+      if (!assessment.has_value()) {
         return foundation::Result<
             std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
             Error{
                 ErrorCode::invalid_argument,
-                "runtime preparation Bank byte length overflowed",
+                "runtime preparation quota ledger is invalid",
             });
       }
-      prospective_bank_bytes = total.value();
-    }
-    if (!limits->allows_prepared_bank_bytes(prospective_bank_bytes)) {
-      return foundation::Result<
-          std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
-          runtime_preparation_limit_error(
-              "prepared_bank_bytes",
-              prospective_bank_bytes,
-              limits->maximum_prepared_bank_bytes));
-    }
-    if (!limits->allows_live_bank_bytes(prospective_bank_bytes)) {
-      return foundation::Result<
-          std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
-          runtime_preparation_limit_error(
-              "live_bank_bytes",
-              prospective_bank_bytes,
-              limits->maximum_live_bank_bytes));
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::user_bank) {
+        return foundation::Result<
+            std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+            runtime_bank_quota_error(
+                pad.slot,
+                sample_bytes.value(),
+                frames,
+                assessment->user_bank_remaining_bytes,
+                limits->maximum_user_bank_bytes,
+                consumed.at(pad.slot.bank)));
+      }
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::generation) {
+        return foundation::Result<
+            std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+            runtime_project_quota_error(
+                sample_bytes.value(),
+                frames,
+                prospective_generation_bytes,
+                assessment->generation_remaining_bytes,
+                limits->maximum_generation_bytes,
+                prospective_bank_bytes));
+      }
+      prospective_bank_bytes.at(pad.slot.bank) += sample_bytes.value();
+      prospective_generation_bytes += sample_bytes.value();
+      consumed.at(pad.slot.bank).push_back({
+          {"pad", pad.slot.pad},
+          {"prepared_bytes", sample_bytes.value()},
+          {"prepared_frames", frames},
+      });
     }
     return cooked;
   }
