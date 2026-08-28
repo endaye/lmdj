@@ -1,4 +1,5 @@
 #include <atomic>
+#include <csignal>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -7,6 +8,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <lmdj/facade/application.hpp>
 #include <lmdj/project_io/project_store.hpp>
@@ -244,6 +248,85 @@ void test_owner_loss_apply_and_discard_are_explicit() {
   LMDJ_CHECK(recovery.list_sequence_recovery({project}).value().empty());
 }
 
+void test_sigkill_owner_recovers_acknowledged_unflushed_events() {
+  TempDirectory temp;
+  const auto project = temp.path() / "hard-owner-loss.lmdj";
+  const PatternId pattern_id{uuid(33)};
+  const SequenceSessionId session_id{uuid(34)};
+  {
+    Application creator(config(temp.path()));
+    create_recordable_project(creator, project, pattern_id);
+  }
+
+  const auto child = ::fork();
+  LMDJ_CHECK(child >= 0);
+  if (child == 0) {
+    Application owner(config(temp.path()));
+    const bool accepted =
+        owner.begin_sequence({project, session_id, pattern_id, 2, 0})
+            .has_value() &&
+        owner.record_sequence_event(
+                 {project, session_id, {PadSlotId{0, 0}, 101, 0, 1, true}})
+            .has_value() &&
+        owner.record_sequence_event(
+                 {project, session_id, {PadSlotId{0, 0}, 0, 12'000, 2, false}})
+            .has_value() &&
+        owner.record_sequence_event(
+                 {project, session_id,
+                  {PadSlotId{0, 0}, 77, 12'000, 3, true}})
+            .has_value();
+    if (!accepted) {
+      ::_exit(20);
+    }
+    ::raise(SIGSTOP);
+    ::_exit(21);
+  }
+
+  int stopped_status = 0;
+  LMDJ_CHECK(::waitpid(child, &stopped_status, WUNTRACED) == child);
+  LMDJ_CHECK(WIFSTOPPED(stopped_status));
+  LMDJ_CHECK(WSTOPSIG(stopped_status) == SIGSTOP);
+  LMDJ_CHECK(::kill(child, SIGKILL) == 0);
+  int killed_status = 0;
+  LMDJ_CHECK(::waitpid(child, &killed_status, 0) == child);
+  LMDJ_CHECK(WIFSIGNALED(killed_status));
+  LMDJ_CHECK(WTERMSIG(killed_status) == SIGKILL);
+
+  Application restarted(config(temp.path()));
+  const auto reconciliation = restarted.begin_sequence(
+      {project, SequenceSessionId{uuid(35)}, pattern_id, 999, 18'001});
+  LMDJ_CHECK(!reconciliation.has_value());
+  LMDJ_CHECK(reconciliation.error().code == ErrorCode::revision_conflict);
+
+  const auto candidates = restarted.list_sequence_recovery({project});
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().size() == 1);
+  LMDJ_CHECK(candidates.value().front().session_id == session_id);
+  LMDJ_CHECK(candidates.value().front().reason == "owner_lost");
+  LMDJ_CHECK(candidates.value().front().event_count == 2);
+
+  const auto applied = restarted.apply_sequence_recovery(
+      {project, session_id, std::nullopt});
+  LMDJ_CHECK(applied.has_value());
+  LMDJ_CHECK(applied.value().committed_revision == 3);
+  lmdj::project_io::ProjectStore store;
+  const auto recovered = store.load(project);
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(recovered.value().revision == 3);
+  const auto& events = recovered.value().patterns.at(pattern_id).events;
+  LMDJ_CHECK(events.size() == 2);
+  LMDJ_CHECK(events.at(0).slot.bank == 0);
+  LMDJ_CHECK(events.at(0).slot.pad == 0);
+  LMDJ_CHECK(events.at(0).onset_tick == 0);
+  LMDJ_CHECK(events.at(0).duration_tick == 480);
+  LMDJ_CHECK(events.at(0).velocity == 101);
+  LMDJ_CHECK(events.at(1).slot.bank == 0);
+  LMDJ_CHECK(events.at(1).slot.pad == 0);
+  LMDJ_CHECK(events.at(1).onset_tick == 480);
+  LMDJ_CHECK(events.at(1).duration_tick == 240);
+  LMDJ_CHECK(events.at(1).velocity == 77);
+}
+
 void test_writer_lease_blocks_competing_sequence_owner() {
   TempDirectory temp;
   const auto project = temp.path() / "lease.lmdj";
@@ -437,6 +520,7 @@ int main() {
   try {
     test_sequence_lifecycle_idempotence_and_mutation_exclusion();
     test_owner_loss_apply_and_discard_are_explicit();
+    test_sigkill_owner_recovers_acknowledged_unflushed_events();
     test_writer_lease_blocks_competing_sequence_owner();
     test_begin_cannot_cross_an_authoring_admission();
     test_orphan_journal_is_sealed_before_authoring();

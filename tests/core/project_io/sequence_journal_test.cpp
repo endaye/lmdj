@@ -167,6 +167,84 @@ void test_shared_fingerprint_vectors_are_exact_bytes() {
       document.at("vectors").at(1).at("sha256").get<std::string>());
 }
 
+void test_durable_tail_snapshots_survive_reload_and_are_consumed_by_flush() {
+  TempDirectory temp("tail");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  begin(journal, bundle);
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto pattern_id = PatternId{std::string{kPatternId}};
+
+  LMDJ_CHECK(
+      journal
+          .append_tail(bundle, session_id, pattern_id, 0, 1,
+                       std::vector{event(1, 480, 240, 80)})
+          .has_value());
+  const std::vector second_tail{
+      event(1, 480, 240, 80),
+      event(0, 0, 120, 100),
+  };
+  LMDJ_CHECK(
+      journal.append_tail(bundle, session_id, pattern_id, 0, 2, second_tail)
+          .has_value());
+
+  const auto reloaded = journal.read_active(bundle);
+  LMDJ_CHECK(reloaded.has_value());
+  LMDJ_CHECK(reloaded.value().next_tail_seq == 2);
+  LMDJ_CHECK(reloaded.value().last_input_sequence == 2);
+  LMDJ_CHECK(reloaded.value().pending_events.size() == 2);
+  LMDJ_CHECK(reloaded.value().pending_events.at(0) == event(0, 0, 120, 100));
+  LMDJ_CHECK(reloaded.value().pending_events.at(1) == event(1, 480, 240, 80));
+
+  const auto flushed = journal.append_flush(
+      bundle,
+      session_id,
+      CommandId{std::string{kCommandId}},
+      pattern_id,
+      0,
+      second_tail);
+  LMDJ_CHECK(flushed.has_value());
+  const auto consumed = journal.read_active(bundle);
+  LMDJ_CHECK(consumed.has_value());
+  LMDJ_CHECK(consumed.value().pending_events.empty());
+  LMDJ_CHECK(consumed.value().flushes.size() == 1);
+  LMDJ_CHECK(consumed.value().flushes.front().canonical_events ==
+             reloaded.value().pending_events);
+}
+
+void test_torn_tail_fails_closed_with_actionable_recovery_evidence() {
+  TempDirectory temp("torn-tail");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  begin(journal, bundle);
+  const auto path = bundle / "recovery/active/sequence.jsonl";
+  const auto durable_prefix = std::filesystem::file_size(path);
+  constexpr std::string_view torn = "{\"checksum\":\"partial";
+  {
+    std::ofstream stream(path, std::ios::binary | std::ios::app);
+    LMDJ_CHECK(static_cast<bool>(stream));
+    stream.write(torn.data(), static_cast<std::streamsize>(torn.size()));
+    LMDJ_CHECK(static_cast<bool>(stream));
+  }
+
+  const auto rejected = journal.read_active(bundle);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(
+      rejected.error().details.at("reason") == "sequence_journal_torn_tail");
+  LMDJ_CHECK(
+      rejected.error().details.at("durable_prefix_length") == durable_prefix);
+  LMDJ_CHECK(rejected.error().details.at("observed_length") ==
+             durable_prefix + torn.size());
+  LMDJ_CHECK(rejected.error().details.at("path") == path.generic_string());
+  LMDJ_CHECK(
+      rejected.error().details.at("remedy") ==
+      "retain the journal and repair or discard the torn tail explicitly");
+  LMDJ_CHECK(std::filesystem::file_size(path) == durable_prefix + torn.size());
+}
+
 void test_one_project_session_and_monotonic_durable_flush_identity() {
   TempDirectory temp("identity");
   ProjectStore store;
@@ -630,6 +708,8 @@ int main(int argc, char** argv) {
       return 0;
     }
     test_shared_fingerprint_vectors_are_exact_bytes();
+    test_durable_tail_snapshots_survive_reload_and_are_consumed_by_flush();
+    test_torn_tail_fails_closed_with_actionable_recovery_evidence();
     test_one_project_session_and_monotonic_durable_flush_identity();
     test_writer_lease_contention_fails_before_begin();
     test_sequence_flush_commits_once_and_replays_receipt();

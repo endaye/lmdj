@@ -73,12 +73,12 @@ truth integration 与不可变快照分别由 #379、#380 负责。
 | H2 | #376 | open |
 | H3 | #374 | open |
 | M1 | #375 | open |
-| M2 | #373 | open |
+| M2 | #373 | source 修复：每次已接受 Pad event 在 acknowledgement 前写入单调、checksummed canonical tail；flush 消费 tail；真实子进程 `SIGKILL` 后重启 seal 两条事件并显式恢复；torn tail 携带 path/prefix/length/remedy fail closed |
 | M3 | #372 | open |
 
-H1 的 source 修复不改写或重新宣称 `1.0.37.0`；其 Module/Product identity 与
-完整集成证据等待 #379，immutable snapshot 等待 #380。#360 的五项物理/人工行
-继续保持未执行。
+H1 与 M2 的 source 修复不改写或重新宣称 `1.0.37.0`；其 Module/Product
+identity 与完整集成证据等待 #379，immutable snapshot 等待 #380。#360 的五项
+物理/人工行继续保持未执行。
 
 ## 二、设计与计划文档评审
 
@@ -238,6 +238,20 @@ journal）；唯一持久化 pending tail 的路径是 `abandon_sequence_session
 走析构路径，掩盖了该缺口；浏览器双窗口测试可佐证磁盘 journal 在 flush 间
 为空（`web_runtime_host_browser.spec.mjs:2438-2449` 观察到
 `pendingEventCount: 0`）。无 kill -9 / 硬崩溃重启测试。
+
+**#373 source disposition（2026-08-29）**：Project I/O journal 新增单调
+canonical tail snapshot；Facade 先耐久 append、成功后才更新 acknowledgement
+ordering，press 以既有 240-tick 默认时值进入恢复 tail，release snapshot 再替换
+真实时值。flush record 消费同一 tail，recovery 对 tail 与 incomplete flush 做一次
+canonical merge。component regression 由真实子进程接受 `press/release/press`
+三个 Pad event 请求后（最后一个 press 未释放）
+`SIGSTOP`，父进程发送 `SIGKILL` 并验证 signal exit；新 owner reconcile 后得到恰
+一个含两条事件的 `owner_lost` candidate，显式 apply 后 identity/order 保持且
+revision 只增加一次。独立 Project I/O case 证明 reload/flush consumption，并证明
+无终止换行的 torn tail 保留原字节、以 `INVALID_PROJECT` 加 path、durable prefix、
+observed length 与 remedy fail closed。该 source disposition 不是 merge、Product
+Build、immutable snapshot、远端 CI 或物理验收证据；这些仍分别等待 #379、#380
+与 #360。
 
 ### M3 同 `command_id` 重试可永久卡死 journal（SR-D21 幂等契约的可用性破口）
 
@@ -461,7 +475,7 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
 | 边界后继续录音（任何层级都停在切槽确认） | H2 |
 | Sequence 内 trim overlay 全流程（会话存活、提交 rebase、冲突保留） | H3 |
 | 未 flush 音的下一圈可听性 | M1 |
-| kill -9 / 硬崩溃后恢复候选出现 | M2 |
+| ~~kill -9 / 硬崩溃后恢复候选出现~~ | M2 source gate 已由 #373 的真实 `SIGKILL` component journey 覆盖；集成身份/快照仍待 #379/#380 |
 | 提交后故障 + 同 `command_id` 重试 | M3 |
 | Pending switch 中改 BPM | M4 |
 | reload → recover 浏览器旅程；恢复指纹 mismatch 的 Creator 路径 | M5/M8 |

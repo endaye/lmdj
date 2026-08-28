@@ -256,6 +256,28 @@ nlohmann::json flush_json(const SequenceFlushRecord& flush) {
   };
 }
 
+nlohmann::json events_json(std::span<const domain::PatternEvent> events) {
+  auto encoded = nlohmann::json::array();
+  for (const auto& event : events) {
+    encoded.push_back(event_json(event));
+  }
+  return encoded;
+}
+
+nlohmann::json tail_json(
+    const ActiveSequenceJournal& journal,
+    std::uint64_t input_sequence,
+    std::span<const domain::PatternEvent> events) {
+  return {
+      {"events", events_json(events)},
+      {"expected_revision", journal.expected_revision},
+      {"input_sequence", input_sequence},
+      {"kind", "tail"},
+      {"pattern_id", journal.pattern_id.value()},
+      {"tail_seq", journal.next_tail_seq},
+  };
+}
+
 nlohmann::json journal_json(const ActiveSequenceJournal& journal) {
   auto flushes = nlohmann::json::array();
   for (const auto& flush : journal.flushes) {
@@ -267,9 +289,15 @@ nlohmann::json journal_json(const ActiveSequenceJournal& journal) {
       {"bars", journal.bars},
       {"expected_revision", journal.expected_revision},
       {"flushes", std::move(flushes)},
+      {"last_input_sequence",
+       journal.last_input_sequence.has_value()
+           ? nlohmann::json(*journal.last_input_sequence)
+           : nlohmann::json(nullptr)},
       {"next_flush_seq", journal.next_flush_seq},
+      {"next_tail_seq", journal.next_tail_seq},
       {"pattern_fingerprint", journal.pattern_fingerprint},
       {"pattern_id", journal.pattern_id.value()},
+      {"pending_events", events_json(journal.pending_events)},
       {"session_id", journal.session_id.value()},
       {"state", state_string(journal.state)},
   };
@@ -289,6 +317,9 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
         input.at("next_flush_seq").get<std::uint64_t>(),
         parse_state(input.at("state").get<std::string>()),
         {},
+        0,
+        std::nullopt,
+        {},
     };
     if (!domain::is_valid_uuid(journal.session_id.value()) ||
         !domain::is_valid_uuid(journal.pattern_id.value()) ||
@@ -297,6 +328,26 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
       throw std::runtime_error("recovery metadata is invalid");
     }
     const auto loop_length = domain::pattern_length_ticks(journal.bars);
+    journal.next_tail_seq = input.value("next_tail_seq", std::uint64_t{0});
+    if (input.contains("last_input_sequence") &&
+        !input.at("last_input_sequence").is_null()) {
+      journal.last_input_sequence =
+          input.at("last_input_sequence").get<std::uint64_t>();
+    }
+    if (input.contains("pending_events")) {
+      for (const auto& encoded : input.at("pending_events")) {
+        auto parsed = parse_event(encoded, loop_length, path);
+        if (!parsed.has_value()) {
+          return foundation::Result<ActiveSequenceJournal>::failure(
+              parsed.error());
+        }
+        journal.pending_events.push_back(parsed.value());
+      }
+      if (domain::merge_pattern_events({}, journal.pending_events) !=
+          journal.pending_events) {
+        throw std::runtime_error("recovery tail is not canonical");
+      }
+    }
     for (const auto& encoded : input.at("flushes")) {
       SequenceFlushRecord flush{
           encoded.at("flush_seq").get<std::uint64_t>(),
@@ -367,6 +418,9 @@ foundation::Result<JournalDocument> read_journal(
           0,
           SequenceSessionState::active,
           {},
+          0,
+          std::nullopt,
+          {},
       },
       0,
   };
@@ -406,6 +460,9 @@ foundation::Result<JournalDocument> read_journal(
             0,
             SequenceSessionState::active,
             {},
+            0,
+            std::nullopt,
+            {},
         };
         if (!domain::is_valid_uuid(document.journal.session_id.value()) ||
             !domain::is_valid_uuid(document.journal.pattern_id.value()) ||
@@ -414,6 +471,41 @@ foundation::Result<JournalDocument> read_journal(
           throw std::runtime_error("Sequence begin metadata is invalid");
         }
         saw_begin = true;
+      } else if (kind == "tail") {
+        const auto tail_seq =
+            payload.value().at("tail_seq").get<std::uint64_t>();
+        const auto input_sequence =
+            payload.value().at("input_sequence").get<std::uint64_t>();
+        const auto pattern_id = foundation::PatternId{
+            payload.value().at("pattern_id").get<std::string>()};
+        const auto expected_revision =
+            payload.value().at("expected_revision").get<std::uint64_t>();
+        if (tail_seq != document.journal.next_tail_seq ||
+            (document.journal.last_input_sequence.has_value() &&
+             input_sequence <= *document.journal.last_input_sequence) ||
+            pattern_id != document.journal.pattern_id ||
+            expected_revision != document.journal.expected_revision ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching)) {
+          throw std::runtime_error("Sequence tail identity is invalid");
+        }
+        std::vector<domain::PatternEvent> pending_events;
+        const auto loop_length =
+            domain::pattern_length_ticks(document.journal.bars);
+        for (const auto& encoded : payload.value().at("events")) {
+          auto parsed = parse_event(encoded, loop_length, path);
+          if (!parsed.has_value()) {
+            return foundation::Result<JournalDocument>::failure(parsed.error());
+          }
+          pending_events.push_back(parsed.value());
+        }
+        if (pending_events.empty() ||
+            domain::merge_pattern_events({}, pending_events) != pending_events) {
+          throw std::runtime_error("Sequence tail events are not canonical");
+        }
+        document.journal.pending_events = std::move(pending_events);
+        document.journal.last_input_sequence = input_sequence;
+        ++document.journal.next_tail_seq;
       } else if (kind == "flush") {
         SequenceFlushRecord flush{
             payload.value().at("flush_seq").get<std::uint64_t>(),
@@ -441,6 +533,12 @@ foundation::Result<JournalDocument> read_journal(
           }
           flush.canonical_events.push_back(parsed.value());
         }
+        if (!document.journal.pending_events.empty() &&
+            document.journal.pending_events != flush.canonical_events) {
+          throw std::runtime_error(
+              "Sequence flush does not consume the durable tail");
+        }
+        document.journal.pending_events.clear();
         document.journal.flushes.push_back(std::move(flush));
         ++document.journal.next_flush_seq;
       } else if (kind == "complete") {
@@ -509,6 +607,22 @@ foundation::Result<JournalDocument> read_journal(
         throw std::runtime_error("Sequence Journal record kind is invalid");
       }
       document.valid_prefix_length = cursor;
+    }
+    if (cursor != bytes.size()) {
+      return foundation::Result<JournalDocument>::failure(
+          Error{
+              ErrorCode::invalid_project,
+              "active Sequence Journal has a torn trailing record",
+              {
+                  {"durable_prefix_length", cursor},
+                  {"observed_length", bytes.size()},
+                  {"path", path.generic_string()},
+                  {"reason", "sequence_journal_torn_tail"},
+                  {"remedy",
+                   "retain the journal and repair or discard the torn tail "
+                   "explicitly"},
+              },
+          });
     }
     if (!saw_begin) {
       throw std::runtime_error("Sequence Journal has no durable begin record");
@@ -691,6 +805,60 @@ foundation::Result<ActiveSequenceJournal> SequenceJournal::read_active(
       std::move(document.value().journal));
 }
 
+foundation::Result<void> SequenceJournal::append_tail(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    foundation::PatternId pattern_id,
+    std::uint64_t expected_revision,
+    std::uint64_t input_sequence,
+    std::span<const domain::PatternEvent> events) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(pattern_id.value()) || events.empty()) {
+    return foundation::Result<void>::failure(
+        Error{ErrorCode::invalid_argument, "Sequence tail metadata is invalid"});
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  auto& journal = document.value().journal;
+  if (journal.session_id != session_id || journal.pattern_id != pattern_id ||
+      journal.expected_revision != expected_revision ||
+      (journal.last_input_sequence.has_value() &&
+       input_sequence <= *journal.last_input_sequence) ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching)) {
+    return foundation::Result<void>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence tail does not match the active session",
+        });
+  }
+  const std::vector<domain::PatternEvent> incoming{events.begin(), events.end()};
+  const auto canonical = domain::merge_pattern_events({}, incoming);
+  const auto loop_length = domain::pattern_length_ticks(journal.bars);
+  for (const auto& event : canonical) {
+    if (!domain::is_valid_slot(event.slot) || event.velocity < 1 ||
+        event.velocity > 127 || event.onset_tick >= loop_length ||
+        event.duration_tick < 1 ||
+        event.duration_tick > loop_length - event.onset_tick) {
+      return foundation::Result<void>::failure(
+          Error{ErrorCode::invalid_argument, "Sequence tail event is invalid"});
+    }
+  }
+  return append_record(
+      platform_, bundle, document.value(),
+      tail_json(journal, input_sequence, canonical));
+}
+
 foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
     const std::filesystem::path& bundle,
     foundation::SequenceSessionId session_id,
@@ -738,6 +906,13 @@ foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
       return foundation::Result<SequenceFlushRecord>::failure(
           Error{ErrorCode::invalid_argument, "Sequence flush event is invalid"});
     }
+  }
+  if (!journal.pending_events.empty() && journal.pending_events != canonical) {
+    return foundation::Result<SequenceFlushRecord>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence flush does not consume the durable tail",
+        });
   }
   SequenceFlushRecord flush{
       journal.next_flush_seq,
@@ -1062,11 +1237,12 @@ foundation::Result<void> SequenceJournal::remove_active_if_complete(
   }
   if (std::any_of(
           journal.flushes.begin(), journal.flushes.end(),
-          [](const auto& flush) { return !flush.completed; })) {
+          [](const auto& flush) { return !flush.completed; }) ||
+      !journal.pending_events.empty()) {
     return foundation::Result<void>::failure(
         Error{
             ErrorCode::invalid_argument,
-            "Sequence Journal still contains an incomplete flush",
+            "Sequence Journal still contains uncommitted events",
         });
   }
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING

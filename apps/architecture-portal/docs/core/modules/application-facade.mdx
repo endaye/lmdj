@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
 ## 2. 当前实现状态
-Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。当前 source 把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。
+Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。每个 Sequence event 先把 completed events 与未释放 press 的 240-tick 默认形态组成 canonical tail 并耐久 append，成功后才更新内存 state 与 acknowledgement；release 的后续 snapshot 替换真实 duration。当前 source 也把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。
 ## 3. 所有权与依赖
 依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。
 ## 4. 架构与数据流
@@ -29,7 +29,7 @@ C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；Bundle
 ## 7. 产品使用方
 CLI、MCP、Native Host，以及通过 Web Runtime Platform 接入的 Creator/Diagnostic Web Host。
 ## 8. 测试与证据
-Application、Sample session/atomicity/cache/privacy/replay、Bundle round trip/import cancellation、Sequence begin-vs-authoring deterministic gate、orphan-journal seal-before-authoring、assembly loader、C API、stress 与 dynamic-load 测试。
+Application、Sample session/atomicity/cache/privacy/replay、Bundle round trip/import cancellation、Sequence begin-vs-authoring deterministic gate、orphan-journal seal-before-authoring、真实子进程 `SIGKILL` 后 acknowledged tail 恢复/identity/order/单 revision gate、assembly loader、C API、stress 与 dynamic-load 测试。
 ## 9. 限制与下一门禁
 Facade 不授权 Host 绕过 Project/Provider/Assembly 不变量。
 ## 10. 版本身份

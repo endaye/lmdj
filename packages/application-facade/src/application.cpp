@@ -1877,6 +1877,27 @@ struct Application::Impl {
     }
   }
 
+  static std::vector<domain::PatternEvent> recoverable_tail(
+      const SequenceRuntime& runtime) {
+    auto result = runtime.pending_events;
+    const auto loop_length = domain::pattern_length_ticks(runtime.bars);
+    for (const auto& [slot, press] : runtime.pressed) {
+      result = domain::merge_pattern_events(
+          result,
+          {domain::PatternEvent{
+              slot,
+              press.onset_tick,
+              domain::normalize_duration_tick(
+                  press.raw_attack_tick,
+                  press.raw_attack_tick + domain::kSixteenthTicks,
+                  press.onset_tick,
+                  loop_length),
+              press.velocity,
+          }});
+    }
+    return result;
+  }
+
   static foundation::Result<void> validate_sequence_path_and_session(
       const std::filesystem::path& path,
       const foundation::SequenceSessionId& session_id) {
@@ -2057,6 +2078,8 @@ struct Application::Impl {
                          "Sequence Pad has no assigned Sample",
                          {{"reason", "sample_unavailable"}}));
     }
+    const auto previous_pending = runtime.pending_events;
+    const auto previous_pressed = runtime.pressed;
     if (request.event.pressed) {
       finalize_pressed(runtime, request.event.slot, ticks.value(), true);
       const auto loop_length = domain::pattern_length_ticks(runtime.bars);
@@ -2076,6 +2099,18 @@ struct Application::Impl {
                            "Sequence release has no matching press"));
       }
       finalize_pressed(runtime, request.event.slot, ticks.value(), true);
+    }
+    const auto durable = sequence_journals.append_tail(
+        request.project_path,
+        runtime.session_id,
+        runtime.pattern_id,
+        runtime.expected_revision,
+        request.event.input_sequence,
+        recoverable_tail(runtime));
+    if (!durable.has_value()) {
+      runtime.pending_events = previous_pending;
+      runtime.pressed = previous_pressed;
+      return foundation::Result<SequenceMutationResult>::failure(durable.error());
     }
     runtime.last_runtime_frame = request.event.runtime_frame;
     runtime.last_input_sequence = request.event.input_sequence;
@@ -2418,7 +2453,8 @@ struct Application::Impl {
     if (active.has_value()) {
       const auto pending = std::accumulate(
           active.value().flushes.begin(), active.value().flushes.end(),
-          std::uint64_t{0}, [](std::uint64_t total, const auto& flush) {
+          static_cast<std::uint64_t>(active.value().pending_events.size()),
+          [](std::uint64_t total, const auto& flush) {
             return total + (flush.completed ? 0U : flush.canonical_events.size());
           });
       return foundation::Result<SequenceStatus>::success(SequenceStatus{
@@ -2447,7 +2483,8 @@ struct Application::Impl {
     }
     const auto& candidate = recovery.value().front().journal;
     const auto pending = std::accumulate(
-        candidate.flushes.begin(), candidate.flushes.end(), std::uint64_t{0},
+        candidate.flushes.begin(), candidate.flushes.end(),
+        static_cast<std::uint64_t>(candidate.pending_events.size()),
         [](std::uint64_t total, const auto& flush) {
           return total + (flush.completed ? 0U : flush.canonical_events.size());
         });
@@ -2481,7 +2518,9 @@ struct Application::Impl {
     for (const auto& candidate : listed.value()) {
       const auto event_count = std::accumulate(
           candidate.journal.flushes.begin(), candidate.journal.flushes.end(),
-          std::uint64_t{0}, [](std::uint64_t total, const auto& flush) {
+          static_cast<std::uint64_t>(
+              candidate.journal.pending_events.size()),
+          [](std::uint64_t total, const auto& flush) {
             return total + (flush.completed ? 0U : flush.canonical_events.size());
           });
       result.push_back(SequenceRecoveryInfo{
@@ -2553,7 +2592,7 @@ struct Application::Impl {
           {{"reason", "pattern_changed"},
            {"pattern_id", destination.value()}}));
     }
-    std::vector<domain::PatternEvent> recovered_events;
+    auto recovered_events = candidate->journal.pending_events;
     for (const auto& flush : candidate->journal.flushes) {
       if (!flush.completed) {
         recovered_events = domain::merge_pattern_events(

@@ -106,6 +106,17 @@ Facade, Audio Runtime and Web Runtime Platform are updated in the same Task.
 
 Automation does not convert any physical row into a pass.
 
+## Post-delivery remediation source evidence
+
+| Finding | Local source evidence | Remaining boundary |
+| --- | --- | --- |
+| M2 / #373 | RED: the real `SIGKILL` restart journey found a candidate without the two acknowledged unflushed events, while the Project I/O test could not compile without durable-tail API/metadata. GREEN: focused 2/2, Core fast 38/38, full 79/79 and stress 4/4 pass with monotonic canonical tail reload/consumption, actionable torn-tail rejection, signal-verified `SIGKILL`, a two-event `owner_lost` candidate, preserved recovered identity/order, and exactly one Project revision increment. Portal check passes 59/59 tests, 37 current pages, 10 diagram sources/20 outputs and 42 routes; dependency, active-tree, version and production hook-symbol gates pass. | This is functional source evidence only. #379 owns accumulated Module/Host/Product identity and complete integrated automated acceptance; #380 owns the clean exact-main immutable snapshot. The five #360 physical/manual rows above remain `deferred / unverified`. |
+
+The #373 Task does not rewrite the historical `1.0.37.0` evidence table or
+promote the candidate. Push, Pull Request, merge, remote CI, Product tag,
+Release, deployment, publication and Channel promotion are not implied by this
+local source gate.
+
 ## External state
 
 | Transition | Status |

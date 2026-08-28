@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -40,6 +41,9 @@ struct ActiveSequenceJournal {
   std::uint64_t next_flush_seq{};
   SequenceSessionState state{SequenceSessionState::active};
   std::vector<SequenceFlushRecord> flushes;
+  std::uint64_t next_tail_seq{};
+  std::optional<std::uint64_t> last_input_sequence;
+  std::vector<domain::PatternEvent> pending_events;
 
   bool operator==(const ActiveSequenceJournal&) const = default;
 };
@@ -69,6 +73,13 @@ class SequenceJournal {
       std::uint64_t expected_revision);
   foundation::Result<ActiveSequenceJournal> read_active(
       const std::filesystem::path& bundle) const;
+  foundation::Result<void> append_tail(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      foundation::PatternId pattern_id,
+      std::uint64_t expected_revision,
+      std::uint64_t input_sequence,
+      std::span<const domain::PatternEvent> events);
   foundation::Result<SequenceFlushRecord> append_flush(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,

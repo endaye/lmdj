@@ -3066,9 +3066,11 @@ ProjectStore::reconcile_sequence_recovery(
     return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
         active.error());
   }
-  const bool has_pending = std::any_of(
-      active.value().flushes.begin(), active.value().flushes.end(),
-      [](const auto& flush) { return !flush.completed; });
+  const bool has_pending =
+      !active.value().pending_events.empty() ||
+      std::any_of(
+          active.value().flushes.begin(), active.value().flushes.end(),
+          [](const auto& flush) { return !flush.completed; });
   if (has_pending || active.value().flushes.empty()) {
     auto sealed = journal.seal(
         bundle, active.value().session_id, "owner_lost");
