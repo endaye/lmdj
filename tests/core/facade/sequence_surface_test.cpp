@@ -431,6 +431,73 @@ void test_settings_rebase_and_pattern_creation_are_authoritative() {
   LMDJ_CHECK(created.at("result").at("bars") == 4);
 }
 
+void test_pending_overlay_projection_is_owner_scoped_and_replaceable() {
+  TempDirectory temp;
+  const auto project = temp.path() / "pending-overlay.lmdj";
+  const PatternId pattern_id{uuid(80)};
+  const SequenceSessionId session_id{uuid(81)};
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+  LMDJ_CHECK(application.begin_sequence(
+      {project, session_id, pattern_id, 2, 0}).has_value());
+
+  const auto initial = application.query_sequence_overlay(
+      {project, session_id});
+  LMDJ_CHECK(initial.has_value());
+  LMDJ_CHECK(initial.value().session_id == session_id);
+  LMDJ_CHECK(initial.value().pattern_id == pattern_id);
+  LMDJ_CHECK(initial.value().generation == 0);
+  LMDJ_CHECK(initial.value().events.empty());
+
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 80, 0, 1, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 110, 3'000, 2, true}})
+                 .has_value());
+  const auto first = application.query_sequence_overlay(
+      {project, session_id});
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(first.value().generation == 1);
+  LMDJ_CHECK(first.value().events.size() == 1);
+  LMDJ_CHECK((first.value().events.front().slot == PadSlotId{0, 0}));
+  LMDJ_CHECK(first.value().events.front().onset_tick == 0);
+  LMDJ_CHECK(first.value().events.front().velocity == 80);
+
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 5'000, 3, false}})
+                 .has_value());
+  const auto replaced = application.query_sequence_overlay(
+      {project, session_id});
+  LMDJ_CHECK(replaced.has_value());
+  LMDJ_CHECK(replaced.value().generation == 2);
+  LMDJ_CHECK(replaced.value().events.size() == 1);
+  LMDJ_CHECK(replaced.value().events.front().velocity == 110);
+
+  const auto rejected = application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 5'001, 4, false}});
+  LMDJ_CHECK(!rejected.has_value());
+  const auto after_rejection = application.query_sequence_overlay(
+      {project, session_id});
+  LMDJ_CHECK(after_rejection.has_value());
+  LMDJ_CHECK(after_rejection.value().generation == 2);
+  LMDJ_CHECK(after_rejection.value().events == replaced.value().events);
+
+  const auto wrong_owner = application.query_sequence_overlay(
+      {project, SequenceSessionId{uuid(82)}});
+  LMDJ_CHECK(!wrong_owner.has_value());
+  LMDJ_CHECK(wrong_owner.error().code == ErrorCode::invalid_argument);
+
+  const auto flushed = application.flush_sequence(
+      {project, session_id, CommandId{uuid(83)}, 6'000});
+  LMDJ_CHECK(flushed.has_value());
+  const auto empty = application.query_sequence_overlay(
+      {project, session_id});
+  LMDJ_CHECK(empty.has_value());
+  LMDJ_CHECK(empty.value().generation == 3);
+  LMDJ_CHECK(empty.value().events.empty());
+}
+
 }  // namespace
 
 int main() {
@@ -441,6 +508,7 @@ int main() {
     test_begin_cannot_cross_an_authoring_admission();
     test_orphan_journal_is_sealed_before_authoring();
     test_settings_rebase_and_pattern_creation_are_authoritative();
+    test_pending_overlay_projection_is_owner_scoped_and_replaceable();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

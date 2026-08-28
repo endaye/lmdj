@@ -93,13 +93,13 @@ Netlify 生产面将静态服务已验证的 release `dist`，与 Python proof-o
 
 ## 生命周期门禁
 
-Trigger 与 `sequence.record.begin` 只在 `running` 接收。Sequence pad admission 使用 Audio Runtime frame clock 和单调 `input_sequence`；next-Bar boundary、BPM anchor 与 receipt 全部来自 Core。pagehide/terminal 会先封闭新 admission，再有界释放 Worker、transport、AudioWorklet、writer lease 与 session owner；owner 丢失留下显式 recovery artifact。
+Trigger 与 `sequence.record.begin` 只在 `running` 接收。Sequence pad admission 使用 Audio Runtime frame clock 和单调 `input_sequence`；accepted pending event 由共享 Control bridge 组合成 immutable overlay view，在下一 Bar 可听，flush/Stop 后由 clean committed view 替换。next-Bar boundary、BPM anchor、overlay generation 与 receipt 全部来自 Core；JavaScript 不持有 fallback sequencer。pagehide/terminal 会先封闭新 admission，再有界释放 Worker、transport、AudioWorklet、writer lease 与 session owner；owner 丢失留下显式 recovery artifact。
 
 中断同步关闭 runtime admission、清除 pressed state，并按 epoch 只发一次 Control suspend/seal。恢复必须同时具备 Context `running`、正整数 current/ack generation 相等，以及一个真实用户 recovery probe 的唯一 `voice_started`；visibility 或 pageshow 本身不能完成恢复。
 
 ## 自动化证据
 
-`scripts/web-runtime-host.sh proof` 覆盖可复现 build、distribution gates 与 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 旅程，包括 Project v3、500-trigger 压力、Sequence recording/status/switch/recovery、跨窗口 observer/busy、失败和 lifecycle。WebKit 只在 mandatory primitive 可用时执行完整 smoke；结构化 limitation 不会被写成物理证据。
+`scripts/web-runtime-host.sh proof` 覆盖可复现 build、distribution gates 与 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 旅程，包括 Project v3、500-trigger 压力、Sequence recording/status/switch/recovery、跨窗口 observer/busy、失败和 lifecycle。共享 C++ ControlRuntime journey 另验证 Facade pending overlay 到 Audio Runtime next-Bar publication，以及 Stop 后 clean replacement 无重复/空洞/陈旧 overlay。WebKit 只在 mandatory primitive 可用时执行完整 smoke；结构化 limitation 不会被写成物理证据。
 
 ## 非能力
 

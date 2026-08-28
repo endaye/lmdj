@@ -1247,6 +1247,80 @@ void test_sequence_observer_busy_and_owner_loss_recovery() {
   LMDJ_CHECK(recovery.at("candidates").at(0).at("reason") == "owner_lost");
 }
 
+void test_pending_sequence_overlay_repeats_and_commits_without_duplicate() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 731, 732, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(runtime->dispatch(
+      "sequence.record.begin",
+      {{"session_id", kSequenceSessionId},
+       {"pattern_id", kPatternId},
+       {"expected_revision", 2}},
+      {}));
+
+  OneShotAudioDriver audio(runtime->engine());
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  audio.render_one();
+  LMDJ_CHECK(runtime->engine().telemetry().started_voices == 1);
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(runtime->engine().current_pattern_has_overlay() == false);
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+
+  const auto overlay_publication = runtime->engine().pattern_telemetry();
+  LMDJ_CHECK(overlay_publication.pending_generation != 0);
+  LMDJ_CHECK(overlay_publication.pending_activation_frame == 96'000);
+  for (std::size_t callback = 0; callback < 750; ++callback) {
+    audio.render_one();
+  }
+  LMDJ_CHECK(runtime->engine().telemetry().started_voices == 2);
+  LMDJ_CHECK(runtime->engine().current_pattern_has_overlay() == true);
+
+  check_error(
+      runtime->dispatch(
+          "sequence.record.event",
+          {{"session_id", kSequenceSessionId},
+           {"event",
+            {{"slot", slot(0, 0)}, {"velocity", 0}, {"pressed", false}}}},
+          {}),
+      "INVALID_ARGUMENT");
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_generation == 0);
+  LMDJ_CHECK(runtime->engine().current_pattern_has_overlay() == true);
+
+  const auto& stopped = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.stop",
+          {{"session_id", kSequenceSessionId}, {"command_id", uuid(733)}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "runtime_frame", "pattern_publication"});
+  LMDJ_CHECK(stopped.at("committed_revision") == 3);
+  LMDJ_CHECK(stopped.at("pattern_publication").is_object());
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().pending_activation_frame ==
+             192'000);
+
+  for (std::size_t callback = 0; callback < 750; ++callback) {
+    audio.render_one();
+  }
+  LMDJ_CHECK(runtime->engine().telemetry().started_voices == 3);
+  LMDJ_CHECK(runtime->engine().current_pattern_has_overlay() == false);
+  const auto final_pattern = runtime->engine().pattern_telemetry();
+  LMDJ_CHECK(final_pattern.applied_publications == 3);
+  LMDJ_CHECK(final_pattern.superseded_publications == 0);
+}
+
 void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   TempDirectory temp;
   {
@@ -3569,6 +3643,7 @@ int main() {
     test_runtime_cancellation_precedes_project_mutation();
     test_exact_payloads_and_facade_owned_project_journey();
     test_sequence_observer_busy_and_owner_loss_recovery();
+    test_pending_sequence_overlay_repeats_and_commits_without_duplicate();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();

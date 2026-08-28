@@ -213,6 +213,20 @@ reducer 只允许从 `stopped` 进入 `trim-overlay`
 
 ### M1 SR-D13「下一圈可听」未接线：journal 叠加音在产品中不存在
 
+**2026-08-29 source remediation (#375)：已修复。** Application Facade 现在只向
+匹配的 active session owner 暴露带单调 generation 的 immutable pending-overlay
+projection；Web Runtime Platform 在 accepted event 后把 committed Runtime Snapshot
+与 projection 组合并发布到下一 Bar，flush/Stop 后发布 clean committed view；Audio
+Runtime 只允许同 Project、同 Pattern、同 activation boundary 的新 view 取代旧 view，
+callback 通过固定队列保留最新 generation，把旧 slot 标成 control-thread
+reclaimable，且不分配、不释放、不加锁。Facade owner/replace/reject/flush component
+case、Audio same-boundary + stress case 与真实 ControlRuntime
+create→import/assign→activate→begin→live trigger→next Bar→reject→Stop→next Bar journey
+共同固定无重复、无空洞、无陈旧 overlay 的源代码边界。版本分配仍归 #379，immutable
+Portal snapshot 仍归 #380；本段不宣称已 merge、已集成 Product identity 或物理听感通过。
+
+以下保留 2026-08-27 审查时的原始缺口证据：
+
 Audio Runtime 侧已交付并有引擎级测试：
 `PreparedPatternView::from_snapshot_with_overlay`
 （`packages/audio-runtime/src/prepared_sample_bank.cpp:274`）、按
@@ -460,7 +474,7 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
 | 并发 begin-vs-authoring / 孤儿 journal 后先发 authoring command | H1 |
 | 边界后继续录音（任何层级都停在切槽确认） | H2 |
 | Sequence 内 trim overlay 全流程（会话存活、提交 rebase、冲突保留） | H3 |
-| 未 flush 音的下一圈可听性 | M1 |
+| 未 flush 音的下一圈可听性 | M1（#375 source-fixed；#379/#380 尚未集成） |
 | kill -9 / 硬崩溃后恢复候选出现 | M2 |
 | 提交后故障 + 同 `command_id` 重试 | M3 |
 | Pending switch 中改 BPM | M4 |
@@ -481,7 +495,7 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
    旅程延伸到边界后录音；连带修 L11。
 3. **H3**：实现 armed-pad 提交白名单 + Creator 会话内 overlay 路径，或走
    决策记录正式收窄 SR-D15/D18 并勘误规格与账本。
-4. **M1–M3**：接线 journal 叠加发布；录音事件按批耐久写 journal（或决策
+4. **M1–M3**：M1 已由 #375 接线 journal 叠加发布；M2 仍需录音事件按批耐久写 journal（或决策
    记录接受「flush 粒度耐久」并勘误 SR-D17/§5）；journal 层 `command_id`
    去重 + reconcile 对身份不匹配降级为可跳过。
 

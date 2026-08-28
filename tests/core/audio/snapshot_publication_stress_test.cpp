@@ -324,8 +324,62 @@ void test_pattern_publication_switches_are_conserved_under_concurrency() {
   LMDJ_CHECK(telemetry.pending_generation == 0);
   LMDJ_CHECK(telemetry.current_generation == accepted);
   LMDJ_CHECK(telemetry.publication_rejections == 0);
+  LMDJ_CHECK(telemetry.superseded_publications == 0);
   LMDJ_CHECK(engine.current_pattern_id() ==
              PatternId{"30000000-0000-4000-8000-000000000001"});
+}
+
+void test_same_boundary_pattern_supersession_is_conserved_under_concurrency() {
+  constexpr std::uint64_t kSupersedingPublications = 2'000;
+  constexpr std::uint64_t kDistantBoundary = 1'000'000'000'000ULL;
+  RealtimeEngine engine;
+  const auto initial = engine.publish_pattern_view(pattern_at(2));
+  LMDJ_CHECK(initial.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+
+  std::atomic<bool> rendering{true};
+  std::thread audio_thread([&] {
+    std::array<float, 128> left{};
+    std::array<float, 128> right{};
+    while (rendering.load(std::memory_order_acquire)) {
+      engine.render(
+          left.data(), right.data(), static_cast<std::uint32_t>(left.size()));
+    }
+    for (int drain = 0; drain < 64; ++drain) {
+      engine.render(left.data(), right.data(), 128);
+    }
+  });
+
+  std::uint64_t accepted = 1;
+  std::uint64_t slots_full = 0;
+  for (std::uint64_t revision = 2;
+       revision < 2 + kSupersedingPublications;) {
+    engine.reclaim_retired_patterns();
+    auto publication = engine.publish_pattern_view(
+        pattern_at(revision * 2), kDistantBoundary);
+    if (publication.result == PatternPublishResult::pattern_slots_full) {
+      ++slots_full;
+      std::this_thread::yield();
+      continue;
+    }
+    LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+    LMDJ_CHECK(publication.activation_frame == kDistantBoundary);
+    ++accepted;
+    ++revision;
+  }
+
+  rendering.store(false, std::memory_order_release);
+  audio_thread.join();
+  const auto telemetry = engine.pattern_telemetry();
+  LMDJ_CHECK(telemetry.current_generation == initial.generation);
+  LMDJ_CHECK(telemetry.pending_generation != 0);
+  LMDJ_CHECK(telemetry.applied_publications == 1);
+  LMDJ_CHECK(
+      telemetry.accepted_publications ==
+      telemetry.applied_publications + telemetry.superseded_publications + 1);
+  LMDJ_CHECK(telemetry.accepted_publications == accepted);
+  LMDJ_CHECK(telemetry.publication_rejections == slots_full);
+  LMDJ_CHECK(telemetry.superseded_publications > 0);
 }
 
 }  // namespace
@@ -335,6 +389,7 @@ int main() {
     test_publication_accounting_is_conserved_under_concurrency();
     test_publish_queue_full_is_unreachable_at_equal_capacities();
     test_pattern_publication_switches_are_conserved_under_concurrency();
+    test_same_boundary_pattern_supersession_is_conserved_under_concurrency();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

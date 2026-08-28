@@ -209,6 +209,18 @@ void RealtimeEngine::deactivate_voice(Voice& voice) noexcept {
 void RealtimeEngine::apply_published_pattern(
     const PatternPublishEntry& publication,
     std::uint64_t runtime_frame) noexcept {
+  auto expected_generation = publication.generation;
+  if (!pending_pattern_generation_.compare_exchange_strong(
+          expected_generation,
+          0,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    pattern_slots_[publication.slot].state.store(
+        PatternState::reclaimable, std::memory_order_release);
+    superseded_pattern_publications_.fetch_add(
+        1, std::memory_order_relaxed);
+    return;
+  }
   const auto current =
       current_pattern_slot_.load(std::memory_order_relaxed);
   if (current != kNoPatternSlot) {
@@ -225,8 +237,6 @@ void RealtimeEngine::apply_published_pattern(
   current_pattern_slot_.store(publication.slot, std::memory_order_release);
   pattern_origin_frame_.store(runtime_frame, std::memory_order_release);
   pattern_event_index_ = 0;
-  pending_pattern_generation_.store(0, std::memory_order_release);
-  pending_pattern_activation_frame_.store(0, std::memory_order_release);
   applied_pattern_publications_.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -462,66 +472,77 @@ PublishResult RealtimeEngine::publish_sample_bank(
 PatternPublication RealtimeEngine::publish_pattern_view(
     PreparedPatternView&& pattern,
     std::optional<std::uint64_t> requested_activation_frame) noexcept {
-  if (pending_pattern_generation_.load(std::memory_order_acquire) != 0) {
-    pattern_publication_rejections_.fetch_add(1, std::memory_order_relaxed);
-    return PatternPublication{
-        PatternPublishResult::publication_pending, 0, 0};
-  }
-
-  const auto current =
-      current_pattern_slot_.load(std::memory_order_acquire);
-  if (current != kNoPatternSlot &&
-      pattern_slots_[current].pattern->project_id() != pattern.project_id()) {
-    pattern_publication_rejections_.fetch_add(1, std::memory_order_relaxed);
-    return PatternPublication{PatternPublishResult::project_mismatch, 0, 0};
-  }
-
-  auto slot = std::find_if(
-      pattern_slots_.begin(),
-      pattern_slots_.end(),
-      [](const PatternSlot& candidate) {
-        return candidate.state.load(std::memory_order_acquire) ==
-               PatternState::empty;
-      });
-  if (slot == pattern_slots_.end()) {
-    pattern_publication_rejections_.fetch_add(1, std::memory_order_relaxed);
-    return PatternPublication{PatternPublishResult::pattern_slots_full, 0, 0};
-  }
-
-  const auto slot_index = static_cast<std::uint8_t>(
-      std::distance(pattern_slots_.begin(), slot));
-  slot->pattern.emplace(std::move(pattern));
-  slot->generation = next_pattern_generation_++;
-
-  const auto running =
-      state_.load(std::memory_order_acquire) == RealtimeState::running;
-  std::uint64_t activation_frame = 0;
-  if (running) {
-    const auto observed_frame =
-        rendered_frames_.load(std::memory_order_acquire);
-    activation_frame = observed_frame;
-    if (requested_activation_frame.has_value()) {
-      if (*requested_activation_frame < observed_frame) {
-        slot->pattern.reset();
-        slot->generation = 0;
+  for (;;) {
+    const auto observed_pending_generation =
+        pending_pattern_generation_.load(std::memory_order_acquire);
+    std::optional<std::uint64_t> observed_pending_activation;
+    if (observed_pending_generation != 0) {
+      const auto pending = std::find_if(
+          pattern_slots_.begin(),
+          pattern_slots_.end(),
+          [observed_pending_generation](const PatternSlot& candidate) {
+            return candidate.state.load(std::memory_order_acquire) ==
+                       PatternState::pending &&
+                   candidate.generation == observed_pending_generation;
+          });
+      if (pending == pattern_slots_.end()) {
+        if (pending_pattern_generation_.load(std::memory_order_acquire) !=
+            observed_pending_generation) {
+          continue;
+        }
         pattern_publication_rejections_.fetch_add(
             1, std::memory_order_relaxed);
         return PatternPublication{
-            PatternPublishResult::publish_queue_full, 0, 0};
+            PatternPublishResult::publication_pending, 0, 0};
       }
-      activation_frame = *requested_activation_frame;
-    } else if (current != kNoPatternSlot) {
-      const auto origin =
-          pattern_origin_frame_.load(std::memory_order_acquire);
-      const auto bar_frames =
-          pattern_slots_[current].pattern->bar_frames();
-      if (observed_frame >= origin) {
-        const auto elapsed = observed_frame - origin;
-        const auto bars = elapsed / bar_frames;
-        if (bars == std::numeric_limits<std::uint64_t>::max() ||
-            (bars + 1) >
-                (std::numeric_limits<std::uint64_t>::max() - origin) /
-                    bar_frames) {
+      observed_pending_activation = pending->activation_frame;
+      if (pending->pattern->project_id() != pattern.project_id() ||
+          pending->pattern->pattern_id() != pattern.pattern_id() ||
+          (requested_activation_frame.has_value() &&
+           *requested_activation_frame != *observed_pending_activation)) {
+        pattern_publication_rejections_.fetch_add(
+            1, std::memory_order_relaxed);
+        return PatternPublication{
+            PatternPublishResult::publication_pending, 0, 0};
+      }
+    }
+
+    const auto current =
+        current_pattern_slot_.load(std::memory_order_acquire);
+    if (current != kNoPatternSlot &&
+        pattern_slots_[current].pattern->project_id() != pattern.project_id()) {
+      pattern_publication_rejections_.fetch_add(1, std::memory_order_relaxed);
+      return PatternPublication{PatternPublishResult::project_mismatch, 0, 0};
+    }
+
+    auto slot = std::find_if(
+        pattern_slots_.begin(),
+        pattern_slots_.end(),
+        [](const PatternSlot& candidate) {
+          return candidate.state.load(std::memory_order_acquire) ==
+                 PatternState::empty;
+        });
+    if (slot == pattern_slots_.end()) {
+      pattern_publication_rejections_.fetch_add(1, std::memory_order_relaxed);
+      return PatternPublication{PatternPublishResult::pattern_slots_full, 0, 0};
+    }
+
+    const auto slot_index = static_cast<std::uint8_t>(
+        std::distance(pattern_slots_.begin(), slot));
+    slot->pattern.emplace(std::move(pattern));
+    slot->generation = next_pattern_generation_++;
+
+    const auto running =
+        state_.load(std::memory_order_acquire) == RealtimeState::running;
+    std::uint64_t activation_frame = 0;
+    if (running) {
+      const auto observed_frame =
+          rendered_frames_.load(std::memory_order_acquire);
+      activation_frame = observed_frame;
+      if (observed_pending_activation.has_value()) {
+        activation_frame = *observed_pending_activation;
+      } else if (requested_activation_frame.has_value()) {
+        if (*requested_activation_frame < observed_frame) {
           slot->pattern.reset();
           slot->generation = 0;
           pattern_publication_rejections_.fetch_add(
@@ -529,39 +550,77 @@ PatternPublication RealtimeEngine::publish_pattern_view(
           return PatternPublication{
               PatternPublishResult::publish_queue_full, 0, 0};
         }
-        activation_frame = origin + (bars + 1) * bar_frames;
+        activation_frame = *requested_activation_frame;
+      } else if (current != kNoPatternSlot) {
+        const auto origin =
+            pattern_origin_frame_.load(std::memory_order_acquire);
+        const auto bar_frames =
+            pattern_slots_[current].pattern->bar_frames();
+        if (observed_frame >= origin) {
+          const auto elapsed = observed_frame - origin;
+          const auto bars = elapsed / bar_frames;
+          if (bars == std::numeric_limits<std::uint64_t>::max() ||
+              (bars + 1) >
+                  (std::numeric_limits<std::uint64_t>::max() - origin) /
+                      bar_frames) {
+            slot->pattern.reset();
+            slot->generation = 0;
+            pattern_publication_rejections_.fetch_add(
+                1, std::memory_order_relaxed);
+            return PatternPublication{
+                PatternPublishResult::publish_queue_full, 0, 0};
+          }
+          activation_frame = origin + (bars + 1) * bar_frames;
+        }
       }
     }
-  }
 
-  const PatternPublishEntry publication{
-      slot_index, slot->generation, activation_frame};
-  slot->state.store(PatternState::pending, std::memory_order_release);
-  if (!running) {
-    apply_published_pattern(publication, 0);
-  } else {
-    pending_pattern_generation_.store(
-        publication.generation, std::memory_order_release);
-    pending_pattern_activation_frame_.store(
-        activation_frame, std::memory_order_release);
-    if (!pattern_publish_queue_.try_push(publication)) {
-      pending_pattern_generation_.store(0, std::memory_order_release);
-      pending_pattern_activation_frame_.store(0, std::memory_order_release);
-      slot->pattern.reset();
-      slot->generation = 0;
-      slot->state.store(PatternState::empty, std::memory_order_release);
-      pattern_publication_rejections_.fetch_add(
-          1, std::memory_order_relaxed);
-      return PatternPublication{
-          PatternPublishResult::publish_queue_full, 0, 0};
+    const PatternPublishEntry publication{
+        slot_index, slot->generation, activation_frame};
+    slot->activation_frame = activation_frame;
+    slot->state.store(PatternState::pending, std::memory_order_release);
+    if (!running) {
+      pending_pattern_generation_.store(
+          publication.generation, std::memory_order_release);
+      apply_published_pattern(publication, 0);
+    } else {
+      auto expected_generation = observed_pending_generation;
+      if (!pending_pattern_generation_.compare_exchange_strong(
+              expected_generation,
+              publication.generation,
+              std::memory_order_release,
+              std::memory_order_acquire)) {
+        pattern = std::move(*slot->pattern);
+        slot->pattern.reset();
+        slot->generation = 0;
+        slot->activation_frame = 0;
+        slot->state.store(PatternState::empty, std::memory_order_release);
+        continue;
+      }
+      if (!pattern_publish_queue_.try_push(publication)) {
+        expected_generation = publication.generation;
+        static_cast<void>(pending_pattern_generation_.compare_exchange_strong(
+            expected_generation,
+            observed_pending_generation,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire));
+        slot->pattern.reset();
+        slot->generation = 0;
+        slot->activation_frame = 0;
+        slot->state.store(PatternState::empty, std::memory_order_release);
+        pattern_publication_rejections_.fetch_add(
+            1, std::memory_order_relaxed);
+        return PatternPublication{
+            PatternPublishResult::publish_queue_full, 0, 0};
+      }
     }
+    accepted_pattern_publications_.fetch_add(1, std::memory_order_relaxed);
+    return PatternPublication{
+        PatternPublishResult::accepted,
+        publication.generation,
+        activation_frame,
+    };
   }
-  accepted_pattern_publications_.fetch_add(1, std::memory_order_relaxed);
-  return PatternPublication{
-      PatternPublishResult::accepted,
-      publication.generation,
-      activation_frame,
-  };
 }
 
 foundation::Result<void> RealtimeEngine::clear_pattern_view() noexcept {
@@ -592,6 +651,7 @@ std::size_t RealtimeEngine::reclaim_retired_patterns() noexcept {
     }
     slot.pattern.reset();
     slot.generation = 0;
+    slot.activation_frame = 0;
     slot.state.store(PatternState::empty, std::memory_order_release);
     ++reclaimed;
   }
@@ -610,20 +670,32 @@ RealtimeEngine::current_pattern_id() const {
 
 std::optional<foundation::PatternId>
 RealtimeEngine::pending_pattern_id() const {
-  if (pending_pattern_generation_.load(std::memory_order_acquire) == 0) {
+  const auto generation =
+      pending_pattern_generation_.load(std::memory_order_acquire);
+  if (generation == 0) {
     return std::nullopt;
   }
   const auto slot = std::find_if(
       pattern_slots_.begin(),
       pattern_slots_.end(),
-      [](const PatternSlot& candidate) {
+      [generation](const PatternSlot& candidate) {
         return candidate.state.load(std::memory_order_acquire) ==
-               PatternState::pending;
+                   PatternState::pending &&
+               candidate.generation == generation;
       });
   return slot == pattern_slots_.end()
              ? std::nullopt
              : std::optional<foundation::PatternId>{
                    slot->pattern->pattern_id()};
+}
+
+std::optional<bool> RealtimeEngine::current_pattern_has_overlay() const
+    noexcept {
+  const auto slot = current_pattern_slot_.load(std::memory_order_acquire);
+  if (slot == kNoPatternSlot) {
+    return std::nullopt;
+  }
+  return pattern_slots_[slot].pattern->has_overlay();
 }
 
 std::optional<std::uint64_t>
@@ -740,7 +812,6 @@ foundation::Result<void> RealtimeEngine::start() {
   voice_state_ring_.clear_quiescent();
   pending_publications_.store(0, std::memory_order_relaxed);
   pending_pattern_generation_.store(0, std::memory_order_relaxed);
-  pending_pattern_activation_frame_.store(0, std::memory_order_relaxed);
   pattern_origin_frame_.store(0, std::memory_order_relaxed);
   pattern_event_index_ = 0;
   std::fill(voices_.begin(), voices_.end(), Voice{});
@@ -810,7 +881,6 @@ void RealtimeEngine::stop() noexcept {
         PatternState::reclaimable, std::memory_order_release);
   }
   pending_pattern_generation_.store(0, std::memory_order_release);
-  pending_pattern_activation_frame_.store(0, std::memory_order_release);
   if (capture_state_.load(std::memory_order_relaxed) !=
       CaptureState::corrupted) {
     capture_state_.store(CaptureState::idle, std::memory_order_release);
@@ -905,11 +975,15 @@ void RealtimeEngine::render(
     apply_published_bank(published_slot);
     pending_publications_.fetch_sub(1, std::memory_order_release);
   }
-  if (!audio_pending_pattern_.has_value()) {
-    PatternPublishEntry publication{};
-    if (pattern_publish_queue_.try_pop(publication)) {
-      audio_pending_pattern_.emplace(publication);
+  PatternPublishEntry publication{};
+  while (pattern_publish_queue_.try_pop(publication)) {
+    if (audio_pending_pattern_.has_value()) {
+      pattern_slots_[audio_pending_pattern_->slot].state.store(
+          PatternState::reclaimable, std::memory_order_release);
+      superseded_pattern_publications_.fetch_add(
+          1, std::memory_order_relaxed);
     }
+    audio_pending_pattern_ = publication;
   }
 
   PadControlEvent event{};
@@ -1174,12 +1248,24 @@ BankTelemetry RealtimeEngine::bank_telemetry() const noexcept {
 PatternTelemetry RealtimeEngine::pattern_telemetry() const noexcept {
   const auto slot =
       current_pattern_slot_.load(std::memory_order_acquire);
+  const auto pending_generation =
+      pending_pattern_generation_.load(std::memory_order_acquire);
+  const auto pending = std::find_if(
+      pattern_slots_.begin(),
+      pattern_slots_.end(),
+      [pending_generation](const PatternSlot& candidate) {
+        return pending_generation != 0 &&
+               candidate.state.load(std::memory_order_acquire) ==
+                   PatternState::pending &&
+               candidate.generation == pending_generation;
+      });
   return PatternTelemetry{
       slot == kNoPatternSlot ? 0 : pattern_slots_[slot].generation,
-      pending_pattern_generation_.load(std::memory_order_acquire),
-      pending_pattern_activation_frame_.load(std::memory_order_acquire),
+      pending_generation,
+      pending == pattern_slots_.end() ? 0 : pending->activation_frame,
       accepted_pattern_publications_.load(std::memory_order_relaxed),
       applied_pattern_publications_.load(std::memory_order_relaxed),
+      superseded_pattern_publications_.load(std::memory_order_relaxed),
       reclaimed_patterns_.load(std::memory_order_relaxed),
       pattern_publication_rejections_.load(std::memory_order_relaxed),
   };

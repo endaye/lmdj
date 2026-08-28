@@ -1738,6 +1738,7 @@ void publishes_immutable_patterns_at_the_next_bar_boundary() {
   LMDJ_CHECK(engine.pattern_telemetry().current_generation ==
              pending.generation);
   LMDJ_CHECK(engine.pattern_telemetry().applied_publications == 2);
+  LMDJ_CHECK(engine.current_pattern_has_overlay() == true);
   LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
   LMDJ_CHECK(!engine.clear_pattern_view().has_value());
   engine.stop();
@@ -1745,6 +1746,76 @@ void publishes_immutable_patterns_at_the_next_bar_boundary() {
   LMDJ_CHECK(!engine.current_pattern_id().has_value());
   LMDJ_CHECK(!engine.current_pattern_origin_frame().has_value());
   LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+}
+
+void newest_same_boundary_pattern_supersedes_overlay_without_realtime_free() {
+  RealtimeEngine engine;
+  const std::array<float, 128> sample = [] {
+    std::array<float, 128> value{};
+    value.fill(0.5F);
+    return value;
+  }();
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+  LMDJ_CHECK(bank.set_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+
+  auto initial = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+  LMDJ_CHECK(initial.has_value());
+  LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+             PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  render_frames(engine, 100);
+
+  const std::array first_event{lmdj::domain::PatternEvent{
+      PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 80}};
+  const std::array replacement_event{lmdj::domain::PatternEvent{
+      PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 100}};
+  auto first = PreparedPatternView::from_snapshot_with_overlay(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64), first_event);
+  auto replacement = PreparedPatternView::from_snapshot_with_overlay(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64), replacement_event);
+  auto committed = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 100));
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(replacement.has_value());
+  LMDJ_CHECK(committed.has_value());
+
+  const auto first_publication =
+      engine.publish_pattern_view(std::move(first.value()));
+  const auto replacement_publication =
+      engine.publish_pattern_view(std::move(replacement.value()));
+  const auto committed_publication =
+      engine.publish_pattern_view(std::move(committed.value()));
+  LMDJ_CHECK(first_publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(replacement_publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(committed_publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(first_publication.activation_frame == 96'000);
+  LMDJ_CHECK(replacement_publication.activation_frame == 96'000);
+  LMDJ_CHECK(committed_publication.activation_frame == 96'000);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation ==
+             committed_publication.generation);
+
+  render_frames(engine, 95'899);
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  g_allocations.store(0, std::memory_order_relaxed);
+  g_deallocations.store(0, std::memory_order_relaxed);
+  g_track_allocations.store(true, std::memory_order_relaxed);
+  engine.render(left.data(), right.data(), 2);
+  g_track_allocations.store(false, std::memory_order_relaxed);
+
+  const auto telemetry = engine.pattern_telemetry();
+  LMDJ_CHECK(g_allocations.load(std::memory_order_relaxed) == 0);
+  LMDJ_CHECK(g_deallocations.load(std::memory_order_relaxed) == 0);
+  LMDJ_CHECK(telemetry.current_generation == committed_publication.generation);
+  LMDJ_CHECK(telemetry.pending_generation == 0);
+  LMDJ_CHECK(telemetry.accepted_publications == 4);
+  LMDJ_CHECK(telemetry.applied_publications == 2);
+  LMDJ_CHECK(telemetry.superseded_publications == 2);
+  LMDJ_CHECK(engine.current_pattern_has_overlay() == false);
+  LMDJ_CHECK(engine.reclaim_retired_patterns() == 3);
 }
 
 }  // namespace
@@ -1821,4 +1892,5 @@ int main() {
   releasing_voice_is_hard_killed_by_a_second_stop();
   voice_shorter_than_the_ramp_multiplies_attack_and_boundary();
   publishes_immutable_patterns_at_the_next_bar_boundary();
+  newest_same_boundary_pattern_supersedes_overlay_without_realtime_free();
 }

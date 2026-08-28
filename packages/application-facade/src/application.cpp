@@ -1581,6 +1581,7 @@ struct Application::Impl {
     bool quantize_enabled{};
     std::uint8_t swing_percent{};
     std::uint64_t available_slots{};
+    std::uint64_t overlay_generation{};
     std::vector<domain::PatternEvent> pending_events;
     std::map<domain::PadSlotId, PressedSequencePad> pressed;
     std::optional<foundation::PatternId> pending_pattern_id;
@@ -1846,8 +1847,12 @@ struct Application::Impl {
   static void merge_pending(
       SequenceRuntime& runtime,
       domain::PatternEvent event) {
-    runtime.pending_events = domain::merge_pattern_events(
+    auto merged = domain::merge_pattern_events(
         runtime.pending_events, {std::move(event)});
+    if (merged != runtime.pending_events) {
+      runtime.pending_events = std::move(merged);
+      ++runtime.overlay_generation;
+    }
   }
 
   static void finalize_pressed(
@@ -1986,6 +1991,7 @@ struct Application::Impl {
         loaded.value().quantize_enabled,
         loaded.value().swing_percent,
         available_slot_mask(loaded.value()),
+        0,
         {},
         {},
         std::nullopt,
@@ -2123,7 +2129,10 @@ struct Application::Impl {
     runtime.expected_revision = project.revision;
     runtime.pending_pattern_id.reset();
     runtime.effective_runtime_frame.reset();
-    runtime.pending_events.clear();
+    if (!runtime.pending_events.empty()) {
+      runtime.pending_events.clear();
+      ++runtime.overlay_generation;
+    }
     runtime.pressed.clear();
     return foundation::Result<void>::success();
   }
@@ -2218,6 +2227,7 @@ struct Application::Impl {
       execution.emplace(std::move(committed.value()));
       runtime.expected_revision = execution->outcome.state.revision;
       runtime.pending_events.clear();
+      ++runtime.overlay_generation;
       runtime.last_flush_identity = identity;
       runtime.last_committed_revision = runtime.expected_revision;
       ++runtime.next_flush_seq;
@@ -2461,6 +2471,34 @@ struct Application::Impl {
         pending,
         std::nullopt,
     });
+  }
+
+  foundation::Result<SequenceOverlayProjection> query_sequence_overlay(
+      const SequenceOverlayRequest& request) const {
+    auto valid = validate_sequence_path_and_session(
+        request.project_path, request.session_id);
+    if (!valid.has_value()) {
+      return foundation::Result<SequenceOverlayProjection>::failure(
+          valid.error());
+    }
+    std::lock_guard lock(sequence_mutex);
+    const auto runtime = sequence_sessions.find(
+        sequence_key(request.project_path));
+    if (runtime == sequence_sessions.end() ||
+        runtime->second.session_id != request.session_id) {
+      return foundation::Result<SequenceOverlayProjection>::failure(
+          sequence_error(
+              ErrorCode::invalid_argument,
+              "Sequence overlay owner does not match",
+              {{"reason", "sequence_owner_mismatch"}}));
+    }
+    return foundation::Result<SequenceOverlayProjection>::success(
+        SequenceOverlayProjection{
+            runtime->second.session_id,
+            runtime->second.pattern_id,
+            runtime->second.overlay_generation,
+            runtime->second.pending_events,
+        });
   }
 
   foundation::Result<std::vector<SequenceRecoveryInfo>>
@@ -5104,6 +5142,20 @@ foundation::Result<SequenceStatus> Application::query_sequence_status(
     return impl_->query_sequence_status(request);
   } catch (...) {
     return foundation::Result<SequenceStatus>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<SequenceOverlayProjection>
+Application::query_sequence_overlay(
+    const SequenceOverlayRequest& request) const {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->query_sequence_overlay(request);
+  } catch (...) {
+    return foundation::Result<SequenceOverlayProjection>::failure(Error{
         ErrorCode::internal_error,
         "unexpected Application Facade Host API failure",
     });

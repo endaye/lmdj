@@ -94,6 +94,38 @@ Facade, Audio Runtime and Web Runtime Platform are updated in the same Task.
 | Stage 9 Issue acceptance | PASS: prerequisite #321, umbrella #265 and Tasks #266–#275 are `CLOSED / COMPLETED`; semantic gate #238 is also closed |
 | Immutable `1.0.37.0 · canary` snapshot | generated under `apps/architecture-portal/versioned_docs/version-1.0.37.0/`, `static/versions/1.0.37.0/`, `versioned_metadata/version-1.0.37.0.json` and `versioned_sidebars/version-1.0.37.0-sidebars.json` |
 
+## #375 pending-overlay source remediation — 2026-08-29
+
+This source Task closes the SR-D13 M1 wiring gap without changing Project
+Truth or persistence semantics. Application Facade exposes an immutable,
+active-owner-only pending-event projection; Web Runtime Platform combines it
+with the committed Runtime Snapshot; Audio Runtime schedules the newest view
+at the next Bar and retires superseded same-boundary views without allocation,
+deallocation, locking, Project access or journal access in the realtime
+callback. A successful flush or Stop publishes the clean committed view, so a
+pending event is audible from the next Bar and cannot survive as a stale or
+duplicate overlay after commit.
+
+| Source boundary | Fresh local evidence |
+| --- | --- |
+| Facade owner/generation/replace/reject/flush projection | PASS: `facade.sequence_surface` |
+| Audio same-boundary newest-view wins, zero realtime allocation/free | PASS: `audio.realtime_engine` |
+| Concurrent accepted = applied + superseded + pending conservation | PASS: `audio.snapshot_publication_stress` |
+| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; live hit → next-Bar repeat → rejected event unchanged → Stop → next-Bar clean committed repeat |
+| Focused suite | PASS: 4/4 |
+| `scripts/core.sh test dev full` | PASS: 79/79 |
+| `scripts/core.sh test dev stress` | PASS: 4/4 |
+| `scripts/core.sh proof` | PASS: 63/63 non-stress CTest plus schema/module/CLI/MCP/Golden/Sequence/package/Assembly proof |
+| `scripts/architecture-portal.sh check` | PASS: 59 Portal tests, 37 current pages, 10 diagram sources/20 outputs and 42 rendered routes |
+| Dependency / active-tree / version gates | PASS: vendored offline dependencies, active tree, product version tests and `1.0.37.0` verification |
+
+This is local source evidence only. Version allocation and integrated Product
+identity remain deferred to #379; the immutable Portal snapshot remains
+deferred to #380. No push, Pull Request, merge, tag, Release, deployment,
+publication or Channel promotion is established here. The physical/manual
+rows below remain unchanged and unverified. Hard-crash pending-tail persistence
+remains #373 and switch-boundary flushing remains #376.
+
 ## Physical and manual rows
 
 | Platform | Journey | Status |

@@ -25,7 +25,7 @@ inline constexpr std::size_t kRealtimeVoiceCapacity = 128;
 inline constexpr std::size_t kRealtimeBankCapacity = 4;
 inline constexpr std::size_t kRealtimePublishQueueCapacity = 4;
 inline constexpr std::size_t kRealtimePatternCapacity = 4;
-inline constexpr std::size_t kRealtimePatternPublishQueueCapacity = 1;
+inline constexpr std::size_t kRealtimePatternPublishQueueCapacity = 4;
 inline constexpr std::size_t kRealtimeCaptureCapacity = 4'096;
 inline constexpr std::size_t kRealtimeTriggerOutcomeCapacity = 4'096;
 // A legacy one-shot can publish both started and completed edges. Keep room
@@ -72,6 +72,7 @@ struct PatternTelemetry {
   std::uint64_t pending_activation_frame;
   std::uint64_t accepted_publications;
   std::uint64_t applied_publications;
+  std::uint64_t superseded_publications;
   std::uint64_t reclaimed_patterns;
   std::uint64_t publication_rejections;
 };
@@ -279,6 +280,7 @@ class RealtimeEngine final {
   std::size_t reclaim_retired_patterns() noexcept;
   std::optional<foundation::PatternId> current_pattern_id() const;
   std::optional<foundation::PatternId> pending_pattern_id() const;
+  std::optional<bool> current_pattern_has_overlay() const noexcept;
   std::optional<std::uint64_t> current_pattern_origin_frame() const noexcept;
   // Control thread, concurrent with render. Frees only reclaimable banks,
   // which by construction hold no live Voice.
@@ -350,6 +352,7 @@ class RealtimeEngine final {
     std::optional<PreparedPatternView> pattern;
     std::atomic<PatternState> state{PatternState::empty};
     std::uint64_t generation = 0;
+    std::uint64_t activation_frame = 0;
   };
 
   struct PatternPublishEntry {
@@ -462,9 +465,9 @@ class RealtimeEngine final {
   std::atomic<std::uint64_t> bank_slot_rejections_{0};
   std::atomic<std::uint64_t> publish_queue_drops_{0};
   std::atomic<std::uint64_t> pending_pattern_generation_{0};
-  std::atomic<std::uint64_t> pending_pattern_activation_frame_{0};
   std::atomic<std::uint64_t> accepted_pattern_publications_{0};
   std::atomic<std::uint64_t> applied_pattern_publications_{0};
+  std::atomic<std::uint64_t> superseded_pattern_publications_{0};
   std::atomic<std::uint64_t> reclaimed_patterns_{0};
   std::atomic<std::uint64_t> pattern_publication_rejections_{0};
   std::atomic<CaptureState> capture_state_{CaptureState::idle};

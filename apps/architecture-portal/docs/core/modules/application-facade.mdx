@@ -17,11 +17,11 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
 ## 2. 当前实现状态
-Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。当前 source 把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。
+Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。当前 source 还向匹配的 active session owner 提供带单调 generation 的 immutable pending-overlay projection；它是 Runtime 派生输入，不是 Project Truth、revision 或 receipt。非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 位于同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。
 ## 3. 所有权与依赖
 依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。
 ## 4. 架构与数据流
-Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Provider SDK → typed response/stream result。Sequence session/receipt、Sample import token、cache 与 Project writer lease 均由 Facade/Core 拥有。
+Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Provider SDK → typed response/stream result。Sequence session/receipt、pending-overlay projection、Sample import token、cache 与 Project writer lease 均由 Facade/Core 拥有；overlay projection 只复制当前内存事件，不扩大 JSON/C API 或持久化 surface。
 ## 5. API 与 Contract 边界
 C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；Bundle/Sample streaming API 不暴露 Project path 或 internals；Assembly Loader 校验锁定身份。
 ## 6. 状态、错误与并发
@@ -29,7 +29,7 @@ C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；Bundle
 ## 7. 产品使用方
 CLI、MCP、Native Host，以及通过 Web Runtime Platform 接入的 Creator/Diagnostic Web Host。
 ## 8. 测试与证据
-Application、Sample session/atomicity/cache/privacy/replay、Bundle round trip/import cancellation、Sequence begin-vs-authoring deterministic gate、orphan-journal seal-before-authoring、assembly loader、C API、stress 与 dynamic-load 测试。
+Application、Sample session/atomicity/cache/privacy/replay、Bundle round trip/import cancellation、Sequence pending-overlay owner/generation/replace/reject/flush、begin-vs-authoring deterministic gate、orphan-journal seal-before-authoring、assembly loader、C API、stress 与 dynamic-load 测试。
 ## 9. 限制与下一门禁
 Facade 不授权 Host 绕过 Project/Provider/Assembly 不变量。
 ## 10. 版本身份

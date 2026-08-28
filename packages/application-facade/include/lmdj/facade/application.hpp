@@ -205,6 +205,20 @@ struct SequenceStatusRequest {
   std::filesystem::path project_path;
 };
 
+struct SequenceOverlayRequest {
+  std::filesystem::path project_path;
+  foundation::SequenceSessionId session_id;
+};
+
+struct SequenceOverlayProjection {
+  foundation::SequenceSessionId session_id;
+  foundation::PatternId pattern_id;
+  std::uint64_t generation{};
+  std::vector<domain::PatternEvent> events;
+
+  bool operator==(const SequenceOverlayProjection&) const = default;
+};
+
 struct SequenceRecoveryRequest {
   std::filesystem::path project_path;
   foundation::SequenceSessionId session_id;
@@ -309,6 +323,8 @@ class Application {
   void abandon_sequence_sessions() noexcept;
   foundation::Result<SequenceStatus> query_sequence_status(
       const SequenceStatusRequest& request) const;
+  foundation::Result<SequenceOverlayProjection> query_sequence_overlay(
+      const SequenceOverlayRequest& request) const;
   foundation::Result<std::vector<SequenceRecoveryInfo>>
   list_sequence_recovery(const SequenceStatusRequest& request) const;
   foundation::Result<SequenceMutationResult> apply_sequence_recovery(
