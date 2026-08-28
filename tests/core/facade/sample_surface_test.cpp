@@ -1483,6 +1483,18 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
   LMDJ_CHECK(replacement.value().asset_id == AssetId{uuid(602)});
   LMDJ_CHECK(replacement.value().playback == PadPlayback{});
 
+  const std::string invalid_wav_text{"not a RIFF/WAVE file"};
+  const auto invalid_wav = std::as_bytes(std::span<const char>{
+      invalid_wav_text.data(), invalid_wav_text.size()});
+  const auto rejected =
+      import(uuid(700), uuid(701), uuid(702), 3, invalid_wav);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::unsupported_audio);
+  const auto after_rejection = application.inspect_sample({project, {0, 0}});
+  LMDJ_CHECK(after_rejection.has_value());
+  LMDJ_CHECK(after_rejection.value().project_revision == 3);
+  LMDJ_CHECK(after_rejection.value().asset_id == AssetId{uuid(602)});
+
   const auto long_source =
       import(uuid(603), uuid(604), uuid(605), 3, oversized);
   LMDJ_CHECK(long_source.has_value());

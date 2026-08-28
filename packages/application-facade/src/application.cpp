@@ -3676,6 +3676,11 @@ struct Application::Impl {
                   : bytes.error(),
               "Sample staging could not be read"));
     }
+    const auto metadata = cooker::inspect_wav(bytes.value());
+    if (!metadata.has_value()) {
+      return foundation::Result<SampleMutationResult>::failure(
+          metadata.error());
+    }
     const auto committed = projects.import_assign_sample_bytes(
         state.request.project_path,
         project_io::ProjectStore::ImportAssignSampleBytesRequest{
