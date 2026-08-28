@@ -102,7 +102,8 @@ the journal; any mismatch fails closed without a second Project mutation.
 Restart recovery applies the same receipt check before owner-loss sealing.
 
 The packaged Creator gate records assigned A2 before the armed A1 stop gesture,
-proves that stop gesture is absent from Sequence, records A1 only after Capture
+keeps A1 as the Sample mutation selection while A2 remains ordinary Sequence
+input, proves that stop gesture is absent from Sequence, records A1 only after Capture
 commit, stops, reloads/reopens, and inspects Project Truth. The exact acceptance
 is revision `48`, one A2 and one A1 event added in that order (no third armed-hit
 event), A1 assigned to the newly committed Asset, and an `audio/wav` artifact.

@@ -163,6 +163,7 @@ The Task also updates the approved Sequence design/decision, Stage 9 review disp
 - [x] On a matching retry, validate the original transaction command, receipt, event, assigned Pad, asset, artifact, and exact `N + 1` revision before replaying and completing the journal. On restart, perform the same receipt-driven reconciliation before sealing owner loss.
 - [x] Prove the reconciled session can append/commit a later flush and stop cleanly without a second Sample mutation.
 - [x] Strengthen the packaged Creator journey to record A2 before the armed A1 stop, reject the stop hit from Sequence, record A1 only after commit, stop, reload/reopen, and inspect exact persisted revision, event delta/order/count, Pad assignment, Asset, and WAV artifact identity.
+- [x] Keep the armed Capture Pad as the Sample selection owner while a different Pad remains ordinary playable/recordable Sequence input, so the eventual Capture commit retains its exact slot identity.
 - [x] Record the second `acceptance-journey-truncation` recurrence and absorb it into the `issue-done` prerequisite as a leg-by-leg far-side evidence map.
 
 Review-fix verification uses the same Version Management and Documentation Impact decisions as Task 1. Version allocation remains deferred to #379; current Portal/review/acceptance truth changes are required, while immutable snapshots remain untouched. The independently shared running-audio BPM-update → immediate switch failure remains outside #374 and is reported against #375 rather than hidden by this journey.

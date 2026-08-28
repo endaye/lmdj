@@ -193,6 +193,7 @@ interface SampleFixtureOptions {
   isRuntimeCurrent?: () => boolean;
   inspectSample?: (slot: number) => Promise<SampleInspect>;
   getAuditionPlayback?: (slot: number) => PadPlayback | null;
+  getArmedCaptureSlot?: () => number | null;
 }
 
 function sampleFixture(options: SampleFixtureOptions = {}) {
@@ -243,6 +244,9 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
       const sample = value.state().sample;
       return sample.selectedSlot === slot ? sample.auditionPlayback : null;
     }),
+    ...(options.getArmedCaptureSlot === undefined
+      ? {}
+      : {getArmedCaptureSlot: options.getArmedCaptureSlot}),
     onFilePickIntent(slot, source) {
       filePickIntents.push({slot, source});
     },
@@ -269,6 +273,27 @@ async function settle() {
 }
 
 describe("Creator input controller", () => {
+  test("keeps the armed Capture Pad selected while another Pad plays", async () => {
+    const value = sampleFixture({getArmedCaptureSlot: () => 0});
+    value.dispatch({
+      type: "sample-action",
+      action: {type: "slot-selected", slot: 0},
+    });
+
+    expect(value.controller.keyDown({
+      code: "KeyW",
+      repeat: false,
+      target: document.body,
+    })).toBe(true);
+    await settle();
+
+    expect(value.state().sample.selectedSlot).toBe(0);
+    expect(value.triggers).toEqual([
+      {slot: 1, velocity: 100, source: "keyboard"},
+    ]);
+    value.controller.dispose();
+  });
+
   test("selects an empty Pad and emits file-pick intent without an audio trigger", () => {
     const value = sampleFixture({isAssigned: () => false});
     const target = document.createElement("button");

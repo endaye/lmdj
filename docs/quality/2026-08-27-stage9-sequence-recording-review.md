@@ -230,7 +230,8 @@ Project 已到 `N + 1`，journal 与内存 runtime 却仍 armed 于 `N`，而 Cr
 receipt 规则完成 journal，再进入 owner-loss seal。故障矩阵覆盖 manifest 已发布/
 journal 未完成、冲突 retry、fresh-command retry、后续 flush/stop 与 restart；packaged
 Creator case 另以 A2→armed A1 stop→commit→A1→Stop→reload 的次序检查 exact persisted
-event delta/order/count、Pad/Asset/WAV 与 revision。共享 running-audio BPM update→immediate
+event delta/order/count、Pad/Asset/WAV 与 revision；armed 期间其他 Pad 的普通输入不得
+把 Sample mutation selection 从 A1 改到 A2。共享 running-audio BPM update→immediate
 switch 的 publication failure 仍单列为 #375 集成 blocker，不以移动步骤或弱化断言隐藏。
 
 ## 四、中危发现
