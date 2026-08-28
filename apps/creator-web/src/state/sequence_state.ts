@@ -73,7 +73,15 @@ export function reduceSequence(
       if (state.phase !== "recording") return state;
       return {...state, phase: "switch-pending", status: action.status};
     case "boundary":
-      if (state.phase !== "switch-pending") return state;
+      if (
+        state.phase !== "switch-pending" ||
+        state.status?.pendingPatternId !== action.patternId ||
+        action.status.state !== "active" ||
+        action.status.sessionId !== state.sessionId ||
+        action.status.patternId !== action.patternId ||
+        action.status.pendingPatternId !== null ||
+        action.status.effectiveRuntimeFrame !== null
+      ) return state;
       return {...state, phase: "recording", status: action.status,
         selectedPatternId: action.patternId};
     case "stopped":
