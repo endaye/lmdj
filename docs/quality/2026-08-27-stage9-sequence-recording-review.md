@@ -276,6 +276,12 @@ replay/collision 只比较前者，reconcile/status/apply 只读取后者。seal
 两个字段，旧 recovery-only snapshot 不猜测缺失的 original。Project I/O 与 Facade
 回归覆盖 exact A+B retry、B/其他 payload collision、serialize/reload、只恢复并单次
 apply B，以及 32-thread inverse completion。
+最终 precedence review 发现 recovery apply 先以最新 `pending_events` 起始、再合并
+较旧 incomplete flush residual，导致 F0(A-old) 可反向覆盖之后已 acknowledgement 的
+tail A-new；status/list 还把同-key 两份输入直接相加为 3。修复后 Facade 统一构造
+canonical effective recovery：依 flush 顺序合并 incomplete residual，再最后合并
+durable tail。确定性 case 证明 active/recoverable count 为 unique A-new+B 两条、显式
+apply 只写一 revision 且得到 A-new+B，重复 apply/discard 不再修改 Project。
 该 source disposition 不是 merge、Product
 Build、immutable snapshot、远端 CI 或物理验收证据；这些仍分别等待 #379、#380
 与 #360。

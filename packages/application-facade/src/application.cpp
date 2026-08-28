@@ -1604,6 +1604,18 @@ foundation::Result<void> validate_initial_pattern(
   return foundation::Result<void>::success();
 }
 
+std::vector<domain::PatternEvent> canonical_recovery_events(
+    const project_io::ActiveSequenceJournal& journal) {
+  std::vector<domain::PatternEvent> recovered;
+  for (const auto& flush : journal.flushes) {
+    if (!flush.completed) {
+      recovered = domain::merge_pattern_events(
+          recovered, flush.recovery_events);
+    }
+  }
+  return domain::merge_pattern_events(recovered, journal.pending_events);
+}
+
 }  // namespace
 
 struct RuntimeProjectWriterLease::Impl {
@@ -2591,12 +2603,7 @@ struct Application::Impl {
     }
     const auto active = sequence_journals.read_active(request.project_path);
     if (active.has_value()) {
-      const auto pending = std::accumulate(
-          active.value().flushes.begin(), active.value().flushes.end(),
-          static_cast<std::uint64_t>(active.value().pending_events.size()),
-          [](std::uint64_t total, const auto& flush) {
-            return total + (flush.completed ? 0U : flush.recovery_events.size());
-          });
+      const auto pending = canonical_recovery_events(active.value()).size();
       return foundation::Result<SequenceStatus>::success(SequenceStatus{
           active.value().state == project_io::SequenceSessionState::switching
               ? SequenceRecordState::switching
@@ -2622,12 +2629,7 @@ struct Application::Impl {
       return foundation::Result<SequenceStatus>::success(SequenceStatus{});
     }
     const auto& candidate = recovery.value().front().journal;
-    const auto pending = std::accumulate(
-        candidate.flushes.begin(), candidate.flushes.end(),
-        static_cast<std::uint64_t>(candidate.pending_events.size()),
-        [](std::uint64_t total, const auto& flush) {
-          return total + (flush.completed ? 0U : flush.recovery_events.size());
-        });
+    const auto pending = canonical_recovery_events(candidate).size();
     return foundation::Result<SequenceStatus>::success(SequenceStatus{
         SequenceRecordState::recoverable,
         candidate.session_id,
@@ -2656,13 +2658,8 @@ struct Application::Impl {
     std::vector<SequenceRecoveryInfo> result;
     result.reserve(listed.value().size());
     for (const auto& candidate : listed.value()) {
-      const auto event_count = std::accumulate(
-          candidate.journal.flushes.begin(), candidate.journal.flushes.end(),
-          static_cast<std::uint64_t>(
-              candidate.journal.pending_events.size()),
-          [](std::uint64_t total, const auto& flush) {
-            return total + (flush.completed ? 0U : flush.recovery_events.size());
-          });
+      const auto event_count =
+          canonical_recovery_events(candidate.journal).size();
       result.push_back(SequenceRecoveryInfo{
           candidate.journal.session_id,
           candidate.journal.pattern_id,
@@ -2732,13 +2729,7 @@ struct Application::Impl {
           {{"reason", "pattern_changed"},
            {"pattern_id", destination.value()}}));
     }
-    auto recovered_events = candidate->journal.pending_events;
-    for (const auto& flush : candidate->journal.flushes) {
-      if (!flush.completed) {
-        recovered_events = domain::merge_pattern_events(
-            recovered_events, flush.recovery_events);
-      }
-    }
+    auto recovered_events = canonical_recovery_events(candidate->journal);
     auto begun = sequence_journals.begin(
         request.project_path,
         request.session_id,

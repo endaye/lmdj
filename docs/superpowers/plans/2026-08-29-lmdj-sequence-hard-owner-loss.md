@@ -241,6 +241,22 @@ CMake/CTest, Docusaurus Architecture Portal.
   exact-stage only declared files, and create a new local Conventional Commit
   without any remote transition.
 
+### Integration Review Fix 2: latest-tail recovery precedence
+
+- [x] **Step 27: Reproduce recovery precedence in RED.** Leave an incomplete
+  F0(A-old), durably acknowledge a later tail A-new+B, seal owner loss before
+  another flush, and prove status/list overcount three events while apply lets
+  the older flush overwrite A-new.
+- [x] **Step 28: Share one canonical effective recovery batch.** Merge
+  incomplete flush residuals in durable flush order, then merge the latest
+  `pending_events` last so acknowledged tail values win same-key replacement.
+  Use this exact batch for active/recoverable status, recovery-list counts, and
+  apply rather than summing overlapping containers.
+- [x] **Step 29: Prove precedence and single application.** Require both status
+  surfaces to report two unique events, apply A-new+B in one revision, reject
+  repeat apply/discard without mutation, run all required gates, append the
+  external report, audit pitfalls, exact-stage, and create a new local commit.
+
 ## Version Management
 
 Version impact: deferred to [#379](https://github.com/endaye/lmdj/issues/379).

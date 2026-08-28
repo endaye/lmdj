@@ -1064,6 +1064,100 @@ void test_inverse_completion_recovery_applies_only_effective_residual_once() {
   LMDJ_CHECK(store.load(project).value().revision == 4);
 }
 
+void test_durable_tail_overrides_older_flush_residual_in_recovery() {
+  TempDirectory temp;
+  const auto project = temp.path() / "tail-precedence-recovery.lmdj";
+  const PatternId pattern_id{uuid(109)};
+  const SequenceSessionId session_id{uuid(110)};
+  {
+    Application creator(config(temp.path()));
+    create_recordable_project(creator, project, pattern_id);
+  }
+
+  lmdj::project_io::ProjectStore store;
+  lmdj::project_io::SequenceJournal journal;
+  const auto initial = store.load(project);
+  LMDJ_CHECK(initial.has_value());
+  const auto& pattern = initial.value().patterns.at(pattern_id);
+  LMDJ_CHECK(
+      journal
+          .begin(
+              project,
+              session_id,
+              pattern_id,
+              pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(pattern),
+              initial.value().revision)
+          .has_value());
+
+  const lmdj::domain::PatternEvent old_value{
+      PadSlotId{0, 0}, 0, 120, 50};
+  const lmdj::domain::PatternEvent new_value{
+      PadSlotId{0, 0}, 0, 240, 110};
+  const lmdj::domain::PatternEvent additional{
+      PadSlotId{0, 1}, 240, 120, 70};
+  const auto first_command = CommandId{uuid(111)};
+  const auto first = journal.append_flush(
+      project,
+      session_id,
+      first_command,
+      pattern_id,
+      initial.value().revision,
+      std::vector{old_value});
+  LMDJ_CHECK(first.has_value());
+  const auto failed = store.execute_sequence_flush(
+      project,
+      {session_id,
+       first.value().flush_seq,
+       CommandId{uuid(112)},
+       pattern_id});
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK(store.load(project).value().revision == initial.value().revision);
+  LMDJ_CHECK(
+      journal
+          .append_tail(
+              project,
+              session_id,
+              pattern_id,
+              initial.value().revision,
+              1,
+              std::vector{new_value, additional})
+          .has_value());
+  const auto reconciled = store.reconcile_sequence_recovery(project);
+  LMDJ_CHECK(reconciled.has_value());
+  LMDJ_CHECK(reconciled.value().size() == 1);
+
+  Application restarted(config(temp.path()));
+  const auto status = restarted.query_sequence_status({project});
+  LMDJ_CHECK(status.has_value());
+  LMDJ_CHECK(status.value().state == SequenceRecordState::recoverable);
+  LMDJ_CHECK(status.value().pending_event_count == 2);
+  const auto candidates = restarted.list_sequence_recovery({project});
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().size() == 1);
+  LMDJ_CHECK(candidates.value().front().event_count == 2);
+
+  const auto applied = restarted.apply_sequence_recovery(
+      {project, session_id, std::nullopt});
+  LMDJ_CHECK(applied.has_value());
+  LMDJ_CHECK(
+      applied.value().committed_revision == initial.value().revision + 1);
+  const auto recovered = store.load(project);
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(
+      recovered.value().revision == initial.value().revision + 1);
+  const std::vector expected_recovery{new_value, additional};
+  LMDJ_CHECK(
+      recovered.value().patterns.at(pattern_id).events ==
+      expected_recovery);
+  LMDJ_CHECK(!restarted.apply_sequence_recovery(
+      {project, session_id, std::nullopt}).has_value());
+  LMDJ_CHECK(!restarted.discard_sequence_recovery(
+      {project, session_id, std::nullopt}).has_value());
+  LMDJ_CHECK(
+      store.load(project).value().revision == initial.value().revision + 1);
+}
+
 void test_writer_lease_blocks_competing_sequence_owner() {
   TempDirectory temp;
   const auto project = temp.path() / "lease.lmdj";
@@ -1266,6 +1360,7 @@ int main() {
     test_later_flush_supersedes_failed_flush_before_recovery_apply();
     test_replayed_completion_applies_only_durable_tail_residual_once();
     test_inverse_completion_recovery_applies_only_effective_residual_once();
+    test_durable_tail_overrides_older_flush_residual_in_recovery();
     test_writer_lease_blocks_competing_sequence_owner();
     test_begin_cannot_cross_an_authoring_admission();
     test_orphan_journal_is_sealed_before_authoring();
