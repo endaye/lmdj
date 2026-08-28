@@ -156,11 +156,11 @@ CASES = {
 }
 
 TOP_LEVELS = {
-    ".claude", ".gitattributes", ".github", ".gitignore", "AGENTS.md",
-    "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "README.md", "apps",
-    "cmake", "contracts", "docs", "netlify.toml", "output", "packages",
-    "packaging", "products", "providers", "references", "scripts", "testdata",
-    "tests", "third_party", "tools", "workers",
+    ".agents", ".claude", ".gitattributes", ".github", ".gitignore",
+    "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "LICENSE",
+    "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml",
+    "output", "packages", "packaging", "products", "providers", "references",
+    "scripts", "testdata", "tests", "third_party", "tools", "workers",
 }
 
 CONCURRENCY_STRESS_SOURCES = (
@@ -352,6 +352,37 @@ class ChangeScopeTest(unittest.TestCase):
             )
         ]
         self.assertEqual(unmatched, [], "unclassified tracked paths:\n" + "\n".join(unmatched))
+
+    def test_every_tracked_top_level_is_admitted_by_the_policy(self):
+        # `_evaluate_ready_paths` checks the top-level segment against
+        # `known_top_levels` independently of, and before, any routing rule
+        # match, so a rule alone does not stop the unknown-top-level upgrade.
+        # Two rule additions have already shipped without the matching
+        # admission -- `.agents/` and `LICENSE` -- and each silently ran full
+        # CI for a Markdown-only change until this gate existed. Derive the
+        # expectation from the worktree so a new top level cannot land with
+        # only half the policy updated.
+        inventory = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True
+        ).stdout
+        tracked = {
+            item.decode("utf-8").split("/", 1)[0]
+            for item in inventory.split(b"\0") if item
+        }
+        unknown = sorted(tracked - set(self.policy["known_top_levels"]))
+        self.assertEqual(
+            unknown, [],
+            "scope policy does not admit every tracked top level.\n"
+            f"why: {unknown} are tracked in the worktree but absent from "
+            "known_top_levels, and the classifier rejects an unlisted "
+            "top-level segment before any routing rule is consulted, so every "
+            "change touching them upgrades the run to full CI even when a "
+            "rule already routes the path.\n"
+            "remedy: add each name to `known_top_levels` in "
+            "scripts/ci/scope_policy.json and to `TOP_LEVELS` in this file, "
+            "and confirm the path also matches a `rules` or `full_rules` "
+            "entry.",
+        )
 
     def test_policy_rejects_mutations_that_weaken_the_closed_v1_contract(self):
         mutations = {
