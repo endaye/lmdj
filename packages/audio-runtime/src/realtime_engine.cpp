@@ -14,6 +14,9 @@ namespace {
 
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
+static_assert(
+    kRealtimeMaximumSampleFrames ==
+    std::numeric_limits<decltype(cooker::ResolvedPlayback::end_frame)>::max());
 
 foundation::Result<void> invalid_argument(std::string message) {
   return foundation::Result<void>::failure(
@@ -333,7 +336,7 @@ void RealtimeEngine::stop_voice(
         voice,
         RuntimeVoiceState::stopped,
         runtime_frame,
-        static_cast<std::uint32_t>(voice.cursor)));
+        voice.cursor));
   }
   // The voice keeps rendering a kRealtimeRampFrames tail to avoid a step
   // discontinuity; the logical stop (publication) has already happened.
@@ -381,7 +384,7 @@ foundation::Result<void> RealtimeEngine::load_sample(
   if (mono_pcm.empty()) {
     return invalid_argument("realtime sample PCM must not be empty");
   }
-  if (mono_pcm.size() > std::numeric_limits<std::uint32_t>::max()) {
+  if (mono_pcm.size() > kRealtimeMaximumSampleFrames) {
     return invalid_argument("realtime sample PCM is too large");
   }
   if (!std::all_of(mono_pcm.begin(), mono_pcm.end(), [](float value) {

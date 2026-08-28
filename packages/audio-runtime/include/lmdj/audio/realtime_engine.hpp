@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <type_traits>
@@ -16,6 +17,8 @@
 namespace lmdj::audio {
 
 inline constexpr std::uint32_t kRealtimeSampleRate = 48'000;
+inline constexpr std::uint32_t kRealtimeMaximumSampleFrames =
+    std::numeric_limits<std::uint32_t>::max();
 // Voice attack/release ramp length: 2 ms at the fixed realtime sample rate.
 inline constexpr std::uint32_t kRealtimeRampFrames = 96;
 inline constexpr std::uint16_t kRealtimeChannels = 2;
@@ -366,7 +369,7 @@ class RealtimeEngine final {
     std::size_t frame_count = 0;
     std::uint32_t start_frame = 0;
     std::uint32_t end_frame = 0;
-    std::size_t cursor = 0;
+    std::uint32_t cursor = 0;
     float gain = 0.0F;
     domain::TriggerMode trigger_mode = domain::TriggerMode::one_shot;
     bool active = false;
