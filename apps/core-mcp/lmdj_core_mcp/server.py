@@ -229,6 +229,10 @@ def input_schemas() -> dict[str, dict]:
             {"project_path": path, "slot": slot},
             ["project_path", "slot"],
         ),
+        "lmdj.sample.quota": object_schema(
+            {"project_path": path, "slot": slot},
+            ["project_path", "slot"],
+        ),
         "lmdj.sample.waveform": object_schema(
             {
                 "project_path": path,
@@ -526,6 +530,7 @@ def tool_table() -> tuple[Tool, ...]:
         ("lmdj.project.create", "project.create", "command"),
         ("lmdj.project.inspect", "project.inspect", "query"),
         ("lmdj.sample.inspect", "sample.inspect", "query"),
+        ("lmdj.sample.quota", "sample.quota", "query"),
         ("lmdj.sample.waveform", "sample.waveform", "query"),
         ("lmdj.sample.import.begin", "sample.import.begin", "command"),
         ("lmdj.sample.import.chunk", "sample.import.chunk", "command"),

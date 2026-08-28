@@ -17,19 +17,19 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
 ## 2. 当前实现状态
-Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。每个 Sequence event 先把 completed events 与未释放 press 的 240-tick 默认形态组成 canonical tail 并耐久 append，成功后才更新内存 state 与 acknowledgement；release 的后续 snapshot 替换真实 duration。运行中的 session 会在 journal append 后保留 exact in-flight flush；post-commit 返回失败的重试先完成该 identity，只消费 immutable original command payload，后到事件仍等待新命令。effective recovery 依 flush 顺序合并 incomplete residual、最后合并最新 durable tail，使同-key acknowledgement 覆盖旧值；active/recoverable status、list 与 apply 共享这一 canonical unique batch，因此 completion 过滤不改变 replay identity、不会恢复已提交事件或重计重叠输入。当前 source 也把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。
+Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。`sample.quota` 以 Project Truth 和目标 Pad 为输入，返回计算所用 revision、Bank/Project target-exclusive 用量、有效剩余额度与目标 Bank 的逐 Pad 占用；查询不读取 Runtime publication residency。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。每个 Sequence event 先把 completed events 与未释放 press 的 240-tick 默认形态组成 canonical tail 并耐久 append，成功后才更新内存 state 与 acknowledgement；release 的后续 snapshot 替换真实 duration。运行中的 session 会在 journal append 后保留 exact in-flight flush；post-commit 返回失败的重试先完成该 identity，只消费 immutable original command payload，后到事件仍等待新命令。effective recovery 依 flush 顺序合并 incomplete residual、最后合并最新 durable tail，使同-key acknowledgement 覆盖旧值；active/recoverable status、list 与 apply 共享这一 canonical unique batch，因此 completion 过滤不改变 replay identity、不会恢复已提交事件或重计重叠输入。当前 source 也把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。
 ## 3. 所有权与依赖
 依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。
 ## 4. 架构与数据流
 Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Provider SDK → typed response/stream result。Sequence session/receipt、Sample import token、cache 与 Project writer lease 均由 Facade/Core 拥有。
 ## 5. API 与 Contract 边界
-C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；Bundle/Sample streaming API 不暴露 Project path 或 internals；Assembly Loader 校验锁定身份。
+C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；`sample.quota` 请求恰含 `operation/project_path/slot`，成功结果中的 `project_revision` 必须作为后续 `sample.import.begin.expected_revision`。Bundle/Sample streaming API 不暴露 Project internals；Assembly Loader 校验锁定身份。
 ## 6. 状态、错误与并发
-错误翻译保留公共类别；Runtime Snapshot 准备复用 Audio Runtime 的 overflow-checked Bank/generation 账本，长 Sample 不再被单 Pad 帧数规则提前拒绝，失败不会修改 Project Truth 或替换已发布 generation。本地 Sequence mutex 只负责进程内 admission 排序，Project I/O 仍在 writer lease 内重判持久 authority；C API stress 验证并发生命周期。
+错误翻译保留公共类别与配额详情；查询和 Sample commit 共用 Audio Runtime 的 overflow-checked Bank/generation 账本，较小的 remaining 约束生效、相等时 Bank 优先。提交恰好允许 effective remaining frames，超一 mono frame 确定性返回 `BANK_QUOTA_EXHAUSTED` 或 `PROJECT_QUOTA_EXHAUSTED`；revision 漂移先返回 `REVISION_CONFLICT`，拒绝不会修改 Project Truth 或已发布 generation。Runtime Snapshot 准备复用同一账本，publication residency 仍是独立瞬态 Host/Attempt 状态。本地 Sequence mutex 只负责进程内 admission 排序，Project I/O 仍在 writer lease 内重判持久 authority；C API stress 验证并发生命周期。
 ## 7. 产品使用方
 CLI、MCP、Native Host，以及通过 Web Runtime Platform 接入的 Creator/Diagnostic Web Host。
 ## 8. 测试与证据
-Application、Sample session/atomicity/cache/privacy/replay、Bundle round trip/import cancellation、Sequence begin-vs-authoring deterministic gate、orphan-journal seal-before-authoring、真实子进程 `SIGKILL` 后 acknowledged tail 恢复/identity/order/单 revision gate、inverse completion 后 exact original retry 与 residual 单次 apply、F0(A-old)+tail(A-new+B) 的 unique count/tail-last/apply-once、assembly loader、C API、stress 与 dynamic-load 测试。
+Application、Sample quota exact/+1-frame、target replacement、revision binding、session/atomicity/cache/privacy/replay、CLI/MCP/Native parity、Bundle round trip/import cancellation、Sequence begin-vs-authoring deterministic gate、orphan-journal seal-before-authoring、真实子进程 `SIGKILL` 后 acknowledged tail 恢复/identity/order/单 revision gate、inverse completion 后 exact original retry 与 residual 单次 apply、F0(A-old)+tail(A-new+B) 的 unique count/tail-last/apply-once、assembly loader、C API、stress 与 dynamic-load 测试。
 ## 9. 限制与下一门禁
 Facade 不授权 Host 绕过 Project/Provider/Assembly 不变量。
 ## 10. 版本身份
