@@ -860,18 +860,28 @@ def main() -> int:
         "deadline on a slow runner",
     )
     sequence_journey = re.search(
-        r'test\("Stage 9 Chromium records, overdubs, replays, reloads, and '
-        r'exposes observer status".*?\n\}\);',
+        r'test\("Stage 9 Chromium records across an acknowledged switch, '
+        r'reloads, and exposes observer status".*?\n\}\);',
         browser_spec_text,
         re.DOTALL,
     )
-    require(sequence_journey is not None, "Stage 9 Sequence journey is missing")
+    require(
+        sequence_journey is not None,
+        "why: the packaged Stage 9 Sequence journey is missing; remedy: keep "
+        "the named Chromium record/switch/reload journey in the Formal Host spec",
+    )
     require(
         "pendingEventCount: 0" in sequence_journey.group(0)
         and "replayed: true" in sequence_journey.group(0)
+        and "requestPatternSwitch" in sequence_journey.group(0)
+        and "__sequenceBoundaries" in sequence_journey.group(0)
+        and "continued.press" in sequence_journey.group(0)
+        and "switchedPattern.events" in sequence_journey.group(0)
         and "snapshot.reload" in sequence_journey.group(0),
-        "packaged Sequence proof must observe a drained journal, prove the "
-        "idempotent stop boundary, and reload committed Project Truth",
+        "why: the packaged Sequence proof does not cross the acknowledged "
+        "switch boundary into committed new-Pattern truth; remedy: assert the "
+        "drained journal, replayed stop, boundary acknowledgement, first later "
+        "event, both Patterns, and reload in the named journey",
     )
     runtime_gate = re.search(
         r"run_audio_worklet_conformance\(\)\s*\{(.*?)\n\}",
