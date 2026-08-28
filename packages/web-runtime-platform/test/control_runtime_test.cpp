@@ -1465,6 +1465,209 @@ void test_stop_replay_recovers_a_committed_clean_publication_failure() {
   LMDJ_CHECK(runtime->engine().telemetry().started_voices == 3);
 }
 
+void test_authoritative_switch_supersedes_overlay_and_stop_cancels_target() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 740, 741, 0);
+  const auto target_pattern = uuid(11);
+  const auto& created = check_exact_success(
+      runtime->dispatch(
+          "pattern.create",
+          {{"command_id", uuid(742)},
+           {"expected_revision", 2},
+           {"pattern_id", target_pattern},
+           {"bars", 1}},
+          {}),
+      {"committed_revision", "pattern_id", "bars", "replayed",
+       "project_revision"});
+  LMDJ_CHECK(created.at("committed_revision") == 3);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(runtime->dispatch(
+      "sequence.record.begin",
+      {{"session_id", kSequenceSessionId},
+       {"pattern_id", kPatternId},
+       {"expected_revision", 3}},
+      {}));
+
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  const auto overlay = runtime->engine().pattern_telemetry();
+  LMDJ_CHECK(overlay.pending_generation != 0);
+  LMDJ_CHECK(runtime->engine().pending_pattern_id() ==
+             lmdj::foundation::PatternId{std::string(kPatternId)});
+
+  const auto& switching = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.switch-request",
+          {{"session_id", kSequenceSessionId},
+           {"next_pattern_id", target_pattern}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "pattern_publication"});
+  LMDJ_CHECK(switching.at("state") == "switching");
+  LMDJ_CHECK(switching.at("pending_pattern_id") == target_pattern);
+  LMDJ_CHECK(runtime->engine().pending_pattern_id() ==
+             lmdj::foundation::PatternId{target_pattern});
+  LMDJ_CHECK(runtime->engine().pattern_telemetry().superseded_publications >= 1);
+  OneShotAudioDriver audio(runtime->engine());
+  audio.render_one();
+
+  const auto revision_before_settings = switching.at("project_revision");
+  check_error(
+      runtime->dispatch(
+          "sequence.settings.update",
+          {{"command_id", uuid(743)},
+           {"expected_revision", revision_before_settings},
+           {"session_id", kSequenceSessionId},
+           {"bpm", 90},
+           {"quantize_enabled", nullptr},
+           {"swing_percent", nullptr}},
+          {}),
+      "INVALID_ARGUMENT");
+  const auto unchanged = inspect_project(temp.path(), kProjectId);
+  LMDJ_CHECK(unchanged.at("project_revision") == revision_before_settings);
+  LMDJ_CHECK(unchanged.at("result").at("project").at("bpm") == 120);
+
+  const auto stop_command = uuid(744);
+  check_exact_success(
+      lmdj::web_runtime::testing::fail_next_pattern_publication(*runtime),
+      {"armed"});
+  check_error(
+      runtime->dispatch(
+          "sequence.record.stop",
+          {{"session_id", kSequenceSessionId}, {"command_id", stop_command}},
+          {}),
+      "INVALID_ARGUMENT");
+  LMDJ_CHECK(!runtime->engine().pending_pattern_id().has_value());
+  const auto& replayed = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.stop",
+          {{"session_id", kSequenceSessionId}, {"command_id", stop_command}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "runtime_frame", "pattern_publication"});
+  LMDJ_CHECK(replayed.at("state") == "inactive");
+  LMDJ_CHECK(replayed.at("replayed") == true);
+  LMDJ_CHECK(replayed.at("pattern_publication").is_object());
+  for (std::size_t callback = 0; callback < 1'100; ++callback) {
+    audio.render_one();
+  }
+  LMDJ_CHECK(runtime->engine().current_pattern_id() ==
+             lmdj::foundation::PatternId{std::string(kPatternId)});
+  LMDJ_CHECK(runtime->engine().current_pattern_has_overlay() == false);
+  const auto saved = inspect_project(temp.path(), kProjectId);
+  LMDJ_CHECK(saved.at("result")
+                 .at("project")
+                 .at("patterns")
+                 .at(kPatternId)
+                 .at("events")
+                 .size() == 1);
+}
+
+void test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 745, 746, 0);
+  const auto target_pattern = uuid(12);
+  check_success(runtime->dispatch(
+      "pattern.create",
+      {{"command_id", uuid(747)},
+       {"expected_revision", 2},
+       {"pattern_id", target_pattern},
+       {"bars", 1}},
+      {}));
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(runtime->dispatch(
+      "sequence.record.begin",
+      {{"session_id", kSequenceSessionId},
+       {"pattern_id", kPatternId},
+       {"expected_revision", 3}},
+      {}));
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  const auto& settings = check_exact_success(
+      runtime->dispatch(
+          "sequence.settings.update",
+          {{"command_id", uuid(748)},
+           {"expected_revision", 3},
+           {"session_id", kSequenceSessionId},
+           {"bpm", 90},
+           {"quantize_enabled", nullptr},
+           {"swing_percent", nullptr}},
+          {}),
+      {"bpm", "quantize_enabled", "swing_percent", "committed_revision",
+       "replayed", "project_revision", "pattern_publication"});
+  LMDJ_CHECK(settings.at("pattern_publication").is_object());
+
+  const auto& switching = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.switch-request",
+          {{"session_id", kSequenceSessionId},
+           {"next_pattern_id", target_pattern}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "pattern_publication"});
+  const auto boundary =
+      switching.at("effective_runtime_frame").get<std::uint64_t>();
+  LMDJ_CHECK(switching.at("pattern_publication").at("activation_frame") ==
+             boundary);
+  OneShotAudioDriver audio(runtime->engine());
+  while (runtime->engine().telemetry().rendered_frames <= boundary) {
+    audio.render_one();
+  }
+  const auto notification = runtime->drain_sequence_bar_boundary();
+  LMDJ_CHECK(notification.has_value());
+  LMDJ_CHECK(notification->pattern_id == target_pattern);
+  LMDJ_CHECK(!runtime->drain_sequence_bar_boundary().has_value());
+  const auto& flushed = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.flush",
+          {{"session_id", kSequenceSessionId}, {"command_id", uuid(749)}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "runtime_frame", "pattern_publication"});
+  LMDJ_CHECK(flushed.at("state") == "active");
+  LMDJ_CHECK(flushed.at("pattern_id") == target_pattern);
+  LMDJ_CHECK(flushed.at("pattern_publication").is_null());
+  LMDJ_CHECK(runtime->engine().current_pattern_id() ==
+             lmdj::foundation::PatternId{target_pattern});
+  const auto saved = inspect_project(temp.path(), kProjectId);
+  LMDJ_CHECK(saved.at("result")
+                 .at("project")
+                 .at("patterns")
+                 .at(kPatternId)
+                 .at("events")
+                 .size() == 1);
+}
+
 void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   TempDirectory temp;
   {
@@ -3790,6 +3993,8 @@ int main() {
     test_owner_loss_cleanup_failure_stops_and_clears_the_overlay();
     test_pending_sequence_overlay_repeats_and_commits_without_duplicate();
     test_stop_replay_recovers_a_committed_clean_publication_failure();
+    test_authoritative_switch_supersedes_overlay_and_stop_cancels_target();
+    test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();

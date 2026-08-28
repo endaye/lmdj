@@ -4178,6 +4178,12 @@ struct Application::Impl {
                   found->second.expected_revision == revision &&
                   runtime_frame >= found->second.last_runtime_frame,
               "Sequence settings owner does not match");
+      if (bpm.has_value() && found->second.pending_pattern_id.has_value()) {
+        return error_envelope(sequence_error(
+            ErrorCode::invalid_argument,
+            "Sequence BPM cannot change while a Pattern switch is pending",
+            {{"reason", "switch_pending"}}));
+      }
     }
     const auto updated = projects.execute_with_identity(
         path,

@@ -296,6 +296,15 @@ SR-D22 指纹门保证 Project Truth 不会双写（无数据腐化），这是�
 边界帧、引擎已按旧 BPM 发布的激活帧、新锚点下的音乐 Bar 三者分裂——正是
 SR-D23 禁止的边界不同一。未测试。
 
+**2026-08-29 source disposition:** #375 Review Fix 3 在 Facade admission
+处选择获准的 fail-before-mutation 合约：只要 session 已有 pending Pattern，
+BPM update 就以 `INVALID_ARGUMENT` / `reason:switch_pending` 拒绝，Project
+revision、BPM、anchor 与 Runtime publication 均不改变。Quantize/Swing 不改变
+transport boundary，仍可更新。若 BPM update 已先成功并发布 immutable view，
+随后 switch 可凭精确 pending generation、源 Pattern 与 activation frame 的
+authority 确定性取代它；普通不同 Pattern overlap 仍拒绝。Facade、ControlRuntime
+及 packaged Chromium 都有回归证据；版本集成仍由 #379 管理。
+
 ### M5 恢复不可发现、恢复 UI 无指纹信息（SR-D17/D22 的 UX 半途）
 
 Creator 的 `refreshSequence` 只在停录失败、settings 更新后、recover/discard
@@ -490,7 +499,7 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
 | 未 flush 音的下一圈可听性 | M1（#375 source-fixed；#379/#380 尚未集成） |
 | kill -9 / 硬崩溃后恢复候选出现 | M2 |
 | 提交后故障 + 同 `command_id` 重试 | M3 |
-| Pending switch 中改 BPM | M4 |
+| Pending switch 中改 BPM | M4（#375 Review Fix 3 source-fixed；#379 待集成） |
 | reload → recover 浏览器旅程；恢复指纹 mismatch 的 Creator 路径 | M5/M8 |
 | 「切 Sample：停录 flush 后 Trim 成功」的正半段 | §12 |
 | 「Record 中切 Sample 表面再开麦：会话已结束不叠加」 | §12 |

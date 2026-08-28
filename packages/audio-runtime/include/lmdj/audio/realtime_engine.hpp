@@ -66,6 +66,17 @@ struct PatternPublication {
   std::uint64_t activation_frame;
 };
 
+// Exact control-thread authority for replacing a pending Pattern publication
+// with a different Pattern. Ordinary publications may only supersede the same
+// Pattern at the same boundary; Sequence switching and cancellation must prove
+// the generation, Pattern identity, and boundary they were authorized to
+// supersede.
+struct PatternReplacementAuthority {
+  std::uint64_t generation;
+  foundation::PatternId pattern_id;
+  std::uint64_t activation_frame;
+};
+
 struct PatternTelemetry {
   std::uint64_t current_generation;
   std::uint64_t pending_generation;
@@ -275,7 +286,14 @@ class RealtimeEngine final {
   // remain Runtime-only and never mutate the source Runtime Snapshot.
   PatternPublication publish_pattern_view(
       PreparedPatternView&& pattern,
-      std::optional<std::uint64_t> activation_frame = std::nullopt) noexcept;
+      std::optional<std::uint64_t> activation_frame = std::nullopt,
+      std::optional<PatternReplacementAuthority> replacement_authority =
+          std::nullopt) noexcept;
+  // Control thread, concurrent with render. Cancels only the exact pending
+  // publication. False means render already claimed/applied it or authority
+  // was stale; callers that require fail-closed cancellation must quiesce.
+  bool cancel_pattern_publication(
+      const PatternReplacementAuthority& authority) noexcept;
   foundation::Result<void> clear_pattern_view() noexcept;
   std::size_t reclaim_retired_patterns() noexcept;
   std::optional<foundation::PatternId> current_pattern_id() const;

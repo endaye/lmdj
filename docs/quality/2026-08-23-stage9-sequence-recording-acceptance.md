@@ -153,6 +153,18 @@ Private gated testable libraries contain the deterministic hooks; the production
 Audio/Web archives contain neither hook symbols nor embedded hook markers. The
 generation allocator also rejects bit 63 before it can alias the claimed marker.
 
+Review Fix 3 integrates that mailbox with #376 switch authority. A different
+Pattern can supersede a pending overlay only when the control path presents the
+exact generation, source Pattern, and activation frame it is authorized to
+replace; ordinary different-Pattern overlap remains rejected. Stop uses the
+same authority to cancel or replace a queued target and retains the durable
+receipt for exact replay after publication failure. A BPM change while a switch
+owns a boundary is rejected before Project mutation; a previously accepted BPM
+view can still be deterministically superseded by the later authoritative
+switch. The acknowledged boundary remains retained until the exactly-once
+Facade flush finishes, preventing a clean old-Pattern republish from reverting
+the target.
+
 | Source boundary | Fresh local evidence |
 | --- | --- |
 | Facade owner/generation/replace/reject/flush projection | PASS: `facade.sequence_surface` |
@@ -160,9 +172,11 @@ generation allocator also rejects bit 63 before it can alias the claimed marker.
 | Deterministic claimed-boundary race keeps onset zero and exact phase | PASS: `audio.realtime_engine` |
 | Claimed 90-BPM transport basis and bit-63 generation boundary | PASS: `audio.realtime_engine` |
 | Concurrent accepted = applied + superseded + pending conservation | PASS: `audio.snapshot_publication_stress` |
-| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; BPM rebuild retains overlay; owner loss removes it; failed clean publication recovers through exact Stop replay |
+| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; authoritative target supersedes the exact pending view; Stop cancels the target and exact replay recovers; boundary flush preserves the target |
 | Owner-loss cleanup-publication failure stops and clears Runtime Pattern | PASS: `host.web_control_runtime` |
 | Production Audio/Web hook symbol and embedded-marker exclusion | PASS: `build.project_io_test_hook_symbols` + unit contract |
+| Shared Runtime Session | PASS: stopped switch authority ignores a later stale boundary without a second flush |
+| Packaged Chromium switch journey | PASS: pending overlay → authoritative switch → exact boundary flush, plus switch-pending BPM rejection and Stop cancellation before target activation |
 | Focused suite | PASS: 6/6 |
 | `scripts/core.sh test dev full` | PASS: 79/79 |
 | `scripts/core.sh test dev stress` | PASS: 4/4 |

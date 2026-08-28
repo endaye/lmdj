@@ -2539,6 +2539,62 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
     committedRevision: created.committedRevision + 2,
     replayed: false,
   });
+
+  const cancelledSessionId = crypto.randomUUID();
+  const cancelledCommandId = crypto.randomUUID();
+  await page.evaluate(({sessionId, patternId, expectedRevision}) =>
+    window.lmdjWebRuntimeController.beginSequence({
+      sessionId, patternId, expectedRevision,
+    }), {
+    sessionId: cancelledSessionId,
+    patternId: nextPatternId,
+    expectedRevision: switchedStop.committedRevision,
+  });
+  await page.evaluate(() => {
+    window.__sequenceBoundaries = [];
+  });
+  await page.evaluate(async ({sessionId, nextPatternId}) => {
+    await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 3, velocity: 80, pressed: true,
+    });
+    await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 3, velocity: 0, pressed: false,
+    });
+    return window.lmdjWebRuntimeController.requestPatternSwitch({
+      sessionId, nextPatternId,
+    });
+  }, {sessionId: cancelledSessionId, nextPatternId: descriptor.pattern_id});
+  const rejectedBpm = await page.evaluate(async ({
+    sessionId, expectedRevision,
+  }) => {
+    try {
+      await window.lmdjWebRuntimeController.updateSequenceSettings({
+        expectedRevision,
+        sessionId,
+        bpm: 90,
+        quantizeEnabled: null,
+        swingPercent: null,
+      });
+      return null;
+    } catch (error) {
+      return {code: error.code, message: error.message};
+    }
+  }, {
+    sessionId: cancelledSessionId,
+    expectedRevision: switchedStop.committedRevision,
+  });
+  expect(rejectedBpm).toMatchObject({code: "INVALID_ARGUMENT"});
+  const cancelledStop = await page.evaluate(({sessionId, commandId}) =>
+    window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
+  {sessionId: cancelledSessionId, commandId: cancelledCommandId});
+  expect(cancelledStop).toMatchObject({
+    state: "inactive",
+    committedRevision: switchedStop.committedRevision + 1,
+    replayed: false,
+  });
+  await page.waitForTimeout(2_500);
+  expect(await page.evaluate(() => window.__sequenceBoundaries)).toEqual([]);
+
   const truth = success(await hostRequest(page, "project.inspect", {}),
     "Stage 9 inspect switch truth");
   const pattern = truth.project.patterns[descriptor.pattern_id];
@@ -2550,15 +2606,19 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
   expect(pattern.events.every(({duration_tick: durationTick}) =>
     durationTick > 0)).toBe(true);
   const switchedPattern = truth.project.patterns[nextPatternId];
-  expect(switchedPattern.events).toHaveLength(1);
+  expect(switchedPattern.events).toHaveLength(2);
   expect(switchedPattern.events[0]).toMatchObject({
     slot: {bank: 0, pad: 2},
     velocity: 90,
   });
+  expect(switchedPattern.events[1]).toMatchObject({
+    slot: {bank: 0, pad: 3},
+    velocity: 80,
+  });
   expect(success(await hostRequest(page, "snapshot.reload", {
     pattern_id: nextPatternId,
   }), "Stage 9 reload-visible truth")).toMatchObject({
-    project_revision: switchedStop.committedRevision,
+    project_revision: cancelledStop.committedRevision,
     pattern_id: nextPatternId,
     runtime_ready: true,
   });

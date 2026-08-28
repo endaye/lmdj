@@ -498,6 +498,48 @@ void test_pending_overlay_projection_is_owner_scoped_and_replaceable() {
   LMDJ_CHECK(empty.value().events.empty());
 }
 
+void test_switch_pending_bpm_rejects_before_project_mutation() {
+  TempDirectory temp;
+  const auto project = temp.path() / "switch-settings.lmdj";
+  const PatternId pattern_id{uuid(90)};
+  const PatternId target_pattern_id{uuid(91)};
+  const SequenceSessionId session_id{uuid(92)};
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+  const auto created = application.command({
+      {"operation", "pattern.create"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(93)},
+      {"expected_revision", 2},
+      {"pattern_id", target_pattern_id.value()},
+      {"bars", 1},
+  });
+  LMDJ_CHECK(created.value("ok", false));
+  LMDJ_CHECK(application.begin_sequence(
+      {project, session_id, pattern_id, 3, 0}).has_value());
+  LMDJ_CHECK(application.request_sequence_switch(
+      {project, session_id, target_pattern_id, 1}).has_value());
+
+  const auto rejected = application.command({
+      {"operation", "sequence.settings.update"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(94)},
+      {"expected_revision", 3},
+      {"session_id", session_id.value()},
+      {"runtime_frame", 2},
+      {"bpm", 90},
+      {"quantize_enabled", nullptr},
+      {"swing_percent", nullptr},
+  });
+  LMDJ_CHECK(!rejected.value("ok", false));
+  LMDJ_CHECK(rejected.at("error").at("code") == "INVALID_ARGUMENT");
+  lmdj::project_io::ProjectStore store;
+  const auto inspected = store.load(project);
+  LMDJ_CHECK(inspected.has_value());
+  LMDJ_CHECK(inspected.value().revision == 3);
+  LMDJ_CHECK(inspected.value().bpm == 120);
+}
+
 }  // namespace
 
 int main() {
@@ -509,6 +551,7 @@ int main() {
     test_orphan_journal_is_sealed_before_authoring();
     test_settings_rebase_and_pattern_creation_are_authoritative();
     test_pending_overlay_projection_is_owner_scoped_and_replaceable();
+    test_switch_pending_bpm_rejects_before_project_mutation();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
