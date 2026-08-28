@@ -16,6 +16,7 @@
 #include <picosha2.h>
 
 #include <lmdj/domain/project.hpp>
+#include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 
@@ -79,6 +80,30 @@ std::string read_text(const std::filesystem::path& path) {
       std::istreambuf_iterator<char>{stream},
       std::istreambuf_iterator<char>{},
   };
+}
+
+void write_text(const std::filesystem::path& path, std::string_view text) {
+  std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+  LMDJ_CHECK(static_cast<bool>(stream));
+  stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+  LMDJ_CHECK(static_cast<bool>(stream));
+}
+
+template <typename Mutator>
+std::pair<std::size_t, std::size_t> rewrite_last_record(
+    const std::filesystem::path& path,
+    Mutator&& mutate) {
+  const auto original = read_text(path);
+  LMDJ_CHECK(original.ends_with('\n'));
+  const auto previous = original.rfind('\n', original.size() - 2);
+  const auto offset = previous == std::string::npos ? 0 : previous + 1;
+  auto envelope = nlohmann::json::parse(
+      original.substr(offset, original.size() - offset - 1));
+  mutate(envelope);
+  const auto replacement = lmdj::foundation::canonical_json(envelope) + "\n";
+  const auto changed = original.substr(0, offset) + replacement;
+  write_text(path, changed);
+  return {offset, changed.size()};
 }
 
 std::string uuid_for(std::uint64_t value) {
@@ -236,13 +261,93 @@ void test_torn_tail_fails_closed_with_actionable_recovery_evidence() {
       rejected.error().details.at("reason") == "sequence_journal_torn_tail");
   LMDJ_CHECK(
       rejected.error().details.at("durable_prefix_length") == durable_prefix);
+  LMDJ_CHECK(rejected.error().details.at("record_offset") == durable_prefix);
   LMDJ_CHECK(rejected.error().details.at("observed_length") ==
              durable_prefix + torn.size());
   LMDJ_CHECK(rejected.error().details.at("path") == path.generic_string());
+  LMDJ_CHECK(rejected.error().details.at("journal_retained") == true);
   LMDJ_CHECK(
       rejected.error().details.at("remedy") ==
-      "retain the journal and repair or discard the torn tail explicitly");
+      "retain the journal; repair the invalid suffix or discard the recovery "
+      "journal explicitly");
   LMDJ_CHECK(std::filesystem::file_size(path) == durable_prefix + torn.size());
+}
+
+void expect_corrupt_record_evidence(
+    const lmdj::foundation::Error& error,
+    const std::filesystem::path& path,
+    std::size_t offset,
+    std::size_t observed_length,
+    std::string_view expected_reason) {
+  LMDJ_CHECK(error.code == ErrorCode::invalid_project);
+  LMDJ_CHECK(error.details.at("reason") == expected_reason);
+  LMDJ_CHECK(error.details.at("durable_prefix_length") == offset);
+  LMDJ_CHECK(error.details.at("record_offset") == offset);
+  LMDJ_CHECK(error.details.at("observed_length") == observed_length);
+  LMDJ_CHECK(error.details.at("path") == path.generic_string());
+  LMDJ_CHECK(error.details.at("journal_retained") == true);
+  LMDJ_CHECK(
+      error.details.at("remedy").get<std::string>().find("discard") !=
+      std::string::npos);
+  LMDJ_CHECK(std::filesystem::file_size(path) == observed_length);
+}
+
+void test_complete_line_tail_corruption_fails_closed_with_uniform_evidence() {
+  const auto run = [](
+                       std::string_view label,
+                       std::string_view expected_reason,
+                       const auto& corrupt) {
+    TempDirectory temp(label);
+    ProjectStore store;
+    const auto bundle = create_bundle(temp, store);
+    SequenceJournal journal;
+    begin(journal, bundle);
+    const auto path = bundle / "recovery/active/sequence.jsonl";
+    LMDJ_CHECK(
+        journal
+            .append_tail(
+                bundle,
+                SequenceSessionId{std::string{kSessionId}},
+                PatternId{std::string{kPatternId}},
+                0,
+                1,
+                std::vector{
+                    event(0, 0, 120, 100),
+                    event(1, 480, 240, 80),
+                })
+            .has_value());
+    const auto [offset, observed_length] = rewrite_last_record(path, corrupt);
+    const auto rejected = journal.read_active(bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    expect_corrupt_record_evidence(
+        rejected.error(), path, offset, observed_length, expected_reason);
+  };
+
+  run(
+      "checksum-corrupt",
+      "sequence_journal_checksum_mismatch",
+      [](nlohmann::json& envelope) {
+        envelope["checksum"] = std::string(64, '0');
+      });
+  run(
+      "tail-sequence-corrupt",
+      "sequence_journal_tail_identity_invalid",
+      [](nlohmann::json& envelope) {
+        envelope["payload"]["tail_seq"] = 9;
+        envelope["checksum"] = sha256(
+            lmdj::foundation::canonical_json(envelope.at("payload")));
+      });
+  run(
+      "tail-canonical-corrupt",
+      "sequence_journal_tail_not_canonical",
+      [](nlohmann::json& envelope) {
+        auto& events = envelope["payload"]["events"];
+        const auto first = events.at(0);
+        events[0] = events.at(1);
+        events[1] = first;
+        envelope["checksum"] = sha256(
+            lmdj::foundation::canonical_json(envelope.at("payload")));
+      });
 }
 
 void test_one_project_session_and_monotonic_durable_flush_identity() {
@@ -463,6 +568,81 @@ class FaultGuard {
   FaultGuard& operator=(const FaultGuard&) = delete;
 };
 
+void test_later_cumulative_flush_resolves_failed_earlier_flush_exactly_once() {
+  TempDirectory temp("cumulative-flush");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  begin(journal, bundle);
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto pattern_id = PatternId{std::string{kPatternId}};
+  const auto old_event = event(0, 0, 120, 40);
+  const auto replacement = event(0, 0, 240, 90);
+  const auto uncommitted = event(1, 480, 120, 70);
+
+  LMDJ_CHECK(
+      journal.append_tail(bundle, session_id, pattern_id, 0, 1,
+                          std::vector{old_event}).has_value());
+  const auto first = journal.append_flush(
+      bundle, session_id, CommandId{uuid_for(20)}, pattern_id, 0,
+      std::vector{old_event});
+  LMDJ_CHECK(first.has_value());
+  const SequenceFlushIdentity first_identity{
+      session_id, first.value().flush_seq, CommandId{uuid_for(20)}, pattern_id};
+  lmdj::foundation::Result<lmdj::project_io::SequenceFlushExecution>
+      first_execution =
+          lmdj::foundation::Result<
+              lmdj::project_io::SequenceFlushExecution>::failure(
+              lmdj::foundation::Error{
+                  ErrorCode::internal_error, "fault was not run"});
+  {
+    FaultGuard fault(FaultPoint::sequence_transaction_write);
+    first_execution = store.execute_sequence_flush(bundle, first_identity);
+  }
+  LMDJ_CHECK(!first_execution.has_value());
+  LMDJ_CHECK(store.load(bundle).value().revision == 0);
+
+  const auto omitted = journal.append_flush(
+      bundle, session_id, CommandId{uuid_for(22)}, pattern_id, 0,
+      std::vector{uncommitted});
+  LMDJ_CHECK(!omitted.has_value());
+  LMDJ_CHECK(omitted.error().code == ErrorCode::invalid_argument);
+
+  LMDJ_CHECK(
+      journal.append_tail(bundle, session_id, pattern_id, 0, 2,
+                          std::vector{replacement}).has_value());
+  const auto second = journal.append_flush(
+      bundle, session_id, CommandId{uuid_for(21)}, pattern_id, 0,
+      std::vector{replacement});
+  LMDJ_CHECK(second.has_value());
+  const SequenceFlushIdentity second_identity{
+      session_id, second.value().flush_seq, CommandId{uuid_for(21)}, pattern_id};
+  const auto committed = store.execute_sequence_flush(bundle, second_identity);
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().outcome.state.revision == 1);
+  LMDJ_CHECK(
+      committed.value().outcome.state.patterns.at(pattern_id).events ==
+      std::vector{replacement});
+
+  const auto resolved = journal.read_active(bundle);
+  LMDJ_CHECK(resolved.has_value());
+  LMDJ_CHECK(resolved.value().flushes.size() == 2);
+  LMDJ_CHECK(resolved.value().flushes.at(0).completed);
+  LMDJ_CHECK(resolved.value().flushes.at(1).completed);
+
+  LMDJ_CHECK(
+      journal.append_tail(bundle, session_id, pattern_id, 1, 3,
+                          std::vector{uncommitted}).has_value());
+  const auto candidates = store.reconcile_sequence_recovery(bundle);
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().size() == 1);
+  LMDJ_CHECK(candidates.value().front().journal.pending_events ==
+             std::vector{uncommitted});
+  LMDJ_CHECK(std::ranges::all_of(
+      candidates.value().front().journal.flushes,
+      [](const auto& flush) { return flush.completed; }));
+}
+
 void test_restart_reconciles_reload_visible_receipt_without_overdub() {
   TempDirectory temp("reconcile");
   ProjectStore store;
@@ -671,9 +851,7 @@ void test_concurrent_flush_allocation_is_gap_free() {
   workers.reserve(kWorkers);
   for (std::size_t index = 0; index < kWorkers; ++index) {
     workers.emplace_back([&, index] {
-      const std::vector events{event(
-          static_cast<std::uint8_t>(index % 16),
-          static_cast<std::uint32_t>((index % 16) * 240))};
+      const std::vector events{event()};
       auto appended = journal.append_flush(
           bundle,
           SequenceSessionId{std::string{kSessionId}},
@@ -710,6 +888,8 @@ int main(int argc, char** argv) {
     test_shared_fingerprint_vectors_are_exact_bytes();
     test_durable_tail_snapshots_survive_reload_and_are_consumed_by_flush();
     test_torn_tail_fails_closed_with_actionable_recovery_evidence();
+    test_later_cumulative_flush_resolves_failed_earlier_flush_exactly_once();
+    test_complete_line_tail_corruption_fails_closed_with_uniform_evidence();
     test_one_project_session_and_monotonic_durable_flush_identity();
     test_writer_lease_contention_fails_before_begin();
     test_sequence_flush_commits_once_and_replays_receipt();

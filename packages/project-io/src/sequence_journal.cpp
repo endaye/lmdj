@@ -217,27 +217,66 @@ nlohmann::json checked_record(nlohmann::json payload) {
   };
 }
 
+Error corrupt_record_error(
+    const std::filesystem::path& path,
+    std::size_t record_offset,
+    std::size_t observed_length,
+    std::string_view reason,
+    std::string message) {
+  return Error{
+      ErrorCode::invalid_project,
+      std::move(message),
+      {
+          {"durable_prefix_length", record_offset},
+          {"journal_retained", true},
+          {"observed_length", observed_length},
+          {"path", path.generic_string()},
+          {"reason", reason},
+          {"record_offset", record_offset},
+          {"remedy",
+           "retain the journal; repair the invalid record or discard the "
+           "recovery journal explicitly"},
+      },
+  };
+}
+
 foundation::Result<nlohmann::json> checked_payload(
     const nlohmann::json& record,
-    const std::filesystem::path& path) {
+    const std::filesystem::path& path,
+    std::size_t record_offset,
+    std::size_t observed_length) {
   try {
     if (!record.is_object() || record.size() != 2 ||
         !record.contains("checksum") || !record.contains("payload")) {
-      throw std::runtime_error("record envelope is invalid");
+      return foundation::Result<nlohmann::json>::failure(
+          corrupt_record_error(
+              path,
+              record_offset,
+              observed_length,
+              "sequence_journal_record_envelope_invalid",
+              "Sequence Journal record envelope is invalid"));
     }
     const auto checksum = record.at("checksum").get<std::string>();
     const auto encoded = foundation::canonical_json(record.at("payload"));
     if (!lowercase_sha256(checksum) || sha256(encoded) != checksum) {
-      throw std::runtime_error("record checksum does not match payload");
+      return foundation::Result<nlohmann::json>::failure(
+          corrupt_record_error(
+              path,
+              record_offset,
+              observed_length,
+              "sequence_journal_checksum_mismatch",
+              "Sequence Journal checksum does not match its canonical payload"));
     }
     return foundation::Result<nlohmann::json>::success(record.at("payload"));
   } catch (const std::exception& exception) {
+    (void)exception;
     return foundation::Result<nlohmann::json>::failure(
-        Error{
-            ErrorCode::invalid_project,
-            "Sequence Journal checksum record is invalid",
-            {{"path", path.generic_string()}, {"detail", exception.what()}},
-        });
+        corrupt_record_error(
+            path,
+            record_offset,
+            observed_length,
+            "sequence_journal_record_envelope_invalid",
+            "Sequence Journal record envelope is invalid"));
   }
 }
 
@@ -276,6 +315,17 @@ nlohmann::json tail_json(
       {"pattern_id", journal.pattern_id.value()},
       {"tail_seq", journal.next_tail_seq},
   };
+}
+
+std::vector<domain::PatternEvent> unresolved_batch(
+    const ActiveSequenceJournal& journal) {
+  std::vector<domain::PatternEvent> result;
+  for (const auto& flush : journal.flushes) {
+    if (!flush.completed) {
+      result = domain::merge_pattern_events(result, flush.canonical_events);
+    }
+  }
+  return domain::merge_pattern_events(result, journal.pending_events);
 }
 
 nlohmann::json journal_json(const ActiveSequenceJournal& journal) {
@@ -425,9 +475,15 @@ foundation::Result<JournalDocument> read_journal(
       0,
   };
   std::size_t cursor = 0;
+  std::size_t record_offset = 0;
+  std::string_view record_reason = "sequence_journal_record_invalid";
+  std::string record_message = "active Sequence Journal record is invalid";
   bool saw_begin = false;
   try {
     while (cursor < bytes.size()) {
+      record_offset = cursor;
+      record_reason = "sequence_journal_record_invalid";
+      record_message = "active Sequence Journal record is invalid";
       const auto line_end = bytes.find('\n', cursor);
       if (line_end == std::string::npos) {
         break;
@@ -439,7 +495,8 @@ foundation::Result<JournalDocument> read_journal(
         continue;
       }
       const auto envelope = parse_bounded_or_throw(line);
-      auto payload = checked_payload(envelope, path);
+      auto payload = checked_payload(
+          envelope, path, record_offset, bytes.size());
       if (!payload.has_value()) {
         return foundation::Result<JournalDocument>::failure(payload.error());
       }
@@ -472,6 +529,9 @@ foundation::Result<JournalDocument> read_journal(
         }
         saw_begin = true;
       } else if (kind == "tail") {
+        record_reason = "sequence_journal_tail_identity_invalid";
+        record_message =
+            "Sequence Journal tail identity is not monotonic or session-bound";
         const auto tail_seq =
             payload.value().at("tail_seq").get<std::uint64_t>();
         const auto input_sequence =
@@ -490,6 +550,9 @@ foundation::Result<JournalDocument> read_journal(
           throw std::runtime_error("Sequence tail identity is invalid");
         }
         std::vector<domain::PatternEvent> pending_events;
+        record_reason = "sequence_journal_tail_not_canonical";
+        record_message =
+            "Sequence Journal tail event order is not canonical";
         const auto loop_length =
             domain::pattern_length_ticks(document.journal.bars);
         for (const auto& encoded : payload.value().at("events")) {
@@ -533,10 +596,13 @@ foundation::Result<JournalDocument> read_journal(
           }
           flush.canonical_events.push_back(parsed.value());
         }
-        if (!document.journal.pending_events.empty() &&
-            document.journal.pending_events != flush.canonical_events) {
+        const auto required = unresolved_batch(document.journal);
+        if (!required.empty() && required != flush.canonical_events) {
+          record_reason = "sequence_journal_flush_batch_invalid";
+          record_message =
+              "Sequence Journal flush omits a durable unresolved event";
           throw std::runtime_error(
-              "Sequence flush does not consume the durable tail");
+              "Sequence flush does not resolve the durable pending batch");
         }
         document.journal.pending_events.clear();
         document.journal.flushes.push_back(std::move(flush));
@@ -558,7 +624,11 @@ foundation::Result<JournalDocument> read_journal(
         if (!lowercase_sha256(fingerprint)) {
           throw std::runtime_error("Sequence completion fingerprint is invalid");
         }
-        found->completed = true;
+        for (auto& flush : document.journal.flushes) {
+          if (flush.flush_seq <= sequence) {
+            flush.completed = true;
+          }
+        }
         document.journal.expected_revision =
             payload.value().at("committed_revision").get<std::uint64_t>();
         document.journal.pattern_fingerprint = fingerprint;
@@ -615,12 +685,14 @@ foundation::Result<JournalDocument> read_journal(
               "active Sequence Journal has a torn trailing record",
               {
                   {"durable_prefix_length", cursor},
+                  {"journal_retained", true},
                   {"observed_length", bytes.size()},
                   {"path", path.generic_string()},
                   {"reason", "sequence_journal_torn_tail"},
+                  {"record_offset", cursor},
                   {"remedy",
-                   "retain the journal and repair or discard the torn tail "
-                   "explicitly"},
+                   "retain the journal; repair the invalid suffix or discard "
+                   "the recovery journal explicitly"},
               },
           });
     }
@@ -629,12 +701,14 @@ foundation::Result<JournalDocument> read_journal(
     }
     return foundation::Result<JournalDocument>::success(std::move(document));
   } catch (const std::exception& exception) {
+    (void)exception;
     return foundation::Result<JournalDocument>::failure(
-        Error{
-            ErrorCode::invalid_project,
-            "active Sequence Journal could not be parsed",
-            {{"path", path.generic_string()}, {"detail", exception.what()}},
-        });
+        corrupt_record_error(
+            path,
+            record_offset,
+            bytes.size(),
+            record_reason,
+            std::move(record_message)));
   }
 }
 
@@ -907,11 +981,12 @@ foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
           Error{ErrorCode::invalid_argument, "Sequence flush event is invalid"});
     }
   }
-  if (!journal.pending_events.empty() && journal.pending_events != canonical) {
+  const auto required = unresolved_batch(journal);
+  if (!required.empty() && required != canonical) {
     return foundation::Result<SequenceFlushRecord>::failure(
         Error{
             ErrorCode::invalid_argument,
-            "Sequence flush does not consume the durable tail",
+            "Sequence flush does not resolve the durable pending batch",
         });
   }
   SequenceFlushRecord flush{
@@ -1181,8 +1256,9 @@ SequenceJournal::list_recoverable(const std::filesystem::path& bundle) const {
           read.error());
     }
     try {
-      const auto envelope = parse_bounded_or_throw(byte_string(read.value()));
-      auto payload = checked_payload(envelope, path);
+      const auto bytes = byte_string(read.value());
+      const auto envelope = parse_bounded_or_throw(bytes);
+      auto payload = checked_payload(envelope, path, 0, bytes.size());
       if (!payload.has_value()) {
         return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
             payload.error());

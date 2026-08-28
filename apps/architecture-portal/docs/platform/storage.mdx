@@ -15,7 +15,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 ## 事务模型
 Project/Asset 写入先进入 token 专属临时目录，完整校验后以一个 revision 发布；commit/abort/坏 offset/启动清理只删除整个目录，故障不得留下被误认作权威 Project 的半成品。
 ## Journal
-Sequence journal overlay、Project Store、flush receipt、owner-loss recovery artifact、Sample staging、waveform cache 与 Bundle publication journal 的生命周期分开。Sequence event acknowledgement 以前先 durable append canonical tail；flush record 消费相同 tail，只有 Project Store manifest replacement 是 Project Truth commit point。partial/torn tail 保留原文件并以 path/prefix/length/remedy fail closed；恢复规则由 Project I/O/Facade 统一执行。
+Sequence journal overlay、Project Store、flush receipt、owner-loss recovery artifact、Sample staging、waveform cache 与 Bundle publication journal 的生命周期分开。Sequence event acknowledgement 以前先 durable append canonical tail；flush record 消费相同 tail，只有 Project Store manifest replacement 是 Project Truth commit point。commit point 前失败的 flush 由后续 canonical 累积 flush 覆盖并在其 receipt 可见时 resolve，不能同时成为 recovery 输入。partial/torn、checksum、tail sequence 与 canonical-order 损坏都保留原文件，并以 path/offset/prefix/length/stable reason/repair-or-discard remedy fail closed；恢复规则由 Project I/O/Facade 统一执行。
 ## Writer admission
 Project writer lease 排斥其他进程或 platform owner；同一 Facade 内的短期 mutation 还由 Project-scoped Sequence admission critical section 排序。普通 authoring command 在 lease 内重读 active journal 后才验证 revision 和发布；active owner 使 mutation fail closed，孤儿 journal 必须先 seal 为 `owner_lost`。因此进程内共享 lease 不是 authority shortcut，也不能让无锁 session 预检查成为提交依据。
 ## Portable transfer

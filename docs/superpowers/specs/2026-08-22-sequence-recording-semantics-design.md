@@ -66,7 +66,7 @@ Proof 规则「录音中任何 revision 变化都 `REVISION_CONFLICT` 并 seal T
 | SR-D18 | 选择性 rebase 只适用于 BPM、Quantize/Swing、以及「正在进行的 Pad Capture 写入武装中的目标 Pad」。未知 Authoring Command fail closed。 |
 | SR-D19 | 实施时新增 Project Contract（新 Contract ID + Schema），删除 `takes`。禁止用空 `takes: {}` 假装兼容。Pattern 事件改为 Slot + tick + 力度 + 长度。 |
 | SR-D20 | 一个 Project 同时只允许一个 active Sequence session。会话落在 bundle `recovery/active`，受 writer lease 保护。Authoring admission 必须在 **同一把写锁** 内检查 active Journal 与 `expected_revision`。 |
-| SR-D21 | 每次 flush 有稳定 `session_id` + `flush_seq` + `command_id`。先把 flush 意图耐久写入 Journal，再写 Project。重复提交返回原 receipt。只有 manifest head 已耐久且 reload 可见 receipt 才算 completed；Journal 只在全部 flush completed 后删除。 |
+| SR-D21 | 每次 flush 有稳定 `session_id` + `flush_seq` + `command_id`。先把 flush 意图耐久写入 Journal，再写 Project。重复提交返回原 receipt。若一次 execute 在 commit point 前失败而录音继续，后续 flush 必须是先前 unresolved flush 与最新 tail 的 canonical 累积批次；该后续 receipt 可见时，同时 supersede/resolve 它覆盖的更早 flush。只有 manifest head 已耐久且 reload 可见 receipt 才算 completed；Journal 只在全部 flush completed 或已被后续 completed 累积批次 supersede 后删除。 |
 | SR-D22 | Journal 保存目标 Pattern 的 `pattern_id`、`bars`、以及上次耐久 flush（若无则 begin）时事件的 canonical fingerprint。恢复区分：指纹匹配可 append；不兼容变化给用户选新槽或放弃；删除/越界 fail closed 并保留恢复件。 |
 | SR-D23 | 切槽的 commit、Journal 改目标、Runtime 改播放三者只在 SR-D11 的 effective transport boundary 发生，禁止点击瞬间换 Journal 而播放仍等到下一 Bar。 |
 | SR-D24 | SR-D15 **不**推翻 Stage 8B 的 trimming / ≤5 s / 显式提交 / 冲突保留缓冲。只增加 Sequence 页内 overlay，避免走到 Sample 表面。 |
@@ -313,7 +313,12 @@ commit`，以及 duplicate `command_id` 回放原 receipt。
 3. transaction / checkpoint 文件本身不是 commit point。仅当 `manifest.json`
    已原子发布并完成适用的目录同步，且从该 manifest head reload 能查到对应
    receipt，才把该 flush 标为 completed。
-4. 会话结束且 **全部** flush completed 之后，才删除 active Journal。
+4. 若较早 flush 在 commit point 前失败，Runtime 保留同一 pending batch；后续
+   flush 必须等于「全部 unresolved flush 依序 merge 最新 durable tail」的 canonical
+   结果。该后续 flush completed 时，它覆盖的较早 `flush_seq` 同时标记为
+   superseded/resolved，不得再进入 recovery。这样同 key 的新 event 可替换旧 event，
+   但不同 key 的旧 event 不能被遗漏。
+5. 会话结束且 **全部** flush completed 或 superseded 之后，才删除 active Journal。
 
 重启判定：
 
@@ -499,6 +504,9 @@ Stage 9 实施必须覆盖：
   completed。
 - Project manifest 已提交、Journal 未完成/未删：重启先按 receipt 清理，不 seal
   已提交批次、不二次 overdub。
+- F1 在 append 后、commit point 前失败，继续录音并由累积 F2 成功：F2 receipt
+  同时 resolve F1；owner loss 只能 seal F2 之后真正未提交的 tail。apply 不得再次
+  写入 F1，也不得用 F1 的旧同-key event 覆盖 F2 的新值；discard 不改变 revision。
 - SR-D15：收音 Pad 不进 Pattern；停采进入 trimming overlay；确认提交后
   rebase，再敲才进 Sequence。提交冲突保留缓冲。
 - 从 Record 中切 Sample 表面再试图新开麦：会话已结束，不再叠加。

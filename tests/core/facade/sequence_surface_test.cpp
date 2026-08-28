@@ -327,6 +327,99 @@ void test_sigkill_owner_recovers_acknowledged_unflushed_events() {
   LMDJ_CHECK(events.at(1).velocity == 77);
 }
 
+void test_later_flush_supersedes_failed_flush_before_recovery_apply() {
+  TempDirectory temp;
+  const auto project = temp.path() / "superseded-flush.lmdj";
+  const PatternId pattern_id{uuid(36)};
+  const SequenceSessionId session_id{uuid(37)};
+  {
+    Application creator(config(temp.path()));
+    create_recordable_project(creator, project, pattern_id);
+  }
+
+  lmdj::project_io::ProjectStore store;
+  lmdj::project_io::SequenceJournal journal;
+  const auto loaded = store.load(project);
+  LMDJ_CHECK(loaded.has_value());
+  const auto& pattern = loaded.value().patterns.at(pattern_id);
+  LMDJ_CHECK(
+      journal
+          .begin(
+              project,
+              session_id,
+              pattern_id,
+              pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(pattern),
+              loaded.value().revision)
+          .has_value());
+
+  const lmdj::domain::PatternEvent old_event{
+      PadSlotId{0, 0}, 0, 120, 40};
+  const lmdj::domain::PatternEvent replacement{
+      PadSlotId{0, 0}, 0, 240, 90};
+  const lmdj::domain::PatternEvent uncommitted{
+      PadSlotId{0, 0}, 480, 120, 70};
+  LMDJ_CHECK(
+      journal.append_tail(project, session_id, pattern_id, 2, 1,
+                          std::vector{old_event}).has_value());
+  const auto first = journal.append_flush(
+      project, session_id, CommandId{uuid(38)}, pattern_id, 2,
+      std::vector{old_event});
+  LMDJ_CHECK(first.has_value());
+  const auto failed = store.execute_sequence_flush(
+      project,
+      {session_id, first.value().flush_seq, CommandId{uuid(39)}, pattern_id});
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK(store.load(project).value().revision == 2);
+
+  LMDJ_CHECK(
+      journal.append_tail(project, session_id, pattern_id, 2, 2,
+                          std::vector{replacement}).has_value());
+  const auto second = journal.append_flush(
+      project, session_id, CommandId{uuid(40)}, pattern_id, 2,
+      std::vector{replacement});
+  LMDJ_CHECK(second.has_value());
+  const auto committed = store.execute_sequence_flush(
+      project,
+      {session_id, second.value().flush_seq, CommandId{uuid(40)}, pattern_id});
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().outcome.state.revision == 3);
+  LMDJ_CHECK(
+      committed.value().outcome.state.patterns.at(pattern_id).events ==
+      std::vector{replacement});
+
+  LMDJ_CHECK(
+      journal.append_tail(project, session_id, pattern_id, 3, 3,
+                          std::vector{uncommitted}).has_value());
+  Application restarted(config(temp.path()));
+  const auto reconciliation = restarted.begin_sequence(
+      {project, SequenceSessionId{uuid(41)}, pattern_id, 999, 0});
+  LMDJ_CHECK(!reconciliation.has_value());
+  LMDJ_CHECK(reconciliation.error().code == ErrorCode::revision_conflict);
+
+  const auto candidates = restarted.list_sequence_recovery({project});
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().size() == 1);
+  LMDJ_CHECK(candidates.value().front().event_count == 1);
+  const auto applied = restarted.apply_sequence_recovery(
+      {project, session_id, std::nullopt});
+  LMDJ_CHECK(applied.has_value());
+  LMDJ_CHECK(applied.value().committed_revision == 4);
+
+  const auto recovered = store.load(project);
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(recovered.value().revision == 4);
+  const auto& events = recovered.value().patterns.at(pattern_id).events;
+  LMDJ_CHECK(events.size() == 2);
+  LMDJ_CHECK(events.at(0) == replacement);
+  LMDJ_CHECK(events.at(1) == uncommitted);
+  LMDJ_CHECK(!restarted.apply_sequence_recovery(
+      {project, session_id, std::nullopt}).has_value());
+  LMDJ_CHECK(!restarted.discard_sequence_recovery(
+      {project, session_id, std::nullopt}).has_value());
+  LMDJ_CHECK(store.load(project).value().revision == 4);
+}
+
 void test_writer_lease_blocks_competing_sequence_owner() {
   TempDirectory temp;
   const auto project = temp.path() / "lease.lmdj";
@@ -521,6 +614,7 @@ int main() {
     test_sequence_lifecycle_idempotence_and_mutation_exclusion();
     test_owner_loss_apply_and_discard_are_explicit();
     test_sigkill_owner_recovers_acknowledged_unflushed_events();
+    test_later_flush_supersedes_failed_flush_before_recovery_apply();
     test_writer_lease_blocks_competing_sequence_owner();
     test_begin_cannot_cross_an_authoring_admission();
     test_orphan_journal_is_sealed_before_authoring();

@@ -242,14 +242,20 @@ journal）；唯一持久化 pending tail 的路径是 `abandon_sequence_session
 **#373 source disposition（2026-08-29）**：Project I/O journal 新增单调
 canonical tail snapshot；Facade 先耐久 append、成功后才更新 acknowledgement
 ordering，press 以既有 240-tick 默认时值进入恢复 tail，release snapshot 再替换
-真实时值。flush record 消费同一 tail，recovery 对 tail 与 incomplete flush 做一次
-canonical merge。component regression 由真实子进程接受 `press/release/press`
+真实时值。flush record 消费同一 tail；若 F1 append 后 execute 在 commit point 前
+失败，继续录音的 F2 必须 canonical 覆盖全部 unresolved flush 与最新 tail，F2
+completed 时同步 supersede 更早批次，recovery 只保留其后真正未提交 tail。
+component regression 由真实子进程接受 `press/release/press`
 三个 Pad event 请求后（最后一个 press 未释放）
 `SIGSTOP`，父进程发送 `SIGKILL` 并验证 signal exit；新 owner reconcile 后得到恰
 一个含两条事件的 `owner_lost` candidate，显式 apply 后 identity/order 保持且
 revision 只增加一次。独立 Project I/O case 证明 reload/flush consumption，并证明
-无终止换行的 torn tail 保留原字节、以 `INVALID_PROJECT` 加 path、durable prefix、
-observed length 与 remedy fail closed。该 source disposition 不是 merge、Product
+无终止换行的 torn tail、checksum mismatch、非单调 tail identity 与非 canonical
+event order 均保留原字节、以 `INVALID_PROJECT` 加 path、record offset/durable
+prefix、observed length、stable reason 与 repair/discard remedy fail closed。补充的
+F1→F2 regression 证明较早失败批次不会二次恢复，且 F1 旧同-key event 不会覆盖
+F2 已提交的新值；apply 只增加一次 revision，之后 apply/discard 均不再改变状态。
+该 source disposition 不是 merge、Product
 Build、immutable snapshot、远端 CI 或物理验收证据；这些仍分别等待 #379、#380
 与 #360。
 

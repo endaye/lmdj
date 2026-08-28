@@ -150,6 +150,30 @@ CMake/CTest, Docusaurus Architecture Portal.
   the staged list, and commit as
   `fix(core): persist Sequence tail before acknowledgement (fixes #373)`.
 
+### Review fix: cumulative flush exactly-once and corruption evidence
+
+- [x] **Step 11: Reproduce the independent-review findings in RED.** Add a
+  fault-injected F1 append/execute-failure → continued tail → successful F2
+  regression and an end-to-end recovery apply case with a newer same-key
+  replacement. Add checksum, tail-sequence, and non-canonical-order corrupt
+  record cases alongside the unterminated suffix case. Observe both focused
+  tests fail for the reported reasons before production edits.
+- [x] **Step 12: Bind cumulative flush completion.** Require each later flush
+  to equal the canonical merge of unresolved earlier batches plus the latest
+  durable tail. When that later flush receipt is visible, resolve every covered
+  earlier `flush_seq`, so reconciliation and apply see only events committed by
+  no successful cumulative flush.
+- [x] **Step 13: Normalize fail-closed corruption evidence.** Preserve complete
+  journal bytes and return `INVALID_PROJECT` with retained path, record offset,
+  durable prefix, observed length, stable reason, and explicit repair/discard
+  remedy for checksum, tail identity/sequence, canonical order, and torn suffix
+  failures.
+- [x] **Step 14: Verify and commit the review fix.** Run focused, fast, full,
+  stress, Portal, dependency, active-tree, version, and production symbol
+  checks; update the acceptance evidence and external report; audit pitfalls;
+  exact-stage only review-fix files and create a second local Conventional
+  Commit without any remote transition.
+
 ## Version Management
 
 Version impact: deferred to [#379](https://github.com/endaye/lmdj/issues/379).
