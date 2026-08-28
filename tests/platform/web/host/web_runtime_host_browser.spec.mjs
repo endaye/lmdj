@@ -2380,7 +2380,7 @@ test("Chromium claimed asset.import publication hang becomes restart-required an
 });
 
 
-test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer status", async ({
+test("Stage 9 Chromium records across an acknowledged switch, reloads, and exposes observer status", async ({
   browserName,
   context,
   page,
@@ -2473,6 +2473,17 @@ test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer
     replayed: true,
   });
 
+  const nextPatternId = crypto.randomUUID();
+  const created = await page.evaluate(({patternId, expectedRevision}) =>
+    window.lmdjWebRuntimeController.createPattern({
+      patternId,
+      bars: 1,
+      expectedRevision,
+    }), {
+    patternId: nextPatternId,
+    expectedRevision: stopped.committedRevision,
+  });
+  expect(created.committedRevision).toBe(stopped.committedRevision + 1);
   const secondSessionId = crypto.randomUUID();
   const secondCommandId = crypto.randomUUID();
   await page.evaluate(({sessionId, patternId, expectedRevision}) =>
@@ -2483,25 +2494,53 @@ test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer
     }), {
     sessionId: secondSessionId,
     patternId: descriptor.pattern_id,
-    expectedRevision: stopped.committedRevision,
+    expectedRevision: created.committedRevision,
   });
-  await page.evaluate(async ({sessionId}) => {
+  await page.evaluate(() => {
+    window.__sequenceBoundaries = [];
+    window.lmdjWebRuntimeController.subscribeSequenceBarBoundary((boundary) => {
+      window.__sequenceBoundaries.push(boundary);
+    });
+  });
+  await page.evaluate(async ({sessionId, nextPatternId}) => {
     await window.lmdjWebRuntimeController.recordSequenceEvent({
       sessionId, slot: 1, velocity: 127, pressed: true,
     });
     await window.lmdjWebRuntimeController.recordSequenceEvent({
       sessionId, slot: 1, velocity: 0, pressed: false,
     });
+    return window.lmdjWebRuntimeController.requestPatternSwitch({
+      sessionId, nextPatternId,
+    });
+  }, {sessionId: secondSessionId, nextPatternId});
+  await expect.poll(() => page.evaluate(() => window.__sequenceBoundaries), {
+    timeout: 30_000,
+  }).toEqual([expect.objectContaining({
+    sessionId: secondSessionId,
+    patternId: nextPatternId,
+  })]);
+  const continued = await page.evaluate(async ({sessionId}) => {
+    const press = await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 2, velocity: 90, pressed: true,
+    });
+    const release = await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 2, velocity: 0, pressed: false,
+    });
+    return {press, release};
   }, {sessionId: secondSessionId});
-  const overdubbed = await page.evaluate(({sessionId, commandId}) =>
+  expect(continued.press).toMatchObject({
+    state: "active",
+    patternId: nextPatternId,
+  });
+  const switchedStop = await page.evaluate(({sessionId, commandId}) =>
     window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
   {sessionId: secondSessionId, commandId: secondCommandId});
-  expect(overdubbed).toMatchObject({
-    committedRevision: stopped.committedRevision + 1,
+  expect(switchedStop).toMatchObject({
+    committedRevision: created.committedRevision + 2,
     replayed: false,
   });
   const truth = success(await hostRequest(page, "project.inspect", {}),
-    "Stage 9 inspect overdub truth");
+    "Stage 9 inspect switch truth");
   const pattern = truth.project.patterns[descriptor.pattern_id];
   expect(pattern.events).toHaveLength(2);
   expect(pattern.events.map(({slot}) => `${slot.bank}:${slot.pad}`).sort())
@@ -2510,10 +2549,17 @@ test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer
     left - right)).toEqual([100, 127]);
   expect(pattern.events.every(({duration_tick: durationTick}) =>
     durationTick > 0)).toBe(true);
+  const switchedPattern = truth.project.patterns[nextPatternId];
+  expect(switchedPattern.events).toHaveLength(1);
+  expect(switchedPattern.events[0]).toMatchObject({
+    slot: {bank: 0, pad: 2},
+    velocity: 90,
+  });
   expect(success(await hostRequest(page, "snapshot.reload", {
-    pattern_id: descriptor.pattern_id,
+    pattern_id: nextPatternId,
   }), "Stage 9 reload-visible truth")).toMatchObject({
-    project_revision: overdubbed.committedRevision,
+    project_revision: switchedStop.committedRevision,
+    pattern_id: nextPatternId,
     runtime_ready: true,
   });
   expect(await page.evaluate(() =>

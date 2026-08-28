@@ -5,6 +5,8 @@ status: partial
 owners: [product, core]
 source_paths:
   - docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md
+  - docs/superpowers/plans/2026-08-29-lmdj-stage9-switch-boundary-flush.md
+  - docs/quality/2026-08-27-stage9-sequence-recording-review.md
   - packages/application-facade
   - packages/project-cooker
 ---
@@ -19,7 +21,7 @@ Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth
 
 ## Sequence 录音
 
-[2026-08-23 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)已由 Stage 9 实现：录音向当前 Pattern 写入 tick-native PPQ 960 事件，没有 Take 产品对象或音频 bounce。会话 overlay 受 writer lease 保护；BPM 与 Quantize/Swing 选择性 rebase 后继续，Sample 类 mutation 失败但会话不被静默改写，flush 按 command/session/sequence identity 幂等并以 manifest 发布为 commit point。Pattern switch 在 Core 报告的下一 Bar 生效；owner-loss recovery artifact 必须通过原 Pattern fingerprint 或用户明确选择的有效目标后才能提交或丢弃。
+[2026-08-23 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)已由 Stage 9 实现：录音向当前 Pattern 写入 tick-native PPQ 960 事件，没有 Take 产品对象或音频 bounce。会话 overlay 受 writer lease 保护；BPM 与 Quantize/Swing 选择性 rebase 后继续，Sample 类 mutation 失败但会话不被静默改写，flush 按 command/session/sequence identity 幂等并以 manifest 发布为 commit point。Pattern switch 在 Core 报告的下一 Bar 生效；Web Runtime Session 以 switch authority 的 session/Pattern/frame/generation 匹配 acknowledgement，在同一输入串行通道 exact-once flush，确认 Facade active 后才允许 Host 呈现新 Pattern 和继续录音。owner-loss recovery artifact 必须通过原 Pattern fingerprint 或用户明确选择的有效目标后才能提交或丢弃。
 
 ## Pad Capture pre-commit 编辑
 

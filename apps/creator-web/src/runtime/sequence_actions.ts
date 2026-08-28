@@ -9,6 +9,7 @@ export function isSequenceSession(value: unknown): value is CreatorSequenceRunti
   const session = value as Partial<CreatorSequenceRuntimeSession> | null;
   return session !== null && typeof session === "object" &&
     typeof session.beginSequence === "function" &&
+    typeof session.flushSequence === "function" &&
     typeof session.createPattern === "function" &&
     typeof session.updateSequenceSettings === "function" &&
     typeof session.stopSequence === "function" &&
