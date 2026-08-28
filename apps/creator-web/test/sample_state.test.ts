@@ -909,9 +909,7 @@ describe("Creator Sample state", () => {
       {actual_revision: 43, expected_revision: 42},
       ...[
         "artifact_bytes",
-        "decoded_frames_per_pad",
-        "prepared_bank_bytes",
-        "live_bank_bytes",
+        "resident_bytes",
       ].map((resource) => ({resource, observed: 2_000, limit: 1_000})),
       ...[
         "project_busy",
@@ -953,6 +951,11 @@ describe("Creator Sample state", () => {
       {actual_revision: Number.MAX_SAFE_INTEGER + 1, expected_revision: 42},
       {actual_revision: 43, expected_revision: 42, note: "extra"},
       {resource: "unknown_resource", observed: 2, limit: 1},
+      ...[
+        "decoded_frames_per_pad",
+        "prepared_bank_bytes",
+        "live_bank_bytes",
+      ].map((resource) => ({resource, observed: 2, limit: 1})),
       {resource: "artifact_bytes", observed: -1, limit: 1},
       {storage_condition: "unknown_condition"},
       {transfer_condition: "unknown_condition"},

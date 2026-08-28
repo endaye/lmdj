@@ -419,6 +419,69 @@ void test_one_project_session_and_monotonic_durable_flush_identity() {
   LMDJ_CHECK(second.value().flush_seq == 1);
 }
 
+void test_repeated_command_id_is_idempotent_or_rejected_before_append() {
+  TempDirectory temp("command-idempotency");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  begin(journal, bundle);
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto command_id = CommandId{std::string{kCommandId}};
+  const auto pattern_id = PatternId{std::string{kPatternId}};
+  const std::vector events{event()};
+
+  const auto first = journal.append_flush(
+      bundle, session_id, command_id, pattern_id, 0, events);
+  LMDJ_CHECK(first.has_value());
+  const auto journal_bytes = read_text(
+      bundle / "recovery/active/sequence.jsonl");
+
+  const auto replayed = journal.append_flush(
+      bundle, session_id, command_id, pattern_id, 0, events);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value() == first.value());
+  LMDJ_CHECK(
+      read_text(bundle / "recovery/active/sequence.jsonl") == journal_bytes);
+
+  LMDJ_CHECK(
+      journal
+          .complete_flush(
+              bundle,
+              session_id,
+              first.value().flush_seq,
+              1,
+              std::string(64, '1'))
+          .has_value());
+  const auto completed_bytes = read_text(
+      bundle / "recovery/active/sequence.jsonl");
+  const auto completed_replay = journal.append_flush(
+      bundle, session_id, command_id, pattern_id, 0, events);
+  LMDJ_CHECK(completed_replay.has_value());
+  LMDJ_CHECK(completed_replay.value().flush_seq == first.value().flush_seq);
+  LMDJ_CHECK(completed_replay.value().completed);
+  LMDJ_CHECK(
+      read_text(bundle / "recovery/active/sequence.jsonl") == completed_bytes);
+
+  const auto conflicting = journal.append_flush(
+      bundle,
+      session_id,
+      command_id,
+      pattern_id,
+      0,
+      std::vector{event(1, 240)});
+  LMDJ_CHECK(!conflicting.has_value());
+  LMDJ_CHECK(conflicting.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(
+      conflicting.error().details.at("reason") ==
+      "sequence_command_conflict");
+  const auto active = journal.read_active(bundle);
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().flushes.size() == 1);
+  LMDJ_CHECK(active.value().next_flush_seq == 1);
+  LMDJ_CHECK(
+      read_text(bundle / "recovery/active/sequence.jsonl") == completed_bytes);
+}
+
 void test_writer_lease_contention_fails_before_begin() {
   TempDirectory temp("lease");
   auto platform = lmdj::project_io::make_default_project_storage_platform();
@@ -466,6 +529,7 @@ void test_sequence_flush_commits_once_and_replays_receipt() {
   const auto first = store.execute_sequence_flush(bundle, identity);
   LMDJ_CHECK(first.has_value());
   LMDJ_CHECK(!first.value().outcome.replayed);
+  LMDJ_CHECK(first.value().committed_revision == 1);
   LMDJ_CHECK(first.value().outcome.state.revision == 1);
   LMDJ_CHECK(
       first.value().outcome.state.patterns.at(identity.pattern_id).events.size() ==
@@ -473,14 +537,31 @@ void test_sequence_flush_commits_once_and_replays_receipt() {
   const auto active = journal.read_active(bundle);
   LMDJ_CHECK(active.has_value());
   LMDJ_CHECK(active.value().flushes.at(0).completed);
+  LMDJ_CHECK(
+      journal.remove_active_if_complete(bundle, identity.session_id)
+          .has_value());
+  const auto advanced = store.execute(
+      bundle,
+      lmdj::domain::Command{lmdj::domain::UpdateSequenceSettings{
+          {CommandId{uuid_for(99)}, 1},
+          121,
+          std::nullopt,
+          std::nullopt,
+      }});
+  LMDJ_CHECK(advanced.has_value());
+  LMDJ_CHECK(advanced.value().state.revision == 2);
 
-  const auto replayed = store.execute_sequence_flush(bundle, identity);
+  const auto replayed = store.replay_sequence_flush(bundle, identity);
   LMDJ_CHECK(replayed.has_value());
-  LMDJ_CHECK(replayed.value().outcome.replayed);
-  LMDJ_CHECK(replayed.value().outcome.state.revision == 1);
+  LMDJ_CHECK(replayed.value().has_value());
+  LMDJ_CHECK(replayed.value()->committed_revision == 1);
+  LMDJ_CHECK(replayed.value()->outcome.replayed);
+  LMDJ_CHECK(replayed.value()->outcome.state.revision == 2);
   LMDJ_CHECK(
       replayed.value()
-          .outcome.state.patterns.at(identity.pattern_id)
+          ->outcome
+          .state
+          .patterns.at(identity.pattern_id)
           .events.size() == 1);
 }
 
@@ -876,55 +957,63 @@ void test_replayed_completion_subtracts_committed_events_from_durable_tail() {
       {});
 }
 
-void test_restart_reconciles_reload_visible_receipt_without_overdub() {
-  TempDirectory temp("reconcile");
-  ProjectStore store;
-  const auto bundle = create_bundle(temp, store);
-  SequenceJournal journal;
-  begin(journal, bundle);
-  const std::vector events{event()};
-  auto flush = journal.append_flush(
-      bundle,
-      SequenceSessionId{std::string{kSessionId}},
-      CommandId{std::string{kCommandId}},
-      PatternId{std::string{kPatternId}},
-      0,
-      events);
-  LMDJ_CHECK(flush.has_value());
-  const SequenceFlushIdentity identity{
-      SequenceSessionId{std::string{kSessionId}},
-      0,
-      CommandId{std::string{kCommandId}},
-      PatternId{std::string{kPatternId}},
+void test_restart_reconciles_each_post_commit_fault_without_overdub() {
+  constexpr std::array post_commit_faults{
+      FaultPoint::sequence_receipt_reload,
+      FaultPoint::sequence_journal_completion,
   };
-  lmdj::foundation::Result<lmdj::project_io::SequenceFlushExecution> result =
-      lmdj::foundation::Result<
-          lmdj::project_io::SequenceFlushExecution>::failure(
-          lmdj::foundation::Error{
-              ErrorCode::internal_error, "fault was not run"});
-  {
-    FaultGuard fault(FaultPoint::sequence_receipt_reload);
-    result = store.execute_sequence_flush(bundle, identity);
-  }
-  LMDJ_CHECK(!result.has_value());
-  LMDJ_CHECK(result.error().code == ErrorCode::io_error);
-  const auto committed = store.load(bundle);
-  LMDJ_CHECK(committed.has_value());
-  LMDJ_CHECK(committed.value().revision == 1);
-  LMDJ_CHECK(committed.value().patterns.at(identity.pattern_id).events.size() == 1);
-  LMDJ_CHECK(!journal.read_active(bundle).value().flushes.at(0).completed);
+  for (std::size_t index = 0; index < post_commit_faults.size(); ++index) {
+    TempDirectory temp("reconcile-" + std::to_string(index));
+    ProjectStore store;
+    const auto bundle = create_bundle(temp, store);
+    SequenceJournal journal;
+    begin(journal, bundle);
+    const std::vector events{event()};
+    auto flush = journal.append_flush(
+        bundle,
+        SequenceSessionId{std::string{kSessionId}},
+        CommandId{std::string{kCommandId}},
+        PatternId{std::string{kPatternId}},
+        0,
+        events);
+    LMDJ_CHECK(flush.has_value());
+    const SequenceFlushIdentity identity{
+        SequenceSessionId{std::string{kSessionId}},
+        0,
+        CommandId{std::string{kCommandId}},
+        PatternId{std::string{kPatternId}},
+    };
+    lmdj::foundation::Result<lmdj::project_io::SequenceFlushExecution> result =
+        lmdj::foundation::Result<
+            lmdj::project_io::SequenceFlushExecution>::failure(
+            lmdj::foundation::Error{
+                ErrorCode::internal_error, "fault was not run"});
+    {
+      FaultGuard fault(post_commit_faults[index]);
+      result = store.execute_sequence_flush(bundle, identity);
+    }
+    LMDJ_CHECK(!result.has_value());
+    LMDJ_CHECK(result.error().code == ErrorCode::io_error);
+    const auto committed = store.load(bundle);
+    LMDJ_CHECK(committed.has_value());
+    LMDJ_CHECK(committed.value().revision == 1);
+    LMDJ_CHECK(
+        committed.value().patterns.at(identity.pattern_id).events.size() == 1);
+    LMDJ_CHECK(!journal.read_active(bundle).value().flushes.at(0).completed);
 
-  ProjectStore restarted;
-  const auto candidates = restarted.reconcile_sequence_recovery(bundle);
-  LMDJ_CHECK(candidates.has_value());
-  LMDJ_CHECK(candidates.value().empty());
-  const auto no_active = journal.read_active(bundle);
-  LMDJ_CHECK(!no_active.has_value());
-  LMDJ_CHECK(no_active.error().code == ErrorCode::not_found);
-  const auto reopened = restarted.load(bundle);
-  LMDJ_CHECK(reopened.has_value());
-  LMDJ_CHECK(reopened.value().revision == 1);
-  LMDJ_CHECK(reopened.value().patterns.at(identity.pattern_id).events.size() == 1);
+    ProjectStore restarted;
+    const auto candidates = restarted.reconcile_sequence_recovery(bundle);
+    LMDJ_CHECK(candidates.has_value());
+    LMDJ_CHECK(candidates.value().empty());
+    const auto no_active = journal.read_active(bundle);
+    LMDJ_CHECK(!no_active.has_value());
+    LMDJ_CHECK(no_active.error().code == ErrorCode::not_found);
+    const auto reopened = restarted.load(bundle);
+    LMDJ_CHECK(reopened.has_value());
+    LMDJ_CHECK(reopened.value().revision == 1);
+    LMDJ_CHECK(
+        reopened.value().patterns.at(identity.pattern_id).events.size() == 1);
+  }
 }
 
 void test_flush_fault_matrix_has_only_recoverable_or_single_commit_outcomes() {
@@ -987,6 +1076,25 @@ void test_flush_fault_matrix_has_only_recoverable_or_single_commit_outcomes() {
     LMDJ_CHECK(
         visible.value().patterns.at(identity.pattern_id).events.size() ==
         (committed ? 1 : 0));
+
+    if (committed) {
+      const auto retried_append = journal.append_flush(
+          bundle,
+          identity.session_id,
+          identity.command_id,
+          identity.pattern_id,
+          0,
+          events);
+      LMDJ_CHECK(retried_append.has_value());
+      LMDJ_CHECK(retried_append.value().flush_seq == identity.flush_seq);
+      LMDJ_CHECK(journal.read_active(bundle).value().flushes.size() == 1);
+      const auto retried_execution =
+          store.execute_sequence_flush(bundle, identity);
+      LMDJ_CHECK(retried_execution.has_value());
+      LMDJ_CHECK(retried_execution.value().outcome.replayed);
+      LMDJ_CHECK(
+          retried_execution.value().outcome.state.revision == 1);
+    }
 
     const auto reconciled = store.reconcile_sequence_recovery(bundle);
     LMDJ_CHECK(reconciled.has_value());
@@ -1144,10 +1252,11 @@ int main(int argc, char** argv) {
     test_replayed_completion_subtracts_committed_events_from_durable_tail();
     test_complete_line_tail_corruption_fails_closed_with_uniform_evidence();
     test_one_project_session_and_monotonic_durable_flush_identity();
+    test_repeated_command_id_is_idempotent_or_rejected_before_append();
     test_writer_lease_contention_fails_before_begin();
     test_sequence_flush_commits_once_and_replays_receipt();
     test_pattern_switch_preserves_session_flush_sequence();
-    test_restart_reconciles_reload_visible_receipt_without_overdub();
+    test_restart_reconciles_each_post_commit_fault_without_overdub();
     test_flush_fault_matrix_has_only_recoverable_or_single_commit_outcomes();
     test_uncommitted_flush_seals_owner_lost_recovery();
   } catch (const std::exception& error) {

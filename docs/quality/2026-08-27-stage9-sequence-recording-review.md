@@ -294,6 +294,14 @@ SR-D22 指纹门保证 Project Truth 不会双写（无数据腐化），这是�
 故障矩阵（`tests/core/project_io/sequence_journal_test.cpp:439`）每个故障
 用全新 bundle、从不重试提交后故障的 flush，未覆盖。
 
+**整改状态（2026-08-29，#372）：** journal append 现在在同一 append mutex
+与 writer lease 内按 `command_id` 查重；相同 payload 返回原 flush record，冲突
+payload 在写入前拒绝。Facade 在 journal append 后保留 exact in-flight record，
+post-commit 返回失败的重试先执行原 identity，并只从 pending 集合移除该批原
+事件，期间到达的事件必须由新的命令提交。组件测试覆盖 receipt reload 与
+journal completion 的 same-bundle retry、restart reconcile，以及 Facade 中间
+录入、后续 flush、stop 和 journal 清理。版本身份与整体验收仍由 #379 刷新。
+
 ### M4 Pending switch 期间改 BPM 留下陈旧边界（SR-D23）
 
 `request_sequence_switch` 用请求时的锚点算 `effective_runtime_frame`

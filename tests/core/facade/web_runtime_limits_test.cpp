@@ -991,6 +991,23 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
     LMDJ_CHECK(rejected.error().details.at("limit") == limit);
     check_prior();
   };
+  const auto check_quota = [&check_prior](
+                               const auto& rejected,
+                               ErrorCode code,
+                               std::uint64_t requested,
+                               std::uint64_t remaining) {
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == code);
+    LMDJ_CHECK(rejected.error().details.at("requested_bytes") == requested);
+    if (code == ErrorCode::bank_quota_exhausted) {
+      LMDJ_CHECK(rejected.error().details.at("remaining_bytes") == remaining);
+    } else {
+      LMDJ_CHECK(
+          rejected.error().details.at("project_remaining_bytes") ==
+          remaining);
+    }
+    check_prior();
+  };
 
   constexpr std::uint32_t kArtifactBoundaryFrames =
       (1'048'576U - 44U) / 2U;
@@ -1007,7 +1024,7 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
       artifact_pattern);
   const RuntimePreparationLimits artifact_limits{
       1'048'576,
-      kArtifactBoundaryFrames,
+      static_cast<std::uint64_t>(kArtifactBoundaryFrames) * sizeof(float),
       static_cast<std::uint64_t>(kArtifactBoundaryFrames) * sizeof(float),
       static_cast<std::uint64_t>(kArtifactBoundaryFrames) * sizeof(float),
   };
@@ -1066,9 +1083,9 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
       decoded_pattern);
   const RuntimePreparationLimits decoded_limits{
       1'048'576,
-      240'000,
-      960'000,
-      960'000,
+      960'004,
+      960'004,
+      0,
   };
   const auto exact_decoded = application.prepare_runtime_snapshot(
       RuntimeSnapshotRequest{
@@ -1096,47 +1113,58 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
               {"project_path", decoded_oversized_project.generic_string()},
           }),
       3);
-  check_limit(
-      application.prepare_runtime_snapshot(
-          RuntimeSnapshotRequest{
-              decoded_oversized_project,
-              PatternId{decoded_oversized_pattern},
-              decoded_limits,
-          }),
-      "decoded_frames_per_pad",
-      240'001,
-      240'000);
+  const auto no_per_pad_cap = application.prepare_runtime_snapshot(
+      RuntimeSnapshotRequest{
+          decoded_oversized_project,
+          PatternId{decoded_oversized_pattern},
+          decoded_limits,
+      });
+  LMDJ_CHECK(no_per_pad_cap.has_value());
 
-  check_limit(
+  check_quota(
       application.prepare_runtime_snapshot(
           RuntimeSnapshotRequest{
               decoded_project,
               PatternId{decoded_pattern},
               RuntimePreparationLimits{
                   1'048'576,
-                  240'000,
                   959'999,
                   960'000,
+                  0,
               },
           }),
-      "prepared_bank_bytes",
+      ErrorCode::bank_quota_exhausted,
       960'000,
       959'999);
-  check_limit(
+  check_quota(
       application.prepare_runtime_snapshot(
           RuntimeSnapshotRequest{
               decoded_project,
               PatternId{decoded_pattern},
               RuntimePreparationLimits{
                   1'048'576,
-                  240'000,
                   960'000,
                   959'999,
+                  0,
               },
           }),
-      "live_bank_bytes",
+      ErrorCode::project_quota_exhausted,
       960'000,
       959'999);
+
+  const auto resident_is_not_a_generation_quota =
+      application.prepare_runtime_snapshot(
+          RuntimeSnapshotRequest{
+              decoded_project,
+              PatternId{decoded_pattern},
+              RuntimePreparationLimits{
+                  1'048'576,
+                  960'000,
+                  960'000,
+                  0,
+              },
+          });
+  LMDJ_CHECK(resident_is_not_a_generation_quota.has_value());
 }
 
 }  // namespace

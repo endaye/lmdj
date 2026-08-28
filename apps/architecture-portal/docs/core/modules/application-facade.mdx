@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
 ## 2. 当前实现状态
-Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。每个 Sequence event 先把 completed events 与未释放 press 的 240-tick 默认形态组成 canonical tail 并耐久 append，成功后才更新内存 state 与 acknowledgement；release 的后续 snapshot 替换真实 duration。当前 source 也把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。
+Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。每个 Sequence event 先把 completed events 与未释放 press 的 240-tick 默认形态组成 canonical tail 并耐久 append，成功后才更新内存 state 与 acknowledgement；release 的后续 snapshot 替换真实 duration。运行中的 session 会在 journal append 后保留 exact in-flight flush；post-commit 返回失败的重试先完成该 identity，只消费其原事件，后到事件仍等待新命令。当前 source 也把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。
 ## 3. 所有权与依赖
 依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。
 ## 4. 架构与数据流
@@ -25,7 +25,7 @@ Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Pr
 ## 5. API 与 Contract 边界
 C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；Bundle/Sample streaming API 不暴露 Project path 或 internals；Assembly Loader 校验锁定身份。
 ## 6. 状态、错误与并发
-错误翻译保留公共类别；本地 Sequence mutex 只负责进程内 admission 排序，Project I/O 仍在 writer lease 内重判持久 authority；C API stress 验证并发生命周期。
+错误翻译保留公共类别；Runtime Snapshot 准备复用 Audio Runtime 的 overflow-checked Bank/generation 账本，长 Sample 不再被单 Pad 帧数规则提前拒绝，失败不会修改 Project Truth 或替换已发布 generation。本地 Sequence mutex 只负责进程内 admission 排序，Project I/O 仍在 writer lease 内重判持久 authority；C API stress 验证并发生命周期。
 ## 7. 产品使用方
 CLI、MCP、Native Host，以及通过 Web Runtime Platform 接入的 Creator/Diagnostic Web Host。
 ## 8. 测试与证据

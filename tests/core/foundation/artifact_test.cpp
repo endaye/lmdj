@@ -155,6 +155,10 @@ void test_public_error_codes_have_stable_names() {
       std::pair{ErrorCode::missing_asset, "MISSING_ASSET"},
       std::pair{ErrorCode::invalid_project, "INVALID_PROJECT"},
       std::pair{ErrorCode::cook_failed, "COOK_FAILED"},
+      std::pair{ErrorCode::bank_quota_exhausted, "BANK_QUOTA_EXHAUSTED"},
+      std::pair{
+          ErrorCode::project_quota_exhausted,
+          "PROJECT_QUOTA_EXHAUSTED"},
       std::pair{ErrorCode::provider_not_found, "PROVIDER_NOT_FOUND"},
       std::pair{ErrorCode::provider_failed, "PROVIDER_FAILED"},
       std::pair{ErrorCode::permission_denied, "PERMISSION_DENIED"},

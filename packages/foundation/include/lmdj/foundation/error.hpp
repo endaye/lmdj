@@ -18,6 +18,8 @@ enum class ErrorCode {
   missing_asset,
   invalid_project,
   cook_failed,
+  bank_quota_exhausted,
+  project_quota_exhausted,
   provider_not_found,
   provider_failed,
   permission_denied,
@@ -43,6 +45,10 @@ constexpr std::string_view error_code_name(ErrorCode code) {
       return "INVALID_PROJECT";
     case ErrorCode::cook_failed:
       return "COOK_FAILED";
+    case ErrorCode::bank_quota_exhausted:
+      return "BANK_QUOTA_EXHAUSTED";
+    case ErrorCode::project_quota_exhausted:
+      return "PROJECT_QUOTA_EXHAUSTED";
     case ErrorCode::provider_not_found:
       return "PROVIDER_NOT_FOUND";
     case ErrorCode::provider_failed:
