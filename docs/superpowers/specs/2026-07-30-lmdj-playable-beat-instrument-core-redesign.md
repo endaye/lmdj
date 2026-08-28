@@ -281,7 +281,10 @@ Perform 提供：
 - Stereo WAV 录制；
 - Replay、命名、导出和 Resample。
 
-首版 Momentary FX 包括：
+首版 Momentary FX 包括（2026-08-29 Stage 10 设计评审勘误：Roll 更名为
+Cutter，八项逐一对位 Koala 官方手册 §9.1 的 perform FX 定义；Delay 取
+节拍同步语义，见
+[Stage 10 Perform 设计](2026-08-28-lmdj-stage10-perform-design.md)）：
 
 - Filter；
 - Delay；
@@ -290,7 +293,7 @@ Perform 提供：
 - Gate；
 - Reverse；
 - Crush；
-- Roll。
+- Cutter。
 
 `Hold` 必须是显式状态。用户可以把完整演出或选中片段 Resample 成新的 Asset，
 再写入目标 Pad，形成：
