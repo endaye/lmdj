@@ -101,14 +101,36 @@ receipt/event, committed revision, Asset and Pad assignment before completing
 the journal; any mismatch fails closed without a second Project mutation.
 Restart recovery applies the same receipt check before owner-loss sealing.
 
+The pre-publication side of that boundary is also checked. If the durable
+prepare exists but Project publication never happened, Discard/disarm acquires
+the Project writer lease and compares the exact original session, slot,
+command, Asset, artifact, expected revision, empty Pad, and absent receipt
+against Project Truth. Exact unchanged truth appends one durable
+`capture-abort`, clears only the Capture marker/arm, preserves pending Sequence
+events and lets the same session flush/Stop. A matching published receipt takes
+the completion path instead; any mismatch fails closed. Restart performs this
+same decision before owner-loss sealing.
+
 The packaged Creator gate records assigned A2 before the armed A1 stop gesture,
 keeps A1 as the Sample mutation selection while A2 remains ordinary Sequence
 input, proves that stop gesture is absent from Sequence, records A1 only after Capture
 commit, stops, reloads/reopens, and inspects Project Truth. The exact acceptance
 is revision `48`, one A2 and one A1 event added in that order (no third armed-hit
-event), A1 assigned to the newly committed Asset, and an `audio/wav` artifact.
+event), A1 assigned to the newly committed Asset, and the exact `audio/wav`
+artifact identity including its SHA-256 and byte length across reload/reopen.
 The unrelated running-audio BPM-update → immediate switch failure remains a
 #375 blocker and is not removed from the full Proof journey.
+
+Review fix 2 local verification on 2026-08-29 is green: Project Store,
+Sequence Journal, Project I/O fault matrix, Facade Sequence surface and Web
+Control Runtime focused executables; Web Runtime protocol/session `76/76`;
+Creator Vitest `349/349` plus production build; Core full `79/79` and stress
+`4/4`; Architecture Portal `59/59`, 37 current pages, 10 diagram sources/20
+outputs and 42 routes; dependency, active-tree and version gates with Product
+Build unchanged at `1.0.37.0`. The clean packaged Creator Proof is run from the
+new commit so its deterministic revision describes the tested source; its
+shared #375 failure, if still present, is reported separately rather than
+reclassified as a #374 defect.
 
 ## Automated verification
 

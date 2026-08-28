@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-08-29
     occurrence: https://github.com/endaye/lmdj/issues/374
     observed_by: OpenAI Codex GPT-5
+  - date: 2026-08-29
+    occurrence: https://github.com/endaye/lmdj/issues/374
+    observed_by: OpenAI Codex GPT-5
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -40,6 +43,7 @@ the reload — not merely the acknowledgement that the transition was requested.
 If a leg cannot be exercised, record it as an explicit gap in the acceptance
 ledger rather than shortening the journey. The `issue-done` prerequisite now
 requires a leg-by-leg map with a far-side observable for every named
-crash/retry, stop, reload/reopen, and persisted-truth transition; this remains
-a judgment-based skill check because general journey completeness is not
-mechanically decidable from the repository.
+crash/retry, failure→discard/abort, stop, reload/reopen, and persisted-truth
+transition, including complete content identity rather than only its type; this
+remains a judgment-based skill check because general journey completeness is
+not mechanically decidable from the repository.

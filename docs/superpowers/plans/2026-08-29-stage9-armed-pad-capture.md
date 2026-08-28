@@ -168,6 +168,51 @@ The Task also updates the approved Sequence design/decision, Stage 9 review disp
 
 Review-fix verification uses the same Version Management and Documentation Impact decisions as Task 1. Version allocation remains deferred to #379; current Portal/review/acceptance truth changes are required, while immutable snapshots remain untouched. The independently shared running-audio BPM-update → immediate switch failure remains outside #374 and is reported against #375 rather than hidden by this journey.
 
+---
+
+### Task 3: Review fix for pre-publication abort and complete reload identity
+
+**Files:**
+
+- Modify: `packages/project-io/include/lmdj/project_io/project_store.hpp`
+- Modify: `packages/project-io/include/lmdj/project_io/sequence_journal.hpp`
+- Modify: `packages/project-io/src/project_store.cpp`
+- Modify: `packages/project-io/src/sequence_journal.cpp`
+- Modify: `packages/application-facade/src/application.cpp`
+- Modify: `tests/core/project_io/fault_matrix_test.cpp`
+- Modify: `tests/core/facade/sequence_surface_test.cpp`
+- Modify: `tests/platform/web/creator/creator_web_capture.spec.mjs`
+- Modify: current acceptance/review/Portal routes declared above
+- Modify: `.agents/pitfalls/acceptance-journey-truncation.md`
+- Modify: `.agents/skills/issue-done/SKILL.md`
+
+- [x] Write failing Project I/O and Facade tests for a durable Capture prepare
+  followed by failure before manifest publication, explicit Discard/disarm,
+  retained pending events, continued flush/Stop, and restart reconciliation.
+- [x] Verify RED at compile time because Project Store has no checked
+  Capture-disarm authority capable of inspecting Project Truth.
+- [x] Add one writer-lease checked resolver. A matching committed receipt
+  completes the original Capture; no receipt plus exact unchanged Project
+  revision/Pad/Asset/command truth appends a durable `capture-abort`; every
+  session, slot, revision, receipt, command, Asset, artifact, or Pad mismatch
+  fails closed without changing the journal.
+- [x] Keep the runtime session active, update its revision only for a reconciled
+  commit, clear only the arm, and preserve all pending Sequence events.
+- [x] Assert the packaged reload/reopen boundary retains the exact assigned
+  Asset and complete artifact identity: media type, SHA-256, and byte length.
+- [x] Run focused Core/Project I/O/Web/Creator verification, Core full/stress,
+  Portal/direct/version gates, and the exact clean packaged Creator journey.
+- [x] Stage only Task 3 files, inspect the cached/committed inventory, create a
+  new Conventional Commit, and leave the worktree clean.
+
+Task 3 keeps the same Version Management decision: version impact is deferred
+to #379, so it allocates no Module, Host, Contract, Product Build, Assembly, or
+Channel identity. Documentation impact remains required for the Application
+Facade, Creator Host, product workflow, testing/proof, Stage 9 acceptance, and
+review routes. Immutable snapshots remain untouched. The shared #375
+running-audio BPM-update → immediate switch failure remains a separate blocker
+and must remain visible in the full packaged proof.
+
 ## External Boundaries
 
 This Task authorizes no push, Pull Request, merge, Product tag, Release, deployment, publication, or Channel promotion. Physical/manual acceptance remains deferred under #360.

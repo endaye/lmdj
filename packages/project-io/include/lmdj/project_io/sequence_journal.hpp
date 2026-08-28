@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -65,6 +66,16 @@ struct SequenceRecoveryCandidate {
   bool operator==(const SequenceRecoveryCandidate&) const = default;
 };
 
+struct SequenceCaptureDisarmResult {
+  bool reconciled_commit{};
+  std::uint64_t expected_revision{};
+
+  bool operator==(const SequenceCaptureDisarmResult&) const = default;
+};
+
+using SequenceCaptureTruthInspector = std::function<foundation::Result<
+    std::optional<std::uint64_t>>(const SequenceCaptureCommit&)>;
+
 // Returns lowercase SHA-256 of the exact SR-D22 canonical JSON preimage.
 std::string sequence_pattern_fingerprint(const domain::Pattern& pattern);
 
@@ -122,6 +133,11 @@ class SequenceJournal {
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,
       domain::PadSlotId slot);
+  foundation::Result<SequenceCaptureDisarmResult> resolve_capture_disarm(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      domain::PadSlotId slot,
+      const SequenceCaptureTruthInspector& inspect_truth);
   foundation::Result<void> switch_pattern(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,

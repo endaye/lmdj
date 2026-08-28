@@ -588,6 +588,63 @@ void test_cancelled_armed_capture_keeps_sequence_active_and_disarms_commit() {
       {project, session_id, CommandId{uuid(97)}, 1}).has_value());
 }
 
+void test_prepublication_capture_marker_can_disarm_and_preserve_pending_events() {
+  TempDirectory temp;
+  const auto project = temp.path() / "prepared-capture-discard.lmdj";
+  const PatternId pattern_id{uuid(98)};
+  const SequenceSessionId session_id{uuid(99)};
+  const PadSlotId armed_slot{0, 1};
+  auto platform = lmdj::project_io::make_default_project_storage_platform();
+  auto application_config = config(temp.path());
+  application_config.storage_platform = platform;
+  Application application(std::move(application_config));
+  create_recordable_project(application, project, pattern_id);
+  LMDJ_CHECK(application.begin_sequence(
+      {project, session_id, pattern_id, 2, 0, armed_slot}).has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 0, 1, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 1, 2, false}})
+                 .has_value());
+
+  const auto artifact = lmdj::foundation::describe_artifact(
+      "tests/fixtures/audio/kick.wav", "audio/wav");
+  LMDJ_CHECK(artifact.has_value());
+  lmdj::project_io::SequenceJournal journal{platform};
+  const auto prepared = journal.prepare_armed_capture(
+      project, session_id, CommandId{uuid(100)}, AssetId{uuid(101)},
+      armed_slot, artifact.value(), 2);
+  LMDJ_CHECK(prepared.has_value());
+
+  LMDJ_CHECK(application.disarm_sequence_capture(
+      {project, session_id, armed_slot}).has_value());
+  const auto status = application.query_sequence_status({project});
+  LMDJ_CHECK(status.has_value());
+  LMDJ_CHECK(status.value().state == SequenceRecordState::active);
+  LMDJ_CHECK(status.value().expected_revision == 2);
+  LMDJ_CHECK(status.value().pending_event_count == 1);
+  const auto disarmed = journal.read_active(project);
+  LMDJ_CHECK(disarmed.has_value());
+  LMDJ_CHECK(!disarmed.value().armed_capture_slot.has_value());
+  LMDJ_CHECK(!disarmed.value().capture_commit.has_value());
+
+  const auto stopped = application.stop_sequence(
+      {project, session_id, CommandId{uuid(102)}, 1});
+  LMDJ_CHECK(stopped.has_value());
+  LMDJ_CHECK(stopped.value().committed_revision == 3);
+  lmdj::project_io::ProjectStore reopened{platform};
+  const auto truth = reopened.load(project);
+  LMDJ_CHECK(truth.has_value());
+  LMDJ_CHECK(truth.value().revision == 3);
+  LMDJ_CHECK(truth.value().assets.size() == 1);
+  LMDJ_CHECK(!truth.value().assets.contains(AssetId{uuid(101)}));
+  LMDJ_CHECK(
+      !truth.value().banks.at(armed_slot.bank).at(armed_slot.pad).asset_id
+           .has_value());
+  LMDJ_CHECK(truth.value().patterns.at(pattern_id).events.size() == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -600,6 +657,7 @@ int main() {
     test_settings_rebase_and_pattern_creation_are_authoritative();
     test_armed_capture_commit_rebases_without_losing_pending_events();
     test_cancelled_armed_capture_keeps_sequence_active_and_disarms_commit();
+    test_prepublication_capture_marker_can_disarm_and_preserve_pending_events();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

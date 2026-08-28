@@ -237,6 +237,17 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
   await expect(panel).toBeHidden({timeout: 180_000});
   await expect(page.getByRole("status").filter({hasText: "recording"}))
     .toBeVisible({timeout: 30_000});
+  const committedTruth = await inspectProjectTruth(page);
+  const committedAsset = committedTruth.project.banks[0].pads[0].asset_id;
+  const committedArtifact = structuredClone(
+    committedTruth.project.assets[committedAsset].artifact,
+  );
+  expect(committedArtifact).toEqual({
+    byte_length: expect.any(Number),
+    media_type: "audio/wav",
+    sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+  });
+  expect(committedArtifact.byte_length).toBeGreaterThan(44);
 
   // Once committed and rebased, the same Pad is a normal playable/recordable
   // input for the still-active session.
@@ -258,6 +269,19 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
   const persisted = await inspectProjectTruth(page);
+
+  // Prove the full committed artifact identity survives the actual
+  // close/reload/reopen boundary before checking the known shared publication
+  // assertions below.
+  const assignedAsset = persisted.project.banks[0].pads[0].asset_id;
+  expect(assignedAsset).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  expect(assignedAsset).toBe(committedAsset);
+  expect(persisted.project.assets[assignedAsset]).toEqual({
+    artifact: committedArtifact,
+  });
+
   expect(persisted.project_revision).toBe(48);
   expect(persisted.project.revision).toBe(48);
 
@@ -279,14 +303,6 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
     Object.keys(event).sort().join(",") ===
       "duration_tick,onset_tick,slot,velocity" &&
     event.duration_tick > 0 && event.velocity > 0)).toBe(true);
-
-  const assignedAsset = persisted.project.banks[0].pads[0].asset_id;
-  expect(assignedAsset).toMatch(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-  );
-  expect(persisted.project.assets[assignedAsset]).toEqual({
-    artifact: expect.objectContaining({media_type: "audio/wav"}),
-  });
 
   await page.getByRole("button", {name: "Sample"}).click();
   await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))

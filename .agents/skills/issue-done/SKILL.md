@@ -34,9 +34,11 @@ Before starting the shipping pipeline:
    plan, or acceptance ledger names a multi-step journey, enumerate every leg
    in order before declaring verification complete. For each transition,
    record an observable assertion after the transition, including every named
-   crash/retry, stop, reload/reopen, and persisted-truth leg. If a leg was not
-   exercised, keep it as an explicit acceptance gap; a green prefix of the
-   journey is not a pass for the full journey.
+   crash/retry, failure-to-discard/abort, stop, reload/reopen, and
+   persisted-truth leg. Persisted artifacts must be checked by their complete
+   required identity (for example digest and byte length, not only media type).
+   If a leg was not exercised, keep it as an explicit acceptance gap; a green
+   prefix of the journey is not a pass for the full journey.
 
 ---
 

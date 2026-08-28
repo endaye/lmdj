@@ -234,6 +234,18 @@ event delta/order/count、Pad/Asset/WAV 与 revision；armed 期间其他 Pad �
 把 Sample mutation selection 从 A1 改到 A2。共享 running-audio BPM update→immediate
 switch 的 publication failure 仍单列为 #375 集成 blocker，不以移动步骤或弱化断言隐藏。
 
+**#374 independent re-review fix 2（2026-08-29）**：第二次复核补出 precommit
+的另一侧：`capture-prepare` 已持久化、但 manifest 尚未发布时，显式 Discard 原本只清
+Host buffer，而 journal 因 marker 拒绝 disarm，使 active session 无 bytes 可重试且无法
+退出。修正把 disarm/abort 放入 Project writer lease 下的 checked decision：exact matching
+receipt 走原 completion/rebase；无 receipt 且 Project 仍精确位于 expected `N`、原 Pad
+为空、command/Asset 均不存在时追加 durable `capture-abort`，只清 marker 与 arm，保留
+pending events/session 并允许后续 flush/Stop；session、slot、revision、receipt、command、
+Asset、artifact 或 Pad Truth 任一冲突均 fail closed。故障矩阵覆盖 prepare 后的
+pre-publication failure、Discard/disarm、continued flush/Stop 与 crash/restart。packaged
+reload/reopen 断言也从 media type 扩展为 exact assigned Asset、artifact SHA-256 与 byte
+length；共享 #375 running-audio BPM→switch failure 仍保留为独立 blocker。
+
 ## 四、中危发现
 
 ### M1 SR-D13「下一圈可听」未接线：journal 叠加音在产品中不存在

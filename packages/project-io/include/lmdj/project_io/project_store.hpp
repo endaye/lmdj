@@ -133,6 +133,10 @@ class ProjectStore {
       const foundation::CommandId& command_id);
   foundation::Result<std::vector<SequenceRecoveryCandidate>>
   reconcile_sequence_recovery(const std::filesystem::path& bundle);
+  foundation::Result<SequenceCaptureDisarmResult> disarm_sequence_capture(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      domain::PadSlotId slot);
   foundation::Result<std::vector<std::byte>> read_artifact(
       const std::filesystem::path& bundle,
       const foundation::ArtifactRef& artifact) const;

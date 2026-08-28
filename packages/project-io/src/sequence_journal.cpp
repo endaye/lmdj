@@ -614,6 +614,30 @@ foundation::Result<JournalDocument> read_journal(
         document.journal.expected_revision = committed_revision;
         document.journal.armed_capture_slot.reset();
         document.journal.capture_commit.reset();
+      } else if (kind == "capture-abort") {
+        const auto slot = optional_slot(payload.value(), "slot");
+        const auto command_id = foundation::CommandId{
+            payload.value().at("command_id").get<std::string>()};
+        const auto expected_revision =
+            payload.value().at("expected_revision").get<std::uint64_t>();
+        if (!slot.has_value() || !document.journal.capture_commit.has_value() ||
+            !domain::is_valid_uuid(command_id.value()) ||
+            document.journal.armed_capture_slot != slot ||
+            document.journal.capture_commit->slot != slot ||
+            document.journal.capture_commit->command_id != command_id ||
+            document.journal.capture_commit->expected_revision !=
+                expected_revision ||
+            expected_revision != document.journal.expected_revision ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching) ||
+            std::any_of(
+                document.journal.flushes.begin(),
+                document.journal.flushes.end(),
+                [](const auto& flush) { return !flush.completed; })) {
+          throw std::runtime_error("armed Capture abort metadata is invalid");
+        }
+        document.journal.armed_capture_slot.reset();
+        document.journal.capture_commit.reset();
       } else if (kind == "capture-disarm") {
         const auto slot = optional_slot(payload.value(), "slot");
         if (!slot.has_value() ||
@@ -1185,6 +1209,113 @@ foundation::Result<void> SequenceJournal::disarm_capture(
   return append_record(
       platform_, bundle, document.value(),
       {{"kind", "capture-disarm"}, {"slot", slot_json(slot)}});
+}
+
+foundation::Result<SequenceCaptureDisarmResult>
+SequenceJournal::resolve_capture_disarm(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    domain::PadSlotId slot,
+    const SequenceCaptureTruthInspector& inspect_truth) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_slot(slot) || !inspect_truth) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(Error{
+        ErrorCode::invalid_argument,
+        "checked armed Capture disarm identity is invalid",
+    });
+  }
+  // ProjectStore Capture publication holds the writer lease before appending
+  // journal completion, so checked abort must take the same lock order.
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(
+        lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(
+        document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching)) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(Error{
+        ErrorCode::invalid_argument,
+        "checked armed Capture disarm does not match the active session",
+        {{"reason", "sequence_owner_mismatch"}},
+    });
+  }
+  if (!journal.armed_capture_slot.has_value()) {
+    return foundation::Result<SequenceCaptureDisarmResult>::success(
+        SequenceCaptureDisarmResult{false, journal.expected_revision});
+  }
+  if (journal.armed_capture_slot != slot) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(Error{
+        ErrorCode::invalid_argument,
+        "checked armed Capture disarm target does not match",
+        {{"reason", "armed_capture_target_mismatch"}},
+    });
+  }
+  if (!journal.capture_commit.has_value()) {
+    auto appended = append_record(
+        platform_, bundle, document.value(),
+        {{"kind", "capture-disarm"}, {"slot", slot_json(slot)}});
+    if (!appended.has_value()) {
+      return foundation::Result<SequenceCaptureDisarmResult>::failure(
+          appended.error());
+    }
+    return foundation::Result<SequenceCaptureDisarmResult>::success(
+        SequenceCaptureDisarmResult{false, journal.expected_revision});
+  }
+
+  const auto& capture = *journal.capture_commit;
+  auto truth = inspect_truth(capture);
+  if (!truth.has_value()) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(
+        truth.error());
+  }
+  if (truth.value().has_value()) {
+    const auto committed_revision = *truth.value();
+    if (committed_revision != capture.expected_revision + 1) {
+      return foundation::Result<SequenceCaptureDisarmResult>::failure(Error{
+          ErrorCode::invalid_project,
+          "checked armed Capture receipt revision is invalid",
+          {{"reason", "armed_capture_recovery_conflict"},
+           {"remedy",
+            "inspect the committed Capture receipt and Project Truth"}},
+      });
+    }
+    auto completed = append_record(
+        platform_, bundle, document.value(),
+        {{"command_id", capture.command_id.value()},
+         {"committed_revision", committed_revision},
+         {"kind", "capture-complete"},
+         {"slot", slot_json(slot)}});
+    if (!completed.has_value()) {
+      return foundation::Result<SequenceCaptureDisarmResult>::failure(
+          completed.error());
+    }
+    return foundation::Result<SequenceCaptureDisarmResult>::success(
+        SequenceCaptureDisarmResult{true, committed_revision});
+  }
+
+  auto aborted = append_record(
+      platform_, bundle, document.value(),
+      {{"command_id", capture.command_id.value()},
+       {"expected_revision", capture.expected_revision},
+       {"kind", "capture-abort"},
+       {"slot", slot_json(slot)}});
+  if (!aborted.has_value()) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(
+        aborted.error());
+  }
+  return foundation::Result<SequenceCaptureDisarmResult>::success(
+      SequenceCaptureDisarmResult{false, capture.expected_revision});
 }
 
 foundation::Result<void> SequenceJournal::switch_pattern(

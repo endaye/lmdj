@@ -2709,10 +2709,15 @@ struct Application::Impl {
           "armed Capture disarm target does not match",
           {{"reason", "armed_capture_target_mismatch"}}));
     }
-    auto disarmed = sequence_journals.disarm_capture(
+    auto disarmed = projects.disarm_sequence_capture(
         request.project_path, request.session_id, request.slot);
     if (!disarmed.has_value()) {
-      return disarmed;
+      return foundation::Result<void>::failure(disarmed.error());
+    }
+    if (disarmed.value().reconciled_commit) {
+      runtime.expected_revision = disarmed.value().expected_revision;
+      runtime.available_slots |=
+          std::uint64_t{1} << slot_index(request.slot);
     }
     runtime.armed_capture_slot.reset();
     return foundation::Result<void>::success();
