@@ -15,13 +15,13 @@
 ## Global Constraints
 
 - The approved decision is the D1+D2 decision file as amended by the 2026-08-28 quota-accounting amendment. Any conflict returns to product review; an implementation Task must not silently choose a different semantic.
-- #357 is Task 0 and blocks every implementation Task. Downstream Tasks copy the merged amendment's accounting domains, surfaces, and values verbatim; an implementation branch may not infer or re-derive a total-accounting, query-consistency, source-format, channel, or decode-memory rule.
+- #357 was Task 0 and is complete via PR #389. #395 corrects only the Contract publication boundary needed to preserve deployable intermediate revisions. Downstream Tasks copy the merged amendment's accounting domains, surfaces, and values verbatim; an implementation branch may not infer or re-derive a total-accounting, query-consistency, source-format, channel, or decode-memory rule.
 - Full-source retention and post-commit re-trim stay with the open [`project-bin-storage-model.md`](../../prd/questions/project-bin-storage-model.md) question. Until it is decided, re-trimming requires re-import.
 - The prepared tier remains mono float PCM (the existing stereo→mono downmix is unchanged). The byte quota therefore admits ≈349.52 s of prepared material per Bank regardless of source channel count; the decision's "≈174.76 s stereo" figure was the conservative bound stated before this layer truth was pinned. Moving to stereo prepared PCM would be a new product decision, out of scope.
 - The 512 MiB fixed Wasm heap (`ALLOW_MEMORY_GROWTH=0`) is unchanged. No Task may raise it.
 - Execute each Task on a short-lived `feat/<task>` or `docs/<task>` branch in an isolated worktree. One Task, one Issue, one atomic reviewable Pull Request, and one squash commit on `main`.
 - Ordinary Task branches use one reviewable Conventional Commit. Task 4 is the narrow exception required by the clean-source Portal freeze: its branch records the verified source/Assembly commit first, runs `scripts/architecture-portal.sh version` only from that clean commit, then adds the generated immutable snapshot in a second Task-local commit. The PR remains one atomic diff and is squash-merged once; no manual history rewrite may invalidate snapshot provenance.
-- Functional Tasks keep active manifests and the Product Build at their current values until Task 4's integration boundary. A Product Build allocated for testing requires an immutable Portal snapshot; Product Build or Assembly changes cannot declare `Documentation impact: none`.
+- Functional Tasks keep active manifests, published Contract schemas, and the Product Build at their current values until Task 4's integration boundary. Task 1 adds the internal C++ error enum/name mappings and exercises the decided failures, but Task 4 atomically publishes `lmdj.error.v1` 1.1.0 with the Assembly, Component SemVers, Product Build, current Portal truth, and immutable snapshot. A Product Build allocated for testing requires an immutable Portal snapshot; Product Build or Assembly changes cannot declare `Documentation impact: none`.
 - `PreparedSampleBank` publication changes touch lock-free/concurrent code: the `stress` tier must be run explicitly (`scripts/core.sh test dev stress`) in every Task that touches it, in addition to `full`.
 - Automated browser tests do not prove Safari or iPadOS memory behavior. Physical acceptance is isolated in #359 and blocks umbrella closure, while failures or unavailable measurements remain `unverified`.
 - Every fail-closed message added or changed by this plan carries both `why` and `remedy` per the [`gate-failure-readability`](../../../.agents/pitfalls/gate-failure-readability.md) pitfall.
@@ -58,7 +58,7 @@ Locked semantics (amendment entries in parentheses):
 
 ## Error Contract Requirement
 
-`lmdj.error.v1` gains two enum members in one additive bump, `BANK_QUOTA_EXHAUSTED` and `PROJECT_QUOTA_EXHAUSTED` (Contract SemVer `1.0.0 → 1.1.0`). The C++ `lmdj::foundation::ErrorCode` enum gains the matching members. The binding constraint is the smaller remaining quantity; on a tie, report `BANK_QUOTA_EXHAUSTED` (an in-Bank remedy fixes both). A global failure must never be mislabeled as target-Bank exhaustion, and neither code is ever used for publication-residency backpressure (A6). The Bank-boundary payload has this minimum shape:
+`lmdj.error.v1` gains two enum members in one additive bump, `BANK_QUOTA_EXHAUSTED` and `PROJECT_QUOTA_EXHAUSTED` (Contract SemVer `1.0.0 → 1.1.0`). Task 1 adds the matching C++ `lmdj::foundation::ErrorCode` members and behavior; Task 4 publishes the schema bump and updates every Assembly/Product identity consumer in the same integration boundary. This ordering is required because the repository has one source schema per stable Contract ID and Product Proof requires its version to equal the Assembly-selected version. The binding constraint is the smaller remaining quantity; on a tie, report `BANK_QUOTA_EXHAUSTED` (an in-Bank remedy fixes both). A global failure must never be mislabeled as target-Bank exhaustion, and neither code is ever used for publication-residency backpressure (A6). The Bank-boundary payload has this minimum shape:
 
 ```json
 {
@@ -88,7 +88,8 @@ Revision binding: the result is valid only for the returned `project_revision`; 
 ```text
 #358 (this plan correction)
   → Task 0 (#357) accounting + Web ingest-memory decision amendment
-      → Task 1 (#343) Core quota model + error Contract
+      → #395 Contract publication-boundary correction
+        → Task 1 (#343) Core quota model + internal error behavior
           ├─→ Task 2 (#344) long-sample runtime + stress
           └─→ Task 3 (#345) Facade query + unified validation
                     [Tasks 2 and 3 run in parallel after #343]
@@ -105,24 +106,24 @@ Revision binding: the result is valid only for the returned `project_revision`; 
 - [x] Lock the publication strategy, non-destructive failure categories, exact Facade request/result types, Project revision binding, and query/commit race semantics (A4–A6).
 - [x] Lock Web supported source formats, pre-decode metadata admission, duration/frame/channel bounds, post-decode exact checks, buffer-release lifecycle, and why+remedy failures (A7–A8).
 - [x] Define automated fixtures and the #359 macOS Safari / physical iPadOS Safari memory procedure with exact evidence fields and pass/fail thresholds (A9).
-- [ ] Update this plan and #341/#343–#346/#359 with the decided values and surfaces; run `scripts/architecture-portal.sh check` (plan updated in the amendment Task; Issue bodies are replaced when the amendment merges, before #343 starts).
+- [x] Update this plan and #341/#343–#346/#359 with the decided values and surfaces; run `scripts/architecture-portal.sh check` (completed by PR #389 and the bounded Contract integration correction #395).
 
 **Acceptance:** no provisional input remains; an implementer can calculate the same admission and publication result from the decision, Facade query, and Task tests without choosing a product or concurrency semantic.
 
 ## Task 1 (#343): Bank-Shared Quota Model in Core with BANK_QUOTA_EXHAUSTED
 
-**Scope:** `packages/foundation`, `packages/audio-runtime` (limits + preparation validation), `packages/project-cooker` (verify no cap duplication), `contracts/error/`.
+**Scope:** `packages/foundation`, `packages/audio-runtime` (limits + preparation validation), `packages/project-cooker` (verify no cap duplication), plus internal error-name tests. The published `contracts/error/` schema and Product identity consumers remain unchanged until Task 4.
 
 - [ ] Start only from the merged #357 amendment and copy its exact accounting fields, ownership domains, failure categories, and values into tests before changing implementation.
 - [ ] Add `BANK_QUOTA_EXHAUSTED` and `PROJECT_QUOTA_EXHAUSTED` to `lmdj::foundation::ErrorCode` (`packages/foundation/include/lmdj/foundation/error.hpp`) and their string mappings.
-- [ ] Bump `contracts/error/lmdj.error.v1.schema.json`: add both enum members, set `x-lmdj-contract-version` to `1.1.0`; update `tests/conformance/schema_contract_test.py` vectors.
+- [ ] Add focused internal error-name and quota-failure tests for both members. Do not mutate `contracts/error/lmdj.error.v1.schema.json`, Assembly, Component manifests, or Product Build in this Task; Task 4 publishes those identities atomically.
 - [ ] Remove `maximum_decoded_frames_per_pad` (and `allows_decoded_frames_per_pad`) from `RuntimePreparationLimits`; add `maximum_user_bank_bytes`, rename `maximum_prepared_bank_bytes` → `maximum_generation_bytes` and `maximum_live_bank_bytes` → `maximum_resident_bytes` (amendment A1.4); no other fields.
 - [ ] In `prepared_sample_bank.cpp::from_snapshot`, drop the per-Pad frame check and replace the current single generation-wide accumulator with the amendment's two-level ledger: per-user-Bank sums against `maximum_user_bank_bytes` (`BANK_QUOTA_EXHAUSTED`) and the generation total against `maximum_generation_bytes` (`PROJECT_QUOTA_EXHAUSTED`); the binding constraint is the smaller remaining, tie → Bank. Publication residency stays with the publication owner's ledger under `maximum_resident_bytes` and keeps its transient Attempt/Host-state category with a why+remedy message.
 - [ ] Audit `project-cooker` and Application Facade preparation helpers for duplicated caps; route every layer through shared overflow-checked accounting helpers in `runtime_preparation_limits.hpp`.
 - [ ] Tests: for each user Bank, exact boundary admits and one mono frame (`+4` prepared bytes) rejects with `BANK_QUOTA_EXHAUSTED`; a single Pad can consume the entire approved Bank quota; the generation total admits at exactly 134,217,728 bytes and rejects `+4` with `PROJECT_QUOTA_EXHAUSTED`; the tie case reports `BANK_QUOTA_EXHAUSTED`; residency admits at exactly 268,435,456 bytes and rejects `+4` with the transient publication category; every rejection leaves Project Truth and the prior live generation byte-identical.
 - [ ] Run `scripts/core.sh test dev full` and `scripts/core.sh test dev stress`.
 
-**Acceptance:** Core implements the complete #357 ledger without a Host literal or duplicated formula; no `decoded_frames_per_pad` symbol remains in Core; error Contract 1.1.0 vectors pass.
+**Acceptance:** Core implements the complete #357 ledger without a Host literal or duplicated formula; no `decoded_frames_per_pad` symbol remains in Core; both decided failures have stable internal names and payload behavior. The published error schema remains 1.0.0 on this intermediate `main` revision and is bumped with its Assembly/Product consumers in Task 4.
 
 ## Task 2 (#344): Long-Sample Runtime Publication under Stress
 
@@ -156,6 +157,7 @@ Revision binding: the result is valid only for the returned `project_revision`; 
 - [ ] creator-web import flow (amendment A7): file picker/drag → enforce `ingest_source_bytes` before reading content → sniff container (WAV/MP3/M4A-AAC/FLAC only, fail-closed) → pre-decode duration/frame/channel admission where metadata is decidable → `decodeAudioData` on a 48,000 Hz `OfflineAudioContext` outside the Wasm heap → exact post-decode bounds (≤ 43,200,000 frames, ≤ 2 channels) → waveform/preview/trim on the single decoded copy → encode the selection to PCM16 WAV → existing commit path → release the decoded buffer at the A7 §15 lifecycle points (commit success, cancel, replace, Project close, background-eviction recovery).
 - [ ] Replace `COMMIT_MAX_FRAMES` (`apps/creator-web/src/capture/capture_buffer.ts:3`) with the `sample.quota` query: capture and import trim ceilings become `min(source frames, effective_remaining_frames)` for the returned Project revision; the trim UI draws the selectable ceiling before commit.
 - [ ] Quota-exhausted presentation: surface Bank, remaining time, and per-Pad usage from the error payload; non-blocking, selection preserved.
+- [ ] Publish `lmdj.error.v1` 1.1.0 at this integration boundary: add `BANK_QUOTA_EXHAUSTED` and `PROJECT_QUOTA_EXHAUSTED` to `contracts/error/lmdj.error.v1.schema.json`, update `tests/conformance/schema_contract_test.py` and version vectors, and update Assembly/compiled identity/lock consumers atomically with the Product Build.
 - [ ] Version integration (single boundary after Tasks 1–3 merge): re-audit protected `main`, bump Module/Host SemVers and the error Contract per **Version Management**, allocate the next verified unused Product Build after current `1.0.37.0`, regenerate Assembly identity, and update current portal pages.
 - [ ] Commit the complete verified source/Assembly/current-page change, require a clean worktree, then run `scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL` and commit only the generated immutable snapshot as the second Task-local commit. Re-run the Portal check on the complete two-commit PR tree; the queue squash is the single `main` commit.
 - [ ] Tests: Vitest for pre/post-decode bounds, release lifecycle, effective trim ceilings, and failure copy; Playwright whole-song journey (metadata admission → decode → trim → commit at effective boundary → one-frame-over refusal); `scripts/core.sh test dev full`; `scripts/architecture-portal.sh check`.
@@ -179,7 +181,7 @@ Current identities below are from protected `main` at `9b5c2929a2cf6cf86ce39e495
 
 | Component | Current | Allocated | Task |
 | --- | --- | --- | --- |
-| `lmdj.error.v1` Contract | 1.0.0 | 1.1.0 (two additive enum members) | 1 |
+| `lmdj.error.v1` Contract | 1.0.0 | 1.1.0 (two additive enum members) | 1 internal behavior; 4 published schema + Assembly integration |
 | audio-runtime | 1.0.0 | 2.0.0 (confirmed: limits-field removal/rename is breaking) | 1–2, integrated in 4 |
 | project-cooker | 1.0.0 | none (confirmed: quota validation lives in Facade callbacks and `from_snapshot`; Task 1 audit re-checks and returns to review on any surface change) | 1, integrated in 4 |
 | application-facade | 2.0.0 | 2.1.0 (confirmed: additive `sample.quota` query and error classes; no breaking surface) | 3, integrated in 4 |
@@ -201,12 +203,13 @@ Implementation Tasks: required — affected portal routes are `/core/modules/aud
 
 - [x] #342 — original plan (docs), completed by #353
 - [x] #358 — readiness correction (docs), completed by #368
-- [ ] #357 — Task 0 decision amendment ([2026-08-28 amendment](../../prd/decisions/2026-08-28-long-material-quota-accounting.md)), blocks all implementation
-- [ ] #343 — Task 1, blocked by #357
-- [ ] #344 — Task 2, blocked by #357 and #343; parallel with #345 after #343
-- [ ] #345 — Task 3, blocked by #357 and #343; parallel with #344 after #343
-- [ ] #346 — Task 4, blocked by #357, #344, and #345
-- [ ] #359 — Task 5 physical acceptance, blocked by #357 and #346
+- [x] #357 — Task 0 decision amendment ([2026-08-28 amendment](../../prd/decisions/2026-08-28-long-material-quota-accounting.md)), completed by #389
+- [x] #395 — Contract integration-boundary correction; preserves deployable intermediate `main`
+- [ ] #343 — Task 1, next and unblocked after #395
+- [ ] #344 — Task 2, blocked by #343; parallel with #345 after #343
+- [ ] #345 — Task 3, blocked by #343; parallel with #344 after #343
+- [ ] #346 — Task 4, blocked by #344 and #345
+- [ ] #359 — Task 5 physical acceptance, blocked by #346
 
 Umbrella: [#341](https://github.com/endaye/lmdj/issues/341). Related, not gated by this plan: [#347](https://github.com/endaye/lmdj/issues/347) (future offline time-stretch design).
 
