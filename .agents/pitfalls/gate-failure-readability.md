@@ -27,6 +27,9 @@ recurrences:
   - date: 2026-08-26
     occurrence: https://github.com/endaye/lmdj/pull/348
     observed_by: Claude Code (Fable 5)
+  - date: 2026-08-28
+    occurrence: https://github.com/endaye/lmdj/pull/382
+    observed_by: Codex
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 

@@ -61,6 +61,25 @@ refreeze，provenance 指向 squash 后已成悬挂对象的 revision，且未�
 （或经决策记录明确收窄范围）之前，不应进入 beta/stable 晋升或任何 Release
 边界。
 
+### 整改处置账本（2026-08-28）
+
+本账本只建立 source remediation 的责任链，不把 issue/Task/PR closure 写成
+Product Build、物理验收或 Release 证据。统一 umbrella 为 #371；版本/current
+truth integration 与不可变快照分别由 #379、#380 负责。
+
+| Finding | Owner | Source disposition |
+| --- | --- | --- |
+| H1 | #378 | 实现 writer-lease 内 journal admission、本地 begin-vs-authoring critical section、孤儿 journal 先 seal，以及 settings-only Store rebase；以 Project Store 与 Facade deterministic component cases 阻断回归 |
+| H2 | #376 | open |
+| H3 | #374 | open |
+| M1 | #375 | open |
+| M2 | #373 | open |
+| M3 | #372 | open |
+
+H1 的 source 修复不改写或重新宣称 `1.0.37.0`；其 Module/Product identity 与
+完整集成证据等待 #379，immutable snapshot 等待 #380。#360 的五项物理/人工行
+继续保持未执行。
+
 ## 二、设计与计划文档评审
 
 ### 值得保持的实践

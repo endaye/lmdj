@@ -838,6 +838,51 @@ void test_sequence_flush_identity_is_durable_and_replayable_after_cleanup() {
       replayed_by_public_identity.value()->identity == identity);
 }
 
+void test_active_sequence_journal_blocks_direct_authoring_admission() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "sequence-authoring-admission.lmdj";
+  auto initial = new_project();
+  const auto pattern_id = PatternId{test_uuid("admission-pattern")};
+  const Pattern pattern{pattern_id, 1, {}};
+  initial.patterns.emplace(pattern_id, pattern);
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, initial).has_value());
+  SequenceJournal journal;
+  const auto session_id = lmdj::foundation::SequenceSessionId{
+      test_uuid("admission-session")};
+  LMDJ_CHECK(
+      journal
+          .begin(
+              bundle,
+              session_id,
+              pattern_id,
+              pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(pattern),
+              0)
+          .has_value());
+
+  const auto rejected = store.execute(
+      bundle,
+      Command{create_pattern(
+          "admission-command", 0, "admission-second-pattern")});
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(
+      rejected.error().details.at("reason") == "sequence_session_active");
+  LMDJ_CHECK(rejected.error().details.at("session_id") == session_id.value());
+  LMDJ_CHECK(rejected.error().details.contains("remedy"));
+  LMDJ_CHECK(store.load(bundle).value().revision == 0);
+  const auto settings = store.execute(
+      bundle,
+      Command{UpdateSequenceSettings{
+          meta("admission-settings", 0), 130, std::nullopt, std::nullopt}});
+  LMDJ_CHECK(settings.has_value());
+  LMDJ_CHECK(settings.value().state.revision == 1);
+  const auto active = journal.read_active(bundle);
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().expected_revision == 1);
+}
+
 void test_nonzero_revision_v1_history_opens_without_migration() {
   TempDirectory temp;
   const auto bundle = temp.path() / "historical-v1.lmdj";
@@ -2022,6 +2067,7 @@ int main() {
     test_v2_total_migration_discards_takes_and_is_byte_stable();
     test_tick_commands_round_trip_with_canonical_replay_identity();
     test_sequence_flush_identity_is_durable_and_replayable_after_cleanup();
+    test_active_sequence_journal_blocks_direct_authoring_admission();
     test_nonzero_revision_v1_history_opens_without_migration();
     test_v2_checkpoint_rejects_extra_playback_keys();
     test_reset_pad_playback_persists_v2_defaults();

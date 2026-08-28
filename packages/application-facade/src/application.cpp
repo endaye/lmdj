@@ -49,6 +49,8 @@ namespace testing {
 namespace {
 
 std::atomic<SampleProjectionHook*> sample_projection_hook{nullptr};
+std::atomic<SequenceAuthoringAdmissionHook*>
+    sequence_authoring_admission_hook{nullptr};
 std::atomic<ApiEntryHook*> api_entry_hook{nullptr};
 
 }  // namespace
@@ -60,6 +62,19 @@ void set_sample_projection_hook(SampleProjectionHook* hook) noexcept {
 void invoke_sample_projection_hook() noexcept {
   auto* hook =
       sample_projection_hook.exchange(nullptr, std::memory_order_acq_rel);
+  if (hook != nullptr && hook->invoke != nullptr) {
+    hook->invoke(hook->context);
+  }
+}
+
+void set_sequence_authoring_admission_hook(
+    SequenceAuthoringAdmissionHook* hook) noexcept {
+  sequence_authoring_admission_hook.store(hook, std::memory_order_release);
+}
+
+void invoke_sequence_authoring_admission_hook() noexcept {
+  auto* hook = sequence_authoring_admission_hook.exchange(
+      nullptr, std::memory_order_acq_rel);
   if (hook != nullptr && hook->invoke != nullptr) {
     hook->invoke(hook->context);
   }
@@ -1755,18 +1770,31 @@ struct Application::Impl {
     return path.generic_string();
   }
 
-  foundation::Result<void> reject_if_sequence_active(
-      const std::filesystem::path& path) const {
-    std::lock_guard lock(sequence_mutex);
+  struct SequenceAuthoringAdmission {
+    std::unique_lock<std::mutex> lock;
+  };
+
+  foundation::Result<SequenceAuthoringAdmission>
+  admit_non_sequence_authoring(const std::filesystem::path& path) {
+    std::unique_lock lock(sequence_mutex);
     const auto found = sequence_sessions.find(sequence_key(path));
-    if (found == sequence_sessions.end()) {
-      return foundation::Result<void>::success();
+    if (found != sequence_sessions.end()) {
+      return foundation::Result<SequenceAuthoringAdmission>::failure(
+          sequence_error(
+              ErrorCode::invalid_argument,
+              "Project mutation is blocked by an active Sequence session",
+              {{"reason", "sequence_session_active"},
+               {"session_id", found->second.session_id.value()},
+               {"remedy", "stop the active Sequence session before retrying"}}));
     }
-    return foundation::Result<void>::failure(sequence_error(
-        ErrorCode::invalid_argument,
-        "Project mutation is blocked by an active Sequence session",
-        {{"reason", "sequence_session_active"},
-         {"session_id", found->second.session_id.value()}}));
+    auto reconciled = projects.reconcile_sequence_recovery(path);
+    if (!reconciled.has_value()) {
+      return foundation::Result<SequenceAuthoringAdmission>::failure(
+          reconciled.error());
+    }
+    testing::invoke_sequence_authoring_admission_hook();
+    return foundation::Result<SequenceAuthoringAdmission>::success(
+        SequenceAuthoringAdmission{std::move(lock)});
   }
 
   static std::string state_name(SequenceRecordState state) {
@@ -3211,7 +3239,7 @@ struct Application::Impl {
               "byte-backed artifact import request is invalid",
           });
     }
-    auto admitted = reject_if_sequence_active(request.project_path);
+    auto admitted = admit_non_sequence_authoring(request.project_path);
     if (!admitted.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           admitted.error());
@@ -3565,7 +3593,7 @@ struct Application::Impl {
       sample_imports.erase(found);
     }
     auto state = std::move(*owned);
-    auto admitted = reject_if_sequence_active(state.request.project_path);
+    auto admitted = admit_non_sequence_authoring(state.request.project_path);
     if (!admitted.has_value()) {
       return foundation::Result<SampleMutationResult>::failure(
           admitted.error());
@@ -3661,7 +3689,7 @@ struct Application::Impl {
       return foundation::Result<SampleMutationResult>::failure(
           invalid_sample_request("Sample update request is invalid"));
     }
-    auto admitted = reject_if_sequence_active(request.project_path);
+    auto admitted = admit_non_sequence_authoring(request.project_path);
     if (!admitted.has_value()) {
       return foundation::Result<SampleMutationResult>::failure(
           admitted.error());
@@ -3741,7 +3769,7 @@ struct Application::Impl {
       return foundation::Result<SampleMutationResult>::failure(
           invalid_sample_request("Sample reset request is invalid"));
     }
-    auto admitted = reject_if_sequence_active(request.project_path);
+    auto admitted = admit_non_sequence_authoring(request.project_path);
     if (!admitted.has_value()) {
       return foundation::Result<SampleMutationResult>::failure(
           admitted.error());
@@ -4024,7 +4052,7 @@ struct Application::Impl {
     const auto bars = unsigned_field(request, "bars", 8);
     require(bars == 1 || bars == 2 || bars == 4 || bars == 8,
             "Pattern bars are invalid");
-    auto admitted = reject_if_sequence_active(path);
+    auto admitted = admit_non_sequence_authoring(path);
     if (!admitted.has_value()) {
       return error_envelope(admitted.error());
     }
@@ -4115,13 +4143,6 @@ struct Application::Impl {
     const auto& outcome = updated.value().outcome;
     if (found != sequence_sessions.end()) {
       auto& runtime = found->second;
-      if (outcome.state.revision > runtime.expected_revision) {
-        auto rebased = sequence_journals.rebase(
-            path, runtime.session_id, outcome.state.revision);
-        if (!rebased.has_value()) {
-          return error_envelope(rebased.error());
-        }
-      }
       if (bpm.has_value()) {
         auto anchor = audio::freeze_transport_bpm(
             runtime.anchor, runtime_frame, outcome.state.bpm);
@@ -4165,7 +4186,7 @@ struct Application::Impl {
     const auto revision = unsigned_field(request, "expected_revision");
     const auto media_type = string_field(request, "media_type");
     require(!media_type.empty(), "media_type must not be empty");
-    auto admitted = reject_if_sequence_active(path);
+    auto admitted = admit_non_sequence_authoring(path);
     if (!admitted.has_value()) {
       return error_envelope(admitted.error());
     }
@@ -4217,7 +4238,7 @@ struct Application::Impl {
     if (!request.at("asset_id").is_null()) {
       asset_id = foundation::AssetId{uuid_field(request, "asset_id")};
     }
-    auto admitted = reject_if_sequence_active(path);
+    auto admitted = admit_non_sequence_authoring(path);
     if (!admitted.has_value()) {
       return error_envelope(admitted.error());
     }

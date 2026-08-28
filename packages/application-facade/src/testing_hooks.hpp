@@ -16,6 +16,19 @@ struct SampleProjectionHook {
 void set_sample_projection_hook(SampleProjectionHook* hook) noexcept;
 void invoke_sample_projection_hook() noexcept;
 
+// One-shot gate invoked after a non-Sequence authoring command has acquired
+// the local Sequence admission lock and reconciled orphan authority, but
+// before it enters Project I/O. Tests use it to prove a concurrent begin
+// cannot open the old check/use gap.
+struct SequenceAuthoringAdmissionHook {
+  void* context;
+  void (*invoke)(void*) noexcept;
+};
+
+void set_sequence_authoring_admission_hook(
+    SequenceAuthoringAdmissionHook* hook) noexcept;
+void invoke_sequence_authoring_admission_hook() noexcept;
+
 // Arms one throw at the next public Application entry, so the catch-all every
 // entry installs can be proven to convert an unexpected exception into the
 // documented failure envelope instead of letting it escape across the Host

@@ -16,11 +16,13 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 Project/Asset 写入先进入 token 专属临时目录，完整校验后以一个 revision 发布；commit/abort/坏 offset/启动清理只删除整个目录，故障不得留下被误认作权威 Project 的半成品。
 ## Journal
 Sequence journal overlay、Project Store、flush receipt、owner-loss recovery artifact、Sample staging、waveform cache 与 Bundle publication journal 的生命周期分开。只有 Project Store manifest replacement 是 Project Truth commit point；恢复规则由 Project I/O/Facade 统一执行。
+## Writer admission
+Project writer lease 排斥其他进程或 platform owner；同一 Facade 内的短期 mutation 还由 Project-scoped Sequence admission critical section 排序。普通 authoring command 在 lease 内重读 active journal 后才验证 revision 和发布；active owner 使 mutation fail closed，孤儿 journal 必须先 seal 为 `owner_lost`。因此进程内共享 lease 不是 authority shortcut，也不能让无锁 session 预检查成为提交依据。
 ## Portable transfer
 `lmdj.project-bundle.v1 · 1.1.0` 只传输完整 Project 内容，并声明 Project v1/v2/v3 identity；新 writer 发出 v3。managed Bundle paths use the portable ASCII segment subset `[A-Za-z0-9._/-]`；Project payload text remains UTF-8。导入在临时 staging 中完成路径、大小、顺序与 hash 验证，再通过 publication journal 原子发布；Host 不解释或直接写入 Project internals。
 ## Complete-read
 Native `read_complete` 对已存在完整文件的 `replace_complete` 竞态重试 open/lock/short-pread/revalidation 瞬时失败，读者只看到完整旧字节或完整新字节；缺失、符号链接与非普通文件仍失败。Web/OPFS 路径未改。
 ## 证据
-Storage platform contract、Sample cleanup retry/age gate/cache corruption rebuild、Bundle round trip/publication、fault matrix、project store 和 journal 测试覆盖本地与 OPFS 实现。
+Storage platform contract、Sample cleanup retry/age gate/cache corruption rebuild、Bundle round trip/publication、fault matrix、writer-lease admission、并发 begin-vs-authoring、project store 和 journal 测试覆盖本地与 OPFS 实现。
 ## 限制
 云同步、冲突合并、协同与远程备份未在当前平台 Contract 中实现。
