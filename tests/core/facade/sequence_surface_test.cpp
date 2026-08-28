@@ -4,7 +4,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -81,6 +84,127 @@ ApplicationConfig config(const std::filesystem::path& root) {
       std::nullopt,
       nullptr,
   };
+}
+
+class JournalCompletionFailurePlatform final
+    : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  explicit JournalCompletionFailurePlatform(
+      std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner)
+      : inner_(std::move(inner)) {}
+
+  void arm() noexcept {
+    armed_ = true;
+    triggered_ = false;
+  }
+
+  bool triggered() const noexcept { return triggered_; }
+
+  lmdj::foundation::Result<
+      std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    return inner_->acquire_writer(path);
+  }
+
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    return inner_->ensure_directory(path);
+  }
+
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return inner_->exists(path);
+  }
+
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return inner_->byte_length(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    return inner_->read_complete(path);
+  }
+
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner_->create_immutable(path, bytes);
+  }
+
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner_->replace_complete(path, bytes);
+  }
+
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
+      std::span<const std::byte> bytes) override {
+    const std::string_view text{
+        reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+    if (armed_ && path.filename() == "sequence.jsonl" &&
+        text.find("\"kind\":\"complete\"") != std::string_view::npos) {
+      armed_ = false;
+      triggered_ = true;
+      return lmdj::foundation::Result<void>::failure(
+          lmdj::foundation::Error{
+              ErrorCode::io_error,
+              "injected Sequence journal completion failure",
+          });
+    }
+    return inner_->append_durable(path, valid_prefix_length, bytes);
+  }
+
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    return inner_->remove(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return inner_->list_names(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path& path) const override {
+    return inner_->list_directories(path);
+  }
+
+  lmdj::foundation::Result<void> remove_tree(
+      const std::filesystem::path& path) override {
+    return inner_->remove_tree(path);
+  }
+
+  lmdj::foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path& source,
+      const std::filesystem::path& destination) override {
+    return inner_->publish_directory_if_absent(source, destination);
+  }
+
+  lmdj::foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const override {
+    return inner_->directory_exists(path);
+  }
+
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& root) const override {
+    return inner_->validate_managed_tree(root);
+  }
+
+ private:
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner_;
+  bool armed_{};
+  bool triggered_{};
+};
+
+ApplicationConfig config(
+    const std::filesystem::path& root,
+    std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> platform) {
+  auto result = config(root);
+  result.storage_platform = std::move(platform);
+  return result;
 }
 
 void create_recordable_project(
@@ -202,6 +326,75 @@ void test_sequence_lifecycle_idempotence_and_mutation_exclusion() {
   LMDJ_CHECK(cross_host_replay.value().committed_revision == 3);
   LMDJ_CHECK(
       cross_host_replay.value().status.state == SequenceRecordState::inactive);
+}
+
+void test_post_commit_retry_preserves_later_events_for_a_new_command() {
+  TempDirectory temp;
+  const auto project = temp.path() / "post-commit-retry.lmdj";
+  const PatternId pattern_id{uuid(60)};
+  const SequenceSessionId session_id{uuid(61)};
+  auto platform = std::make_shared<JournalCompletionFailurePlatform>(
+      lmdj::project_io::make_default_project_storage_platform());
+  Application application(config(temp.path(), platform));
+  create_recordable_project(application, project, pattern_id);
+
+  LMDJ_CHECK(
+      application.begin_sequence({project, session_id, pattern_id, 2, 0})
+          .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 0, 1, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 12'000, 2, false}})
+                 .has_value());
+
+  const lmdj::facade::SequenceFlushRequest first_flush{
+      project, session_id, CommandId{uuid(62)}, 12'000};
+  platform->arm();
+  const auto failed = application.flush_sequence(first_flush);
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK(failed.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(platform->triggered());
+  lmdj::project_io::ProjectStore store{platform};
+  LMDJ_CHECK(store.load(project).value().revision == 3);
+
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 24'000, 3, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 36'000, 4, false}})
+                 .has_value());
+
+  const auto retried = application.flush_sequence(
+      {project, session_id, first_flush.command_id, 36'001});
+  LMDJ_CHECK(retried.has_value());
+  LMDJ_CHECK(retried.value().replayed);
+  LMDJ_CHECK(retried.value().committed_revision == 3);
+  LMDJ_CHECK(retried.value().status.pending_event_count == 1);
+
+  const auto repeated = application.flush_sequence(
+      {project, session_id, first_flush.command_id, 36'002});
+  LMDJ_CHECK(repeated.has_value());
+  LMDJ_CHECK(repeated.value().replayed);
+  LMDJ_CHECK(repeated.value().committed_revision == 3);
+  LMDJ_CHECK(repeated.value().status.pending_event_count == 1);
+
+  const auto later = application.flush_sequence(
+      {project, session_id, CommandId{uuid(63)}, 36'003});
+  LMDJ_CHECK(later.has_value());
+  LMDJ_CHECK(!later.value().replayed);
+  LMDJ_CHECK(later.value().committed_revision == 4);
+  LMDJ_CHECK(later.value().status.pending_event_count == 0);
+
+  const auto stopped = application.stop_sequence(
+      {project, session_id, CommandId{uuid(64)}, 36'004});
+  LMDJ_CHECK(stopped.has_value());
+  const auto loaded = store.load(project);
+  LMDJ_CHECK(loaded.has_value());
+  LMDJ_CHECK(loaded.value().revision == 4);
+  LMDJ_CHECK(loaded.value().patterns.at(pattern_id).events.size() == 2);
+  LMDJ_CHECK(!std::filesystem::exists(
+      project / "recovery/active/sequence.jsonl"));
 }
 
 void test_owner_loss_apply_and_discard_are_explicit() {
@@ -436,6 +629,7 @@ void test_settings_rebase_and_pattern_creation_are_authoritative() {
 int main() {
   try {
     test_sequence_lifecycle_idempotence_and_mutation_exclusion();
+    test_post_commit_retry_preserves_later_events_for_a_new_command();
     test_owner_loss_apply_and_discard_are_explicit();
     test_writer_lease_blocks_competing_sequence_owner();
     test_begin_cannot_cross_an_authoring_admission();

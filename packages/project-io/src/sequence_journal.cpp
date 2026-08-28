@@ -717,9 +717,7 @@ foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
     return foundation::Result<SequenceFlushRecord>::failure(document.error());
   }
   auto& journal = document.value().journal;
-  if (journal.session_id != session_id || journal.pattern_id != pattern_id ||
-      journal.expected_revision != expected_revision ||
-      journal.state != SequenceSessionState::active) {
+  if (journal.session_id != session_id) {
     return foundation::Result<SequenceFlushRecord>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -729,6 +727,34 @@ foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
   const std::vector<domain::PatternEvent> incoming{
       events.begin(), events.end()};
   auto canonical = domain::merge_pattern_events({}, incoming);
+  const auto repeated = std::find_if(
+      journal.flushes.begin(),
+      journal.flushes.end(),
+      [&command_id](const auto& flush) {
+        return flush.command_id == command_id;
+      });
+  if (repeated != journal.flushes.end()) {
+    if (repeated->pattern_id == pattern_id &&
+        repeated->expected_revision == expected_revision &&
+        repeated->canonical_events == canonical) {
+      return foundation::Result<SequenceFlushRecord>::success(*repeated);
+    }
+    return foundation::Result<SequenceFlushRecord>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence command id is already bound to a different flush",
+            {{"reason", "sequence_command_conflict"}},
+        });
+  }
+  if (journal.pattern_id != pattern_id ||
+      journal.expected_revision != expected_revision ||
+      journal.state != SequenceSessionState::active) {
+    return foundation::Result<SequenceFlushRecord>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence flush does not match the active session",
+        });
+  }
   const auto loop_length = domain::pattern_length_ticks(journal.bars);
   for (const auto& event : canonical) {
     if (!domain::is_valid_slot(event.slot) || event.velocity < 1 ||

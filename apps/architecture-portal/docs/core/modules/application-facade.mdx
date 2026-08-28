@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
 ## 2. 当前实现状态
-Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。当前 source 把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。
+Application Facade `2.0.0` 提供 Host-neutral Sequence begin/event/flush/stop/switch/status/settings/recovery、Pattern create，以及既有 Project/Bundle/Sample/Runtime/Provider surface。Facade 统一持有 writer lease、录音 session、选择性 rebase、幂等 receipt 与 recovery policy。运行中的 session 会在 journal append 后保留 exact in-flight flush；post-commit 返回失败的重试先完成该 identity，只消费其原事件，后到事件仍等待新命令。当前 source 把非 Sequence authoring 的本机会话检查、孤儿 journal reconciliation 和 Store mutation 放在同一个 Project-scoped admission critical section，消除 begin-vs-authoring 的检查/使用间隙。
 ## 3. 所有权与依赖
 依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。
 ## 4. 架构与数据流

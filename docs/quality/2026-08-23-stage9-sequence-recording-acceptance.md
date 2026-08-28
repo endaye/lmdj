@@ -26,6 +26,19 @@ Runtime, Native Audio, input, workflows, capability map, versioning and
 testing/proof. Source diagrams for the product, Core, Project I/O, Cooker,
 Facade, Audio Runtime and Web Runtime Platform are updated in the same Task.
 
+## Post-delivery remediation
+
+Issue #372 closes review finding M3 in current source. Sequence Journal now
+deduplicates exact `command_id` appends and rejects conflicting payloads before
+write. Application Facade retains an in-flight durable flush across a
+post-commit return failure, replays only that identity, and leaves events
+accepted between attempts pending for a fresh command. Component evidence
+covers same-bundle retry and restart reconciliation for receipt-reload and
+journal-completion faults, plus the active-Facade retry/new-event/stop journey.
+Product Build and module identity refresh, integrated-main evidence, and final
+remediation acceptance remain assigned to #379; this entry does not claim
+those transitions are complete.
+
 ## Identity
 
 | Identity | Candidate |

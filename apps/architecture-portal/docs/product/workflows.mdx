@@ -19,7 +19,7 @@ Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth
 
 ## Sequence 录音
 
-[2026-08-23 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)已由 Stage 9 实现：录音向当前 Pattern 写入 tick-native PPQ 960 事件，没有 Take 产品对象或音频 bounce。会话 overlay 受 writer lease 保护；BPM 与 Quantize/Swing 选择性 rebase 后继续，Sample 类 mutation 失败但会话不被静默改写，flush 按 command/session/sequence identity 幂等并以 manifest 发布为 commit point。Pattern switch 在 Core 报告的下一 Bar 生效；owner-loss recovery artifact 必须通过原 Pattern fingerprint 或用户明确选择的有效目标后才能提交或丢弃。
+[2026-08-23 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)已由 Stage 9 实现：录音向当前 Pattern 写入 tick-native PPQ 960 事件，没有 Take 产品对象或音频 bounce。会话 overlay 受 writer lease 保护；BPM 与 Quantize/Swing 选择性 rebase 后继续，Sample 类 mutation 失败但会话不被静默改写，flush 按 command/session/sequence identity 幂等并以 manifest 发布为 commit point。若 Project 已提交但 receipt 返回失败，原 `command_id` 只重放原 durable flush；期间接收的新事件继续 pending，必须由新的命令提交，不能追加冲突 identity。Pattern switch 在 Core 报告的下一 Bar 生效；owner-loss recovery artifact 必须通过原 Pattern fingerprint 或用户明确选择的有效目标后才能提交或丢弃。
 
 ## Pad Capture pre-commit 编辑
 
