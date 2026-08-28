@@ -722,11 +722,10 @@ struct ControlRuntime::Impl {
     return stopped;
   }
 
-  foundation::Result<audio::PatternPublication> publish_project_pattern(
-      const foundation::PatternId& selected_pattern,
-      std::optional<std::uint64_t> activation_frame = std::nullopt) {
+  foundation::Result<audio::PreparedPatternView> prepare_project_pattern(
+      const foundation::PatternId& selected_pattern) {
     if (!retained_project_path.has_value()) {
-      return foundation::Result<audio::PatternPublication>::failure(
+      return foundation::Result<audio::PreparedPatternView>::failure(
           Error{ErrorCode::invalid_argument, "no Project is open"});
     }
     auto snapshot = application.prepare_runtime_snapshot({
@@ -735,16 +734,22 @@ struct ControlRuntime::Impl {
         limits,
     });
     if (!snapshot.has_value()) {
-      return foundation::Result<audio::PatternPublication>::failure(
+      return foundation::Result<audio::PreparedPatternView>::failure(
           snapshot.error());
     }
     auto pattern = audio::PreparedPatternView::from_snapshot(*snapshot.value());
     if (!pattern.has_value()) {
-      return foundation::Result<audio::PatternPublication>::failure(
+      return foundation::Result<audio::PreparedPatternView>::failure(
           pattern.error());
     }
+    return pattern;
+  }
+
+  foundation::Result<audio::PatternPublication> publish_prepared_pattern(
+      audio::PreparedPatternView&& pattern,
+      std::optional<std::uint64_t> activation_frame = std::nullopt) {
     const auto publication =
-        engine.publish_pattern_view(std::move(pattern.value()), activation_frame);
+        engine.publish_pattern_view(std::move(pattern), activation_frame);
     if (publication.result != audio::PatternPublishResult::accepted) {
       return foundation::Result<audio::PatternPublication>::failure(Error{
           ErrorCode::invalid_argument,
@@ -752,6 +757,17 @@ struct ControlRuntime::Impl {
       });
     }
     return foundation::Result<audio::PatternPublication>::success(publication);
+  }
+
+  foundation::Result<audio::PatternPublication> publish_project_pattern(
+      const foundation::PatternId& selected_pattern,
+      std::optional<std::uint64_t> activation_frame = std::nullopt) {
+    auto pattern = prepare_project_pattern(selected_pattern);
+    if (!pattern.has_value()) {
+      return foundation::Result<audio::PatternPublication>::failure(
+          pattern.error());
+    }
+    return publish_prepared_pattern(std::move(pattern.value()), activation_frame);
   }
 
   std::chrono::steady_clock::time_point clock_now() const noexcept {
@@ -2507,6 +2523,11 @@ Json ControlRuntime::dispatch(
           impl_->active_sequence->id.value() != session_id) {
         return state_error();
       }
+      auto pattern = impl_->prepare_project_pattern(
+          foundation::PatternId{next_pattern_id});
+      if (!pattern.has_value()) {
+        return normalized_error(pattern.error());
+      }
       const auto runtime_frame = impl_->engine.telemetry().rendered_frames;
       auto response = impl_->application.command({
           {"operation", "sequence.record.switch-request"},
@@ -2521,8 +2542,8 @@ Json ControlRuntime::dispatch(
       const auto effective_runtime_frame =
           response.at("result").at("effective_runtime_frame")
               .get<std::uint64_t>();
-      auto published = impl_->publish_project_pattern(
-          foundation::PatternId{next_pattern_id}, effective_runtime_frame);
+      auto published = impl_->publish_prepared_pattern(
+          std::move(pattern.value()), effective_runtime_frame);
       if (!published.has_value()) {
         fail_and_seal("sequence_switch_publication_failed");
         return normalized_error(published.error());

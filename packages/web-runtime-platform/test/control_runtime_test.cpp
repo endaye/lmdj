@@ -68,6 +68,8 @@ constexpr std::string_view kProjectId =
     "00000000-0000-4000-8000-000000000001";
 constexpr std::string_view kPatternId =
     "00000000-0000-4000-8000-000000000010";
+constexpr std::string_view kNextPatternId =
+    "00000000-0000-4000-8000-000000000011";
 constexpr std::string_view kAssetId =
     "00000000-0000-4000-8000-000000000101";
 constexpr std::string_view kSequenceSessionId =
@@ -1243,6 +1245,60 @@ void test_sequence_observer_busy_and_owner_loss_recovery() {
   LMDJ_CHECK(recovery.at("candidates").size() == 1);
   LMDJ_CHECK(recovery.at("candidates").at(0).at("session_id") == kSequenceSessionId);
   LMDJ_CHECK(recovery.at("candidates").at(0).at("reason") == "owner_lost");
+}
+
+void test_sequence_switch_prepares_before_selecting_bar_boundary() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto& created = check_exact_success(
+      runtime->dispatch(
+          "pattern.create",
+          {{"command_id", uuid(1'201)},
+           {"expected_revision", 0},
+           {"pattern_id", kNextPatternId},
+           {"bars", 1}},
+          {}),
+      {"committed_revision", "pattern_id", "bars", "replayed",
+       "project_revision"});
+  LMDJ_CHECK(created.at("committed_revision") == 1);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  ContinuousAudioDriver audio(runtime->engine());
+  check_success(runtime->dispatch(
+      "sequence.record.begin",
+      {{"session_id", kSequenceSessionId},
+       {"pattern_id", kPatternId},
+       {"expected_revision", 1}},
+      {}));
+
+  constexpr std::uint64_t kBarFrames = 96'000;
+  wait_until([&] {
+    return runtime->engine().telemetry().rendered_frames % kBarFrames >=
+           kBarFrames - 128;
+  });
+  const auto& switched = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.switch-request",
+          {{"session_id", kSequenceSessionId},
+           {"next_pattern_id", kNextPatternId}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "pattern_publication"});
+  LMDJ_CHECK(switched.at("state") == "switching");
+  LMDJ_CHECK(switched.at("pending_pattern_id") == kNextPatternId);
+  LMDJ_CHECK(
+      switched.at("effective_runtime_frame") ==
+      switched.at("pattern_publication").at("activation_frame"));
+  audio.stop();
 }
 
 void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
@@ -3582,6 +3638,7 @@ int main() {
     test_runtime_cancellation_precedes_project_mutation();
     test_exact_payloads_and_facade_owned_project_journey();
     test_sequence_observer_busy_and_owner_loss_recovery();
+    test_sequence_switch_prepares_before_selecting_bar_boundary();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();
