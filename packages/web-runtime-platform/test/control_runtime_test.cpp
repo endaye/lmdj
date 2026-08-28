@@ -1551,6 +1551,15 @@ void test_authoritative_switch_supersedes_overlay_and_stop_cancels_target() {
           {}),
       "INVALID_ARGUMENT");
   LMDJ_CHECK(!runtime->engine().pending_pattern_id().has_value());
+  const auto committed_revision =
+      inspect_project(temp.path(), kProjectId).at("project_revision");
+  const auto canceled_boundary =
+      switching.at("effective_runtime_frame").get<std::uint64_t>();
+  while (runtime->engine().telemetry().rendered_frames <= canceled_boundary) {
+    audio.render_one();
+  }
+  LMDJ_CHECK(runtime->engine().current_pattern_id() ==
+             lmdj::foundation::PatternId{std::string(kPatternId)});
   const auto& replayed = check_exact_success(
       runtime->dispatch(
           "sequence.record.stop",
@@ -1563,6 +1572,12 @@ void test_authoritative_switch_supersedes_overlay_and_stop_cancels_target() {
   LMDJ_CHECK(replayed.at("state") == "inactive");
   LMDJ_CHECK(replayed.at("replayed") == true);
   LMDJ_CHECK(replayed.at("pattern_publication").is_object());
+  LMDJ_CHECK(
+      replayed.at("pattern_publication").at("activation_frame") >
+      canceled_boundary);
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") ==
+      committed_revision);
   for (std::size_t callback = 0; callback < 1'100; ++callback) {
     audio.render_one();
   }

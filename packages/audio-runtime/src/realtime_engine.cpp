@@ -18,6 +18,7 @@ namespace testing {
 namespace {
 
 std::atomic<PatternClaimHook*> pattern_claim_hook{nullptr};
+std::atomic<PatternClaimHook*> pattern_apply_hook{nullptr};
 
 }  // namespace
 
@@ -27,6 +28,17 @@ void set_pattern_claim_hook(PatternClaimHook* hook) noexcept {
 
 void invoke_pattern_claim_hook() noexcept {
   auto* hook = pattern_claim_hook.exchange(nullptr, std::memory_order_acq_rel);
+  if (hook != nullptr && hook->invoke != nullptr) {
+    hook->invoke(hook->context);
+  }
+}
+
+void set_pattern_apply_hook(PatternClaimHook* hook) noexcept {
+  pattern_apply_hook.store(hook, std::memory_order_release);
+}
+
+void invoke_pattern_apply_hook() noexcept {
+  auto* hook = pattern_apply_hook.exchange(nullptr, std::memory_order_acq_rel);
   if (hook != nullptr && hook->invoke != nullptr) {
     hook->invoke(hook->context);
   }
@@ -493,8 +505,10 @@ PatternPublication RealtimeEngine::publish_pattern_view(
         (observed_mailbox & detail::kPatternClaimedMask) == 0
             ? observed_mailbox
             : 0;
-    const auto observed_audio_generation =
+    const auto observed_audio_mailbox =
         audio_pending_pattern_generation_.load(std::memory_order_acquire);
+    const auto observed_audio_generation =
+        detail::pattern_mailbox_generation(observed_audio_mailbox);
     const auto observed_pending_generation = observed_mailbox != 0
         ? detail::pattern_mailbox_generation(observed_mailbox)
         : observed_audio_generation;
@@ -514,7 +528,7 @@ PatternPublication RealtimeEngine::publish_pattern_view(
         if (queued_pattern_generation_.load(std::memory_order_acquire) !=
                 observed_mailbox ||
             audio_pending_pattern_generation_.load(
-                std::memory_order_acquire) != observed_audio_generation) {
+                std::memory_order_acquire) != observed_audio_mailbox) {
           continue;
         }
         pattern_publication_rejections_.fetch_add(
@@ -714,6 +728,7 @@ bool RealtimeEngine::cancel_pattern_publication(
           std::memory_order_acq_rel,
           std::memory_order_acquire)) {
     pending->state.store(PatternState::reclaimable, std::memory_order_release);
+    canceled_pattern_publications_.fetch_add(1, std::memory_order_relaxed);
     return true;
   }
 
@@ -723,6 +738,7 @@ bool RealtimeEngine::cancel_pattern_publication(
           0,
           std::memory_order_acq_rel,
           std::memory_order_acquire)) {
+    canceled_pattern_publications_.fetch_add(1, std::memory_order_relaxed);
     return true;
   }
   return false;
@@ -1127,10 +1143,19 @@ void RealtimeEngine::render(
           claimed->generation,
           claimed->activation_frame};
       if (audio_pending_pattern_.has_value()) {
+        auto superseded_generation = audio_pending_pattern_->generation;
+        const auto claimed_superseded_generation =
+            superseded_generation | detail::kPatternClaimedMask;
+        if (audio_pending_pattern_generation_.compare_exchange_strong(
+                superseded_generation,
+                claimed_superseded_generation,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+          superseded_pattern_publications_.fetch_add(
+              1, std::memory_order_relaxed);
+        }
         pattern_slots_[audio_pending_pattern_->slot].state.store(
             PatternState::reclaimable, std::memory_order_release);
-        superseded_pattern_publications_.fetch_add(
-            1, std::memory_order_relaxed);
       }
       audio_pending_pattern_ = publication;
       audio_pending_pattern_generation_.store(
@@ -1285,6 +1310,9 @@ void RealtimeEngine::render(
                   detail::kPatternClaimedMask,
               std::memory_order_acq_rel,
               std::memory_order_acquire)) {
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+        testing::invoke_pattern_apply_hook();
+#endif
         apply_published_pattern(*audio_pending_pattern_, runtime_frame);
       } else {
         pattern_slots_[audio_pending_pattern_->slot].state.store(
@@ -1439,6 +1467,7 @@ PatternTelemetry RealtimeEngine::pattern_telemetry() const noexcept {
       accepted_pattern_publications_.load(std::memory_order_relaxed),
       applied_pattern_publications_.load(std::memory_order_relaxed),
       superseded_pattern_publications_.load(std::memory_order_relaxed),
+      canceled_pattern_publications_.load(std::memory_order_relaxed),
       reclaimed_patterns_.load(std::memory_order_relaxed),
       pattern_publication_rejections_.load(std::memory_order_relaxed),
   };

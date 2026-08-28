@@ -766,9 +766,7 @@ struct ControlRuntime::Impl {
       }
       auto published = publish_project_pattern(
           pattern_id,
-          authority.has_value()
-              ? std::optional<std::uint64_t>{authority->activation_frame}
-              : std::nullopt,
+          std::nullopt,
           {},
           std::nullopt);
       if (!published.has_value()) {
@@ -2604,7 +2602,7 @@ Json ControlRuntime::dispatch(
         }
         auto published = impl_->publish_project_pattern(
             *recorded_pattern,
-            authority.has_value()
+            operation != "sequence.record.stop" && authority.has_value()
                 ? std::optional<std::uint64_t>{authority->activation_frame}
                 : std::nullopt,
             {},

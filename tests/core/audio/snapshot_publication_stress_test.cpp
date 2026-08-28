@@ -45,6 +45,7 @@ namespace {
 using lmdj::audio::PreparedSampleBank;
 using lmdj::audio::PreparedPatternView;
 using lmdj::audio::PatternPublishResult;
+using lmdj::audio::PatternReplacementAuthority;
 using lmdj::audio::PublishResult;
 using lmdj::audio::RealtimeEngine;
 using lmdj::foundation::ProjectId;
@@ -352,6 +353,7 @@ void test_same_boundary_pattern_supersession_is_conserved_under_concurrency() {
 
   std::uint64_t accepted = 1;
   std::uint64_t slots_full = 0;
+  std::uint64_t canceled = 0;
   for (std::uint64_t revision = 2;
        revision < 2 + kSupersedingPublications;) {
     engine.reclaim_retired_patterns();
@@ -365,21 +367,39 @@ void test_same_boundary_pattern_supersession_is_conserved_under_concurrency() {
     LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
     LMDJ_CHECK(publication.activation_frame == kDistantBoundary);
     ++accepted;
+    if (revision % 7 == 0) {
+      const auto authority = PatternReplacementAuthority{
+          publication.generation,
+          PatternId{"30000000-0000-4000-8000-000000000001"},
+          publication.activation_frame};
+      if (engine.cancel_pattern_publication(authority)) {
+        ++canceled;
+      }
+    }
     ++revision;
   }
 
   rendering.store(false, std::memory_order_release);
   audio_thread.join();
   const auto telemetry = engine.pattern_telemetry();
+  std::cerr << "  pattern accepted=" << telemetry.accepted_publications
+            << " applied=" << telemetry.applied_publications
+            << " superseded=" << telemetry.superseded_publications
+            << " canceled=" << telemetry.canceled_publications
+            << " pending=" << (telemetry.pending_generation == 0 ? 0 : 1)
+            << '\n';
   LMDJ_CHECK(telemetry.current_generation == initial.generation);
   LMDJ_CHECK(telemetry.pending_generation != 0);
   LMDJ_CHECK(telemetry.applied_publications == 1);
   LMDJ_CHECK(
       telemetry.accepted_publications ==
-      telemetry.applied_publications + telemetry.superseded_publications + 1);
+      telemetry.applied_publications + telemetry.superseded_publications +
+          telemetry.canceled_publications + 1);
   LMDJ_CHECK(telemetry.accepted_publications == accepted);
   LMDJ_CHECK(telemetry.publication_rejections == slots_full);
   LMDJ_CHECK(telemetry.superseded_publications > 0);
+  LMDJ_CHECK(telemetry.canceled_publications == canceled);
+  LMDJ_CHECK(telemetry.canceled_publications > 0);
 }
 
 }  // namespace

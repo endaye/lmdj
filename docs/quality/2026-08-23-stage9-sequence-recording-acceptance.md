@@ -165,14 +165,26 @@ switch. The acknowledged boundary remains retained until the exactly-once
 Facade flush finishes, preventing a clean old-Pattern republish from reverting
 the target.
 
+Review Fix 4 closes the remaining terminal-state races. A Stop receipt no
+longer stores a one-use audio activation: after exact target cancellation, each
+publication attempt derives the clean committed old-Pattern view from current
+transport, so a replay after the original boundary gets a fresh next Bar while
+retaining the same durable receipt and Project revision. Audio publication
+masks the claimed bit consistently for queued and audio-owned generations,
+including the frame-exact apply point; validated switch authority can therefore
+reserve the next Bar while ordinary different-Pattern overlap remains rejected.
+Cancellation is now an explicit telemetry terminal, with conservation
+`accepted = applied + superseded + canceled + pending` across queued,
+audio-owned, apply-point, and concurrent handoffs.
+
 | Source boundary | Fresh local evidence |
 | --- | --- |
 | Facade owner/generation/replace/reject/flush projection | PASS: `facade.sequence_surface` |
 | Audio same-boundary newest-view wins, zero realtime allocation/free | PASS: `audio.realtime_engine` |
 | Deterministic claimed-boundary race keeps onset zero and exact phase | PASS: `audio.realtime_engine` |
 | Claimed 90-BPM transport basis and bit-63 generation boundary | PASS: `audio.realtime_engine` |
-| Concurrent accepted = applied + superseded + pending conservation | PASS: `audio.snapshot_publication_stress` |
-| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; authoritative target supersedes the exact pending view; Stop cancels the target and exact replay recovers; boundary flush preserves the target |
+| Concurrent accepted = applied + superseded + canceled + pending conservation | PASS: `audio.snapshot_publication_stress` |
+| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; authoritative target supersedes the exact pending view; Stop cancels the target and delayed exact replay derives a fresh boundary without a second Project mutation; boundary flush preserves the target |
 | Owner-loss cleanup-publication failure stops and clears Runtime Pattern | PASS: `host.web_control_runtime` |
 | Production Audio/Web hook symbol and embedded-marker exclusion | PASS: `build.project_io_test_hook_symbols` + unit contract |
 | Shared Runtime Session | PASS: stopped switch authority ignores a later stale boundary without a second flush |

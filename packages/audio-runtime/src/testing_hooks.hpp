@@ -15,6 +15,8 @@ static_assert(std::atomic<PatternClaimHook*>::is_always_lock_free);
 
 void set_pattern_claim_hook(PatternClaimHook* hook) noexcept;
 void invoke_pattern_claim_hook() noexcept;
+void set_pattern_apply_hook(PatternClaimHook* hook) noexcept;
+void invoke_pattern_apply_hook() noexcept;
 
 }  // namespace testing
 

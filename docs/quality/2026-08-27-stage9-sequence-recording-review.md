@@ -305,6 +305,14 @@ transport boundary，仍可更新。若 BPM update 已先成功并发布 immutab
 authority 确定性取代它；普通不同 Pattern overlap 仍拒绝。Facade、ControlRuntime
 及 packaged Chromium 都有回归证据；版本集成仍由 #379 管理。
 
+**2026-08-29 Review Fix 4 disposition:** Audio-owned generation 即使正在
+apply-point claim 也先剥离 bit-63 marker 再匹配 slot/authority；精确 switch 可在
+该窗口保留下一 Bar，普通不同 Pattern overlap 仍拒绝。Stop 取消 target 后不再
+重用已过期 activation frame；相同 durable receipt 的延迟 replay 从当前 transport
+派生新 next Bar，Project revision 不二次变化。Pattern telemetry 明确增加 canceled
+终态，并由 component/stress 证明 accepted 只落入 applied、superseded、canceled
+或单一 pending bucket。
+
 ### M5 恢复不可发现、恢复 UI 无指纹信息（SR-D17/D22 的 UX 半途）
 
 Creator 的 `refreshSequence` 只在停录失败、settings 更新后、recover/discard

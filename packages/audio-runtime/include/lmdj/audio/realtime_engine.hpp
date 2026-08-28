@@ -84,6 +84,7 @@ struct PatternTelemetry {
   std::uint64_t accepted_publications;
   std::uint64_t applied_publications;
   std::uint64_t superseded_publications;
+  std::uint64_t canceled_publications;
   std::uint64_t reclaimed_patterns;
   std::uint64_t publication_rejections;
 };
@@ -486,6 +487,7 @@ class RealtimeEngine final {
   std::atomic<std::uint64_t> accepted_pattern_publications_{0};
   std::atomic<std::uint64_t> applied_pattern_publications_{0};
   std::atomic<std::uint64_t> superseded_pattern_publications_{0};
+  std::atomic<std::uint64_t> canceled_pattern_publications_{0};
   std::atomic<std::uint64_t> reclaimed_patterns_{0};
   std::atomic<std::uint64_t> pattern_publication_rejections_{0};
   std::atomic<CaptureState> capture_state_{CaptureState::idle};

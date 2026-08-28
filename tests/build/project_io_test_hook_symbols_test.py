@@ -11,6 +11,8 @@ FORBIDDEN_SYMBOLS = (
     "set_active_directory_sync_hook",
     "set_pattern_claim_hook",
     "invoke_pattern_claim_hook",
+    "set_pattern_apply_hook",
+    "invoke_pattern_apply_hook",
     "fail_next_pattern_publication",
 )
 
@@ -19,6 +21,8 @@ FORBIDDEN_BYTES = (
     b"injected runtime Pattern publication failure",
     b"set_pattern_claim_hook",
     b"invoke_pattern_claim_hook",
+    b"set_pattern_apply_hook",
+    b"invoke_pattern_apply_hook",
 )
 
 
