@@ -1813,7 +1813,7 @@ void test_sample_import_timeout_aborts_staging_and_fails_closed() {
       inspect_project(temp.path(), kProjectId).at("project_revision") == 0);
 }
 
-void test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit() {
+void test_sample_commit_quota_failure_keeps_truth_and_runtime_unchanged() {
   TempDirectory temp;
   constexpr RuntimePreparationLimits limits{
       1'048'576,
@@ -1856,44 +1856,22 @@ void test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit() {
       "sample.import.chunk",
       sample_chunk_payload(433, 0, true, larger_wav),
       larger_wav));
-  const auto stale_runtime = check_exact_success(
-      runtime->dispatch(
-          "sample.import.commit", {{"import_token", uuid(433)}}, {}),
-      {"committed_revision", "runtime_revision", "runtime_published",
-       "snapshot_error"});
-  LMDJ_CHECK(stale_runtime.at("committed_revision") == 2);
-  LMDJ_CHECK(stale_runtime.at("runtime_revision") == 1);
-  LMDJ_CHECK(stale_runtime.at("runtime_published") == false);
-  LMDJ_CHECK(
-      stale_runtime.at("snapshot_error").at("code") ==
-      "BANK_QUOTA_EXHAUSTED");
+  const auto rejected = runtime->dispatch(
+      "sample.import.commit", {{"import_token", uuid(433)}}, {});
+  check_error(rejected, "BANK_QUOTA_EXHAUSTED");
   LMDJ_CHECK(
       runtime->engine().bank_telemetry().accepted_publications == generation);
-
-  const auto stale_preview = runtime->dispatch(
-      "sample.preview.set",
-      {{"slot", slot(0, 0)},
-       {"playback", playback_payload(0, 1, "gate")}},
-      {});
-  LMDJ_CHECK(stale_preview.at("ok") == false);
-  check_error(stale_preview, "HOST_STATE_INVALID");
-  check_exact_success(
-      runtime->dispatch(
-          "trigger", {{"slot", 0}, {"kind", "release"}}, {}),
-      {"accepted"});
-  check_exact_success(
-      runtime->dispatch("sample.stop", {{"slot", slot(0, 0)}}, {}),
-      {"accepted", "scope"});
-
-  const auto retried = check_exact_success(
-      runtime->dispatch(
-          "snapshot.retry", {{"pattern_id", kPatternId}}, {}),
-      {"project_id", "project_revision", "pattern_id", "runtime_ready",
-       "generation", "snapshot_error", "runtime_revision"});
-  LMDJ_CHECK(retried.at("project_revision") == 2);
-  LMDJ_CHECK(retried.at("runtime_revision") == 1);
-  LMDJ_CHECK(retried.at("runtime_ready") == false);
-  LMDJ_CHECK(retried.at("snapshot_error").is_object());
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 1);
+  const auto retained = check_exact_success(
+      runtime->dispatch("sample.inspect", {{"slot", slot(0, 0)}}, {}),
+      {"project_revision", "slot", "asset_id", "playback", "metadata",
+       "waveform_cache_identity"});
+  LMDJ_CHECK(retained.at("project_revision") == 1);
+  LMDJ_CHECK(retained.at("metadata").at("source_frames") == 2);
+  LMDJ_CHECK(
+      !std::filesystem::exists(
+          temp.path() / ".lmdj-host/sample-import-staging" / uuid(433)));
   LMDJ_CHECK(
       runtime->engine().bank_telemetry().accepted_publications == generation);
 }
@@ -2845,22 +2823,6 @@ void check_snapshot_published_notification(
            {"project_revision", project_revision}}));
 }
 
-void check_snapshot_rejected_notification(
-    const Json& notification,
-    std::uint64_t project_revision,
-    std::uint64_t runtime_revision,
-    std::string_view error_code) {
-  check_exact_keys(notification, {"protocol_version", "event", "payload"});
-  LMDJ_CHECK(notification.at("protocol_version") == 1);
-  LMDJ_CHECK(notification.at("event") == "snapshot.rejected");
-  LMDJ_CHECK(!notification.contains("request_id"));
-  const auto& payload = notification.at("payload");
-  check_exact_keys(payload, {"project_revision", "runtime_revision", "error"});
-  LMDJ_CHECK(payload.at("project_revision") == project_revision);
-  LMDJ_CHECK(payload.at("runtime_revision") == runtime_revision);
-  LMDJ_CHECK(payload.at("error").at("code") == error_code);
-}
-
 void test_bridge_routes_sample_operations_without_a_project_path() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -3301,7 +3263,7 @@ void test_bridge_emits_sample_publication_notifications_after_response() {
   check_no_bridge_message(*bridge);
 }
 
-void test_bridge_emits_rejected_sample_and_retry_notifications() {
+void test_bridge_emits_commit_quota_rejection_without_snapshot_notification() {
   TempDirectory temp;
   constexpr RuntimePreparationLimits limits{
       1'048'576,
@@ -3355,49 +3317,18 @@ void test_bridge_emits_rejected_sample_and_retry_notifications() {
   proxy.pump_one();
   const auto response = poll_message(*bridge);
   LMDJ_CHECK(response.at("request_id") == uuid(926));
-  LMDJ_CHECK(response.at("ok") == true);
-  LMDJ_CHECK(response.at("result").at("committed_revision") == 3);
-  LMDJ_CHECK(response.at("result").at("runtime_revision") == 2);
-  LMDJ_CHECK(response.at("result").at("runtime_published") == false);
-  check_snapshot_rejected_notification(
-      poll_message(*bridge), 3, 2, "BANK_QUOTA_EXHAUSTED");
-  proxy.pump_one();
-
-  const auto retry = encode(request(
-      uuid(927),
-      "snapshot.retry",
-      {{"pattern_id", kPatternId}}));
+  LMDJ_CHECK(response.at("ok") == false);
   LMDJ_CHECK(
-      bridge->submit(retry, {}) == BridgeSubmitStatus::accepted);
-  proxy.pump_one();
-  const auto retry_response = poll_message(*bridge);
-  LMDJ_CHECK(retry_response.at("request_id") == uuid(927));
-  LMDJ_CHECK(retry_response.at("ok") == true);
-  LMDJ_CHECK(retry_response.at("result").at("project_revision") == 3);
-  LMDJ_CHECK(retry_response.at("result").at("runtime_revision") == 2);
-  LMDJ_CHECK(retry_response.at("result").at("runtime_ready") == false);
-  check_snapshot_rejected_notification(
-      poll_message(*bridge), 3, 2, "BANK_QUOTA_EXHAUSTED");
-  proxy.pump_one();
-
-  const auto replay = encode(request(
-      uuid(930), "sample.update_pad", replayed_update_payload));
+      response.at("error").at("code") == "BANK_QUOTA_EXHAUSTED");
+  LMDJ_CHECK(response.at("error").at("details").at("bank") == 0);
   LMDJ_CHECK(
-      bridge->submit(replay, {}) == BridgeSubmitStatus::accepted);
-  proxy.pump_one();
-  const auto replay_response = poll_message(*bridge);
-  LMDJ_CHECK(replay_response.at("request_id") == uuid(930));
-  LMDJ_CHECK(replay_response.at("ok") == true);
-  LMDJ_CHECK(replay_response.at("result").at("committed_revision") == 2);
-  LMDJ_CHECK(replay_response.at("result").at("runtime_revision") == 2);
-  LMDJ_CHECK(replay_response.at("result").at("runtime_published") == false);
+      response.at("error").at("details").at("remaining_frames") == 4);
   LMDJ_CHECK(
-      replay_response.at("result").at("snapshot_error").at("code") ==
-      "BANK_QUOTA_EXHAUSTED");
-  check_snapshot_rejected_notification(
-      poll_message(*bridge), 3, 2, "BANK_QUOTA_EXHAUSTED");
+      response.at("error").at("details").at("consumed").size() == 1);
   check_no_bridge_message(*bridge);
   proxy.pump_one();
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 2);
 
   const auto unknown = encode(request(
       uuid(928),
@@ -3663,7 +3594,7 @@ int main() {
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();
     test_sample_import_timeout_aborts_staging_and_fails_closed();
-    test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit();
+    test_sample_commit_quota_failure_keeps_truth_and_runtime_unchanged();
     test_sample_post_claim_deadline_preserves_saved_truth();
     test_source_frames_are_admitted_by_prepared_pcm_quota();
     test_trigger_queue_full_is_admission_failure();
@@ -3686,7 +3617,7 @@ int main() {
     test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
     test_bridge_emits_only_real_snapshot_notifications_after_response();
     test_bridge_emits_sample_publication_notifications_after_response();
-    test_bridge_emits_rejected_sample_and_retry_notifications();
+    test_bridge_emits_commit_quota_rejection_without_snapshot_notification();
     test_bridge_rejects_an_expired_control_request_without_late_success();
     test_bridge_cancelled_before_dispatch_skips_facade_work();
     test_bridge_benign_query_cancel_does_not_fail_the_runtime();

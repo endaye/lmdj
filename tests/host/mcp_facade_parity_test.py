@@ -510,6 +510,30 @@ def sample_facade_parity(
     )
     assert mcp_inspect == cli_inspect
 
+    quota_arguments = {
+        "project_path": str(project),
+        "slot": slot(0, 0),
+    }
+    cli_quota = cli_request(
+        cli,
+        workspace,
+        "query",
+        {"operation": "sample.quota", **quota_arguments},
+    )
+    mcp_quota = mcp.tool("lmdj.sample.quota", quota_arguments)
+    assert mcp_quota == cli_quota
+    assert cli_quota["result"]["project_revision"] == 2
+    assert cli_quota["result"]["bank_used_bytes"] == 0
+    assert cli_quota["result"]["project_used_bytes"] == 0
+    assert cli_quota["result"]["effective_remaining_frames"] == 16_777_216
+    assert cli_quota["result"]["consumed"] == [
+        {
+            "slot": slot(0, 0),
+            "prepared_bytes": 36,
+            "prepared_frames": 9,
+        }
+    ]
+
     waveform_arguments = {
         "project_path": str(project),
         "slot": slot(0, 0),
