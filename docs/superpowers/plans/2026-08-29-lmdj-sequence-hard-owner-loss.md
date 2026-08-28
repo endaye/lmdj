@@ -174,6 +174,29 @@ CMake/CTest, Docusaurus Architecture Portal.
   exact-stage only review-fix files and create a second local Conventional
   Commit without any remote transition.
 
+### Review Fix 2: inverse completion coverage
+
+- [x] **Step 15: Reproduce inverse completion RED.** Append 32 equivalent
+  cumulative flushes before any completion, complete F0, and observe F1…F31
+  remain incomplete. Add the ambiguous manifest-committed/completion-error F0
+  followed by an equivalent F1 retry, plus a non-equivalent later batch mixing
+  an exact committed event, a same-key new value, and a new key.
+- [x] **Step 16: Resolve by identity and canonical coverage.** For the same
+  session journal, Pattern, and expected revision, let a later completion
+  key-cover/supersede prior cumulative flushes; let an earlier completion
+  resolve later retries only when every key/value is exactly covered. Remove
+  exact committed events from non-equivalent later batches while retaining new
+  keys and same-key different values as the recovery residual.
+- [x] **Step 17: Preserve concurrency and both completion orders.** Extend the
+  32-thread gap-free allocation stress through F0 completion and reconcile;
+  retain the prior later-completion replacement test and all receipt,
+  fingerprint, revision, and recovery identity assertions.
+- [x] **Step 18: Verify and commit Review Fix 2.** Run focused, fast, full,
+  stress, Portal, dependency, active-tree, version, and production symbol
+  checks; append the external Review Fix 2 report; audit pitfalls; exact-stage
+  only these files and create a third local Conventional Commit without any
+  remote transition.
+
 ## Version Management
 
 Version impact: deferred to [#379](https://github.com/endaye/lmdj/issues/379).

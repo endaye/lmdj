@@ -643,6 +643,161 @@ void test_later_cumulative_flush_resolves_failed_earlier_flush_exactly_once() {
       [](const auto& flush) { return flush.completed; }));
 }
 
+void test_earlier_completion_resolves_all_durable_equivalent_retries() {
+  TempDirectory temp("inverse-completion");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  begin(journal, bundle);
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto pattern_id = PatternId{std::string{kPatternId}};
+  const std::vector events{event(0, 0, 120, 90)};
+  constexpr std::size_t kRetries = 32;
+
+  for (std::size_t index = 0; index < kRetries; ++index) {
+    const auto appended = journal.append_flush(
+        bundle, session_id, CommandId{uuid_for(100 + index)}, pattern_id, 0,
+        events);
+    LMDJ_CHECK(appended.has_value());
+    LMDJ_CHECK(appended.value().flush_seq == index);
+  }
+  const auto committed = store.execute_sequence_flush(
+      bundle,
+      {session_id, 0, CommandId{uuid_for(100)}, pattern_id});
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().outcome.state.revision == 1);
+
+  const auto resolved = journal.read_active(bundle);
+  LMDJ_CHECK(resolved.has_value());
+  LMDJ_CHECK(resolved.value().flushes.size() == kRetries);
+  LMDJ_CHECK(std::ranges::all_of(
+      resolved.value().flushes,
+      [](const auto& flush) { return flush.completed; }));
+  const auto candidates = store.reconcile_sequence_recovery(bundle);
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().empty());
+  LMDJ_CHECK(store.load(bundle).value().revision == 1);
+  LMDJ_CHECK(
+      store.load(bundle).value().patterns.at(pattern_id).events == events);
+}
+
+void test_ambiguous_committed_flush_resolves_later_equivalent_retry() {
+  TempDirectory temp("ambiguous-inverse-completion");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  begin(journal, bundle);
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto pattern_id = PatternId{std::string{kPatternId}};
+  const std::vector events{event(0, 0, 120, 90)};
+
+  LMDJ_CHECK(
+      journal.append_flush(
+          bundle, session_id, CommandId{uuid_for(140)}, pattern_id, 0, events)
+          .has_value());
+  lmdj::foundation::Result<lmdj::project_io::SequenceFlushExecution> ambiguous =
+      lmdj::foundation::Result<
+          lmdj::project_io::SequenceFlushExecution>::failure(
+          lmdj::foundation::Error{
+              ErrorCode::internal_error, "fault was not run"});
+  {
+    FaultGuard fault(FaultPoint::sequence_journal_completion);
+    ambiguous = store.execute_sequence_flush(
+        bundle,
+        {session_id, 0, CommandId{uuid_for(140)}, pattern_id});
+  }
+  LMDJ_CHECK(!ambiguous.has_value());
+  LMDJ_CHECK(store.load(bundle).value().revision == 1);
+  LMDJ_CHECK(!journal.read_active(bundle).value().flushes.at(0).completed);
+
+  const auto retry = journal.append_flush(
+      bundle, session_id, CommandId{uuid_for(141)}, pattern_id, 0, events);
+  LMDJ_CHECK(retry.has_value());
+  LMDJ_CHECK(retry.value().flush_seq == 1);
+
+  ProjectStore restarted;
+  const auto candidates = restarted.reconcile_sequence_recovery(bundle);
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().empty());
+  const auto no_active = journal.read_active(bundle);
+  LMDJ_CHECK(!no_active.has_value());
+  LMDJ_CHECK(no_active.error().code == ErrorCode::not_found);
+  LMDJ_CHECK(restarted.load(bundle).value().revision == 1);
+  LMDJ_CHECK(
+      restarted.load(bundle).value().patterns.at(pattern_id).events == events);
+}
+
+void test_earlier_completion_preserves_only_later_uncommitted_residual() {
+  TempDirectory temp("inverse-residual");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  begin(journal, bundle);
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto pattern_id = PatternId{std::string{kPatternId}};
+  const auto committed_event = event(0, 0, 120, 90);
+  const auto superseded_event = event(1, 240, 120, 50);
+  const auto later_replacement = event(1, 240, 240, 110);
+  const auto additional_event = event(2, 480, 120, 70);
+  const std::vector committed_batch{committed_event, superseded_event};
+  const std::vector cumulative_batch{
+      committed_event, later_replacement, additional_event};
+  const std::vector expected_residual{later_replacement, additional_event};
+
+  LMDJ_CHECK(
+      journal
+          .append_flush(
+              bundle,
+              session_id,
+              CommandId{uuid_for(150)},
+              pattern_id,
+              0,
+              committed_batch)
+          .has_value());
+  LMDJ_CHECK(
+      journal.append_tail(bundle, session_id, pattern_id, 0, 1,
+                          cumulative_batch).has_value());
+  LMDJ_CHECK(
+      journal
+          .append_flush(
+              bundle,
+              session_id,
+              CommandId{uuid_for(151)},
+              pattern_id,
+              0,
+              cumulative_batch)
+          .has_value());
+
+  const auto committed = store.execute_sequence_flush(
+      bundle,
+      {session_id, 0, CommandId{uuid_for(150)}, pattern_id});
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().outcome.state.revision == 1);
+  LMDJ_CHECK(
+      committed.value().outcome.state.patterns.at(pattern_id).events ==
+      committed_batch);
+
+  const auto active = journal.read_active(bundle);
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().flushes.at(0).completed);
+  LMDJ_CHECK(!active.value().flushes.at(1).completed);
+  LMDJ_CHECK(active.value().flushes.at(1).canonical_events ==
+             expected_residual);
+
+  const auto candidates = store.reconcile_sequence_recovery(bundle);
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().size() == 1);
+  LMDJ_CHECK(candidates.value().front().journal.flushes.at(0).completed);
+  LMDJ_CHECK(!candidates.value().front().journal.flushes.at(1).completed);
+  LMDJ_CHECK(
+      candidates.value().front().journal.flushes.at(1).canonical_events ==
+      expected_residual);
+  LMDJ_CHECK(store.load(bundle).value().revision == 1);
+  LMDJ_CHECK(
+      store.load(bundle).value().patterns.at(pattern_id).events ==
+      committed_batch);
+}
+
 void test_restart_reconciles_reload_visible_receipt_without_overdub() {
   TempDirectory temp("reconcile");
   ProjectStore store;
@@ -875,6 +1030,22 @@ void test_concurrent_flush_allocation_is_gap_free() {
   for (std::size_t index = 0; index < kWorkers; ++index) {
     LMDJ_CHECK(active.value().flushes[index].flush_seq == index);
   }
+  const auto& first = active.value().flushes.front();
+  const auto committed = store.execute_sequence_flush(
+      bundle,
+      {SequenceSessionId{std::string{kSessionId}},
+       first.flush_seq,
+       first.command_id,
+       PatternId{std::string{kPatternId}}});
+  LMDJ_CHECK(committed.has_value());
+  const auto resolved = journal.read_active(bundle);
+  LMDJ_CHECK(resolved.has_value());
+  LMDJ_CHECK(std::ranges::all_of(
+      resolved.value().flushes,
+      [](const auto& flush) { return flush.completed; }));
+  const auto candidates = store.reconcile_sequence_recovery(bundle);
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().empty());
 }
 
 }  // namespace
@@ -889,6 +1060,9 @@ int main(int argc, char** argv) {
     test_durable_tail_snapshots_survive_reload_and_are_consumed_by_flush();
     test_torn_tail_fails_closed_with_actionable_recovery_evidence();
     test_later_cumulative_flush_resolves_failed_earlier_flush_exactly_once();
+    test_earlier_completion_resolves_all_durable_equivalent_retries();
+    test_ambiguous_committed_flush_resolves_later_equivalent_retry();
+    test_earlier_completion_preserves_only_later_uncommitted_residual();
     test_complete_line_tail_corruption_fails_closed_with_uniform_evidence();
     test_one_project_session_and_monotonic_durable_flush_identity();
     test_writer_lease_contention_fails_before_begin();

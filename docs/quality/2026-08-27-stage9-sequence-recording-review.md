@@ -255,6 +255,12 @@ event order 均保留原字节、以 `INVALID_PROJECT` 加 path、record offset/
 prefix、observed length、stable reason 与 repair/discard remedy fail closed。补充的
 F1→F2 regression 证明较早失败批次不会二次恢复，且 F1 旧同-key event 不会覆盖
 F2 已提交的新值；apply 只增加一次 revision，之后 apply/discard 均不再改变状态。
+第二次 re-review 补齐 inverse completion：F0…F31 可在任何 completion 前耐久；F0
+先完成时，以相同 session/pattern/expected-revision 和 canonical key/value coverage
+resolve 所有等价较晚 retry，而不是只按 `flush_seq <= F0`。非等价较晚 batch 只扣
+精确已提交 event，同-key 新值与新增 key 保留为 recovery residual。独立 case 还
+覆盖 F0 manifest 已提交但 completion 报错、其后 F1 等价 retry 已 append 的歧义态；
+restart reconcile 只回放 F0 receipt，不产生已提交工作的 candidate。
 该 source disposition 不是 merge、Product
 Build、immutable snapshot、远端 CI 或物理验收证据；这些仍分别等待 #379、#380
 与 #360。

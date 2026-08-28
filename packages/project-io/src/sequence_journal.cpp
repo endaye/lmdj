@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -328,6 +329,35 @@ std::vector<domain::PatternEvent> unresolved_batch(
   return domain::merge_pattern_events(result, journal.pending_events);
 }
 
+bool same_event_key(
+    const domain::PatternEvent& left,
+    const domain::PatternEvent& right) noexcept {
+  return left.slot == right.slot && left.onset_tick == right.onset_tick;
+}
+
+bool covers_event_keys(
+    std::span<const domain::PatternEvent> committed,
+    std::span<const domain::PatternEvent> candidate) {
+  return std::ranges::all_of(candidate, [committed](const auto& event) {
+    return std::ranges::any_of(committed, [&event](const auto& visible) {
+      return same_event_key(visible, event);
+    });
+  });
+}
+
+std::vector<domain::PatternEvent> uncommitted_residual(
+    std::span<const domain::PatternEvent> committed,
+    std::span<const domain::PatternEvent> candidate) {
+  std::vector<domain::PatternEvent> residual;
+  std::ranges::copy_if(
+      candidate,
+      std::back_inserter(residual),
+      [committed](const auto& event) {
+        return std::ranges::find(committed, event) == committed.end();
+      });
+  return residual;
+}
+
 nlohmann::json journal_json(const ActiveSequenceJournal& journal) {
   auto flushes = nlohmann::json::array();
   for (const auto& flush : journal.flushes) {
@@ -624,9 +654,34 @@ foundation::Result<JournalDocument> read_journal(
         if (!lowercase_sha256(fingerprint)) {
           throw std::runtime_error("Sequence completion fingerprint is invalid");
         }
+        const auto committed_flush = *found;
         for (auto& flush : document.journal.flushes) {
+          if (flush.completed ||
+              flush.pattern_id != committed_flush.pattern_id ||
+              flush.expected_revision != committed_flush.expected_revision) {
+            continue;
+          }
           if (flush.flush_seq <= sequence) {
+            if (!covers_event_keys(
+                    committed_flush.canonical_events,
+                    flush.canonical_events)) {
+              record_reason = "sequence_journal_completion_coverage_invalid";
+              record_message =
+                  "Sequence completion does not cover an earlier cumulative "
+                  "flush";
+              throw std::runtime_error(
+                  "Sequence completion does not cover an earlier flush");
+            }
             flush.completed = true;
+            continue;
+          }
+          auto residual = uncommitted_residual(
+              committed_flush.canonical_events,
+              flush.canonical_events);
+          if (residual.empty()) {
+            flush.completed = true;
+          } else {
+            flush.canonical_events = std::move(residual);
           }
         }
         document.journal.expected_revision =
