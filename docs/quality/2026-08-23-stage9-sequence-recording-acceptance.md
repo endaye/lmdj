@@ -20,6 +20,38 @@ passed every selected lane, including the landed snapshot projection check.
 Product tag, Release, deployment, publication and Channel promotion remain
 pending until their separately authorized boundaries occur.
 
+## Post-delivery source remediation — 2026-08-29
+
+Issue #376 corrects review finding H2 without rewriting the historical
+`1.0.37.0` candidate or its immutable snapshot. The shared Web Runtime Session
+now retains the Facade switch authority, accepts only the matching
+session/Pattern/frame/generation boundary, reserves it before dispatch, and
+serializes one generated-command flush before both Host acknowledgement and
+the first later Pad event. Creator changes selected Pattern only after a fresh
+Facade query reports that target active. Duplicate, reordered, stopped, and
+superseded boundaries cannot publish optimistic authority or issue a second
+flush.
+
+Source-level verification produced by the remediation Task includes:
+
+| Command / journey | Result |
+| --- | --- |
+| `node --test packages/web-runtime-platform/test/runtime_session.test.mjs` | PASS: 54/54; exact-one matching boundary flush, duplicate/reordered rejection, and flush-before-post-boundary-event ordering |
+| Web Runtime Platform plus Formal Host Node suites | PASS: 159/159 |
+| `npm --prefix apps/creator-web test -- --run` | PASS: 344/344 across 19 files; boundary state requires confirmed active authority |
+| Creator TypeScript and production Vite build | PASS |
+| Formal Web Runtime Host targeted Chromium journey | PASS: old-Pattern record → acknowledged exact-one flush → new-Pattern record → stop → both committed Patterns inspected → new Pattern reload |
+| Creator targeted Chromium Sequence journey | PASS: switch-pending keeps old selection; confirmed flush selects the target; first later unified input records without ErrorPanel or terminal Runtime failure |
+| `scripts/core.sh test dev fast` / `scripts/core.sh test dev stress` | PASS: 36/36 fast and 4/4 stress; Native/CLI/MCP Facade contract remains green |
+| `scripts/architecture-portal.sh check` | PASS: 59 tests, 37 current pages, 10 diagram sources/20 outputs, production build, and 42 routes/internal links |
+
+The full packaged-browser suites, full Pull Request CI, integrated identities,
+and a corrected immutable snapshot remain separate evidence boundaries. The
+targeted browser journeys above extend through post-boundary recording, stop,
+reload, and committed-event inspection; #379 owns the integrated version audit
+and #380 owns the new immutable snapshot. The five physical/manual rows below
+remain unchanged and unverified.
+
 Documentation impact: required. Current routes updated by this Task include
 Assembly, Project and Bundle Contracts, Core Modules, Hosts, storage, Web
 Runtime, Native Audio, input, workflows, capability map, versioning and
