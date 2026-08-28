@@ -113,14 +113,25 @@ It also preserves pending events across an active-session BPM rebuild, schedules
 a clean committed view on owner-loss sealing, and returns the durable committed
 Pattern identity needed for exact Stop replay after a clean-publication failure.
 
+Review Fix 2 additionally proves that a 90-BPM view claimed at frame `96000`
+owns its transport basis: a concurrent replacement activates at `224000`, not
+the stale 120-BPM boundary `192000`. If owner-loss clean publication itself
+fails, the Host quiesces, stops, and clears the engine before owner abandonment.
+Private gated testable libraries contain the deterministic hooks; the production
+Audio/Web archives contain neither hook symbols nor embedded hook markers. The
+generation allocator also rejects bit 63 before it can alias the claimed marker.
+
 | Source boundary | Fresh local evidence |
 | --- | --- |
 | Facade owner/generation/replace/reject/flush projection | PASS: `facade.sequence_surface` |
 | Audio same-boundary newest-view wins, zero realtime allocation/free | PASS: `audio.realtime_engine` |
 | Deterministic claimed-boundary race keeps onset zero and exact phase | PASS: `audio.realtime_engine` |
+| Claimed 90-BPM transport basis and bit-63 generation boundary | PASS: `audio.realtime_engine` |
 | Concurrent accepted = applied + superseded + pending conservation | PASS: `audio.snapshot_publication_stress` |
 | Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; BPM rebuild retains overlay; owner loss removes it; failed clean publication recovers through exact Stop replay |
-| Focused suite | PASS: 4/4 |
+| Owner-loss cleanup-publication failure stops and clears Runtime Pattern | PASS: `host.web_control_runtime` |
+| Production Audio/Web hook symbol and embedded-marker exclusion | PASS: `build.project_io_test_hook_symbols` + unit contract |
+| Focused suite | PASS: 6/6 |
 | `scripts/core.sh test dev full` | PASS: 79/79 |
 | `scripts/core.sh test dev stress` | PASS: 4/4 |
 | `scripts/core.sh proof` | PASS: 63/63 non-stress CTest plus schema/module/CLI/MCP/Golden/Sequence/package/Assembly proof |

@@ -57,6 +57,7 @@ enum class PatternPublishResult : std::uint8_t {
   publication_pending,
   pattern_slots_full,
   publish_queue_full,
+  generation_exhausted,
 };
 
 struct PatternPublication {

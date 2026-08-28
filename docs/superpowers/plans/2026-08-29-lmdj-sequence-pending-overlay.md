@@ -96,6 +96,10 @@
 
   Add a deterministic callback-claim race gate proving a superseding publication cannot cancel a view already claimed for onset zero; extend the production journey through an active-session BPM change; render an overlay before owner loss and prove clean removal at the following Bar; inject one post-commit clean-publication failure and prove exact Stop replay recovers from the durable Pattern identity. These tests must fail against the original queue/generation ordering and Host lifecycle behavior before the production fixes.
 
+- [x] **Step 6b: Close claimed-transport, fail-closed cleanup, and production-hook review findings**
+
+  When the callback has claimed a view whose activation is crossed by its reserved frame range, derive a concurrent replacement from that claimed view's activation and Bar length, not the still-current view's BPM/origin. If owner-loss clean publication fails, use the installed quiescence contract to stop the engine and clear the Runtime Pattern before abandoning the Facade owner. Compile claim/failure hooks only into private testable libraries; production Audio/Web libraries, callbacks, public headers, and marker strings remain hook-free and are checked by the existing production-symbol contract gate. Reserve bit 63 exclusively for the mailbox claimed marker and fail closed when the generation allocator reaches it.
+
 - [x] **Step 7: Update current documentation and generated diagrams**
 
   Mark M1 as source-fixed by #375 while leaving integrated Product identity to #379, immutable snapshot work to #380, and all physical/manual rows unverified. Update `/core/modules/application-facade/`, `/core/modules/audio-runtime/`, `/core/modules/web-runtime-platform/`, `/hosts/web-runtime/`, and `/hosts/creator-web/` to state the projection/publication boundary and tests. Regenerate only the current outputs for the three changed source diagrams; do not modify `versioned_docs`, `versioned_metadata`, version manifests, Assembly identities, or Product Build snapshots.

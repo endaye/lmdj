@@ -608,6 +608,7 @@ struct ControlRuntime::Impl {
       const foundation::PatternId& selected_pattern,
       std::optional<std::uint64_t> activation_frame = std::nullopt,
       std::span<const domain::PatternEvent> overlay = {}) {
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
     if (fail_next_pattern_publication) {
       fail_next_pattern_publication = false;
       return foundation::Result<audio::PatternPublication>::failure(Error{
@@ -615,6 +616,7 @@ struct ControlRuntime::Impl {
           "injected runtime Pattern publication failure",
       });
     }
+#endif
     if (!retained_project_path.has_value()) {
       return foundation::Result<audio::PatternPublication>::failure(
           Error{ErrorCode::invalid_argument, "no Project is open"});
@@ -1208,6 +1210,25 @@ struct ControlRuntime::Impl {
     return quiescent;
   }
 
+  void stop_and_clear_pattern_noexcept() noexcept {
+    if (engine.telemetry().state == audio::RealtimeState::running) {
+      if (!coordinator.has_value() ||
+          coordinator->await_quiescent == nullptr) {
+        return;
+      }
+      // The coordinator contract establishes paused-or-terminal with no
+      // callback in flight on every return, including timeout/failure. Cleanup
+      // therefore gets a minimal independent budget even after request expiry.
+      const auto timeout_ms = std::max<std::uint32_t>(
+          remaining_request_budget_ms(), 1U);
+      static_cast<void>(coordinator->await_quiescent(
+          coordinator->context, timeout_ms));
+      engine.stop();
+    }
+    static_cast<void>(engine.clear_pattern_view());
+    static_cast<void>(engine.reclaim_retired_patterns());
+  }
+
   foundation::Result<void> abort_imports() {
     std::optional<Error> first_failure;
     for (auto current = import_tokens.begin(); current != import_tokens.end();) {
@@ -1245,14 +1266,20 @@ struct ControlRuntime::Impl {
       static_cast<void>(abort_imports());
     } catch (...) {
     }
+    bool clean_pattern_published = true;
     if (active_sequence.has_value()) {
       try {
         // The journal overlay is Runtime-only. Seal the failed owner by
         // replacing any queued or active overlay with committed Project Truth
         // at the normal Bar boundary before abandoning the Facade session.
-        static_cast<void>(publish_project_pattern(active_sequence->pattern_id));
+        clean_pattern_published =
+            publish_project_pattern(active_sequence->pattern_id).has_value();
       } catch (...) {
+        clean_pattern_published = false;
       }
+    }
+    if (!clean_pattern_published) {
+      stop_and_clear_pattern_noexcept();
     }
     application.abandon_sequence_sessions();
     active_sequence.reset();
@@ -1279,7 +1306,9 @@ struct ControlRuntime::Impl {
   std::optional<std::string> project_id;
   std::optional<std::uint64_t> project_revision;
   std::optional<std::string> pattern_id;
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
   bool fail_next_pattern_publication = false;
+#endif
   std::optional<std::uint16_t> project_bpm;
   std::optional<std::string> runtime_bank_project_id;
   std::optional<std::uint64_t> runtime_revision;
@@ -1348,6 +1377,14 @@ Json ControlRuntime::dispatch(
     if (impl_->cancel_if_expired()) {
       return timeout_error();
     }
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    if (operation == "__testing.fail-next-pattern-publication") {
+      require(exact_keys(payload, {}));
+      require(sidecar.empty());
+      impl_->fail_next_pattern_publication = true;
+      return success({{"armed", true}});
+    }
+#endif
     if (operation == "host.status") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
@@ -2889,11 +2926,6 @@ foundation::Result<void> detail::ControlRuntimeAudioAccess::install(
   }
   runtime.impl_->coordinator = coordinator;
   return foundation::Result<void>::success();
-}
-
-void detail::ControlRuntimeAudioAccess::fail_next_pattern_publication(
-    ControlRuntime& runtime) noexcept {
-  runtime.impl_->fail_next_pattern_publication = true;
 }
 
 foundation::Result<void> detail::ControlRuntimeClockAccess::install(

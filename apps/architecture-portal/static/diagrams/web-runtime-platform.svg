@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="0e0d731d6482d9b0edf56f6206257ddf992298a5822151266ee43f65527c5439">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="37f1907486dd8b887c34e6263b5d6d4652f6bd0bea5148c49b916c0d5e497445">
   <title id="title">Web Runtime Platform Module</title><desc id="description">Creator 与诊断 Host 共用一个受 Product Assembly 约束的浏览器 Runtime</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -62,6 +62,6 @@
       <text class="node-detail" x="966" y="468">transfer-only bytes</text>
     </g>
   <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Product identity</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Product CMake 注入 Product Build、Platform version 与精确 Host triple。</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Shared runtime</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">两个 Host 共用 frame-stamped input、BPM-safe overlay、owner-loss cleanup、receipt replay 与 AudioWorklet Voice/Bar 路径。</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Shared runtime</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">两个 Host 共用 frame-stamped input、BPM-safe overlay、fail-closed owner-loss cleanup、receipt replay 与 AudioWorklet Voice/Bar 路径。</div></foreignObject></g>
 <g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Forbidden boundary</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。</div></foreignObject></g>
 </svg>

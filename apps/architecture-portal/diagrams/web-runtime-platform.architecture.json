@@ -23,7 +23,7 @@
   ],
   "cards": [
     {"title": "Product identity", "body": "Product CMake 注入 Product Build、Platform version 与精确 Host triple。"},
-    {"title": "Shared runtime", "body": "两个 Host 共用 frame-stamped input、BPM-safe overlay、owner-loss cleanup、receipt replay 与 AudioWorklet Voice/Bar 路径。"},
+    {"title": "Shared runtime", "body": "两个 Host 共用 frame-stamped input、BPM-safe overlay、fail-closed owner-loss cleanup、receipt replay 与 AudioWorklet Voice/Bar 路径。"},
     {"title": "Forbidden boundary", "body": "Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。"}
   ]
 }

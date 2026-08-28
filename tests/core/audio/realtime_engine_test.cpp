@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "tests/core/support/test.hpp"
+#include "pattern_generation.hpp"
 #include "testing_hooks.hpp"
 
 namespace {
@@ -117,14 +118,15 @@ PreparedSampleBank bank_with_playback(
 RuntimeSnapshot pattern_snapshot(
     const char* pattern_id,
     PadSlotId slot,
-    std::uint8_t velocity) {
+    std::uint8_t velocity,
+    std::uint16_t bpm = 120) {
   auto sample = std::make_shared<const lmdj::cooker::PcmSample>(
       lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, 1)});
   return RuntimeSnapshot{
       ProjectId{kProjectId},
       PatternId{pattern_id},
       1,
-      120,
+      bpm,
       1,
       lmdj::domain::kPpq,
       lmdj::domain::kBarTicks4x4,
@@ -1827,9 +1829,9 @@ void publication_claim_race_preserves_the_claimed_boundary_and_phase() {
   const std::array pending_event{lmdj::domain::PatternEvent{
       PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 100}};
   auto pending = PreparedPatternView::from_snapshot_with_overlay(
-      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64), pending_event);
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64, 90), pending_event);
   auto replacement = PreparedPatternView::from_snapshot(
-      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 100));
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 100, 90));
   LMDJ_CHECK(initial.has_value());
   LMDJ_CHECK(pending.has_value());
   LMDJ_CHECK(replacement.has_value());
@@ -1872,15 +1874,27 @@ void publication_claim_race_preserves_the_claimed_boundary_and_phase() {
 
   LMDJ_CHECK(replacement_publication.result ==
              PatternPublishResult::accepted);
-  LMDJ_CHECK(replacement_publication.activation_frame == 192'000);
+  LMDJ_CHECK(replacement_publication.activation_frame == 224'000);
   LMDJ_CHECK(engine.current_pattern_origin_frame() == 96'000);
   LMDJ_CHECK(engine.current_pattern_has_overlay() == true);
 
-  render_frames(engine, 95'999);
+  render_frames(engine, 127'999);
   LMDJ_CHECK(engine.current_pattern_origin_frame() == 96'000);
   render_frames(engine, 1);
-  LMDJ_CHECK(engine.current_pattern_origin_frame() == 192'000);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 224'000);
   LMDJ_CHECK(engine.current_pattern_has_overlay() == false);
+}
+
+void pattern_generation_never_enters_the_claimed_marker_range() {
+  constexpr auto kLastGeneration =
+      (std::uint64_t{1} << 63U) - std::uint64_t{1};
+  auto next_generation = kLastGeneration;
+  const auto accepted =
+      lmdj::audio::detail::take_pattern_generation(next_generation);
+  LMDJ_CHECK(accepted == kLastGeneration);
+  LMDJ_CHECK(next_generation == lmdj::audio::detail::kPatternClaimedMask);
+  LMDJ_CHECK(!lmdj::audio::detail::take_pattern_generation(next_generation)
+                  .has_value());
 }
 
 }  // namespace
@@ -1959,4 +1973,5 @@ int main() {
   publishes_immutable_patterns_at_the_next_bar_boundary();
   newest_same_boundary_pattern_supersedes_overlay_without_realtime_free();
   publication_claim_race_preserves_the_claimed_boundary_and_phase();
+  pattern_generation_never_enters_the_claimed_marker_range();
 }

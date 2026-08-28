@@ -228,6 +228,16 @@ create→import/assign→activate→begin→live trigger→BPM→next Bar→owne
 共同固定无重复、无空洞、无陈旧 overlay 的源代码边界。版本分配仍归 #379，immutable
 Portal snapshot 仍归 #380；本段不宣称已 merge、已集成 Product identity 或物理听感通过。
 
+**2026-08-29 Review Fix 2：已修复。** claimed view 若携带新 BPM，concurrent
+replacement 现在从 claimed activation + claimed Bar length 计算后续 boundary，不再回退
+到尚未切换的 current BPM/origin。owner-loss clean publication 若失败，Web control 通过已
+安装的 quiescence contract 停止 engine 并清空 Runtime Pattern 后才 abandon owner；失败
+状态保持可诊断。Audio claim hook 与 Web failure hook 只编入 private testable target，
+production archives 由既有 symbol contract 同时检查符号与 marker bytes；callback production
+binary 不含 hook atomic/branch。generation allocator 在 bit 63 claimed marker 前 fail closed。
+deterministic 90-BPM claim-window、cleanup failure、generation boundary 与 production-symbol
+tests 固定这些边界。
+
 以下保留 2026-08-27 审查时的原始缺口证据：
 
 Audio Runtime 侧已交付并有引擎级测试：

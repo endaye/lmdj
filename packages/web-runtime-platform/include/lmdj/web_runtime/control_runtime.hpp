@@ -94,7 +94,6 @@ class ControlRuntimeAudioAccess final {
   static foundation::Result<void> install(
       ControlRuntime& runtime,
       AudioQuiescenceCoordinator coordinator) noexcept;
-  static void fail_next_pattern_publication(ControlRuntime& runtime) noexcept;
 };
 
 class ControlRuntimeClockAccess final {

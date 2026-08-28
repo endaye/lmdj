@@ -9,9 +9,11 @@
 #include <string>
 #include <utility>
 
+#include "pattern_generation.hpp"
 #include "testing_hooks.hpp"
 
 namespace lmdj::audio {
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
 namespace testing {
 namespace {
 
@@ -31,16 +33,11 @@ void invoke_pattern_claim_hook() noexcept {
 }
 
 }  // namespace testing
+#endif
 namespace {
 
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
-
-constexpr std::uint64_t kPatternClaimedMask = std::uint64_t{1} << 63U;
-
-std::uint64_t pattern_mailbox_generation(std::uint64_t value) noexcept {
-  return value & ~kPatternClaimedMask;
-}
 
 foundation::Result<void> invalid_argument(std::string message) {
   return foundation::Result<void>::failure(
@@ -492,15 +489,16 @@ PatternPublication RealtimeEngine::publish_pattern_view(
     const auto observed_mailbox =
         queued_pattern_generation_.load(std::memory_order_acquire);
     const auto observed_queued_generation =
-        (observed_mailbox & kPatternClaimedMask) == 0
+        (observed_mailbox & detail::kPatternClaimedMask) == 0
             ? observed_mailbox
             : 0;
     const auto observed_audio_generation =
         audio_pending_pattern_generation_.load(std::memory_order_acquire);
     const auto observed_pending_generation = observed_mailbox != 0
-        ? pattern_mailbox_generation(observed_mailbox)
+        ? detail::pattern_mailbox_generation(observed_mailbox)
         : observed_audio_generation;
     std::optional<std::uint64_t> observed_pending_activation;
+    std::optional<std::uint64_t> claimed_next_activation;
     if (observed_pending_generation != 0) {
       const auto pending = std::find_if(
           pattern_slots_.begin(),
@@ -526,6 +524,19 @@ PatternPublication RealtimeEngine::publish_pattern_view(
           rendered_frames_.load(std::memory_order_acquire);
       if (pending->activation_frame >= observed_frame) {
         observed_pending_activation = pending->activation_frame;
+      } else if ((observed_mailbox & detail::kPatternClaimedMask) != 0 ||
+                 (observed_mailbox == 0 && observed_audio_generation != 0)) {
+        const auto bar_frames = pending->pattern->bar_frames();
+        const auto elapsed = observed_frame - pending->activation_frame;
+        const auto bars = elapsed / bar_frames;
+        if (bars != std::numeric_limits<std::uint64_t>::max() &&
+            (bars + 1) <=
+                (std::numeric_limits<std::uint64_t>::max() -
+                 pending->activation_frame) /
+                    bar_frames) {
+          claimed_next_activation =
+              pending->activation_frame + (bars + 1) * bar_frames;
+        }
       }
       if (pending->pattern->project_id() != pattern.project_id() ||
           pending->pattern->pattern_id() != pattern.pattern_id() ||
@@ -561,8 +572,16 @@ PatternPublication RealtimeEngine::publish_pattern_view(
 
     const auto slot_index = static_cast<std::uint8_t>(
         std::distance(pattern_slots_.begin(), slot));
+    const auto generation =
+        detail::take_pattern_generation(next_pattern_generation_);
+    if (!generation.has_value()) {
+      pattern_publication_rejections_.fetch_add(
+          1, std::memory_order_relaxed);
+      return PatternPublication{
+          PatternPublishResult::generation_exhausted, 0, 0};
+    }
     slot->pattern.emplace(std::move(pattern));
-    slot->generation = next_pattern_generation_++;
+    slot->generation = *generation;
 
     const auto running =
         state_.load(std::memory_order_acquire) == RealtimeState::running;
@@ -573,6 +592,8 @@ PatternPublication RealtimeEngine::publish_pattern_view(
       activation_frame = observed_frame;
       if (observed_pending_activation.has_value()) {
         activation_frame = *observed_pending_activation;
+      } else if (claimed_next_activation.has_value()) {
+        activation_frame = *claimed_next_activation;
       } else if (requested_activation_frame.has_value()) {
         if (*requested_activation_frame < observed_frame) {
           slot->pattern.reset();
@@ -705,7 +726,7 @@ RealtimeEngine::pending_pattern_id() const {
       queued_pattern_generation_.load(std::memory_order_acquire);
   const auto generation =
       mailbox != 0
-          ? pattern_mailbox_generation(mailbox)
+          ? detail::pattern_mailbox_generation(mailbox)
           : audio_pending_pattern_generation_.load(std::memory_order_acquire);
   if (generation == 0) {
     return std::nullopt;
@@ -1023,8 +1044,8 @@ void RealtimeEngine::render(
   }
   auto mailbox = queued_pattern_generation_.load(std::memory_order_acquire);
   std::uint64_t claimed_pattern_generation = 0;
-  while (mailbox != 0 && (mailbox & kPatternClaimedMask) == 0) {
-    const auto claimed_mailbox = mailbox | kPatternClaimedMask;
+  while (mailbox != 0 && (mailbox & detail::kPatternClaimedMask) == 0) {
+    const auto claimed_mailbox = mailbox | detail::kPatternClaimedMask;
     if (queued_pattern_generation_.compare_exchange_weak(
             mailbox,
             claimed_mailbox,
@@ -1061,7 +1082,9 @@ void RealtimeEngine::render(
     }
     queued_pattern_generation_.store(0, std::memory_order_release);
   }
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
   testing::invoke_pattern_claim_hook();
+#endif
 
   PadControlEvent event{};
   for (std::size_t processed = 0;
@@ -1329,7 +1352,7 @@ PatternTelemetry RealtimeEngine::pattern_telemetry() const noexcept {
       queued_pattern_generation_.load(std::memory_order_acquire);
   const auto pending_generation =
       mailbox != 0
-          ? pattern_mailbox_generation(mailbox)
+          ? detail::pattern_mailbox_generation(mailbox)
           : audio_pending_pattern_generation_.load(std::memory_order_acquire);
   const auto pending = std::find_if(
       pattern_slots_.begin(),

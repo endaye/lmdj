@@ -34,6 +34,7 @@
 #include <lmdj/provider/registry.hpp>
 
 #include "tests/core/support/test.hpp"
+#include "testing_hooks.hpp"
 
 namespace lmdj::web_runtime::detail {
 nlohmann::json normalize_error_for_testing(
@@ -1266,6 +1267,51 @@ void test_sequence_observer_busy_and_owner_loss_recovery() {
   LMDJ_CHECK(recovery.at("candidates").at(0).at("reason") == "owner_lost");
 }
 
+void test_owner_loss_cleanup_failure_stops_and_clears_the_overlay() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(32);
+  import_and_assign(*runtime, wav, kAssetId, 738, 739, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  coordinator.engine = &runtime->engine();
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(runtime->dispatch(
+      "sequence.record.begin",
+      {{"session_id", kSequenceSessionId},
+       {"pattern_id", kPatternId},
+       {"expected_revision", 2}},
+      {}));
+
+  OneShotAudioDriver audio(runtime->engine());
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  audio.render_one();
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  for (std::size_t callback = 0; callback < 750; ++callback) {
+    audio.render_one();
+  }
+  LMDJ_CHECK(runtime->engine().current_pattern_has_overlay() == true);
+
+  check_exact_success(
+      lmdj::web_runtime::testing::fail_next_pattern_publication(*runtime),
+      {"armed"});
+  runtime->fail_and_seal("test_owner_loss_cleanup_failure");
+
+  LMDJ_CHECK(runtime->failed());
+  LMDJ_CHECK(coordinator.called);
+  LMDJ_CHECK(runtime->engine().telemetry().state ==
+             lmdj::audio::RealtimeState::stopped);
+  LMDJ_CHECK(!runtime->engine().current_pattern_id().has_value());
+  LMDJ_CHECK(!runtime->engine().pending_pattern_id().has_value());
+}
+
 void test_pending_sequence_overlay_repeats_and_commits_without_duplicate() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -1388,7 +1434,9 @@ void test_stop_replay_recovers_a_committed_clean_publication_failure() {
   LMDJ_CHECK(runtime->engine().current_pattern_has_overlay() == true);
 
   const auto command_id = uuid(737);
-  ControlRuntimeAudioAccess::fail_next_pattern_publication(*runtime);
+  check_exact_success(
+      lmdj::web_runtime::testing::fail_next_pattern_publication(*runtime),
+      {"armed"});
   check_error(
       runtime->dispatch(
           "sequence.record.stop",
@@ -3739,6 +3787,7 @@ int main() {
     test_runtime_cancellation_precedes_project_mutation();
     test_exact_payloads_and_facade_owned_project_journey();
     test_sequence_observer_busy_and_owner_loss_recovery();
+    test_owner_loss_cleanup_failure_stops_and_clears_the_overlay();
     test_pending_sequence_overlay_repeats_and_commits_without_duplicate();
     test_stop_replay_recovers_a_committed_clean_publication_failure();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
