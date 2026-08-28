@@ -47,12 +47,13 @@ test("Sequence journeys preserve typed command identities and query both authori
 
 test("Sequence capability detection includes settings and Pattern authoring", () => {
   const value = Object.fromEntries([
-    "beginSequence", "createPattern", "updateSequenceSettings", "stopSequence",
+    "beginSequence", "flushSequence", "createPattern", "updateSequenceSettings", "stopSequence",
     "disarmSequenceCapture",
     "requestPatternSwitch", "querySequenceStatus", "listSequenceRecovery",
     "applySequenceRecovery", "discardSequenceRecovery", "subscribeSequenceBarBoundary",
   ].map((name) => [name, () => {}]));
   expect(isSequenceSession(value)).toBe(true);
+  expect(isSequenceSession({...value, flushSequence: undefined})).toBe(false);
   expect(isSequenceSession({...value, updateSequenceSettings: undefined})).toBe(false);
 });
 

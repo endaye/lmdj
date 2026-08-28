@@ -510,6 +510,8 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     replayed: false,
     project_revision: 5,
   };
+  let switchRequested = false;
+  let switchFlushed = false;
   const {session, emitNotification} = fixture({
     send: async (envelope) => {
       operations.push({operation: envelope.operation, payload: envelope.payload});
@@ -526,18 +528,26 @@ test("bridges Sequence authority without browser musical-clock math", async () =
         case "sequence.record.event":
           return success(envelope, {
             ...mutation,
+            ...(switchFlushed ? {pattern_id: nextPatternId} : {}),
             pending_event_count: 1,
             runtime_frame: 48_120,
             input_sequence: 1,
           });
         case "sequence.record.flush":
         case "sequence.record.stop":
+          if (switchRequested) switchFlushed = true;
           return success(envelope, {
             ...mutation,
+            ...(switchRequested ? {
+              pattern_id: nextPatternId,
+              pending_pattern_id: null,
+              effective_runtime_frame: null,
+            } : {}),
             runtime_frame: 48_240,
             pattern_publication: null,
           });
         case "sequence.record.switch-request":
+          switchRequested = true;
           return success(envelope, {
             ...mutation,
             state: "switching",
@@ -629,10 +639,31 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     payload: {
       session_id: sessionId,
       pattern_id: nextPatternId,
+      runtime_frame: 95_999,
+      generation: 2,
+    },
+  });
+  emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
       runtime_frame: 96_000,
       generation: 2,
     },
   });
+  emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(boundaries, [{
     sessionId,
     patternId: nextPatternId,
@@ -640,6 +671,37 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     generation: 2,
   }]);
   assert.equal(Object.isFrozen(boundaries[0]), true);
+  emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(operations.filter(({operation}) =>
+    operation === "sequence.record.flush").length, 2);
+  const boundaryFlush = operations.filter(({operation}) =>
+    operation === "sequence.record.flush").at(-1).payload;
+  assert.equal(boundaryFlush.session_id, sessionId);
+  assert.match(
+    boundaryFlush.command_id,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  );
+  const postBoundaryEvent = await session.recordSequenceEvent({
+    sessionId,
+    slot: 18,
+    velocity: 90,
+    pressed: true,
+  });
+  assert.equal(postBoundaryEvent.patternId, nextPatternId);
+  assert.deepEqual(
+    operations.slice(-2).map(({operation}) => operation),
+    ["sequence.record.flush", "sequence.record.event"],
+  );
   const settings = await session.updateSequenceSettings({
     expectedRevision: 5,
     sessionId,

@@ -1171,6 +1171,8 @@ function createRuntimeSessionController(options = {}) {
   let activeHostQueryAbort = null;
   let runtimeActionTail = Promise.resolve();
   let projectActionTail = Promise.resolve();
+  let pendingSequenceSwitch = null;
+  let sequenceBoundaryFlush = null;
   let interruptionReservation = null;
   let safetyReservation = null;
   let fatalReservation = null;
@@ -1374,6 +1376,9 @@ function createRuntimeSessionController(options = {}) {
     unsubscribeTransportFailure?.();
     unsubscribeTransportFailure = null;
     activePreviewSlots.clear();
+    pendingSequenceSwitch = null;
+    sequenceBoundaryFlush = null;
+    sequenceBoundaryListeners.clear();
     voiceStateListeners.clear();
     for (const dispose of listenerDisposers.splice(0)) {
       dispose();
@@ -2010,6 +2015,61 @@ function createRuntimeSessionController(options = {}) {
     }
   }
 
+  function acknowledgeSequenceBoundary(boundary) {
+    const pending = pendingSequenceSwitch;
+    if (
+      pending === null ||
+      sequenceBoundaryFlush !== null ||
+      boundary.sessionId !== pending.sessionId ||
+      boundary.patternId !== pending.patternId ||
+      boundary.runtimeFrame !== pending.runtimeFrame ||
+      boundary.generation !== pending.generation
+    ) {
+      return;
+    }
+    const reservation = Object.freeze({pending, boundary});
+    sequenceBoundaryFlush = reservation;
+    const commandId = crypto.randomUUID();
+    void serializeRuntimeAction(async () => {
+      if (
+        sequenceBoundaryFlush !== reservation ||
+        pendingSequenceSwitch !== pending
+      ) {
+        return null;
+      }
+      return commitSequenceBoundaryInLane(
+        "sequence.record.flush", pending.sessionId, commandId,
+      );
+    }).then((result) => {
+      if (result === null || sequenceBoundaryFlush !== reservation) {
+        return;
+      }
+      if (
+        result.state !== "active" ||
+        result.sessionId !== pending.sessionId ||
+        result.patternId !== pending.patternId ||
+        result.pendingPatternId !== null ||
+        result.effectiveRuntimeFrame !== null
+      ) {
+        throw protocolMismatch("Sequence boundary flush authority is invalid");
+      }
+      pendingSequenceSwitch = null;
+      sequenceBoundaryFlush = null;
+      for (const listener of sequenceBoundaryListeners) {
+        try {
+          listener(boundary);
+        } catch {
+          // UI observers cannot alter the authoritative boundary stream.
+        }
+      }
+    }).catch((error) => {
+      if (sequenceBoundaryFlush === reservation) {
+        sequenceBoundaryFlush = null;
+        fail(error);
+      }
+    });
+  }
+
   function observeNotification(rawNotification) {
     let notification;
     try {
@@ -2049,13 +2109,7 @@ function createRuntimeSessionController(options = {}) {
         runtimeFrame: value.runtime_frame,
         generation: value.generation,
       });
-      for (const listener of sequenceBoundaryListeners) {
-        try {
-          listener(boundary);
-        } catch {
-          // UI observers cannot alter the authoritative boundary stream.
-        }
-      }
+      acknowledgeSequenceBoundary(boundary);
       return;
     }
     if (notification.event === "runtime.warning") {
@@ -2335,7 +2389,7 @@ function createRuntimeSessionController(options = {}) {
       ) {
         throw protocolMismatch("Sequence transport anchor is invalid");
       }
-      return Object.freeze({
+      const result = Object.freeze({
         ...mutation,
         transportAnchor: Object.freeze({
           runtimeFrame: anchor.runtime_frame,
@@ -2343,6 +2397,9 @@ function createRuntimeSessionController(options = {}) {
           bpm: anchor.bpm,
         }),
       });
+      pendingSequenceSwitch = null;
+      sequenceBoundaryFlush = null;
+      return result;
     });
   }
 
@@ -2414,6 +2471,27 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  async function commitSequenceBoundaryInLane(operation, sessionId, commandId) {
+    const value = await boundedRequest(operation, {
+      session_id: sessionId,
+      command_id: commandId,
+    });
+    const mutation = normalizeSequenceMutation(
+      value,
+      ["runtime_frame", "pattern_publication"],
+    );
+    if (!isUnsignedInteger(value.runtime_frame)) {
+      throw protocolMismatch("Sequence flush clock is invalid");
+    }
+    return Object.freeze({
+      ...mutation,
+      runtimeFrame: value.runtime_frame,
+      patternPublication: normalizePatternPublication(
+        value.pattern_publication,
+      ),
+    });
+  }
+
   function commitSequenceBoundary(operation, request) {
     if (
       request === null ||
@@ -2425,24 +2503,19 @@ function createRuntimeSessionController(options = {}) {
     const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
     const commandId = requireSequenceIdentity(request.commandId, "commandId");
     return serializeRuntimeAction(async () => {
-      const value = await boundedRequest(operation, {
-        session_id: sessionId,
-        command_id: commandId,
-      });
-      const mutation = normalizeSequenceMutation(
-        value,
-        ["runtime_frame", "pattern_publication"],
+      const result = await commitSequenceBoundaryInLane(
+        operation, sessionId, commandId,
       );
-      if (!isUnsignedInteger(value.runtime_frame)) {
-        throw protocolMismatch("Sequence flush clock is invalid");
+      if (
+        pendingSequenceSwitch?.sessionId === sessionId &&
+        (operation === "sequence.record.stop" ||
+          (operation === "sequence.record.flush" &&
+            sequenceBoundaryFlush === null && result.state !== "switching"))
+      ) {
+        pendingSequenceSwitch = null;
+        sequenceBoundaryFlush = null;
       }
-      return Object.freeze({
-        ...mutation,
-        runtimeFrame: value.runtime_frame,
-        patternPublication: normalizePatternPublication(
-          value.pattern_publication,
-        ),
-      });
+      return result;
     });
   }
 
@@ -2472,12 +2545,31 @@ function createRuntimeSessionController(options = {}) {
         session_id: sessionId,
         next_pattern_id: nextPatternId,
       });
-      return Object.freeze({
+      const result = Object.freeze({
         ...normalizeSequenceMutation(value, ["pattern_publication"]),
         patternPublication: normalizePatternPublication(
           value.pattern_publication,
         ),
       });
+      if (
+        result.state !== "switching" ||
+        result.sessionId !== sessionId ||
+        result.pendingPatternId !== nextPatternId ||
+        result.effectiveRuntimeFrame === null ||
+        result.patternPublication === null ||
+        result.patternPublication.activationFrame !==
+          result.effectiveRuntimeFrame
+      ) {
+        throw protocolMismatch("Sequence switch authority is invalid");
+      }
+      pendingSequenceSwitch = Object.freeze({
+        sessionId,
+        patternId: nextPatternId,
+        runtimeFrame: result.effectiveRuntimeFrame,
+        generation: result.patternPublication.generation,
+      });
+      sequenceBoundaryFlush = null;
+      return result;
     });
   }
 
