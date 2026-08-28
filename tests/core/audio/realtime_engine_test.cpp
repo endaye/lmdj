@@ -85,6 +85,9 @@ constexpr auto kPatternB = "30000000-0000-4000-8000-000000000002";
 
 constexpr std::uint32_t kRampFrames = lmdj::audio::kRealtimeRampFrames;
 constexpr float kRampScale = 1.0F / static_cast<float>(kRampFrames);
+constexpr std::uint32_t kMaximumBankPadFrames = 16'777'216;
+static_assert(
+    lmdj::audio::kRealtimeMaximumSampleFrames >= kMaximumBankPadFrames);
 
 // Mirrors the engine's ramp arithmetic exactly (same operands, same order):
 // one ramp component is `frames * (1/96)` and components multiply into a
@@ -1223,6 +1226,90 @@ void reports_exact_bytes_for_non_fifo_heterogeneous_bank_reclaim() {
   LMDJ_CHECK(engine.bank_telemetry().reclaimed_banks == 2);
 }
 
+void preserves_high_frame_trim_loop_and_ramp_arithmetic() {
+  std::vector<float> sample(kMaximumBankPadFrames, 0.0F);
+  sample.at(kMaximumBankPadFrames - 3) = 0.25F;
+  sample.at(kMaximumBankPadFrames - 2) = 0.5F;
+  sample.at(kMaximumBankPadFrames - 1) = 0.75F;
+
+  RealtimeEngine engine;
+  auto bank = bank_with_playback(
+      43,
+      sample,
+      ResolvedPlayback{
+          kMaximumBankPadFrames - 3,
+          kMaximumBankPadFrames,
+          TriggerMode::one_shot,
+          1.0F,
+          false});
+  LMDJ_CHECK(bank.decoded_pcm_bytes() == 67'108'864);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
+             EnqueueResult::accepted);
+
+  std::array<float, 5> left{};
+  std::array<float, 5> right{};
+  engine.render(left.data(), right.data(), 3);
+  LMDJ_CHECK(left.at(0) == 0.0F);
+  LMDJ_CHECK(
+      left.at(1) == 0.5F * (ramp_part(1) * ramp_part(2)));
+  LMDJ_CHECK(
+      left.at(2) == 0.75F * (ramp_part(2) * ramp_part(1)));
+
+  std::array<RuntimeVoiceStateEvent, 2> one_shot_states{};
+  LMDJ_CHECK(engine.drain_voice_states(one_shot_states) == 2);
+  LMDJ_CHECK(
+      one_shot_states.at(0).source_frame == kMaximumBankPadFrames - 3);
+  LMDJ_CHECK(
+      one_shot_states.at(1).source_frame == kMaximumBankPadFrames);
+
+  LMDJ_CHECK(
+      engine.enqueue_control(PadControlEvent{
+          2,
+          0,
+          127,
+          PadControlKind::preview_set,
+          ResolvedPlayback{
+              kMaximumBankPadFrames - 2,
+              kMaximumBankPadFrames,
+              TriggerMode::loop_gate,
+              1.0F,
+              false},
+      }) == EnqueueResult::accepted);
+  LMDJ_CHECK(
+      engine.enqueue_control(PadControlEvent{
+          3,
+          0,
+          127,
+          PadControlKind::press,
+          {},
+      }) == EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 5);
+  LMDJ_CHECK(left.at(0) == 0.0F);
+  LMDJ_CHECK(left.at(1) == 0.75F * ramp_part(1));
+  LMDJ_CHECK(left.at(2) == 0.5F * ramp_part(2));
+  LMDJ_CHECK(left.at(3) == 0.75F * ramp_part(3));
+  LMDJ_CHECK(left.at(4) == 0.5F * ramp_part(4));
+
+  LMDJ_CHECK(
+      engine.enqueue_control(PadControlEvent{
+          4,
+          0,
+          127,
+          PadControlKind::release,
+          {},
+      }) == EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  std::array<RuntimeVoiceStateEvent, 2> loop_states{};
+  LMDJ_CHECK(engine.drain_voice_states(loop_states) == 2);
+  LMDJ_CHECK(
+      loop_states.at(0).source_frame == kMaximumBankPadFrames - 2);
+  LMDJ_CHECK(
+      loop_states.at(1).source_frame == kMaximumBankPadFrames - 1);
+}
+
 void captures_voice_starts_at_exact_runtime_frames_and_disarms_at_end() {
   RealtimeEngine engine;
   const std::array<float, 1> sample{0.25F};
@@ -1809,6 +1896,7 @@ int main() {
   rejects_publication_until_trigger_queue_is_empty();
   applies_explicit_bank_slot_backpressure_until_reclaimed();
   reports_exact_bytes_for_non_fifo_heterogeneous_bank_reclaim();
+  preserves_high_frame_trim_loop_and_ramp_arithmetic();
   captures_voice_starts_at_exact_runtime_frames_and_disarms_at_end();
   captures_only_successfully_allocated_voices();
   capture_overflow_remains_observable_without_a_voice_state_consumer();
