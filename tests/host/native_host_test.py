@@ -508,11 +508,29 @@ def sample_facade_snapshot_path(
     )
     assert inspected["playback"]["trim_end_frame"] == 100
 
+    quota_request = {
+        "operation": "sample.quota",
+        "project_path": str(project),
+        "slot": slot(0, 0),
+    }
+    cli_quota = cli_success(
+        cli,
+        workspace,
+        assembly,
+        "query",
+        quota_request,
+        6,
+    )
+
     process = HostProcess(host, workspace, assembly, project)
     ready = process.read()
     assert ready["ok"] is True, ready
     assert ready["result"]["project_revision"] == 6
     assert ready["result"]["resolved_pad_count"] == 2
+    native_quota = process.request(quota_request)
+    assert native_quota["ok"] is True, native_quota
+    assert native_quota["project_revision"] == 6
+    assert native_quota["result"] == cli_quota
     triggered = process.request(
         {"operation": "trigger", "slot": slot(0, 0), "velocity": 100}
     )

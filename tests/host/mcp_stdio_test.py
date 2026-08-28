@@ -208,6 +208,10 @@ def expected_schemas() -> dict[str, dict]:
             {"project_path": path, "slot": slot},
             ["project_path", "slot"],
         ),
+        "lmdj.sample.quota": object_schema(
+            {"project_path": path, "slot": slot},
+            ["project_path", "slot"],
+        ),
         "lmdj.sample.waveform": object_schema(
             {
                 "project_path": path,
@@ -1215,6 +1219,7 @@ def tools_list(library: Path, temp_root: Path) -> None:
         ("lmdj.project.create", "project.create", "command"),
         ("lmdj.project.inspect", "project.inspect", "query"),
         ("lmdj.sample.inspect", "sample.inspect", "query"),
+        ("lmdj.sample.quota", "sample.quota", "query"),
         ("lmdj.sample.waveform", "sample.waveform", "query"),
         ("lmdj.sample.import.begin", "sample.import.begin", "command"),
         ("lmdj.sample.import.chunk", "sample.import.chunk", "command"),
@@ -1279,6 +1284,10 @@ def valid_arguments(temp_root: Path) -> dict[str, dict]:
         },
         "lmdj.project.inspect": {"project_path": str(missing_project)},
         "lmdj.sample.inspect": {
+            "project_path": str(missing_project),
+            "slot": slot,
+        },
+        "lmdj.sample.quota": {
             "project_path": str(missing_project),
             "slot": slot,
         },

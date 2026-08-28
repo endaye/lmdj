@@ -450,6 +450,9 @@ class NativeHost final {
         return invalid_request("operation must be a string");
       }
       const auto name = operation->get<std::string>();
+      if (name == "sample.quota") {
+        return sample_quota(request);
+      }
       if (name == "trigger") {
         return trigger(request);
       }
@@ -496,6 +499,18 @@ class NativeHost final {
   }
 
  private:
+  Json sample_quota(const Json& request) {
+    if (!exact_keys(request, {"operation", "project_path", "slot"}) ||
+        !request.at("project_path").is_string() ||
+        request.at("project_path").get<std::string>() !=
+            invocation_.project.generic_string()) {
+      return invalid_request(
+          "sample.quota must target the Native Host Project");
+    }
+    std::lock_guard lock(facade_mutex_);
+    return application_.query(request);
+  }
+
   void drain_trigger_outcomes_once() noexcept {
     std::array<RuntimeTriggerOutcomeEvent, 64> outcomes{};
     (void)engine_.drain_trigger_outcomes(outcomes);

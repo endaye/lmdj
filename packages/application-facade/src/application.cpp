@@ -107,6 +107,12 @@ constexpr std::size_t kMaximumRememberedSampleImportTokens = 256U;
 constexpr std::size_t kMaximumSampleScavengeFiles = 64U;
 constexpr std::uint64_t kMaximumSampleStagingMarkerBytes = 4U * 1024U;
 constexpr std::uint64_t kMinimumSampleStagingAgeSeconds = 24U * 60U * 60U;
+constexpr audio::RuntimePreparationLimits kDefaultSampleLimits{
+    1'048'576,
+    67'108'864,
+    134'217'728,
+    268'435'456,
+};
 constexpr std::string_view kSampleStagingContract =
     "lmdj.sample-import-staging.v1";
 constexpr std::string_view kWaveformCacheContract =
@@ -142,6 +148,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"sample.import.chunk", OperationKind::command},
       {"sample.import.commit", OperationKind::command},
       {"sample.inspect", OperationKind::query},
+      {"sample.quota", OperationKind::query},
       {"sample.reset_pad", OperationKind::command},
       {"sample.update_pad", OperationKind::command},
       {"sample.waveform", OperationKind::query},
@@ -619,7 +626,7 @@ std::string_view sample_public_message(ErrorCode code) {
              "shorten it, free another Pad, or target another Bank";
     case ErrorCode::project_quota_exhausted:
       return "why: the selection exceeds the Sample Project quota; remedy: "
-             "shorten it or remove prepared Samples, then retry";
+             "shorten it or free a Pad in any Bank, then retry";
     case ErrorCode::io_error:
       return "Sample storage operation failed";
     case ErrorCode::permission_denied:
@@ -664,6 +671,47 @@ nlohmann::json sample_public_details(const Error& error) {
         value == project_io::kStorageConditionAlreadyExists ||
         value == project_io::kStorageConditionAtomicPublishUnsupported) {
       details["storage_condition"] = value;
+    }
+  }
+  if (error.code == ErrorCode::bank_quota_exhausted) {
+    for (const auto* key : {
+             "bank",
+             "requested_bytes",
+             "requested_frames",
+             "remaining_bytes",
+             "remaining_frames",
+             "quota_bytes",
+         }) {
+      const auto found = error.details.find(key);
+      if (found != error.details.end() &&
+          (found->is_number_unsigned() || found->is_number_integer())) {
+        details[key] = *found;
+      }
+    }
+    const auto consumed = error.details.find("consumed");
+    if (consumed != error.details.end() && consumed->is_array() &&
+        all_strings_valid(*consumed)) {
+      details["consumed"] = *consumed;
+    }
+  }
+  if (error.code == ErrorCode::project_quota_exhausted) {
+    for (const auto* key : {
+             "requested_bytes",
+             "requested_frames",
+             "project_used_bytes",
+             "project_remaining_bytes",
+             "project_quota_bytes",
+         }) {
+      const auto found = error.details.find(key);
+      if (found != error.details.end() &&
+          (found->is_number_unsigned() || found->is_number_integer())) {
+        details[key] = *found;
+      }
+    }
+    const auto banks = error.details.find("banks");
+    if (banks != error.details.end() && banks->is_array() &&
+        all_strings_valid(*banks)) {
+      details["banks"] = *banks;
     }
   }
   return details;
@@ -1213,8 +1261,8 @@ Error runtime_bank_quota_error(
   return Error{
       ErrorCode::bank_quota_exhausted,
       "Bank prepared-PCM quota exhausted; why: the committed selection "
-      "does not fit in this Bank; remedy: shorten or remove samples in the "
-      "same Bank, then retry",
+      "does not fit in this Bank; remedy: shorten the selection, free a Pad "
+      "in this Bank, or target another Bank, then retry",
       {
           {"bank", slot.bank},
           {"requested_bytes", requested_bytes},
@@ -1614,6 +1662,16 @@ struct RuntimeProjectWriterLease::Impl {
 };
 
 struct Application::Impl {
+  struct PreparedQuotaUsage {
+    std::uint64_t bytes;
+    std::uint64_t frames;
+  };
+
+  struct SampleQuotaComputation {
+    SampleQuotaResult result;
+    std::array<std::uint64_t, 4> bank_used_bytes;
+  };
+
   struct SampleImportState {
     SampleImportBeginRequest request;
     std::filesystem::path directory;
@@ -1661,7 +1719,8 @@ struct Application::Impl {
             config.storage_platform
                 ? std::move(config.storage_platform)
                 : project_io::make_default_project_storage_platform()),
-        sample_limits(config.runtime_preparation_limits),
+        sample_limits(
+            config.runtime_preparation_limits.value_or(kDefaultSampleLimits)),
         projects(storage_platform),
         sequence_journals(storage_platform),
         bundle_transfers(storage_platform),
@@ -3058,6 +3117,9 @@ struct Application::Impl {
     if (operation == "sample.inspect") {
       return sample_inspect(request);
     }
+    if (operation == "sample.quota") {
+      return sample_quota(request);
+    }
     if (operation == "sample.waveform") {
       return sample_waveform(request);
     }
@@ -3553,6 +3615,168 @@ struct Application::Impl {
     return computed;
   }
 
+  foundation::Result<PreparedQuotaUsage> measure_prepared_quota(
+      std::span<const std::byte> bytes) const {
+    const auto decoded = cooker::decode_wav(bytes);
+    if (!decoded.has_value()) {
+      return foundation::Result<PreparedQuotaUsage>::failure(
+          decoded.error());
+    }
+    auto frames = static_cast<std::uint64_t>(
+        decoded.value()->interleaved.size() / decoded.value()->channels);
+    if (decoded.value()->sample_rate != 48'000) {
+      const auto prepared = cooker::prepare_runtime_pcm(*decoded.value());
+      if (!prepared.has_value() || prepared.value()->channels == 0 ||
+          prepared.value()->interleaved.size() %
+                  prepared.value()->channels !=
+              0) {
+        return foundation::Result<PreparedQuotaUsage>::failure(
+            prepared.has_value()
+                ? Error{
+                      ErrorCode::cook_failed,
+                      "prepared Sample PCM shape is invalid",
+                  }
+                : prepared.error());
+      }
+      frames = static_cast<std::uint64_t>(
+          prepared.value()->interleaved.size() /
+          prepared.value()->channels);
+    }
+    const auto prepared_bytes = audio::checked_mono_float_bytes(frames);
+    if (!prepared_bytes.has_value()) {
+      return foundation::Result<PreparedQuotaUsage>::failure(Error{
+          ErrorCode::invalid_argument,
+          "prepared Sample PCM byte length overflowed",
+      });
+    }
+    return foundation::Result<PreparedQuotaUsage>::success(
+        PreparedQuotaUsage{*prepared_bytes, frames});
+  }
+
+  foundation::Result<SampleQuotaComputation> compute_sample_quota(
+      const std::filesystem::path& project_path,
+      const domain::ProjectState& project,
+      domain::PadSlotId target) const {
+    if (!sample_limits.has_value()) {
+      return foundation::Result<SampleQuotaComputation>::failure(
+          invalid_sample_request("Sample quota is unavailable"));
+    }
+    std::array<std::uint64_t, 4> bank_used_bytes{};
+    std::uint64_t project_used_bytes = 0;
+    std::vector<SampleQuotaConsumed> consumed;
+    std::map<std::string, PreparedQuotaUsage> cached_usage;
+
+    for (std::uint8_t bank = 0; bank < project.banks.size(); ++bank) {
+      for (std::uint8_t pad = 0;
+           pad < project.banks.at(bank).size();
+           ++pad) {
+        const domain::PadSlotId slot{bank, pad};
+        const auto& assignment = project.banks.at(bank).at(pad);
+        if (!assignment.asset_id.has_value()) {
+          continue;
+        }
+        const auto asset = domain::resolve_slot_asset(project, slot);
+        if (!asset.has_value()) {
+          return foundation::Result<SampleQuotaComputation>::failure(
+              unavailable_sample());
+        }
+        auto usage = cached_usage.find(asset->artifact.sha256);
+        if (usage == cached_usage.end()) {
+          const auto artifact_bytes =
+              projects.read_artifact(project_path, asset->artifact);
+          if (!artifact_bytes.has_value()) {
+            return foundation::Result<SampleQuotaComputation>::failure(
+                sample_artifact_read_error(artifact_bytes.error()));
+          }
+          const auto measured = measure_prepared_quota(artifact_bytes.value());
+          if (!measured.has_value()) {
+            return foundation::Result<SampleQuotaComputation>::failure(
+                measured.error());
+          }
+          usage = cached_usage.emplace(
+              asset->artifact.sha256, measured.value()).first;
+        }
+        if (bank == target.bank) {
+          consumed.push_back(SampleQuotaConsumed{
+              slot,
+              usage->second.bytes,
+              usage->second.frames,
+          });
+        }
+        if (slot == target) {
+          continue;
+        }
+        const auto next_bank = audio::checked_runtime_byte_sum(
+            bank_used_bytes.at(bank), usage->second.bytes);
+        const auto next_project = audio::checked_runtime_byte_sum(
+            project_used_bytes, usage->second.bytes);
+        if (!next_bank.has_value() || !next_project.has_value()) {
+          return foundation::Result<SampleQuotaComputation>::failure(Error{
+              ErrorCode::invalid_project,
+              "Sample quota ledger overflowed",
+          });
+        }
+        bank_used_bytes.at(bank) = *next_bank;
+        project_used_bytes = *next_project;
+      }
+    }
+
+    const auto assessment = audio::assess_runtime_quota(
+        bank_used_bytes.at(target.bank),
+        project_used_bytes,
+        0,
+        *sample_limits);
+    if (!assessment.has_value()) {
+      return foundation::Result<SampleQuotaComputation>::failure(Error{
+          ErrorCode::invalid_project,
+          "Project prepared-PCM quota ledger exceeds configured limits",
+      });
+    }
+    const auto effective_remaining_bytes = std::min(
+        assessment->user_bank_remaining_bytes,
+        assessment->generation_remaining_bytes);
+    return foundation::Result<SampleQuotaComputation>::success(
+        SampleQuotaComputation{
+            SampleQuotaResult{
+                project.revision,
+                target,
+                sample_limits->maximum_user_bank_bytes,
+                bank_used_bytes.at(target.bank),
+                assessment->user_bank_remaining_bytes,
+                sample_limits->maximum_generation_bytes,
+                project_used_bytes,
+                assessment->generation_remaining_bytes,
+                effective_remaining_bytes,
+                effective_remaining_bytes / sizeof(float),
+                std::move(consumed),
+            },
+            bank_used_bytes,
+        });
+  }
+
+  foundation::Result<SampleQuotaResult> query_sample_quota(
+      const SampleQuotaRequest& request) const {
+    if (!valid_host_project_path(request.project_path) ||
+        !domain::is_valid_slot(request.slot)) {
+      return foundation::Result<SampleQuotaResult>::failure(
+          invalid_sample_request("Sample quota request is invalid"));
+    }
+    const auto loaded = projects.load(request.project_path);
+    if (!loaded.has_value()) {
+      return foundation::Result<SampleQuotaResult>::failure(
+          sample_project_load_error(loaded.error()));
+    }
+    testing::invoke_sample_projection_hook();
+    auto computed = compute_sample_quota(
+        request.project_path, loaded.value(), request.slot);
+    if (!computed.has_value()) {
+      return foundation::Result<SampleQuotaResult>::failure(
+          computed.error());
+    }
+    return foundation::Result<SampleQuotaResult>::success(
+        std::move(computed.value().result));
+  }
+
   foundation::Result<SampleImportSession> begin_sample_import(
       const SampleImportBeginRequest& request) {
     if (!sample_limits.has_value() ||
@@ -3756,10 +3980,67 @@ struct Application::Impl {
                   : bytes.error(),
               "Sample staging could not be read"));
     }
-    const auto metadata = cooker::inspect_wav(bytes.value());
-    if (!metadata.has_value()) {
+    const auto loaded = projects.load(state.request.project_path);
+    if (!loaded.has_value()) {
       return foundation::Result<SampleMutationResult>::failure(
-          metadata.error());
+          sample_project_load_error(loaded.error()));
+    }
+    if (loaded.value().revision == state.request.meta.expected_revision) {
+      const auto candidate = measure_prepared_quota(bytes.value());
+      if (!candidate.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            candidate.error());
+      }
+      const auto quota = compute_sample_quota(
+          state.request.project_path,
+          loaded.value(),
+          state.request.slot);
+      if (!quota.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            quota.error());
+      }
+      const auto assessment = audio::assess_runtime_quota(
+          quota.value().result.bank_used_bytes,
+          quota.value().result.project_used_bytes,
+          candidate.value().bytes,
+          *sample_limits);
+      if (!assessment.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(Error{
+            ErrorCode::invalid_project,
+            "Sample quota ledger exceeds configured limits",
+        });
+      }
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::user_bank) {
+        std::vector<nlohmann::json> consumed;
+        consumed.reserve(quota.value().result.consumed.size());
+        for (const auto& entry : quota.value().result.consumed) {
+          consumed.push_back({
+              {"pad", entry.slot.pad},
+              {"prepared_bytes", entry.prepared_bytes},
+              {"prepared_frames", entry.prepared_frames},
+          });
+        }
+        return foundation::Result<SampleMutationResult>::failure(
+            runtime_bank_quota_error(
+                state.request.slot,
+                candidate.value().bytes,
+                candidate.value().frames,
+                assessment->user_bank_remaining_bytes,
+                sample_limits->maximum_user_bank_bytes,
+                consumed));
+      }
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::generation) {
+        return foundation::Result<SampleMutationResult>::failure(
+            runtime_project_quota_error(
+                candidate.value().bytes,
+                candidate.value().frames,
+                quota.value().result.project_used_bytes,
+                assessment->generation_remaining_bytes,
+                sample_limits->maximum_generation_bytes,
+                quota.value().bank_used_bytes));
+      }
     }
     const auto committed = projects.import_assign_sample_bytes(
         state.request.project_path,
@@ -3949,6 +4230,45 @@ struct Application::Impl {
              result.waveform_cache_identity.has_value()
                  ? nlohmann::json(*result.waveform_cache_identity)
                  : nlohmann::json(nullptr)},
+        },
+        result.project_revision);
+  }
+
+  nlohmann::json sample_quota(const nlohmann::json& request) const {
+    require(
+        exact_keys(request, {"operation", "project_path", "slot"}),
+        "sample.quota request shape is invalid");
+    const auto quota = query_sample_quota(SampleQuotaRequest{
+        absolute_path_field(request, "project_path"),
+        slot_value(request.at("slot")),
+    });
+    if (!quota.has_value()) {
+      return sample_error_envelope(quota.error());
+    }
+    auto consumed = nlohmann::json::array();
+    for (const auto& entry : quota.value().consumed) {
+      consumed.push_back({
+          {"slot", slot_json(entry.slot)},
+          {"prepared_bytes", entry.prepared_bytes},
+          {"prepared_frames", entry.prepared_frames},
+      });
+    }
+    const auto& result = quota.value();
+    return success_envelope(
+        {
+            {"project_revision", result.project_revision},
+            {"slot", slot_json(result.slot)},
+            {"bank_quota_bytes", result.bank_quota_bytes},
+            {"bank_used_bytes", result.bank_used_bytes},
+            {"bank_remaining_bytes", result.bank_remaining_bytes},
+            {"project_quota_bytes", result.project_quota_bytes},
+            {"project_used_bytes", result.project_used_bytes},
+            {"project_remaining_bytes", result.project_remaining_bytes},
+            {"effective_remaining_bytes",
+             result.effective_remaining_bytes},
+            {"effective_remaining_frames",
+             result.effective_remaining_frames},
+            {"consumed", std::move(consumed)},
         },
         result.project_revision);
   }
@@ -5070,6 +5390,19 @@ Application::query_sample_waveform(const SampleWaveformRequest& request) {
     return impl_->query_sample_waveform(request);
   } catch (...) {
     return foundation::Result<cooker::WaveformEnvelope>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<SampleQuotaResult> Application::query_sample_quota(
+    const SampleQuotaRequest& request) const {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->query_sample_quota(request);
+  } catch (...) {
+    return foundation::Result<SampleQuotaResult>::failure(Error{
         ErrorCode::internal_error,
         "unexpected Application Facade Host API failure",
     });

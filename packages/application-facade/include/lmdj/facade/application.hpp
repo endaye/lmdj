@@ -126,6 +126,35 @@ struct SampleWaveformRequest {
   cooker::WaveformRequest window;
 };
 
+struct SampleQuotaRequest {
+  std::filesystem::path project_path;
+  domain::PadSlotId slot;
+};
+
+struct SampleQuotaConsumed {
+  domain::PadSlotId slot;
+  std::uint64_t prepared_bytes;
+  std::uint64_t prepared_frames;
+
+  friend bool operator==(
+      const SampleQuotaConsumed&,
+      const SampleQuotaConsumed&) = default;
+};
+
+struct SampleQuotaResult {
+  std::uint64_t project_revision;
+  domain::PadSlotId slot;
+  std::uint64_t bank_quota_bytes;
+  std::uint64_t bank_used_bytes;
+  std::uint64_t bank_remaining_bytes;
+  std::uint64_t project_quota_bytes;
+  std::uint64_t project_used_bytes;
+  std::uint64_t project_remaining_bytes;
+  std::uint64_t effective_remaining_bytes;
+  std::uint64_t effective_remaining_frames;
+  std::vector<SampleQuotaConsumed> consumed;
+};
+
 struct SampleMutationResult {
   std::uint64_t committed_revision;
   bool runtime_prepare_required;
@@ -282,6 +311,8 @@ class Application {
       const SampleInspectRequest& request) const;
   foundation::Result<cooker::WaveformEnvelope> query_sample_waveform(
       const SampleWaveformRequest& request);
+  foundation::Result<SampleQuotaResult> query_sample_quota(
+      const SampleQuotaRequest& request) const;
   foundation::Result<SampleImportSession> begin_sample_import(
       const SampleImportBeginRequest& request);
   foundation::Result<void> append_sample_import(
