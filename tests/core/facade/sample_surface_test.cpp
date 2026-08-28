@@ -84,8 +84,8 @@ constexpr std::string_view kGoldenSha =
     "d276060107ab2479126c4f66919b799593a852fe624720f03e7be3b70bcfe867";
 constexpr RuntimePreparationLimits kStage8WebLimits{
     1'048'576,
-    240'000,
     67'108'864,
+    134'217'728,
     134'217'728,
 };
 constexpr std::string_view kMono44100Sha =
@@ -1224,10 +1224,11 @@ void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
       RuntimeSnapshotRequest{
           project,
           pattern_id,
-          RuntimePreparationLimits{1'048'576, 240'000, 1, 1},
+          RuntimePreparationLimits{1'048'576, 1, 1, 1},
       });
   LMDJ_CHECK(!failed_prepare.has_value());
-  LMDJ_CHECK(failed_prepare.error().code == ErrorCode::cook_failed);
+  LMDJ_CHECK(
+      failed_prepare.error().code == ErrorCode::bank_quota_exhausted);
   LMDJ_CHECK(
       application.inspect_sample({project, {0, 0}})
           .value()
@@ -1482,22 +1483,14 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
   LMDJ_CHECK(replacement.value().asset_id == AssetId{uuid(602)});
   LMDJ_CHECK(replacement.value().playback == PadPlayback{});
 
-  const auto revision_before_rejection = replacement.value().project_revision;
-  const auto over_limit =
+  const auto long_source =
       import(uuid(603), uuid(604), uuid(605), 3, oversized);
-  LMDJ_CHECK(!over_limit.has_value());
-  LMDJ_CHECK(over_limit.error().code == ErrorCode::unsupported_audio);
-  LMDJ_CHECK((
-      over_limit.error().details ==
-      nlohmann::json{
-          {"resource", "decoded_frames_per_pad"},
-          {"observed", 240'001},
-          {"limit", 240'000},
-      }));
+  LMDJ_CHECK(long_source.has_value());
+  LMDJ_CHECK(long_source.value().committed_revision == 4);
   LMDJ_CHECK(
       application.inspect_sample({project, {0, 0}})
           .value()
-          .project_revision == revision_before_rejection);
+          .project_revision == 4);
   LMDJ_CHECK(!std::filesystem::exists(staging_directory(uuid(603))));
 }
 

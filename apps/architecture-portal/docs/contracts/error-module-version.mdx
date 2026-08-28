@@ -16,6 +16,8 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## Error
 `lmdj.error.v1` 固定公共错误形状，使 C API、CLI、MCP 和 Provider 失败保持可机器处理。
+
+当前 Core 已具备内部 `BANK_QUOTA_EXHAUSTED` 与 `PROJECT_QUOTA_EXHAUSTED` 名称及 payload 行为；活动 schema 仍为 `1.0.0`。这两个成员的公开 Contract `1.1.0`、Assembly 选择和 Product Build 身份将在同一集成边界发布，当前页面不把内部实现状态冒充为已发布 Contract。
 ## Module Manifest
 `lmdj.module.v1` 声明组件 ID、独立 SemVer、API version 与确切依赖。
 ## Product Version
