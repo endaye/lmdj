@@ -1,12 +1,18 @@
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <lmdj/facade/application.hpp>
+#include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
+
+#include "packages/application-facade/src/testing_hooks.hpp"
 
 #include "tests/core/support/test.hpp"
 
@@ -108,6 +114,35 @@ void create_recordable_project(
   });
   LMDJ_CHECK(assigned.value("ok", false));
   LMDJ_CHECK(assigned.at("project_revision") == 2);
+}
+
+class SequenceAdmissionHookGuard {
+ public:
+  explicit SequenceAdmissionHookGuard(
+      lmdj::facade::testing::SequenceAuthoringAdmissionHook* hook) {
+    lmdj::facade::testing::set_sequence_authoring_admission_hook(hook);
+  }
+
+  ~SequenceAdmissionHookGuard() {
+    lmdj::facade::testing::set_sequence_authoring_admission_hook(nullptr);
+  }
+
+  SequenceAdmissionHookGuard(const SequenceAdmissionHookGuard&) = delete;
+  SequenceAdmissionHookGuard& operator=(
+      const SequenceAdmissionHookGuard&) = delete;
+};
+
+struct SequenceAdmissionGate {
+  std::atomic<bool> entered{false};
+  std::atomic<bool> release{false};
+};
+
+void hold_sequence_admission(void* opaque) noexcept {
+  auto& gate = *static_cast<SequenceAdmissionGate*>(opaque);
+  gate.entered.store(true, std::memory_order_release);
+  while (!gate.release.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
 }
 
 void test_sequence_lifecycle_idempotence_and_mutation_exclusion() {
@@ -230,6 +265,120 @@ void test_writer_lease_blocks_competing_sequence_owner() {
       rejected.error().details.at("storage_condition") == "project_busy");
 }
 
+void test_begin_cannot_cross_an_authoring_admission() {
+  TempDirectory temp;
+  const auto project = temp.path() / "admission-race.lmdj";
+  const PatternId pattern_id{uuid(60)};
+  const SequenceSessionId session_id{uuid(61)};
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+
+  SequenceAdmissionGate gate;
+  lmdj::facade::testing::SequenceAuthoringAdmissionHook hook{
+      &gate, hold_sequence_admission};
+  SequenceAdmissionHookGuard guard(&hook);
+  bool assigned = false;
+  std::uint64_t assigned_revision = 0;
+  std::thread authoring([&]() {
+    const auto result = application.command({
+        {"operation", "pad.assign"},
+        {"project_path", project.generic_string()},
+        {"command_id", uuid(62)},
+        {"expected_revision", 2},
+        {"slot", {{"bank", 0}, {"pad", 0}}},
+        {"asset_id", nullptr},
+    });
+    assigned = result.value("ok", false);
+    if (assigned) {
+      assigned_revision = result.at("project_revision").get<std::uint64_t>();
+    }
+  });
+  while (!gate.entered.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+
+  bool begin_succeeded = false;
+  ErrorCode begin_error = ErrorCode::internal_error;
+  std::atomic<bool> begin_entered{false};
+  std::atomic<bool> begin_returned{false};
+  std::thread begin([&]() {
+    begin_entered.store(true, std::memory_order_release);
+    auto result = application.begin_sequence(
+        {project, session_id, pattern_id, 2, 0});
+    begin_succeeded = result.has_value();
+    if (!result.has_value()) {
+      begin_error = result.error().code;
+    }
+    begin_returned.store(true, std::memory_order_release);
+  });
+  while (!begin_entered.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  const auto begin_deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+  while (!begin_returned.load(std::memory_order_acquire) &&
+         std::chrono::steady_clock::now() < begin_deadline) {
+    std::this_thread::yield();
+  }
+  const bool crossed_admission =
+      begin_returned.load(std::memory_order_acquire);
+  gate.release.store(true, std::memory_order_release);
+  authoring.join();
+  begin.join();
+
+  LMDJ_CHECK(!crossed_admission);
+  LMDJ_CHECK(assigned);
+  LMDJ_CHECK(assigned_revision == 3);
+  LMDJ_CHECK(!begin_succeeded);
+  LMDJ_CHECK(begin_error == ErrorCode::revision_conflict);
+  LMDJ_CHECK(!std::filesystem::exists(
+      project / "recovery/active/sequence.jsonl"));
+}
+
+void test_orphan_journal_is_sealed_before_authoring() {
+  TempDirectory temp;
+  const auto project = temp.path() / "orphan-admission.lmdj";
+  const PatternId pattern_id{uuid(70)};
+  const SequenceSessionId session_id{uuid(71)};
+  Application creator(config(temp.path()));
+  create_recordable_project(creator, project, pattern_id);
+
+  lmdj::project_io::ProjectStore store;
+  const auto state = store.load(project);
+  LMDJ_CHECK(state.has_value());
+  const auto& pattern = state.value().patterns.at(pattern_id);
+  lmdj::project_io::SequenceJournal journal;
+  LMDJ_CHECK(
+      journal
+          .begin(
+              project,
+              session_id,
+              pattern_id,
+              pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(pattern),
+              state.value().revision)
+          .has_value());
+
+  Application restarted(config(temp.path()));
+  const auto created = restarted.command({
+      {"operation", "pattern.create"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(72)},
+      {"expected_revision", 2},
+      {"pattern_id", uuid(73)},
+      {"bars", 1},
+  });
+  LMDJ_CHECK(created.value("ok", false));
+  LMDJ_CHECK(created.at("project_revision") == 3);
+  LMDJ_CHECK(!std::filesystem::exists(
+      project / "recovery/active/sequence.jsonl"));
+  const auto candidates = restarted.list_sequence_recovery({project});
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().size() == 1);
+  LMDJ_CHECK(candidates.value().front().reason == "owner_lost");
+  LMDJ_CHECK(candidates.value().front().session_id == session_id);
+}
+
 void test_settings_rebase_and_pattern_creation_are_authoritative() {
   TempDirectory temp;
   const auto project = temp.path() / "authoring.lmdj";
@@ -289,6 +438,8 @@ int main() {
     test_sequence_lifecycle_idempotence_and_mutation_exclusion();
     test_owner_loss_apply_and_discard_are_explicit();
     test_writer_lease_blocks_competing_sequence_owner();
+    test_begin_cannot_cross_an_authoring_admission();
+    test_orphan_journal_is_sealed_before_authoring();
     test_settings_rebase_and_pattern_creation_are_authoritative();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

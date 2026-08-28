@@ -2375,6 +2375,43 @@ foundation::Result<void> create_bundle_directories(
   return foundation::Result<void>::success();
 }
 
+foundation::Result<std::optional<ActiveSequenceJournal>>
+admit_sequence_authoring(
+    const std::shared_ptr<ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle,
+    const PersistedCommand* command = nullptr) {
+  SequenceJournal journal{platform};
+  auto active = journal.read_active(bundle);
+  if (!active.has_value()) {
+    if (active.error().code == ErrorCode::not_found) {
+      return foundation::Result<
+          std::optional<ActiveSequenceJournal>>::success(std::nullopt);
+    }
+    return foundation::Result<
+        std::optional<ActiveSequenceJournal>>::failure(active.error());
+  }
+  const auto* settings =
+      command != nullptr
+          ? std::get_if<domain::UpdateSequenceSettings>(command)
+          : nullptr;
+  if (settings != nullptr &&
+      (active.value().state == SequenceSessionState::active ||
+       active.value().state == SequenceSessionState::switching)) {
+    return foundation::Result<
+        std::optional<ActiveSequenceJournal>>::success(
+        std::optional<ActiveSequenceJournal>{std::move(active.value())});
+  }
+  return foundation::Result<std::optional<ActiveSequenceJournal>>::failure(
+      Error{
+          ErrorCode::invalid_argument,
+          "Project mutation is blocked by the active Sequence Journal",
+          {{"reason", "sequence_session_active"},
+           {"session_id", active.value().session_id.value()},
+           {"remedy",
+            "stop the active Sequence session or reconcile owner loss before retrying"}},
+      });
+}
+
 foundation::Result<domain::AppliedCommand> execute_persisted(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
@@ -2403,6 +2440,11 @@ foundation::Result<domain::AppliedCommand> execute_persisted(
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
+  }
+  auto admitted = admit_sequence_authoring(platform, bundle);
+  if (!admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        admitted.error());
   }
   return commit_loaded(
       platform,
@@ -2622,6 +2664,12 @@ foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
         recovered.error());
   }
   auto persisted_identity = persisted_command(command);
+  auto admitted =
+      admit_sequence_authoring(platform_, bundle, &persisted_identity);
+  if (!admitted.has_value()) {
+    return foundation::Result<CommandExecution>::failure(
+        admitted.error());
+  }
   auto outcome = commit_loaded(
       platform_,
       bundle,
@@ -2632,6 +2680,19 @@ foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
   if (!outcome.has_value()) {
     return foundation::Result<CommandExecution>::failure(
         outcome.error());
+  }
+  if (admitted.value().has_value() &&
+      outcome.value().state.revision >
+          admitted.value()->expected_revision) {
+    SequenceJournal journal{platform_};
+    auto rebased = journal.rebase(
+        bundle,
+        admitted.value()->session_id,
+        outcome.value().state.revision);
+    if (!rebased.has_value()) {
+      return foundation::Result<CommandExecution>::failure(
+          rebased.error());
+    }
   }
   auto returned_identity = legacy_command(persisted_identity);
   if (!returned_identity.has_value()) {
@@ -3078,6 +3139,11 @@ ProjectStore::import_artifact_with_identity(
     return foundation::Result<ImportArtifactExecution>::failure(
         recovered.error());
   }
+  auto admitted = admit_sequence_authoring(platform_, bundle);
+  if (!admitted.has_value()) {
+    return foundation::Result<ImportArtifactExecution>::failure(
+        admitted.error());
+  }
 
   const auto original =
       loaded.value().commands.find(request.meta.command_id);
@@ -3248,6 +3314,11 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
   }
+  auto admitted = admit_sequence_authoring(platform_, bundle);
+  if (!admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        admitted.error());
+  }
 
   const auto original =
       loaded.value().commands.find(request.meta.command_id);
@@ -3382,6 +3453,11 @@ ProjectStore::import_assign_sample_bytes(
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
+  }
+  auto admitted = admit_sequence_authoring(platform_, bundle);
+  if (!admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        admitted.error());
   }
   const auto scavenged = scavenge_sample_staging(*platform_, bundle);
   if (!scavenged.has_value()) {
