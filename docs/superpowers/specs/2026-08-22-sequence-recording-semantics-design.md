@@ -66,7 +66,7 @@ Proof 规则「录音中任何 revision 变化都 `REVISION_CONFLICT` 并 seal T
 | SR-D18 | 选择性 rebase 只适用于 BPM、Quantize/Swing、以及「正在进行的 Pad Capture 写入武装中的目标 Pad」。未知 Authoring Command fail closed。 |
 | SR-D19 | 实施时新增 Project Contract（新 Contract ID + Schema），删除 `takes`。禁止用空 `takes: {}` 假装兼容。Pattern 事件改为 Slot + tick + 力度 + 长度。 |
 | SR-D20 | 一个 Project 同时只允许一个 active Sequence session。会话落在 bundle `recovery/active`，受 writer lease 保护。Authoring admission 必须在 **同一把写锁** 内检查 active Journal 与 `expected_revision`。 |
-| SR-D21 | 每次 flush 有稳定 `session_id` + `flush_seq` + `command_id`。先把 flush 意图耐久写入 Journal，再写 Project。重复提交返回原 receipt。若一次 execute 在 commit point 前失败而录音继续，后续 flush 必须是先前 unresolved flush 与最新 tail 的 canonical 累积批次。任一 receipt 可见时按同一 session/pattern/expected-revision 的 canonical key/value coverage 双向 resolve：较晚 completion 可 supersede 它 key-cover 的较早批次；较早 completion 可 resolve 已耐久、event key/value 全被其精确覆盖的等价较晚 retry，并从非等价较晚批次及当前 durable pending tail 中只扣除精确已提交 event、保留真正新增或同-key 不同值的 residual。只有 manifest head 已耐久且 reload 可见 receipt 才算 completed；Journal 只在全部 flush completed/superseded 或只剩未提交 residual 后删除/seal。 |
+| SR-D21 | 每次 flush 有稳定 `session_id` + `flush_seq` + `command_id`。先把 flush 意图耐久写入 Journal，再写 Project。原始 canonical command payload 在 flush 生命周期内不可变，重复提交与 command collision 永远按它比较；completion 只更新独立的 effective recovery residual，reconcile/apply 不得把 residual 反写成命令身份。若一次 execute 在 commit point 前失败而录音继续，后续 flush 必须是先前 unresolved flush 与最新 tail 的 canonical 累积批次。任一 receipt 可见时按同一 session/pattern/expected-revision 的 canonical key/value coverage 双向 resolve：较晚 completion 可 supersede 它 key-cover 的较早批次；较早 completion 可 resolve 已耐久、event key/value 全被其精确覆盖的等价较晚 retry，并从非等价较晚批次及当前 durable pending tail 中只扣除精确已提交 event、保留真正新增或同-key 不同值的 residual。只有 manifest head 已耐久且 reload 可见 receipt 才算 completed；Journal 只在全部 flush completed/superseded 或只剩未提交 residual 后删除/seal。 |
 | SR-D22 | Journal 保存目标 Pattern 的 `pattern_id`、`bars`、以及上次耐久 flush（若无则 begin）时事件的 canonical fingerprint。恢复区分：指纹匹配可 append；不兼容变化给用户选新槽或放弃；删除/越界 fail closed 并保留恢复件。 |
 | SR-D23 | 切槽的 commit、Journal 改目标、Runtime 改播放三者只在 SR-D11 的 effective transport boundary 发生，禁止点击瞬间换 Journal 而播放仍等到下一 Bar。 |
 | SR-D24 | SR-D15 **不**推翻 Stage 8B 的 trimming / ≤5 s / 显式提交 / 冲突保留缓冲。只增加 Sequence 页内 overlay，避免走到 Sample 表面。 |
@@ -307,7 +307,8 @@ commit`，以及 duplicate `command_id` 回放原 receipt。
    flush record 已耐久后 tail 不再单列，避免同一事件成为两份恢复输入。
 1. 在 Journal 耐久写入 pending flush：`session_id`、`flush_seq`、
    `command_id`（Host UUID）、目标 `pattern_id`、本批事件、
-   `expected_revision`。
+   `expected_revision`。该 canonical command payload 不因 completion 或
+   recovery filtering 改写；独立 recovery residual 才能被扣减。
 2. 在同一 writer lease 内执行 Pattern 写入 Command。已存在该 `command_id`
    的 receipt 时返回原 receipt，不二次 overdub。
 3. transaction / checkpoint 文件本身不是 commit point。仅当 `manifest.json`
@@ -324,7 +325,9 @@ commit`，以及 duplicate `command_id` 回放原 receipt。
    从 recovery residual 扣除；同样规则必须应用到 completion 时最新的 durable
    `pending_events`，即使其后没有 append 新 flush。过滤保持原 canonical 顺序及
    `next_tail_seq`/`last_input_sequence`，新增 key 或同-key 不同 duration/velocity
-   保留未提交。
+   保留未提交。sealed snapshot v2 同时携带 immutable command payload 与 effective
+   residual 并 fail closed 要求两者齐备；旧 snapshot 只有 recovery payload 时按旧
+   recovery-only 语义读取，不猜测已经不可恢复的原命令。
 6. 会话结束且 **全部** flush completed 或 superseded 之后，才删除 active Journal。
 
 重启判定：

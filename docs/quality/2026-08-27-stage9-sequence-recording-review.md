@@ -268,6 +268,14 @@ completion 报错，录音继续耐久写入 A+B 或 A+A'+B、且没有 append �
 增加一次 revision；等价-only tail 被完全 resolve，不产生 candidate 或第二次写入。
 过滤不重置 `next_tail_seq`/`last_input_sequence`，因此后续 acknowledgement 的
 单调性证据仍连续。
+最终 integration review 还发现 #372 exact-command replay 与 #373 residual filtering
+共用同一字段：F0(A) 完成会把已耐久 F1(A+B) 改写为 B，导致原始 F1(A+B) retry 被
+拒绝、残余 B 反而可能冒充同一 command。修复后每条 flush 永久保存 original
+canonical payload 作为 command identity，另存 effective recovery residual；append
+replay/collision 只比较前者，reconcile/status/apply 只读取后者。sealed v2 显式要求
+两个字段，旧 recovery-only snapshot 不猜测缺失的 original。Project I/O 与 Facade
+回归覆盖 exact A+B retry、B/其他 payload collision、serialize/reload、只恢复并单次
+apply B，以及 32-thread inverse completion。
 该 source disposition 不是 merge、Product
 Build、immutable snapshot、远端 CI 或物理验收证据；这些仍分别等待 #379、#380
 与 #360。

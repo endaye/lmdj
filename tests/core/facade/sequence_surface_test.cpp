@@ -964,6 +964,106 @@ void test_replayed_completion_applies_only_durable_tail_residual_once() {
   LMDJ_CHECK(store.load(project).value().revision == 4);
 }
 
+void test_inverse_completion_recovery_applies_only_effective_residual_once() {
+  TempDirectory temp;
+  const auto project = temp.path() / "inverse-flush-residual.lmdj";
+  const PatternId pattern_id{uuid(46)};
+  const SequenceSessionId session_id{uuid(47)};
+  {
+    Application creator(config(temp.path()));
+    create_recordable_project(creator, project, pattern_id);
+  }
+
+  lmdj::project_io::ProjectStore store;
+  lmdj::project_io::SequenceJournal journal;
+  const auto initial = store.load(project);
+  LMDJ_CHECK(initial.has_value());
+  const auto& pattern = initial.value().patterns.at(pattern_id);
+  LMDJ_CHECK(
+      journal
+          .begin(
+              project,
+              session_id,
+              pattern_id,
+              pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(pattern),
+              initial.value().revision)
+          .has_value());
+
+  const lmdj::domain::PatternEvent committed{
+      PadSlotId{0, 0}, 0, 120, 90};
+  const lmdj::domain::PatternEvent residual{
+      PadSlotId{0, 0}, 240, 120, 70};
+  const std::vector first_batch{committed};
+  const std::vector second_batch{committed, residual};
+  const auto first_command = CommandId{uuid(48)};
+  const auto second_command = CommandId{uuid(49)};
+  const auto first = journal.append_flush(
+      project,
+      session_id,
+      first_command,
+      pattern_id,
+      initial.value().revision,
+      first_batch);
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(
+      journal.append_tail(
+          project,
+          session_id,
+          pattern_id,
+          initial.value().revision,
+          1,
+          second_batch)
+          .has_value());
+  const auto second = journal.append_flush(
+      project,
+      session_id,
+      second_command,
+      pattern_id,
+      initial.value().revision,
+      second_batch);
+  LMDJ_CHECK(second.has_value());
+  const auto executed = store.execute_sequence_flush(
+      project,
+      {session_id, first.value().flush_seq, first_command, pattern_id});
+  LMDJ_CHECK(executed.has_value());
+  LMDJ_CHECK(executed.value().outcome.state.revision == 3);
+  const auto exact_retry = journal.append_flush(
+      project,
+      session_id,
+      second_command,
+      pattern_id,
+      initial.value().revision,
+      second_batch);
+  LMDJ_CHECK(exact_retry.has_value());
+  LMDJ_CHECK(exact_retry.value().flush_seq == second.value().flush_seq);
+
+  Application restarted(config(temp.path()));
+  const auto reconciliation = restarted.begin_sequence(
+      {project, SequenceSessionId{uuid(50)}, pattern_id, 999, 0});
+  LMDJ_CHECK(!reconciliation.has_value());
+  LMDJ_CHECK(reconciliation.error().code == ErrorCode::revision_conflict);
+  const auto candidates = restarted.list_sequence_recovery({project});
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().size() == 1);
+  LMDJ_CHECK(candidates.value().front().event_count == 1);
+
+  const auto applied = restarted.apply_sequence_recovery(
+      {project, session_id, std::nullopt});
+  LMDJ_CHECK(applied.has_value());
+  LMDJ_CHECK(applied.value().committed_revision == 4);
+  const auto recovered = store.load(project);
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(recovered.value().revision == 4);
+  LMDJ_CHECK(
+      recovered.value().patterns.at(pattern_id).events == second_batch);
+  LMDJ_CHECK(!restarted.apply_sequence_recovery(
+      {project, session_id, std::nullopt}).has_value());
+  LMDJ_CHECK(!restarted.discard_sequence_recovery(
+      {project, session_id, std::nullopt}).has_value());
+  LMDJ_CHECK(store.load(project).value().revision == 4);
+}
+
 void test_writer_lease_blocks_competing_sequence_owner() {
   TempDirectory temp;
   const auto project = temp.path() / "lease.lmdj";
@@ -1165,6 +1265,7 @@ int main() {
     test_sigkill_owner_recovers_acknowledged_unflushed_events();
     test_later_flush_supersedes_failed_flush_before_recovery_apply();
     test_replayed_completion_applies_only_durable_tail_residual_once();
+    test_inverse_completion_recovery_applies_only_effective_residual_once();
     test_writer_lease_blocks_competing_sequence_owner();
     test_begin_cannot_cross_an_authoring_admission();
     test_orphan_journal_is_sealed_before_authoring();

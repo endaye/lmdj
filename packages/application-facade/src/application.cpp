@@ -2595,7 +2595,7 @@ struct Application::Impl {
           active.value().flushes.begin(), active.value().flushes.end(),
           static_cast<std::uint64_t>(active.value().pending_events.size()),
           [](std::uint64_t total, const auto& flush) {
-            return total + (flush.completed ? 0U : flush.canonical_events.size());
+            return total + (flush.completed ? 0U : flush.recovery_events.size());
           });
       return foundation::Result<SequenceStatus>::success(SequenceStatus{
           active.value().state == project_io::SequenceSessionState::switching
@@ -2626,7 +2626,7 @@ struct Application::Impl {
         candidate.flushes.begin(), candidate.flushes.end(),
         static_cast<std::uint64_t>(candidate.pending_events.size()),
         [](std::uint64_t total, const auto& flush) {
-          return total + (flush.completed ? 0U : flush.canonical_events.size());
+          return total + (flush.completed ? 0U : flush.recovery_events.size());
         });
     return foundation::Result<SequenceStatus>::success(SequenceStatus{
         SequenceRecordState::recoverable,
@@ -2661,7 +2661,7 @@ struct Application::Impl {
           static_cast<std::uint64_t>(
               candidate.journal.pending_events.size()),
           [](std::uint64_t total, const auto& flush) {
-            return total + (flush.completed ? 0U : flush.canonical_events.size());
+            return total + (flush.completed ? 0U : flush.recovery_events.size());
           });
       result.push_back(SequenceRecoveryInfo{
           candidate.journal.session_id,
@@ -2736,7 +2736,7 @@ struct Application::Impl {
     for (const auto& flush : candidate->journal.flushes) {
       if (!flush.completed) {
         recovered_events = domain::merge_pattern_events(
-            recovered_events, flush.canonical_events);
+            recovered_events, flush.recovery_events);
       }
     }
     auto begun = sequence_journals.begin(

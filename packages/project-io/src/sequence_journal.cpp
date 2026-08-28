@@ -292,6 +292,7 @@ nlohmann::json flush_json(const SequenceFlushRecord& flush) {
       {"expected_revision", flush.expected_revision},
       {"flush_seq", flush.flush_seq},
       {"kind", "flush"},
+      {"payload_version", 2},
       {"pattern_id", flush.pattern_id.value()},
   };
 }
@@ -323,7 +324,7 @@ std::vector<domain::PatternEvent> unresolved_batch(
   std::vector<domain::PatternEvent> result;
   for (const auto& flush : journal.flushes) {
     if (!flush.completed) {
-      result = domain::merge_pattern_events(result, flush.canonical_events);
+      result = domain::merge_pattern_events(result, flush.recovery_events);
     }
   }
   return domain::merge_pattern_events(result, journal.pending_events);
@@ -363,6 +364,7 @@ nlohmann::json journal_json(const ActiveSequenceJournal& journal) {
   for (const auto& flush : journal.flushes) {
     auto encoded = flush_json(flush);
     encoded["completed"] = flush.completed;
+    encoded["recovery_events"] = events_json(flush.recovery_events);
     flushes.push_back(std::move(encoded));
   }
   return {
@@ -435,6 +437,7 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
           foundation::PatternId{encoded.at("pattern_id").get<std::string>()},
           encoded.at("expected_revision").get<std::uint64_t>(),
           {},
+          {},
           encoded.at("completed").get<bool>(),
       };
       if (!domain::is_valid_uuid(flush.command_id.value()) ||
@@ -449,6 +452,46 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
         }
         flush.canonical_events.push_back(parsed.value());
       }
+      const auto payload_version =
+          encoded.value("payload_version", std::uint64_t{1});
+      if (payload_version != 1 && payload_version != 2) {
+        throw std::runtime_error("recovery flush payload version is invalid");
+      }
+      if (payload_version == 2 && !encoded.contains("recovery_events")) {
+        throw std::runtime_error(
+            "recovery flush v2 is missing its effective residual");
+      }
+      if (payload_version == 1 && encoded.contains("recovery_events")) {
+        throw std::runtime_error(
+            "legacy recovery flush has ambiguous residual metadata");
+      }
+      // Legacy sealed snapshots encoded the effective residual in `events`.
+      // Treat it as both the original and recovery payload: this preserves
+      // recoverability without guessing an unavailable original command.
+      const auto& recovery_events = payload_version == 2
+                                        ? encoded.at("recovery_events")
+                                        : encoded.at("events");
+      for (const auto& event : recovery_events) {
+        auto parsed = parse_event(event, loop_length, path);
+        if (!parsed.has_value()) {
+          return foundation::Result<ActiveSequenceJournal>::failure(
+              parsed.error());
+        }
+        flush.recovery_events.push_back(parsed.value());
+      }
+      if (domain::merge_pattern_events({}, flush.canonical_events) !=
+              flush.canonical_events ||
+          domain::merge_pattern_events({}, flush.recovery_events) !=
+              flush.recovery_events ||
+          !std::ranges::all_of(
+              flush.recovery_events,
+              [&flush](const auto& event) {
+                return std::ranges::find(flush.canonical_events, event) !=
+                       flush.canonical_events.end();
+              })) {
+        throw std::runtime_error(
+            "recovery flush payload or residual is invalid");
+      }
       journal.flushes.push_back(std::move(flush));
     }
     return foundation::Result<ActiveSequenceJournal>::success(
@@ -457,8 +500,16 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
     return foundation::Result<ActiveSequenceJournal>::failure(
         Error{
             ErrorCode::invalid_project,
-            "Sequence recovery document is invalid",
-            {{"path", path.generic_string()}, {"detail", exception.what()}},
+            "Sequence recovery payload is invalid and has been retained",
+            {
+                {"detail", exception.what()},
+                {"path", path.generic_string()},
+                {"reason", "sequence_recovery_payload_invalid"},
+                {"recovery_retained", true},
+                {"remedy",
+                 "retain the recovery file; repair its versioned payload or "
+                 "discard this recovery candidate explicitly"},
+            },
         });
   }
 }
@@ -600,6 +651,8 @@ foundation::Result<JournalDocument> read_journal(
         document.journal.last_input_sequence = input_sequence;
         ++document.journal.next_tail_seq;
       } else if (kind == "flush") {
+        const auto payload_version =
+            payload.value().value("payload_version", std::uint64_t{1});
         SequenceFlushRecord flush{
             payload.value().at("flush_seq").get<std::uint64_t>(),
             foundation::CommandId{
@@ -608,9 +661,11 @@ foundation::Result<JournalDocument> read_journal(
                 payload.value().at("pattern_id").get<std::string>()},
             payload.value().at("expected_revision").get<std::uint64_t>(),
             {},
+            {},
             false,
         };
         if (flush.flush_seq != document.journal.next_flush_seq ||
+            payload_version > 2 || payload_version < 1 ||
             !domain::is_valid_uuid(flush.command_id.value()) ||
             !domain::is_valid_uuid(flush.pattern_id.value()) ||
             flush.pattern_id != document.journal.pattern_id) {
@@ -626,6 +681,7 @@ foundation::Result<JournalDocument> read_journal(
           }
           flush.canonical_events.push_back(parsed.value());
         }
+        flush.recovery_events = flush.canonical_events;
         const auto required = unresolved_batch(document.journal);
         if (!required.empty() && required != flush.canonical_events) {
           record_reason = "sequence_journal_flush_batch_invalid";
@@ -664,7 +720,7 @@ foundation::Result<JournalDocument> read_journal(
           if (flush.flush_seq <= sequence) {
             if (!covers_event_keys(
                     committed_flush.canonical_events,
-                    flush.canonical_events)) {
+                    flush.recovery_events)) {
               record_reason = "sequence_journal_completion_coverage_invalid";
               record_message =
                   "Sequence completion does not cover an earlier cumulative "
@@ -673,15 +729,17 @@ foundation::Result<JournalDocument> read_journal(
                   "Sequence completion does not cover an earlier flush");
             }
             flush.completed = true;
+            flush.recovery_events.clear();
             continue;
           }
           auto residual = uncommitted_residual(
               committed_flush.canonical_events,
-              flush.canonical_events);
+              flush.recovery_events);
           if (residual.empty()) {
             flush.completed = true;
+            flush.recovery_events.clear();
           } else {
-            flush.canonical_events = std::move(residual);
+            flush.recovery_events = std::move(residual);
           }
         }
         document.journal.pending_events = uncommitted_residual(
@@ -1078,6 +1136,7 @@ foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
       std::move(command_id),
       std::move(pattern_id),
       expected_revision,
+      canonical,
       std::move(canonical),
       false,
   };
@@ -1362,8 +1421,16 @@ SequenceJournal::list_recoverable(const std::filesystem::path& bundle) const {
       return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
           Error{
               ErrorCode::invalid_project,
-              "Sequence recovery file could not be parsed",
-              {{"path", path.generic_string()}, {"detail", exception.what()}},
+              "Sequence recovery payload is invalid and has been retained",
+              {
+                  {"detail", exception.what()},
+                  {"path", path.generic_string()},
+                  {"reason", "sequence_recovery_payload_invalid"},
+                  {"recovery_retained", true},
+                  {"remedy",
+                   "retain the recovery file; repair its versioned payload or "
+                   "discard this recovery candidate explicitly"},
+              },
           });
     }
   }

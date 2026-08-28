@@ -863,6 +863,8 @@ void test_earlier_completion_preserves_only_later_uncommitted_residual() {
   LMDJ_CHECK(active.value().flushes.at(0).completed);
   LMDJ_CHECK(!active.value().flushes.at(1).completed);
   LMDJ_CHECK(active.value().flushes.at(1).canonical_events ==
+             cumulative_batch);
+  LMDJ_CHECK(active.value().flushes.at(1).recovery_events ==
              expected_residual);
 
   const auto candidates = store.reconcile_sequence_recovery(bundle);
@@ -872,11 +874,159 @@ void test_earlier_completion_preserves_only_later_uncommitted_residual() {
   LMDJ_CHECK(!candidates.value().front().journal.flushes.at(1).completed);
   LMDJ_CHECK(
       candidates.value().front().journal.flushes.at(1).canonical_events ==
+      cumulative_batch);
+  LMDJ_CHECK(
+      candidates.value().front().journal.flushes.at(1).recovery_events ==
       expected_residual);
   LMDJ_CHECK(store.load(bundle).value().revision == 1);
   LMDJ_CHECK(
       store.load(bundle).value().patterns.at(pattern_id).events ==
       committed_batch);
+}
+
+void test_original_flush_payload_survives_inverse_completion_residual() {
+  TempDirectory temp("inverse-original-payload");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  begin(journal, bundle);
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto pattern_id = PatternId{std::string{kPatternId}};
+  const auto first_command = CommandId{uuid_for(170)};
+  const auto second_command = CommandId{uuid_for(171)};
+  const auto committed = event(0, 0, 120, 90);
+  const auto residual = event(1, 240, 120, 70);
+  const auto conflicting = event(2, 480, 120, 60);
+  const std::vector first_batch{committed};
+  const std::vector second_batch{committed, residual};
+
+  const auto first = journal.append_flush(
+      bundle, session_id, first_command, pattern_id, 0, first_batch);
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(
+      journal.append_tail(bundle, session_id, pattern_id, 0, 1, second_batch)
+          .has_value());
+  const auto second = journal.append_flush(
+      bundle, session_id, second_command, pattern_id, 0, second_batch);
+  LMDJ_CHECK(second.has_value());
+  const auto executed = store.execute_sequence_flush(
+      bundle,
+      {session_id, first.value().flush_seq, first_command, pattern_id});
+  LMDJ_CHECK(executed.has_value());
+  LMDJ_CHECK(executed.value().outcome.state.revision == 1);
+
+  const auto before_retry = read_text(
+      bundle / "recovery/active/sequence.jsonl");
+  const auto exact_retry = journal.append_flush(
+      bundle, session_id, second_command, pattern_id, 0, second_batch);
+  LMDJ_CHECK(exact_retry.has_value());
+  LMDJ_CHECK(exact_retry.value().flush_seq == second.value().flush_seq);
+  LMDJ_CHECK(exact_retry.value().command_id == second_command);
+  LMDJ_CHECK(exact_retry.value().pattern_id == pattern_id);
+  LMDJ_CHECK(exact_retry.value().expected_revision == 0);
+  LMDJ_CHECK(exact_retry.value().canonical_events == second_batch);
+  LMDJ_CHECK(exact_retry.value().recovery_events == std::vector{residual});
+  LMDJ_CHECK(
+      read_text(bundle / "recovery/active/sequence.jsonl") == before_retry);
+
+  const auto residual_only = journal.append_flush(
+      bundle,
+      session_id,
+      second_command,
+      pattern_id,
+      0,
+      std::vector{residual});
+  LMDJ_CHECK(!residual_only.has_value());
+  LMDJ_CHECK(
+      residual_only.error().details.at("reason") ==
+      "sequence_command_conflict");
+  const auto different = journal.append_flush(
+      bundle,
+      session_id,
+      second_command,
+      pattern_id,
+      0,
+      std::vector{committed, conflicting});
+  LMDJ_CHECK(!different.has_value());
+  LMDJ_CHECK(
+      different.error().details.at("reason") ==
+      "sequence_command_conflict");
+  LMDJ_CHECK(
+      read_text(bundle / "recovery/active/sequence.jsonl") == before_retry);
+
+  SequenceJournal reloaded;
+  const auto active = reloaded.read_active(bundle);
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().flushes.size() == 2);
+  LMDJ_CHECK(!active.value().flushes.at(1).completed);
+  LMDJ_CHECK(active.value().flushes.at(1).canonical_events == second_batch);
+  LMDJ_CHECK(
+      active.value().flushes.at(1).recovery_events ==
+      std::vector{residual});
+  const auto candidates = store.reconcile_sequence_recovery(bundle);
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().size() == 1);
+  LMDJ_CHECK(
+      candidates.value().front().journal.flushes.at(1).canonical_events ==
+      second_batch);
+  LMDJ_CHECK(
+      candidates.value().front().journal.flushes.at(1).recovery_events ==
+      std::vector{residual});
+  LMDJ_CHECK(store.load(bundle).value().revision == 1);
+
+  const auto sealed_path = candidates.value().front().path;
+  const auto original_snapshot = read_text(sealed_path);
+  auto versioned = nlohmann::json::parse(original_snapshot);
+  auto& encoded_flush = versioned["payload"]["journal"]["flushes"][1];
+  LMDJ_CHECK(encoded_flush.at("payload_version") == 2);
+  LMDJ_CHECK(encoded_flush.at("events").size() == 2);
+  LMDJ_CHECK(encoded_flush.at("recovery_events").size() == 1);
+
+  encoded_flush.erase("recovery_events");
+  versioned["checksum"] = sha256(lmdj::foundation::canonical_json(
+      versioned.at("payload")));
+  write_text(
+      sealed_path,
+      lmdj::foundation::canonical_json(versioned) + "\n");
+  const auto missing_v2_residual = journal.list_recoverable(bundle);
+  LMDJ_CHECK(!missing_v2_residual.has_value());
+  LMDJ_CHECK(missing_v2_residual.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(
+      missing_v2_residual.error().details.at("reason") ==
+      "sequence_recovery_payload_invalid");
+  LMDJ_CHECK(
+      missing_v2_residual.error().details.at("recovery_retained") == true);
+  LMDJ_CHECK(
+      missing_v2_residual.error().details.at("remedy").get<std::string>().find(
+          "repair") !=
+      std::string::npos);
+  LMDJ_CHECK(
+      missing_v2_residual.error().details.at("remedy").get<std::string>().find(
+          "discard") !=
+      std::string::npos);
+
+  // A legacy sealed snapshot stored only its effective residual in `events`.
+  // It remains safely recoverable without reconstructing an unavailable
+  // original command payload.
+  auto legacy = nlohmann::json::parse(original_snapshot);
+  auto& legacy_flush = legacy["payload"]["journal"]["flushes"][1];
+  legacy_flush["events"] = legacy_flush.at("recovery_events");
+  legacy_flush.erase("recovery_events");
+  legacy_flush.erase("payload_version");
+  legacy["checksum"] = sha256(lmdj::foundation::canonical_json(
+      legacy.at("payload")));
+  write_text(
+      sealed_path,
+      lmdj::foundation::canonical_json(legacy) + "\n");
+  const auto legacy_candidates = journal.list_recoverable(bundle);
+  LMDJ_CHECK(legacy_candidates.has_value());
+  LMDJ_CHECK(legacy_candidates.value().size() == 1);
+  LMDJ_CHECK(
+      legacy_candidates.value().front().journal.flushes.at(1).canonical_events ==
+      std::vector{residual});
+  LMDJ_CHECK(
+      legacy_candidates.value().front().journal.flushes.at(1).recovery_events ==
+      std::vector{residual});
 }
 
 void test_replayed_completion_subtracts_committed_events_from_durable_tail() {
@@ -1215,6 +1365,12 @@ void test_concurrent_flush_allocation_is_gap_free() {
   LMDJ_CHECK(active.value().next_flush_seq == kWorkers);
   for (std::size_t index = 0; index < kWorkers; ++index) {
     LMDJ_CHECK(active.value().flushes[index].flush_seq == index);
+    LMDJ_CHECK(
+        active.value().flushes[index].canonical_events ==
+        std::vector{event()});
+    LMDJ_CHECK(
+        active.value().flushes[index].recovery_events ==
+        std::vector{event()});
   }
   const auto& first = active.value().flushes.front();
   const auto committed = store.execute_sequence_flush(
@@ -1229,6 +1385,12 @@ void test_concurrent_flush_allocation_is_gap_free() {
   LMDJ_CHECK(std::ranges::all_of(
       resolved.value().flushes,
       [](const auto& flush) { return flush.completed; }));
+  LMDJ_CHECK(std::ranges::all_of(
+      resolved.value().flushes,
+      [](const auto& flush) {
+        return flush.canonical_events == std::vector{event()} &&
+               flush.recovery_events.empty();
+      }));
   const auto candidates = store.reconcile_sequence_recovery(bundle);
   LMDJ_CHECK(candidates.has_value());
   LMDJ_CHECK(candidates.value().empty());
@@ -1249,6 +1411,7 @@ int main(int argc, char** argv) {
     test_earlier_completion_resolves_all_durable_equivalent_retries();
     test_ambiguous_committed_flush_resolves_later_equivalent_retry();
     test_earlier_completion_preserves_only_later_uncommitted_residual();
+    test_original_flush_payload_survives_inverse_completion_residual();
     test_replayed_completion_subtracts_committed_events_from_durable_tail();
     test_complete_line_tail_corruption_fails_closed_with_uniform_evidence();
     test_one_project_session_and_monotonic_durable_flush_identity();

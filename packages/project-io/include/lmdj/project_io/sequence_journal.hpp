@@ -26,7 +26,10 @@ struct SequenceFlushRecord {
   foundation::CommandId command_id;
   foundation::PatternId pattern_id;
   std::uint64_t expected_revision{};
+  // Immutable canonical payload bound to command_id and flush identity.
   std::vector<domain::PatternEvent> canonical_events;
+  // Effective uncommitted subset used only for recovery/reconciliation.
+  std::vector<domain::PatternEvent> recovery_events;
   bool completed{};
 
   bool operator==(const SequenceFlushRecord&) const = default;

@@ -218,6 +218,29 @@ CMake/CTest, Docusaurus Architecture Portal.
   only these files and create a fourth local Conventional Commit without any
   remote transition.
 
+### Integration Review Fix: immutable command payload and recovery residual
+
+- [x] **Step 23: Reproduce the combined #372/#373 replay gap in RED.** Append
+  F0(A) and F1(A+B), complete F0 so only B remains recoverable, then retry F1
+  with its original command id and A+B. Observe the retry rejected because the
+  durable record had overwritten its command payload with B.
+- [x] **Step 24: Separate command identity from recovery projection.** Keep the
+  canonical A+B payload immutable for append replay/collision and Project
+  execution; store B separately as the effective recovery residual consumed by
+  reconciliation, status, and apply. Version sealed flush payloads explicitly;
+  require the residual for v2, and read legacy recovery-only records without
+  guessing an unavailable original payload.
+- [x] **Step 25: Prove replay, reload, legacy, and concurrency semantics.** Exact
+  F1(A+B) replay returns its original durable identity without append, while B
+  or any other payload with the same command id conflicts before append.
+  Serialize/reload and recovery retain only B; 32 concurrent equivalent flushes
+  preserve immutable payloads and resolve to empty recovery residuals.
+- [x] **Step 26: Verify and commit the integration review fix.** Run focused,
+  fast, full, stress, Web, Creator, Portal, dependency, active-tree, version,
+  and production-symbol gates; append the external report, audit pitfalls,
+  exact-stage only declared files, and create a new local Conventional Commit
+  without any remote transition.
+
 ## Version Management
 
 Version impact: deferred to [#379](https://github.com/endaye/lmdj/issues/379).
