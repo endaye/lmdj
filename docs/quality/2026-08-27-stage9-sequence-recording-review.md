@@ -70,15 +70,15 @@ truth integration 与不可变快照分别由 #379、#380 负责。
 | Finding | Owner | Source disposition |
 | --- | --- | --- |
 | H1 | #378 | 实现 writer-lease 内 journal admission、本地 begin-vs-authoring critical section、孤儿 journal 先 seal，以及 settings-only Store rebase；以 Project Store 与 Facade deterministic component cases 阻断回归 |
-| H2 | #376 | open |
+| H2 | #376 | 实现共享 Web Runtime Session 的权威边界匹配、exact-once flush、串行 post-boundary admission，以及 Creator authority-only 状态转换；单元与 packaged-browser journey 覆盖乱序/重复通知、继续录音、stop、reload 和 committed-event inspection |
 | H3 | #374 | open |
 | M1 | #375 | open |
 | M2 | #373 | open |
 | M3 | #372 | open |
 
-H1 的 source 修复不改写或重新宣称 `1.0.37.0`；其 Module/Product identity 与
-完整集成证据等待 #379，immutable snapshot 等待 #380。#360 的五项物理/人工行
-继续保持未执行。
+H1/H2 的 source 修复不改写或重新宣称 `1.0.37.0`；其 Module/Product identity
+与完整集成证据等待 #379，immutable snapshot 等待 #380。#360 的五项物理/人工
+行继续保持未执行。
 
 ## 二、设计与计划文档评审
 
