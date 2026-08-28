@@ -275,9 +275,16 @@ with no per-Pad cap; the quota model lives in Core, numbers are injected per
 Host manifest (the 512 MiB heap and Web values are browser-tier numbers);
 ingest (Host tier) and prepared (Core tier) split — capture and long-file
 import converge at one deterministic commit validation with a new
-`bank_quota_exhausted` failure class. Implementation is umbrella
-[#341](https://github.com/endaye/lmdj/issues/341), Tasks
-[#342](https://github.com/endaye/lmdj/issues/342)–[#346](https://github.com/endaye/lmdj/issues/346).
+`bank_quota_exhausted` failure class. The 2026-08-27 readiness audit preserved
+that product direction but found that the four 16-Pad user-Bank quotas, current
+64-Pad Runtime generation, live/pending/retiring total, revision-bound query,
+and Web pre-decode memory envelope still need one bounded amendment. Plan
+correction [#358](https://github.com/endaye/lmdj/issues/358) adds decision gate
+[#357](https://github.com/endaye/lmdj/issues/357) before implementation
+[#343](https://github.com/endaye/lmdj/issues/343)–[#346](https://github.com/endaye/lmdj/issues/346), followed by physical Safari
+acceptance [#359](https://github.com/endaye/lmdj/issues/359) under umbrella
+[#341](https://github.com/endaye/lmdj/issues/341). The original plan Task
+[#342](https://github.com/endaye/lmdj/issues/342) remains completed history.
 
 ### ~~D2. Loop material BPM time-stretch~~ — decided 2026-08-26, merged 2026-08-26
 
@@ -568,7 +575,9 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has). ~~D4
    [#360](https://github.com/endaye/lmdj/issues/360), and pending review
    [#367](https://github.com/endaye/lmdj/pull/367) is a separate remediation
    boundary.
-5. **D1 + D2** — one review, before any long-material work.
+5. ~~**D1 + D2 product direction**~~ — decided 2026-08-26; the bounded D1
+   accounting and Web ingest-memory amendment [#357](https://github.com/endaye/lmdj/issues/357)
+   remains mandatory before any long-material implementation.
 6. ~~**A2**~~ — done 2026-08-24 (rename to `native-host` + distribution
    contents rule; see the A2 section). (~~A3~~ decided and implemented
    2026-08-24, [#286](https://github.com/endaye/lmdj/issues/286).)
