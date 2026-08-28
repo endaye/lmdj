@@ -2,20 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver the approved D1 long-material resource model — a Bank-shared prepared-PCM quota with no per-Pad cap, ingest (Host tier) / prepared (Core tier) split, long-file import with Host-side trim, a read-only remaining-quota query, and the deterministic `BANK_QUOTA_EXHAUSTED` failure class — as a testable Product Build with an immutable Portal snapshot.
+**Goal:** Deliver the approved D1 long-material resource model — a Bank-shared prepared-PCM quota with no per-Pad cap, ingest (Host tier) / prepared (Core tier) split, long-file import with Host-side trim, a read-only remaining-quota query, and the deterministic `BANK_QUOTA_EXHAUSTED` / `PROJECT_QUOTA_EXHAUSTED` failure classes — as a testable Product Build with an immutable Portal snapshot.
 
-**Authority:** [2026-08-26 D1+D2 decision](../../prd/decisions/2026-08-26-long-material-quota-and-bpm-stretch.md) (merged in [#339](https://github.com/endaye/lmdj/pull/339)). D2 requires no implementation: samples carry no BPM, global BPM drives the sequencer only, and the realtime engine stays zero-DSP — that is current behavior. The future per-Pad offline time-stretch capability is [#347](https://github.com/endaye/lmdj/issues/347) and is out of scope here.
+**Authority:** [2026-08-26 D1+D2 decision](../../prd/decisions/2026-08-26-long-material-quota-and-bpm-stretch.md) (merged in [#339](https://github.com/endaye/lmdj/pull/339)) as amended by the [2026-08-28 quota-accounting amendment](../../prd/decisions/2026-08-28-long-material-quota-accounting.md) (#357). D2 requires no implementation: samples carry no BPM, global BPM drives the sequencer only, and the realtime engine stays zero-DSP — that is current behavior. The future per-Pad offline time-stretch capability is [#347](https://github.com/endaye/lmdj/issues/347) and is out of scope here.
 
-**Readiness:** Implementation is blocked by [#357](https://github.com/endaye/lmdj/issues/357). The 2026-08-27 readiness audit found that the approved 64 MiB per-user-Bank quota does not yet compose unambiguously with the existing 64-Pad `RuntimeSnapshot` / `PreparedSampleBank` generation and the 128 MiB live/pending/retiring publication limit. #357 must merge a durable decision amendment and replace the provisional accounting and ingest-memory inputs below before #343 starts.
+**Readiness:** The [#357](https://github.com/endaye/lmdj/issues/357) decision amendment resolves the 2026-08-27 readiness-audit accounting gap: `decoded_float_pcm_bytes_total` bounds one Project revision (equivalently one 64-Pad generation), the per-user-Bank quota is its inner partition, and live/pending/retiring publication residency is the separate named quantity `decoded_float_pcm_bytes_resident` = 2 × total, enforced by the existing publication-owner ledger. Implementation Tasks copy the amendment's values and semantics verbatim; #343 starts only from the merged amendment.
 
-**Architecture:** The quota model — validation rule, failure class, publication accounting — lives in Core and is Host-independent; every number is injected per Host manifest through `lmdj::audio::RuntimePreparationLimits`. The current `PreparedSampleBank` already stores one independent `std::vector<float>` per each of 64 slots, so no offset-table or arena rewrite is required; however, its byte counter is generation-wide rather than a four-user-Bank ledger. #357 locks the missing per-Bank, active-generation, and live/pending/retiring accounting semantics. Application Facade then exposes a revision-bound effective-headroom query and routes Captured and Imported selections through the same commit validation. The Web Host supplies the ingest tier: bounded source admission precedes expensive decode outside the Wasm heap, trim happens Host-side, and only the committed selection crosses into Core.
+**Architecture:** The quota model — validation rule, failure classes, publication accounting — lives in Core and is Host-independent; every number is injected per Host manifest through `lmdj::audio::RuntimePreparationLimits`. The current `PreparedSampleBank` already stores one independent `std::vector<float>` per each of 64 slots, so no offset-table or arena rewrite is required; its single generation-wide byte counter becomes the amendment's two-level ledger (per-user-Bank plus generation total), while publication residency stays with the publication owner's reclaim→reserve→publish ledger under `maximum_resident_bytes`. Application Facade exposes the revision-bound `sample.quota` effective-headroom query and routes Captured and Imported selections through the same commit validation. The Web Host supplies the ingest tier: bounded source admission precedes expensive decode outside the Wasm heap, trim happens Host-side, and only the committed selection crosses into Core.
 
 **Tech Stack:** C++20, CMake 3.24+, JSON Schema, nlohmann/json, Emscripten `6.0.5`, Wasm AudioWorklet, JavaScript ES modules, React, TypeScript, Vitest, Playwright, Python 3.11, Docusaurus Architecture Portal.
 
 ## Global Constraints
 
-- The approved decision is the D1+D2 decision file above. Any conflict returns to product review; an implementation Task must not silently choose a different semantic.
-- #357 is Task 0 and blocks every implementation Task. Its decision amendment must replace every provisional input marked in this plan; an implementation branch may not infer the missing total-accounting, query-consistency, source-format, channel, or decode-memory rules.
+- The approved decision is the D1+D2 decision file as amended by the 2026-08-28 quota-accounting amendment. Any conflict returns to product review; an implementation Task must not silently choose a different semantic.
+- #357 is Task 0 and blocks every implementation Task. Downstream Tasks copy the merged amendment's accounting domains, surfaces, and values verbatim; an implementation branch may not infer or re-derive a total-accounting, query-consistency, source-format, channel, or decode-memory rule.
 - Full-source retention and post-commit re-trim stay with the open [`project-bin-storage-model.md`](../../prd/questions/project-bin-storage-model.md) question. Until it is decided, re-trimming requires re-import.
 - The prepared tier remains mono float PCM (the existing stereo→mono downmix is unchanged). The byte quota therefore admits ≈349.52 s of prepared material per Bank regardless of source channel count; the decision's "≈174.76 s stereo" figure was the conservative bound stated before this layer truth was pinned. Moving to stereo prepared PCM would be a new product decision, out of scope.
 - The 512 MiB fixed Wasm heap (`ALLOW_MEMORY_GROWTH=0`) is unchanged. No Task may raise it.
@@ -28,33 +28,37 @@
 - Before every Task commit: run the Task-specific tests and `scripts/architecture-portal.sh check`; stage only declared files; run `git diff --cached --check`; inspect the staged and committed file lists.
 - This plan authorizes local commits only. Push, Pull Request creation, merge, tag, Release, deployment, and Channel promotion require separate authorization per Task.
 
-## Provisional Quota and Ingest Inputs for Task 0
+## Decided Quota and Ingest Values (locked by #357)
 
-These are the values approved or proposed before the readiness audit. They are inputs to #357, not implementation authorization. #357 must retain, replace, or split each value with byte-exact memory math; downstream Tasks use only the values in the merged amendment. Numbers remain Web-manifest values and Core structures carry no product literals.
+These values and ownership domains are locked by the [2026-08-28 amendment](../../prd/decisions/2026-08-28-long-material-quota-accounting.md). Downstream Tasks copy them verbatim. Numbers remain Web-manifest values and Core structures carry no product literals.
 
 ```text
 RUNTIME_SAMPLE_RATE            = 48000            (unchanged)
-BANK_QUOTA_BYTES               = 67,108,864       (decoded_float_pcm_bytes_per_bank, unchanged)
-TOTAL_LIVE_BYTES               = 134,217,728      (decoded_float_pcm_bytes_total, unchanged)
+BANK_QUOTA_BYTES               = 67,108,864       (decoded_float_pcm_bytes_per_bank; per 16-Pad user Bank at one Project revision)
+PROJECT_QUOTA_BYTES            = 134,217,728      (decoded_float_pcm_bytes_total; all four user Banks at one Project revision = one generation)
+RESIDENT_BYTES                 = 268,435,456      (decoded_float_pcm_bytes_resident, NEW; live+pending+retiring publication residency = 2 × total)
 BANK_QUOTA_FRAMES              = 16,777,216       (mono frames; = BANK_QUOTA_BYTES / 4; ≈349.52 s)
-IMPORTED_WAV_BYTES             = 68,157,440       (65 MiB; re-scoped: commit-selection Artifact cap)
-INGEST_SOURCE_BYTES            = 104,857,600      (100 MiB proposal; Host source-file cap)
-INGEST_DECODED_FRAMES          = 43,200,000       (15 min @ 48 kHz proposal; Host decode cap)
+IMPORTED_WAV_BYTES             = 68,157,440       (65 MiB; commit-selection Artifact cap = maximum_artifact_bytes)
+INGEST_SOURCE_BYTES            = 104,857,600      (100 MiB; Host source-file cap, checked before reading content)
+INGEST_DECODED_FRAMES          = 43,200,000       (15 min @ 48 kHz; Host decode cap, 48 kHz-normalized)
+INGEST_CHANNELS                = 2                (Host source channel cap)
 CAPTURE_BUFFER_SECONDS         = 60               (unchanged Host capture value)
 WASM_HEAP_BYTES                = 536,870,912      (unchanged)
 decoded_frames_per_pad         = RETIRED          (removed from manifest, gate, limits struct)
 ```
 
-Task 0 must lock these semantics:
+Locked semantics (amendment entries in parentheses):
 
-- `imported_wav_bytes` is re-scoped from "import file cap" to "commit-selection Artifact byte cap". 65 MiB covers a full-quota stereo PCM16 selection (16,777,216 frames × 2 ch × 2 B = 64 MiB payload) plus header allowance, so the Bank quota — never this byte cap — is the binding constraint.
-- `ingest_source_bytes` and decoded-duration/frame/channel limits are Host-tier bounds, declared in the manifest for identity/portal derivation and enforced before expensive decode whenever the approved format metadata makes that decidable. Post-decode exact checks remain mandatory. The amendment must name supported source containers/codecs, channel bounds, failure behavior, and when decoded buffers are released.
-- Requested prepared bytes remain `selection_mono_frames × 4`. Effective commit headroom is the minimum of every applicable approved constraint, including the target user Bank and any active-generation or publication reservation limit. A Bank-only calculation is forbidden when another limit can reject the same unchanged-revision commit.
-- `decoded_float_pcm_bytes_total` must be assigned one unambiguous ownership domain: active generation, all user Banks, live/pending/retiring generations, or newly split named quantities. The current implementation's generation-wide counter is not evidence that the approved per-user-Bank model is already implemented.
+- Ownership domains (A1): `per_bank` and `total` are deterministic Project-Truth quotas at one revision; `total` is simultaneously the byte bound of any single `PreparedSampleBank` generation because a generation materializes all 64 Pads. `resident` is the separate publication-residency envelope owned by the publication owner's existing reclaim→reserve→publish ledger; residency exhaustion is transient Attempt/Host-state backpressure (Web: `WEB_RUNTIME_RESOURCE_LIMIT`, `resource` renamed `resident_pcm_bytes`), retryable by construction (resident = 2 × total), and never one of the two quota error codes. The publication owner must reclaim and satisfy `reserved ≤ resident − total` before starting an expensive cook (A4 pre-check) — this is what keeps the A3 peak math valid in every ordering. Four simultaneously full Banks (256 MiB) are not supported — that is the approved 128 MiB total's inherent meaning.
+- `RuntimePreparationLimits` fields (A1.4): `maximum_artifact_bytes` (kept), `maximum_user_bank_bytes` (new), `maximum_generation_bytes` (renamed from `maximum_prepared_bank_bytes`), `maximum_resident_bytes` (renamed from `maximum_live_bank_bytes`); `maximum_decoded_frames_per_pad` and `allows_decoded_frames_per_pad` are deleted.
+- Accounting (A2): per-Pad bytes = `prepared_frames × 4` with `prepared_frames = ceil(source_frames × 48000 / source_sample_rate)`; trim never reduces accounting; commit validation excludes the target Pad's current bytes (assignment replaces).
+- Heap math (A3): worst in-heap peak is the `from_snapshot` phase at 3 × total + per-Bank = 469,762,048 bytes (448 MiB), leaving a ≤ 64 MiB static envelope inside the fixed 512 MiB heap; steady state is one live generation ≤ 128 MiB and post-publication residency ≤ 256 MiB.
+- `imported_wav_bytes` (A8) is the commit-selection Artifact (PCM16 WAV) byte cap. 65 MiB covers a full-quota stereo PCM16 selection (16,777,216 frames × 2 ch × 2 B = 64 MiB payload) plus header allowance, so the Bank/Project quota — never this byte cap — is the binding constraint. Capture uses the identical path and cap.
+- Ingest bounds (A7) are Host-tier manifest values enforced before expensive decode whenever the format metadata makes that decidable (WAV, FLAC STREAMINFO, MP4 mdhd exact; MP3 via Xing/VBRI, else CBR estimate, else deferred); post-decode exact checks remain mandatory. Supported containers/codecs, channel bounds, failure copy, and buffer-release lifecycle are locked in A7 §12–16.
 
 ## Error Contract Requirement
 
-`lmdj.error.v1` gains one enum member, `BANK_QUOTA_EXHAUSTED` (Contract SemVer `1.0.0 → 1.1.0`, additive). The C++ `lmdj::foundation::ErrorCode` enum gains the matching member. #357 decides whether a distinct total/publication failure code is required; it must not mislabel a global reservation failure as target-Bank exhaustion. The Bank-boundary payload has this minimum shape:
+`lmdj.error.v1` gains two enum members in one additive bump, `BANK_QUOTA_EXHAUSTED` and `PROJECT_QUOTA_EXHAUSTED` (Contract SemVer `1.0.0 → 1.1.0`). The C++ `lmdj::foundation::ErrorCode` enum gains the matching members. The binding constraint is the smaller remaining quantity; on a tie, report `BANK_QUOTA_EXHAUSTED` (an in-Bank remedy fixes both). A global failure must never be mislabeled as target-Bank exhaustion, and neither code is ever used for publication-residency backpressure (A6). The Bank-boundary payload has this minimum shape:
 
 ```json
 {
@@ -71,13 +75,13 @@ Task 0 must lock these semantics:
 }
 ```
 
-Rejection is deterministic and non-destructive: Project Truth and the live Bank are unchanged, matching the [2026-08-24 non-destructive refusal precedent](../../prd/decisions/2026-08-24-refused-audio-activation-non-destructive.md).
+The `PROJECT_QUOTA_EXHAUSTED` payload is isomorphic, carrying `project_used_bytes` / `project_quota_bytes` / `project_remaining_bytes` and the four per-Bank usage totals. Rejection is deterministic and non-destructive: Project Truth and the live Bank are unchanged, matching the [2026-08-24 non-destructive refusal precedent](../../prd/decisions/2026-08-24-refused-audio-activation-non-destructive.md).
 
-## Facade Query Requirements
+## Facade Query Surface (locked by #357, A5)
 
-#357 must lock an exact request and result type before Task 3 starts. The surface must identify the Project and target Bank, return the Project revision used for accounting, distinguish target-Bank remaining bytes from effective commit remaining bytes, and expose `effective_remaining_frames = effective_remaining_bytes / 4`. The later import/capture commit must carry the same expected revision.
+The query operation is `sample.quota` (query kind). The request is exactly `{"operation", "project_path", "slot"}` where `slot` is the existing `{"bank", "pad"}` target-Pad identity (the Bank derives from the slot). The result carries `project_revision`, `slot`, `bank_quota_bytes` / `bank_used_bytes` / `bank_remaining_bytes`, `project_quota_bytes` / `project_used_bytes` / `project_remaining_bytes`, `effective_remaining_bytes = min(bank_remaining_bytes, project_remaining_bytes)`, `effective_remaining_frames = effective_remaining_bytes / 4`, and a `consumed` list of every non-empty Pad in the target Bank with `prepared_bytes` / `prepared_frames`. `bank_used_bytes` and `project_used_bytes` exclude the target Pad's current bytes (assignment replaces); `consumed` includes the target Pad's current value for Host presentation.
 
-For an unchanged Project revision and unchanged publication reservation state, query and commit validation agree byte-for-byte: a selection at `effective_remaining_frames` commits, while `effective_remaining_frames + 1` (four prepared bytes) fails with the precise approved quota/publication category. Revision or reservation drift produces its own existing conflict/state outcome rather than a false quota promise. Hosts consume the query only through the Facade; no Host parses the Project bundle or recomputes quota.
+Revision binding: the result is valid only for the returned `project_revision`; Captured and Imported selections both carry it through `sample.import.begin`'s existing `expected_revision` field, and drift yields the existing `REVISION_CONFLICT`. Quota derives from Project Truth alone — publication residency never enters query or commit adjudication, so reservation drift cannot exist by construction; publication backpressure is a post-commit transient Attempt state (A4). For an unchanged Project revision, query and commit validation agree byte-for-byte: a selection at `effective_remaining_frames` commits, while `effective_remaining_frames + 1` (four prepared bytes) fails with the binding quota category. Hosts consume the query only through the Facade; no Host parses the Project bundle or recomputes quota.
 
 ## Dependency Order
 
@@ -94,14 +98,14 @@ For an unchanged Project revision and unchanged publication reservation state, q
 
 ## Task 0 (#357): Reconcile Quota Publication and Web Decode-Memory Accounting
 
-**Scope:** PRD/architecture decision amendment only; no product code, manifest, Contract, or version mutation.
+**Scope:** PRD/architecture decision amendment only; no product code, manifest, Contract, or version mutation. Delivered by the [2026-08-28 amendment](../../prd/decisions/2026-08-28-long-material-quota-accounting.md).
 
-- [ ] Reconcile the four 16-Pad user Banks with the current 64-Pad `RuntimeSnapshot` / `PreparedSampleBank` generation and name the exact ownership domain of every byte limit.
-- [ ] Provide peak and steady-state memory math for current/pending/retiring generations inside the fixed 512 MiB Wasm heap, including decoded Project/Cooker inputs and temporary preparation allocations.
-- [ ] Lock the publication strategy, non-destructive failure categories, exact Facade request/result types, Project revision binding, and query/commit race semantics.
-- [ ] Lock Web supported source formats, pre-decode metadata admission, duration/frame/channel bounds, post-decode exact checks, buffer-release lifecycle, and why+remedy failures.
-- [ ] Define automated fixtures and the #359 macOS Safari / physical iPadOS Safari memory procedure with exact evidence fields and pass/fail thresholds.
-- [ ] Update this plan and #341/#343–#346/#359 with the decided values and surfaces; run `scripts/architecture-portal.sh check`.
+- [x] Reconcile the four 16-Pad user Banks with the current 64-Pad `RuntimeSnapshot` / `PreparedSampleBank` generation and name the exact ownership domain of every byte limit (A1).
+- [x] Provide peak and steady-state memory math for current/pending/retiring generations inside the fixed 512 MiB Wasm heap, including decoded Project/Cooker inputs and temporary preparation allocations (A3).
+- [x] Lock the publication strategy, non-destructive failure categories, exact Facade request/result types, Project revision binding, and query/commit race semantics (A4–A6).
+- [x] Lock Web supported source formats, pre-decode metadata admission, duration/frame/channel bounds, post-decode exact checks, buffer-release lifecycle, and why+remedy failures (A7–A8).
+- [x] Define automated fixtures and the #359 macOS Safari / physical iPadOS Safari memory procedure with exact evidence fields and pass/fail thresholds (A9).
+- [ ] Update this plan and #341/#343–#346/#359 with the decided values and surfaces; run `scripts/architecture-portal.sh check` (plan updated in the amendment Task; Issue bodies are replaced when the amendment merges, before #343 starts).
 
 **Acceptance:** no provisional input remains; an implementer can calculate the same admission and publication result from the decision, Facade query, and Task tests without choosing a product or concurrency semantic.
 
@@ -110,12 +114,12 @@ For an unchanged Project revision and unchanged publication reservation state, q
 **Scope:** `packages/foundation`, `packages/audio-runtime` (limits + preparation validation), `packages/project-cooker` (verify no cap duplication), `contracts/error/`.
 
 - [ ] Start only from the merged #357 amendment and copy its exact accounting fields, ownership domains, failure categories, and values into tests before changing implementation.
-- [ ] Add `BANK_QUOTA_EXHAUSTED` to `lmdj::foundation::ErrorCode` (`packages/foundation/include/lmdj/foundation/error.hpp`) and its string mapping.
-- [ ] Bump `contracts/error/lmdj.error.v1.schema.json`: add the enum member, set `x-lmdj-contract-version` to `1.1.0`; update `tests/conformance/schema_contract_test.py` vectors.
-- [ ] Remove `maximum_decoded_frames_per_pad` (and `allows_decoded_frames_per_pad`) from `RuntimePreparationLimits`; add or rename only the Bank/generation/publication fields approved by #357.
-- [ ] In `prepared_sample_bank.cpp::from_snapshot`, drop the per-Pad frame check and replace the current single generation-wide accumulator with the exact #357 ledger. Bank-boundary failure reports `BANK_QUOTA_EXHAUSTED`; any separate generation/publication failure uses its own approved category and why+remedy message.
+- [ ] Add `BANK_QUOTA_EXHAUSTED` and `PROJECT_QUOTA_EXHAUSTED` to `lmdj::foundation::ErrorCode` (`packages/foundation/include/lmdj/foundation/error.hpp`) and their string mappings.
+- [ ] Bump `contracts/error/lmdj.error.v1.schema.json`: add both enum members, set `x-lmdj-contract-version` to `1.1.0`; update `tests/conformance/schema_contract_test.py` vectors.
+- [ ] Remove `maximum_decoded_frames_per_pad` (and `allows_decoded_frames_per_pad`) from `RuntimePreparationLimits`; add `maximum_user_bank_bytes`, rename `maximum_prepared_bank_bytes` → `maximum_generation_bytes` and `maximum_live_bank_bytes` → `maximum_resident_bytes` (amendment A1.4); no other fields.
+- [ ] In `prepared_sample_bank.cpp::from_snapshot`, drop the per-Pad frame check and replace the current single generation-wide accumulator with the amendment's two-level ledger: per-user-Bank sums against `maximum_user_bank_bytes` (`BANK_QUOTA_EXHAUSTED`) and the generation total against `maximum_generation_bytes` (`PROJECT_QUOTA_EXHAUSTED`); the binding constraint is the smaller remaining, tie → Bank. Publication residency stays with the publication owner's ledger under `maximum_resident_bytes` and keeps its transient Attempt/Host-state category with a why+remedy message.
 - [ ] Audit `project-cooker` and Application Facade preparation helpers for duplicated caps; route every layer through shared overflow-checked accounting helpers in `runtime_preparation_limits.hpp`.
-- [ ] Tests: for each user Bank, exact boundary admits and one mono frame (`+4` prepared bytes) rejects; a single Pad can consume the entire approved Bank quota; every active-generation and live/pending/retiring boundary from #357 has boundary and boundary-plus-one coverage; every rejection leaves Project Truth and the prior live generation byte-identical.
+- [ ] Tests: for each user Bank, exact boundary admits and one mono frame (`+4` prepared bytes) rejects with `BANK_QUOTA_EXHAUSTED`; a single Pad can consume the entire approved Bank quota; the generation total admits at exactly 134,217,728 bytes and rejects `+4` with `PROJECT_QUOTA_EXHAUSTED`; the tie case reports `BANK_QUOTA_EXHAUSTED`; residency admits at exactly 268,435,456 bytes and rejects `+4` with the transient publication category; every rejection leaves Project Truth and the prior live generation byte-identical.
 - [ ] Run `scripts/core.sh test dev full` and `scripts/core.sh test dev stress`.
 
 **Acceptance:** Core implements the complete #357 ledger without a Host literal or duplicated formula; no `decoded_frames_per_pad` symbol remains in Core; error Contract 1.1.0 vectors pass.
@@ -124,9 +128,9 @@ For an unchanged Project revision and unchanged publication reservation state, q
 
 **Scope:** `packages/audio-runtime` (engine + publication), stress tier.
 
-- [ ] Verify `RealtimeEngine` voice arithmetic (positions, trim, loop points, ramps) is exact for samples up to the maximum prepared frames approved by #357 (`std::uint32_t` positions hold to 4.29 G frames; assert no intermediate narrows).
+- [ ] Verify `RealtimeEngine` voice arithmetic (positions, trim, loop points, ramps) is exact for samples up to 16,777,216 prepared frames — the full-Bank single Pad approved by the amendment (`std::uint32_t` positions hold to 4.29 G frames; assert no intermediate narrows).
 - [ ] Keep the per-slot `std::vector<float>` storage; document in the module README that the decision's variable-length requirement is satisfied by this existing layout (no arena rewrite).
-- [ ] Stress-tier tests: publish/retire every maximum valid generation shape required by #357, including one ≈full-quota Pad and 15 empty Pads in a user Bank, under concurrent trigger load; assert the approved live/pending/retiring ledger, no lock acquisition on the realtime read path, and no torn reads (ASAN full + stress on Linux and macOS gates).
+- [ ] Stress-tier tests: publish/retire every maximum valid generation shape required by the amendment — one full-quota 16,777,216-frame Pad with 15 empty Pads in a user Bank, and a full 134,217,728-byte generation — under concurrent trigger load; assert the reclaim→reserve→publish residency ledger against `maximum_resident_bytes` = 268,435,456, no lock acquisition on the realtime read path, and no torn reads (ASAN full + stress on Linux and macOS gates).
 - [ ] Run `scripts/core.sh test dev full` and `scripts/core.sh test dev stress` locally before commit.
 
 **Acceptance:** a full-quota single-Pad Bank plays, publishes, and retires cleanly under stress; realtime path remains lock-free.
@@ -135,21 +139,22 @@ For an unchanged Project revision and unchanged publication reservation state, q
 
 **Scope:** `packages/application-facade`, host parity in `apps/core-cli`, `apps/core-mcp`, `apps/native-host` (error surface only).
 
-- [ ] Add the exact #357 query request/result surface. Target-Bank and effective headroom derive from the same Task 1 accounting helpers, never a second formula; the response includes the Project revision used for the calculation.
-- [ ] Replace the per-Pad frame checks currently at `application.cpp:3597–3607` and `application.cpp:4290–4296` with unified quota validation; Captured and Imported selections flow through the identical path and carry the query's expected revision.
-- [ ] Emit the precise #357 failure category. A Bank failure names the Bank, effective remaining frames/bytes, and the three remedies (shorten, free a Pad, target another Bank); a generation/publication failure must not masquerade as Bank exhaustion.
-- [ ] Parity tests: CLI, MCP, and Native Host observe identical error payloads via the Facade only; with unchanged revision/reservation, query-then-commit admits exactly `effective_remaining_frames` and rejects `effective_remaining_frames + 1`; revision/reservation drift returns its approved conflict/state outcome.
+- [ ] Add the `sample.quota` query exactly as locked in amendment A5 (request `{"operation", "project_path", "slot"}`; result fields and target-Pad-exclusive used-bytes semantics as specified). Target-Bank and effective headroom derive from the same Task 1 accounting helpers, never a second formula; the response includes the Project revision used for the calculation.
+- [ ] Replace the per-Pad frame checks currently at `application.cpp:3597–3607` and `application.cpp:4290–4296` with unified quota validation; Captured and Imported selections flow through the identical path and carry the query's revision via `sample.import.begin`'s existing `expected_revision`.
+- [ ] Emit the binding failure category per amendment A6. A Bank failure names the Bank, effective remaining frames/bytes, and the three remedies (shorten, free a Pad, target another Bank); a `PROJECT_QUOTA_EXHAUSTED` failure carries project totals plus per-Bank usage and must not masquerade as Bank exhaustion.
+- [ ] Parity tests: CLI, MCP, and Native Host observe identical error payloads via the Facade only; with unchanged revision, query-then-commit admits exactly `effective_remaining_frames` and rejects `effective_remaining_frames + 1`; revision drift returns `REVISION_CONFLICT`.
 - [ ] Run `scripts/core.sh test dev full`.
 
-**Acceptance:** query and commit agree byte-for-byte across all Hosts under the #357 revision/reservation precondition; no Host parses bundle contents for quota.
+**Acceptance:** query and commit agree byte-for-byte across all Hosts under the unchanged-revision precondition; no Host parses bundle contents for quota.
 
 ## Task 4 (#346): Web Ingest Tier, Manifest, Creator UX, Version Integration, Snapshot
 
 **Scope:** `packages/web-runtime-platform`, `apps/web-runtime-host`, `apps/creator-web`, `products/lmdj`, portal current pages, immutable snapshot.
 
-- [ ] Manifest `resource_limits`: remove `decoded_frames_per_pad`; add the exact artifact, ingest, per-Bank, active-generation, and publication keys/values approved by #357. Update `manifest_gate.cpp`, `control_runtime.cpp`, `packages/web-runtime-platform/CMakeLists.txt`, generated identity inputs, and why+remedy gate messages without hand-entering Product identity.
-- [ ] creator-web import flow: file picker/drag → enforce source-byte cap → parse the #357-approved metadata needed for pre-decode duration/frame/channel admission → reject before expensive decode when outside the envelope → `decodeAudioData` outside the Wasm heap → enforce exact post-decode bounds → waveform/preview/trim → encode the selection to PCM16 WAV → existing commit path → release source buffers at the approved lifecycle points.
-- [ ] Replace `COMMIT_MAX_FRAMES` (`apps/creator-web/src/capture/capture_buffer.ts:3`) with the Facade effective-headroom query: capture and import trim ceilings become `min(source frames, effective_remaining_frames)` for the returned Project revision; the trim UI draws the selectable ceiling before commit.
+- [ ] Manifest `resource_limits` (amendment A10 key set): remove `decoded_frames_per_pad`; keep `decoded_float_pcm_bytes_per_bank` = 67,108,864 and `decoded_float_pcm_bytes_total` = 134,217,728 under their amended semantics; add `decoded_float_pcm_bytes_resident` = 268,435,456, `ingest_source_bytes` = 104,857,600, `ingest_decoded_frames` = 43,200,000, `ingest_channels` = 2; set `imported_wav_bytes` = 68,157,440. Update `manifest_gate.cpp`, `control_runtime.cpp`, `packages/web-runtime-platform/CMakeLists.txt`, generated identity inputs, and why+remedy gate messages without hand-entering Product identity.
+- [ ] `control_runtime.cpp` publication ledger (amendment A4): keep the reclaim→reserve→publish order with `maximum_resident_bytes` = 268,435,456 as the ceiling, rename the failure `resource` to `resident_pcm_bytes` with a retry-oriented why+remedy message, and add the A4 pre-check — reclaim, then require `reserved_live_bytes ≤ resident − total` before `prepare_runtime_snapshot` begins.
+- [ ] creator-web import flow (amendment A7): file picker/drag → enforce `ingest_source_bytes` before reading content → sniff container (WAV/MP3/M4A-AAC/FLAC only, fail-closed) → pre-decode duration/frame/channel admission where metadata is decidable → `decodeAudioData` on a 48,000 Hz `OfflineAudioContext` outside the Wasm heap → exact post-decode bounds (≤ 43,200,000 frames, ≤ 2 channels) → waveform/preview/trim on the single decoded copy → encode the selection to PCM16 WAV → existing commit path → release the decoded buffer at the A7 §15 lifecycle points (commit success, cancel, replace, Project close, background-eviction recovery).
+- [ ] Replace `COMMIT_MAX_FRAMES` (`apps/creator-web/src/capture/capture_buffer.ts:3`) with the `sample.quota` query: capture and import trim ceilings become `min(source frames, effective_remaining_frames)` for the returned Project revision; the trim UI draws the selectable ceiling before commit.
 - [ ] Quota-exhausted presentation: surface Bank, remaining time, and per-Pad usage from the error payload; non-blocking, selection preserved.
 - [ ] Version integration (single boundary after Tasks 1–3 merge): re-audit protected `main`, bump Module/Host SemVers and the error Contract per **Version Management**, allocate the next verified unused Product Build after current `1.0.37.0`, regenerate Assembly identity, and update current portal pages.
 - [ ] Commit the complete verified source/Assembly/current-page change, require a clean worktree, then run `scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL` and commit only the generated immutable snapshot as the second Task-local commit. Re-run the Portal check on the complete two-commit PR tree; the queue squash is the single `main` commit.
@@ -161,7 +166,7 @@ For an unchanged Project revision and unchanged publication reservation state, q
 
 **Scope:** Exact Product Build from Task 4; macOS Safari and physical iPadOS Safari evidence only.
 
-- [ ] Run the #357-approved normal-boundary and rejection fixtures through import, metadata admission, decode, waveform/preview/trim, commit/refusal, cancel, replace, re-import, and background/recovery cleanup.
+- [ ] Run the amendment A9 fixtures (`LM-OK-SONG`, `LM-OK-BOUNDARY-INGEST`, `LM-REJ-FRAMES`, `LM-REJ-SOURCE`, `LM-REJ-CH`, `LM-OK-COMMIT-BOUNDARY`, `LM-REJ-COMMIT-PLUS-4B`, and the lifecycle sequences) through import, metadata admission, decode, waveform/preview/trim, commit/refusal, cancel, replace, re-import, and background/recovery cleanup, with the A9 §19 measurement method and §21 pass/fail thresholds.
 - [ ] Record device model, OS/browser versions, Product Build, full Git SHA, fixture hashes and encoded/decoded dimensions, observed peak/released memory, and any page reload or process termination under `docs/release-evidence/`.
 - [ ] Verify source decode length is not misreported as Wasm residency and that cancel/re-import/post-commit release does not retain the prior full decoded source.
 - [ ] Update the canonical manual-verification ledger. Unsupported, failed, or incomplete rows stay `unverified` and block #341 closure.
@@ -170,14 +175,14 @@ For an unchanged Project revision and unchanged publication reservation state, q
 
 ## Version Management
 
-Current identities below are from protected `main` at `9b5c2929a2cf6cf86ce39e495920b852a01c740d` after Stage 9. #357 must re-audit and confirm the allocation class; Task 4 re-verifies exact unused numbers immediately before integration.
+Current identities below are from protected `main` at `9b5c2929a2cf6cf86ce39e495920b852a01c740d` after Stage 9. Allocation classes are confirmed by amendment A10 (`audio-runtime` 2.0.0, `application-facade` 2.1.0, `lmdj.error.v1` 1.1.0 with two members, `project-cooker` none, `web-runtime-platform` 2.0.0); Task 4 re-verifies exact unused numbers immediately before integration.
 
 | Component | Current | Allocated | Task |
 | --- | --- | --- | --- |
-| `lmdj.error.v1` Contract | 1.0.0 | 1.1.0 (additive enum member) | 1 |
-| audio-runtime | 1.0.0 | 2.0.0 if the public limits surface removal remains breaking; #357 must confirm | 1–2, integrated in 4 |
-| project-cooker | 1.0.0 | 1.1.0 only if its public behavior/sources change; otherwise none | 1, integrated in 4 |
-| application-facade | 2.0.0 | 2.1.0 for the additive query; #357 must confirm if another breaking surface is required | 3, integrated in 4 |
+| `lmdj.error.v1` Contract | 1.0.0 | 1.1.0 (two additive enum members) | 1 |
+| audio-runtime | 1.0.0 | 2.0.0 (confirmed: limits-field removal/rename is breaking) | 1–2, integrated in 4 |
+| project-cooker | 1.0.0 | none (confirmed: quota validation lives in Facade callbacks and `from_snapshot`; Task 1 audit re-checks and returns to review on any surface change) | 1, integrated in 4 |
+| application-facade | 2.0.0 | 2.1.0 (confirmed: additive `sample.quota` query and error classes; no breaking surface) | 3, integrated in 4 |
 | web-runtime-platform | 1.0.0 | 2.0.0 for the breaking manifest-key migration | 4 |
 | web-runtime-host | 2.0.0 | 2.1.0 | 4 |
 | creator-web | 2.0.0 | 2.1.0 | 4 |
@@ -195,8 +200,8 @@ Implementation Tasks: required — affected portal routes are `/core/modules/aud
 ## Issue Map
 
 - [x] #342 — original plan (docs), completed by #353
-- [ ] #358 — this readiness correction (docs)
-- [ ] #357 — Task 0 decision amendment, blocks all implementation
+- [x] #358 — readiness correction (docs), completed by #368
+- [ ] #357 — Task 0 decision amendment ([2026-08-28 amendment](../../prd/decisions/2026-08-28-long-material-quota-accounting.md)), blocks all implementation
 - [ ] #343 — Task 1, blocked by #357
 - [ ] #344 — Task 2, blocked by #357 and #343; parallel with #345 after #343
 - [ ] #345 — Task 3, blocked by #357 and #343; parallel with #344 after #343
