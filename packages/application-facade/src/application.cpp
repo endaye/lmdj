@@ -2177,6 +2177,40 @@ struct Application::Impl {
               true,
           });
     }
+    auto replay_persisted_command = [&]() -> foundation::Result<
+        std::optional<SequenceMutationResult>> {
+      auto replayed = projects.replay_sequence_flush(
+          request.project_path, runtime.session_id, request.command_id);
+      if (!replayed.has_value()) {
+        return foundation::Result<
+            std::optional<SequenceMutationResult>>::failure(
+            replayed.error());
+      }
+      if (!replayed.value().has_value()) {
+        return foundation::Result<
+            std::optional<SequenceMutationResult>>::success(std::nullopt);
+      }
+      return foundation::Result<
+          std::optional<SequenceMutationResult>>::success(
+          SequenceMutationResult{
+              runtime_status(runtime),
+              replayed.value()->committed_revision,
+              true,
+          });
+    };
+    bool persisted_command_checked = false;
+    if (!runtime.in_flight_flush.has_value()) {
+      auto replayed = replay_persisted_command();
+      if (!replayed.has_value()) {
+        return foundation::Result<SequenceMutationResult>::failure(
+            replayed.error());
+      }
+      persisted_command_checked = true;
+      if (replayed.value().has_value()) {
+        return foundation::Result<SequenceMutationResult>::success(
+            std::move(*replayed.value()));
+      }
+    }
 
     finalize_unreleased(runtime, stop || switch_due);
     runtime.last_runtime_frame = request.runtime_frame;
@@ -2212,6 +2246,17 @@ struct Application::Impl {
       runtime.in_flight_flush.reset();
     }
     if (!replayed_in_flight_command && !runtime.pending_events.empty()) {
+      if (!persisted_command_checked) {
+        auto replayed = replay_persisted_command();
+        if (!replayed.has_value()) {
+          return foundation::Result<SequenceMutationResult>::failure(
+              replayed.error());
+        }
+        if (replayed.value().has_value()) {
+          return foundation::Result<SequenceMutationResult>::success(
+              std::move(*replayed.value()));
+        }
+      }
       if (was_switching) {
         auto active = sequence_journals.set_state(
             request.project_path,

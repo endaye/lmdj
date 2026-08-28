@@ -397,6 +397,171 @@ void test_post_commit_retry_preserves_later_events_for_a_new_command() {
       project / "recovery/active/sequence.jsonl"));
 }
 
+void test_older_flush_replay_preserves_pending_events() {
+  TempDirectory temp;
+  const auto project = temp.path() / "older-flush-replay.lmdj";
+  const PatternId pattern_id{uuid(80)};
+  const SequenceSessionId session_id{uuid(81)};
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+
+  LMDJ_CHECK(
+      application.begin_sequence({project, session_id, pattern_id, 2, 0})
+          .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 0, 1, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 12'000, 2, false}})
+                 .has_value());
+  const lmdj::facade::SequenceFlushRequest first{
+      project, session_id, CommandId{uuid(82)}, 12'000};
+  const auto first_result = application.flush_sequence(first);
+  LMDJ_CHECK(first_result.has_value());
+  LMDJ_CHECK(first_result.value().committed_revision == 3);
+
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 24'000, 3, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 36'000, 4, false}})
+                 .has_value());
+  const auto second = application.flush_sequence(
+      {project, session_id, CommandId{uuid(83)}, 36'000});
+  LMDJ_CHECK(second.has_value());
+  LMDJ_CHECK(second.value().committed_revision == 4);
+
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 48'000, 5, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 60'000, 6, false}})
+                 .has_value());
+  const auto replayed = application.flush_sequence(
+      {project, session_id, first.command_id, 60'001});
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().committed_revision == 3);
+  LMDJ_CHECK(replayed.value().status.pending_event_count == 1);
+
+  const auto third = application.flush_sequence(
+      {project, session_id, CommandId{uuid(84)}, 60'002});
+  LMDJ_CHECK(third.has_value());
+  LMDJ_CHECK(!third.value().replayed);
+  LMDJ_CHECK(third.value().committed_revision == 5);
+  LMDJ_CHECK(third.value().status.pending_event_count == 0);
+  LMDJ_CHECK(application.stop_sequence(
+      {project, session_id, CommandId{uuid(85)}, 60'003}).has_value());
+}
+
+void test_project_command_collision_does_not_poison_sequence_journal() {
+  TempDirectory temp;
+  const auto project = temp.path() / "project-command-collision.lmdj";
+  const PatternId pattern_id{uuid(90)};
+  const SequenceSessionId session_id{uuid(91)};
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+
+  LMDJ_CHECK(
+      application.begin_sequence({project, session_id, pattern_id, 2, 0})
+          .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 0, 1, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 12'000, 2, false}})
+                 .has_value());
+  const auto journal_path = project / "recovery/active/sequence.jsonl";
+  const auto journal_before = read_bytes(journal_path);
+
+  const auto collision = application.flush_sequence(
+      {project, session_id, CommandId{uuid(12)}, 12'000});
+  LMDJ_CHECK(!collision.has_value());
+  LMDJ_CHECK(collision.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(read_bytes(journal_path) == journal_before);
+  LMDJ_CHECK(application.query_sequence_status({project})
+                 .value()
+                 .pending_event_count == 1);
+
+  const auto valid = application.flush_sequence(
+      {project, session_id, CommandId{uuid(92)}, 12'001});
+  LMDJ_CHECK(valid.has_value());
+  LMDJ_CHECK(valid.value().committed_revision == 3);
+  LMDJ_CHECK(application.stop_sequence(
+      {project, session_id, CommandId{uuid(93)}, 12'002}).has_value());
+
+  lmdj::project_io::ProjectStore store;
+  const auto reconciled = store.reconcile_sequence_recovery(project);
+  LMDJ_CHECK(reconciled.has_value());
+  LMDJ_CHECK(reconciled.value().empty());
+  const SequenceSessionId next_session{uuid(94)};
+  LMDJ_CHECK(application.begin_sequence(
+      {project, next_session, pattern_id, 3, 12'003}).has_value());
+  LMDJ_CHECK(application.stop_sequence(
+      {project, next_session, CommandId{uuid(95)}, 12'004}).has_value());
+}
+
+void test_prior_sequence_collision_does_not_poison_new_session() {
+  TempDirectory temp;
+  const auto project = temp.path() / "prior-sequence-collision.lmdj";
+  const PatternId pattern_id{uuid(100)};
+  const SequenceSessionId first_session{uuid(101)};
+  const CommandId first_command{uuid(102)};
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+
+  LMDJ_CHECK(application.begin_sequence(
+      {project, first_session, pattern_id, 2, 0}).has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, first_session, {PadSlotId{0, 0}, 100, 0, 1, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, first_session, {PadSlotId{0, 0}, 0, 12'000, 2, false}})
+                 .has_value());
+  LMDJ_CHECK(application.flush_sequence(
+      {project, first_session, first_command, 12'000}).has_value());
+  LMDJ_CHECK(application.stop_sequence(
+      {project, first_session, CommandId{uuid(103)}, 12'001}).has_value());
+
+  const SequenceSessionId second_session{uuid(104)};
+  LMDJ_CHECK(application.begin_sequence(
+      {project, second_session, pattern_id, 3, 24'000}).has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, second_session, {PadSlotId{0, 0}, 100, 24'000, 3, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, second_session, {PadSlotId{0, 0}, 0, 36'000, 4, false}})
+                 .has_value());
+  const auto journal_path = project / "recovery/active/sequence.jsonl";
+  const auto journal_before = read_bytes(journal_path);
+
+  const auto collision = application.flush_sequence(
+      {project, second_session, first_command, 36'000});
+  LMDJ_CHECK(!collision.has_value());
+  LMDJ_CHECK(collision.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(read_bytes(journal_path) == journal_before);
+  LMDJ_CHECK(application.query_sequence_status({project})
+                 .value()
+                 .pending_event_count == 1);
+
+  const auto valid = application.flush_sequence(
+      {project, second_session, CommandId{uuid(105)}, 36'001});
+  LMDJ_CHECK(valid.has_value());
+  LMDJ_CHECK(valid.value().committed_revision == 4);
+  LMDJ_CHECK(application.stop_sequence(
+      {project, second_session, CommandId{uuid(106)}, 36'002}).has_value());
+
+  lmdj::project_io::ProjectStore store;
+  const auto reconciled = store.reconcile_sequence_recovery(project);
+  LMDJ_CHECK(reconciled.has_value());
+  LMDJ_CHECK(reconciled.value().empty());
+  const SequenceSessionId third_session{uuid(107)};
+  LMDJ_CHECK(application.begin_sequence(
+      {project, third_session, pattern_id, 4, 48'000}).has_value());
+  LMDJ_CHECK(application.stop_sequence(
+      {project, third_session, CommandId{uuid(108)}, 48'001}).has_value());
+}
+
 void test_owner_loss_apply_and_discard_are_explicit() {
   TempDirectory temp;
   const auto project = temp.path() / "recovery.lmdj";
@@ -630,6 +795,9 @@ int main() {
   try {
     test_sequence_lifecycle_idempotence_and_mutation_exclusion();
     test_post_commit_retry_preserves_later_events_for_a_new_command();
+    test_older_flush_replay_preserves_pending_events();
+    test_project_command_collision_does_not_poison_sequence_journal();
+    test_prior_sequence_collision_does_not_poison_new_session();
     test_owner_loss_apply_and_discard_are_explicit();
     test_writer_lease_blocks_competing_sequence_owner();
     test_begin_cannot_cross_an_authoring_admission();

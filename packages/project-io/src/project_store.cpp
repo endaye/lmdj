@@ -2798,6 +2798,7 @@ ProjectStore::replay_sequence_flush(
       SequenceFlushExecution{
           identity,
           *merge,
+          receipt->second.committed_revision,
           domain::AppliedCommand{
               std::move(loaded.value().state),
               receipt->second.event,

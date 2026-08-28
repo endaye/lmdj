@@ -346,6 +346,7 @@ void test_sequence_flush_commits_once_and_replays_receipt() {
   const auto first = store.execute_sequence_flush(bundle, identity);
   LMDJ_CHECK(first.has_value());
   LMDJ_CHECK(!first.value().outcome.replayed);
+  LMDJ_CHECK(first.value().committed_revision == 1);
   LMDJ_CHECK(first.value().outcome.state.revision == 1);
   LMDJ_CHECK(
       first.value().outcome.state.patterns.at(identity.pattern_id).events.size() ==
@@ -353,14 +354,31 @@ void test_sequence_flush_commits_once_and_replays_receipt() {
   const auto active = journal.read_active(bundle);
   LMDJ_CHECK(active.has_value());
   LMDJ_CHECK(active.value().flushes.at(0).completed);
+  LMDJ_CHECK(
+      journal.remove_active_if_complete(bundle, identity.session_id)
+          .has_value());
+  const auto advanced = store.execute(
+      bundle,
+      lmdj::domain::Command{lmdj::domain::UpdateSequenceSettings{
+          {CommandId{uuid_for(99)}, 1},
+          121,
+          std::nullopt,
+          std::nullopt,
+      }});
+  LMDJ_CHECK(advanced.has_value());
+  LMDJ_CHECK(advanced.value().state.revision == 2);
 
-  const auto replayed = store.execute_sequence_flush(bundle, identity);
+  const auto replayed = store.replay_sequence_flush(bundle, identity);
   LMDJ_CHECK(replayed.has_value());
-  LMDJ_CHECK(replayed.value().outcome.replayed);
-  LMDJ_CHECK(replayed.value().outcome.state.revision == 1);
+  LMDJ_CHECK(replayed.value().has_value());
+  LMDJ_CHECK(replayed.value()->committed_revision == 1);
+  LMDJ_CHECK(replayed.value()->outcome.replayed);
+  LMDJ_CHECK(replayed.value()->outcome.state.revision == 2);
   LMDJ_CHECK(
       replayed.value()
-          .outcome.state.patterns.at(identity.pattern_id)
+          ->outcome
+          .state
+          .patterns.at(identity.pattern_id)
           .events.size() == 1);
 }
 
