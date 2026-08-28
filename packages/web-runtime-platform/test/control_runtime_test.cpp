@@ -1593,6 +1593,96 @@ void test_authoritative_switch_supersedes_overlay_and_stop_cancels_target() {
                  .size() == 1);
 }
 
+void test_stop_fails_closed_if_target_applies_between_cancel_queries() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto target_pattern = uuid(13);
+  const auto& created = check_exact_success(
+      runtime->dispatch(
+          "pattern.create",
+          {{"command_id", uuid(750)},
+           {"expected_revision", 0},
+           {"pattern_id", target_pattern},
+           {"bars", 1}},
+          {}),
+      {"committed_revision", "pattern_id", "bars", "replayed",
+       "project_revision"});
+  LMDJ_CHECK(created.at("committed_revision") == 1);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(runtime->dispatch(
+      "sequence.record.begin",
+      {{"session_id", kSequenceSessionId},
+       {"pattern_id", kPatternId},
+       {"expected_revision", 1}},
+      {}));
+  const auto& switching = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.switch-request",
+          {{"session_id", kSequenceSessionId},
+           {"next_pattern_id", target_pattern}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "pattern_publication"});
+  const auto boundary =
+      switching.at("effective_runtime_frame").get<std::uint64_t>();
+
+  OneShotAudioDriver audio(runtime->engine());
+  while (runtime->engine().telemetry().rendered_frames < boundary) {
+    audio.render_one();
+  }
+  LMDJ_CHECK(runtime->engine().telemetry().rendered_frames == boundary);
+  LMDJ_CHECK(runtime->engine().current_pattern_id() ==
+             lmdj::foundation::PatternId{std::string(kPatternId)});
+
+  struct CancelGate final {
+    std::atomic<bool> first_query_complete{false};
+    std::atomic<bool> release{false};
+  } gate;
+  lmdj::web_runtime::testing::CancelPendingSwitchHook hook{
+      &gate,
+      [](void* context) noexcept {
+        auto& cancel_gate = *static_cast<CancelGate*>(context);
+        cancel_gate.first_query_complete.store(true, std::memory_order_release);
+        while (!cancel_gate.release.load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+      }};
+  lmdj::web_runtime::testing::set_cancel_pending_switch_hook(&hook);
+
+  Json stop_response;
+  std::thread stop_thread([&] {
+    stop_response = runtime->dispatch(
+        "sequence.record.stop",
+        {{"session_id", kSequenceSessionId}, {"command_id", uuid(751)}},
+        {});
+  });
+  while (!gate.first_query_complete.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  audio.render_one();
+  LMDJ_CHECK(runtime->engine().current_pattern_id() ==
+             lmdj::foundation::PatternId{target_pattern});
+  LMDJ_CHECK(!runtime->engine().pending_pattern_id().has_value());
+  gate.release.store(true, std::memory_order_release);
+  stop_thread.join();
+
+  check_error(stop_response, "INVALID_ARGUMENT");
+  LMDJ_CHECK(runtime->engine().telemetry().state ==
+             lmdj::audio::RealtimeState::stopped);
+  LMDJ_CHECK(!runtime->engine().current_pattern_id().has_value());
+  LMDJ_CHECK(inspect_project(temp.path(), kProjectId).at("project_revision") ==
+             1);
+}
+
 void test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -4009,6 +4099,7 @@ int main() {
     test_pending_sequence_overlay_repeats_and_commits_without_duplicate();
     test_stop_replay_recovers_a_committed_clean_publication_failure();
     test_authoritative_switch_supersedes_overlay_and_stop_cancels_target();
+    test_stop_fails_closed_if_target_applies_between_cancel_queries();
     test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_import_prevents_current_project_switch_until_terminal();

@@ -386,7 +386,7 @@ void test_same_boundary_pattern_supersession_is_conserved_under_concurrency() {
             << " applied=" << telemetry.applied_publications
             << " superseded=" << telemetry.superseded_publications
             << " canceled=" << telemetry.canceled_publications
-            << " pending=" << (telemetry.pending_generation == 0 ? 0 : 1)
+            << " pending=" << telemetry.pending_publications
             << '\n';
   LMDJ_CHECK(telemetry.current_generation == initial.generation);
   LMDJ_CHECK(telemetry.pending_generation != 0);
@@ -394,7 +394,7 @@ void test_same_boundary_pattern_supersession_is_conserved_under_concurrency() {
   LMDJ_CHECK(
       telemetry.accepted_publications ==
       telemetry.applied_publications + telemetry.superseded_publications +
-          telemetry.canceled_publications + 1);
+          telemetry.canceled_publications + telemetry.pending_publications);
   LMDJ_CHECK(telemetry.accepted_publications == accepted);
   LMDJ_CHECK(telemetry.publication_rejections == slots_full);
   LMDJ_CHECK(telemetry.superseded_publications > 0);

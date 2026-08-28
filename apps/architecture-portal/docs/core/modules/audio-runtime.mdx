@@ -25,11 +25,11 @@ Runtime Snapshot + 可选 pending overlay → immutable Prepared Pattern slot �
 ## 5. API 与 Artifact 边界
 消费不可变快照、resolved playback 与已准备样本，不在实时回调解析 Project/WAV、分配内存、加锁或调用 Host。
 ## 6. 状态、错误与并发
-atomic claimed marker 消除 generation 更新与 callback ownership 之间的竞态窗口；queued、audio-owned 与 apply-point mailbox 都先剥离 marker 再解析 generation，不会把已 claim 的合法 authority 误报为 publication pending。不同 BPM 的 claimed view 仍是后续 boundary 的 transport authority。固定 SPSC 队列和压力测试覆盖 control/Voice 并发，旧 Pattern slot 只由 control thread reclaim，callback 不析构 view，overflow fail closed，实时路径避免无界工作。每个 accepted Pattern publication 恰好落入 applied、superseded、canceled 或一个 pending 桶；取消后的 audio-owned slot 后续被 callback 回收时不会重复计为 superseded。deterministic race hooks 只存在于 private testable library；production archive/callback 无 hook symbol、marker、pointer atomic 或 branch。
+atomic claimed marker 消除 generation 更新与 callback ownership 之间的竞态窗口；queued、audio-owned 与 apply-point mailbox 都先剥离 marker 再解析 generation，不会把已 claim 的合法 authority 误报为 publication pending。不同 BPM 的 claimed view 仍是后续 boundary 的 transport authority。固定 SPSC 队列和压力测试覆盖 control/Voice 并发，旧 Pattern slot 只由 control thread reclaim，callback 不析构 view，overflow fail closed，实时路径避免无界工作。`pending_publications` 显式计数 audio-owned A 与同时 queued B 两个不同 generation；每个 accepted Pattern publication 恰好落入 applied、superseded、canceled 或 pending。取消后的 audio-owned slot 后续被 callback 回收时不会重复计为 superseded；quiescent `stop()` 将 queued-only、audio-owned-only 或两者各计一次 canceled，且这些累计 counter 跨 `start()` 保留。deterministic race hooks 只存在于 private testable library；production archive/callback 无 hook symbol、marker、pointer atomic 或 branch。
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 ## 8. 测试与证据
-Realtime、same-boundary overlay supersession、apply-point 精确 switch/Stop replacement authority、queued/audio-owned cancellation、`accepted = applied + superseded + canceled + pending` conservation stress、offline、sample bank、queue 与 CoreAudio output 测试；物理延迟验收单列。
+Realtime、same-boundary overlay supersession、apply-point 精确 switch/Stop replacement authority、queued/audio-owned/stop cancellation、two-pending `accepted = applied + superseded + canceled + pending_publications` conservation stress、offline、sample bank、queue 与 CoreAudio output 测试；物理延迟验收单列。
 ## 9. 限制与下一门禁
 自动化绿色不证明 MIDI/iPad/扬声器体验；需保留设备视频和测量证据。
 ## 10. 版本身份

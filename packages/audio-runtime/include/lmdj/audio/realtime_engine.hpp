@@ -81,6 +81,7 @@ struct PatternTelemetry {
   std::uint64_t current_generation;
   std::uint64_t pending_generation;
   std::uint64_t pending_activation_frame;
+  std::uint64_t pending_publications;
   std::uint64_t accepted_publications;
   std::uint64_t applied_publications;
   std::uint64_t superseded_publications;

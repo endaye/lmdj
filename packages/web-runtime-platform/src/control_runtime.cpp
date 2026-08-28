@@ -23,7 +23,31 @@
 #include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/artifact.hpp>
 
+#include "testing_hooks.hpp"
+
 namespace lmdj::web_runtime {
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+namespace testing {
+namespace {
+
+std::atomic<CancelPendingSwitchHook*> cancel_pending_switch_hook{nullptr};
+
+}  // namespace
+
+void set_cancel_pending_switch_hook(CancelPendingSwitchHook* hook) noexcept {
+  cancel_pending_switch_hook.store(hook, std::memory_order_release);
+}
+
+void invoke_cancel_pending_switch_hook() noexcept {
+  auto* hook =
+      cancel_pending_switch_hook.exchange(nullptr, std::memory_order_acq_rel);
+  if (hook != nullptr && hook->invoke != nullptr) {
+    hook->invoke(hook->context);
+  }
+}
+
+}  // namespace testing
+#endif
 namespace {
 
 using Json = nlohmann::json;
@@ -685,10 +709,14 @@ struct ControlRuntime::Impl {
     if (telemetry.current_generation == authority.generation) {
       return false;
     }
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    testing::invoke_cancel_pending_switch_hook();
+#endif
     const auto pending = pending_pattern_authority();
     if (!pending.has_value()) {
       // Exact replay after an earlier successful cancellation.
-      return true;
+      return engine.pattern_telemetry().current_generation !=
+          authority.generation;
     }
     if (pending->generation != authority.generation ||
         pending->pattern_id != authority.pattern_id ||

@@ -311,7 +311,14 @@ apply-point claim 也先剥离 bit-63 marker 再匹配 slot/authority；精确 s
 重用已过期 activation frame；相同 durable receipt 的延迟 replay 从当前 transport
 派生新 next Bar，Project revision 不二次变化。Pattern telemetry 明确增加 canceled
 终态，并由 component/stress 证明 accepted 只落入 applied、superseded、canceled
-或单一 pending bucket。
+或显式计数的 pending bucket。
+
+**2026-08-29 Review Fix 5 disposition:** pending 不再推断为 0/1；telemetry
+显式报告 `pending_publications`，所以 audio-owned A 与 queued B 并存时守恒式仍
+完整。quiescent `stop()` 对 queued-only、audio-owned-only 与两者并存逐 generation
+计 canceled，重复 stop/start 不丢失或重复累计。ControlRuntime cancellation 的
+no-pending 分支重读 current generation；target 若恰在两次查询之间 apply，Stop
+fail closed，而不是误判已取消。三个窗口都有 deterministic native 回归。
 
 ### M5 恢复不可发现、恢复 UI 无指纹信息（SR-D17/D22 的 UX 半途）
 

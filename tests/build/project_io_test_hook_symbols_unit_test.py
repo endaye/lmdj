@@ -36,6 +36,8 @@ class ValidateSymbolsTest(unittest.TestCase):
             "invoke_pattern_claim_hook",
             "set_pattern_apply_hook",
             "invoke_pattern_apply_hook",
+            "set_cancel_pending_switch_hook",
+            "invoke_cancel_pending_switch_hook",
             "fail_next_pattern_publication",
         )
         for symbol in forbidden:

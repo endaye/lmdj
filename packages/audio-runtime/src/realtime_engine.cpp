@@ -998,13 +998,19 @@ void RealtimeEngine::stop() noexcept {
         BankState::reclaimable, std::memory_order_release);
     pending_publications_.fetch_sub(1, std::memory_order_relaxed);
   }
+  const auto audio_pending_generation = detail::pattern_mailbox_generation(
+      audio_pending_pattern_generation_.exchange(
+          0, std::memory_order_acq_rel));
+  const auto queued_generation = detail::pattern_mailbox_generation(
+      queued_pattern_generation_.exchange(0, std::memory_order_acq_rel));
   if (audio_pending_pattern_.has_value()) {
     pattern_slots_[audio_pending_pattern_->slot].state.store(
         PatternState::reclaimable, std::memory_order_release);
     audio_pending_pattern_.reset();
   }
-  const auto queued_generation =
-      queued_pattern_generation_.exchange(0, std::memory_order_acq_rel);
+  if (audio_pending_generation != 0) {
+    canceled_pattern_publications_.fetch_add(1, std::memory_order_relaxed);
+  }
   if (queued_generation != 0) {
     const auto queued = std::find_if(
         pattern_slots_.begin(),
@@ -1018,8 +1024,10 @@ void RealtimeEngine::stop() noexcept {
       queued->state.store(
           PatternState::reclaimable, std::memory_order_release);
     }
+    if (queued_generation != audio_pending_generation) {
+      canceled_pattern_publications_.fetch_add(1, std::memory_order_relaxed);
+    }
   }
-  audio_pending_pattern_generation_.store(0, std::memory_order_release);
   if (capture_state_.load(std::memory_order_relaxed) !=
       CaptureState::corrupted) {
     capture_state_.store(CaptureState::idle, std::memory_order_release);
@@ -1445,12 +1453,20 @@ PatternTelemetry RealtimeEngine::pattern_telemetry() const noexcept {
       current_pattern_slot_.load(std::memory_order_acquire);
   const auto mailbox =
       queued_pattern_generation_.load(std::memory_order_acquire);
+  const auto queued_generation =
+      detail::pattern_mailbox_generation(mailbox);
+  const auto audio_pending_generation =
+      detail::pattern_mailbox_generation(
+          audio_pending_pattern_generation_.load(
+              std::memory_order_acquire));
   const auto pending_generation =
-      mailbox != 0
-          ? detail::pattern_mailbox_generation(mailbox)
-          : detail::pattern_mailbox_generation(
-                audio_pending_pattern_generation_.load(
-                    std::memory_order_acquire));
+      queued_generation != 0 ? queued_generation : audio_pending_generation;
+  const auto pending_publications =
+      (queued_generation != 0 ? std::uint64_t{1} : std::uint64_t{0}) +
+      (audio_pending_generation != 0 &&
+               audio_pending_generation != queued_generation
+           ? std::uint64_t{1}
+           : std::uint64_t{0});
   const auto pending = std::find_if(
       pattern_slots_.begin(),
       pattern_slots_.end(),
@@ -1464,6 +1480,7 @@ PatternTelemetry RealtimeEngine::pattern_telemetry() const noexcept {
       slot == kNoPatternSlot ? 0 : pattern_slots_[slot].generation,
       pending_generation,
       pending == pattern_slots_.end() ? 0 : pending->activation_frame,
+      pending_publications,
       accepted_pattern_publications_.load(std::memory_order_relaxed),
       applied_pattern_publications_.load(std::memory_order_relaxed),
       superseded_pattern_publications_.load(std::memory_order_relaxed),

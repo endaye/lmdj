@@ -13,6 +13,8 @@ FORBIDDEN_SYMBOLS = (
     "invoke_pattern_claim_hook",
     "set_pattern_apply_hook",
     "invoke_pattern_apply_hook",
+    "set_cancel_pending_switch_hook",
+    "invoke_cancel_pending_switch_hook",
     "fail_next_pattern_publication",
 )
 
@@ -23,6 +25,8 @@ FORBIDDEN_BYTES = (
     b"invoke_pattern_claim_hook",
     b"set_pattern_apply_hook",
     b"invoke_pattern_apply_hook",
+    b"set_cancel_pending_switch_hook",
+    b"invoke_cancel_pending_switch_hook",
 )
 
 

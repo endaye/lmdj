@@ -1917,11 +1917,10 @@ void exact_cancellation_prevents_a_queued_switch_from_activating() {
   LMDJ_CHECK(!engine.pending_pattern_id().has_value());
   LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
   const auto telemetry = engine.pattern_telemetry();
-  const auto pending_count = telemetry.pending_generation == 0 ? 0U : 1U;
   LMDJ_CHECK(
       telemetry.accepted_publications ==
       telemetry.applied_publications + telemetry.superseded_publications +
-          telemetry.canceled_publications + pending_count);
+          telemetry.canceled_publications + telemetry.pending_publications);
   LMDJ_CHECK(telemetry.canceled_publications == 2);
 }
 
@@ -1990,12 +1989,124 @@ void apply_point_claim_preserves_authorized_switch_and_rejects_overlap() {
   render_frames(engine, 96'000);
   LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternB});
   const auto telemetry = engine.pattern_telemetry();
-  const auto pending_count = telemetry.pending_generation == 0 ? 0U : 1U;
   LMDJ_CHECK(
       telemetry.accepted_publications ==
       telemetry.applied_publications + telemetry.superseded_publications +
-          telemetry.canceled_publications + pending_count);
+          telemetry.canceled_publications + telemetry.pending_publications);
   LMDJ_CHECK(telemetry.canceled_publications == 0);
+}
+
+void stop_terminally_accounts_every_distinct_pending_pattern() {
+  {
+    RealtimeEngine engine;
+    auto initial = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+    auto queued = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 80));
+    LMDJ_CHECK(initial.has_value());
+    LMDJ_CHECK(queued.has_value());
+    LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+               PatternPublishResult::accepted);
+    LMDJ_CHECK(engine.start().has_value());
+    render_frames(engine, 100);
+    LMDJ_CHECK(
+        engine.publish_pattern_view(std::move(queued.value())).result ==
+        PatternPublishResult::accepted);
+
+    engine.stop();
+    const auto stopped = engine.pattern_telemetry();
+    LMDJ_CHECK(stopped.pending_generation == 0);
+    LMDJ_CHECK(stopped.accepted_publications == 2);
+    LMDJ_CHECK(stopped.applied_publications == 1);
+    LMDJ_CHECK(stopped.canceled_publications == 1);
+    LMDJ_CHECK(
+        stopped.accepted_publications ==
+        stopped.applied_publications + stopped.superseded_publications +
+            stopped.canceled_publications + stopped.pending_publications);
+    LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+    LMDJ_CHECK(engine.start().has_value());
+    const auto restarted = engine.pattern_telemetry();
+    LMDJ_CHECK(restarted.accepted_publications == 2);
+    LMDJ_CHECK(restarted.applied_publications == 1);
+    LMDJ_CHECK(restarted.canceled_publications == 1);
+    engine.stop();
+  }
+
+  {
+    RealtimeEngine engine;
+    auto initial = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+    auto audio_owned = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 80));
+    LMDJ_CHECK(initial.has_value());
+    LMDJ_CHECK(audio_owned.has_value());
+    LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+               PatternPublishResult::accepted);
+    LMDJ_CHECK(engine.start().has_value());
+    render_frames(engine, 100);
+    LMDJ_CHECK(
+        engine.publish_pattern_view(std::move(audio_owned.value())).result ==
+        PatternPublishResult::accepted);
+    render_frames(engine, 1);
+
+    engine.stop();
+    const auto stopped = engine.pattern_telemetry();
+    LMDJ_CHECK(stopped.pending_generation == 0);
+    LMDJ_CHECK(stopped.accepted_publications == 2);
+    LMDJ_CHECK(stopped.applied_publications == 1);
+    LMDJ_CHECK(stopped.canceled_publications == 1);
+    LMDJ_CHECK(
+        stopped.accepted_publications ==
+        stopped.applied_publications + stopped.superseded_publications +
+            stopped.canceled_publications + stopped.pending_publications);
+    LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+  }
+
+  {
+    RealtimeEngine engine;
+    auto initial = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+    auto audio_owned = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 80));
+    auto queued = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 96));
+    LMDJ_CHECK(initial.has_value());
+    LMDJ_CHECK(audio_owned.has_value());
+    LMDJ_CHECK(queued.has_value());
+    LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+               PatternPublishResult::accepted);
+    LMDJ_CHECK(engine.start().has_value());
+    render_frames(engine, 100);
+    const auto first =
+        engine.publish_pattern_view(std::move(audio_owned.value()));
+    LMDJ_CHECK(first.result == PatternPublishResult::accepted);
+    render_frames(engine, 1);
+    const auto second = engine.publish_pattern_view(
+        std::move(queued.value()), first.activation_frame);
+    LMDJ_CHECK(second.result == PatternPublishResult::accepted);
+    LMDJ_CHECK(first.generation != second.generation);
+    const auto concurrently_pending = engine.pattern_telemetry();
+    LMDJ_CHECK(concurrently_pending.pending_generation == second.generation);
+    LMDJ_CHECK(concurrently_pending.pending_publications == 2);
+    LMDJ_CHECK(
+        concurrently_pending.accepted_publications ==
+        concurrently_pending.applied_publications +
+            concurrently_pending.superseded_publications +
+            concurrently_pending.canceled_publications +
+            concurrently_pending.pending_publications);
+
+    engine.stop();
+    const auto stopped = engine.pattern_telemetry();
+    LMDJ_CHECK(stopped.pending_generation == 0);
+    LMDJ_CHECK(stopped.accepted_publications == 3);
+    LMDJ_CHECK(stopped.applied_publications == 1);
+    LMDJ_CHECK(stopped.canceled_publications == 2);
+    LMDJ_CHECK(
+        stopped.accepted_publications ==
+        stopped.applied_publications + stopped.superseded_publications +
+            stopped.canceled_publications + stopped.pending_publications);
+    LMDJ_CHECK(engine.reclaim_retired_patterns() == 2);
+  }
 }
 
 void publication_claim_race_preserves_the_claimed_boundary_and_phase() {
@@ -2151,6 +2262,7 @@ int main() {
   authoritative_switch_supersedes_only_the_exact_pending_overlay();
   exact_cancellation_prevents_a_queued_switch_from_activating();
   apply_point_claim_preserves_authorized_switch_and_rejects_overlap();
+  stop_terminally_accounts_every_distinct_pending_pattern();
   publication_claim_race_preserves_the_claimed_boundary_and_phase();
   pattern_generation_never_enters_the_claimed_marker_range();
 }

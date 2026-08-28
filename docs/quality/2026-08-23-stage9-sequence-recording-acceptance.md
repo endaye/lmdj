@@ -177,14 +177,23 @@ Cancellation is now an explicit telemetry terminal, with conservation
 `accepted = applied + superseded + canceled + pending` across queued,
 audio-owned, apply-point, and concurrent handoffs.
 
+Review Fix 5 makes `pending` an explicit cardinality instead of an inferred
+boolean: an audio-owned A and simultaneously queued B are two distinct pending
+authorities and `pending_publications == 2`. Quiescent `stop()` moves every
+distinct queued/audio-owned generation to canceled exactly once, including
+when both exist, while cumulative Pattern counters survive a later `start()`.
+Web Stop also closes its cancellation TOCTOU: if the target applies and clears
+pending after the first current-generation read, the no-pending branch rereads
+current generation and fails closed instead of claiming cancellation success.
+
 | Source boundary | Fresh local evidence |
 | --- | --- |
 | Facade owner/generation/replace/reject/flush projection | PASS: `facade.sequence_surface` |
 | Audio same-boundary newest-view wins, zero realtime allocation/free | PASS: `audio.realtime_engine` |
 | Deterministic claimed-boundary race keeps onset zero and exact phase | PASS: `audio.realtime_engine` |
 | Claimed 90-BPM transport basis and bit-63 generation boundary | PASS: `audio.realtime_engine` |
-| Concurrent accepted = applied + superseded + canceled + pending conservation | PASS: `audio.snapshot_publication_stress` |
-| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; authoritative target supersedes the exact pending view; Stop cancels the target and delayed exact replay derives a fresh boundary without a second Project mutation; boundary flush preserves the target |
+| Concurrent accepted = applied + superseded + canceled + pending_publications conservation | PASS: `audio.snapshot_publication_stress` plus deterministic two-pending component gate |
+| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; authoritative target supersedes the exact pending view; Stop cancels the target, fails closed if it applies between cancellation queries, and delayed exact replay derives a fresh boundary without a second Project mutation; boundary flush preserves the target |
 | Owner-loss cleanup-publication failure stops and clears Runtime Pattern | PASS: `host.web_control_runtime` |
 | Production Audio/Web hook symbol and embedded-marker exclusion | PASS: `build.project_io_test_hook_symbols` + unit contract |
 | Shared Runtime Session | PASS: stopped switch authority ignores a later stale boundary without a second flush |
