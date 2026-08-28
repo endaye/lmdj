@@ -39,9 +39,9 @@ constexpr auto kProjectId = "00000000-0000-4000-8000-000000000001";
 
 constexpr RuntimePreparationLimits kWebLimits{
     1'048'576,
-    240'000,
     67'108'864,
     134'217'728,
+    268'435'456,
 };
 
 ArtifactRef artifact(char digit, std::uint64_t byte_length) {
@@ -83,43 +83,32 @@ RuntimeSnapshot valid_snapshot() {
   };
 }
 
-RuntimeSnapshot large_shared_snapshot(bool one_extra_frame) {
-  auto shared = pcm(
-      48'000,
-      1,
-      std::vector<std::int16_t>(262'144, 0));
-  auto larger = one_extra_frame
-                    ? pcm(
-                          48'000,
-                          1,
-                          std::vector<std::int16_t>(262'145, 0))
-                    : shared;
+RuntimeSnapshot snapshot_with_frame_counts(
+    const std::vector<std::pair<PadSlotId, std::uint32_t>>& specifications) {
   std::vector<ResolvedPad> pads;
-  pads.reserve(64);
-  for (std::uint8_t slot = 0; slot < 64; ++slot) {
-    pads.push_back(
-        ResolvedPad{
-            PadSlotId{
-                static_cast<std::uint8_t>(slot / 16U),
-                static_cast<std::uint8_t>(slot % 16U),
-            },
-            artifact('c', 1),
-            one_extra_frame && slot == 63 ? larger : shared,
-            ResolvedPlayback{
-                0,
-                static_cast<std::uint32_t>(
-                    one_extra_frame && slot == 63 ? 262'145 : 262'144),
-                TriggerMode::one_shot,
-                1.0F,
-                false,
-            },
-        });
+  pads.reserve(specifications.size());
+  for (const auto& [slot, frames] : specifications) {
+    pads.push_back(ResolvedPad{
+        slot,
+        artifact('d', 1),
+        pcm(
+            48'000,
+            1,
+            std::vector<std::int16_t>(frames, 0)),
+        ResolvedPlayback{
+            0,
+            frames,
+            TriggerMode::one_shot,
+            1.0F,
+            false,
+        },
+    });
   }
   return RuntimeSnapshot{
       ProjectId{kProjectId},
       lmdj::foundation::PatternId{
           "30000000-0000-4000-8000-000000000001"},
-      8,
+      10,
       120,
       1,
       lmdj::domain::kPpq,
@@ -282,20 +271,39 @@ void validates_resolved_playback_before_storing_fixed_values() {
 void accepts_exact_web_limits_and_rejects_boundary_plus_one() {
   LMDJ_CHECK(kWebLimits.allows_artifact_bytes(1'048'576));
   LMDJ_CHECK(!kWebLimits.allows_artifact_bytes(1'048'577));
-  LMDJ_CHECK(kWebLimits.allows_decoded_frames_per_pad(240'000));
-  LMDJ_CHECK(!kWebLimits.allows_decoded_frames_per_pad(240'001));
-  LMDJ_CHECK(kWebLimits.allows_prepared_bank_bytes(67'108'864));
-  LMDJ_CHECK(!kWebLimits.allows_prepared_bank_bytes(67'108'865));
-  LMDJ_CHECK(kWebLimits.allows_live_bank_bytes(134'217'728));
-  LMDJ_CHECK(!kWebLimits.allows_live_bank_bytes(134'217'729));
-  const auto live_boundary = lmdj::audio::checked_runtime_byte_sum(
-      67'108'864, 67'108'864);
-  const auto live_plus_one = lmdj::audio::checked_runtime_byte_sum(
-      67'108'864, 67'108'865);
-  LMDJ_CHECK(live_boundary.has_value());
-  LMDJ_CHECK(live_plus_one.has_value());
-  LMDJ_CHECK(kWebLimits.allows_live_bank_bytes(live_boundary.value()));
-  LMDJ_CHECK(!kWebLimits.allows_live_bank_bytes(live_plus_one.value()));
+  LMDJ_CHECK(kWebLimits.allows_user_bank_bytes(67'108'864));
+  LMDJ_CHECK(!kWebLimits.allows_user_bank_bytes(67'108'865));
+  LMDJ_CHECK(kWebLimits.allows_generation_bytes(134'217'728));
+  LMDJ_CHECK(!kWebLimits.allows_generation_bytes(134'217'729));
+  LMDJ_CHECK(kWebLimits.allows_resident_bytes(268'435'456));
+  LMDJ_CHECK(!kWebLimits.allows_resident_bytes(268'435'457));
+
+  const auto allowed = lmdj::audio::assess_runtime_quota(
+      0, 0, 67'108'864, kWebLimits);
+  LMDJ_CHECK(allowed.has_value());
+  LMDJ_CHECK(
+      allowed->constraint == lmdj::audio::RuntimeQuotaConstraint::none);
+  const auto bank_bound = lmdj::audio::assess_runtime_quota(
+      0, 0, 67'108'868, kWebLimits);
+  LMDJ_CHECK(bank_bound.has_value());
+  LMDJ_CHECK(
+      bank_bound->constraint ==
+      lmdj::audio::RuntimeQuotaConstraint::user_bank);
+  const auto generation_bound = lmdj::audio::assess_runtime_quota(
+      0, 134'217'724, 8, kWebLimits);
+  LMDJ_CHECK(generation_bound.has_value());
+  LMDJ_CHECK(
+      generation_bound->constraint ==
+      lmdj::audio::RuntimeQuotaConstraint::generation);
+  const RuntimePreparationLimits tied_limits{1'048'576, 20, 20, 40};
+  const auto tie = lmdj::audio::assess_runtime_quota(
+      0, 0, 24, tied_limits);
+  LMDJ_CHECK(tie.has_value());
+  LMDJ_CHECK(
+      tie->constraint == lmdj::audio::RuntimeQuotaConstraint::user_bank);
+  LMDJ_CHECK(
+      !lmdj::audio::assess_runtime_quota(21, 0, 1, tied_limits)
+           .has_value());
 
   const auto largest_frame_count =
       std::numeric_limits<std::uint64_t>::max() / sizeof(float);
@@ -382,91 +390,129 @@ void bounded_preparation_rejects_before_allocation_and_retains_prior_bank() {
   const auto snapshot = valid_snapshot();
   const RuntimePreparationLimits exact{
       1'048'576,
-      5,
+      20,
       28,
-      28,
+      56,
   };
   const auto prepared = PreparedSampleBank::from_snapshot(snapshot, exact);
   LMDJ_CHECK(prepared.has_value());
   LMDJ_CHECK(prepared.value().decoded_pcm_bytes() == 28);
   check_prior();
 
-  struct Rejection {
-    RuntimePreparationLimits limits;
-    std::string_view resource;
-    std::uint64_t observed;
-    std::uint64_t limit;
-  };
-  const std::array rejections{
-      Rejection{
-          RuntimePreparationLimits{1'048'576, 4, 28, 28},
-          "decoded_frames_per_pad",
-          5,
-          4,
-      },
-      Rejection{
-          RuntimePreparationLimits{1'048'576, 5, 27, 28},
-          "prepared_bank_bytes",
-          28,
-          27,
-      },
-      Rejection{
-          RuntimePreparationLimits{1'048'576, 5, 28, 27},
-          "live_bank_bytes",
-          28,
-          27,
-      },
-  };
-  for (const auto& rejection : rejections) {
+  const auto bank_rejected = PreparedSampleBank::from_snapshot(
+      snapshot,
+      RuntimePreparationLimits{1'048'576, 19, 28, 56});
+  LMDJ_CHECK(!bank_rejected.has_value());
+  LMDJ_CHECK(
+      bank_rejected.error().code == ErrorCode::bank_quota_exhausted);
+  LMDJ_CHECK(bank_rejected.error().details.at("bank") == 0);
+  LMDJ_CHECK(bank_rejected.error().details.at("requested_bytes") == 20);
+  LMDJ_CHECK(bank_rejected.error().details.at("remaining_bytes") == 19);
+  LMDJ_CHECK(bank_rejected.error().details.at("quota_bytes") == 19);
+  LMDJ_CHECK(bank_rejected.error().details.at("consumed").empty());
+  LMDJ_CHECK(
+      bank_rejected.error().message.find("why:") != std::string::npos);
+  LMDJ_CHECK(
+      bank_rejected.error().message.find("remedy:") != std::string::npos);
+  check_prior();
+
+  const auto project_rejected = PreparedSampleBank::from_snapshot(
+      snapshot,
+      RuntimePreparationLimits{1'048'576, 20, 27, 56});
+  LMDJ_CHECK(!project_rejected.has_value());
+  LMDJ_CHECK(
+      project_rejected.error().code ==
+      ErrorCode::project_quota_exhausted);
+  LMDJ_CHECK(project_rejected.error().details.at("requested_bytes") == 8);
+  LMDJ_CHECK(
+      project_rejected.error().details.at("project_used_bytes") == 20);
+  LMDJ_CHECK(
+      project_rejected.error().details.at("project_remaining_bytes") == 7);
+  LMDJ_CHECK(
+      project_rejected.error().details.at("project_quota_bytes") == 27);
+  LMDJ_CHECK(project_rejected.error().details.at("banks").size() == 4);
+  LMDJ_CHECK(
+      project_rejected.error().message.find("why:") != std::string::npos);
+  LMDJ_CHECK(
+      project_rejected.error().message.find("remedy:") != std::string::npos);
+  check_prior();
+
+  const auto tie_rejected = PreparedSampleBank::from_snapshot(
+      snapshot,
+      RuntimePreparationLimits{1'048'576, 19, 19, 38});
+  LMDJ_CHECK(!tie_rejected.has_value());
+  LMDJ_CHECK(
+      tie_rejected.error().code == ErrorCode::bank_quota_exhausted);
+  check_prior();
+
+  const auto resident_is_not_a_generation_quota =
+      PreparedSampleBank::from_snapshot(
+          snapshot,
+          RuntimePreparationLimits{1'048'576, 20, 28, 0});
+  LMDJ_CHECK(resident_is_not_a_generation_quota.has_value());
+  check_prior();
+
+  const auto artifact_rejected = PreparedSampleBank::from_snapshot(
+      snapshot,
+      RuntimePreparationLimits{9, 20, 28, 56});
+  LMDJ_CHECK(!artifact_rejected.has_value());
+  LMDJ_CHECK(artifact_rejected.error().code == ErrorCode::cook_failed);
+  LMDJ_CHECK(
+      artifact_rejected.error().details.at("resource") ==
+      "artifact_bytes");
+  check_prior();
+}
+
+void admits_decided_boundaries_and_rejects_one_mono_frame_over() {
+  for (std::uint8_t bank = 0; bank < 4; ++bank) {
+    const auto exact_bank = snapshot_with_frame_counts(
+        {{PadSlotId{bank, 0}, 16'777'216}});
+    const auto prepared =
+        PreparedSampleBank::from_snapshot(exact_bank, kWebLimits);
+    LMDJ_CHECK(prepared.has_value());
+    LMDJ_CHECK(prepared.value().decoded_pcm_bytes() == 67'108'864);
+
+    const auto bank_plus_one = snapshot_with_frame_counts(
+        {{PadSlotId{bank, 0}, 16'777'217}});
     const auto rejected =
-        PreparedSampleBank::from_snapshot(snapshot, rejection.limits);
+        PreparedSampleBank::from_snapshot(bank_plus_one, kWebLimits);
     LMDJ_CHECK(!rejected.has_value());
-    LMDJ_CHECK(rejected.error().code == ErrorCode::cook_failed);
     LMDJ_CHECK(
-        rejected.error().details.at("resource") == rejection.resource);
-    LMDJ_CHECK(
-        rejected.error().details.at("observed") == rejection.observed);
-    LMDJ_CHECK(rejected.error().details.at("limit") == rejection.limit);
-    check_prior();
+        rejected.error().code == ErrorCode::bank_quota_exhausted);
+    LMDJ_CHECK(rejected.error().details.at("bank") == bank);
+    LMDJ_CHECK(rejected.error().details.at("requested_bytes") == 67'108'868);
+    LMDJ_CHECK(rejected.error().details.at("remaining_bytes") == 67'108'864);
   }
 
-  const auto exact_large = large_shared_snapshot(false);
-  const auto exact_large_rejected_by_later_live_limit =
-      PreparedSampleBank::from_snapshot(
-          exact_large,
-          RuntimePreparationLimits{
-              1'048'576,
-              262'144,
-              67'108'864,
-              67'108'863,
-          });
-  LMDJ_CHECK(!exact_large_rejected_by_later_live_limit.has_value());
-  LMDJ_CHECK(
-      exact_large_rejected_by_later_live_limit.error().details.at(
-          "resource") == "live_bank_bytes");
-  LMDJ_CHECK(
-      exact_large_rejected_by_later_live_limit.error().details.at(
-          "observed") == 67'108'864);
-  check_prior();
+  LMDJ_CHECK(kWebLimits.allows_resident_bytes(268'435'456));
+  LMDJ_CHECK(!kWebLimits.allows_resident_bytes(268'435'460));
 
-  const auto first_representable_overage = large_shared_snapshot(true);
-  const auto large_rejected_before_float_allocation =
-      PreparedSampleBank::from_snapshot(
-          first_representable_overage,
-          RuntimePreparationLimits{
-              1'048'576,
-              262'145,
-              67'108'864,
-              134'217'728,
-          });
-  LMDJ_CHECK(!large_rejected_before_float_allocation.has_value());
-  LMDJ_CHECK(
-      large_rejected_before_float_allocation.error().details.at(
-          "resource") == "prepared_bank_bytes");
-  LMDJ_CHECK(
-      large_rejected_before_float_allocation.error().details.at(
-          "observed") == 67'108'868);
-  check_prior();
+  {
+    const auto exact_generation = snapshot_with_frame_counts({
+        {PadSlotId{0, 0}, 16'777'216},
+        {PadSlotId{1, 0}, 16'777'216},
+    });
+    const auto prepared =
+        PreparedSampleBank::from_snapshot(exact_generation, kWebLimits);
+    LMDJ_CHECK(prepared.has_value());
+    LMDJ_CHECK(prepared.value().decoded_pcm_bytes() == 134'217'728);
+  }
+
+  {
+    const auto generation_plus_one = snapshot_with_frame_counts({
+        {PadSlotId{0, 0}, 16'777'216},
+        {PadSlotId{1, 0}, 16'777'216},
+        {PadSlotId{2, 0}, 1},
+    });
+    const auto rejected =
+        PreparedSampleBank::from_snapshot(generation_plus_one, kWebLimits);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(
+        rejected.error().code == ErrorCode::project_quota_exhausted);
+    LMDJ_CHECK(rejected.error().details.at("requested_bytes") == 4);
+    LMDJ_CHECK(
+        rejected.error().details.at("project_remaining_bytes") == 0);
+  }
 }
 
 }  // namespace
@@ -479,5 +525,6 @@ int main() {
   validates_resolved_playback_before_storing_fixed_values();
   accepts_exact_web_limits_and_rejects_boundary_plus_one();
   bounded_preparation_rejects_before_allocation_and_retains_prior_bank();
+  admits_decided_boundaries_and_rejects_one_mono_frame_over();
   prepares_immutable_pattern_overlay_and_integer_timing();
 }

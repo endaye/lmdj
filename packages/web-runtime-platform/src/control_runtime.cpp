@@ -365,6 +365,12 @@ std::string safe_message(std::string_view code) {
       {"MISSING_ASSET", "required asset is missing"},
       {"INVALID_PROJECT", "project data is invalid"},
       {"COOK_FAILED", "runtime snapshot preparation failed"},
+      {"BANK_QUOTA_EXHAUSTED",
+       "why: the selection exceeds the Sample Bank quota; remedy: shorten "
+       "it, free another Pad, or target another Bank"},
+      {"PROJECT_QUOTA_EXHAUSTED",
+       "why: the selection exceeds the Sample Project quota; remedy: "
+       "shorten it or remove prepared Samples, then retry"},
       {"PROVIDER_NOT_FOUND", "provider was not found"},
       {"PROVIDER_FAILED", "provider failed"},
       {"PERMISSION_DENIED", "operation is not permitted"},
@@ -374,6 +380,97 @@ std::string safe_message(std::string_view code) {
   const auto found = messages.find(code);
   return std::string(
       found == messages.end() ? messages.at("INTERNAL_ERROR") : found->second);
+}
+
+Json sanitize_quota_details(std::string_view code, const Json& details) {
+  if (!details.is_object()) {
+    return Json::object();
+  }
+  const auto copy_unsigned = [&details](Json& result, std::string_view key) {
+    const auto found = details.find(key);
+    if (found == details.end() || !found->is_number_unsigned()) {
+      return false;
+    }
+    result[std::string(key)] = *found;
+    return true;
+  };
+  Json result = Json::object();
+  if (code == "BANK_QUOTA_EXHAUSTED") {
+    static constexpr std::array<std::string_view, 6> fields{
+        "bank",
+        "requested_bytes",
+        "requested_frames",
+        "remaining_bytes",
+        "remaining_frames",
+        "quota_bytes",
+    };
+    if (!std::all_of(fields.begin(), fields.end(), [&](auto field) {
+          return copy_unsigned(result, field);
+        })) {
+      return Json::object();
+    }
+    const auto consumed = details.find("consumed");
+    if (consumed == details.end() || !consumed->is_array()) {
+      return Json::object();
+    }
+    result["consumed"] = Json::array();
+    for (const auto& item : *consumed) {
+      if (!item.is_object() || !item.value("pad", Json{}).is_number_unsigned() ||
+          !item.value("prepared_bytes", Json{}).is_number_unsigned() ||
+          !item.value("prepared_frames", Json{}).is_number_unsigned()) {
+        return Json::object();
+      }
+      result["consumed"].push_back({
+          {"pad", item.at("pad")},
+          {"prepared_bytes", item.at("prepared_bytes")},
+          {"prepared_frames", item.at("prepared_frames")},
+      });
+    }
+    return result;
+  }
+  if (code == "PROJECT_QUOTA_EXHAUSTED") {
+    static constexpr std::array<std::string_view, 5> fields{
+        "requested_bytes",
+        "requested_frames",
+        "project_used_bytes",
+        "project_remaining_bytes",
+        "project_quota_bytes",
+    };
+    if (!std::all_of(fields.begin(), fields.end(), [&](auto field) {
+          return copy_unsigned(result, field);
+        })) {
+      return Json::object();
+    }
+    const auto banks = details.find("banks");
+    if (banks == details.end() || !banks->is_array()) {
+      return Json::object();
+    }
+    result["banks"] = Json::array();
+    for (const auto& item : *banks) {
+      if (!item.is_object() ||
+          !item.value("bank", Json{}).is_number_unsigned() ||
+          !item.value("prepared_bytes", Json{}).is_number_unsigned()) {
+        return Json::object();
+      }
+      result["banks"].push_back({
+          {"bank", item.at("bank")},
+          {"prepared_bytes", item.at("prepared_bytes")},
+      });
+    }
+    return result;
+  }
+  return Json::object();
+}
+
+bool runtime_resource_rejection(const Json& error) {
+  if (!error.is_object() || !error.contains("code") ||
+      !error.at("code").is_string()) {
+    return false;
+  }
+  const auto code = error.at("code").get<std::string_view>();
+  return code == "WEB_RUNTIME_RESOURCE_LIMIT" ||
+         code == "BANK_QUOTA_EXHAUSTED" ||
+         code == "PROJECT_QUOTA_EXHAUSTED";
 }
 
 Json normalized_error(
@@ -391,6 +488,11 @@ Json normalized_error(
     return host_error(
         "WEB_RUNTIME_RESOURCE_LIMIT",
         "Project Bundle exceeds the Web Runtime transfer limit");
+  }
+  if (code == "BANK_QUOTA_EXHAUSTED" ||
+      code == "PROJECT_QUOTA_EXHAUSTED") {
+    return host_error(
+        code, safe_message(code), sanitize_quota_details(code, details));
   }
   if (code == "IO_ERROR" && details.is_object() &&
       storage_condition != details.end() &&
@@ -420,11 +522,8 @@ Json normalized_error(
       source_message.starts_with("Project Bundle")) {
     return host_error("INVALID_PROJECT", "Project Bundle transfer is invalid");
   }
-  static constexpr std::array<std::string_view, 4> resource_names{
+  static constexpr std::array<std::string_view, 1> resource_names{
       "artifact_bytes",
-      "decoded_frames_per_pad",
-      "prepared_bank_bytes",
-      "live_bank_bytes",
   };
   const auto resource =
       details.is_object() ? details.find("resource") : details.end();
@@ -629,10 +728,36 @@ struct ControlRuntime::Impl {
     return recorded;
   }
 
-  foundation::Result<audio::PatternPublication> publish_project_pattern(
+  foundation::Result<audio::PreparedPatternView> prepare_project_pattern(
       const foundation::PatternId& selected_pattern,
+      std::span<const domain::PatternEvent> overlay = {}) {
+    if (!retained_project_path.has_value()) {
+      return foundation::Result<audio::PreparedPatternView>::failure(
+          Error{ErrorCode::invalid_argument, "no Project is open"});
+    }
+    auto snapshot = application.prepare_runtime_snapshot({
+        *retained_project_path,
+        selected_pattern,
+        limits,
+    });
+    if (!snapshot.has_value()) {
+      return foundation::Result<audio::PreparedPatternView>::failure(
+          snapshot.error());
+    }
+    auto pattern = overlay.empty()
+        ? audio::PreparedPatternView::from_snapshot(*snapshot.value())
+        : audio::PreparedPatternView::from_snapshot_with_overlay(
+              *snapshot.value(), overlay);
+    if (!pattern.has_value()) {
+      return foundation::Result<audio::PreparedPatternView>::failure(
+          pattern.error());
+    }
+    return pattern;
+  }
+
+  foundation::Result<audio::PatternPublication> publish_prepared_pattern(
+      audio::PreparedPatternView&& pattern,
       std::optional<std::uint64_t> activation_frame = std::nullopt,
-      std::span<const domain::PatternEvent> overlay = {},
       std::optional<audio::PatternReplacementAuthority>
           replacement_authority = std::nullopt) {
 #if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
@@ -644,33 +769,11 @@ struct ControlRuntime::Impl {
       });
     }
 #endif
-    if (!retained_project_path.has_value()) {
-      return foundation::Result<audio::PatternPublication>::failure(
-          Error{ErrorCode::invalid_argument, "no Project is open"});
-    }
-    auto snapshot = application.prepare_runtime_snapshot({
-        *retained_project_path,
-        selected_pattern,
-        limits,
-    });
-    if (!snapshot.has_value()) {
-      return foundation::Result<audio::PatternPublication>::failure(
-          snapshot.error());
-    }
-    auto pattern = overlay.empty()
-        ? audio::PreparedPatternView::from_snapshot(*snapshot.value())
-        : audio::PreparedPatternView::from_snapshot_with_overlay(
-              *snapshot.value(), overlay);
-    if (!pattern.has_value()) {
-      return foundation::Result<audio::PatternPublication>::failure(
-          pattern.error());
-    }
     static_cast<void>(engine.reclaim_retired_patterns());
-    const auto publication =
-        engine.publish_pattern_view(
-            std::move(pattern.value()),
-            activation_frame,
-            std::move(replacement_authority));
+    const auto publication = engine.publish_pattern_view(
+        std::move(pattern),
+        activation_frame,
+        std::move(replacement_authority));
     if (publication.result != audio::PatternPublishResult::accepted) {
       return foundation::Result<audio::PatternPublication>::failure(Error{
           ErrorCode::invalid_argument,
@@ -678,6 +781,23 @@ struct ControlRuntime::Impl {
       });
     }
     return foundation::Result<audio::PatternPublication>::success(publication);
+  }
+
+  foundation::Result<audio::PatternPublication> publish_project_pattern(
+      const foundation::PatternId& selected_pattern,
+      std::optional<std::uint64_t> activation_frame = std::nullopt,
+      std::span<const domain::PatternEvent> overlay = {},
+      std::optional<audio::PatternReplacementAuthority>
+          replacement_authority = std::nullopt) {
+    auto pattern = prepare_project_pattern(selected_pattern, overlay);
+    if (!pattern.has_value()) {
+      return foundation::Result<audio::PatternPublication>::failure(
+          pattern.error());
+    }
+    return publish_prepared_pattern(
+        std::move(pattern.value()),
+        activation_frame,
+        std::move(replacement_authority));
   }
 
   std::optional<audio::PatternReplacementAuthority>
@@ -891,11 +1011,9 @@ struct ControlRuntime::Impl {
         {"limits",
          {
              {"maximum_artifact_bytes", limits.maximum_artifact_bytes},
-             {"maximum_decoded_frames_per_pad",
-              limits.maximum_decoded_frames_per_pad},
-             {"maximum_prepared_bank_bytes",
-              limits.maximum_prepared_bank_bytes},
-             {"maximum_live_bank_bytes", limits.maximum_live_bank_bytes},
+             {"maximum_user_bank_bytes", limits.maximum_user_bank_bytes},
+             {"maximum_generation_bytes", limits.maximum_generation_bytes},
+             {"maximum_resident_bytes", limits.maximum_resident_bytes},
          }},
         {"audio_state", audio_running ? "running" : "stopped"},
         {"capture_state",
@@ -1082,8 +1200,7 @@ struct ControlRuntime::Impl {
       auto error = normalized_error(prepared.error());
       return SnapshotResult{
           false,
-          error.at("error").at("code") ==
-              "WEB_RUNTIME_RESOURCE_LIMIT",
+          runtime_resource_rejection(error.at("error")),
           std::nullopt,
           error.at("error"),
       };
@@ -1124,29 +1241,29 @@ struct ControlRuntime::Impl {
     const auto aggregate =
         audio::checked_runtime_byte_sum(reserved_live_bytes, candidate_bytes);
     if (!aggregate.has_value() ||
-        !limits.allows_live_bank_bytes(*aggregate)) {
+        !limits.allows_resident_bytes(*aggregate)) {
       const auto observed = aggregate.value_or(
           std::numeric_limits<std::uint64_t>::max());
       auto error = host_error(
           "WEB_RUNTIME_RESOURCE_LIMIT",
-          "runtime preparation limit exceeded",
+          "why: live and retiring generations exceed the runtime residency "
+          "quota; remedy: wait for retirement and retry publication",
           {
-              {"resource", "live_bank_bytes"},
+              {"resource", "resident_bytes"},
               {"observed", observed},
-              {"limit", limits.maximum_live_bank_bytes},
+              {"limit", limits.maximum_resident_bytes},
           });
       return SnapshotResult{false, true, std::nullopt, error.at("error")};
     }
 
-    // Application admission already applies the decoded-source frame limit.
-    // The immutable Snapshot contains prepared 48 kHz frames, which can be
-    // larger after 44.1 kHz resampling and must not be compared to that source
-    // limit a second time. Publication retains every byte/live-bank bound.
+    // Application admission already applies the Bank and generation quotas.
+    // Publication repeats those immutable Snapshot checks and keeps residency
+    // as a separate aggregate bound across live and retired generations.
     const auto publication_limits = audio::RuntimePreparationLimits{
         limits.maximum_artifact_bytes,
-        std::numeric_limits<std::uint64_t>::max(),
-        limits.maximum_prepared_bank_bytes,
-        limits.maximum_live_bank_bytes,
+        limits.maximum_user_bank_bytes,
+        limits.maximum_generation_bytes,
+        limits.maximum_resident_bytes,
     };
     auto bank = audio::PreparedSampleBank::from_snapshot(
         snapshot, publication_limits);
@@ -1154,8 +1271,7 @@ struct ControlRuntime::Impl {
       auto error = normalized_error(bank.error());
       return SnapshotResult{
           false,
-          error.at("error").at("code") ==
-              "WEB_RUNTIME_RESOURCE_LIMIT",
+          runtime_resource_rejection(error.at("error")),
           std::nullopt,
           error.at("error"),
       };
@@ -2670,6 +2786,11 @@ Json ControlRuntime::dispatch(
           impl_->active_sequence->id.value() != session_id) {
         return state_error();
       }
+      auto pattern = impl_->prepare_project_pattern(
+          foundation::PatternId{next_pattern_id});
+      if (!pattern.has_value()) {
+        return normalized_error(pattern.error());
+      }
       const auto runtime_frame = impl_->engine.telemetry().rendered_frames;
       const auto replacement_authority = impl_->pending_pattern_authority();
       auto response = impl_->application.command({
@@ -2685,10 +2806,9 @@ Json ControlRuntime::dispatch(
       const auto effective_runtime_frame =
           response.at("result").at("effective_runtime_frame")
               .get<std::uint64_t>();
-      auto published = impl_->publish_project_pattern(
-          foundation::PatternId{next_pattern_id},
+      auto published = impl_->publish_prepared_pattern(
+          std::move(pattern.value()),
           effective_runtime_frame,
-          {},
           replacement_authority);
       if (!published.has_value()) {
         fail_and_seal("sequence_switch_publication_failed");

@@ -69,6 +69,8 @@ constexpr std::string_view kProjectId =
     "00000000-0000-4000-8000-000000000001";
 constexpr std::string_view kPatternId =
     "00000000-0000-4000-8000-000000000010";
+constexpr std::string_view kNextPatternId =
+    "00000000-0000-4000-8000-000000000011";
 constexpr std::string_view kAssetId =
     "00000000-0000-4000-8000-000000000101";
 constexpr std::string_view kSequenceSessionId =
@@ -78,8 +80,8 @@ constexpr std::string_view kProtocolShapeRequestId =
 
 constexpr RuntimePreparationLimits kWebLimits{
     1'048'576,
-    240'000,
     67'108'864,
+    134'217'728,
     134'217'728,
 };
 
@@ -995,11 +997,9 @@ void test_exact_payloads_and_facade_owned_project_journey() {
       initial_status.at("limits") ==
       Json{
           {"maximum_artifact_bytes", kWebLimits.maximum_artifact_bytes},
-          {"maximum_decoded_frames_per_pad",
-           kWebLimits.maximum_decoded_frames_per_pad},
-          {"maximum_prepared_bank_bytes",
-           kWebLimits.maximum_prepared_bank_bytes},
-          {"maximum_live_bank_bytes", kWebLimits.maximum_live_bank_bytes},
+          {"maximum_user_bank_bytes", kWebLimits.maximum_user_bank_bytes},
+          {"maximum_generation_bytes", kWebLimits.maximum_generation_bytes},
+          {"maximum_resident_bytes", kWebLimits.maximum_resident_bytes},
       }));
 
   auto extra_create = create_payload();
@@ -1773,6 +1773,80 @@ void test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary() {
                  .size() == 1);
 }
 
+void test_sequence_switch_prepares_before_selecting_bar_boundary() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto& created = check_exact_success(
+      runtime->dispatch(
+          "pattern.create",
+          {{"command_id", uuid(1'201)},
+           {"expected_revision", 0},
+           {"pattern_id", kNextPatternId},
+           {"bars", 1}},
+          {}),
+      {"committed_revision", "pattern_id", "bars", "replayed",
+       "project_revision"});
+  LMDJ_CHECK(created.at("committed_revision") == 1);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  ContinuousAudioDriver audio(runtime->engine());
+  check_success(runtime->dispatch(
+      "sequence.settings.update",
+      {{"command_id", "00000000-0000-4000-8000-000000000099"},
+       {"expected_revision", 1},
+       {"session_id", nullptr},
+       {"bpm", 132},
+       {"quantize_enabled", nullptr},
+       {"swing_percent", nullptr}},
+      {}));
+  wait_until([&] {
+    return runtime->engine().pattern_telemetry().pending_generation == 0;
+  });
+  const auto& begun = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.begin",
+          {{"session_id", kSequenceSessionId},
+           {"pattern_id", kPatternId},
+           {"expected_revision", 2}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "transport_anchor"});
+  const auto bar_frames = lmdj::audio::tick_boundary_frame(
+      lmdj::domain::kBarTicks4x4, 132, lmdj::audio::kTransportPpq);
+  LMDJ_CHECK(bar_frames.has_value());
+  const auto anchor_frame =
+      begun.at("transport_anchor").at("runtime_frame").get<std::uint64_t>();
+  wait_until([&] {
+    return runtime->engine().telemetry().rendered_frames >=
+           anchor_frame + bar_frames.value() - 128;
+  });
+  const auto& switched = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.switch-request",
+          {{"session_id", kSequenceSessionId},
+           {"next_pattern_id", kNextPatternId}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "pattern_publication"});
+  LMDJ_CHECK(switched.at("state") == "switching");
+  LMDJ_CHECK(switched.at("pending_pattern_id") == kNextPatternId);
+  LMDJ_CHECK(
+      switched.at("effective_runtime_frame") ==
+      switched.at("pattern_publication").at("activation_frame"));
+  audio.stop();
+}
+
 void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   TempDirectory temp;
   {
@@ -2269,8 +2343,8 @@ void test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit() {
   TempDirectory temp;
   constexpr RuntimePreparationLimits limits{
       1'048'576,
-      240'000,
       16,
+      134'217'728,
       134'217'728,
   };
   auto runtime = make_runtime(temp.path(), limits);
@@ -2318,7 +2392,7 @@ void test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit() {
   LMDJ_CHECK(stale_runtime.at("runtime_published") == false);
   LMDJ_CHECK(
       stale_runtime.at("snapshot_error").at("code") ==
-      "WEB_RUNTIME_RESOURCE_LIMIT");
+      "BANK_QUOTA_EXHAUSTED");
   LMDJ_CHECK(
       runtime->engine().bank_telemetry().accepted_publications == generation);
 
@@ -2440,7 +2514,7 @@ void test_sample_post_claim_deadline_preserves_saved_truth() {
       inspect_project(temp.path(), kProjectId).at("project_revision") == 2);
 }
 
-void test_source_frame_limit_is_applied_once_before_44k1_publication() {
+void test_source_frames_are_admitted_by_prepared_pcm_quota() {
   {
     TempDirectory temp;
     auto runtime = make_runtime(temp.path());
@@ -2478,12 +2552,15 @@ void test_source_frame_limit_is_applied_once_before_44k1_publication() {
         "sample.import.chunk",
         sample_chunk_payload(443, 0, true, wav),
         wav));
-    check_error(
+    const auto published = check_exact_success(
         runtime->dispatch(
             "sample.import.commit", {{"import_token", uuid(443)}}, {}),
-        "UNSUPPORTED_AUDIO");
+        {"committed_revision", "runtime_revision", "runtime_published"});
+    LMDJ_CHECK(published.at("committed_revision") == 1);
+    LMDJ_CHECK(published.at("runtime_revision") == 1);
+    LMDJ_CHECK(published.at("runtime_published") == true);
     LMDJ_CHECK(
-        inspect_project(temp.path(), kProjectId).at("project_revision") == 0);
+        inspect_project(temp.path(), kProjectId).at("project_revision") == 1);
   }
 }
 
@@ -2964,7 +3041,7 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
   TempDirectory temp;
   constexpr RuntimePreparationLimits limits{
       1'048'576,
-      512,
+      4'096,
       4'096,
       2'060,
   };
@@ -3018,10 +3095,16 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
       runtime->dispatch(
           "snapshot.reload", {{"pattern_id", kPatternId}}, {}),
       "WEB_RUNTIME_RESOURCE_LIMIT");
+  LMDJ_CHECK(
+      rejected.at("message").get<std::string>().find("why:") !=
+      std::string::npos);
+  LMDJ_CHECK(
+      rejected.at("message").get<std::string>().find("remedy:") !=
+      std::string::npos);
   LMDJ_CHECK((
       rejected.at("details") ==
       Json{
-          {"resource", "live_bank_bytes"},
+          {"resource", "resident_bytes"},
           {"observed", 2'068},
           {"limit", 2'060},
       }));
@@ -3079,8 +3162,8 @@ void test_oversized_project_switch_is_inspectable_but_not_runnable() {
   TempDirectory temp;
   constexpr RuntimePreparationLimits limits{
       1'048'576,
-      1,
       4,
+      8,
       8,
   };
   auto runtime = make_runtime(temp.path(), limits);
@@ -3124,14 +3207,20 @@ void test_oversized_project_switch_is_inspectable_but_not_runnable() {
   LMDJ_CHECK(opened.at("generation").is_null());
   LMDJ_CHECK(
       opened.at("snapshot_error").at("code") ==
-      "WEB_RUNTIME_RESOURCE_LIMIT");
-  LMDJ_CHECK((
-      opened.at("snapshot_error").at("details") ==
-      Json{
-          {"resource", "decoded_frames_per_pad"},
-          {"observed", 2},
-          {"limit", 1},
-      }));
+      "BANK_QUOTA_EXHAUSTED");
+  LMDJ_CHECK(opened.at("snapshot_error").at("details").at("bank") == 0);
+  LMDJ_CHECK(
+      opened.at("snapshot_error").at("details").at("requested_bytes") ==
+      8);
+  LMDJ_CHECK(
+      opened.at("snapshot_error").at("details").at("remaining_bytes") ==
+      4);
+  LMDJ_CHECK(
+      opened.at("snapshot_error").at("message").get<std::string>().find(
+          "why:") != std::string::npos);
+  LMDJ_CHECK(
+      opened.at("snapshot_error").at("message").get<std::string>().find(
+          "remedy:") != std::string::npos);
   const auto& inspected = check_exact_success(
       runtime->dispatch("project.inspect", Json::object(), {}),
       {"project", "project_revision"});
@@ -3576,8 +3665,8 @@ void test_bridge_emits_only_real_snapshot_notifications_after_response() {
     TempDirectory temp;
     constexpr RuntimePreparationLimits limits{
         1'048'576,
-        1,
         4,
+        8,
         8,
     };
     auto runtime = make_runtime(temp.path(), limits);
@@ -3602,7 +3691,7 @@ void test_bridge_emits_only_real_snapshot_notifications_after_response() {
     LMDJ_CHECK(response.at("result").at("runtime_ready") == false);
     LMDJ_CHECK(
         response.at("result").at("snapshot_error").at("code") ==
-        "WEB_RUNTIME_RESOURCE_LIMIT");
+        "BANK_QUOTA_EXHAUSTED");
 
     const auto notification = poll_message(*bridge);
     check_exact_keys(
@@ -3612,7 +3701,7 @@ void test_bridge_emits_only_real_snapshot_notifications_after_response() {
     check_exact_keys(notification.at("payload"), {"error"});
     LMDJ_CHECK(
         notification.at("payload").at("error").at("code") ==
-        "WEB_RUNTIME_RESOURCE_LIMIT");
+        "BANK_QUOTA_EXHAUSTED");
     check_no_bridge_message(*bridge);
   }
 }
@@ -3742,8 +3831,8 @@ void test_bridge_emits_rejected_sample_and_retry_notifications() {
   TempDirectory temp;
   constexpr RuntimePreparationLimits limits{
       1'048'576,
-      240'000,
       16,
+      134'217'728,
       134'217'728,
   };
   auto runtime = make_runtime(temp.path(), limits);
@@ -3797,7 +3886,7 @@ void test_bridge_emits_rejected_sample_and_retry_notifications() {
   LMDJ_CHECK(response.at("result").at("runtime_revision") == 2);
   LMDJ_CHECK(response.at("result").at("runtime_published") == false);
   check_snapshot_rejected_notification(
-      poll_message(*bridge), 3, 2, "WEB_RUNTIME_RESOURCE_LIMIT");
+      poll_message(*bridge), 3, 2, "BANK_QUOTA_EXHAUSTED");
   proxy.pump_one();
 
   const auto retry = encode(request(
@@ -3814,7 +3903,7 @@ void test_bridge_emits_rejected_sample_and_retry_notifications() {
   LMDJ_CHECK(retry_response.at("result").at("runtime_revision") == 2);
   LMDJ_CHECK(retry_response.at("result").at("runtime_ready") == false);
   check_snapshot_rejected_notification(
-      poll_message(*bridge), 3, 2, "WEB_RUNTIME_RESOURCE_LIMIT");
+      poll_message(*bridge), 3, 2, "BANK_QUOTA_EXHAUSTED");
   proxy.pump_one();
 
   const auto replay = encode(request(
@@ -3830,9 +3919,9 @@ void test_bridge_emits_rejected_sample_and_retry_notifications() {
   LMDJ_CHECK(replay_response.at("result").at("runtime_published") == false);
   LMDJ_CHECK(
       replay_response.at("result").at("snapshot_error").at("code") ==
-      "WEB_RUNTIME_RESOURCE_LIMIT");
+      "BANK_QUOTA_EXHAUSTED");
   check_snapshot_rejected_notification(
-      poll_message(*bridge), 3, 2, "WEB_RUNTIME_RESOURCE_LIMIT");
+      poll_message(*bridge), 3, 2, "BANK_QUOTA_EXHAUSTED");
   check_no_bridge_message(*bridge);
   proxy.pump_one();
 
@@ -4101,13 +4190,14 @@ int main() {
     test_authoritative_switch_supersedes_overlay_and_stop_cancels_target();
     test_stop_fails_closed_if_target_applies_between_cancel_queries();
     test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary();
+    test_sequence_switch_prepares_before_selecting_bar_boundary();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();
     test_sample_import_timeout_aborts_staging_and_fails_closed();
     test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit();
     test_sample_post_claim_deadline_preserves_saved_truth();
-    test_source_frame_limit_is_applied_once_before_44k1_publication();
+    test_source_frames_are_admitted_by_prepared_pcm_quota();
     test_trigger_queue_full_is_admission_failure();
     test_voice_capacity_is_sequence_addressed_execution_outcome();
     test_audio_activation_requires_ready_and_reports_explicit_ack();

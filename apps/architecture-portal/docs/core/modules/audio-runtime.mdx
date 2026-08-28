@@ -17,19 +17,20 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 准备样本、调度 Pattern/Pad 事件并离线或实时渲染；不修改 Project Truth。
 ## 2. 当前实现状态
-Audio Runtime `1.0.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。当前 source 以 atomic generation mailbox 线性化 immutable Pattern publication：control 只取代尚未被 callback claim 的同 Project/Pattern/next-Bar view；不同 Pattern 默认拒绝，只有同时匹配 pending generation、源 Pattern 与 activation frame 的 Sequence switch/Stop authority 才可替换或取消。已 claim 的 view 保留原 boundary，较新的 view 从 claimed activation/BPM Bar length 重算到下一 Bar；bit 63 专用于 claimed marker，generation 在进入该范围前 fail closed。实时线程只消费不可变 Runtime 输入与有界状态，不执行 quantization、Project mutation 或 journal I/O。
+Audio Runtime `1.0.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。Prepared PCM 不再设置单 Pad 帧数上限：64 个 Pad Slot 各自持有独立的可变长 `std::vector<float>`，每个 16-Pad user Bank 使用独立字节账本，同时受 generation 总账本约束；无需 PCM arena 或 offset table。resident bytes 由 publication owner 另行核算。当前 source 以 atomic generation mailbox 线性化 immutable Pattern publication：control 只取代尚未被 callback claim 的同 Project/Pattern/next-Bar view；不同 Pattern 默认拒绝，只有同时匹配 pending generation、源 Pattern 与 activation frame 的 Sequence switch/Stop authority 才可替换或取消。已 claim 的 view 保留原 boundary，较新的 view 从 claimed activation/BPM Bar length 重算到下一 Bar；bit 63 专用于 claimed marker，generation 在进入该范围前 fail closed。实时线程只消费不可变 Runtime Snapshot 与有界固定队列，不执行 quantization、Project mutation 或 journal I/O。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Project Cooker；平台输出位于适配边界。
 ## 4. 架构与数据流
 Runtime Snapshot + 可选 pending overlay → immutable Prepared Pattern slot → atomic generation mailbox claim → fixed SPSC control 与 Voice-state/Bar-boundary 队列 → Bar-boundary apply → 输出 sink；preview、overlay 与 transport anchor 只属于 Runtime，不进入 Project Truth。
 ## 5. API 与 Artifact 边界
-消费不可变快照、resolved playback 与已准备样本，不在实时回调解析 Project/WAV、分配内存、加锁或调用 Host。
+消费不可变快照、resolved playback 与已准备样本，不在实时回调解析 Project/WAV、分配内存、加锁或调用 Host。`kRealtimeMaximumSampleFrames` 明确实时样本、playback 与 Voice-state 共用的无符号 32 位帧域；批准的 16,777,216 帧单 Pad 在 trim、loop、ramp 和事件回报中不发生中间收窄。
 ## 6. 状态、错误与并发
 atomic claimed marker 消除 generation 更新与 callback ownership 之间的竞态窗口；queued、audio-owned 与 apply-point mailbox 都先剥离 marker 再解析 generation，不会把已 claim 的合法 authority 误报为 publication pending。不同 BPM 的 claimed view 仍是后续 boundary 的 transport authority。固定 SPSC 队列和压力测试覆盖 control/Voice 并发，旧 Pattern slot 只由 control thread reclaim，callback 不析构 view，overflow fail closed，实时路径避免无界工作。`pending_publications` 显式计数 audio-owned A 与同时 queued B 两个不同 generation；每个 accepted Pattern publication 恰好落入 applied、superseded、canceled 或 pending。取消后的 audio-owned slot 后续被 callback 回收时不会重复计为 superseded；quiescent `stop()` 将 queued-only、audio-owned-only 或两者各计一次 canceled，且这些累计 counter 跨 `start()` 保留。deterministic race hooks 只存在于 private testable library；production archive/callback 无 hook symbol、marker、pointer atomic 或 branch。
+发布按 current/pending/retiring/reclaimable 状态转移：实时线程只读不可变 Bank，最后一个 Voice 结束后才允许控制线程回收。publication owner 按 reclaim → reserve → publish 顺序核算 live、pending、retiring bytes。准备阶段按剩余字节的较小约束判定失败，约束相等时稳定返回 Bank failure；Bank、generation 与 transient residency 三类失败不互相冒充。
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 ## 8. 测试与证据
-Realtime、same-boundary overlay supersession、apply-point 精确 switch/Stop replacement authority、queued/audio-owned/stop cancellation、two-pending `accepted = applied + superseded + canceled + pending_publications` conservation stress、offline、sample bank、queue 与 CoreAudio output 测试；物理延迟验收单列。
+Realtime、same-boundary overlay supersession、apply-point 精确 switch/Stop replacement authority、queued/audio-owned/stop cancellation、two-pending `accepted = applied + superseded + canceled + pending_publications` conservation stress、offline、sample bank、queue 与 CoreAudio output 测试；`audio.realtime_engine` 覆盖 16,777,216 帧高位 trim/loop/ramp，`audio.long_sample_publication_stress` 在并发渲染下覆盖 64 MiB 单 Pad、128 MiB generation、256 MiB resident 边界与字节精确回收。该 busy-spin 用例仅属于 stress tier，并从 coverage preset 排除。物理延迟与 Safari 内存验收单列。
 ## 9. 限制与下一门禁
 自动化绿色不证明 MIDI/iPad/扬声器体验；需保留设备视频和测量证据。
 ## 10. 版本身份

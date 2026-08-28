@@ -190,6 +190,27 @@ if(BUILD_TESTING)
   )
 
   add_executable(
+    lmdj_long_sample_publication_stress_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/long_sample_publication_stress_test.cpp"
+  )
+  target_include_directories(
+    lmdj_long_sample_publication_stress_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_long_sample_publication_stress_tests
+    PRIVATE lmdj::audio_runtime Threads::Threads
+  )
+  lmdj_target_warnings(lmdj_long_sample_publication_stress_tests)
+  lmdj_target_sanitizers(lmdj_long_sample_publication_stress_tests)
+  lmdj_add_test(
+    NAME audio.long_sample_publication_stress
+    TIER stress
+    COMMAND lmdj_long_sample_publication_stress_tests
+    LABELS audio concurrency
+    TIMEOUT 180
+  )
+
+  add_executable(
     lmdj_audio_runtime_tests
     "${CMAKE_SOURCE_DIR}/tests/core/audio/offline_renderer_test.cpp"
   )

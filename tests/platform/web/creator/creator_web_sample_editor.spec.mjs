@@ -453,7 +453,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     snapshot_error: expect.objectContaining({
       code: "WEB_RUNTIME_RESOURCE_LIMIT",
       details: {
-        resource: "live_bank_bytes",
+        resource: "resident_bytes",
         observed: 139_078_800,
         limit: 134_217_728,
       },

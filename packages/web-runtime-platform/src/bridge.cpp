@@ -2562,8 +2562,8 @@ int main() {
       std::filesystem::path("/lmdj-workspace").lexically_normal();
   constexpr RuntimePreparationLimits limits{
       1'048'576,
-      240'000,
       67'108'864,
+      134'217'728,
       134'217'728,
   };
   auto created = ControlRuntime::create(
