@@ -2150,7 +2150,7 @@ struct Application::Impl {
         return foundation::Result<SequenceMutationResult>::success(
             SequenceMutationResult{
                 status,
-                replayed.value()->outcome.state.revision,
+                replayed.value()->committed_revision,
                 true,
             });
       }
@@ -2160,14 +2160,6 @@ struct Application::Impl {
                          {{"reason", "sequence_owner_mismatch"}}));
     }
     auto& runtime = found->second;
-    if (request.runtime_frame < runtime.last_runtime_frame) {
-      return foundation::Result<SequenceMutationResult>::failure(
-          sequence_error(ErrorCode::invalid_argument,
-                         "Sequence flush frame moved backwards"));
-    }
-    const bool switch_due = runtime.effective_runtime_frame.has_value() &&
-                            request.runtime_frame >=
-                                *runtime.effective_runtime_frame;
     if (runtime.last_flush_identity.has_value() &&
         runtime.last_flush_identity->command_id == request.command_id) {
       return foundation::Result<SequenceMutationResult>::success(
@@ -2177,6 +2169,9 @@ struct Application::Impl {
               true,
           });
     }
+    const bool replaying_in_flight_command =
+        runtime.in_flight_flush.has_value() &&
+        runtime.in_flight_flush->command_id == request.command_id;
     auto replay_persisted_command = [&]() -> foundation::Result<
         std::optional<SequenceMutationResult>> {
       auto replayed = projects.replay_sequence_flush(
@@ -2198,22 +2193,31 @@ struct Application::Impl {
               true,
           });
     };
-    bool persisted_command_checked = false;
-    if (!runtime.in_flight_flush.has_value()) {
+    if (!replaying_in_flight_command) {
       auto replayed = replay_persisted_command();
       if (!replayed.has_value()) {
         return foundation::Result<SequenceMutationResult>::failure(
             replayed.error());
       }
-      persisted_command_checked = true;
       if (replayed.value().has_value()) {
         return foundation::Result<SequenceMutationResult>::success(
             std::move(*replayed.value()));
       }
     }
+    if (!replaying_in_flight_command &&
+        request.runtime_frame < runtime.last_runtime_frame) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Sequence flush frame moved backwards"));
+    }
+    const bool switch_due = runtime.effective_runtime_frame.has_value() &&
+                            request.runtime_frame >=
+                                *runtime.effective_runtime_frame;
 
-    finalize_unreleased(runtime, stop || switch_due);
-    runtime.last_runtime_frame = request.runtime_frame;
+    if (!replaying_in_flight_command) {
+      finalize_unreleased(runtime, stop || switch_due);
+      runtime.last_runtime_frame = request.runtime_frame;
+    }
     std::optional<project_io::SequenceFlushExecution> execution;
     const bool was_switching = runtime.pending_pattern_id.has_value();
     bool replayed_in_flight_command = false;
@@ -2246,17 +2250,6 @@ struct Application::Impl {
       runtime.in_flight_flush.reset();
     }
     if (!replayed_in_flight_command && !runtime.pending_events.empty()) {
-      if (!persisted_command_checked) {
-        auto replayed = replay_persisted_command();
-        if (!replayed.has_value()) {
-          return foundation::Result<SequenceMutationResult>::failure(
-              replayed.error());
-        }
-        if (replayed.value().has_value()) {
-          return foundation::Result<SequenceMutationResult>::success(
-              std::move(*replayed.value()));
-        }
-      }
       if (was_switching) {
         auto active = sequence_journals.set_state(
             request.project_path,

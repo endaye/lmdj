@@ -319,11 +319,26 @@ void test_sequence_lifecycle_idempotence_and_mutation_exclusion() {
   LMDJ_CHECK(!std::filesystem::exists(
       project / "recovery/active/sequence.jsonl"));
 
+  const auto advanced = application.command({
+      {"operation", "sequence.settings.update"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(25)},
+      {"expected_revision", 3},
+      {"session_id", nullptr},
+      {"runtime_frame", 12'002},
+      {"bpm", 121},
+      {"quantize_enabled", nullptr},
+      {"swing_percent", nullptr},
+  });
+  LMDJ_CHECK(advanced.value("ok", false));
+  LMDJ_CHECK(advanced.at("project_revision") == 4);
+
   Application restarted(config(temp.path()));
   const auto cross_host_replay = restarted.flush_sequence(flush);
   LMDJ_CHECK(cross_host_replay.has_value());
   LMDJ_CHECK(cross_host_replay.value().replayed);
   LMDJ_CHECK(cross_host_replay.value().committed_revision == 3);
+  LMDJ_CHECK(cross_host_replay.value().status.expected_revision == 4);
   LMDJ_CHECK(
       cross_host_replay.value().status.state == SequenceRecordState::inactive);
 }
@@ -365,29 +380,27 @@ void test_post_commit_retry_preserves_later_events_for_a_new_command() {
       {project, session_id, {PadSlotId{0, 0}, 0, 36'000, 4, false}})
                  .has_value());
 
-  const auto retried = application.flush_sequence(
-      {project, session_id, first_flush.command_id, 36'001});
+  const auto retried = application.flush_sequence(first_flush);
   LMDJ_CHECK(retried.has_value());
   LMDJ_CHECK(retried.value().replayed);
   LMDJ_CHECK(retried.value().committed_revision == 3);
   LMDJ_CHECK(retried.value().status.pending_event_count == 1);
 
-  const auto repeated = application.flush_sequence(
-      {project, session_id, first_flush.command_id, 36'002});
+  const auto repeated = application.flush_sequence(first_flush);
   LMDJ_CHECK(repeated.has_value());
   LMDJ_CHECK(repeated.value().replayed);
   LMDJ_CHECK(repeated.value().committed_revision == 3);
   LMDJ_CHECK(repeated.value().status.pending_event_count == 1);
 
   const auto later = application.flush_sequence(
-      {project, session_id, CommandId{uuid(63)}, 36'003});
+      {project, session_id, CommandId{uuid(63)}, 36'001});
   LMDJ_CHECK(later.has_value());
   LMDJ_CHECK(!later.value().replayed);
   LMDJ_CHECK(later.value().committed_revision == 4);
   LMDJ_CHECK(later.value().status.pending_event_count == 0);
 
   const auto stopped = application.stop_sequence(
-      {project, session_id, CommandId{uuid(64)}, 36'004});
+      {project, session_id, CommandId{uuid(64)}, 36'002});
   LMDJ_CHECK(stopped.has_value());
   const auto loaded = store.load(project);
   LMDJ_CHECK(loaded.has_value());
@@ -437,21 +450,31 @@ void test_older_flush_replay_preserves_pending_events() {
   LMDJ_CHECK(application.record_sequence_event(
       {project, session_id, {PadSlotId{0, 0}, 0, 60'000, 6, false}})
                  .has_value());
-  const auto replayed = application.flush_sequence(
-      {project, session_id, first.command_id, 60'001});
+  const auto journal_path = project / "recovery/active/sequence.jsonl";
+  const auto journal_before_stale = read_bytes(journal_path);
+  const auto stale_unknown = application.flush_sequence(
+      {project, session_id, CommandId{uuid(86)}, first.runtime_frame});
+  LMDJ_CHECK(!stale_unknown.has_value());
+  LMDJ_CHECK(stale_unknown.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(read_bytes(journal_path) == journal_before_stale);
+  LMDJ_CHECK(application.query_sequence_status({project})
+                 .value()
+                 .pending_event_count == 1);
+
+  const auto replayed = application.flush_sequence(first);
   LMDJ_CHECK(replayed.has_value());
   LMDJ_CHECK(replayed.value().replayed);
   LMDJ_CHECK(replayed.value().committed_revision == 3);
   LMDJ_CHECK(replayed.value().status.pending_event_count == 1);
 
   const auto third = application.flush_sequence(
-      {project, session_id, CommandId{uuid(84)}, 60'002});
+      {project, session_id, CommandId{uuid(84)}, 60'001});
   LMDJ_CHECK(third.has_value());
   LMDJ_CHECK(!third.value().replayed);
   LMDJ_CHECK(third.value().committed_revision == 5);
   LMDJ_CHECK(third.value().status.pending_event_count == 0);
   LMDJ_CHECK(application.stop_sequence(
-      {project, session_id, CommandId{uuid(85)}, 60'003}).has_value());
+      {project, session_id, CommandId{uuid(85)}, 60'002}).has_value());
 }
 
 void test_project_command_collision_does_not_poison_sequence_journal() {
