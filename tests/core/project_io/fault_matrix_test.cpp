@@ -28,6 +28,7 @@ using lmdj::domain::CreatePattern;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
+using lmdj::domain::UpdateSequenceSettings;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
 using lmdj::foundation::ErrorCode;
@@ -814,6 +815,22 @@ void test_armed_capture_discard_aborts_prepublication_marker() {
   LMDJ_CHECK(prepared.value().expected_revision == 1);
   LMDJ_CHECK(prepared.value().armed_capture_slot == slot);
   LMDJ_CHECK(prepared.value().capture_commit.has_value());
+
+  const auto settings = store.execute(
+      bundle,
+      Command{UpdateSequenceSettings{
+          meta("armed-discard-settings", 1), 130, std::nullopt,
+          std::nullopt}});
+  LMDJ_CHECK(!settings.has_value());
+  LMDJ_CHECK(settings.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(manifest_revision(bundle) == 1);
+  const auto after_settings = journal.read_active(bundle);
+  LMDJ_CHECK(after_settings.has_value());
+  LMDJ_CHECK(after_settings.value() == prepared.value());
+  LMDJ_CHECK(
+      settings.error().details.at("reason") ==
+      "armed_capture_recovery_pending");
+  LMDJ_CHECK(settings.error().details.contains("remedy"));
 
   const auto wrong_owner = store.disarm_sequence_capture(
       bundle,

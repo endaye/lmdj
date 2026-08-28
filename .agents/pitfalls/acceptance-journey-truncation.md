@@ -6,12 +6,6 @@ recurrences:
   - date: 2026-08-27
     occurrence: https://github.com/endaye/lmdj/pull/334
     observed_by: claude-fable-5
-  - date: 2026-08-29
-    occurrence: https://github.com/endaye/lmdj/issues/374
-    observed_by: OpenAI Codex GPT-5
-  - date: 2026-08-29
-    occurrence: https://github.com/endaye/lmdj/issues/374
-    observed_by: OpenAI Codex GPT-5
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 

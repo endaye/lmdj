@@ -246,6 +246,16 @@ pre-publication failure、Discard/disarm、continued flush/Stop 与 crash/restar
 reload/reopen 断言也从 media type 扩展为 exact assigned Asset、artifact SHA-256 与 byte
 length；共享 #375 running-audio BPM→switch failure 仍保留为独立 blocker。
 
+**#374 independent re-review fix 3（2026-08-29）**：复核继续发现 settings
+selective rebase 在 durable Capture marker 存在时仍被 admission 接纳。Project 先从
+`N` 提交到 `N + 1`，随后 journal `rebase` 因 `capture_commit` 拒绝，形成 Project 与
+journal 分叉并再次困住 session。修正把拒绝移到同一 writer lease 内的
+`admit_sequence_authoring`，在 `commit_loaded` 前返回
+`armed_capture_recovery_pending`。故障矩阵从
+`sample_after_manifest_preparation` 精确复现，证明 settings 不改变 manifest revision
+或 journal/marker，随后 checked Discard 与 flush/Stop 均成功。该修正不扩大 settings/
+Capture 白名单，也不处理共享 #375 publication 语义。
+
 ## 四、中危发现
 
 ### M1 SR-D13「下一圈可听」未接线：journal 叠加音在产品中不存在

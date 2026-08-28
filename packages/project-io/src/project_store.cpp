@@ -2411,6 +2411,17 @@ admit_sequence_authoring(
   if (settings != nullptr &&
       (active.value().state == SequenceSessionState::active ||
        active.value().state == SequenceSessionState::switching)) {
+    if (active.value().capture_commit.has_value()) {
+      return foundation::Result<
+          std::optional<ActiveSequenceJournal>>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Sequence settings cannot commit while armed Capture recovery is "
+          "pending",
+          {{"reason", "armed_capture_recovery_pending"},
+           {"remedy",
+            "retry, reconcile, or discard the armed Capture first"}},
+      });
+    }
     return foundation::Result<
         std::optional<ActiveSequenceJournal>>::success(
             std::optional<ActiveSequenceJournal>{std::move(active.value())});

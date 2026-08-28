@@ -213,6 +213,38 @@ review routes. Immutable snapshots remain untouched. The shared #375
 running-audio BPM-update → immediate switch failure remains a separate blocker
 and must remain visible in the full packaged proof.
 
+---
+
+### Task 4: Review fix for settings admission while Capture recovery is pending
+
+**Files:**
+
+- Modify: `packages/project-io/src/project_store.cpp`
+- Modify: `tests/core/project_io/fault_matrix_test.cpp`
+- Modify: current Stage 9 plan, review, acceptance, and Portal authority pages
+- Modify: `.agents/pitfalls/acceptance-journey-truncation.md`
+
+- [x] Extend the pre-publication fault journey with an
+  `UpdateSequenceSettings` request before Discard and verify RED because the
+  request advances Project Truth from `N` to `N + 1` before journal rebase
+  rejects the pending Capture marker.
+- [x] Reject settings at Sequence admission while `capture_commit` is pending,
+  before `commit_loaded`, with `armed_capture_recovery_pending` and a concrete
+  remedy. Preserve Project revision, journal bytes, marker, arm, and session.
+- [x] Prove the subsequent checked Discard clears the uncommitted marker and
+  the same session can flush and Stop.
+- [x] Remove the mutable Issue recurrence references from the pitfall ledger;
+  local-only commits are not yet truthful GitHub permalinks, so the controller
+  will add PR/remote-commit evidence at the authorized shipping boundary.
+- [x] Run focused/full/stress/Web/Creator/Portal/direct/version verification,
+  exact-stage the Task 4 files, commit once, and inspect the clean final tree.
+
+Task 4 has no independent version allocation: the behavior remains within the
+already approved closed selective-rebase authority and version allocation stays
+deferred to #379. Documentation impact is required for the current Application
+Facade, product workflow, testing/proof, Stage 9 acceptance, and review pages;
+no immutable snapshot changes.
+
 ## External Boundaries
 
 This Task authorizes no push, Pull Request, merge, Product tag, Release, deployment, publication, or Channel promotion. Physical/manual acceptance remains deferred under #360.

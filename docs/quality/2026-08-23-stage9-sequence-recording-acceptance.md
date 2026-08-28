@@ -111,6 +111,13 @@ events and lets the same session flush/Stop. A matching published receipt takes
 the completion path instead; any mismatch fails closed. Restart performs this
 same decision before owner-loss sealing.
 
+While that durable marker exists, the settings selective-rebase path is closed:
+`UpdateSequenceSettings` must fail before Project publication with
+`armed_capture_recovery_pending`. Project Truth and the journal stay exactly at
+`N`; after checked Discard/abort, the retained session can still flush and Stop.
+This prevents settings from committing `N + 1` and then failing the journal
+rebase behind the Capture marker.
+
 The packaged Creator gate records assigned A2 before the armed A1 stop gesture,
 keeps A1 as the Sample mutation selection while A2 remains ordinary Sequence
 input, proves that stop gesture is absent from Sequence, records A1 only after Capture
