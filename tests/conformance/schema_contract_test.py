@@ -55,7 +55,7 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 contract_versions = {
     name: (
         "1.1.0"
-        if name == "project_bundle"
+        if name in {"project_bundle", "error"}
         else (
             "3.0.0"
             if name == "project_v3"
@@ -376,6 +376,8 @@ public_error_codes = {
     "MISSING_ASSET",
     "INVALID_PROJECT",
     "COOK_FAILED",
+    "BANK_QUOTA_EXHAUSTED",
+    "PROJECT_QUOTA_EXHAUSTED",
     "PROVIDER_NOT_FOUND",
     "PROVIDER_FAILED",
     "PERMISSION_DENIED",
@@ -386,7 +388,10 @@ assert set(error_schema["properties"]["code"]["enum"]) == public_error_codes
 assert capability["properties"]["errors"]["items"]["$ref"] == (
     "#/$defs/error_code"
 )
-assert set(capability["$defs"]["error_code"]["enum"]) == public_error_codes
+assert set(capability["$defs"]["error_code"]["enum"]) == public_error_codes - {
+    "BANK_QUOTA_EXHAUSTED",
+    "PROJECT_QUOTA_EXHAUSTED",
+}
 
 pattern = project["$defs"]["pattern"]
 step_limits = {}

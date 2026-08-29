@@ -21,7 +21,7 @@ import {
   storeSampleInspect,
   type SampleDraft,
 } from "../state/sample_state";
-import {COMMIT_MAX_FRAMES, type CaptureBuffer} from "../capture/capture_buffer";
+import type {CaptureBuffer} from "../capture/capture_buffer";
 import {encodePcm16Wav} from "../capture/wav_encoder";
 
 const UUID_PATTERN =
@@ -35,6 +35,8 @@ const ALLOWED_ERROR_CODES = new Set([
   "MISSING_ASSET",
   "INVALID_PROJECT",
   "COOK_FAILED",
+  "BANK_QUOTA_EXHAUSTED",
+  "PROJECT_QUOTA_EXHAUSTED",
   "PROVIDER_NOT_FOUND",
   "PROVIDER_FAILED",
   "PERMISSION_DENIED",
@@ -595,8 +597,7 @@ export function captureCommitJourney(
   if (!exactKeys(selection, ["startFrame", "frameCount"]) ||
       !unsignedInteger(selection.startFrame) ||
       !unsignedInteger(selection.frameCount) ||
-      selection.frameCount < 1 ||
-      selection.frameCount > COMMIT_MAX_FRAMES) {
+      selection.frameCount < 1) {
     return Promise.reject(new TypeError("Capture commit selection is invalid"));
   }
   let file: File;

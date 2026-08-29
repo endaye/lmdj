@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 准备样本、调度 Pattern/Pad 事件并离线或实时渲染；不修改 Project Truth。
 ## 2. 当前实现状态
-Audio Runtime `1.0.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。Prepared PCM 不再设置单 Pad 帧数上限：64 个 Pad Slot 各自持有独立的可变长 `std::vector<float>`，每个 16-Pad user Bank 使用独立字节账本，同时受 generation 总账本约束；无需 PCM arena 或 offset table。resident bytes 由 publication owner 另行核算。实时线程只消费不可变 Runtime Snapshot 与固定队列，不执行 quantization、Project mutation 或 journal I/O。
+Audio Runtime `2.0.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。Prepared PCM 不再设置单 Pad 帧数上限：64 个 Pad Slot 各自持有独立的可变长 `std::vector<float>`，每个 16-Pad user Bank 使用独立字节账本，同时受 generation 总账本约束；无需 PCM arena 或 offset table。resident bytes 由 publication owner 另行核算。实时线程只消费不可变 Runtime Snapshot 与固定队列，不执行 quantization、Project mutation 或 journal I/O。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Project Cooker；平台输出位于适配边界。
 ## 4. 架构与数据流

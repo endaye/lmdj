@@ -264,7 +264,7 @@ class CreatorPackageTest(unittest.TestCase):
         ):
             self.build(destination)
 
-    def test_requires_stage8_sample_surface_and_rejects_dev_audio_paths(self) -> None:
+    def test_requires_stage8_sample_surface_and_rejects_retired_payloads(self) -> None:
         source = self.ui / "assets/index-source.js"
         valid = source.read_text(encoding="utf-8")
 
@@ -283,7 +283,6 @@ class CreatorPackageTest(unittest.TestCase):
                 "lmdj.patch.v1",
                 "lmdj.materials.v1",
                 "parseProjectBundle",
-                "decodeAudioData(",
                 "//# sourceMappingURL=fixture.map",
             )
         ):
@@ -298,6 +297,19 @@ class CreatorPackageTest(unittest.TestCase):
                 ):
                     self.build(self.root / f"forbidden-{index}")
         source.write_text(valid, encoding="utf-8", newline="\n")
+
+    def test_allows_host_tier_audio_decode_for_long_source_ingest(self) -> None:
+        source = self.ui / "assets/index-source.js"
+        source.write_text(
+            source.read_text(encoding="utf-8")
+            + "\nconst decoded = audioContext.decodeAudioData(sourceBytes);\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        destination = self.root / "long-source-ingest"
+        self.build(destination)
+        self.module.verify_distribution(destination, self.repo)
 
     def test_proof_and_ci_require_the_packaged_sample_editor_lane(self) -> None:
         script = CREATOR_SCRIPT.read_text(encoding="utf-8")

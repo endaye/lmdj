@@ -157,18 +157,27 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
           limits,
           {
               "decoded_float_pcm_bytes_per_bank",
+              "decoded_float_pcm_bytes_resident",
               "decoded_float_pcm_bytes_total",
-              "decoded_frames_per_pad",
               "imported_wav_bytes",
+              "ingest_channels",
+              "ingest_decoded_frames",
+              "ingest_source_bytes",
           }) ||
       !limits.at("imported_wav_bytes").is_number_unsigned() ||
-      limits.at("imported_wav_bytes") != 1'048'576 ||
-      !limits.at("decoded_frames_per_pad").is_number_unsigned() ||
-      limits.at("decoded_frames_per_pad") != 240'000 ||
+      limits.at("imported_wav_bytes") != 68'157'440 ||
       !limits.at("decoded_float_pcm_bytes_per_bank").is_number_unsigned() ||
       limits.at("decoded_float_pcm_bytes_per_bank") != 67'108'864 ||
       !limits.at("decoded_float_pcm_bytes_total").is_number_unsigned() ||
-      limits.at("decoded_float_pcm_bytes_total") != 134'217'728) {
+      limits.at("decoded_float_pcm_bytes_total") != 134'217'728 ||
+      !limits.at("decoded_float_pcm_bytes_resident").is_number_unsigned() ||
+      limits.at("decoded_float_pcm_bytes_resident") != 268'435'456 ||
+      !limits.at("ingest_source_bytes").is_number_unsigned() ||
+      limits.at("ingest_source_bytes") != 104'857'600 ||
+      !limits.at("ingest_decoded_frames").is_number_unsigned() ||
+      limits.at("ingest_decoded_frames") != 43'200'000 ||
+      !limits.at("ingest_channels").is_number_unsigned() ||
+      limits.at("ingest_channels") != 2) {
     return false;
   }
   const auto& emscripten = value.at("emscripten");

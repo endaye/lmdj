@@ -64,6 +64,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof CapturePanel
   const view = render(
     <CapturePanel
       padLabel="Pad A1"
+      maxCommitFrames={240_000}
       onCommit={onCommit}
       onClose={onClose}
       {...overrides}
@@ -98,6 +99,7 @@ test("a Sequence Pad stop request preserves the take in the trimming overlay", a
   view.rerender(
     <CapturePanel padLabel="Pad A1" onCommit={async () => ({kind: "committed"})}
       onClose={() => {}} makeController={makeController} stopRequest={1}
+      maxCommitFrames={240_000}
       onPhaseChange={(phase) => phases.push(phase)} />,
   );
   await screen.findByRole("button", {name: "Commit"});
@@ -338,7 +340,7 @@ test("controller onEnded maps to a device-lost stop (behavior 3)", async () => {
   )).toBeTruthy();
 });
 
-test("trimming clamps the selection sliders to COMMIT_MAX_FRAMES (behavior 4)", async () => {
+test("trimming clamps the selection sliders to the queried effective quota", async () => {
   const {makeController, instances} = createFactory();
   renderPanel({makeController});
   const {listener} = await startRecording(instances);

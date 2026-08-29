@@ -17,7 +17,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 ## Error
 `lmdj.error.v1` 固定公共错误形状，使 C API、CLI、MCP 和 Provider 失败保持可机器处理。
 
-当前 Core 已具备内部 `BANK_QUOTA_EXHAUSTED` 与 `PROJECT_QUOTA_EXHAUSTED` 名称及 payload 行为；活动 schema 仍为 `1.0.0`。这两个成员的公开 Contract `1.1.0`、Assembly 选择和 Product Build 身份将在同一集成边界发布，当前页面不把内部实现状态冒充为已发布 Contract。
+活动 `lmdj.error.v1 · 1.1.0` 已公开 `BANK_QUOTA_EXHAUSTED` 与 `PROJECT_QUOTA_EXHAUSTED`。两类错误分别携带可呈现的 Bank 逐 Pad 用量或 Project 四 Bank 汇总，并保持 why+remedy；它们只表示提交时的 prepared-PCM 约束，不用于 publication residency 背压。
 ## Module Manifest
 `lmdj.module.v1` 声明组件 ID、独立 SemVer、API version 与确切依赖。
 ## Product Version

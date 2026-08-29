@@ -205,6 +205,18 @@ function sampleFixture(options: SampleFixtureOptions = {}) {
   const filePickIntents: Array<{slot: number; source: string}> = [];
   const session: CreatorSampleRuntimeSession = {
     ...value.session,
+    querySampleQuota: async (slot) => ({
+      projectRevision: 3, slot, bankQuotaBytes: 67_108_864,
+      bankUsedBytes: 0, bankRemainingBytes: 67_108_864,
+      projectQuotaBytes: 134_217_728, projectUsedBytes: 0,
+      projectRemainingBytes: 134_217_728,
+      effectiveRemainingBytes: 67_108_864,
+      effectiveRemainingFrames: 16_777_216, consumed: [],
+    }),
+    sampleIngestLimits: () => ({
+      sourceBytes: 104_857_600, decodedFrames: 43_200_000,
+      channels: 2, artifactBytes: 68_157_440,
+    }),
     async inspectSample(slot) {
       inspectCalls.push(slot);
       return options.inspectSample?.(slot) ?? sampleInspect(slot);

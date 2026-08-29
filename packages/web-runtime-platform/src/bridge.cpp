@@ -202,7 +202,8 @@ Json bridge_query_cancelled_error() {
 
 bool safety_interruptible_query(std::string_view operation) {
   return operation == "project.inspect" || operation == "project.list" ||
-         operation == "sample.inspect" || operation == "sample.waveform";
+         operation == "sample.inspect" || operation == "sample.quota" ||
+         operation == "sample.waveform";
 }
 
 std::chrono::milliseconds operation_deadline(std::string_view operation) {
@@ -219,7 +220,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 40> operations{
+  static constexpr std::array<std::string_view, 41> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -236,6 +237,7 @@ bool supported_operation(std::string_view operation) {
       "snapshot.reload",
       "snapshot.retry",
       "sample.inspect",
+      "sample.quota",
       "sample.waveform",
       "sample.import.begin",
       "sample.import.chunk",
@@ -2561,10 +2563,10 @@ int main() {
   const auto workspace =
       std::filesystem::path("/lmdj-workspace").lexically_normal();
   constexpr RuntimePreparationLimits limits{
-      1'048'576,
-      67'108'864,
-      134'217'728,
-      134'217'728,
+      LMDJ_WEB_LIMIT_ARTIFACT_BYTES,
+      LMDJ_WEB_LIMIT_USER_BANK_BYTES,
+      LMDJ_WEB_LIMIT_GENERATION_BYTES,
+      LMDJ_WEB_LIMIT_RESIDENT_BYTES,
   };
   auto created = ControlRuntime::create(
       workspace,

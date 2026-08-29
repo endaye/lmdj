@@ -1,7 +1,6 @@
 import {describe, expect, test} from "vitest";
 import {
   CAPTURE_MAX_FRAMES,
-  COMMIT_MAX_FRAMES,
   CaptureBuffer,
   ENVELOPE_BLOCK_FRAMES,
 } from "../src/capture/capture_buffer";
@@ -318,14 +317,8 @@ describe("CaptureBuffer", () => {
       .toBe(buffer.envelope(2, 0, buffer.frameCount));
   });
 
-  // Finding 3: COMMIT_MAX_FRAMES must never hand-enter a value that can drift
-  // from the generated product manifest the Core actually enforces.
-  test("COMMIT_MAX_FRAMES matches the generated manifest's decoded_frames_per_pad", () => {
-    expect(COMMIT_MAX_FRAMES).toBe(WEB_RUNTIME_IDENTITY.resource_limits.decoded_frames_per_pad);
-  });
-
-  test("the worst-case encoded WAV at COMMIT_MAX_FRAMES fits the manifest's imported_wav_bytes", () => {
-    const worstCaseBytes = COMMIT_MAX_FRAMES * 2 /* channels */ * 2 /* bytes/sample */ + 44;
+  test("the worst-case 60-second capture fits imported_wav_bytes", () => {
+    const worstCaseBytes = CAPTURE_MAX_FRAMES * 2 /* channels */ * 2 /* bytes/sample */ + 44;
     expect(worstCaseBytes).toBeLessThanOrEqual(
       WEB_RUNTIME_IDENTITY.resource_limits.imported_wav_bytes,
     );

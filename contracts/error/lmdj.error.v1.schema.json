@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lmdj.dev/contracts/error/lmdj.error.v1.schema.json",
-  "x-lmdj-contract-version": "1.0.0",
+  "x-lmdj-contract-version": "1.1.0",
   "title": "LMDJ Public Error v1",
   "type": "object",
   "required": ["contract", "code", "message", "details"],
@@ -19,6 +19,8 @@
         "MISSING_ASSET",
         "INVALID_PROJECT",
         "COOK_FAILED",
+        "BANK_QUOTA_EXHAUSTED",
+        "PROJECT_QUOTA_EXHAUSTED",
         "PROVIDER_NOT_FOUND",
         "PROVIDER_FAILED",
         "PERMISSION_DENIED",

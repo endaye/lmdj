@@ -106,7 +106,7 @@ WebKit smoke 只有在所有 mandatory primitive 可用时才运行 protocol、O
 ## Creator Web Proof
 `scripts/creator-web.sh configure|build|test|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
 
-当前 Product Build `1.0.37.0` 的 Creator 自动化覆盖 Sequence 状态机、Pattern/Record/Stop/settings 控件、统一 Pointer/Keyboard/MIDI admission、next-Bar acknowledgement、Capture trim overlay、reload 与 recovery；Core gates覆盖 Project v3 migration、journal/receipt/recovery、整数 transport、Facade/CLI/MCP/Native/Web parity。自动化不替代真实听感或物理设备验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
+当前 Product Build `1.0.38.0` 的 Creator 自动化覆盖长素材格式嗅探、浏览器解码边界、波形选区、Bank 配额与非破坏性提交，也覆盖 Sequence 状态机、Pattern/Record/Stop/settings 控件、统一 Pointer/Keyboard/MIDI admission、next-Bar acknowledgement、Capture trim overlay、reload 与 recovery；Core gates 覆盖 Project v3 migration、journal/receipt/recovery、整数 transport、Facade/CLI/MCP/Native/Web parity。自动化不替代真实听感或物理设备验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
 
 Stage 9 H1 的 source remediation 另以确定性 gate 把普通 authoring command 暂停在“已取得本地 Sequence admission、尚未进入 Project I/O”的精确边界，再并发启动 Sequence begin：begin 必须等待 mutation 完成并以 revision conflict 退出，不能创建 stale journal。配套 restart case 直接留下 valid orphan journal，证明下一条 authoring command 先 seal `owner_lost` recovery，再提交新 revision；Project Store 的独立 case 证明绕过 Facade 时仍在 writer lease 内拒绝 active journal，同时保留 settings-only rebase 白名单。这些是自动化并发/恢复证据，不替代 #360 的实体设备旅程。
 

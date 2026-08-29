@@ -19,9 +19,9 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 为浏览器 Host 提供共享 Runtime Session、输入 adapter、Control bridge、manifest gate 与 Web Audio 接线；不拥有 Creator UI、诊断 UI、Project Truth 或产品专属身份。
 ## 2. 当前实现状态
-Creator Web 与诊断 Web Runtime Host 共用 Platform `1.0.0` 和同一 Wasm Runtime。Platform 除 Sample surface 外，还桥接 Sequence begin/event/flush/stop/next-Bar switch/status/settings/recovery；pointer、keyboard、MIDI admission 统一使用 Audio Runtime frame clock 与单调 `input_sequence`，JavaScript 不计算 musical time。
+Creator Web 与诊断 Web Runtime Host 共用 Platform `2.0.0` 和同一 Wasm Runtime。Platform 除 Sample surface 外，还桥接 revision-bound `sample.quota`、Sequence begin/event/flush/stop/next-Bar switch/status/settings/recovery；pointer、keyboard、MIDI admission 统一使用 Audio Runtime frame clock 与单调 `input_sequence`，JavaScript 不计算 musical time。
 ## 3. 所有权与依赖
-只依赖 Application Facade `2.0.0` 与 Audio Runtime `1.0.0`。Product CMake 注入 Product Build、Platform 版本及精确 Host allowlist。
+只依赖 Application Facade `2.1.0` 与 Audio Runtime `2.0.0`。Product CMake 注入 Product Build、Platform 版本、完整资源上限及精确 Host allowlist。
 ## 4. 架构与数据流
 Creator/Diagnostic Host → Runtime Session → Application Facade；Project/Sample/Sequence actions 共享有界 Host lane，Pointer、Keyboard、MIDI 汇入同一 frame-stamped admission，AudioWorklet 消费不可变 Runtime Snapshot 并发布 Voice/Bar state。
 ## 5. API 与 Contract 边界
@@ -31,7 +31,7 @@ Manifest mismatch、生命周期失效和 terminal failure 均 fail closed；Mai
 
 Runtime Session 启动只运行一次真实 Control Worker/OPFS capability probe，默认等待预算为 15 秒。明确缺少 Worker/Blob、Worker 返回 negative 或 Worker error 继续 fail closed 为 `UNSUPPORTED_WEB_RUNTIME`；纯调度预算耗尽精确进入 `HOST_TIMEOUT`，不能伪造 `opfs`、`opfsSyncAccessHandle` 或 `opfsWritableReplace` 缺失。message、error 与 timeout 三条 settlement 路径都由同一 `finally` terminate Worker 并 revoke Blob URL。显式暂停期间 Project 操作保持禁用，Host suspend 响应与浏览器 Context suspend 严格串行。
 ## 7. 产品使用方
-`creator-web 2.0.0` 与 `web-runtime-host 2.0.0`。Sequence UI 只展示 Facade 返回的 authority state；pending switch 在 Bar acknowledgement 前保持旧 Pattern，recovery artifact 与 CaptureBuffer 都不冒充 Project Truth。
+`creator-web 2.1.0` 与 `web-runtime-host 2.1.0`。Sequence UI 只展示 Facade 返回的 authority state；pending switch 在 Bar acknowledgement 前保持旧 Pattern，recovery artifact、长素材解码缓冲与 CaptureBuffer 都不冒充 Project Truth。
 ## 8. 测试与证据
 C++ manifest/control/realtime tests、Node Runtime Session tests、Chromium/WebKit browser proof 与分发验证覆盖共享边界；Node 精确断言 Host suspend 未完成时 `AudioContext` 仍为 running，Creator packaged Proof 覆盖真实 Sample Cook split 后的 suspend→activate→Retry Prepare，并继续覆盖 recovery readiness 的 `false -> true -> false -> running` 序列。
 ## 9. 限制与下一门禁

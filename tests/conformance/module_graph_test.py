@@ -13,7 +13,7 @@ HOST_ROOT = REPO_ROOT / "apps"
 PROVIDER_ROOT = REPO_ROOT / "providers"
 FORBIDDEN_PACKAGE_REFERENCES = ("products/lmdj/", "apps/creator-web/")
 EXPECTED_WEB_HOST_DEPENDENCIES = {
-    "web-runtime-platform": "1.0.0",
+    "web-runtime-platform": "2.0.0",
 }
 
 
@@ -171,7 +171,7 @@ assert web_host_path == REPO_ROOT / "apps/web-runtime-host/module.json"
 assert web_host_manifest == {
     "contract": "lmdj.module.v1",
     "module": "web-runtime-host",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "api_version": 2,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }
@@ -180,7 +180,7 @@ assert creator_path == REPO_ROOT / "apps/creator-web/module.json"
 assert creator_manifest == {
     "contract": "lmdj.module.v1",
     "module": "creator-web",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "api_version": 2,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }
@@ -237,17 +237,28 @@ assert web_host_link is not None, (
     "Product Assembly must link the compiled catalog only when the "
     "Emscripten Web Host target exists"
 )
-# Derive the expected compile-time identities from the Host manifests rather
-# than repeating them. These definitions are baked into the wasm Runtime as the
-# manifest gate's allowlist, so a Host version bump that misses them ships a
-# distribution the Runtime refuses at boot with HOST_PROTOCOL_MISMATCH — a
-# failure that names nothing about versions. Deriving here fails loudly and
-# points at the real cause instead.
+# Compile-time Runtime identities are generated from Product Assembly, then
+# read by CMake. This keeps the wasm manifest gate aligned without copying
+# mutable version literals into the build definition.
+web_identity = load_object(
+    REPO_ROOT / "products/lmdj/generated/web-runtime-identity.json"
+)
+assert web_identity["platform"]["version"] == package_manifests[
+    "web-runtime-platform"
+][1]["version"]
+assert web_identity["hosts"]["creator-web"]["version"] == creator_manifest[
+    "version"
+]
+assert web_identity["hosts"]["web-runtime-host"]["version"] == (
+    web_host_manifest["version"]
+)
 for identity in (
+    "generated/web-runtime-identity.json",
     'LMDJ_WEB_CREATOR_HOST_ID="creator-web"',
-    f'LMDJ_WEB_CREATOR_HOST_VERSION="{creator_manifest["version"]}"',
+    'LMDJ_WEB_CREATOR_HOST_VERSION="${lmdj_web_creator_host_version}"',
     'LMDJ_WEB_DIAGNOSTIC_HOST_ID="web-runtime-host"',
-    f'LMDJ_WEB_DIAGNOSTIC_HOST_VERSION="{web_host_manifest["version"]}"',
+    'LMDJ_WEB_DIAGNOSTIC_HOST_VERSION="${lmdj_web_diagnostic_host_version}"',
+    'LMDJ_WEB_PLATFORM_VERSION="${lmdj_web_platform_version}"',
 ):
     assert identity in product_cmake, identity
 
