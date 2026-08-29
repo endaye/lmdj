@@ -196,9 +196,12 @@ class GitHubQueueApiTest(unittest.TestCase):
                     invalid.dispatch_validation(220, SHA_B, {"lanes": ""})
 
     def test_cancel_validation_posts_the_exact_run_endpoint(self):
-        client, transport = self.client([(202, {}, b"")])
+        client, transport = self.client([
+            json_response(200, {"status": "in_progress"}),
+            (202, {}, b""),
+        ])
         client.cancel_validation(991)
-        request = transport.requests[0]
+        request = transport.requests[1]
         self.assertEqual(request.method, "POST")
         self.assertEqual(
             request.url,
@@ -206,8 +209,19 @@ class GitHubQueueApiTest(unittest.TestCase):
         )
         self.assertIsNone(request.body)
 
+    def test_cancel_validation_does_not_post_for_a_completed_run(self):
+        client, transport = self.client([
+            json_response(200, {"status": "completed"}),
+        ])
+        client.cancel_validation(991)
+        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(transport.requests[0].method, "GET")
+
     def test_cancel_validation_rejects_a_non_success_response(self):
-        client, _ = self.client([json_response(409, {"message": "cannot cancel"})])
+        client, _ = self.client([
+            json_response(200, {"status": "in_progress"}),
+            json_response(409, {"message": "cannot cancel"}),
+        ])
         with self.assertRaises(api.GitHubApiError):
             client.cancel_validation(991)
 
@@ -419,7 +433,7 @@ class GitHubQueueApiTest(unittest.TestCase):
             "queue_head_sha": SHA_B,
             "observed_base_sha": SHA_A,
             "observed_head_sha": SHA_B,
-            "manifest_mode": "full",
+            "manifest_mode": "focused",
             "trusted_head": True,
         }
         artifact_redirect = (
