@@ -77,6 +77,33 @@ export interface SampleInspect {
   waveformCacheIdentity: string | null;
 }
 
+export interface SampleQuotaConsumption {
+  slot: number;
+  preparedBytes: number;
+  preparedFrames: number;
+}
+
+export interface SampleQuota {
+  projectRevision: number;
+  slot: number;
+  bankQuotaBytes: number;
+  bankUsedBytes: number;
+  bankRemainingBytes: number;
+  projectQuotaBytes: number;
+  projectUsedBytes: number;
+  projectRemainingBytes: number;
+  effectiveRemainingBytes: number;
+  effectiveRemainingFrames: number;
+  consumed: readonly Readonly<SampleQuotaConsumption>[];
+}
+
+export interface SampleIngestLimits {
+  sourceBytes: number;
+  decodedFrames: number;
+  channels: number;
+  artifactBytes: number;
+}
+
 export interface WaveformWindow {
   startFrame: number;
   endFrame: number;
@@ -222,6 +249,8 @@ export interface CreatorRuntimeSession {
 
 export interface CreatorSampleRuntimeSession extends CreatorRuntimeSession {
   inspectSample(slot: number): Promise<SampleInspect>;
+  querySampleQuota(slot: number): Promise<SampleQuota>;
+  sampleIngestLimits(): Readonly<SampleIngestLimits>;
   queryWaveform(request: WaveformQuery): Promise<WaveformEnvelope>;
   importAssignSample(
     file: File,

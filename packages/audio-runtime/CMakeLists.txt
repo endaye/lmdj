@@ -40,6 +40,30 @@ lmdj_target_warnings(lmdj_audio_runtime)
 lmdj_target_sanitizers(lmdj_audio_runtime)
 
 if(BUILD_TESTING)
+  add_library(
+    lmdj_audio_runtime_testable
+    STATIC
+      src/prepared_sample_bank.cpp
+      src/realtime_engine.cpp
+  )
+  target_include_directories(
+    lmdj_audio_runtime_testable
+    PUBLIC
+      "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  )
+  target_link_libraries(
+    lmdj_audio_runtime_testable
+    PUBLIC
+      lmdj::foundation
+      lmdj::project_cooker
+  )
+  target_compile_definitions(
+    lmdj_audio_runtime_testable
+    PRIVATE LMDJ_AUDIO_RUNTIME_TESTING=1
+  )
+  lmdj_target_warnings(lmdj_audio_runtime_testable)
+  lmdj_target_sanitizers(lmdj_audio_runtime_testable)
+
   add_executable(
     lmdj_prepared_sample_bank_tests
     "${CMAKE_SOURCE_DIR}/tests/core/audio/prepared_sample_bank_test.cpp"
@@ -64,10 +88,16 @@ if(BUILD_TESTING)
     "${CMAKE_SOURCE_DIR}/tests/core/audio/realtime_engine_test.cpp"
   )
   target_include_directories(
-    lmdj_realtime_engine_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+    lmdj_realtime_engine_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src"
   )
   target_link_libraries(
-    lmdj_realtime_engine_tests PRIVATE lmdj::audio_runtime
+    lmdj_realtime_engine_tests PRIVATE lmdj_audio_runtime_testable
+  )
+  target_compile_definitions(
+    lmdj_realtime_engine_tests PRIVATE LMDJ_AUDIO_RUNTIME_TESTING=1
   )
   lmdj_target_warnings(lmdj_realtime_engine_tests)
   lmdj_target_sanitizers(lmdj_realtime_engine_tests)
@@ -155,6 +185,27 @@ if(BUILD_TESTING)
     NAME audio.snapshot_publication_stress
     TIER stress
     COMMAND lmdj_snapshot_publication_stress_tests
+    LABELS audio concurrency
+    TIMEOUT 180
+  )
+
+  add_executable(
+    lmdj_long_sample_publication_stress_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/long_sample_publication_stress_test.cpp"
+  )
+  target_include_directories(
+    lmdj_long_sample_publication_stress_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_long_sample_publication_stress_tests
+    PRIVATE lmdj::audio_runtime Threads::Threads
+  )
+  lmdj_target_warnings(lmdj_long_sample_publication_stress_tests)
+  lmdj_target_sanitizers(lmdj_long_sample_publication_stress_tests)
+  lmdj_add_test(
+    NAME audio.long_sample_publication_stress
+    TIER stress
+    COMMAND lmdj_long_sample_publication_stress_tests
     LABELS audio concurrency
     TIMEOUT 180
   )

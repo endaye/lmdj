@@ -202,7 +202,8 @@ Json bridge_query_cancelled_error() {
 
 bool safety_interruptible_query(std::string_view operation) {
   return operation == "project.inspect" || operation == "project.list" ||
-         operation == "sample.inspect" || operation == "sample.waveform";
+         operation == "sample.inspect" || operation == "sample.quota" ||
+         operation == "sample.waveform";
 }
 
 std::chrono::milliseconds operation_deadline(std::string_view operation) {
@@ -219,7 +220,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 41> operations{
+  static constexpr std::array<std::string_view, 42> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -236,6 +237,7 @@ bool supported_operation(std::string_view operation) {
       "snapshot.reload",
       "snapshot.retry",
       "sample.inspect",
+      "sample.quota",
       "sample.waveform",
       "sample.import.begin",
       "sample.import.chunk",
@@ -401,6 +403,14 @@ struct ControlBridge::Impl {
         std::memory_order_acquire)) {
       request.owner->mark_publication(request, PublicationState::committed);
     }
+  }
+
+  static bool publication_settlement_owned(void* context) noexcept {
+    const auto state = static_cast<RequestSlot*>(context)->publication.load(
+        std::memory_order_acquire);
+    return state == PublicationState::publish_claimed ||
+           state == PublicationState::committed ||
+           state == PublicationState::aborted;
   }
 
   static void abort_publication(void* context) noexcept {
@@ -1025,7 +1035,10 @@ struct ControlBridge::Impl {
                 parsed->at("payload"),
                 std::span<const std::byte>(
                     request.sidecar.data(), request.sidecar_size),
-                request.submitted_at);
+                ControlRuntime::AbsoluteRequestDeadline{
+                    deadline,
+                    &request,
+                    &publication_settlement_owned});
             if (!runtime_was_failed && runtime.failed()) {
               terminal_after_response = true;
             }
@@ -2245,6 +2258,11 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_bootstrap_timeout() {
   return schedule_audio_control_failure(adapter->fatal()) ? 1 : 0;
 }
 
+EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_callback_heartbeat() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter == nullptr ? 0 : adapter->callback_heartbeat();
+}
+
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
 EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_test_observed_frames() {
   auto* adapter = web_audio.load(std::memory_order_acquire);
@@ -2562,10 +2580,10 @@ int main() {
   const auto workspace =
       std::filesystem::path("/lmdj-workspace").lexically_normal();
   constexpr RuntimePreparationLimits limits{
-      1'048'576,
-      240'000,
-      67'108'864,
-      134'217'728,
+      LMDJ_WEB_LIMIT_ARTIFACT_BYTES,
+      LMDJ_WEB_LIMIT_USER_BANK_BYTES,
+      LMDJ_WEB_LIMIT_GENERATION_BYTES,
+      LMDJ_WEB_LIMIT_RESIDENT_BYTES,
   };
   auto created = ControlRuntime::create(
       workspace,

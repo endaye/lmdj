@@ -13,7 +13,7 @@ import {
   retryPrepareJourney,
   updateSampleJourney,
 } from "../src/runtime/sample_actions";
-import {COMMIT_MAX_FRAMES, CaptureBuffer} from "../src/capture/capture_buffer";
+import {CaptureBuffer} from "../src/capture/capture_buffer";
 import {encodePcm16Wav} from "../src/capture/wav_encoder";
 import type {
   CreatorSampleRuntimeSession,
@@ -113,6 +113,18 @@ function fixture() {
       trigger_admitted_count: 0,
       trigger_outcome_count: 0,
       trigger_rejected_count: 0,
+    }),
+    querySampleQuota: async (slot) => ({
+      projectRevision: 42, slot, bankQuotaBytes: 67_108_864,
+      bankUsedBytes: 0, bankRemainingBytes: 67_108_864,
+      projectQuotaBytes: 134_217_728, projectUsedBytes: 0,
+      projectRemainingBytes: 134_217_728,
+      effectiveRemainingBytes: 67_108_864,
+      effectiveRemainingFrames: 16_777_216, consumed: [],
+    }),
+    sampleIngestLimits: () => ({
+      sourceBytes: 104_857_600, decodedFrames: 43_200_000,
+      channels: 2, artifactBytes: 68_157_440,
     }),
     async inspectSample(slot) {
       calls.push({method: "inspectSample", arguments: [slot]});
@@ -488,9 +500,7 @@ describe("Creator Sample actions", () => {
       {actual_revision: 43, expected_revision: 42},
       ...[
         "artifact_bytes",
-        "decoded_frames_per_pad",
-        "prepared_bank_bytes",
-        "live_bank_bytes",
+        "resident_pcm_bytes",
       ].map((resource) => ({resource, observed: 1_048_576, limit: 524_288})),
       ...[
         "project_busy",
@@ -535,6 +545,11 @@ describe("Creator Sample actions", () => {
       {actual_revision: Number.MAX_SAFE_INTEGER + 1, expected_revision: 42},
       {actual_revision: 43, expected_revision: 42, note: "extra"},
       {resource: "unknown_resource", observed: 2, limit: 1},
+      ...[
+        "decoded_frames_per_pad",
+        "prepared_bank_bytes",
+        "live_bank_bytes",
+      ].map((resource) => ({resource, observed: 2, limit: 1})),
       {resource: "artifact_bytes", observed: -1, limit: 1},
       {storage_condition: "unknown_condition"},
       {transfer_condition: "unknown_condition"},
@@ -836,12 +851,12 @@ describe("captureCommitJourney", () => {
       .toEqual(new Uint8Array(await second.arrayBuffer()));
   });
 
-  test("rejects a selection over COMMIT_MAX_FRAMES or otherwise malformed", async () => {
+  test("rejects a selection outside the captured buffer or otherwise malformed", async () => {
     const {calls, session} = fixture();
     const buffer = captureBuffer(64);
     await expect(captureCommitJourney(session, buffer,
-      {startFrame: 0, frameCount: COMMIT_MAX_FRAMES + 1}, {slot: 1, expectedRevision: 1},
-    )).rejects.toThrow(TypeError);
+      {startFrame: 0, frameCount: 65}, {slot: 1, expectedRevision: 1},
+    )).rejects.toThrow(RangeError);
     await expect(captureCommitJourney(session, buffer,
       {startFrame: 0, frameCount: 0}, {slot: 1, expectedRevision: 1},
     )).rejects.toThrow(TypeError);

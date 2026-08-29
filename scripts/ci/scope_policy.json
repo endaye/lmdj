@@ -149,6 +149,7 @@
     {"match": {"kind": "prefix", "value": "tests/e2e/"}, "lanes": ["core_ubuntu"]},
     {"match": {"kind": "prefix", "value": "tests/distribution/"}, "lanes": ["package"]},
     {"match": {"kind": "prefix", "value": "tests/fixtures/audio/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_runtime_host", "creator"]},
+    {"match": {"kind": "prefix", "value": "tests/fixtures/long-material/"}, "lanes": ["creator"]},
     {"match": {"kind": "prefix", "value": "tests/fixtures/projects/"}, "lanes": ["core_ubuntu"]},
     {"match": {"kind": "exact", "value": "tests/platform/web/package-lock.json"}, "lanes": ["web_toolchain", "web_runtime_host", "creator", "web_runtime_lab"]},
     {"match": {"kind": "exact", "value": "tests/platform/web/package.json"}, "lanes": ["web_toolchain", "web_runtime_host", "creator", "web_runtime_lab"]},

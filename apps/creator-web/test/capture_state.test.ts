@@ -18,7 +18,7 @@ describe("reduceCapture", () => {
     let state = run([
       {kind: "record"}, {kind: "granted"},
       {kind: "frames", frames: 96_000, peak: 0.5},
-      {kind: "stop", reason: "user"},
+      {kind: "stop", reason: "user", maximumFrames: 240_000},
     ]);
     expect(state.phase).toBe("trimming");
     expect(state.selectionFrames).toBe(96_000); // clamped default ≤ 240,000
@@ -28,21 +28,21 @@ describe("reduceCapture", () => {
     expect(state).toEqual(initialCaptureState);
   });
 
-  test("clamps the default selection to COMMIT_MAX_FRAMES", () => {
+  test("clamps the default selection to the queried effective quota", () => {
     const state = run([
       {kind: "record"}, {kind: "granted"},
       {kind: "frames", frames: 2_880_000, peak: 1},
-      {kind: "stop", reason: "capacity"},
+      {kind: "stop", reason: "capacity", maximumFrames: 1_000_000},
     ]);
-    expect(state.selectionFrames).toBe(240_000);
+    expect(state.selectionFrames).toBe(1_000_000);
     expect(state.stopReason).toBe("capacity");
   });
 
-  test("rejects selections above COMMIT_MAX_FRAMES", () => {
+  test("rejects selections above the queried effective quota", () => {
     const trimming = run([
       {kind: "record"}, {kind: "granted"},
       {kind: "frames", frames: 480_000, peak: 0.2},
-      {kind: "stop", reason: "hidden"},
+      {kind: "stop", reason: "hidden", maximumFrames: 240_000},
     ]);
     const rejected = reduceCapture(trimming, {kind: "select", start: 0, frames: 240_001});
     expect(rejected).toBe(trimming); // unchanged

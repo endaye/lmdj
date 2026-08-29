@@ -34,7 +34,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Formal Web Runtime Host `2.0.0` 已进入 Product Build `1.0.37.0` Assembly。Host 只依赖 Web Runtime Platform `1.0.0`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。Diagnostic flow 现在覆盖 Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。
+<StatusBadge status="implemented" /> Formal Web Runtime Host `2.1.0` 已进入 Product Build `1.0.38.0` Assembly。Host 只依赖 Web Runtime Platform `2.0.0`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。Diagnostic flow 现在覆盖 revision-bound `sample.quota`、Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。
 Formal Web Runtime Host `1.2.10` 已进入 Product Build `1.0.24.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.3.1`。
 
 ControlBridge 先于 audio readiness 发布；Host 只转发 Runtime Session authority state。它不解析 Project/bundle/journal、不执行 quantization/fingerprint，也没有 JavaScript fallback sequencer。
@@ -45,7 +45,7 @@ Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用�
 
 ## 分发与身份门禁
 
-`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：内容哈希资产与 canonical manifest 绑定 Product Build `1.0.37.0`、Host `2.0.0`、Platform `1.0.0`、私有协议 `1`、固定 heap/资源上限、Emscripten 身份及精确 inventory。Browser Main 与 shared native gate 在创建 runtime owner 前双重校验这些身份，漂移、重复或迟到初始化均 fail closed。
+`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：内容哈希资产与 canonical manifest 绑定 Product Build `1.0.38.0`、Host `2.1.0`、Platform `2.0.0`、私有协议 `1`、固定 heap/七项资源上限、Emscripten 身份及精确 inventory。Browser Main 与 shared native gate 在创建 runtime owner 前双重校验这些身份，漂移、重复或迟到初始化均 fail closed。
 
 proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
 
@@ -84,7 +84,7 @@ reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior�
 evidence v1。official site response 的 `disabled: true` 被规范化为 `state: disabled` 并在
 smoke/Draft 前拒绝自动 enable；publication projection 接受并保留 Netlify UTC `Z`
 时间戳中的可选小数秒。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
-自动证明当前 Product Build `1.0.37.0` 或任何历史 Product Build 已获得 remote verified tag、Release、Deploy ID、
+自动证明当前 Product Build `1.0.38.0` 或任何历史 Product Build 已获得 remote verified tag、Release、Deploy ID、
 immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
 工具测试或 PR Preview 上升为当前候选的公开部署结论。
 
@@ -96,13 +96,13 @@ Netlify 生产面将静态服务已验证的 release `dist`，与 Python proof-o
 
 ## 生命周期门禁
 
-Trigger 与 `sequence.record.begin` 只在 `running` 接收。Sequence pad admission 使用 Audio Runtime frame clock 和单调 `input_sequence`；next-Bar boundary、BPM anchor 与 receipt 全部来自 Core。共享 Runtime Session 保留 switch-request 返回的 session、目标 Pattern、activation frame 与 generation，只接受完全匹配的 Runtime boundary；它在同一 Runtime action lane 内发出一个生成 command identity 的 Facade flush，确认目标 Pattern 已 active 后才通知 Host observer。乱序、重复或已被 stop/new begin 取代的 boundary 不会重复 flush，第一条已确认边界后的 Pad event 排在 flush 之后。pagehide/terminal 会先封闭新 admission，再有界释放 Worker、transport、AudioWorklet、writer lease 与 session owner；owner 丢失留下显式 recovery artifact。
+Trigger 与 `sequence.record.begin` 只在 `running` 接收。Sequence pad admission 使用 Audio Runtime frame clock 和单调 `input_sequence`；accepted pending event 由共享 Control bridge 组合成 immutable overlay view，在下一 Bar 可听，flush/Stop 后由 clean committed view 替换。next-Bar boundary、BPM anchor、overlay generation 与 receipt 全部来自 Core；JavaScript 不持有 fallback sequencer。共享 Runtime Session 保留 switch-request 返回的 session、目标 Pattern、activation frame 与 generation，只接受完全匹配的 Runtime boundary；ControlRuntime 仅用匹配 pending generation、源 Pattern 与 boundary 的 authority 让目标 Pattern 取代 overlay，普通不同 Pattern overlap 仍拒绝。它在同一 Runtime action lane 内发出一个生成 command identity 的 Facade flush，确认目标 Pattern 已 active 后才通知 Host observer；authority 保留到该 flush 完成。switch-pending Stop 会取消目标并发布旧 Pattern 的 clean committed view；若 cancellation 的两次查询之间 target 已 apply 并清空 pending，ControlRuntime 必须重读 current generation 并 fail closed，不能把 target 已激活误报为已取消。若第一次 clean publication 失败，同一 durable Stop receipt 在任何已流逝 boundary 之后重放时都从当前 transport 派生新的 next Bar，而不重做 Project mutation 或让已取消目标复活。switch-pending BPM 在 Facade mutation 前拒绝。乱序、重复或已被 stop/new begin 取代的 boundary 不会重复 flush，第一条已确认边界后的 Pad event 排在 flush 之后。pagehide/terminal 会先封闭新 admission，再有界释放 Worker、transport、AudioWorklet、writer lease 与 session owner；owner 丢失留下显式 recovery artifact。
 
 中断同步关闭 runtime admission、清除 pressed state，并按 epoch 只发一次 Control suspend/seal。恢复必须同时具备 Context `running`、正整数 current/ack generation 相等，以及一个真实用户 recovery probe 的唯一 `voice_started`；visibility 或 pageshow 本身不能完成恢复。
 
 ## 自动化证据
 
-`scripts/web-runtime-host.sh proof` 覆盖可复现 build、distribution gates 与 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 旅程，包括 Project v3、500-trigger 压力、Sequence recording/status/recovery、跨窗口 observer/busy、失败和 lifecycle；switch journey 继续越过已确认边界录入新 Pattern，并经 stop、Project inspection 与新 Pattern reload 验证两侧提交。WebKit 只在 mandatory primitive 可用时执行完整 smoke；结构化 limitation 不会被写成物理证据。
+`scripts/web-runtime-host.sh proof` 覆盖可复现 build、distribution gates 与 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 旅程，包括 Project v3、500-trigger 压力、Sequence recording/status/recovery、跨窗口 observer/busy、失败和 lifecycle；switch journey 从 pending overlay 越过已确认边界录入新 Pattern，并经 stop、Project inspection 与新 Pattern reload 验证两侧提交，还覆盖 switch-pending BPM pre-mutation rejection 与 Stop target cancellation。共享 C++ ControlRuntime journey 另验证 Facade pending overlay 到 Audio Runtime next-Bar publication、apply-point 精确 switch authority、target 在 cancellation 查询间 apply 的 fail-closed interleaving、延迟越过旧 boundary 的 durable Stop replay，以及 clean replacement 无重复/空洞/陈旧 overlay。WebKit 只在 mandatory primitive 可用时执行完整 smoke；结构化 limitation 不会被写成物理证据。
 
 ## 非能力
 

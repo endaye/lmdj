@@ -31,29 +31,71 @@ constexpr std::optional<std::uint64_t> checked_runtime_byte_sum(
 
 struct RuntimePreparationLimits {
   std::uint64_t maximum_artifact_bytes;
-  std::uint64_t maximum_decoded_frames_per_pad;
-  std::uint64_t maximum_prepared_bank_bytes;
-  std::uint64_t maximum_live_bank_bytes;
+  std::uint64_t maximum_user_bank_bytes;
+  std::uint64_t maximum_generation_bytes;
+  std::uint64_t maximum_resident_bytes;
 
   constexpr bool allows_artifact_bytes(
       std::uint64_t observed) const noexcept {
     return observed <= maximum_artifact_bytes;
   }
 
-  constexpr bool allows_decoded_frames_per_pad(
+  constexpr bool allows_user_bank_bytes(
       std::uint64_t observed) const noexcept {
-    return observed <= maximum_decoded_frames_per_pad;
+    return observed <= maximum_user_bank_bytes;
   }
 
-  constexpr bool allows_prepared_bank_bytes(
+  constexpr bool allows_generation_bytes(
       std::uint64_t observed) const noexcept {
-    return observed <= maximum_prepared_bank_bytes;
+    return observed <= maximum_generation_bytes;
   }
 
-  constexpr bool allows_live_bank_bytes(
+  constexpr bool allows_resident_bytes(
       std::uint64_t observed) const noexcept {
-    return observed <= maximum_live_bank_bytes;
+    return observed <= maximum_resident_bytes;
   }
 };
+
+enum class RuntimeQuotaConstraint {
+  none,
+  user_bank,
+  generation,
+};
+
+struct RuntimeQuotaAssessment {
+  RuntimeQuotaConstraint constraint;
+  std::uint64_t user_bank_remaining_bytes;
+  std::uint64_t generation_remaining_bytes;
+};
+
+constexpr std::optional<RuntimeQuotaAssessment> assess_runtime_quota(
+    std::uint64_t user_bank_used_bytes,
+    std::uint64_t generation_used_bytes,
+    std::uint64_t requested_bytes,
+    const RuntimePreparationLimits& limits) noexcept {
+  if (user_bank_used_bytes > limits.maximum_user_bank_bytes ||
+      generation_used_bytes > limits.maximum_generation_bytes) {
+    return std::nullopt;
+  }
+  const auto user_bank_remaining =
+      limits.maximum_user_bank_bytes - user_bank_used_bytes;
+  const auto generation_remaining =
+      limits.maximum_generation_bytes - generation_used_bytes;
+  const auto user_bank_exhausted = requested_bytes > user_bank_remaining;
+  const auto generation_exhausted = requested_bytes > generation_remaining;
+  auto constraint = RuntimeQuotaConstraint::none;
+  if (user_bank_exhausted &&
+      (!generation_exhausted ||
+       user_bank_remaining <= generation_remaining)) {
+    constraint = RuntimeQuotaConstraint::user_bank;
+  } else if (generation_exhausted) {
+    constraint = RuntimeQuotaConstraint::generation;
+  }
+  return RuntimeQuotaAssessment{
+      constraint,
+      user_bank_remaining,
+      generation_remaining,
+  };
+}
 
 }  // namespace lmdj::audio

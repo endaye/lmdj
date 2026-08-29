@@ -41,6 +41,60 @@ foundation::Result<PreparedSampleBank> preparation_limit(
   });
 }
 
+foundation::Result<PreparedSampleBank> bank_quota_exhausted(
+    std::uint8_t bank,
+    std::uint64_t requested_bytes,
+    std::uint64_t requested_frames,
+    std::uint64_t remaining_bytes,
+    std::uint64_t quota_bytes,
+    const std::vector<nlohmann::json>& consumed) {
+  return foundation::Result<PreparedSampleBank>::failure(foundation::Error{
+      foundation::ErrorCode::bank_quota_exhausted,
+      "Bank prepared-PCM quota exhausted; why: the committed selection "
+      "does not fit in this Bank; remedy: shorten or remove samples in the "
+      "same Bank, then retry",
+      {
+          {"bank", bank},
+          {"requested_bytes", requested_bytes},
+          {"requested_frames", requested_frames},
+          {"remaining_bytes", remaining_bytes},
+          {"remaining_frames", remaining_bytes / sizeof(float)},
+          {"quota_bytes", quota_bytes},
+          {"consumed", consumed},
+      },
+  });
+}
+
+foundation::Result<PreparedSampleBank> project_quota_exhausted(
+    std::uint64_t requested_bytes,
+    std::uint64_t requested_frames,
+    std::uint64_t project_used_bytes,
+    std::uint64_t project_remaining_bytes,
+    std::uint64_t project_quota_bytes,
+    const std::array<std::uint64_t, 4>& bank_bytes) {
+  auto banks = nlohmann::json::array();
+  for (std::uint8_t bank = 0; bank < bank_bytes.size(); ++bank) {
+    banks.push_back({
+        {"bank", bank},
+        {"prepared_bytes", bank_bytes.at(bank)},
+    });
+  }
+  return foundation::Result<PreparedSampleBank>::failure(foundation::Error{
+      foundation::ErrorCode::project_quota_exhausted,
+      "Project prepared-PCM quota exhausted; why: the committed selection "
+      "does not fit in the current generation; remedy: shorten or remove "
+      "samples in the Project, then retry",
+      {
+          {"requested_bytes", requested_bytes},
+          {"requested_frames", requested_frames},
+          {"project_used_bytes", project_used_bytes},
+          {"project_remaining_bytes", project_remaining_bytes},
+          {"project_quota_bytes", project_quota_bytes},
+          {"banks", std::move(banks)},
+      },
+  });
+}
+
 float pcm16_to_float(std::int16_t value) noexcept {
   return value < 0 ? static_cast<float>(value) / 32768.0F
                    : static_cast<float>(value) / 32767.0F;
@@ -338,7 +392,9 @@ foundation::Result<PreparedSampleBank> PreparedSampleBank::from_snapshot(
   }
   std::uint8_t previous_slot = 0;
   bool has_previous_slot = false;
-  std::uint64_t prospective_bank_bytes = 0;
+  std::array<std::uint64_t, 4> prospective_bank_bytes{};
+  std::array<std::vector<nlohmann::json>, 4> consumed{};
+  std::uint64_t prospective_generation_bytes = 0;
   for (const auto& pad : snapshot.pads) {
     if (!domain::is_valid_slot(pad.slot) || pad.sample == nullptr) {
       return invalid_bank("runtime snapshot Pad is invalid");
@@ -365,36 +421,45 @@ foundation::Result<PreparedSampleBank> PreparedSampleBank::from_snapshot(
     if (!valid_playback(pad.playback, static_cast<std::size_t>(frames))) {
       return invalid_bank("runtime snapshot Pad playback is invalid");
     }
-    if (!limits.allows_decoded_frames_per_pad(frames)) {
-      return preparation_limit(
-          "decoded_frames_per_pad",
-          frames,
-          limits.maximum_decoded_frames_per_pad);
-    }
     const auto sample_bytes = checked_mono_float_bytes(frames);
     if (!sample_bytes.has_value()) {
       return invalid_bank("runtime snapshot PCM byte length overflowed");
     }
-    const auto total = checked_runtime_byte_sum(
-        prospective_bank_bytes, sample_bytes.value());
-    if (!total.has_value()) {
-      return invalid_bank("runtime snapshot Bank byte length overflowed");
+    const auto assessment = assess_runtime_quota(
+        prospective_bank_bytes.at(pad.slot.bank),
+        prospective_generation_bytes,
+        sample_bytes.value(),
+        limits);
+    if (!assessment.has_value()) {
+      return invalid_bank("runtime snapshot quota ledger is invalid");
     }
-    prospective_bank_bytes = total.value();
+    if (assessment->constraint == RuntimeQuotaConstraint::user_bank) {
+      return bank_quota_exhausted(
+          pad.slot.bank,
+          sample_bytes.value(),
+          frames,
+          assessment->user_bank_remaining_bytes,
+          limits.maximum_user_bank_bytes,
+          consumed.at(pad.slot.bank));
+    }
+    if (assessment->constraint == RuntimeQuotaConstraint::generation) {
+      return project_quota_exhausted(
+          sample_bytes.value(),
+          frames,
+          prospective_generation_bytes,
+          assessment->generation_remaining_bytes,
+          limits.maximum_generation_bytes,
+          prospective_bank_bytes);
+    }
+    prospective_bank_bytes.at(pad.slot.bank) += sample_bytes.value();
+    prospective_generation_bytes += sample_bytes.value();
+    consumed.at(pad.slot.bank).push_back({
+        {"pad", pad.slot.pad},
+        {"prepared_bytes", sample_bytes.value()},
+        {"prepared_frames", frames},
+    });
     previous_slot = slot;
     has_previous_slot = true;
-  }
-  if (!limits.allows_prepared_bank_bytes(prospective_bank_bytes)) {
-    return preparation_limit(
-        "prepared_bank_bytes",
-        prospective_bank_bytes,
-        limits.maximum_prepared_bank_bytes);
-  }
-  if (!limits.allows_live_bank_bytes(prospective_bank_bytes)) {
-    return preparation_limit(
-        "live_bank_bytes",
-        prospective_bank_bytes,
-        limits.maximum_live_bank_bytes);
   }
 
   PreparedSampleBank bank(snapshot.project_id, snapshot.project_revision);

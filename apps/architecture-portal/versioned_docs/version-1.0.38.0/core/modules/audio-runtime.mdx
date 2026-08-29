@@ -1,0 +1,36 @@
+---
+title: Audio Runtime
+area: core
+status: implemented
+owners: [core, audio]
+module: audio-runtime
+source_paths: [packages/audio-runtime, tests/core/audio]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity kind="modules" id="audio-runtime" />
+
+<DiagramFrame title="Audio Runtime Module" diagramId="audio-runtime" />
+
+## 1. 目的与非职责
+准备样本、调度 Pattern/Pad 事件并离线或实时渲染；不修改 Project Truth。
+## 2. 当前实现状态
+Audio Runtime `2.0.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。Prepared PCM 不再设置单 Pad 帧数上限：64 个 Pad Slot 各自持有独立的可变长 `std::vector<float>`，每个 16-Pad user Bank 使用独立字节账本，同时受 generation 总账本约束；无需 PCM arena 或 offset table。resident bytes 由 publication owner 另行核算。实时线程只消费不可变 Runtime Snapshot 与固定队列，不执行 quantization、Project mutation 或 journal I/O。
+## 3. 所有权与依赖
+依赖 Foundation 与 Project Cooker；平台输出位于适配边界。
+## 4. 架构与数据流
+Runtime Snapshot → Sample Bank/Pattern origin 发布 → fixed SPSC control 与 Voice-state/Bar-boundary 队列 → 音频线程 → 输出 sink；preview 与 transport anchor 只属于 Runtime，不进入 Project Truth。
+## 5. API 与 Artifact 边界
+消费不可变快照、resolved playback 与已准备样本，不在实时回调解析 Project/WAV、分配内存、加锁或调用 Host。`kRealtimeMaximumSampleFrames` 明确实时样本、playback 与 Voice-state 共用的无符号 32 位帧域；批准的 16,777,216 帧单 Pad 在 trim、loop、ramp 和事件回报中不发生中间收窄。
+## 6. 状态、错误与并发
+固定 SPSC 队列和压力测试覆盖 control/Voice 并发；overflow fail closed，实时路径避免无界工作。发布按 current/pending/retiring/reclaimable 状态转移：实时线程只读不可变 Bank，最后一个 Voice 结束后才允许控制线程回收。publication owner 按 reclaim → reserve → publish 顺序核算 live、pending、retiring bytes。准备阶段按剩余字节的较小约束判定失败，约束相等时稳定返回 Bank failure；Bank、generation 与 transient residency 三类失败不互相冒充。
+## 7. 产品使用方
+Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
+## 8. 测试与证据
+Realtime、stress、offline、sample bank、queue 与 CoreAudio output 测试；`audio.realtime_engine` 覆盖 16,777,216 帧高位 trim/loop/ramp，`audio.long_sample_publication_stress` 在并发渲染下覆盖 64 MiB 单 Pad、128 MiB generation、256 MiB resident 边界与字节精确回收。该 busy-spin 用例仅属于 stress tier，并从 coverage preset 排除。物理延迟与 Safari 内存验收单列。
+## 9. 限制与下一门禁
+自动化绿色不证明 MIDI/iPad/扬声器体验；需保留设备视频和测量证据。
+## 10. 版本身份
+Module 版本由清单生成，Product Build 由 Assembly 固定。

@@ -26,6 +26,7 @@ const API = [
   "listLocalProjects",
   "listSequenceRecovery",
   "openProject",
+  "querySampleQuota",
   "queryWaveform",
   "querySequenceStatus",
   "recordSequenceEvent",
@@ -36,6 +37,7 @@ const API = [
   "resetPad",
   "retryPrepare",
   "setSamplePreview",
+  "sampleIngestLimits",
   "start",
   "subscribeDiagnostics",
   "stopAll",
@@ -65,6 +67,16 @@ const WIRE_PLAYBACK = Object.freeze({
   trigger_mode: "gate",
   gain_millidb: -1_200,
   muted: false,
+});
+
+const RESOURCE_LIMITS = Object.freeze({
+  decoded_float_pcm_bytes_per_bank: 67_108_864,
+  decoded_float_pcm_bytes_total: 134_217_728,
+  decoded_float_pcm_bytes_resident: 268_435_456,
+  ingest_source_bytes: 104_857_600,
+  ingest_decoded_frames: 43_200_000,
+  ingest_channels: 2,
+  imported_wav_bytes: 68_157_440,
 });
 
 function success(envelope, result = {}) {
@@ -115,15 +127,19 @@ function fixture({
   inputConfiguration = {},
   runtimeTransport,
   runtimeTerminator,
+  audioCallbackHeartbeat,
+  startAudioWorklet,
+  now,
   inputOwnership,
   manifestSource = {
-    resourceLimits: {imported_wav_bytes: 1_048_576},
+    resourceLimits: RESOURCE_LIMITS,
   },
 } = {}) {
   let request = 0;
   let terminated = 0;
   let notificationListener = null;
   let failureListener = null;
+  let defaultAudioCallbackHeartbeat = 0;
   const context = Object.assign(new EventTarget(), {
     state: "suspended",
     async resume() {
@@ -160,7 +176,13 @@ function fixture({
       },
       subtle: webcrypto.subtle,
     },
-    manifestSource,
+    manifestSource: {
+      ...manifestSource,
+      resourceLimits: {
+        ...RESOURCE_LIMITS,
+        ...manifestSource.resourceLimits,
+      },
+    },
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
@@ -179,7 +201,11 @@ function fixture({
       createAudioContext: () => context,
       loadRuntime: async () => ({
         registerAudioContext: () => 1,
-        startAudioWorklet: async () => ({ok: true}),
+        audioCallbackHeartbeat:
+          audioCallbackHeartbeat ??
+          (() => ++defaultAudioCallbackHeartbeat),
+        startAudioWorklet:
+          startAudioWorklet ?? (async () => ({ok: true})),
         workers: [],
         ...(runtimeTransport === undefined
           ? {}
@@ -198,6 +224,7 @@ function fixture({
         product_build: TEST_PRODUCT_BUILD,
         protocol_version: 1,
       }),
+      ...(now === undefined ? {} : {now}),
     },
   });
   return {
@@ -312,7 +339,7 @@ test("default capability probe timeout fails startup without restart-required", 
     },
     navigator: {},
     crypto: webcrypto,
-    manifestSource: {resourceLimits: {imported_wav_bytes: 1_048_576}},
+    manifestSource: {resourceLimits: RESOURCE_LIMITS},
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
@@ -366,7 +393,7 @@ test("accepts only the declared compatible Host inventory in packaged manifests"
   };
   const manifestSource = {
     heapBytes: 536_870_912,
-    resourceLimits: {imported_wav_bytes: 1_048_576},
+    resourceLimits: RESOURCE_LIMITS,
     emscripten: {
       emcc_version: "emcc",
       emscripten_releases_revision: "a".repeat(40),
@@ -486,6 +513,73 @@ test("owns the exact Host-neutral surface and lifecycle", async () => {
     errorDetails: {},
   });
   assert.equal(terminated(), 1);
+});
+
+test("activation waits for a resumed AudioWorklet callback within its original budget", async () => {
+  let heartbeat = 7;
+  const activations = [];
+  const {session} = fixture({
+    audioCallbackHeartbeat: () => heartbeat,
+    send: async (envelope, options) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(options.deadlineMs);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  const first = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  assert.deepEqual(activations, []);
+  heartbeat = 8;
+  assert.equal(await first, true);
+  assert.equal(activations.length, 1);
+  assert.ok(activations[0] > 0 && activations[0] <= 1_000);
+
+  assert.equal(await session.suspendAudio(), true);
+  const second = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  assert.equal(activations.length, 1);
+  heartbeat = 9;
+  assert.equal(await second, true);
+  assert.equal(activations.length, 2);
+  assert.ok(activations[1] > 0 && activations[1] <= 1_000);
+
+  assert.equal(await session.suspendAudio(), true);
+  heartbeat = 0xffff_ffff;
+  const wrapped = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  assert.equal(activations.length, 2);
+  heartbeat = 0;
+  assert.equal(await wrapped, true);
+  assert.equal(activations.length, 3);
+});
+
+test("initial AudioWorklet bootstrap does not consume the activation budget", async () => {
+  let monotonicTime = 0;
+  const activations = [];
+  const {session} = fixture({
+    now: () => monotonicTime,
+    startAudioWorklet: async () => {
+      monotonicTime += 5_000;
+      return {ok: true};
+    },
+    send: async (envelope, options) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(options.deadlineMs);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(activations, [1_000]);
 });
 
 test("bridges Sequence authority without browser musical-clock math", async () => {
@@ -744,7 +838,24 @@ test("bridges Sequence authority without browser musical-clock math", async () =
   });
   assert.equal(await session.discardSequenceRecovery(sessionId), true);
   assert.equal(await session.disarmSequenceCapture({sessionId, slot: 17}), true);
+  await session.requestPatternSwitch({sessionId, nextPatternId});
   await session.stopSequence({sessionId, commandId});
+  const flushCountAfterStop = operations.filter(({operation}) =>
+    operation === "sequence.record.flush").length;
+  emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(boundaries.length, 1);
+  assert.equal(operations.filter(({operation}) =>
+    operation === "sequence.record.flush").length, flushCountAfterStop);
 
   const eventPayload = operations.find(
     ({operation}) => operation === "sequence.record.event",
@@ -799,9 +910,9 @@ test("Host-state failures expose only allowlisted structured details", async () 
     code: "WEB_RUNTIME_RESOURCE_LIMIT",
     stack: "private stack",
     details: {
-      resource: "decoded_frames_per_pad",
-      observed: 240_001,
-      limit: 240_000,
+      resource: "ingest_decoded_frames",
+      observed: 43_200_001,
+      limit: 43_200_000,
       storage_condition: "quota_exceeded",
       path: "/Users/private/project",
       request_id: "11111111-1111-4111-8111-111111111111",
@@ -814,9 +925,9 @@ test("Host-state failures expose only allowlisted structured details", async () 
     state: "failed",
     errorCode: "WEB_RUNTIME_RESOURCE_LIMIT",
     errorDetails: {
-      resource: "decoded_frames_per_pad",
-      observed: 240_001,
-      limit: 240_000,
+      resource: "ingest_decoded_frames",
+      observed: 43_200_001,
+      limit: 43_200_000,
       storage_condition: "quota_exceeded",
     },
   });
@@ -905,6 +1016,25 @@ test("Sample queries bind flat slots to the current Project and validate typed r
           project_revision: 7,
         });
       }
+      if (envelope.operation === "sample.quota") {
+        return success(envelope, {
+          project_revision: 7,
+          slot: {bank: 2, pad: 1},
+          bank_quota_bytes: 67_108_864,
+          bank_used_bytes: 4_000,
+          bank_remaining_bytes: 67_104_864,
+          project_quota_bytes: 134_217_728,
+          project_used_bytes: 8_000,
+          project_remaining_bytes: 134_209_728,
+          effective_remaining_bytes: 67_104_864,
+          effective_remaining_frames: 16_776_216,
+          consumed: [{
+            slot: {bank: 2, pad: 0},
+            prepared_bytes: 4_000,
+            prepared_frames: 1_000,
+          }],
+        });
+      }
       return success(envelope, defaultResult(envelope.operation));
     },
   });
@@ -930,6 +1060,25 @@ test("Sample queries bind flat slots to the current Project and validate typed r
     ],
     projectRevision: 7,
   });
+  assert.deepEqual(await session.querySampleQuota(33), {
+    projectRevision: 7,
+    slot: 33,
+    bankQuotaBytes: 67_108_864,
+    bankUsedBytes: 4_000,
+    bankRemainingBytes: 67_104_864,
+    projectQuotaBytes: 134_217_728,
+    projectUsedBytes: 8_000,
+    projectRemainingBytes: 134_209_728,
+    effectiveRemainingBytes: 67_104_864,
+    effectiveRemainingFrames: 16_776_216,
+    consumed: [{slot: 32, preparedBytes: 4_000, preparedFrames: 1_000}],
+  });
+  assert.deepEqual(session.sampleIngestLimits(), {
+    sourceBytes: 104_857_600,
+    decodedFrames: 43_200_000,
+    channels: 2,
+    artifactBytes: 68_157_440,
+  });
   assert.deepEqual(calls.map(({envelope}) => ({
     operation: envelope.operation,
     payload: envelope.payload,
@@ -942,10 +1091,11 @@ test("Sample queries bind flat slots to the current Project and validate typed r
         window: {start_frame: 10, end_frame: 30, bucket_count: 2},
       },
     },
+    {operation: "sample.quota", payload: {slot: {bank: 2, pad: 1}}},
   ]);
   assert.deepEqual(
     calls.map(({transportOptions}) => transportOptions.deadlineMs),
-    [30_000, 30_000],
+    [30_000, 30_000, 30_000],
   );
 });
 

@@ -58,6 +58,19 @@ Runtime, Native Audio, input, workflows, capability map, versioning and
 testing/proof. Source diagrams for the product, Core, Project I/O, Cooker,
 Facade, Audio Runtime and Web Runtime Platform are updated in the same Task.
 
+## Post-delivery remediation
+
+Issue #372 closes review finding M3 in current source. Sequence Journal now
+deduplicates exact `command_id` appends and rejects conflicting payloads before
+write. Application Facade retains an in-flight durable flush across a
+post-commit return failure, replays only that identity, and leaves events
+accepted between attempts pending for a fresh command. Component evidence
+covers same-bundle retry and restart reconciliation for receipt-reload and
+journal-completion faults, plus the active-Facade retry/new-event/stop journey.
+Product Build and module identity refresh, integrated-main evidence, and final
+remediation acceptance remain assigned to #379; this entry does not claim
+those transitions are complete.
+
 ## Identity
 
 | Identity | Candidate |
@@ -174,6 +187,92 @@ reclassified as a #374 defect.
 | Stage 9 Issue acceptance | PASS: prerequisite #321, umbrella #265 and Tasks #266–#275 are `CLOSED / COMPLETED`; semantic gate #238 is also closed |
 | Immutable `1.0.37.0 · canary` snapshot | generated under `apps/architecture-portal/versioned_docs/version-1.0.37.0/`, `static/versions/1.0.37.0/`, `versioned_metadata/version-1.0.37.0.json` and `versioned_sidebars/version-1.0.37.0-sidebars.json` |
 
+## #375 pending-overlay source remediation — 2026-08-29
+
+This source Task closes the SR-D13 M1 wiring gap without changing Project
+Truth or persistence semantics. Application Facade exposes an immutable,
+active-owner-only pending-event projection; Web Runtime Platform combines it
+with the committed Runtime Snapshot; Audio Runtime schedules the newest view
+at the next Bar and retires superseded same-boundary views without allocation,
+deallocation, locking, Project access or journal access in the realtime
+callback. A successful flush or Stop publishes the clean committed view, so a
+pending event is audible from the next Bar and cannot survive as a stale or
+duplicate overlay after commit.
+
+The review fix makes the publication handoff linearizable: Audio Runtime marks
+the mailbox generation callback-owned before a producer can replace it, so a
+view already claimed for a Bar cannot be invalidated between dequeue and apply.
+It also preserves pending events across an active-session BPM rebuild, schedules
+a clean committed view on owner-loss sealing, and returns the durable committed
+Pattern identity needed for exact Stop replay after a clean-publication failure.
+
+Review Fix 2 additionally proves that a 90-BPM view claimed at frame `96000`
+owns its transport basis: a concurrent replacement activates at `224000`, not
+the stale 120-BPM boundary `192000`. If owner-loss clean publication itself
+fails, the Host quiesces, stops, and clears the engine before owner abandonment.
+Private gated testable libraries contain the deterministic hooks; the production
+Audio/Web archives contain neither hook symbols nor embedded hook markers. The
+generation allocator also rejects bit 63 before it can alias the claimed marker.
+
+Review Fix 3 integrates that mailbox with #376 switch authority. A different
+Pattern can supersede a pending overlay only when the control path presents the
+exact generation, source Pattern, and activation frame it is authorized to
+replace; ordinary different-Pattern overlap remains rejected. Stop uses the
+same authority to cancel or replace a queued target and retains the durable
+receipt for exact replay after publication failure. A BPM change while a switch
+owns a boundary is rejected before Project mutation; a previously accepted BPM
+view can still be deterministically superseded by the later authoritative
+switch. The acknowledged boundary remains retained until the exactly-once
+Facade flush finishes, preventing a clean old-Pattern republish from reverting
+the target.
+
+Review Fix 4 closes the remaining terminal-state races. A Stop receipt no
+longer stores a one-use audio activation: after exact target cancellation, each
+publication attempt derives the clean committed old-Pattern view from current
+transport, so a replay after the original boundary gets a fresh next Bar while
+retaining the same durable receipt and Project revision. Audio publication
+masks the claimed bit consistently for queued and audio-owned generations,
+including the frame-exact apply point; validated switch authority can therefore
+reserve the next Bar while ordinary different-Pattern overlap remains rejected.
+Cancellation is now an explicit telemetry terminal, with conservation
+`accepted = applied + superseded + canceled + pending` across queued,
+audio-owned, apply-point, and concurrent handoffs.
+
+Review Fix 5 makes `pending` an explicit cardinality instead of an inferred
+boolean: an audio-owned A and simultaneously queued B are two distinct pending
+authorities and `pending_publications == 2`. Quiescent `stop()` moves every
+distinct queued/audio-owned generation to canceled exactly once, including
+when both exist, while cumulative Pattern counters survive a later `start()`.
+Web Stop also closes its cancellation TOCTOU: if the target applies and clears
+pending after the first current-generation read, the no-pending branch rereads
+current generation and fails closed instead of claiming cancellation success.
+
+| Source boundary | Fresh local evidence |
+| --- | --- |
+| Facade owner/generation/replace/reject/flush projection | PASS: `facade.sequence_surface` |
+| Audio same-boundary newest-view wins, zero realtime allocation/free | PASS: `audio.realtime_engine` |
+| Deterministic claimed-boundary race keeps onset zero and exact phase | PASS: `audio.realtime_engine` |
+| Claimed 90-BPM transport basis and bit-63 generation boundary | PASS: `audio.realtime_engine` |
+| Concurrent accepted = applied + superseded + canceled + pending_publications conservation | PASS: `audio.snapshot_publication_stress` plus deterministic two-pending component gate |
+| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; authoritative target supersedes the exact pending view; Stop cancels the target, fails closed if it applies between cancellation queries, and delayed exact replay derives a fresh boundary without a second Project mutation; boundary flush preserves the target |
+| Owner-loss cleanup-publication failure stops and clears Runtime Pattern | PASS: `host.web_control_runtime` |
+| Production Audio/Web hook symbol and embedded-marker exclusion | PASS: `build.project_io_test_hook_symbols` + unit contract |
+| Shared Runtime Session | PASS: stopped switch authority ignores a later stale boundary without a second flush |
+| Packaged Chromium switch journey | PASS: pending overlay → authoritative switch → exact boundary flush, plus switch-pending BPM rejection and Stop cancellation before target activation |
+| Focused suite | PASS: 6/6 |
+| `scripts/core.sh test dev full` | PASS: 79/79 |
+| `scripts/core.sh test dev stress` | PASS: 4/4 |
+| `scripts/core.sh proof` | PASS: 63/63 non-stress CTest plus schema/module/CLI/MCP/Golden/Sequence/package/Assembly proof |
+| `scripts/architecture-portal.sh check` | PASS: 59 Portal tests, 37 current pages, 10 diagram sources/20 outputs and 42 rendered routes |
+| Dependency / active-tree / version gates | PASS: vendored offline dependencies, active tree, product version tests and `1.0.37.0` verification |
+
+This is local source evidence only. Version allocation and integrated Product
+identity remain deferred to #379; the immutable Portal snapshot remains
+deferred to #380. No push, Pull Request, merge, tag, Release, deployment,
+publication or Channel promotion is established here. The physical/manual
+rows below remain unchanged and unverified. Hard-crash pending-tail persistence
+remains #373 and switch-boundary flushing remains #376.
+
 ## Physical and manual rows
 
 | Platform | Journey | Status |
@@ -185,6 +284,17 @@ reclassified as a #374 defect.
 | iPadOS Safari | Background/lock-screen owner-loss recovery | `deferred / unverified` |
 
 Automation does not convert any physical row into a pass.
+
+## Post-delivery remediation source evidence
+
+| Finding | Local source evidence | Remaining boundary |
+| --- | --- | --- |
+| M2 / #373 | RED: the real `SIGKILL` restart journey found a candidate without the two acknowledged unflushed events, while the Project I/O test could not compile without durable-tail API/metadata. Review RED: after F1 append/execute failure, a successful cumulative F2 left F1 recoverable; apply could double-mutate and overwrite F2's newer same-key event. Complete-line checksum/sequence/canonical corruption also returned generic path/detail. Review Fix 2 RED: with F0…F31 equivalent retries durable before completion, F0 completion left F1…F31 incomplete; the same gap followed an ambiguous post-commit F0 error plus F1 retry. Review Fix 3 RED: after F0 manifest/receipt commit plus completion failure, an accepted durable A+B/A+A'+B tail with no later flush exposed committed A again; equivalent-only A could create a second candidate/revision. Integration RED: F0(A) completion mutated durable F1(A+B) to residual B, so exact F1 replay was rejected while residual-only collision could be accepted. Precedence RED: incomplete F0(A-old) plus acknowledged tail A-new+B reported three events and apply let A-old overwrite the newer tail value. GREEN: focused 2/2 passes with semantic bidirectional coverage—later completion resolves covered earlier batches; earlier completion resolves exact-value-covered later retries and subtracts the same exact committed batch from the current pending tail; non-equivalent flushes/tails retain only new/different residual in canonical order. Immutable original command payload drives exact replay/collision while a separately versioned recovery residual drives reconcile/apply; effective recovery merges incomplete residuals in flush order and durable tail last, so status/list/apply share the unique canonical A-new+B batch. Reload, fail-safe v2 parsing, legacy recovery-only parsing, and 32-thread completion order are covered. Recovery/apply remains one revision and preserves newer same-key values; equivalent-only work produces no candidate. Torn and complete-line corruption retain exact bytes and uniform actionable evidence. Fresh precedence verification passes focused 2/2, full 79/79, stress 4/4, Web 54/54, Creator 344/344 and Portal 59/59 with 37 pages/10 diagram sources/20 outputs/42 routes, plus dependency, active-tree, version and production hook-symbol gates. | This is functional source evidence only. #379 owns accumulated Module/Host/Product identity and complete integrated automated acceptance; #380 owns the clean exact-main immutable snapshot. The five #360 physical/manual rows above remain `deferred / unverified`. |
+
+The #373 Task does not rewrite the historical `1.0.37.0` evidence table or
+promote the candidate. Push, Pull Request, merge, remote CI, Product tag,
+Release, deployment, publication and Channel promotion are not implied by this
+local source gate.
 
 ## External state
 

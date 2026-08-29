@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useReducer, useRef, useState} from "react";
 
-import {CAPTURE_SAMPLE_RATE, COMMIT_MAX_FRAMES, CaptureBuffer} from "../capture/capture_buffer";
+import {CAPTURE_MAX_FRAMES, CAPTURE_SAMPLE_RATE, CaptureBuffer} from "../capture/capture_buffer";
 import {
   CaptureController,
   CapturePermissionError,
@@ -49,6 +49,7 @@ export interface CapturePanelProps {
   onContinueInSequence?(): void;
   closeAfterResolution?: boolean;
   backgrounded?: boolean;
+  maxCommitFrames?: number;
 }
 
 function defaultMakeController(listener: CaptureListener): CaptureController {
@@ -77,6 +78,7 @@ export function CapturePanel({
   onContinueInSequence,
   closeAfterResolution = false,
   backgrounded = false,
+  maxCommitFrames = CAPTURE_MAX_FRAMES,
 }: CapturePanelProps) {
   const [state, dispatch] = useReducer(reduceCapture, initialCaptureState);
   const bufferRef = useRef<CaptureBuffer | null>(null);
@@ -104,13 +106,13 @@ export function CapturePanel({
 
   const requestStop = useCallback((reason: CaptureStopReason) => {
     recordingRef.current = false;
-    dispatch({kind: "stop", reason});
+    dispatch({kind: "stop", reason, maximumFrames: maxCommitFrames});
     const controller = controllerRef.current;
     controllerRef.current = null;
     if (controller !== null) {
       void controller.stop().catch(() => {});
     }
-  }, []);
+  }, [maxCommitFrames]);
 
   useEffect(() => {
     onPhaseChange?.(state.phase);
@@ -290,7 +292,7 @@ export function CapturePanel({
   };
 
   // The reducer is the single source of truth for what a selection may be
-  // (COMMIT_MAX_FRAMES, in-range); the sliders below only need correct
+  // (revision-bound effective quota, in-range); the sliders below only need correct
   // min/max attributes so the browser's own range-input clamp never lets the
   // user pick an out-of-range value in the first place (mirrors
   // waveform_editor.tsx's start/end handle bounds).
@@ -419,7 +421,7 @@ export function CapturePanel({
       case "trimming":
       case "commit-error": {
         const maxSelectionFrames = Math.min(
-          COMMIT_MAX_FRAMES,
+          state.selectionLimitFrames,
           state.frameCount - state.selectionStart,
         );
         return (

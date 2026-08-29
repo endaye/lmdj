@@ -119,6 +119,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "snapshot.reload",
     "snapshot.retry",
     "sample.inspect",
+    "sample.quota",
     "sample.waveform",
     "sample.import.begin",
     "sample.import.chunk",

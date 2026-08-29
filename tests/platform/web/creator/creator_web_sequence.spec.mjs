@@ -80,8 +80,6 @@ test("Sequence authors settings, records unified input, requests a Bar switch, a
   await installSequenceProofRecorder(page);
   await page.goto("/index.html");
   await importProject(page);
-  await page.getByRole("button", {name: "Activate audio"}).click();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {timeout: 30_000});
   await page.getByRole("button", {name: "Sequence"}).click();
   await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
 
@@ -101,6 +99,11 @@ test("Sequence authors settings, records unified input, requests a Bar switch, a
   await page.getByRole("button", {name: "Apply Swing"}).click();
   await expect(page.getByRole("status", {name: "Swing 60"})).toBeVisible({timeout: 30_000});
 
+  // Authoring settings while stopped makes their prepared Pattern current
+  // before the switch proof starts. A live BPM publication intentionally owns
+  // the next-Bar slot and is a separate concurrency scenario.
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {timeout: 30_000});
   await page.getByRole("button", {name: "Record"}).click();
   await expect(page.getByRole("status").filter({hasText: "recording"})).toBeVisible();
   const recordedPattern = await pattern.inputValue();

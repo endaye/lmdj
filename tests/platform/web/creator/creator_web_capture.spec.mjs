@@ -309,7 +309,7 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
     .toBeVisible({timeout: 30_000});
 });
 
-test("clamps a long take to the committable selection", async ({page}, testInfo) => {
+test("uses queried Bank quota instead of the retired per-Pad capture cap", async ({page}, testInfo) => {
   test.skip(testInfo.project.name !== GRANTED);
   test.setTimeout(600_000);
   await page.goto("/index.html");
@@ -317,15 +317,16 @@ test("clamps a long take to the committable selection", async ({page}, testInfo)
   await enterSampleEditor(page);
 
   await selectPadWithoutPress(page, "Pad A1 — empty");
-  // S8B-D3 caps the buffer at 60 s and the commit at 5 s. Waiting out 60 s of
-  // real time proves nothing the clamp does not, so record past the 5 s commit
-  // boundary and assert the selection the panel offers.
+  // Task #346 removes the old five-second per-Pad commit cap. Record past that
+  // boundary and prove the entire buffered take remains selectable while the
+  // queried Bank/Project quota is the only commit ceiling.
   const panel = await recordAtLeast(page, "Pad A1", CAPTURE_FIXTURE_SECONDS * 3);
   await panel.getByRole("button", {name: "Stop"}).click();
 
   const length = panel.getByRole("slider", {name: "Pad A1 Selection length"});
-  await expect(length).toHaveAttribute("max", "240000");
-  expect(Number(await length.inputValue())).toBeLessThanOrEqual(240_000);
+  const maximum = Number(await length.getAttribute("max"));
+  expect(maximum).toBeGreaterThan(240_000);
+  expect(Number(await length.inputValue())).toBe(maximum);
 });
 
 test("blur during recording stops capture and keeps the buffer", async ({page}, testInfo) => {

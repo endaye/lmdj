@@ -147,6 +147,8 @@ const ALLOWED_ERROR_CODES = new Set([
   "MISSING_ASSET",
   "INVALID_PROJECT",
   "COOK_FAILED",
+  "BANK_QUOTA_EXHAUSTED",
+  "PROJECT_QUOTA_EXHAUSTED",
   "PROVIDER_NOT_FOUND",
   "PROVIDER_FAILED",
   "PERMISSION_DENIED",
@@ -205,9 +207,7 @@ const PRIVATE_KEY_TERMS = [
 ] as const;
 const SNAPSHOT_RESOURCE_TOKENS = new Set([
   "artifact_bytes",
-  "decoded_frames_per_pad",
-  "prepared_bank_bytes",
-  "live_bank_bytes",
+  "resident_pcm_bytes",
 ]);
 const SNAPSHOT_STORAGE_CONDITIONS = new Set([
   "project_busy",
@@ -225,6 +225,10 @@ const SAMPLE_PUBLIC_ERROR_MESSAGES: Readonly<Record<string, string>> =
     MISSING_ASSET: "Sample Artifact is unavailable",
     INVALID_PROJECT: "Project could not be validated",
     COOK_FAILED: "Sample runtime preparation failed",
+    BANK_QUOTA_EXHAUSTED:
+      "Selection exceeds this Bank quota; shorten it, free another Pad, or use another Bank",
+    PROJECT_QUOTA_EXHAUSTED:
+      "Selection exceeds the Project quota; shorten it or free prepared Samples",
     PROVIDER_NOT_FOUND: "Sample operation failed",
     PROVIDER_FAILED: "Sample operation failed",
     PERMISSION_DENIED: "Sample operation is not permitted",
@@ -562,6 +566,54 @@ function normalizeSnapshotDetails(value: unknown): Readonly<Record<string, unkno
   throw new TypeError("Sample snapshot error details are invalid");
 }
 
+function normalizeQuotaDetails(
+  code: string,
+  value: unknown,
+): Readonly<Record<string, unknown>> {
+  if (!plainRecord(value)) throw new TypeError("Sample quota error details are invalid");
+  const hasKeys = (keys: readonly string[]): boolean =>
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+  if (code === "BANK_QUOTA_EXHAUSTED") {
+    const keys = [
+      "bank", "requested_bytes", "requested_frames", "remaining_bytes",
+      "remaining_frames", "quota_bytes", "consumed",
+    ];
+    if (!hasKeys(keys) || !Array.isArray(value.consumed) ||
+      !keys.slice(0, 6).every((key) => unsignedInteger(value[key]))) {
+      throw new TypeError("Sample Bank quota details are invalid");
+    }
+    const consumed = value.consumed.map((entry) => {
+      if (!exactKeys(entry, ["pad", "prepared_bytes", "prepared_frames"]) ||
+        !unsignedInteger(entry.pad) || entry.pad > 15 ||
+        !unsignedInteger(entry.prepared_bytes) || !unsignedInteger(entry.prepared_frames)) {
+        throw new TypeError("Sample Bank quota consumption is invalid");
+      }
+      return Object.freeze({...entry});
+    });
+    return Object.freeze({...value, consumed: Object.freeze(consumed)});
+  }
+  if (code === "PROJECT_QUOTA_EXHAUSTED") {
+    const keys = [
+      "requested_bytes", "requested_frames", "project_used_bytes",
+      "project_remaining_bytes", "project_quota_bytes", "banks",
+    ];
+    if (!hasKeys(keys) || !Array.isArray(value.banks) ||
+      !keys.slice(0, 5).every((key) => unsignedInteger(value[key]))) {
+      throw new TypeError("Sample Project quota details are invalid");
+    }
+    const banks = value.banks.map((entry) => {
+      if (!exactKeys(entry, ["bank", "prepared_bytes"]) ||
+        !unsignedInteger(entry.bank) || entry.bank > 3 ||
+        !unsignedInteger(entry.prepared_bytes)) {
+        throw new TypeError("Sample Project quota Bank usage is invalid");
+      }
+      return Object.freeze({...entry});
+    });
+    return Object.freeze({...value, banks: Object.freeze(banks)});
+  }
+  return normalizeSnapshotDetails(value);
+}
+
 export function normalizeSampleSnapshotError(
   value: unknown,
 ): Readonly<SampleSnapshotError> | null {
@@ -575,7 +627,7 @@ export function normalizeSampleSnapshotError(
   return Object.freeze({
     code: value.code,
     message: SAMPLE_PUBLIC_ERROR_MESSAGES[value.code] ?? "Sample operation failed",
-    details: normalizeSnapshotDetails(value.details),
+    details: normalizeQuotaDetails(value.code, value.details),
   });
 }
 
@@ -1084,7 +1136,7 @@ export function applySampleOperationFailure(
     throw new TypeError("Sample operation failure is invalid");
   }
   const details = hasDetails
-    ? normalizeSnapshotDetails(value.details)
+    ? normalizeQuotaDetails(value.code, value.details)
     : Object.freeze({});
   return Object.freeze({
     ...state,

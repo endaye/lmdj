@@ -99,6 +99,8 @@ struct RealtimeAudioWorklet::Impl {
       return false;
     }
 
+    self.callback_heartbeat.fetch_add(1, std::memory_order_release);
+
     auto gate = self.gate.load(std::memory_order_acquire);
     if (gate == RealtimeAudioWorkletGate::paused) {
       std::fill_n(
@@ -166,9 +168,14 @@ struct RealtimeAudioWorklet::Impl {
                std::memory_order_relaxed)) {
     }
 #endif
+    auto acknowledged_generation = self.activation_generation.exchange(
+        0, std::memory_order_acq_rel);
+    if (acknowledged_generation == 0) {
+      acknowledged_generation =
+          self.engine.bank_telemetry().current_generation;
+    }
     self.acknowledged.store(
-        self.engine.bank_telemetry().current_generation,
-        std::memory_order_release);
+        acknowledged_generation, std::memory_order_release);
     auto requested = RealtimeAudioWorkletGate::final_quantum_requested;
     const auto paused = self.gate.compare_exchange_strong(
         requested,
@@ -308,6 +315,8 @@ struct RealtimeAudioWorklet::Impl {
   std::atomic<bool> in_flight{false};
   std::atomic<std::uint32_t> quiescence_signal{0};
   std::atomic<std::uint64_t> acknowledged{0};
+  std::atomic<std::uint64_t> activation_generation{0};
+  std::atomic<std::uint32_t> callback_heartbeat{0};
   std::atomic<std::int32_t> node{0};
   std::atomic<std::int32_t> sample_rate{0};
   std::atomic<std::int32_t> render_quantum{0};
@@ -416,13 +425,23 @@ foundation::Result<void> RealtimeAudioWorklet::begin_rendering() noexcept {
     return foundation::Result<void>::failure(
         worklet_error("Wasm AudioWorklet is not ready to render"));
   }
+  const auto bank = impl_->engine.bank_telemetry();
+  if (bank.accepted_publications == 0 ||
+      bank.current_generation != bank.accepted_publications ||
+      bank.pending_publications != 0) {
+    return foundation::Result<void>::failure(
+        worklet_error("Wasm AudioWorklet Bank is not current"));
+  }
   auto expected = RealtimeAudioWorkletGate::paused;
+  impl_->activation_generation.store(
+      bank.current_generation, std::memory_order_release);
   impl_->acknowledged.store(0, std::memory_order_release);
   if (!impl_->gate.compare_exchange_strong(
           expected,
           RealtimeAudioWorkletGate::open,
           std::memory_order_acq_rel,
           std::memory_order_acquire)) {
+    impl_->activation_generation.store(0, std::memory_order_release);
     return foundation::Result<void>::failure(
         worklet_error("Wasm AudioWorklet gate is not paused"));
   }
@@ -511,6 +530,10 @@ bool RealtimeAudioWorklet::ready() const noexcept {
 
 std::uint64_t RealtimeAudioWorklet::acknowledged_generation() const noexcept {
   return impl_->acknowledged.load(std::memory_order_acquire);
+}
+
+std::uint32_t RealtimeAudioWorklet::callback_heartbeat() const noexcept {
+  return impl_->callback_heartbeat.load(std::memory_order_acquire);
 }
 
 RealtimeAudioWorkletState RealtimeAudioWorklet::state() const noexcept {

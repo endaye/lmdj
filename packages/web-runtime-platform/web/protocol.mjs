@@ -24,6 +24,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "snapshot.reload",
   "snapshot.retry",
   "sample.inspect",
+  "sample.quota",
   "sample.waveform",
   "sample.import.begin",
   "sample.import.chunk",
@@ -186,6 +187,7 @@ function requireSampleOperationPayload(operation, payload) {
   let valid = true;
   switch (operation) {
     case "sample.inspect":
+    case "sample.quota":
       valid = hasExactKeys(payload, ["slot"]) && validSlot(payload.slot);
       break;
     case "sample.waveform":

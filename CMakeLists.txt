@@ -61,6 +61,8 @@ lmdj_add_test(
     "${CMAKE_SOURCE_DIR}/tests/build/project_io_test_hook_symbols_test.py"
     "${CMAKE_NM}"
     "$<TARGET_FILE:lmdj_project_io>"
+    "$<TARGET_FILE:lmdj_audio_runtime>"
+    "$<TARGET_FILE:lmdj_web_runtime_control>"
   LABELS persistence
 )
 

@@ -33,6 +33,7 @@ struct SequenceFlushIdentity {
 struct SequenceFlushExecution {
   SequenceFlushIdentity identity;
   domain::MergePatternEvents command;
+  std::uint64_t committed_revision{};
   domain::AppliedCommand outcome;
 };
 
