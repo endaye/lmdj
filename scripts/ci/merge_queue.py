@@ -15,6 +15,8 @@ import tempfile
 import time
 from typing import Protocol
 
+from change_scope import MERGE_EVIDENCE_MODES
+
 
 QUEUE_LABEL = "merge:queue"
 MAX_ATTEMPTS = 3
@@ -35,6 +37,17 @@ REQUIRED_CHECKS = (
     "core (macos-latest)",
     "PR Gate",
 )
+# Merge evidence is the classification, so a Core context may legitimately be
+# skipped when the manifest did not select its lane. `PR Gate` is what makes
+# that safe and is therefore never allowed to be skipped: it adjudicates the
+# same run against the manifest and fails both when a selected job is not
+# success and when an unselected job ran anyway, so its success already proves
+# the skip was owed.
+SKIPPABLE_CHECKS = (
+    "core (ubuntu-latest)",
+    "core (macos-latest)",
+)
+
 CONTROL_PLANE_PATHS = (
     ".github/actionlint.yaml",
     ".github/workflows/ci.yml",
@@ -383,7 +396,10 @@ def _validation_contract_error(
     ):
         if observed != expected:
             field_evidence.append(f"field:{field}")
-    if result.manifest_mode != "full":
+    # The queue accepts the classification as merge evidence; what it may not
+    # accept is evidence whose breadth is unknown. A manifest that never
+    # published a mode proves nothing about which lanes were owed.
+    if result.manifest_mode not in MERGE_EVIDENCE_MODES:
         mode = (
             result.manifest_mode
             if result.manifest_mode in {"focused", None}
@@ -427,6 +443,8 @@ def _validation_contract_error(
     failed_checks: list[str] = []
     for name in REQUIRED_CHECKS:
         conclusion = checks_by_name[name][0].conclusion
+        if conclusion == "skipped" and name in SKIPPABLE_CHECKS:
+            continue
         if conclusion != "success":
             safe_conclusion = (
                 conclusion

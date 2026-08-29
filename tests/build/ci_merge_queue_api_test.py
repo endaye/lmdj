@@ -391,7 +391,13 @@ class GitHubQueueApiTest(unittest.TestCase):
         opened = dict(manifest)
         opened["extra"] = True
         wrong_lanes = json.loads(json.dumps(manifest))
-        wrong_lanes["lanes"][next(iter(wrong_lanes["lanes"]))] = False
+        # Turn off a lane the manifest actually selected. Clearing an already
+        # unselected lane leaves `required_jobs` consistent and would assert
+        # nothing; that only held before because a queued manifest was always
+        # full, so every lane was a selected lane.
+        wrong_lanes["lanes"][
+            next(lane for lane, on in wrong_lanes["lanes"].items() if on)
+        ] = False
         wrong_jobs = dict(manifest)
         wrong_jobs["required_jobs"] = []
         for document in (opened, wrong_lanes, wrong_jobs):
