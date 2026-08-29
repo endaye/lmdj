@@ -151,6 +151,7 @@ if(EMSCRIPTEN)
     _lmdj_web_audio_control_failure_committed
     _lmdj_web_audio_commit_failure
     _lmdj_web_audio_bootstrap_timeout
+    _lmdj_web_audio_callback_heartbeat
   )
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
     list(

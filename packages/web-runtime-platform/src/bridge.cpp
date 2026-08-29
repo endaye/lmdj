@@ -404,6 +404,14 @@ struct ControlBridge::Impl {
     }
   }
 
+  static bool publication_settlement_owned(void* context) noexcept {
+    const auto state = static_cast<RequestSlot*>(context)->publication.load(
+        std::memory_order_acquire);
+    return state == PublicationState::publish_claimed ||
+           state == PublicationState::committed ||
+           state == PublicationState::aborted;
+  }
+
   static void abort_publication(void* context) noexcept {
     auto& request = *static_cast<RequestSlot*>(context);
     auto expected = PublicationState::publish_claimed;
@@ -1026,7 +1034,10 @@ struct ControlBridge::Impl {
                 parsed->at("payload"),
                 std::span<const std::byte>(
                     request.sidecar.data(), request.sidecar_size),
-                request.submitted_at);
+                ControlRuntime::AbsoluteRequestDeadline{
+                    deadline,
+                    &request,
+                    &publication_settlement_owned});
             if (!runtime_was_failed && runtime.failed()) {
               terminal_after_response = true;
             }
@@ -2244,6 +2255,11 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_bootstrap_timeout() {
   }
   adapter->latch_bootstrap_timeout();
   return schedule_audio_control_failure(adapter->fatal()) ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_callback_heartbeat() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter == nullptr ? 0 : adapter->callback_heartbeat();
 }
 
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)

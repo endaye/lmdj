@@ -126,6 +126,9 @@ function fixture({
   inputConfiguration = {},
   runtimeTransport,
   runtimeTerminator,
+  audioCallbackHeartbeat,
+  startAudioWorklet,
+  now,
   inputOwnership,
   manifestSource = {
     resourceLimits: RESOURCE_LIMITS,
@@ -135,6 +138,7 @@ function fixture({
   let terminated = 0;
   let notificationListener = null;
   let failureListener = null;
+  let defaultAudioCallbackHeartbeat = 0;
   const context = Object.assign(new EventTarget(), {
     state: "suspended",
     async resume() {
@@ -196,7 +200,11 @@ function fixture({
       createAudioContext: () => context,
       loadRuntime: async () => ({
         registerAudioContext: () => 1,
-        startAudioWorklet: async () => ({ok: true}),
+        audioCallbackHeartbeat:
+          audioCallbackHeartbeat ??
+          (() => ++defaultAudioCallbackHeartbeat),
+        startAudioWorklet:
+          startAudioWorklet ?? (async () => ({ok: true})),
         workers: [],
         ...(runtimeTransport === undefined
           ? {}
@@ -215,6 +223,7 @@ function fixture({
         product_build: TEST_PRODUCT_BUILD,
         protocol_version: 1,
       }),
+      ...(now === undefined ? {} : {now}),
     },
   });
   return {
@@ -503,6 +512,73 @@ test("owns the exact Host-neutral surface and lifecycle", async () => {
     errorDetails: {},
   });
   assert.equal(terminated(), 1);
+});
+
+test("activation waits for a resumed AudioWorklet callback within its original budget", async () => {
+  let heartbeat = 7;
+  const activations = [];
+  const {session} = fixture({
+    audioCallbackHeartbeat: () => heartbeat,
+    send: async (envelope, options) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(options.deadlineMs);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  const first = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  assert.deepEqual(activations, []);
+  heartbeat = 8;
+  assert.equal(await first, true);
+  assert.equal(activations.length, 1);
+  assert.ok(activations[0] > 0 && activations[0] <= 1_000);
+
+  assert.equal(await session.suspendAudio(), true);
+  const second = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  assert.equal(activations.length, 1);
+  heartbeat = 9;
+  assert.equal(await second, true);
+  assert.equal(activations.length, 2);
+  assert.ok(activations[1] > 0 && activations[1] <= 1_000);
+
+  assert.equal(await session.suspendAudio(), true);
+  heartbeat = 0xffff_ffff;
+  const wrapped = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  assert.equal(activations.length, 2);
+  heartbeat = 0;
+  assert.equal(await wrapped, true);
+  assert.equal(activations.length, 3);
+});
+
+test("initial AudioWorklet bootstrap does not consume the activation budget", async () => {
+  let monotonicTime = 0;
+  const activations = [];
+  const {session} = fixture({
+    now: () => monotonicTime,
+    startAudioWorklet: async () => {
+      monotonicTime += 5_000;
+      return {ok: true};
+    },
+    send: async (envelope, options) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(options.deadlineMs);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(activations, [1_000]);
 });
 
 test("bridges Sequence authority without browser musical-clock math", async () => {
