@@ -7,9 +7,9 @@ remediation identities after H1–H3, M1–M3, and #417 landed. Project I/O is
 `1.0.1`, Audio Runtime is `2.0.1`, and Application Facade is `2.1.1`;
 Build 39 already absorbed Web Runtime Platform `2.0.1` and both Web Host
 `2.1.1` identities, so they are not double-bumped. This Task records automated
-source/branch evidence only. #380 freezes the clean immutable snapshot from the
-#379 commit; Pull Request and exact-main evidence remain pending, and all five
-#360 physical/manual rows remain deferred.
+source, immutable-snapshot, Pull Request, and merged-main evidence. #380 freezes
+the clean immutable snapshot from the #379 commit; all five #360
+physical/manual rows remain deferred and unverified.
 
 ## Build 40 remediation integration — 2026-08-29
 
@@ -33,9 +33,31 @@ that exact revision and tree `b0c44989e1788bbf5be7753894eae94883c33c28`.
 | `scripts/architecture-portal.sh version 1.0.40.0 canary` | PASS: immutable snapshot frozen from `67be108b`; Assembly lock SHA-256 `848390ec5be2a1a511f5ad93c728598c84665a65353cd8d80dc59c3bc596ea01`; source projection SHA-256 `d110a802bdd34488159cb0fdefb3ab0be2099d84fe985be4f6d656cbb7fc81f1`; metadata SHA-256 `038742430d3d8e2e0267864c60cf6a45e7599d323234f9b2305d5b3775e1a969` |
 | `scripts/architecture-portal.sh check` | PASS: 59 tests, 37 current pages, 10 diagram sources/20 outputs, matching release docs, production build, and 42 routes/internal links |
 
-This is complete local automated evidence for #379/#380, not merged-main or
-physical-device evidence. Pull Request head, squash tree equality, exact-main
-CI, and Issue closure are recorded only after those transitions occur.
+### Build 40 merged-main and snapshot evidence — 2026-08-30
+
+PR [#420](https://github.com/endaye/lmdj/pull/420) retained #379 and #380 as
+separate clean commits: integration source `67be108bb5c6fd77f943516d17bdfcdf4416a859`
+followed by snapshot `d191324952473d246c40402797b7fb75091d6d50`.
+After synchronization with `main`, final PR head
+`d28831e6821f72adb234566049ff5a37394f9d83` was squash-merged as
+`bb0544c46d4b3fc3a7c96cb848e10cdecb4be040`; both have exact tree
+`fa6eacd557aad63a4a1119c113a1608f02f3341d`. The immutable metadata continues
+to bind Product Build `1.0.40.0` to source commit `67be108b`, source tree
+`b0c44989e1788bbf5be7753894eae94883c33c28`, Assembly lock SHA-256
+`848390ec5be2a1a511f5ad93c728598c84665a65353cd8d80dc59c3bc596ea01`, and
+source projection SHA-256
+`d110a802bdd34488159cb0fdefb3ab0be2099d84fe985be4f6d656cbb7fc81f1`.
+
+Exact-main Core CI run
+[`33259586218`](https://github.com/endaye/lmdj/actions/runs/33259586218)
+passed Portal, Core proof, coverage, package, Web, Creator, macOS, dependency,
+version, and Assembly lanes. Its first Linux ASan attempt completed 76/77 tests
+and timed out in `host.native` without a sanitizer finding; failed-only attempt
+2 ran on `contabo-lmdj-linux` and passed the full 77/77 suite plus the 5/5
+stress tier with no sanitizer finding. The rerun completed with 19 successful
+formal jobs and no failure, closing #380's automated exact-main evidence
+boundary. This evidence does not claim a Product tag, Release, deployment,
+publication, Channel promotion, or any of the five #360 physical rows.
 
 Historical Product Build candidate `1.0.37.0` implements Project v3 event-only
 Sequence recording across the Core, CLI/MCP/Native/Web Hosts and Creator.
