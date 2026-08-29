@@ -1924,6 +1924,83 @@ void test_sequence_switch_prepares_before_selecting_bar_boundary() {
   audio.stop();
 }
 
+void test_sequence_switch_supersedes_a_near_boundary_recording_overlay() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 1'211, 1'212, 0);
+  check_exact_success(
+      runtime->dispatch(
+          "pattern.create",
+          {{"command_id", uuid(1'213)},
+           {"expected_revision", 2},
+           {"pattern_id", kNextPatternId},
+           {"bars", 1}},
+          {}),
+      {"committed_revision", "pattern_id", "bars", "replayed",
+       "project_revision"});
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_exact_success(
+      runtime->dispatch(
+          "sequence.record.begin",
+          {{"session_id", kSequenceSessionId},
+           {"pattern_id", kPatternId},
+           {"expected_revision", 3}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "transport_anchor"});
+
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  const auto overlay = runtime->engine().pattern_telemetry();
+  LMDJ_CHECK(overlay.pending_generation != 0);
+  OneShotAudioDriver audio(runtime->engine());
+  struct PublicationGate final {
+    OneShotAudioDriver& audio;
+    RealtimeEngine& engine;
+    std::uint64_t boundary;
+  } gate{audio, runtime->engine(), overlay.pending_activation_frame};
+  lmdj::web_runtime::testing::SequenceSwitchPublicationHook hook{
+      &gate,
+      [](void* context) noexcept {
+        auto& publication = *static_cast<PublicationGate*>(context);
+        while (publication.engine.telemetry().rendered_frames <=
+               publication.boundary) {
+          publication.audio.render_one();
+        }
+      }};
+  lmdj::web_runtime::testing::set_sequence_switch_publication_hook(&hook);
+
+  const auto& switched = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.switch-request",
+          {{"session_id", kSequenceSessionId},
+           {"next_pattern_id", kNextPatternId}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "pattern_publication"});
+  LMDJ_CHECK(switched.at("state") == "switching");
+  LMDJ_CHECK(switched.at("pending_pattern_id") == kNextPatternId);
+  LMDJ_CHECK(
+      switched.at("effective_runtime_frame") ==
+      switched.at("pattern_publication").at("activation_frame"));
+  LMDJ_CHECK(!runtime->failed());
+}
+
 void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   TempDirectory temp;
   {
@@ -4708,6 +4785,7 @@ int main() {
     test_stop_fails_closed_if_target_applies_between_cancel_queries();
     test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary();
     test_sequence_switch_prepares_before_selecting_bar_boundary();
+    test_sequence_switch_supersedes_a_near_boundary_recording_overlay();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();

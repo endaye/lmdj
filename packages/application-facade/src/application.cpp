@@ -2615,27 +2615,6 @@ struct Application::Impl {
                          {{"reason", "sequence_owner_mismatch"}}));
     }
     auto& runtime = found->second;
-    if (runtime.pending_pattern_id.has_value()) {
-      return foundation::Result<SequenceMutationResult>::failure(
-          sequence_error(ErrorCode::invalid_argument,
-                         "a Sequence switch is already pending",
-                         {{"reason", "switch_pending"}}));
-    }
-    if (runtime.pattern_id == request.next_pattern_id) {
-      return foundation::Result<SequenceMutationResult>::failure(
-          sequence_error(ErrorCode::invalid_argument,
-                         "next Sequence Pattern is already active"));
-    }
-    auto loaded = projects.load(request.project_path);
-    if (!loaded.has_value()) {
-      return foundation::Result<SequenceMutationResult>::failure(
-          loaded.error());
-    }
-    if (!loaded.value().patterns.contains(request.next_pattern_id)) {
-      return foundation::Result<SequenceMutationResult>::failure(
-          sequence_error(ErrorCode::not_found,
-                         "next Sequence Pattern was not found"));
-    }
     const auto switch_runtime_frame =
         request.runtime_frame.value_or(runtime.last_runtime_frame);
     if (switch_runtime_frame < runtime.last_runtime_frame) {
@@ -2672,9 +2651,43 @@ struct Application::Impl {
           sequence_error(ErrorCode::invalid_argument,
                          "Sequence switch frame overflowed"));
     }
-    runtime.pending_pattern_id = request.next_pattern_id;
-    runtime.effective_runtime_frame =
+    const auto effective_runtime_frame =
         runtime.anchor.runtime_frame + frame_delta;
+    if (runtime.pending_pattern_id.has_value()) {
+      const auto can_rebase_missed_boundary =
+          runtime.pending_pattern_id == request.next_pattern_id &&
+          request.runtime_frame.has_value() &&
+          runtime.effective_runtime_frame.has_value() &&
+          switch_runtime_frame >= *runtime.effective_runtime_frame;
+      if (!can_rebase_missed_boundary) {
+        return foundation::Result<SequenceMutationResult>::failure(
+            sequence_error(ErrorCode::invalid_argument,
+                           "a Sequence switch is already pending",
+                           {{"reason", "switch_pending"}}));
+      }
+      runtime.effective_runtime_frame = effective_runtime_frame;
+      runtime.last_runtime_frame = switch_runtime_frame;
+      return foundation::Result<SequenceMutationResult>::success(
+          SequenceMutationResult{
+              runtime_status(runtime), std::nullopt, false, std::nullopt});
+    }
+    if (runtime.pattern_id == request.next_pattern_id) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(ErrorCode::invalid_argument,
+                         "next Sequence Pattern is already active"));
+    }
+    auto loaded = projects.load(request.project_path);
+    if (!loaded.has_value()) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          loaded.error());
+    }
+    if (!loaded.value().patterns.contains(request.next_pattern_id)) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(ErrorCode::not_found,
+                         "next Sequence Pattern was not found"));
+    }
+    runtime.pending_pattern_id = request.next_pattern_id;
+    runtime.effective_runtime_frame = effective_runtime_frame;
     runtime.last_runtime_frame = switch_runtime_frame;
     auto switching = sequence_journals.set_state(
         request.project_path,
