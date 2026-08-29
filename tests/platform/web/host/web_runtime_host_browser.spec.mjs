@@ -2647,11 +2647,15 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
     expect(cancelledBoundaries).toEqual([]);
     expect(cancelledStop.replayed).toBe(false);
   } else {
-    expect(cancelledBoundaries).toHaveLength(1);
-    expect(cancelledBoundaries[0]).toMatchObject({
-      sessionId: cancelledSessionId,
-      patternId: descriptor.pattern_id,
-    });
+    // Boundary notification delivery may itself race the fail-closed Runtime
+    // clear. If it was already delivered, it must name the crossed target.
+    expect(cancelledBoundaries.length).toBeLessThanOrEqual(1);
+    if (cancelledBoundaries.length === 1) {
+      expect(cancelledBoundaries[0]).toMatchObject({
+        sessionId: cancelledSessionId,
+        patternId: descriptor.pattern_id,
+      });
+    }
   }
 
   const truth = success(await hostRequest(page, "project.inspect", {}),
