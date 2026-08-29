@@ -555,12 +555,15 @@ export function importAssignSampleJourney(
     keys.some((key) => ![
       "slot",
       "expectedRevision",
+      "sequenceSessionId",
       "signal",
       "onProgress",
     ].includes(key)) ||
     !Object.hasOwn(options, "slot") ||
     !Object.hasOwn(options, "expectedRevision") ||
     !slotNumber(options.slot) || !unsignedInteger(options.expectedRevision) ||
+    (options.sequenceSessionId !== undefined &&
+      !UUID_PATTERN.test(options.sequenceSessionId)) ||
     (options.onProgress !== undefined && typeof options.onProgress !== "function") ||
     (options.signal !== undefined && !(options.signal instanceof AbortSignal))) {
     return Promise.reject(new TypeError("Sample import options are invalid"));
@@ -568,6 +571,9 @@ export function importAssignSampleJourney(
   const normalizedOptions: SampleImportOptions = Object.freeze({
     slot: options.slot,
     expectedRevision: options.expectedRevision,
+    ...(options.sequenceSessionId === undefined
+      ? {}
+      : {sequenceSessionId: options.sequenceSessionId}),
     ...(options.signal === undefined ? {} : {signal: options.signal}),
     ...(options.onProgress === undefined ? {} : {onProgress: options.onProgress}),
   });

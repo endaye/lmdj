@@ -514,7 +514,8 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   }
 
   function trigger(slot: number, velocity: number, source: RuntimeTriggerSource) {
-    if (getArmedCaptureSlot() === slot && onArmedCaptureStop !== undefined) {
+    const armedCaptureSlot = getArmedCaptureSlot();
+    if (armedCaptureSlot === slot && onArmedCaptureStop !== undefined) {
       onArmedCaptureStop(slot, source);
       return;
     }
@@ -525,10 +526,15 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       return;
     }
 
-    dispatch({
-      type: "sample-action",
-      action: {type: "slot-selected", slot},
-    });
+    // The capture owns Sample selection until it commits or is discarded.
+    // Other Pads remain ordinary playable Sequence input, but must not retarget
+    // the pending Sample mutation away from the armed capture identity.
+    if (armedCaptureSlot === null) {
+      dispatch({
+        type: "sample-action",
+        action: {type: "slot-selected", slot},
+      });
+    }
     if (stopAcceptedLoopToggle(slot)) return;
     if (!sampleOptions.isAssigned(slot)) {
       sampleOptions.onFilePickIntent(slot, source);

@@ -56,6 +56,11 @@ interface SampleSurfaceProps {
   onCapturePhaseChange?(phase: CapturePhase): void;
   onContinueCaptureInSequence?(): void;
   closeCaptureAfterResolution?: boolean;
+  captureBackgrounded?: boolean;
+  sequenceCapture?: Readonly<{
+    sessionId: string;
+    expectedRevision: number;
+  }>;
 }
 
 interface PendingFile {
@@ -204,6 +209,8 @@ export function SampleSurface({
   onCapturePhaseChange,
   onContinueCaptureInSequence,
   closeCaptureAfterResolution = false,
+  captureBackgrounded = false,
+  sequenceCapture,
 }: SampleSurfaceProps) {
   const input = useRef<HTMLInputElement | null>(null);
   const fileSlot = useRef<number | null>(null);
@@ -608,13 +615,18 @@ export function SampleSurface({
     slot: number,
     invoke: (
       active: CreatorSampleRuntimeSession,
-      options: {slot: number; expectedRevision: number; signal: AbortSignal},
+      options: {
+        slot: number;
+        expectedRevision: number;
+        sequenceSessionId?: string;
+        signal: AbortSignal;
+      },
     ) => Promise<SampleMutationResolution>,
-    expectedRevisionOverride?: number,
+    context?: Readonly<{expectedRevision: number; sequenceSessionId?: string}>,
   ): Promise<ImportOutcome> => {
     if (session === undefined || sample.pendingAction !== null ||
       operationPending.current !== null) return BUSY_OUTCOME;
-    const expectedRevision = expectedRevisionOverride ??
+    const expectedRevision = context?.expectedRevision ??
       sample.savedRevision ?? state.project.current?.revision;
     if (expectedRevision === null || expectedRevision === undefined) return BUSY_OUTCOME;
     const assigned = isAssigned(slot);
@@ -633,6 +645,9 @@ export function SampleSurface({
       const resolution = await invoke(session, {
         slot,
         expectedRevision,
+        ...(context?.sequenceSessionId === undefined
+          ? {}
+          : {sequenceSessionId: context.sequenceSessionId}),
         signal: controller.signal,
       });
       previewOwner.current = null;
@@ -705,7 +720,7 @@ export function SampleSurface({
     const outcome = await runImportJourney(
       draft.slot,
       (active, options) => importAssignSampleJourney(active, file, options),
-      draft.quota.projectRevision,
+      {expectedRevision: draft.quota.projectRevision},
     );
     if (outcome.kind === "committed") releaseLongSource();
     return outcome;
@@ -718,7 +733,12 @@ export function SampleSurface({
   ) => runImportJourney(
     target.slot,
     (active, options) => captureCommitJourney(active, buffer, selection, options),
-    target.quota.projectRevision,
+    {
+      expectedRevision: sequenceCapture?.expectedRevision ?? target.quota.projectRevision,
+      ...(sequenceCapture === undefined
+        ? {}
+        : {sequenceSessionId: sequenceCapture.sessionId}),
+    },
   );
 
   const openCapture = async (slot: number): Promise<void> => {
@@ -994,13 +1014,17 @@ export function SampleSurface({
           stopRequest={captureStopRequest}
           maxCommitFrames={captureTarget.quota.effectiveRemainingFrames}
           closeAfterResolution={closeCaptureAfterResolution}
+          backgrounded={captureBackgrounded}
           {...(onCapturePhaseChange === undefined
             ? {}
             : {onPhaseChange: onCapturePhaseChange})}
           {...(onContinueCaptureInSequence === undefined
             ? {}
             : {onContinueInSequence: onContinueCaptureInSequence})}
-          onClose={() => setCaptureTarget(null)}
+          onClose={() => {
+            onCapturePhaseChange?.("idle");
+            setCaptureTarget(null);
+          }}
         />
       )}
       {pendingCaptureSlot === null ? null : (

@@ -2481,18 +2481,33 @@ function createRuntimeSessionController(options = {}) {
     if (
       request === null ||
       typeof request !== "object" ||
-      !exactKeys(request, ["sessionId", "patternId", "expectedRevision"]) ||
+      (!exactKeys(request, ["sessionId", "patternId", "expectedRevision"]) &&
+        !exactKeys(request, [
+          "sessionId", "patternId", "expectedRevision", "armedCaptureSlot",
+        ])) ||
       !isUnsignedInteger(request.expectedRevision)
     ) {
       throw new TypeError("Sequence begin request is invalid");
     }
     const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
     const patternId = requireSequenceIdentity(request.patternId, "patternId");
+    let armedCaptureSlot;
+    try {
+      armedCaptureSlot = request.armedCaptureSlot === undefined ||
+          request.armedCaptureSlot === null
+        ? null
+        : flatSlotAddress(request.armedCaptureSlot);
+    } catch (error) {
+      throw new TypeError("Sequence armed capture slot is invalid", {cause: error});
+    }
     return serializeRuntimeAction(async () => {
       const value = await boundedRequest("sequence.record.begin", {
         session_id: sessionId,
         pattern_id: patternId,
         expected_revision: request.expectedRevision,
+        ...(request.armedCaptureSlot === undefined
+          ? {}
+          : {armed_capture_slot: armedCaptureSlot}),
       });
       const mutation = normalizeSequenceMutation(value, ["transport_anchor"]);
       const anchor = value.transport_anchor;
@@ -2516,6 +2531,34 @@ function createRuntimeSessionController(options = {}) {
       pendingSequenceSwitch = null;
       sequenceBoundaryFlush = null;
       return result;
+    });
+  }
+
+  function disarmSequenceCapture(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["sessionId", "slot"])
+    ) {
+      return Promise.reject(new TypeError("Sequence capture disarm request is invalid"));
+    }
+    let sessionId;
+    let slot;
+    try {
+      sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
+      slot = flatSlotAddress(request.slot);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return serializeRuntimeAction(async () => {
+      const result = await boundedRequest("sequence.capture.disarm", {
+        session_id: sessionId,
+        slot,
+      });
+      if (!exactKeys(result, ["disarmed"]) || result.disarmed !== true) {
+        throw protocolMismatch("Sequence capture disarm result is invalid");
+      }
+      return true;
     });
   }
 
@@ -2963,7 +3006,9 @@ function createRuntimeSessionController(options = {}) {
 
   function importAssignSample(file, importOptions = {}) {
     return serializeProjectAction(async () => {
-      const allowedKeys = ["slot", "expectedRevision", "signal", "onProgress"];
+      const allowedKeys = [
+        "slot", "expectedRevision", "sequenceSessionId", "signal", "onProgress",
+      ];
       if (
         importOptions === null ||
         typeof importOptions !== "object" ||
@@ -2971,7 +3016,9 @@ function createRuntimeSessionController(options = {}) {
         Object.keys(importOptions).some((key) => !allowedKeys.includes(key)) ||
         !Object.hasOwn(importOptions, "slot") ||
         !Object.hasOwn(importOptions, "expectedRevision") ||
-        !isUnsignedInteger(importOptions.expectedRevision)
+        !isUnsignedInteger(importOptions.expectedRevision) ||
+        (importOptions.sequenceSessionId !== undefined &&
+          !UUID_PATTERN.test(importOptions.sequenceSessionId))
       ) {
         throw new TypeError("Sample import options are invalid");
       }
@@ -3037,6 +3084,9 @@ function createRuntimeSessionController(options = {}) {
           import_token: importToken,
           command_id: commandId,
           expected_revision: importOptions.expectedRevision,
+          ...(importOptions.sequenceSessionId === undefined
+            ? {}
+            : {sequence_session_id: importOptions.sequenceSessionId}),
           slot,
           asset_id: assetId,
           byte_length: totalBytes,
@@ -3471,6 +3521,7 @@ function createRuntimeSessionController(options = {}) {
     openProject,
     inspectProject,
     beginSequence,
+    disarmSequenceCapture,
     recordSequenceEvent,
     flushSequence,
     stopSequence,

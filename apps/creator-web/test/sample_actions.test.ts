@@ -793,16 +793,26 @@ describe("captureCommitJourney", () => {
       session,
       buffer,
       {startFrame: 8, frameCount: 16},
-      {slot: 17, expectedRevision: 42},
+      {
+        slot: 17,
+        expectedRevision: 42,
+        sequenceSessionId: "10000000-0000-4000-8000-000000000001",
+      },
     );
 
     expect(resolution).toEqual({kind: "committed", commit: published, inspect: refreshed});
     const call = calls.find(({method}) => method === "importAssignSample");
-    const [file, options] = (call?.arguments ?? []) as [File, {slot: number; expectedRevision: number}];
+    const [file, options] = (call?.arguments ?? []) as [File, {
+      slot: number; expectedRevision: number; sequenceSessionId: string;
+    }];
     expect(file).toBeInstanceOf(File);
     expect(file.name).toBe(CAPTURE_FILE_NAME);
     expect(file.type).toBe("audio/wav");
-    expect(options).toMatchObject({slot: 17, expectedRevision: 42});
+    expect(options).toMatchObject({
+      slot: 17,
+      expectedRevision: 42,
+      sequenceSessionId: "10000000-0000-4000-8000-000000000001",
+    });
     // The delegated bytes are exactly the deterministic encoding of the
     // selected frames — not the whole take.
     const expected = encodePcm16Wav(buffer.slice(8, 16));
