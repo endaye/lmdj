@@ -26,12 +26,19 @@ SAFE_VALIDATION_EVIDENCE = re.compile(
     r"duplicate:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)|"
     r"unexpected:required-check|"
     r"field:(?:run_id=invalid|run_event|workflow_path|head_sha|ticket|base_sha|"
-    r"classification=(?:invalid|unexpected)|manifest_mode=(?:focused|None)|"
+    r"classification=(?:invalid|unexpected)|manifest_mode=(?:focused|None|invalid)|"
     r"trusted_head|run_status|run_conclusion))$"
 )
 
 
 def load_module():
+    # merge_queue.py imports its sibling change_scope for the shared
+    # merge-evidence predicate, which resolves from `scripts/ci` when the
+    # controller runs as a script. Loading it here has to offer the same path
+    # rather than depend on another test module having inserted it first.
+    scripts_ci = str(MODULE_PATH.parent)
+    if scripts_ci not in sys.path:
+        sys.path.insert(0, scripts_ci)
     spec = importlib.util.spec_from_file_location("merge_queue", MODULE_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load merge queue controller")
@@ -712,14 +719,77 @@ class MergeQueueTest(unittest.TestCase):
         self.assertIn("duplicate:PR Gate", report.evidence)
         self.assert_evidence_is_safe(report)
 
-    def test_run_field_mismatch_names_the_field(self):
+    def test_focused_validation_is_merge_evidence(self):
+        # PR Gate adjudicates the same run against the manifest, failing both
+        # when a selected job is not success and when an unselected job ran, so
+        # a focused validation already proves every lane the change owed.
         focused = replace(
             self.client().validation_results[0], manifest_mode="focused"
         )
         report = self.run_item(self.client(validation_results=[focused]))
+        self.assertEqual(report.code, "merged")
+
+    def test_skippable_checks_stay_a_subset_that_excludes_pr_gate(self):
+        # Listing the skippable checks explicitly is what makes a newly added
+        # required check fail closed: it is not skippable until someone says
+        # so. This pins the other half -- a stale name after a rename, and
+        # PR Gate never becoming skippable, since it is what vouches for a
+        # skip being owed.
+        self.assertTrue(
+            set(self.mq.SKIPPABLE_CHECKS)
+            < set(self.mq.REQUIRED_CHECKS),
+            "skippable checks must be a proper subset of required checks",
+        )
+        self.assertNotIn("PR Gate", self.mq.SKIPPABLE_CHECKS)
+
+    def test_skipped_core_context_is_owed_only_because_pr_gate_vouches(self):
+        # A focused manifest legitimately skips the Core contexts, so a skip
+        # there is not a failure. PR Gate is what makes that safe: it fails
+        # both when a selected job is not success and when an unselected job
+        # ran anyway, so it is never allowed to be skipped itself.
+        base = self.client().validation_results[0]
+        for name in ("core (ubuntu-latest)", "core (macos-latest)"):
+            with self.subTest(skipped=name):
+                checks = tuple(
+                    replace(check, conclusion="skipped")
+                    if check.name == name else check
+                    for check in base.required_checks
+                )
+                result = replace(
+                    base, manifest_mode="focused", required_checks=checks
+                )
+                report = self.run_item(self.client(validation_results=[result]))
+                self.assertEqual(report.code, "merged")
+
+        checks = tuple(
+            replace(check, conclusion="skipped")
+            if check.name == "PR Gate" else check
+            for check in base.required_checks
+        )
+        result = replace(base, manifest_mode="focused", required_checks=checks)
+        report = self.run_item(self.client(validation_results=[result]))
         self.assertEqual(report.code, "validation-failed")
-        self.assertIn("field:manifest_mode=focused", report.evidence)
+        self.assertIn("check:PR Gate=skipped", report.evidence)
         self.assert_evidence_is_safe(report)
+
+    def test_unclassified_validation_mode_names_the_field(self):
+        # Breadth must be known. A run that published no mode proves nothing
+        # about which lanes were owed, and a `requested` lane selection is an
+        # operator's choice rather than a classification of the change.
+        for mode in (None, "requested", "draft"):
+            with self.subTest(mode=mode):
+                unclassified = replace(
+                    self.client().validation_results[0], manifest_mode=mode
+                )
+                report = self.run_item(
+                    self.client(validation_results=[unclassified])
+                )
+                self.assertEqual(report.code, "validation-failed")
+                self.assertTrue(
+                    any(e.startswith("field:manifest_mode=") for e in report.evidence),
+                    report.evidence,
+                )
+                self.assert_evidence_is_safe(report)
 
     def assert_evidence_is_safe(self, report):
         for evidence in report.evidence:

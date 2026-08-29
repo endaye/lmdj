@@ -25,7 +25,9 @@ from merge_queue import (
     UpdateResult,
     ValidationResult,
 )
-from change_scope import load_policy, reject_duplicates, validate_manifest
+from change_scope import (
+    MERGE_EVIDENCE_MODES, load_policy, reject_duplicates, validate_manifest,
+)
 
 
 API_ROOT = "https://api.github.com"
@@ -228,8 +230,11 @@ def parse_scope_manifest_zip(
         raise ValueError("pull request scope must not contain dispatch queue metadata")
     if document.get("head_sha") != expected_head_sha:
         raise ValueError("scope manifest head does not match workflow run")
-    if document.get("mode") != "full" or document.get("trusted_head") is not True:
-        raise ValueError("synchronized validation requires trusted full scope")
+    if (
+        document.get("mode") not in MERGE_EVIDENCE_MODES
+        or document.get("trusted_head") is not True
+    ):
+        raise ValueError("synchronized validation requires trusted classified scope")
     return document
 
 

@@ -626,11 +626,16 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(plain["mode"], "focused")
         self.assertEqual(labeled["mode"], "full")
 
-    def test_merge_queue_label_upgrades_synchronized_pr_run_to_full(self):
-        manifest = self.classify(["docs/guide.md"], labels={"merge:queue"})
-        self.assertEqual(manifest["mode"], "full")
-        self.assertTrue(all(manifest["lanes"].values()))
-        self.assertIn("merge:queue label", manifest["reasons"])
+    def test_merge_queue_label_authorizes_without_changing_scope(self):
+        # The label authorizes a merge; it does not widen one. Merge evidence
+        # is the classification, so a docs-only change carries the same
+        # manifest whether or not it is queued.
+        plain = self.classify(["docs/guide.md"])
+        labelled = self.classify(["docs/guide.md"], labels={"merge:queue"})
+        self.assertEqual(labelled["mode"], "focused")
+        self.assertEqual(self.true_lanes(labelled), {"docs_static"})
+        self.assertEqual(labelled["lanes"], plain["lanes"])
+        self.assertEqual(labelled["reasons"], plain["reasons"])
 
     def test_docs_main_push_is_focused(self):
         manifest = self.classify(["docs/guide.md"], event_name="push")
@@ -1099,7 +1104,7 @@ class ChangeScopeTest(unittest.TestCase):
         )
         self.assertEqual(head_drift.classification, "queue-head-drift")
 
-    def test_valid_queue_context_forces_full_and_closes_manifest_metadata(self):
+    def test_valid_queue_context_classifies_and_closes_manifest_metadata(self):
         queue = self.module.parse_queue_inputs(
             "mq:123:1", "220", "a" * 40, "b" * 40
         )
@@ -1132,7 +1137,12 @@ class ChangeScopeTest(unittest.TestCase):
             trusted_head=True,
             queue=queue,
         )
-        self.assertEqual(manifest["mode"], "full")
+        # A queue dispatch is the controller validating one exact PR, not an
+        # operator asking for full CI, so it classifies. The operator's own
+        # empty dispatch keeps its unconditional full -- release evidence
+        # depends on it -- and that is asserted separately.
+        self.assertEqual(manifest["mode"], "focused")
+        self.assertEqual(self.true_lanes(manifest), {"docs_static"})
         self.assertEqual(
             manifest["queue"],
             {
@@ -1147,6 +1157,39 @@ class ChangeScopeTest(unittest.TestCase):
         invalid["queue"]["extra"] = True
         with self.assertRaises(ValueError):
             self.module.validate_manifest(invalid, self.policy)
+
+    def test_queue_manifest_may_be_focused_but_never_untrusted(self):
+        # Merge evidence is the classification; trust is not negotiable at any
+        # breadth. PR Gate proves each selected lane succeeded and each
+        # unselected one was skipped, which is what makes focused sufficient.
+        queue = self.module.parse_queue_inputs(
+            "mq:123:1", "220", "a" * 40, "b" * 40
+        )
+        manifest = self.module.classify(
+            self.policy,
+            changed(self.module, "docs/guide.md"),
+            base_sha="a" * 40, head_sha="b" * 40,
+            event_name="workflow_dispatch", draft=False,
+            labels=("merge:queue",), trusted_head=True, queue=queue,
+        )
+        self.assertEqual(manifest["mode"], "focused")
+        self.module.validate_manifest(manifest, self.policy)
+
+        untrusted = copy.deepcopy(manifest)
+        untrusted["trusted_head"] = False
+        with self.assertRaisesRegex(ValueError, "trusted"):
+            self.module.validate_manifest(untrusted, self.policy)
+
+    def test_operator_dispatch_keeps_unconditional_full_for_release_evidence(self):
+        # scripts/release.sh rejects focused and requested evidence, so the
+        # operator's empty dispatch must stay the one way to produce full
+        # evidence for an exact main SHA.
+        manifest = self.classify(
+            ["docs/guide.md"], event_name="workflow_dispatch"
+        )
+        self.assertEqual(manifest["mode"], "full")
+        self.assertEqual(self.true_lanes(manifest), LANES)
+        self.assertIn("full event: workflow_dispatch", manifest["reasons"])
 
     def test_queue_validation_document_is_closed_for_valid_and_drift(self):
         queue = self.module.parse_queue_inputs(

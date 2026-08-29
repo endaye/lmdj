@@ -58,10 +58,20 @@ pending，且按 GitHub 定义的等待开始时间 FIFO 执行；dispatch 还�
 的 PR 添加 `merge:queue`，就是一次可撤销的自动 squash merge 授权。Controller 只执行默认
 分支上的控制代码，把 exact current main 合入 PR branch。GitHub 会把该 `GITHUB_TOKEN`
 同步产生的 PR CI 置为 approval-required；Controller 只绑定 exact PR/head/bot 的唯一 run，
-显式批准后把它作为 full validation，不再重复 dispatch。若 PR 已包含 current main，才显式
+显式批准后把它作为 validation，不再重复 dispatch。若 PR 已包含 current main，才显式
 dispatch PR head；该路径的 ticket、PR number、base SHA、head SHA 和返回 run ID 必须完全
-匹配。两条路径都要求同一 run 内 `Change Scope`、全部 full lane 与 `PR Gate` 成功后才可
-merge。被测 head 自己产生 CI 证据，
+匹配。两条路径都要求同一 run 内 `Change Scope`、manifest 选中的全部 lane 与 `PR Gate`
+成功后才可 merge。
+
+Merge 证据就是分类结果，`focused` 或 `full` 皆可；`requested`（操作者指定 lane）与
+`draft` 都不是 merge 证据，untrusted head 在任何 breadth 下都不是证据。`merge:queue`
+只授权一次 merge，不再放宽它。因为 manifest 可能是 focused，`core (ubuntu-latest)` 与
+`core (macos-latest)` 在其 lane 未被选中时可以是 `skipped`；`PR Gate` 不可以，因为正是
+它让这种 skip 安全——它对同一 run 按 manifest 裁决，被选中的 job 非 success 会失败，
+未被选中的 job 跑了也会失败，所以它成功本身就证明每一次 skip 都是应有的。见
+[focused merge evidence 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-29-focused-merge-evidence.md)。
+
+被测 head 自己产生 CI 证据，
 因此 review 与 branch protection 仍是最终信任边界；任何 merge-authority control-plane diff
 都不能由队列自动合并，必须走普通受保护合并路径。
 
