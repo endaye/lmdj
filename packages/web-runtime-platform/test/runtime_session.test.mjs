@@ -1647,6 +1647,56 @@ test("Sample import streams one bounded hashed sidecar and commits one typed res
   ]);
 });
 
+test("Sample import treats 1 MiB as the chunk limit instead of the total limit", async () => {
+  const bytes = new Uint8Array(1_048_577);
+  const file = {
+    size: bytes.byteLength,
+    slice(start, end) {
+      return new Blob([bytes.subarray(start, end)]);
+    },
+  };
+  const operations = [];
+  const chunkSizes = [];
+  const {session} = fixture({
+    send: async (envelope, transportOptions) => {
+      operations.push(envelope.operation);
+      if (envelope.operation === "sample.import.begin") {
+        return success(envelope, {
+          token: envelope.payload.import_token,
+          expected_bytes: bytes.byteLength,
+        });
+      }
+      if (envelope.operation === "sample.import.chunk") {
+        chunkSizes.push(transportOptions.sidecar.byteLength);
+        return success(envelope, {
+          received_bytes:
+            envelope.payload.offset + transportOptions.sidecar.byteLength,
+          final: envelope.payload.final,
+        });
+      }
+      if (envelope.operation === "sample.import.commit") {
+        return success(envelope, {
+          committed_revision: 1,
+          runtime_revision: 1,
+          runtime_published: true,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  await session.importAssignSample(file, {slot: 0, expectedRevision: 0});
+
+  assert.deepEqual(operations, [
+    "sample.import.begin",
+    "sample.import.chunk",
+    "sample.import.chunk",
+    "sample.import.commit",
+  ]);
+  assert.deepEqual(chunkSizes, [1_048_576, 1]);
+});
+
 test("Sample import enforces the verified manifest total before begin", async () => {
   const operations = [];
   const file = new Blob([Uint8Array.of(1, 2, 3, 4)]);

@@ -614,6 +614,24 @@ function normalizeQuotaDetails(
   return normalizeSnapshotDetails(value);
 }
 
+function normalizeOperationFailureDetails(
+  code: string,
+  value: unknown,
+): Readonly<Record<string, unknown>> {
+  if (code === "BANK_QUOTA_EXHAUSTED" ||
+    code === "PROJECT_QUOTA_EXHAUSTED") {
+    return normalizeQuotaDetails(code, value);
+  }
+  try {
+    return normalizeSnapshotDetails(value);
+  } catch {
+    // A typed operation failure may carry protocol-layer diagnostics such as
+    // the rejected operation name. They are not Sample snapshot truth and
+    // must not escape their boundary or take down the Creator reducer.
+    return Object.freeze({});
+  }
+}
+
 export function normalizeSampleSnapshotError(
   value: unknown,
 ): Readonly<SampleSnapshotError> | null {
@@ -1136,7 +1154,7 @@ export function applySampleOperationFailure(
     throw new TypeError("Sample operation failure is invalid");
   }
   const details = hasDetails
-    ? normalizeQuotaDetails(value.code, value.details)
+    ? normalizeOperationFailureDetails(value.code, value.details)
     : Object.freeze({});
   return Object.freeze({
     ...state,

@@ -640,6 +640,48 @@ describe("Creator Sample state", () => {
     });
   });
 
+  test("contains non-snapshot Host protocol details without blanking Creator", () => {
+    let state = beginSamplePending(inspectedState(), {
+      kind: "import",
+      slot: 17,
+      expectedRevision: 42,
+    });
+    state = reduceSampleState(state, {
+      type: "operation-failed",
+      pending: state.pendingAction,
+      error: {
+        code: "HOST_PROTOCOL_MISMATCH",
+        message: "Host operation payload is invalid",
+        details: {operation: "sample.import.begin"},
+      },
+    });
+
+    expect(state.pendingAction).toBeNull();
+    expect(state.lastError).toEqual({
+      code: "HOST_PROTOCOL_MISMATCH",
+      message: "Sample Host response was invalid",
+      retryPrepare: false,
+      details: {},
+    });
+  });
+
+  test("keeps malformed quota operation details fail-closed", () => {
+    const state = beginSamplePending(inspectedState(), {
+      kind: "import",
+      slot: 17,
+      expectedRevision: 42,
+    });
+    expect(() => reduceSampleState(state, {
+      type: "operation-failed",
+      pending: state.pendingAction,
+      error: {
+        code: "BANK_QUOTA_EXHAUSTED",
+        message: "opaque Host wording",
+        details: {},
+      },
+    })).toThrow("Sample Bank quota details are invalid");
+  });
+
   test("fails a rejected preview without requiring or changing mutation pending truth", () => {
     const draft = updateSampleDraft(beginSampleDraft(saved, 42), {
       trimStartFrame: 120,

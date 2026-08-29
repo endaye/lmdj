@@ -565,6 +565,39 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await page.evaluate(() => window.__sampleVoiceUnsubscribe?.());
 });
 
+test("packaged Sample Editor admits a decoded Sample larger than one transport chunk", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  await activateAudio(page);
+  await enterSampleEditor(page);
+
+  const operationOffset = await page.evaluate(() =>
+    (window.__sampleProofOperations ?? []).length);
+  await chooseSampleFile(
+    page,
+    "Add Sample to Pad A1",
+    "multi-chunk-ramp.wav",
+    pcm16Wav({frames: 262_145}),
+  );
+  await commitLongSourceSelection(page);
+
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible({timeout: 120_000});
+  await expect(page.getByText("48 kHz · Mono · 262,145 frames")).toBeVisible();
+  await expectProjectRevision(page, 47);
+  const operations = await page.evaluate((offset) =>
+    (window.__sampleProofOperations ?? []).slice(offset), operationOffset);
+  expect(operations.filter((operation) => operation === "sample.import.begin"))
+    .toHaveLength(1);
+  expect(operations.filter((operation) => operation === "sample.import.chunk"))
+    .toHaveLength(2);
+  expect(operations.filter((operation) => operation === "sample.import.commit"))
+    .toHaveLength(1);
+});
+
 test("Sample Editor WebKit capability boundary is explicit, private, and non-physical", async ({page, browserName}) => {
   test.skip(browserName !== "webkit");
   await installHostProofRecorder(page);

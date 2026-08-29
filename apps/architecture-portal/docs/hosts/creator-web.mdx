@@ -32,7 +32,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host `2.1.0` 已进入 Product Build `1.0.38.0` Assembly，并只依赖 Web Runtime Platform `2.0.0`。Creator 支持 WAV、MP3、M4A/AAC 与 FLAC 的内容嗅探摄入，在 48 kHz `OfflineAudioContext` 中把长源解码到 Wasm 外的单一 Host 缓冲，随后提供波形、试听、revision-bound 配额显示和选区提交。既有 Sequence Surface、Sample Editor、Pad Capture、pre-commit Crop、输入电平门与可恢复 `DUPLICATE_ID` 行为继续保留。
+<StatusBadge status="implemented" /> Creator Web Host `2.1.1` 已进入 Product Build `1.0.39.0` Assembly，并只依赖 Web Runtime Platform `2.0.1`。Creator 支持 WAV、MP3、M4A/AAC 与 FLAC 的内容嗅探摄入，在 48 kHz `OfflineAudioContext` 中把长源解码到 Wasm 外的单一 Host 缓冲，随后提供波形、试听、revision-bound 配额显示和选区提交。提交选区时 1 MiB 只作为单 chunk 上限，选区 WAV 总量仍由已验证 manifest 上限约束；非 quota 协议诊断会在 operation boundary 被收敛为空 details，不再击穿 reducer，Bank/Project quota details 仍严格校验。既有 Sequence Surface、Sample Editor、Pad Capture、pre-commit Crop、输入电平门与可恢复 `DUPLICATE_ID` 行为继续保留。
 
 ## 创作边界
 
