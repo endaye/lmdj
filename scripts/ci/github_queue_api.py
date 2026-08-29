@@ -180,8 +180,11 @@ def parse_queue_validation_json(value: object) -> dict[str, object]:
         "queue_base_sha", "queue_head_sha", "observed_base_sha", "observed_head_sha"
     ):
         _sha(document[name], name)
-    if document["manifest_mode"] not in {None, "full"}:
-        raise ValueError("queue manifest mode must be null or full")
+    if (
+        document["manifest_mode"] is not None
+        and document["manifest_mode"] not in MERGE_EVIDENCE_MODES
+    ):
+        raise ValueError("queue manifest mode is not merge evidence")
     if not isinstance(document["trusted_head"], bool):
         raise ValueError("queue trusted head must be boolean")
     return document
@@ -536,6 +539,9 @@ class GitHubQueueClient:
         return run_id
 
     def cancel_validation(self, run_id: int) -> None:
+        run = self._get_object(f"/actions/runs/{run_id}")
+        if run.get("status") == "completed":
+            return
         self._request(
             "POST",
             f"/actions/runs/{run_id}/cancel",
