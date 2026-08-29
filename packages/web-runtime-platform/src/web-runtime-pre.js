@@ -125,6 +125,10 @@ if (typeof globalThis.window !== "undefined") {
     return handle;
   }
 
+  function audioCallbackHeartbeat() {
+    return Module["_lmdj_web_audio_callback_heartbeat"]();
+  }
+
   let startRecord = null;
   function startAudioWorklet(handle) {
     if (!Number.isInteger(handle) || handle <= 0 || !contexts.has(handle)) {
@@ -721,6 +725,7 @@ if (typeof globalThis.window !== "undefined") {
     runtimeInitialized: false,
     manifestReady: false,
     registerAudioContext,
+    audioCallbackHeartbeat,
     startAudioWorklet,
     transport,
     ...(deadlineProof === undefined ? {} : {deadlineProof}),
@@ -886,7 +891,10 @@ if (typeof globalThis.window !== "undefined") {
       const snapshot = await submit(
         "snapshot.reload", {pattern_id: patternId});
       if (!snapshot.ok) throw new Error(JSON.stringify(snapshot));
-      return {controlGeneration: snapshot.result.generation};
+      return {
+        controlGeneration: snapshot.result.generation,
+        patternId,
+      };
     }
 
     async function prepareAndTrigger() {
@@ -1346,15 +1354,43 @@ if (typeof globalThis.window !== "undefined") {
 
       async runSuspendReactivateProof() {
         const prepared = await prepareProject();
+        const context = contexts.get(startRecord?.handle);
+        if (!(context instanceof AudioContext)) {
+          throw new Error("registered AudioContext is unavailable");
+        }
         const firstActivation = await submit("audio.activate", {});
         if (!firstActivation.ok) throw new Error(JSON.stringify(firstActivation));
         const firstAcknowledgement =
+          Module["_lmdj_web_audio_test_ack_generation"]();
+        const liveReload = await submit(
+          "snapshot.reload", {pattern_id: prepared.patternId});
+        if (!liveReload.ok) throw new Error(JSON.stringify(liveReload));
+        const latestGeneration = liveReload.result.generation;
+        const liveAcknowledgement =
           Module["_lmdj_web_audio_test_ack_generation"]();
         const suspended = await submit("audio.suspend", {});
         const paused = {
           gate: gateNames[Module["_lmdj_web_audio_test_gate_state"]()],
           callbackInFlight: Module["_lmdj_web_audio_test_in_flight"](),
         };
+        await context.suspend();
+        const heartbeatBeforeResume =
+          Module["_lmdj_web_audio_callback_heartbeat"]();
+        await context.resume();
+        const heartbeatDeadline = performance.now() + 1_000;
+        let heartbeatAfterResume =
+          Module["_lmdj_web_audio_callback_heartbeat"]();
+        while (
+          heartbeatAfterResume === heartbeatBeforeResume &&
+          performance.now() < heartbeatDeadline
+        ) {
+          await delay(0);
+          heartbeatAfterResume =
+            Module["_lmdj_web_audio_callback_heartbeat"]();
+        }
+        if (heartbeatAfterResume === heartbeatBeforeResume) {
+          throw new Error("AudioWorklet callback did not resume");
+        }
         const secondActivation = await submit("audio.activate", {});
         if (!secondActivation.ok) {
           throw new Error(JSON.stringify(secondActivation));
@@ -1364,8 +1400,12 @@ if (typeof globalThis.window !== "undefined") {
         return {
           ...prepared,
           firstAcknowledgement,
+          latestGeneration,
+          liveAcknowledgement,
           suspended,
           paused,
+          heartbeatBeforeResume,
+          heartbeatAfterResume,
           secondActivation,
           secondAcknowledgement,
         };

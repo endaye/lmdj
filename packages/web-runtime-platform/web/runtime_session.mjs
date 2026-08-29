@@ -1018,6 +1018,7 @@ async function loadSourceRuntime({ window }) {
   const runtime = window?.lmdjWebRuntimeHost;
   if (
     typeof runtime?.registerAudioContext !== "function" ||
+    typeof runtime?.audioCallbackHeartbeat !== "function" ||
     typeof runtime?.startAudioWorklet !== "function"
   ) {
     throw typedError("HOST_STATE_INVALID", "Source runtime is not loaded");
@@ -1788,7 +1789,12 @@ function createRuntimeSessionController(options = {}) {
     return generationsMatch(status);
   }
 
-  async function activateRuntimeForRecovery(epoch) {
+  async function activateRuntimeForRecovery(
+    epoch,
+    activationDeadline =
+      monotonicNow() + deadlineForOperation("audio.activate"),
+    callbackReady = false,
+  ) {
     if (
       recoveryEpoch !== epoch ||
       epoch.activationStarted ||
@@ -1800,7 +1806,14 @@ function createRuntimeSessionController(options = {}) {
     epoch.activationStarted = true;
     epoch.contextUsable = true;
     try {
-      await boundedRequest("audio.activate", {});
+      if (!callbackReady) {
+        const callbackBaseline = readAudioCallbackHeartbeat();
+        await awaitAudioCallbackAfterResume(
+          callbackBaseline, activationDeadline);
+      }
+      await boundedRequest("audio.activate", {}, {
+        deadlineMs: remainingActivationBudget(activationDeadline),
+      });
       if (recoveryEpoch !== epoch || machine.state !== "recovering") {
         return;
       }
@@ -2236,6 +2249,47 @@ function createRuntimeSessionController(options = {}) {
     );
   }
 
+  function readAudioCallbackHeartbeat() {
+    const heartbeat = runtime?.audioCallbackHeartbeat?.();
+    if (
+      !Number.isInteger(heartbeat) ||
+      heartbeat < 0 ||
+      heartbeat > 0xffff_ffff
+    ) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH",
+        "AudioWorklet callback heartbeat is invalid",
+      );
+    }
+    return heartbeat;
+  }
+
+  async function awaitAudioCallbackAfterResume(baseline, deadline) {
+    let heartbeat = readAudioCallbackHeartbeat();
+    while (heartbeat === baseline && monotonicNow() < deadline) {
+      await new Promise((resolvePromise) =>
+        timers.setTimeout(resolvePromise, 0));
+      heartbeat = readAudioCallbackHeartbeat();
+    }
+    if (heartbeat === baseline) {
+      throw typedError(
+        "HOST_TIMEOUT",
+        "AudioWorklet callback did not resume",
+      );
+    }
+  }
+
+  function remainingActivationBudget(deadline) {
+    const remaining = Math.ceil(deadline - monotonicNow());
+    if (remaining <= 0) {
+      throw typedError(
+        "HOST_TIMEOUT",
+        "AudioWorklet activation deadline expired",
+      );
+    }
+    return Math.min(deadlineForOperation("audio.activate"), remaining);
+  }
+
   async function activateAudio(token) {
     if (
       createUserGestureToken.consume(token) !== true ||
@@ -2263,10 +2317,15 @@ function createRuntimeSessionController(options = {}) {
           return false;
         }
       }
+      const activationDeadline =
+        monotonicNow() + deadlineForOperation("audio.activate");
+      const callbackBaseline = readAudioCallbackHeartbeat();
       await audioContext.resume();
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
       }
+      await awaitAudioCallbackAfterResume(
+        callbackBaseline, activationDeadline);
       if (recoveryEpoch !== null) {
         machine.transition("recovering", {
           reason: "recovery_activation",
@@ -2274,7 +2333,8 @@ function createRuntimeSessionController(options = {}) {
         });
         recoveryEpoch.contextUsable = true;
         recoveryEpoch.suspendComplete = true;
-        await activateRuntimeForRecovery(recoveryEpoch);
+        await activateRuntimeForRecovery(
+          recoveryEpoch, activationDeadline, true);
         if (
           closing ||
           visibilityHidden ||
@@ -2285,7 +2345,9 @@ function createRuntimeSessionController(options = {}) {
         }
         return machine.state === "recovering";
       }
-      await boundedRequest("audio.activate", {});
+      await boundedRequest("audio.activate", {}, {
+        deadlineMs: remainingActivationBudget(activationDeadline),
+      });
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
       }

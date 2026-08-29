@@ -79,6 +79,7 @@ class RealtimeAudioWorklet final {
 
   bool ready() const noexcept;
   std::uint64_t acknowledged_generation() const noexcept;
+  std::uint32_t callback_heartbeat() const noexcept;
   RealtimeAudioWorkletState state() const noexcept;
   RealtimeAudioWorkletFatal fatal() const noexcept;
   void latch_processor_error() noexcept;

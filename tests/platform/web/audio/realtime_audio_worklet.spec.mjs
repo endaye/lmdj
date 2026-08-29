@@ -308,12 +308,15 @@ test("start is exactly-once and suspend can reactivate the same processor", asyn
   const proof = await page.evaluate(async () =>
     window.lmdjWebRuntimeHostTest.runSuspendReactivateProof());
   expect(proof.firstAcknowledgement).toBeGreaterThan(0);
+  expect(proof.latestGeneration).toBeGreaterThan(proof.firstAcknowledgement);
+  expect(proof.liveAcknowledgement).toBe(proof.latestGeneration);
   expect(proof.suspended).toMatchObject({
     ok: true,
     result: {state: "audio-suspended", changed: true},
   });
   expect(proof.paused).toEqual({gate: "paused", callbackInFlight: 0});
-  expect(proof.secondAcknowledgement).toBe(proof.firstAcknowledgement);
+  expect(proof.heartbeatAfterResume).not.toBe(proof.heartbeatBeforeResume);
+  expect(proof.secondAcknowledgement).toBe(proof.latestGeneration);
   expect(proof.secondActivation).toMatchObject({
     ok: true,
     result: {state: "running", changed: true},
