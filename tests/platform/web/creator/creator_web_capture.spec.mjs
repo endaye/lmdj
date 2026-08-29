@@ -263,6 +263,8 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
   await expect(panel).toBeHidden({timeout: 180_000});
   await expect(page.getByRole("status").filter({hasText: "recording"}))
     .toBeVisible({timeout: 30_000});
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible({timeout: 30_000});
   const committedTruth = await inspectProjectTruth(page);
   const committedAsset = committedTruth.project.banks[0].pads[0].asset_id;
   const committedArtifact = structuredClone(
