@@ -6,7 +6,7 @@
 
 **Authority:** [2026-08-26 D1+D2 decision](../../prd/decisions/2026-08-26-long-material-quota-and-bpm-stretch.md) (merged in [#339](https://github.com/endaye/lmdj/pull/339)) as amended by the [2026-08-28 quota-accounting amendment](../../prd/decisions/2026-08-28-long-material-quota-accounting.md) (#357). D2 requires no implementation: samples carry no BPM, global BPM drives the sequencer only, and the realtime engine stays zero-DSP — that is current behavior. The future per-Pad offline time-stretch capability is [#347](https://github.com/endaye/lmdj/issues/347) and is out of scope here.
 
-**Readiness:** The [#357](https://github.com/endaye/lmdj/issues/357) decision amendment resolves the 2026-08-27 readiness-audit accounting gap: `decoded_float_pcm_bytes_total` bounds one Project revision (equivalently one 64-Pad generation), the per-user-Bank quota is its inner partition, and live/pending/retiring publication residency is the separate named quantity `decoded_float_pcm_bytes_resident` = 2 × total, enforced by the existing publication-owner ledger. Implementation Tasks copy the amendment's values and semantics verbatim; #343 starts only from the merged amendment.
+**Delivery status (2026-08-29):** The decision and machine implementation are complete. [#343](https://github.com/endaye/lmdj/issues/343)–[#346](https://github.com/endaye/lmdj/issues/346) merged through PRs [#400](https://github.com/endaye/lmdj/pull/400), [#406](https://github.com/endaye/lmdj/pull/406), [#408](https://github.com/endaye/lmdj/pull/408), and [#411](https://github.com/endaye/lmdj/pull/411). Physical macOS Safari testing of Product Build `1.0.38.0` then found the recoverability defect [#415](https://github.com/endaye/lmdj/issues/415); [PR #419](https://github.com/endaye/lmdj/pull/419) fixed it in Product Build `1.0.39.0`, and exact-main full CI passed at `925499293f7b79eb7dacbe85318595c4b11098a3`. The only remaining gate inside this plan is the complete [#359](https://github.com/endaye/lmdj/issues/359) macOS Safari and physical iPadOS Safari acceptance matrix on that repaired Build. The independent offline time-stretch question remains [#347](https://github.com/endaye/lmdj/issues/347) and does not block the umbrella.
 
 **Architecture:** The quota model — validation rule, failure classes, publication accounting — lives in Core and is Host-independent; every number is injected per Host manifest through `lmdj::audio::RuntimePreparationLimits`. The current `PreparedSampleBank` already stores one independent `std::vector<float>` per each of 64 slots, so no offset-table or arena rewrite is required; its single generation-wide byte counter becomes the amendment's two-level ledger (per-user-Bank plus generation total), while publication residency stays with the publication owner's reclaim→reserve→publish ledger under `maximum_resident_bytes`. Application Facade exposes the revision-bound `sample.quota` effective-headroom query and routes Captured and Imported selections through the same commit validation. The Web Host supplies the ingest tier: bounded source admission precedes expensive decode outside the Wasm heap, trim happens Host-side, and only the committed selection crosses into Core.
 
@@ -94,7 +94,8 @@ Revision binding: the result is valid only for the returned `project_revision`; 
           └─→ Task 3 (#345) Facade query + unified validation
                     [Tasks 2 and 3 run in parallel after #343]
               → Task 4 (#346) Web ingest tier, manifest, Creator UX, version integration, snapshot
-                  → Task 5 (#359) macOS Safari + physical iPadOS memory acceptance
+                  → repair #415 / PR #419 (Product Build 1.0.39.0)
+                      → Task 5 (#359) macOS Safari + physical iPadOS memory acceptance
 ```
 
 ## Task 0 (#357): Reconcile Quota Publication and Web Decode-Memory Accounting
@@ -114,14 +115,14 @@ Revision binding: the result is valid only for the returned `project_revision`; 
 
 **Scope:** `packages/foundation`, `packages/audio-runtime` (limits + preparation validation), `packages/project-cooker` (verify no cap duplication), plus internal error-name tests. The published `contracts/error/` schema and Product identity consumers remain unchanged until Task 4.
 
-- [ ] Start only from the merged #357 amendment and copy its exact accounting fields, ownership domains, failure categories, and values into tests before changing implementation.
-- [ ] Add `BANK_QUOTA_EXHAUSTED` and `PROJECT_QUOTA_EXHAUSTED` to `lmdj::foundation::ErrorCode` (`packages/foundation/include/lmdj/foundation/error.hpp`) and their string mappings.
-- [ ] Add focused internal error-name and quota-failure tests for both members. Do not mutate `contracts/error/lmdj.error.v1.schema.json`, Assembly, Component manifests, or Product Build in this Task; Task 4 publishes those identities atomically.
-- [ ] Remove `maximum_decoded_frames_per_pad` (and `allows_decoded_frames_per_pad`) from `RuntimePreparationLimits`; add `maximum_user_bank_bytes`, rename `maximum_prepared_bank_bytes` → `maximum_generation_bytes` and `maximum_live_bank_bytes` → `maximum_resident_bytes` (amendment A1.4); no other fields.
-- [ ] In `prepared_sample_bank.cpp::from_snapshot`, drop the per-Pad frame check and replace the current single generation-wide accumulator with the amendment's two-level ledger: per-user-Bank sums against `maximum_user_bank_bytes` (`BANK_QUOTA_EXHAUSTED`) and the generation total against `maximum_generation_bytes` (`PROJECT_QUOTA_EXHAUSTED`); the binding constraint is the smaller remaining, tie → Bank. Publication residency stays with the publication owner's ledger under `maximum_resident_bytes` and keeps its transient Attempt/Host-state category with a why+remedy message.
-- [ ] Audit `project-cooker` and Application Facade preparation helpers for duplicated caps; route every layer through shared overflow-checked accounting helpers in `runtime_preparation_limits.hpp`.
-- [ ] Tests: for each user Bank, exact boundary admits and one mono frame (`+4` prepared bytes) rejects with `BANK_QUOTA_EXHAUSTED`; a single Pad can consume the entire approved Bank quota; the generation total admits at exactly 134,217,728 bytes and rejects `+4` with `PROJECT_QUOTA_EXHAUSTED`; the tie case reports `BANK_QUOTA_EXHAUSTED`; residency admits at exactly 268,435,456 bytes and rejects `+4` with the transient publication category; every rejection leaves Project Truth and the prior live generation byte-identical.
-- [ ] Run `scripts/core.sh test dev full` and `scripts/core.sh test dev stress`.
+- [x] Start only from the merged #357 amendment and copy its exact accounting fields, ownership domains, failure categories, and values into tests before changing implementation.
+- [x] Add `BANK_QUOTA_EXHAUSTED` and `PROJECT_QUOTA_EXHAUSTED` to `lmdj::foundation::ErrorCode` (`packages/foundation/include/lmdj/foundation/error.hpp`) and their string mappings.
+- [x] Add focused internal error-name and quota-failure tests for both members. Do not mutate `contracts/error/lmdj.error.v1.schema.json`, Assembly, Component manifests, or Product Build in this Task; Task 4 publishes those identities atomically.
+- [x] Remove `maximum_decoded_frames_per_pad` (and `allows_decoded_frames_per_pad`) from `RuntimePreparationLimits`; add `maximum_user_bank_bytes`, rename `maximum_prepared_bank_bytes` → `maximum_generation_bytes` and `maximum_live_bank_bytes` → `maximum_resident_bytes` (amendment A1.4); no other fields.
+- [x] In `prepared_sample_bank.cpp::from_snapshot`, drop the per-Pad frame check and replace the current single generation-wide accumulator with the amendment's two-level ledger: per-user-Bank sums against `maximum_user_bank_bytes` (`BANK_QUOTA_EXHAUSTED`) and the generation total against `maximum_generation_bytes` (`PROJECT_QUOTA_EXHAUSTED`); the binding constraint is the smaller remaining, tie → Bank. Publication residency stays with the publication owner's ledger under `maximum_resident_bytes` and keeps its transient Attempt/Host-state category with a why+remedy message.
+- [x] Audit `project-cooker` and Application Facade preparation helpers for duplicated caps; route every layer through shared overflow-checked accounting helpers in `runtime_preparation_limits.hpp`.
+- [x] Tests: for each user Bank, exact boundary admits and one mono frame (`+4` prepared bytes) rejects with `BANK_QUOTA_EXHAUSTED`; a single Pad can consume the entire approved Bank quota; the generation total admits at exactly 134,217,728 bytes and rejects `+4` with `PROJECT_QUOTA_EXHAUSTED`; the tie case reports `BANK_QUOTA_EXHAUSTED`; residency admits at exactly 268,435,456 bytes and rejects `+4` with the transient publication category; every rejection leaves Project Truth and the prior live generation byte-identical.
+- [x] Run `scripts/core.sh test dev full` and `scripts/core.sh test dev stress`.
 
 **Acceptance:** Core implements the complete #357 ledger without a Host literal or duplicated formula; no `decoded_frames_per_pad` symbol remains in Core; both decided failures have stable internal names and payload behavior. The published error schema remains 1.0.0 on this intermediate `main` revision and is bumped with its Assembly/Product consumers in Task 4.
 
@@ -129,10 +130,10 @@ Revision binding: the result is valid only for the returned `project_revision`; 
 
 **Scope:** `packages/audio-runtime` (engine + publication), stress tier.
 
-- [ ] Verify `RealtimeEngine` voice arithmetic (positions, trim, loop points, ramps) is exact for samples up to 16,777,216 prepared frames — the full-Bank single Pad approved by the amendment (`std::uint32_t` positions hold to 4.29 G frames; assert no intermediate narrows).
-- [ ] Keep the per-slot `std::vector<float>` storage; document in the module README that the decision's variable-length requirement is satisfied by this existing layout (no arena rewrite).
-- [ ] Stress-tier tests: publish/retire every maximum valid generation shape required by the amendment — one full-quota 16,777,216-frame Pad with 15 empty Pads in a user Bank, and a full 134,217,728-byte generation — under concurrent trigger load; assert the reclaim→reserve→publish residency ledger against `maximum_resident_bytes` = 268,435,456, no lock acquisition on the realtime read path, and no torn reads (ASAN full + stress on Linux and macOS gates).
-- [ ] Run `scripts/core.sh test dev full` and `scripts/core.sh test dev stress` locally before commit.
+- [x] Verify `RealtimeEngine` voice arithmetic (positions, trim, loop points, ramps) is exact for samples up to 16,777,216 prepared frames — the full-Bank single Pad approved by the amendment (`std::uint32_t` positions hold to 4.29 G frames; assert no intermediate narrows).
+- [x] Keep the per-slot `std::vector<float>` storage; document in the module README that the decision's variable-length requirement is satisfied by this existing layout (no arena rewrite).
+- [x] Stress-tier tests: publish/retire every maximum valid generation shape required by the amendment — one full-quota 16,777,216-frame Pad with 15 empty Pads in a user Bank, and a full 134,217,728-byte generation — under concurrent trigger load; assert the reclaim→reserve→publish residency ledger against `maximum_resident_bytes` = 268,435,456, no lock acquisition on the realtime read path, and no torn reads (ASAN full + stress on Linux and macOS gates).
+- [x] Run `scripts/core.sh test dev full` and `scripts/core.sh test dev stress` locally before commit.
 
 **Acceptance:** a full-quota single-Pad Bank plays, publishes, and retires cleanly under stress; realtime path remains lock-free.
 
@@ -140,11 +141,11 @@ Revision binding: the result is valid only for the returned `project_revision`; 
 
 **Scope:** `packages/application-facade`, host parity in `apps/core-cli`, `apps/core-mcp`, `apps/native-host` (error surface only).
 
-- [ ] Add the `sample.quota` query exactly as locked in amendment A5 (request `{"operation", "project_path", "slot"}`; result fields and target-Pad-exclusive used-bytes semantics as specified). Target-Bank and effective headroom derive from the same Task 1 accounting helpers, never a second formula; the response includes the Project revision used for the calculation.
-- [ ] Replace the per-Pad frame checks currently at `application.cpp:3597–3607` and `application.cpp:4290–4296` with unified quota validation; Captured and Imported selections flow through the identical path and carry the query's revision via `sample.import.begin`'s existing `expected_revision`.
-- [ ] Emit the binding failure category per amendment A6. A Bank failure names the Bank, effective remaining frames/bytes, and the three remedies (shorten, free a Pad, target another Bank); a `PROJECT_QUOTA_EXHAUSTED` failure carries project totals plus per-Bank usage and must not masquerade as Bank exhaustion.
-- [ ] Parity tests: CLI, MCP, and Native Host observe identical error payloads via the Facade only; with unchanged revision, query-then-commit admits exactly `effective_remaining_frames` and rejects `effective_remaining_frames + 1`; revision drift returns `REVISION_CONFLICT`.
-- [ ] Run `scripts/core.sh test dev full`.
+- [x] Add the `sample.quota` query exactly as locked in amendment A5 (request `{"operation", "project_path", "slot"}`; result fields and target-Pad-exclusive used-bytes semantics as specified). Target-Bank and effective headroom derive from the same Task 1 accounting helpers, never a second formula; the response includes the Project revision used for the calculation.
+- [x] Replace the per-Pad frame checks currently at `application.cpp:3597–3607` and `application.cpp:4290–4296` with unified quota validation; Captured and Imported selections flow through the identical path and carry the query's revision via `sample.import.begin`'s existing `expected_revision`.
+- [x] Emit the binding failure category per amendment A6. A Bank failure names the Bank, effective remaining frames/bytes, and the three remedies (shorten, free a Pad, target another Bank); a `PROJECT_QUOTA_EXHAUSTED` failure carries project totals plus per-Bank usage and must not masquerade as Bank exhaustion.
+- [x] Parity tests: CLI, MCP, and Native Host observe identical error payloads via the Facade only; with unchanged revision, query-then-commit admits exactly `effective_remaining_frames` and rejects `effective_remaining_frames + 1`; revision drift returns `REVISION_CONFLICT`.
+- [x] Run `scripts/core.sh test dev full`.
 
 **Acceptance:** query and commit agree byte-for-byte across all Hosts under the unchanged-revision precondition; no Host parses bundle contents for quota.
 
@@ -152,21 +153,21 @@ Revision binding: the result is valid only for the returned `project_revision`; 
 
 **Scope:** `packages/web-runtime-platform`, `apps/web-runtime-host`, `apps/creator-web`, `products/lmdj`, portal current pages, immutable snapshot.
 
-- [ ] Manifest `resource_limits` (amendment A10 key set): remove `decoded_frames_per_pad`; keep `decoded_float_pcm_bytes_per_bank` = 67,108,864 and `decoded_float_pcm_bytes_total` = 134,217,728 under their amended semantics; add `decoded_float_pcm_bytes_resident` = 268,435,456, `ingest_source_bytes` = 104,857,600, `ingest_decoded_frames` = 43,200,000, `ingest_channels` = 2; set `imported_wav_bytes` = 68,157,440. Update `manifest_gate.cpp`, `control_runtime.cpp`, `packages/web-runtime-platform/CMakeLists.txt`, generated identity inputs, and why+remedy gate messages without hand-entering Product identity.
-- [ ] `control_runtime.cpp` publication ledger (amendment A4): keep the reclaim→reserve→publish order with `maximum_resident_bytes` = 268,435,456 as the ceiling, rename the failure `resource` to `resident_pcm_bytes` with a retry-oriented why+remedy message, and add the A4 pre-check — reclaim, then require `reserved_live_bytes ≤ resident − total` before `prepare_runtime_snapshot` begins.
-- [ ] creator-web import flow (amendment A7): file picker/drag → enforce `ingest_source_bytes` before reading content → sniff container (WAV/MP3/M4A-AAC/FLAC only, fail-closed) → pre-decode duration/frame/channel admission where metadata is decidable → `decodeAudioData` on a 48,000 Hz `OfflineAudioContext` outside the Wasm heap → exact post-decode bounds (≤ 43,200,000 frames, ≤ 2 channels) → waveform/preview/trim on the single decoded copy → encode the selection to PCM16 WAV → existing commit path → release the decoded buffer at the A7 §15 lifecycle points (commit success, cancel, replace, Project close, background-eviction recovery).
-- [ ] Replace `COMMIT_MAX_FRAMES` (`apps/creator-web/src/capture/capture_buffer.ts:3`) with the `sample.quota` query: capture and import trim ceilings become `min(source frames, effective_remaining_frames)` for the returned Project revision; the trim UI draws the selectable ceiling before commit.
-- [ ] Quota-exhausted presentation: surface Bank, remaining time, and per-Pad usage from the error payload; non-blocking, selection preserved.
-- [ ] Publish `lmdj.error.v1` 1.1.0 at this integration boundary: add `BANK_QUOTA_EXHAUSTED` and `PROJECT_QUOTA_EXHAUSTED` to `contracts/error/lmdj.error.v1.schema.json`, update `tests/conformance/schema_contract_test.py` and version vectors, and update Assembly/compiled identity/lock consumers atomically with the Product Build.
-- [ ] Version integration (single boundary after Tasks 1–3 merge): re-audit protected `main`, bump Module/Host SemVers and the error Contract per **Version Management**, allocate the next verified unused Product Build after current `1.0.37.0`, regenerate Assembly identity, and update current portal pages.
-- [ ] Commit the complete verified source/Assembly/current-page change, require a clean worktree, then run `scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL` and commit only the generated immutable snapshot as the second Task-local commit. Re-run the Portal check on the complete two-commit PR tree; the queue squash is the single `main` commit.
-- [ ] Tests: Vitest for pre/post-decode bounds, release lifecycle, effective trim ceilings, and failure copy; Playwright whole-song journey (metadata admission → decode → trim → commit at effective boundary → one-frame-over refusal); `scripts/core.sh test dev full`; `scripts/architecture-portal.sh check`.
+- [x] Manifest `resource_limits` (amendment A10 key set): remove `decoded_frames_per_pad`; keep `decoded_float_pcm_bytes_per_bank` = 67,108,864 and `decoded_float_pcm_bytes_total` = 134,217,728 under their amended semantics; add `decoded_float_pcm_bytes_resident` = 268,435,456, `ingest_source_bytes` = 104,857,600, `ingest_decoded_frames` = 43,200,000, `ingest_channels` = 2; set `imported_wav_bytes` = 68,157,440. Update `manifest_gate.cpp`, `control_runtime.cpp`, `packages/web-runtime-platform/CMakeLists.txt`, generated identity inputs, and why+remedy gate messages without hand-entering Product identity.
+- [x] `control_runtime.cpp` publication ledger (amendment A4): keep the reclaim→reserve→publish order with `maximum_resident_bytes` = 268,435,456 as the ceiling, rename the failure `resource` to `resident_pcm_bytes` with a retry-oriented why+remedy message, and add the A4 pre-check — reclaim, then require `reserved_live_bytes ≤ resident − total` before `prepare_runtime_snapshot` begins.
+- [x] creator-web import flow (amendment A7): file picker/drag → enforce `ingest_source_bytes` before reading content → sniff container (WAV/MP3/M4A-AAC/FLAC only, fail-closed) → pre-decode duration/frame/channel admission where metadata is decidable → `decodeAudioData` on a 48,000 Hz `OfflineAudioContext` outside the Wasm heap → exact post-decode bounds (≤ 43,200,000 frames, ≤ 2 channels) → waveform/preview/trim on the single decoded copy → encode the selection to PCM16 WAV → existing commit path → release the decoded buffer at the A7 §15 lifecycle points (commit success, cancel, replace, Project close, background-eviction recovery).
+- [x] Replace `COMMIT_MAX_FRAMES` (`apps/creator-web/src/capture/capture_buffer.ts:3`) with the `sample.quota` query: capture and import trim ceilings become `min(source frames, effective_remaining_frames)` for the returned Project revision; the trim UI draws the selectable ceiling before commit.
+- [x] Quota-exhausted presentation: surface Bank, remaining time, and per-Pad usage from the error payload; non-blocking, selection preserved. The protocol-boundary defect found by the first #359 run was subsequently repaired by #415 / PR #419.
+- [x] Publish `lmdj.error.v1` 1.1.0 at this integration boundary: add `BANK_QUOTA_EXHAUSTED` and `PROJECT_QUOTA_EXHAUSTED` to `contracts/error/lmdj.error.v1.schema.json`, update `tests/conformance/schema_contract_test.py` and version vectors, and update Assembly/compiled identity/lock consumers atomically with the Product Build.
+- [x] Version integration (single boundary after Tasks 1–3 merge): Product Build `1.0.38.0`, audio-runtime `2.0.0`, application-facade `2.1.0`, web-runtime-platform `2.0.0`, web-runtime-host `2.1.0`, creator-web `2.1.0`, and `lmdj.error.v1` 1.1.0 were integrated by PR #411; the #415 repair advanced the affected Platform and Hosts to patch versions in Product Build `1.0.39.0`.
+- [x] Commit the complete verified source/Assembly/current-page change, require a clean worktree, then run `scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL` and commit only the generated immutable snapshot as the second Task-local commit. Re-run the Portal check on the complete two-commit PR tree; the queue squash is the single `main` commit.
+- [x] Tests: Vitest for pre/post-decode bounds, release lifecycle, effective trim ceilings, and failure copy; Playwright whole-song journey (metadata admission → decode → trim → revision-bound clamp → quota-bound multi-chunk commit, with typed stale/concurrent quota refusals covered separately); `scripts/core.sh test dev full`; `scripts/architecture-portal.sh check`.
 
 **Acceptance:** every #357-approved automated fixture imports or rejects before the specified expensive boundary; source decoding stays outside the fixed Wasm heap; unchanged-revision commit succeeds at exact effective headroom and one frame over fails legibly; buffers release at the approved lifecycle points; the Product Build carries a verified immutable snapshot. This automated acceptance does not close #359.
 
 ## Task 5 (#359): Physical Safari Ingest-Memory Acceptance
 
-**Scope:** Exact Product Build from Task 4; macOS Safari and physical iPadOS Safari evidence only.
+**Scope:** Exact repaired Product Build `1.0.39.0` from #415 / PR #419, at merged-main SHA `925499293f7b79eb7dacbe85318595c4b11098a3`; macOS Safari and physical iPadOS Safari evidence only. The incomplete `1.0.38.0` attempt found #415 and remains failed/unverified evidence; none of its passing prefixes carry forward. Restart the complete matrix on the repaired Build with a named physical iPad device.
 
 - [ ] Run the amendment A9 fixtures (`LM-OK-SONG`, `LM-OK-BOUNDARY-INGEST`, `LM-REJ-FRAMES`, `LM-REJ-SOURCE`, `LM-REJ-CH`, `LM-OK-COMMIT-BOUNDARY`, `LM-REJ-COMMIT-PLUS-4B`, and the lifecycle sequences) through import, metadata admission, decode, waveform/preview/trim, commit/refusal, cancel, replace, re-import, and background/recovery cleanup, with the A9 §19 measurement method and §21 pass/fail thresholds.
 - [ ] Record device model, OS/browser versions, Product Build, full Git SHA, fixture hashes and encoded/decoded dimensions, observed peak/released memory, and any page reload or process termination under `docs/release-evidence/`.
@@ -177,19 +178,19 @@ Revision binding: the result is valid only for the returned `project_revision`; 
 
 ## Version Management
 
-Current identities below are from protected `main` at `9b5c2929a2cf6cf86ce39e495920b852a01c740d` after Stage 9. Allocation classes are confirmed by amendment A10 (`audio-runtime` 2.0.0, `application-facade` 2.1.0, `lmdj.error.v1` 1.1.0 with two members, `project-cooker` none, `web-runtime-platform` 2.0.0); Task 4 re-verifies exact unused numbers immediately before integration.
+The delivery identities below are verified on protected `main` at `925499293f7b79eb7dacbe85318595c4b11098a3`. Task 4 / PR #411 integrated the approved identity set in Product Build `1.0.38.0`; the #415 repair / PR #419 advanced only the affected Web Runtime Platform and Web Hosts to patch versions in Product Build `1.0.39.0`.
 
-| Component | Current | Allocated | Task |
+| Component | Delivered by #346 | Current after #415 repair | Impact owner |
 | --- | --- | --- | --- |
-| `lmdj.error.v1` Contract | 1.0.0 | 1.1.0 (two additive enum members) | 1 internal behavior; 4 published schema + Assembly integration |
-| audio-runtime | 1.0.0 | 2.0.0 (confirmed: limits-field removal/rename is breaking) | 1–2, integrated in 4 |
-| project-cooker | 1.0.0 | none (confirmed: quota validation lives in Facade callbacks and `from_snapshot`; Task 1 audit re-checks and returns to review on any surface change) | 1, integrated in 4 |
-| application-facade | 2.0.0 | 2.1.0 (confirmed: additive `sample.quota` query and error classes; no breaking surface) | 3, integrated in 4 |
-| web-runtime-platform | 1.0.0 | 2.0.0 for the breaking manifest-key migration | 4 |
-| web-runtime-host | 2.0.0 | 2.1.0 | 4 |
-| creator-web | 2.0.0 | 2.1.0 | 4 |
-| Project Contract | `lmdj.project.v3` 3.0.0 | none — no Project schema change | — |
-| Product Build | 1.0.37.0 | next verified unused at Task 4 integration; never pre-allocate or reuse a consumed number | 4 |
+| `lmdj.error.v1` Contract | 1.1.0 (two additive enum members) | 1.1.0 | Tasks 1 and 4 |
+| audio-runtime | 2.0.0 | 2.0.0 | Tasks 1–2, integrated in 4 |
+| project-cooker | 1.0.0 (unchanged) | 1.0.0 | Task 1 audit |
+| application-facade | 2.1.0 | 2.1.0 | Task 3, integrated in 4 |
+| web-runtime-platform | 2.0.0 | 2.0.1 | Task 4; repair #415 |
+| web-runtime-host | 2.1.0 | 2.1.1 | Task 4; repair #415 |
+| creator-web | 2.1.0 | 2.1.1 | Task 4; repair #415 |
+| Project Contract | `lmdj.project.v3` 3.0.0 (unchanged) | `lmdj.project.v3` 3.0.0 | — |
+| Product Build | 1.0.38.0 | 1.0.39.0 | Task 4; repair #415 |
 
 Version impact of this plan document itself: none — documentation only; every impact above is paid by its implementation Task.
 
@@ -205,14 +206,15 @@ Implementation Tasks: required — affected portal routes are `/core/modules/aud
 - [x] #358 — readiness correction (docs), completed by #368
 - [x] #357 — Task 0 decision amendment ([2026-08-28 amendment](../../prd/decisions/2026-08-28-long-material-quota-accounting.md)), completed by #389
 - [x] #395 — Contract integration-boundary correction; preserves deployable intermediate `main`
-- [ ] #343 — Task 1, next and unblocked after #395
-- [ ] #344 — Task 2, blocked by #343; parallel with #345 after #343
-- [ ] #345 — Task 3, blocked by #343; parallel with #344 after #343
-- [ ] #346 — Task 4, blocked by #344 and #345
-- [ ] #359 — Task 5 physical acceptance, blocked by #346
+- [x] #343 — Task 1, completed by PR #400
+- [x] #344 — Task 2, completed by PR #406
+- [x] #345 — Task 3, completed by PR #408
+- [x] #346 — Task 4, completed by PR #411 as Product Build `1.0.38.0`
+- [x] #415 — physical-test follow-up repair, completed by PR #419 as Product Build `1.0.39.0`
+- [ ] #359 — Task 5 physical acceptance, unblocked; restart the full matrix on `1.0.39.0`
 
 Umbrella: [#341](https://github.com/endaye/lmdj/issues/341). Related, not gated by this plan: [#347](https://github.com/endaye/lmdj/issues/347) (future offline time-stretch design).
 
 ## Final Acceptance Boundary
 
-The umbrella closes only when Task 0 and Tasks 1–4 are merged, the full and stress suites pass on the integrated head, the allocated Product Build has a verified immutable Portal snapshot, and #359 records passing macOS Safari and physical iPadOS Safari evidence. Release, deployment, and Channel promotion remain separate authorization boundaries outside this plan.
+Tasks 0–4 and the #415 repair are merged, their full/stress/Portal/queue and exact-main gates pass, and Product Build `1.0.39.0` has a verified immutable canary Portal snapshot. The umbrella remains open only until #359 records the complete passing macOS Safari and physical iPadOS Safari matrix on that exact repaired Build. Release, deployment, and Channel promotion remain separate authorization boundaries outside this plan.
