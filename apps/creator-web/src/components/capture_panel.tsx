@@ -48,6 +48,7 @@ export interface CapturePanelProps {
   onPhaseChange?(phase: CapturePhase): void;
   onContinueInSequence?(): void;
   closeAfterResolution?: boolean;
+  backgrounded?: boolean;
   maxCommitFrames?: number;
 }
 
@@ -76,6 +77,7 @@ export function CapturePanel({
   onPhaseChange,
   onContinueInSequence,
   closeAfterResolution = false,
+  backgrounded = false,
   maxCommitFrames = CAPTURE_MAX_FRAMES,
 }: CapturePanelProps) {
   const [state, dispatch] = useReducer(reduceCapture, initialCaptureState);
@@ -517,15 +519,8 @@ export function CapturePanel({
     }
   };
 
-  return (
-    <ModalDialog
-      label={`${padLabel} Pad Capture`}
-      returnFocus={returnFocus}
-      onCancel={handleClose}
-      dialogClassName="capture-panel-dialog"
-      resolveInitialFocus={resolvePrimaryFocus}
-      dialogRef={dialogElementRef}
-    >
+  const contents = (
+    <>
       <div className="capture-panel-header">
         <h2>{padLabel} Capture</h2>
         <button type="button" onClick={handleClose}>Close</button>
@@ -535,6 +530,26 @@ export function CapturePanel({
         {renderDetails()}
       </div>
       <div className="capture-panel-actions">{renderActions()}</div>
+    </>
+  );
+
+  if (backgrounded) {
+    // The live capture state stays mounted, but the native dialog must leave
+    // Chromium's top layer completely so the Sequence workspace is neither
+    // inert nor covered. Trimming remounts the same state inside a fresh modal.
+    return <div className="capture-panel-background" hidden>{contents}</div>;
+  }
+
+  return (
+    <ModalDialog
+      label={`${padLabel} Pad Capture`}
+      returnFocus={returnFocus}
+      onCancel={handleClose}
+      dialogClassName="capture-panel-dialog"
+      resolveInitialFocus={resolvePrimaryFocus}
+      dialogRef={dialogElementRef}
+    >
+      {contents}
     </ModalDialog>
   );
 }

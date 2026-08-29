@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -35,6 +36,16 @@ struct SequenceFlushRecord {
   bool operator==(const SequenceFlushRecord&) const = default;
 };
 
+struct SequenceCaptureCommit {
+  foundation::CommandId command_id;
+  foundation::AssetId asset_id;
+  domain::PadSlotId slot;
+  foundation::ArtifactRef artifact;
+  std::uint64_t expected_revision{};
+
+  bool operator==(const SequenceCaptureCommit&) const = default;
+};
+
 struct ActiveSequenceJournal {
   foundation::SequenceSessionId session_id;
   foundation::PatternId pattern_id;
@@ -44,6 +55,8 @@ struct ActiveSequenceJournal {
   std::uint64_t next_flush_seq{};
   SequenceSessionState state{SequenceSessionState::active};
   std::vector<SequenceFlushRecord> flushes;
+  std::optional<domain::PadSlotId> armed_capture_slot;
+  std::optional<SequenceCaptureCommit> capture_commit;
   std::uint64_t next_tail_seq{};
   std::optional<std::uint64_t> last_input_sequence;
   std::vector<domain::PatternEvent> pending_events;
@@ -59,6 +72,16 @@ struct SequenceRecoveryCandidate {
   bool operator==(const SequenceRecoveryCandidate&) const = default;
 };
 
+struct SequenceCaptureDisarmResult {
+  bool reconciled_commit{};
+  std::uint64_t expected_revision{};
+
+  bool operator==(const SequenceCaptureDisarmResult&) const = default;
+};
+
+using SequenceCaptureTruthInspector = std::function<foundation::Result<
+    std::optional<std::uint64_t>>(const SequenceCaptureCommit&)>;
+
 // Returns lowercase SHA-256 of the exact SR-D22 canonical JSON preimage.
 std::string sequence_pattern_fingerprint(const domain::Pattern& pattern);
 
@@ -73,7 +96,8 @@ class SequenceJournal {
       foundation::PatternId pattern_id,
       std::uint8_t bars,
       std::string pattern_fingerprint,
-      std::uint64_t expected_revision);
+      std::uint64_t expected_revision,
+      std::optional<domain::PadSlotId> armed_capture_slot = std::nullopt);
   foundation::Result<ActiveSequenceJournal> read_active(
       const std::filesystem::path& bundle) const;
   foundation::Result<void> append_tail(
@@ -104,6 +128,29 @@ class SequenceJournal {
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,
       std::uint64_t expected_revision);
+  foundation::Result<void> prepare_armed_capture(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      foundation::CommandId command_id,
+      foundation::AssetId asset_id,
+      domain::PadSlotId slot,
+      foundation::ArtifactRef artifact,
+      std::uint64_t expected_revision);
+  foundation::Result<void> complete_armed_capture(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      foundation::CommandId command_id,
+      domain::PadSlotId slot,
+      std::uint64_t committed_revision);
+  foundation::Result<void> disarm_capture(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      domain::PadSlotId slot);
+  foundation::Result<SequenceCaptureDisarmResult> resolve_capture_disarm(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      domain::PadSlotId slot,
+      const SequenceCaptureTruthInspector& inspect_truth);
   foundation::Result<void> switch_pattern(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,

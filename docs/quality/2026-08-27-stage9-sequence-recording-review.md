@@ -71,7 +71,7 @@ truth integration 与不可变快照分别由 #379、#380 负责。
 | --- | --- | --- |
 | H1 | #378 | 实现 writer-lease 内 journal admission、本地 begin-vs-authoring critical section、孤儿 journal 先 seal，以及 settings-only Store rebase；以 Project Store 与 Facade deterministic component cases 阻断回归 |
 | H2 | #376 | 实现共享 Web Runtime Session 的权威边界匹配、exact-once flush、串行 post-boundary admission，以及 Creator authority-only 状态转换；单元与 packaged-browser journey 覆盖乱序/重复通知、继续录音、stop、reload 和 committed-event inspection |
-| H3 | #374 | open |
+| H3 | #374 | source remediation implemented locally: armed target/session/revision admission, journal rebase/disarm, Creator session-preserving trim overlay, and Core/Web/Creator regression coverage; Product identity integration remains #379 and immutable snapshot remains #380 |
 | M1 | #375 | open |
 | M2 | #373 | source 修复：每次已接受 Pad event 在 acknowledgement 前写入单调、checksummed canonical tail；flush 消费 tail；真实子进程 `SIGKILL` 后重启 seal 两条事件并显式恢复；torn tail 携带 path/prefix/length/remedy fail closed |
 | M3 | #372 | open |
@@ -208,6 +208,53 @@ reducer 只允许从 `stopped` 进入 `trim-overlay`
 
 整改方向：要么实现 armed-pad 提交白名单并让 Creator 走会话内 overlay 路径，
 要么按治理规则把收窄补一条 PRD 决策/勘误，并让账本与规格一致。
+
+**#374 source remediation（2026-08-29）**：实现选择了设计已批准的第一条路径。
+Sequence begin 只登记开始录音前已经打开的空 Pad Capture；Project Store 在 writer
+lease 内只接纳 session、Pad 和 expected revision 全匹配的 `ImportAssignSample`，
+成功后用单个 checked journal record 同时 rebase revision 并消费 arm。失败提交和
+显式 disarm 都保留 pending events，Creator 不再先 Stop Sequence，而是在 active /
+switching underlay 上显示 trim overlay。Facade component、Web ControlRuntime、协议、
+Creator reducer/action 与 packaged Chromium journey 均增加回归证据。此处只记录本地
+source disposition，不宣称 #379 的版本集成、#380 的 immutable snapshot、PR/merge、
+Release 或 #360 的物理验收。
+
+**#374 independent review fix（2026-08-29）**：复核发现首次实现仍把 Project
+manifest/receipt 发布放在 `capture-complete` journal record 之前；该窗口失败时，
+Project 已到 `N + 1`，journal 与内存 runtime 却仍 armed 于 `N`，而 Creator 重试会
+生成新的 command/asset identity。修正现在于发布前追加 durable Capture precommit，
+绑定 exact session、slot、expected revision、原 command/asset 与 artifact identity。
+同 bytes 的新 UI command 只在原 transaction、receipt、event、Asset、Pad assignment
+及 `N + 1` revision 全部吻合时 replay 原提交并完成 journal/runtime rebase；不同 bytes
+或任一 identity/truth 冲突均 fail closed 且不二次 mutation。restart recovery 也先以同一
+receipt 规则完成 journal，再进入 owner-loss seal。故障矩阵覆盖 manifest 已发布/
+journal 未完成、冲突 retry、fresh-command retry、后续 flush/stop 与 restart；packaged
+Creator case 另以 A2→armed A1 stop→commit→A1→Stop→reload 的次序检查 exact persisted
+event delta/order/count、Pad/Asset/WAV 与 revision；armed 期间其他 Pad 的普通输入不得
+把 Sample mutation selection 从 A1 改到 A2。共享 running-audio BPM update→immediate
+switch 的 publication failure 仍单列为 #375 集成 blocker，不以移动步骤或弱化断言隐藏。
+
+**#374 independent re-review fix 2（2026-08-29）**：第二次复核补出 precommit
+的另一侧：`capture-prepare` 已持久化、但 manifest 尚未发布时，显式 Discard 原本只清
+Host buffer，而 journal 因 marker 拒绝 disarm，使 active session 无 bytes 可重试且无法
+退出。修正把 disarm/abort 放入 Project writer lease 下的 checked decision：exact matching
+receipt 走原 completion/rebase；无 receipt 且 Project 仍精确位于 expected `N`、原 Pad
+为空、command/Asset 均不存在时追加 durable `capture-abort`，只清 marker 与 arm，保留
+pending events/session 并允许后续 flush/Stop；session、slot、revision、receipt、command、
+Asset、artifact 或 Pad Truth 任一冲突均 fail closed。故障矩阵覆盖 prepare 后的
+pre-publication failure、Discard/disarm、continued flush/Stop 与 crash/restart。packaged
+reload/reopen 断言也从 media type 扩展为 exact assigned Asset、artifact SHA-256 与 byte
+length；共享 #375 running-audio BPM→switch failure 仍保留为独立 blocker。
+
+**#374 independent re-review fix 3（2026-08-29）**：复核继续发现 settings
+selective rebase 在 durable Capture marker 存在时仍被 admission 接纳。Project 先从
+`N` 提交到 `N + 1`，随后 journal `rebase` 因 `capture_commit` 拒绝，形成 Project 与
+journal 分叉并再次困住 session。修正把拒绝移到同一 writer lease 内的
+`admit_sequence_authoring`，在 `commit_loaded` 前返回
+`armed_capture_recovery_pending`。故障矩阵从
+`sample_after_manifest_preparation` 精确复现，证明 settings 不改变 manifest revision
+或 journal/marker，随后 checked Discard 与 flush/Stop 均成功。该修正不扩大 settings/
+Capture 白名单，也不处理共享 #375 publication 语义。
 
 ## 四、中危发现
 
@@ -565,7 +612,7 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
 | --- | --- |
 | 并发 begin-vs-authoring / 孤儿 journal 后先发 authoring command | H1 |
 | 边界后继续录音（任何层级都停在切槽确认） | H2 |
-| Sequence 内 trim overlay 全流程（会话存活、提交 rebase、冲突保留） | H3 |
+| Sequence 内 trim overlay 全流程（会话存活、提交 rebase、冲突保留） | #374 本地 source remediation 已补；集成证据等待 #379/#380 |
 | 未 flush 音的下一圈可听性 | M1（#375 source-fixed；#379/#380 尚未集成） |
 | ~~kill -9 / 硬崩溃后恢复候选出现~~ | M2 source gate 已由 #373 的真实 `SIGKILL` component journey 覆盖；集成身份/快照仍待 #379/#380 |
 | ~~提交后故障 + 同 `command_id` 重试~~ | M3 source gate 已由 #372 的 immutable original payload、inverse completion 与 exact replay cases 覆盖；集成身份/快照仍待 #379/#380 |

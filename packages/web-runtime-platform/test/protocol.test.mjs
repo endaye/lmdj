@@ -134,6 +134,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "audio.suspend",
     "trigger",
     "sequence.record.begin",
+    "sequence.capture.disarm",
     "sequence.record.event",
     "sequence.record.flush",
     "sequence.record.stop",
@@ -181,6 +182,15 @@ test("accepts only exact privacy-safe Sample operation payloads", () => {
       expected_revision: 7,
       slot: {bank: 0, pad: 3},
       asset_id: requestIdFor(103),
+      byte_length: 44,
+    }],
+    ["sample.import.begin", {
+      import_token: requestIdFor(111),
+      command_id: requestIdFor(112),
+      expected_revision: 7,
+      sequence_session_id: requestIdFor(113),
+      slot: {bank: 0, pad: 3},
+      asset_id: requestIdFor(114),
       byte_length: 44,
     }],
     ["sample.import.chunk", {

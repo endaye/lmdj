@@ -1141,7 +1141,8 @@ void test_exact_payloads_and_facade_owned_project_journey() {
           "sequence.record.begin",
           {{"session_id", kSequenceSessionId},
            {"pattern_id", kPatternId},
-           {"expected_revision", 2}},
+           {"expected_revision", 2},
+           {"armed_capture_slot", slot(0, 1)}},
           {}),
       {"state", "session_id", "pattern_id", "pending_pattern_id",
        "expected_revision", "next_flush_seq", "pending_event_count",
@@ -1162,6 +1163,34 @@ void test_exact_payloads_and_facade_owned_project_journey() {
       runtime->dispatch(
           "trigger", {{"slot", 0}, {"kind", "release"}}, {}),
       {"accepted"});
+  const auto captured_asset_id = uuid(304);
+  const auto capture_token = uuid(305);
+  auto capture_begin = sample_begin_payload(
+      305, 306, 2, captured_asset_id, wav.size(), 1);
+  capture_begin["sequence_session_id"] = kSequenceSessionId;
+  check_exact_success(
+      runtime->dispatch("sample.import.begin", capture_begin, {}),
+      {"token", "expected_bytes"});
+  check_exact_success(
+      runtime->dispatch(
+          "sample.import.chunk", sample_chunk_payload(305, 0, true, wav), wav),
+      {"received_bytes", "final"});
+  const auto& capture_committed = check_exact_success(
+      runtime->dispatch(
+          "sample.import.commit", {{"import_token", capture_token}}, {}),
+      {"committed_revision", "runtime_revision", "runtime_published",
+       "snapshot_error"});
+  LMDJ_CHECK(capture_committed.at("committed_revision") == 3);
+  LMDJ_CHECK(capture_committed.at("runtime_revision") == 2);
+  LMDJ_CHECK(capture_committed.at("runtime_published") == false);
+  const auto& rebased = check_exact_success(
+      runtime->dispatch("sequence.record.status", Json::object(), {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "project_revision"});
+  LMDJ_CHECK(rebased.at("state") == "active");
+  LMDJ_CHECK(rebased.at("expected_revision") == 3);
+  LMDJ_CHECK(rebased.at("pending_event_count") == 1);
   const auto stop_command = uuid(303);
   const auto& stopped = check_exact_success(
       runtime->dispatch(
@@ -1173,7 +1202,7 @@ void test_exact_payloads_and_facade_owned_project_journey() {
        "effective_runtime_frame", "committed_revision", "replayed",
        "project_revision", "runtime_frame", "pattern_publication"});
   LMDJ_CHECK(stopped.at("state") == "inactive");
-  LMDJ_CHECK(stopped.at("committed_revision") == 3);
+  LMDJ_CHECK(stopped.at("committed_revision") == 4);
   LMDJ_CHECK(stopped.at("replayed") == false);
   const auto& recoverable = check_exact_success(
       runtime->dispatch("sequence.recovery.list", Json::object(), {}),
@@ -1189,6 +1218,11 @@ void test_exact_payloads_and_facade_owned_project_journey() {
   LMDJ_CHECK(events.size() == 1);
   LMDJ_CHECK(events.at(0).at("onset_tick") == 0);
   LMDJ_CHECK(events.at(0).at("duration_tick") >= 1);
+  const auto& captured = check_exact_success(
+      runtime->dispatch("sample.inspect", {{"slot", slot(0, 1)}}, {}),
+      {"project_revision", "slot", "asset_id", "playback", "metadata",
+       "waveform_cache_identity"});
+  LMDJ_CHECK(captured.at("asset_id") == captured_asset_id);
   const auto inspected = inspect_project(temp.path(), kProjectId);
   LMDJ_CHECK(inspected.at("ok") == true);
   LMDJ_CHECK(
