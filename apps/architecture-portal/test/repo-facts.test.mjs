@@ -68,9 +68,9 @@ test('facts match the current locked product composition', async () => {
   assert.deepEqual(facts.hosts.map(({id, version}) => ({id, version})), [
     {id: 'core-cli', version: '2.0.0'},
     {id: 'core-mcp', version: '2.0.0'},
-    {id: 'creator-web', version: '2.0.0'},
+    {id: 'creator-web', version: '2.1.0'},
     {id: 'native-host', version: '2.0.0'},
-    {id: 'web-runtime-host', version: '2.0.0'},
+    {id: 'web-runtime-host', version: '2.1.0'},
   ]);
   assert.equal(facts.providers.length, 2);
   assert.equal(facts.contracts.length, 7);

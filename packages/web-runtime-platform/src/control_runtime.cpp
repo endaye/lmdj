@@ -1033,6 +1033,27 @@ struct ControlRuntime::Impl {
     }
     reserved_live_bytes -= reclaimed.decoded_pcm_bytes;
 
+    const auto preparation_headroom =
+        limits.maximum_resident_bytes >= limits.maximum_generation_bytes
+            ? limits.maximum_resident_bytes - limits.maximum_generation_bytes
+            : 0;
+    if (limits.maximum_resident_bytes < limits.maximum_generation_bytes ||
+        reserved_live_bytes > preparation_headroom) {
+      const auto observed = audio::checked_runtime_byte_sum(
+          reserved_live_bytes, limits.maximum_generation_bytes);
+      auto error = host_error(
+          "WEB_RUNTIME_RESOURCE_LIMIT",
+          "why: live and retiring prepared PCM leaves no bounded room for "
+          "one generation cook; remedy: wait for retirement and retry",
+          {
+              {"resource", "resident_pcm_bytes"},
+              {"observed",
+               observed.value_or(std::numeric_limits<std::uint64_t>::max())},
+              {"limit", limits.maximum_resident_bytes},
+          });
+      return SnapshotResult{false, true, std::nullopt, error.at("error")};
+    }
+
     auto prepared = application.prepare_runtime_snapshot(
         facade::RuntimeSnapshotRequest{
             *retained_project_path,
@@ -1092,7 +1113,7 @@ struct ControlRuntime::Impl {
           "why: live and retiring generations exceed the runtime residency "
           "quota; remedy: wait for retirement and retry publication",
           {
-              {"resource", "resident_bytes"},
+              {"resource", "resident_pcm_bytes"},
               {"observed", observed},
               {"limit", limits.maximum_resident_bytes},
           });
@@ -1699,6 +1720,27 @@ Json ControlRuntime::dispatch(
                 .get<std::uint64_t>();
       }
       static_cast<void>(selected_slot);
+      return response;
+    }
+    if (operation == "sample.quota") {
+      require(exact_keys(payload, {"slot"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      static_cast<void>(slot_value(payload.at("slot")));
+      auto response = impl_->facade_query(
+          {{"operation", "sample.quota"},
+           {"project_path", impl_->retained_project_path->generic_string()},
+           {"slot", payload.at("slot")}});
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      if (response.value("ok", false)) {
+        impl_->project_revision =
+            response.at("result").at("project_revision")
+                .get<std::uint64_t>();
+      }
       return response;
     }
     if (operation == "sample.waveform") {

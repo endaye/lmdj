@@ -1,6 +1,5 @@
 export const CAPTURE_SAMPLE_RATE = 48_000;
 export const CAPTURE_MAX_FRAMES = 2_880_000; // 60 s at 48 kHz (S8B-D3)
-export const COMMIT_MAX_FRAMES = 240_000;    // manifest decoded_frames_per_pad
 // Summary granularity for the envelope's block path. 256 frames keeps a full
 // 60 s stereo take at ~11,250 block peaks (~45 KB), so a redraw scans blocks,
 // not samples, once bins are at least this wide.

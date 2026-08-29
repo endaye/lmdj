@@ -909,7 +909,7 @@ describe("Creator Sample state", () => {
       {actual_revision: 43, expected_revision: 42},
       ...[
         "artifact_bytes",
-        "resident_bytes",
+        "resident_pcm_bytes",
       ].map((resource) => ({resource, observed: 2_000, limit: 1_000})),
       ...[
         "project_busy",

@@ -89,6 +89,8 @@ const SAMPLE_ERROR_CODES = new Set([
   "MISSING_ASSET",
   "INVALID_PROJECT",
   "COOK_FAILED",
+  "BANK_QUOTA_EXHAUSTED",
+  "PROJECT_QUOTA_EXHAUSTED",
   "PROVIDER_NOT_FOUND",
   "PROVIDER_FAILED",
   "PERMISSION_DENIED",
@@ -122,6 +124,8 @@ function isSampleSession(
   const candidate = session as Partial<CreatorSampleRuntimeSession> | undefined;
   return candidate !== undefined &&
     typeof candidate.inspectSample === "function" &&
+    typeof candidate.querySampleQuota === "function" &&
+    typeof candidate.sampleIngestLimits === "function" &&
     typeof candidate.queryWaveform === "function" &&
     typeof candidate.importAssignSample === "function" &&
     typeof candidate.updatePad === "function" &&

@@ -78,10 +78,10 @@ constexpr std::string_view kProtocolShapeRequestId =
     "01234567-89ab-cdef-0123-456789abcdef";
 
 constexpr RuntimePreparationLimits kWebLimits{
-    1'048'576,
+    68'157'440,
     67'108'864,
     134'217'728,
-    134'217'728,
+    268'435'456,
 };
 
 class TempDirectory final {
@@ -1359,6 +1359,16 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   LMDJ_CHECK(empty.at("asset_id").is_null());
   LMDJ_CHECK(empty.at("metadata").is_null());
   LMDJ_CHECK(read_bytes(manifest_path) == original_manifest);
+  const auto empty_quota = check_exact_success(
+      runtime->dispatch("sample.quota", {{"slot", slot(0, 0)}}, {}),
+      {"project_revision", "slot", "bank_quota_bytes", "bank_used_bytes",
+       "bank_remaining_bytes", "project_quota_bytes", "project_used_bytes",
+       "project_remaining_bytes", "effective_remaining_bytes",
+       "effective_remaining_frames", "consumed"});
+  LMDJ_CHECK(empty_quota.at("project_revision") == 0);
+  LMDJ_CHECK(empty_quota.at("slot") == slot(0, 0));
+  LMDJ_CHECK(empty_quota.at("effective_remaining_frames") == 16'777'216);
+  LMDJ_CHECK(empty_quota.at("consumed").empty());
 
   const auto wav = mono_pcm16_wav(2'400);
   const auto token = uuid(401);
@@ -1418,6 +1428,16 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   LMDJ_CHECK(inspected.at("project_revision") == 1);
   LMDJ_CHECK(inspected.at("asset_id") == kAssetId);
   LMDJ_CHECK(inspected.at("metadata").at("source_frames") == 2'400);
+  const auto replacement_quota = check_exact_success(
+      runtime->dispatch("sample.quota", {{"slot", slot(0, 0)}}, {}),
+      {"project_revision", "slot", "bank_quota_bytes", "bank_used_bytes",
+       "bank_remaining_bytes", "project_quota_bytes", "project_used_bytes",
+       "project_remaining_bytes", "effective_remaining_bytes",
+       "effective_remaining_frames", "consumed"});
+  LMDJ_CHECK(replacement_quota.at("project_revision") == 1);
+  LMDJ_CHECK(replacement_quota.at("bank_used_bytes") == 0);
+  LMDJ_CHECK(replacement_quota.at("consumed").size() == 1);
+  LMDJ_CHECK(replacement_quota.at("consumed").at(0).at("slot") == slot(0, 0));
   const auto waveform = check_exact_success(
       runtime->dispatch(
           "sample.waveform",
@@ -1819,7 +1839,7 @@ void test_sample_commit_quota_failure_keeps_truth_and_runtime_unchanged() {
       1'048'576,
       16,
       134'217'728,
-      134'217'728,
+      268'435'456,
   };
   auto runtime = make_runtime(temp.path(), limits);
   check_success(runtime->dispatch("project.create", create_payload(), {}));
@@ -2494,8 +2514,8 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
   constexpr RuntimePreparationLimits limits{
       1'048'576,
       4'096,
-      4'096,
-      2'060,
+      2'052,
+      4'104,
   };
   auto runtime = make_runtime(temp.path(), limits);
   check_success(runtime->dispatch(
@@ -2553,13 +2573,15 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
   LMDJ_CHECK(
       rejected.at("message").get<std::string>().find("remedy:") !=
       std::string::npos);
-  LMDJ_CHECK((
-      rejected.at("details") ==
-      Json{
-          {"resource", "resident_bytes"},
-          {"observed", 2'068},
-          {"limit", 2'060},
-      }));
+  const Json expected_residency_details{
+      {"resource", "resident_pcm_bytes"},
+      {"observed", 4'108},
+      {"limit", 4'104},
+  };
+  if (rejected.at("details") != expected_residency_details) {
+    throw std::runtime_error(
+        "unexpected residency details: " + rejected.at("details").dump());
+  }
   LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 3);
 
   check_success(runtime->dispatch(
@@ -2616,7 +2638,7 @@ void test_oversized_project_switch_is_inspectable_but_not_runnable() {
       1'048'576,
       4,
       8,
-      8,
+      16,
   };
   auto runtime = make_runtime(temp.path(), limits);
   check_success(runtime->dispatch(
@@ -2850,6 +2872,30 @@ void test_bridge_routes_sample_operations_without_a_project_path() {
   const auto encoded_request = std::string(
       reinterpret_cast<const char*>(envelope.data()), envelope.size());
   LMDJ_CHECK(encoded_request.find("project_path") == std::string::npos);
+  proxy.pump_one();
+
+  const auto quota_request_id = uuid(990);
+  const auto quota_envelope = encode(request(
+      quota_request_id, "sample.quota", {{"slot", slot(0, 0)}}));
+  LMDJ_CHECK(
+      bridge->submit(quota_envelope, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto quota_response = poll_message(*bridge);
+  check_exact_keys(
+      quota_response,
+      {"protocol_version", "request_id", "ok", "result"});
+  LMDJ_CHECK(quota_response.at("request_id") == quota_request_id);
+  check_exact_keys(
+      quota_response.at("result"),
+      {"project_revision", "slot", "bank_quota_bytes", "bank_used_bytes",
+       "bank_remaining_bytes", "project_quota_bytes", "project_used_bytes",
+       "project_remaining_bytes", "effective_remaining_bytes",
+       "effective_remaining_frames", "consumed"});
+  LMDJ_CHECK(quota_response.at("result").at("project_revision") == 0);
+  const auto encoded_quota_request = std::string(
+      reinterpret_cast<const char*>(quota_envelope.data()),
+      quota_envelope.size());
+  LMDJ_CHECK(encoded_quota_request.find("project_path") == std::string::npos);
 }
 
 void test_bridge_defers_parse_dispatch_and_copies_fixed_slots() {
@@ -3103,7 +3149,7 @@ void test_bridge_emits_only_real_snapshot_notifications_after_response() {
         1'048'576,
         4,
         8,
-        8,
+        16,
     };
     auto runtime = make_runtime(temp.path(), limits);
     check_success(runtime->dispatch(
@@ -3269,7 +3315,7 @@ void test_bridge_emits_commit_quota_rejection_without_snapshot_notification() {
       1'048'576,
       16,
       134'217'728,
-      134'217'728,
+      268'435'456,
   };
   auto runtime = make_runtime(temp.path(), limits);
   check_success(runtime->dispatch("project.create", create_payload(), {}));
@@ -3420,8 +3466,9 @@ void test_bridge_benign_query_cancel_does_not_fail_the_runtime() {
   check_success(runtime->dispatch("project.create", create_payload(), {}));
   FakeProxy proxy;
   auto bridge = make_bridge(*runtime, proxy);
-  const std::array<std::pair<std::string_view, Json>, 4> queries{{
+  const std::array<std::pair<std::string_view, Json>, 5> queries{{
       {"sample.inspect", {{"slot", slot(0, 0)}}},
+      {"sample.quota", {{"slot", slot(0, 0)}}},
       {"sample.waveform",
        {{"slot", slot(0, 0)},
         {"window",
@@ -3431,7 +3478,7 @@ void test_bridge_benign_query_cancel_does_not_fail_the_runtime() {
   }};
 
   for (std::size_t index = 0; index < queries.size(); ++index) {
-    const auto request_id = uuid(988 + index);
+    const auto request_id = uuid(1'100 + index);
     const auto query = encode(request(
         request_id, queries[index].first, queries[index].second));
     LMDJ_CHECK(
