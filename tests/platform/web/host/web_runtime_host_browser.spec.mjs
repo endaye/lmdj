@@ -2612,16 +2612,47 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
     expectedRevision: switchedStop.committedRevision,
   });
   expect(rejectedBpm).toMatchObject({code: "INVALID_ARGUMENT"});
-  const cancelledStop = await page.evaluate(({sessionId, commandId}) =>
-    window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
-  {sessionId: cancelledSessionId, commandId: cancelledCommandId});
+  const cancelledStopAttempt = await page.evaluate(async ({
+    sessionId, commandId,
+  }) => {
+    try {
+      return {
+        result: await window.lmdjWebRuntimeController.stopSequence({
+          sessionId, commandId,
+        }),
+        error: null,
+      };
+    } catch (error) {
+      return {result: null, error: {code: error.code, message: error.message}};
+    }
+  }, {sessionId: cancelledSessionId, commandId: cancelledCommandId});
+  let cancelledStop = cancelledStopAttempt.result;
+  if (cancelledStopAttempt.error !== null) {
+    // The realtime Pattern boundary may win the Stop linearization race. The
+    // durable Stop receipt must remain replayable with the same command ID.
+    expect(cancelledStopAttempt.error).toMatchObject({code: "INVALID_ARGUMENT"});
+    cancelledStop = await page.evaluate(({sessionId, commandId}) =>
+      window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
+    {sessionId: cancelledSessionId, commandId: cancelledCommandId});
+    expect(cancelledStop.replayed).toBe(true);
+  }
   expect(cancelledStop).toMatchObject({
     state: "inactive",
     committedRevision: switchedStop.committedRevision + 1,
-    replayed: false,
   });
   await page.waitForTimeout(2_500);
-  expect(await page.evaluate(() => window.__sequenceBoundaries)).toEqual([]);
+  const cancelledBoundaries = await page.evaluate(() =>
+    window.__sequenceBoundaries);
+  if (cancelledStopAttempt.error === null) {
+    expect(cancelledBoundaries).toEqual([]);
+    expect(cancelledStop.replayed).toBe(false);
+  } else {
+    expect(cancelledBoundaries).toHaveLength(1);
+    expect(cancelledBoundaries[0]).toMatchObject({
+      sessionId: cancelledSessionId,
+      patternId: descriptor.pattern_id,
+    });
+  }
 
   const truth = success(await hostRequest(page, "project.inspect", {}),
     "Stage 9 inspect switch truth");
