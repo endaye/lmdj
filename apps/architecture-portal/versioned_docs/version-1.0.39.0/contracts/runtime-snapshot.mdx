@@ -1,0 +1,22 @@
+---
+title: Runtime Snapshot
+area: contracts
+status: implemented
+owners: [core, audio]
+source_paths: [packages/project-cooker, packages/audio-runtime, tests/core/cooker]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 定义
+Runtime Snapshot 是 Project Cooker 从 Project Truth 与 Artifact 确定性派生的不可变运行状态。
+## 生命周期
+Cook 成功后发布完整快照；Audio Runtime 只读消费。新 Project 变化产生新快照，不在原对象上修改。
+## 持久化规则
+Snapshot 可作为运行证据或临时 Artifact，但绝不能持久化回 Project Truth 成为创作权威。
+## 并发与错误
+构建错误发生在非实时路径；实时线程只消费准备完成的状态。
+## 下一门禁
+若未来公开跨语言 Snapshot Contract，必须单独批准版本与兼容策略。
