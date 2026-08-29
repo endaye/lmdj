@@ -2,7 +2,42 @@
 
 ## Current status
 
-Product Build candidate `1.0.37.0` implements Project v3 event-only
+Current source candidate Product Build `1.0.40.0` integrates the Stage 9
+remediation identities after H1–H3, M1–M3, and #417 landed. Project I/O is
+`1.0.1`, Audio Runtime is `2.0.1`, and Application Facade is `2.1.1`;
+Build 39 already absorbed Web Runtime Platform `2.0.1` and both Web Host
+`2.1.1` identities, so they are not double-bumped. This Task records automated
+source/branch evidence only. #380 freezes the clean immutable snapshot from the
+#379 commit; Pull Request and exact-main evidence remain pending, and all five
+#360 physical/manual rows remain deferred.
+
+## Build 40 remediation integration — 2026-08-29
+
+The unused-build audit covered active manifests, immutable snapshots, remote
+tags, GitHub Releases, open Pull Requests, and release intents before selecting
+`1.0.40.0`. No tag, Release, release intent, deployment, publication, or Channel
+promotion was created. The version integration is commit
+`67be108bb5c6fd77f943516d17bdfcdf4416a859`; the stable Portal freeze records
+that exact revision and tree `b0c44989e1788bbf5be7753894eae94883c33c28`.
+
+| Boundary | Local result |
+| --- | --- |
+| Product / Module identities | PASS: Product `1.0.40.0`; Project I/O `1.0.1`; Audio Runtime `2.0.1`; Application Facade `2.1.1`; all exact dependent manifests and generated Assembly/runtime identities match |
+| Dependency, active-tree, version, and module graph gates | PASS |
+| `scripts/core.sh test dev full` | PASS: 79/79 |
+| `scripts/core.sh test dev stress` | PASS: 5/5 |
+| `scripts/core.sh coverage check` | PASS: 81/81; lines 82.90% and branches 67.91%, with every scoped threshold met |
+| `scripts/core.sh proof` | PASS: 63/63 Release CTest plus schema, module graph, CLI/MCP parity, Golden audio, Sequence, package, and Assembly gates |
+| `scripts/web-runtime-host.sh proof` | PASS: final stable-entry run completed AudioWorklet 22/22, package reproducibility, Python/Node/native/distribution gates, Chromium 20 passed/1 designed skip, and WebKit 2 passed/14 capability skips. Two earlier full attempts hit the same activation `HOST_TIMEOUT`; the case then passed alone, the full Chromium group passed, and the final unchanged full proof passed, so remote CI remains the required independent check. |
+| `scripts/creator-web.sh proof` | PASS: Vitest 363/363 across 21 files, Node 138/138, package reproducibility, packaged Chromium 15 passed/1 designed skip, Sample Editor 3 passed/1 skip, Capture 6 passed/1 skip, denied-capture 1 passed/6 skips, and both WebKit capability-boundary cases passed |
+| `scripts/architecture-portal.sh version 1.0.40.0 canary` | PASS: immutable snapshot frozen from `67be108b`; Assembly lock SHA-256 `848390ec5be2a1a511f5ad93c728598c84665a65353cd8d80dc59c3bc596ea01`; source projection SHA-256 `d110a802bdd34488159cb0fdefb3ab0be2099d84fe985be4f6d656cbb7fc81f1`; metadata SHA-256 `038742430d3d8e2e0267864c60cf6a45e7599d323234f9b2305d5b3775e1a969` |
+| `scripts/architecture-portal.sh check` | PASS: 59 tests, 37 current pages, 10 diagram sources/20 outputs, matching release docs, production build, and 42 routes/internal links |
+
+This is complete local automated evidence for #379/#380, not merged-main or
+physical-device evidence. Pull Request head, squash tree equality, exact-main
+CI, and Issue closure are recorded only after those transitions occur.
+
+Historical Product Build candidate `1.0.37.0` implements Project v3 event-only
 Sequence recording across the Core, CLI/MCP/Native/Web Hosts and Creator.
 This ledger records only evidence actually produced for the candidate and its
 integrated tree. PR [#334](https://github.com/endaye/lmdj/pull/334) reached
@@ -46,11 +81,11 @@ Source-level verification produced by the remediation Task includes:
 | `scripts/architecture-portal.sh check` | PASS: 59 tests, 37 current pages, 10 diagram sources/20 outputs, production build, and 42 routes/internal links |
 
 The full packaged-browser suites, full Pull Request CI, integrated identities,
-and a corrected immutable snapshot remain separate evidence boundaries. The
+and a corrected immutable snapshot were separate evidence boundaries. The
 targeted browser journeys above extend through post-boundary recording, stop,
-reload, and committed-event inspection; #379 owns the integrated version audit
-and #380 owns the new immutable snapshot. The five physical/manual rows below
-remain unchanged and unverified.
+reload, and committed-event inspection; #379 now owns the integrated Build 40
+source evidence and #380 owns its immutable snapshot. The five physical/manual
+rows below remain unchanged and unverified.
 
 Documentation impact: required. Current routes updated by this Task include
 Assembly, Project and Bundle Contracts, Core Modules, Hosts, storage, Web
@@ -67,9 +102,9 @@ post-commit return failure, replays only that identity, and leaves events
 accepted between attempts pending for a fresh command. Component evidence
 covers same-bundle retry and restart reconciliation for receipt-reload and
 journal-completion faults, plus the active-Facade retry/new-event/stop journey.
-Product Build and module identity refresh, integrated-main evidence, and final
-remediation acceptance remain assigned to #379; this entry does not claim
-those transitions are complete.
+Product Build and module identity refresh are integrated by Build 40 in this
+Task; exact PR/main evidence and the immutable snapshot remain later evidence
+boundaries rather than being inferred from this source entry.
 
 ## Identity
 

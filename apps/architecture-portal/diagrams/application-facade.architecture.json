@@ -19,7 +19,7 @@
   ],
   "cards": [
     {"title": "Dependencies", "body": "Six lower Core Modules at locked versions."},
-    {"title": "Sequence authority", "body": "Session-owned pending-overlay projection is immutable Runtime input; durable flush identity lets an exact replay recover post-commit Runtime publication without repeating Project mutation."},
+    {"title": "Sequence authority", "body": "Project-scoped admission, armed-Pad selective rebase and session-owned pending overlay share one authority; exact receipt replay never repeats Project mutation."},
     {"title": "Forbidden boundary", "body": "No Host UI, Web protocol or product-specific wiring in the Facade."}
   ]
 }
