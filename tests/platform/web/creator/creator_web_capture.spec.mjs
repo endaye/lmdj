@@ -277,7 +277,7 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
 
   // Once committed and rebased, the same Pad is a normal playable/recordable
   // input for the still-active session.
-  await pressRecordedPad(page, "Pad A1 — assigned", "KeyQ");
+  await pressRecordedPad(page, /^Pad A1 —/, "KeyQ");
   await page.getByRole("button", {name: "Stop"}).click();
   await expect(page.getByRole("status").filter({hasText: "stopped"}))
     .toBeVisible({timeout: 30_000});
