@@ -85,9 +85,9 @@ transport、resample 是含 live FX 的现场捕获、Bank 是即时视图切签
 | P10-D9 | Performance 录制会话按 session kind 泛化 Stage 9 机制（writer-lease admission、耐久 journal 链、幂等 flush、封存、指纹门控恢复）；一个 Project 同时至多一个录制会话——Perform 与 Sequence 录制互斥，后到 begin 返回 `INVALID_ARGUMENT`。 | #384 决策 4 |
 | P10-D10 | Replay 是只读回放，按**当前** Project 状态重放（Sampler 惯例，SR-D4 延伸）：换采样出新声音、被删/空槽的 Launch 该段落空并非致命提示。Replay 不做指纹门控；指纹门控只在写回真相的恢复路径。冻结版本由 WAV 承担。 | #384 决策 5 |
 | P10-D11 | ResamplePerformance v1 = 现场捕获：在演出录音 Artifact 上选区，经 D1 长源路径 commit（同配额判定、同 `BANK_QUOTA_EXHAUSTED`、同 revision 绑定），Lineage 记源哈希+范围+Performance 身份；无新 Job 类别。离线重渲染立为具名后续能力，届时也永不进实时引擎。 | #385 决策 |
-| P10-D12 | Stereo WAV 录制是 Host 层母线 tap（镜像 Stage 8B worklet 批量模式，走 JS 堆）流式写 OPFS，PCM16 48 kHz；录制待命后由 PLAY 启动、停播即停录、停录后显式命名保存或丢弃；上限是 Host manifest `resource_limits` 数值；写手落后/出错/到顶时按 SR-D17 先例封存（已耐久前缀是合法 WAV），tap 永不阻塞 `render`。 | #387 决策 |
+| P10-D12 | Stereo WAV 录制是 Host 层母线 tap（镜像 Stage 8B worklet 的 4,800-frame 批量模式，走 JS 堆）流式写 OPFS，PCM16 48 kHz stereo；录制待命后由 PLAY 启动、停播即停录、停录后显式命名保存或丢弃。Host manifest `resource_limits.perform_recording_frames = 86400000`，即单次最多 30 分钟；`resource_limits.perform_recording_queue_batches = 32`，即最多积压 153,600 frames / 3.2 秒 / 1,228,800 bytes 的 Float32 stereo 数据。达到时长上限、队列第 33 批到达、写手出错或 OPFS 失败时，按 SR-D17 先例封存最后已耐久帧形成的合法 WAV、丢弃未耐久 tail、显示可操作错误；tap 永不等待写手且永不阻塞或反向通知 `render`。30 分钟的 PCM payload 是 345,600,000 bytes，标准 44-byte RIFF/WAV 文件上限是 345,600,044 bytes。 | #387 决策；#426 plan refresh |
 | P10-D13 | CLI、MCP、Native、Web Runtime、Creator 通过同一 Facade 表面暴露 Perform 语义；无 UI 的 Host 能完整驱动录制、回放与 Resample commit（Web 的 WAV tap 除外，属 Host 层能力）。 | 规格 §10.2 |
-| P10-D14 | **FX 名单定版（2026-08-29 评审）**：Filter（中点双向 HP/LP 共振）、Delay（节拍同步立体声，Koala TEMPO DELAY 对位）、Reverb、Stutter（节拍同步 beat repeat，½–1/64 bar）、Gate（阈值门）、Reverse、Crush（降采样 bitcrush）、**Cutter**（原 Roll 更名，节拍同步静音门，1–1/64 bar，Koala CUTTER 对位）。八项逐一有 Koala 手册 §9.1 定义，零发明 DSP；重设计规格 §7 勘误同 Task 落笔。DUB 式长反馈 delay 留作后续 FX 扩展。 | 2026-08-29 评审 |
+| P10-D14 | **FX 名单定版（2026-08-29 评审，2026-08-30 口径澄清）**：Filter（中点双向 HP/LP 共振）、Delay（节拍同步立体声，Koala TEMPO DELAY 行为对位）、Reverb、Stutter（节拍同步 beat repeat，½–1/64 bar）、Gate（阈值门）、Reverse、Crush（降采样 bitcrush）、**Cutter**（原 Roll 更名，节拍同步静音门，1–1/64 bar，Koala CUTTER 行为对位）。Koala 手册 §9.1 只提供产品行为与方向，不公开 DSP 系数或算法；首版实现因此是满足本 Contract、可测试且确定性的 **LMDJ reference DSP**，不宣称复制或等同 Koala 的专有声音算法。DUB 式长反馈 delay 留作后续 FX 扩展。 | 2026-08-29 评审；#426 plan refresh |
 | P10-D15 | **值标度与密度（2026-08-29 评审）**：FX 参数值为整数 0–1000，双向类以 500 为中点、带符号偏移解释。`move` 事件按输入到达在 admission 记录；同 FX 连续同值去重；Host 合并至每 FX 每音频 quantum（128 帧 ≈ 2.67 ms）至多一条——高于任何触控/MIDI 报告率，等效无损，且给 v4 事件体积可证明上界。 | 2026-08-29 评审 |
 | P10-D16 | **Perform rebase 白名单（2026-08-29 评审）**：Perform 会话的选择性 rebase 白名单 = {BPM、Quantize/Swing}。BPM 同 SR-D14（已记 tick 不动）；Quantize/Swing 可 rebase 但对 Perform 事件**零语义作用**——演出记录原始 timing，不吸格、不烘焙。武装 Pad capture 提交在 v1 Perform 白名单中**排除**，按 Sample 类处理（Command 失败、录制继续、不封存，Host 须先停录）；未知 Authoring Command fail closed。 | 2026-08-29 评审 |
 | P10-D17 | **表面布局（2026-08-29 评审）**：中部 Surface 自上而下 = Pattern Launch 槽条（16 槽，含 pending 切换指示）→ 八根竖向 FX 滑条（视觉顺序即 Contract 链序，左→右）→ HOLD 按钮在 FX 区底部（Koala 同位）。WAV 录制状态与停录命名入口在顶部 transport；底部 4×4 Pad 平面不变。像素级细节归实施评审。 | 2026-08-29 评审 |
@@ -250,8 +250,9 @@ SR-D25 已裁决整数时钟唯一权威。
 
 ### 13.9 保留 Roll 名字或另行发明 Roll DSP
 
-名字不变但用 CUTTER 语义会造成永久的文档-对照错位；自行发明无 Koala 对照
-的 DSP 需要额外设计与听测，违背「零发明 DSP」的首版原则（P10-D14）。
+名字不变但用 CUTTER 语义会造成永久的文档-对照错位。首版采用经 Contract
+钉死、可自动验证的 LMDJ reference DSP，并以 Koala 手册描述的产品行为作为
+方向对照；不声称复刻手册未公开的系数、算法或专有声音身份（P10-D14）。
 
 ### 13.10 Performance 事件受 Quantize 吸格
 
