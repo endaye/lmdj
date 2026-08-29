@@ -139,6 +139,92 @@ those transitions are complete.
 | Stage 9 Issue acceptance | PASS: prerequisite #321, umbrella #265 and Tasks #266–#275 are `CLOSED / COMPLETED`; semantic gate #238 is also closed |
 | Immutable `1.0.37.0 · canary` snapshot | generated under `apps/architecture-portal/versioned_docs/version-1.0.37.0/`, `static/versions/1.0.37.0/`, `versioned_metadata/version-1.0.37.0.json` and `versioned_sidebars/version-1.0.37.0-sidebars.json` |
 
+## #375 pending-overlay source remediation — 2026-08-29
+
+This source Task closes the SR-D13 M1 wiring gap without changing Project
+Truth or persistence semantics. Application Facade exposes an immutable,
+active-owner-only pending-event projection; Web Runtime Platform combines it
+with the committed Runtime Snapshot; Audio Runtime schedules the newest view
+at the next Bar and retires superseded same-boundary views without allocation,
+deallocation, locking, Project access or journal access in the realtime
+callback. A successful flush or Stop publishes the clean committed view, so a
+pending event is audible from the next Bar and cannot survive as a stale or
+duplicate overlay after commit.
+
+The review fix makes the publication handoff linearizable: Audio Runtime marks
+the mailbox generation callback-owned before a producer can replace it, so a
+view already claimed for a Bar cannot be invalidated between dequeue and apply.
+It also preserves pending events across an active-session BPM rebuild, schedules
+a clean committed view on owner-loss sealing, and returns the durable committed
+Pattern identity needed for exact Stop replay after a clean-publication failure.
+
+Review Fix 2 additionally proves that a 90-BPM view claimed at frame `96000`
+owns its transport basis: a concurrent replacement activates at `224000`, not
+the stale 120-BPM boundary `192000`. If owner-loss clean publication itself
+fails, the Host quiesces, stops, and clears the engine before owner abandonment.
+Private gated testable libraries contain the deterministic hooks; the production
+Audio/Web archives contain neither hook symbols nor embedded hook markers. The
+generation allocator also rejects bit 63 before it can alias the claimed marker.
+
+Review Fix 3 integrates that mailbox with #376 switch authority. A different
+Pattern can supersede a pending overlay only when the control path presents the
+exact generation, source Pattern, and activation frame it is authorized to
+replace; ordinary different-Pattern overlap remains rejected. Stop uses the
+same authority to cancel or replace a queued target and retains the durable
+receipt for exact replay after publication failure. A BPM change while a switch
+owns a boundary is rejected before Project mutation; a previously accepted BPM
+view can still be deterministically superseded by the later authoritative
+switch. The acknowledged boundary remains retained until the exactly-once
+Facade flush finishes, preventing a clean old-Pattern republish from reverting
+the target.
+
+Review Fix 4 closes the remaining terminal-state races. A Stop receipt no
+longer stores a one-use audio activation: after exact target cancellation, each
+publication attempt derives the clean committed old-Pattern view from current
+transport, so a replay after the original boundary gets a fresh next Bar while
+retaining the same durable receipt and Project revision. Audio publication
+masks the claimed bit consistently for queued and audio-owned generations,
+including the frame-exact apply point; validated switch authority can therefore
+reserve the next Bar while ordinary different-Pattern overlap remains rejected.
+Cancellation is now an explicit telemetry terminal, with conservation
+`accepted = applied + superseded + canceled + pending` across queued,
+audio-owned, apply-point, and concurrent handoffs.
+
+Review Fix 5 makes `pending` an explicit cardinality instead of an inferred
+boolean: an audio-owned A and simultaneously queued B are two distinct pending
+authorities and `pending_publications == 2`. Quiescent `stop()` moves every
+distinct queued/audio-owned generation to canceled exactly once, including
+when both exist, while cumulative Pattern counters survive a later `start()`.
+Web Stop also closes its cancellation TOCTOU: if the target applies and clears
+pending after the first current-generation read, the no-pending branch rereads
+current generation and fails closed instead of claiming cancellation success.
+
+| Source boundary | Fresh local evidence |
+| --- | --- |
+| Facade owner/generation/replace/reject/flush projection | PASS: `facade.sequence_surface` |
+| Audio same-boundary newest-view wins, zero realtime allocation/free | PASS: `audio.realtime_engine` |
+| Deterministic claimed-boundary race keeps onset zero and exact phase | PASS: `audio.realtime_engine` |
+| Claimed 90-BPM transport basis and bit-63 generation boundary | PASS: `audio.realtime_engine` |
+| Concurrent accepted = applied + superseded + canceled + pending_publications conservation | PASS: `audio.snapshot_publication_stress` plus deterministic two-pending component gate |
+| Production Facade → ControlRuntime → Audio path | PASS: `host.web_control_runtime`; authoritative target supersedes the exact pending view; Stop cancels the target, fails closed if it applies between cancellation queries, and delayed exact replay derives a fresh boundary without a second Project mutation; boundary flush preserves the target |
+| Owner-loss cleanup-publication failure stops and clears Runtime Pattern | PASS: `host.web_control_runtime` |
+| Production Audio/Web hook symbol and embedded-marker exclusion | PASS: `build.project_io_test_hook_symbols` + unit contract |
+| Shared Runtime Session | PASS: stopped switch authority ignores a later stale boundary without a second flush |
+| Packaged Chromium switch journey | PASS: pending overlay → authoritative switch → exact boundary flush, plus switch-pending BPM rejection and Stop cancellation before target activation |
+| Focused suite | PASS: 6/6 |
+| `scripts/core.sh test dev full` | PASS: 79/79 |
+| `scripts/core.sh test dev stress` | PASS: 4/4 |
+| `scripts/core.sh proof` | PASS: 63/63 non-stress CTest plus schema/module/CLI/MCP/Golden/Sequence/package/Assembly proof |
+| `scripts/architecture-portal.sh check` | PASS: 59 Portal tests, 37 current pages, 10 diagram sources/20 outputs and 42 rendered routes |
+| Dependency / active-tree / version gates | PASS: vendored offline dependencies, active tree, product version tests and `1.0.37.0` verification |
+
+This is local source evidence only. Version allocation and integrated Product
+identity remain deferred to #379; the immutable Portal snapshot remains
+deferred to #380. No push, Pull Request, merge, tag, Release, deployment,
+publication or Channel promotion is established here. The physical/manual
+rows below remain unchanged and unverified. Hard-crash pending-tail persistence
+remains #373 and switch-boundary flushing remains #376.
+
 ## Physical and manual rows
 
 | Platform | Journey | Status |

@@ -11,11 +11,14 @@
 #include <new>
 #include <span>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "tests/core/support/test.hpp"
+#include "pattern_generation.hpp"
+#include "testing_hooks.hpp"
 
 namespace {
 
@@ -118,14 +121,15 @@ PreparedSampleBank bank_with_playback(
 RuntimeSnapshot pattern_snapshot(
     const char* pattern_id,
     PadSlotId slot,
-    std::uint8_t velocity) {
+    std::uint8_t velocity,
+    std::uint16_t bpm = 120) {
   auto sample = std::make_shared<const lmdj::cooker::PcmSample>(
       lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(128, 1)});
   return RuntimeSnapshot{
       ProjectId{kProjectId},
       PatternId{pattern_id},
       1,
-      120,
+      bpm,
       1,
       lmdj::domain::kPpq,
       lmdj::domain::kBarTicks4x4,
@@ -1825,6 +1829,7 @@ void publishes_immutable_patterns_at_the_next_bar_boundary() {
   LMDJ_CHECK(engine.pattern_telemetry().current_generation ==
              pending.generation);
   LMDJ_CHECK(engine.pattern_telemetry().applied_publications == 2);
+  LMDJ_CHECK(engine.current_pattern_has_overlay() == true);
   LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
   LMDJ_CHECK(!engine.clear_pattern_view().has_value());
   engine.stop();
@@ -1832,6 +1837,438 @@ void publishes_immutable_patterns_at_the_next_bar_boundary() {
   LMDJ_CHECK(!engine.current_pattern_id().has_value());
   LMDJ_CHECK(!engine.current_pattern_origin_frame().has_value());
   LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+}
+
+void newest_same_boundary_pattern_supersedes_overlay_without_realtime_free() {
+  RealtimeEngine engine;
+  const std::array<float, 128> sample = [] {
+    std::array<float, 128> value{};
+    value.fill(0.5F);
+    return value;
+  }();
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+  LMDJ_CHECK(bank.set_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+
+  auto initial = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+  LMDJ_CHECK(initial.has_value());
+  LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+             PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  render_frames(engine, 100);
+
+  const std::array first_event{lmdj::domain::PatternEvent{
+      PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 80}};
+  const std::array replacement_event{lmdj::domain::PatternEvent{
+      PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 100}};
+  auto first = PreparedPatternView::from_snapshot_with_overlay(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64), first_event);
+  auto replacement = PreparedPatternView::from_snapshot_with_overlay(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64), replacement_event);
+  auto committed = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 100));
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(replacement.has_value());
+  LMDJ_CHECK(committed.has_value());
+
+  const auto first_publication =
+      engine.publish_pattern_view(std::move(first.value()));
+  const auto replacement_publication =
+      engine.publish_pattern_view(std::move(replacement.value()));
+  const auto committed_publication =
+      engine.publish_pattern_view(std::move(committed.value()));
+  LMDJ_CHECK(first_publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(replacement_publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(committed_publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(first_publication.activation_frame == 96'000);
+  LMDJ_CHECK(replacement_publication.activation_frame == 96'000);
+  LMDJ_CHECK(committed_publication.activation_frame == 96'000);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation ==
+             committed_publication.generation);
+
+  render_frames(engine, 95'899);
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  g_allocations.store(0, std::memory_order_relaxed);
+  g_deallocations.store(0, std::memory_order_relaxed);
+  g_track_allocations.store(true, std::memory_order_relaxed);
+  engine.render(left.data(), right.data(), 2);
+  g_track_allocations.store(false, std::memory_order_relaxed);
+
+  const auto telemetry = engine.pattern_telemetry();
+  LMDJ_CHECK(g_allocations.load(std::memory_order_relaxed) == 0);
+  LMDJ_CHECK(g_deallocations.load(std::memory_order_relaxed) == 0);
+  LMDJ_CHECK(telemetry.current_generation == committed_publication.generation);
+  LMDJ_CHECK(telemetry.pending_generation == 0);
+  LMDJ_CHECK(telemetry.accepted_publications == 4);
+  LMDJ_CHECK(telemetry.applied_publications == 2);
+  LMDJ_CHECK(telemetry.superseded_publications == 2);
+  LMDJ_CHECK(engine.current_pattern_has_overlay() == false);
+  LMDJ_CHECK(engine.reclaim_retired_patterns() == 3);
+}
+
+void authoritative_switch_supersedes_only_the_exact_pending_overlay() {
+  RealtimeEngine engine;
+  auto initial = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+  const std::array overlay_event{lmdj::domain::PatternEvent{
+      PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 100}};
+  auto overlay = PreparedPatternView::from_snapshot_with_overlay(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64), overlay_event);
+  auto rejected_target = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternB, PadSlotId{0, 1}, 96));
+  auto wrong_target = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternB, PadSlotId{0, 1}, 96));
+  auto target = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternB, PadSlotId{0, 1}, 96));
+  LMDJ_CHECK(initial.has_value());
+  LMDJ_CHECK(overlay.has_value());
+  LMDJ_CHECK(rejected_target.has_value());
+  LMDJ_CHECK(wrong_target.has_value());
+  LMDJ_CHECK(target.has_value());
+  LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+             PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  render_frames(engine, 100);
+
+  const auto overlay_publication =
+      engine.publish_pattern_view(std::move(overlay.value()));
+  LMDJ_CHECK(overlay_publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(overlay_publication.activation_frame == 96'000);
+  LMDJ_CHECK(
+      engine.publish_pattern_view(std::move(rejected_target.value()), 96'000)
+          .result == PatternPublishResult::publication_pending);
+  LMDJ_CHECK(
+      engine.publish_pattern_view(
+                std::move(wrong_target.value()),
+                96'000,
+                lmdj::audio::PatternReplacementAuthority{
+                    overlay_publication.generation + 1,
+                    PatternId{kPatternA},
+                    96'000})
+          .result == PatternPublishResult::publication_pending);
+
+  const auto switched = engine.publish_pattern_view(
+      std::move(target.value()),
+      96'000,
+      lmdj::audio::PatternReplacementAuthority{
+          overlay_publication.generation, PatternId{kPatternA}, 96'000});
+  LMDJ_CHECK(switched.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(switched.activation_frame == 96'000);
+  LMDJ_CHECK(engine.pending_pattern_id() == PatternId{kPatternB});
+  render_frames(engine, 95'901);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 96'000);
+  LMDJ_CHECK(!engine.pending_pattern_id().has_value());
+}
+
+void exact_cancellation_prevents_a_queued_switch_from_activating() {
+  RealtimeEngine engine;
+  auto initial = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+  auto target = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternB, PadSlotId{0, 1}, 96));
+  auto audio_owned_target = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternB, PadSlotId{0, 1}, 96));
+  LMDJ_CHECK(initial.has_value());
+  LMDJ_CHECK(target.has_value());
+  LMDJ_CHECK(audio_owned_target.has_value());
+  LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+             PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  render_frames(engine, 100);
+  const auto pending =
+      engine.publish_pattern_view(std::move(target.value()), 96'000);
+  LMDJ_CHECK(pending.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(!engine.cancel_pattern_publication(
+      lmdj::audio::PatternReplacementAuthority{
+          pending.generation + 1, PatternId{kPatternB}, 96'000}));
+  LMDJ_CHECK(engine.cancel_pattern_publication(
+      lmdj::audio::PatternReplacementAuthority{
+          pending.generation, PatternId{kPatternB}, 96'000}));
+  LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+
+  const auto audio_pending = engine.publish_pattern_view(
+      std::move(audio_owned_target.value()), 96'000);
+  LMDJ_CHECK(audio_pending.result == PatternPublishResult::accepted);
+  render_frames(engine, 1);
+  LMDJ_CHECK(engine.pattern_telemetry().pending_generation ==
+             audio_pending.generation);
+  LMDJ_CHECK(engine.cancel_pattern_publication(
+      lmdj::audio::PatternReplacementAuthority{
+          audio_pending.generation, PatternId{kPatternB}, 96'000}));
+  render_frames(engine, 96'000);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternA});
+  LMDJ_CHECK(!engine.pending_pattern_id().has_value());
+  LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+  const auto telemetry = engine.pattern_telemetry();
+  LMDJ_CHECK(
+      telemetry.accepted_publications ==
+      telemetry.applied_publications + telemetry.superseded_publications +
+          telemetry.canceled_publications + telemetry.pending_publications);
+  LMDJ_CHECK(telemetry.canceled_publications == 2);
+}
+
+void apply_point_claim_preserves_authorized_switch_and_rejects_overlap() {
+  RealtimeEngine engine;
+  auto initial = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+  const std::array overlay_event{lmdj::domain::PatternEvent{
+      PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 100}};
+  auto overlay = PreparedPatternView::from_snapshot_with_overlay(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64), overlay_event);
+  auto ordinary_target = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternB, PadSlotId{0, 1}, 96));
+  auto authorized_target = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternB, PadSlotId{0, 1}, 96));
+  LMDJ_CHECK(initial.has_value());
+  LMDJ_CHECK(overlay.has_value());
+  LMDJ_CHECK(ordinary_target.has_value());
+  LMDJ_CHECK(authorized_target.has_value());
+  LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+             PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  render_frames(engine, 100);
+  const auto overlay_publication =
+      engine.publish_pattern_view(std::move(overlay.value()));
+  LMDJ_CHECK(overlay_publication.result == PatternPublishResult::accepted);
+  render_frames(engine, 95'899);
+
+  struct ApplyGate final {
+    std::atomic<bool> claimed{false};
+    std::atomic<bool> release{false};
+  } gate;
+  lmdj::audio::testing::PatternClaimHook hook{
+      &gate,
+      [](void* context) noexcept {
+        auto& apply_gate = *static_cast<ApplyGate*>(context);
+        apply_gate.claimed.store(true, std::memory_order_release);
+        while (!apply_gate.release.load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+      }};
+  lmdj::audio::testing::set_pattern_apply_hook(&hook);
+
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  std::thread callback([&] { engine.render(left.data(), right.data(), 2); });
+  while (!gate.claimed.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  const auto authority = lmdj::audio::PatternReplacementAuthority{
+      overlay_publication.generation, PatternId{kPatternA}, 96'000};
+  LMDJ_CHECK(!engine.cancel_pattern_publication(authority));
+  LMDJ_CHECK(
+      engine.publish_pattern_view(std::move(ordinary_target.value()), 192'000)
+          .result == PatternPublishResult::publication_pending);
+  const auto switched = engine.publish_pattern_view(
+      std::move(authorized_target.value()), 192'000, authority);
+  gate.release.store(true, std::memory_order_release);
+  callback.join();
+
+  LMDJ_CHECK(switched.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(switched.activation_frame == 192'000);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternA});
+  LMDJ_CHECK(engine.current_pattern_has_overlay() == true);
+  LMDJ_CHECK(engine.pending_pattern_id() == PatternId{kPatternB});
+  render_frames(engine, 96'000);
+  LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternB});
+  const auto telemetry = engine.pattern_telemetry();
+  LMDJ_CHECK(
+      telemetry.accepted_publications ==
+      telemetry.applied_publications + telemetry.superseded_publications +
+          telemetry.canceled_publications + telemetry.pending_publications);
+  LMDJ_CHECK(telemetry.canceled_publications == 0);
+}
+
+void stop_terminally_accounts_every_distinct_pending_pattern() {
+  {
+    RealtimeEngine engine;
+    auto initial = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+    auto queued = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 80));
+    LMDJ_CHECK(initial.has_value());
+    LMDJ_CHECK(queued.has_value());
+    LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+               PatternPublishResult::accepted);
+    LMDJ_CHECK(engine.start().has_value());
+    render_frames(engine, 100);
+    LMDJ_CHECK(
+        engine.publish_pattern_view(std::move(queued.value())).result ==
+        PatternPublishResult::accepted);
+
+    engine.stop();
+    const auto stopped = engine.pattern_telemetry();
+    LMDJ_CHECK(stopped.pending_generation == 0);
+    LMDJ_CHECK(stopped.accepted_publications == 2);
+    LMDJ_CHECK(stopped.applied_publications == 1);
+    LMDJ_CHECK(stopped.canceled_publications == 1);
+    LMDJ_CHECK(
+        stopped.accepted_publications ==
+        stopped.applied_publications + stopped.superseded_publications +
+            stopped.canceled_publications + stopped.pending_publications);
+    LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+    LMDJ_CHECK(engine.start().has_value());
+    const auto restarted = engine.pattern_telemetry();
+    LMDJ_CHECK(restarted.accepted_publications == 2);
+    LMDJ_CHECK(restarted.applied_publications == 1);
+    LMDJ_CHECK(restarted.canceled_publications == 1);
+    engine.stop();
+  }
+
+  {
+    RealtimeEngine engine;
+    auto initial = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+    auto audio_owned = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 80));
+    LMDJ_CHECK(initial.has_value());
+    LMDJ_CHECK(audio_owned.has_value());
+    LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+               PatternPublishResult::accepted);
+    LMDJ_CHECK(engine.start().has_value());
+    render_frames(engine, 100);
+    LMDJ_CHECK(
+        engine.publish_pattern_view(std::move(audio_owned.value())).result ==
+        PatternPublishResult::accepted);
+    render_frames(engine, 1);
+
+    engine.stop();
+    const auto stopped = engine.pattern_telemetry();
+    LMDJ_CHECK(stopped.pending_generation == 0);
+    LMDJ_CHECK(stopped.accepted_publications == 2);
+    LMDJ_CHECK(stopped.applied_publications == 1);
+    LMDJ_CHECK(stopped.canceled_publications == 1);
+    LMDJ_CHECK(
+        stopped.accepted_publications ==
+        stopped.applied_publications + stopped.superseded_publications +
+            stopped.canceled_publications + stopped.pending_publications);
+    LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+  }
+
+  {
+    RealtimeEngine engine;
+    auto initial = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+    auto audio_owned = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 80));
+    auto queued = PreparedPatternView::from_snapshot(
+        pattern_snapshot(kPatternA, PadSlotId{0, 0}, 96));
+    LMDJ_CHECK(initial.has_value());
+    LMDJ_CHECK(audio_owned.has_value());
+    LMDJ_CHECK(queued.has_value());
+    LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+               PatternPublishResult::accepted);
+    LMDJ_CHECK(engine.start().has_value());
+    render_frames(engine, 100);
+    const auto first =
+        engine.publish_pattern_view(std::move(audio_owned.value()));
+    LMDJ_CHECK(first.result == PatternPublishResult::accepted);
+    render_frames(engine, 1);
+    const auto second = engine.publish_pattern_view(
+        std::move(queued.value()), first.activation_frame);
+    LMDJ_CHECK(second.result == PatternPublishResult::accepted);
+    LMDJ_CHECK(first.generation != second.generation);
+    const auto concurrently_pending = engine.pattern_telemetry();
+    LMDJ_CHECK(concurrently_pending.pending_generation == second.generation);
+    LMDJ_CHECK(concurrently_pending.pending_publications == 2);
+    LMDJ_CHECK(
+        concurrently_pending.accepted_publications ==
+        concurrently_pending.applied_publications +
+            concurrently_pending.superseded_publications +
+            concurrently_pending.canceled_publications +
+            concurrently_pending.pending_publications);
+
+    engine.stop();
+    const auto stopped = engine.pattern_telemetry();
+    LMDJ_CHECK(stopped.pending_generation == 0);
+    LMDJ_CHECK(stopped.accepted_publications == 3);
+    LMDJ_CHECK(stopped.applied_publications == 1);
+    LMDJ_CHECK(stopped.canceled_publications == 2);
+    LMDJ_CHECK(
+        stopped.accepted_publications ==
+        stopped.applied_publications + stopped.superseded_publications +
+            stopped.canceled_publications + stopped.pending_publications);
+    LMDJ_CHECK(engine.reclaim_retired_patterns() == 2);
+  }
+}
+
+void publication_claim_race_preserves_the_claimed_boundary_and_phase() {
+  RealtimeEngine engine;
+  auto initial = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64));
+  const std::array pending_event{lmdj::domain::PatternEvent{
+      PadSlotId{0, 0}, 0, lmdj::domain::kBarTicks4x4, 100}};
+  auto pending = PreparedPatternView::from_snapshot_with_overlay(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 64, 90), pending_event);
+  auto replacement = PreparedPatternView::from_snapshot(
+      pattern_snapshot(kPatternA, PadSlotId{0, 0}, 100, 90));
+  LMDJ_CHECK(initial.has_value());
+  LMDJ_CHECK(pending.has_value());
+  LMDJ_CHECK(replacement.has_value());
+  LMDJ_CHECK(engine.publish_pattern_view(std::move(initial.value())).result ==
+             PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  render_frames(engine, 100);
+
+  const auto pending_publication =
+      engine.publish_pattern_view(std::move(pending.value()));
+  LMDJ_CHECK(pending_publication.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(pending_publication.activation_frame == 96'000);
+  render_frames(engine, 95'899);
+
+  struct ClaimGate final {
+    std::atomic<bool> claimed{false};
+    std::atomic<bool> release{false};
+  } gate;
+  lmdj::audio::testing::PatternClaimHook hook{
+      &gate,
+      [](void* context) noexcept {
+        auto& claim_gate = *static_cast<ClaimGate*>(context);
+        claim_gate.claimed.store(true, std::memory_order_release);
+        while (!claim_gate.release.load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+      }};
+  lmdj::audio::testing::set_pattern_claim_hook(&hook);
+
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  std::thread callback([&] { engine.render(left.data(), right.data(), 2); });
+  while (!gate.claimed.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  const auto replacement_publication =
+      engine.publish_pattern_view(std::move(replacement.value()));
+  gate.release.store(true, std::memory_order_release);
+  callback.join();
+
+  LMDJ_CHECK(replacement_publication.result ==
+             PatternPublishResult::accepted);
+  LMDJ_CHECK(replacement_publication.activation_frame == 224'000);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 96'000);
+  LMDJ_CHECK(engine.current_pattern_has_overlay() == true);
+
+  render_frames(engine, 127'999);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 96'000);
+  render_frames(engine, 1);
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 224'000);
+  LMDJ_CHECK(engine.current_pattern_has_overlay() == false);
+}
+
+void pattern_generation_never_enters_the_claimed_marker_range() {
+  constexpr auto kLastGeneration =
+      (std::uint64_t{1} << 63U) - std::uint64_t{1};
+  auto next_generation = kLastGeneration;
+  const auto accepted =
+      lmdj::audio::detail::take_pattern_generation(next_generation);
+  LMDJ_CHECK(accepted == kLastGeneration);
+  LMDJ_CHECK(next_generation == lmdj::audio::detail::kPatternClaimedMask);
+  LMDJ_CHECK(!lmdj::audio::detail::take_pattern_generation(next_generation)
+                  .has_value());
 }
 
 }  // namespace
@@ -1909,4 +2346,11 @@ int main() {
   releasing_voice_is_hard_killed_by_a_second_stop();
   voice_shorter_than_the_ramp_multiplies_attack_and_boundary();
   publishes_immutable_patterns_at_the_next_bar_boundary();
+  newest_same_boundary_pattern_supersedes_overlay_without_realtime_free();
+  authoritative_switch_supersedes_only_the_exact_pending_overlay();
+  exact_cancellation_prevents_a_queued_switch_from_activating();
+  apply_point_claim_preserves_authorized_switch_and_rejects_overlap();
+  stop_terminally_accounts_every_distinct_pending_pattern();
+  publication_claim_race_preserves_the_claimed_boundary_and_phase();
+  pattern_generation_never_enters_the_claimed_marker_range();
 }

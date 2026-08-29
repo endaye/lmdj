@@ -833,7 +833,24 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     destinationPatternId: null,
   });
   assert.equal(await session.discardSequenceRecovery(sessionId), true);
+  await session.requestPatternSwitch({sessionId, nextPatternId});
   await session.stopSequence({sessionId, commandId});
+  const flushCountAfterStop = operations.filter(({operation}) =>
+    operation === "sequence.record.flush").length;
+  emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(boundaries.length, 1);
+  assert.equal(operations.filter(({operation}) =>
+    operation === "sequence.record.flush").length, flushCountAfterStop);
 
   const eventPayload = operations.find(
     ({operation}) => operation === "sequence.record.event",

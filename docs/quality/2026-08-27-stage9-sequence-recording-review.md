@@ -213,6 +213,33 @@ reducer 只允许从 `stopped` 进入 `trim-overlay`
 
 ### M1 SR-D13「下一圈可听」未接线：journal 叠加音在产品中不存在
 
+**2026-08-29 source remediation (#375)：已修复。** Application Facade 现在只向
+匹配的 active session owner 暴露带单调 generation 的 immutable pending-overlay
+projection；Web Runtime Platform 在 accepted event 后把 committed Runtime Snapshot
+与 projection 组合并发布到下一 Bar，flush/Stop 后发布 clean committed view；Audio
+Runtime 只允许同 Project、同 Pattern、同 activation boundary 的新 view 取代旧 view，
+atomic generation mailbox 先把 generation 标记为 callback-owned，再把旧 slot 标成
+control-thread reclaimable，避免 producer generation 先行造成 boundary onset 丢失，
+且不分配、不释放、不加锁。active-session BPM 更新强制重发 snapshot + overlay；owner
+loss 先排入 clean committed view；Stop 的 durable replay result 保留 committed Pattern
+identity，可在一次 publication failure 后重试恢复。Facade owner/replace/reject/flush
+component case、Audio deterministic claim-race + stress case 与真实 ControlRuntime
+create→import/assign→activate→begin→live trigger→BPM→next Bar→owner loss / Stop replay journey
+共同固定无重复、无空洞、无陈旧 overlay 的源代码边界。版本分配仍归 #379，immutable
+Portal snapshot 仍归 #380；本段不宣称已 merge、已集成 Product identity 或物理听感通过。
+
+**2026-08-29 Review Fix 2：已修复。** claimed view 若携带新 BPM，concurrent
+replacement 现在从 claimed activation + claimed Bar length 计算后续 boundary，不再回退
+到尚未切换的 current BPM/origin。owner-loss clean publication 若失败，Web control 通过已
+安装的 quiescence contract 停止 engine 并清空 Runtime Pattern 后才 abandon owner；失败
+状态保持可诊断。Audio claim hook 与 Web failure hook 只编入 private testable target，
+production archives 由既有 symbol contract 同时检查符号与 marker bytes；callback production
+binary 不含 hook atomic/branch。generation allocator 在 bit 63 claimed marker 前 fail closed。
+deterministic 90-BPM claim-window、cleanup failure、generation boundary 与 production-symbol
+tests 固定这些边界。
+
+以下保留 2026-08-27 审查时的原始缺口证据：
+
 Audio Runtime 侧已交付并有引擎级测试：
 `PreparedPatternView::from_snapshot_with_overlay`
 （`packages/audio-runtime/src/prepared_sample_bank.cpp:274`）、按
@@ -323,6 +350,30 @@ journal completion 的 same-bundle retry、restart reconcile，以及 Facade 中
 锚点（`application.cpp:4125-4132`）但从不重算 pending 边界。改速后，存储的
 边界帧、引擎已按旧 BPM 发布的激活帧、新锚点下的音乐 Bar 三者分裂——正是
 SR-D23 禁止的边界不同一。未测试。
+
+**2026-08-29 source disposition:** #375 Review Fix 3 在 Facade admission
+处选择获准的 fail-before-mutation 合约：只要 session 已有 pending Pattern，
+BPM update 就以 `INVALID_ARGUMENT` / `reason:switch_pending` 拒绝，Project
+revision、BPM、anchor 与 Runtime publication 均不改变。Quantize/Swing 不改变
+transport boundary，仍可更新。若 BPM update 已先成功并发布 immutable view，
+随后 switch 可凭精确 pending generation、源 Pattern 与 activation frame 的
+authority 确定性取代它；普通不同 Pattern overlap 仍拒绝。Facade、ControlRuntime
+及 packaged Chromium 都有回归证据；版本集成仍由 #379 管理。
+
+**2026-08-29 Review Fix 4 disposition:** Audio-owned generation 即使正在
+apply-point claim 也先剥离 bit-63 marker 再匹配 slot/authority；精确 switch 可在
+该窗口保留下一 Bar，普通不同 Pattern overlap 仍拒绝。Stop 取消 target 后不再
+重用已过期 activation frame；相同 durable receipt 的延迟 replay 从当前 transport
+派生新 next Bar，Project revision 不二次变化。Pattern telemetry 明确增加 canceled
+终态，并由 component/stress 证明 accepted 只落入 applied、superseded、canceled
+或显式计数的 pending bucket。
+
+**2026-08-29 Review Fix 5 disposition:** pending 不再推断为 0/1；telemetry
+显式报告 `pending_publications`，所以 audio-owned A 与 queued B 并存时守恒式仍
+完整。quiescent `stop()` 对 queued-only、audio-owned-only 与两者并存逐 generation
+计 canceled，重复 stop/start 不丢失或重复累计。ControlRuntime cancellation 的
+no-pending 分支重读 current generation；target 若恰在两次查询之间 apply，Stop
+fail closed，而不是误判已取消。三个窗口都有 deterministic native 回归。
 
 ### M5 恢复不可发现、恢复 UI 无指纹信息（SR-D17/D22 的 UX 半途）
 
@@ -515,10 +566,10 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
 | 并发 begin-vs-authoring / 孤儿 journal 后先发 authoring command | H1 |
 | 边界后继续录音（任何层级都停在切槽确认） | H2 |
 | Sequence 内 trim overlay 全流程（会话存活、提交 rebase、冲突保留） | H3 |
-| 未 flush 音的下一圈可听性 | M1 |
+| 未 flush 音的下一圈可听性 | M1（#375 source-fixed；#379/#380 尚未集成） |
 | ~~kill -9 / 硬崩溃后恢复候选出现~~ | M2 source gate 已由 #373 的真实 `SIGKILL` component journey 覆盖；集成身份/快照仍待 #379/#380 |
-| 提交后故障 + 同 `command_id` 重试 | M3 |
-| Pending switch 中改 BPM | M4 |
+| ~~提交后故障 + 同 `command_id` 重试~~ | M3 source gate 已由 #372 的 immutable original payload、inverse completion 与 exact replay cases 覆盖；集成身份/快照仍待 #379/#380 |
+| Pending switch 中改 BPM | M4（#375 Review Fix 3 source-fixed；#379 待集成） |
 | reload → recover 浏览器旅程；恢复指纹 mismatch 的 Creator 路径 | M5/M8 |
 | 「切 Sample：停录 flush 后 Trim 成功」的正半段 | §12 |
 | 「Record 中切 Sample 表面再开麦：会话已结束不叠加」 | §12 |
@@ -536,7 +587,7 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
    旅程延伸到边界后录音；连带修 L11。
 3. **H3**：实现 armed-pad 提交白名单 + Creator 会话内 overlay 路径，或走
    决策记录正式收窄 SR-D15/D18 并勘误规格与账本。
-4. **M1–M3**：接线 journal 叠加发布；录音事件按批耐久写 journal（或决策
+4. **M1–M3**：M1 已由 #375 接线 journal 叠加发布；M2 仍需录音事件按批耐久写 journal（或决策
    记录接受「flush 粒度耐久」并勘误 SR-D17/§5）；journal 层 `command_id`
    去重 + reconcile 对身份不匹配降级为可跳过。
 

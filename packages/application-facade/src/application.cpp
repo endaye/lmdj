@@ -1711,6 +1711,7 @@ struct Application::Impl {
     bool quantize_enabled{};
     std::uint8_t swing_percent{};
     std::uint64_t available_slots{};
+    std::uint64_t overlay_generation{};
     std::vector<domain::PatternEvent> pending_events;
     std::map<domain::PadSlotId, PressedSequencePad> pressed;
     std::optional<foundation::PatternId> pending_pattern_id;
@@ -1978,8 +1979,12 @@ struct Application::Impl {
   static void merge_pending(
       SequenceRuntime& runtime,
       domain::PatternEvent event) {
-    runtime.pending_events = domain::merge_pattern_events(
+    auto merged = domain::merge_pattern_events(
         runtime.pending_events, {std::move(event)});
+    if (merged != runtime.pending_events) {
+      runtime.pending_events = std::move(merged);
+      ++runtime.overlay_generation;
+    }
   }
 
   static void finalize_pressed(
@@ -2139,6 +2144,7 @@ struct Application::Impl {
         loaded.value().quantize_enabled,
         loaded.value().swing_percent,
         available_slot_mask(loaded.value()),
+        0,
         {},
         {},
         std::nullopt,
@@ -2156,7 +2162,7 @@ struct Application::Impl {
     }
     return foundation::Result<SequenceMutationResult>::success(
         SequenceMutationResult{runtime_status(inserted->second), std::nullopt,
-                               false});
+                               false, std::nullopt});
   }
 
   foundation::Result<SequenceMutationResult> record_sequence_event(
@@ -2248,7 +2254,8 @@ struct Application::Impl {
     runtime.last_runtime_frame = request.event.runtime_frame;
     runtime.last_input_sequence = request.event.input_sequence;
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{runtime_status(runtime), std::nullopt, false});
+        SequenceMutationResult{
+            runtime_status(runtime), std::nullopt, false, std::nullopt});
   }
 
   static void finalize_unreleased(SequenceRuntime& runtime, bool clear) {
@@ -2291,7 +2298,10 @@ struct Application::Impl {
     runtime.expected_revision = project.revision;
     runtime.pending_pattern_id.reset();
     runtime.effective_runtime_frame.reset();
-    runtime.pending_events.clear();
+    if (!runtime.pending_events.empty()) {
+      runtime.pending_events.clear();
+      ++runtime.overlay_generation;
+    }
     runtime.pressed.clear();
     return foundation::Result<void>::success();
   }
@@ -2318,6 +2328,7 @@ struct Application::Impl {
                 status,
                 replayed.value()->committed_revision,
                 true,
+                replayed.value()->identity.pattern_id,
             });
       }
       return foundation::Result<SequenceMutationResult>::failure(
@@ -2333,6 +2344,7 @@ struct Application::Impl {
               runtime_status(runtime),
               runtime.last_committed_revision,
               true,
+              runtime.last_flush_identity->pattern_id,
           });
     }
     const bool replaying_in_flight_command =
@@ -2357,6 +2369,7 @@ struct Application::Impl {
               runtime_status(runtime),
               replayed.value()->committed_revision,
               true,
+              replayed.value()->identity.pattern_id,
           });
     };
     if (!replaying_in_flight_command) {
@@ -2453,6 +2466,7 @@ struct Application::Impl {
       execution.emplace(std::move(committed.value()));
       runtime.expected_revision = execution->outcome.state.revision;
       runtime.pending_events.clear();
+      ++runtime.overlay_generation;
       runtime.last_flush_identity = identity;
       runtime.last_committed_revision = runtime.expected_revision;
       ++runtime.next_flush_seq;
@@ -2466,6 +2480,7 @@ struct Application::Impl {
               runtime_status(runtime),
               runtime.last_committed_revision,
               true,
+              runtime.last_flush_identity->pattern_id,
           });
     }
 
@@ -2485,13 +2500,15 @@ struct Application::Impl {
             removed.error());
       }
       const auto revision = runtime.expected_revision;
+      const auto committed_pattern_id = runtime.pattern_id;
       const auto replayed = execution.has_value() &&
                             execution->outcome.replayed;
       sequence_sessions.erase(found);
       SequenceStatus status;
       status.expected_revision = revision;
       return foundation::Result<SequenceMutationResult>::success(
-          SequenceMutationResult{status, revision, replayed});
+          SequenceMutationResult{
+              status, revision, replayed, committed_pattern_id});
     }
 
     if (switch_due) {
@@ -2530,6 +2547,9 @@ struct Application::Impl {
                 ? std::optional<std::uint64_t>{runtime.expected_revision}
                 : std::nullopt,
             execution.has_value() && execution->outcome.replayed,
+            execution.has_value()
+                ? std::optional<foundation::PatternId>{runtime.pattern_id}
+                : std::nullopt,
         });
   }
 
@@ -2644,7 +2664,8 @@ struct Application::Impl {
           switching.error());
     }
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{runtime_status(runtime), std::nullopt, false});
+        SequenceMutationResult{
+            runtime_status(runtime), std::nullopt, false, std::nullopt});
   }
 
   foundation::Result<SequenceStatus> query_sequence_status(
@@ -2699,6 +2720,34 @@ struct Application::Impl {
         pending,
         std::nullopt,
     });
+  }
+
+  foundation::Result<SequenceOverlayProjection> query_sequence_overlay(
+      const SequenceOverlayRequest& request) const {
+    auto valid = validate_sequence_path_and_session(
+        request.project_path, request.session_id);
+    if (!valid.has_value()) {
+      return foundation::Result<SequenceOverlayProjection>::failure(
+          valid.error());
+    }
+    std::lock_guard lock(sequence_mutex);
+    const auto runtime = sequence_sessions.find(
+        sequence_key(request.project_path));
+    if (runtime == sequence_sessions.end() ||
+        runtime->second.session_id != request.session_id) {
+      return foundation::Result<SequenceOverlayProjection>::failure(
+          sequence_error(
+              ErrorCode::invalid_argument,
+              "Sequence overlay owner does not match",
+              {{"reason", "sequence_owner_mismatch"}}));
+    }
+    return foundation::Result<SequenceOverlayProjection>::success(
+        SequenceOverlayProjection{
+            runtime->second.session_id,
+            runtime->second.pattern_id,
+            runtime->second.overlay_generation,
+            runtime->second.pending_events,
+        });
   }
 
   foundation::Result<std::vector<SequenceRecoveryInfo>>
@@ -2850,7 +2899,8 @@ struct Application::Impl {
     SequenceStatus status;
     status.expected_revision = committed_revision;
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{status, committed_revision, replayed});
+        SequenceMutationResult{
+            status, committed_revision, replayed, std::nullopt});
   }
 
   foundation::Result<void> discard_sequence_recovery(
@@ -2944,6 +2994,9 @@ struct Application::Impl {
                                          ? nlohmann::json(*result.committed_revision)
                                          : nlohmann::json(nullptr);
     encoded["replayed"] = result.replayed;
+    if (result.committed_pattern_id.has_value()) {
+      encoded["committed_pattern_id"] = result.committed_pattern_id->value();
+    }
     return encoded;
   }
 
@@ -4603,6 +4656,12 @@ struct Application::Impl {
                   found->second.expected_revision == revision &&
                   runtime_frame >= found->second.last_runtime_frame,
               "Sequence settings owner does not match");
+      if (bpm.has_value() && found->second.pending_pattern_id.has_value()) {
+        return error_envelope(sequence_error(
+            ErrorCode::invalid_argument,
+            "Sequence BPM cannot change while a Pattern switch is pending",
+            {{"reason", "switch_pending"}}));
+      }
     }
     const auto updated = projects.execute_with_identity(
         path,
@@ -5596,6 +5655,20 @@ foundation::Result<SequenceStatus> Application::query_sequence_status(
     return impl_->query_sequence_status(request);
   } catch (...) {
     return foundation::Result<SequenceStatus>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<SequenceOverlayProjection>
+Application::query_sequence_overlay(
+    const SequenceOverlayRequest& request) const {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->query_sequence_overlay(request);
+  } catch (...) {
+    return foundation::Result<SequenceOverlayProjection>::failure(Error{
         ErrorCode::internal_error,
         "unexpected Application Facade Host API failure",
     });

@@ -10,6 +10,7 @@
 #include <optional>
 #include <random>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -22,7 +23,31 @@
 #include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/artifact.hpp>
 
+#include "testing_hooks.hpp"
+
 namespace lmdj::web_runtime {
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+namespace testing {
+namespace {
+
+std::atomic<CancelPendingSwitchHook*> cancel_pending_switch_hook{nullptr};
+
+}  // namespace
+
+void set_cancel_pending_switch_hook(CancelPendingSwitchHook* hook) noexcept {
+  cancel_pending_switch_hook.store(hook, std::memory_order_release);
+}
+
+void invoke_cancel_pending_switch_hook() noexcept {
+  auto* hook =
+      cancel_pending_switch_hook.exchange(nullptr, std::memory_order_acq_rel);
+  if (hook != nullptr && hook->invoke != nullptr) {
+    hook->invoke(hook->context);
+  }
+}
+
+}  // namespace testing
+#endif
 namespace {
 
 using Json = nlohmann::json;
@@ -652,6 +677,7 @@ struct ControlRuntime::Impl {
     foundation::SequenceSessionId id;
     foundation::PatternId pattern_id;
     std::uint64_t next_input_sequence{1};
+    std::uint64_t published_overlay_generation{0};
   };
 
   struct PendingSequenceBoundary {
@@ -659,6 +685,7 @@ struct ControlRuntime::Impl {
     foundation::PatternId pattern_id;
     std::uint64_t runtime_frame;
     std::uint64_t generation;
+    bool notified = false;
   };
 
   Impl(
@@ -701,29 +728,9 @@ struct ControlRuntime::Impl {
     return recorded;
   }
 
-  foundation::Result<facade::SequenceMutationResult> stop_active_sequence() {
-    if (!active_sequence.has_value() || !retained_project_path.has_value()) {
-      return foundation::Result<facade::SequenceMutationResult>::failure(
-          Error{ErrorCode::invalid_argument, "no Sequence session is active"});
-    }
-    const auto session_id = active_sequence->id;
-    auto stopped = application.stop_sequence({
-        *retained_project_path,
-        session_id,
-        foundation::CommandId{generated_uuid()},
-        engine.telemetry().rendered_frames,
-    });
-    if (stopped.has_value()) {
-      active_sequence.reset();
-      if (stopped.value().committed_revision.has_value()) {
-        project_revision = *stopped.value().committed_revision;
-      }
-    }
-    return stopped;
-  }
-
   foundation::Result<audio::PreparedPatternView> prepare_project_pattern(
-      const foundation::PatternId& selected_pattern) {
+      const foundation::PatternId& selected_pattern,
+      std::span<const domain::PatternEvent> overlay = {}) {
     if (!retained_project_path.has_value()) {
       return foundation::Result<audio::PreparedPatternView>::failure(
           Error{ErrorCode::invalid_argument, "no Project is open"});
@@ -737,7 +744,10 @@ struct ControlRuntime::Impl {
       return foundation::Result<audio::PreparedPatternView>::failure(
           snapshot.error());
     }
-    auto pattern = audio::PreparedPatternView::from_snapshot(*snapshot.value());
+    auto pattern = overlay.empty()
+        ? audio::PreparedPatternView::from_snapshot(*snapshot.value())
+        : audio::PreparedPatternView::from_snapshot_with_overlay(
+              *snapshot.value(), overlay);
     if (!pattern.has_value()) {
       return foundation::Result<audio::PreparedPatternView>::failure(
           pattern.error());
@@ -747,9 +757,23 @@ struct ControlRuntime::Impl {
 
   foundation::Result<audio::PatternPublication> publish_prepared_pattern(
       audio::PreparedPatternView&& pattern,
-      std::optional<std::uint64_t> activation_frame = std::nullopt) {
-    const auto publication =
-        engine.publish_pattern_view(std::move(pattern), activation_frame);
+      std::optional<std::uint64_t> activation_frame = std::nullopt,
+      std::optional<audio::PatternReplacementAuthority>
+          replacement_authority = std::nullopt) {
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    if (fail_next_pattern_publication) {
+      fail_next_pattern_publication = false;
+      return foundation::Result<audio::PatternPublication>::failure(Error{
+          ErrorCode::invalid_argument,
+          "injected runtime Pattern publication failure",
+      });
+    }
+#endif
+    static_cast<void>(engine.reclaim_retired_patterns());
+    const auto publication = engine.publish_pattern_view(
+        std::move(pattern),
+        activation_frame,
+        std::move(replacement_authority));
     if (publication.result != audio::PatternPublishResult::accepted) {
       return foundation::Result<audio::PatternPublication>::failure(Error{
           ErrorCode::invalid_argument,
@@ -761,13 +785,146 @@ struct ControlRuntime::Impl {
 
   foundation::Result<audio::PatternPublication> publish_project_pattern(
       const foundation::PatternId& selected_pattern,
-      std::optional<std::uint64_t> activation_frame = std::nullopt) {
-    auto pattern = prepare_project_pattern(selected_pattern);
+      std::optional<std::uint64_t> activation_frame = std::nullopt,
+      std::span<const domain::PatternEvent> overlay = {},
+      std::optional<audio::PatternReplacementAuthority>
+          replacement_authority = std::nullopt) {
+    auto pattern = prepare_project_pattern(selected_pattern, overlay);
     if (!pattern.has_value()) {
       return foundation::Result<audio::PatternPublication>::failure(
           pattern.error());
     }
-    return publish_prepared_pattern(std::move(pattern.value()), activation_frame);
+    return publish_prepared_pattern(
+        std::move(pattern.value()),
+        activation_frame,
+        std::move(replacement_authority));
+  }
+
+  std::optional<audio::PatternReplacementAuthority>
+  pending_pattern_authority() const {
+    const auto telemetry = engine.pattern_telemetry();
+    const auto pending_pattern = engine.pending_pattern_id();
+    if (telemetry.pending_generation == 0 || !pending_pattern.has_value()) {
+      return std::nullopt;
+    }
+    return audio::PatternReplacementAuthority{
+        telemetry.pending_generation,
+        *pending_pattern,
+        telemetry.pending_activation_frame,
+    };
+  }
+
+  static audio::PatternReplacementAuthority replacement_authority(
+      const PendingSequenceBoundary& boundary) {
+    return audio::PatternReplacementAuthority{
+        boundary.generation,
+        boundary.pattern_id,
+        boundary.runtime_frame,
+    };
+  }
+
+  bool cancel_pending_switch(
+      const audio::PatternReplacementAuthority& authority) {
+    const auto telemetry = engine.pattern_telemetry();
+    if (telemetry.current_generation == authority.generation) {
+      return false;
+    }
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    testing::invoke_cancel_pending_switch_hook();
+#endif
+    const auto pending = pending_pattern_authority();
+    if (!pending.has_value()) {
+      // Exact replay after an earlier successful cancellation.
+      return engine.pattern_telemetry().current_generation !=
+          authority.generation;
+    }
+    if (pending->generation != authority.generation ||
+        pending->pattern_id != authority.pattern_id ||
+        pending->activation_frame != authority.activation_frame) {
+      return false;
+    }
+    return engine.cancel_pattern_publication(authority);
+  }
+
+  foundation::Result<std::optional<audio::PatternPublication>>
+  publish_pending_sequence_overlay(bool force = false) {
+    if (!active_sequence.has_value() || !retained_project_path.has_value()) {
+      return foundation::Result<std::optional<audio::PatternPublication>>::failure(
+          Error{ErrorCode::invalid_argument, "no Sequence session is active"});
+    }
+    auto overlay = application.query_sequence_overlay({
+        *retained_project_path,
+        active_sequence->id,
+    });
+    if (!overlay.has_value()) {
+      return foundation::Result<std::optional<audio::PatternPublication>>::failure(
+          overlay.error());
+    }
+    if (!force && overlay.value().generation ==
+        active_sequence->published_overlay_generation) {
+      return foundation::Result<std::optional<audio::PatternPublication>>::success(
+          std::nullopt);
+    }
+    if (pending_sequence_boundary.has_value()) {
+      return foundation::Result<std::optional<audio::PatternPublication>>::success(
+          std::nullopt);
+    }
+    auto published = publish_project_pattern(
+        overlay.value().pattern_id,
+        std::nullopt,
+        overlay.value().events);
+    if (!published.has_value()) {
+      return foundation::Result<std::optional<audio::PatternPublication>>::failure(
+          published.error());
+    }
+    active_sequence->published_overlay_generation = overlay.value().generation;
+    return foundation::Result<std::optional<audio::PatternPublication>>::success(
+        published.value());
+  }
+
+  foundation::Result<facade::SequenceMutationResult> stop_active_sequence() {
+    if (!active_sequence.has_value() || !retained_project_path.has_value()) {
+      return foundation::Result<facade::SequenceMutationResult>::failure(
+          Error{ErrorCode::invalid_argument, "no Sequence session is active"});
+    }
+    const auto session_id = active_sequence->id;
+    const auto pattern_id = active_sequence->pattern_id;
+    auto stopped = application.stop_sequence({
+        *retained_project_path,
+        session_id,
+        foundation::CommandId{generated_uuid()},
+        engine.telemetry().rendered_frames,
+    });
+    if (!stopped.has_value()) {
+      return stopped;
+    }
+    if (stopped.value().committed_revision.has_value()) {
+      project_revision = *stopped.value().committed_revision;
+      const auto authority = pending_sequence_boundary.has_value()
+          ? std::optional<audio::PatternReplacementAuthority>{
+                replacement_authority(*pending_sequence_boundary)}
+          : std::nullopt;
+      if (authority.has_value() && !cancel_pending_switch(*authority)) {
+        stop_and_clear_pattern_noexcept();
+        return foundation::Result<facade::SequenceMutationResult>::failure(
+            Error{
+                ErrorCode::invalid_argument,
+                "runtime Pattern switch crossed the Stop boundary",
+            });
+      }
+      auto published = publish_project_pattern(
+          pattern_id,
+          std::nullopt,
+          {},
+          std::nullopt);
+      if (!published.has_value()) {
+        return foundation::Result<facade::SequenceMutationResult>::failure(
+            published.error());
+      }
+    }
+    active_sequence.reset();
+    pending_sequence_boundary.reset();
+    return stopped;
   }
 
   std::chrono::steady_clock::time_point clock_now() const noexcept {
@@ -1340,6 +1497,25 @@ struct ControlRuntime::Impl {
     return quiescent;
   }
 
+  void stop_and_clear_pattern_noexcept() noexcept {
+    if (engine.telemetry().state == audio::RealtimeState::running) {
+      if (!coordinator.has_value() ||
+          coordinator->await_quiescent == nullptr) {
+        return;
+      }
+      // The coordinator contract establishes paused-or-terminal with no
+      // callback in flight on every return, including timeout/failure. Cleanup
+      // therefore gets a minimal independent budget even after request expiry.
+      const auto timeout_ms = std::max<std::uint32_t>(
+          remaining_request_budget_ms(), 1U);
+      static_cast<void>(coordinator->await_quiescent(
+          coordinator->context, timeout_ms));
+      engine.stop();
+    }
+    static_cast<void>(engine.clear_pattern_view());
+    static_cast<void>(engine.reclaim_retired_patterns());
+  }
+
   foundation::Result<void> abort_imports() {
     std::optional<Error> first_failure;
     for (auto current = import_tokens.begin(); current != import_tokens.end();) {
@@ -1377,6 +1553,21 @@ struct ControlRuntime::Impl {
       static_cast<void>(abort_imports());
     } catch (...) {
     }
+    bool clean_pattern_published = true;
+    if (active_sequence.has_value()) {
+      try {
+        // The journal overlay is Runtime-only. Seal the failed owner by
+        // replacing any queued or active overlay with committed Project Truth
+        // at the normal Bar boundary before abandoning the Facade session.
+        clean_pattern_published =
+            publish_project_pattern(active_sequence->pattern_id).has_value();
+      } catch (...) {
+        clean_pattern_published = false;
+      }
+    }
+    if (!clean_pattern_published) {
+      stop_and_clear_pattern_noexcept();
+    }
     application.abandon_sequence_sessions();
     active_sequence.reset();
     pending_sequence_boundary.reset();
@@ -1402,6 +1593,9 @@ struct ControlRuntime::Impl {
   std::optional<std::string> project_id;
   std::optional<std::uint64_t> project_revision;
   std::optional<std::string> pattern_id;
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+  bool fail_next_pattern_publication = false;
+#endif
   std::optional<std::uint16_t> project_bpm;
   std::optional<std::string> runtime_bank_project_id;
   std::optional<std::uint64_t> runtime_revision;
@@ -1497,6 +1691,14 @@ Json ControlRuntime::dispatch(
     if (impl_->cancel_if_expired()) {
       return timeout_error();
     }
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    if (operation == "__testing.fail-next-pattern-publication") {
+      require(exact_keys(payload, {}));
+      require(sidecar.empty());
+      impl_->fail_next_pattern_publication = true;
+      return success({{"armed", true}});
+    }
+#endif
     if (operation == "host.status") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
@@ -2404,6 +2606,11 @@ Json ControlRuntime::dispatch(
           if (!recorded.has_value()) {
             return normalized_error(recorded.error());
           }
+          const auto published = impl_->publish_pending_sequence_overlay();
+          if (!published.has_value()) {
+            fail_and_seal("sequence_overlay_publication_failed");
+            return normalized_error(published.error());
+          }
         }
         return success({{"accepted", true}});
       }
@@ -2442,6 +2649,11 @@ Json ControlRuntime::dispatch(
             true);
         if (!recorded.has_value()) {
           return normalized_error(recorded.error());
+        }
+        const auto published = impl_->publish_pending_sequence_overlay();
+        if (!published.has_value()) {
+          fail_and_seal("sequence_overlay_publication_failed");
+          return normalized_error(published.error());
         }
       }
       return success(
@@ -2530,16 +2742,29 @@ Json ControlRuntime::dispatch(
           response.at("result").at("bpm").get<std::uint16_t>();
       nlohmann::json publication = nullptr;
       if (!payload.at("bpm").is_null()) {
-        auto published = impl_->publish_project_pattern(
-            foundation::PatternId{*impl_->pattern_id});
-        if (!published.has_value()) {
-          fail_and_seal("sequence_settings_publication_failed");
-          return normalized_error(published.error());
+        std::optional<audio::PatternPublication> pattern_publication;
+        if (impl_->active_sequence.has_value()) {
+          auto published = impl_->publish_pending_sequence_overlay(true);
+          if (!published.has_value()) {
+            fail_and_seal("sequence_settings_publication_failed");
+            return normalized_error(published.error());
+          }
+          pattern_publication = published.value();
+        } else {
+          auto published = impl_->publish_project_pattern(
+              foundation::PatternId{*impl_->pattern_id});
+          if (!published.has_value()) {
+            fail_and_seal("sequence_settings_publication_failed");
+            return normalized_error(published.error());
+          }
+          pattern_publication = published.value();
         }
-        publication = {
-            {"generation", published.value().generation},
-            {"activation_frame", published.value().activation_frame},
-        };
+        if (pattern_publication.has_value()) {
+          publication = {
+              {"generation", pattern_publication->generation},
+              {"activation_frame", pattern_publication->activation_frame},
+          };
+        }
       }
       auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
@@ -2579,6 +2804,11 @@ Json ControlRuntime::dispatch(
         return normalized_facade_error(response);
       }
       ++impl_->active_sequence->next_input_sequence;
+      const auto published = impl_->publish_pending_sequence_overlay();
+      if (!published.has_value()) {
+        fail_and_seal("sequence_overlay_publication_failed");
+        return normalized_error(published.error());
+      }
       auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
       result["runtime_frame"] = runtime_frame;
@@ -2617,16 +2847,49 @@ Json ControlRuntime::dispatch(
             response.at("project_revision").get<std::uint64_t>();
       }
       Json pattern_publication = nullptr;
-      const auto& sequence_result = response.at("result");
+      auto result = response.at("result");
+      if (result.contains("committed_pattern_id") &&
+          result.at("committed_pattern_id").is_string()) {
+        recorded_pattern = foundation::PatternId{
+            result.at("committed_pattern_id").get<std::string>()};
+      }
+      result.erase("committed_pattern_id");
+      if (operation == "sequence.record.stop" &&
+          impl_->active_sequence.has_value() &&
+          impl_->active_sequence->id.value() == session_id) {
+        // Facade commit is already terminal even when publication fails. Drop
+        // the transient owner now so an exact command replay can recover the
+        // clean publication from its durable flush identity.
+        impl_->active_sequence.reset();
+      }
       if (recorded_pattern.has_value() &&
-          sequence_result.at("committed_revision").is_number_unsigned() &&
-          sequence_result.at("replayed") == false &&
-          sequence_result.at("pattern_id").is_string() &&
-          sequence_result.at("pattern_id").get<std::string>() ==
-              recorded_pattern->value()) {
-        auto published = impl_->publish_project_pattern(*recorded_pattern);
+          (operation == "sequence.record.stop" ||
+           !impl_->pending_sequence_boundary.has_value()) &&
+          result.at("committed_revision").is_number_unsigned()) {
+        const auto authority = impl_->pending_sequence_boundary.has_value()
+            ? std::optional<audio::PatternReplacementAuthority>{
+                  Impl::replacement_authority(
+                      *impl_->pending_sequence_boundary)}
+            : std::nullopt;
+        if (operation == "sequence.record.stop" && authority.has_value() &&
+            !impl_->cancel_pending_switch(*authority)) {
+          // Audio already crossed the exact cancellation linearization point.
+          // Facade Stop is durable, so clear Runtime fail-closed and leave the
+          // receipt replayable instead of allowing the target to remain live.
+          impl_->stop_and_clear_pattern_noexcept();
+          return normalized_error(Error{
+              ErrorCode::invalid_argument,
+              "runtime Pattern switch crossed the Stop boundary",
+          });
+        }
+        auto published = impl_->publish_project_pattern(
+            *recorded_pattern,
+            operation != "sequence.record.stop" && authority.has_value()
+                ? std::optional<std::uint64_t>{authority->activation_frame}
+                : std::nullopt,
+            {},
+            operation == "sequence.record.stop" ? std::nullopt : authority);
         if (!published.has_value()) {
-          fail_and_seal("sequence_pattern_publication_failed");
           return normalized_error(published.error());
         }
         pattern_publication = {
@@ -2636,17 +2899,17 @@ Json ControlRuntime::dispatch(
       }
       if (operation == "sequence.record.flush" &&
           impl_->active_sequence.has_value() &&
-          sequence_result.at("pattern_id").is_string()) {
+          result.at("pattern_id").is_string()) {
         impl_->active_sequence->pattern_id = foundation::PatternId{
-            sequence_result.at("pattern_id").get<std::string>()};
+            result.at("pattern_id").get<std::string>()};
         impl_->pattern_id = impl_->active_sequence->pattern_id.value();
+        if (result.at("state") != "switching") {
+          impl_->pending_sequence_boundary.reset();
+        }
       }
-      if (operation == "sequence.record.stop" &&
-          impl_->active_sequence.has_value() &&
-          impl_->active_sequence->id.value() == session_id) {
-        impl_->active_sequence.reset();
+      if (operation == "sequence.record.stop") {
+        impl_->pending_sequence_boundary.reset();
       }
-      auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
       result["runtime_frame"] = runtime_frame;
       result["pattern_publication"] = std::move(pattern_publication);
@@ -2667,6 +2930,7 @@ Json ControlRuntime::dispatch(
         return normalized_error(pattern.error());
       }
       const auto runtime_frame = impl_->engine.telemetry().rendered_frames;
+      const auto replacement_authority = impl_->pending_pattern_authority();
       auto response = impl_->application.command({
           {"operation", "sequence.record.switch-request"},
           {"project_path", impl_->retained_project_path->generic_string()},
@@ -2681,7 +2945,9 @@ Json ControlRuntime::dispatch(
           response.at("result").at("effective_runtime_frame")
               .get<std::uint64_t>();
       auto published = impl_->publish_prepared_pattern(
-          std::move(pattern.value()), effective_runtime_frame);
+          std::move(pattern.value()),
+          effective_runtime_frame,
+          replacement_authority);
       if (!published.has_value()) {
         fail_and_seal("sequence_switch_publication_failed");
         return normalized_error(published.error());
@@ -2929,7 +3195,10 @@ ControlRuntime::drain_sequence_bar_boundary() {
     return std::nullopt;
   }
   const auto telemetry = impl_->engine.pattern_telemetry();
-  const auto& pending = *impl_->pending_sequence_boundary;
+  auto& pending = *impl_->pending_sequence_boundary;
+  if (pending.notified) {
+    return std::nullopt;
+  }
   if (telemetry.current_generation != pending.generation ||
       impl_->engine.telemetry().rendered_frames < pending.runtime_frame) {
     return std::nullopt;
@@ -2940,7 +3209,7 @@ ControlRuntime::drain_sequence_bar_boundary() {
       pending.runtime_frame,
       pending.generation,
   };
-  impl_->pending_sequence_boundary.reset();
+  pending.notified = true;
   return result;
 }
 
