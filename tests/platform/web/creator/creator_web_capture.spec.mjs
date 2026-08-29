@@ -72,6 +72,32 @@ async function inspectProjectTruth(page) {
   return response.result;
 }
 
+async function pressRecordedPad(page, accessibleName, code) {
+  const pad = page.getByRole("button", {name: accessibleName});
+  await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
+  await pad.evaluate((element) => {
+    element.removeAttribute("data-proof-outcome-observed");
+    const observeOutcome = () => {
+      const outcome = element.getAttribute("data-outcome");
+      if (outcome !== null && outcome !== "idle") {
+        element.setAttribute("data-proof-outcome-observed", outcome);
+        return true;
+      }
+      return false;
+    };
+    if (observeOutcome()) return;
+    const observer = new MutationObserver(() => {
+      if (observeOutcome()) observer.disconnect();
+    });
+    observer.observe(element, {attributes: true, attributeFilter: ["data-outcome"]});
+  });
+  await page.keyboard.down(code);
+  await expect(pad).toHaveAttribute("data-proof-outcome-observed", /.+/, {
+    timeout: 30_000,
+  });
+  await page.keyboard.up(code);
+}
+
 async function importV1SampleProject(page) {
   if (!sampleBundle) {
     throw new Error("LMDJ_CREATOR_WEB_SAMPLE_BUNDLE is required");
@@ -226,7 +252,7 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
 
   // A distinct non-armed Pad is ordinary Sequence input before the Capture
   // stop gesture. This event must survive the Capture commit/rebase boundary.
-  await page.keyboard.press("KeyW");
+  await pressRecordedPad(page, "Pad A2 — assigned", "KeyW");
 
   // The armed Pad stops only its capture. The Sequence session stays beneath
   // the trim overlay and the armed hit itself is not recorded.
@@ -251,7 +277,7 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
 
   // Once committed and rebased, the same Pad is a normal playable/recordable
   // input for the still-active session.
-  await page.keyboard.press("KeyQ");
+  await pressRecordedPad(page, "Pad A1 — assigned", "KeyQ");
   await page.getByRole("button", {name: "Stop"}).click();
   await expect(page.getByRole("status").filter({hasText: "stopped"}))
     .toBeVisible({timeout: 30_000});
