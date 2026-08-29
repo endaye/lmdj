@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-08-28
     occurrence: https://github.com/endaye/lmdj/pull/392
     observed_by: claude-fable-5
+  - date: 2026-08-29
+    occurrence: https://github.com/endaye/lmdj/pull/409
+    observed_by: codex
 exit: none
 escalation: https://github.com/endaye/lmdj/issues/394
 ---
