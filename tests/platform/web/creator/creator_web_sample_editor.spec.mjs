@@ -580,13 +580,13 @@ test("packaged Sample Editor admits a decoded Sample larger than one transport c
     page,
     "Add Sample to Pad A1",
     "multi-chunk-ramp.wav",
-    pcm16Wav({frames: 262_145}),
+    pcm16Wav({frames: 524_289}),
   );
   await commitLongSourceSelection(page);
 
   await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByText("48 kHz · Mono · 262,145 frames")).toBeVisible();
+  await expect(page.getByText("48 kHz · Mono · 524,289 frames")).toBeVisible();
   await expectProjectRevision(page, 47);
   const operations = await page.evaluate((offset) =>
     (window.__sampleProofOperations ?? []).slice(offset), operationOffset);
