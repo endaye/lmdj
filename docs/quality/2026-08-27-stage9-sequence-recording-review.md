@@ -80,6 +80,14 @@ H1/H2/M2 的 source 修复不改写或重新宣称 `1.0.37.0`；其 Module/Produ
 identity 与完整集成证据等待 #379，immutable snapshot 等待 #380。#360 的五项
 物理/人工行继续保持未执行。
 
+远端集成跟进 #417 记录了 H2 journey 的一个跨层 Stop/boundary response 竞态：
+PR 与 merged-main 的两个独立 run 都在 durable Stop 已可重放后，让 queued boundary
+flush 的 `INVALID_ARGUMENT` 进入 terminal cleanup，随后只读 `project.inspect` 看到
+`formal Web Host transport is terminated`。source remediation 在共享 Runtime action
+lane 内只对“匹配 pending switch 且 boundary 已排队”的第一次歧义，以同一
+`command_id` 做一次重放；重放成功取消 stale boundary，连续真实拒绝仍保留并让
+boundary 赢得顺序。它不扩大 H2 产品语义，版本与集成证据仍由 #379 统一处理。
+
 ## 二、设计与计划文档评审
 
 ### 值得保持的实践

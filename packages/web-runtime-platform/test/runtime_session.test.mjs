@@ -887,6 +887,228 @@ test("bridges Sequence authority without browser musical-clock math", async () =
   ).payload, {session_id: sessionId, slot: {bank: 1, pad: 1}});
 });
 
+test("replays an ambiguous Sequence Stop before a queued boundary can fail the Host", async () => {
+  const sessionId = "10000000-0000-4000-8000-000000000001";
+  const patternId = "20000000-0000-4000-8000-000000000002";
+  const nextPatternId = "20000000-0000-4000-8000-000000000003";
+  const commandId = "30000000-0000-4000-8000-000000000004";
+  const operations = [];
+  let stopAttempts = 0;
+  let emitBoundary;
+  const activeStatus = {
+    state: "active",
+    session_id: sessionId,
+    pattern_id: patternId,
+    pending_pattern_id: null,
+    expected_revision: 5,
+    next_flush_seq: 0,
+    pending_event_count: 1,
+    effective_runtime_frame: null,
+  };
+  const stoppedStatus = {
+    ...activeStatus,
+    state: "inactive",
+    session_id: null,
+    pattern_id: null,
+    pending_event_count: 0,
+  };
+  const stoppedMutation = {
+    ...stoppedStatus,
+    committed_revision: 6,
+    replayed: true,
+    project_revision: 6,
+    runtime_frame: 96_000,
+    pattern_publication: null,
+  };
+  const runtime = fixture({
+    send: async (envelope) => {
+      operations.push({
+        operation: envelope.operation,
+        payload: envelope.payload,
+      });
+      if (envelope.operation === "sequence.record.switch-request") {
+        return success(envelope, {
+          ...activeStatus,
+          state: "switching",
+          pending_pattern_id: nextPatternId,
+          effective_runtime_frame: 96_000,
+          committed_revision: null,
+          replayed: false,
+          project_revision: 5,
+          pattern_publication: {
+            generation: 2,
+            activation_frame: 96_000,
+          },
+        });
+      }
+      if (envelope.operation === "sequence.record.stop") {
+        stopAttempts += 1;
+        if (stopAttempts === 1) {
+          emitBoundary();
+          return {
+            protocol_version: 1,
+            request_id: envelope.request_id,
+            ok: false,
+            error: {
+              code: "INVALID_ARGUMENT",
+              message: "Sequence Stop response was ambiguous at the boundary",
+              details: {},
+            },
+          };
+        }
+        return success(envelope, stoppedMutation);
+      }
+      if (envelope.operation === "sequence.record.status") {
+        return success(envelope, {
+          ...stoppedStatus,
+          project_revision: 6,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  emitBoundary = () => runtime.emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+
+  await runtime.session.start();
+  const boundaries = [];
+  runtime.session.subscribeSequenceBarBoundary((value) => boundaries.push(value));
+  await runtime.session.requestPatternSwitch({sessionId, nextPatternId});
+  const stopped = await runtime.session.stopSequence({sessionId, commandId});
+  assert.equal(stopped.replayed, true);
+  await drainTasks();
+
+  assert.equal((await runtime.session.querySequenceStatus()).state, "inactive");
+  assert.equal(runtime.terminated(), 0);
+  assert.equal(runtime.session.diagnostics().state, "audio-suspended");
+  assert.deepEqual(boundaries, []);
+  assert.deepEqual(
+    operations.filter(({operation}) => operation.startsWith("sequence.record."))
+      .map(({operation}) => operation),
+    [
+      "sequence.record.switch-request",
+      "sequence.record.stop",
+      "sequence.record.stop",
+      "sequence.record.status",
+    ],
+  );
+  assert.deepEqual(
+    operations.filter(({operation}) => operation === "sequence.record.stop")
+      .map(({payload}) => payload.command_id),
+    [commandId, commandId],
+  );
+});
+
+test("keeps a genuine invalid Stop observable and lets the queued boundary win", async () => {
+  const sessionId = "10000000-0000-4000-8000-000000000001";
+  const patternId = "20000000-0000-4000-8000-000000000002";
+  const nextPatternId = "20000000-0000-4000-8000-000000000003";
+  const commandId = "30000000-0000-4000-8000-000000000004";
+  const operations = [];
+  let stopAttempts = 0;
+  let emitBoundary;
+  const switchingStatus = {
+    state: "switching",
+    session_id: sessionId,
+    pattern_id: patternId,
+    pending_pattern_id: nextPatternId,
+    expected_revision: 5,
+    next_flush_seq: 0,
+    pending_event_count: 1,
+    effective_runtime_frame: 96_000,
+  };
+  const runtime = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      if (envelope.operation === "sequence.record.switch-request") {
+        return success(envelope, {
+          ...switchingStatus,
+          committed_revision: null,
+          replayed: false,
+          project_revision: 5,
+          pattern_publication: {
+            generation: 2,
+            activation_frame: 96_000,
+          },
+        });
+      }
+      if (envelope.operation === "sequence.record.stop") {
+        stopAttempts += 1;
+        if (stopAttempts === 1) emitBoundary();
+        return {
+          protocol_version: 1,
+          request_id: envelope.request_id,
+          ok: false,
+          error: {
+            code: "INVALID_ARGUMENT",
+            message: "Sequence Stop was rejected before commit",
+            details: {},
+          },
+        };
+      }
+      if (envelope.operation === "sequence.record.flush") {
+        return success(envelope, {
+          ...switchingStatus,
+          state: "active",
+          pattern_id: nextPatternId,
+          pending_pattern_id: null,
+          effective_runtime_frame: null,
+          committed_revision: 6,
+          replayed: false,
+          project_revision: 6,
+          runtime_frame: 96_000,
+          pattern_publication: null,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  emitBoundary = () => runtime.emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+
+  await runtime.session.start();
+  const boundaries = [];
+  runtime.session.subscribeSequenceBarBoundary((value) => boundaries.push(value));
+  await runtime.session.requestPatternSwitch({sessionId, nextPatternId});
+  await assert.rejects(
+    runtime.session.stopSequence({sessionId, commandId}),
+    (error) => error.code === "INVALID_ARGUMENT",
+  );
+  await drainTasks();
+
+  assert.equal(runtime.terminated(), 0);
+  assert.equal(runtime.session.diagnostics().state, "audio-suspended");
+  assert.deepEqual(boundaries, [{
+    sessionId,
+    patternId: nextPatternId,
+    runtimeFrame: 96_000,
+    generation: 2,
+  }]);
+  assert.deepEqual(operations.filter((operation) =>
+    operation.startsWith("sequence.record.")), [
+    "sequence.record.switch-request",
+    "sequence.record.stop",
+    "sequence.record.stop",
+    "sequence.record.flush",
+  ]);
+});
+
 test("pushes immutable diagnostics and honors unsubscribe", async () => {
   const {session} = fixture();
   const values = [];
