@@ -6,10 +6,13 @@ recurrences:
   - date: 2026-08-30
     occurrence: https://github.com/endaye/lmdj/pull/437
     observed_by: Claude Code (Opus 5)
+  - date: 2026-08-30
+    occurrence: https://github.com/endaye/lmdj/pull/444
+    observed_by: Codex (GPT-5)
 exit: none
 ---
 
-# The Integration Queue's evidence contract is enforced at seven independent points across three modules, so changing it in one place leaves a silent majority still enforcing the old rule.
+# The Integration Queue's evidence contract is enforced at eight independent points across three modules, so changing it in one place leaves a silent majority still enforcing the old rule.
 
 ## Why
 
@@ -26,7 +29,9 @@ found it written seven times, in three modules, in four different shapes:
 6. `merge_queue._validation_contract_error` — every required check had to be
    `success`, which a focused run cannot satisfy because it skips Core;
 7. `github_queue_api.parse_scope_manifest_zip` — a synchronized scope had to
-   be full.
+   be full;
+8. `github_queue_api.parse_queue_validation_json` — a dispatched validation
+   artifact still admitted only `None` or `full` after focused evidence shipped.
 
 Points 1, 3, 4, 5 and 7 were found by reading. Point 6 was found by reasoning
 about what a focused run publishes. **Point 2 was found only because a test
@@ -42,15 +47,17 @@ different functions.
 
 ## How to apply
 
-Before changing what the queue accepts as evidence, enumerate all seven sites
+Before changing what the queue accepts as evidence, enumerate all eight sites
 above and state what each becomes; do not stop at the ones a grep for `full`
 finds, because points 1, 2 and 6 do not read that way. Points 5 and 7 now share
-`change_scope.MERGE_EVIDENCE_MODES`, so those two cannot drift apart; the other
-five remain independent.
+`change_scope.MERGE_EVIDENCE_MODES`; #446 binds point 8 to the same set. The
+other five remain independent.
 
 `exit: none`: no check can decide whether seven differently-shaped conditions
 express one intent, so this is not gate-eligible under
 [`docs/governance/pitfall-ledger.md`](../../docs/governance/pitfall-ledger.md).
 The reduction that would retire this entry is structural -- routing every
-enforcement point through one predicate -- not a test. Treat a second
-occurrence as the trigger to do that work rather than to widen this list.
+enforcement point through one predicate -- not a test. The second occurrence
+opened [#447](https://github.com/endaye/lmdj/issues/447) to perform that
+consolidation; keep this entry open until that Task installs the deterministic
+gate and records it as the exit.
