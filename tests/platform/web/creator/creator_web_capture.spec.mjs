@@ -324,10 +324,18 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
     addedEvents.splice(index, 1);
   }
   expect(addedEvents).toHaveLength(2);
-  expect(addedEvents.map(({slot}) => slot)).toEqual([
-    {bank: 0, pad: 1},
+  // Capture trim/commit can cross the loop boundary. Persisted Pattern order
+  // is canonical onset-first, so assert that order independently from the two
+  // exact Pad identities recorded on opposite sides of the Capture commit.
+  expect(addedEvents.map(({slot}) => slot).sort((left, right) =>
+    left.pad - right.pad)).toEqual([
     {bank: 0, pad: 0},
+    {bank: 0, pad: 1},
   ]);
+  expect(addedEvents.map(({onset_tick: onsetTick}) => onsetTick)).toEqual(
+    addedEvents.map(({onset_tick: onsetTick}) => onsetTick)
+      .sort((left, right) => left - right),
+  );
   expect(addedEvents.every((event) =>
     Object.keys(event).sort().join(",") ===
       "duration_tick,onset_tick,slot,velocity" &&
