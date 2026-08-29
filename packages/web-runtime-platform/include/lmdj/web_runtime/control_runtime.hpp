@@ -35,6 +35,12 @@ struct SequenceBarBoundaryEvent {
 
 class ControlRuntime final {
  public:
+  struct AbsoluteRequestDeadline final {
+    std::chrono::steady_clock::time_point value;
+    void* publication_context = nullptr;
+    bool (*publication_settlement_owned)(void* context) noexcept = nullptr;
+  };
+
   static foundation::Result<std::unique_ptr<ControlRuntime>> create(
       std::filesystem::path workspace_root,
       facade::Application application,
@@ -49,6 +55,11 @@ class ControlRuntime final {
       const nlohmann::json& payload,
       std::span<const std::byte> sidecar,
       std::chrono::steady_clock::time_point submitted_at);
+  nlohmann::json dispatch(
+      std::string_view operation,
+      const nlohmann::json& payload,
+      std::span<const std::byte> sidecar,
+      AbsoluteRequestDeadline deadline);
   std::vector<audio::RuntimeTriggerOutcomeEvent> drain_outcomes();
   std::vector<audio::RuntimeVoiceStateEvent> drain_voice_states();
   foundation::Result<void> drain_capture();

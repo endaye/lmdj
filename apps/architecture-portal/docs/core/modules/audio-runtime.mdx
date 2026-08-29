@@ -25,11 +25,11 @@ Runtime Snapshot → Sample Bank/Pattern origin 发布 → fixed SPSC control �
 ## 5. API 与 Artifact 边界
 消费不可变快照、resolved playback 与已准备样本，不在实时回调解析 Project/WAV、分配内存、加锁或调用 Host。`kRealtimeMaximumSampleFrames` 明确实时样本、playback 与 Voice-state 共用的无符号 32 位帧域；批准的 16,777,216 帧单 Pad 在 trim、loop、ramp 和事件回报中不发生中间收窄。
 ## 6. 状态、错误与并发
-固定 SPSC 队列和压力测试覆盖 control/Voice 并发；overflow fail closed，实时路径避免无界工作。发布按 current/pending/retiring/reclaimable 状态转移：实时线程只读不可变 Bank，最后一个 Voice 结束后才允许控制线程回收。publication owner 按 reclaim → reserve → publish 顺序核算 live、pending、retiring bytes。准备阶段按剩余字节的较小约束判定失败，约束相等时稳定返回 Bank failure；Bank、generation 与 transient residency 三类失败不互相冒充。
+固定 SPSC 队列和压力测试覆盖 control/Voice 并发；overflow fail closed，实时路径避免无界工作。发布按 current/pending/retiring/reclaimable 状态转移：实时线程只读不可变 Bank，最后一个 Voice 结束后才允许控制线程回收。publication owner 按 reclaim → reserve → publish 顺序核算 live、pending、retiring bytes。准备阶段按剩余字节的较小约束判定失败，约束相等时稳定返回 Bank failure；Bank、generation 与 transient residency 三类失败不互相冒充。Web Audio 的每个有效 callback（包括 paused callback）以 lock-free `uint32` heartbeat 表示活性；Browser Main 在 `AudioContext.resume()` 后必须先观察 heartbeat 前进，才请求打开 realtime gate。激活只在 accepted generation 已成为 current 且无 pending publication 时开启 gate；激活前锁存的 generation 由首个 open-gate callback 精确确认，避免 stop/start 或 suspend/resume 把旧的非零 acknowledgement 当作当前 Bank。
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 ## 8. 测试与证据
-Realtime、stress、offline、sample bank、queue 与 CoreAudio output 测试；`audio.realtime_engine` 覆盖 16,777,216 帧高位 trim/loop/ramp，`audio.long_sample_publication_stress` 在并发渲染下覆盖 64 MiB 单 Pad、128 MiB generation、256 MiB resident 边界与字节精确回收。该 busy-spin 用例仅属于 stress tier，并从 coverage preset 排除。物理延迟与 Safari 内存验收单列。
+Realtime、stress、offline、sample bank、queue 与 CoreAudio output 测试；`audio.realtime_engine` 覆盖 16,777,216 帧高位 trim/loop/ramp，`audio.long_sample_publication_stress` 在并发渲染下覆盖 64 MiB 单 Pad、128 MiB generation、256 MiB resident 边界与字节精确回收。Web Audio conformance 还覆盖 live Bank exact acknowledgement 与最新 generation 的 suspend/reactivate acknowledgement。该 busy-spin 用例仅属于 stress tier，并从 coverage preset 排除。物理延迟与 Safari 内存验收单列。
 ## 9. 限制与下一门禁
 自动化绿色不证明 MIDI/iPad/扬声器体验；需保留设备视频和测量证据。
 ## 10. 版本身份

@@ -802,6 +802,12 @@ struct ControlRuntime::Impl {
            clock_now() >= *request_deadline;
   }
 
+  bool publication_settlement_owned() const noexcept {
+    return request_publication_settlement_owned != nullptr &&
+           request_publication_settlement_owned(
+               request_publication_context);
+  }
+
   std::uint32_t remaining_request_budget_ms() const noexcept {
     if (!request_deadline.has_value()) {
       return 0;
@@ -995,6 +1001,37 @@ struct ControlRuntime::Impl {
     std::optional<std::uint64_t> generation;
     Json error = nullptr;
   };
+
+  std::optional<Json> await_bank_acknowledgement(
+      std::uint64_t expected_generation) noexcept {
+    if (engine.telemetry().state != audio::RealtimeState::running) {
+      return std::nullopt;
+    }
+    if (!coordinator.has_value() ||
+        coordinator->acknowledged_generation == nullptr ||
+        !request_deadline.has_value()) {
+      trigger_admission = false;
+      seal_all_noexcept();
+      state = State::failed;
+      return internal_error();
+    }
+    auto acknowledged = coordinator->acknowledged_generation(
+        coordinator->context);
+    while (acknowledged < expected_generation &&
+           clock_now() < *request_deadline) {
+      std::this_thread::yield();
+      acknowledged = coordinator->acknowledged_generation(
+          coordinator->context);
+    }
+    if (acknowledged == expected_generation) {
+      return std::nullopt;
+    }
+    const auto timed_out = request_cancelled();
+    trigger_admission = false;
+    seal_all_noexcept();
+    state = State::failed;
+    return timed_out ? timeout_error() : internal_error();
+  }
 
   foundation::Result<void> release_runtime_banks() {
     for (std::size_t slot = 0; slot < audio::kRealtimeSampleSlots; ++slot) {
@@ -1242,8 +1279,28 @@ struct ControlRuntime::Impl {
       if (request_cancelled()) {
         const auto timeout = timeout_error();
         snapshot.error = timeout.at("error");
+        if (state == State::running) {
+          trigger_admission = false;
+          seal_all_noexcept();
+          state = State::failed;
+        }
       } else {
         snapshot = prepare_and_publish(*pattern_id, true);
+        if (!snapshot.published && state == State::running &&
+            snapshot.error.is_object() &&
+            snapshot.error.value("code", std::string{}) == "HOST_TIMEOUT") {
+          trigger_admission = false;
+          seal_all_noexcept();
+          state = State::failed;
+        }
+        if (snapshot.published && snapshot.generation.has_value()) {
+          if (const auto acknowledgement =
+                  await_bank_acknowledgement(*snapshot.generation);
+              acknowledgement.has_value()) {
+            snapshot.published = false;
+            snapshot.error = acknowledgement->at("error");
+          }
+        }
       }
     }
     Json result{
@@ -1326,7 +1383,7 @@ struct ControlRuntime::Impl {
   }
 
   bool cancel_if_expired() noexcept {
-    if (!request_cancelled()) {
+    if (!request_cancelled() || publication_settlement_owned()) {
       return false;
     }
     trigger_admission = false;
@@ -1360,6 +1417,9 @@ struct ControlRuntime::Impl {
   bool runtime_ready = false;
   bool trigger_admission = false;
   std::optional<std::chrono::steady_clock::time_point> request_deadline;
+  void* request_publication_context = nullptr;
+  bool (*request_publication_settlement_owned)(void* context) noexcept =
+      nullptr;
 };
 
 ControlRuntime::ControlRuntime(std::shared_ptr<Impl> impl) noexcept
@@ -1400,11 +1460,35 @@ Json ControlRuntime::dispatch(
     const Json& payload,
     std::span<const std::byte> sidecar,
     std::chrono::steady_clock::time_point submitted_at) {
+  return dispatch(
+      operation,
+      payload,
+      sidecar,
+      AbsoluteRequestDeadline{submitted_at + operation_deadline(operation)});
+}
+
+Json ControlRuntime::dispatch(
+    std::string_view operation,
+    const Json& payload,
+    std::span<const std::byte> sidecar,
+    AbsoluteRequestDeadline deadline) {
   struct DeadlineReset final {
     std::optional<std::chrono::steady_clock::time_point>& value;
-    ~DeadlineReset() { value.reset(); }
-  } reset{impl_->request_deadline};
-  impl_->request_deadline = submitted_at + operation_deadline(operation);
+    void*& publication_context;
+    bool (*&publication_settlement_owned)(void*) noexcept;
+    ~DeadlineReset() {
+      value.reset();
+      publication_context = nullptr;
+      publication_settlement_owned = nullptr;
+    }
+  } reset{
+      impl_->request_deadline,
+      impl_->request_publication_context,
+      impl_->request_publication_settlement_owned};
+  impl_->request_deadline = deadline.value;
+  impl_->request_publication_context = deadline.publication_context;
+  impl_->request_publication_settlement_owned =
+      deadline.publication_settlement_owned;
   try {
     if (impl_->state == Impl::State::failed ||
         impl_->state == Impl::State::closed) {
@@ -2179,6 +2263,11 @@ Json ControlRuntime::dispatch(
       if (!snapshot.published) {
         return {{"ok", false}, {"error", snapshot.error}};
       }
+      if (const auto acknowledgement =
+              impl_->await_bank_acknowledgement(*snapshot.generation);
+          acknowledgement.has_value()) {
+        return *acknowledgement;
+      }
       return impl_->open_result(selected_pattern, snapshot);
     }
     if (operation == "snapshot.retry") {
@@ -2195,6 +2284,13 @@ Json ControlRuntime::dispatch(
         return timeout_error();
       }
       const auto snapshot = impl_->prepare_and_publish(selected_pattern);
+      if (snapshot.published) {
+        if (const auto acknowledgement =
+                impl_->await_bank_acknowledgement(*snapshot.generation);
+            acknowledgement.has_value()) {
+          return *acknowledgement;
+        }
+      }
       return impl_->retry_result(selected_pattern, snapshot);
     }
     if (operation == "audio.activate") {
@@ -2261,7 +2357,7 @@ Json ControlRuntime::dispatch(
       const auto deadline = *impl_->request_deadline;
       auto acknowledged = impl_->coordinator->acknowledged_generation(
           impl_->coordinator->context);
-      while (acknowledged == 0 &&
+      while (acknowledged < expected_generation &&
              impl_->clock_now() < deadline) {
         std::this_thread::yield();
         acknowledged = impl_->coordinator->acknowledged_generation(

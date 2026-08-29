@@ -38,6 +38,8 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
   }
 
   await page.addInitScript((identity) => {
+    let callbackHeartbeat = 0;
+    let callbackRunning = false;
     class FakeAudioContext extends EventTarget {
       constructor(options) {
         super();
@@ -46,14 +48,18 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
       }
       async resume() {
         this.state = "running";
+        callbackRunning = true;
+        callbackHeartbeat = (callbackHeartbeat + 1) >>> 0;
         this.dispatchEvent(new Event("statechange"));
       }
       async suspend() {
         this.state = "suspended";
+        callbackRunning = false;
         this.dispatchEvent(new Event("statechange"));
       }
       async close() {
         this.state = "closed";
+        callbackRunning = false;
       }
     }
     const notificationListeners = new Set();
@@ -107,6 +113,12 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
       }),
       loadRuntime: async () => ({
         registerAudioContext: () => 1,
+        audioCallbackHeartbeat: () => {
+          if (callbackRunning) {
+            callbackHeartbeat = (callbackHeartbeat + 1) >>> 0;
+          }
+          return callbackHeartbeat;
+        },
         startAudioWorklet: async () => ({ ok: true }),
         workers: [worker],
         worklet,
