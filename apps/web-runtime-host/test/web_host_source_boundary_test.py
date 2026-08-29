@@ -870,8 +870,23 @@ def main() -> int:
         "why: the packaged Stage 9 Sequence journey is missing; remedy: keep "
         "the named Chromium record/switch/reload journey in the Formal Host spec",
     )
+    observed_pending = re.search(
+        r"const observed = .*?expect\(observed\)\.toMatchObject\(\{.*?"
+        r"pendingEventCount: 1,.*?\}\);",
+        sequence_journey.group(0),
+        re.DOTALL,
+    )
+    persisted_drain = re.search(
+        r"const persistedStatus = .*?expect\(persistedStatus\)\.toMatchObject\(\{"
+        r'.*?state: "inactive",.*?pendingEventCount: 0,.*?\}\);',
+        sequence_journey.group(0),
+        re.DOTALL,
+    )
     require(
-        "pendingEventCount: 0" in sequence_journey.group(0)
+        observed_pending is not None
+        and persisted_drain is not None
+        and '"sequence.recovery.list"' in sequence_journey.group(0)
+        and "persistedEvent" in sequence_journey.group(0)
         and "replayed: true" in sequence_journey.group(0)
         and "requestPatternSwitch" in sequence_journey.group(0)
         and "__sequenceBoundaries" in sequence_journey.group(0)
@@ -880,8 +895,9 @@ def main() -> int:
         and "snapshot.reload" in sequence_journey.group(0),
         "why: the packaged Sequence proof does not cross the acknowledged "
         "switch boundary into committed new-Pattern truth; remedy: assert the "
-        "drained journal, replayed stop, boundary acknowledgement, first later "
-        "event, both Patterns, and reload in the named journey",
+        "durable pending event, replayed Stop, reloaded exact event and drained "
+        "journal, boundary acknowledgement, first later event, both Patterns, "
+        "and reload in the named journey",
     )
     runtime_gate = re.search(
         r"run_audio_worklet_conformance\(\)\s*\{(.*?)\n\}",

@@ -2444,7 +2444,7 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
     state: "active",
     sessionId: firstSessionId,
     patternId: descriptor.pattern_id,
-    pendingEventCount: 0,
+    pendingEventCount: 1,
   });
   expect(await hostRequest(observer, "project.open", {
     project_id: descriptor.project_id,
@@ -2472,6 +2472,34 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
     committedRevision: stopped.committedRevision,
     replayed: true,
   });
+
+  await page.reload();
+  await expect(page.locator("#host-state")).toHaveText("audio-suspended");
+  await page.locator("#diagnostic-project-load").click();
+  await waitForDiagnosticProjectReady(page);
+  const persistedStatus = await page.evaluate((projectId) =>
+    window.lmdjWebRuntimeController.querySequenceStatus(projectId),
+  descriptor.project_id);
+  expect(persistedStatus).toMatchObject({
+    state: "inactive",
+    pendingEventCount: 0,
+  });
+  expect(success(await hostRequest(page, "sequence.recovery.list", {}),
+    "Stage 9 recovery after first Stop reload").candidates).toEqual([]);
+  const persistedAfterStop = success(
+    await hostRequest(page, "project.inspect", {}),
+    "Stage 9 first Stop truth after page and Worker reload",
+  );
+  expect(persistedAfterStop.project_revision).toBe(stopped.committedRevision);
+  const persistedEvent =
+    persistedAfterStop.project.patterns[descriptor.pattern_id].events;
+  expect(persistedEvent).toHaveLength(1);
+  expect(persistedEvent[0]).toMatchObject({
+    slot: {bank: 0, pad: 0},
+    velocity: 100,
+  });
+  expect(persistedEvent[0].duration_tick).toBeGreaterThan(0);
+  await activateWithGesture(page);
 
   const nextPatternId = crypto.randomUUID();
   const created = await page.evaluate(({patternId, expectedRevision}) =>
