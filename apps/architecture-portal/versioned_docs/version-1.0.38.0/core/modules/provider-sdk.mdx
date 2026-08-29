@@ -1,0 +1,37 @@
+---
+title: Provider SDK
+area: core
+status: implemented
+owners: [core, providers]
+module: provider-sdk
+source_paths: [packages/provider-sdk, tests/core/provider]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity kind="modules" id="provider-sdk" />
+
+<DiagramFrame title="Provider SDK Module" diagramId="provider-sdk" />
+
+## 1. 目的与非职责
+定义 Capability、Registry、Attempt Store 与 Provider 边界；不选择产品 Provider。
+## 2. 当前实现状态
+Capability v2 路径、Registry 与 Attempt isolation 已实现。
+## 3. 所有权与依赖
+仅依赖 Foundation；Provider 实现位于 `providers/`。
+## 4. 架构与数据流
+Host/Workspace 选择 → Registry 解析能力 → Attempt → Artifact 输入/输出 sink → 结果。
+## 5. API 与 Artifact 边界
+Provider 从不接收可变 Project 或 bundle path，只接收 Artifact。
+## 6. 状态、错误与生命周期
+Provider failure 属于 Attempt；取消、失败和输出身份均有隔离边界。
+Native 路径上，terminal Attempt JSON 与 minted artifact bytes 在成功返回前会对文件和父目录执行 `fsync`。Host settings writer 使用 kernel-owned advisory `flock(LOCK_EX | LOCK_NB)` 覆盖完整 read-modify-atomic-rename；竞争 writer 以 `host settings are busy` fail fast，owner 进程退出时内核自动释放锁。互斥边界只覆盖 cooperating SDK writers：它们持久复用 `.host-settings.lock`，不得 unlink 或替换该路径；acquisition 后的 `lstat` 只检测 open/flock 期间发生的 pathname identity 变化，检查完成后的外部同 UID pathname tamper 不在该互斥保证内。读取保持 lock-free，因为 `host-settings.json` 仍以 atomic rename 发布；缺失的 Provider 选择仍返回 `PROVIDER_NOT_FOUND`。
+## 7. 产品使用方
+Application Facade 和两个本地 Proof Provider 使用 SDK。
+## 8. 测试与证据
+Conformance、attempt isolation、Host settings invariant 与 spec regression 测试；跨进程 invariant 会同步确认 live owner contention，并在 owner 被终止和回收后验证下一次写入成功。
+## 9. 限制与下一门禁
+生产/云 Provider、鉴权和隐私政策尚未实现。
+## 10. 版本身份
+SDK 与 Provider 各自独立 SemVer，由 Assembly Lock 组合。
