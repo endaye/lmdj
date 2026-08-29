@@ -6,7 +6,7 @@
     {"id": "project", "label": "Project Truth", "detail": "v1/v2 read · v3 write", "kind": "host", "x": 50, "y": 150, "width": 220, "height": 96},
     {"id": "bundle-in", "label": "Project Bundle", "detail": "transfer-only input", "kind": "host", "x": 50, "y": 390, "width": 220, "height": 96},
     {"id": "io", "label": "Project I/O", "detail": "validate · pack · publish", "kind": "core", "x": 390, "y": 270, "width": 250,"height": 96},
-    {"id": "stage", "label": "Journal Overlay", "detail": "flush · receipt · recovery", "kind": "core", "x": 770, "y": 270, "width": 240, "height": 96},
+    {"id": "stage", "label": "Journal Overlay", "detail": "durable tail · receipt · recovery", "kind": "core", "x": 770, "y": 270, "width": 240, "height": 96},
     {"id": "store", "label": "Project Store", "detail": "committed truth", "kind": "host", "x": 1140, "y": 150, "width": 220, "height": 96},
     {"id": "bundle-out", "label": "Project Bundle", "detail": "canonical export", "kind": "host", "x": 1140, "y": 390, "width": 220, "height": 96}
   ],
@@ -19,7 +19,7 @@
   ],
   "cards": [
     {"title": "Dependencies", "body": "Foundation + Authoring Domain."},
-    {"title": "Failure model", "body": "Manifest publication commits Project Truth; receipt enables replay, while owner loss preserves a fingerprint-gated recovery artifact."},
+    {"title": "Failure model", "body": "Writer-lease admission closes mutation races; immutable command payload enables replay, while tail-last residual merge preserves only uncommitted owner-loss work."},
     {"title": "Forbidden boundary", "body": "Bundle is transfer-only; Runtime Snapshot is never persisted as Project Truth."}
   ]
 }

@@ -57,9 +57,10 @@ refreeze，provenance 指向 squash 后已成悬挂对象的 revision，且未�
 | 低 | 19 | 错误码偏差、恢复边角、文案残留、测试缺口等（第五节） |
 | 信息 | 若干 | 正文列出，无需单独排期 |
 
-**结论建议**：`1.0.37.0` 可作为 canary 候选保留，但在 H1–H3 与 M1–M3 修复
-（或经决策记录明确收窄范围）之前，不应进入 beta/stable 晋升或任何 Release
-边界。
+**当前处置**：`1.0.37.0` 保留为历史 canary 候选。H1–H3、M1–M3 与 #417
+Stop/boundary follow-up 的 source 修复已合入，Product Build `1.0.40.0` 负责最终
+Module/Product 身份与自动化集成；#380 的不可变快照和 #360 的五项物理/人工
+验收仍未完成，因此不能据此宣称 beta/stable、Release 或物理体验通过。
 
 ### 整改处置账本（2026-08-28）
 
@@ -71,14 +72,15 @@ truth integration 与不可变快照分别由 #379、#380 负责。
 | --- | --- | --- |
 | H1 | #378 | 实现 writer-lease 内 journal admission、本地 begin-vs-authoring critical section、孤儿 journal 先 seal，以及 settings-only Store rebase；以 Project Store 与 Facade deterministic component cases 阻断回归 |
 | H2 | #376 | 实现共享 Web Runtime Session 的权威边界匹配、exact-once flush、串行 post-boundary admission，以及 Creator authority-only 状态转换；单元与 packaged-browser journey 覆盖乱序/重复通知、继续录音、stop、reload 和 committed-event inspection |
-| H3 | #374 | source remediation implemented locally: armed target/session/revision admission, journal rebase/disarm, Creator session-preserving trim overlay, and Core/Web/Creator regression coverage; Product identity integration remains #379 and immutable snapshot remains #380 |
-| M1 | #375 | open |
+| H3 | #374 | armed target/session/revision admission、journal rebase/disarm 与 Creator session-preserving trim overlay 已合入；Build 40 集成身份与自动化证据，immutable snapshot 仍归 #380 |
+| M1 | #375 | pending overlay 已通过 Facade → Platform → Audio Runtime 在下一 Bar 发布；claimed-generation、BPM、Stop/owner-loss replacement 与 production-hook 边界均有自动化覆盖 |
 | M2 | #373 | source 修复：每次已接受 Pad event 在 acknowledgement 前写入单调、checksummed canonical tail；flush 消费 tail；真实子进程 `SIGKILL` 后重启 seal 两条事件并显式恢复；torn tail 携带 path/prefix/length/remedy fail closed |
-| M3 | #372 | open |
+| M3 | #372 | immutable original flush payload、独立 recovery residual、exact replay/collision 与 tail-last precedence 已合入，重试不再二次 mutation 或卡死 journal |
 
-H1/H2/M2 的 source 修复不改写或重新宣称 `1.0.37.0`；其 Module/Product
-identity 与完整集成证据等待 #379，immutable snapshot 等待 #380。#360 的五项
-物理/人工行继续保持未执行。
+六项 source 修复不改写或重新宣称 `1.0.37.0`；其缺失的 Project I/O、Audio
+Runtime、Application Facade patch 身份由 Build 40 集成，Build 39 已分配的 Web
+Platform/Host/Creator 身份不重复 bump。immutable snapshot 等待 #380，#360 的
+五项物理/人工行继续保持未执行。
 
 远端集成跟进 #417 记录了 H2 journey 的一个跨层 Stop/boundary response 竞态：
 PR 与 merged-main 的两个独立 run 都在 durable Stop 已可重放后，让 queued boundary
@@ -86,7 +88,8 @@ flush 的 `INVALID_ARGUMENT` 进入 terminal cleanup，随后只读 `project.ins
 `formal Web Host transport is terminated`。source remediation 在共享 Runtime action
 lane 内只对“匹配 pending switch 且 boundary 已排队”的第一次歧义，以同一
 `command_id` 做一次重放；重放成功取消 stale boundary，连续真实拒绝仍保留并让
-boundary 赢得顺序。它不扩大 H2 产品语义，版本与集成证据仍由 #379 统一处理。
+boundary 赢得顺序。它不扩大 H2 产品语义；Web 身份已由 Build 39 吸收，并纳入
+Build 40 的最终 Stage 9 自动化集成证据。
 
 ## 二、设计与计划文档评审
 

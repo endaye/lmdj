@@ -700,7 +700,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         "module": "core-mcp",
         "version": "2.0.0",
         "api_version": 2,
-        "dependencies": {"application-facade": "2.1.0"},
+        "dependencies": {"application-facade": "2.1.1"},
     }
     pyproject = tomllib.loads(
         (REPO_ROOT / "apps/core-mcp/pyproject.toml").read_text(

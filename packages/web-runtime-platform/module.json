@@ -4,7 +4,7 @@
   "version": "2.0.1",
   "api_version": 1,
   "dependencies": {
-    "application-facade": "2.1.0",
-    "audio-runtime": "2.0.0"
+    "application-facade": "2.1.1",
+    "audio-runtime": "2.0.1"
   }
 }

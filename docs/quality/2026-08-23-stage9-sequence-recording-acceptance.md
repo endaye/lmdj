@@ -2,7 +2,15 @@
 
 ## Current status
 
-Product Build candidate `1.0.37.0` implements Project v3 event-only
+Current source candidate Product Build `1.0.40.0` integrates the Stage 9
+remediation identities after H1–H3, M1–M3, and #417 landed. Project I/O is
+`1.0.1`, Audio Runtime is `2.0.1`, and Application Facade is `2.1.1`;
+Build 39 already absorbed Web Runtime Platform `2.0.1` and both Web Host
+`2.1.1` identities, so they are not double-bumped. This Task records automated
+source/branch evidence only. #380 still owns the clean immutable snapshot and
+exact-main evidence, and all five #360 physical/manual rows remain deferred.
+
+Historical Product Build candidate `1.0.37.0` implements Project v3 event-only
 Sequence recording across the Core, CLI/MCP/Native/Web Hosts and Creator.
 This ledger records only evidence actually produced for the candidate and its
 integrated tree. PR [#334](https://github.com/endaye/lmdj/pull/334) reached
@@ -46,10 +54,10 @@ Source-level verification produced by the remediation Task includes:
 | `scripts/architecture-portal.sh check` | PASS: 59 tests, 37 current pages, 10 diagram sources/20 outputs, production build, and 42 routes/internal links |
 
 The full packaged-browser suites, full Pull Request CI, integrated identities,
-and a corrected immutable snapshot remain separate evidence boundaries. The
+and a corrected immutable snapshot were separate evidence boundaries. The
 targeted browser journeys above extend through post-boundary recording, stop,
-reload, and committed-event inspection; #379 owns the integrated version audit
-and #380 owns the new immutable snapshot. The five physical/manual rows below
+reload, and committed-event inspection; #379 now owns the integrated Build 40
+source evidence and #380 owns the new immutable snapshot. The five physical/manual rows below
 remain unchanged and unverified.
 
 Documentation impact: required. Current routes updated by this Task include
@@ -67,9 +75,9 @@ post-commit return failure, replays only that identity, and leaves events
 accepted between attempts pending for a fresh command. Component evidence
 covers same-bundle retry and restart reconciliation for receipt-reload and
 journal-completion faults, plus the active-Facade retry/new-event/stop journey.
-Product Build and module identity refresh, integrated-main evidence, and final
-remediation acceptance remain assigned to #379; this entry does not claim
-those transitions are complete.
+Product Build and module identity refresh are integrated by Build 40 in this
+Task; exact PR/main evidence and the immutable snapshot remain later evidence
+boundaries rather than being inferred from this source entry.
 
 ## Identity
 
