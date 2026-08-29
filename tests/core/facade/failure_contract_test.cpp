@@ -46,6 +46,7 @@ using lmdj::facade::ApplicationConfig;
 using lmdj::facade::InitialProjectRequest;
 using lmdj::facade::SampleImportBeginRequest;
 using lmdj::facade::SampleInspectRequest;
+using lmdj::facade::SampleQuotaRequest;
 using lmdj::facade::SampleResetRequest;
 using lmdj::facade::SampleUpdateRequest;
 using lmdj::domain::CommandMeta;
@@ -547,6 +548,9 @@ void test_every_public_entry_converts_an_unexpected_throw_to_its_envelope() {
   });
   check_typed("inspect_sample", [&] {
     return application.inspect_sample(SampleInspectRequest{project, {0, 0}});
+  });
+  check_typed("query_sample_quota", [&] {
+    return application.query_sample_quota(SampleQuotaRequest{project, {0, 0}});
   });
   check_typed("begin_sample_import", [&] {
     return application.begin_sample_import(SampleImportBeginRequest{

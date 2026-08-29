@@ -39,7 +39,6 @@ FORBIDDEN_CREATOR_PAYLOAD_MARKERS = (
     b"lmdj.patch.v1",
     b"lmdj.materials.v1",
     b"parseProjectBundle",
-    b"decodeAudioData(",
     b"sourceMappingURL=",
 )
 

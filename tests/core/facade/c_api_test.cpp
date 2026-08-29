@@ -548,6 +548,20 @@ void test_sample_operations_have_exact_shapes_and_private_errors() {
   response = query(
       engine,
       {
+          {"operation", "sample.quota"},
+          {"project_path", project.generic_string()},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+      });
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("project_revision") == 2);
+  LMDJ_CHECK(
+      response.at("result").at("effective_remaining_frames") ==
+      16'777'216);
+  LMDJ_CHECK(response.at("result").at("consumed").size() == 1);
+
+  response = query(
+      engine,
+      {
           {"operation", "sample.waveform"},
           {"project_path", project.generic_string()},
           {"slot", {{"bank", 0}, {"pad", 0}}},
@@ -621,20 +635,20 @@ void test_sample_operations_have_exact_shapes_and_private_errors() {
       "Project revision changed");
 
   const auto valid_token = uuid(707);
-  check_facade_error(
-      command(
-          engine,
-          {
-              {"operation", "sample.import.begin"},
-              {"import_token", valid_token},
-              {"project_path", project.generic_string()},
-              {"command_id", uuid(708)},
-              {"expected_revision", 4},
-              {"slot", {{"bank", 0}, {"pad", 0}}},
-              {"asset_id", uuid(709)},
-              {"byte_length", 60},
-          }),
-      "INVALID_ARGUMENT");
+  const auto begun = command(
+      engine,
+      {
+          {"operation", "sample.import.begin"},
+          {"import_token", valid_token},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(708)},
+          {"expected_revision", 4},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+          {"asset_id", uuid(709)},
+          {"byte_length", 60},
+      });
+  LMDJ_CHECK(begun.at("ok") == true);
+  LMDJ_CHECK(begun.at("result").at("expected_bytes") == 60);
   check_facade_error(
       command(
           engine,

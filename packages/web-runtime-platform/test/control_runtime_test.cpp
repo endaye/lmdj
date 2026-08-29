@@ -79,10 +79,10 @@ constexpr std::string_view kProtocolShapeRequestId =
     "01234567-89ab-cdef-0123-456789abcdef";
 
 constexpr RuntimePreparationLimits kWebLimits{
-    1'048'576,
+    68'157'440,
     67'108'864,
     134'217'728,
-    134'217'728,
+    268'435'456,
 };
 
 class TempDirectory final {
@@ -1885,6 +1885,16 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   LMDJ_CHECK(empty.at("asset_id").is_null());
   LMDJ_CHECK(empty.at("metadata").is_null());
   LMDJ_CHECK(read_bytes(manifest_path) == original_manifest);
+  const auto empty_quota = check_exact_success(
+      runtime->dispatch("sample.quota", {{"slot", slot(0, 0)}}, {}),
+      {"project_revision", "slot", "bank_quota_bytes", "bank_used_bytes",
+       "bank_remaining_bytes", "project_quota_bytes", "project_used_bytes",
+       "project_remaining_bytes", "effective_remaining_bytes",
+       "effective_remaining_frames", "consumed"});
+  LMDJ_CHECK(empty_quota.at("project_revision") == 0);
+  LMDJ_CHECK(empty_quota.at("slot") == slot(0, 0));
+  LMDJ_CHECK(empty_quota.at("effective_remaining_frames") == 16'777'216);
+  LMDJ_CHECK(empty_quota.at("consumed").empty());
 
   const auto wav = mono_pcm16_wav(2'400);
   const auto token = uuid(401);
@@ -1944,6 +1954,16 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   LMDJ_CHECK(inspected.at("project_revision") == 1);
   LMDJ_CHECK(inspected.at("asset_id") == kAssetId);
   LMDJ_CHECK(inspected.at("metadata").at("source_frames") == 2'400);
+  const auto replacement_quota = check_exact_success(
+      runtime->dispatch("sample.quota", {{"slot", slot(0, 0)}}, {}),
+      {"project_revision", "slot", "bank_quota_bytes", "bank_used_bytes",
+       "bank_remaining_bytes", "project_quota_bytes", "project_used_bytes",
+       "project_remaining_bytes", "effective_remaining_bytes",
+       "effective_remaining_frames", "consumed"});
+  LMDJ_CHECK(replacement_quota.at("project_revision") == 1);
+  LMDJ_CHECK(replacement_quota.at("bank_used_bytes") == 0);
+  LMDJ_CHECK(replacement_quota.at("consumed").size() == 1);
+  LMDJ_CHECK(replacement_quota.at("consumed").at(0).at("slot") == slot(0, 0));
   const auto waveform = check_exact_success(
       runtime->dispatch(
           "sample.waveform",
@@ -2339,13 +2359,13 @@ void test_sample_import_timeout_aborts_staging_and_fails_closed() {
       inspect_project(temp.path(), kProjectId).at("project_revision") == 0);
 }
 
-void test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit() {
+void test_sample_commit_quota_failure_keeps_truth_and_runtime_unchanged() {
   TempDirectory temp;
   constexpr RuntimePreparationLimits limits{
       1'048'576,
       16,
       134'217'728,
-      134'217'728,
+      268'435'456,
   };
   auto runtime = make_runtime(temp.path(), limits);
   check_success(runtime->dispatch("project.create", create_payload(), {}));
@@ -2382,44 +2402,22 @@ void test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit() {
       "sample.import.chunk",
       sample_chunk_payload(433, 0, true, larger_wav),
       larger_wav));
-  const auto stale_runtime = check_exact_success(
-      runtime->dispatch(
-          "sample.import.commit", {{"import_token", uuid(433)}}, {}),
-      {"committed_revision", "runtime_revision", "runtime_published",
-       "snapshot_error"});
-  LMDJ_CHECK(stale_runtime.at("committed_revision") == 2);
-  LMDJ_CHECK(stale_runtime.at("runtime_revision") == 1);
-  LMDJ_CHECK(stale_runtime.at("runtime_published") == false);
-  LMDJ_CHECK(
-      stale_runtime.at("snapshot_error").at("code") ==
-      "BANK_QUOTA_EXHAUSTED");
+  const auto rejected = runtime->dispatch(
+      "sample.import.commit", {{"import_token", uuid(433)}}, {});
+  check_error(rejected, "BANK_QUOTA_EXHAUSTED");
   LMDJ_CHECK(
       runtime->engine().bank_telemetry().accepted_publications == generation);
-
-  const auto stale_preview = runtime->dispatch(
-      "sample.preview.set",
-      {{"slot", slot(0, 0)},
-       {"playback", playback_payload(0, 1, "gate")}},
-      {});
-  LMDJ_CHECK(stale_preview.at("ok") == false);
-  check_error(stale_preview, "HOST_STATE_INVALID");
-  check_exact_success(
-      runtime->dispatch(
-          "trigger", {{"slot", 0}, {"kind", "release"}}, {}),
-      {"accepted"});
-  check_exact_success(
-      runtime->dispatch("sample.stop", {{"slot", slot(0, 0)}}, {}),
-      {"accepted", "scope"});
-
-  const auto retried = check_exact_success(
-      runtime->dispatch(
-          "snapshot.retry", {{"pattern_id", kPatternId}}, {}),
-      {"project_id", "project_revision", "pattern_id", "runtime_ready",
-       "generation", "snapshot_error", "runtime_revision"});
-  LMDJ_CHECK(retried.at("project_revision") == 2);
-  LMDJ_CHECK(retried.at("runtime_revision") == 1);
-  LMDJ_CHECK(retried.at("runtime_ready") == false);
-  LMDJ_CHECK(retried.at("snapshot_error").is_object());
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 1);
+  const auto retained = check_exact_success(
+      runtime->dispatch("sample.inspect", {{"slot", slot(0, 0)}}, {}),
+      {"project_revision", "slot", "asset_id", "playback", "metadata",
+       "waveform_cache_identity"});
+  LMDJ_CHECK(retained.at("project_revision") == 1);
+  LMDJ_CHECK(retained.at("metadata").at("source_frames") == 2);
+  LMDJ_CHECK(
+      !std::filesystem::exists(
+          temp.path() / ".lmdj-host/sample-import-staging" / uuid(433)));
   LMDJ_CHECK(
       runtime->engine().bank_telemetry().accepted_publications == generation);
 }
@@ -3042,8 +3040,8 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
   constexpr RuntimePreparationLimits limits{
       1'048'576,
       4'096,
-      4'096,
-      2'060,
+      2'052,
+      4'104,
   };
   auto runtime = make_runtime(temp.path(), limits);
   check_success(runtime->dispatch(
@@ -3101,13 +3099,15 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
   LMDJ_CHECK(
       rejected.at("message").get<std::string>().find("remedy:") !=
       std::string::npos);
-  LMDJ_CHECK((
-      rejected.at("details") ==
-      Json{
-          {"resource", "resident_bytes"},
-          {"observed", 2'068},
-          {"limit", 2'060},
-      }));
+  const Json expected_residency_details{
+      {"resource", "resident_pcm_bytes"},
+      {"observed", 4'108},
+      {"limit", 4'104},
+  };
+  if (rejected.at("details") != expected_residency_details) {
+    throw std::runtime_error(
+        "unexpected residency details: " + rejected.at("details").dump());
+  }
   LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 3);
 
   check_success(runtime->dispatch(
@@ -3164,7 +3164,7 @@ void test_oversized_project_switch_is_inspectable_but_not_runnable() {
       1'048'576,
       4,
       8,
-      8,
+      16,
   };
   auto runtime = make_runtime(temp.path(), limits);
   check_success(runtime->dispatch(
@@ -3371,22 +3371,6 @@ void check_snapshot_published_notification(
            {"project_revision", project_revision}}));
 }
 
-void check_snapshot_rejected_notification(
-    const Json& notification,
-    std::uint64_t project_revision,
-    std::uint64_t runtime_revision,
-    std::string_view error_code) {
-  check_exact_keys(notification, {"protocol_version", "event", "payload"});
-  LMDJ_CHECK(notification.at("protocol_version") == 1);
-  LMDJ_CHECK(notification.at("event") == "snapshot.rejected");
-  LMDJ_CHECK(!notification.contains("request_id"));
-  const auto& payload = notification.at("payload");
-  check_exact_keys(payload, {"project_revision", "runtime_revision", "error"});
-  LMDJ_CHECK(payload.at("project_revision") == project_revision);
-  LMDJ_CHECK(payload.at("runtime_revision") == runtime_revision);
-  LMDJ_CHECK(payload.at("error").at("code") == error_code);
-}
-
 void test_bridge_routes_sample_operations_without_a_project_path() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -3414,6 +3398,30 @@ void test_bridge_routes_sample_operations_without_a_project_path() {
   const auto encoded_request = std::string(
       reinterpret_cast<const char*>(envelope.data()), envelope.size());
   LMDJ_CHECK(encoded_request.find("project_path") == std::string::npos);
+  proxy.pump_one();
+
+  const auto quota_request_id = uuid(990);
+  const auto quota_envelope = encode(request(
+      quota_request_id, "sample.quota", {{"slot", slot(0, 0)}}));
+  LMDJ_CHECK(
+      bridge->submit(quota_envelope, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto quota_response = poll_message(*bridge);
+  check_exact_keys(
+      quota_response,
+      {"protocol_version", "request_id", "ok", "result"});
+  LMDJ_CHECK(quota_response.at("request_id") == quota_request_id);
+  check_exact_keys(
+      quota_response.at("result"),
+      {"project_revision", "slot", "bank_quota_bytes", "bank_used_bytes",
+       "bank_remaining_bytes", "project_quota_bytes", "project_used_bytes",
+       "project_remaining_bytes", "effective_remaining_bytes",
+       "effective_remaining_frames", "consumed"});
+  LMDJ_CHECK(quota_response.at("result").at("project_revision") == 0);
+  const auto encoded_quota_request = std::string(
+      reinterpret_cast<const char*>(quota_envelope.data()),
+      quota_envelope.size());
+  LMDJ_CHECK(encoded_quota_request.find("project_path") == std::string::npos);
 }
 
 void test_bridge_defers_parse_dispatch_and_copies_fixed_slots() {
@@ -3667,7 +3675,7 @@ void test_bridge_emits_only_real_snapshot_notifications_after_response() {
         1'048'576,
         4,
         8,
-        8,
+        16,
     };
     auto runtime = make_runtime(temp.path(), limits);
     check_success(runtime->dispatch(
@@ -3827,13 +3835,13 @@ void test_bridge_emits_sample_publication_notifications_after_response() {
   check_no_bridge_message(*bridge);
 }
 
-void test_bridge_emits_rejected_sample_and_retry_notifications() {
+void test_bridge_emits_commit_quota_rejection_without_snapshot_notification() {
   TempDirectory temp;
   constexpr RuntimePreparationLimits limits{
       1'048'576,
       16,
       134'217'728,
-      134'217'728,
+      268'435'456,
   };
   auto runtime = make_runtime(temp.path(), limits);
   check_success(runtime->dispatch("project.create", create_payload(), {}));
@@ -3881,49 +3889,18 @@ void test_bridge_emits_rejected_sample_and_retry_notifications() {
   proxy.pump_one();
   const auto response = poll_message(*bridge);
   LMDJ_CHECK(response.at("request_id") == uuid(926));
-  LMDJ_CHECK(response.at("ok") == true);
-  LMDJ_CHECK(response.at("result").at("committed_revision") == 3);
-  LMDJ_CHECK(response.at("result").at("runtime_revision") == 2);
-  LMDJ_CHECK(response.at("result").at("runtime_published") == false);
-  check_snapshot_rejected_notification(
-      poll_message(*bridge), 3, 2, "BANK_QUOTA_EXHAUSTED");
-  proxy.pump_one();
-
-  const auto retry = encode(request(
-      uuid(927),
-      "snapshot.retry",
-      {{"pattern_id", kPatternId}}));
+  LMDJ_CHECK(response.at("ok") == false);
   LMDJ_CHECK(
-      bridge->submit(retry, {}) == BridgeSubmitStatus::accepted);
-  proxy.pump_one();
-  const auto retry_response = poll_message(*bridge);
-  LMDJ_CHECK(retry_response.at("request_id") == uuid(927));
-  LMDJ_CHECK(retry_response.at("ok") == true);
-  LMDJ_CHECK(retry_response.at("result").at("project_revision") == 3);
-  LMDJ_CHECK(retry_response.at("result").at("runtime_revision") == 2);
-  LMDJ_CHECK(retry_response.at("result").at("runtime_ready") == false);
-  check_snapshot_rejected_notification(
-      poll_message(*bridge), 3, 2, "BANK_QUOTA_EXHAUSTED");
-  proxy.pump_one();
-
-  const auto replay = encode(request(
-      uuid(930), "sample.update_pad", replayed_update_payload));
+      response.at("error").at("code") == "BANK_QUOTA_EXHAUSTED");
+  LMDJ_CHECK(response.at("error").at("details").at("bank") == 0);
   LMDJ_CHECK(
-      bridge->submit(replay, {}) == BridgeSubmitStatus::accepted);
-  proxy.pump_one();
-  const auto replay_response = poll_message(*bridge);
-  LMDJ_CHECK(replay_response.at("request_id") == uuid(930));
-  LMDJ_CHECK(replay_response.at("ok") == true);
-  LMDJ_CHECK(replay_response.at("result").at("committed_revision") == 2);
-  LMDJ_CHECK(replay_response.at("result").at("runtime_revision") == 2);
-  LMDJ_CHECK(replay_response.at("result").at("runtime_published") == false);
+      response.at("error").at("details").at("remaining_frames") == 4);
   LMDJ_CHECK(
-      replay_response.at("result").at("snapshot_error").at("code") ==
-      "BANK_QUOTA_EXHAUSTED");
-  check_snapshot_rejected_notification(
-      poll_message(*bridge), 3, 2, "BANK_QUOTA_EXHAUSTED");
+      response.at("error").at("details").at("consumed").size() == 1);
   check_no_bridge_message(*bridge);
   proxy.pump_one();
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 2);
 
   const auto unknown = encode(request(
       uuid(928),
@@ -4015,8 +3992,9 @@ void test_bridge_benign_query_cancel_does_not_fail_the_runtime() {
   check_success(runtime->dispatch("project.create", create_payload(), {}));
   FakeProxy proxy;
   auto bridge = make_bridge(*runtime, proxy);
-  const std::array<std::pair<std::string_view, Json>, 4> queries{{
+  const std::array<std::pair<std::string_view, Json>, 5> queries{{
       {"sample.inspect", {{"slot", slot(0, 0)}}},
+      {"sample.quota", {{"slot", slot(0, 0)}}},
       {"sample.waveform",
        {{"slot", slot(0, 0)},
         {"window",
@@ -4026,7 +4004,7 @@ void test_bridge_benign_query_cancel_does_not_fail_the_runtime() {
   }};
 
   for (std::size_t index = 0; index < queries.size(); ++index) {
-    const auto request_id = uuid(988 + index);
+    const auto request_id = uuid(1'100 + index);
     const auto query = encode(request(
         request_id, queries[index].first, queries[index].second));
     LMDJ_CHECK(
@@ -4195,7 +4173,7 @@ int main() {
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();
     test_sample_import_timeout_aborts_staging_and_fails_closed();
-    test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit();
+    test_sample_commit_quota_failure_keeps_truth_and_runtime_unchanged();
     test_sample_post_claim_deadline_preserves_saved_truth();
     test_source_frames_are_admitted_by_prepared_pcm_quota();
     test_trigger_queue_full_is_admission_failure();
@@ -4218,7 +4196,7 @@ int main() {
     test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
     test_bridge_emits_only_real_snapshot_notifications_after_response();
     test_bridge_emits_sample_publication_notifications_after_response();
-    test_bridge_emits_rejected_sample_and_retry_notifications();
+    test_bridge_emits_commit_quota_rejection_without_snapshot_notification();
     test_bridge_rejects_an_expired_control_request_without_late_success();
     test_bridge_cancelled_before_dispatch_skips_facade_work();
     test_bridge_benign_query_cancel_does_not_fail_the_runtime();

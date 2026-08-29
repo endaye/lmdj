@@ -73,12 +73,12 @@ truth integration 与不可变快照分别由 #379、#380 负责。
 | H2 | #376 | 实现共享 Web Runtime Session 的权威边界匹配、exact-once flush、串行 post-boundary admission，以及 Creator authority-only 状态转换；单元与 packaged-browser journey 覆盖乱序/重复通知、继续录音、stop、reload 和 committed-event inspection |
 | H3 | #374 | open |
 | M1 | #375 | open |
-| M2 | #373 | open |
+| M2 | #373 | source 修复：每次已接受 Pad event 在 acknowledgement 前写入单调、checksummed canonical tail；flush 消费 tail；真实子进程 `SIGKILL` 后重启 seal 两条事件并显式恢复；torn tail 携带 path/prefix/length/remedy fail closed |
 | M3 | #372 | open |
 
-H1/H2 的 source 修复不改写或重新宣称 `1.0.37.0`；其 Module/Product identity
-与完整集成证据等待 #379，immutable snapshot 等待 #380。#360 的五项物理/人工
-行继续保持未执行。
+H1/H2/M2 的 source 修复不改写或重新宣称 `1.0.37.0`；其 Module/Product
+identity 与完整集成证据等待 #379，immutable snapshot 等待 #380。#360 的五项
+物理/人工行继续保持未执行。
 
 ## 二、设计与计划文档评审
 
@@ -265,6 +265,53 @@ journal）；唯一持久化 pending tail 的路径是 `abandon_sequence_session
 走析构路径，掩盖了该缺口；浏览器双窗口测试可佐证磁盘 journal 在 flush 间
 为空（`web_runtime_host_browser.spec.mjs:2438-2449` 观察到
 `pendingEventCount: 0`）。无 kill -9 / 硬崩溃重启测试。
+
+**#373 source disposition（2026-08-29）**：Project I/O journal 新增单调
+canonical tail snapshot；Facade 先耐久 append、成功后才更新 acknowledgement
+ordering，press 以既有 240-tick 默认时值进入恢复 tail，release snapshot 再替换
+真实时值。flush record 消费同一 tail；若 F1 append 后 execute 在 commit point 前
+失败，继续录音的 F2 必须 canonical 覆盖全部 unresolved flush 与最新 tail，F2
+completed 时同步 supersede 更早批次，recovery 只保留其后真正未提交 tail。
+component regression 由真实子进程接受 `press/release/press`
+三个 Pad event 请求后（最后一个 press 未释放）
+`SIGSTOP`，父进程发送 `SIGKILL` 并验证 signal exit；新 owner reconcile 后得到恰
+一个含两条事件的 `owner_lost` candidate，显式 apply 后 identity/order 保持且
+revision 只增加一次。独立 Project I/O case 证明 reload/flush consumption，并证明
+无终止换行的 torn tail、checksum mismatch、非单调 tail identity 与非 canonical
+event order 均保留原字节、以 `INVALID_PROJECT` 加 path、record offset/durable
+prefix、observed length、stable reason 与 repair/discard remedy fail closed。补充的
+F1→F2 regression 证明较早失败批次不会二次恢复，且 F1 旧同-key event 不会覆盖
+F2 已提交的新值；apply 只增加一次 revision，之后 apply/discard 均不再改变状态。
+第二次 re-review 补齐 inverse completion：F0…F31 可在任何 completion 前耐久；F0
+先完成时，以相同 session/pattern/expected-revision 和 canonical key/value coverage
+resolve 所有等价较晚 retry，而不是只按 `flush_seq <= F0`。非等价较晚 batch 只扣
+精确已提交 event，同-key 新值与新增 key 保留为 recovery residual。独立 case 还
+覆盖 F0 manifest 已提交但 completion 报错、其后 F1 等价 retry 已 append 的歧义态；
+restart reconcile 只回放 F0 receipt，不产生已提交工作的 candidate。
+第三次 re-review 补齐 latest-tail residual：若 F0 manifest/receipt 已提交但
+completion 报错，录音继续耐久写入 A+B 或 A+A'+B、且没有 append 较晚 flush，
+重启回放 F0 completion 也从当前 `pending_events` 扣除精确已提交 A。新增 B 与
+同-key 不同值 A' 保持 canonical 顺序成为唯一 recovery residual，显式 apply 只
+增加一次 revision；等价-only tail 被完全 resolve，不产生 candidate 或第二次写入。
+过滤不重置 `next_tail_seq`/`last_input_sequence`，因此后续 acknowledgement 的
+单调性证据仍连续。
+最终 integration review 还发现 #372 exact-command replay 与 #373 residual filtering
+共用同一字段：F0(A) 完成会把已耐久 F1(A+B) 改写为 B，导致原始 F1(A+B) retry 被
+拒绝、残余 B 反而可能冒充同一 command。修复后每条 flush 永久保存 original
+canonical payload 作为 command identity，另存 effective recovery residual；append
+replay/collision 只比较前者，reconcile/status/apply 只读取后者。sealed v2 显式要求
+两个字段，旧 recovery-only snapshot 不猜测缺失的 original。Project I/O 与 Facade
+回归覆盖 exact A+B retry、B/其他 payload collision、serialize/reload、只恢复并单次
+apply B，以及 32-thread inverse completion。
+最终 precedence review 发现 recovery apply 先以最新 `pending_events` 起始、再合并
+较旧 incomplete flush residual，导致 F0(A-old) 可反向覆盖之后已 acknowledgement 的
+tail A-new；status/list 还把同-key 两份输入直接相加为 3。修复后 Facade 统一构造
+canonical effective recovery：依 flush 顺序合并 incomplete residual，再最后合并
+durable tail。确定性 case 证明 active/recoverable count 为 unique A-new+B 两条、显式
+apply 只写一 revision 且得到 A-new+B，重复 apply/discard 不再修改 Project。
+该 source disposition 不是 merge、Product
+Build、immutable snapshot、远端 CI 或物理验收证据；这些仍分别等待 #379、#380
+与 #360。
 
 ### M3 同 `command_id` 重试可永久卡死 journal（SR-D21 幂等契约的可用性破口）
 
@@ -520,8 +567,8 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
 | 边界后继续录音（任何层级都停在切槽确认） | H2 |
 | Sequence 内 trim overlay 全流程（会话存活、提交 rebase、冲突保留） | H3 |
 | 未 flush 音的下一圈可听性 | M1（#375 source-fixed；#379/#380 尚未集成） |
-| kill -9 / 硬崩溃后恢复候选出现 | M2 |
-| 提交后故障 + 同 `command_id` 重试 | M3 |
+| ~~kill -9 / 硬崩溃后恢复候选出现~~ | M2 source gate 已由 #373 的真实 `SIGKILL` component journey 覆盖；集成身份/快照仍待 #379/#380 |
+| ~~提交后故障 + 同 `command_id` 重试~~ | M3 source gate 已由 #372 的 immutable original payload、inverse completion 与 exact replay cases 覆盖；集成身份/快照仍待 #379/#380 |
 | Pending switch 中改 BPM | M4（#375 Review Fix 3 source-fixed；#379 待集成） |
 | reload → recover 浏览器旅程；恢复指纹 mismatch 的 Creator 路径 | M5/M8 |
 | 「切 Sample：停录 flush 后 Trim 成功」的正半段 | §12 |

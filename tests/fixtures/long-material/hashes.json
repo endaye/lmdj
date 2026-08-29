@@ -1,0 +1,76 @@
+{
+  "contract": "lmdj.long-material-fixtures.v1",
+  "ffmpeg": "ffmpeg version 8.0.1 Copyright (c) 2000-2025 the FFmpeg developers",
+  "fixtures": [
+    {
+      "bytes": 156110,
+      "channels": 2,
+      "decoded_frames_48k": 43200000,
+      "file": "LM-OK-BOUNDARY-INGEST.flac",
+      "name": "LM-OK-BOUNDARY-INGEST",
+      "sample_rate": 48000,
+      "sha256": "d0f80011686403f1815792c6667591b96f6e01af4ee90b31b4ebbdd374c1a703"
+    },
+    {
+      "bytes": 33554510,
+      "channels": 1,
+      "decoded_frames_48k": 16777216,
+      "file": "LM-OK-COMMIT-BOUNDARY.wav",
+      "name": "LM-OK-COMMIT-BOUNDARY",
+      "sample_rate": 48000,
+      "sha256": "9d6efd6adf778ccb819e3973df364c62b4fe0903fe695460cea6272eeab3d3e0"
+    },
+    {
+      "bytes": 5041884,
+      "channels": 2,
+      "decoded_frames_48k": 10080000,
+      "file": "LM-OK-SONG.mp3",
+      "name": "LM-OK-SONG",
+      "sample_rate": 44100,
+      "sha256": "0b769834f750cb4321aa9e6f7b05bc3576021647568ba8614489e1fe9e0f0eba"
+    },
+    {
+      "bytes": 1927,
+      "channels": 6,
+      "decoded_frames_48k": 48000,
+      "file": "LM-REJ-CH.m4a",
+      "name": "LM-REJ-CH",
+      "sample_rate": 48000,
+      "sha256": "bf65ed729d8e0f5596c6073c3dc0d4878f7898f44c7a5f68cf05b62d46cdd47d"
+    },
+    {
+      "bytes": 33554512,
+      "channels": 1,
+      "decoded_frames_48k": 16777217,
+      "file": "LM-REJ-COMMIT-PLUS-4B.wav",
+      "name": "LM-REJ-COMMIT-PLUS-4B",
+      "sample_rate": 48000,
+      "sha256": "8c4ace496fd06823c4c76a24a5ef6f59003cda3dd13605989c906077eb461182"
+    },
+    {
+      "bytes": 156127,
+      "channels": 2,
+      "decoded_frames_48k": 43200001,
+      "file": "LM-REJ-FRAMES.flac",
+      "name": "LM-REJ-FRAMES",
+      "sample_rate": 48000,
+      "sha256": "4c24b906dd7d6177864c2876259ab17482ec352a33c96cf0925e30ca7d9bed8f"
+    },
+    {
+      "bytes": 104857601,
+      "channels": 2,
+      "file": "LM-REJ-SOURCE.mp3",
+      "name": "LM-REJ-SOURCE",
+      "sample_rate": 48000,
+      "sha256": "2e63c82d8f021d7b3ec5cde74ffcd26f5d1935197c75d49abbd9163f2d24b6dc",
+      "source_bytes": 104857601
+    }
+  ],
+  "generator": "tests/fixtures/long-material/make_fixtures.py",
+  "lifecycle_sequences": [
+    "cancel",
+    "replace",
+    "re-import",
+    "background-recovery"
+  ]
+}

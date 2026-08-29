@@ -237,6 +237,17 @@ remains #373 and switch-boundary flushing remains #376.
 
 Automation does not convert any physical row into a pass.
 
+## Post-delivery remediation source evidence
+
+| Finding | Local source evidence | Remaining boundary |
+| --- | --- | --- |
+| M2 / #373 | RED: the real `SIGKILL` restart journey found a candidate without the two acknowledged unflushed events, while the Project I/O test could not compile without durable-tail API/metadata. Review RED: after F1 append/execute failure, a successful cumulative F2 left F1 recoverable; apply could double-mutate and overwrite F2's newer same-key event. Complete-line checksum/sequence/canonical corruption also returned generic path/detail. Review Fix 2 RED: with F0…F31 equivalent retries durable before completion, F0 completion left F1…F31 incomplete; the same gap followed an ambiguous post-commit F0 error plus F1 retry. Review Fix 3 RED: after F0 manifest/receipt commit plus completion failure, an accepted durable A+B/A+A'+B tail with no later flush exposed committed A again; equivalent-only A could create a second candidate/revision. Integration RED: F0(A) completion mutated durable F1(A+B) to residual B, so exact F1 replay was rejected while residual-only collision could be accepted. Precedence RED: incomplete F0(A-old) plus acknowledged tail A-new+B reported three events and apply let A-old overwrite the newer tail value. GREEN: focused 2/2 passes with semantic bidirectional coverage—later completion resolves covered earlier batches; earlier completion resolves exact-value-covered later retries and subtracts the same exact committed batch from the current pending tail; non-equivalent flushes/tails retain only new/different residual in canonical order. Immutable original command payload drives exact replay/collision while a separately versioned recovery residual drives reconcile/apply; effective recovery merges incomplete residuals in flush order and durable tail last, so status/list/apply share the unique canonical A-new+B batch. Reload, fail-safe v2 parsing, legacy recovery-only parsing, and 32-thread completion order are covered. Recovery/apply remains one revision and preserves newer same-key values; equivalent-only work produces no candidate. Torn and complete-line corruption retain exact bytes and uniform actionable evidence. Fresh precedence verification passes focused 2/2, full 79/79, stress 4/4, Web 54/54, Creator 344/344 and Portal 59/59 with 37 pages/10 diagram sources/20 outputs/42 routes, plus dependency, active-tree, version and production hook-symbol gates. | This is functional source evidence only. #379 owns accumulated Module/Host/Product identity and complete integrated automated acceptance; #380 owns the clean exact-main immutable snapshot. The five #360 physical/manual rows above remain `deferred / unverified`. |
+
+The #373 Task does not rewrite the historical `1.0.37.0` evidence table or
+promote the candidate. Push, Pull Request, merge, remote CI, Product tag,
+Release, deployment, publication and Channel promotion are not implied by this
+local source gate.
+
 ## External state
 
 | Transition | Status |

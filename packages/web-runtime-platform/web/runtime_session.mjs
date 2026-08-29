@@ -39,6 +39,7 @@ const SAFETY_INTERRUPTIBLE_HOST_OPERATIONS = new Set([
   "project.inspect",
   "project.list",
   "sample.inspect",
+  "sample.quota",
   "sample.waveform",
 ]);
 const TRIGGER_SOURCES = new Set(["pointer", "keyboard", "midi"]);
@@ -60,6 +61,8 @@ const ALLOWED_TYPED_ERROR_CODES = new Set([
   "MISSING_ASSET",
   "INVALID_PROJECT",
   "COOK_FAILED",
+  "BANK_QUOTA_EXHAUSTED",
+  "PROJECT_QUOTA_EXHAUSTED",
   "PROVIDER_NOT_FOUND",
   "PROVIDER_FAILED",
   "PERMISSION_DENIED",
@@ -497,6 +500,71 @@ function normalizeSampleCommit(value) {
     runtimeRevision: value.runtime_revision,
     runtimePublished: published,
     snapshotError,
+  });
+}
+
+function normalizeSampleQuota(value, expectedSlot) {
+  const keys = [
+    "project_revision",
+    "slot",
+    "bank_quota_bytes",
+    "bank_used_bytes",
+    "bank_remaining_bytes",
+    "project_quota_bytes",
+    "project_used_bytes",
+    "project_remaining_bytes",
+    "effective_remaining_bytes",
+    "effective_remaining_frames",
+    "consumed",
+  ];
+  if (!exactKeys(value, keys) || !Array.isArray(value.consumed) ||
+      !keys.slice(0, -2).filter((key) => key !== "slot")
+        .every((key) => isUnsignedInteger(value[key]))) {
+    throw protocolMismatch("Sample quota result is invalid");
+  }
+  const slot = flatSlotFromAddress(value.slot);
+  if (slot !== expectedSlot ||
+      value.bank_used_bytes > value.bank_quota_bytes ||
+      value.project_used_bytes > value.project_quota_bytes ||
+      value.bank_remaining_bytes !== value.bank_quota_bytes - value.bank_used_bytes ||
+      value.project_remaining_bytes !==
+        value.project_quota_bytes - value.project_used_bytes ||
+      value.effective_remaining_bytes !== Math.min(
+        value.bank_remaining_bytes,
+        value.project_remaining_bytes,
+      ) || value.effective_remaining_frames * 4 !== value.effective_remaining_bytes) {
+    throw protocolMismatch("Sample quota result is invalid");
+  }
+  const bank = Math.floor(slot / 16);
+  const consumed = value.consumed.map((entry) => {
+    if (!exactKeys(entry, ["slot", "prepared_bytes", "prepared_frames"]) ||
+        !isUnsignedInteger(entry.prepared_bytes) ||
+        !isUnsignedInteger(entry.prepared_frames) ||
+        entry.prepared_frames * 4 !== entry.prepared_bytes) {
+      throw protocolMismatch("Sample quota consumption is invalid");
+    }
+    const consumedSlot = flatSlotFromAddress(entry.slot);
+    if (Math.floor(consumedSlot / 16) !== bank) {
+      throw protocolMismatch("Sample quota consumption is invalid");
+    }
+    return Object.freeze({
+      slot: consumedSlot,
+      preparedBytes: entry.prepared_bytes,
+      preparedFrames: entry.prepared_frames,
+    });
+  });
+  return Object.freeze({
+    projectRevision: value.project_revision,
+    slot,
+    bankQuotaBytes: value.bank_quota_bytes,
+    bankUsedBytes: value.bank_used_bytes,
+    bankRemainingBytes: value.bank_remaining_bytes,
+    projectQuotaBytes: value.project_quota_bytes,
+    projectUsedBytes: value.project_used_bytes,
+    projectRemainingBytes: value.project_remaining_bytes,
+    effectiveRemainingBytes: value.effective_remaining_bytes,
+    effectiveRemainingFrames: value.effective_remaining_frames,
+    consumed: Object.freeze(consumed),
   });
 }
 
@@ -1141,6 +1209,7 @@ function createRuntimeSessionController(options = {}) {
     protocol_version: assemblyIdentity.protocolVersion,
   });
   let verifiedSampleImportLimit = null;
+  let verifiedSampleIngestLimits = null;
   let runtime = null;
   let audioContext = null;
   let contextHandle = null;
@@ -2740,6 +2809,22 @@ function createRuntimeSessionController(options = {}) {
     return normalizeSampleInspect(result, flatSlot);
   }
 
+  async function querySampleQuota(flatSlot) {
+    const slot = flatSlotAddress(flatSlot);
+    const result = await recoverableQuery("sample.quota", {slot});
+    return normalizeSampleQuota(result, flatSlot);
+  }
+
+  function sampleIngestLimits() {
+    if (verifiedSampleIngestLimits === null) {
+      throw typedError(
+        "HOST_STATE_INVALID",
+        "Verified Sample ingest limits are unavailable",
+      );
+    }
+    return verifiedSampleIngestLimits;
+  }
+
   async function queryWaveform(request) {
     if (
       !exactKeys(request, ["slot", "window"]) ||
@@ -3260,15 +3345,27 @@ function createRuntimeSessionController(options = {}) {
       ) {
         throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest identity is invalid");
       }
-      const importedWavBytes =
-        manifestSource?.resourceLimits?.imported_wav_bytes;
-      if (!isPositiveInteger(importedWavBytes)) {
+      const resourceLimits = manifestSource?.resourceLimits;
+      const importedWavBytes = resourceLimits?.imported_wav_bytes;
+      const ingestSourceBytes = resourceLimits?.ingest_source_bytes;
+      const ingestDecodedFrames = resourceLimits?.ingest_decoded_frames;
+      const ingestChannels = resourceLimits?.ingest_channels;
+      if (!isPositiveInteger(importedWavBytes) ||
+          !isPositiveInteger(ingestSourceBytes) ||
+          !isPositiveInteger(ingestDecodedFrames) ||
+          !isPositiveInteger(ingestChannels) || ingestChannels > 2) {
         throw typedError(
           "HOST_PROTOCOL_MISMATCH",
-          "Manifest Sample import limit is invalid",
+          "Manifest Sample ingest limits are invalid",
         );
       }
       verifiedSampleImportLimit = importedWavBytes;
+      verifiedSampleIngestLimits = Object.freeze({
+        sourceBytes: ingestSourceBytes,
+        decodedFrames: ingestDecodedFrames,
+        channels: ingestChannels,
+        artifactBytes: importedWavBytes,
+      });
       const capabilities =
         options.capabilities ??
         (preflight === runPreflight
@@ -3323,6 +3420,8 @@ function createRuntimeSessionController(options = {}) {
     applySequenceRecovery,
     discardSequenceRecovery,
     inspectSample,
+    querySampleQuota,
+    sampleIngestLimits,
     queryWaveform,
     updatePad,
     resetPad,

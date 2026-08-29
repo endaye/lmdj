@@ -458,8 +458,8 @@ class PackageTest(unittest.TestCase):
         self.assertEqual(manifest["manifest_version"], 1)
         self.assertEqual(manifest["product_build"], current_product_build())
         self.assertEqual(manifest["host_id"], "web-runtime-host")
-        self.assertEqual(manifest["host_version"], "2.0.0")
-        self.assertEqual(manifest["platform_version"], "1.0.0")
+        self.assertEqual(manifest["host_version"], "2.1.0")
+        self.assertEqual(manifest["platform_version"], "2.0.0")
         self.assertEqual(manifest["protocol_version"], 1)
         self.assertEqual(manifest["heap_bytes"], 536_870_912)
         self.assertEqual(
@@ -467,8 +467,11 @@ class PackageTest(unittest.TestCase):
             {
                 "decoded_float_pcm_bytes_per_bank": 67_108_864,
                 "decoded_float_pcm_bytes_total": 134_217_728,
-                "decoded_frames_per_pad": 240_000,
-                "imported_wav_bytes": 1_048_576,
+                "decoded_float_pcm_bytes_resident": 268_435_456,
+                "ingest_source_bytes": 104_857_600,
+                "ingest_decoded_frames": 43_200_000,
+                "ingest_channels": 2,
+                "imported_wav_bytes": 68_157_440,
             },
         )
         identity = json.loads(self.identity.read_text(encoding="utf-8"))
@@ -570,10 +573,10 @@ class PackageTest(unittest.TestCase):
             '<meta name="lmdj-host-id" content="web-runtime-host">', index
         )
         self.assertIn(
-            '<meta name="lmdj-host-version" content="2.0.0">', index
+            '<meta name="lmdj-host-version" content="2.1.0">', index
         )
         self.assertIn(
-            '<meta name="lmdj-web-runtime-platform-version" content="1.0.0">',
+            '<meta name="lmdj-web-runtime-platform-version" content="2.0.0">',
             index,
         )
         self.assertIn(

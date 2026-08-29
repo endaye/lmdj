@@ -25,6 +25,7 @@ const API = [
   "listLocalProjects",
   "listSequenceRecovery",
   "openProject",
+  "querySampleQuota",
   "queryWaveform",
   "querySequenceStatus",
   "recordSequenceEvent",
@@ -35,6 +36,7 @@ const API = [
   "resetPad",
   "retryPrepare",
   "setSamplePreview",
+  "sampleIngestLimits",
   "start",
   "subscribeDiagnostics",
   "stopAll",
@@ -64,6 +66,16 @@ const WIRE_PLAYBACK = Object.freeze({
   trigger_mode: "gate",
   gain_millidb: -1_200,
   muted: false,
+});
+
+const RESOURCE_LIMITS = Object.freeze({
+  decoded_float_pcm_bytes_per_bank: 67_108_864,
+  decoded_float_pcm_bytes_total: 134_217_728,
+  decoded_float_pcm_bytes_resident: 268_435_456,
+  ingest_source_bytes: 104_857_600,
+  ingest_decoded_frames: 43_200_000,
+  ingest_channels: 2,
+  imported_wav_bytes: 68_157_440,
 });
 
 function success(envelope, result = {}) {
@@ -116,7 +128,7 @@ function fixture({
   runtimeTerminator,
   inputOwnership,
   manifestSource = {
-    resourceLimits: {imported_wav_bytes: 1_048_576},
+    resourceLimits: RESOURCE_LIMITS,
   },
 } = {}) {
   let request = 0;
@@ -159,7 +171,13 @@ function fixture({
       },
       subtle: webcrypto.subtle,
     },
-    manifestSource,
+    manifestSource: {
+      ...manifestSource,
+      resourceLimits: {
+        ...RESOURCE_LIMITS,
+        ...manifestSource.resourceLimits,
+      },
+    },
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
@@ -311,7 +329,7 @@ test("default capability probe timeout fails startup without restart-required", 
     },
     navigator: {},
     crypto: webcrypto,
-    manifestSource: {resourceLimits: {imported_wav_bytes: 1_048_576}},
+    manifestSource: {resourceLimits: RESOURCE_LIMITS},
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
@@ -365,7 +383,7 @@ test("accepts only the declared compatible Host inventory in packaged manifests"
   };
   const manifestSource = {
     heapBytes: 536_870_912,
-    resourceLimits: {imported_wav_bytes: 1_048_576},
+    resourceLimits: RESOURCE_LIMITS,
     emscripten: {
       emcc_version: "emcc",
       emscripten_releases_revision: "a".repeat(40),
@@ -808,9 +826,9 @@ test("Host-state failures expose only allowlisted structured details", async () 
     code: "WEB_RUNTIME_RESOURCE_LIMIT",
     stack: "private stack",
     details: {
-      resource: "decoded_frames_per_pad",
-      observed: 240_001,
-      limit: 240_000,
+      resource: "ingest_decoded_frames",
+      observed: 43_200_001,
+      limit: 43_200_000,
       storage_condition: "quota_exceeded",
       path: "/Users/private/project",
       request_id: "11111111-1111-4111-8111-111111111111",
@@ -823,9 +841,9 @@ test("Host-state failures expose only allowlisted structured details", async () 
     state: "failed",
     errorCode: "WEB_RUNTIME_RESOURCE_LIMIT",
     errorDetails: {
-      resource: "decoded_frames_per_pad",
-      observed: 240_001,
-      limit: 240_000,
+      resource: "ingest_decoded_frames",
+      observed: 43_200_001,
+      limit: 43_200_000,
       storage_condition: "quota_exceeded",
     },
   });
@@ -914,6 +932,25 @@ test("Sample queries bind flat slots to the current Project and validate typed r
           project_revision: 7,
         });
       }
+      if (envelope.operation === "sample.quota") {
+        return success(envelope, {
+          project_revision: 7,
+          slot: {bank: 2, pad: 1},
+          bank_quota_bytes: 67_108_864,
+          bank_used_bytes: 4_000,
+          bank_remaining_bytes: 67_104_864,
+          project_quota_bytes: 134_217_728,
+          project_used_bytes: 8_000,
+          project_remaining_bytes: 134_209_728,
+          effective_remaining_bytes: 67_104_864,
+          effective_remaining_frames: 16_776_216,
+          consumed: [{
+            slot: {bank: 2, pad: 0},
+            prepared_bytes: 4_000,
+            prepared_frames: 1_000,
+          }],
+        });
+      }
       return success(envelope, defaultResult(envelope.operation));
     },
   });
@@ -939,6 +976,25 @@ test("Sample queries bind flat slots to the current Project and validate typed r
     ],
     projectRevision: 7,
   });
+  assert.deepEqual(await session.querySampleQuota(33), {
+    projectRevision: 7,
+    slot: 33,
+    bankQuotaBytes: 67_108_864,
+    bankUsedBytes: 4_000,
+    bankRemainingBytes: 67_104_864,
+    projectQuotaBytes: 134_217_728,
+    projectUsedBytes: 8_000,
+    projectRemainingBytes: 134_209_728,
+    effectiveRemainingBytes: 67_104_864,
+    effectiveRemainingFrames: 16_776_216,
+    consumed: [{slot: 32, preparedBytes: 4_000, preparedFrames: 1_000}],
+  });
+  assert.deepEqual(session.sampleIngestLimits(), {
+    sourceBytes: 104_857_600,
+    decodedFrames: 43_200_000,
+    channels: 2,
+    artifactBytes: 68_157_440,
+  });
   assert.deepEqual(calls.map(({envelope}) => ({
     operation: envelope.operation,
     payload: envelope.payload,
@@ -951,10 +1007,11 @@ test("Sample queries bind flat slots to the current Project and validate typed r
         window: {start_frame: 10, end_frame: 30, bucket_count: 2},
       },
     },
+    {operation: "sample.quota", payload: {slot: {bank: 2, pad: 1}}},
   ]);
   assert.deepEqual(
     calls.map(({transportOptions}) => transportOptions.deadlineMs),
-    [30_000, 30_000],
+    [30_000, 30_000, 30_000],
   );
 });
 

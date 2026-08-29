@@ -120,7 +120,10 @@
   "resource_limits": {
     "decoded_float_pcm_bytes_per_bank": 67108864,
     "decoded_float_pcm_bytes_total": 134217728,
-    "decoded_frames_per_pad": 240000,
-    "imported_wav_bytes": 1048576
+    "decoded_float_pcm_bytes_resident": 268435456,
+    "ingest_source_bytes": 104857600,
+    "ingest_decoded_frames": 43200000,
+    "ingest_channels": 2,
+    "imported_wav_bytes": 68157440
   }
 }
