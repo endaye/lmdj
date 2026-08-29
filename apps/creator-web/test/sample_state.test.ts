@@ -682,6 +682,50 @@ describe("Creator Sample state", () => {
     })).toThrow("Sample Bank quota details are invalid");
   });
 
+  test.each([
+    ["BANK_QUOTA_EXHAUSTED", {
+      bank: 0,
+      requested_bytes: 67_108_868,
+      requested_frames: 16_777_217,
+      remaining_bytes: 67_108_864,
+      remaining_frames: 16_777_216,
+      quota_bytes: 67_108_864,
+      consumed: [],
+    }],
+    ["PROJECT_QUOTA_EXHAUSTED", {
+      requested_bytes: 4,
+      requested_frames: 1,
+      project_used_bytes: 134_217_728,
+      project_remaining_bytes: 0,
+      project_quota_bytes: 134_217_728,
+      banks: [
+        {bank: 0, prepared_bytes: 67_108_864},
+        {bank: 1, prepared_bytes: 67_108_864},
+      ],
+    }],
+  ] as const)("preserves valid %s operation details", (code, details) => {
+    let state = beginSamplePending(inspectedState(), {
+      kind: "import",
+      slot: 17,
+      expectedRevision: 42,
+    });
+    state = reduceSampleState(state, {
+      type: "operation-failed",
+      pending: state.pendingAction,
+      error: {code, message: "opaque Host wording", details},
+    });
+
+    expect(state.pendingAction).toBeNull();
+    expect(state.lastError).toEqual({
+      code,
+      message: code === "BANK_QUOTA_EXHAUSTED"
+        ? "Selection exceeds this Bank quota; shorten it, free another Pad, or use another Bank"
+        : "Selection exceeds the Project quota; shorten it or free prepared Samples",
+      retryPrepare: false,
+      details,
+    });
+  });
+
   test("fails a rejected preview without requiring or changing mutation pending truth", () => {
     const draft = updateSampleDraft(beginSampleDraft(saved, 42), {
       trimStartFrame: 120,

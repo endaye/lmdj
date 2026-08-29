@@ -565,7 +565,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await page.evaluate(() => window.__sampleVoiceUnsubscribe?.());
 });
 
-test("packaged Sample Editor admits a decoded Sample larger than one transport chunk", async ({page, browserName}) => {
+test("packaged Sample Editor clamps a plus-one-frame source and admits the quota-bound selection", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(300_000);
   await installHostProofRecorder(page);
@@ -579,21 +579,21 @@ test("packaged Sample Editor admits a decoded Sample larger than one transport c
   await chooseSampleFile(
     page,
     "Add Sample to Pad A1",
-    "multi-chunk-ramp.wav",
-    pcm16Wav({frames: 524_289}),
+    "bank-quota-plus-one.wav",
+    pcm16Wav({frames: 16_777_217}),
   );
   await commitLongSourceSelection(page);
 
   await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByText("48 kHz · Mono · 524,289 frames")).toBeVisible();
+  await expect(page.getByText("48 kHz · Mono · 16,777,216 frames")).toBeVisible();
   await expectProjectRevision(page, 47);
   const operations = await page.evaluate((offset) =>
     (window.__sampleProofOperations ?? []).slice(offset), operationOffset);
   expect(operations.filter((operation) => operation === "sample.import.begin"))
     .toHaveLength(1);
   expect(operations.filter((operation) => operation === "sample.import.chunk"))
-    .toHaveLength(2);
+    .toHaveLength(33);
   expect(operations.filter((operation) => operation === "sample.import.commit"))
     .toHaveLength(1);
 });
