@@ -57,9 +57,10 @@ refreeze，provenance 指向 squash 后已成悬挂对象的 revision，且未�
 | 低 | 19 | 错误码偏差、恢复边角、文案残留、测试缺口等（第五节） |
 | 信息 | 若干 | 正文列出，无需单独排期 |
 
-**结论建议**：`1.0.37.0` 可作为 canary 候选保留，但在 H1–H3 与 M1–M3 修复
-（或经决策记录明确收窄范围）之前，不应进入 beta/stable 晋升或任何 Release
-边界。
+**当前处置**：`1.0.37.0` 保留为历史 canary 候选。H1–H3、M1–M3 与 #417
+Stop/boundary follow-up 的 source 修复已合入，Product Build `1.0.40.0` 负责最终
+Module/Product 身份与自动化集成；#380 的不可变快照和 #360 的五项物理/人工
+验收仍未完成，因此不能据此宣称 beta/stable、Release 或物理体验通过。
 
 ### 整改处置账本（2026-08-28）
 
@@ -70,15 +71,25 @@ truth integration 与不可变快照分别由 #379、#380 负责。
 | Finding | Owner | Source disposition |
 | --- | --- | --- |
 | H1 | #378 | 实现 writer-lease 内 journal admission、本地 begin-vs-authoring critical section、孤儿 journal 先 seal，以及 settings-only Store rebase；以 Project Store 与 Facade deterministic component cases 阻断回归 |
-| H2 | #376 | open |
-| H3 | #374 | open |
-| M1 | #375 | open |
-| M2 | #373 | open |
-| M3 | #372 | open |
+| H2 | #376 | 实现共享 Web Runtime Session 的权威边界匹配、exact-once flush、串行 post-boundary admission，以及 Creator authority-only 状态转换；单元与 packaged-browser journey 覆盖乱序/重复通知、继续录音、stop、reload 和 committed-event inspection |
+| H3 | #374 | armed target/session/revision admission、journal rebase/disarm 与 Creator session-preserving trim overlay 已合入；Build 40 集成身份与自动化证据，immutable snapshot 仍归 #380 |
+| M1 | #375 | pending overlay 已通过 Facade → Platform → Audio Runtime 在下一 Bar 发布；claimed-generation、BPM、Stop/owner-loss replacement 与 production-hook 边界均有自动化覆盖 |
+| M2 | #373 | source 修复：每次已接受 Pad event 在 acknowledgement 前写入单调、checksummed canonical tail；flush 消费 tail；真实子进程 `SIGKILL` 后重启 seal 两条事件并显式恢复；torn tail 携带 path/prefix/length/remedy fail closed |
+| M3 | #372 | immutable original flush payload、独立 recovery residual、exact replay/collision 与 tail-last precedence 已合入，重试不再二次 mutation 或卡死 journal |
 
-H1 的 source 修复不改写或重新宣称 `1.0.37.0`；其 Module/Product identity 与
-完整集成证据等待 #379，immutable snapshot 等待 #380。#360 的五项物理/人工行
-继续保持未执行。
+六项 source 修复不改写或重新宣称 `1.0.37.0`；其缺失的 Project I/O、Audio
+Runtime、Application Facade patch 身份由 Build 40 集成，Build 39 已分配的 Web
+Platform/Host/Creator 身份不重复 bump。immutable snapshot 等待 #380，#360 的
+五项物理/人工行继续保持未执行。
+
+远端集成跟进 #417 记录了 H2 journey 的一个跨层 Stop/boundary response 竞态：
+PR 与 merged-main 的两个独立 run 都在 durable Stop 已可重放后，让 queued boundary
+flush 的 `INVALID_ARGUMENT` 进入 terminal cleanup，随后只读 `project.inspect` 看到
+`formal Web Host transport is terminated`。source remediation 在共享 Runtime action
+lane 内只对“匹配 pending switch 且 boundary 已排队”的第一次歧义，以同一
+`command_id` 做一次重放；重放成功取消 stale boundary，连续真实拒绝仍保留并让
+boundary 赢得顺序。它不扩大 H2 产品语义；Web 身份已由 Build 39 吸收，并纳入
+Build 40 的最终 Stage 9 自动化集成证据。
 
 ## 二、设计与计划文档评审
 
@@ -209,9 +220,83 @@ reducer 只允许从 `stopped` 进入 `trim-overlay`
 整改方向：要么实现 armed-pad 提交白名单并让 Creator 走会话内 overlay 路径，
 要么按治理规则把收窄补一条 PRD 决策/勘误，并让账本与规格一致。
 
+**#374 source remediation（2026-08-29）**：实现选择了设计已批准的第一条路径。
+Sequence begin 只登记开始录音前已经打开的空 Pad Capture；Project Store 在 writer
+lease 内只接纳 session、Pad 和 expected revision 全匹配的 `ImportAssignSample`，
+成功后用单个 checked journal record 同时 rebase revision 并消费 arm。失败提交和
+显式 disarm 都保留 pending events，Creator 不再先 Stop Sequence，而是在 active /
+switching underlay 上显示 trim overlay。Facade component、Web ControlRuntime、协议、
+Creator reducer/action 与 packaged Chromium journey 均增加回归证据。此处只记录本地
+source disposition，不宣称 #379 的版本集成、#380 的 immutable snapshot、PR/merge、
+Release 或 #360 的物理验收。
+
+**#374 independent review fix（2026-08-29）**：复核发现首次实现仍把 Project
+manifest/receipt 发布放在 `capture-complete` journal record 之前；该窗口失败时，
+Project 已到 `N + 1`，journal 与内存 runtime 却仍 armed 于 `N`，而 Creator 重试会
+生成新的 command/asset identity。修正现在于发布前追加 durable Capture precommit，
+绑定 exact session、slot、expected revision、原 command/asset 与 artifact identity。
+同 bytes 的新 UI command 只在原 transaction、receipt、event、Asset、Pad assignment
+及 `N + 1` revision 全部吻合时 replay 原提交并完成 journal/runtime rebase；不同 bytes
+或任一 identity/truth 冲突均 fail closed 且不二次 mutation。restart recovery 也先以同一
+receipt 规则完成 journal，再进入 owner-loss seal。故障矩阵覆盖 manifest 已发布/
+journal 未完成、冲突 retry、fresh-command retry、后续 flush/stop 与 restart；packaged
+Creator case 另以 A2→armed A1 stop→commit→A1→Stop→reload 的次序检查 exact persisted
+event delta/order/count、Pad/Asset/WAV 与 revision；armed 期间其他 Pad 的普通输入不得
+把 Sample mutation selection 从 A1 改到 A2。共享 running-audio BPM update→immediate
+switch 的 publication failure 仍单列为 #375 集成 blocker，不以移动步骤或弱化断言隐藏。
+
+**#374 independent re-review fix 2（2026-08-29）**：第二次复核补出 precommit
+的另一侧：`capture-prepare` 已持久化、但 manifest 尚未发布时，显式 Discard 原本只清
+Host buffer，而 journal 因 marker 拒绝 disarm，使 active session 无 bytes 可重试且无法
+退出。修正把 disarm/abort 放入 Project writer lease 下的 checked decision：exact matching
+receipt 走原 completion/rebase；无 receipt 且 Project 仍精确位于 expected `N`、原 Pad
+为空、command/Asset 均不存在时追加 durable `capture-abort`，只清 marker 与 arm，保留
+pending events/session 并允许后续 flush/Stop；session、slot、revision、receipt、command、
+Asset、artifact 或 Pad Truth 任一冲突均 fail closed。故障矩阵覆盖 prepare 后的
+pre-publication failure、Discard/disarm、continued flush/Stop 与 crash/restart。packaged
+reload/reopen 断言也从 media type 扩展为 exact assigned Asset、artifact SHA-256 与 byte
+length；共享 #375 running-audio BPM→switch failure 仍保留为独立 blocker。
+
+**#374 independent re-review fix 3（2026-08-29）**：复核继续发现 settings
+selective rebase 在 durable Capture marker 存在时仍被 admission 接纳。Project 先从
+`N` 提交到 `N + 1`，随后 journal `rebase` 因 `capture_commit` 拒绝，形成 Project 与
+journal 分叉并再次困住 session。修正把拒绝移到同一 writer lease 内的
+`admit_sequence_authoring`，在 `commit_loaded` 前返回
+`armed_capture_recovery_pending`。故障矩阵从
+`sample_after_manifest_preparation` 精确复现，证明 settings 不改变 manifest revision
+或 journal/marker，随后 checked Discard 与 flush/Stop 均成功。该修正不扩大 settings/
+Capture 白名单，也不处理共享 #375 publication 语义。
+
 ## 四、中危发现
 
 ### M1 SR-D13「下一圈可听」未接线：journal 叠加音在产品中不存在
+
+**2026-08-29 source remediation (#375)：已修复。** Application Facade 现在只向
+匹配的 active session owner 暴露带单调 generation 的 immutable pending-overlay
+projection；Web Runtime Platform 在 accepted event 后把 committed Runtime Snapshot
+与 projection 组合并发布到下一 Bar，flush/Stop 后发布 clean committed view；Audio
+Runtime 只允许同 Project、同 Pattern、同 activation boundary 的新 view 取代旧 view，
+atomic generation mailbox 先把 generation 标记为 callback-owned，再把旧 slot 标成
+control-thread reclaimable，避免 producer generation 先行造成 boundary onset 丢失，
+且不分配、不释放、不加锁。active-session BPM 更新强制重发 snapshot + overlay；owner
+loss 先排入 clean committed view；Stop 的 durable replay result 保留 committed Pattern
+identity，可在一次 publication failure 后重试恢复。Facade owner/replace/reject/flush
+component case、Audio deterministic claim-race + stress case 与真实 ControlRuntime
+create→import/assign→activate→begin→live trigger→BPM→next Bar→owner loss / Stop replay journey
+共同固定无重复、无空洞、无陈旧 overlay 的源代码边界。版本分配仍归 #379，immutable
+Portal snapshot 仍归 #380；本段不宣称已 merge、已集成 Product identity 或物理听感通过。
+
+**2026-08-29 Review Fix 2：已修复。** claimed view 若携带新 BPM，concurrent
+replacement 现在从 claimed activation + claimed Bar length 计算后续 boundary，不再回退
+到尚未切换的 current BPM/origin。owner-loss clean publication 若失败，Web control 通过已
+安装的 quiescence contract 停止 engine 并清空 Runtime Pattern 后才 abandon owner；失败
+状态保持可诊断。Audio claim hook 与 Web failure hook 只编入 private testable target，
+production archives 由既有 symbol contract 同时检查符号与 marker bytes；callback production
+binary 不含 hook atomic/branch。generation allocator 在 bit 63 claimed marker 前 fail closed。
+deterministic 90-BPM claim-window、cleanup failure、generation boundary 与 production-symbol
+tests 固定这些边界。
+
+以下保留 2026-08-27 审查时的原始缺口证据：
 
 Audio Runtime 侧已交付并有引擎级测试：
 `PreparedPatternView::from_snapshot_with_overlay`
@@ -239,6 +324,53 @@ journal）；唯一持久化 pending tail 的路径是 `abandon_sequence_session
 为空（`web_runtime_host_browser.spec.mjs:2438-2449` 观察到
 `pendingEventCount: 0`）。无 kill -9 / 硬崩溃重启测试。
 
+**#373 source disposition（2026-08-29）**：Project I/O journal 新增单调
+canonical tail snapshot；Facade 先耐久 append、成功后才更新 acknowledgement
+ordering，press 以既有 240-tick 默认时值进入恢复 tail，release snapshot 再替换
+真实时值。flush record 消费同一 tail；若 F1 append 后 execute 在 commit point 前
+失败，继续录音的 F2 必须 canonical 覆盖全部 unresolved flush 与最新 tail，F2
+completed 时同步 supersede 更早批次，recovery 只保留其后真正未提交 tail。
+component regression 由真实子进程接受 `press/release/press`
+三个 Pad event 请求后（最后一个 press 未释放）
+`SIGSTOP`，父进程发送 `SIGKILL` 并验证 signal exit；新 owner reconcile 后得到恰
+一个含两条事件的 `owner_lost` candidate，显式 apply 后 identity/order 保持且
+revision 只增加一次。独立 Project I/O case 证明 reload/flush consumption，并证明
+无终止换行的 torn tail、checksum mismatch、非单调 tail identity 与非 canonical
+event order 均保留原字节、以 `INVALID_PROJECT` 加 path、record offset/durable
+prefix、observed length、stable reason 与 repair/discard remedy fail closed。补充的
+F1→F2 regression 证明较早失败批次不会二次恢复，且 F1 旧同-key event 不会覆盖
+F2 已提交的新值；apply 只增加一次 revision，之后 apply/discard 均不再改变状态。
+第二次 re-review 补齐 inverse completion：F0…F31 可在任何 completion 前耐久；F0
+先完成时，以相同 session/pattern/expected-revision 和 canonical key/value coverage
+resolve 所有等价较晚 retry，而不是只按 `flush_seq <= F0`。非等价较晚 batch 只扣
+精确已提交 event，同-key 新值与新增 key 保留为 recovery residual。独立 case 还
+覆盖 F0 manifest 已提交但 completion 报错、其后 F1 等价 retry 已 append 的歧义态；
+restart reconcile 只回放 F0 receipt，不产生已提交工作的 candidate。
+第三次 re-review 补齐 latest-tail residual：若 F0 manifest/receipt 已提交但
+completion 报错，录音继续耐久写入 A+B 或 A+A'+B、且没有 append 较晚 flush，
+重启回放 F0 completion 也从当前 `pending_events` 扣除精确已提交 A。新增 B 与
+同-key 不同值 A' 保持 canonical 顺序成为唯一 recovery residual，显式 apply 只
+增加一次 revision；等价-only tail 被完全 resolve，不产生 candidate 或第二次写入。
+过滤不重置 `next_tail_seq`/`last_input_sequence`，因此后续 acknowledgement 的
+单调性证据仍连续。
+最终 integration review 还发现 #372 exact-command replay 与 #373 residual filtering
+共用同一字段：F0(A) 完成会把已耐久 F1(A+B) 改写为 B，导致原始 F1(A+B) retry 被
+拒绝、残余 B 反而可能冒充同一 command。修复后每条 flush 永久保存 original
+canonical payload 作为 command identity，另存 effective recovery residual；append
+replay/collision 只比较前者，reconcile/status/apply 只读取后者。sealed v2 显式要求
+两个字段，旧 recovery-only snapshot 不猜测缺失的 original。Project I/O 与 Facade
+回归覆盖 exact A+B retry、B/其他 payload collision、serialize/reload、只恢复并单次
+apply B，以及 32-thread inverse completion。
+最终 precedence review 发现 recovery apply 先以最新 `pending_events` 起始、再合并
+较旧 incomplete flush residual，导致 F0(A-old) 可反向覆盖之后已 acknowledgement 的
+tail A-new；status/list 还把同-key 两份输入直接相加为 3。修复后 Facade 统一构造
+canonical effective recovery：依 flush 顺序合并 incomplete residual，再最后合并
+durable tail。确定性 case 证明 active/recoverable count 为 unique A-new+B 两条、显式
+apply 只写一 revision 且得到 A-new+B，重复 apply/discard 不再修改 Project。
+该 source disposition 不是 merge、Product
+Build、immutable snapshot、远端 CI 或物理验收证据；这些仍分别等待 #379、#380
+与 #360。
+
 ### M3 同 `command_id` 重试可永久卡死 journal（SR-D21 幂等契约的可用性破口）
 
 `SequenceJournal::append_flush` 不做 `command_id` 去重
@@ -261,6 +393,14 @@ SR-D22 指纹门保证 Project Truth 不会双写（无数据腐化），这是�
 故障矩阵（`tests/core/project_io/sequence_journal_test.cpp:439`）每个故障
 用全新 bundle、从不重试提交后故障的 flush，未覆盖。
 
+**整改状态（2026-08-29，#372）：** journal append 现在在同一 append mutex
+与 writer lease 内按 `command_id` 查重；相同 payload 返回原 flush record，冲突
+payload 在写入前拒绝。Facade 在 journal append 后保留 exact in-flight record，
+post-commit 返回失败的重试先执行原 identity，并只从 pending 集合移除该批原
+事件，期间到达的事件必须由新的命令提交。组件测试覆盖 receipt reload 与
+journal completion 的 same-bundle retry、restart reconcile，以及 Facade 中间
+录入、后续 flush、stop 和 journal 清理。版本身份与整体验收仍由 #379 刷新。
+
 ### M4 Pending switch 期间改 BPM 留下陈旧边界（SR-D23）
 
 `request_sequence_switch` 用请求时的锚点算 `effective_runtime_frame`
@@ -268,6 +408,30 @@ SR-D22 指纹门保证 Project Truth 不会双写（无数据腐化），这是�
 锚点（`application.cpp:4125-4132`）但从不重算 pending 边界。改速后，存储的
 边界帧、引擎已按旧 BPM 发布的激活帧、新锚点下的音乐 Bar 三者分裂——正是
 SR-D23 禁止的边界不同一。未测试。
+
+**2026-08-29 source disposition:** #375 Review Fix 3 在 Facade admission
+处选择获准的 fail-before-mutation 合约：只要 session 已有 pending Pattern，
+BPM update 就以 `INVALID_ARGUMENT` / `reason:switch_pending` 拒绝，Project
+revision、BPM、anchor 与 Runtime publication 均不改变。Quantize/Swing 不改变
+transport boundary，仍可更新。若 BPM update 已先成功并发布 immutable view，
+随后 switch 可凭精确 pending generation、源 Pattern 与 activation frame 的
+authority 确定性取代它；普通不同 Pattern overlap 仍拒绝。Facade、ControlRuntime
+及 packaged Chromium 都有回归证据；版本集成仍由 #379 管理。
+
+**2026-08-29 Review Fix 4 disposition:** Audio-owned generation 即使正在
+apply-point claim 也先剥离 bit-63 marker 再匹配 slot/authority；精确 switch 可在
+该窗口保留下一 Bar，普通不同 Pattern overlap 仍拒绝。Stop 取消 target 后不再
+重用已过期 activation frame；相同 durable receipt 的延迟 replay 从当前 transport
+派生新 next Bar，Project revision 不二次变化。Pattern telemetry 明确增加 canceled
+终态，并由 component/stress 证明 accepted 只落入 applied、superseded、canceled
+或显式计数的 pending bucket。
+
+**2026-08-29 Review Fix 5 disposition:** pending 不再推断为 0/1；telemetry
+显式报告 `pending_publications`，所以 audio-owned A 与 queued B 并存时守恒式仍
+完整。quiescent `stop()` 对 queued-only、audio-owned-only 与两者并存逐 generation
+计 canceled，重复 stop/start 不丢失或重复累计。ControlRuntime cancellation 的
+no-pending 分支重读 current generation；target 若恰在两次查询之间 apply，Stop
+fail closed，而不是误判已取消。三个窗口都有 deterministic native 回归。
 
 ### M5 恢复不可发现、恢复 UI 无指纹信息（SR-D17/D22 的 UX 半途）
 
@@ -459,11 +623,11 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
 | --- | --- |
 | 并发 begin-vs-authoring / 孤儿 journal 后先发 authoring command | H1 |
 | 边界后继续录音（任何层级都停在切槽确认） | H2 |
-| Sequence 内 trim overlay 全流程（会话存活、提交 rebase、冲突保留） | H3 |
-| 未 flush 音的下一圈可听性 | M1 |
-| kill -9 / 硬崩溃后恢复候选出现 | M2 |
-| 提交后故障 + 同 `command_id` 重试 | M3 |
-| Pending switch 中改 BPM | M4 |
+| Sequence 内 trim overlay 全流程（会话存活、提交 rebase、冲突保留） | #374 本地 source remediation 已补；集成证据等待 #379/#380 |
+| 未 flush 音的下一圈可听性 | M1（#375 source-fixed；#379/#380 尚未集成） |
+| ~~kill -9 / 硬崩溃后恢复候选出现~~ | M2 source gate 已由 #373 的真实 `SIGKILL` component journey 覆盖；集成身份/快照仍待 #379/#380 |
+| ~~提交后故障 + 同 `command_id` 重试~~ | M3 source gate 已由 #372 的 immutable original payload、inverse completion 与 exact replay cases 覆盖；集成身份/快照仍待 #379/#380 |
+| Pending switch 中改 BPM | M4（#375 Review Fix 3 source-fixed；#379 待集成） |
 | reload → recover 浏览器旅程；恢复指纹 mismatch 的 Creator 路径 | M5/M8 |
 | 「切 Sample：停录 flush 后 Trim 成功」的正半段 | §12 |
 | 「Record 中切 Sample 表面再开麦：会话已结束不叠加」 | §12 |
@@ -481,7 +645,7 @@ reconcile、stress 层、三语言指纹向量、迁移重复 step 向量）。�
    旅程延伸到边界后录音；连带修 L11。
 3. **H3**：实现 armed-pad 提交白名单 + Creator 会话内 overlay 路径，或走
    决策记录正式收窄 SR-D15/D18 并勘误规格与账本。
-4. **M1–M3**：接线 journal 叠加发布；录音事件按批耐久写 journal（或决策
+4. **M1–M3**：M1 已由 #375 接线 journal 叠加发布；M2 仍需录音事件按批耐久写 journal（或决策
    记录接受「flush 粒度耐久」并勘误 SR-D17/§5）；journal 层 `command_id`
    去重 + reconcile 对身份不匹配降级为可跳过。
 

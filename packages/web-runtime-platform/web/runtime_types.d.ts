@@ -97,7 +97,12 @@ export interface SequenceRuntimeSession {
     readonly sessionId: string;
     readonly patternId: string;
     readonly expectedRevision: number;
+    readonly armedCaptureSlot?: number | null;
   }): Promise<SequenceBeginResult>;
+  disarmSequenceCapture(request: {
+    readonly sessionId: string;
+    readonly slot: number;
+  }): Promise<boolean>;
   recordSequenceEvent(request: {
     readonly sessionId: string;
     readonly slot: number;

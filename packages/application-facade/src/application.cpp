@@ -107,6 +107,12 @@ constexpr std::size_t kMaximumRememberedSampleImportTokens = 256U;
 constexpr std::size_t kMaximumSampleScavengeFiles = 64U;
 constexpr std::uint64_t kMaximumSampleStagingMarkerBytes = 4U * 1024U;
 constexpr std::uint64_t kMinimumSampleStagingAgeSeconds = 24U * 60U * 60U;
+constexpr audio::RuntimePreparationLimits kDefaultSampleLimits{
+    1'048'576,
+    67'108'864,
+    134'217'728,
+    268'435'456,
+};
 constexpr std::string_view kSampleStagingContract =
     "lmdj.sample-import-staging.v1";
 constexpr std::string_view kWaveformCacheContract =
@@ -142,6 +148,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"sample.import.chunk", OperationKind::command},
       {"sample.import.commit", OperationKind::command},
       {"sample.inspect", OperationKind::query},
+      {"sample.quota", OperationKind::query},
       {"sample.reset_pad", OperationKind::command},
       {"sample.update_pad", OperationKind::command},
       {"sample.waveform", OperationKind::query},
@@ -614,6 +621,12 @@ std::string_view sample_public_message(ErrorCode code) {
       return "Project could not be validated";
     case ErrorCode::cook_failed:
       return "Sample runtime preparation failed";
+    case ErrorCode::bank_quota_exhausted:
+      return "why: the selection exceeds the Sample Bank quota; remedy: "
+             "shorten it, free another Pad, or target another Bank";
+    case ErrorCode::project_quota_exhausted:
+      return "why: the selection exceeds the Sample Project quota; remedy: "
+             "shorten it or free a Pad in any Bank, then retry";
     case ErrorCode::io_error:
       return "Sample storage operation failed";
     case ErrorCode::permission_denied:
@@ -658,6 +671,47 @@ nlohmann::json sample_public_details(const Error& error) {
         value == project_io::kStorageConditionAlreadyExists ||
         value == project_io::kStorageConditionAtomicPublishUnsupported) {
       details["storage_condition"] = value;
+    }
+  }
+  if (error.code == ErrorCode::bank_quota_exhausted) {
+    for (const auto* key : {
+             "bank",
+             "requested_bytes",
+             "requested_frames",
+             "remaining_bytes",
+             "remaining_frames",
+             "quota_bytes",
+         }) {
+      const auto found = error.details.find(key);
+      if (found != error.details.end() &&
+          (found->is_number_unsigned() || found->is_number_integer())) {
+        details[key] = *found;
+      }
+    }
+    const auto consumed = error.details.find("consumed");
+    if (consumed != error.details.end() && consumed->is_array() &&
+        all_strings_valid(*consumed)) {
+      details["consumed"] = *consumed;
+    }
+  }
+  if (error.code == ErrorCode::project_quota_exhausted) {
+    for (const auto* key : {
+             "requested_bytes",
+             "requested_frames",
+             "project_used_bytes",
+             "project_remaining_bytes",
+             "project_quota_bytes",
+         }) {
+      const auto found = error.details.find(key);
+      if (found != error.details.end() &&
+          (found->is_number_unsigned() || found->is_number_integer())) {
+        details[key] = *found;
+      }
+    }
+    const auto banks = error.details.find("banks");
+    if (banks != error.details.end() && banks->is_array() &&
+        all_strings_valid(*banks)) {
+      details["banks"] = *banks;
     }
   }
   return details;
@@ -1197,6 +1251,60 @@ Error runtime_preparation_limit_error(
   };
 }
 
+Error runtime_bank_quota_error(
+    domain::PadSlotId slot,
+    std::uint64_t requested_bytes,
+    std::uint64_t requested_frames,
+    std::uint64_t remaining_bytes,
+    std::uint64_t quota_bytes,
+    const std::vector<nlohmann::json>& consumed) {
+  return Error{
+      ErrorCode::bank_quota_exhausted,
+      "Bank prepared-PCM quota exhausted; why: the committed selection "
+      "does not fit in this Bank; remedy: shorten the selection, free a Pad "
+      "in this Bank, or target another Bank, then retry",
+      {
+          {"bank", slot.bank},
+          {"requested_bytes", requested_bytes},
+          {"requested_frames", requested_frames},
+          {"remaining_bytes", remaining_bytes},
+          {"remaining_frames", remaining_bytes / sizeof(float)},
+          {"quota_bytes", quota_bytes},
+          {"consumed", consumed},
+      },
+  };
+}
+
+Error runtime_project_quota_error(
+    std::uint64_t requested_bytes,
+    std::uint64_t requested_frames,
+    std::uint64_t project_used_bytes,
+    std::uint64_t project_remaining_bytes,
+    std::uint64_t project_quota_bytes,
+    const std::array<std::uint64_t, 4>& bank_bytes) {
+  auto banks = nlohmann::json::array();
+  for (std::uint8_t bank = 0; bank < bank_bytes.size(); ++bank) {
+    banks.push_back({
+        {"bank", bank},
+        {"prepared_bytes", bank_bytes.at(bank)},
+    });
+  }
+  return Error{
+      ErrorCode::project_quota_exhausted,
+      "Project prepared-PCM quota exhausted; why: the committed selection "
+      "does not fit in the current generation; remedy: shorten or remove "
+      "samples in the Project, then retry",
+      {
+          {"requested_bytes", requested_bytes},
+          {"requested_frames", requested_frames},
+          {"project_used_bytes", project_used_bytes},
+          {"project_remaining_bytes", project_remaining_bytes},
+          {"project_quota_bytes", project_quota_bytes},
+          {"banks", std::move(banks)},
+      },
+  };
+}
+
 bool valid_host_project_path(const std::filesystem::path& path) {
   const auto encoded = path.generic_string();
   return valid_utf8(encoded) && path.is_absolute() &&
@@ -1544,6 +1652,18 @@ foundation::Result<void> validate_initial_pattern(
   return foundation::Result<void>::success();
 }
 
+std::vector<domain::PatternEvent> canonical_recovery_events(
+    const project_io::ActiveSequenceJournal& journal) {
+  std::vector<domain::PatternEvent> recovered;
+  for (const auto& flush : journal.flushes) {
+    if (!flush.completed) {
+      recovered = domain::merge_pattern_events(
+          recovered, flush.recovery_events);
+    }
+  }
+  return domain::merge_pattern_events(recovered, journal.pending_events);
+}
+
 }  // namespace
 
 struct RuntimeProjectWriterLease::Impl {
@@ -1554,6 +1674,16 @@ struct RuntimeProjectWriterLease::Impl {
 };
 
 struct Application::Impl {
+  struct PreparedQuotaUsage {
+    std::uint64_t bytes;
+    std::uint64_t frames;
+  };
+
+  struct SampleQuotaComputation {
+    SampleQuotaResult result;
+    std::array<std::uint64_t, 4> bank_used_bytes;
+  };
+
   struct SampleImportState {
     SampleImportBeginRequest request;
     std::filesystem::path directory;
@@ -1581,13 +1711,16 @@ struct Application::Impl {
     bool quantize_enabled{};
     std::uint8_t swing_percent{};
     std::uint64_t available_slots{};
+    std::uint64_t overlay_generation{};
     std::vector<domain::PatternEvent> pending_events;
     std::map<domain::PadSlotId, PressedSequencePad> pressed;
     std::optional<foundation::PatternId> pending_pattern_id;
     std::optional<std::uint64_t> effective_runtime_frame;
+    std::optional<project_io::SequenceFlushRecord> in_flight_flush;
     std::optional<project_io::SequenceFlushIdentity> last_flush_identity;
     std::optional<std::uint64_t> last_committed_revision;
     std::unique_ptr<project_io::ProjectWriterLease> lease;
+    std::optional<domain::PadSlotId> armed_capture_slot;
   };
 
   explicit Impl(ApplicationConfig config)
@@ -1600,7 +1733,8 @@ struct Application::Impl {
             config.storage_platform
                 ? std::move(config.storage_platform)
                 : project_io::make_default_project_storage_platform()),
-        sample_limits(config.runtime_preparation_limits),
+        sample_limits(
+            config.runtime_preparation_limits.value_or(kDefaultSampleLimits)),
         projects(storage_platform),
         sequence_journals(storage_platform),
         bundle_transfers(storage_platform),
@@ -1846,8 +1980,12 @@ struct Application::Impl {
   static void merge_pending(
       SequenceRuntime& runtime,
       domain::PatternEvent event) {
-    runtime.pending_events = domain::merge_pattern_events(
+    auto merged = domain::merge_pattern_events(
         runtime.pending_events, {std::move(event)});
+    if (merged != runtime.pending_events) {
+      runtime.pending_events = std::move(merged);
+      ++runtime.overlay_generation;
+    }
   }
 
   static void finalize_pressed(
@@ -1875,6 +2013,27 @@ struct Application::Impl {
     if (remove_press) {
       runtime.pressed.erase(found);
     }
+  }
+
+  static std::vector<domain::PatternEvent> recoverable_tail(
+      const SequenceRuntime& runtime) {
+    auto result = runtime.pending_events;
+    const auto loop_length = domain::pattern_length_ticks(runtime.bars);
+    for (const auto& [slot, press] : runtime.pressed) {
+      result = domain::merge_pattern_events(
+          result,
+          {domain::PatternEvent{
+              slot,
+              press.onset_tick,
+              domain::normalize_duration_tick(
+                  press.raw_attack_tick,
+                  press.raw_attack_tick + domain::kSixteenthTicks,
+                  press.onset_tick,
+                  loop_length),
+              press.velocity,
+          }});
+    }
+    return result;
   }
 
   static foundation::Result<void> validate_sequence_path_and_session(
@@ -1915,7 +2074,9 @@ struct Application::Impl {
     auto valid = validate_sequence_path_and_session(
         request.project_path, request.session_id);
     if (!valid.has_value() ||
-        !domain::is_valid_uuid(request.pattern_id.value())) {
+        !domain::is_valid_uuid(request.pattern_id.value()) ||
+        (request.armed_capture_slot.has_value() &&
+         !domain::is_valid_slot(*request.armed_capture_slot))) {
       return foundation::Result<SequenceMutationResult>::failure(
           valid.has_value()
               ? sequence_error(
@@ -1963,13 +2124,25 @@ struct Application::Impl {
       return foundation::Result<SequenceMutationResult>::failure(
           sequence_error(ErrorCode::not_found, "Sequence Pattern was not found"));
     }
+    if (request.armed_capture_slot.has_value() &&
+        loaded.value()
+            .banks.at(request.armed_capture_slot->bank)
+            .at(request.armed_capture_slot->pad)
+            .asset_id.has_value()) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(
+              ErrorCode::invalid_argument,
+              "armed Capture target Pad is not empty",
+              {{"reason", "armed_capture_target_assigned"}}));
+    }
     auto begun = sequence_journals.begin(
         request.project_path,
         request.session_id,
         request.pattern_id,
         pattern->second.bars,
         project_io::sequence_pattern_fingerprint(pattern->second),
-        request.expected_revision);
+        request.expected_revision,
+        request.armed_capture_slot);
     if (!begun.has_value()) {
       return foundation::Result<SequenceMutationResult>::failure(
           begun.error());
@@ -1986,13 +2159,16 @@ struct Application::Impl {
         loaded.value().quantize_enabled,
         loaded.value().swing_percent,
         available_slot_mask(loaded.value()),
+        0,
         {},
         {},
+        std::nullopt,
         std::nullopt,
         std::nullopt,
         std::nullopt,
         std::nullopt,
         std::move(lease.value()),
+        request.armed_capture_slot,
     };
     auto [inserted, ok] = sequence_sessions.emplace(key, std::move(runtime));
     if (!ok) {
@@ -2002,7 +2178,7 @@ struct Application::Impl {
     }
     return foundation::Result<SequenceMutationResult>::success(
         SequenceMutationResult{runtime_status(inserted->second), std::nullopt,
-                               false});
+                               false, std::nullopt});
   }
 
   foundation::Result<SequenceMutationResult> record_sequence_event(
@@ -2044,6 +2220,13 @@ struct Application::Impl {
               {{"reason", "switch_boundary_reached"},
                {"effective_runtime_frame", *runtime.effective_runtime_frame}}));
     }
+    if (runtime.armed_capture_slot == request.event.slot) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(
+              ErrorCode::invalid_argument,
+              "armed Capture Pad is not a Sequence event",
+              {{"reason", "armed_capture_in_progress"}}));
+    }
     const auto ticks = audio::raw_tick_at(
         runtime.anchor, request.event.runtime_frame);
     if (!ticks.has_value()) {
@@ -2057,6 +2240,8 @@ struct Application::Impl {
                          "Sequence Pad has no assigned Sample",
                          {{"reason", "sample_unavailable"}}));
     }
+    const auto previous_pending = runtime.pending_events;
+    const auto previous_pressed = runtime.pressed;
     if (request.event.pressed) {
       finalize_pressed(runtime, request.event.slot, ticks.value(), true);
       const auto loop_length = domain::pattern_length_ticks(runtime.bars);
@@ -2077,10 +2262,23 @@ struct Application::Impl {
       }
       finalize_pressed(runtime, request.event.slot, ticks.value(), true);
     }
+    const auto durable = sequence_journals.append_tail(
+        request.project_path,
+        runtime.session_id,
+        runtime.pattern_id,
+        runtime.expected_revision,
+        request.event.input_sequence,
+        recoverable_tail(runtime));
+    if (!durable.has_value()) {
+      runtime.pending_events = previous_pending;
+      runtime.pressed = previous_pressed;
+      return foundation::Result<SequenceMutationResult>::failure(durable.error());
+    }
     runtime.last_runtime_frame = request.event.runtime_frame;
     runtime.last_input_sequence = request.event.input_sequence;
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{runtime_status(runtime), std::nullopt, false});
+        SequenceMutationResult{
+            runtime_status(runtime), std::nullopt, false, std::nullopt});
   }
 
   static void finalize_unreleased(SequenceRuntime& runtime, bool clear) {
@@ -2123,7 +2321,10 @@ struct Application::Impl {
     runtime.expected_revision = project.revision;
     runtime.pending_pattern_id.reset();
     runtime.effective_runtime_frame.reset();
-    runtime.pending_events.clear();
+    if (!runtime.pending_events.empty()) {
+      runtime.pending_events.clear();
+      ++runtime.overlay_generation;
+    }
     runtime.pressed.clear();
     return foundation::Result<void>::success();
   }
@@ -2148,8 +2349,9 @@ struct Application::Impl {
         return foundation::Result<SequenceMutationResult>::success(
             SequenceMutationResult{
                 status,
-                replayed.value()->outcome.state.revision,
+                replayed.value()->committed_revision,
                 true,
+                replayed.value()->identity.pattern_id,
             });
       }
       return foundation::Result<SequenceMutationResult>::failure(
@@ -2158,7 +2360,54 @@ struct Application::Impl {
                          {{"reason", "sequence_owner_mismatch"}}));
     }
     auto& runtime = found->second;
-    if (request.runtime_frame < runtime.last_runtime_frame) {
+    if (runtime.last_flush_identity.has_value() &&
+        runtime.last_flush_identity->command_id == request.command_id) {
+      return foundation::Result<SequenceMutationResult>::success(
+          SequenceMutationResult{
+              runtime_status(runtime),
+              runtime.last_committed_revision,
+              true,
+              runtime.last_flush_identity->pattern_id,
+          });
+    }
+    const bool replaying_in_flight_command =
+        runtime.in_flight_flush.has_value() &&
+        runtime.in_flight_flush->command_id == request.command_id;
+    auto replay_persisted_command = [&]() -> foundation::Result<
+        std::optional<SequenceMutationResult>> {
+      auto replayed = projects.replay_sequence_flush(
+          request.project_path, runtime.session_id, request.command_id);
+      if (!replayed.has_value()) {
+        return foundation::Result<
+            std::optional<SequenceMutationResult>>::failure(
+            replayed.error());
+      }
+      if (!replayed.value().has_value()) {
+        return foundation::Result<
+            std::optional<SequenceMutationResult>>::success(std::nullopt);
+      }
+      return foundation::Result<
+          std::optional<SequenceMutationResult>>::success(
+          SequenceMutationResult{
+              runtime_status(runtime),
+              replayed.value()->committed_revision,
+              true,
+              replayed.value()->identity.pattern_id,
+          });
+    };
+    if (!replaying_in_flight_command) {
+      auto replayed = replay_persisted_command();
+      if (!replayed.has_value()) {
+        return foundation::Result<SequenceMutationResult>::failure(
+            replayed.error());
+      }
+      if (replayed.value().has_value()) {
+        return foundation::Result<SequenceMutationResult>::success(
+            std::move(*replayed.value()));
+      }
+    }
+    if (!replaying_in_flight_command &&
+        request.runtime_frame < runtime.last_runtime_frame) {
       return foundation::Result<SequenceMutationResult>::failure(
           sequence_error(ErrorCode::invalid_argument,
                          "Sequence flush frame moved backwards"));
@@ -2166,22 +2415,43 @@ struct Application::Impl {
     const bool switch_due = runtime.effective_runtime_frame.has_value() &&
                             request.runtime_frame >=
                                 *runtime.effective_runtime_frame;
-    if (runtime.last_flush_identity.has_value() &&
-        runtime.last_flush_identity->command_id == request.command_id &&
-        runtime.pending_events.empty()) {
-      return foundation::Result<SequenceMutationResult>::success(
-          SequenceMutationResult{
-              runtime_status(runtime),
-              runtime.last_committed_revision,
-              true,
-          });
-    }
 
-    finalize_unreleased(runtime, stop || switch_due);
-    runtime.last_runtime_frame = request.runtime_frame;
+    if (!replaying_in_flight_command) {
+      finalize_unreleased(runtime, stop || switch_due);
+      runtime.last_runtime_frame = request.runtime_frame;
+    }
     std::optional<project_io::SequenceFlushExecution> execution;
     const bool was_switching = runtime.pending_pattern_id.has_value();
-    if (!runtime.pending_events.empty()) {
+    bool replayed_in_flight_command = false;
+    if (runtime.in_flight_flush.has_value()) {
+      const auto& flush = *runtime.in_flight_flush;
+      project_io::SequenceFlushIdentity identity{
+          runtime.session_id,
+          flush.flush_seq,
+          flush.command_id,
+          flush.pattern_id,
+      };
+      auto committed = projects.execute_sequence_flush(
+          request.project_path, identity);
+      if (!committed.has_value()) {
+        return foundation::Result<SequenceMutationResult>::failure(
+            committed.error());
+      }
+      execution.emplace(std::move(committed.value()));
+      runtime.expected_revision = execution->outcome.state.revision;
+      std::erase_if(
+          runtime.pending_events,
+          [&flush](const auto& pending) {
+            return std::ranges::find(flush.canonical_events, pending) !=
+                   flush.canonical_events.end();
+          });
+      runtime.last_flush_identity = identity;
+      runtime.last_committed_revision = runtime.expected_revision;
+      ++runtime.next_flush_seq;
+      replayed_in_flight_command = flush.command_id == request.command_id;
+      runtime.in_flight_flush.reset();
+    }
+    if (!replayed_in_flight_command && !runtime.pending_events.empty()) {
       if (was_switching) {
         auto active = sequence_journals.set_state(
             request.project_path,
@@ -2203,6 +2473,7 @@ struct Application::Impl {
         return foundation::Result<SequenceMutationResult>::failure(
             appended.error());
       }
+      runtime.in_flight_flush = appended.value();
       project_io::SequenceFlushIdentity identity{
           runtime.session_id,
           appended.value().flush_seq,
@@ -2218,9 +2489,22 @@ struct Application::Impl {
       execution.emplace(std::move(committed.value()));
       runtime.expected_revision = execution->outcome.state.revision;
       runtime.pending_events.clear();
+      ++runtime.overlay_generation;
       runtime.last_flush_identity = identity;
       runtime.last_committed_revision = runtime.expected_revision;
       ++runtime.next_flush_seq;
+      runtime.in_flight_flush.reset();
+    }
+
+    if (replayed_in_flight_command &&
+        (!runtime.pending_events.empty() || !runtime.pressed.empty())) {
+      return foundation::Result<SequenceMutationResult>::success(
+          SequenceMutationResult{
+              runtime_status(runtime),
+              runtime.last_committed_revision,
+              true,
+              runtime.last_flush_identity->pattern_id,
+          });
     }
 
     if (stop) {
@@ -2239,13 +2523,15 @@ struct Application::Impl {
             removed.error());
       }
       const auto revision = runtime.expected_revision;
+      const auto committed_pattern_id = runtime.pattern_id;
       const auto replayed = execution.has_value() &&
                             execution->outcome.replayed;
       sequence_sessions.erase(found);
       SequenceStatus status;
       status.expected_revision = revision;
       return foundation::Result<SequenceMutationResult>::success(
-          SequenceMutationResult{status, revision, replayed});
+          SequenceMutationResult{
+              status, revision, replayed, committed_pattern_id});
     }
 
     if (switch_due) {
@@ -2284,6 +2570,9 @@ struct Application::Impl {
                 ? std::optional<std::uint64_t>{runtime.expected_revision}
                 : std::nullopt,
             execution.has_value() && execution->outcome.replayed,
+            execution.has_value()
+                ? std::optional<foundation::PatternId>{runtime.pattern_id}
+                : std::nullopt,
         });
   }
 
@@ -2398,7 +2687,8 @@ struct Application::Impl {
           switching.error());
     }
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{runtime_status(runtime), std::nullopt, false});
+        SequenceMutationResult{
+            runtime_status(runtime), std::nullopt, false, std::nullopt});
   }
 
   foundation::Result<SequenceStatus> query_sequence_status(
@@ -2416,11 +2706,7 @@ struct Application::Impl {
     }
     const auto active = sequence_journals.read_active(request.project_path);
     if (active.has_value()) {
-      const auto pending = std::accumulate(
-          active.value().flushes.begin(), active.value().flushes.end(),
-          std::uint64_t{0}, [](std::uint64_t total, const auto& flush) {
-            return total + (flush.completed ? 0U : flush.canonical_events.size());
-          });
+      const auto pending = canonical_recovery_events(active.value()).size();
       return foundation::Result<SequenceStatus>::success(SequenceStatus{
           active.value().state == project_io::SequenceSessionState::switching
               ? SequenceRecordState::switching
@@ -2446,11 +2732,7 @@ struct Application::Impl {
       return foundation::Result<SequenceStatus>::success(SequenceStatus{});
     }
     const auto& candidate = recovery.value().front().journal;
-    const auto pending = std::accumulate(
-        candidate.flushes.begin(), candidate.flushes.end(), std::uint64_t{0},
-        [](std::uint64_t total, const auto& flush) {
-          return total + (flush.completed ? 0U : flush.canonical_events.size());
-        });
+    const auto pending = canonical_recovery_events(candidate).size();
     return foundation::Result<SequenceStatus>::success(SequenceStatus{
         SequenceRecordState::recoverable,
         candidate.session_id,
@@ -2461,6 +2743,34 @@ struct Application::Impl {
         pending,
         std::nullopt,
     });
+  }
+
+  foundation::Result<SequenceOverlayProjection> query_sequence_overlay(
+      const SequenceOverlayRequest& request) const {
+    auto valid = validate_sequence_path_and_session(
+        request.project_path, request.session_id);
+    if (!valid.has_value()) {
+      return foundation::Result<SequenceOverlayProjection>::failure(
+          valid.error());
+    }
+    std::lock_guard lock(sequence_mutex);
+    const auto runtime = sequence_sessions.find(
+        sequence_key(request.project_path));
+    if (runtime == sequence_sessions.end() ||
+        runtime->second.session_id != request.session_id) {
+      return foundation::Result<SequenceOverlayProjection>::failure(
+          sequence_error(
+              ErrorCode::invalid_argument,
+              "Sequence overlay owner does not match",
+              {{"reason", "sequence_owner_mismatch"}}));
+    }
+    return foundation::Result<SequenceOverlayProjection>::success(
+        SequenceOverlayProjection{
+            runtime->second.session_id,
+            runtime->second.pattern_id,
+            runtime->second.overlay_generation,
+            runtime->second.pending_events,
+        });
   }
 
   foundation::Result<std::vector<SequenceRecoveryInfo>>
@@ -2479,11 +2789,8 @@ struct Application::Impl {
     std::vector<SequenceRecoveryInfo> result;
     result.reserve(listed.value().size());
     for (const auto& candidate : listed.value()) {
-      const auto event_count = std::accumulate(
-          candidate.journal.flushes.begin(), candidate.journal.flushes.end(),
-          std::uint64_t{0}, [](std::uint64_t total, const auto& flush) {
-            return total + (flush.completed ? 0U : flush.canonical_events.size());
-          });
+      const auto event_count =
+          canonical_recovery_events(candidate.journal).size();
       result.push_back(SequenceRecoveryInfo{
           candidate.journal.session_id,
           candidate.journal.pattern_id,
@@ -2553,13 +2860,7 @@ struct Application::Impl {
           {{"reason", "pattern_changed"},
            {"pattern_id", destination.value()}}));
     }
-    std::vector<domain::PatternEvent> recovered_events;
-    for (const auto& flush : candidate->journal.flushes) {
-      if (!flush.completed) {
-        recovered_events = domain::merge_pattern_events(
-            recovered_events, flush.canonical_events);
-      }
-    }
+    auto recovered_events = canonical_recovery_events(candidate->journal);
     auto begun = sequence_journals.begin(
         request.project_path,
         request.session_id,
@@ -2621,7 +2922,8 @@ struct Application::Impl {
     SequenceStatus status;
     status.expected_revision = committed_revision;
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{status, committed_revision, replayed});
+        SequenceMutationResult{
+            status, committed_revision, replayed, std::nullopt});
   }
 
   foundation::Result<void> discard_sequence_recovery(
@@ -2653,6 +2955,51 @@ struct Application::Impl {
           ErrorCode::not_found, "Sequence recovery candidate was not found"));
     }
     return storage_platform->remove(candidate->path);
+  }
+
+  foundation::Result<void> disarm_sequence_capture(
+      const SequenceCaptureDisarmRequest& request) {
+    auto valid = validate_sequence_path_and_session(
+        request.project_path, request.session_id);
+    if (!valid.has_value() || !domain::is_valid_slot(request.slot)) {
+      return foundation::Result<void>::failure(
+          valid.has_value()
+              ? sequence_error(
+                    ErrorCode::invalid_argument,
+                    "armed Capture disarm target is invalid")
+              : valid.error());
+    }
+    std::lock_guard lock(sequence_mutex);
+    const auto found = sequence_sessions.find(sequence_key(request.project_path));
+    if (found == sequence_sessions.end() ||
+        found->second.session_id != request.session_id) {
+      return foundation::Result<void>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "armed Capture disarm owner does not match",
+          {{"reason", "sequence_owner_mismatch"}}));
+    }
+    auto& runtime = found->second;
+    if (!runtime.armed_capture_slot.has_value()) {
+      return foundation::Result<void>::success();
+    }
+    if (*runtime.armed_capture_slot != request.slot) {
+      return foundation::Result<void>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "armed Capture disarm target does not match",
+          {{"reason", "armed_capture_target_mismatch"}}));
+    }
+    auto disarmed = projects.disarm_sequence_capture(
+        request.project_path, request.session_id, request.slot);
+    if (!disarmed.has_value()) {
+      return foundation::Result<void>::failure(disarmed.error());
+    }
+    if (disarmed.value().reconciled_commit) {
+      runtime.expected_revision = disarmed.value().expected_revision;
+      runtime.available_slots |=
+          std::uint64_t{1} << slot_index(request.slot);
+    }
+    runtime.armed_capture_slot.reset();
+    return foundation::Result<void>::success();
   }
 
   void abandon_sequence_sessions() noexcept {
@@ -2715,6 +3062,9 @@ struct Application::Impl {
                                          ? nlohmann::json(*result.committed_revision)
                                          : nlohmann::json(nullptr);
     encoded["replayed"] = result.replayed;
+    if (result.committed_pattern_id.has_value()) {
+      encoded["committed_pattern_id"] = result.committed_pattern_id->value();
+    }
     return encoded;
   }
 
@@ -2722,14 +3072,25 @@ struct Application::Impl {
     require(
         exact_keys(request,
                    {"operation", "project_path", "session_id", "pattern_id",
-                    "expected_revision", "runtime_frame"}),
+                    "expected_revision", "runtime_frame"}) ||
+            exact_keys(request,
+                       {"operation", "project_path", "session_id", "pattern_id",
+                        "expected_revision", "runtime_frame",
+                        "armed_capture_slot"}),
         "sequence.record.begin request shape is invalid");
+    const auto armed_capture_slot =
+        !request.contains("armed_capture_slot") ||
+                request.at("armed_capture_slot").is_null()
+            ? std::optional<domain::PadSlotId>{}
+            : std::optional<domain::PadSlotId>{
+                  slot_value(request.at("armed_capture_slot"))};
     const auto result = begin_sequence(SequenceBeginRequest{
         absolute_path_field(request, "project_path"),
         foundation::SequenceSessionId{uuid_field(request, "session_id")},
         foundation::PatternId{uuid_field(request, "pattern_id")},
         unsigned_field(request, "expected_revision"),
         unsigned_field(request, "runtime_frame"),
+        armed_capture_slot,
     });
     if (!result.has_value()) {
       return error_envelope(result.error());
@@ -2917,6 +3278,9 @@ struct Application::Impl {
     }
     if (operation == "sample.inspect") {
       return sample_inspect(request);
+    }
+    if (operation == "sample.quota") {
+      return sample_quota(request);
     }
     if (operation == "sample.waveform") {
       return sample_waveform(request);
@@ -3413,6 +3777,168 @@ struct Application::Impl {
     return computed;
   }
 
+  foundation::Result<PreparedQuotaUsage> measure_prepared_quota(
+      std::span<const std::byte> bytes) const {
+    const auto decoded = cooker::decode_wav(bytes);
+    if (!decoded.has_value()) {
+      return foundation::Result<PreparedQuotaUsage>::failure(
+          decoded.error());
+    }
+    auto frames = static_cast<std::uint64_t>(
+        decoded.value()->interleaved.size() / decoded.value()->channels);
+    if (decoded.value()->sample_rate != 48'000) {
+      const auto prepared = cooker::prepare_runtime_pcm(*decoded.value());
+      if (!prepared.has_value() || prepared.value()->channels == 0 ||
+          prepared.value()->interleaved.size() %
+                  prepared.value()->channels !=
+              0) {
+        return foundation::Result<PreparedQuotaUsage>::failure(
+            prepared.has_value()
+                ? Error{
+                      ErrorCode::cook_failed,
+                      "prepared Sample PCM shape is invalid",
+                  }
+                : prepared.error());
+      }
+      frames = static_cast<std::uint64_t>(
+          prepared.value()->interleaved.size() /
+          prepared.value()->channels);
+    }
+    const auto prepared_bytes = audio::checked_mono_float_bytes(frames);
+    if (!prepared_bytes.has_value()) {
+      return foundation::Result<PreparedQuotaUsage>::failure(Error{
+          ErrorCode::invalid_argument,
+          "prepared Sample PCM byte length overflowed",
+      });
+    }
+    return foundation::Result<PreparedQuotaUsage>::success(
+        PreparedQuotaUsage{*prepared_bytes, frames});
+  }
+
+  foundation::Result<SampleQuotaComputation> compute_sample_quota(
+      const std::filesystem::path& project_path,
+      const domain::ProjectState& project,
+      domain::PadSlotId target) const {
+    if (!sample_limits.has_value()) {
+      return foundation::Result<SampleQuotaComputation>::failure(
+          invalid_sample_request("Sample quota is unavailable"));
+    }
+    std::array<std::uint64_t, 4> bank_used_bytes{};
+    std::uint64_t project_used_bytes = 0;
+    std::vector<SampleQuotaConsumed> consumed;
+    std::map<std::string, PreparedQuotaUsage> cached_usage;
+
+    for (std::uint8_t bank = 0; bank < project.banks.size(); ++bank) {
+      for (std::uint8_t pad = 0;
+           pad < project.banks.at(bank).size();
+           ++pad) {
+        const domain::PadSlotId slot{bank, pad};
+        const auto& assignment = project.banks.at(bank).at(pad);
+        if (!assignment.asset_id.has_value()) {
+          continue;
+        }
+        const auto asset = domain::resolve_slot_asset(project, slot);
+        if (!asset.has_value()) {
+          return foundation::Result<SampleQuotaComputation>::failure(
+              unavailable_sample());
+        }
+        auto usage = cached_usage.find(asset->artifact.sha256);
+        if (usage == cached_usage.end()) {
+          const auto artifact_bytes =
+              projects.read_artifact(project_path, asset->artifact);
+          if (!artifact_bytes.has_value()) {
+            return foundation::Result<SampleQuotaComputation>::failure(
+                sample_artifact_read_error(artifact_bytes.error()));
+          }
+          const auto measured = measure_prepared_quota(artifact_bytes.value());
+          if (!measured.has_value()) {
+            return foundation::Result<SampleQuotaComputation>::failure(
+                measured.error());
+          }
+          usage = cached_usage.emplace(
+              asset->artifact.sha256, measured.value()).first;
+        }
+        if (bank == target.bank) {
+          consumed.push_back(SampleQuotaConsumed{
+              slot,
+              usage->second.bytes,
+              usage->second.frames,
+          });
+        }
+        if (slot == target) {
+          continue;
+        }
+        const auto next_bank = audio::checked_runtime_byte_sum(
+            bank_used_bytes.at(bank), usage->second.bytes);
+        const auto next_project = audio::checked_runtime_byte_sum(
+            project_used_bytes, usage->second.bytes);
+        if (!next_bank.has_value() || !next_project.has_value()) {
+          return foundation::Result<SampleQuotaComputation>::failure(Error{
+              ErrorCode::invalid_project,
+              "Sample quota ledger overflowed",
+          });
+        }
+        bank_used_bytes.at(bank) = *next_bank;
+        project_used_bytes = *next_project;
+      }
+    }
+
+    const auto assessment = audio::assess_runtime_quota(
+        bank_used_bytes.at(target.bank),
+        project_used_bytes,
+        0,
+        *sample_limits);
+    if (!assessment.has_value()) {
+      return foundation::Result<SampleQuotaComputation>::failure(Error{
+          ErrorCode::invalid_project,
+          "Project prepared-PCM quota ledger exceeds configured limits",
+      });
+    }
+    const auto effective_remaining_bytes = std::min(
+        assessment->user_bank_remaining_bytes,
+        assessment->generation_remaining_bytes);
+    return foundation::Result<SampleQuotaComputation>::success(
+        SampleQuotaComputation{
+            SampleQuotaResult{
+                project.revision,
+                target,
+                sample_limits->maximum_user_bank_bytes,
+                bank_used_bytes.at(target.bank),
+                assessment->user_bank_remaining_bytes,
+                sample_limits->maximum_generation_bytes,
+                project_used_bytes,
+                assessment->generation_remaining_bytes,
+                effective_remaining_bytes,
+                effective_remaining_bytes / sizeof(float),
+                std::move(consumed),
+            },
+            bank_used_bytes,
+        });
+  }
+
+  foundation::Result<SampleQuotaResult> query_sample_quota(
+      const SampleQuotaRequest& request) const {
+    if (!valid_host_project_path(request.project_path) ||
+        !domain::is_valid_slot(request.slot)) {
+      return foundation::Result<SampleQuotaResult>::failure(
+          invalid_sample_request("Sample quota request is invalid"));
+    }
+    const auto loaded = projects.load(request.project_path);
+    if (!loaded.has_value()) {
+      return foundation::Result<SampleQuotaResult>::failure(
+          sample_project_load_error(loaded.error()));
+    }
+    testing::invoke_sample_projection_hook();
+    auto computed = compute_sample_quota(
+        request.project_path, loaded.value(), request.slot);
+    if (!computed.has_value()) {
+      return foundation::Result<SampleQuotaResult>::failure(
+          computed.error());
+    }
+    return foundation::Result<SampleQuotaResult>::success(
+        std::move(computed.value().result));
+  }
+
   foundation::Result<SampleImportSession> begin_sample_import(
       const SampleImportBeginRequest& request) {
     if (!sample_limits.has_value() ||
@@ -3421,10 +3947,39 @@ struct Application::Impl {
         !domain::is_valid_uuid(request.meta.command_id.value()) ||
         !domain::is_valid_slot(request.slot) ||
         !domain::is_valid_uuid(request.asset_id.value()) ||
+        (request.sequence_session_id.has_value() &&
+         !domain::is_valid_uuid(request.sequence_session_id->value())) ||
         request.byte_length == 0 ||
         !sample_limits->allows_artifact_bytes(request.byte_length)) {
       return foundation::Result<SampleImportSession>::failure(
           invalid_sample_request("Sample import begin request is invalid"));
+    }
+    if (request.sequence_session_id.has_value()) {
+      std::lock_guard sequence_lock(sequence_mutex);
+      const auto found = sequence_sessions.find(sequence_key(request.project_path));
+      if (found == sequence_sessions.end() ||
+          found->second.session_id != *request.sequence_session_id) {
+        return foundation::Result<SampleImportSession>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit owner does not match",
+                {{"reason", "sequence_owner_mismatch"}}));
+      }
+      if (!found->second.armed_capture_slot.has_value()) {
+        return foundation::Result<SampleImportSession>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit has no active target",
+                {{"reason", "armed_capture_not_armed"}}));
+      }
+      if (*found->second.armed_capture_slot != request.slot ||
+          found->second.expected_revision != request.meta.expected_revision) {
+        return foundation::Result<SampleImportSession>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit target does not match",
+                {{"reason", "armed_capture_target_mismatch"}}));
+      }
     }
     std::lock_guard lock(sample_mutex);
     if (sample_imports.size() >= kMaximumSampleImportSessions) {
@@ -3593,10 +4148,45 @@ struct Application::Impl {
       sample_imports.erase(found);
     }
     auto state = std::move(*owned);
-    auto admitted = admit_non_sequence_authoring(state.request.project_path);
-    if (!admitted.has_value()) {
-      return foundation::Result<SampleMutationResult>::failure(
-          admitted.error());
+    std::optional<SequenceAuthoringAdmission> ordinary_admission;
+    std::unique_lock<std::mutex> capture_admission;
+    SequenceRuntime* active_sequence = nullptr;
+    if (state.request.sequence_session_id.has_value()) {
+      capture_admission = std::unique_lock(sequence_mutex);
+      const auto found = sequence_sessions.find(
+          sequence_key(state.request.project_path));
+      if (found == sequence_sessions.end() ||
+          found->second.session_id != *state.request.sequence_session_id) {
+        return foundation::Result<SampleMutationResult>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit owner does not match",
+                {{"reason", "sequence_owner_mismatch"}}));
+      }
+      if (!found->second.armed_capture_slot.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit has no active target",
+                {{"reason", "armed_capture_not_armed"}}));
+      }
+      if (*found->second.armed_capture_slot != state.request.slot ||
+          found->second.expected_revision !=
+              state.request.meta.expected_revision) {
+        return foundation::Result<SampleMutationResult>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit target does not match",
+                {{"reason", "armed_capture_target_mismatch"}}));
+      }
+      active_sequence = &found->second;
+    } else {
+      auto admitted = admit_non_sequence_authoring(state.request.project_path);
+      if (!admitted.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            admitted.error());
+      }
+      ordinary_admission.emplace(std::move(admitted.value()));
     }
     SampleStagingCleanup cleanup{
         storage_platform,
@@ -3616,24 +4206,67 @@ struct Application::Impl {
                   : bytes.error(),
               "Sample staging could not be read"));
     }
-    const auto metadata = cooker::inspect_wav(bytes.value());
-    if (!metadata.has_value()) {
+    const auto loaded = projects.load(state.request.project_path);
+    if (!loaded.has_value()) {
       return foundation::Result<SampleMutationResult>::failure(
-          metadata.error());
+          sample_project_load_error(loaded.error()));
     }
-    if (!sample_limits.has_value() ||
-        !sample_limits->allows_decoded_frames_per_pad(
-            metadata.value().source_frames)) {
-      return foundation::Result<SampleMutationResult>::failure(Error{
-          ErrorCode::unsupported_audio,
-          "Sample exceeds the active decoded frame limit",
-          {{"resource", "decoded_frames_per_pad"},
-           {"observed", metadata.value().source_frames},
-           {"limit",
-            sample_limits.has_value()
-                ? sample_limits->maximum_decoded_frames_per_pad
-                : 0U}},
-      });
+    if (loaded.value().revision == state.request.meta.expected_revision) {
+      const auto candidate = measure_prepared_quota(bytes.value());
+      if (!candidate.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            candidate.error());
+      }
+      const auto quota = compute_sample_quota(
+          state.request.project_path,
+          loaded.value(),
+          state.request.slot);
+      if (!quota.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            quota.error());
+      }
+      const auto assessment = audio::assess_runtime_quota(
+          quota.value().result.bank_used_bytes,
+          quota.value().result.project_used_bytes,
+          candidate.value().bytes,
+          *sample_limits);
+      if (!assessment.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(Error{
+            ErrorCode::invalid_project,
+            "Sample quota ledger exceeds configured limits",
+        });
+      }
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::user_bank) {
+        std::vector<nlohmann::json> consumed;
+        consumed.reserve(quota.value().result.consumed.size());
+        for (const auto& entry : quota.value().result.consumed) {
+          consumed.push_back({
+              {"pad", entry.slot.pad},
+              {"prepared_bytes", entry.prepared_bytes},
+              {"prepared_frames", entry.prepared_frames},
+          });
+        }
+        return foundation::Result<SampleMutationResult>::failure(
+            runtime_bank_quota_error(
+                state.request.slot,
+                candidate.value().bytes,
+                candidate.value().frames,
+                assessment->user_bank_remaining_bytes,
+                sample_limits->maximum_user_bank_bytes,
+                consumed));
+      }
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::generation) {
+        return foundation::Result<SampleMutationResult>::failure(
+            runtime_project_quota_error(
+                candidate.value().bytes,
+                candidate.value().frames,
+                quota.value().result.project_used_bytes,
+                assessment->generation_remaining_bytes,
+                sample_limits->maximum_generation_bytes,
+                quota.value().bank_used_bytes));
+      }
     }
     const auto committed = projects.import_assign_sample_bytes(
         state.request.project_path,
@@ -3643,6 +4276,7 @@ struct Application::Impl {
             state.request.asset_id,
             "audio/wav",
             bytes.value(),
+            state.request.sequence_session_id,
         });
     if (!committed.has_value()) {
       return foundation::Result<SampleMutationResult>::failure(
@@ -3650,6 +4284,12 @@ struct Application::Impl {
     }
     if (project_revision != nullptr) {
       *project_revision = committed.value().state.revision;
+    }
+    if (active_sequence != nullptr) {
+      active_sequence->expected_revision = committed.value().state.revision;
+      active_sequence->available_slots |=
+          std::uint64_t{1} << slot_index(state.request.slot);
+      active_sequence->armed_capture_slot.reset();
     }
     return foundation::Result<SampleMutationResult>::success(
         SampleMutationResult{
@@ -3827,6 +4467,45 @@ struct Application::Impl {
         result.project_revision);
   }
 
+  nlohmann::json sample_quota(const nlohmann::json& request) const {
+    require(
+        exact_keys(request, {"operation", "project_path", "slot"}),
+        "sample.quota request shape is invalid");
+    const auto quota = query_sample_quota(SampleQuotaRequest{
+        absolute_path_field(request, "project_path"),
+        slot_value(request.at("slot")),
+    });
+    if (!quota.has_value()) {
+      return sample_error_envelope(quota.error());
+    }
+    auto consumed = nlohmann::json::array();
+    for (const auto& entry : quota.value().consumed) {
+      consumed.push_back({
+          {"slot", slot_json(entry.slot)},
+          {"prepared_bytes", entry.prepared_bytes},
+          {"prepared_frames", entry.prepared_frames},
+      });
+    }
+    const auto& result = quota.value();
+    return success_envelope(
+        {
+            {"project_revision", result.project_revision},
+            {"slot", slot_json(result.slot)},
+            {"bank_quota_bytes", result.bank_quota_bytes},
+            {"bank_used_bytes", result.bank_used_bytes},
+            {"bank_remaining_bytes", result.bank_remaining_bytes},
+            {"project_quota_bytes", result.project_quota_bytes},
+            {"project_used_bytes", result.project_used_bytes},
+            {"project_remaining_bytes", result.project_remaining_bytes},
+            {"effective_remaining_bytes",
+             result.effective_remaining_bytes},
+            {"effective_remaining_frames",
+             result.effective_remaining_frames},
+            {"consumed", std::move(consumed)},
+        },
+        result.project_revision);
+  }
+
   nlohmann::json sample_waveform(const nlohmann::json& request) {
     require(
         exact_keys(
@@ -3878,6 +4557,7 @@ struct Application::Impl {
         slot_value(request.at("slot")),
         foundation::AssetId{uuid_field(request, "asset_id")},
         unsigned_field(request, "byte_length", 1'048'576U),
+        std::nullopt,
     });
     if (!begun.has_value()) {
       return sample_error_envelope(begun.error());
@@ -4127,6 +4807,12 @@ struct Application::Impl {
                   found->second.expected_revision == revision &&
                   runtime_frame >= found->second.last_runtime_frame,
               "Sequence settings owner does not match");
+      if (bpm.has_value() && found->second.pending_pattern_id.has_value()) {
+        return error_envelope(sequence_error(
+            ErrorCode::invalid_argument,
+            "Sequence BPM cannot change while a Pattern switch is pending",
+            {{"reason", "switch_pending"}}));
+      }
     }
     const auto updated = projects.execute_with_identity(
         path,
@@ -4300,29 +4986,15 @@ struct Application::Impl {
                     limits->maximum_artifact_bytes));
           }
           auto bytes = projects.read_artifact(path, artifact);
-          if (!bytes.has_value() || !limits.has_value()) {
-            return bytes;
-          }
-          const auto metadata = cooker::inspect_wav(bytes.value());
-          if (!metadata.has_value()) {
-            return foundation::Result<std::vector<std::byte>>::failure(
-                metadata.error());
-          }
-          if (!limits->allows_decoded_frames_per_pad(
-                  metadata.value().source_frames)) {
-            return foundation::Result<std::vector<std::byte>>::failure(
-                runtime_preparation_limit_error(
-                    "decoded_frames_per_pad",
-                    metadata.value().source_frames,
-                    limits->maximum_decoded_frames_per_pad));
-          }
           return bytes;
         });
     if (!cooked.has_value() || !limits.has_value()) {
       return cooked;
     }
 
-    std::uint64_t prospective_bank_bytes = 0;
+    std::array<std::uint64_t, 4> prospective_bank_bytes{};
+    std::array<std::vector<nlohmann::json>, 4> consumed{};
+    std::uint64_t prospective_generation_bytes = 0;
     for (const auto& pad : cooked.value()->pads) {
       if (pad.sample == nullptr || pad.sample->channels == 0 ||
           pad.sample->interleaved.size() % pad.sample->channels != 0) {
@@ -4344,33 +5016,50 @@ struct Application::Impl {
                 "runtime preparation PCM byte length overflowed",
             });
       }
-      const auto total = audio::checked_runtime_byte_sum(
-          prospective_bank_bytes, sample_bytes.value());
-      if (!total.has_value()) {
+      const auto assessment = audio::assess_runtime_quota(
+          prospective_bank_bytes.at(pad.slot.bank),
+          prospective_generation_bytes,
+          sample_bytes.value(),
+          *limits);
+      if (!assessment.has_value()) {
         return foundation::Result<
             std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
             Error{
                 ErrorCode::invalid_argument,
-                "runtime preparation Bank byte length overflowed",
+                "runtime preparation quota ledger is invalid",
             });
       }
-      prospective_bank_bytes = total.value();
-    }
-    if (!limits->allows_prepared_bank_bytes(prospective_bank_bytes)) {
-      return foundation::Result<
-          std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
-          runtime_preparation_limit_error(
-              "prepared_bank_bytes",
-              prospective_bank_bytes,
-              limits->maximum_prepared_bank_bytes));
-    }
-    if (!limits->allows_live_bank_bytes(prospective_bank_bytes)) {
-      return foundation::Result<
-          std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
-          runtime_preparation_limit_error(
-              "live_bank_bytes",
-              prospective_bank_bytes,
-              limits->maximum_live_bank_bytes));
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::user_bank) {
+        return foundation::Result<
+            std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+            runtime_bank_quota_error(
+                pad.slot,
+                sample_bytes.value(),
+                frames,
+                assessment->user_bank_remaining_bytes,
+                limits->maximum_user_bank_bytes,
+                consumed.at(pad.slot.bank)));
+      }
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::generation) {
+        return foundation::Result<
+            std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+            runtime_project_quota_error(
+                sample_bytes.value(),
+                frames,
+                prospective_generation_bytes,
+                assessment->generation_remaining_bytes,
+                limits->maximum_generation_bytes,
+                prospective_bank_bytes));
+      }
+      prospective_bank_bytes.at(pad.slot.bank) += sample_bytes.value();
+      prospective_generation_bytes += sample_bytes.value();
+      consumed.at(pad.slot.bank).push_back({
+          {"pad", pad.slot.pad},
+          {"prepared_bytes", sample_bytes.value()},
+          {"prepared_frames", frames},
+      });
     }
     return cooked;
   }
@@ -4947,6 +5636,19 @@ Application::query_sample_waveform(const SampleWaveformRequest& request) {
   }
 }
 
+foundation::Result<SampleQuotaResult> Application::query_sample_quota(
+    const SampleQuotaRequest& request) const {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->query_sample_quota(request);
+  } catch (...) {
+    return foundation::Result<SampleQuotaResult>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
 foundation::Result<SampleImportSession> Application::begin_sample_import(
     const SampleImportBeginRequest& request) {
   try {
@@ -5093,6 +5795,19 @@ Application::request_sequence_switch(const SequenceSwitchRequest& request) {
   }
 }
 
+foundation::Result<void> Application::disarm_sequence_capture(
+    const SequenceCaptureDisarmRequest& request) {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->disarm_sequence_capture(request);
+  } catch (...) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
 void Application::abandon_sequence_sessions() noexcept {
   impl_->abandon_sequence_sessions();
 }
@@ -5104,6 +5819,20 @@ foundation::Result<SequenceStatus> Application::query_sequence_status(
     return impl_->query_sequence_status(request);
   } catch (...) {
     return foundation::Result<SequenceStatus>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<SequenceOverlayProjection>
+Application::query_sequence_overlay(
+    const SequenceOverlayRequest& request) const {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->query_sequence_overlay(request);
+  } catch (...) {
+    return foundation::Result<SequenceOverlayProjection>::failure(Error{
         ErrorCode::internal_error,
         "unexpected Application Facade Host API failure",
     });

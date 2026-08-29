@@ -1,0 +1,1116 @@
+{
+  "schema_version": 2,
+  "product": {
+    "id": "lmdj",
+    "version": "1.0.39.0"
+  },
+  "channel": "canary",
+  "revision": "e07d63f3c91f0f189de771e4fbba8a4afa7550a2",
+  "assembly_lock_sha256": "71b0093e781060252f417e23ea8f3701e66a1b9d048e582fc923b3f6128abd0e",
+  "modules": [
+    {
+      "id": "application-facade",
+      "sha256": "989662715251f972dad98dccb9bafd783dac967c8488002b08d79e3c33c969f1",
+      "version": "2.1.0"
+    },
+    {
+      "id": "audio-runtime",
+      "sha256": "8104cb32bf3042ad6348ffa9a1536d2e18434ba9f3bb7b4e62c41a57595e9ba7",
+      "version": "2.0.0"
+    },
+    {
+      "id": "authoring-domain",
+      "sha256": "ccde457682fbff18514242cb43f6c9dabd8fe051cf16505590f2a8f523b90609",
+      "version": "1.0.0"
+    },
+    {
+      "id": "foundation",
+      "sha256": "aebb583cfcfa28179088e976fd5571e8f5033f9ba37e42ecc4a05dc0ceab9bcc",
+      "version": "0.3.0"
+    },
+    {
+      "id": "project-cooker",
+      "sha256": "6765cc8ed29b30e01c99628043042f6de75763484e15b5fe141f38bac9436d5a",
+      "version": "1.0.0"
+    },
+    {
+      "id": "project-io",
+      "sha256": "9bbca083104cb6eab52e7aaeea18b1bd0aabb36d37afc291bf55299e85d8be0f",
+      "version": "1.0.0"
+    },
+    {
+      "id": "provider-sdk",
+      "sha256": "8e6bdd7db0d89604f87534c128e7378e6b91ca377108e02dd32c89fd687ec202",
+      "version": "1.1.4"
+    },
+    {
+      "id": "web-runtime-platform",
+      "sha256": "d6ffb6aea26e2f49131b56af6aba29b9ff28f25d20083953fa0465851da17b7b",
+      "version": "2.0.1"
+    }
+  ],
+  "hosts": [
+    {
+      "id": "core-cli",
+      "sha256": "56495b542f0d764172465bbae20f099e341632fbe2ce445229d08ab02bf53de0",
+      "version": "2.0.0"
+    },
+    {
+      "id": "core-mcp",
+      "sha256": "5f5f041720cda877e430b70714010f8f3e8048c0ea86662a3da2e615fcb34af4",
+      "version": "2.0.0"
+    },
+    {
+      "id": "creator-web",
+      "sha256": "a3be7fba501754af954777d01882cba8941d8521959f58aea2813e93b7e70332",
+      "version": "2.1.1"
+    },
+    {
+      "id": "native-host",
+      "sha256": "3813bd22353fc55d2059bd75580c9576d645845b385c12df61e529d5a6f4b098",
+      "version": "2.0.0"
+    },
+    {
+      "id": "web-runtime-host",
+      "sha256": "7b6e092730a1685e8cf685f0715af5adf771f2ed7da602758d4b650549856ea6",
+      "version": "2.1.1"
+    }
+  ],
+  "providers": [
+    {
+      "id": "local.proof.failure",
+      "sha256": "af71c772d7590394a0904732b10323b8756040f0c0e328785cff5e492fa21a34",
+      "version": "1.0.5"
+    },
+    {
+      "id": "local.proof.success",
+      "sha256": "d5f19c10347eeca9d180fb0629932c28dc6e2595668e49a5c0f4bba9d3094987",
+      "version": "1.0.5"
+    }
+  ],
+  "contracts": [
+    {
+      "id": "lmdj.assembly.v2",
+      "sha256": "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
+      "version": "2.0.0"
+    },
+    {
+      "id": "lmdj.capability.v2",
+      "sha256": "213c05e55b2b4b4e90a7dbc02731936e452e589e104ad2a6143c2b7de2ead9fb",
+      "version": "2.0.0"
+    },
+    {
+      "id": "lmdj.error.v1",
+      "sha256": "089e94465199ae132e9b7d543a7c2530333964042b067d774487470f2e07a820",
+      "version": "1.1.0"
+    },
+    {
+      "id": "lmdj.module.v1",
+      "sha256": "6c765021c68b773e96ab5b7e4ba1e4ff9dab3ba69d87c4795d33770aa8344543",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.product-version.v1",
+      "sha256": "5e4012dee592dd0e99ee7e7217327fcf98d123f63cf6b5033745a05bbe790980",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.project-bundle.v1",
+      "sha256": "cc0bb6e1a553e2fe0c293c80e93565595d95e6de546a778d62332949d194eff9",
+      "version": "1.1.0"
+    },
+    {
+      "id": "lmdj.project.v3",
+      "sha256": "663a84b5bebf0c1d5fac272f0569a0faae13387d264f073b95ea9d0a6196ddf7",
+      "version": "3.0.0"
+    }
+  ],
+  "product_build": "1.0.39.0",
+  "source_commit": {
+    "raw_base64": "dHJlZSA4YWVkMmQxMGNlMWFjNGM3NmViZGI3MjJjZDQ4MzkzMGUxZTA1NDM4CnBhcmVudCBmNGMxMjg3NDNmNmZlNmQxM2UzY2FmMmFiZjdjNDM1M2RkY2NkMmEwCmF1dGhvciBlbmRheWUgPGVuQGVuZGF5ZS5jb20+IDE3ODgwMDI5ODcgKzA4MDAKY29tbWl0dGVyIGVuZGF5ZSA8ZW5AZW5kYXllLmNvbT4gMTc4ODAwMjk4NyArMDgwMApncGdzaWcgLS0tLS1CRUdJTiBQR1AgU0lHTkFUVVJFLS0tLS0KIAogaVFIUEJBQUJDQUE1RmlFRUsxN2pZdkJZZ0FBMnJVKzFFVzdPRlcrVlRTa0ZBbXFTd3FzYkZJQUFBQUFBQkFBTwogYldGdWRUSXNNaTQxS3pFdU1USXNNQ3d6QUFvSkVCRnV6aFZ2bFUwcG5XWU1BTmNjcXY5bTVzcVlDd0ZNbHdKawogZVFEeVZzQ3JYSVc3dnhWT3N4UE11SnRmN1FXU1ZEOHZvLzZzbmtFQm9JME1ENDBidXo2UDFaTjZtUkkraHFjcAogWjFQR2RtS0VoTTB4dHFCMzgzVHFpSkhCb0Z0VEtTbnJtalc0RTh3VnlEdnRpV3hVZXJLUEsxYVpncms3VzJVbQogYXNWWkx0RytjQmExdDZzelRmdjhQUTVBYVJCWlhyTEI4bHRtcE9DQUVLQWYyYkVvRFFrUVcycHVTb2xFK3ZlUgogTUZWSVlXM2ZGSFBNTG45cWs2UlZxbVNKYVBpV0xWaXdieEVhUlBGTzFZSkw5ZkhlNkZSOHFpdmgybUVWYWlFcgogWWVDSFFzSWd0NkZsK3kvMDN0eVZDOXpOb2szOERvMDR4WnlWZGVNaFFsdXJwQXN6eEtXYnVUSkdZQ0dlZHFQVwogUmxMYjVnMnU0bk93RStMYVhGNHVFSmp6UzQrOGdiVGhKdXhNMExHSmQvZGhhQzdSa0VzcjZyNXRIZStTdmk2MQogYVJZM3E2ZWJUdElWLzJORUR3ZlNPOWV2WVpNMStwOFFWRFRKVXBEVGh5MkQzOHlmUUh2YVJqVy9VZTgwNEd0NQogMHgxa3FPcmxpcFIxNjBmb2tOVWlQSDN3Z3NSM255YktnNjlYd2x0cjNrditnUT09CiA9NTI3dwogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCgpkb2NzKHBvcnRhbCk6IHByZXBhcmUgcmVmcmVzaGVkIHByb2R1Y3QgYnVpbGQgMS4wLjM5LjAgc25hcHNob3QK",
+    "committed_at_utc": "2026-08-29T11:29:47.000Z",
+    "tree": "8aed2d10ce1ac4c76ebdb722cd483930e1e05438"
+  },
+  "source_projection": {
+    "sha256": "392416e024f15f4ecf8885f55df3514d13a5d72fc28f2d5682863e7fbf88eda0",
+    "files": [
+      {
+        "path": "apps/architecture-portal/diagrams/application-facade.architecture.json",
+        "bytes": 1919,
+        "sha256": "37e79ff50fe29bd85b7cd3da90ab55ffc6bcb3a23a772470f4a56a8a55e18026"
+      },
+      {
+        "path": "apps/architecture-portal/diagrams/audio-runtime.architecture.json",
+        "bytes": 1270,
+        "sha256": "de2abad3d31c3fde7f270e3810dd0305b5383c3fd7d882b4e2d72313def734b2"
+      },
+      {
+        "path": "apps/architecture-portal/diagrams/authoring-domain.architecture.json",
+        "bytes": 1072,
+        "sha256": "5f2a45577331f5e9eaef1f572058dfae5cd5c6b0cd0f8ed31b199049e5c151f9"
+      },
+      {
+        "path": "apps/architecture-portal/diagrams/foundation.architecture.json",
+        "bytes": 1095,
+        "sha256": "ce4722b90afad09660fd0f9300637bd76a959669c0a867ef7c54eef9f0159b2c"
+      },
+      {
+        "path": "apps/architecture-portal/diagrams/lmdj-core.architecture.json",
+        "bytes": 2761,
+        "sha256": "e693e4d08d77cbc3141202b0bbd0c87c542d32981e15c87eb28ae44d684842ee"
+      },
+      {
+        "path": "apps/architecture-portal/diagrams/lmdj-product.architecture.json",
+        "bytes": 3099,
+        "sha256": "b5569ade9b6a668f1222d5859b94c6d33d290263aa919b1c32362468917b0001"
+      },
+      {
+        "path": "apps/architecture-portal/diagrams/project-cooker.architecture.json",
+        "bytes": 1075,
+        "sha256": "cf0105bf373076f1641547701a8f2e8b885faa5a3635381307acedb9bc0d045c"
+      },
+      {
+        "path": "apps/architecture-portal/diagrams/project-io.architecture.json",
+        "bytes": 1814,
+        "sha256": "e2171329e883f6d0d11a34a7bd21542292d10bbc4f31463c9db85113e52f6f7c"
+      },
+      {
+        "path": "apps/architecture-portal/diagrams/provider-sdk.architecture.json",
+        "bytes": 1053,
+        "sha256": "33c7e23c63be5c6a7f433c72512ef20097f008243610c96d84be6ec24fe3db36"
+      },
+      {
+        "path": "apps/architecture-portal/diagrams/web-runtime-platform.architecture.json",
+        "bytes": 2306,
+        "sha256": "1461b67b280550d4a3761f6087e0e8e1de1bffc4c6d120f71bed22172978bbaf"
+      },
+      {
+        "path": "apps/architecture-portal/docs/assembly/lmdj.mdx",
+        "bytes": 2591,
+        "sha256": "373b815ab6f062a8505447ab7a1dc1e9c6b9f5bb70bdc79c0273bacc54f70401"
+      },
+      {
+        "path": "apps/architecture-portal/docs/contracts/assembly.mdx",
+        "bytes": 827,
+        "sha256": "cc3a5c60fd6d46a9c77bc16d2cd7c802d758404c7126164aa5c3f063e18344b6"
+      },
+      {
+        "path": "apps/architecture-portal/docs/contracts/capability.mdx",
+        "bytes": 767,
+        "sha256": "b2135ab902083f44789e884a5854df1efea56357efa9edb3cde4770b5d9ac713"
+      },
+      {
+        "path": "apps/architecture-portal/docs/contracts/error-module-version.mdx",
+        "bytes": 1210,
+        "sha256": "93622b6ca787952a55ea9ddd8f538a87dc64365951f22426c252ae3a0e79b75e"
+      },
+      {
+        "path": "apps/architecture-portal/docs/contracts/overview.mdx",
+        "bytes": 878,
+        "sha256": "1b8aee68f160ffb19e8736dd2b731c609413670b534d95a82cafdeb2fc102772"
+      },
+      {
+        "path": "apps/architecture-portal/docs/contracts/project-bundle.mdx",
+        "bytes": 1512,
+        "sha256": "20a95ae6a302234757f2b0bdf260e47dd345bee4b290a7af9ae18dbaa9bf4ea9"
+      },
+      {
+        "path": "apps/architecture-portal/docs/contracts/project.mdx",
+        "bytes": 1438,
+        "sha256": "e19a672e8948ac2b263e688bcf327fa90b8817dd5c24f88d25653296159bd6d6"
+      },
+      {
+        "path": "apps/architecture-portal/docs/contracts/runtime-snapshot.mdx",
+        "bytes": 863,
+        "sha256": "96332ed8d68035880f37fa5444bae8a5b67428e6f02abc727bb7529a0c5a8264"
+      },
+      {
+        "path": "apps/architecture-portal/docs/core/modules/application-facade.mdx",
+        "bytes": 5843,
+        "sha256": "627bd159bb005b103f42d90829b17f42ac9671b35d63005dcf149fe33941b497"
+      },
+      {
+        "path": "apps/architecture-portal/docs/core/modules/audio-runtime.mdx",
+        "bytes": 5660,
+        "sha256": "0059114e7895d70245a01b380d91c12b9f5b7587d126e3614a51db797a2f833b"
+      },
+      {
+        "path": "apps/architecture-portal/docs/core/modules/authoring-domain.mdx",
+        "bytes": 1878,
+        "sha256": "86e869a86e503e43e20b5135d3e1da6d9ace3e79c2bc5e68ee1c6851ee4185d7"
+      },
+      {
+        "path": "apps/architecture-portal/docs/core/modules/foundation.mdx",
+        "bytes": 1514,
+        "sha256": "c7f9702b8d8b5475cc2fa31b1c44c7131902d697c2dc185f4c748936d382aeb1"
+      },
+      {
+        "path": "apps/architecture-portal/docs/core/modules/project-cooker.mdx",
+        "bytes": 1838,
+        "sha256": "0329f55743324dc1ba84e1b4e7f405021968b86fe904c87149bf81e6a4b8ec1b"
+      },
+      {
+        "path": "apps/architecture-portal/docs/core/modules/project-io.mdx",
+        "bytes": 4464,
+        "sha256": "930d78711fe23191c0be9be751660fc9ecf72ea7d552c3241d2a21711b22e6ed"
+      },
+      {
+        "path": "apps/architecture-portal/docs/core/modules/provider-sdk.mdx",
+        "bytes": 2350,
+        "sha256": "222ce8f3ba7a5a8e7b0c78ebb8b37361fc9012a0139ac7868b4f040579975df7"
+      },
+      {
+        "path": "apps/architecture-portal/docs/core/modules/web-runtime-platform.mdx",
+        "bytes": 5366,
+        "sha256": "4ae3d23a5562ab85a47f9278264f1e5583e5609977932c657d8cc3e9eae8d89d"
+      },
+      {
+        "path": "apps/architecture-portal/docs/core/overview.mdx",
+        "bytes": 1343,
+        "sha256": "ed5b13233a7dd47e3537103da9098b3416d6d3320d9e35e8d787e1ca269dd052"
+      },
+      {
+        "path": "apps/architecture-portal/docs/history/legacy-patch-architecture.mdx",
+        "bytes": 1064,
+        "sha256": "fe4560bf1d229820088f3c5856e226f38a2cf555725cdfb4676553ea0e8af3a8"
+      },
+      {
+        "path": "apps/architecture-portal/docs/hosts/core-cli.mdx",
+        "bytes": 982,
+        "sha256": "7934a3ee4d52371363fab6f2bb24c24276090ae8ed95de16d90f809ff444448c"
+      },
+      {
+        "path": "apps/architecture-portal/docs/hosts/core-mcp.mdx",
+        "bytes": 1038,
+        "sha256": "89d3b546d00481039feb3462dcfcd51cc6ca6e52b8b19fa186b0d8ccc9f2eba3"
+      },
+      {
+        "path": "apps/architecture-portal/docs/hosts/creator-web.mdx",
+        "bytes": 8365,
+        "sha256": "32be5dad2502907d9c5f6954ad6447a4595c3080002472ae2cf90e22a60843bf"
+      },
+      {
+        "path": "apps/architecture-portal/docs/hosts/native-host.mdx",
+        "bytes": 1433,
+        "sha256": "31947134c3c4559f9bbd7f01f2025bfa0997021cfb8d94fa9e65fa03edd62bf6"
+      },
+      {
+        "path": "apps/architecture-portal/docs/hosts/overview.mdx",
+        "bytes": 1892,
+        "sha256": "7f2bd5353538c0f1bb2fa47963a02b04a5974c60acaf244cbcf8e43cfdd6b430"
+      },
+      {
+        "path": "apps/architecture-portal/docs/hosts/web-runtime.mdx",
+        "bytes": 11241,
+        "sha256": "3e38d1544c1ab460cea7187b650c6f3b4b7c5edd3a68a66f7ab2668eb7ac7aea"
+      },
+      {
+        "path": "apps/architecture-portal/docs/operations/documentation-governance.mdx",
+        "bytes": 2941,
+        "sha256": "9cf0b9c43936af374f820dcb474838bb1863d8e87b71706efa71ab2465795256"
+      },
+      {
+        "path": "apps/architecture-portal/docs/operations/testing-and-proof.mdx",
+        "bytes": 51550,
+        "sha256": "eeacbcb8a2e1ea172afcf6e0ffa7bdb96868943d9aed588fad0d1929ab01f5ef"
+      },
+      {
+        "path": "apps/architecture-portal/docs/operations/version-and-release.mdx",
+        "bytes": 12566,
+        "sha256": "e162918ebbda1835dadbd03a15674868a9d582e2453b53dc0fc2d1c3d8a450ef"
+      },
+      {
+        "path": "apps/architecture-portal/docs/overview/index.mdx",
+        "bytes": 3967,
+        "sha256": "b9bb23eafd5eb12e12f6e83c5cb1437c0b0eed788d6ac5f23af4484992cf3aed"
+      },
+      {
+        "path": "apps/architecture-portal/docs/platform/input.mdx",
+        "bytes": 3584,
+        "sha256": "5fc058dedc5ce4e02d7656820e8884d0c2492478cfa48b57b4b8e26096da00f3"
+      },
+      {
+        "path": "apps/architecture-portal/docs/platform/native-audio.mdx",
+        "bytes": 1168,
+        "sha256": "2326337adfb40d932f56bc3ed4354a6789b5766919316951ff6e6d7c07164dc3"
+      },
+      {
+        "path": "apps/architecture-portal/docs/platform/storage.mdx",
+        "bytes": 3909,
+        "sha256": "0a74279fc1a9797c26c17a8aea53c977bdc7e7141b1d3cdf93de6572fcc9ffa7"
+      },
+      {
+        "path": "apps/architecture-portal/docs/platform/web-runtime.mdx",
+        "bytes": 9912,
+        "sha256": "5b7d26e09b1c900d45444b74c4a5673ab1db0442f8c2c62011a461c36c9c2788"
+      },
+      {
+        "path": "apps/architecture-portal/docs/product/capability-map.mdx",
+        "bytes": 2551,
+        "sha256": "4e4542ce134f693f052448d5b6fefd71ae7028451dd6ea2bb3bcc1dee341bf06"
+      },
+      {
+        "path": "apps/architecture-portal/docs/product/positioning.mdx",
+        "bytes": 1393,
+        "sha256": "73bd4757d278a6b1abf1ba4ccb9ebbe9ca09593e8bb1692d45d8054f1b942bc1"
+      },
+      {
+        "path": "apps/architecture-portal/docs/product/workflows.mdx",
+        "bytes": 5145,
+        "sha256": "9d3b65a968b1927dfe854743045b7eac7f063f4041b196d1b2a06a45b32a2855"
+      },
+      {
+        "path": "apps/architecture-portal/docs/providers/local-proof.mdx",
+        "bytes": 934,
+        "sha256": "1bdd927df41e9dda89f8eb95fba131cfc14b3c986af9e1d1262ed08429e8184a"
+      },
+      {
+        "path": "apps/architecture-portal/docs/providers/overview.mdx",
+        "bytes": 1022,
+        "sha256": "5113a681c36c839d5c7e12102f9327a9d6e49a86b1a3b95ba60204673623619c"
+      },
+      {
+        "path": "apps/architecture-portal/docusaurus.config.ts",
+        "bytes": 3471,
+        "sha256": "2190bb5ddfd2464deed2fe330aa08ce3076c594fb6bc4710fb6c97d3a3012197"
+      },
+      {
+        "path": "apps/architecture-portal/sidebars.ts",
+        "bytes": 1677,
+        "sha256": "c2405734e77ee54e809d176a6119b048a544f6ecd9999b2b4492f8a9233b3fd8"
+      },
+      {
+        "path": "apps/architecture-portal/src/components/BuildIdentity.tsx",
+        "bytes": 1304,
+        "sha256": "fb62026f1269bbf881655250fe0c24f002a16b2f0646dc8f6030a5d77ec4ad62"
+      },
+      {
+        "path": "apps/architecture-portal/src/components/DiagramFrame.tsx",
+        "bytes": 2594,
+        "sha256": "c55c5476902650be1712634d2286e285419fe826ec40cccfdf53e3f52c5bc635"
+      },
+      {
+        "path": "apps/architecture-portal/src/components/SectionCards.tsx",
+        "bytes": 1801,
+        "sha256": "01b33d2d9ef30a0e9984947c08271c1f8d972b4af59ef8b49445f726a712da1c"
+      },
+      {
+        "path": "apps/architecture-portal/src/components/StatusBadge.tsx",
+        "bytes": 449,
+        "sha256": "40df7894abf8899e97f519cd1bcc72a0168b95c37b6ae3bffed02d520759b53a"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/application-facade.html",
+        "bytes": 7604,
+        "sha256": "b404a7af3ac4f238c909908eb4dde4b318375765ec5bd154a89544a97d608908"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/application-facade.svg",
+        "bytes": 6644,
+        "sha256": "bb037372f4e1d2cf4174bbd9c69cc79fb557d78f485efd408f217c7e4d200130"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/audio-runtime.html",
+        "bytes": 6461,
+        "sha256": "ee597140d9ecfd6ec69445833d44261f369a7df7fdfba694a2817b32175af196"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/audio-runtime.svg",
+        "bytes": 5506,
+        "sha256": "cd0505d8e648bde23b852731e376b134c4af3c0176e270c764570249a61cdded"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/authoring-domain.html",
+        "bytes": 6228,
+        "sha256": "e2349e0c6c90c01ddeb3cd150e444d8e842659c003bf8c2a88c8a17eb318e859"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/authoring-domain.svg",
+        "bytes": 5270,
+        "sha256": "b6a30f3c15bb41dfb435edea70462e4d9ce951e20e54e3dc9c63136988d614a4"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/foundation.html",
+        "bytes": 6283,
+        "sha256": "3f468d458772471ce3eb6949b082b1881502be70b12224e10d09d8d89f3e0c30"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/foundation.svg",
+        "bytes": 5331,
+        "sha256": "a0f1f695e833da596453d9104816bf4a3dbe29c44e5471e65671c0a91cf2d1d9"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/lmdj-core.html",
+        "bytes": 10097,
+        "sha256": "82e31bc4eb79d366109053402c80e73ddb2835480f287ec1d1cbad5f7b3851fa"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/lmdj-core.svg",
+        "bytes": 9144,
+        "sha256": "77544e5ca4729f45fe5c4f67dc5956c0b0b779bed622931ebec15a0f50e130ff"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/lmdj-product.html",
+        "bytes": 10798,
+        "sha256": "41dcd2ac5c0c5f897ffb6dcef925ceaa9ff56cc6c2980f37a4fff8722782cfc9"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/lmdj-product.svg",
+        "bytes": 9843,
+        "sha256": "c9f90eaf63bcf1a5d03a0d53d13c937b3b17e25900e389f8dec0880ff8c6d295"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/project-cooker.html",
+        "bytes": 6225,
+        "sha256": "f8ba2d24c1fd78c58e15d5533e39e6d11b13247e0e600e52ea0e7dcfb952141c"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/project-cooker.svg",
+        "bytes": 5269,
+        "sha256": "e7ff5d3af2075213d40564dfe5c191ae9139d681ca91915b57c6c51b0b7c8339"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/project-io.html",
+        "bytes": 7541,
+        "sha256": "b238f2277a4a695952f92aee759eca41799f0d47026074af1c66dfccdd74b0a3"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/project-io.svg",
+        "bytes": 6588,
+        "sha256": "d2e71afa8a1eaa980a9def15efce33a7c00e7ada9b49414dfbbffff7e4915804"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/provider-sdk.html",
+        "bytes": 6197,
+        "sha256": "20d203f5ccb12c7b454266c915a90dc3ab5c69b9e1b15dc699a5b3a295d63c6e"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/provider-sdk.svg",
+        "bytes": 5243,
+        "sha256": "1dc6f7a71c976123e3e6ddec19cfcb13047e23e7a26dc67156079ae88d8ae57e"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/web-runtime-platform.html",
+        "bytes": 8399,
+        "sha256": "3dc192cba70878938e893792be28073a2abe670b359a8da53bede63ca1e54474"
+      },
+      {
+        "path": "apps/architecture-portal/static/diagrams/web-runtime-platform.svg",
+        "bytes": 7437,
+        "sha256": "137b7c060b2b70a70837959e6f85566e74a42f92c33f76d275f604242818413c"
+      },
+      {
+        "path": "apps/core-cli/module.json",
+        "bytes": 160,
+        "sha256": "56495b542f0d764172465bbae20f099e341632fbe2ce445229d08ab02bf53de0"
+      },
+      {
+        "path": "apps/core-mcp/module.json",
+        "bytes": 160,
+        "sha256": "5f5f041720cda877e430b70714010f8f3e8048c0ea86662a3da2e615fcb34af4"
+      },
+      {
+        "path": "apps/creator-web/module.json",
+        "bytes": 165,
+        "sha256": "a3be7fba501754af954777d01882cba8941d8521959f58aea2813e93b7e70332"
+      },
+      {
+        "path": "apps/native-host/module.json",
+        "bytes": 193,
+        "sha256": "3813bd22353fc55d2059bd75580c9576d645845b385c12df61e529d5a6f4b098"
+      },
+      {
+        "path": "apps/web-runtime-host/module.json",
+        "bytes": 170,
+        "sha256": "7b6e092730a1685e8cf685f0715af5adf771f2ed7da602758d4b650549856ea6"
+      },
+      {
+        "path": "contracts/assembly/lmdj.assembly.v1.schema.json",
+        "bytes": 3089,
+        "sha256": "2952af96b98a12c8e1fa6bb9050ce934242d4955cbd8866eb8930c5758760d88"
+      },
+      {
+        "path": "contracts/assembly/lmdj.assembly.v2.schema.json",
+        "bytes": 3849,
+        "sha256": "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4"
+      },
+      {
+        "path": "contracts/capability/lmdj.capability.v1.schema.json",
+        "bytes": 4414,
+        "sha256": "d38820d41132cf3dc54962bdb16e75a4843202f540c4518aa4ff19ac8753ec39"
+      },
+      {
+        "path": "contracts/capability/lmdj.capability.v2.schema.json",
+        "bytes": 6859,
+        "sha256": "213c05e55b2b4b4e90a7dbc02731936e452e589e104ad2a6143c2b7de2ead9fb"
+      },
+      {
+        "path": "contracts/error/lmdj.error.v1.schema.json",
+        "bytes": 962,
+        "sha256": "089e94465199ae132e9b7d543a7c2530333964042b067d774487470f2e07a820"
+      },
+      {
+        "path": "contracts/module/lmdj.module.v1.schema.json",
+        "bytes": 1050,
+        "sha256": "6c765021c68b773e96ab5b7e4ba1e4ff9dab3ba69d87c4795d33770aa8344543"
+      },
+      {
+        "path": "contracts/project/lmdj.project-bundle.v1.schema.json",
+        "bytes": 2082,
+        "sha256": "cc0bb6e1a553e2fe0c293c80e93565595d95e6de546a778d62332949d194eff9"
+      },
+      {
+        "path": "contracts/project/lmdj.project.v1.schema.json",
+        "bytes": 12143,
+        "sha256": "f44f0dadb8c8f6d4e7f9b568a2233555ce68ce3f6c3a008db42b855d6ec78f44"
+      },
+      {
+        "path": "contracts/project/lmdj.project.v2.schema.json",
+        "bytes": 12964,
+        "sha256": "9d3727cb3876ee704b2d6daeb45ee8bb5e92812061fc1e254a6f0d29ab4f842c"
+      },
+      {
+        "path": "contracts/project/lmdj.project.v3.schema.json",
+        "bytes": 5880,
+        "sha256": "663a84b5bebf0c1d5fac272f0569a0faae13387d264f073b95ea9d0a6196ddf7"
+      },
+      {
+        "path": "contracts/version/lmdj.product-version.v1.schema.json",
+        "bytes": 1079,
+        "sha256": "5e4012dee592dd0e99ee7e7217327fcf98d123f63cf6b5033745a05bbe790980"
+      },
+      {
+        "path": "packages/application-facade/module.json",
+        "bytes": 312,
+        "sha256": "989662715251f972dad98dccb9bafd783dac967c8488002b08d79e3c33c969f1"
+      },
+      {
+        "path": "packages/audio-runtime/module.json",
+        "bytes": 188,
+        "sha256": "8104cb32bf3042ad6348ffa9a1536d2e18434ba9f3bb7b4e62c41a57595e9ba7"
+      },
+      {
+        "path": "packages/authoring-domain/module.json",
+        "bytes": 160,
+        "sha256": "ccde457682fbff18514242cb43f6c9dabd8fe051cf16505590f2a8f523b90609"
+      },
+      {
+        "path": "packages/foundation/module.json",
+        "bytes": 125,
+        "sha256": "aebb583cfcfa28179088e976fd5571e8f5033f9ba37e42ecc4a05dc0ceab9bcc"
+      },
+      {
+        "path": "packages/project-cooker/module.json",
+        "bytes": 191,
+        "sha256": "6765cc8ed29b30e01c99628043042f6de75763484e15b5fe141f38bac9436d5a"
+      },
+      {
+        "path": "packages/project-io/module.json",
+        "bytes": 187,
+        "sha256": "9bbca083104cb6eab52e7aaeea18b1bd0aabb36d37afc291bf55299e85d8be0f"
+      },
+      {
+        "path": "packages/provider-sdk/module.json",
+        "bytes": 156,
+        "sha256": "8e6bdd7db0d89604f87534c128e7378e6b91ca377108e02dd32c89fd687ec202"
+      },
+      {
+        "path": "packages/web-runtime-platform/module.json",
+        "bytes": 202,
+        "sha256": "d6ffb6aea26e2f49131b56af6aba29b9ff28f25d20083953fa0465851da17b7b"
+      },
+      {
+        "path": "products/lmdj/CMakeLists.txt",
+        "bytes": 2483,
+        "sha256": "cab40260e07c1aa846e48e36be6927bbf9839c67ebebbd430c78e7b1b7a70b75"
+      },
+      {
+        "path": "products/lmdj/README.md",
+        "bytes": 1821,
+        "sha256": "316cf38ed633afc83461392fb6472bcf24296523da0bb4dc150bdb0adf470f2f"
+      },
+      {
+        "path": "products/lmdj/assembly.json",
+        "bytes": 2184,
+        "sha256": "eb372e68ce8ab8d4cbd6961aa8f982b6587f45bc03efab45d732eb034a895a9b"
+      },
+      {
+        "path": "products/lmdj/assembly.lock.json",
+        "bytes": 2926,
+        "sha256": "71b0093e781060252f417e23ea8f3701e66a1b9d048e582fc923b3f6128abd0e"
+      },
+      {
+        "path": "products/lmdj/generated/web-runtime-identity.json",
+        "bytes": 2977,
+        "sha256": "02576b8609ae3191feb4dab88dd675f57d9b8649f21e6ee566484d64fc1ff657"
+      },
+      {
+        "path": "products/lmdj/generated/web-runtime-identity.mjs",
+        "bytes": 3210,
+        "sha256": "db90dfc34f6fc2b79d93a819397bcbbfa7deb4abe8168978b1224700de952bfd"
+      },
+      {
+        "path": "products/lmdj/src/compiled_assembly.cpp",
+        "bytes": 2271,
+        "sha256": "431de25d2b00aa737092cc414abc379ce9d23233c12b2b82186ed07c432341b7"
+      },
+      {
+        "path": "products/lmdj/version.json",
+        "bytes": 126,
+        "sha256": "e47137dbe0d895742b5c9e2521d8a4b2977d616700dacb6db779c1aae77b03a8"
+      },
+      {
+        "path": "providers/local-proof-failure/CMakeLists.txt",
+        "bytes": 2074,
+        "sha256": "462a29600cfbd611a25958a4ae5103c96429228d6e6325c51971ab00c94dc918"
+      },
+      {
+        "path": "providers/local-proof-failure/include/lmdj/providers/local_proof_failure/factory.hpp",
+        "bytes": 182,
+        "sha256": "0260007d360bbc3a6cb6c4d924bcc9437bb575d162b09c9744c520dab15da253"
+      },
+      {
+        "path": "providers/local-proof-failure/module.json",
+        "bytes": 165,
+        "sha256": "5c4378a4b023353c69b05dbda6d053f5a730ce6ceb1cd77dcfb9c40710aaf7c2"
+      },
+      {
+        "path": "providers/local-proof-failure/src/provider.cpp",
+        "bytes": 2205,
+        "sha256": "13072121e26a99584aac2800e9908f3f945de35302b1b25fab3add9db09053a9"
+      },
+      {
+        "path": "providers/local-proof-success/CMakeLists.txt",
+        "bytes": 2074,
+        "sha256": "48b740bc8932806931993dd5c3c98befc060cc76cb67a0c3ff557310669f46a3"
+      },
+      {
+        "path": "providers/local-proof-success/include/lmdj/providers/local_proof_success/factory.hpp",
+        "bytes": 182,
+        "sha256": "e770cc1c5cffaba52e8fe25d796bdfeacc79c141ba573b3a924707592b3d8a35"
+      },
+      {
+        "path": "providers/local-proof-success/module.json",
+        "bytes": 165,
+        "sha256": "80fc2a1315de6f3bcc0a26def2eb3b2b2ccd0cd35d41daab7d234149b813cf06"
+      },
+      {
+        "path": "providers/local-proof-success/src/provider.cpp",
+        "bytes": 2687,
+        "sha256": "9e58cd38e99456c9df0d51e685fedeb1cfc88c6d4deef4d3d5a94784878fcc50"
+      }
+    ]
+  },
+  "source_documents": [
+    {
+      "source_path": "apps/architecture-portal/docs/assembly/lmdj.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/assembly/lmdj.mdx",
+      "bytes": 2591,
+      "sha256": "373b815ab6f062a8505447ab7a1dc1e9c6b9f5bb70bdc79c0273bacc54f70401"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/contracts/assembly.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/contracts/assembly.mdx",
+      "bytes": 827,
+      "sha256": "cc3a5c60fd6d46a9c77bc16d2cd7c802d758404c7126164aa5c3f063e18344b6"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/contracts/capability.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/contracts/capability.mdx",
+      "bytes": 767,
+      "sha256": "b2135ab902083f44789e884a5854df1efea56357efa9edb3cde4770b5d9ac713"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/contracts/error-module-version.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/contracts/error-module-version.mdx",
+      "bytes": 1210,
+      "sha256": "93622b6ca787952a55ea9ddd8f538a87dc64365951f22426c252ae3a0e79b75e"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/contracts/overview.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/contracts/overview.mdx",
+      "bytes": 878,
+      "sha256": "1b8aee68f160ffb19e8736dd2b731c609413670b534d95a82cafdeb2fc102772"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/contracts/project-bundle.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/contracts/project-bundle.mdx",
+      "bytes": 1512,
+      "sha256": "20a95ae6a302234757f2b0bdf260e47dd345bee4b290a7af9ae18dbaa9bf4ea9"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/contracts/project.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/contracts/project.mdx",
+      "bytes": 1438,
+      "sha256": "e19a672e8948ac2b263e688bcf327fa90b8817dd5c24f88d25653296159bd6d6"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/contracts/runtime-snapshot.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/contracts/runtime-snapshot.mdx",
+      "bytes": 863,
+      "sha256": "96332ed8d68035880f37fa5444bae8a5b67428e6f02abc727bb7529a0c5a8264"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/core/modules/application-facade.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/core/modules/application-facade.mdx",
+      "bytes": 5843,
+      "sha256": "627bd159bb005b103f42d90829b17f42ac9671b35d63005dcf149fe33941b497"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/core/modules/audio-runtime.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/core/modules/audio-runtime.mdx",
+      "bytes": 5660,
+      "sha256": "0059114e7895d70245a01b380d91c12b9f5b7587d126e3614a51db797a2f833b"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/core/modules/authoring-domain.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/core/modules/authoring-domain.mdx",
+      "bytes": 1878,
+      "sha256": "86e869a86e503e43e20b5135d3e1da6d9ace3e79c2bc5e68ee1c6851ee4185d7"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/core/modules/foundation.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/core/modules/foundation.mdx",
+      "bytes": 1514,
+      "sha256": "c7f9702b8d8b5475cc2fa31b1c44c7131902d697c2dc185f4c748936d382aeb1"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/core/modules/project-cooker.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/core/modules/project-cooker.mdx",
+      "bytes": 1838,
+      "sha256": "0329f55743324dc1ba84e1b4e7f405021968b86fe904c87149bf81e6a4b8ec1b"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/core/modules/project-io.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/core/modules/project-io.mdx",
+      "bytes": 4464,
+      "sha256": "930d78711fe23191c0be9be751660fc9ecf72ea7d552c3241d2a21711b22e6ed"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/core/modules/provider-sdk.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/core/modules/provider-sdk.mdx",
+      "bytes": 2350,
+      "sha256": "222ce8f3ba7a5a8e7b0c78ebb8b37361fc9012a0139ac7868b4f040579975df7"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/core/modules/web-runtime-platform.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/core/modules/web-runtime-platform.mdx",
+      "bytes": 5366,
+      "sha256": "4ae3d23a5562ab85a47f9278264f1e5583e5609977932c657d8cc3e9eae8d89d"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/core/overview.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/core/overview.mdx",
+      "bytes": 1343,
+      "sha256": "ed5b13233a7dd47e3537103da9098b3416d6d3320d9e35e8d787e1ca269dd052"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/history/legacy-patch-architecture.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/history/legacy-patch-architecture.mdx",
+      "bytes": 1064,
+      "sha256": "fe4560bf1d229820088f3c5856e226f38a2cf555725cdfb4676553ea0e8af3a8"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/hosts/core-cli.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/hosts/core-cli.mdx",
+      "bytes": 982,
+      "sha256": "7934a3ee4d52371363fab6f2bb24c24276090ae8ed95de16d90f809ff444448c"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/hosts/core-mcp.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/hosts/core-mcp.mdx",
+      "bytes": 1038,
+      "sha256": "89d3b546d00481039feb3462dcfcd51cc6ca6e52b8b19fa186b0d8ccc9f2eba3"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/hosts/creator-web.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/hosts/creator-web.mdx",
+      "bytes": 8365,
+      "sha256": "32be5dad2502907d9c5f6954ad6447a4595c3080002472ae2cf90e22a60843bf"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/hosts/native-host.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/hosts/native-host.mdx",
+      "bytes": 1433,
+      "sha256": "31947134c3c4559f9bbd7f01f2025bfa0997021cfb8d94fa9e65fa03edd62bf6"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/hosts/overview.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/hosts/overview.mdx",
+      "bytes": 1892,
+      "sha256": "7f2bd5353538c0f1bb2fa47963a02b04a5974c60acaf244cbcf8e43cfdd6b430"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/hosts/web-runtime.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/hosts/web-runtime.mdx",
+      "bytes": 11241,
+      "sha256": "3e38d1544c1ab460cea7187b650c6f3b4b7c5edd3a68a66f7ab2668eb7ac7aea"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/operations/documentation-governance.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/operations/documentation-governance.mdx",
+      "bytes": 2941,
+      "sha256": "9cf0b9c43936af374f820dcb474838bb1863d8e87b71706efa71ab2465795256"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/operations/testing-and-proof.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/operations/testing-and-proof.mdx",
+      "bytes": 51550,
+      "sha256": "eeacbcb8a2e1ea172afcf6e0ffa7bdb96868943d9aed588fad0d1929ab01f5ef"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/operations/version-and-release.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/operations/version-and-release.mdx",
+      "bytes": 12566,
+      "sha256": "e162918ebbda1835dadbd03a15674868a9d582e2453b53dc0fc2d1c3d8a450ef"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/overview/index.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/overview/index.mdx",
+      "bytes": 3967,
+      "sha256": "b9bb23eafd5eb12e12f6e83c5cb1437c0b0eed788d6ac5f23af4484992cf3aed"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/platform/input.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/platform/input.mdx",
+      "bytes": 3584,
+      "sha256": "5fc058dedc5ce4e02d7656820e8884d0c2492478cfa48b57b4b8e26096da00f3"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/platform/native-audio.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/platform/native-audio.mdx",
+      "bytes": 1168,
+      "sha256": "2326337adfb40d932f56bc3ed4354a6789b5766919316951ff6e6d7c07164dc3"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/platform/storage.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/platform/storage.mdx",
+      "bytes": 3909,
+      "sha256": "0a74279fc1a9797c26c17a8aea53c977bdc7e7141b1d3cdf93de6572fcc9ffa7"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/platform/web-runtime.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/platform/web-runtime.mdx",
+      "bytes": 9912,
+      "sha256": "5b7d26e09b1c900d45444b74c4a5673ab1db0442f8c2c62011a461c36c9c2788"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/product/capability-map.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/product/capability-map.mdx",
+      "bytes": 2551,
+      "sha256": "4e4542ce134f693f052448d5b6fefd71ae7028451dd6ea2bb3bcc1dee341bf06"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/product/positioning.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/product/positioning.mdx",
+      "bytes": 1393,
+      "sha256": "73bd4757d278a6b1abf1ba4ccb9ebbe9ca09593e8bb1692d45d8054f1b942bc1"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/product/workflows.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/product/workflows.mdx",
+      "bytes": 5145,
+      "sha256": "9d3b65a968b1927dfe854743045b7eac7f063f4041b196d1b2a06a45b32a2855"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/providers/local-proof.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/providers/local-proof.mdx",
+      "bytes": 934,
+      "sha256": "1bdd927df41e9dda89f8eb95fba131cfc14b3c986af9e1d1262ed08429e8184a"
+    },
+    {
+      "source_path": "apps/architecture-portal/docs/providers/overview.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.39.0/providers/overview.mdx",
+      "bytes": 1022,
+      "sha256": "5113a681c36c839d5c7e12102f9327a9d6e49a86b1a3b95ba60204673623619c"
+    }
+  ],
+  "source_sidebar": {
+    "path": "apps/architecture-portal/sidebars.ts",
+    "bytes": 1677,
+    "sha256": "c2405734e77ee54e809d176a6119b048a544f6ecd9999b2b4492f8a9233b3fd8"
+  },
+  "snapshot_sidebar": {
+    "path": "versioned_sidebars/version-1.0.39.0-sidebars.json",
+    "bytes": 2070,
+    "sha256": "0b53c96bf33887703ac2c93177f8ef18b23fb480ffd81bc31aeeaeba0ccdb9c8"
+  },
+  "diagrams": {
+    "ids": [
+      "application-facade",
+      "audio-runtime",
+      "authoring-domain",
+      "foundation",
+      "lmdj-core",
+      "lmdj-product",
+      "project-cooker",
+      "project-io",
+      "provider-sdk",
+      "web-runtime-platform"
+    ],
+    "asset_base": "/versions/1.0.39.0/diagrams",
+    "assets": [
+      {
+        "id": "application-facade",
+        "format": "html",
+        "source_path": "apps/architecture-portal/static/diagrams/application-facade.html",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/application-facade.html",
+        "bytes": 7604,
+        "sha256": "b404a7af3ac4f238c909908eb4dde4b318375765ec5bd154a89544a97d608908"
+      },
+      {
+        "id": "application-facade",
+        "format": "svg",
+        "source_path": "apps/architecture-portal/static/diagrams/application-facade.svg",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/application-facade.svg",
+        "bytes": 6644,
+        "sha256": "bb037372f4e1d2cf4174bbd9c69cc79fb557d78f485efd408f217c7e4d200130"
+      },
+      {
+        "id": "audio-runtime",
+        "format": "html",
+        "source_path": "apps/architecture-portal/static/diagrams/audio-runtime.html",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/audio-runtime.html",
+        "bytes": 6461,
+        "sha256": "ee597140d9ecfd6ec69445833d44261f369a7df7fdfba694a2817b32175af196"
+      },
+      {
+        "id": "audio-runtime",
+        "format": "svg",
+        "source_path": "apps/architecture-portal/static/diagrams/audio-runtime.svg",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/audio-runtime.svg",
+        "bytes": 5506,
+        "sha256": "cd0505d8e648bde23b852731e376b134c4af3c0176e270c764570249a61cdded"
+      },
+      {
+        "id": "authoring-domain",
+        "format": "html",
+        "source_path": "apps/architecture-portal/static/diagrams/authoring-domain.html",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/authoring-domain.html",
+        "bytes": 6228,
+        "sha256": "e2349e0c6c90c01ddeb3cd150e444d8e842659c003bf8c2a88c8a17eb318e859"
+      },
+      {
+        "id": "authoring-domain",
+        "format": "svg",
+        "source_path": "apps/architecture-portal/static/diagrams/authoring-domain.svg",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/authoring-domain.svg",
+        "bytes": 5270,
+        "sha256": "b6a30f3c15bb41dfb435edea70462e4d9ce951e20e54e3dc9c63136988d614a4"
+      },
+      {
+        "id": "foundation",
+        "format": "html",
+        "source_path": "apps/architecture-portal/static/diagrams/foundation.html",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/foundation.html",
+        "bytes": 6283,
+        "sha256": "3f468d458772471ce3eb6949b082b1881502be70b12224e10d09d8d89f3e0c30"
+      },
+      {
+        "id": "foundation",
+        "format": "svg",
+        "source_path": "apps/architecture-portal/static/diagrams/foundation.svg",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/foundation.svg",
+        "bytes": 5331,
+        "sha256": "a0f1f695e833da596453d9104816bf4a3dbe29c44e5471e65671c0a91cf2d1d9"
+      },
+      {
+        "id": "lmdj-core",
+        "format": "html",
+        "source_path": "apps/architecture-portal/static/diagrams/lmdj-core.html",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/lmdj-core.html",
+        "bytes": 10097,
+        "sha256": "82e31bc4eb79d366109053402c80e73ddb2835480f287ec1d1cbad5f7b3851fa"
+      },
+      {
+        "id": "lmdj-core",
+        "format": "svg",
+        "source_path": "apps/architecture-portal/static/diagrams/lmdj-core.svg",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/lmdj-core.svg",
+        "bytes": 9144,
+        "sha256": "77544e5ca4729f45fe5c4f67dc5956c0b0b779bed622931ebec15a0f50e130ff"
+      },
+      {
+        "id": "lmdj-product",
+        "format": "html",
+        "source_path": "apps/architecture-portal/static/diagrams/lmdj-product.html",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/lmdj-product.html",
+        "bytes": 10798,
+        "sha256": "41dcd2ac5c0c5f897ffb6dcef925ceaa9ff56cc6c2980f37a4fff8722782cfc9"
+      },
+      {
+        "id": "lmdj-product",
+        "format": "svg",
+        "source_path": "apps/architecture-portal/static/diagrams/lmdj-product.svg",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/lmdj-product.svg",
+        "bytes": 9843,
+        "sha256": "c9f90eaf63bcf1a5d03a0d53d13c937b3b17e25900e389f8dec0880ff8c6d295"
+      },
+      {
+        "id": "project-cooker",
+        "format": "html",
+        "source_path": "apps/architecture-portal/static/diagrams/project-cooker.html",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/project-cooker.html",
+        "bytes": 6225,
+        "sha256": "f8ba2d24c1fd78c58e15d5533e39e6d11b13247e0e600e52ea0e7dcfb952141c"
+      },
+      {
+        "id": "project-cooker",
+        "format": "svg",
+        "source_path": "apps/architecture-portal/static/diagrams/project-cooker.svg",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/project-cooker.svg",
+        "bytes": 5269,
+        "sha256": "e7ff5d3af2075213d40564dfe5c191ae9139d681ca91915b57c6c51b0b7c8339"
+      },
+      {
+        "id": "project-io",
+        "format": "html",
+        "source_path": "apps/architecture-portal/static/diagrams/project-io.html",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/project-io.html",
+        "bytes": 7541,
+        "sha256": "b238f2277a4a695952f92aee759eca41799f0d47026074af1c66dfccdd74b0a3"
+      },
+      {
+        "id": "project-io",
+        "format": "svg",
+        "source_path": "apps/architecture-portal/static/diagrams/project-io.svg",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/project-io.svg",
+        "bytes": 6588,
+        "sha256": "d2e71afa8a1eaa980a9def15efce33a7c00e7ada9b49414dfbbffff7e4915804"
+      },
+      {
+        "id": "provider-sdk",
+        "format": "html",
+        "source_path": "apps/architecture-portal/static/diagrams/provider-sdk.html",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/provider-sdk.html",
+        "bytes": 6197,
+        "sha256": "20d203f5ccb12c7b454266c915a90dc3ab5c69b9e1b15dc699a5b3a295d63c6e"
+      },
+      {
+        "id": "provider-sdk",
+        "format": "svg",
+        "source_path": "apps/architecture-portal/static/diagrams/provider-sdk.svg",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/provider-sdk.svg",
+        "bytes": 5243,
+        "sha256": "1dc6f7a71c976123e3e6ddec19cfcb13047e23e7a26dc67156079ae88d8ae57e"
+      },
+      {
+        "id": "web-runtime-platform",
+        "format": "html",
+        "source_path": "apps/architecture-portal/static/diagrams/web-runtime-platform.html",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/web-runtime-platform.html",
+        "bytes": 8399,
+        "sha256": "3dc192cba70878938e893792be28073a2abe670b359a8da53bede63ca1e54474"
+      },
+      {
+        "id": "web-runtime-platform",
+        "format": "svg",
+        "source_path": "apps/architecture-portal/static/diagrams/web-runtime-platform.svg",
+        "versioned_path": "static/versions/1.0.39.0/diagrams/web-runtime-platform.svg",
+        "bytes": 7437,
+        "sha256": "137b7c060b2b70a70837959e6f85566e74a42f92c33f76d275f604242818413c"
+      }
+    ]
+  },
+  "frozen_at_utc": "2026-08-29T11:30:28.665Z"
+}

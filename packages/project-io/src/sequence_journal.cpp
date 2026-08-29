@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -128,6 +129,34 @@ nlohmann::json slot_json(domain::PadSlotId slot) {
   return {{"bank", slot.bank}, {"pad", slot.pad}};
 }
 
+std::optional<domain::PadSlotId> optional_slot(
+    const nlohmann::json& input,
+    std::string_view key) {
+  const auto found = input.find(std::string{key});
+  if (found == input.end() || found->is_null()) {
+    return std::nullopt;
+  }
+  if (!found->is_object() || found->size() != 2 ||
+      !found->contains("bank") || !found->contains("pad") ||
+      !found->at("bank").is_number_unsigned() ||
+      !found->at("pad").is_number_unsigned()) {
+    throw std::runtime_error("armed Capture slot shape is invalid");
+  }
+  const auto bank = found->at("bank").get<std::uint64_t>();
+  const auto pad = found->at("pad").get<std::uint64_t>();
+  if (bank > 255 || pad > 255) {
+    throw std::runtime_error("armed Capture slot is invalid");
+  }
+  const domain::PadSlotId slot{
+      static_cast<std::uint8_t>(bank),
+      static_cast<std::uint8_t>(pad),
+  };
+  if (!domain::is_valid_slot(slot)) {
+    throw std::runtime_error("armed Capture slot is invalid");
+  }
+  return slot;
+}
+
 nlohmann::json event_json(const domain::PatternEvent& event) {
   return {
       {"duration_tick", event.duration_tick},
@@ -217,27 +246,66 @@ nlohmann::json checked_record(nlohmann::json payload) {
   };
 }
 
+Error corrupt_record_error(
+    const std::filesystem::path& path,
+    std::size_t record_offset,
+    std::size_t observed_length,
+    std::string_view reason,
+    std::string message) {
+  return Error{
+      ErrorCode::invalid_project,
+      std::move(message),
+      {
+          {"durable_prefix_length", record_offset},
+          {"journal_retained", true},
+          {"observed_length", observed_length},
+          {"path", path.generic_string()},
+          {"reason", reason},
+          {"record_offset", record_offset},
+          {"remedy",
+           "retain the journal; repair the invalid record or discard the "
+           "recovery journal explicitly"},
+      },
+  };
+}
+
 foundation::Result<nlohmann::json> checked_payload(
     const nlohmann::json& record,
-    const std::filesystem::path& path) {
+    const std::filesystem::path& path,
+    std::size_t record_offset,
+    std::size_t observed_length) {
   try {
     if (!record.is_object() || record.size() != 2 ||
         !record.contains("checksum") || !record.contains("payload")) {
-      throw std::runtime_error("record envelope is invalid");
+      return foundation::Result<nlohmann::json>::failure(
+          corrupt_record_error(
+              path,
+              record_offset,
+              observed_length,
+              "sequence_journal_record_envelope_invalid",
+              "Sequence Journal record envelope is invalid"));
     }
     const auto checksum = record.at("checksum").get<std::string>();
     const auto encoded = foundation::canonical_json(record.at("payload"));
     if (!lowercase_sha256(checksum) || sha256(encoded) != checksum) {
-      throw std::runtime_error("record checksum does not match payload");
+      return foundation::Result<nlohmann::json>::failure(
+          corrupt_record_error(
+              path,
+              record_offset,
+              observed_length,
+              "sequence_journal_checksum_mismatch",
+              "Sequence Journal checksum does not match its canonical payload"));
     }
     return foundation::Result<nlohmann::json>::success(record.at("payload"));
   } catch (const std::exception& exception) {
+    (void)exception;
     return foundation::Result<nlohmann::json>::failure(
-        Error{
-            ErrorCode::invalid_project,
-            "Sequence Journal checksum record is invalid",
-            {{"path", path.generic_string()}, {"detail", exception.what()}},
-        });
+        corrupt_record_error(
+            path,
+            record_offset,
+            observed_length,
+            "sequence_journal_record_envelope_invalid",
+            "Sequence Journal record envelope is invalid"));
   }
 }
 
@@ -252,8 +320,109 @@ nlohmann::json flush_json(const SequenceFlushRecord& flush) {
       {"expected_revision", flush.expected_revision},
       {"flush_seq", flush.flush_seq},
       {"kind", "flush"},
+      {"payload_version", 2},
       {"pattern_id", flush.pattern_id.value()},
   };
+}
+
+nlohmann::json events_json(std::span<const domain::PatternEvent> events) {
+  auto encoded = nlohmann::json::array();
+  for (const auto& event : events) {
+    encoded.push_back(event_json(event));
+  }
+  return encoded;
+}
+
+nlohmann::json tail_json(
+    const ActiveSequenceJournal& journal,
+    std::uint64_t input_sequence,
+    std::span<const domain::PatternEvent> events) {
+  return {
+      {"events", events_json(events)},
+      {"expected_revision", journal.expected_revision},
+      {"input_sequence", input_sequence},
+      {"kind", "tail"},
+      {"pattern_id", journal.pattern_id.value()},
+      {"tail_seq", journal.next_tail_seq},
+  };
+}
+
+std::vector<domain::PatternEvent> unresolved_batch(
+    const ActiveSequenceJournal& journal) {
+  std::vector<domain::PatternEvent> result;
+  for (const auto& flush : journal.flushes) {
+    if (!flush.completed) {
+      result = domain::merge_pattern_events(result, flush.recovery_events);
+    }
+  }
+  return domain::merge_pattern_events(result, journal.pending_events);
+}
+
+bool same_event_key(
+    const domain::PatternEvent& left,
+    const domain::PatternEvent& right) noexcept {
+  return left.slot == right.slot && left.onset_tick == right.onset_tick;
+}
+
+bool covers_event_keys(
+    std::span<const domain::PatternEvent> committed,
+    std::span<const domain::PatternEvent> candidate) {
+  return std::ranges::all_of(candidate, [committed](const auto& event) {
+    return std::ranges::any_of(committed, [&event](const auto& visible) {
+      return same_event_key(visible, event);
+    });
+  });
+}
+
+std::vector<domain::PatternEvent> uncommitted_residual(
+    std::span<const domain::PatternEvent> committed,
+    std::span<const domain::PatternEvent> candidate) {
+  std::vector<domain::PatternEvent> residual;
+  std::ranges::copy_if(
+      candidate,
+      std::back_inserter(residual),
+      [committed](const auto& event) {
+        return std::ranges::find(committed, event) == committed.end();
+      });
+  return residual;
+}
+
+nlohmann::json capture_json(const SequenceCaptureCommit& capture) {
+  return {
+      {"artifact", capture.artifact},
+      {"asset_id", capture.asset_id.value()},
+      {"command_id", capture.command_id.value()},
+      {"expected_revision", capture.expected_revision},
+      {"kind", "capture-prepare"},
+      {"slot", slot_json(capture.slot)},
+  };
+}
+
+SequenceCaptureCommit parse_capture(
+    const nlohmann::json& input,
+    const std::filesystem::path& path) {
+  if (!input.is_object()) {
+    throw std::runtime_error("armed Capture commit shape is invalid");
+  }
+  const auto slot = optional_slot(input, "slot");
+  SequenceCaptureCommit capture{
+      foundation::CommandId{input.at("command_id").get<std::string>()},
+      foundation::AssetId{input.at("asset_id").get<std::string>()},
+      slot.value_or(domain::PadSlotId{}),
+      input.at("artifact").get<foundation::ArtifactRef>(),
+      input.at("expected_revision").get<std::uint64_t>(),
+  };
+  if (!slot.has_value() ||
+      !domain::is_valid_uuid(capture.command_id.value()) ||
+      !domain::is_valid_uuid(capture.asset_id.value()) ||
+      !domain::is_valid_slot(capture.slot) ||
+      !lowercase_sha256(capture.artifact.sha256) ||
+      capture.artifact.media_type.empty()) {
+    throw std::runtime_error(
+        "armed Capture commit identity is invalid at " +
+        path.generic_string());
+  }
+  return capture;
 }
 
 nlohmann::json journal_json(const ActiveSequenceJournal& journal) {
@@ -261,15 +430,30 @@ nlohmann::json journal_json(const ActiveSequenceJournal& journal) {
   for (const auto& flush : journal.flushes) {
     auto encoded = flush_json(flush);
     encoded["completed"] = flush.completed;
+    encoded["recovery_events"] = events_json(flush.recovery_events);
     flushes.push_back(std::move(encoded));
   }
   return {
+      {"armed_capture_slot",
+       journal.armed_capture_slot.has_value()
+           ? nlohmann::json(slot_json(*journal.armed_capture_slot))
+           : nlohmann::json(nullptr)},
       {"bars", journal.bars},
+      {"capture_commit",
+       journal.capture_commit.has_value()
+           ? nlohmann::json(capture_json(*journal.capture_commit))
+           : nlohmann::json(nullptr)},
       {"expected_revision", journal.expected_revision},
       {"flushes", std::move(flushes)},
+      {"last_input_sequence",
+       journal.last_input_sequence.has_value()
+           ? nlohmann::json(*journal.last_input_sequence)
+           : nlohmann::json(nullptr)},
       {"next_flush_seq", journal.next_flush_seq},
+      {"next_tail_seq", journal.next_tail_seq},
       {"pattern_fingerprint", journal.pattern_fingerprint},
       {"pattern_id", journal.pattern_id.value()},
+      {"pending_events", events_json(journal.pending_events)},
       {"session_id", journal.session_id.value()},
       {"state", state_string(journal.state)},
   };
@@ -289,7 +473,17 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
         input.at("next_flush_seq").get<std::uint64_t>(),
         parse_state(input.at("state").get<std::string>()),
         {},
+        std::nullopt,
+        std::nullopt,
+        0,
+        std::nullopt,
+        {},
     };
+    journal.armed_capture_slot = optional_slot(input, "armed_capture_slot");
+    const auto capture = input.find("capture_commit");
+    if (capture != input.end() && !capture->is_null()) {
+      journal.capture_commit = parse_capture(*capture, path);
+    }
     if (!domain::is_valid_uuid(journal.session_id.value()) ||
         !domain::is_valid_uuid(journal.pattern_id.value()) ||
         !valid_bars(journal.bars) ||
@@ -297,12 +491,33 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
       throw std::runtime_error("recovery metadata is invalid");
     }
     const auto loop_length = domain::pattern_length_ticks(journal.bars);
+    journal.next_tail_seq = input.value("next_tail_seq", std::uint64_t{0});
+    if (input.contains("last_input_sequence") &&
+        !input.at("last_input_sequence").is_null()) {
+      journal.last_input_sequence =
+          input.at("last_input_sequence").get<std::uint64_t>();
+    }
+    if (input.contains("pending_events")) {
+      for (const auto& encoded : input.at("pending_events")) {
+        auto parsed = parse_event(encoded, loop_length, path);
+        if (!parsed.has_value()) {
+          return foundation::Result<ActiveSequenceJournal>::failure(
+              parsed.error());
+        }
+        journal.pending_events.push_back(parsed.value());
+      }
+      if (domain::merge_pattern_events({}, journal.pending_events) !=
+          journal.pending_events) {
+        throw std::runtime_error("recovery tail is not canonical");
+      }
+    }
     for (const auto& encoded : input.at("flushes")) {
       SequenceFlushRecord flush{
           encoded.at("flush_seq").get<std::uint64_t>(),
           foundation::CommandId{encoded.at("command_id").get<std::string>()},
           foundation::PatternId{encoded.at("pattern_id").get<std::string>()},
           encoded.at("expected_revision").get<std::uint64_t>(),
+          {},
           {},
           encoded.at("completed").get<bool>(),
       };
@@ -318,6 +533,46 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
         }
         flush.canonical_events.push_back(parsed.value());
       }
+      const auto payload_version =
+          encoded.value("payload_version", std::uint64_t{1});
+      if (payload_version != 1 && payload_version != 2) {
+        throw std::runtime_error("recovery flush payload version is invalid");
+      }
+      if (payload_version == 2 && !encoded.contains("recovery_events")) {
+        throw std::runtime_error(
+            "recovery flush v2 is missing its effective residual");
+      }
+      if (payload_version == 1 && encoded.contains("recovery_events")) {
+        throw std::runtime_error(
+            "legacy recovery flush has ambiguous residual metadata");
+      }
+      // Legacy sealed snapshots encoded the effective residual in `events`.
+      // Treat it as both the original and recovery payload: this preserves
+      // recoverability without guessing an unavailable original command.
+      const auto& recovery_events = payload_version == 2
+                                        ? encoded.at("recovery_events")
+                                        : encoded.at("events");
+      for (const auto& event : recovery_events) {
+        auto parsed = parse_event(event, loop_length, path);
+        if (!parsed.has_value()) {
+          return foundation::Result<ActiveSequenceJournal>::failure(
+              parsed.error());
+        }
+        flush.recovery_events.push_back(parsed.value());
+      }
+      if (domain::merge_pattern_events({}, flush.canonical_events) !=
+              flush.canonical_events ||
+          domain::merge_pattern_events({}, flush.recovery_events) !=
+              flush.recovery_events ||
+          !std::ranges::all_of(
+              flush.recovery_events,
+              [&flush](const auto& event) {
+                return std::ranges::find(flush.canonical_events, event) !=
+                       flush.canonical_events.end();
+              })) {
+        throw std::runtime_error(
+            "recovery flush payload or residual is invalid");
+      }
       journal.flushes.push_back(std::move(flush));
     }
     return foundation::Result<ActiveSequenceJournal>::success(
@@ -326,8 +581,16 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
     return foundation::Result<ActiveSequenceJournal>::failure(
         Error{
             ErrorCode::invalid_project,
-            "Sequence recovery document is invalid",
-            {{"path", path.generic_string()}, {"detail", exception.what()}},
+            "Sequence recovery payload is invalid and has been retained",
+            {
+                {"detail", exception.what()},
+                {"path", path.generic_string()},
+                {"reason", "sequence_recovery_payload_invalid"},
+                {"recovery_retained", true},
+                {"remedy",
+                 "retain the recovery file; repair its versioned payload or "
+                 "discard this recovery candidate explicitly"},
+            },
         });
   }
 }
@@ -367,13 +630,24 @@ foundation::Result<JournalDocument> read_journal(
           0,
           SequenceSessionState::active,
           {},
+          std::nullopt,
+          std::nullopt,
+          0,
+          std::nullopt,
+          {},
       },
       0,
   };
   std::size_t cursor = 0;
+  std::size_t record_offset = 0;
+  std::string_view record_reason = "sequence_journal_record_invalid";
+  std::string record_message = "active Sequence Journal record is invalid";
   bool saw_begin = false;
   try {
     while (cursor < bytes.size()) {
+      record_offset = cursor;
+      record_reason = "sequence_journal_record_invalid";
+      record_message = "active Sequence Journal record is invalid";
       const auto line_end = bytes.find('\n', cursor);
       if (line_end == std::string::npos) {
         break;
@@ -385,7 +659,8 @@ foundation::Result<JournalDocument> read_journal(
         continue;
       }
       const auto envelope = parse_bounded_or_throw(line);
-      auto payload = checked_payload(envelope, path);
+      auto payload = checked_payload(
+          envelope, path, record_offset, bytes.size());
       if (!payload.has_value()) {
         return foundation::Result<JournalDocument>::failure(payload.error());
       }
@@ -406,7 +681,14 @@ foundation::Result<JournalDocument> read_journal(
             0,
             SequenceSessionState::active,
             {},
+            std::nullopt,
+            std::nullopt,
+            0,
+            std::nullopt,
+            {},
         };
+        document.journal.armed_capture_slot =
+            optional_slot(payload.value(), "armed_capture_slot");
         if (!domain::is_valid_uuid(document.journal.session_id.value()) ||
             !domain::is_valid_uuid(document.journal.pattern_id.value()) ||
             !valid_bars(document.journal.bars) ||
@@ -414,7 +696,50 @@ foundation::Result<JournalDocument> read_journal(
           throw std::runtime_error("Sequence begin metadata is invalid");
         }
         saw_begin = true;
+      } else if (kind == "tail") {
+        record_reason = "sequence_journal_tail_identity_invalid";
+        record_message =
+            "Sequence Journal tail identity is not monotonic or session-bound";
+        const auto tail_seq =
+            payload.value().at("tail_seq").get<std::uint64_t>();
+        const auto input_sequence =
+            payload.value().at("input_sequence").get<std::uint64_t>();
+        const auto pattern_id = foundation::PatternId{
+            payload.value().at("pattern_id").get<std::string>()};
+        const auto expected_revision =
+            payload.value().at("expected_revision").get<std::uint64_t>();
+        if (tail_seq != document.journal.next_tail_seq ||
+            (document.journal.last_input_sequence.has_value() &&
+             input_sequence <= *document.journal.last_input_sequence) ||
+            pattern_id != document.journal.pattern_id ||
+            expected_revision != document.journal.expected_revision ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching)) {
+          throw std::runtime_error("Sequence tail identity is invalid");
+        }
+        std::vector<domain::PatternEvent> pending_events;
+        record_reason = "sequence_journal_tail_not_canonical";
+        record_message =
+            "Sequence Journal tail event order is not canonical";
+        const auto loop_length =
+            domain::pattern_length_ticks(document.journal.bars);
+        for (const auto& encoded : payload.value().at("events")) {
+          auto parsed = parse_event(encoded, loop_length, path);
+          if (!parsed.has_value()) {
+            return foundation::Result<JournalDocument>::failure(parsed.error());
+          }
+          pending_events.push_back(parsed.value());
+        }
+        if (pending_events.empty() ||
+            domain::merge_pattern_events({}, pending_events) != pending_events) {
+          throw std::runtime_error("Sequence tail events are not canonical");
+        }
+        document.journal.pending_events = std::move(pending_events);
+        document.journal.last_input_sequence = input_sequence;
+        ++document.journal.next_tail_seq;
       } else if (kind == "flush") {
+        const auto payload_version =
+            payload.value().value("payload_version", std::uint64_t{1});
         SequenceFlushRecord flush{
             payload.value().at("flush_seq").get<std::uint64_t>(),
             foundation::CommandId{
@@ -423,9 +748,12 @@ foundation::Result<JournalDocument> read_journal(
                 payload.value().at("pattern_id").get<std::string>()},
             payload.value().at("expected_revision").get<std::uint64_t>(),
             {},
+            {},
             false,
         };
-        if (flush.flush_seq != document.journal.next_flush_seq ||
+        if (document.journal.capture_commit.has_value() ||
+            flush.flush_seq != document.journal.next_flush_seq ||
+            payload_version > 2 || payload_version < 1 ||
             !domain::is_valid_uuid(flush.command_id.value()) ||
             !domain::is_valid_uuid(flush.pattern_id.value()) ||
             flush.pattern_id != document.journal.pattern_id) {
@@ -441,6 +769,16 @@ foundation::Result<JournalDocument> read_journal(
           }
           flush.canonical_events.push_back(parsed.value());
         }
+        flush.recovery_events = flush.canonical_events;
+        const auto required = unresolved_batch(document.journal);
+        if (!required.empty() && required != flush.canonical_events) {
+          record_reason = "sequence_journal_flush_batch_invalid";
+          record_message =
+              "Sequence Journal flush omits a durable unresolved event";
+          throw std::runtime_error(
+              "Sequence flush does not resolve the durable pending batch");
+        }
+        document.journal.pending_events.clear();
         document.journal.flushes.push_back(std::move(flush));
         ++document.journal.next_flush_seq;
       } else if (kind == "complete") {
@@ -460,17 +798,56 @@ foundation::Result<JournalDocument> read_journal(
         if (!lowercase_sha256(fingerprint)) {
           throw std::runtime_error("Sequence completion fingerprint is invalid");
         }
-        found->completed = true;
+        const auto committed_flush = *found;
+        for (auto& flush : document.journal.flushes) {
+          if (flush.completed ||
+              flush.pattern_id != committed_flush.pattern_id ||
+              flush.expected_revision != committed_flush.expected_revision) {
+            continue;
+          }
+          if (flush.flush_seq <= sequence) {
+            if (!covers_event_keys(
+                    committed_flush.canonical_events,
+                    flush.recovery_events)) {
+              record_reason = "sequence_journal_completion_coverage_invalid";
+              record_message =
+                  "Sequence completion does not cover an earlier cumulative "
+                  "flush";
+              throw std::runtime_error(
+                  "Sequence completion does not cover an earlier flush");
+            }
+            flush.completed = true;
+            flush.recovery_events.clear();
+            continue;
+          }
+          auto residual = uncommitted_residual(
+              committed_flush.canonical_events,
+              flush.recovery_events);
+          if (residual.empty()) {
+            flush.completed = true;
+            flush.recovery_events.clear();
+          } else {
+            flush.recovery_events = std::move(residual);
+          }
+        }
+        document.journal.pending_events = uncommitted_residual(
+            committed_flush.canonical_events,
+            document.journal.pending_events);
         document.journal.expected_revision =
             payload.value().at("committed_revision").get<std::uint64_t>();
         document.journal.pattern_fingerprint = fingerprint;
       } else if (kind == "state") {
+        if (document.journal.capture_commit.has_value()) {
+          throw std::runtime_error(
+              "Sequence state cannot change during Capture recovery");
+        }
         document.journal.state =
             parse_state(payload.value().at("state").get<std::string>());
       } else if (kind == "rebase") {
         const auto expected_revision =
             payload.value().at("expected_revision").get<std::uint64_t>();
-        if (expected_revision <= document.journal.expected_revision ||
+        if (document.journal.capture_commit.has_value() ||
+            expected_revision <= document.journal.expected_revision ||
             (document.journal.state != SequenceSessionState::active &&
              document.journal.state != SequenceSessionState::switching) ||
             std::any_of(
@@ -480,6 +857,81 @@ foundation::Result<JournalDocument> read_journal(
           throw std::runtime_error("Sequence rebase metadata is invalid");
         }
         document.journal.expected_revision = expected_revision;
+      } else if (kind == "capture-prepare") {
+        auto capture = parse_capture(payload.value(), path);
+        if (document.journal.capture_commit.has_value() ||
+            document.journal.armed_capture_slot != capture.slot ||
+            capture.expected_revision != document.journal.expected_revision ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching) ||
+            std::any_of(
+                document.journal.flushes.begin(),
+                document.journal.flushes.end(),
+                [](const auto& flush) { return !flush.completed; })) {
+          throw std::runtime_error(
+              "armed Capture preparation metadata is invalid");
+        }
+        document.journal.capture_commit = std::move(capture);
+      } else if (kind == "capture-complete") {
+        const auto slot = optional_slot(payload.value(), "slot");
+        const auto command_id = foundation::CommandId{
+            payload.value().at("command_id").get<std::string>()};
+        const auto committed_revision =
+            payload.value().at("committed_revision").get<std::uint64_t>();
+        if (!slot.has_value() || !document.journal.capture_commit.has_value() ||
+            !domain::is_valid_uuid(command_id.value()) ||
+            document.journal.armed_capture_slot != slot ||
+            document.journal.capture_commit->slot != slot ||
+            document.journal.capture_commit->command_id != command_id ||
+            document.journal.capture_commit->expected_revision !=
+                document.journal.expected_revision ||
+            committed_revision != document.journal.expected_revision + 1 ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching) ||
+            std::any_of(
+                document.journal.flushes.begin(),
+                document.journal.flushes.end(),
+                [](const auto& flush) { return !flush.completed; })) {
+          throw std::runtime_error(
+              "armed Capture completion metadata is invalid");
+        }
+        document.journal.expected_revision = committed_revision;
+        document.journal.armed_capture_slot.reset();
+        document.journal.capture_commit.reset();
+      } else if (kind == "capture-abort") {
+        const auto slot = optional_slot(payload.value(), "slot");
+        const auto command_id = foundation::CommandId{
+            payload.value().at("command_id").get<std::string>()};
+        const auto expected_revision =
+            payload.value().at("expected_revision").get<std::uint64_t>();
+        if (!slot.has_value() || !document.journal.capture_commit.has_value() ||
+            !domain::is_valid_uuid(command_id.value()) ||
+            document.journal.armed_capture_slot != slot ||
+            document.journal.capture_commit->slot != slot ||
+            document.journal.capture_commit->command_id != command_id ||
+            document.journal.capture_commit->expected_revision !=
+                expected_revision ||
+            expected_revision != document.journal.expected_revision ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching) ||
+            std::any_of(
+                document.journal.flushes.begin(),
+                document.journal.flushes.end(),
+                [](const auto& flush) { return !flush.completed; })) {
+          throw std::runtime_error("armed Capture abort metadata is invalid");
+        }
+        document.journal.armed_capture_slot.reset();
+        document.journal.capture_commit.reset();
+      } else if (kind == "capture-disarm") {
+        const auto slot = optional_slot(payload.value(), "slot");
+        if (!slot.has_value() ||
+            document.journal.armed_capture_slot != slot ||
+            document.journal.capture_commit.has_value() ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching)) {
+          throw std::runtime_error("armed Capture disarm metadata is invalid");
+        }
+        document.journal.armed_capture_slot.reset();
       } else if (kind == "switch") {
         const auto pattern_id = foundation::PatternId{
             payload.value().at("pattern_id").get<std::string>()};
@@ -488,7 +940,8 @@ foundation::Result<JournalDocument> read_journal(
             payload.value().at("pattern_fingerprint").get<std::string>();
         const auto expected_revision =
             payload.value().at("expected_revision").get<std::uint64_t>();
-        if (!domain::is_valid_uuid(pattern_id.value()) || !valid_bars(bars) ||
+        if (document.journal.capture_commit.has_value() ||
+            !domain::is_valid_uuid(pattern_id.value()) || !valid_bars(bars) ||
             !lowercase_sha256(fingerprint) ||
             expected_revision != document.journal.expected_revision ||
             pattern_id == document.journal.pattern_id ||
@@ -510,17 +963,37 @@ foundation::Result<JournalDocument> read_journal(
       }
       document.valid_prefix_length = cursor;
     }
+    if (cursor != bytes.size()) {
+      return foundation::Result<JournalDocument>::failure(
+          Error{
+              ErrorCode::invalid_project,
+              "active Sequence Journal has a torn trailing record",
+              {
+                  {"durable_prefix_length", cursor},
+                  {"journal_retained", true},
+                  {"observed_length", bytes.size()},
+                  {"path", path.generic_string()},
+                  {"reason", "sequence_journal_torn_tail"},
+                  {"record_offset", cursor},
+                  {"remedy",
+                   "retain the journal; repair the invalid suffix or discard "
+                   "the recovery journal explicitly"},
+              },
+          });
+    }
     if (!saw_begin) {
       throw std::runtime_error("Sequence Journal has no durable begin record");
     }
     return foundation::Result<JournalDocument>::success(std::move(document));
   } catch (const std::exception& exception) {
+    (void)exception;
     return foundation::Result<JournalDocument>::failure(
-        Error{
-            ErrorCode::invalid_project,
-            "active Sequence Journal could not be parsed",
-            {{"path", path.generic_string()}, {"detail", exception.what()}},
-        });
+        corrupt_record_error(
+            path,
+            record_offset,
+            bytes.size(),
+            record_reason,
+            std::move(record_message)));
   }
 }
 
@@ -608,10 +1081,13 @@ foundation::Result<void> SequenceJournal::begin(
     foundation::PatternId pattern_id,
     std::uint8_t bars,
     std::string pattern_fingerprint,
-    std::uint64_t expected_revision) {
+    std::uint64_t expected_revision,
+    std::optional<domain::PadSlotId> armed_capture_slot) {
   if (!domain::is_valid_uuid(session_id.value()) ||
       !domain::is_valid_uuid(pattern_id.value()) || !valid_bars(bars) ||
-      !lowercase_sha256(pattern_fingerprint)) {
+      !lowercase_sha256(pattern_fingerprint) ||
+      (armed_capture_slot.has_value() &&
+       !domain::is_valid_slot(*armed_capture_slot))) {
     return foundation::Result<void>::failure(
         Error{ErrorCode::invalid_argument, "Sequence begin metadata is invalid"});
   }
@@ -646,6 +1122,10 @@ foundation::Result<void> SequenceJournal::begin(
         });
   }
   const auto payload = nlohmann::json{
+      {"armed_capture_slot",
+       armed_capture_slot.has_value()
+           ? nlohmann::json(slot_json(*armed_capture_slot))
+           : nlohmann::json(nullptr)},
       {"bars", bars},
       {"contract", kJournalContract},
       {"expected_revision", expected_revision},
@@ -691,6 +1171,60 @@ foundation::Result<ActiveSequenceJournal> SequenceJournal::read_active(
       std::move(document.value().journal));
 }
 
+foundation::Result<void> SequenceJournal::append_tail(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    foundation::PatternId pattern_id,
+    std::uint64_t expected_revision,
+    std::uint64_t input_sequence,
+    std::span<const domain::PatternEvent> events) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(pattern_id.value()) || events.empty()) {
+    return foundation::Result<void>::failure(
+        Error{ErrorCode::invalid_argument, "Sequence tail metadata is invalid"});
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  auto& journal = document.value().journal;
+  if (journal.session_id != session_id || journal.pattern_id != pattern_id ||
+      journal.expected_revision != expected_revision ||
+      (journal.last_input_sequence.has_value() &&
+       input_sequence <= *journal.last_input_sequence) ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching)) {
+    return foundation::Result<void>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence tail does not match the active session",
+        });
+  }
+  const std::vector<domain::PatternEvent> incoming{events.begin(), events.end()};
+  const auto canonical = domain::merge_pattern_events({}, incoming);
+  const auto loop_length = domain::pattern_length_ticks(journal.bars);
+  for (const auto& event : canonical) {
+    if (!domain::is_valid_slot(event.slot) || event.velocity < 1 ||
+        event.velocity > 127 || event.onset_tick >= loop_length ||
+        event.duration_tick < 1 ||
+        event.duration_tick > loop_length - event.onset_tick) {
+      return foundation::Result<void>::failure(
+          Error{ErrorCode::invalid_argument, "Sequence tail event is invalid"});
+    }
+  }
+  return append_record(
+      platform_, bundle, document.value(),
+      tail_json(journal, input_sequence, canonical));
+}
+
 foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
     const std::filesystem::path& bundle,
     foundation::SequenceSessionId session_id,
@@ -717,9 +1251,7 @@ foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
     return foundation::Result<SequenceFlushRecord>::failure(document.error());
   }
   auto& journal = document.value().journal;
-  if (journal.session_id != session_id || journal.pattern_id != pattern_id ||
-      journal.expected_revision != expected_revision ||
-      journal.state != SequenceSessionState::active) {
+  if (journal.session_id != session_id) {
     return foundation::Result<SequenceFlushRecord>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -729,6 +1261,35 @@ foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
   const std::vector<domain::PatternEvent> incoming{
       events.begin(), events.end()};
   auto canonical = domain::merge_pattern_events({}, incoming);
+  const auto repeated = std::find_if(
+      journal.flushes.begin(),
+      journal.flushes.end(),
+      [&command_id](const auto& flush) {
+        return flush.command_id == command_id;
+      });
+  if (repeated != journal.flushes.end()) {
+    if (repeated->pattern_id == pattern_id &&
+        repeated->expected_revision == expected_revision &&
+        repeated->canonical_events == canonical) {
+      return foundation::Result<SequenceFlushRecord>::success(*repeated);
+    }
+    return foundation::Result<SequenceFlushRecord>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence command id is already bound to a different flush",
+            {{"reason", "sequence_command_conflict"}},
+        });
+  }
+  if (journal.pattern_id != pattern_id ||
+      journal.expected_revision != expected_revision ||
+      journal.state != SequenceSessionState::active ||
+      journal.capture_commit.has_value()) {
+    return foundation::Result<SequenceFlushRecord>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence flush does not match the active session",
+        });
+  }
   const auto loop_length = domain::pattern_length_ticks(journal.bars);
   for (const auto& event : canonical) {
     if (!domain::is_valid_slot(event.slot) || event.velocity < 1 ||
@@ -739,11 +1300,20 @@ foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
           Error{ErrorCode::invalid_argument, "Sequence flush event is invalid"});
     }
   }
+  const auto required = unresolved_batch(journal);
+  if (!required.empty() && required != canonical) {
+    return foundation::Result<SequenceFlushRecord>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence flush does not resolve the durable pending batch",
+        });
+  }
   SequenceFlushRecord flush{
       journal.next_flush_seq,
       std::move(command_id),
       std::move(pattern_id),
       expected_revision,
+      canonical,
       std::move(canonical),
       false,
   };
@@ -777,7 +1347,8 @@ foundation::Result<void> SequenceJournal::complete_flush(
   if (!document.has_value()) {
     return foundation::Result<void>::failure(document.error());
   }
-  if (document.value().journal.session_id != session_id) {
+  if (document.value().journal.session_id != session_id ||
+      document.value().journal.capture_commit.has_value()) {
     return foundation::Result<void>::failure(
         Error{ErrorCode::invalid_argument, "Sequence session does not match"});
   }
@@ -827,7 +1398,8 @@ foundation::Result<void> SequenceJournal::set_state(
   if (!document.has_value()) {
     return foundation::Result<void>::failure(document.error());
   }
-  if (document.value().journal.session_id != session_id) {
+  if (document.value().journal.session_id != session_id ||
+      document.value().journal.capture_commit.has_value()) {
     return foundation::Result<void>::failure(
         Error{ErrorCode::invalid_argument, "Sequence session does not match"});
   }
@@ -855,6 +1427,7 @@ foundation::Result<void> SequenceJournal::rebase(
   const auto& journal = document.value().journal;
   if (journal.session_id != session_id ||
       expected_revision <= journal.expected_revision ||
+      journal.capture_commit.has_value() ||
       (journal.state != SequenceSessionState::active &&
        journal.state != SequenceSessionState::switching) ||
       std::any_of(
@@ -868,6 +1441,274 @@ foundation::Result<void> SequenceJournal::rebase(
   return append_record(
       platform_, bundle, document.value(),
       {{"expected_revision", expected_revision}, {"kind", "rebase"}});
+}
+
+foundation::Result<void> SequenceJournal::complete_armed_capture(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    foundation::CommandId command_id,
+    domain::PadSlotId slot,
+    std::uint64_t committed_revision) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(command_id.value()) ||
+      !domain::is_valid_slot(slot)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture completion identity is invalid",
+    });
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id ||
+      !journal.capture_commit.has_value() ||
+      journal.capture_commit->command_id != command_id ||
+      journal.capture_commit->slot != slot ||
+      journal.armed_capture_slot != slot ||
+      journal.capture_commit->expected_revision != journal.expected_revision ||
+      committed_revision != journal.expected_revision + 1 ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching) ||
+      std::any_of(
+          journal.flushes.begin(), journal.flushes.end(),
+          [](const auto& flush) { return !flush.completed; })) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture completion does not match the active session",
+        {{"reason", "armed_capture_target_mismatch"}},
+    });
+  }
+  return append_record(
+      platform_, bundle, document.value(),
+      {{"command_id", command_id.value()},
+       {"committed_revision", committed_revision},
+       {"kind", "capture-complete"},
+       {"slot", slot_json(slot)}});
+}
+
+foundation::Result<void> SequenceJournal::prepare_armed_capture(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    foundation::CommandId command_id,
+    foundation::AssetId asset_id,
+    domain::PadSlotId slot,
+    foundation::ArtifactRef artifact,
+    std::uint64_t expected_revision) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(command_id.value()) ||
+      !domain::is_valid_uuid(asset_id.value()) || !domain::is_valid_slot(slot) ||
+      !lowercase_sha256(artifact.sha256) || artifact.media_type.empty()) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture preparation identity is invalid",
+    });
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id ||
+      journal.armed_capture_slot != slot ||
+      journal.capture_commit.has_value() ||
+      expected_revision != journal.expected_revision ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching) ||
+      std::any_of(
+          journal.flushes.begin(), journal.flushes.end(),
+          [](const auto& flush) { return !flush.completed; })) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture preparation does not match the active session",
+        {{"reason", "armed_capture_target_mismatch"}},
+    });
+  }
+  return append_record(
+      platform_, bundle, document.value(),
+      capture_json(SequenceCaptureCommit{
+          std::move(command_id), std::move(asset_id), slot,
+          std::move(artifact), expected_revision}));
+}
+
+foundation::Result<void> SequenceJournal::disarm_capture(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    domain::PadSlotId slot) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_slot(slot)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture disarm identity is invalid",
+    });
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture disarm does not match the active session",
+        {{"reason", "sequence_owner_mismatch"}},
+    });
+  }
+  if (!journal.armed_capture_slot.has_value()) {
+    return foundation::Result<void>::success();
+  }
+  if (journal.armed_capture_slot != slot) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture disarm target does not match",
+        {{"reason", "armed_capture_target_mismatch"}},
+    });
+  }
+  if (journal.capture_commit.has_value()) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "armed Capture commit must be reconciled before disarm",
+        {{"reason", "armed_capture_recovery_pending"},
+         {"remedy", "retry or reconcile the durable Capture commit first"}},
+    });
+  }
+  return append_record(
+      platform_, bundle, document.value(),
+      {{"kind", "capture-disarm"}, {"slot", slot_json(slot)}});
+}
+
+foundation::Result<SequenceCaptureDisarmResult>
+SequenceJournal::resolve_capture_disarm(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    domain::PadSlotId slot,
+    const SequenceCaptureTruthInspector& inspect_truth) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_slot(slot) || !inspect_truth) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(Error{
+        ErrorCode::invalid_argument,
+        "checked armed Capture disarm identity is invalid",
+    });
+  }
+  // ProjectStore Capture publication holds the writer lease before appending
+  // journal completion, so checked abort must take the same lock order.
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(
+        lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(
+        document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching)) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(Error{
+        ErrorCode::invalid_argument,
+        "checked armed Capture disarm does not match the active session",
+        {{"reason", "sequence_owner_mismatch"}},
+    });
+  }
+  if (!journal.armed_capture_slot.has_value()) {
+    return foundation::Result<SequenceCaptureDisarmResult>::success(
+        SequenceCaptureDisarmResult{false, journal.expected_revision});
+  }
+  if (journal.armed_capture_slot != slot) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(Error{
+        ErrorCode::invalid_argument,
+        "checked armed Capture disarm target does not match",
+        {{"reason", "armed_capture_target_mismatch"}},
+    });
+  }
+  if (!journal.capture_commit.has_value()) {
+    auto appended = append_record(
+        platform_, bundle, document.value(),
+        {{"kind", "capture-disarm"}, {"slot", slot_json(slot)}});
+    if (!appended.has_value()) {
+      return foundation::Result<SequenceCaptureDisarmResult>::failure(
+          appended.error());
+    }
+    return foundation::Result<SequenceCaptureDisarmResult>::success(
+        SequenceCaptureDisarmResult{false, journal.expected_revision});
+  }
+
+  const auto& capture = *journal.capture_commit;
+  auto truth = inspect_truth(capture);
+  if (!truth.has_value()) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(
+        truth.error());
+  }
+  if (truth.value().has_value()) {
+    const auto committed_revision = *truth.value();
+    if (committed_revision != capture.expected_revision + 1) {
+      return foundation::Result<SequenceCaptureDisarmResult>::failure(Error{
+          ErrorCode::invalid_project,
+          "checked armed Capture receipt revision is invalid",
+          {{"reason", "armed_capture_recovery_conflict"},
+           {"remedy",
+            "inspect the committed Capture receipt and Project Truth"}},
+      });
+    }
+    auto completed = append_record(
+        platform_, bundle, document.value(),
+        {{"command_id", capture.command_id.value()},
+         {"committed_revision", committed_revision},
+         {"kind", "capture-complete"},
+         {"slot", slot_json(slot)}});
+    if (!completed.has_value()) {
+      return foundation::Result<SequenceCaptureDisarmResult>::failure(
+          completed.error());
+    }
+    return foundation::Result<SequenceCaptureDisarmResult>::success(
+        SequenceCaptureDisarmResult{true, committed_revision});
+  }
+
+  auto aborted = append_record(
+      platform_, bundle, document.value(),
+      {{"command_id", capture.command_id.value()},
+       {"expected_revision", capture.expected_revision},
+       {"kind", "capture-abort"},
+       {"slot", slot_json(slot)}});
+  if (!aborted.has_value()) {
+    return foundation::Result<SequenceCaptureDisarmResult>::failure(
+        aborted.error());
+  }
+  return foundation::Result<SequenceCaptureDisarmResult>::success(
+      SequenceCaptureDisarmResult{false, capture.expected_revision});
 }
 
 foundation::Result<void> SequenceJournal::switch_pattern(
@@ -901,6 +1742,7 @@ foundation::Result<void> SequenceJournal::switch_pattern(
   const auto& journal = document.value().journal;
   if (journal.session_id != session_id || journal.pattern_id == pattern_id ||
       journal.expected_revision != expected_revision ||
+      journal.capture_commit.has_value() ||
       (journal.state != SequenceSessionState::active &&
        journal.state != SequenceSessionState::switching) ||
       std::any_of(
@@ -1006,8 +1848,9 @@ SequenceJournal::list_recoverable(const std::filesystem::path& bundle) const {
           read.error());
     }
     try {
-      const auto envelope = parse_bounded_or_throw(byte_string(read.value()));
-      auto payload = checked_payload(envelope, path);
+      const auto bytes = byte_string(read.value());
+      const auto envelope = parse_bounded_or_throw(bytes);
+      auto payload = checked_payload(envelope, path, 0, bytes.size());
       if (!payload.has_value()) {
         return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
             payload.error());
@@ -1027,8 +1870,16 @@ SequenceJournal::list_recoverable(const std::filesystem::path& bundle) const {
       return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
           Error{
               ErrorCode::invalid_project,
-              "Sequence recovery file could not be parsed",
-              {{"path", path.generic_string()}, {"detail", exception.what()}},
+              "Sequence recovery payload is invalid and has been retained",
+              {
+                  {"detail", exception.what()},
+                  {"path", path.generic_string()},
+                  {"reason", "sequence_recovery_payload_invalid"},
+                  {"recovery_retained", true},
+                  {"remedy",
+                   "retain the recovery file; repair its versioned payload or "
+                   "discard this recovery candidate explicitly"},
+              },
           });
     }
   }
@@ -1062,11 +1913,12 @@ foundation::Result<void> SequenceJournal::remove_active_if_complete(
   }
   if (std::any_of(
           journal.flushes.begin(), journal.flushes.end(),
-          [](const auto& flush) { return !flush.completed; })) {
+          [](const auto& flush) { return !flush.completed; }) ||
+      !journal.pending_events.empty()) {
     return foundation::Result<void>::failure(
         Error{
             ErrorCode::invalid_argument,
-            "Sequence Journal still contains an incomplete flush",
+            "Sequence Journal still contains uncommitted events",
         });
   }
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING

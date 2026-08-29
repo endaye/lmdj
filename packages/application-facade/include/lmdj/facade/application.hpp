@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -126,6 +127,35 @@ struct SampleWaveformRequest {
   cooker::WaveformRequest window;
 };
 
+struct SampleQuotaRequest {
+  std::filesystem::path project_path;
+  domain::PadSlotId slot;
+};
+
+struct SampleQuotaConsumed {
+  domain::PadSlotId slot;
+  std::uint64_t prepared_bytes;
+  std::uint64_t prepared_frames;
+
+  friend bool operator==(
+      const SampleQuotaConsumed&,
+      const SampleQuotaConsumed&) = default;
+};
+
+struct SampleQuotaResult {
+  std::uint64_t project_revision;
+  domain::PadSlotId slot;
+  std::uint64_t bank_quota_bytes;
+  std::uint64_t bank_used_bytes;
+  std::uint64_t bank_remaining_bytes;
+  std::uint64_t project_quota_bytes;
+  std::uint64_t project_used_bytes;
+  std::uint64_t project_remaining_bytes;
+  std::uint64_t effective_remaining_bytes;
+  std::uint64_t effective_remaining_frames;
+  std::vector<SampleQuotaConsumed> consumed;
+};
+
 struct SampleMutationResult {
   std::uint64_t committed_revision;
   bool runtime_prepare_required;
@@ -151,6 +181,24 @@ struct SampleImportBeginRequest {
   domain::PadSlotId slot;
   foundation::AssetId asset_id;
   std::uint64_t byte_length;
+  std::optional<foundation::SequenceSessionId> sequence_session_id;
+
+  SampleImportBeginRequest(
+      std::string import_token_value,
+      std::filesystem::path project_path_value,
+      domain::CommandMeta meta_value,
+      domain::PadSlotId slot_value,
+      foundation::AssetId asset_id_value,
+      std::uint64_t byte_length_value,
+      std::optional<foundation::SequenceSessionId> sequence_session_id_value =
+          std::nullopt)
+      : import_token(std::move(import_token_value)),
+        project_path(std::move(project_path_value)),
+        meta(std::move(meta_value)),
+        slot(slot_value),
+        asset_id(std::move(asset_id_value)),
+        byte_length(byte_length_value),
+        sequence_session_id(std::move(sequence_session_id_value)) {}
 };
 
 struct SampleImportSession {
@@ -171,6 +219,21 @@ struct SequenceBeginRequest {
   foundation::PatternId pattern_id;
   std::uint64_t expected_revision;
   std::uint64_t runtime_frame;
+  std::optional<domain::PadSlotId> armed_capture_slot;
+
+  SequenceBeginRequest(
+      std::filesystem::path project_path_value,
+      foundation::SequenceSessionId session_id_value,
+      foundation::PatternId pattern_id_value,
+      std::uint64_t expected_revision_value,
+      std::uint64_t runtime_frame_value,
+      std::optional<domain::PadSlotId> armed_capture_slot_value = std::nullopt)
+      : project_path(std::move(project_path_value)),
+        session_id(std::move(session_id_value)),
+        pattern_id(std::move(pattern_id_value)),
+        expected_revision(expected_revision_value),
+        runtime_frame(runtime_frame_value),
+        armed_capture_slot(armed_capture_slot_value) {}
 };
 
 struct SequencePadEvent {
@@ -201,8 +264,28 @@ struct SequenceSwitchRequest {
   std::optional<std::uint64_t> runtime_frame{};
 };
 
+struct SequenceCaptureDisarmRequest {
+  std::filesystem::path project_path;
+  foundation::SequenceSessionId session_id;
+  domain::PadSlotId slot;
+};
+
 struct SequenceStatusRequest {
   std::filesystem::path project_path;
+};
+
+struct SequenceOverlayRequest {
+  std::filesystem::path project_path;
+  foundation::SequenceSessionId session_id;
+};
+
+struct SequenceOverlayProjection {
+  foundation::SequenceSessionId session_id;
+  foundation::PatternId pattern_id;
+  std::uint64_t generation{};
+  std::vector<domain::PatternEvent> events;
+
+  bool operator==(const SequenceOverlayProjection&) const = default;
 };
 
 struct SequenceRecoveryRequest {
@@ -228,6 +311,7 @@ struct SequenceMutationResult {
   SequenceStatus status;
   std::optional<std::uint64_t> committed_revision;
   bool replayed{};
+  std::optional<foundation::PatternId> committed_pattern_id;
 };
 
 struct SequenceRecoveryInfo {
@@ -282,6 +366,8 @@ class Application {
       const SampleInspectRequest& request) const;
   foundation::Result<cooker::WaveformEnvelope> query_sample_waveform(
       const SampleWaveformRequest& request);
+  foundation::Result<SampleQuotaResult> query_sample_quota(
+      const SampleQuotaRequest& request) const;
   foundation::Result<SampleImportSession> begin_sample_import(
       const SampleImportBeginRequest& request);
   foundation::Result<void> append_sample_import(
@@ -306,9 +392,13 @@ class Application {
       const SequenceFlushRequest& request);
   foundation::Result<SequenceMutationResult> request_sequence_switch(
       const SequenceSwitchRequest& request);
+  foundation::Result<void> disarm_sequence_capture(
+      const SequenceCaptureDisarmRequest& request);
   void abandon_sequence_sessions() noexcept;
   foundation::Result<SequenceStatus> query_sequence_status(
       const SequenceStatusRequest& request) const;
+  foundation::Result<SequenceOverlayProjection> query_sequence_overlay(
+      const SequenceOverlayRequest& request) const;
   foundation::Result<std::vector<SequenceRecoveryInfo>>
   list_sequence_recovery(const SequenceStatusRequest& request) const;
   foundation::Result<SequenceMutationResult> apply_sequence_recovery(

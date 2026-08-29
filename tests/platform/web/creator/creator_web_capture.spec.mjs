@@ -18,6 +18,86 @@ async function expectProjectRevision(page, expectedRevision) {
   expect(report.sample.project_revision).toBe(expectedRevision);
 }
 
+async function report(page) {
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", {name: "Export report"}).click();
+  return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
+}
+
+async function installProjectInspectProbe(page) {
+  await page.addInitScript(() => {
+    let exposed;
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {
+      configurable: true,
+      get() {
+        return exposed;
+      },
+      set(nativeHost) {
+        const nativeTransport = nativeHost.transport;
+        nativeHost.transport = Object.freeze({
+          send(...arguments_) {
+            return nativeTransport.send(...arguments_);
+          },
+          subscribe(...arguments_) {
+            return nativeTransport.subscribe(...arguments_);
+          },
+          subscribeFailure(...arguments_) {
+            return nativeTransport.subscribeFailure(...arguments_);
+          },
+          terminate(...arguments_) {
+            return nativeTransport.terminate(...arguments_);
+          },
+          get terminated() {
+            return nativeTransport.terminated;
+          },
+          get terminalOwnerReleased() {
+            return nativeTransport.terminalOwnerReleased;
+          },
+        });
+        exposed = nativeHost;
+      },
+    });
+  });
+}
+
+async function inspectProjectTruth(page) {
+  const response = await page.evaluate(() =>
+    window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "project.inspect",
+      payload: {},
+    }));
+  expect(response.ok).toBe(true);
+  return response.result;
+}
+
+async function pressRecordedPad(page, accessibleName, code) {
+  const pad = page.getByRole("button", {name: accessibleName});
+  await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
+  await pad.evaluate((element) => {
+    element.removeAttribute("data-proof-outcome-observed");
+    const observeOutcome = () => {
+      const outcome = element.getAttribute("data-outcome");
+      if (outcome !== null && outcome !== "idle") {
+        element.setAttribute("data-proof-outcome-observed", outcome);
+        return true;
+      }
+      return false;
+    };
+    if (observeOutcome()) return;
+    const observer = new MutationObserver(() => {
+      if (observeOutcome()) observer.disconnect();
+    });
+    observer.observe(element, {attributes: true, attributeFilter: ["data-outcome"]});
+  });
+  await page.keyboard.down(code);
+  await expect(pad).toHaveAttribute("data-proof-outcome-observed", /.+/, {
+    timeout: 30_000,
+  });
+  await page.keyboard.up(code);
+}
+
 async function importV1SampleProject(page) {
   if (!sampleBundle) {
     throw new Error("LMDJ_CREATOR_WEB_SAMPLE_BUNDLE is required");
@@ -143,7 +223,130 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   await expectProjectRevision(page, 47);
 });
 
-test("clamps a long take to the committable selection", async ({page}, testInfo) => {
+test("armed Pad capture commits without stopping the active Sequence", async ({page}, testInfo) => {
+  test.skip(testInfo.project.name !== GRANTED);
+  test.setTimeout(600_000);
+  await installProjectInspectProbe(page);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  const initialTruth = await inspectProjectTruth(page);
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: 30_000,
+  });
+  await enterSampleEditor(page);
+  await selectPadWithoutPress(page, "Pad A1 — empty");
+  const panel = await recordAtLeast(page, "Pad A1", 1);
+
+  await panel.getByRole("button", {name: "Continue in Sequence"}).click();
+  await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
+  await page.getByRole("button", {name: "Record"}).click();
+  await expect(page.getByRole("status").filter({hasText: "recording"}))
+    .toBeVisible();
+
+  const patternId = await page.getByRole("combobox", {name: "Pattern"})
+    .inputValue();
+  const initialEvents = structuredClone(
+    initialTruth.project.patterns[patternId].events,
+  );
+
+  // A distinct non-armed Pad is ordinary Sequence input before the Capture
+  // stop gesture. This event must survive the Capture commit/rebase boundary.
+  await pressRecordedPad(page, "Pad A2 — assigned", "KeyW");
+
+  // The armed Pad stops only its capture. The Sequence session stays beneath
+  // the trim overlay and the armed hit itself is not recorded.
+  await page.keyboard.press("KeyQ");
+  await expect(panel.getByRole("slider", {name: "Pad A1 Selection length"}))
+    .toBeVisible({timeout: 30_000});
+  await panel.getByRole("button", {name: "Commit"}).click();
+  await expect(panel).toBeHidden({timeout: 180_000});
+  await expect(page.getByRole("status").filter({hasText: "recording"}))
+    .toBeVisible({timeout: 30_000});
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible({timeout: 30_000});
+  const committedTruth = await inspectProjectTruth(page);
+  const committedAsset = committedTruth.project.banks[0].pads[0].asset_id;
+  const committedArtifact = structuredClone(
+    committedTruth.project.assets[committedAsset].artifact,
+  );
+  expect(committedArtifact).toEqual({
+    byte_length: expect.any(Number),
+    media_type: "audio/wav",
+    sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+  });
+  expect(committedArtifact.byte_length).toBeGreaterThan(44);
+
+  // Once committed and rebased, the same Pad is a normal playable/recordable
+  // input for the still-active session.
+  await pressRecordedPad(page, "Pad A1 — assigned", "KeyQ");
+  await page.getByRole("button", {name: "Stop"}).click();
+  await expect(page.getByRole("status").filter({hasText: "stopped"}))
+    .toBeVisible({timeout: 30_000});
+
+  const evidence = await report(page);
+  expect(evidence.sequence.semantic_state).toBe("stopped");
+  expect(evidence.sequence.project_revision)
+    .toBe(evidence.sequence.expected_revision);
+  expect(evidence.sequence.pending_event_count).toBe(0);
+
+  await page.reload();
+  await expect(page.getByRole("button", {name: "Open Project 00000000"}))
+    .toBeVisible({timeout: 60_000});
+  await page.getByRole("button", {name: "Open Project 00000000"}).click();
+  await expect(page.getByRole("heading", {name: "Project 00000000"}))
+    .toBeVisible({timeout: 120_000});
+  const persisted = await inspectProjectTruth(page);
+
+  // Prove the full committed artifact identity survives the actual
+  // close/reload/reopen boundary before checking the known shared publication
+  // assertions below.
+  const assignedAsset = persisted.project.banks[0].pads[0].asset_id;
+  expect(assignedAsset).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  expect(assignedAsset).toBe(committedAsset);
+  expect(persisted.project.assets[assignedAsset]).toEqual({
+    artifact: committedArtifact,
+  });
+
+  const expectedFinalRevision = initialTruth.project_revision + 2;
+  expect(persisted.project_revision).toBe(expectedFinalRevision);
+  expect(persisted.project.revision).toBe(expectedFinalRevision);
+
+  const persistedEvents = persisted.project.patterns[patternId].events;
+  expect(persistedEvents).toHaveLength(initialEvents.length + 2);
+  const addedEvents = structuredClone(persistedEvents);
+  for (const initialEvent of initialEvents) {
+    const exact = JSON.stringify(initialEvent);
+    const index = addedEvents.findIndex((event) => JSON.stringify(event) === exact);
+    expect(index).toBeGreaterThanOrEqual(0);
+    addedEvents.splice(index, 1);
+  }
+  expect(addedEvents).toHaveLength(2);
+  // Capture trim/commit can cross the loop boundary. Persisted Pattern order
+  // is canonical onset-first, so assert that order independently from the two
+  // exact Pad identities recorded on opposite sides of the Capture commit.
+  expect(addedEvents.map(({slot}) => slot).sort((left, right) =>
+    left.pad - right.pad)).toEqual([
+    {bank: 0, pad: 0},
+    {bank: 0, pad: 1},
+  ]);
+  expect(addedEvents.map(({onset_tick: onsetTick}) => onsetTick)).toEqual(
+    addedEvents.map(({onset_tick: onsetTick}) => onsetTick)
+      .sort((left, right) => left - right),
+  );
+  expect(addedEvents.every((event) =>
+    Object.keys(event).sort().join(",") ===
+      "duration_tick,onset_tick,slot,velocity" &&
+    event.duration_tick > 0 && event.velocity > 0)).toBe(true);
+
+  await page.getByRole("button", {name: "Sample"}).click();
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible({timeout: 30_000});
+});
+
+test("uses queried Bank quota instead of the retired per-Pad capture cap", async ({page}, testInfo) => {
   test.skip(testInfo.project.name !== GRANTED);
   test.setTimeout(600_000);
   await page.goto("/index.html");
@@ -151,15 +354,16 @@ test("clamps a long take to the committable selection", async ({page}, testInfo)
   await enterSampleEditor(page);
 
   await selectPadWithoutPress(page, "Pad A1 — empty");
-  // S8B-D3 caps the buffer at 60 s and the commit at 5 s. Waiting out 60 s of
-  // real time proves nothing the clamp does not, so record past the 5 s commit
-  // boundary and assert the selection the panel offers.
+  // Task #346 removes the old five-second per-Pad commit cap. Record past that
+  // boundary and prove the entire buffered take remains selectable while the
+  // queried Bank/Project quota is the only commit ceiling.
   const panel = await recordAtLeast(page, "Pad A1", CAPTURE_FIXTURE_SECONDS * 3);
   await panel.getByRole("button", {name: "Stop"}).click();
 
   const length = panel.getByRole("slider", {name: "Pad A1 Selection length"});
-  await expect(length).toHaveAttribute("max", "240000");
-  expect(Number(await length.inputValue())).toBeLessThanOrEqual(240_000);
+  const maximum = Number(await length.getAttribute("max"));
+  expect(maximum).toBeGreaterThan(240_000);
+  expect(Number(await length.inputValue())).toBe(maximum);
 });
 
 test("blur during recording stops capture and keeps the buffer", async ({page}, testInfo) => {

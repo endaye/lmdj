@@ -270,3 +270,66 @@ Merged-main Host Proof and successful PR CI do not create a signed tag,
 Release, deployment, Channel promotion, or physical-device evidence. The
 immutable `1.0.14.0` Portal snapshot remains unchanged and independently
 verified by its provenance gate.
+
+## Bank reactivation acknowledgement repair candidate — 2026-08-29
+
+Issue #410 closes an acknowledgement gap found by repeatedly exercising the
+packaged Browser lifecycle journey. Before this repair, a live Bank reload
+could return while audio still acknowledged the prior generation, and a later
+stop/start or suspend/resume could treat that stale nonzero value as activation
+success.
+
+The candidate requires exact generation identity at both boundaries. Running
+`snapshot.reload`, retry publication, and the automatic running-Bank
+publications from `sample.import.commit`, `sample.update_pad`, and
+`sample.reset_pad` wait for the newly accepted Bank generation within the
+original Host request deadline. When a sample mutation has already committed
+Project Truth but the acknowledgement cannot complete, its response retains
+the committed revision and reports `runtime_published=false` with a typed
+`snapshot_error`; it does not claim that the Project mutation rolled back. The
+same Project-committed response and running-Runtime fail-closed outcome applies
+when the deadline expires anywhere before Runtime publication completes,
+including during immutable Snapshot and Bank preparation.
+Initial AudioWorklet bootstrap completes before Browser Main establishes the
+one-second activation deadline immediately beside the callback baseline and
+`AudioContext.resume()` edge; bootstrap time therefore cannot consume that
+budget. Browser Main first observes a lock-free callback heartbeat advance,
+including across `uint32` wrap, then gives Control only the remaining activation
+budget. Recovery retains one budget from its resume edge. The Bridge computes
+the absolute effective cutoff as the earlier of the operation cutoff and caller
+cutoff, passes that absolute deadline into Control Runtime, and never rebuilds a
+fresh operation window from `submitted_at`. If a Project mutation atomically
+wins its publication claim before the cutoff, that claim remains authoritative
+until commit or abort settlement; unclaimed work and later Runtime-derived
+publication/acknowledgement do not inherit that exemption. AudioWorklet activation validates
+current/accepted/pending Bank state before opening the gate, latches that
+generation, and makes the first open-gate callback acknowledge it. A stale lower
+generation waits; a newer generation or deadline expiry fails closed. No timeout
+is increased, and the callback adds only lock-free atomic increment and exchange
+operations.
+
+Current automated acceptance includes deterministic Control tests for live
+publication, all three running sample-mutation publication paths, committed
+Project plus fake-clock post-commit/pre-publication fail-closed Runtime timeout
+semantics, stale reactivation acknowledgement, a caller-bounded 100 ms Bridge
+activation, pre-deadline Project claim settlement after the deadline, and
+terminal timeout.
+Runtime Session tests prove that slow initial Worklet bootstrap receives a fresh
+activation budget while suspend/resume shares one budget from the resume edge.
+A real Chromium production-path journey reloads a live Bank and then
+suspends/reactivates while retaining the latest exact acknowledgement. This is
+local candidate evidence until independent review, remote CI, and merge are
+separately complete; it creates no release, deployment, Channel promotion, or
+physical-device evidence.
+
+The final local candidate gates are Core full 79/79, stress 5/5, and proof
+63/63; Web Host nonbrowser 160/160; real AudioWorklet 22/22; clean packaged
+Chromium 20 passed with one designed skip and WebKit 2 passed with 14 declared
+capability skips; Creator Vitest 354/354, Python 13/13, shared platform Node
+133/133, and production build; and Portal 59/59 tests, 37 pages, 10 diagram
+sources with 20 outputs, and 42 rendered routes. Dependency, active-tree,
+version, production source-boundary, Web toolchain symbol-identity, and diff
+checks also pass. Creator's clean-tree reproducibility/browser proof is deferred
+to the first post-amend gate because its stable entrypoint rejects dirty source.
+These remain local candidate facts, not independent review,
+remote CI, merge, release, deployment, Channel, or physical acceptance.

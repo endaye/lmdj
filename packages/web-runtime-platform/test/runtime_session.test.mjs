@@ -17,6 +17,7 @@ const API = [
   "createPattern",
   "diagnostics",
   "discardSequenceRecovery",
+  "disarmSequenceCapture",
   "flushSequence",
   "importProject",
   "importAssignSample",
@@ -25,6 +26,7 @@ const API = [
   "listLocalProjects",
   "listSequenceRecovery",
   "openProject",
+  "querySampleQuota",
   "queryWaveform",
   "querySequenceStatus",
   "recordSequenceEvent",
@@ -35,6 +37,7 @@ const API = [
   "resetPad",
   "retryPrepare",
   "setSamplePreview",
+  "sampleIngestLimits",
   "start",
   "subscribeDiagnostics",
   "stopAll",
@@ -64,6 +67,16 @@ const WIRE_PLAYBACK = Object.freeze({
   trigger_mode: "gate",
   gain_millidb: -1_200,
   muted: false,
+});
+
+const RESOURCE_LIMITS = Object.freeze({
+  decoded_float_pcm_bytes_per_bank: 67_108_864,
+  decoded_float_pcm_bytes_total: 134_217_728,
+  decoded_float_pcm_bytes_resident: 268_435_456,
+  ingest_source_bytes: 104_857_600,
+  ingest_decoded_frames: 43_200_000,
+  ingest_channels: 2,
+  imported_wav_bytes: 68_157_440,
 });
 
 function success(envelope, result = {}) {
@@ -114,15 +127,19 @@ function fixture({
   inputConfiguration = {},
   runtimeTransport,
   runtimeTerminator,
+  audioCallbackHeartbeat,
+  startAudioWorklet,
+  now,
   inputOwnership,
   manifestSource = {
-    resourceLimits: {imported_wav_bytes: 1_048_576},
+    resourceLimits: RESOURCE_LIMITS,
   },
 } = {}) {
   let request = 0;
   let terminated = 0;
   let notificationListener = null;
   let failureListener = null;
+  let defaultAudioCallbackHeartbeat = 0;
   const context = Object.assign(new EventTarget(), {
     state: "suspended",
     async resume() {
@@ -159,7 +176,13 @@ function fixture({
       },
       subtle: webcrypto.subtle,
     },
-    manifestSource,
+    manifestSource: {
+      ...manifestSource,
+      resourceLimits: {
+        ...RESOURCE_LIMITS,
+        ...manifestSource.resourceLimits,
+      },
+    },
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
@@ -178,7 +201,11 @@ function fixture({
       createAudioContext: () => context,
       loadRuntime: async () => ({
         registerAudioContext: () => 1,
-        startAudioWorklet: async () => ({ok: true}),
+        audioCallbackHeartbeat:
+          audioCallbackHeartbeat ??
+          (() => ++defaultAudioCallbackHeartbeat),
+        startAudioWorklet:
+          startAudioWorklet ?? (async () => ({ok: true})),
         workers: [],
         ...(runtimeTransport === undefined
           ? {}
@@ -197,6 +224,7 @@ function fixture({
         product_build: TEST_PRODUCT_BUILD,
         protocol_version: 1,
       }),
+      ...(now === undefined ? {} : {now}),
     },
   });
   return {
@@ -311,7 +339,7 @@ test("default capability probe timeout fails startup without restart-required", 
     },
     navigator: {},
     crypto: webcrypto,
-    manifestSource: {resourceLimits: {imported_wav_bytes: 1_048_576}},
+    manifestSource: {resourceLimits: RESOURCE_LIMITS},
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
@@ -365,7 +393,7 @@ test("accepts only the declared compatible Host inventory in packaged manifests"
   };
   const manifestSource = {
     heapBytes: 536_870_912,
-    resourceLimits: {imported_wav_bytes: 1_048_576},
+    resourceLimits: RESOURCE_LIMITS,
     emscripten: {
       emcc_version: "emcc",
       emscripten_releases_revision: "a".repeat(40),
@@ -487,6 +515,73 @@ test("owns the exact Host-neutral surface and lifecycle", async () => {
   assert.equal(terminated(), 1);
 });
 
+test("activation waits for a resumed AudioWorklet callback within its original budget", async () => {
+  let heartbeat = 7;
+  const activations = [];
+  const {session} = fixture({
+    audioCallbackHeartbeat: () => heartbeat,
+    send: async (envelope, options) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(options.deadlineMs);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  const first = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  assert.deepEqual(activations, []);
+  heartbeat = 8;
+  assert.equal(await first, true);
+  assert.equal(activations.length, 1);
+  assert.ok(activations[0] > 0 && activations[0] <= 1_000);
+
+  assert.equal(await session.suspendAudio(), true);
+  const second = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  assert.equal(activations.length, 1);
+  heartbeat = 9;
+  assert.equal(await second, true);
+  assert.equal(activations.length, 2);
+  assert.ok(activations[1] > 0 && activations[1] <= 1_000);
+
+  assert.equal(await session.suspendAudio(), true);
+  heartbeat = 0xffff_ffff;
+  const wrapped = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  assert.equal(activations.length, 2);
+  heartbeat = 0;
+  assert.equal(await wrapped, true);
+  assert.equal(activations.length, 3);
+});
+
+test("initial AudioWorklet bootstrap does not consume the activation budget", async () => {
+  let monotonicTime = 0;
+  const activations = [];
+  const {session} = fixture({
+    now: () => monotonicTime,
+    startAudioWorklet: async () => {
+      monotonicTime += 5_000;
+      return {ok: true};
+    },
+    send: async (envelope, options) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(options.deadlineMs);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(activations, [1_000]);
+});
+
 test("bridges Sequence authority without browser musical-clock math", async () => {
   const sessionId = "10000000-0000-4000-8000-000000000001";
   const patternId = "20000000-0000-4000-8000-000000000002";
@@ -509,6 +604,8 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     replayed: false,
     project_revision: 5,
   };
+  let switchRequested = false;
+  let switchFlushed = false;
   const {session, emitNotification} = fixture({
     send: async (envelope) => {
       operations.push({operation: envelope.operation, payload: envelope.payload});
@@ -525,18 +622,26 @@ test("bridges Sequence authority without browser musical-clock math", async () =
         case "sequence.record.event":
           return success(envelope, {
             ...mutation,
+            ...(switchFlushed ? {pattern_id: nextPatternId} : {}),
             pending_event_count: 1,
             runtime_frame: 48_120,
             input_sequence: 1,
           });
         case "sequence.record.flush":
         case "sequence.record.stop":
+          if (switchRequested) switchFlushed = true;
           return success(envelope, {
             ...mutation,
+            ...(switchRequested ? {
+              pattern_id: nextPatternId,
+              pending_pattern_id: null,
+              effective_runtime_frame: null,
+            } : {}),
             runtime_frame: 48_240,
             pattern_publication: null,
           });
         case "sequence.record.switch-request":
+          switchRequested = true;
           return success(envelope, {
             ...mutation,
             state: "switching",
@@ -586,6 +691,8 @@ test("bridges Sequence authority without browser musical-clock math", async () =
             discarded: true,
             project_revision: null,
           });
+        case "sequence.capture.disarm":
+          return success(envelope, {disarmed: true});
         default:
           return success(envelope, defaultResult(envelope.operation));
       }
@@ -598,6 +705,7 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     sessionId,
     patternId,
     expectedRevision: 5,
+    armedCaptureSlot: 17,
   });
   assert.deepEqual(begun.transportAnchor, {
     runtimeFrame: 48_000,
@@ -625,10 +733,31 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     payload: {
       session_id: sessionId,
       pattern_id: nextPatternId,
+      runtime_frame: 95_999,
+      generation: 2,
+    },
+  });
+  emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
       runtime_frame: 96_000,
       generation: 2,
     },
   });
+  emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(boundaries, [{
     sessionId,
     patternId: nextPatternId,
@@ -636,6 +765,37 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     generation: 2,
   }]);
   assert.equal(Object.isFrozen(boundaries[0]), true);
+  emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(operations.filter(({operation}) =>
+    operation === "sequence.record.flush").length, 2);
+  const boundaryFlush = operations.filter(({operation}) =>
+    operation === "sequence.record.flush").at(-1).payload;
+  assert.equal(boundaryFlush.session_id, sessionId);
+  assert.match(
+    boundaryFlush.command_id,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  );
+  const postBoundaryEvent = await session.recordSequenceEvent({
+    sessionId,
+    slot: 18,
+    velocity: 90,
+    pressed: true,
+  });
+  assert.equal(postBoundaryEvent.patternId, nextPatternId);
+  assert.deepEqual(
+    operations.slice(-2).map(({operation}) => operation),
+    ["sequence.record.flush", "sequence.record.event"],
+  );
   const settings = await session.updateSequenceSettings({
     expectedRevision: 5,
     sessionId,
@@ -677,7 +837,25 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     destinationPatternId: null,
   });
   assert.equal(await session.discardSequenceRecovery(sessionId), true);
+  assert.equal(await session.disarmSequenceCapture({sessionId, slot: 17}), true);
+  await session.requestPatternSwitch({sessionId, nextPatternId});
   await session.stopSequence({sessionId, commandId});
+  const flushCountAfterStop = operations.filter(({operation}) =>
+    operation === "sequence.record.flush").length;
+  emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(boundaries.length, 1);
+  assert.equal(operations.filter(({operation}) =>
+    operation === "sequence.record.flush").length, flushCountAfterStop);
 
   const eventPayload = operations.find(
     ({operation}) => operation === "sequence.record.event",
@@ -704,6 +882,231 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     quantize_enabled: false,
     swing_percent: 60,
   });
+  assert.deepEqual(operations.find(
+    ({operation}) => operation === "sequence.capture.disarm",
+  ).payload, {session_id: sessionId, slot: {bank: 1, pad: 1}});
+});
+
+test("replays an ambiguous Sequence Stop before a queued boundary can fail the Host", async () => {
+  const sessionId = "10000000-0000-4000-8000-000000000001";
+  const patternId = "20000000-0000-4000-8000-000000000002";
+  const nextPatternId = "20000000-0000-4000-8000-000000000003";
+  const commandId = "30000000-0000-4000-8000-000000000004";
+  const operations = [];
+  let stopAttempts = 0;
+  let emitBoundary;
+  const activeStatus = {
+    state: "active",
+    session_id: sessionId,
+    pattern_id: patternId,
+    pending_pattern_id: null,
+    expected_revision: 5,
+    next_flush_seq: 0,
+    pending_event_count: 1,
+    effective_runtime_frame: null,
+  };
+  const stoppedStatus = {
+    ...activeStatus,
+    state: "inactive",
+    session_id: null,
+    pattern_id: null,
+    pending_event_count: 0,
+  };
+  const stoppedMutation = {
+    ...stoppedStatus,
+    committed_revision: 6,
+    replayed: true,
+    project_revision: 6,
+    runtime_frame: 96_000,
+    pattern_publication: null,
+  };
+  const runtime = fixture({
+    send: async (envelope) => {
+      operations.push({
+        operation: envelope.operation,
+        payload: envelope.payload,
+      });
+      if (envelope.operation === "sequence.record.switch-request") {
+        return success(envelope, {
+          ...activeStatus,
+          state: "switching",
+          pending_pattern_id: nextPatternId,
+          effective_runtime_frame: 96_000,
+          committed_revision: null,
+          replayed: false,
+          project_revision: 5,
+          pattern_publication: {
+            generation: 2,
+            activation_frame: 96_000,
+          },
+        });
+      }
+      if (envelope.operation === "sequence.record.stop") {
+        stopAttempts += 1;
+        if (stopAttempts === 1) {
+          emitBoundary();
+          return {
+            protocol_version: 1,
+            request_id: envelope.request_id,
+            ok: false,
+            error: {
+              code: "INVALID_ARGUMENT",
+              message: "Sequence Stop response was ambiguous at the boundary",
+              details: {},
+            },
+          };
+        }
+        return success(envelope, stoppedMutation);
+      }
+      if (envelope.operation === "sequence.record.status") {
+        return success(envelope, {
+          ...stoppedStatus,
+          project_revision: 6,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  emitBoundary = () => runtime.emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+
+  await runtime.session.start();
+  const boundaries = [];
+  runtime.session.subscribeSequenceBarBoundary((value) => boundaries.push(value));
+  await runtime.session.requestPatternSwitch({sessionId, nextPatternId});
+  const stopped = await runtime.session.stopSequence({sessionId, commandId});
+  assert.equal(stopped.replayed, true);
+  await drainTasks();
+
+  assert.equal((await runtime.session.querySequenceStatus()).state, "inactive");
+  assert.equal(runtime.terminated(), 0);
+  assert.equal(runtime.session.diagnostics().state, "audio-suspended");
+  assert.deepEqual(boundaries, []);
+  assert.deepEqual(
+    operations.filter(({operation}) => operation.startsWith("sequence.record."))
+      .map(({operation}) => operation),
+    [
+      "sequence.record.switch-request",
+      "sequence.record.stop",
+      "sequence.record.stop",
+      "sequence.record.status",
+    ],
+  );
+  assert.deepEqual(
+    operations.filter(({operation}) => operation === "sequence.record.stop")
+      .map(({payload}) => payload.command_id),
+    [commandId, commandId],
+  );
+});
+
+test("keeps a genuine invalid Stop observable and lets the queued boundary win", async () => {
+  const sessionId = "10000000-0000-4000-8000-000000000001";
+  const patternId = "20000000-0000-4000-8000-000000000002";
+  const nextPatternId = "20000000-0000-4000-8000-000000000003";
+  const commandId = "30000000-0000-4000-8000-000000000004";
+  const operations = [];
+  let stopAttempts = 0;
+  let emitBoundary;
+  const switchingStatus = {
+    state: "switching",
+    session_id: sessionId,
+    pattern_id: patternId,
+    pending_pattern_id: nextPatternId,
+    expected_revision: 5,
+    next_flush_seq: 0,
+    pending_event_count: 1,
+    effective_runtime_frame: 96_000,
+  };
+  const runtime = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      if (envelope.operation === "sequence.record.switch-request") {
+        return success(envelope, {
+          ...switchingStatus,
+          committed_revision: null,
+          replayed: false,
+          project_revision: 5,
+          pattern_publication: {
+            generation: 2,
+            activation_frame: 96_000,
+          },
+        });
+      }
+      if (envelope.operation === "sequence.record.stop") {
+        stopAttempts += 1;
+        if (stopAttempts === 1) emitBoundary();
+        return {
+          protocol_version: 1,
+          request_id: envelope.request_id,
+          ok: false,
+          error: {
+            code: "INVALID_ARGUMENT",
+            message: "Sequence Stop was rejected before commit",
+            details: {},
+          },
+        };
+      }
+      if (envelope.operation === "sequence.record.flush") {
+        return success(envelope, {
+          ...switchingStatus,
+          state: "active",
+          pattern_id: nextPatternId,
+          pending_pattern_id: null,
+          effective_runtime_frame: null,
+          committed_revision: 6,
+          replayed: false,
+          project_revision: 6,
+          runtime_frame: 96_000,
+          pattern_publication: null,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  emitBoundary = () => runtime.emitNotification({
+    protocol_version: 1,
+    event: "sequence.bar_boundary",
+    payload: {
+      session_id: sessionId,
+      pattern_id: nextPatternId,
+      runtime_frame: 96_000,
+      generation: 2,
+    },
+  });
+
+  await runtime.session.start();
+  const boundaries = [];
+  runtime.session.subscribeSequenceBarBoundary((value) => boundaries.push(value));
+  await runtime.session.requestPatternSwitch({sessionId, nextPatternId});
+  await assert.rejects(
+    runtime.session.stopSequence({sessionId, commandId}),
+    (error) => error.code === "INVALID_ARGUMENT",
+  );
+  await drainTasks();
+
+  assert.equal(runtime.terminated(), 0);
+  assert.equal(runtime.session.diagnostics().state, "audio-suspended");
+  assert.deepEqual(boundaries, [{
+    sessionId,
+    patternId: nextPatternId,
+    runtimeFrame: 96_000,
+    generation: 2,
+  }]);
+  assert.deepEqual(operations.filter((operation) =>
+    operation.startsWith("sequence.record.")), [
+    "sequence.record.switch-request",
+    "sequence.record.stop",
+    "sequence.record.stop",
+    "sequence.record.flush",
+  ]);
 });
 
 test("pushes immutable diagnostics and honors unsubscribe", async () => {
@@ -729,9 +1132,9 @@ test("Host-state failures expose only allowlisted structured details", async () 
     code: "WEB_RUNTIME_RESOURCE_LIMIT",
     stack: "private stack",
     details: {
-      resource: "decoded_frames_per_pad",
-      observed: 240_001,
-      limit: 240_000,
+      resource: "ingest_decoded_frames",
+      observed: 43_200_001,
+      limit: 43_200_000,
       storage_condition: "quota_exceeded",
       path: "/Users/private/project",
       request_id: "11111111-1111-4111-8111-111111111111",
@@ -744,9 +1147,9 @@ test("Host-state failures expose only allowlisted structured details", async () 
     state: "failed",
     errorCode: "WEB_RUNTIME_RESOURCE_LIMIT",
     errorDetails: {
-      resource: "decoded_frames_per_pad",
-      observed: 240_001,
-      limit: 240_000,
+      resource: "ingest_decoded_frames",
+      observed: 43_200_001,
+      limit: 43_200_000,
       storage_condition: "quota_exceeded",
     },
   });
@@ -835,6 +1238,25 @@ test("Sample queries bind flat slots to the current Project and validate typed r
           project_revision: 7,
         });
       }
+      if (envelope.operation === "sample.quota") {
+        return success(envelope, {
+          project_revision: 7,
+          slot: {bank: 2, pad: 1},
+          bank_quota_bytes: 67_108_864,
+          bank_used_bytes: 4_000,
+          bank_remaining_bytes: 67_104_864,
+          project_quota_bytes: 134_217_728,
+          project_used_bytes: 8_000,
+          project_remaining_bytes: 134_209_728,
+          effective_remaining_bytes: 67_104_864,
+          effective_remaining_frames: 16_776_216,
+          consumed: [{
+            slot: {bank: 2, pad: 0},
+            prepared_bytes: 4_000,
+            prepared_frames: 1_000,
+          }],
+        });
+      }
       return success(envelope, defaultResult(envelope.operation));
     },
   });
@@ -860,6 +1282,25 @@ test("Sample queries bind flat slots to the current Project and validate typed r
     ],
     projectRevision: 7,
   });
+  assert.deepEqual(await session.querySampleQuota(33), {
+    projectRevision: 7,
+    slot: 33,
+    bankQuotaBytes: 67_108_864,
+    bankUsedBytes: 4_000,
+    bankRemainingBytes: 67_104_864,
+    projectQuotaBytes: 134_217_728,
+    projectUsedBytes: 8_000,
+    projectRemainingBytes: 134_209_728,
+    effectiveRemainingBytes: 67_104_864,
+    effectiveRemainingFrames: 16_776_216,
+    consumed: [{slot: 32, preparedBytes: 4_000, preparedFrames: 1_000}],
+  });
+  assert.deepEqual(session.sampleIngestLimits(), {
+    sourceBytes: 104_857_600,
+    decodedFrames: 43_200_000,
+    channels: 2,
+    artifactBytes: 68_157_440,
+  });
   assert.deepEqual(calls.map(({envelope}) => ({
     operation: envelope.operation,
     payload: envelope.payload,
@@ -872,10 +1313,11 @@ test("Sample queries bind flat slots to the current Project and validate typed r
         window: {start_frame: 10, end_frame: 30, bucket_count: 2},
       },
     },
+    {operation: "sample.quota", payload: {slot: {bank: 2, pad: 1}}},
   ]);
   assert.deepEqual(
     calls.map(({transportOptions}) => transportOptions.deadlineMs),
-    [30_000, 30_000],
+    [30_000, 30_000, 30_000],
   );
 });
 
@@ -1384,6 +1826,7 @@ test("Sample import streams one bounded hashed sidecar and commits one typed res
   assert.deepEqual(await session.importAssignSample(file, {
     slot: 63,
     expectedRevision: 3,
+    sequenceSessionId: "10000000-0000-4000-8000-000000000001",
     onProgress(value) {
       progress.push(value);
     },
@@ -1402,10 +1845,11 @@ test("Sample import streams one bounded hashed sidecar and commits one typed res
   const begin = calls[0].envelope.payload;
   assert.deepEqual(Object.keys(begin).sort(), [
     "asset_id", "byte_length", "command_id", "expected_revision",
-    "import_token", "slot",
+    "import_token", "sequence_session_id", "slot",
   ]);
   assert.equal(begin.import_token, importToken);
   assert.equal(begin.expected_revision, 3);
+  assert.equal(begin.sequence_session_id, "10000000-0000-4000-8000-000000000001");
   assert.deepEqual(begin.slot, {bank: 3, pad: 15});
   assert.equal(begin.byte_length, 1_048_576);
   assert.notEqual(begin.command_id, begin.import_token);
@@ -1433,6 +1877,56 @@ test("Sample import streams one bounded hashed sidecar and commits one typed res
     {completedBytes: 0, totalBytes: 1_048_576},
     {completedBytes: 1_048_576, totalBytes: 1_048_576},
   ]);
+});
+
+test("Sample import treats 1 MiB as the chunk limit instead of the total limit", async () => {
+  const bytes = new Uint8Array(1_048_577);
+  const file = {
+    size: bytes.byteLength,
+    slice(start, end) {
+      return new Blob([bytes.subarray(start, end)]);
+    },
+  };
+  const operations = [];
+  const chunkSizes = [];
+  const {session} = fixture({
+    send: async (envelope, transportOptions) => {
+      operations.push(envelope.operation);
+      if (envelope.operation === "sample.import.begin") {
+        return success(envelope, {
+          token: envelope.payload.import_token,
+          expected_bytes: bytes.byteLength,
+        });
+      }
+      if (envelope.operation === "sample.import.chunk") {
+        chunkSizes.push(transportOptions.sidecar.byteLength);
+        return success(envelope, {
+          received_bytes:
+            envelope.payload.offset + transportOptions.sidecar.byteLength,
+          final: envelope.payload.final,
+        });
+      }
+      if (envelope.operation === "sample.import.commit") {
+        return success(envelope, {
+          committed_revision: 1,
+          runtime_revision: 1,
+          runtime_published: true,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  await session.importAssignSample(file, {slot: 0, expectedRevision: 0});
+
+  assert.deepEqual(operations, [
+    "sample.import.begin",
+    "sample.import.chunk",
+    "sample.import.chunk",
+    "sample.import.commit",
+  ]);
+  assert.deepEqual(chunkSizes, [1_048_576, 1]);
 });
 
 test("Sample import enforces the verified manifest total before begin", async () => {
@@ -1564,6 +2058,83 @@ test("Sample import keeps the primary Host failure while aborting once", async (
     "sample.import.abort",
   ]);
 });
+
+for (const quotaFailure of [
+  {
+    code: "BANK_QUOTA_EXHAUSTED",
+    details: {
+      bank: 0,
+      requested_bytes: 67_108_868,
+      requested_frames: 16_777_217,
+      remaining_bytes: 67_108_864,
+      remaining_frames: 16_777_216,
+      quota_bytes: 67_108_864,
+      consumed: [],
+    },
+  },
+  {
+    code: "PROJECT_QUOTA_EXHAUSTED",
+    details: {
+      requested_bytes: 4,
+      requested_frames: 1,
+      project_used_bytes: 134_217_728,
+      project_remaining_bytes: 0,
+      project_quota_bytes: 134_217_728,
+      banks: [
+        {bank: 0, prepared_bytes: 67_108_864},
+        {bank: 1, prepared_bytes: 67_108_864},
+      ],
+    },
+  },
+]) {
+  test(`Sample import preserves ${quotaFailure.code} details`, async () => {
+    const file = new Blob([Uint8Array.of(1, 2, 3, 4)]);
+    const operations = [];
+    const {session} = fixture({
+      send: async (envelope) => {
+        operations.push(envelope.operation);
+        if (envelope.operation === "sample.import.begin") {
+          return success(envelope, {
+            token: envelope.payload.import_token,
+            expected_bytes: file.size,
+          });
+        }
+        if (envelope.operation === "sample.import.chunk") {
+          return success(envelope, {received_bytes: file.size, final: true});
+        }
+        if (envelope.operation === "sample.import.commit") {
+          return {
+            protocol_version: 1,
+            request_id: envelope.request_id,
+            ok: false,
+            error: {
+              code: quotaFailure.code,
+              message: "Sample quota exhausted",
+              details: quotaFailure.details,
+            },
+          };
+        }
+        if (envelope.operation === "sample.import.abort") {
+          return success(envelope, {aborted: true});
+        }
+        throw new Error(`unexpected operation ${envelope.operation}`);
+      },
+    });
+    await session.start();
+
+    await assert.rejects(
+      session.importAssignSample(file, {slot: 0, expectedRevision: 0}),
+      (error) => error.code === quotaFailure.code &&
+        assert.deepEqual(error.details, quotaFailure.details) === undefined,
+    );
+    assert.deepEqual(operations, [
+      "sample.import.begin",
+      "sample.import.chunk",
+      "sample.import.commit",
+      "sample.import.abort",
+    ]);
+  });
+}
 
 test("malformed Sample abort response fails the session without hiding the primary error", async () => {
   const operations = [];

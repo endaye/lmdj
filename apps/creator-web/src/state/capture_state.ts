@@ -1,5 +1,3 @@
-import {COMMIT_MAX_FRAMES} from "../capture/capture_buffer";
-
 export type CapturePhase =
   "idle" | "requesting-permission" | "permission-error" |
   "recording" | "trimming" | "committing" | "commit-error";
@@ -13,6 +11,7 @@ export interface CaptureState {
   peak: number;
   selectionStart: number;
   selectionFrames: number;
+  selectionLimitFrames: number;
   errorMessage: string | null;
   conflict: boolean;
 }
@@ -47,12 +46,13 @@ export function captureStopReasonMessage(reason: CaptureStopReason | null): stri
 export const initialCaptureState: CaptureState = Object.freeze({
   phase: "idle", stopReason: null, frameCount: 0, peak: 0,
   selectionStart: 0, selectionFrames: 0, errorMessage: null, conflict: false,
+  selectionLimitFrames: 0,
 });
 
 export type CaptureEvent =
   | {kind: "record"} | {kind: "granted"} | {kind: "denied"; message: string}
   | {kind: "frames"; frames: number; peak: number}
-  | {kind: "stop"; reason: CaptureStopReason}
+  | {kind: "stop"; reason: CaptureStopReason; maximumFrames?: number}
   | {kind: "select"; start: number; frames: number}
   | {kind: "crop"; frames: number}
   | {kind: "discard"} | {kind: "commit"} | {kind: "committed"}
@@ -74,9 +74,16 @@ export function reduceCapture(state: CaptureState, event: CaptureEvent): Capture
     case "stop": {
       if (state.phase !== "recording") { return state; }
       if (state.frameCount > 0) {
+        const maximumFrames = event.maximumFrames === undefined
+          ? state.frameCount
+          : event.maximumFrames;
+        if (!Number.isSafeInteger(maximumFrames) || maximumFrames <= 0) {
+          return state;
+        }
         return {...state, phase: "trimming", stopReason: event.reason, peak: 0,
                 selectionStart: 0,
-                selectionFrames: Math.min(state.frameCount, COMMIT_MAX_FRAMES)};
+                selectionFrames: Math.min(state.frameCount, maximumFrames),
+                selectionLimitFrames: maximumFrames};
       }
       // Nothing captured yet (interrupted before the first batch landed), so
       // there is nothing to trim. A failure reason must still reach the user;
@@ -90,7 +97,7 @@ export function reduceCapture(state: CaptureState, event: CaptureEvent): Capture
       return (state.phase === "trimming" || state.phase === "commit-error") &&
              Number.isInteger(event.start) && Number.isInteger(event.frames) &&
              event.start >= 0 && event.frames > 0 &&
-             event.frames <= COMMIT_MAX_FRAMES &&
+             event.frames <= state.selectionLimitFrames &&
              event.start + event.frames <= state.frameCount
         ? {...state, phase: "trimming", selectionStart: event.start,
            selectionFrames: event.frames, errorMessage: null, conflict: false}

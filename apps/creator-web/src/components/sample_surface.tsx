@@ -16,11 +16,18 @@ import {
   type SampleMutationResolution,
 } from "../runtime/sample_actions";
 import {CapturePanel} from "./capture_panel";
+import {LongSourceEditor, type LongSourceCommitOutcome} from "./long_source_editor";
 import type {CaptureBuffer} from "../capture/capture_buffer";
+import {
+  DecodedLongSource,
+  LongSourceIngestError,
+  openLongSource,
+} from "../ingest/long_source_ingest";
 import {refreshProjectProjectionJourney} from "../runtime/project_actions";
 import type {
   CreatorSampleRuntimeSession,
   PadPlayback,
+  SampleQuota,
   TypedRuntimeError,
 } from "../runtime/runtime_types";
 import {
@@ -49,11 +56,27 @@ interface SampleSurfaceProps {
   onCapturePhaseChange?(phase: CapturePhase): void;
   onContinueCaptureInSequence?(): void;
   closeCaptureAfterResolution?: boolean;
+  captureBackgrounded?: boolean;
+  sequenceCapture?: Readonly<{
+    sessionId: string;
+    expectedRevision: number;
+  }>;
 }
 
 interface PendingFile {
   readonly slot: number;
   readonly file: File;
+}
+
+interface LongSourceDraft {
+  readonly slot: number;
+  readonly source: DecodedLongSource;
+  readonly quota: Readonly<SampleQuota>;
+}
+
+interface CaptureTarget {
+  readonly slot: number;
+  readonly quota: Readonly<SampleQuota>;
 }
 
 // What the Sample surface reports back to a byte source about one import
@@ -93,6 +116,8 @@ const SAMPLE_ERROR_CODES = new Set([
   "MISSING_ASSET",
   "INVALID_PROJECT",
   "COOK_FAILED",
+  "BANK_QUOTA_EXHAUSTED",
+  "PROJECT_QUOTA_EXHAUSTED",
   "PROVIDER_NOT_FOUND",
   "PROVIDER_FAILED",
   "PERMISSION_DENIED",
@@ -111,12 +136,23 @@ const PAD_KEY_CODES = Object.freeze([
   "KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK",
 ]);
 
-function publicOperationError(error: unknown): Readonly<{code: string; message: string}> {
+function publicOperationError(
+  error: unknown,
+): Readonly<{code: string; message: string; details?: Readonly<Record<string, unknown>>}> {
   const candidate = (error as TypedRuntimeError | null)?.code;
   const code = candidate !== undefined && SAMPLE_ERROR_CODES.has(candidate)
     ? candidate
     : "INTERNAL_ERROR";
-  return Object.freeze({code, message: "Sample operation failed"});
+  const details = (error as TypedRuntimeError | null)?.details;
+  return Object.freeze({
+    code,
+    message: code === "BANK_QUOTA_EXHAUSTED"
+      ? "Selection exceeds this Bank quota; shorten it, free another Pad, or use another Bank"
+      : code === "PROJECT_QUOTA_EXHAUSTED"
+        ? "Selection exceeds the Project quota; shorten it or free prepared Samples"
+        : "Sample operation failed",
+    ...(details === undefined ? {} : {details}),
+  });
 }
 
 function metadataCopy(state: CreatorState): string {
@@ -132,6 +168,36 @@ function displayFileName(name: string): string {
   return characters.length <= 96 ? name : `${characters.slice(0, 95).join("")}…`;
 }
 
+function quotaErrorCopy(
+  error: CreatorState["sample"]["lastError"],
+): string | null {
+  if (error === null || error.details === undefined) return null;
+  if (error.code === "BANK_QUOTA_EXHAUSTED") {
+    const bank = error.details.bank;
+    const remaining = error.details.remaining_frames;
+    const consumed = error.details.consumed;
+    if (typeof bank !== "number" || typeof remaining !== "number" || !Array.isArray(consumed)) {
+      return null;
+    }
+    const usage = consumed.map((entry) => {
+      if (entry === null || typeof entry !== "object") return null;
+      const pad = (entry as Record<string, unknown>).pad;
+      const frames = (entry as Record<string, unknown>).prepared_frames;
+      return typeof pad === "number" && typeof frames === "number"
+        ? `${String.fromCharCode(65 + bank)}${pad + 1}: ${(frames / 48_000).toFixed(2)} s`
+        : null;
+    }).filter((entry): entry is string => entry !== null);
+    return `Bank ${String.fromCharCode(65 + bank)} remaining ${(remaining / 48_000).toFixed(2)} s; Pad usage ${usage.length === 0 ? "none" : usage.join(", ")}.`;
+  }
+  if (error.code === "PROJECT_QUOTA_EXHAUSTED") {
+    const remaining = error.details.project_remaining_bytes;
+    return typeof remaining === "number"
+      ? `Project remaining ${(remaining / 4 / 48_000).toFixed(2)} s prepared mono PCM.`
+      : null;
+  }
+  return null;
+}
+
 export function SampleSurface({
   state,
   session,
@@ -143,6 +209,8 @@ export function SampleSurface({
   onCapturePhaseChange,
   onContinueCaptureInSequence,
   closeCaptureAfterResolution = false,
+  captureBackgrounded = false,
+  sequenceCapture,
 }: SampleSurfaceProps) {
   const input = useRef<HTMLInputElement | null>(null);
   const fileSlot = useRef<number | null>(null);
@@ -153,11 +221,16 @@ export function SampleSurface({
   const previousSession = useRef(session);
   const previewEpoch = useRef(0);
   const previewOwner = useRef<PreviewOwner | null>(null);
+  const ingestEpoch = useRef(0);
+  const ingestOwner = useRef<DecodedLongSource | null>(null);
   const [pendingFile, setPendingFile] = useState<PendingFile | null>(null);
+  const [longSourceDraft, setLongSourceDraft] = useState<LongSourceDraft | null>(null);
+  const [ingestPending, setIngestPending] = useState(false);
+  const [ingestError, setIngestError] = useState<string | null>(null);
   // Slot whose Replace confirmation is pending before the capture panel opens
   // (S8-D12), and the slot the open panel records into.
   const [pendingCaptureSlot, setPendingCaptureSlot] = useState<number | null>(null);
-  const [captureSlot, setCaptureSlot] = useState<number | null>(null);
+  const [captureTarget, setCaptureTarget] = useState<CaptureTarget | null>(null);
   const sample = state.sample;
   const audioSuspended = state.audio.phase !== "running" &&
     state.audio.phase !== "recovering";
@@ -166,8 +239,16 @@ export function SampleSurface({
   const selectedSlot = sample.selectedSlot;
 
   useEffect(() => {
-    onCaptureSlotChange?.(captureSlot);
-  }, [captureSlot, onCaptureSlotChange]);
+    onCaptureSlotChange?.(captureTarget?.slot ?? null);
+  }, [captureTarget, onCaptureSlotChange]);
+
+  const releaseLongSource = useCallback(() => {
+    ingestEpoch.current += 1;
+    const source = ingestOwner.current;
+    ingestOwner.current = null;
+    source?.release();
+    setLongSourceDraft(null);
+  }, []);
 
   const clearOwnedPreview = useCallback(() => {
     const owner = previewOwner.current;
@@ -193,6 +274,7 @@ export function SampleSurface({
 
   useEffect(() => () => {
     clearOwnedPreview();
+    releaseLongSource();
     const pending = importPending.current;
     importPending.current = null;
     if (pending !== null) {
@@ -204,7 +286,7 @@ export function SampleSurface({
     }
     importController.current?.abort();
     importController.current = null;
-  }, [clearOwnedPreview, dispatch]);
+  }, [clearOwnedPreview, dispatch, releaseLongSource]);
 
   useEffect(() => {
     if (session !== undefined && selectedSlot !== null &&
@@ -224,6 +306,7 @@ export function SampleSurface({
   useEffect(() => {
     if (previousSession.current === session) return;
     clearOwnedPreview();
+    releaseLongSource();
     previousSession.current = session;
     const pending = operationPending.current;
     operationPending.current = null;
@@ -236,7 +319,22 @@ export function SampleSurface({
         action: {type: "operation-cancelled", pending},
       });
     }
-  }, [clearOwnedPreview, dispatch, session]);
+  }, [clearOwnedPreview, dispatch, releaseLongSource, session]);
+
+  const projectIdentity = state.project.current?.projectId ?? null;
+  const previousProjectIdentity = useRef(projectIdentity);
+  useEffect(() => {
+    if (previousProjectIdentity.current === projectIdentity) return;
+    previousProjectIdentity.current = projectIdentity;
+    releaseLongSource();
+    setCaptureTarget(null);
+  }, [projectIdentity, releaseLongSource]);
+
+  useEffect(() => {
+    if (state.audio.phase !== "recovering") return;
+    releaseLongSource();
+    setCaptureTarget(null);
+  }, [releaseLongSource, state.audio.phase]);
 
   useEffect(() => {
     if (selectedSlot !== null || state.project.current === null) return;
@@ -517,12 +615,19 @@ export function SampleSurface({
     slot: number,
     invoke: (
       active: CreatorSampleRuntimeSession,
-      options: {slot: number; expectedRevision: number; signal: AbortSignal},
+      options: {
+        slot: number;
+        expectedRevision: number;
+        sequenceSessionId?: string;
+        signal: AbortSignal;
+      },
     ) => Promise<SampleMutationResolution>,
+    context?: Readonly<{expectedRevision: number; sequenceSessionId?: string}>,
   ): Promise<ImportOutcome> => {
     if (session === undefined || sample.pendingAction !== null ||
       operationPending.current !== null) return BUSY_OUTCOME;
-    const expectedRevision = sample.savedRevision ?? state.project.current?.revision;
+    const expectedRevision = context?.expectedRevision ??
+      sample.savedRevision ?? state.project.current?.revision;
     if (expectedRevision === null || expectedRevision === undefined) return BUSY_OUTCOME;
     const assigned = isAssigned(slot);
     const pending = Object.freeze({
@@ -540,6 +645,9 @@ export function SampleSurface({
       const resolution = await invoke(session, {
         slot,
         expectedRevision,
+        ...(context?.sequenceSessionId === undefined
+          ? {}
+          : {sequenceSessionId: context.sequenceSessionId}),
         signal: controller.signal,
       });
       previewOwner.current = null;
@@ -571,19 +679,82 @@ export function SampleSurface({
     }
   };
 
-  const performImport = ({slot, file}: PendingFile) => runImportJourney(
-    slot,
-    (active, options) => importAssignSampleJourney(active, file, options),
-  );
+  const startLongImport = async ({slot, file}: PendingFile): Promise<void> => {
+    if (session === undefined || ingestPending || sample.pendingAction !== null ||
+      operationPending.current !== null) return;
+    releaseLongSource();
+    setIngestPending(true);
+    setIngestError(null);
+    const epoch = ++ingestEpoch.current;
+    try {
+      const quota = await session.querySampleQuota(slot);
+      const source = await openLongSource(file, session.sampleIngestLimits());
+      if (ingestEpoch.current !== epoch) {
+        source.release();
+        return;
+      }
+      ingestOwner.current = source;
+      setLongSourceDraft({slot, source, quota});
+    } catch (error) {
+      if (ingestEpoch.current !== epoch) return;
+      if (error instanceof LongSourceIngestError) {
+        setIngestError(`${error.message} (${error.details.resource}: ${String(error.details.observed)} / ${String(error.details.limit)})`);
+      } else {
+        setIngestError(publicOperationError(error).message);
+      }
+    } finally {
+      if (ingestEpoch.current === epoch) setIngestPending(false);
+    }
+  };
+
+  const commitLongSource = async (
+    draft: LongSourceDraft,
+    selection: {startFrame: number; frameCount: number},
+  ): Promise<LongSourceCommitOutcome> => {
+    let file: File;
+    try {
+      file = draft.source.encodeSelection(selection, draft.quota.effectiveRemainingFrames);
+    } catch (error) {
+      return {kind: "failed", message: error instanceof Error ? error.message : "Selection encode failed"};
+    }
+    const outcome = await runImportJourney(
+      draft.slot,
+      (active, options) => importAssignSampleJourney(active, file, options),
+      {expectedRevision: draft.quota.projectRevision},
+    );
+    if (outcome.kind === "committed") releaseLongSource();
+    return outcome;
+  };
 
   const performCaptureCommit = (
-    slot: number,
+    target: CaptureTarget,
     buffer: CaptureBuffer,
     selection: {startFrame: number; frameCount: number},
   ) => runImportJourney(
-    slot,
+    target.slot,
     (active, options) => captureCommitJourney(active, buffer, selection, options),
+    {
+      expectedRevision: sequenceCapture?.expectedRevision ?? target.quota.projectRevision,
+      ...(sequenceCapture === undefined
+        ? {}
+        : {sequenceSessionId: sequenceCapture.sessionId}),
+    },
   );
+
+  const openCapture = async (slot: number): Promise<void> => {
+    if (session === undefined) return;
+    setIngestError(null);
+    try {
+      const quota = await session.querySampleQuota(slot);
+      if (quota.effectiveRemainingFrames < 1) {
+        setIngestError("why: no prepared-PCM quota remains; remedy: free a Pad or choose another Bank.");
+        return;
+      }
+      setCaptureTarget({slot, quota});
+    } catch (error) {
+      setIngestError(publicOperationError(error).message);
+    }
+  };
 
   const chooseFile = (slot: number) => {
     replaceReturnFocus.current = document.activeElement instanceof HTMLElement
@@ -646,7 +817,7 @@ export function SampleSurface({
             <button
               type="button"
               disabled={session === undefined || projectUnavailable ||
-                sample.pendingAction !== null || captureSlot !== null}
+                sample.pendingAction !== null || captureTarget !== null}
               onClick={() => {
                 replaceReturnFocus.current = document.activeElement instanceof HTMLElement
                   ? document.activeElement
@@ -655,7 +826,7 @@ export function SampleSurface({
                 // the existing confirmation before the microphone is ever
                 // requested (S8-D12, S8B-D2).
                 if (selectedAssigned) setPendingCaptureSlot(selectedSlot);
-                else setCaptureSlot(selectedSlot);
+                else void openCapture(selectedSlot);
               }}
             >
               Record Sample
@@ -710,7 +881,12 @@ export function SampleSurface({
       )}
 
       {sample.lastError === null ? null : (
-        <p className="sample-error" role="alert">{sample.lastError.message}</p>
+        <div className="sample-error" role="alert">
+          <p>{sample.lastError.message}</p>
+          {quotaErrorCopy(sample.lastError) === null
+            ? null
+            : <p>{quotaErrorCopy(sample.lastError)}</p>}
+        </div>
       )}
 
       <section className="sample-pads" aria-label="Sample Pads">
@@ -776,7 +952,7 @@ export function SampleSurface({
                     replaceReturnFocus.current = event.currentTarget;
                     setPendingFile({slot: pad.slot, file});
                   }
-                  else void performImport({slot: pad.slot, file});
+                  else void startLongImport({slot: pad.slot, file});
                 }}
                 onClick={(event) => {
                   if (!selected) {
@@ -802,7 +978,7 @@ export function SampleSurface({
         ref={input}
         className="sample-file-input"
         type="file"
-        accept=".wav,audio/wav,audio/wave"
+        accept=".wav,.mp3,.m4a,.aac,.flac,audio/wav,audio/wave,audio/mpeg,audio/mp4,audio/aac,audio/flac"
         aria-hidden="true"
         tabIndex={-1}
         onChange={(event) => {
@@ -812,27 +988,43 @@ export function SampleSurface({
           if (file === undefined || slot === null) return;
           const assigned = isAssigned(slot);
           if (assigned) setPendingFile({slot, file});
-          else void performImport({slot, file});
+          else void startLongImport({slot, file});
         }}
       />
-      {captureSlot === null ? null : (
+      {ingestPending ? <p role="status">Decoding long source…</p> : null}
+      {ingestError === null ? null : <p className="sample-error" role="alert">{ingestError}</p>}
+      {longSourceDraft === null ? null : (
+        <LongSourceEditor
+          source={longSourceDraft.source}
+          quota={longSourceDraft.quota}
+          returnFocus={replaceReturnFocus.current}
+          onCommit={(selection) => commitLongSource(longSourceDraft, selection)}
+          onCancel={releaseLongSource}
+        />
+      )}
+      {captureTarget === null ? null : (
         <CapturePanel
-          padLabel={`Pad ${padAddress({slot: captureSlot, assetId: null})}`}
+          padLabel={`Pad ${padAddress({slot: captureTarget.slot, assetId: null})}`}
           onCommit={(buffer, selection) =>
-            performCaptureCommit(captureSlot, buffer, selection)}
+            performCaptureCommit(captureTarget, buffer, selection)}
           // The panel's modal dialog owns focus restore on close (P2-D2), so
           // onClose only clears state — a second .focus() here would race the
           // dialog's own restore.
           returnFocus={replaceReturnFocus.current}
           stopRequest={captureStopRequest}
+          maxCommitFrames={captureTarget.quota.effectiveRemainingFrames}
           closeAfterResolution={closeCaptureAfterResolution}
+          backgrounded={captureBackgrounded}
           {...(onCapturePhaseChange === undefined
             ? {}
             : {onPhaseChange: onCapturePhaseChange})}
           {...(onContinueCaptureInSequence === undefined
             ? {}
             : {onContinueInSequence: onContinueCaptureInSequence})}
-          onClose={() => setCaptureSlot(null)}
+          onClose={() => {
+            onCapturePhaseChange?.("idle");
+            setCaptureTarget(null);
+          }}
         />
       )}
       {pendingCaptureSlot === null ? null : (
@@ -855,7 +1047,7 @@ export function SampleSurface({
               onClick={() => {
                 const slot = pendingCaptureSlot;
                 setPendingCaptureSlot(null);
-                setCaptureSlot(slot);
+                void openCapture(slot);
               }}
             >
               Confirm replace
@@ -881,7 +1073,7 @@ export function SampleSurface({
               onClick={() => {
                 const replacement = pendingFile;
                 setPendingFile(null);
-                void performImport(replacement);
+                void startLongImport(replacement);
               }}
             >
               Confirm replace

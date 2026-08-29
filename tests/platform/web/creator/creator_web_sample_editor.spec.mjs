@@ -185,6 +185,12 @@ async function chooseSampleFile(page, buttonName, name, buffer) {
   });
 }
 
+async function commitLongSourceSelection(page) {
+  const longSource = page.getByRole("dialog", {name: /Pad [A-D]\d+ Long Source/});
+  await expect(longSource).toBeVisible({timeout: 30_000});
+  await longSource.getByRole("button", {name: "Commit selection"}).click();
+}
+
 async function selectPadWithoutPress(page, label) {
   await page.getByRole("button", {name: label}).evaluate((element) => element.click());
 }
@@ -289,6 +295,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     "proof-ramp.wav",
     pcm16Wav({}),
   );
+  await commitLongSourceSelection(page);
   await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
     .toBeVisible({timeout: 120_000});
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
@@ -387,8 +394,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     replacement,
   );
   await page.getByRole("button", {name: "Confirm replace"}).click();
-  await expect(page.getByRole("button", {name: "Replace Sample"}))
-    .toBeDisabled({timeout: 10_000});
+  await commitLongSourceSelection(page);
   await expect(page.getByRole("button", {name: "Replace Sample"}))
     .toBeEnabled({timeout: 120_000});
   await expectProjectRevision(page, 55);
@@ -401,9 +407,10 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     Buffer.from("not a RIFF/WAVE file"),
   );
   await page.getByRole("button", {name: "Confirm replace"}).click();
-  await expect(page.getByText(
-    "Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz",
-  )).toBeVisible({timeout: 30_000});
+  await expect(page.getByRole("alert")).toContainText(
+    "why: the source container is not supported; remedy: choose WAV, MP3, M4A/AAC, or FLAC audio",
+    {timeout: 30_000},
+  );
   await expectProjectRevision(page, 55);
 
   const conflictPlayback = {
@@ -438,34 +445,54 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await selectPadWithoutPress(page, "Pad A1 — assigned");
   const a1Mute = page.getByRole("button", {name: "Mute"});
   await waitForControlMutation(page, a1Mute, () => a1Mute.click(), 57);
+
+  await selectPadWithoutPress(page, "Pad A3 — assigned");
+  const a3Loop = page.getByRole("button", {name: "Loop"});
+  await waitForControlMutation(page, a3Loop, () => a3Loop.click(), 58);
+  await heldPadGesture(
+    page,
+    page.getByRole("button", {name: "Pad A3 — assigned"}),
+    ["started"],
+  );
+
+  await selectPadWithoutPress(page, "Pad A4 — assigned");
+  const a4Loop = page.getByRole("button", {name: "Loop"});
+  await waitForControlMutation(page, a4Loop, () => a4Loop.click(), 59);
+  await heldPadGesture(
+    page,
+    page.getByRole("button", {name: "Pad A4 — assigned"}),
+    ["started"],
+  );
+
+  await selectPadWithoutPress(page, "Pad A1 — assigned");
   await page.evaluate(() => {
     window.__normalizeNextResourceFailureToCook = true;
   });
   await a1Mute.click();
   await expect.poll(() => page.evaluate(() =>
     (window.__sampleProofResponses ?? []).findLast((entry) =>
-      entry?.result?.committed_revision === 58)?.result ?? null), {
+      entry?.result?.committed_revision === 60)?.result ?? null), {
     timeout: 120_000,
   }).toEqual(expect.objectContaining({
-    committed_revision: 58,
-    runtime_revision: 57,
+    committed_revision: 60,
+    runtime_revision: 59,
     runtime_published: false,
     snapshot_error: expect.objectContaining({
       code: "WEB_RUNTIME_RESOURCE_LIMIT",
       details: {
-        resource: "live_bank_bytes",
-        observed: 139_078_800,
-        limit: 134_217_728,
+        resource: "resident_pcm_bytes",
+        observed: 273_296_528,
+        limit: 268_435_456,
       },
     }),
   }));
   await expect(page.getByText(
-    "Saved at revision 58; Runtime is still revision 57",
+    "Saved at revision 60; Runtime is still revision 59",
   )).toBeVisible(
     {timeout: 120_000},
   );
   expect(await page.evaluate(() => window.__sampleProofObservedResourceFailure)).toBe(true);
-  await expectProjectRevision(page, 58);
+  await expectProjectRevision(page, 60);
 
   await page.getByRole("button", {name: "Suspend audio"}).click();
   // An explicit Suspend publishes "Audio suspended" only after the Runtime has
@@ -485,8 +512,8 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     timeout: 120_000,
   });
   const recoveredReport = await downloadReport(page);
-  expect(recoveredReport.sample.project_revision).toBe(58);
-  expect(recoveredReport.sample.runtime_revision).toBe(58);
+  expect(recoveredReport.sample.project_revision).toBe(60);
+  expect(recoveredReport.sample.runtime_revision).toBe(60);
 
   await page.reload();
   await expect(page.getByRole("button", {name: "Open Project 00000000"}))
@@ -494,11 +521,11 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await page.getByRole("button", {name: "Open Project 00000000"}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.locator(".project-summary")).toContainText("Revision58");
+  await expect(page.locator(".project-summary")).toContainText("Revision60");
   await expect(page.getByText("45 / 64")).toBeVisible();
   await enterSampleEditor(page);
   await expect(page.getByRole("button", {name: "Pad A1 — assigned"})).toBeVisible();
-  await expectProjectRevision(page, 58);
+  await expectProjectRevision(page, 60);
   const postReloadOperations = await page.evaluate(() => window.__sampleProofOperations ?? []);
   expect(postReloadOperations.filter((operation) => operation === "sample.import.commit"))
     .toHaveLength(0);
@@ -525,17 +552,57 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   };
   await waitForControlMutation(page, trimStart, async () => {
     await dragGrip(page.locator('[data-grip-zone="start"]'), 40);
-  }, 59);
+  }, 61);
   await expect(trimStart).not.toHaveValue("0");
   await expect(trimEnd).toHaveValue("2");
   const movedStart = await trimStart.inputValue();
   await waitForControlMutation(page, trimEnd, async () => {
     await dragGrip(page.locator('[data-grip-zone="end"]'), -40);
-  }, 60);
+  }, 62);
   await expect(trimEnd).not.toHaveValue("2");
   await expect(trimStart).toHaveValue(movedStart);
 
   await page.evaluate(() => window.__sampleVoiceUnsubscribe?.());
+});
+
+test("packaged Sample Editor clamps a plus-one-frame source and admits the quota-bound selection", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  await activateAudio(page);
+  await enterSampleEditor(page);
+
+  const operationOffset = await page.evaluate(() =>
+    (window.__sampleProofOperations ?? []).length);
+  await chooseSampleFile(
+    page,
+    "Add Sample to Pad A1",
+    "bank-quota-plus-one.wav",
+    pcm16Wav({frames: 16_777_217}),
+  );
+  const quotaBoundFrames = Number(await page.getByRole("slider", {
+    name: "Long source selection length",
+  }).inputValue());
+  expect(quotaBoundFrames).toBeLessThan(16_777_217);
+  expect(44 + quotaBoundFrames * 2).toBeGreaterThan(1_048_576);
+  await commitLongSourceSelection(page);
+
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible({timeout: 120_000});
+  await expect(page.getByText(
+    `48 kHz · Mono · ${quotaBoundFrames.toLocaleString("en-US")} frames`,
+  )).toBeVisible();
+  await expectProjectRevision(page, 47);
+  const operations = await page.evaluate((offset) =>
+    (window.__sampleProofOperations ?? []).slice(offset), operationOffset);
+  expect(operations.filter((operation) => operation === "sample.import.begin"))
+    .toHaveLength(1);
+  expect(operations.filter((operation) => operation === "sample.import.chunk"))
+    .toHaveLength(Math.ceil((44 + quotaBoundFrames * 2) / 1_048_576));
+  expect(operations.filter((operation) => operation === "sample.import.commit"))
+    .toHaveLength(1);
 });
 
 test("Sample Editor WebKit capability boundary is explicit, private, and non-physical", async ({page, browserName}) => {
@@ -572,6 +639,7 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
     "proof-ramp.wav",
     pcm16Wav({}),
   );
+  await commitLongSourceSelection(page);
   await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);

@@ -10,6 +10,7 @@
 #include <optional>
 #include <random>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -22,7 +23,31 @@
 #include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/artifact.hpp>
 
+#include "testing_hooks.hpp"
+
 namespace lmdj::web_runtime {
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+namespace testing {
+namespace {
+
+std::atomic<CancelPendingSwitchHook*> cancel_pending_switch_hook{nullptr};
+
+}  // namespace
+
+void set_cancel_pending_switch_hook(CancelPendingSwitchHook* hook) noexcept {
+  cancel_pending_switch_hook.store(hook, std::memory_order_release);
+}
+
+void invoke_cancel_pending_switch_hook() noexcept {
+  auto* hook =
+      cancel_pending_switch_hook.exchange(nullptr, std::memory_order_acq_rel);
+  if (hook != nullptr && hook->invoke != nullptr) {
+    hook->invoke(hook->context);
+  }
+}
+
+}  // namespace testing
+#endif
 namespace {
 
 using Json = nlohmann::json;
@@ -340,6 +365,12 @@ std::string safe_message(std::string_view code) {
       {"MISSING_ASSET", "required asset is missing"},
       {"INVALID_PROJECT", "project data is invalid"},
       {"COOK_FAILED", "runtime snapshot preparation failed"},
+      {"BANK_QUOTA_EXHAUSTED",
+       "why: the selection exceeds the Sample Bank quota; remedy: shorten "
+       "it, free another Pad, or target another Bank"},
+      {"PROJECT_QUOTA_EXHAUSTED",
+       "why: the selection exceeds the Sample Project quota; remedy: "
+       "shorten it or remove prepared Samples, then retry"},
       {"PROVIDER_NOT_FOUND", "provider was not found"},
       {"PROVIDER_FAILED", "provider failed"},
       {"PERMISSION_DENIED", "operation is not permitted"},
@@ -349,6 +380,97 @@ std::string safe_message(std::string_view code) {
   const auto found = messages.find(code);
   return std::string(
       found == messages.end() ? messages.at("INTERNAL_ERROR") : found->second);
+}
+
+Json sanitize_quota_details(std::string_view code, const Json& details) {
+  if (!details.is_object()) {
+    return Json::object();
+  }
+  const auto copy_unsigned = [&details](Json& result, std::string_view key) {
+    const auto found = details.find(key);
+    if (found == details.end() || !found->is_number_unsigned()) {
+      return false;
+    }
+    result[std::string(key)] = *found;
+    return true;
+  };
+  Json result = Json::object();
+  if (code == "BANK_QUOTA_EXHAUSTED") {
+    static constexpr std::array<std::string_view, 6> fields{
+        "bank",
+        "requested_bytes",
+        "requested_frames",
+        "remaining_bytes",
+        "remaining_frames",
+        "quota_bytes",
+    };
+    if (!std::all_of(fields.begin(), fields.end(), [&](auto field) {
+          return copy_unsigned(result, field);
+        })) {
+      return Json::object();
+    }
+    const auto consumed = details.find("consumed");
+    if (consumed == details.end() || !consumed->is_array()) {
+      return Json::object();
+    }
+    result["consumed"] = Json::array();
+    for (const auto& item : *consumed) {
+      if (!item.is_object() || !item.value("pad", Json{}).is_number_unsigned() ||
+          !item.value("prepared_bytes", Json{}).is_number_unsigned() ||
+          !item.value("prepared_frames", Json{}).is_number_unsigned()) {
+        return Json::object();
+      }
+      result["consumed"].push_back({
+          {"pad", item.at("pad")},
+          {"prepared_bytes", item.at("prepared_bytes")},
+          {"prepared_frames", item.at("prepared_frames")},
+      });
+    }
+    return result;
+  }
+  if (code == "PROJECT_QUOTA_EXHAUSTED") {
+    static constexpr std::array<std::string_view, 5> fields{
+        "requested_bytes",
+        "requested_frames",
+        "project_used_bytes",
+        "project_remaining_bytes",
+        "project_quota_bytes",
+    };
+    if (!std::all_of(fields.begin(), fields.end(), [&](auto field) {
+          return copy_unsigned(result, field);
+        })) {
+      return Json::object();
+    }
+    const auto banks = details.find("banks");
+    if (banks == details.end() || !banks->is_array()) {
+      return Json::object();
+    }
+    result["banks"] = Json::array();
+    for (const auto& item : *banks) {
+      if (!item.is_object() ||
+          !item.value("bank", Json{}).is_number_unsigned() ||
+          !item.value("prepared_bytes", Json{}).is_number_unsigned()) {
+        return Json::object();
+      }
+      result["banks"].push_back({
+          {"bank", item.at("bank")},
+          {"prepared_bytes", item.at("prepared_bytes")},
+      });
+    }
+    return result;
+  }
+  return Json::object();
+}
+
+bool runtime_resource_rejection(const Json& error) {
+  if (!error.is_object() || !error.contains("code") ||
+      !error.at("code").is_string()) {
+    return false;
+  }
+  const auto code = error.at("code").get<std::string_view>();
+  return code == "WEB_RUNTIME_RESOURCE_LIMIT" ||
+         code == "BANK_QUOTA_EXHAUSTED" ||
+         code == "PROJECT_QUOTA_EXHAUSTED";
 }
 
 Json normalized_error(
@@ -366,6 +488,11 @@ Json normalized_error(
     return host_error(
         "WEB_RUNTIME_RESOURCE_LIMIT",
         "Project Bundle exceeds the Web Runtime transfer limit");
+  }
+  if (code == "BANK_QUOTA_EXHAUSTED" ||
+      code == "PROJECT_QUOTA_EXHAUSTED") {
+    return host_error(
+        code, safe_message(code), sanitize_quota_details(code, details));
   }
   if (code == "IO_ERROR" && details.is_object() &&
       storage_condition != details.end() &&
@@ -395,11 +522,8 @@ Json normalized_error(
       source_message.starts_with("Project Bundle")) {
     return host_error("INVALID_PROJECT", "Project Bundle transfer is invalid");
   }
-  static constexpr std::array<std::string_view, 4> resource_names{
+  static constexpr std::array<std::string_view, 1> resource_names{
       "artifact_bytes",
-      "decoded_frames_per_pad",
-      "prepared_bank_bytes",
-      "live_bank_bytes",
   };
   const auto resource =
       details.is_object() ? details.find("resource") : details.end();
@@ -553,6 +677,8 @@ struct ControlRuntime::Impl {
     foundation::SequenceSessionId id;
     foundation::PatternId pattern_id;
     std::uint64_t next_input_sequence{1};
+    std::optional<domain::PadSlotId> armed_capture_slot;
+    std::uint64_t published_overlay_generation{0};
   };
 
   struct PendingSequenceBoundary {
@@ -560,6 +686,7 @@ struct ControlRuntime::Impl {
     foundation::PatternId pattern_id;
     std::uint64_t runtime_frame;
     std::uint64_t generation;
+    bool notified = false;
   };
 
   Impl(
@@ -602,32 +729,11 @@ struct ControlRuntime::Impl {
     return recorded;
   }
 
-  foundation::Result<facade::SequenceMutationResult> stop_active_sequence() {
-    if (!active_sequence.has_value() || !retained_project_path.has_value()) {
-      return foundation::Result<facade::SequenceMutationResult>::failure(
-          Error{ErrorCode::invalid_argument, "no Sequence session is active"});
-    }
-    const auto session_id = active_sequence->id;
-    auto stopped = application.stop_sequence({
-        *retained_project_path,
-        session_id,
-        foundation::CommandId{generated_uuid()},
-        engine.telemetry().rendered_frames,
-    });
-    if (stopped.has_value()) {
-      active_sequence.reset();
-      if (stopped.value().committed_revision.has_value()) {
-        project_revision = *stopped.value().committed_revision;
-      }
-    }
-    return stopped;
-  }
-
-  foundation::Result<audio::PatternPublication> publish_project_pattern(
+  foundation::Result<audio::PreparedPatternView> prepare_project_pattern(
       const foundation::PatternId& selected_pattern,
-      std::optional<std::uint64_t> activation_frame = std::nullopt) {
+      std::span<const domain::PatternEvent> overlay = {}) {
     if (!retained_project_path.has_value()) {
-      return foundation::Result<audio::PatternPublication>::failure(
+      return foundation::Result<audio::PreparedPatternView>::failure(
           Error{ErrorCode::invalid_argument, "no Project is open"});
     }
     auto snapshot = application.prepare_runtime_snapshot({
@@ -636,16 +742,39 @@ struct ControlRuntime::Impl {
         limits,
     });
     if (!snapshot.has_value()) {
-      return foundation::Result<audio::PatternPublication>::failure(
+      return foundation::Result<audio::PreparedPatternView>::failure(
           snapshot.error());
     }
-    auto pattern = audio::PreparedPatternView::from_snapshot(*snapshot.value());
+    auto pattern = overlay.empty()
+        ? audio::PreparedPatternView::from_snapshot(*snapshot.value())
+        : audio::PreparedPatternView::from_snapshot_with_overlay(
+              *snapshot.value(), overlay);
     if (!pattern.has_value()) {
-      return foundation::Result<audio::PatternPublication>::failure(
+      return foundation::Result<audio::PreparedPatternView>::failure(
           pattern.error());
     }
-    const auto publication =
-        engine.publish_pattern_view(std::move(pattern.value()), activation_frame);
+    return pattern;
+  }
+
+  foundation::Result<audio::PatternPublication> publish_prepared_pattern(
+      audio::PreparedPatternView&& pattern,
+      std::optional<std::uint64_t> activation_frame = std::nullopt,
+      std::optional<audio::PatternReplacementAuthority>
+          replacement_authority = std::nullopt) {
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    if (fail_next_pattern_publication) {
+      fail_next_pattern_publication = false;
+      return foundation::Result<audio::PatternPublication>::failure(Error{
+          ErrorCode::invalid_argument,
+          "injected runtime Pattern publication failure",
+      });
+    }
+#endif
+    static_cast<void>(engine.reclaim_retired_patterns());
+    const auto publication = engine.publish_pattern_view(
+        std::move(pattern),
+        activation_frame,
+        std::move(replacement_authority));
     if (publication.result != audio::PatternPublishResult::accepted) {
       return foundation::Result<audio::PatternPublication>::failure(Error{
           ErrorCode::invalid_argument,
@@ -653,6 +782,150 @@ struct ControlRuntime::Impl {
       });
     }
     return foundation::Result<audio::PatternPublication>::success(publication);
+  }
+
+  foundation::Result<audio::PatternPublication> publish_project_pattern(
+      const foundation::PatternId& selected_pattern,
+      std::optional<std::uint64_t> activation_frame = std::nullopt,
+      std::span<const domain::PatternEvent> overlay = {},
+      std::optional<audio::PatternReplacementAuthority>
+          replacement_authority = std::nullopt) {
+    auto pattern = prepare_project_pattern(selected_pattern, overlay);
+    if (!pattern.has_value()) {
+      return foundation::Result<audio::PatternPublication>::failure(
+          pattern.error());
+    }
+    return publish_prepared_pattern(
+        std::move(pattern.value()),
+        activation_frame,
+        std::move(replacement_authority));
+  }
+
+  std::optional<audio::PatternReplacementAuthority>
+  pending_pattern_authority() const {
+    const auto telemetry = engine.pattern_telemetry();
+    const auto pending_pattern = engine.pending_pattern_id();
+    if (telemetry.pending_generation == 0 || !pending_pattern.has_value()) {
+      return std::nullopt;
+    }
+    return audio::PatternReplacementAuthority{
+        telemetry.pending_generation,
+        *pending_pattern,
+        telemetry.pending_activation_frame,
+    };
+  }
+
+  static audio::PatternReplacementAuthority replacement_authority(
+      const PendingSequenceBoundary& boundary) {
+    return audio::PatternReplacementAuthority{
+        boundary.generation,
+        boundary.pattern_id,
+        boundary.runtime_frame,
+    };
+  }
+
+  bool cancel_pending_switch(
+      const audio::PatternReplacementAuthority& authority) {
+    const auto telemetry = engine.pattern_telemetry();
+    if (telemetry.current_generation == authority.generation) {
+      return false;
+    }
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    testing::invoke_cancel_pending_switch_hook();
+#endif
+    const auto pending = pending_pattern_authority();
+    if (!pending.has_value()) {
+      // Exact replay after an earlier successful cancellation.
+      return engine.pattern_telemetry().current_generation !=
+          authority.generation;
+    }
+    if (pending->generation != authority.generation ||
+        pending->pattern_id != authority.pattern_id ||
+        pending->activation_frame != authority.activation_frame) {
+      return false;
+    }
+    return engine.cancel_pattern_publication(authority);
+  }
+
+  foundation::Result<std::optional<audio::PatternPublication>>
+  publish_pending_sequence_overlay(bool force = false) {
+    if (!active_sequence.has_value() || !retained_project_path.has_value()) {
+      return foundation::Result<std::optional<audio::PatternPublication>>::failure(
+          Error{ErrorCode::invalid_argument, "no Sequence session is active"});
+    }
+    auto overlay = application.query_sequence_overlay({
+        *retained_project_path,
+        active_sequence->id,
+    });
+    if (!overlay.has_value()) {
+      return foundation::Result<std::optional<audio::PatternPublication>>::failure(
+          overlay.error());
+    }
+    if (!force && overlay.value().generation ==
+        active_sequence->published_overlay_generation) {
+      return foundation::Result<std::optional<audio::PatternPublication>>::success(
+          std::nullopt);
+    }
+    if (pending_sequence_boundary.has_value()) {
+      return foundation::Result<std::optional<audio::PatternPublication>>::success(
+          std::nullopt);
+    }
+    auto published = publish_project_pattern(
+        overlay.value().pattern_id,
+        std::nullopt,
+        overlay.value().events);
+    if (!published.has_value()) {
+      return foundation::Result<std::optional<audio::PatternPublication>>::failure(
+          published.error());
+    }
+    active_sequence->published_overlay_generation = overlay.value().generation;
+    return foundation::Result<std::optional<audio::PatternPublication>>::success(
+        published.value());
+  }
+
+  foundation::Result<facade::SequenceMutationResult> stop_active_sequence() {
+    if (!active_sequence.has_value() || !retained_project_path.has_value()) {
+      return foundation::Result<facade::SequenceMutationResult>::failure(
+          Error{ErrorCode::invalid_argument, "no Sequence session is active"});
+    }
+    const auto session_id = active_sequence->id;
+    const auto pattern_id = active_sequence->pattern_id;
+    auto stopped = application.stop_sequence({
+        *retained_project_path,
+        session_id,
+        foundation::CommandId{generated_uuid()},
+        engine.telemetry().rendered_frames,
+    });
+    if (!stopped.has_value()) {
+      return stopped;
+    }
+    if (stopped.value().committed_revision.has_value()) {
+      project_revision = *stopped.value().committed_revision;
+      const auto authority = pending_sequence_boundary.has_value()
+          ? std::optional<audio::PatternReplacementAuthority>{
+                replacement_authority(*pending_sequence_boundary)}
+          : std::nullopt;
+      if (authority.has_value() && !cancel_pending_switch(*authority)) {
+        stop_and_clear_pattern_noexcept();
+        return foundation::Result<facade::SequenceMutationResult>::failure(
+            Error{
+                ErrorCode::invalid_argument,
+                "runtime Pattern switch crossed the Stop boundary",
+            });
+      }
+      auto published = publish_project_pattern(
+          pattern_id,
+          std::nullopt,
+          {},
+          std::nullopt);
+      if (!published.has_value()) {
+        return foundation::Result<facade::SequenceMutationResult>::failure(
+            published.error());
+      }
+    }
+    active_sequence.reset();
+    pending_sequence_boundary.reset();
+    return stopped;
   }
 
   std::chrono::steady_clock::time_point clock_now() const noexcept {
@@ -685,6 +958,12 @@ struct ControlRuntime::Impl {
   bool request_cancelled() const noexcept {
     return request_deadline.has_value() &&
            clock_now() >= *request_deadline;
+  }
+
+  bool publication_settlement_owned() const noexcept {
+    return request_publication_settlement_owned != nullptr &&
+           request_publication_settlement_owned(
+               request_publication_context);
   }
 
   std::uint32_t remaining_request_budget_ms() const noexcept {
@@ -739,11 +1018,9 @@ struct ControlRuntime::Impl {
         {"limits",
          {
              {"maximum_artifact_bytes", limits.maximum_artifact_bytes},
-             {"maximum_decoded_frames_per_pad",
-              limits.maximum_decoded_frames_per_pad},
-             {"maximum_prepared_bank_bytes",
-              limits.maximum_prepared_bank_bytes},
-             {"maximum_live_bank_bytes", limits.maximum_live_bank_bytes},
+             {"maximum_user_bank_bytes", limits.maximum_user_bank_bytes},
+             {"maximum_generation_bytes", limits.maximum_generation_bytes},
+             {"maximum_resident_bytes", limits.maximum_resident_bytes},
          }},
         {"audio_state", audio_running ? "running" : "stopped"},
         {"capture_state",
@@ -883,6 +1160,37 @@ struct ControlRuntime::Impl {
     Json error = nullptr;
   };
 
+  std::optional<Json> await_bank_acknowledgement(
+      std::uint64_t expected_generation) noexcept {
+    if (engine.telemetry().state != audio::RealtimeState::running) {
+      return std::nullopt;
+    }
+    if (!coordinator.has_value() ||
+        coordinator->acknowledged_generation == nullptr ||
+        !request_deadline.has_value()) {
+      trigger_admission = false;
+      seal_all_noexcept();
+      state = State::failed;
+      return internal_error();
+    }
+    auto acknowledged = coordinator->acknowledged_generation(
+        coordinator->context);
+    while (acknowledged < expected_generation &&
+           clock_now() < *request_deadline) {
+      std::this_thread::yield();
+      acknowledged = coordinator->acknowledged_generation(
+          coordinator->context);
+    }
+    if (acknowledged == expected_generation) {
+      return std::nullopt;
+    }
+    const auto timed_out = request_cancelled();
+    trigger_admission = false;
+    seal_all_noexcept();
+    state = State::failed;
+    return timed_out ? timeout_error() : internal_error();
+  }
+
   foundation::Result<void> release_runtime_banks() {
     for (std::size_t slot = 0; slot < audio::kRealtimeSampleSlots; ++slot) {
       const auto cleared =
@@ -920,6 +1228,27 @@ struct ControlRuntime::Impl {
     }
     reserved_live_bytes -= reclaimed.decoded_pcm_bytes;
 
+    const auto preparation_headroom =
+        limits.maximum_resident_bytes >= limits.maximum_generation_bytes
+            ? limits.maximum_resident_bytes - limits.maximum_generation_bytes
+            : 0;
+    if (limits.maximum_resident_bytes < limits.maximum_generation_bytes ||
+        reserved_live_bytes > preparation_headroom) {
+      const auto observed = audio::checked_runtime_byte_sum(
+          reserved_live_bytes, limits.maximum_generation_bytes);
+      auto error = host_error(
+          "WEB_RUNTIME_RESOURCE_LIMIT",
+          "why: live and retiring prepared PCM leaves no bounded room for "
+          "one generation cook; remedy: wait for retirement and retry",
+          {
+              {"resource", "resident_pcm_bytes"},
+              {"observed",
+               observed.value_or(std::numeric_limits<std::uint64_t>::max())},
+              {"limit", limits.maximum_resident_bytes},
+          });
+      return SnapshotResult{false, true, std::nullopt, error.at("error")};
+    }
+
     auto prepared = application.prepare_runtime_snapshot(
         facade::RuntimeSnapshotRequest{
             *retained_project_path,
@@ -930,8 +1259,7 @@ struct ControlRuntime::Impl {
       auto error = normalized_error(prepared.error());
       return SnapshotResult{
           false,
-          error.at("error").at("code") ==
-              "WEB_RUNTIME_RESOURCE_LIMIT",
+          runtime_resource_rejection(error.at("error")),
           std::nullopt,
           error.at("error"),
       };
@@ -972,29 +1300,29 @@ struct ControlRuntime::Impl {
     const auto aggregate =
         audio::checked_runtime_byte_sum(reserved_live_bytes, candidate_bytes);
     if (!aggregate.has_value() ||
-        !limits.allows_live_bank_bytes(*aggregate)) {
+        !limits.allows_resident_bytes(*aggregate)) {
       const auto observed = aggregate.value_or(
           std::numeric_limits<std::uint64_t>::max());
       auto error = host_error(
           "WEB_RUNTIME_RESOURCE_LIMIT",
-          "runtime preparation limit exceeded",
+          "why: live and retiring generations exceed the runtime residency "
+          "quota; remedy: wait for retirement and retry publication",
           {
-              {"resource", "live_bank_bytes"},
+              {"resource", "resident_pcm_bytes"},
               {"observed", observed},
-              {"limit", limits.maximum_live_bank_bytes},
+              {"limit", limits.maximum_resident_bytes},
           });
       return SnapshotResult{false, true, std::nullopt, error.at("error")};
     }
 
-    // Application admission already applies the decoded-source frame limit.
-    // The immutable Snapshot contains prepared 48 kHz frames, which can be
-    // larger after 44.1 kHz resampling and must not be compared to that source
-    // limit a second time. Publication retains every byte/live-bank bound.
+    // Application admission already applies the Bank and generation quotas.
+    // Publication repeats those immutable Snapshot checks and keeps residency
+    // as a separate aggregate bound across live and retired generations.
     const auto publication_limits = audio::RuntimePreparationLimits{
         limits.maximum_artifact_bytes,
-        std::numeric_limits<std::uint64_t>::max(),
-        limits.maximum_prepared_bank_bytes,
-        limits.maximum_live_bank_bytes,
+        limits.maximum_user_bank_bytes,
+        limits.maximum_generation_bytes,
+        limits.maximum_resident_bytes,
     };
     auto bank = audio::PreparedSampleBank::from_snapshot(
         snapshot, publication_limits);
@@ -1002,8 +1330,7 @@ struct ControlRuntime::Impl {
       auto error = normalized_error(bank.error());
       return SnapshotResult{
           false,
-          error.at("error").at("code") ==
-              "WEB_RUNTIME_RESOURCE_LIMIT",
+          runtime_resource_rejection(error.at("error")),
           std::nullopt,
           error.at("error"),
       };
@@ -1110,8 +1437,28 @@ struct ControlRuntime::Impl {
       if (request_cancelled()) {
         const auto timeout = timeout_error();
         snapshot.error = timeout.at("error");
+        if (state == State::running) {
+          trigger_admission = false;
+          seal_all_noexcept();
+          state = State::failed;
+        }
       } else {
         snapshot = prepare_and_publish(*pattern_id, true);
+        if (!snapshot.published && state == State::running &&
+            snapshot.error.is_object() &&
+            snapshot.error.value("code", std::string{}) == "HOST_TIMEOUT") {
+          trigger_admission = false;
+          seal_all_noexcept();
+          state = State::failed;
+        }
+        if (snapshot.published && snapshot.generation.has_value()) {
+          if (const auto acknowledgement =
+                  await_bank_acknowledgement(*snapshot.generation);
+              acknowledgement.has_value()) {
+            snapshot.published = false;
+            snapshot.error = acknowledgement->at("error");
+          }
+        }
       }
     }
     Json result{
@@ -1151,6 +1498,25 @@ struct ControlRuntime::Impl {
     return quiescent;
   }
 
+  void stop_and_clear_pattern_noexcept() noexcept {
+    if (engine.telemetry().state == audio::RealtimeState::running) {
+      if (!coordinator.has_value() ||
+          coordinator->await_quiescent == nullptr) {
+        return;
+      }
+      // The coordinator contract establishes paused-or-terminal with no
+      // callback in flight on every return, including timeout/failure. Cleanup
+      // therefore gets a minimal independent budget even after request expiry.
+      const auto timeout_ms = std::max<std::uint32_t>(
+          remaining_request_budget_ms(), 1U);
+      static_cast<void>(coordinator->await_quiescent(
+          coordinator->context, timeout_ms));
+      engine.stop();
+    }
+    static_cast<void>(engine.clear_pattern_view());
+    static_cast<void>(engine.reclaim_retired_patterns());
+  }
+
   foundation::Result<void> abort_imports() {
     std::optional<Error> first_failure;
     for (auto current = import_tokens.begin(); current != import_tokens.end();) {
@@ -1188,13 +1554,28 @@ struct ControlRuntime::Impl {
       static_cast<void>(abort_imports());
     } catch (...) {
     }
+    bool clean_pattern_published = true;
+    if (active_sequence.has_value()) {
+      try {
+        // The journal overlay is Runtime-only. Seal the failed owner by
+        // replacing any queued or active overlay with committed Project Truth
+        // at the normal Bar boundary before abandoning the Facade session.
+        clean_pattern_published =
+            publish_project_pattern(active_sequence->pattern_id).has_value();
+      } catch (...) {
+        clean_pattern_published = false;
+      }
+    }
+    if (!clean_pattern_published) {
+      stop_and_clear_pattern_noexcept();
+    }
     application.abandon_sequence_sessions();
     active_sequence.reset();
     pending_sequence_boundary.reset();
   }
 
   bool cancel_if_expired() noexcept {
-    if (!request_cancelled()) {
+    if (!request_cancelled() || publication_settlement_owned()) {
       return false;
     }
     trigger_admission = false;
@@ -1213,6 +1594,9 @@ struct ControlRuntime::Impl {
   std::optional<std::string> project_id;
   std::optional<std::uint64_t> project_revision;
   std::optional<std::string> pattern_id;
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+  bool fail_next_pattern_publication = false;
+#endif
   std::optional<std::uint16_t> project_bpm;
   std::optional<std::string> runtime_bank_project_id;
   std::optional<std::uint64_t> runtime_revision;
@@ -1228,6 +1612,9 @@ struct ControlRuntime::Impl {
   bool runtime_ready = false;
   bool trigger_admission = false;
   std::optional<std::chrono::steady_clock::time_point> request_deadline;
+  void* request_publication_context = nullptr;
+  bool (*request_publication_settlement_owned)(void* context) noexcept =
+      nullptr;
 };
 
 ControlRuntime::ControlRuntime(std::shared_ptr<Impl> impl) noexcept
@@ -1268,11 +1655,35 @@ Json ControlRuntime::dispatch(
     const Json& payload,
     std::span<const std::byte> sidecar,
     std::chrono::steady_clock::time_point submitted_at) {
+  return dispatch(
+      operation,
+      payload,
+      sidecar,
+      AbsoluteRequestDeadline{submitted_at + operation_deadline(operation)});
+}
+
+Json ControlRuntime::dispatch(
+    std::string_view operation,
+    const Json& payload,
+    std::span<const std::byte> sidecar,
+    AbsoluteRequestDeadline deadline) {
   struct DeadlineReset final {
     std::optional<std::chrono::steady_clock::time_point>& value;
-    ~DeadlineReset() { value.reset(); }
-  } reset{impl_->request_deadline};
-  impl_->request_deadline = submitted_at + operation_deadline(operation);
+    void*& publication_context;
+    bool (*&publication_settlement_owned)(void*) noexcept;
+    ~DeadlineReset() {
+      value.reset();
+      publication_context = nullptr;
+      publication_settlement_owned = nullptr;
+    }
+  } reset{
+      impl_->request_deadline,
+      impl_->request_publication_context,
+      impl_->request_publication_settlement_owned};
+  impl_->request_deadline = deadline.value;
+  impl_->request_publication_context = deadline.publication_context;
+  impl_->request_publication_settlement_owned =
+      deadline.publication_settlement_owned;
   try {
     if (impl_->state == Impl::State::failed ||
         impl_->state == Impl::State::closed) {
@@ -1281,6 +1692,14 @@ Json ControlRuntime::dispatch(
     if (impl_->cancel_if_expired()) {
       return timeout_error();
     }
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    if (operation == "__testing.fail-next-pattern-publication") {
+      require(exact_keys(payload, {}));
+      require(sidecar.empty());
+      impl_->fail_next_pattern_publication = true;
+      return success({{"armed", true}});
+    }
+#endif
     if (operation == "host.status") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
@@ -1590,6 +2009,27 @@ Json ControlRuntime::dispatch(
       static_cast<void>(selected_slot);
       return response;
     }
+    if (operation == "sample.quota") {
+      require(exact_keys(payload, {"slot"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      static_cast<void>(slot_value(payload.at("slot")));
+      auto response = impl_->facade_query(
+          {{"operation", "sample.quota"},
+           {"project_path", impl_->retained_project_path->generic_string()},
+           {"slot", payload.at("slot")}});
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      if (response.value("ok", false)) {
+        impl_->project_revision =
+            response.at("result").at("project_revision")
+                .get<std::uint64_t>();
+      }
+      return response;
+    }
     if (operation == "sample.waveform") {
       require(exact_keys(payload, {"slot", "window"}));
       require(sidecar.empty());
@@ -1620,10 +2060,15 @@ Json ControlRuntime::dispatch(
       return response;
     }
     if (operation == "sample.import.begin") {
-      require(exact_keys(
-          payload,
-          {"import_token", "command_id", "expected_revision", "slot",
-           "asset_id", "byte_length"}));
+      require(
+          exact_keys(
+              payload,
+              {"import_token", "command_id", "expected_revision", "slot",
+               "asset_id", "byte_length"}) ||
+          exact_keys(
+              payload,
+              {"import_token", "command_id", "expected_revision",
+               "sequence_session_id", "slot", "asset_id", "byte_length"}));
       require(sidecar.empty());
       if (!impl_->session_available()) {
         return state_error();
@@ -1634,6 +2079,11 @@ Json ControlRuntime::dispatch(
           unsigned_field(payload, "expected_revision");
       const auto selected_slot = slot_value(payload.at("slot"));
       const auto asset_id = uuid_field(payload, "asset_id");
+      const auto sequence_session_id = payload.contains("sequence_session_id")
+          ? std::optional<foundation::SequenceSessionId>{
+                foundation::SequenceSessionId{
+                    uuid_field(payload, "sequence_session_id")}}
+          : std::nullopt;
       const auto byte_length = unsigned_field(
           payload, "byte_length", impl_->limits.maximum_artifact_bytes);
       require(byte_length != 0);
@@ -1649,6 +2099,7 @@ Json ControlRuntime::dispatch(
               selected_slot,
               foundation::AssetId{asset_id},
               byte_length,
+              sequence_session_id,
           });
       if (!begun.has_value()) {
         return normalized_error(begun.error());
@@ -2026,6 +2477,11 @@ Json ControlRuntime::dispatch(
       if (!snapshot.published) {
         return {{"ok", false}, {"error", snapshot.error}};
       }
+      if (const auto acknowledgement =
+              impl_->await_bank_acknowledgement(*snapshot.generation);
+          acknowledgement.has_value()) {
+        return *acknowledgement;
+      }
       return impl_->open_result(selected_pattern, snapshot);
     }
     if (operation == "snapshot.retry") {
@@ -2042,6 +2498,13 @@ Json ControlRuntime::dispatch(
         return timeout_error();
       }
       const auto snapshot = impl_->prepare_and_publish(selected_pattern);
+      if (snapshot.published) {
+        if (const auto acknowledgement =
+                impl_->await_bank_acknowledgement(*snapshot.generation);
+            acknowledgement.has_value()) {
+          return *acknowledgement;
+        }
+      }
       return impl_->retry_result(selected_pattern, snapshot);
     }
     if (operation == "audio.activate") {
@@ -2108,7 +2571,7 @@ Json ControlRuntime::dispatch(
       const auto deadline = *impl_->request_deadline;
       auto acknowledged = impl_->coordinator->acknowledged_generation(
           impl_->coordinator->context);
-      while (acknowledged == 0 &&
+      while (acknowledged < expected_generation &&
              impl_->clock_now() < deadline) {
         std::this_thread::yield();
         acknowledged = impl_->coordinator->acknowledged_generation(
@@ -2155,6 +2618,11 @@ Json ControlRuntime::dispatch(
           if (!recorded.has_value()) {
             return normalized_error(recorded.error());
           }
+          const auto published = impl_->publish_pending_sequence_overlay();
+          if (!published.has_value()) {
+            fail_and_seal("sequence_overlay_publication_failed");
+            return normalized_error(published.error());
+          }
         }
         return success({{"accepted", true}});
       }
@@ -2194,13 +2662,23 @@ Json ControlRuntime::dispatch(
         if (!recorded.has_value()) {
           return normalized_error(recorded.error());
         }
+        const auto published = impl_->publish_pending_sequence_overlay();
+        if (!published.has_value()) {
+          fail_and_seal("sequence_overlay_publication_failed");
+          return normalized_error(published.error());
+        }
       }
       return success(
           {{"sequence", sequence}, {"status", "enqueued"}});
     }
     if (operation == "sequence.record.begin") {
-      require(exact_keys(
-          payload, {"session_id", "pattern_id", "expected_revision"}));
+      require(
+          exact_keys(
+              payload, {"session_id", "pattern_id", "expected_revision"}) ||
+          exact_keys(
+              payload,
+              {"session_id", "pattern_id", "expected_revision",
+               "armed_capture_slot"}));
       require(sidecar.empty());
       if (impl_->state != Impl::State::running ||
           !impl_->session_available() || impl_->active_sequence.has_value() ||
@@ -2211,6 +2689,12 @@ Json ControlRuntime::dispatch(
       const auto selected_pattern = uuid_field(payload, "pattern_id");
       const auto expected_revision =
           unsigned_field(payload, "expected_revision");
+      const auto armed_capture_slot =
+          !payload.contains("armed_capture_slot") ||
+                  payload.at("armed_capture_slot").is_null()
+              ? std::optional<domain::PadSlotId>{}
+              : std::optional<domain::PadSlotId>{
+                    slot_value(payload.at("armed_capture_slot"))};
       const auto runtime_frame =
           impl_->engine.current_pattern_origin_frame();
       if (!runtime_frame.has_value()) {
@@ -2223,6 +2707,12 @@ Json ControlRuntime::dispatch(
           {"pattern_id", selected_pattern},
           {"expected_revision", expected_revision},
           {"runtime_frame", *runtime_frame},
+          {"armed_capture_slot",
+           armed_capture_slot.has_value()
+               ? nlohmann::json{
+                     {"bank", armed_capture_slot->bank},
+                     {"pad", armed_capture_slot->pad}}
+               : nlohmann::json(nullptr)},
       });
       if (!response.value("ok", false)) {
         return normalized_facade_error(response);
@@ -2230,6 +2720,8 @@ Json ControlRuntime::dispatch(
       impl_->active_sequence = Impl::SequenceSession{
           foundation::SequenceSessionId{session_id},
           foundation::PatternId{selected_pattern},
+          1,
+          armed_capture_slot,
       };
       auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
@@ -2239,6 +2731,26 @@ Json ControlRuntime::dispatch(
           {"bpm", *impl_->project_bpm},
       };
       return success(std::move(result));
+    }
+    if (operation == "sequence.capture.disarm") {
+      require(exact_keys(payload, {"session_id", "slot"}));
+      require(sidecar.empty());
+      const auto session_id = uuid_field(payload, "session_id");
+      const auto selected_slot = slot_value(payload.at("slot"));
+      require(
+          impl_->active_sequence.has_value() &&
+          impl_->active_sequence->id.value() == session_id);
+      const auto disarmed = impl_->application.disarm_sequence_capture(
+          facade::SequenceCaptureDisarmRequest{
+              *impl_->retained_project_path,
+              foundation::SequenceSessionId{session_id},
+              selected_slot,
+          });
+      if (!disarmed.has_value()) {
+        return normalized_error(disarmed.error());
+      }
+      impl_->active_sequence->armed_capture_slot.reset();
+      return success({{"disarmed", true}});
     }
     if (operation == "sequence.settings.update") {
       require(exact_keys(
@@ -2281,16 +2793,29 @@ Json ControlRuntime::dispatch(
           response.at("result").at("bpm").get<std::uint16_t>();
       nlohmann::json publication = nullptr;
       if (!payload.at("bpm").is_null()) {
-        auto published = impl_->publish_project_pattern(
-            foundation::PatternId{*impl_->pattern_id});
-        if (!published.has_value()) {
-          fail_and_seal("sequence_settings_publication_failed");
-          return normalized_error(published.error());
+        std::optional<audio::PatternPublication> pattern_publication;
+        if (impl_->active_sequence.has_value()) {
+          auto published = impl_->publish_pending_sequence_overlay(true);
+          if (!published.has_value()) {
+            fail_and_seal("sequence_settings_publication_failed");
+            return normalized_error(published.error());
+          }
+          pattern_publication = published.value();
+        } else {
+          auto published = impl_->publish_project_pattern(
+              foundation::PatternId{*impl_->pattern_id});
+          if (!published.has_value()) {
+            fail_and_seal("sequence_settings_publication_failed");
+            return normalized_error(published.error());
+          }
+          pattern_publication = published.value();
         }
-        publication = {
-            {"generation", published.value().generation},
-            {"activation_frame", published.value().activation_frame},
-        };
+        if (pattern_publication.has_value()) {
+          publication = {
+              {"generation", pattern_publication->generation},
+              {"activation_frame", pattern_publication->activation_frame},
+          };
+        }
       }
       auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
@@ -2330,6 +2855,11 @@ Json ControlRuntime::dispatch(
         return normalized_facade_error(response);
       }
       ++impl_->active_sequence->next_input_sequence;
+      const auto published = impl_->publish_pending_sequence_overlay();
+      if (!published.has_value()) {
+        fail_and_seal("sequence_overlay_publication_failed");
+        return normalized_error(published.error());
+      }
       auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
       result["runtime_frame"] = runtime_frame;
@@ -2368,16 +2898,49 @@ Json ControlRuntime::dispatch(
             response.at("project_revision").get<std::uint64_t>();
       }
       Json pattern_publication = nullptr;
-      const auto& sequence_result = response.at("result");
+      auto result = response.at("result");
+      if (result.contains("committed_pattern_id") &&
+          result.at("committed_pattern_id").is_string()) {
+        recorded_pattern = foundation::PatternId{
+            result.at("committed_pattern_id").get<std::string>()};
+      }
+      result.erase("committed_pattern_id");
+      if (operation == "sequence.record.stop" &&
+          impl_->active_sequence.has_value() &&
+          impl_->active_sequence->id.value() == session_id) {
+        // Facade commit is already terminal even when publication fails. Drop
+        // the transient owner now so an exact command replay can recover the
+        // clean publication from its durable flush identity.
+        impl_->active_sequence.reset();
+      }
       if (recorded_pattern.has_value() &&
-          sequence_result.at("committed_revision").is_number_unsigned() &&
-          sequence_result.at("replayed") == false &&
-          sequence_result.at("pattern_id").is_string() &&
-          sequence_result.at("pattern_id").get<std::string>() ==
-              recorded_pattern->value()) {
-        auto published = impl_->publish_project_pattern(*recorded_pattern);
+          (operation == "sequence.record.stop" ||
+           !impl_->pending_sequence_boundary.has_value()) &&
+          result.at("committed_revision").is_number_unsigned()) {
+        const auto authority = impl_->pending_sequence_boundary.has_value()
+            ? std::optional<audio::PatternReplacementAuthority>{
+                  Impl::replacement_authority(
+                      *impl_->pending_sequence_boundary)}
+            : std::nullopt;
+        if (operation == "sequence.record.stop" && authority.has_value() &&
+            !impl_->cancel_pending_switch(*authority)) {
+          // Audio already crossed the exact cancellation linearization point.
+          // Facade Stop is durable, so clear Runtime fail-closed and leave the
+          // receipt replayable instead of allowing the target to remain live.
+          impl_->stop_and_clear_pattern_noexcept();
+          return normalized_error(Error{
+              ErrorCode::invalid_argument,
+              "runtime Pattern switch crossed the Stop boundary",
+          });
+        }
+        auto published = impl_->publish_project_pattern(
+            *recorded_pattern,
+            operation != "sequence.record.stop" && authority.has_value()
+                ? std::optional<std::uint64_t>{authority->activation_frame}
+                : std::nullopt,
+            {},
+            operation == "sequence.record.stop" ? std::nullopt : authority);
         if (!published.has_value()) {
-          fail_and_seal("sequence_pattern_publication_failed");
           return normalized_error(published.error());
         }
         pattern_publication = {
@@ -2387,17 +2950,17 @@ Json ControlRuntime::dispatch(
       }
       if (operation == "sequence.record.flush" &&
           impl_->active_sequence.has_value() &&
-          sequence_result.at("pattern_id").is_string()) {
+          result.at("pattern_id").is_string()) {
         impl_->active_sequence->pattern_id = foundation::PatternId{
-            sequence_result.at("pattern_id").get<std::string>()};
+            result.at("pattern_id").get<std::string>()};
         impl_->pattern_id = impl_->active_sequence->pattern_id.value();
+        if (result.at("state") != "switching") {
+          impl_->pending_sequence_boundary.reset();
+        }
       }
-      if (operation == "sequence.record.stop" &&
-          impl_->active_sequence.has_value() &&
-          impl_->active_sequence->id.value() == session_id) {
-        impl_->active_sequence.reset();
+      if (operation == "sequence.record.stop") {
+        impl_->pending_sequence_boundary.reset();
       }
-      auto result = response.at("result");
       result["project_revision"] = response.at("project_revision");
       result["runtime_frame"] = runtime_frame;
       result["pattern_publication"] = std::move(pattern_publication);
@@ -2412,7 +2975,13 @@ Json ControlRuntime::dispatch(
           impl_->active_sequence->id.value() != session_id) {
         return state_error();
       }
+      auto pattern = impl_->prepare_project_pattern(
+          foundation::PatternId{next_pattern_id});
+      if (!pattern.has_value()) {
+        return normalized_error(pattern.error());
+      }
       const auto runtime_frame = impl_->engine.telemetry().rendered_frames;
+      const auto replacement_authority = impl_->pending_pattern_authority();
       auto response = impl_->application.command({
           {"operation", "sequence.record.switch-request"},
           {"project_path", impl_->retained_project_path->generic_string()},
@@ -2426,8 +2995,10 @@ Json ControlRuntime::dispatch(
       const auto effective_runtime_frame =
           response.at("result").at("effective_runtime_frame")
               .get<std::uint64_t>();
-      auto published = impl_->publish_project_pattern(
-          foundation::PatternId{next_pattern_id}, effective_runtime_frame);
+      auto published = impl_->publish_prepared_pattern(
+          std::move(pattern.value()),
+          effective_runtime_frame,
+          replacement_authority);
       if (!published.has_value()) {
         fail_and_seal("sequence_switch_publication_failed");
         return normalized_error(published.error());
@@ -2675,7 +3246,10 @@ ControlRuntime::drain_sequence_bar_boundary() {
     return std::nullopt;
   }
   const auto telemetry = impl_->engine.pattern_telemetry();
-  const auto& pending = *impl_->pending_sequence_boundary;
+  auto& pending = *impl_->pending_sequence_boundary;
+  if (pending.notified) {
+    return std::nullopt;
+  }
   if (telemetry.current_generation != pending.generation ||
       impl_->engine.telemetry().rendered_frames < pending.runtime_frame) {
     return std::nullopt;
@@ -2686,7 +3260,7 @@ ControlRuntime::drain_sequence_bar_boundary() {
       pending.runtime_frame,
       pending.generation,
   };
-  impl_->pending_sequence_boundary.reset();
+  pending.notified = true;
   return result;
 }
 

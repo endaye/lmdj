@@ -32,11 +32,25 @@ class ValidateSymbolsTest(unittest.TestCase):
             "FaultPoint",
             "set_fault_hook",
             "set_active_directory_sync_hook",
+            "set_pattern_claim_hook",
+            "invoke_pattern_claim_hook",
+            "set_pattern_apply_hook",
+            "invoke_pattern_apply_hook",
+            "set_cancel_pending_switch_hook",
+            "invoke_cancel_pending_switch_hook",
+            "fail_next_pattern_publication",
         )
         for symbol in forbidden:
             with self.subTest(symbol=symbol):
                 line = f"0000000000000000 T {symbol}\n"
                 self.assertEqual([line.rstrip()], MODULE.validate_symbols(line))
+
+    def test_each_forbidden_test_hook_marker_is_reported_once(self) -> None:
+        for marker in MODULE.FORBIDDEN_BYTES:
+            with self.subTest(marker=marker):
+                self.assertEqual(
+                    [marker.decode("ascii")], MODULE.validate_binary(marker)
+                )
 
 
 if __name__ == "__main__":

@@ -62,11 +62,11 @@ Proof 规则「录音中任何 revision 变化都 `REVISION_CONFLICT` 并 seal T
 | SR-D14 | 录音中允许改 BPM、Quantize、Swing。Core rebase，录音继续。Quantize/Swing 只影响之后的新音。BPM 改变 tick→墙钟，已写入的 tick 不动。 |
 | SR-D15 | 先武装空 Pad 收音，再进 Sequence Record：Capture 后台继续。收音 Pad 不进 Sequence。在 Sequence 页点该 Pad = **停采并进入 Stage 8B trimming overlay**（不切到 Sample 表面，不触发 SR-D9）。用户确认 ≤5 s 提交后，Pad 写入 rebase 会话；此后再敲才进 Sequence。 |
 | SR-D16 | Record 仍 active 时，Trim / 换其他 Pad 采样 / 普通 `ImportAsset` 等 Sample 类 Command：Core 失败，Journal 继续，不 seal。Host 须先停录。 |
-| SR-D17 | 崩溃、音频中断、Capture Ring 溢出、owner 丢失：已由 manifest head 提交的 flush 保持有效；未提交 tail 不写 Project 并 seal。下次打开提示恢复。确认时按 SR-D22 匹配目标 Pattern，**禁止**仅凭新鲜 revision 写回。拒绝则丢未提交音符。 |
+| SR-D17 | 崩溃、音频中断、Capture Ring 溢出、owner 丢失：已由 manifest head 提交的 flush 保持有效；未提交 tail 不写 Project 并 seal。每个已接受 Pad event 必须先把其 canonical recoverable tail 耐久写入 Journal，才可向 Host acknowledgement；未释放 press 以 §10.1 的 240-tick 默认时值进入 tail，release 以后一条单调 tail snapshot 替换时值。下次打开提示恢复。确认时按 SR-D22 匹配目标 Pattern，**禁止**仅凭新鲜 revision 写回。拒绝则丢未提交音符；partial/torn tail 必须保留并以可操作证据 fail closed，不得静默截断。 |
 | SR-D18 | 选择性 rebase 只适用于 BPM、Quantize/Swing、以及「正在进行的 Pad Capture 写入武装中的目标 Pad」。未知 Authoring Command fail closed。 |
 | SR-D19 | 实施时新增 Project Contract（新 Contract ID + Schema），删除 `takes`。禁止用空 `takes: {}` 假装兼容。Pattern 事件改为 Slot + tick + 力度 + 长度。 |
 | SR-D20 | 一个 Project 同时只允许一个 active Sequence session。会话落在 bundle `recovery/active`，受 writer lease 保护。Authoring admission 必须在 **同一把写锁** 内检查 active Journal 与 `expected_revision`。 |
-| SR-D21 | 每次 flush 有稳定 `session_id` + `flush_seq` + `command_id`。先把 flush 意图耐久写入 Journal，再写 Project。重复提交返回原 receipt。只有 manifest head 已耐久且 reload 可见 receipt 才算 completed；Journal 只在全部 flush completed 后删除。 |
+| SR-D21 | 每次 flush 有稳定 `session_id` + `flush_seq` + `command_id`。先把 flush 意图耐久写入 Journal，再写 Project。原始 canonical command payload 在 flush 生命周期内不可变，重复提交与 command collision 永远按它比较；completion 只更新独立的 effective recovery residual，reconcile/apply 不得把 residual 反写成命令身份。若一次 execute 在 commit point 前失败而录音继续，后续 flush 必须是先前 unresolved flush 与最新 tail 的 canonical 累积批次。任一 receipt 可见时按同一 session/pattern/expected-revision 的 canonical key/value coverage 双向 resolve：较晚 completion 可 supersede 它 key-cover 的较早批次；较早 completion 可 resolve 已耐久、event key/value 全被其精确覆盖的等价较晚 retry，并从非等价较晚批次及当前 durable pending tail 中只扣除精确已提交 event、保留真正新增或同-key 不同值的 residual。effective recovery 必须按 flush 顺序合并 incomplete residual，最后合并最新 durable tail；同-key 时最新 acknowledgement 胜出，status/list/apply 使用同一 canonical unique batch。只有 manifest head 已耐久且 reload 可见 receipt 才算 completed；Journal 只在全部 flush completed/superseded 或只剩未提交 residual 后删除/seal。 |
 | SR-D22 | Journal 保存目标 Pattern 的 `pattern_id`、`bars`、以及上次耐久 flush（若无则 begin）时事件的 canonical fingerprint。恢复区分：指纹匹配可 append；不兼容变化给用户选新槽或放弃；删除/越界 fail closed 并保留恢复件。 |
 | SR-D23 | 切槽的 commit、Journal 改目标、Runtime 改播放三者只在 SR-D11 的 effective transport boundary 发生，禁止点击瞬间换 Journal 而播放仍等到下一 Bar。 |
 | SR-D24 | SR-D15 **不**推翻 Stage 8B 的 trimming / ≤5 s / 显式提交 / 冲突保留缓冲。只增加 Sequence 页内 overlay，避免走到 Sample 表面。 |
@@ -127,6 +127,9 @@ Proof 规则「录音中任何 revision 变化都 `REVISION_CONFLICT` 并 seal T
 - 捕获并随 rebase 更新的 `expected_revision`。
 - 当时的 BPM / Quantize / Swing。
 - 尚未 commit 的事件。
+- 单调 `tail_seq` / `input_sequence` 与每次已 acknowledgement 后的 canonical
+  tail snapshot；press 未释放时使用 §10.1 的 240-tick 默认时值，release snapshot
+  替换同一事件的真实时值。
 - 目标 Pattern 在上次耐久 flush（若无则 begin）时的 `bars` 与
   `pattern_fingerprint`（见 §8.7）。
 - 每个 pending/completed flush：`flush_seq`、`command_id`、目标
@@ -142,7 +145,7 @@ Proof 规则「录音中任何 revision 变化都 `REVISION_CONFLICT` 并 seal T
 Pad 打击
   → transport musical tick（权威；见 SR-D25）
   → Quantize 开则 onset 按 §10.1 吸格
-  → 写入会话 Journal + Runtime 叠录音符
+  → 先耐久写入会话 Journal tail，再 acknowledgement 并发布 Runtime 叠录音符
   → 下一圈即可听到
   → 到 flush 边界：Journal 先记下 command_id，再一条 Command 写入 Pattern
   → revision +1 → Cook Snapshot
@@ -299,15 +302,37 @@ commit`，以及 duplicate `command_id` 回放原 receipt。
 
 每个 flush（停录、停 Play、切 Sample、切槽边界）：
 
+0. 事件 acknowledgement 之前，Journal 已耐久保存最新 canonical tail；flush
+   record 消费该 tail，二者事件必须逐项相同。crash 落在两者之间时仍由 tail 恢复；
+   flush record 已耐久后 tail 不再单列，避免同一事件成为两份恢复输入。
 1. 在 Journal 耐久写入 pending flush：`session_id`、`flush_seq`、
    `command_id`（Host UUID）、目标 `pattern_id`、本批事件、
-   `expected_revision`。
+   `expected_revision`。该 canonical command payload 不因 completion 或
+   recovery filtering 改写；独立 recovery residual 才能被扣减。
 2. 在同一 writer lease 内执行 Pattern 写入 Command。已存在该 `command_id`
    的 receipt 时返回原 receipt，不二次 overdub。
 3. transaction / checkpoint 文件本身不是 commit point。仅当 `manifest.json`
    已原子发布并完成适用的目录同步，且从该 manifest head reload 能查到对应
    receipt，才把该 flush 标为 completed。
-4. 会话结束且 **全部** flush completed 之后，才删除 active Journal。
+4. 若较早 flush 在 commit point 前失败，Runtime 保留同一 pending batch；后续
+   flush 必须等于「全部 unresolved flush 依序 merge 最新 durable tail」的 canonical
+   结果。该后续 flush completed 时，它覆盖的较早 `flush_seq` 同时标记为
+   superseded/resolved，不得再进入 recovery。这样同 key 的新 event 可替换旧 event，
+   但不同 key 的旧 event 不能被遗漏。
+5. 反向 completion 不能只看 `flush_seq`：若 F0 先 completed，已经耐久的较晚 retry
+   只有在 session、Pattern、`expected_revision` 相同，且每个 canonical event 的
+   key/value 都被 F0 精确覆盖时才同时 resolved。较晚 batch 中精确匹配 F0 的 event
+   从 recovery residual 扣除；同样规则必须应用到 completion 时最新的 durable
+   `pending_events`，即使其后没有 append 新 flush。过滤保持原 canonical 顺序及
+   `next_tail_seq`/`last_input_sequence`，新增 key 或同-key 不同 duration/velocity
+   保留未提交。sealed snapshot v2 同时携带 immutable command payload 与 effective
+   residual 并 fail closed 要求两者齐备；旧 snapshot 只有 recovery payload 时按旧
+   recovery-only 语义读取，不猜测已经不可恢复的原命令。
+6. owner-loss recovery 先按 `flush_seq` 合并所有 incomplete recovery residual，
+   再把最新 `pending_events` 作为最后输入合并；因此同-key 的最新 acknowledged tail
+   覆盖旧 flush 值。status、list 与 apply 必须共享该 canonical unique batch，不得对
+   两个容器直接求和或反序覆盖。
+7. 会话结束且 **全部** flush completed 或 superseded 之后，才删除 active Journal。
 
 重启判定：
 
@@ -482,10 +507,29 @@ Stage 9 实施必须覆盖：
 - 第二次 begin：`INVALID_ARGUMENT` / `sequence_session_active`。
 - Owner 崩溃后下一 lease：先 reconcile 已提交 receipt；只把剩余未提交 tail seal
   为 `owner_lost`，不 resume。
+- 真正子进程在 `press/release/press` 三个 event acknowledgement 后由 `SIGKILL`
+  终止（最后一个 press 未释放）：下一 owner
+  seal 恰一个 `owner_lost` candidate；显式恢复保持事件 identity/canonical 顺序且
+  Project revision 只增加一次。测试不得调用 destructor 或 graceful close。
+- Journal 末尾 partial record、checksum 损坏或 tail sequence/order 不合法时 fail
+  closed，保留 active 文件，并返回 path、durable prefix、observed length、reason 与
+  repair/discard remedy；不得把 torn bytes 静默截掉后继续录音。
 - transaction/checkpoint 已写、manifest 未发布：flush 仍未提交，Journal 不得标
   completed。
 - Project manifest 已提交、Journal 未完成/未删：重启先按 receipt 清理，不 seal
   已提交批次、不二次 overdub。
+- F1 在 append 后、commit point 前失败，继续录音并由累积 F2 成功：F2 receipt
+  同时 resolve F1；owner loss 只能 seal F2 之后真正未提交的 tail。apply 不得再次
+  写入 F1，也不得用 F1 的旧同-key event 覆盖 F2 的新值；discard 不改变 revision。
+- F0…F31 等价 retry 已全部耐久、F0 先 completed：32 条均 resolved，reconcile 不得
+  产生 candidate。若 F0 已 commit 但 completion 报错，随后 append 等价 F1，重启按
+  F0 receipt completion 也必须 resolve F1，Project revision 仍只增加一次。
+- F0 先 completed、较晚 batch 同时含精确已提交 event、新 event 与同-key 新值：只
+  后两者进入 owner-loss residual；精确已提交 event 不得再次成为 candidate。
+- F0 manifest/receipt 已提交但 completion 报错，其后只有 durable tail、没有较晚
+  flush：重启回放 F0 completion 必须从 tail 扣除精确已提交 event。新增 key 和
+  同-key 不同值保持 canonical 顺序并只 apply 一次；仅含等价已提交 event 的 tail
+  不得产生 candidate 或第二次 revision。
 - SR-D15：收音 Pad 不进 Pattern；停采进入 trimming overlay；确认提交后
   rebase，再敲才进 Sequence。提交冲突保留缓冲。
 - 从 Record 中切 Sample 表面再试图新开麦：会话已结束，不再叠加。

@@ -1,6 +1,7 @@
 export const PROTOCOL_VERSION = 1;
 export const MAX_ENVELOPE_BYTES = 65_536;
 export const MAX_ASSET_BYTES = 1_048_576;
+export const MAX_SAMPLE_IMPORT_BYTES = 68_157_440;
 export const DEADLINES_MS = Object.freeze({
   short: 1_000,
   project: 30_000,
@@ -24,6 +25,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "snapshot.reload",
   "snapshot.retry",
   "sample.inspect",
+  "sample.quota",
   "sample.waveform",
   "sample.import.begin",
   "sample.import.chunk",
@@ -38,6 +40,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "audio.suspend",
   "trigger",
   "sequence.record.begin",
+  "sequence.capture.disarm",
   "sequence.record.event",
   "sequence.record.flush",
   "sequence.record.stop",
@@ -185,6 +188,7 @@ function requireSampleOperationPayload(operation, payload) {
   let valid = true;
   switch (operation) {
     case "sample.inspect":
+    case "sample.quota":
       valid = hasExactKeys(payload, ["slot"]) && validSlot(payload.slot);
       break;
     case "sample.waveform":
@@ -204,20 +208,30 @@ function requireSampleOperationPayload(operation, payload) {
       break;
     case "sample.import.begin":
       valid =
-        hasExactKeys(payload, [
+        (hasExactKeys(payload, [
           "import_token",
           "command_id",
           "expected_revision",
           "slot",
           "asset_id",
           "byte_length",
-        ]) &&
+        ]) || hasExactKeys(payload, [
+          "import_token",
+          "command_id",
+          "expected_revision",
+          "sequence_session_id",
+          "slot",
+          "asset_id",
+          "byte_length",
+        ])) &&
         UUID_PATTERN.test(payload.import_token) &&
         UUID_PATTERN.test(payload.command_id) &&
         isUnsignedInteger(payload.expected_revision) &&
         validSlot(payload.slot) &&
         UUID_PATTERN.test(payload.asset_id) &&
-        isUnsignedInteger(payload.byte_length, MAX_ASSET_BYTES) &&
+        (!Object.hasOwn(payload, "sequence_session_id") ||
+          UUID_PATTERN.test(payload.sequence_session_id)) &&
+        isUnsignedInteger(payload.byte_length, MAX_SAMPLE_IMPORT_BYTES) &&
         payload.byte_length > 0;
       break;
     case "sample.import.chunk":
@@ -307,14 +321,27 @@ function requireSampleOperationPayload(operation, payload) {
       break;
     case "sequence.record.begin":
       valid =
-        hasExactKeys(payload, [
+        (hasExactKeys(payload, [
           "session_id",
           "pattern_id",
           "expected_revision",
-        ]) &&
+        ]) || hasExactKeys(payload, [
+          "session_id",
+          "pattern_id",
+          "expected_revision",
+          "armed_capture_slot",
+        ])) &&
         UUID_PATTERN.test(payload.session_id) &&
         UUID_PATTERN.test(payload.pattern_id) &&
-        isUnsignedInteger(payload.expected_revision);
+        isUnsignedInteger(payload.expected_revision) &&
+        (!Object.hasOwn(payload, "armed_capture_slot") ||
+          payload.armed_capture_slot === null || validSlot(payload.armed_capture_slot));
+      break;
+    case "sequence.capture.disarm":
+      valid =
+        hasExactKeys(payload, ["session_id", "slot"]) &&
+        UUID_PATTERN.test(payload.session_id) &&
+        validSlot(payload.slot);
       break;
     case "sequence.record.event":
       valid =

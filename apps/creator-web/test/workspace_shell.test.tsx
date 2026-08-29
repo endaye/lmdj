@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
+import {encodePcm16Wav} from "../src/capture/wav_encoder";
 import {SampleSurface} from "../src/components/sample_surface";
 import {StatusBar} from "../src/components/status_bar";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
@@ -23,12 +24,45 @@ const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const creatorStyles = readFileSync("src/styles.css", "utf8");
 let styleElement: HTMLStyleElement;
+let originalOfflineAudioContext: typeof globalThis.OfflineAudioContext | undefined;
 beforeAll(() => {
   styleElement = document.createElement("style");
   styleElement.textContent = creatorStyles;
   document.head.append(styleElement);
+  originalOfflineAudioContext = globalThis.OfflineAudioContext;
+  Object.defineProperty(globalThis, "OfflineAudioContext", {
+    configurable: true,
+    value: class {
+      async decodeAudioData(): Promise<AudioBuffer> {
+        const samples = Float32Array.from([0, 0.125, 0.25, 0.5, 0.25, 0, -0.25, -0.5]);
+        return {
+          length: samples.length,
+          numberOfChannels: 1,
+          sampleRate: 48_000,
+          getChannelData: () => samples,
+        } as unknown as AudioBuffer;
+      }
+    },
+  });
 });
-afterAll(() => styleElement.remove());
+afterAll(() => {
+  styleElement.remove();
+  Object.defineProperty(globalThis, "OfflineAudioContext", {
+    configurable: true,
+    value: originalOfflineAudioContext,
+  });
+});
+
+function wavFile(name: string): File {
+  return new File([
+    encodePcm16Wav([Float32Array.from([0, 0.25, -0.25, 0.5, -0.5, 0, 0.125, 0])], 48_000),
+  ], name, {type: "audio/wav"});
+}
+
+async function commitLongSourceSelection(): Promise<void> {
+  await screen.findByRole("button", {name: "Commit selection"});
+  await userEvent.click(screen.getByRole("button", {name: "Commit selection"}));
+}
 
 const ready: CreatorState = {
   ...initialCreatorState,
@@ -214,7 +248,7 @@ test("bounds and escapes Replace display names, warns, cancels, and restores foc
   pad.focus();
   const sourceName = `${"<img src=x onerror=private>".repeat(8)}.wav`;
   fireEvent.drop(pad, {
-    dataTransfer: {files: [new File(["wav"], sourceName, {type: "audio/wav"})]},
+    dataTransfer: {files: [wavFile(sourceName)]},
   });
 
   const dialog = screen.getByRole("dialog", {name: "Replace Pad A1?"});
@@ -401,6 +435,18 @@ function sampleRuntimeFixture(
   };
   const session: CreatorSampleRuntimeSession = {
     ...base.session,
+    querySampleQuota: async (slot) => ({
+      projectRevision: 3, slot, bankQuotaBytes: 67_108_864,
+      bankUsedBytes: 0, bankRemainingBytes: 67_108_864,
+      projectQuotaBytes: 134_217_728, projectUsedBytes: 0,
+      projectRemainingBytes: 134_217_728,
+      effectiveRemainingBytes: 67_108_864,
+      effectiveRemainingFrames: 16_777_216, consumed: [],
+    }),
+    sampleIngestLimits: () => ({
+      sourceBytes: 104_857_600, decodedFrames: 43_200_000,
+      channels: 2, artifactBytes: 68_157_440,
+    }),
     inspectSample: async () => {
       base.calls.push("inspectSample");
       return inspect;
@@ -658,7 +704,7 @@ test("commits composed controlled Volume once per pointer and keyboard completio
   await waitFor(() => expect(updateCount).toBe(2));
 });
 
-test.each(["import", "update", "reset"] as const)(
+test.each(["update", "reset"] as const)(
   "settles a slow $kind after selecting a different Pad",
   async (kind) => {
     const fixture = mutableSampleRuntimeFixture();
@@ -685,13 +731,8 @@ test.each(["import", "update", "reset"] as const)(
     await userEvent.click(screen.getByRole("button", {name: "Sample"}));
     await screen.findByText("Asset 33333333");
 
-    let selectedAfter = 1;
-    if (kind === "import") {
-      await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty"}));
-      const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
-      await userEvent.upload(input, new File(["wav"], "slow.wav", {type: "audio/wav"}));
-      selectedAfter = 2;
-    } else if (kind === "update") {
+    const selectedAfter = 1;
+    if (kind === "update") {
       await userEvent.click(screen.getByRole("button", {name: "Mute"}));
     } else {
       await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
@@ -702,16 +743,7 @@ test.each(["import", "update", "reset"] as const)(
       name: `Pad A${selectedAfter + 1} — empty`,
     }));
 
-    if (kind === "import") {
-      fixture.assigned.set(1, "44444444-4444-4444-8444-444444444444");
-      fixture.playbacks.set(1, Object.freeze({
-        trimStartFrame: 0,
-        trimEndFrame: 8,
-        triggerMode: "one_shot",
-        gainMillidb: 0,
-        muted: false,
-      }));
-    } else if (kind === "update") {
+    if (kind === "update") {
       fixture.playbacks.set(0, requestPlayback!);
     } else {
       fixture.playbacks.set(0, Object.freeze({
@@ -820,7 +852,8 @@ test("converges committed Sample and Project truth across interleaved revisions"
   await screen.findByText("Asset 33333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty"}));
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
-  await userEvent.upload(input, new File(["wav"], "interleaved.wav", {type: "audio/wav"}));
+  await userEvent.upload(input, wavFile("interleaved.wav"));
+  await commitLongSourceSelection();
 
   await screen.findByText("Asset 44444444");
   expect(screen.queryByRole("alert")).toBeNull();
@@ -1038,7 +1071,7 @@ test.each(["update", "reset"] as const)(
   },
 );
 
-test("keeps pre-commit Sample import abort ownership on mode switch", async () => {
+test("keeps pre-commit Sample import abort ownership on unmount", async () => {
   const fixture = mutableSampleRuntimeFixture();
   let importCount = 0;
   let abortCount = 0;
@@ -1051,7 +1084,7 @@ test("keeps pre-commit Sample import abort ownership on mode switch", async () =
       }, {once: true});
     });
   };
-  const {container} = render(
+  const {container, unmount} = render(
     <App initialState={ready} runtimeFactory={() => fixture.session} />,
   );
   await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
@@ -1059,14 +1092,12 @@ test("keeps pre-commit Sample import abort ownership on mode switch", async () =
   await screen.findByText("Asset 33333333");
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty"}));
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
-  await userEvent.upload(input, new File(["wav"], "abort.wav", {type: "audio/wav"}));
+  await userEvent.upload(input, wavFile("abort.wav"));
+  await commitLongSourceSelection();
   await waitFor(() => expect(importCount).toBe(1));
 
-  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  unmount();
   await waitFor(() => expect(abortCount).toBe(1));
-  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
-  const add = await screen.findByRole("button", {name: "Add Sample to Pad A2"});
-  expect(add.hasAttribute("disabled")).toBe(false);
   expect(importCount).toBe(1);
 });
 
@@ -1317,8 +1348,9 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
   expect(sampleInput).not.toBeNull();
   await userEvent.upload(
     sampleInput!,
-    new File(["wav"], "import.wav", {type: "audio/wav"}),
+    wavFile("import.wav"),
   );
+  await commitLongSourceSelection();
   await screen.findByText("Asset 44444444");
 
   await userEvent.click(screen.getByRole("button", {name: "Pad A3 — empty"}));
@@ -1363,7 +1395,9 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty"}));
 
   const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
-  expect(input.accept).toBe(".wav,audio/wav,audio/wave");
+  expect(input.accept).toBe(
+    ".wav,.mp3,.m4a,.aac,.flac,audio/wav,audio/wave,audio/mpeg,audio/mp4,audio/aac,audio/flac",
+  );
   fireEvent.change(input, {target: {files: []}});
   expect(importCount).toBe(0);
 
@@ -1374,18 +1408,16 @@ test("uses the same accept-filtered import path and keeps selection on unsupport
     })]},
   });
 
-  await screen.findByText("Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz");
+  await screen.findByText(/the source container is not supported/);
   expect(screen.getByText("Pad A2", {selector: ".selected-sample strong"})).toBeTruthy();
   expect(screen.queryByText("private-source.mp3")).toBeNull();
   expect(screen.queryByText("/private/opfs")).toBeNull();
-  expect(importCount).toBe(1);
+  expect(importCount).toBe(0);
   await userEvent.upload(input, new File(["not-wav"], "second-private.wav", {
     type: "audio/wav",
   }));
-  await waitFor(() => expect(importCount).toBe(2));
-  expect(screen.getByText(
-    "Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz",
-  )).toBeTruthy();
+  await waitFor(() => expect(importCount).toBe(0));
+  expect(screen.getByText(/the source container is not supported/)).toBeTruthy();
   expect(screen.queryByText("second-private.wav")).toBeNull();
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
   expect(screen.getByText("3", {selector: ".project-summary dd"})).toBeTruthy();
@@ -1472,10 +1504,9 @@ test.each(["mute", "reset", "replace"] as const)(
     } else {
       await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
       const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
-      await userEvent.upload(input, new File(["wav"], "replace.wav", {
-        type: "audio/wav",
-      }));
+      await userEvent.upload(input, wavFile("replace.wav"));
       await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
+      await commitLongSourceSelection();
     }
 
     await waitFor(() => expect(order).toEqual([`stop:0`, `${kind}:0`]));
@@ -1767,8 +1798,8 @@ test.each([
   ["DUPLICATE_ID", {},
     "The import was refused because the local copy of this Project has newer changes. Nothing was lost."],
   ["WEB_RUNTIME_RESOURCE_LIMIT", {
-    resource: "decoded_frames_per_pad", observed: 240001, limit: 240000,
-  }, "decoded_frames_per_pad: observed 240001, limit 240000."],
+    resource: "ingest_decoded_frames", observed: 43200001, limit: 43200000,
+  }, "ingest_decoded_frames: observed 43200001, limit 43200000."],
   ["IO_ERROR", {storage_condition: "quota_exceeded"},
     "Storage condition: quota_exceeded."],
   ["HOST_PROTOCOL_MISMATCH", {},

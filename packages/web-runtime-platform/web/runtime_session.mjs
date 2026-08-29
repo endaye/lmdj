@@ -39,6 +39,7 @@ const SAFETY_INTERRUPTIBLE_HOST_OPERATIONS = new Set([
   "project.inspect",
   "project.list",
   "sample.inspect",
+  "sample.quota",
   "sample.waveform",
 ]);
 const TRIGGER_SOURCES = new Set(["pointer", "keyboard", "midi"]);
@@ -60,6 +61,8 @@ const ALLOWED_TYPED_ERROR_CODES = new Set([
   "MISSING_ASSET",
   "INVALID_PROJECT",
   "COOK_FAILED",
+  "BANK_QUOTA_EXHAUSTED",
+  "PROJECT_QUOTA_EXHAUSTED",
   "PROVIDER_NOT_FOUND",
   "PROVIDER_FAILED",
   "PERMISSION_DENIED",
@@ -497,6 +500,71 @@ function normalizeSampleCommit(value) {
     runtimeRevision: value.runtime_revision,
     runtimePublished: published,
     snapshotError,
+  });
+}
+
+function normalizeSampleQuota(value, expectedSlot) {
+  const keys = [
+    "project_revision",
+    "slot",
+    "bank_quota_bytes",
+    "bank_used_bytes",
+    "bank_remaining_bytes",
+    "project_quota_bytes",
+    "project_used_bytes",
+    "project_remaining_bytes",
+    "effective_remaining_bytes",
+    "effective_remaining_frames",
+    "consumed",
+  ];
+  if (!exactKeys(value, keys) || !Array.isArray(value.consumed) ||
+      !keys.slice(0, -2).filter((key) => key !== "slot")
+        .every((key) => isUnsignedInteger(value[key]))) {
+    throw protocolMismatch("Sample quota result is invalid");
+  }
+  const slot = flatSlotFromAddress(value.slot);
+  if (slot !== expectedSlot ||
+      value.bank_used_bytes > value.bank_quota_bytes ||
+      value.project_used_bytes > value.project_quota_bytes ||
+      value.bank_remaining_bytes !== value.bank_quota_bytes - value.bank_used_bytes ||
+      value.project_remaining_bytes !==
+        value.project_quota_bytes - value.project_used_bytes ||
+      value.effective_remaining_bytes !== Math.min(
+        value.bank_remaining_bytes,
+        value.project_remaining_bytes,
+      ) || value.effective_remaining_frames * 4 !== value.effective_remaining_bytes) {
+    throw protocolMismatch("Sample quota result is invalid");
+  }
+  const bank = Math.floor(slot / 16);
+  const consumed = value.consumed.map((entry) => {
+    if (!exactKeys(entry, ["slot", "prepared_bytes", "prepared_frames"]) ||
+        !isUnsignedInteger(entry.prepared_bytes) ||
+        !isUnsignedInteger(entry.prepared_frames) ||
+        entry.prepared_frames * 4 !== entry.prepared_bytes) {
+      throw protocolMismatch("Sample quota consumption is invalid");
+    }
+    const consumedSlot = flatSlotFromAddress(entry.slot);
+    if (Math.floor(consumedSlot / 16) !== bank) {
+      throw protocolMismatch("Sample quota consumption is invalid");
+    }
+    return Object.freeze({
+      slot: consumedSlot,
+      preparedBytes: entry.prepared_bytes,
+      preparedFrames: entry.prepared_frames,
+    });
+  });
+  return Object.freeze({
+    projectRevision: value.project_revision,
+    slot,
+    bankQuotaBytes: value.bank_quota_bytes,
+    bankUsedBytes: value.bank_used_bytes,
+    bankRemainingBytes: value.bank_remaining_bytes,
+    projectQuotaBytes: value.project_quota_bytes,
+    projectUsedBytes: value.project_used_bytes,
+    projectRemainingBytes: value.project_remaining_bytes,
+    effectiveRemainingBytes: value.effective_remaining_bytes,
+    effectiveRemainingFrames: value.effective_remaining_frames,
+    consumed: Object.freeze(consumed),
   });
 }
 
@@ -950,6 +1018,7 @@ async function loadSourceRuntime({ window }) {
   const runtime = window?.lmdjWebRuntimeHost;
   if (
     typeof runtime?.registerAudioContext !== "function" ||
+    typeof runtime?.audioCallbackHeartbeat !== "function" ||
     typeof runtime?.startAudioWorklet !== "function"
   ) {
     throw typedError("HOST_STATE_INVALID", "Source runtime is not loaded");
@@ -1141,6 +1210,7 @@ function createRuntimeSessionController(options = {}) {
     protocol_version: assemblyIdentity.protocolVersion,
   });
   let verifiedSampleImportLimit = null;
+  let verifiedSampleIngestLimits = null;
   let runtime = null;
   let audioContext = null;
   let contextHandle = null;
@@ -1171,6 +1241,8 @@ function createRuntimeSessionController(options = {}) {
   let activeHostQueryAbort = null;
   let runtimeActionTail = Promise.resolve();
   let projectActionTail = Promise.resolve();
+  let pendingSequenceSwitch = null;
+  let sequenceBoundaryFlush = null;
   let interruptionReservation = null;
   let safetyReservation = null;
   let fatalReservation = null;
@@ -1374,6 +1446,9 @@ function createRuntimeSessionController(options = {}) {
     unsubscribeTransportFailure?.();
     unsubscribeTransportFailure = null;
     activePreviewSlots.clear();
+    pendingSequenceSwitch = null;
+    sequenceBoundaryFlush = null;
+    sequenceBoundaryListeners.clear();
     voiceStateListeners.clear();
     for (const dispose of listenerDisposers.splice(0)) {
       dispose();
@@ -1714,7 +1789,12 @@ function createRuntimeSessionController(options = {}) {
     return generationsMatch(status);
   }
 
-  async function activateRuntimeForRecovery(epoch) {
+  async function activateRuntimeForRecovery(
+    epoch,
+    activationDeadline =
+      monotonicNow() + deadlineForOperation("audio.activate"),
+    callbackReady = false,
+  ) {
     if (
       recoveryEpoch !== epoch ||
       epoch.activationStarted ||
@@ -1726,7 +1806,14 @@ function createRuntimeSessionController(options = {}) {
     epoch.activationStarted = true;
     epoch.contextUsable = true;
     try {
-      await boundedRequest("audio.activate", {});
+      if (!callbackReady) {
+        const callbackBaseline = readAudioCallbackHeartbeat();
+        await awaitAudioCallbackAfterResume(
+          callbackBaseline, activationDeadline);
+      }
+      await boundedRequest("audio.activate", {}, {
+        deadlineMs: remainingActivationBudget(activationDeadline),
+      });
       if (recoveryEpoch !== epoch || machine.state !== "recovering") {
         return;
       }
@@ -2010,6 +2097,61 @@ function createRuntimeSessionController(options = {}) {
     }
   }
 
+  function acknowledgeSequenceBoundary(boundary) {
+    const pending = pendingSequenceSwitch;
+    if (
+      pending === null ||
+      sequenceBoundaryFlush !== null ||
+      boundary.sessionId !== pending.sessionId ||
+      boundary.patternId !== pending.patternId ||
+      boundary.runtimeFrame !== pending.runtimeFrame ||
+      boundary.generation !== pending.generation
+    ) {
+      return;
+    }
+    const reservation = Object.freeze({pending, boundary});
+    sequenceBoundaryFlush = reservation;
+    const commandId = crypto.randomUUID();
+    void serializeRuntimeAction(async () => {
+      if (
+        sequenceBoundaryFlush !== reservation ||
+        pendingSequenceSwitch !== pending
+      ) {
+        return null;
+      }
+      return commitSequenceBoundaryInLane(
+        "sequence.record.flush", pending.sessionId, commandId,
+      );
+    }).then((result) => {
+      if (result === null || sequenceBoundaryFlush !== reservation) {
+        return;
+      }
+      if (
+        result.state !== "active" ||
+        result.sessionId !== pending.sessionId ||
+        result.patternId !== pending.patternId ||
+        result.pendingPatternId !== null ||
+        result.effectiveRuntimeFrame !== null
+      ) {
+        throw protocolMismatch("Sequence boundary flush authority is invalid");
+      }
+      pendingSequenceSwitch = null;
+      sequenceBoundaryFlush = null;
+      for (const listener of sequenceBoundaryListeners) {
+        try {
+          listener(boundary);
+        } catch {
+          // UI observers cannot alter the authoritative boundary stream.
+        }
+      }
+    }).catch((error) => {
+      if (sequenceBoundaryFlush === reservation) {
+        sequenceBoundaryFlush = null;
+        fail(error);
+      }
+    });
+  }
+
   function observeNotification(rawNotification) {
     let notification;
     try {
@@ -2049,13 +2191,7 @@ function createRuntimeSessionController(options = {}) {
         runtimeFrame: value.runtime_frame,
         generation: value.generation,
       });
-      for (const listener of sequenceBoundaryListeners) {
-        try {
-          listener(boundary);
-        } catch {
-          // UI observers cannot alter the authoritative boundary stream.
-        }
-      }
+      acknowledgeSequenceBoundary(boundary);
       return;
     }
     if (notification.event === "runtime.warning") {
@@ -2113,6 +2249,47 @@ function createRuntimeSessionController(options = {}) {
     );
   }
 
+  function readAudioCallbackHeartbeat() {
+    const heartbeat = runtime?.audioCallbackHeartbeat?.();
+    if (
+      !Number.isInteger(heartbeat) ||
+      heartbeat < 0 ||
+      heartbeat > 0xffff_ffff
+    ) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH",
+        "AudioWorklet callback heartbeat is invalid",
+      );
+    }
+    return heartbeat;
+  }
+
+  async function awaitAudioCallbackAfterResume(baseline, deadline) {
+    let heartbeat = readAudioCallbackHeartbeat();
+    while (heartbeat === baseline && monotonicNow() < deadline) {
+      await new Promise((resolvePromise) =>
+        timers.setTimeout(resolvePromise, 0));
+      heartbeat = readAudioCallbackHeartbeat();
+    }
+    if (heartbeat === baseline) {
+      throw typedError(
+        "HOST_TIMEOUT",
+        "AudioWorklet callback did not resume",
+      );
+    }
+  }
+
+  function remainingActivationBudget(deadline) {
+    const remaining = Math.ceil(deadline - monotonicNow());
+    if (remaining <= 0) {
+      throw typedError(
+        "HOST_TIMEOUT",
+        "AudioWorklet activation deadline expired",
+      );
+    }
+    return Math.min(deadlineForOperation("audio.activate"), remaining);
+  }
+
   async function activateAudio(token) {
     if (
       createUserGestureToken.consume(token) !== true ||
@@ -2140,10 +2317,15 @@ function createRuntimeSessionController(options = {}) {
           return false;
         }
       }
+      const activationDeadline =
+        monotonicNow() + deadlineForOperation("audio.activate");
+      const callbackBaseline = readAudioCallbackHeartbeat();
       await audioContext.resume();
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
       }
+      await awaitAudioCallbackAfterResume(
+        callbackBaseline, activationDeadline);
       if (recoveryEpoch !== null) {
         machine.transition("recovering", {
           reason: "recovery_activation",
@@ -2151,7 +2333,8 @@ function createRuntimeSessionController(options = {}) {
         });
         recoveryEpoch.contextUsable = true;
         recoveryEpoch.suspendComplete = true;
-        await activateRuntimeForRecovery(recoveryEpoch);
+        await activateRuntimeForRecovery(
+          recoveryEpoch, activationDeadline, true);
         if (
           closing ||
           visibilityHidden ||
@@ -2162,7 +2345,9 @@ function createRuntimeSessionController(options = {}) {
         }
         return machine.state === "recovering";
       }
-      await boundedRequest("audio.activate", {});
+      await boundedRequest("audio.activate", {}, {
+        deadlineMs: remainingActivationBudget(activationDeadline),
+      });
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
       }
@@ -2296,18 +2481,33 @@ function createRuntimeSessionController(options = {}) {
     if (
       request === null ||
       typeof request !== "object" ||
-      !exactKeys(request, ["sessionId", "patternId", "expectedRevision"]) ||
+      (!exactKeys(request, ["sessionId", "patternId", "expectedRevision"]) &&
+        !exactKeys(request, [
+          "sessionId", "patternId", "expectedRevision", "armedCaptureSlot",
+        ])) ||
       !isUnsignedInteger(request.expectedRevision)
     ) {
       throw new TypeError("Sequence begin request is invalid");
     }
     const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
     const patternId = requireSequenceIdentity(request.patternId, "patternId");
+    let armedCaptureSlot;
+    try {
+      armedCaptureSlot = request.armedCaptureSlot === undefined ||
+          request.armedCaptureSlot === null
+        ? null
+        : flatSlotAddress(request.armedCaptureSlot);
+    } catch (error) {
+      throw new TypeError("Sequence armed capture slot is invalid", {cause: error});
+    }
     return serializeRuntimeAction(async () => {
       const value = await boundedRequest("sequence.record.begin", {
         session_id: sessionId,
         pattern_id: patternId,
         expected_revision: request.expectedRevision,
+        ...(request.armedCaptureSlot === undefined
+          ? {}
+          : {armed_capture_slot: armedCaptureSlot}),
       });
       const mutation = normalizeSequenceMutation(value, ["transport_anchor"]);
       const anchor = value.transport_anchor;
@@ -2320,7 +2520,7 @@ function createRuntimeSessionController(options = {}) {
       ) {
         throw protocolMismatch("Sequence transport anchor is invalid");
       }
-      return Object.freeze({
+      const result = Object.freeze({
         ...mutation,
         transportAnchor: Object.freeze({
           runtimeFrame: anchor.runtime_frame,
@@ -2328,6 +2528,37 @@ function createRuntimeSessionController(options = {}) {
           bpm: anchor.bpm,
         }),
       });
+      pendingSequenceSwitch = null;
+      sequenceBoundaryFlush = null;
+      return result;
+    });
+  }
+
+  function disarmSequenceCapture(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["sessionId", "slot"])
+    ) {
+      return Promise.reject(new TypeError("Sequence capture disarm request is invalid"));
+    }
+    let sessionId;
+    let slot;
+    try {
+      sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
+      slot = flatSlotAddress(request.slot);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return serializeRuntimeAction(async () => {
+      const result = await boundedRequest("sequence.capture.disarm", {
+        session_id: sessionId,
+        slot,
+      });
+      if (!exactKeys(result, ["disarmed"]) || result.disarmed !== true) {
+        throw protocolMismatch("Sequence capture disarm result is invalid");
+      }
+      return true;
     });
   }
 
@@ -2371,6 +2602,45 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  async function commitSequenceBoundaryInLane(operation, sessionId, commandId) {
+    const payload = {
+      session_id: sessionId,
+      command_id: commandId,
+    };
+    let value;
+    try {
+      value = await boundedRequest(operation, payload);
+    } catch (error) {
+      if (
+        operation !== "sequence.record.stop" ||
+        error?.code !== "INVALID_ARGUMENT" ||
+        pendingSequenceSwitch?.sessionId !== sessionId ||
+        sequenceBoundaryFlush === null
+      ) {
+        throw error;
+      }
+      // The authoritative boundary notification can arrive while Stop is
+      // returning a post-commit ambiguity. Replay the same durable identity
+      // inside this lane before the queued boundary flush is allowed to run;
+      // a genuine pre-commit rejection fails again and remains observable.
+      value = await boundedRequest(operation, payload);
+    }
+    const mutation = normalizeSequenceMutation(
+      value,
+      ["runtime_frame", "pattern_publication"],
+    );
+    if (!isUnsignedInteger(value.runtime_frame)) {
+      throw protocolMismatch("Sequence flush clock is invalid");
+    }
+    return Object.freeze({
+      ...mutation,
+      runtimeFrame: value.runtime_frame,
+      patternPublication: normalizePatternPublication(
+        value.pattern_publication,
+      ),
+    });
+  }
+
   function commitSequenceBoundary(operation, request) {
     if (
       request === null ||
@@ -2382,24 +2652,19 @@ function createRuntimeSessionController(options = {}) {
     const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
     const commandId = requireSequenceIdentity(request.commandId, "commandId");
     return serializeRuntimeAction(async () => {
-      const value = await boundedRequest(operation, {
-        session_id: sessionId,
-        command_id: commandId,
-      });
-      const mutation = normalizeSequenceMutation(
-        value,
-        ["runtime_frame", "pattern_publication"],
+      const result = await commitSequenceBoundaryInLane(
+        operation, sessionId, commandId,
       );
-      if (!isUnsignedInteger(value.runtime_frame)) {
-        throw protocolMismatch("Sequence flush clock is invalid");
+      if (
+        pendingSequenceSwitch?.sessionId === sessionId &&
+        (operation === "sequence.record.stop" ||
+          (operation === "sequence.record.flush" &&
+            sequenceBoundaryFlush === null && result.state !== "switching"))
+      ) {
+        pendingSequenceSwitch = null;
+        sequenceBoundaryFlush = null;
       }
-      return Object.freeze({
-        ...mutation,
-        runtimeFrame: value.runtime_frame,
-        patternPublication: normalizePatternPublication(
-          value.pattern_publication,
-        ),
-      });
+      return result;
     });
   }
 
@@ -2429,12 +2694,31 @@ function createRuntimeSessionController(options = {}) {
         session_id: sessionId,
         next_pattern_id: nextPatternId,
       });
-      return Object.freeze({
+      const result = Object.freeze({
         ...normalizeSequenceMutation(value, ["pattern_publication"]),
         patternPublication: normalizePatternPublication(
           value.pattern_publication,
         ),
       });
+      if (
+        result.state !== "switching" ||
+        result.sessionId !== sessionId ||
+        result.pendingPatternId !== nextPatternId ||
+        result.effectiveRuntimeFrame === null ||
+        result.patternPublication === null ||
+        result.patternPublication.activationFrame !==
+          result.effectiveRuntimeFrame
+      ) {
+        throw protocolMismatch("Sequence switch authority is invalid");
+      }
+      pendingSequenceSwitch = Object.freeze({
+        sessionId,
+        patternId: nextPatternId,
+        runtimeFrame: result.effectiveRuntimeFrame,
+        generation: result.patternPublication.generation,
+      });
+      sequenceBoundaryFlush = null;
+      return result;
     });
   }
 
@@ -2648,6 +2932,22 @@ function createRuntimeSessionController(options = {}) {
     return normalizeSampleInspect(result, flatSlot);
   }
 
+  async function querySampleQuota(flatSlot) {
+    const slot = flatSlotAddress(flatSlot);
+    const result = await recoverableQuery("sample.quota", {slot});
+    return normalizeSampleQuota(result, flatSlot);
+  }
+
+  function sampleIngestLimits() {
+    if (verifiedSampleIngestLimits === null) {
+      throw typedError(
+        "HOST_STATE_INVALID",
+        "Verified Sample ingest limits are unavailable",
+      );
+    }
+    return verifiedSampleIngestLimits;
+  }
+
   async function queryWaveform(request) {
     if (
       !exactKeys(request, ["slot", "window"]) ||
@@ -2724,7 +3024,9 @@ function createRuntimeSessionController(options = {}) {
 
   function importAssignSample(file, importOptions = {}) {
     return serializeProjectAction(async () => {
-      const allowedKeys = ["slot", "expectedRevision", "signal", "onProgress"];
+      const allowedKeys = [
+        "slot", "expectedRevision", "sequenceSessionId", "signal", "onProgress",
+      ];
       if (
         importOptions === null ||
         typeof importOptions !== "object" ||
@@ -2732,7 +3034,9 @@ function createRuntimeSessionController(options = {}) {
         Object.keys(importOptions).some((key) => !allowedKeys.includes(key)) ||
         !Object.hasOwn(importOptions, "slot") ||
         !Object.hasOwn(importOptions, "expectedRevision") ||
-        !isUnsignedInteger(importOptions.expectedRevision)
+        !isUnsignedInteger(importOptions.expectedRevision) ||
+        (importOptions.sequenceSessionId !== undefined &&
+          !UUID_PATTERN.test(importOptions.sequenceSessionId))
       ) {
         throw new TypeError("Sample import options are invalid");
       }
@@ -2798,6 +3102,9 @@ function createRuntimeSessionController(options = {}) {
           import_token: importToken,
           command_id: commandId,
           expected_revision: importOptions.expectedRevision,
+          ...(importOptions.sequenceSessionId === undefined
+            ? {}
+            : {sequence_session_id: importOptions.sequenceSessionId}),
           slot,
           asset_id: assetId,
           byte_length: totalBytes,
@@ -3168,15 +3475,27 @@ function createRuntimeSessionController(options = {}) {
       ) {
         throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest identity is invalid");
       }
-      const importedWavBytes =
-        manifestSource?.resourceLimits?.imported_wav_bytes;
-      if (!isPositiveInteger(importedWavBytes)) {
+      const resourceLimits = manifestSource?.resourceLimits;
+      const importedWavBytes = resourceLimits?.imported_wav_bytes;
+      const ingestSourceBytes = resourceLimits?.ingest_source_bytes;
+      const ingestDecodedFrames = resourceLimits?.ingest_decoded_frames;
+      const ingestChannels = resourceLimits?.ingest_channels;
+      if (!isPositiveInteger(importedWavBytes) ||
+          !isPositiveInteger(ingestSourceBytes) ||
+          !isPositiveInteger(ingestDecodedFrames) ||
+          !isPositiveInteger(ingestChannels) || ingestChannels > 2) {
         throw typedError(
           "HOST_PROTOCOL_MISMATCH",
-          "Manifest Sample import limit is invalid",
+          "Manifest Sample ingest limits are invalid",
         );
       }
       verifiedSampleImportLimit = importedWavBytes;
+      verifiedSampleIngestLimits = Object.freeze({
+        sourceBytes: ingestSourceBytes,
+        decodedFrames: ingestDecodedFrames,
+        channels: ingestChannels,
+        artifactBytes: importedWavBytes,
+      });
       const capabilities =
         options.capabilities ??
         (preflight === runPreflight
@@ -3220,6 +3539,7 @@ function createRuntimeSessionController(options = {}) {
     openProject,
     inspectProject,
     beginSequence,
+    disarmSequenceCapture,
     recordSequenceEvent,
     flushSequence,
     stopSequence,
@@ -3231,6 +3551,8 @@ function createRuntimeSessionController(options = {}) {
     applySequenceRecovery,
     discardSequenceRecovery,
     inspectSample,
+    querySampleQuota,
+    sampleIngestLimits,
     queryWaveform,
     updatePad,
     resetPad,

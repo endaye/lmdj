@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-08-26
     occurrence: https://github.com/endaye/lmdj/issues/331
     observed_by: claude-code/fable-5
+  - date: 2026-08-29
+    occurrence: https://github.com/endaye/lmdj/pull/400
+    observed_by: codex/gpt-5
 exit: none
 ---
 

@@ -20,7 +20,10 @@ string(JSON lmdj_web_emsdk_revision GET "${lmdj_web_runtime_identity}" emscripte
 string(JSON lmdj_web_emsdk_tag GET "${lmdj_web_runtime_identity}" emscripten emsdk_tag)
 string(JSON lmdj_web_limit_bank GET "${lmdj_web_runtime_identity}" resource_limits decoded_float_pcm_bytes_per_bank)
 string(JSON lmdj_web_limit_total GET "${lmdj_web_runtime_identity}" resource_limits decoded_float_pcm_bytes_total)
-string(JSON lmdj_web_limit_frames GET "${lmdj_web_runtime_identity}" resource_limits decoded_frames_per_pad)
+string(JSON lmdj_web_limit_resident GET "${lmdj_web_runtime_identity}" resource_limits decoded_float_pcm_bytes_resident)
+string(JSON lmdj_web_limit_ingest_source GET "${lmdj_web_runtime_identity}" resource_limits ingest_source_bytes)
+string(JSON lmdj_web_limit_ingest_frames GET "${lmdj_web_runtime_identity}" resource_limits ingest_decoded_frames)
+string(JSON lmdj_web_limit_ingest_channels GET "${lmdj_web_runtime_identity}" resource_limits ingest_channels)
 string(JSON lmdj_web_limit_import GET "${lmdj_web_runtime_identity}" resource_limits imported_wav_bytes)
 
 add_library(
@@ -96,6 +99,14 @@ if(EMSCRIPTEN)
     PRIVATE
       "${CMAKE_SOURCE_DIR}/packages/application-facade/internal"
   )
+  target_compile_definitions(
+    lmdj_web_runtime_host
+    PRIVATE
+      LMDJ_WEB_LIMIT_ARTIFACT_BYTES=${lmdj_web_limit_import}
+      LMDJ_WEB_LIMIT_USER_BANK_BYTES=${lmdj_web_limit_bank}
+      LMDJ_WEB_LIMIT_GENERATION_BYTES=${lmdj_web_limit_total}
+      LMDJ_WEB_LIMIT_RESIDENT_BYTES=${lmdj_web_limit_resident}
+  )
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
     target_compile_definitions(
       lmdj_web_runtime_host
@@ -103,7 +114,7 @@ if(EMSCRIPTEN)
     )
     set(
       LMDJ_WEB_CONFORMANCE_MANIFEST
-      "{\"assets\":[{\"bytes\":48,\"path\":\"assets/diagnostic-project.0000000000000000000000000000000000000000000000000000000000000000.mjs\",\"role\":\"host_module\",\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"bytes\":49,\"path\":\"assets/input-adapters.1111111111111111111111111111111111111111111111111111111111111111.mjs\",\"role\":\"host_module\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"bytes\":50,\"path\":\"assets/main.2222222222222222222222222222222222222222222222222222222222222222.mjs\",\"role\":\"host_main\",\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},{\"bytes\":51,\"path\":\"assets/preflight.3333333333333333333333333333333333333333333333333333333333333333.mjs\",\"role\":\"host_module\",\"sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\"},{\"bytes\":52,\"path\":\"assets/protocol.4444444444444444444444444444444444444444444444444444444444444444.mjs\",\"role\":\"host_module\",\"sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\"},{\"bytes\":53,\"path\":\"assets/runtime.5555555555555555555555555555555555555555555555555555555555555555.js\",\"role\":\"runtime_script\",\"sha256\":\"5555555555555555555555555555555555555555555555555555555555555555\"},{\"bytes\":54,\"path\":\"assets/runtime.6666666666666666666666666666666666666666666666666666666666666666.wasm\",\"role\":\"runtime_wasm\",\"sha256\":\"6666666666666666666666666666666666666666666666666666666666666666\"},{\"bytes\":55,\"path\":\"assets/state-machine.7777777777777777777777777777777777777777777777777777777777777777.mjs\",\"role\":\"host_module\",\"sha256\":\"7777777777777777777777777777777777777777777777777777777777777777\"},{\"bytes\":56,\"path\":\"assets/styles.8888888888888888888888888888888888888888888888888888888888888888.css\",\"role\":\"host_style\",\"sha256\":\"8888888888888888888888888888888888888888888888888888888888888888\"}],\"distribution_contract\":\"${lmdj_web_host_contract}\",\"emscripten\":{\"emcc_version\":\"${lmdj_web_emcc_version}\",\"emscripten_releases_revision\":\"${lmdj_web_releases_revision}\",\"emsdk_revision\":\"${lmdj_web_emsdk_revision}\",\"emsdk_tag\":\"${lmdj_web_emsdk_tag}\"},\"heap_bytes\":${lmdj_web_heap_bytes},\"host_id\":\"${lmdj_web_host_id}\",\"host_version\":\"${lmdj_web_host_version}\",\"manifest_version\":1,\"platform_version\":\"${lmdj_web_platform_version}\",\"product_build\":\"${lmdj_web_product_build}\",\"protocol_version\":${lmdj_web_protocol_version},\"resource_limits\":{\"decoded_float_pcm_bytes_per_bank\":${lmdj_web_limit_bank},\"decoded_float_pcm_bytes_total\":${lmdj_web_limit_total},\"decoded_frames_per_pad\":${lmdj_web_limit_frames},\"imported_wav_bytes\":${lmdj_web_limit_import}}}"
+      "{\"assets\":[{\"bytes\":48,\"path\":\"assets/diagnostic-project.0000000000000000000000000000000000000000000000000000000000000000.mjs\",\"role\":\"host_module\",\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"bytes\":49,\"path\":\"assets/input-adapters.1111111111111111111111111111111111111111111111111111111111111111.mjs\",\"role\":\"host_module\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"bytes\":50,\"path\":\"assets/main.2222222222222222222222222222222222222222222222222222222222222222.mjs\",\"role\":\"host_main\",\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},{\"bytes\":51,\"path\":\"assets/preflight.3333333333333333333333333333333333333333333333333333333333333333.mjs\",\"role\":\"host_module\",\"sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\"},{\"bytes\":52,\"path\":\"assets/protocol.4444444444444444444444444444444444444444444444444444444444444444.mjs\",\"role\":\"host_module\",\"sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\"},{\"bytes\":53,\"path\":\"assets/runtime.5555555555555555555555555555555555555555555555555555555555555555.js\",\"role\":\"runtime_script\",\"sha256\":\"5555555555555555555555555555555555555555555555555555555555555555\"},{\"bytes\":54,\"path\":\"assets/runtime.6666666666666666666666666666666666666666666666666666666666666666.wasm\",\"role\":\"runtime_wasm\",\"sha256\":\"6666666666666666666666666666666666666666666666666666666666666666\"},{\"bytes\":55,\"path\":\"assets/state-machine.7777777777777777777777777777777777777777777777777777777777777777.mjs\",\"role\":\"host_module\",\"sha256\":\"7777777777777777777777777777777777777777777777777777777777777777\"},{\"bytes\":56,\"path\":\"assets/styles.8888888888888888888888888888888888888888888888888888888888888888.css\",\"role\":\"host_style\",\"sha256\":\"8888888888888888888888888888888888888888888888888888888888888888\"}],\"distribution_contract\":\"${lmdj_web_host_contract}\",\"emscripten\":{\"emcc_version\":\"${lmdj_web_emcc_version}\",\"emscripten_releases_revision\":\"${lmdj_web_releases_revision}\",\"emsdk_revision\":\"${lmdj_web_emsdk_revision}\",\"emsdk_tag\":\"${lmdj_web_emsdk_tag}\"},\"heap_bytes\":${lmdj_web_heap_bytes},\"host_id\":\"${lmdj_web_host_id}\",\"host_version\":\"${lmdj_web_host_version}\",\"manifest_version\":1,\"platform_version\":\"${lmdj_web_platform_version}\",\"product_build\":\"${lmdj_web_product_build}\",\"protocol_version\":${lmdj_web_protocol_version},\"resource_limits\":{\"decoded_float_pcm_bytes_per_bank\":${lmdj_web_limit_bank},\"decoded_float_pcm_bytes_resident\":${lmdj_web_limit_resident},\"decoded_float_pcm_bytes_total\":${lmdj_web_limit_total},\"imported_wav_bytes\":${lmdj_web_limit_import},\"ingest_channels\":${lmdj_web_limit_ingest_channels},\"ingest_decoded_frames\":${lmdj_web_limit_ingest_frames},\"ingest_source_bytes\":${lmdj_web_limit_ingest_source}}}"
     )
     string(
       REPLACE
@@ -140,6 +151,7 @@ if(EMSCRIPTEN)
     _lmdj_web_audio_control_failure_committed
     _lmdj_web_audio_commit_failure
     _lmdj_web_audio_bootstrap_timeout
+    _lmdj_web_audio_callback_heartbeat
   )
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
     list(
@@ -294,6 +306,33 @@ endif()
 
 if(BUILD_TESTING AND NOT EMSCRIPTEN)
   find_package(Threads REQUIRED)
+  add_library(
+    lmdj_web_runtime_control_testable
+    STATIC
+      src/control_runtime.cpp
+  )
+  target_include_directories(
+    lmdj_web_runtime_control_testable
+    PUBLIC
+      "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}/packages/application-facade/internal"
+  )
+  target_link_libraries(
+    lmdj_web_runtime_control_testable
+    PUBLIC
+      lmdj::application
+      lmdj::audio_runtime
+    PRIVATE
+      lmdj_picosha2
+  )
+  target_compile_definitions(
+    lmdj_web_runtime_control_testable
+    PRIVATE LMDJ_WEB_RUNTIME_TESTING=1
+  )
+  lmdj_target_warnings(lmdj_web_runtime_control_testable)
+  lmdj_target_sanitizers(lmdj_web_runtime_control_testable)
+
   add_executable(
     lmdj_web_control_runtime_tests
     test/control_runtime_test.cpp
@@ -309,9 +348,12 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
   target_link_libraries(
     lmdj_web_control_runtime_tests
     PRIVATE
-      lmdj::web_runtime_control
+      lmdj_web_runtime_control_testable
       lmdj_picosha2
       Threads::Threads
+  )
+  target_compile_definitions(
+    lmdj_web_control_runtime_tests PRIVATE LMDJ_WEB_RUNTIME_TESTING=1
   )
   lmdj_target_warnings(lmdj_web_control_runtime_tests)
   lmdj_target_sanitizers(lmdj_web_control_runtime_tests)

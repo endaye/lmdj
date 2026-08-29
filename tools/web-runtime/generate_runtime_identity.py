@@ -277,7 +277,10 @@ def read_policy(repo_root: Path, components: dict[str, dict], toolchain: dict) -
     expected_limit_keys = {
         "decoded_float_pcm_bytes_per_bank",
         "decoded_float_pcm_bytes_total",
-        "decoded_frames_per_pad",
+        "decoded_float_pcm_bytes_resident",
+        "ingest_source_bytes",
+        "ingest_decoded_frames",
+        "ingest_channels",
         "imported_wav_bytes",
     }
     if not isinstance(limits, dict) or set(limits) != expected_limit_keys or any(

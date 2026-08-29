@@ -26,6 +26,15 @@ async function installSequenceProofRecorder(page) {
                 error: response?.error ?? null,
               };
             }
+            if (request?.operation === "sequence.record.flush") {
+              window.__sequenceFlushProof ??= [];
+              window.__sequenceFlushProof.push({
+                payload: request.payload,
+                ok: response?.ok ?? null,
+                result: response?.result ?? null,
+                error: response?.error ?? null,
+              });
+            }
             return response;
           },
           subscribe(...arguments_) {
@@ -71,8 +80,6 @@ test("Sequence authors settings, records unified input, requests a Bar switch, a
   await installSequenceProofRecorder(page);
   await page.goto("/index.html");
   await importProject(page);
-  await page.getByRole("button", {name: "Activate audio"}).click();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {timeout: 30_000});
   await page.getByRole("button", {name: "Sequence"}).click();
   await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
 
@@ -92,13 +99,19 @@ test("Sequence authors settings, records unified input, requests a Bar switch, a
   await page.getByRole("button", {name: "Apply Swing"}).click();
   await expect(page.getByRole("status", {name: "Swing 60"})).toBeVisible({timeout: 30_000});
 
+  // Authoring settings while stopped makes their prepared Pattern current
+  // before the switch proof starts. A live BPM publication intentionally owns
+  // the next-Bar slot and is a separate concurrency scenario.
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {timeout: 30_000});
   await page.getByRole("button", {name: "Record"}).click();
   await expect(page.getByRole("status").filter({hasText: "recording"})).toBeVisible();
+  const recordedPattern = await pattern.inputValue();
   await page.keyboard.press("KeyQ");
   await pattern.selectOption(originalPattern);
-  // Headless browser audio is not physical Bar-timing acceptance. Prove that
-  // the real Host acknowledges the request; Core owns the deterministic
-  // boundary-activation proof.
+  await expect(page.getByRole("status").filter({hasText: "switch-pending"}))
+    .toBeVisible();
+  await expect(pattern).toHaveValue(recordedPattern);
   await expect.poll(() => page.evaluate(() =>
     window.__sequenceSwitchProof ?? null), {timeout: 30_000}).toMatchObject({
       ok: true,
@@ -108,7 +121,25 @@ test("Sequence authors settings, records unified input, requests a Bar switch, a
       },
       error: null,
     });
+  await expect(page.getByRole("status").filter({hasText: "recording"}))
+    .toBeVisible({timeout: 30_000});
+  await expect(pattern).toHaveValue(originalPattern);
+  await expect.poll(() => page.evaluate(() =>
+    window.__sequenceFlushProof ?? []), {timeout: 30_000}).toHaveLength(1);
+  await expect.poll(() => page.evaluate(() =>
+    window.__sequenceFlushProof?.[0] ?? null)).toMatchObject({
+      ok: true,
+      result: {
+        state: "active",
+        pattern_id: originalPattern,
+        pending_pattern_id: null,
+        effective_runtime_frame: null,
+      },
+      error: null,
+    });
+  await page.keyboard.press("KeyW");
   await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
   await page.getByRole("button", {name: "Stop"}).click();
   await expect(page.getByRole("status").filter({hasText: "stopped"}))
     .toBeVisible({timeout: 30_000});

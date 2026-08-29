@@ -20,7 +20,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tools.release.audit import AuditContext, audit, format_report, write_report  # noqa: E402
+from tools.release.audit import (  # noqa: E402
+    AuditContext, AuditReport, audit, format_report, write_report,
+)
 import tools.release.audit as audit_module  # noqa: E402
 from tools.release.commands import CommandRunner  # noqa: E402
 from tools.release.git_repository import GitRepositoryError  # noqa: E402
@@ -275,6 +277,41 @@ class ReleaseAuditFixture:
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def assert_audit_passes(self, report: AuditReport) -> None:
+        """Fail with the audit's own rendered findings, not a bare `1 != 0`.
+
+        `exit_code` collapses every reason into one integer, so
+        `assertEqual(report.exit_code, 0)` names neither the failing subject
+        nor the rule it broke; diagnosing one costs a separate local rerun of
+        the whole audit. `format_report` is the same sanitized rendering the
+        CLI emits, so the failure carries the reason at the point it is read.
+        """
+        if report.exit_code == 0:
+            return
+        if report.findings:
+            observed = "at least one finding carries a non-success code"
+            remedy = (
+                "fix the subject named below, or -- when the finding is "
+                "checkout-dependent rather than a real defect -- isolate it in "
+                "the fixture, as "
+                "test_repository_local_audit_does_not_assume_current_intent_count"
+                " isolates the pre-squash intent target."
+            )
+        else:
+            observed = "the audit produced no findings at all"
+            remedy = (
+                "an audit that reaches no conclusion is itself the defect: "
+                "check that the fixture supplies the ledger, manifest, and "
+                "intent projections this audit mode reads."
+            )
+        self.fail(
+            f"why: release audit exit_code is {report.exit_code}, not 0. An "
+            f"audit passes only when it has findings and every code is a "
+            f"success code; here {observed}.\n"
+            f"remedy: {remedy}\n"
+            f"{format_report(report)}"
+        )
 
     def entry(
         self,
@@ -971,7 +1008,7 @@ class ReleaseAuditTest(ReleaseAuditFixture, unittest.TestCase):
         report = audit(self.context([], [exception]), remote=True, tag=tag)
         self.assertEqual([item.code for item in report.findings], ["ok-with-historical-exception"])
         self.assertIn("fixture predates", report.findings[0].message)
-        self.assertEqual(report.exit_code, 0)
+        self.assert_audit_passes(report)
 
     def test_linked_exception_marker_waiver_requires_exact_release_id(self) -> None:
         tag = str(self.entry()["tag"])
@@ -1617,6 +1654,25 @@ class ReleaseAuditIntegrationTest(ReleaseAuditFixture, unittest.TestCase):
         self.assertEqual({item.code for item in report.findings}, {"ok"})
 
     def test_repository_local_audit_does_not_assume_current_intent_count(self) -> None:
+        run = subprocess.run
+
+        def present_intent_target(command, **kwargs):
+            if command[:5] != ["git", "-C", str(ROOT), "cat-file", "-e"]:
+                return run(command, **kwargs)
+            self.assertEqual(
+                command[:5], ["git", "-C", str(ROOT), "cat-file", "-e"],
+            )
+            self.assertRegex(command[5], r"^[0-9a-f]{40}\^\{commit\}$")
+            self.assertEqual(
+                kwargs,
+                {
+                    "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.DEVNULL,
+                    "check": False,
+                },
+            )
+            return subprocess.CompletedProcess(command, 0)
+
         context = replace(
             cli.build_audit_context(ROOT),
             # Canonical key import is covered independently; this integration
@@ -1624,16 +1680,26 @@ class ReleaseAuditIntegrationTest(ReleaseAuditFixture, unittest.TestCase):
             # projections that dominate the zero-intent behavior under test.
             trust_anchor_verifier=lambda root, policy: None,
         )
-        with patch.object(
-            context.git,
-            "validate_current_product_snapshot",
-            # The corruption matrix below owns the real provenance command;
-            # this test keeps the repository's manifest, lock, inventory, and
-            # ledger projections real while isolating the intent-count rule.
-            return_value=None,
+        with (
+            patch.object(
+                context.git,
+                "validate_current_product_snapshot",
+                # The corruption matrix below owns the real provenance command;
+                # this test keeps the repository's manifest, lock, inventory,
+                # and ledger projections real while isolating the intent-count
+                # rule.
+                return_value=None,
+            ),
+            patch(
+                "tools.release.audit.subprocess.run",
+                # Fresh CI clones intentionally lack pre-squash intent targets.
+                # Object availability has its own fail-closed unit test; it must
+                # not make this intent-count integration test checkout-dependent.
+                side_effect=present_intent_target,
+            ),
         ):
             report = audit(context, remote=False)
-            self.assertEqual(report.exit_code, 0)
+            self.assert_audit_passes(report)
 
     def test_zero_intent_local_and_remote_audits_reject_corrupt_snapshot_provenance(self) -> None:
         cases = (

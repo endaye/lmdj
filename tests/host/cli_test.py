@@ -738,6 +738,25 @@ def sample_facade_contract(
         "channels": 1,
         "source_frames": 8,
     }
+    quota = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "sample.quota",
+            "project_path": str(project),
+            "slot": slot(0, 0),
+        },
+    )
+    check_success(quota, 2)
+    assert quota["result"]["effective_remaining_frames"] == 16_777_216
+    assert quota["result"]["consumed"] == [
+        {
+            "slot": slot(0, 0),
+            "prepared_bytes": 36,
+            "prepared_frames": 9,
+        }
+    ]
     waveform = run_request(
         executable,
         workspace,

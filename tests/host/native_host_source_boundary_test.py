@@ -40,8 +40,8 @@ def main() -> int:
         (source_root / "module.json").read_text(encoding="utf-8")
     )
     assert manifest["dependencies"] == {
-        "application-facade": "2.0.0",
-        "audio-runtime": "1.0.0",
+        "application-facade": "2.1.1",
+        "audio-runtime": "2.0.1",
     }
 
     logical_dependencies = {

@@ -30,6 +30,9 @@ recurrences:
   - date: 2026-08-28
     occurrence: https://github.com/endaye/lmdj/pull/382
     observed_by: Codex
+  - date: 2026-08-28
+    occurrence: https://github.com/endaye/lmdj/pull/398
+    observed_by: Claude Code (Opus 5)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -50,6 +53,15 @@ body edit needs a fresh pull_request event (a rerun reuses the stale payload),
 turning a formatting slip into three diagnosis round-trips. Each was
 written as a one-off repair of one message, so the next new gate repeated the
 omission.
+
+The tenth occurrence (PR #398) shows the pattern is not confined to gates
+authored as gates. `tests/build/release_audit_test.py` asserted
+`assertEqual(report.exit_code, 0)` on a whole release audit; `exit_code`
+collapses every rule into one integer, so a macOS-only failure printed nothing
+but `AssertionError: 1 != 0`. Establishing that the cause was a fresh clone
+lacking a pre-squash intent target -- not the change under review -- took a
+separate local checkout of the exact validated commit and a full rerun. A
+sanitized `format_report(report)` was already available at that call site.
 
 The invariant is not mechanically decidable — no test can judge whether prose
 is actionable — so it exits to guidance at the point where a gate is authored

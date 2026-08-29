@@ -77,6 +77,33 @@ export interface SampleInspect {
   waveformCacheIdentity: string | null;
 }
 
+export interface SampleQuotaConsumption {
+  slot: number;
+  preparedBytes: number;
+  preparedFrames: number;
+}
+
+export interface SampleQuota {
+  projectRevision: number;
+  slot: number;
+  bankQuotaBytes: number;
+  bankUsedBytes: number;
+  bankRemainingBytes: number;
+  projectQuotaBytes: number;
+  projectUsedBytes: number;
+  projectRemainingBytes: number;
+  effectiveRemainingBytes: number;
+  effectiveRemainingFrames: number;
+  consumed: readonly Readonly<SampleQuotaConsumption>[];
+}
+
+export interface SampleIngestLimits {
+  sourceBytes: number;
+  decodedFrames: number;
+  channels: number;
+  artifactBytes: number;
+}
+
 export interface WaveformWindow {
   startFrame: number;
   endFrame: number;
@@ -117,6 +144,7 @@ export interface SampleCommit {
 export interface SampleImportOptions {
   slot: number;
   expectedRevision: number;
+  sequenceSessionId?: string;
   signal?: AbortSignal;
   onProgress?: (progress: TransferProgress) => void;
 }
@@ -221,6 +249,8 @@ export interface CreatorRuntimeSession {
 
 export interface CreatorSampleRuntimeSession extends CreatorRuntimeSession {
   inspectSample(slot: number): Promise<SampleInspect>;
+  querySampleQuota(slot: number): Promise<SampleQuota>;
+  sampleIngestLimits(): Readonly<SampleIngestLimits>;
   queryWaveform(request: WaveformQuery): Promise<WaveformEnvelope>;
   importAssignSample(
     file: File,
@@ -302,11 +332,16 @@ export interface CreatorSequenceRuntimeSession extends CreatorSampleRuntimeSessi
     sessionId: string;
     patternId: string;
     expectedRevision: number;
+    armedCaptureSlot?: number | null;
   }): Promise<SequenceMutation & {transportAnchor: {
     runtimeFrame: number;
     tickNumerator: number;
     bpm: number;
   }}>;
+  disarmSequenceCapture(request: {
+    sessionId: string;
+    slot: number;
+  }): Promise<boolean>;
   flushSequence(request: {sessionId: string; commandId: string}): Promise<SequenceMutation>;
   stopSequence(request: {sessionId: string; commandId: string}): Promise<SequenceMutation>;
   requestPatternSwitch(request: {

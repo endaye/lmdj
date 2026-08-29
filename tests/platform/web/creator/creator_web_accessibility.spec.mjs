@@ -130,7 +130,7 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   expect(manifest.distribution_contract).toBe("lmdj.creator-web.distribution.v1");
   expect(manifest.compatible_hosts).toEqual([
-    {host_id: "web-runtime-host", host_version: "2.0.0"},
+    {host_id: "web-runtime-host", host_version: "2.1.1"},
   ]);
   // capture_worklet ships as its own same-origin asset because the CSP below
   // (script-src 'self') rejects blob:/data: AudioWorklet module URLs.
@@ -206,7 +206,10 @@ for (const viewport of [
     await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
     const picker = page.locator("input.sample-file-input");
     await expect(picker).toHaveCount(1);
-    await expect(picker).toHaveAttribute("accept", ".wav,audio/wav,audio/wave");
+    await expect(picker).toHaveAttribute(
+      "accept",
+      ".wav,.mp3,.m4a,.aac,.flac,audio/wav,audio/wave,audio/mpeg,audio/mp4,audio/aac,audio/flac",
+    );
     const samplePads = page.getByRole("button", {name: /^Pad A\d+ — assigned$/});
     await expect(samplePads).toHaveCount(16);
     for (let index = 0; index < 16; index += 1) {

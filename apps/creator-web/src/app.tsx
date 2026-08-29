@@ -23,7 +23,9 @@ import {createCreatorInputController} from "./runtime/input_controller";
 import {retryPrepareJourney} from "./runtime/sample_actions";
 import {
   beginSequenceJourney,
+  disarmSequenceCaptureJourney,
   isSequenceSession,
+  reconcileSequenceAuthoringRevision,
   refreshSequenceJourney,
   stopSequenceJourney,
 } from "./runtime/sequence_actions";
@@ -89,6 +91,8 @@ const SAMPLE_ERROR_CODES = new Set([
   "MISSING_ASSET",
   "INVALID_PROJECT",
   "COOK_FAILED",
+  "BANK_QUOTA_EXHAUSTED",
+  "PROJECT_QUOTA_EXHAUSTED",
   "PROVIDER_NOT_FOUND",
   "PROVIDER_FAILED",
   "PERMISSION_DENIED",
@@ -122,6 +126,8 @@ function isSampleSession(
   const candidate = session as Partial<CreatorSampleRuntimeSession> | undefined;
   return candidate !== undefined &&
     typeof candidate.inspectSample === "function" &&
+    typeof candidate.querySampleQuota === "function" &&
+    typeof candidate.sampleIngestLimits === "function" &&
     typeof candidate.queryWaveform === "function" &&
     typeof candidate.importAssignSample === "function" &&
     typeof candidate.updatePad === "function" &&
@@ -175,7 +181,7 @@ function Workspace({
     sequenceAuthoringProjectId.current = state.project.current?.projectId ?? null;
     sequenceAuthoringRevision.current = state.project.current?.revision ?? 0;
   } else {
-    sequenceAuthoringRevision.current = Math.max(
+    sequenceAuthoringRevision.current = reconcileSequenceAuthoringRevision(
       sequenceAuthoringRevision.current,
       state.project.current?.revision ?? 0,
       sequence.status?.expectedRevision ?? 0,
@@ -632,6 +638,11 @@ function Workspace({
     if (!isSequenceSession(session) || project === null) return;
     try {
       const authority = await refreshSequenceJourney(session, project.projectId);
+      sequenceAuthoringRevision.current = reconcileSequenceAuthoringRevision(
+        sequenceAuthoringRevision.current,
+        project.revision,
+        authority.status.expectedRevision,
+      );
       dispatchSequence({type: "authority", status: authority.status});
       dispatchSequence({type: "recovery", candidates: authority.recovery});
     } catch (error) {
@@ -650,6 +661,7 @@ function Workspace({
         sessionId,
         patternId: sequence.selectedPatternId ?? project.patternId,
         expectedRevision: sequenceAuthoringRevision.current,
+        armedCaptureSlot: armedCaptureSlotRef.current,
       });
       dispatchSequence({type: "recording", status, sessionId});
     } catch (error) {
@@ -684,9 +696,7 @@ function Workspace({
 
   const stopArmedCapture = async () => {
     const current = sequenceRef.current;
-    if (["recording", "switch-pending", "flushing"].includes(current.phase)) {
-      if (current.phase === "flushing" || !(await stopSequence())) return;
-    }
+    if (current.phase === "flushing") return;
     setCaptureStopRequest((request) => request + 1);
   };
   armedCaptureStopIntent.current = () => { void stopArmedCapture(); };
@@ -748,9 +758,35 @@ function Workspace({
     if (phase === "trimming" || phase === "commit-error" || phase === "committing") {
       dispatchSequence({type: "trim-overlay"});
     } else if (phase === "idle" || phase === "permission-error") {
-      dispatchSequence({type: "trim-closed"});
+      const currentSequence = sequenceRef.current;
+      const slot = armedCaptureSlotRef.current;
+      if (isSequenceSession(session) && currentSequence.sessionId !== null && slot !== null) {
+        void disarmSequenceCaptureJourney(
+          session, currentSequence.sessionId, slot,
+        ).then(async () => {
+          const project = stateRef.current.project.current;
+          if (project !== null) {
+            const authority = await refreshSequenceJourney(
+              session, project.projectId,
+            );
+            sequenceAuthoringRevision.current = reconcileSequenceAuthoringRevision(
+              sequenceAuthoringRevision.current,
+              project.revision,
+              authority.status.expectedRevision,
+            );
+            dispatchSequence({type: "authority", status: authority.status});
+            dispatchSequence({type: "recovery", candidates: authority.recovery});
+          }
+          dispatchSequence({type: "trim-closed"});
+        }, (error) => {
+          dispatchSequence({type: "failed", errorCode: errorCode(error)});
+          dispatchSequence({type: "trim-closed"});
+        });
+      } else {
+        dispatchSequence({type: "trim-closed"});
+      }
     }
-  }, []);
+  }, [session]);
 
   const selectSequencePattern = async (patternId: string) => {
     if (!isSequenceSession(session)) return;
@@ -907,7 +943,8 @@ function Workspace({
         </>
       ) : null}
       {activeMode === "sample" || armedCaptureSlot !== null ||
-      sequence.phase === "trim-overlay" ? (
+      sequence.phase === "trim-overlay" ||
+      (activeMode === "sequence" && state.sampleProjectionRefresh !== null) ? (
         <div className={sequence.phase === "trim-overlay" ? "sample-overlay-host" : ""}
           hidden={activeMode !== "sample" && sequence.phase !== "trim-overlay"}>
           <SampleSurface
@@ -915,7 +952,16 @@ function Workspace({
             dispatch={dispatch}
             filePickIntent={sampleFilePickIntent}
             captureStopRequest={captureStopRequest}
+            captureBackgrounded={activeMode !== "sample" &&
+              sequence.phase !== "trim-overlay"}
             closeCaptureAfterResolution={activeMode !== "sample"}
+            {...(sequence.sessionId !== null && sequence.phase === "trim-overlay" &&
+              sequence.status !== null
+              ? {sequenceCapture: {
+                  sessionId: sequence.sessionId,
+                  expectedRevision: sequence.status.expectedRevision,
+                }}
+              : {})}
             onCaptureSlotChange={setArmedCaptureSlot}
             onCapturePhaseChange={capturePhaseChanged}
             onContinueCaptureInSequence={() => {

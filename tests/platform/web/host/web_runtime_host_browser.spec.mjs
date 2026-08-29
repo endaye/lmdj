@@ -2380,7 +2380,7 @@ test("Chromium claimed asset.import publication hang becomes restart-required an
 });
 
 
-test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer status", async ({
+test("Stage 9 Chromium records across an acknowledged switch, reloads, and exposes observer status", async ({
   browserName,
   context,
   page,
@@ -2444,7 +2444,7 @@ test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer
     state: "active",
     sessionId: firstSessionId,
     patternId: descriptor.pattern_id,
-    pendingEventCount: 0,
+    pendingEventCount: 1,
   });
   expect(await hostRequest(observer, "project.open", {
     project_id: descriptor.project_id,
@@ -2473,6 +2473,45 @@ test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer
     replayed: true,
   });
 
+  await page.reload();
+  await expect(page.locator("#host-state")).toHaveText("audio-suspended");
+  await page.locator("#diagnostic-project-load").click();
+  await waitForDiagnosticProjectReady(page);
+  const persistedStatus = await page.evaluate((projectId) =>
+    window.lmdjWebRuntimeController.querySequenceStatus(projectId),
+  descriptor.project_id);
+  expect(persistedStatus).toMatchObject({
+    state: "inactive",
+    pendingEventCount: 0,
+  });
+  expect(success(await hostRequest(page, "sequence.recovery.list", {}),
+    "Stage 9 recovery after first Stop reload").candidates).toEqual([]);
+  const persistedAfterStop = success(
+    await hostRequest(page, "project.inspect", {}),
+    "Stage 9 first Stop truth after page and Worker reload",
+  );
+  expect(persistedAfterStop.project_revision).toBe(stopped.committedRevision);
+  const persistedEvent =
+    persistedAfterStop.project.patterns[descriptor.pattern_id].events;
+  expect(persistedEvent).toHaveLength(1);
+  expect(persistedEvent[0]).toMatchObject({
+    slot: {bank: 0, pad: 0},
+    velocity: 100,
+  });
+  expect(persistedEvent[0].duration_tick).toBeGreaterThan(0);
+  await activateWithGesture(page);
+
+  const nextPatternId = crypto.randomUUID();
+  const created = await page.evaluate(({patternId, expectedRevision}) =>
+    window.lmdjWebRuntimeController.createPattern({
+      patternId,
+      bars: 1,
+      expectedRevision,
+    }), {
+    patternId: nextPatternId,
+    expectedRevision: stopped.committedRevision,
+  });
+  expect(created.committedRevision).toBe(stopped.committedRevision + 1);
   const secondSessionId = crypto.randomUUID();
   const secondCommandId = crypto.randomUUID();
   await page.evaluate(({sessionId, patternId, expectedRevision}) =>
@@ -2483,25 +2522,148 @@ test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer
     }), {
     sessionId: secondSessionId,
     patternId: descriptor.pattern_id,
-    expectedRevision: stopped.committedRevision,
+    expectedRevision: created.committedRevision,
   });
-  await page.evaluate(async ({sessionId}) => {
+  await page.evaluate(() => {
+    window.__sequenceBoundaries = [];
+    window.lmdjWebRuntimeController.subscribeSequenceBarBoundary((boundary) => {
+      window.__sequenceBoundaries.push(boundary);
+    });
+  });
+  await page.evaluate(async ({sessionId, nextPatternId}) => {
     await window.lmdjWebRuntimeController.recordSequenceEvent({
       sessionId, slot: 1, velocity: 127, pressed: true,
     });
     await window.lmdjWebRuntimeController.recordSequenceEvent({
       sessionId, slot: 1, velocity: 0, pressed: false,
     });
+    return window.lmdjWebRuntimeController.requestPatternSwitch({
+      sessionId, nextPatternId,
+    });
+  }, {sessionId: secondSessionId, nextPatternId});
+  await expect.poll(() => page.evaluate(() => window.__sequenceBoundaries), {
+    timeout: 30_000,
+  }).toEqual([expect.objectContaining({
+    sessionId: secondSessionId,
+    patternId: nextPatternId,
+  })]);
+  const continued = await page.evaluate(async ({sessionId}) => {
+    const press = await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 2, velocity: 90, pressed: true,
+    });
+    const release = await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 2, velocity: 0, pressed: false,
+    });
+    return {press, release};
   }, {sessionId: secondSessionId});
-  const overdubbed = await page.evaluate(({sessionId, commandId}) =>
+  expect(continued.press).toMatchObject({
+    state: "active",
+    patternId: nextPatternId,
+  });
+  const switchedStop = await page.evaluate(({sessionId, commandId}) =>
     window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
   {sessionId: secondSessionId, commandId: secondCommandId});
-  expect(overdubbed).toMatchObject({
-    committedRevision: stopped.committedRevision + 1,
+  expect(switchedStop).toMatchObject({
+    committedRevision: created.committedRevision + 2,
     replayed: false,
   });
+
+  const cancelledSessionId = crypto.randomUUID();
+  const cancelledCommandId = crypto.randomUUID();
+  await page.evaluate(({sessionId, patternId, expectedRevision}) =>
+    window.lmdjWebRuntimeController.beginSequence({
+      sessionId, patternId, expectedRevision,
+    }), {
+    sessionId: cancelledSessionId,
+    patternId: nextPatternId,
+    expectedRevision: switchedStop.committedRevision,
+  });
+  await page.evaluate(() => {
+    window.__sequenceBoundaries = [];
+  });
+  await page.evaluate(async ({sessionId, nextPatternId}) => {
+    await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 3, velocity: 80, pressed: true,
+    });
+    await window.lmdjWebRuntimeController.recordSequenceEvent({
+      sessionId, slot: 3, velocity: 0, pressed: false,
+    });
+    return window.lmdjWebRuntimeController.requestPatternSwitch({
+      sessionId, nextPatternId,
+    });
+  }, {sessionId: cancelledSessionId, nextPatternId: descriptor.pattern_id});
+  const rejectedBpm = await page.evaluate(async ({
+    sessionId, expectedRevision,
+  }) => {
+    try {
+      await window.lmdjWebRuntimeController.updateSequenceSettings({
+        expectedRevision,
+        sessionId,
+        bpm: 90,
+        quantizeEnabled: null,
+        swingPercent: null,
+      });
+      return null;
+    } catch (error) {
+      return {code: error.code, message: error.message};
+    }
+  }, {
+    sessionId: cancelledSessionId,
+    expectedRevision: switchedStop.committedRevision,
+  });
+  expect(rejectedBpm).toMatchObject({code: "INVALID_ARGUMENT"});
+  const cancelledStopAttempt = await page.evaluate(async ({
+    sessionId, commandId,
+  }) => {
+    try {
+      return {
+        result: await window.lmdjWebRuntimeController.stopSequence({
+          sessionId, commandId,
+        }),
+        error: null,
+      };
+    } catch (error) {
+      return {result: null, error: {code: error.code, message: error.message}};
+    }
+  }, {sessionId: cancelledSessionId, commandId: cancelledCommandId});
+  let cancelledStop = cancelledStopAttempt.result;
+  if (cancelledStopAttempt.error !== null) {
+    // The realtime Pattern boundary may win the Stop linearization race. The
+    // durable Stop receipt must remain replayable with the same command ID.
+    expect(cancelledStopAttempt.error).toMatchObject({code: "INVALID_ARGUMENT"});
+    cancelledStop = await page.evaluate(({sessionId, commandId}) =>
+      window.lmdjWebRuntimeController.stopSequence({sessionId, commandId}),
+    {sessionId: cancelledSessionId, commandId: cancelledCommandId});
+    expect(cancelledStop.replayed).toBe(true);
+  }
+  expect(cancelledStop).toMatchObject({
+    state: "inactive",
+    committedRevision: switchedStop.committedRevision + 1,
+  });
+  await page.waitForTimeout(2_500);
+  const cancelledBoundaries = await page.evaluate(() =>
+    window.__sequenceBoundaries);
+  if (cancelledStopAttempt.error === null) {
+    expect(cancelledBoundaries).toEqual([]);
+    // Stop can either return its first response or repair a post-commit
+    // boundary ambiguity by replaying the same durable command identity
+    // inside the Runtime action lane. Both settle before the queued boundary
+    // and must leave no target notification or duplicate Project mutation.
+    expect([false, true]).toContain(cancelledStop.replayed);
+  } else {
+    // Boundary notification delivery may itself race the fail-closed Runtime
+    // clear. If it was already delivered, it must name the crossed target.
+    expect(cancelledBoundaries.length).toBeLessThanOrEqual(1);
+    if (cancelledBoundaries.length === 1) {
+      expect(cancelledBoundaries[0]).toMatchObject({
+        sessionId: cancelledSessionId,
+        patternId: descriptor.pattern_id,
+      });
+    }
+  }
+
   const truth = success(await hostRequest(page, "project.inspect", {}),
-    "Stage 9 inspect overdub truth");
+    "Stage 9 inspect switch truth");
   const pattern = truth.project.patterns[descriptor.pattern_id];
   expect(pattern.events).toHaveLength(2);
   expect(pattern.events.map(({slot}) => `${slot.bank}:${slot.pad}`).sort())
@@ -2510,10 +2672,23 @@ test("Stage 9 Chromium records, overdubs, replays, reloads, and exposes observer
     left - right)).toEqual([100, 127]);
   expect(pattern.events.every(({duration_tick: durationTick}) =>
     durationTick > 0)).toBe(true);
+  const switchedPattern = truth.project.patterns[nextPatternId];
+  expect(switchedPattern.events).toHaveLength(2);
+  // Canonical Pattern order is onset-first. These events were recorded in
+  // separate sessions, so a loop wrap can legitimately place either Pad
+  // first even though both identities and values must survive.
+  expect(switchedPattern.events.map(({slot, velocity}) => ({slot, velocity}))
+    .sort((left, right) => left.slot.pad - right.slot.pad)).toEqual([
+    {slot: {bank: 0, pad: 2}, velocity: 90},
+    {slot: {bank: 0, pad: 3}, velocity: 80},
+  ]);
+  expect(switchedPattern.events.every(({duration_tick: durationTick}) =>
+    durationTick > 0)).toBe(true);
   expect(success(await hostRequest(page, "snapshot.reload", {
-    pattern_id: descriptor.pattern_id,
+    pattern_id: nextPatternId,
   }), "Stage 9 reload-visible truth")).toMatchObject({
-    project_revision: overdubbed.committedRevision,
+    project_revision: cancelledStop.committedRevision,
+    pattern_id: nextPatternId,
     runtime_ready: true,
   });
   expect(await page.evaluate(() =>

@@ -640,6 +640,92 @@ describe("Creator Sample state", () => {
     });
   });
 
+  test("contains non-snapshot Host protocol details without blanking Creator", () => {
+    let state = beginSamplePending(inspectedState(), {
+      kind: "import",
+      slot: 17,
+      expectedRevision: 42,
+    });
+    state = reduceSampleState(state, {
+      type: "operation-failed",
+      pending: state.pendingAction,
+      error: {
+        code: "HOST_PROTOCOL_MISMATCH",
+        message: "Host operation payload is invalid",
+        details: {operation: "sample.import.begin"},
+      },
+    });
+
+    expect(state.pendingAction).toBeNull();
+    expect(state.lastError).toEqual({
+      code: "HOST_PROTOCOL_MISMATCH",
+      message: "Sample Host response was invalid",
+      retryPrepare: false,
+      details: {},
+    });
+  });
+
+  test("keeps malformed quota operation details fail-closed", () => {
+    const state = beginSamplePending(inspectedState(), {
+      kind: "import",
+      slot: 17,
+      expectedRevision: 42,
+    });
+    expect(() => reduceSampleState(state, {
+      type: "operation-failed",
+      pending: state.pendingAction,
+      error: {
+        code: "BANK_QUOTA_EXHAUSTED",
+        message: "opaque Host wording",
+        details: {},
+      },
+    })).toThrow("Sample Bank quota details are invalid");
+  });
+
+  test.each([
+    ["BANK_QUOTA_EXHAUSTED", {
+      bank: 0,
+      requested_bytes: 67_108_868,
+      requested_frames: 16_777_217,
+      remaining_bytes: 67_108_864,
+      remaining_frames: 16_777_216,
+      quota_bytes: 67_108_864,
+      consumed: [],
+    }],
+    ["PROJECT_QUOTA_EXHAUSTED", {
+      requested_bytes: 4,
+      requested_frames: 1,
+      project_used_bytes: 134_217_728,
+      project_remaining_bytes: 0,
+      project_quota_bytes: 134_217_728,
+      banks: [
+        {bank: 0, prepared_bytes: 67_108_864},
+        {bank: 1, prepared_bytes: 67_108_864},
+      ],
+    }],
+  ] as const)("preserves valid %s operation details", (code, details) => {
+    let state = beginSamplePending(inspectedState(), {
+      kind: "import",
+      slot: 17,
+      expectedRevision: 42,
+    });
+    state = reduceSampleState(state, {
+      type: "operation-failed",
+      pending: state.pendingAction,
+      error: {code, message: "opaque Host wording", details},
+    });
+
+    expect(state.pendingAction).toBeNull();
+    expect(state.lastError).toEqual({
+      code,
+      message: code === "BANK_QUOTA_EXHAUSTED"
+        ? "Selection exceeds this Bank quota; shorten it, free another Pad, or use another Bank"
+        : "Selection exceeds the Project quota; shorten it or free prepared Samples",
+      retryPrepare: false,
+      details,
+    });
+  });
+
   test("fails a rejected preview without requiring or changing mutation pending truth", () => {
     const draft = updateSampleDraft(beginSampleDraft(saved, 42), {
       trimStartFrame: 120,
@@ -909,9 +995,7 @@ describe("Creator Sample state", () => {
       {actual_revision: 43, expected_revision: 42},
       ...[
         "artifact_bytes",
-        "decoded_frames_per_pad",
-        "prepared_bank_bytes",
-        "live_bank_bytes",
+        "resident_pcm_bytes",
       ].map((resource) => ({resource, observed: 2_000, limit: 1_000})),
       ...[
         "project_busy",
@@ -953,6 +1037,11 @@ describe("Creator Sample state", () => {
       {actual_revision: Number.MAX_SAFE_INTEGER + 1, expected_revision: 42},
       {actual_revision: 43, expected_revision: 42, note: "extra"},
       {resource: "unknown_resource", observed: 2, limit: 1},
+      ...[
+        "decoded_frames_per_pad",
+        "prepared_bank_bytes",
+        "live_bank_bytes",
+      ].map((resource) => ({resource, observed: 2, limit: 1})),
       {resource: "artifact_bytes", observed: -1, limit: 1},
       {storage_condition: "unknown_condition"},
       {transfer_condition: "unknown_condition"},

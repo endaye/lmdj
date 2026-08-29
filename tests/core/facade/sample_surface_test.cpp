@@ -84,8 +84,8 @@ constexpr std::string_view kGoldenSha =
     "d276060107ab2479126c4f66919b799593a852fe624720f03e7be3b70bcfe867";
 constexpr RuntimePreparationLimits kStage8WebLimits{
     1'048'576,
-    240'000,
     67'108'864,
+    134'217'728,
     134'217'728,
 };
 constexpr std::string_view kMono44100Sha =
@@ -1224,10 +1224,11 @@ void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
       RuntimeSnapshotRequest{
           project,
           pattern_id,
-          RuntimePreparationLimits{1'048'576, 240'000, 1, 1},
+          RuntimePreparationLimits{1'048'576, 1, 1, 1},
       });
   LMDJ_CHECK(!failed_prepare.has_value());
-  LMDJ_CHECK(failed_prepare.error().code == ErrorCode::cook_failed);
+  LMDJ_CHECK(
+      failed_prepare.error().code == ErrorCode::bank_quota_exhausted);
   LMDJ_CHECK(
       application.inspect_sample({project, {0, 0}})
           .value()
@@ -1482,22 +1483,26 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
   LMDJ_CHECK(replacement.value().asset_id == AssetId{uuid(602)});
   LMDJ_CHECK(replacement.value().playback == PadPlayback{});
 
-  const auto revision_before_rejection = replacement.value().project_revision;
-  const auto over_limit =
+  const std::string invalid_wav_text{"not a RIFF/WAVE file"};
+  const auto invalid_wav = std::as_bytes(std::span<const char>{
+      invalid_wav_text.data(), invalid_wav_text.size()});
+  const auto rejected =
+      import(uuid(700), uuid(701), uuid(702), 3, invalid_wav);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::unsupported_audio);
+  const auto after_rejection = application.inspect_sample({project, {0, 0}});
+  LMDJ_CHECK(after_rejection.has_value());
+  LMDJ_CHECK(after_rejection.value().project_revision == 3);
+  LMDJ_CHECK(after_rejection.value().asset_id == AssetId{uuid(602)});
+
+  const auto long_source =
       import(uuid(603), uuid(604), uuid(605), 3, oversized);
-  LMDJ_CHECK(!over_limit.has_value());
-  LMDJ_CHECK(over_limit.error().code == ErrorCode::unsupported_audio);
-  LMDJ_CHECK((
-      over_limit.error().details ==
-      nlohmann::json{
-          {"resource", "decoded_frames_per_pad"},
-          {"observed", 240'001},
-          {"limit", 240'000},
-      }));
+  LMDJ_CHECK(long_source.has_value());
+  LMDJ_CHECK(long_source.value().committed_revision == 4);
   LMDJ_CHECK(
       application.inspect_sample({project, {0, 0}})
           .value()
-          .project_revision == revision_before_rejection);
+          .project_revision == 4);
   LMDJ_CHECK(!std::filesystem::exists(staging_directory(uuid(603))));
 }
 
@@ -1564,6 +1569,226 @@ void test_sample_source_frame_limit_is_not_reapplied_after_resampling() {
   const auto& sample = *prepared.value()->pads.at(0).sample;
   LMDJ_CHECK(sample.sample_rate == 48'000);
   LMDJ_CHECK(sample.interleaved.size() / sample.channels == 240'002);
+}
+
+void test_sample_quota_reports_revision_bound_target_exclusive_headroom() {
+  TempDirectory temp;
+  const auto project = temp.path() / "sample-quota.lmdj";
+  constexpr RuntimePreparationLimits kQuotaLimits{
+      1'048'576,
+      32,
+      48,
+      96,
+  };
+  Application application(sample_config(temp.path(), kQuotaLimits));
+  LMDJ_CHECK(
+      application
+          .create_initial_project(
+              {project,
+               ProjectId{uuid(615)},
+               120,
+               Pattern{PatternId{uuid(616)}, 1, {}}})
+          .has_value());
+
+  std::uint32_t identity = 617;
+  const auto stage = [&](Application& target_application,
+                         const std::filesystem::path& target_project,
+                         PadSlotId target_slot,
+                         std::uint32_t frames,
+                         std::uint64_t revision) {
+    const auto token = uuid(identity++);
+    const auto command = uuid(identity++);
+    const auto asset = uuid(identity++);
+    const auto source = mono_pcm16_wav(frames);
+    LMDJ_CHECK(
+        target_application
+            .begin_sample_import(
+                {token,
+                 target_project,
+                 {CommandId{command}, revision},
+                 target_slot,
+                 AssetId{asset},
+                 source.size()})
+            .has_value());
+    LMDJ_CHECK(
+        target_application
+            .append_sample_import(token, 0, source, true)
+            .has_value());
+    return std::pair{token, asset};
+  };
+  const auto commit = [&](Application& target_application,
+                          const std::filesystem::path& target_project,
+                          PadSlotId target_slot,
+                          std::uint32_t frames,
+                          std::uint64_t revision) {
+    const auto staged = stage(
+        target_application,
+        target_project,
+        target_slot,
+        frames,
+        revision);
+    return target_application.commit_sample_import(staged.first);
+  };
+
+  LMDJ_CHECK(commit(application, project, {0, 0}, 3, 0).has_value());
+  LMDJ_CHECK(commit(application, project, {0, 1}, 2, 1).has_value());
+  LMDJ_CHECK(commit(application, project, {1, 0}, 4, 2).has_value());
+
+  const auto quota = application.query({
+      {"operation", "sample.quota"},
+      {"project_path", project.generic_string()},
+      {"slot", slot(0, 1)},
+  });
+  check_success(quota, 3);
+  check_exact_keys(
+      quota.at("result"),
+      {"project_revision",
+       "slot",
+       "bank_quota_bytes",
+       "bank_used_bytes",
+       "bank_remaining_bytes",
+       "project_quota_bytes",
+       "project_used_bytes",
+       "project_remaining_bytes",
+       "effective_remaining_bytes",
+       "effective_remaining_frames",
+       "consumed"});
+  const auto& result = quota.at("result");
+  LMDJ_CHECK(result.at("project_revision") == 3);
+  LMDJ_CHECK(result.at("slot") == slot(0, 1));
+  LMDJ_CHECK(result.at("bank_quota_bytes") == 32);
+  LMDJ_CHECK(result.at("bank_used_bytes") == 12);
+  LMDJ_CHECK(result.at("bank_remaining_bytes") == 20);
+  LMDJ_CHECK(result.at("project_quota_bytes") == 48);
+  LMDJ_CHECK(result.at("project_used_bytes") == 28);
+  LMDJ_CHECK(result.at("project_remaining_bytes") == 20);
+  LMDJ_CHECK(result.at("effective_remaining_bytes") == 20);
+  LMDJ_CHECK(result.at("effective_remaining_frames") == 5);
+  LMDJ_CHECK(
+      result.at("consumed") ==
+      nlohmann::json::array(
+          {{{"slot", slot(0, 0)},
+            {"prepared_bytes", 12},
+            {"prepared_frames", 3}},
+           {{"slot", slot(0, 1)},
+            {"prepared_bytes", 8},
+            {"prepared_frames", 2}}}));
+
+  const auto exact = commit(application, project, {0, 1}, 5, 3);
+  LMDJ_CHECK(exact.has_value());
+  LMDJ_CHECK(exact.value().committed_revision == 4);
+  const auto retained = application.inspect_sample({project, {0, 1}});
+  LMDJ_CHECK(retained.has_value());
+  LMDJ_CHECK(retained.value().metadata->source_frames == 5);
+
+  const auto one_over = stage(application, project, {0, 1}, 6, 4);
+  const auto bank_rejected = application.command({
+      {"operation", "sample.import.commit"},
+      {"import_token", one_over.first},
+  });
+  check_error(bank_rejected, "BANK_QUOTA_EXHAUSTED");
+  const auto& bank_details = bank_rejected.at("error").at("details");
+  LMDJ_CHECK(bank_details.at("bank") == 0);
+  LMDJ_CHECK(bank_details.at("requested_bytes") == 24);
+  LMDJ_CHECK(bank_details.at("requested_frames") == 6);
+  LMDJ_CHECK(bank_details.at("remaining_bytes") == 20);
+  LMDJ_CHECK(bank_details.at("remaining_frames") == 5);
+  LMDJ_CHECK(bank_details.at("quota_bytes") == 32);
+  LMDJ_CHECK(
+      bank_details.at("consumed") ==
+      nlohmann::json::array(
+          {{{"pad", 0}, {"prepared_bytes", 12}, {"prepared_frames", 3}},
+           {{"pad", 1}, {"prepared_bytes", 20}, {"prepared_frames", 5}}}));
+  const auto after_bank_rejection =
+      application.inspect_sample({project, {0, 1}});
+  LMDJ_CHECK(after_bank_rejection.has_value());
+  LMDJ_CHECK(after_bank_rejection.value().project_revision == 4);
+  LMDJ_CHECK(after_bank_rejection.value().metadata->source_frames == 5);
+
+  const auto drifted = stage(application, project, {0, 1}, 5, 4);
+  const auto advanced = application.update_sample_pad(
+      {project,
+       {CommandId{uuid(identity++)}, 4},
+       {0, 0},
+       PadPlayback{0, 3, TriggerMode::gate, 0, false}});
+  LMDJ_CHECK(advanced.has_value());
+  const auto revision_conflict =
+      application.commit_sample_import(drifted.first);
+  LMDJ_CHECK(!revision_conflict.has_value());
+  LMDJ_CHECK(
+      revision_conflict.error().code == ErrorCode::revision_conflict);
+  LMDJ_CHECK(
+      revision_conflict.error().details.at("actual_revision") == 5);
+  LMDJ_CHECK(
+      revision_conflict.error().details.at("expected_revision") == 4);
+
+  const auto project_bound = temp.path() / "sample-project-quota.lmdj";
+  constexpr RuntimePreparationLimits kProjectQuotaLimits{
+      1'048'576,
+      64,
+      40,
+      96,
+  };
+  Application project_application(
+      sample_config(temp.path(), kProjectQuotaLimits));
+  LMDJ_CHECK(
+      project_application
+          .create_initial_project(
+              {project_bound,
+               ProjectId{uuid(identity++)},
+               120,
+               Pattern{PatternId{uuid(identity++)}, 1, {}}})
+          .has_value());
+  LMDJ_CHECK(
+      commit(project_application, project_bound, {0, 0}, 4, 0)
+          .has_value());
+  LMDJ_CHECK(
+      commit(project_application, project_bound, {0, 1}, 2, 1)
+          .has_value());
+  LMDJ_CHECK(
+      commit(project_application, project_bound, {1, 0}, 3, 2)
+          .has_value());
+  const auto project_quota = project_application.query({
+      {"operation", "sample.quota"},
+      {"project_path", project_bound.generic_string()},
+      {"slot", slot(0, 1)},
+  });
+  check_success(project_quota, 3);
+  LMDJ_CHECK(
+      project_quota.at("result").at("bank_remaining_bytes") == 48);
+  LMDJ_CHECK(
+      project_quota.at("result").at("project_remaining_bytes") == 12);
+  LMDJ_CHECK(
+      project_quota.at("result").at("effective_remaining_frames") == 3);
+  LMDJ_CHECK(
+      commit(project_application, project_bound, {0, 1}, 3, 3)
+          .has_value());
+
+  const auto project_one_over =
+      stage(project_application, project_bound, {0, 1}, 4, 4);
+  const auto project_rejected = project_application.command({
+      {"operation", "sample.import.commit"},
+      {"import_token", project_one_over.first},
+  });
+  check_error(project_rejected, "PROJECT_QUOTA_EXHAUSTED");
+  const auto& project_details =
+      project_rejected.at("error").at("details");
+  LMDJ_CHECK(project_details.at("requested_bytes") == 16);
+  LMDJ_CHECK(project_details.at("requested_frames") == 4);
+  LMDJ_CHECK(project_details.at("project_used_bytes") == 28);
+  LMDJ_CHECK(project_details.at("project_remaining_bytes") == 12);
+  LMDJ_CHECK(project_details.at("project_quota_bytes") == 40);
+  LMDJ_CHECK(
+      project_details.at("banks") ==
+      nlohmann::json::array(
+          {{{"bank", 0}, {"prepared_bytes", 16}},
+           {{"bank", 1}, {"prepared_bytes", 12}},
+           {{"bank", 2}, {"prepared_bytes", 0}},
+           {{"bank", 3}, {"prepared_bytes", 0}}}));
+  LMDJ_CHECK(
+      project_application.inspect_sample({project_bound, {0, 1}})
+          .value()
+          .metadata->source_frames == 3);
 }
 
 void test_sample_delayed_replays_report_original_committed_revision() {
@@ -1937,6 +2162,7 @@ int main() {
     test_sample_import_abort_scavenge_replace_and_manifest_admission();
     test_sample_cleanup_half_failures_leave_one_retryable_unit();
     test_sample_source_frame_limit_is_not_reapplied_after_resampling();
+    test_sample_quota_reports_revision_bound_target_exclusive_headroom();
     test_sample_delayed_replays_report_original_committed_revision();
     test_sample_json_delayed_replays_report_current_project_revision();
     test_sample_artifact_busy_errors_remain_storage_errors();

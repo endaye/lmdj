@@ -64,6 +64,7 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof CapturePanel
   const view = render(
     <CapturePanel
       padLabel="Pad A1"
+      maxCommitFrames={240_000}
       onCommit={onCommit}
       onClose={onClose}
       {...overrides}
@@ -98,6 +99,7 @@ test("a Sequence Pad stop request preserves the take in the trimming overlay", a
   view.rerender(
     <CapturePanel padLabel="Pad A1" onCommit={async () => ({kind: "committed"})}
       onClose={() => {}} makeController={makeController} stopRequest={1}
+      maxCommitFrames={240_000}
       onPhaseChange={(phase) => phases.push(phase)} />,
   );
   await screen.findByRole("button", {name: "Commit"});
@@ -113,6 +115,31 @@ test("opens as a modal dialog and moves focus to the phase's primary action (P2-
   expect(document.activeElement).toBe(
     screen.getByRole("button", {name: "Record into Pad A1"}),
   );
+});
+
+test("releases native modal ownership while capture continues behind Sequence", () => {
+  const view = renderPanel({backgrounded: false});
+  const dialog = view.container.querySelector<HTMLDialogElement>(
+    ".capture-panel-dialog",
+  )!;
+  expect(dialog.open).toBe(true);
+
+  view.rerender(
+    <CapturePanel padLabel="Pad A1"
+      onCommit={async () => ({kind: "committed"})}
+      onClose={() => {}} backgrounded />,
+  );
+  expect(screen.queryByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeNull();
+  expect(view.container.querySelector(".capture-panel-background")?.hasAttribute("hidden"))
+    .toBe(true);
+
+  view.rerender(
+    <CapturePanel padLabel="Pad A1"
+      onCommit={async () => ({kind: "committed"})}
+      onClose={() => {}} backgrounded={false} />,
+  );
+  expect(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"})
+    .getAttribute("aria-modal")).toBe("true");
 });
 
 test("focus lands on Stop after entering recording and on Commit in trimming (P2-D2)", async () => {
@@ -338,7 +365,7 @@ test("controller onEnded maps to a device-lost stop (behavior 3)", async () => {
   )).toBeTruthy();
 });
 
-test("trimming clamps the selection sliders to COMMIT_MAX_FRAMES (behavior 4)", async () => {
+test("trimming clamps the selection sliders to the queried effective quota", async () => {
   const {makeController, instances} = createFactory();
   renderPanel({makeController});
   const {listener} = await startRecording(instances);
