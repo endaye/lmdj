@@ -5,8 +5,12 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/foundation/error.hpp>
@@ -18,6 +22,7 @@ enum class ProjectContract : std::uint8_t {
   v1,
   v2,
   v3,
+  v4,
 };
 
 inline constexpr std::uint32_t kPpq = 960;
@@ -25,6 +30,13 @@ inline constexpr std::uint32_t kSixteenthTicks = 240;
 inline constexpr std::uint32_t kBarTicks4x4 = 3840;
 inline constexpr std::uint8_t kSwingPercentMin = 50;
 inline constexpr std::uint8_t kSwingPercentMax = 75;
+inline constexpr std::size_t kPerformanceNameMax = 64;
+inline constexpr std::uint8_t kPerformancePadSlotMax = 63;
+inline constexpr std::uint8_t kPatternSlotMin = 0;
+inline constexpr std::uint8_t kPatternSlotMax = 15;
+inline constexpr std::uint16_t kFxValueMin = 0;
+inline constexpr std::uint16_t kFxValueMax = 1000;
+inline constexpr std::uint8_t kFxCount = 8;
 
 enum class TriggerMode : std::uint8_t {
   one_shot,
@@ -95,6 +107,106 @@ struct Pattern {
   bool operator==(const Pattern&) const = default;
 };
 
+struct PerformanceIdTag;
+using PerformanceId = foundation::StrongId<PerformanceIdTag>;
+
+enum class PerformanceEventKind : std::uint8_t {
+  pad_hit,
+  pattern_launch,
+  fx_engage,
+  fx_move,
+  fx_release,
+  hold_on,
+  hold_off,
+};
+
+enum class PerformanceFx : std::uint8_t {
+  filter,
+  delay,
+  reverb,
+  stutter,
+  gate,
+  reverse,
+  crush,
+  cutter,
+};
+
+struct PadHitPerformanceEvent {
+  std::uint8_t slot;
+  std::uint64_t onset_tick;
+  std::uint64_t duration_tick;
+  std::uint8_t velocity;
+
+  bool operator==(const PadHitPerformanceEvent&) const = default;
+};
+
+struct PatternLaunchPerformanceEvent {
+  std::uint8_t pattern_slot;
+  std::uint64_t effective_tick;
+
+  bool operator==(const PatternLaunchPerformanceEvent&) const = default;
+};
+
+struct FxEngagePerformanceEvent {
+  PerformanceFx fx;
+  std::uint16_t value;
+  std::uint64_t tick;
+
+  bool operator==(const FxEngagePerformanceEvent&) const = default;
+};
+
+struct FxMovePerformanceEvent {
+  PerformanceFx fx;
+  std::uint16_t value;
+  std::uint64_t tick;
+
+  bool operator==(const FxMovePerformanceEvent&) const = default;
+};
+
+struct FxReleasePerformanceEvent {
+  PerformanceFx fx;
+  std::uint64_t tick;
+
+  bool operator==(const FxReleasePerformanceEvent&) const = default;
+};
+
+struct HoldOnPerformanceEvent {
+  std::uint64_t tick;
+
+  bool operator==(const HoldOnPerformanceEvent&) const = default;
+};
+
+struct HoldOffPerformanceEvent {
+  std::uint64_t tick;
+
+  bool operator==(const HoldOffPerformanceEvent&) const = default;
+};
+
+using PerformanceEventPayload = std::variant<
+    PadHitPerformanceEvent,
+    PatternLaunchPerformanceEvent,
+    FxEngagePerformanceEvent,
+    FxMovePerformanceEvent,
+    FxReleasePerformanceEvent,
+    HoldOnPerformanceEvent,
+    HoldOffPerformanceEvent>;
+
+struct PerformanceEvent {
+  PerformanceEventPayload payload;
+
+  bool operator==(const PerformanceEvent&) const = default;
+};
+
+struct Performance {
+  PerformanceId id;
+  std::string name;
+  std::uint16_t created_bpm;
+  std::optional<foundation::ArtifactRef> recording_artifact;
+  std::vector<PerformanceEvent> events;
+
+  bool operator==(const Performance&) const = default;
+};
+
 struct ProjectState {
   ProjectContract contract;
   foundation::ProjectId id;
@@ -105,6 +217,7 @@ struct ProjectState {
   std::array<std::array<PadSlot, 16>, 4> banks;
   std::map<foundation::AssetId, Asset> assets;
   std::map<foundation::PatternId, Pattern> patterns;
+  std::map<PerformanceId, Performance> performances;
 
   bool operator==(const ProjectState&) const = default;
 };
@@ -133,5 +246,24 @@ std::uint32_t normalize_duration_tick(
 std::vector<PatternEvent> merge_pattern_events(
     const std::vector<PatternEvent>& stored,
     const std::vector<PatternEvent>& incoming);
+
+PerformanceEventKind performance_event_kind(
+    const PerformanceEvent& event) noexcept;
+std::uint64_t performance_event_tick(
+    const PerformanceEvent& event) noexcept;
+std::uint8_t performance_event_fx_or_slot(
+    const PerformanceEvent& event) noexcept;
+std::vector<PerformanceEvent> canonical_performance_events(
+    const std::vector<PerformanceEvent>& events);
+foundation::Result<void> validate_performance_events(
+    const std::vector<PerformanceEvent>& events);
+foundation::Result<void> validate_performance(
+    const Performance& performance);
+foundation::Result<PerformanceEvent> performance_event_from_json(
+    const nlohmann::json& input);
+nlohmann::json performance_event_json(const PerformanceEvent& event);
+
+foundation::Result<nlohmann::json> migrate_project_v3_to_v4(
+    const nlohmann::json& project_v3);
 
 }  // namespace lmdj::domain
