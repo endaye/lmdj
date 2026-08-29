@@ -366,7 +366,8 @@ Json sample_begin_payload(
     std::uint64_t expected_revision,
     std::string_view asset_id,
     std::size_t byte_length,
-    std::uint8_t pad = 0) {
+    std::uint8_t pad = 0,
+    std::optional<std::string_view> sequence_session_id = std::nullopt) {
   return {
       {"import_token", uuid(token_suffix)},
       {"command_id", uuid(command_suffix)},
@@ -374,6 +375,10 @@ Json sample_begin_payload(
       {"slot", slot(0, pad)},
       {"asset_id", asset_id},
       {"byte_length", byte_length},
+      {"sequence_session_id",
+       sequence_session_id.has_value()
+           ? Json(*sequence_session_id)
+           : Json(nullptr)},
   };
 }
 
@@ -1141,7 +1146,8 @@ void test_exact_payloads_and_facade_owned_project_journey() {
           "sequence.record.begin",
           {{"session_id", kSequenceSessionId},
            {"pattern_id", kPatternId},
-           {"expected_revision", 2}},
+           {"expected_revision", 2},
+           {"armed_capture_slot", nullptr}},
           {}),
       {"state", "session_id", "pattern_id", "pending_pattern_id",
        "expected_revision", "next_flush_seq", "pending_event_count",
@@ -1244,7 +1250,8 @@ void test_sequence_observer_busy_and_owner_loss_recovery() {
         "sequence.record.begin",
         {{"session_id", kSequenceSessionId},
          {"pattern_id", kPatternId},
-         {"expected_revision", 2}},
+         {"expected_revision", 2},
+         {"armed_capture_slot", nullptr}},
         {}));
     check_success(owner->dispatch(
         "sequence.record.event",
@@ -1328,7 +1335,8 @@ void test_owner_loss_cleanup_failure_stops_and_clears_the_overlay() {
       "sequence.record.begin",
       {{"session_id", kSequenceSessionId},
        {"pattern_id", kPatternId},
-       {"expected_revision", 2}},
+       {"expected_revision", 2},
+       {"armed_capture_slot", nullptr}},
       {}));
 
   OneShotAudioDriver audio(runtime->engine());
@@ -1372,7 +1380,8 @@ void test_pending_sequence_overlay_repeats_and_commits_without_duplicate() {
       "sequence.record.begin",
       {{"session_id", kSequenceSessionId},
        {"pattern_id", kPatternId},
-       {"expected_revision", 2}},
+       {"expected_revision", 2},
+       {"armed_capture_slot", nullptr}},
       {}));
 
   OneShotAudioDriver audio(runtime->engine());
@@ -1445,6 +1454,102 @@ void test_pending_sequence_overlay_repeats_and_commits_without_duplicate() {
   LMDJ_CHECK(final_pattern.superseded_publications == 1);
 }
 
+void test_armed_capture_commit_preserves_active_sequence_and_pending_events() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 741, 742, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+
+  FakeCoordinator coordinator;
+  coordinator.engine = &runtime->engine();
+  coordinator.observe_engine_generation = true;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  ContinuousAudioDriver audio(runtime->engine());
+  check_success(runtime->dispatch(
+      "sequence.record.begin",
+      {{"session_id", kSequenceSessionId},
+       {"pattern_id", kPatternId},
+       {"expected_revision", 2},
+       {"armed_capture_slot", slot(0, 1)}},
+      {}));
+
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  const auto before = check_locked_success_result(runtime->dispatch(
+      "sequence.record.status", Json::object(), {}));
+  LMDJ_CHECK(before.at("state") == "active");
+  LMDJ_CHECK(before.at("pending_event_count") == 1);
+
+  const auto capture_asset_id = uuid(743);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(
+          744,
+          745,
+          2,
+          capture_asset_id,
+          wav.size(),
+          1,
+          kSequenceSessionId),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(744, 0, true, wav),
+      wav));
+  const auto& committed = check_exact_success(
+      runtime->dispatch(
+          "sample.import.commit", {{"import_token", uuid(744)}}, {}),
+      {"committed_revision", "runtime_revision", "runtime_published"});
+  LMDJ_CHECK(committed.at("committed_revision") == 3);
+  LMDJ_CHECK(committed.at("runtime_revision") == 3);
+  LMDJ_CHECK(committed.at("runtime_published") == true);
+
+  const auto active = check_locked_success_result(runtime->dispatch(
+      "sequence.record.status", Json::object(), {}));
+  LMDJ_CHECK(active.at("state") == "active");
+  LMDJ_CHECK(active.at("session_id") == kSequenceSessionId);
+  LMDJ_CHECK(active.at("expected_revision") == 3);
+  LMDJ_CHECK(active.at("pending_event_count") == 1);
+
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 1}, {"velocity", 96}}, {}));
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 1}, {"kind", "release"}}, {}));
+  const auto& stopped = check_locked_success_result(runtime->dispatch(
+      "sequence.record.stop",
+      {{"session_id", kSequenceSessionId}, {"command_id", uuid(746)}},
+      {}));
+  LMDJ_CHECK(stopped.at("state") == "inactive");
+  LMDJ_CHECK(stopped.at("committed_revision") == 4);
+  audio.stop();
+
+  const auto saved = inspect_project(temp.path(), kProjectId);
+  LMDJ_CHECK(saved.at("project_revision") == 4);
+  LMDJ_CHECK(
+      saved.at("result")
+              .at("project")
+              .at("banks")
+              .at(0)
+              .at("pads")
+              .at(1)
+              .at("asset_id") == capture_asset_id);
+  LMDJ_CHECK(
+      saved.at("result")
+              .at("project")
+              .at("patterns")
+              .at(kPatternId)
+              .at("events")
+              .size() == 2);
+}
+
 void test_stop_replay_recovers_a_committed_clean_publication_failure() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -1462,7 +1567,8 @@ void test_stop_replay_recovers_a_committed_clean_publication_failure() {
       "sequence.record.begin",
       {{"session_id", kSequenceSessionId},
        {"pattern_id", kPatternId},
-       {"expected_revision", 2}},
+       {"expected_revision", 2},
+       {"armed_capture_slot", nullptr}},
       {}));
 
   OneShotAudioDriver audio(runtime->engine());
@@ -1537,7 +1643,8 @@ void test_authoritative_switch_supersedes_overlay_and_stop_cancels_target() {
       "sequence.record.begin",
       {{"session_id", kSequenceSessionId},
        {"pattern_id", kPatternId},
-       {"expected_revision", 3}},
+       {"expected_revision", 3},
+       {"armed_capture_slot", nullptr}},
       {}));
 
   check_success(runtime->dispatch(
@@ -1663,7 +1770,8 @@ void test_stop_fails_closed_if_target_applies_between_cancel_queries() {
       "sequence.record.begin",
       {{"session_id", kSequenceSessionId},
        {"pattern_id", kPatternId},
-       {"expected_revision", 1}},
+       {"expected_revision", 1},
+       {"armed_capture_slot", nullptr}},
       {}));
   const auto& switching = check_exact_success(
       runtime->dispatch(
@@ -1751,7 +1859,8 @@ void test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary() {
       "sequence.record.begin",
       {{"session_id", kSequenceSessionId},
        {"pattern_id", kPatternId},
-       {"expected_revision", 3}},
+       {"expected_revision", 3},
+       {"armed_capture_slot", nullptr}},
       {}));
   check_success(runtime->dispatch(
       "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
@@ -1857,7 +1966,8 @@ void test_sequence_switch_prepares_before_selecting_bar_boundary() {
           "sequence.record.begin",
           {{"session_id", kSequenceSessionId},
            {"pattern_id", kPatternId},
-           {"expected_revision", 2}},
+           {"expected_revision", 2},
+           {"armed_capture_slot", nullptr}},
           {}),
       {"state", "session_id", "pattern_id", "pending_pattern_id",
        "expected_revision", "next_flush_seq", "pending_event_count",
@@ -3203,7 +3313,8 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
         "sequence.record.begin",
         {{"session_id", kSequenceSessionId},
          {"pattern_id", kPatternId},
-         {"expected_revision", 2}},
+         {"expected_revision", 2},
+         {"armed_capture_slot", nullptr}},
         {}));
     check_success(runtime->dispatch(
         "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
@@ -4605,6 +4716,7 @@ int main() {
     test_sequence_observer_busy_and_owner_loss_recovery();
     test_owner_loss_cleanup_failure_stops_and_clears_the_overlay();
     test_pending_sequence_overlay_repeats_and_commits_without_duplicate();
+    test_armed_capture_commit_preserves_active_sequence_and_pending_events();
     test_stop_replay_recovers_a_committed_clean_publication_failure();
     test_authoritative_switch_supersedes_overlay_and_stop_cancels_target();
     test_stop_fails_closed_if_target_applies_between_cancel_queries();

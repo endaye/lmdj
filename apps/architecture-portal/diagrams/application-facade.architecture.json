@@ -6,7 +6,7 @@
     {"id": "native-hosts", "label": "Native Hosts", "detail": "CLI · MCP · Native", "kind": "host", "x": 40, "y": 140, "width": 220, "height": 96},
     {"id": "web-hosts", "label": "Web Hosts", "detail": "Creator · Diagnostic", "kind": "host", "x": 40, "y": 380, "width": 220, "height": 96},
     {"id": "platform", "label": "Web Runtime Platform", "detail": "shared browser adapter", "kind": "core", "x": 340, "y": 380, "width": 250, "height": 96},
-    {"id": "facade", "label": "Application Facade", "detail": "Project · Sample · Sequence", "kind": "core", "x": 680, "y": 250, "width": 250, "height": 96},
+    {"id": "facade", "label": "Application Facade", "detail": "session · armed Pad · rebase", "kind": "core", "x": 680, "y": 250, "width": 250, "height": 96},
     {"id": "modules", "label": "Core Modules", "detail": "domain · I/O · cook · audio", "kind": "core", "x": 1010, "y": 250, "width": 220, "height": 96},
     {"id": "result", "label": "Typed Response", "detail": "receipt · Pattern identity · overlay", "kind": "host", "x": 1310, "y": 250, "width": 210, "height": 96}
   ],
@@ -19,7 +19,7 @@
   ],
   "cards": [
     {"title": "Dependencies", "body": "Six lower Core Modules at locked versions."},
-    {"title": "Sequence authority", "body": "Session-owned pending-overlay projection is immutable Runtime input; durable flush identity lets an exact replay recover post-commit Runtime publication without repeating Project mutation."},
+    {"title": "Sequence authority", "body": "Session-owned pending-overlay projection is immutable Runtime input; one empty armed Pad may admit an exact owner/revision capture commit and rebase without clearing pending events."},
     {"title": "Forbidden boundary", "body": "No Host UI, Web protocol or product-specific wiring in the Facade."}
   ]
 }

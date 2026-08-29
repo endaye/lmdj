@@ -349,6 +349,7 @@ test("processorerror seals an active Sequence and the failed session never resum
       slot: {bank: 0, pad: 0},
       asset_id: assetId,
       byte_length: wav.byteLength,
+      sequence_session_id: null,
     });
     const importChunked = await submit("sample.import.chunk", {
       import_token: importToken,
@@ -368,6 +369,7 @@ test("processorerror seals an active Sequence and the failed session never resum
       session_id: sessionId,
       pattern_id: patternId,
       expected_revision: 1,
+      armed_capture_slot: null,
     });
     const recorded = await submit("sequence.record.event", {
       session_id: sessionId,

@@ -18,6 +18,55 @@ async function expectProjectRevision(page, expectedRevision) {
   expect(report.sample.project_revision).toBe(expectedRevision);
 }
 
+async function installArmedCaptureRecorder(page) {
+  await page.addInitScript(() => {
+    let exposed;
+    Object.defineProperty(window, "lmdjWebRuntimeHost", {
+      configurable: true,
+      get() {
+        return exposed;
+      },
+      set(nativeHost) {
+        const nativeTransport = nativeHost.transport;
+        nativeHost.transport = Object.freeze({
+          async send(...arguments_) {
+            const [request] = arguments_;
+            const response = await nativeTransport.send(...arguments_);
+            if (request?.operation?.startsWith("sequence.record.") ||
+                request?.operation?.startsWith("sample.import.")) {
+              window.__armedCaptureProof ??= [];
+              window.__armedCaptureProof.push({
+                operation: request.operation,
+                payload: request.payload,
+                ok: response?.ok ?? null,
+                result: response?.result ?? null,
+                error: response?.error ?? null,
+              });
+            }
+            return response;
+          },
+          subscribe(...arguments_) {
+            return nativeTransport.subscribe(...arguments_);
+          },
+          subscribeFailure(...arguments_) {
+            return nativeTransport.subscribeFailure(...arguments_);
+          },
+          terminate(...arguments_) {
+            return nativeTransport.terminate(...arguments_);
+          },
+          get terminated() {
+            return nativeTransport.terminated;
+          },
+          get terminalOwnerReleased() {
+            return nativeTransport.terminalOwnerReleased;
+          },
+        });
+        exposed = nativeHost;
+      },
+    });
+  });
+}
+
 async function importV1SampleProject(page) {
   if (!sampleBundle) {
     throw new Error("LMDJ_CREATOR_WEB_SAMPLE_BUNDLE is required");
@@ -141,6 +190,56 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
+});
+
+test("armed Pad capture trims and commits without stopping Sequence", async ({page}, testInfo) => {
+  test.skip(testInfo.project.name !== GRANTED);
+  test.setTimeout(600_000);
+  await installArmedCaptureRecorder(page);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  await enterSampleEditor(page);
+
+  await selectPadWithoutPress(page, "Pad A1 — empty");
+  const panel = await recordAtLeast(page, "Pad A1", 1);
+  await panel.getByRole("button", {name: "Continue in Sequence"}).click();
+  await expect(page.getByRole("heading", {name: "Sequence"})).toBeVisible();
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state"))
+    .toHaveText("Audio running", {timeout: 30_000});
+  await page.getByRole("button", {name: "Record"}).click();
+  await expect(page.getByRole("status").filter({hasText: "recording"}))
+    .toBeVisible();
+
+  // The armed Pad gesture stops only capture. It must reveal the trim overlay
+  // without dispatching Sequence Stop or losing the active session.
+  await page.keyboard.press("KeyQ");
+  await expect(panel.getByRole("button", {name: "Commit"}))
+    .toBeVisible({timeout: 30_000});
+  const beforeCommit = await page.evaluate(() => window.__armedCaptureProof ?? []);
+  expect(beforeCommit.some(({operation}) =>
+    operation === "sequence.record.stop")).toBe(false);
+
+  await panel.getByRole("button", {name: "Commit"}).click();
+  await expect(panel).toBeHidden({timeout: 180_000});
+  await expect(page.getByRole("status").filter({hasText: "recording"}))
+    .toBeVisible({timeout: 30_000});
+  const proof = await page.evaluate(() => window.__armedCaptureProof ?? []);
+  const begun = proof.find(({operation}) => operation === "sequence.record.begin");
+  const imported = proof.find(({operation}) => operation === "sample.import.begin");
+  expect(begun?.ok).toBe(true);
+  expect(begun?.payload.armed_capture_slot).toEqual({bank: 0, pad: 0});
+  expect(imported?.ok).toBe(true);
+  expect(imported?.payload.sequence_session_id).toBe(begun?.payload.session_id);
+  expect(proof.some(({operation}) => operation === "sequence.record.stop"))
+    .toBe(false);
+
+  // Only this post-commit gesture may become a Sequence event for A1.
+  await page.keyboard.press("KeyQ");
+  await page.getByRole("button", {name: "Stop"}).click();
+  await expect(page.getByRole("status").filter({hasText: "stopped"}))
+    .toBeVisible({timeout: 30_000});
+  await expectProjectRevision(page, 48);
 });
 
 test("uses queried Bank quota instead of the retired per-Pad capture cap", async ({page}, testInfo) => {

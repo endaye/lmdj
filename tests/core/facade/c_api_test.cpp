@@ -326,7 +326,8 @@ void test_sequence_surface_is_routed_through_c_abi() {
                  {"session_id", uuid(201)},
                  {"pattern_id", uuid(10)},
                  {"expected_revision", 0},
-                 {"runtime_frame", 0}}),
+                 {"runtime_frame", 0},
+                 {"armed_capture_slot", nullptr}}),
         "NOT_FOUND");
     const auto status = query(
         engine,
@@ -646,6 +647,7 @@ void test_sample_operations_have_exact_shapes_and_private_errors() {
           {"slot", {{"bank", 0}, {"pad", 0}}},
           {"asset_id", uuid(709)},
           {"byte_length", 60},
+          {"sequence_session_id", nullptr},
       });
   LMDJ_CHECK(begun.at("ok") == true);
   LMDJ_CHECK(begun.at("result").at("expected_bytes") == 60);

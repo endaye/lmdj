@@ -213,12 +213,15 @@ function requireSampleOperationPayload(operation, payload) {
           "slot",
           "asset_id",
           "byte_length",
+          "sequence_session_id",
         ]) &&
         UUID_PATTERN.test(payload.import_token) &&
         UUID_PATTERN.test(payload.command_id) &&
         isUnsignedInteger(payload.expected_revision) &&
         validSlot(payload.slot) &&
         UUID_PATTERN.test(payload.asset_id) &&
+        (payload.sequence_session_id === null ||
+          UUID_PATTERN.test(payload.sequence_session_id)) &&
         isUnsignedInteger(payload.byte_length, MAX_ASSET_BYTES) &&
         payload.byte_length > 0;
       break;
@@ -313,9 +316,12 @@ function requireSampleOperationPayload(operation, payload) {
           "session_id",
           "pattern_id",
           "expected_revision",
+          "armed_capture_slot",
         ]) &&
         UUID_PATTERN.test(payload.session_id) &&
         UUID_PATTERN.test(payload.pattern_id) &&
+        (payload.armed_capture_slot === null ||
+          validSlot(payload.armed_capture_slot)) &&
         isUnsignedInteger(payload.expected_revision);
       break;
     case "sequence.record.event":

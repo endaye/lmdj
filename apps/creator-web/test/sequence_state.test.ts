@@ -62,5 +62,31 @@ describe("Sequence state machine", () => {
     const overlay = reduceSequence(initialSequenceState, {type: "trim-overlay"});
     expect(overlay.phase).toBe("trim-overlay");
     expect(reduceSequence(overlay, {type: "trim-closed"}).phase).toBe("stopped");
+
+    const activeOverlay = reduceSequence(recording, {type: "trim-overlay"});
+    expect(activeOverlay.phase).toBe("trim-overlay");
+    expect(activeOverlay.sessionId).toBe("session-1");
+    expect(activeOverlay.status?.pendingEventCount).toBe(0);
+    expect(reduceSequence(activeOverlay, {type: "trim-closed"}).phase)
+      .toBe("recording");
+
+    const switching = reduceSequence(recording, {
+      type: "switch-pending",
+      status: status("switching", {pendingPatternId: "pattern-2"}),
+    });
+    const switchingOverlay = reduceSequence(switching, {type: "trim-overlay"});
+    const boundaryInOverlay = reduceSequence(switchingOverlay, {
+      type: "boundary",
+      patternId: "pattern-2",
+      status: status("active", {
+        patternId: "pattern-2",
+        pendingPatternId: null,
+        effectiveRuntimeFrame: null,
+      }),
+    });
+    expect(boundaryInOverlay.phase).toBe("trim-overlay");
+    expect(boundaryInOverlay.selectedPatternId).toBe("pattern-2");
+    expect(reduceSequence(boundaryInOverlay, {type: "trim-closed"}).phase)
+      .toBe("recording");
   });
 });

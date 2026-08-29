@@ -32,6 +32,7 @@ using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
 using lmdj::facade::ArtifactBytesImportRequest;
 using lmdj::facade::InitialProjectRequest;
+using lmdj::facade::SampleImportBeginRequest;
 using lmdj::facade::SequenceRecordState;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
@@ -104,6 +105,17 @@ ApplicationConfig config(const std::filesystem::path& root) {
       std::nullopt,
       nullptr,
   };
+}
+
+ApplicationConfig sample_config(const std::filesystem::path& root) {
+  auto result = config(root);
+  result.runtime_preparation_limits = lmdj::audio::RuntimePreparationLimits{
+      1'048'576,
+      67'108'864,
+      134'217'728,
+      134'217'728,
+  };
+  return result;
 }
 
 class JournalCompletionFailurePlatform final
@@ -1454,6 +1466,132 @@ void test_switch_pending_bpm_rejects_before_project_mutation() {
   LMDJ_CHECK(inspected.value().bpm == 120);
 }
 
+void test_armed_capture_commit_rebases_without_stopping_sequence() {
+  TempDirectory temp;
+  const auto project = temp.path() / "armed-capture.lmdj";
+  const PatternId pattern_id{uuid(100)};
+  const SequenceSessionId session_id{uuid(101)};
+  const PadSlotId armed_slot{0, 1};
+  const auto bytes = read_bytes("tests/fixtures/audio/mono-44100.wav");
+  Application application(sample_config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+
+  const auto begun = application.begin_sequence(
+      {project, session_id, pattern_id, 2, 0, armed_slot});
+  LMDJ_CHECK(begun.has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 0, 1, true}}).has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 12'000, 2, false}}).has_value());
+  const auto before = application.query_sequence_status({project});
+  LMDJ_CHECK(before.has_value());
+  LMDJ_CHECK(before.value().pending_event_count == 1);
+
+  const auto cancelled_token = uuid(109);
+  LMDJ_CHECK(application.begin_sample_import(SampleImportBeginRequest{
+      cancelled_token,
+      project,
+      {CommandId{uuid(110)}, 2},
+      armed_slot,
+      AssetId{uuid(111)},
+      bytes.size(),
+      session_id,
+  }).has_value());
+  LMDJ_CHECK(application.append_sample_import(
+      cancelled_token,
+      0,
+      std::span<const std::byte>{bytes}.first(bytes.size() / 2),
+      false).has_value());
+  LMDJ_CHECK(application.abort_sample_import(cancelled_token).has_value());
+  const auto after_cancel = application.query_sequence_status({project});
+  LMDJ_CHECK(after_cancel.has_value());
+  LMDJ_CHECK(after_cancel.value() == before.value());
+
+  const auto wrong_token = uuid(102);
+  LMDJ_CHECK(application.begin_sample_import(SampleImportBeginRequest{
+      wrong_token,
+      project,
+      {CommandId{uuid(103)}, 2},
+      PadSlotId{0, 2},
+      AssetId{uuid(104)},
+      bytes.size(),
+      session_id,
+  }).has_value());
+  LMDJ_CHECK(application.append_sample_import(
+      wrong_token, 0, bytes, true).has_value());
+  const auto wrong = application.commit_sample_import(wrong_token);
+  LMDJ_CHECK(!wrong.has_value());
+  LMDJ_CHECK(wrong.error().details.at("reason") ==
+             "armed_capture_target_mismatch");
+  const auto after_wrong = application.query_sequence_status({project});
+  LMDJ_CHECK(after_wrong.has_value());
+  LMDJ_CHECK(after_wrong.value() == before.value());
+
+  const auto token = uuid(105);
+  LMDJ_CHECK(application.begin_sample_import(SampleImportBeginRequest{
+      token,
+      project,
+      {CommandId{uuid(106)}, 2},
+      armed_slot,
+      AssetId{uuid(107)},
+      bytes.size(),
+      session_id,
+  }).has_value());
+  LMDJ_CHECK(application.append_sample_import(token, 0, bytes, true).has_value());
+  const auto committed = application.commit_sample_import(token);
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().committed_revision == 3);
+  const auto active = application.query_sequence_status({project});
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().state == SequenceRecordState::active);
+  LMDJ_CHECK(active.value().session_id == session_id);
+  LMDJ_CHECK(active.value().expected_revision == 3);
+  LMDJ_CHECK(active.value().pending_event_count == 1);
+
+  const auto reused_token = uuid(112);
+  LMDJ_CHECK(application.begin_sample_import(SampleImportBeginRequest{
+      reused_token,
+      project,
+      {CommandId{uuid(113)}, 3},
+      armed_slot,
+      AssetId{uuid(114)},
+      bytes.size(),
+      session_id,
+  }).has_value());
+  LMDJ_CHECK(application.append_sample_import(
+      reused_token, 0, bytes, true).has_value());
+  const auto reused = application.commit_sample_import(reused_token);
+  LMDJ_CHECK(!reused.has_value());
+  LMDJ_CHECK(reused.error().details.at("reason") ==
+             "armed_capture_target_mismatch");
+  const auto after_reuse = application.query_sequence_status({project});
+  LMDJ_CHECK(after_reuse.has_value());
+  LMDJ_CHECK(after_reuse.value() == active.value());
+
+  const auto flushed = application.flush_sequence(
+      {project, session_id, CommandId{uuid(115)}, 24'000});
+  LMDJ_CHECK(flushed.has_value());
+  LMDJ_CHECK(flushed.value().committed_revision == 4);
+  LMDJ_CHECK(flushed.value().status.state == SequenceRecordState::active);
+  LMDJ_CHECK(flushed.value().status.pending_event_count == 0);
+
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {armed_slot, 96, 24'000, 3, true}}).has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {armed_slot, 0, 36'000, 4, false}}).has_value());
+  const auto stopped = application.stop_sequence(
+      {project, session_id, CommandId{uuid(108)}, 48'000});
+  LMDJ_CHECK(stopped.has_value());
+  LMDJ_CHECK(stopped.value().committed_revision == 5);
+
+  lmdj::project_io::ProjectStore store;
+  const auto loaded = store.load(project);
+  LMDJ_CHECK(loaded.has_value());
+  LMDJ_CHECK(loaded.value().revision == 5);
+  LMDJ_CHECK(loaded.value().banks.at(0).at(1).asset_id == AssetId{uuid(107)});
+  LMDJ_CHECK(loaded.value().patterns.at(pattern_id).events.size() == 2);
+}
+
 }  // namespace
 
 int main() {
@@ -1476,6 +1614,7 @@ int main() {
     test_settings_rebase_and_pattern_creation_are_authoritative();
     test_pending_overlay_projection_is_owner_scoped_and_replaceable();
     test_switch_pending_bpm_rejects_before_project_mutation();
+    test_armed_capture_commit_rebases_without_stopping_sequence();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

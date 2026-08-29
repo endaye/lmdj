@@ -702,7 +702,17 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     sessionId,
     patternId,
     expectedRevision: 5,
+    armedCaptureSlot: 17,
   });
+  assert.deepEqual(
+    operations.find(({operation}) => operation === "sequence.record.begin").payload,
+    {
+      session_id: sessionId,
+      pattern_id: patternId,
+      expected_revision: 5,
+      armed_capture_slot: {bank: 1, pad: 1},
+    },
+  );
   assert.deepEqual(begun.transportAnchor, {
     runtimeFrame: 48_000,
     tickNumerator: 0,
@@ -1614,12 +1624,13 @@ test("Sample import streams one bounded hashed sidecar and commits one typed res
   const begin = calls[0].envelope.payload;
   assert.deepEqual(Object.keys(begin).sort(), [
     "asset_id", "byte_length", "command_id", "expected_revision",
-    "import_token", "slot",
+    "import_token", "sequence_session_id", "slot",
   ]);
   assert.equal(begin.import_token, importToken);
   assert.equal(begin.expected_revision, 3);
   assert.deepEqual(begin.slot, {bank: 3, pad: 15});
   assert.equal(begin.byte_length, 1_048_576);
+  assert.equal(begin.sequence_session_id, null);
   assert.notEqual(begin.command_id, begin.import_token);
   assert.notEqual(begin.asset_id, begin.import_token);
   assert.notEqual(begin.asset_id, begin.command_id);
@@ -1645,6 +1656,20 @@ test("Sample import streams one bounded hashed sidecar and commits one typed res
     {completedBytes: 0, totalBytes: 1_048_576},
     {completedBytes: 1_048_576, totalBytes: 1_048_576},
   ]);
+
+  calls.length = 0;
+  const sequenceSessionId = "00000000-0000-4000-8000-000000000374";
+  await session.importAssignSample(file, {
+    slot: 17,
+    expectedRevision: 4,
+    sequenceSessionId,
+  });
+  assert.equal(
+    calls.find(({envelope}) =>
+      envelope.operation === "sample.import.begin")
+      .envelope.payload.sequence_session_id,
+    sequenceSessionId,
+  );
 });
 
 test("Sample import enforces the verified manifest total before begin", async () => {

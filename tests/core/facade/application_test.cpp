@@ -1937,6 +1937,7 @@ void test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation() {
           {"pattern_id", kPatternId},
           {"expected_revision", 1},
           {"runtime_frame", 0},
+          {"armed_capture_slot", nullptr},
       });
   check_error(stale_begin, "REVISION_CONFLICT");
   LMDJ_CHECK(!std::filesystem::exists(

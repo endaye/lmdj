@@ -1899,6 +1899,7 @@ void test_sample_json_delayed_replays_report_current_project_revision() {
                 {"slot", slot(0, 0)},
                 {"asset_id", uuid(723)},
                 {"byte_length", source.size()},
+                {"sequence_session_id", nullptr},
             }),
         nullptr);
     LMDJ_CHECK(

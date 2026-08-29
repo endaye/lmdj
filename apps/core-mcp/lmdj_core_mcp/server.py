@@ -254,6 +254,9 @@ def input_schemas() -> dict[str, dict]:
                     "minimum": 1,
                     "maximum": 1_048_576,
                 },
+                "sequence_session_id": {
+                    "anyOf": [uuid, {"type": "null"}],
+                },
             },
             [
                 "import_token",
@@ -263,6 +266,7 @@ def input_schemas() -> dict[str, dict]:
                 "slot",
                 "asset_id",
                 "byte_length",
+                "sequence_session_id",
             ],
         ),
         "lmdj.sample.import.chunk": object_schema(
@@ -369,6 +373,9 @@ def input_schemas() -> dict[str, dict]:
                 "pattern_id": uuid,
                 "expected_revision": uint,
                 "runtime_frame": uint,
+                "armed_capture_slot": {
+                    "anyOf": [slot, {"type": "null"}],
+                },
             },
             [
                 "project_path",
@@ -376,6 +383,7 @@ def input_schemas() -> dict[str, dict]:
                 "pattern_id",
                 "expected_revision",
                 "runtime_frame",
+                "armed_capture_slot",
             ],
         ),
         "lmdj.sequence.record.event": object_schema(

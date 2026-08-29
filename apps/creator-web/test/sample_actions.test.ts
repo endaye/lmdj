@@ -793,7 +793,8 @@ describe("captureCommitJourney", () => {
       session,
       buffer,
       {startFrame: 8, frameCount: 16},
-      {slot: 17, expectedRevision: 42},
+      {slot: 17, expectedRevision: 42,
+        sequenceSessionId: "00000000-0000-4000-8000-000000000374"},
     );
 
     expect(resolution).toEqual({kind: "committed", commit: published, inspect: refreshed});
@@ -802,7 +803,8 @@ describe("captureCommitJourney", () => {
     expect(file).toBeInstanceOf(File);
     expect(file.name).toBe(CAPTURE_FILE_NAME);
     expect(file.type).toBe("audio/wav");
-    expect(options).toMatchObject({slot: 17, expectedRevision: 42});
+    expect(options).toMatchObject({slot: 17, expectedRevision: 42,
+      sequenceSessionId: "00000000-0000-4000-8000-000000000374"});
     // The delegated bytes are exactly the deterministic encoding of the
     // selected frames — not the whole take.
     const expected = encodePcm16Wav(buffer.slice(8, 16));
@@ -855,6 +857,10 @@ describe("captureCommitJourney", () => {
     )).rejects.toThrow(TypeError);
     await expect(captureCommitJourney(session, buffer,
       {startFrame: 0, frameCount: 8, extra: 1} as never, {slot: 1, expectedRevision: 1},
+    )).rejects.toThrow(TypeError);
+    await expect(captureCommitJourney(session, buffer,
+      {startFrame: 0, frameCount: 8},
+      {slot: 1, expectedRevision: 1, sequenceSessionId: "not-a-session"},
     )).rejects.toThrow(TypeError);
     // A selection outside the recorded frames is the buffer's RangeError, and
     // it must never reach the Runtime as a half-formed import.

@@ -618,6 +618,7 @@ def proof(
                 "pattern_id": PATTERN_ID,
                 "expected_revision": 7,
                 "runtime_frame": 0,
+                "armed_capture_slot": None,
             },
         ),
         7,

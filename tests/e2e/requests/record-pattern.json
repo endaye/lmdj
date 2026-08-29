@@ -13,7 +13,8 @@
     "session_id": "00000000-0000-4000-8000-000000000201",
     "pattern_id": "00000000-0000-4000-8000-000000000010",
     "expected_revision": 5,
-    "runtime_frame": 0
+    "runtime_frame": 0,
+    "armed_capture_slot": null
   },
   "events": [
     {"slot": {"bank": 0, "pad": 0}, "velocity": 127, "runtime_frame": 0, "input_sequence": 1, "pressed": true},

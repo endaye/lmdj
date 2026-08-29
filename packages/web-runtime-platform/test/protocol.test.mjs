@@ -182,6 +182,7 @@ test("accepts only exact privacy-safe Sample operation payloads", () => {
       slot: {bank: 0, pad: 3},
       asset_id: requestIdFor(103),
       byte_length: 44,
+      sequence_session_id: null,
     }],
     ["sample.import.chunk", {
       import_token: requestIdFor(101),

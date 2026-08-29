@@ -736,6 +736,7 @@ def sequence_cross_host_observer(
             "pattern_id": PATTERN_ID,
             "expected_revision": 5,
             "runtime_frame": 0,
+            "armed_capture_slot": None,
         },
     )
     check_success(begun, 5)
@@ -823,6 +824,7 @@ def sequence_cross_host_observer(
                 "pattern_id": PATTERN_ID,
                 "expected_revision": 5,
                 "runtime_frame": 0,
+                "armed_capture_slot": None,
             },
         ),
         5,

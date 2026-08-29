@@ -2402,6 +2402,7 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
       sessionId,
       patternId,
       expectedRevision,
+      armedCaptureSlot: null,
     }), {
     sessionId: firstSessionId,
     patternId: descriptor.pattern_id,
@@ -2519,6 +2520,7 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
       sessionId,
       patternId,
       expectedRevision,
+      armedCaptureSlot: null,
     }), {
     sessionId: secondSessionId,
     patternId: descriptor.pattern_id,
@@ -2572,7 +2574,7 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
   const cancelledCommandId = crypto.randomUUID();
   await page.evaluate(({sessionId, patternId, expectedRevision}) =>
     window.lmdjWebRuntimeController.beginSequence({
-      sessionId, patternId, expectedRevision,
+      sessionId, patternId, expectedRevision, armedCaptureSlot: null,
     }), {
     sessionId: cancelledSessionId,
     patternId: nextPatternId,

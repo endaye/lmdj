@@ -23,7 +23,12 @@ export function isSequenceSession(value: unknown): value is CreatorSequenceRunti
 
 export async function beginSequenceJourney(
   session: CreatorSequenceRuntimeSession,
-  request: {sessionId: string; patternId: string; expectedRevision: number},
+  request: {
+    sessionId: string;
+    patternId: string;
+    expectedRevision: number;
+    armedCaptureSlot: number | null;
+  },
 ): Promise<SequenceMutation> {
   return session.beginSequence(request);
 }

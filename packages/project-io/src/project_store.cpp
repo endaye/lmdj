@@ -2379,11 +2379,21 @@ foundation::Result<std::optional<ActiveSequenceJournal>>
 admit_sequence_authoring(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
-    const PersistedCommand* command = nullptr) {
+    const PersistedCommand* command = nullptr,
+    const std::optional<foundation::SequenceSessionId>&
+        sequence_capture_session_id = std::nullopt) {
   SequenceJournal journal{platform};
   auto active = journal.read_active(bundle);
   if (!active.has_value()) {
     if (active.error().code == ErrorCode::not_found) {
+      if (sequence_capture_session_id.has_value()) {
+        return foundation::Result<
+            std::optional<ActiveSequenceJournal>>::failure(Error{
+            ErrorCode::invalid_argument,
+            "Sequence capture owner does not match an active journal",
+            {{"reason", "sequence_owner_mismatch"}},
+        });
+      }
       return foundation::Result<
           std::optional<ActiveSequenceJournal>>::success(std::nullopt);
     }
@@ -2394,7 +2404,15 @@ admit_sequence_authoring(
       command != nullptr
           ? std::get_if<domain::UpdateSequenceSettings>(command)
           : nullptr;
-  if (settings != nullptr &&
+  const auto* sample_import =
+      command != nullptr
+          ? std::get_if<domain::ImportAssignSample>(command)
+          : nullptr;
+  const auto sequence_capture_matches =
+      sample_import != nullptr && sequence_capture_session_id.has_value() &&
+      domain::is_valid_uuid(sequence_capture_session_id->value()) &&
+      active.value().session_id == *sequence_capture_session_id;
+  if ((settings != nullptr || sequence_capture_matches) &&
       (active.value().state == SequenceSessionState::active ||
        active.value().state == SequenceSessionState::switching)) {
     return foundation::Result<
@@ -3457,7 +3475,8 @@ ProjectStore::import_assign_sample_bytes(
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
   }
-  auto admitted = admit_sequence_authoring(platform_, bundle);
+  auto admitted = admit_sequence_authoring(
+      platform_, bundle, &command, request.sequence_session_id);
   if (!admitted.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         admitted.error());
@@ -3469,13 +3488,30 @@ ProjectStore::import_assign_sample_bytes(
   }
 
   if (loaded.value().receipts.contains(request.meta.command_id)) {
-    return commit_loaded(
+    auto replayed = commit_loaded(
         platform_,
         bundle,
         std::move(loaded.value()),
         command,
         std::nullopt,
         nullptr);
+    if (!replayed.has_value()) {
+      return replayed;
+    }
+    if (admitted.value().has_value() &&
+        replayed.value().state.revision >
+            admitted.value()->expected_revision) {
+      SequenceJournal journal{platform_};
+      auto rebased = journal.rebase(
+          bundle,
+          admitted.value()->session_id,
+          replayed.value().state.revision);
+      if (!rebased.has_value()) {
+        return foundation::Result<domain::AppliedCommand>::failure(
+            rebased.error());
+      }
+    }
+    return replayed;
   }
 
   auto staged = stage_sample(
@@ -3518,6 +3554,18 @@ ProjectStore::import_assign_sample_bytes(
   if (!cleanup.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         cleanup.error());
+  }
+  if (admitted.value().has_value() &&
+      outcome.value().state.revision > admitted.value()->expected_revision) {
+    SequenceJournal journal{platform_};
+    auto rebased = journal.rebase(
+        bundle,
+        admitted.value()->session_id,
+        outcome.value().state.revision);
+    if (!rebased.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          rebased.error());
+    }
   }
   return outcome;
 }

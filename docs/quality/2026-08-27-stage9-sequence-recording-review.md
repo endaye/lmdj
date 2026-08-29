@@ -71,8 +71,8 @@ truth integration 与不可变快照分别由 #379、#380 负责。
 | --- | --- | --- |
 | H1 | #378 | 实现 writer-lease 内 journal admission、本地 begin-vs-authoring critical section、孤儿 journal 先 seal，以及 settings-only Store rebase；以 Project Store 与 Facade deterministic component cases 阻断回归 |
 | H2 | #376 | 实现共享 Web Runtime Session 的权威边界匹配、exact-once flush、串行 post-boundary admission，以及 Creator authority-only 状态转换；单元与 packaged-browser journey 覆盖乱序/重复通知、继续录音、stop、reload 和 committed-event inspection |
-| H3 | #374 | open |
-| M1 | #375 | open |
+| H3 | #374 | source 修复：Sequence begin 绑定可选空 armed Pad；capture-only import 以 session/revision/slot 三重校验进入 Facade 与 Store 白名单并同步 rebase journal/runtime；Creator trim overlay 保留 active/switch-pending authority，拒绝、取消和失败不丢 pending events |
+| M1 | #375 | source 修复：Facade pending projection 经 Web Control 发布下一 Bar immutable overlay；flush/Stop/owner loss 清理 committed view，Audio mailbox race、替换、取消和计数守恒已有 component/stress evidence |
 | M2 | #373 | source 修复：每次已接受 Pad event 在 acknowledgement 前写入单调、checksummed canonical tail；flush 消费 tail；真实子进程 `SIGKILL` 后重启 seal 两条事件并显式恢复；torn tail 携带 path/prefix/length/remedy fail closed |
 | M3 | #372 | open |
 
@@ -182,6 +182,20 @@ Stage 9 浏览器 Host 测试从不切槽；`control_runtime_test.cpp` 没有
 switch-request 测试。
 
 ### H3 SR-D15/D24/D18 未实现：武装 Pad 提交白名单缺失，Creator trim 走了被禁止的 SR-D9 路径
+
+**2026-08-29 source remediation (#374)：已修复。** Sequence begin 现在只可绑定
+一个当时为空的 armed Pad。Capture commit 沿现有 Stage 8B trim/encode/import 路径
+携带 active session identity；Facade 在 `sequence_mutex` 内同时验证 owner、最新
+revision、原 armed slot 与目标仍为空，Project Store 再以 matching active journal
+独立重判并在原子 Sample transaction 后 rebase journal。成功提交只更新会话
+expected revision、可用 Pad mask 和一次性 armed authority，pending/pressed events、
+transport、overlay generation 与 switch authority 均保留；普通 file/long-source
+import 仍 fail closed。Creator 停 armed capture 不再调用 Sequence Stop，trim overlay
+保留 active/switch-pending underlay，并在取消、失败或提交后回到最新 Facade
+authority。Facade、Project Store、Web Control、Runtime Session 与 Creator reducer/action
+的 source evidence 写入 Stage 9 acceptance ledger；Product identity 仍由 #379、
+immutable snapshot 仍由 #380 负责。以下段落保留原始 `1.0.37.0` 审查发现，
+不能据此否定当前 source disposition。
 
 PRD 决策明文：「选择性 rebase 是封闭白名单：BPM、Quantize/Swing、以及进行中
 的 Pad Capture 提交到已武装的目标 Pad」

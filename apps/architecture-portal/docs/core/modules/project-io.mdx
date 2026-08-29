@@ -18,6 +18,8 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 事务式保存/加载 Project Truth、导入/导出 portable Project Bundle，并维护 Sequence journal overlay、flush receipt 与 recovery artifact；不 Cook、渲染或拥有 Host UI。
 ## 2. 当前实现状态
 Project I/O `1.0.0` 的 Store、Sequence Journal、streaming Bundle parser/packer、v1/v2 读取与 v3-only 写出、Workspace Cache 和 crash-safe publication 已实现。flush 以 manifest replacement 为 commit point，并把 command/session/flush identity 与 committed revision 写入可幂等重放的 receipt；同一 `command_id` 的 replay/collision 始终比较不可变 original canonical payload，相同 append 返回原 record，冲突 payload 在写入前失败。completion 只更新独立 effective recovery residual，不能改写 command identity；sealed payload v2 同时要求两者，旧 recovery-only snapshot 按旧语义安全读取。当前 source 在每个已接受 Sequence Pad event acknowledgement 前 append 单调、checksummed canonical tail；flush record 消费同一 tail。若较早 flush 在 commit point 前失败，后续 flush 必须 canonical 覆盖全部 unresolved batch 与最新 tail。任一 receipt 可见时，Project I/O 按同 session/pattern/expected-revision 的 canonical key/value coverage 双向 resolve：较晚 completion supersede 被覆盖的较早 batch；较早 completion resolve 精确等价的已耐久 retry，并从非等价较晚 batch 及当时最新 durable pending tail 扣除精确 committed event、保留新增或同-key 新值 residual。即使没有较晚 flush，owner loss 也只 seal 真正未提交部分；tail 的单调 sequence metadata 与 canonical 顺序不被过滤重置。所有普通 authoring mutation 仍在持有 writer lease 后重读 active Sequence Journal；存在 active journal 时只有 `UpdateSequenceSettings` 属于既有白名单，其成功提交由 Store 同步 rebase journal。
+Store 的第二个白名单只接受 `ImportAssignSample` 携带 matching active journal session 的 capture authority；Facade 仍负责 armed target 与空 Pad 校验。Store 在同一 writer-lease transaction 后把 journal rebase 到 committed revision。无 active journal、错误 owner 或无 authority 都在 Project mutation 前拒绝，普通 Sample import 不因共享 transaction 实现而获得权限。
+
 ## 3. 所有权与依赖
 依赖 Foundation 与 Authoring Domain；平台适配不能改变领域语义。
 ## 4. 架构与数据流
@@ -29,7 +31,7 @@ Facade 提交 Project、Bundle stream、bounded Sample bytes 或 Sequence flush�
 ## 7. 产品使用方
 Application Facade 使用；Host 不直接解析 bundle。
 ## 8. 测试与证据
-Project store、v1/v2→v3 migration、atomic Sample transaction、Sequence journal/receipt/recovery、durable tail reload/flush consumption、失败 F1 被成功累积 F2 supersede、F0 先完成时 32 条等价 retry inverse resolve、original A+B replay 与 residual-only collision、versioned serialize/reload/legacy recovery、post-commit same-bundle retry/restart reconcile、无 later flush 的 A+B/A+A'+B/equivalent-only pending-tail residual、非等价 flush residual 提取、torn/checksum/sequence/canonical corruption 的统一 fail-closed evidence、writer-lease 内 direct-authoring refusal/settings rebase、Bundle 1.0/1.1 round trip/publication、fault matrix、distinct-platform publication ownership、Native link-count 与 Web/native storage platform contract 测试。
+Project store、v1/v2→v3 migration、atomic Sample transaction、Sequence journal/receipt/recovery、durable tail reload/flush consumption、失败 F1 被成功累积 F2 supersede、F0 先完成时 32 条等价 retry inverse resolve、original A+B replay 与 residual-only collision、versioned serialize/reload/legacy recovery、post-commit same-bundle retry/restart reconcile、无 later flush 的 A+B/A+A'+B/equivalent-only pending-tail residual、非等价 flush residual 提取、torn/checksum/sequence/canonical corruption 的统一 fail-closed evidence、writer-lease 内 direct-authoring refusal/settings rebase、owner-only capture admission/journal rebase、Bundle 1.0/1.1 round trip/publication、fault matrix、distinct-platform publication ownership、Native link-count 与 Web/native storage platform contract 测试。
 ## 9. 限制与下一门禁
 云同步和协同冲突策略未批准，不能从本地存储能力推断。
 ## 10. 版本身份

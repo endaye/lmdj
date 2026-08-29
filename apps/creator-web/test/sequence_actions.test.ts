@@ -25,11 +25,13 @@ test("Sequence journeys preserve typed command identities and query both authori
   } as unknown as CreatorSequenceRuntimeSession;
   await beginSequenceJourney(session, {
     sessionId: "session-1", patternId: "pattern-1", expectedRevision: 3,
+    armedCaptureSlot: 17,
   });
   await stopSequenceJourney(session, "session-1", "command-1");
   await refreshSequenceJourney(session, "project-1");
   expect(session.beginSequence).toHaveBeenCalledWith({
     sessionId: "session-1", patternId: "pattern-1", expectedRevision: 3,
+    armedCaptureSlot: 17,
   });
   expect(session.stopSequence).toHaveBeenCalledWith({
     sessionId: "session-1", commandId: "command-1",

@@ -654,6 +654,7 @@ function Workspace({
         sessionId,
         patternId: sequence.selectedPatternId ?? project.patternId,
         expectedRevision: sequenceAuthoringRevision.current,
+        armedCaptureSlot: armedCaptureSlotRef.current,
       });
       dispatchSequence({type: "recording", status, sessionId});
     } catch (error) {
@@ -688,9 +689,7 @@ function Workspace({
 
   const stopArmedCapture = async () => {
     const current = sequenceRef.current;
-    if (["recording", "switch-pending", "flushing"].includes(current.phase)) {
-      if (current.phase === "flushing" || !(await stopSequence())) return;
-    }
+    if (current.phase === "flushing") return;
     setCaptureStopRequest((request) => request + 1);
   };
   armedCaptureStopIntent.current = () => { void stopArmedCapture(); };
@@ -922,6 +921,12 @@ function Workspace({
             closeCaptureAfterResolution={activeMode !== "sample"}
             onCaptureSlotChange={setArmedCaptureSlot}
             onCapturePhaseChange={capturePhaseChanged}
+            sequenceCaptureSessionId={sequence.sessionId}
+            sequenceCaptureExpectedRevision={sequenceAuthoringRevision.current}
+            onSequenceCaptureCommitted={(revision) => {
+              sequenceAuthoringRevision.current = revision;
+              void refreshSequence();
+            }}
             onContinueCaptureInSequence={() => {
               if (isSequenceSession(session) && state.project.current !== null) {
                 setActiveMode("sequence");

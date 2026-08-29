@@ -225,6 +225,41 @@ publication or Channel promotion is established here. The physical/manual
 rows below remain unchanged and unverified. Hard-crash pending-tail persistence
 remains #373 and switch-boundary flushing remains #376.
 
+## #374 armed-capture rebase source remediation — 2026-08-29
+
+This source Task closes review finding H3 while preserving the approved
+Stage 8B capture editor. Sequence begin binds at most one currently empty armed
+Pad. Only a capture import carrying the exact active session, current revision,
+and bound slot can cross the authoring gate; ordinary file and long-source
+imports remain blocked. Project Store independently matches the active journal
+owner and rebases it after the existing atomic `ImportAssignSample` transaction.
+Facade then advances the in-memory session revision and available-slot mask
+without clearing pending/pressed events, changing transport, moving Pattern
+authority, or fabricating a flush receipt.
+
+Creator now stops only capture when the armed Pad is pressed during Sequence.
+The trim overlay retains active or switch-pending authority and returns to the
+latest authoritative phase after cancel, failure, or success. A rejected owner,
+stale revision, changed target, or already-assigned target is non-destructive;
+the captured buffer and pending Sequence events remain recoverable. After a
+successful commit, only later hits on the newly assigned Pad enter the journal.
+
+| Source boundary | Fresh local evidence |
+| --- | --- |
+| Project Store owner-only capture admission and active journal rebase | PASS: `project_io.project_store` |
+| Facade wrong-target rejection, pending preservation, successful rebase, future-hit admission, Stop and reload | PASS: `facade.sequence_surface` |
+| Production ControlRuntime capture import, Bank refresh, active status, future hit, Stop and Project inspection | PASS: `host.web_control_runtime` |
+| Web Runtime exact `armed_capture_slot` / nullable `sequence_session_id` protocol | PASS: Node Runtime Session + protocol suites |
+| Creator trim underlay and capture-specific authority forwarding | PASS: TypeScript build plus 21 Vitest files / 354 tests |
+| Native concurrency regression layer | PASS: 5/5 stress tests |
+| Packaged Chromium armed-capture journey | Source case added to the mandatory Creator capture project; local execution awaits the Linux/EMSDK CI lane |
+| Current Architecture Portal | PASS: 59 tests, 37 pages, 10 diagram sources / 20 outputs, and 42 rendered routes |
+
+This is source evidence, not a new Product Build or immutable snapshot. #379
+owns integrated identity and full CI disposition; #380 owns the corrected
+immutable Portal snapshot. The physical/manual rows below remain unchanged and
+unverified.
+
 ## Physical and manual rows
 
 | Platform | Journey | Status |

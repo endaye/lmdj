@@ -2481,18 +2481,26 @@ function createRuntimeSessionController(options = {}) {
     if (
       request === null ||
       typeof request !== "object" ||
-      !exactKeys(request, ["sessionId", "patternId", "expectedRevision"]) ||
+      !exactKeys(request, [
+        "sessionId", "patternId", "expectedRevision", "armedCaptureSlot",
+      ]) ||
+      (request.armedCaptureSlot !== null &&
+       !isUnsignedInteger(request.armedCaptureSlot, 63)) ||
       !isUnsignedInteger(request.expectedRevision)
     ) {
       throw new TypeError("Sequence begin request is invalid");
     }
     const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
     const patternId = requireSequenceIdentity(request.patternId, "patternId");
+    const armedCaptureSlot = request.armedCaptureSlot === null
+      ? null
+      : flatSlotAddress(request.armedCaptureSlot);
     return serializeRuntimeAction(async () => {
       const value = await boundedRequest("sequence.record.begin", {
         session_id: sessionId,
         pattern_id: patternId,
         expected_revision: request.expectedRevision,
+        armed_capture_slot: armedCaptureSlot,
       });
       const mutation = normalizeSequenceMutation(value, ["transport_anchor"]);
       const anchor = value.transport_anchor;
@@ -2963,7 +2971,9 @@ function createRuntimeSessionController(options = {}) {
 
   function importAssignSample(file, importOptions = {}) {
     return serializeProjectAction(async () => {
-      const allowedKeys = ["slot", "expectedRevision", "signal", "onProgress"];
+      const allowedKeys = [
+        "slot", "expectedRevision", "sequenceSessionId", "signal", "onProgress",
+      ];
       if (
         importOptions === null ||
         typeof importOptions !== "object" ||
@@ -2971,7 +2981,9 @@ function createRuntimeSessionController(options = {}) {
         Object.keys(importOptions).some((key) => !allowedKeys.includes(key)) ||
         !Object.hasOwn(importOptions, "slot") ||
         !Object.hasOwn(importOptions, "expectedRevision") ||
-        !isUnsignedInteger(importOptions.expectedRevision)
+        !isUnsignedInteger(importOptions.expectedRevision) ||
+        (importOptions.sequenceSessionId !== undefined &&
+          !UUID_PATTERN.test(importOptions.sequenceSessionId))
       ) {
         throw new TypeError("Sample import options are invalid");
       }
@@ -3040,6 +3052,7 @@ function createRuntimeSessionController(options = {}) {
           slot,
           asset_id: assetId,
           byte_length: totalBytes,
+          sequence_session_id: importOptions.sequenceSessionId ?? null,
         }, {signal});
         if (
           !exactKeys(begun, ["token", "expected_bytes"]) ||

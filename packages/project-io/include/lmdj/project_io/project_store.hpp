@@ -71,6 +71,8 @@ class ProjectStore {
     foundation::AssetId asset_id;
     std::string media_type;
     std::span<const std::byte> bytes;
+    std::optional<foundation::SequenceSessionId> sequence_session_id =
+        std::nullopt;
   };
 
   foundation::Result<void> create(

@@ -555,12 +555,15 @@ export function importAssignSampleJourney(
     keys.some((key) => ![
       "slot",
       "expectedRevision",
+      "sequenceSessionId",
       "signal",
       "onProgress",
     ].includes(key)) ||
     !Object.hasOwn(options, "slot") ||
     !Object.hasOwn(options, "expectedRevision") ||
     !slotNumber(options.slot) || !unsignedInteger(options.expectedRevision) ||
+    (options.sequenceSessionId !== undefined &&
+      !UUID_PATTERN.test(options.sequenceSessionId)) ||
     (options.onProgress !== undefined && typeof options.onProgress !== "function") ||
     (options.signal !== undefined && !(options.signal instanceof AbortSignal))) {
     return Promise.reject(new TypeError("Sample import options are invalid"));
@@ -568,6 +571,8 @@ export function importAssignSampleJourney(
   const normalizedOptions: SampleImportOptions = Object.freeze({
     slot: options.slot,
     expectedRevision: options.expectedRevision,
+    ...(options.sequenceSessionId === undefined
+      ? {} : {sequenceSessionId: options.sequenceSessionId}),
     ...(options.signal === undefined ? {} : {signal: options.signal}),
     ...(options.onProgress === undefined ? {} : {onProgress: options.onProgress}),
   });
@@ -581,13 +586,10 @@ export function importAssignSampleJourney(
 
 export const CAPTURE_FILE_NAME = "capture.wav";
 
-// A committed capture is just another byte source for the Stage 8 import
-// session: encode the trimmed selection here, then hand the File to the very
-// same journey the file picker uses. Nothing downstream — staging, writer
-// lease, command_id/expected_revision, conflict classification, Cooker
-// preparation — learns that these bytes came from a microphone (S8B design
-// §6.2). A conflict therefore surfaces exactly like an import conflict, and a
-// retry re-encodes the identical selection into identical bytes.
+// Capture keeps the Stage 8 byte/trim journey, while an optional Stage 9
+// Sequence session identity gives the Facade one narrow admission capability.
+// The Facade still validates the exact active owner, revision and armed Pad;
+// ordinary file/long-source imports never carry that capability.
 export function captureCommitJourney(
   session: CreatorSampleRuntimeSession,
   buffer: CaptureBuffer,

@@ -881,6 +881,48 @@ void test_active_sequence_journal_blocks_direct_authoring_admission() {
   const auto active = journal.read_active(bundle);
   LMDJ_CHECK(active.has_value());
   LMDJ_CHECK(active.value().expected_revision == 1);
+
+  const std::array capture_bytes{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+      std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
+  };
+  const auto capture_request =
+      ProjectStore::ImportAssignSampleBytesRequest{
+          meta("admission-capture", 1),
+          PadSlotId{0, 1},
+          AssetId{test_uuid("admission-capture-asset")},
+          "audio/wav",
+          capture_bytes,
+          session_id,
+      };
+  auto unowned_capture = capture_request;
+  unowned_capture.sequence_session_id = std::nullopt;
+  const auto rejected_unowned =
+      store.import_assign_sample_bytes(bundle, unowned_capture);
+  LMDJ_CHECK(!rejected_unowned.has_value());
+  LMDJ_CHECK(
+      rejected_unowned.error().details.at("reason") ==
+      "sequence_session_active");
+
+  auto wrong_owner = capture_request;
+  wrong_owner.sequence_session_id = lmdj::foundation::SequenceSessionId{
+      test_uuid("admission-wrong-session")};
+  const auto rejected_owner =
+      store.import_assign_sample_bytes(bundle, wrong_owner);
+  LMDJ_CHECK(!rejected_owner.has_value());
+  LMDJ_CHECK(store.load(bundle).value().revision == 1);
+
+  const auto captured =
+      store.import_assign_sample_bytes(bundle, capture_request);
+  LMDJ_CHECK(captured.has_value());
+  LMDJ_CHECK(captured.value().state.revision == 2);
+  LMDJ_CHECK(
+      captured.value().state.banks.at(0).at(1).asset_id ==
+      capture_request.asset_id);
+  const auto rebased = journal.read_active(bundle);
+  LMDJ_CHECK(rebased.has_value());
+  LMDJ_CHECK(rebased.value().session_id == session_id);
+  LMDJ_CHECK(rebased.value().expected_revision == 2);
 }
 
 void test_nonzero_revision_v1_history_opens_without_migration() {

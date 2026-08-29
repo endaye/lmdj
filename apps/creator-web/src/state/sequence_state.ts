@@ -10,6 +10,12 @@ export type SequencePhase =
 
 export interface SequenceState {
   phase: SequencePhase;
+  overlayReturnPhase:
+    | "stopped"
+    | "recording"
+    | "switch-pending"
+    | "recovery"
+    | null;
   status: SequenceStatus | null;
   recovery: readonly SequenceRecoveryCandidate[];
   selectedPatternId: string | null;
@@ -20,6 +26,7 @@ export interface SequenceState {
 
 export const initialSequenceState: SequenceState = Object.freeze({
   phase: "stopped",
+  overlayReturnPhase: null,
   status: null,
   recovery: Object.freeze([]),
   selectedPatternId: null,
@@ -50,17 +57,21 @@ export function reduceSequence(
       return state.phase === "stopped"
         ? {...state, selectedPatternId: action.patternId}
         : state;
-    case "authority":
+    case "authority": {
+      const authorityPhase = action.status.state === "recoverable" ? "recovery" :
+        action.status.state === "switching" ? "switch-pending" :
+        action.status.state === "active" ? "recording" : "stopped";
       return {
         ...state,
-        phase: action.status.state === "recoverable" ? "recovery" :
-          action.status.state === "switching" ? "switch-pending" :
-          action.status.state === "active" ? "recording" : "stopped",
+        phase: state.phase === "trim-overlay" ? "trim-overlay" : authorityPhase,
+        overlayReturnPhase: state.phase === "trim-overlay"
+          ? authorityPhase : null,
         status: action.status,
         selectedPatternId: action.status.patternId ?? state.selectedPatternId,
         sessionId: action.status.sessionId,
         errorCode: null,
       };
+    }
     case "recording":
       if (state.phase !== "stopped" && state.phase !== "recovery") return state;
       return {...state, phase: "recording", status: action.status,
@@ -74,7 +85,9 @@ export function reduceSequence(
       return {...state, phase: "switch-pending", status: action.status};
     case "boundary":
       if (
-        state.phase !== "switch-pending" ||
+        (state.phase === "trim-overlay"
+          ? state.overlayReturnPhase !== "switch-pending"
+          : state.phase !== "switch-pending") ||
         state.status?.pendingPatternId !== action.patternId ||
         action.status.state !== "active" ||
         action.status.sessionId !== state.sessionId ||
@@ -82,8 +95,13 @@ export function reduceSequence(
         action.status.pendingPatternId !== null ||
         action.status.effectiveRuntimeFrame !== null
       ) return state;
-      return {...state, phase: "recording", status: action.status,
-        selectedPatternId: action.patternId};
+      return {
+        ...state,
+        phase: state.phase === "trim-overlay" ? "trim-overlay" : "recording",
+        overlayReturnPhase: state.phase === "trim-overlay" ? "recording" : null,
+        status: action.status,
+        selectedPatternId: action.patternId,
+      };
     case "stopped":
       if (!["recording", "switch-pending", "flushing"].includes(state.phase)) return state;
       return {...state, phase: "stopped", status: action.status,
@@ -94,9 +112,15 @@ export function reduceSequence(
       return {...state, phase: action.candidates.length === 0 ? "stopped" : "recovery",
         recovery: Object.freeze([...action.candidates])};
     case "trim-overlay":
-      return state.phase === "stopped" ? {...state, phase: "trim-overlay"} : state;
+      return ["stopped", "recording", "switch-pending"].includes(state.phase)
+        ? {...state, phase: "trim-overlay",
+          overlayReturnPhase: state.phase as "stopped" | "recording" | "switch-pending"}
+        : state;
     case "trim-closed":
-      return state.phase === "trim-overlay" ? {...state, phase: "stopped"} : state;
+      return state.phase === "trim-overlay"
+        ? {...state, phase: state.overlayReturnPhase ?? "stopped",
+          overlayReturnPhase: null}
+        : state;
     case "failed":
       return {...state, errorCode: action.errorCode};
   }

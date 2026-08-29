@@ -55,6 +55,9 @@ interface SampleSurfaceProps {
   onCaptureSlotChange?(slot: number | null): void;
   onCapturePhaseChange?(phase: CapturePhase): void;
   onContinueCaptureInSequence?(): void;
+  sequenceCaptureSessionId?: string | null;
+  sequenceCaptureExpectedRevision?: number;
+  onSequenceCaptureCommitted?(revision: number): void;
   closeCaptureAfterResolution?: boolean;
 }
 
@@ -204,6 +207,9 @@ export function SampleSurface({
   onCapturePhaseChange,
   onContinueCaptureInSequence,
   closeCaptureAfterResolution = false,
+  sequenceCaptureSessionId = null,
+  sequenceCaptureExpectedRevision,
+  onSequenceCaptureCommitted,
 }: SampleSurfaceProps) {
   const input = useRef<HTMLInputElement | null>(null);
   const fileSlot = useRef<number | null>(null);
@@ -600,10 +606,11 @@ export function SampleSurface({
   };
 
   // One journey runner for every byte source that assigns a Sample to a Pad.
-  // A file pick and a committed capture differ only in how the bytes are
-  // produced, so they must share the Replace confirmation, the pre-mutation
+  // A file pick and a committed capture share the byte/trim journey, so they
+  // keep the Replace confirmation, the pre-mutation
   // stop, the pending/abort bookkeeping, conflict classification and the
-  // post-import selection and waveform behaviour. `invoke` is the only seam.
+  // post-import selection and waveform behaviour. `invoke` is also the narrow
+  // seam where an armed Sequence capture adds its session capability.
   const runImportJourney = async (
     slot: number,
     invoke: (
@@ -717,8 +724,24 @@ export function SampleSurface({
     selection: {startFrame: number; frameCount: number},
   ) => runImportJourney(
     target.slot,
-    (active, options) => captureCommitJourney(active, buffer, selection, options),
-    target.quota.projectRevision,
+    async (active, options) => {
+      const resolution = await captureCommitJourney(
+        active,
+        buffer,
+        selection,
+        sequenceCaptureSessionId === null
+          ? options
+          : {...options, sequenceSessionId: sequenceCaptureSessionId},
+      );
+      if (resolution.kind === "committed" &&
+          sequenceCaptureSessionId !== null) {
+        onSequenceCaptureCommitted?.(resolution.commit.committedRevision);
+      }
+      return resolution;
+    },
+    sequenceCaptureSessionId === null
+      ? target.quota.projectRevision
+      : sequenceCaptureExpectedRevision,
   );
 
   const openCapture = async (slot: number): Promise<void> => {

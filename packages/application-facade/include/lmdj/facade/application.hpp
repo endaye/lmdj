@@ -180,6 +180,8 @@ struct SampleImportBeginRequest {
   domain::PadSlotId slot;
   foundation::AssetId asset_id;
   std::uint64_t byte_length;
+  std::optional<foundation::SequenceSessionId> sequence_session_id =
+      std::nullopt;
 };
 
 struct SampleImportSession {
@@ -200,6 +202,7 @@ struct SequenceBeginRequest {
   foundation::PatternId pattern_id;
   std::uint64_t expected_revision;
   std::uint64_t runtime_frame;
+  std::optional<domain::PadSlotId> armed_capture_slot = std::nullopt;
 };
 
 struct SequencePadEvent {

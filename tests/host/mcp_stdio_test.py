@@ -233,6 +233,9 @@ def expected_schemas() -> dict[str, dict]:
                     "minimum": 1,
                     "maximum": 1_048_576,
                 },
+                "sequence_session_id": {
+                    "anyOf": [uuid, {"type": "null"}],
+                },
             },
             [
                 "import_token",
@@ -242,6 +245,7 @@ def expected_schemas() -> dict[str, dict]:
                 "slot",
                 "asset_id",
                 "byte_length",
+                "sequence_session_id",
             ],
         ),
         "lmdj.sample.import.chunk": object_schema(
@@ -343,6 +347,9 @@ def expected_schemas() -> dict[str, dict]:
                 "pattern_id": uuid,
                 "expected_revision": uint,
                 "runtime_frame": uint,
+                "armed_capture_slot": {
+                    "anyOf": [slot, {"type": "null"}],
+                },
             },
             [
                 "project_path",
@@ -350,6 +357,7 @@ def expected_schemas() -> dict[str, dict]:
                 "pattern_id",
                 "expected_revision",
                 "runtime_frame",
+                "armed_capture_slot",
             ],
         ),
         "lmdj.sequence.record.event": object_schema(
@@ -1308,6 +1316,7 @@ def valid_arguments(temp_root: Path) -> dict[str, dict]:
             "slot": slot,
             "asset_id": uuid,
             "byte_length": 44,
+            "sequence_session_id": None,
         },
         "lmdj.sample.import.chunk": {
             "import_token": uuid,
@@ -1361,6 +1370,7 @@ def valid_arguments(temp_root: Path) -> dict[str, dict]:
             "pattern_id": uuid,
             "expected_revision": 0,
             "runtime_frame": 0,
+            "armed_capture_slot": None,
         },
         "lmdj.sequence.record.event": {
             "project_path": str(missing_project),
