@@ -11,6 +11,7 @@ import copy
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -76,7 +77,11 @@ SELF_HOSTED_JOBS = [
 CASES = {
     ".github/ISSUE_TEMPLATE/feature.yml": {"docs_static", "ci_contract"},
     "docs/guide.md": {"docs_static"},
-    "docs/governance/git-workflow.md": {"docs_static", "portal"},
+    # release_skill_test.py asserts on this page, so the release-facing
+    # lanes that hold it must run when it changes.
+    "docs/governance/git-workflow.md": {
+        "docs_static", "portal", "ci_contract", "deploy_contract"
+    },
     "docs/governance/github-work-management.md": {
         "docs_static", "portal", "ci_contract"
     },
@@ -339,6 +344,13 @@ class ChangeScopeTest(unittest.TestCase):
                         trusted_head=True,
                     )
 
+    def lanes_for_path(self, path):
+        """Return the exact lane union the policy gives one path."""
+        return {
+            lane for rule in self.policy["rules"]
+            if policy_match(rule["match"], path) for lane in rule["lanes"]
+        }
+
     def test_every_tracked_path_has_explicit_ownership_or_full_rule(self):
         inventory = subprocess.run(
             ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True
@@ -353,6 +365,58 @@ class ChangeScopeTest(unittest.TestCase):
             )
         ]
         self.assertEqual(unmatched, [], "unclassified tracked paths:\n" + "\n".join(unmatched))
+
+    def test_every_document_a_test_reads_reaches_that_test_lane(self):
+        # A test that asserts on a document's content is a gate over that
+        # document, so editing the document must run the lane that holds the
+        # test. Three tests once read eleven documents routed away from their
+        # own lane -- `web_runtime_public_deployment_docs_test.py` asserted on
+        # a design document routed only to `docs_static` -- and only the
+        # queue's unconditional full run caught it. Deriving the expectation
+        # from the tests' real read sites keeps a new document from repeating
+        # it. The scan reads literal paths only: a dynamically built path is
+        # invisible to it, so this gate closes the common case rather than
+        # proving the general one.
+        read_sites = re.compile(
+            r"""(?:readRepo|readFile)\s*\(\s*["'`](docs/[A-Za-z0-9_./-]+)"""
+            r"""|(?:REPO_ROOT|ROOT)\s*/\s*["'](docs/[A-Za-z0-9_./-]+)["']"""
+        )
+        inventory = subprocess.run(
+            ["git", "ls-files", "tests", "apps", "-z"],
+            cwd=ROOT, check=True, capture_output=True,
+        ).stdout
+        sources = [
+            item.decode("utf-8") for item in inventory.split(b"\0")
+            if item and re.search(r"(_test\.py|\.test\.mjs)$", item.decode("utf-8"))
+        ]
+        gaps = []
+        for source in sources:
+            source_lanes = self.lanes_for_path(source)
+            if not source_lanes:
+                continue
+            text = (ROOT / source).read_text(encoding="utf-8", errors="ignore")
+            documents = {
+                match[0] or match[1] for match in read_sites.findall(text)
+            }
+            for document in sorted(documents):
+                if not (ROOT / document).exists():
+                    continue
+                missing = source_lanes - self.lanes_for_path(document)
+                if missing:
+                    gaps.append(
+                        f"{document} is missing {sorted(missing)}, read by {source}"
+                    )
+        self.assertEqual(
+            gaps, [],
+            "a document a test asserts on does not reach that test's lane.\n"
+            "why: editing the document classifies without the lane that holds "
+            "the test, so the assertion over its content never runs on the "
+            "Pull Request:\n  " + "\n  ".join(gaps) + "\n"
+            "remedy: add an exact rule for each document in "
+            "scripts/ci/scope_policy.json carrying the missing lanes. Rules are "
+            "additive, so the rule needs only the lanes the document does not "
+            "already get.",
+        )
 
     def test_every_tracked_top_level_is_admitted_by_the_policy(self):
         # `_evaluate_ready_paths` checks the top-level segment against
