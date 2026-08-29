@@ -565,6 +565,46 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await page.evaluate(() => window.__sampleVoiceUnsubscribe?.());
 });
 
+test("packaged Sample Editor clamps a plus-one-frame source and admits the quota-bound selection", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  await activateAudio(page);
+  await enterSampleEditor(page);
+
+  const operationOffset = await page.evaluate(() =>
+    (window.__sampleProofOperations ?? []).length);
+  await chooseSampleFile(
+    page,
+    "Add Sample to Pad A1",
+    "bank-quota-plus-one.wav",
+    pcm16Wav({frames: 16_777_217}),
+  );
+  const quotaBoundFrames = Number(await page.getByRole("slider", {
+    name: "Long source selection length",
+  }).inputValue());
+  expect(quotaBoundFrames).toBeLessThan(16_777_217);
+  expect(44 + quotaBoundFrames * 2).toBeGreaterThan(1_048_576);
+  await commitLongSourceSelection(page);
+
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible({timeout: 120_000});
+  await expect(page.getByText(
+    `48 kHz · Mono · ${quotaBoundFrames.toLocaleString("en-US")} frames`,
+  )).toBeVisible();
+  await expectProjectRevision(page, 47);
+  const operations = await page.evaluate((offset) =>
+    (window.__sampleProofOperations ?? []).slice(offset), operationOffset);
+  expect(operations.filter((operation) => operation === "sample.import.begin"))
+    .toHaveLength(1);
+  expect(operations.filter((operation) => operation === "sample.import.chunk"))
+    .toHaveLength(Math.ceil((44 + quotaBoundFrames * 2) / 1_048_576));
+  expect(operations.filter((operation) => operation === "sample.import.commit"))
+    .toHaveLength(1);
+});
+
 test("Sample Editor WebKit capability boundary is explicit, private, and non-physical", async ({page, browserName}) => {
   test.skip(browserName !== "webkit");
   await installHostProofRecorder(page);

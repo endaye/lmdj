@@ -1879,6 +1879,56 @@ test("Sample import streams one bounded hashed sidecar and commits one typed res
   ]);
 });
 
+test("Sample import treats 1 MiB as the chunk limit instead of the total limit", async () => {
+  const bytes = new Uint8Array(1_048_577);
+  const file = {
+    size: bytes.byteLength,
+    slice(start, end) {
+      return new Blob([bytes.subarray(start, end)]);
+    },
+  };
+  const operations = [];
+  const chunkSizes = [];
+  const {session} = fixture({
+    send: async (envelope, transportOptions) => {
+      operations.push(envelope.operation);
+      if (envelope.operation === "sample.import.begin") {
+        return success(envelope, {
+          token: envelope.payload.import_token,
+          expected_bytes: bytes.byteLength,
+        });
+      }
+      if (envelope.operation === "sample.import.chunk") {
+        chunkSizes.push(transportOptions.sidecar.byteLength);
+        return success(envelope, {
+          received_bytes:
+            envelope.payload.offset + transportOptions.sidecar.byteLength,
+          final: envelope.payload.final,
+        });
+      }
+      if (envelope.operation === "sample.import.commit") {
+        return success(envelope, {
+          committed_revision: 1,
+          runtime_revision: 1,
+          runtime_published: true,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  await session.importAssignSample(file, {slot: 0, expectedRevision: 0});
+
+  assert.deepEqual(operations, [
+    "sample.import.begin",
+    "sample.import.chunk",
+    "sample.import.chunk",
+    "sample.import.commit",
+  ]);
+  assert.deepEqual(chunkSizes, [1_048_576, 1]);
+});
+
 test("Sample import enforces the verified manifest total before begin", async () => {
   const operations = [];
   const file = new Blob([Uint8Array.of(1, 2, 3, 4)]);
@@ -2008,6 +2058,83 @@ test("Sample import keeps the primary Host failure while aborting once", async (
     "sample.import.abort",
   ]);
 });
+
+for (const quotaFailure of [
+  {
+    code: "BANK_QUOTA_EXHAUSTED",
+    details: {
+      bank: 0,
+      requested_bytes: 67_108_868,
+      requested_frames: 16_777_217,
+      remaining_bytes: 67_108_864,
+      remaining_frames: 16_777_216,
+      quota_bytes: 67_108_864,
+      consumed: [],
+    },
+  },
+  {
+    code: "PROJECT_QUOTA_EXHAUSTED",
+    details: {
+      requested_bytes: 4,
+      requested_frames: 1,
+      project_used_bytes: 134_217_728,
+      project_remaining_bytes: 0,
+      project_quota_bytes: 134_217_728,
+      banks: [
+        {bank: 0, prepared_bytes: 67_108_864},
+        {bank: 1, prepared_bytes: 67_108_864},
+      ],
+    },
+  },
+]) {
+  test(`Sample import preserves ${quotaFailure.code} details`, async () => {
+    const file = new Blob([Uint8Array.of(1, 2, 3, 4)]);
+    const operations = [];
+    const {session} = fixture({
+      send: async (envelope) => {
+        operations.push(envelope.operation);
+        if (envelope.operation === "sample.import.begin") {
+          return success(envelope, {
+            token: envelope.payload.import_token,
+            expected_bytes: file.size,
+          });
+        }
+        if (envelope.operation === "sample.import.chunk") {
+          return success(envelope, {received_bytes: file.size, final: true});
+        }
+        if (envelope.operation === "sample.import.commit") {
+          return {
+            protocol_version: 1,
+            request_id: envelope.request_id,
+            ok: false,
+            error: {
+              code: quotaFailure.code,
+              message: "Sample quota exhausted",
+              details: quotaFailure.details,
+            },
+          };
+        }
+        if (envelope.operation === "sample.import.abort") {
+          return success(envelope, {aborted: true});
+        }
+        throw new Error(`unexpected operation ${envelope.operation}`);
+      },
+    });
+    await session.start();
+
+    await assert.rejects(
+      session.importAssignSample(file, {slot: 0, expectedRevision: 0}),
+      (error) => error.code === quotaFailure.code &&
+        assert.deepEqual(error.details, quotaFailure.details) === undefined,
+    );
+    assert.deepEqual(operations, [
+      "sample.import.begin",
+      "sample.import.chunk",
+      "sample.import.commit",
+      "sample.import.abort",
+    ]);
+  });
+}
 
 test("malformed Sample abort response fails the session without hiding the primary error", async () => {
   const operations = [];

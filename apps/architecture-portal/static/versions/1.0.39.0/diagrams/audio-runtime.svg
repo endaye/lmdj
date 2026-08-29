@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="9e9d7042ee1b83f8fe77247059a55318daf572397e54101db77a9bdeb1d52c9e">
+  <title id="title">Audio Runtime Module</title><desc id="description">不可变快照、pending overlay、整数 transport 与有界实时输出</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
+  <style>
+    :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    @media(prefers-color-scheme:dark){:root{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}}
+    [data-theme=dark]{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}
+    [data-theme=light]{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
+    .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
+  </style>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">不可变快照、pending overlay、整数 transport 与有界实时输出</text>
+
+  <g class="connection"><path class="edge-mask" d="M 300 238 H 355 V 238 H 410"/><path class="edge" d="M 300 238 H 355 V 238 H 410" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 680 238 H 740 V 238 H 800"/><path class="edge" d="M 680 238 H 740 V 238 H 800" marker-end="url(#arrow)"/><text x="740" y="229">generation mailbox</text></g>
+<g class="connection"><path class="edge-mask" d="M 1040 238 H 1115 V 238 H 1190"/><path class="edge" d="M 1040 238 H 1115 V 238 H 1190" marker-end="url(#arrow)"/></g>
+
+    <g class="component kind-host">
+      <rect class="node-mask" x="56" y="186" width="248" height="104" rx="18"/>
+      <rect class="node" x="60" y="190" width="240" height="96" rx="14"/>
+      <text class="node-title" x="76" y="222">Prepared Pattern</text>
+      <text class="node-detail" x="76" y="248">snapshot + overlay</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="406" y="186" width="278" height="104" rx="18"/>
+      <rect class="node" x="410" y="190" width="270" height="96" rx="14"/>
+      <text class="node-title" x="426" y="222">Pattern Origin</text>
+      <text class="node-detail" x="426" y="248">PCM · BPM anchor</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="796" y="186" width="248" height="104" rx="18"/>
+      <rect class="node" x="800" y="190" width="240" height="96" rx="14"/>
+      <text class="node-title" x="816" y="222">Realtime Engine</text>
+      <text class="node-detail" x="816" y="248">atomic claim · Bar clock</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="1186" y="186" width="238" height="104" rx="18"/>
+      <rect class="node" x="1190" y="190" width="230" height="96" rx="14"/>
+      <text class="node-title" x="1206" y="222">Audio + Status</text>
+      <text class="node-detail" x="1206" y="248">device · generation</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation + Project Cooker.</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Concurrency</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Control may replace only an unclaimed mailbox generation; claimed activation and BPM define the following Bar, while old slots are reclaimed only on the control thread.</div></foreignObject></g>
+<g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Forbidden boundary</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No allocation, destruction, lock, Project mutation, quantization, journal I/O or production test hook on the realtime thread.</div></foreignObject></g>
+</svg>

@@ -1,6 +1,7 @@
 export const PROTOCOL_VERSION = 1;
 export const MAX_ENVELOPE_BYTES = 65_536;
 export const MAX_ASSET_BYTES = 1_048_576;
+export const MAX_SAMPLE_IMPORT_BYTES = 68_157_440;
 export const DEADLINES_MS = Object.freeze({
   short: 1_000,
   project: 30_000,
@@ -230,7 +231,7 @@ function requireSampleOperationPayload(operation, payload) {
         UUID_PATTERN.test(payload.asset_id) &&
         (!Object.hasOwn(payload, "sequence_session_id") ||
           UUID_PATTERN.test(payload.sequence_session_id)) &&
-        isUnsignedInteger(payload.byte_length, MAX_ASSET_BYTES) &&
+        isUnsignedInteger(payload.byte_length, MAX_SAMPLE_IMPORT_BYTES) &&
         payload.byte_length > 0;
       break;
     case "sample.import.chunk":

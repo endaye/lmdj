@@ -8,6 +8,7 @@ import {
   HOST_OPERATIONS,
   MAX_ASSET_BYTES,
   MAX_ENVELOPE_BYTES,
+  MAX_SAMPLE_IMPORT_BYTES,
   PROTOCOL_VERSION,
   HostProtocolError,
   createProtocolTransport,
@@ -97,6 +98,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
   assert.equal(PROTOCOL_VERSION, 1);
   assert.equal(MAX_ENVELOPE_BYTES, 65_536);
   assert.equal(MAX_ASSET_BYTES, 1_048_576);
+  assert.equal(MAX_SAMPLE_IMPORT_BYTES, 68_157_440);
   assert.deepEqual(DEADLINES_MS, {
     short: 1_000,
     project: 30_000,
