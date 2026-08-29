@@ -58,9 +58,11 @@ refreeze，provenance 指向 squash 后已成悬挂对象的 revision，且未�
 | 信息 | 若干 | 正文列出，无需单独排期 |
 
 **当前处置**：`1.0.37.0` 保留为历史 canary 候选。H1–H3、M1–M3 与 #417
-Stop/boundary follow-up 的 source 修复已合入，Product Build `1.0.40.0` 负责最终
-Module/Product 身份与自动化集成；#380 的不可变快照和 #360 的五项物理/人工
-验收仍未完成，因此不能据此宣称 beta/stable、Release 或物理体验通过。
+Stop/boundary follow-up 的 source 修复已合入；PR #420 已把最终 Module/Product
+身份与 Product Build `1.0.40.0` 的不可变 canary 快照合入 `main`。exact-main
+run `33259586218` 的 Linux ASan failed-only 重跑已通过完整 77/77 与 stress 5/5，
+#380 自动化证据闭环；#360 的五项物理/人工验收仍未执行，因此不能据此宣称
+beta/stable、Release 或物理体验通过。
 
 ### 整改处置账本（2026-08-28）
 
