@@ -2603,10 +2603,28 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function commitSequenceBoundaryInLane(operation, sessionId, commandId) {
-    const value = await boundedRequest(operation, {
+    const payload = {
       session_id: sessionId,
       command_id: commandId,
-    });
+    };
+    let value;
+    try {
+      value = await boundedRequest(operation, payload);
+    } catch (error) {
+      if (
+        operation !== "sequence.record.stop" ||
+        error?.code !== "INVALID_ARGUMENT" ||
+        pendingSequenceSwitch?.sessionId !== sessionId ||
+        sequenceBoundaryFlush === null
+      ) {
+        throw error;
+      }
+      // The authoritative boundary notification can arrive while Stop is
+      // returning a post-commit ambiguity. Replay the same durable identity
+      // inside this lane before the queued boundary flush is allowed to run;
+      // a genuine pre-commit rejection fails again and remains observable.
+      value = await boundedRequest(operation, payload);
+    }
     const mutation = normalizeSequenceMutation(
       value,
       ["runtime_frame", "pattern_publication"],
