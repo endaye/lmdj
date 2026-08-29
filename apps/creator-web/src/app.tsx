@@ -943,7 +943,8 @@ function Workspace({
         </>
       ) : null}
       {activeMode === "sample" || armedCaptureSlot !== null ||
-      sequence.phase === "trim-overlay" ? (
+      sequence.phase === "trim-overlay" ||
+      (activeMode === "sequence" && state.sampleProjectionRefresh !== null) ? (
         <div className={sequence.phase === "trim-overlay" ? "sample-overlay-host" : ""}
           hidden={activeMode !== "sample" && sequence.phase !== "trim-overlay"}>
           <SampleSurface
