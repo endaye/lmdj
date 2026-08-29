@@ -1716,8 +1716,19 @@ void test_missed_switch_boundary_rebases_only_the_same_target() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    if (argc == 2 &&
+        std::string_view(argv[1]) == "--switch-rebase-only") {
+      test_missed_switch_boundary_rebases_only_the_same_target();
+      std::cout << "sequence switch rebase test: PASS\n";
+      return 0;
+    }
+    if (argc != 1) {
+      std::cerr << "usage: lmdj_facade_sequence_surface_tests "
+                   "[--switch-rebase-only]\n";
+      return 2;
+    }
     test_sequence_lifecycle_idempotence_and_mutation_exclusion();
     test_post_commit_retry_preserves_later_events_for_a_new_command();
     test_post_commit_stop_retry_preserves_later_unreleased_press();
@@ -1739,7 +1750,6 @@ int main() {
     test_prepublication_capture_marker_can_disarm_and_preserve_pending_events();
     test_pending_overlay_projection_is_owner_scoped_and_replaceable();
     test_switch_pending_bpm_rejects_before_project_mutation();
-    test_missed_switch_boundary_rebases_only_the_same_target();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

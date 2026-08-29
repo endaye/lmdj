@@ -136,6 +136,12 @@ if(BUILD_TESTING)
     COMMAND lmdj_facade_sequence_surface_tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
+  lmdj_add_test(
+    NAME facade.sequence_switch_rebase
+    TIER component
+    COMMAND lmdj_facade_sequence_surface_tests --switch-rebase-only
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
 
   add_executable(
     lmdj_facade_sample_surface_tests
