@@ -2,7 +2,9 @@ import {expect, test, vi} from "vitest";
 
 import {
   beginSequenceJourney,
+  disarmSequenceCaptureJourney,
   isSequenceSession,
+  reconcileSequenceAuthoringRevision,
   refreshSequenceJourney,
   stopSequenceJourney,
 } from "../src/runtime/sequence_actions";
@@ -22,17 +24,22 @@ test("Sequence journeys preserve typed command identities and query both authori
       committedRevision: 4, replayed: false, projectRevision: 4})),
     querySequenceStatus: vi.fn(async () => status),
     listSequenceRecovery: vi.fn(async () => []),
+    disarmSequenceCapture: vi.fn(async () => true),
   } as unknown as CreatorSequenceRuntimeSession;
   await beginSequenceJourney(session, {
     sessionId: "session-1", patternId: "pattern-1", expectedRevision: 3,
   });
   await stopSequenceJourney(session, "session-1", "command-1");
+  await disarmSequenceCaptureJourney(session, "session-1", 17);
   await refreshSequenceJourney(session, "project-1");
   expect(session.beginSequence).toHaveBeenCalledWith({
     sessionId: "session-1", patternId: "pattern-1", expectedRevision: 3,
   });
   expect(session.stopSequence).toHaveBeenCalledWith({
     sessionId: "session-1", commandId: "command-1",
+  });
+  expect(session.disarmSequenceCapture).toHaveBeenCalledWith({
+    sessionId: "session-1", slot: 17,
   });
   expect(session.querySequenceStatus).toHaveBeenCalledWith("project-1");
   expect(session.listSequenceRecovery).toHaveBeenCalledWith("project-1");
@@ -41,10 +48,15 @@ test("Sequence journeys preserve typed command identities and query both authori
 test("Sequence capability detection includes settings and Pattern authoring", () => {
   const value = Object.fromEntries([
     "beginSequence", "flushSequence", "createPattern", "updateSequenceSettings", "stopSequence",
+    "disarmSequenceCapture",
     "requestPatternSwitch", "querySequenceStatus", "listSequenceRecovery",
     "applySequenceRecovery", "discardSequenceRecovery", "subscribeSequenceBarBoundary",
   ].map((name) => [name, () => {}]));
   expect(isSequenceSession(value)).toBe(true);
   expect(isSequenceSession({...value, flushSequence: undefined})).toBe(false);
   expect(isSequenceSession({...value, updateSequenceSettings: undefined})).toBe(false);
+});
+
+test("a stale journal refresh cannot lower the committed authoring revision", () => {
+  expect(reconcileSequenceAuthoringRevision(70, 70, 66)).toBe(70);
 });

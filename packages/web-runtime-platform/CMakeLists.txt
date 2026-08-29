@@ -151,6 +151,7 @@ if(EMSCRIPTEN)
     _lmdj_web_audio_control_failure_committed
     _lmdj_web_audio_commit_failure
     _lmdj_web_audio_bootstrap_timeout
+    _lmdj_web_audio_callback_heartbeat
   )
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
     list(
@@ -305,6 +306,33 @@ endif()
 
 if(BUILD_TESTING AND NOT EMSCRIPTEN)
   find_package(Threads REQUIRED)
+  add_library(
+    lmdj_web_runtime_control_testable
+    STATIC
+      src/control_runtime.cpp
+  )
+  target_include_directories(
+    lmdj_web_runtime_control_testable
+    PUBLIC
+      "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}/packages/application-facade/internal"
+  )
+  target_link_libraries(
+    lmdj_web_runtime_control_testable
+    PUBLIC
+      lmdj::application
+      lmdj::audio_runtime
+    PRIVATE
+      lmdj_picosha2
+  )
+  target_compile_definitions(
+    lmdj_web_runtime_control_testable
+    PRIVATE LMDJ_WEB_RUNTIME_TESTING=1
+  )
+  lmdj_target_warnings(lmdj_web_runtime_control_testable)
+  lmdj_target_sanitizers(lmdj_web_runtime_control_testable)
+
   add_executable(
     lmdj_web_control_runtime_tests
     test/control_runtime_test.cpp
@@ -320,9 +348,12 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
   target_link_libraries(
     lmdj_web_control_runtime_tests
     PRIVATE
-      lmdj::web_runtime_control
+      lmdj_web_runtime_control_testable
       lmdj_picosha2
       Threads::Threads
+  )
+  target_compile_definitions(
+    lmdj_web_control_runtime_tests PRIVATE LMDJ_WEB_RUNTIME_TESTING=1
   )
   lmdj_target_warnings(lmdj_web_control_runtime_tests)
   lmdj_target_sanitizers(lmdj_web_control_runtime_tests)

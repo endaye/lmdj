@@ -1711,6 +1711,7 @@ struct Application::Impl {
     bool quantize_enabled{};
     std::uint8_t swing_percent{};
     std::uint64_t available_slots{};
+    std::uint64_t overlay_generation{};
     std::vector<domain::PatternEvent> pending_events;
     std::map<domain::PadSlotId, PressedSequencePad> pressed;
     std::optional<foundation::PatternId> pending_pattern_id;
@@ -1719,6 +1720,7 @@ struct Application::Impl {
     std::optional<project_io::SequenceFlushIdentity> last_flush_identity;
     std::optional<std::uint64_t> last_committed_revision;
     std::unique_ptr<project_io::ProjectWriterLease> lease;
+    std::optional<domain::PadSlotId> armed_capture_slot;
   };
 
   explicit Impl(ApplicationConfig config)
@@ -1978,8 +1980,12 @@ struct Application::Impl {
   static void merge_pending(
       SequenceRuntime& runtime,
       domain::PatternEvent event) {
-    runtime.pending_events = domain::merge_pattern_events(
+    auto merged = domain::merge_pattern_events(
         runtime.pending_events, {std::move(event)});
+    if (merged != runtime.pending_events) {
+      runtime.pending_events = std::move(merged);
+      ++runtime.overlay_generation;
+    }
   }
 
   static void finalize_pressed(
@@ -2068,7 +2074,9 @@ struct Application::Impl {
     auto valid = validate_sequence_path_and_session(
         request.project_path, request.session_id);
     if (!valid.has_value() ||
-        !domain::is_valid_uuid(request.pattern_id.value())) {
+        !domain::is_valid_uuid(request.pattern_id.value()) ||
+        (request.armed_capture_slot.has_value() &&
+         !domain::is_valid_slot(*request.armed_capture_slot))) {
       return foundation::Result<SequenceMutationResult>::failure(
           valid.has_value()
               ? sequence_error(
@@ -2116,13 +2124,25 @@ struct Application::Impl {
       return foundation::Result<SequenceMutationResult>::failure(
           sequence_error(ErrorCode::not_found, "Sequence Pattern was not found"));
     }
+    if (request.armed_capture_slot.has_value() &&
+        loaded.value()
+            .banks.at(request.armed_capture_slot->bank)
+            .at(request.armed_capture_slot->pad)
+            .asset_id.has_value()) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(
+              ErrorCode::invalid_argument,
+              "armed Capture target Pad is not empty",
+              {{"reason", "armed_capture_target_assigned"}}));
+    }
     auto begun = sequence_journals.begin(
         request.project_path,
         request.session_id,
         request.pattern_id,
         pattern->second.bars,
         project_io::sequence_pattern_fingerprint(pattern->second),
-        request.expected_revision);
+        request.expected_revision,
+        request.armed_capture_slot);
     if (!begun.has_value()) {
       return foundation::Result<SequenceMutationResult>::failure(
           begun.error());
@@ -2139,6 +2159,7 @@ struct Application::Impl {
         loaded.value().quantize_enabled,
         loaded.value().swing_percent,
         available_slot_mask(loaded.value()),
+        0,
         {},
         {},
         std::nullopt,
@@ -2147,6 +2168,7 @@ struct Application::Impl {
         std::nullopt,
         std::nullopt,
         std::move(lease.value()),
+        request.armed_capture_slot,
     };
     auto [inserted, ok] = sequence_sessions.emplace(key, std::move(runtime));
     if (!ok) {
@@ -2156,7 +2178,7 @@ struct Application::Impl {
     }
     return foundation::Result<SequenceMutationResult>::success(
         SequenceMutationResult{runtime_status(inserted->second), std::nullopt,
-                               false});
+                               false, std::nullopt});
   }
 
   foundation::Result<SequenceMutationResult> record_sequence_event(
@@ -2197,6 +2219,13 @@ struct Application::Impl {
               "Sequence switch boundary must be flushed first",
               {{"reason", "switch_boundary_reached"},
                {"effective_runtime_frame", *runtime.effective_runtime_frame}}));
+    }
+    if (runtime.armed_capture_slot == request.event.slot) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(
+              ErrorCode::invalid_argument,
+              "armed Capture Pad is not a Sequence event",
+              {{"reason", "armed_capture_in_progress"}}));
     }
     const auto ticks = audio::raw_tick_at(
         runtime.anchor, request.event.runtime_frame);
@@ -2248,7 +2277,8 @@ struct Application::Impl {
     runtime.last_runtime_frame = request.event.runtime_frame;
     runtime.last_input_sequence = request.event.input_sequence;
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{runtime_status(runtime), std::nullopt, false});
+        SequenceMutationResult{
+            runtime_status(runtime), std::nullopt, false, std::nullopt});
   }
 
   static void finalize_unreleased(SequenceRuntime& runtime, bool clear) {
@@ -2291,7 +2321,10 @@ struct Application::Impl {
     runtime.expected_revision = project.revision;
     runtime.pending_pattern_id.reset();
     runtime.effective_runtime_frame.reset();
-    runtime.pending_events.clear();
+    if (!runtime.pending_events.empty()) {
+      runtime.pending_events.clear();
+      ++runtime.overlay_generation;
+    }
     runtime.pressed.clear();
     return foundation::Result<void>::success();
   }
@@ -2318,6 +2351,7 @@ struct Application::Impl {
                 status,
                 replayed.value()->committed_revision,
                 true,
+                replayed.value()->identity.pattern_id,
             });
       }
       return foundation::Result<SequenceMutationResult>::failure(
@@ -2333,6 +2367,7 @@ struct Application::Impl {
               runtime_status(runtime),
               runtime.last_committed_revision,
               true,
+              runtime.last_flush_identity->pattern_id,
           });
     }
     const bool replaying_in_flight_command =
@@ -2357,6 +2392,7 @@ struct Application::Impl {
               runtime_status(runtime),
               replayed.value()->committed_revision,
               true,
+              replayed.value()->identity.pattern_id,
           });
     };
     if (!replaying_in_flight_command) {
@@ -2453,6 +2489,7 @@ struct Application::Impl {
       execution.emplace(std::move(committed.value()));
       runtime.expected_revision = execution->outcome.state.revision;
       runtime.pending_events.clear();
+      ++runtime.overlay_generation;
       runtime.last_flush_identity = identity;
       runtime.last_committed_revision = runtime.expected_revision;
       ++runtime.next_flush_seq;
@@ -2466,6 +2503,7 @@ struct Application::Impl {
               runtime_status(runtime),
               runtime.last_committed_revision,
               true,
+              runtime.last_flush_identity->pattern_id,
           });
     }
 
@@ -2485,13 +2523,15 @@ struct Application::Impl {
             removed.error());
       }
       const auto revision = runtime.expected_revision;
+      const auto committed_pattern_id = runtime.pattern_id;
       const auto replayed = execution.has_value() &&
                             execution->outcome.replayed;
       sequence_sessions.erase(found);
       SequenceStatus status;
       status.expected_revision = revision;
       return foundation::Result<SequenceMutationResult>::success(
-          SequenceMutationResult{status, revision, replayed});
+          SequenceMutationResult{
+              status, revision, replayed, committed_pattern_id});
     }
 
     if (switch_due) {
@@ -2530,6 +2570,9 @@ struct Application::Impl {
                 ? std::optional<std::uint64_t>{runtime.expected_revision}
                 : std::nullopt,
             execution.has_value() && execution->outcome.replayed,
+            execution.has_value()
+                ? std::optional<foundation::PatternId>{runtime.pattern_id}
+                : std::nullopt,
         });
   }
 
@@ -2644,7 +2687,8 @@ struct Application::Impl {
           switching.error());
     }
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{runtime_status(runtime), std::nullopt, false});
+        SequenceMutationResult{
+            runtime_status(runtime), std::nullopt, false, std::nullopt});
   }
 
   foundation::Result<SequenceStatus> query_sequence_status(
@@ -2699,6 +2743,34 @@ struct Application::Impl {
         pending,
         std::nullopt,
     });
+  }
+
+  foundation::Result<SequenceOverlayProjection> query_sequence_overlay(
+      const SequenceOverlayRequest& request) const {
+    auto valid = validate_sequence_path_and_session(
+        request.project_path, request.session_id);
+    if (!valid.has_value()) {
+      return foundation::Result<SequenceOverlayProjection>::failure(
+          valid.error());
+    }
+    std::lock_guard lock(sequence_mutex);
+    const auto runtime = sequence_sessions.find(
+        sequence_key(request.project_path));
+    if (runtime == sequence_sessions.end() ||
+        runtime->second.session_id != request.session_id) {
+      return foundation::Result<SequenceOverlayProjection>::failure(
+          sequence_error(
+              ErrorCode::invalid_argument,
+              "Sequence overlay owner does not match",
+              {{"reason", "sequence_owner_mismatch"}}));
+    }
+    return foundation::Result<SequenceOverlayProjection>::success(
+        SequenceOverlayProjection{
+            runtime->second.session_id,
+            runtime->second.pattern_id,
+            runtime->second.overlay_generation,
+            runtime->second.pending_events,
+        });
   }
 
   foundation::Result<std::vector<SequenceRecoveryInfo>>
@@ -2850,7 +2922,8 @@ struct Application::Impl {
     SequenceStatus status;
     status.expected_revision = committed_revision;
     return foundation::Result<SequenceMutationResult>::success(
-        SequenceMutationResult{status, committed_revision, replayed});
+        SequenceMutationResult{
+            status, committed_revision, replayed, std::nullopt});
   }
 
   foundation::Result<void> discard_sequence_recovery(
@@ -2882,6 +2955,51 @@ struct Application::Impl {
           ErrorCode::not_found, "Sequence recovery candidate was not found"));
     }
     return storage_platform->remove(candidate->path);
+  }
+
+  foundation::Result<void> disarm_sequence_capture(
+      const SequenceCaptureDisarmRequest& request) {
+    auto valid = validate_sequence_path_and_session(
+        request.project_path, request.session_id);
+    if (!valid.has_value() || !domain::is_valid_slot(request.slot)) {
+      return foundation::Result<void>::failure(
+          valid.has_value()
+              ? sequence_error(
+                    ErrorCode::invalid_argument,
+                    "armed Capture disarm target is invalid")
+              : valid.error());
+    }
+    std::lock_guard lock(sequence_mutex);
+    const auto found = sequence_sessions.find(sequence_key(request.project_path));
+    if (found == sequence_sessions.end() ||
+        found->second.session_id != request.session_id) {
+      return foundation::Result<void>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "armed Capture disarm owner does not match",
+          {{"reason", "sequence_owner_mismatch"}}));
+    }
+    auto& runtime = found->second;
+    if (!runtime.armed_capture_slot.has_value()) {
+      return foundation::Result<void>::success();
+    }
+    if (*runtime.armed_capture_slot != request.slot) {
+      return foundation::Result<void>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "armed Capture disarm target does not match",
+          {{"reason", "armed_capture_target_mismatch"}}));
+    }
+    auto disarmed = projects.disarm_sequence_capture(
+        request.project_path, request.session_id, request.slot);
+    if (!disarmed.has_value()) {
+      return foundation::Result<void>::failure(disarmed.error());
+    }
+    if (disarmed.value().reconciled_commit) {
+      runtime.expected_revision = disarmed.value().expected_revision;
+      runtime.available_slots |=
+          std::uint64_t{1} << slot_index(request.slot);
+    }
+    runtime.armed_capture_slot.reset();
+    return foundation::Result<void>::success();
   }
 
   void abandon_sequence_sessions() noexcept {
@@ -2944,6 +3062,9 @@ struct Application::Impl {
                                          ? nlohmann::json(*result.committed_revision)
                                          : nlohmann::json(nullptr);
     encoded["replayed"] = result.replayed;
+    if (result.committed_pattern_id.has_value()) {
+      encoded["committed_pattern_id"] = result.committed_pattern_id->value();
+    }
     return encoded;
   }
 
@@ -2951,14 +3072,25 @@ struct Application::Impl {
     require(
         exact_keys(request,
                    {"operation", "project_path", "session_id", "pattern_id",
-                    "expected_revision", "runtime_frame"}),
+                    "expected_revision", "runtime_frame"}) ||
+            exact_keys(request,
+                       {"operation", "project_path", "session_id", "pattern_id",
+                        "expected_revision", "runtime_frame",
+                        "armed_capture_slot"}),
         "sequence.record.begin request shape is invalid");
+    const auto armed_capture_slot =
+        !request.contains("armed_capture_slot") ||
+                request.at("armed_capture_slot").is_null()
+            ? std::optional<domain::PadSlotId>{}
+            : std::optional<domain::PadSlotId>{
+                  slot_value(request.at("armed_capture_slot"))};
     const auto result = begin_sequence(SequenceBeginRequest{
         absolute_path_field(request, "project_path"),
         foundation::SequenceSessionId{uuid_field(request, "session_id")},
         foundation::PatternId{uuid_field(request, "pattern_id")},
         unsigned_field(request, "expected_revision"),
         unsigned_field(request, "runtime_frame"),
+        armed_capture_slot,
     });
     if (!result.has_value()) {
       return error_envelope(result.error());
@@ -3815,10 +3947,39 @@ struct Application::Impl {
         !domain::is_valid_uuid(request.meta.command_id.value()) ||
         !domain::is_valid_slot(request.slot) ||
         !domain::is_valid_uuid(request.asset_id.value()) ||
+        (request.sequence_session_id.has_value() &&
+         !domain::is_valid_uuid(request.sequence_session_id->value())) ||
         request.byte_length == 0 ||
         !sample_limits->allows_artifact_bytes(request.byte_length)) {
       return foundation::Result<SampleImportSession>::failure(
           invalid_sample_request("Sample import begin request is invalid"));
+    }
+    if (request.sequence_session_id.has_value()) {
+      std::lock_guard sequence_lock(sequence_mutex);
+      const auto found = sequence_sessions.find(sequence_key(request.project_path));
+      if (found == sequence_sessions.end() ||
+          found->second.session_id != *request.sequence_session_id) {
+        return foundation::Result<SampleImportSession>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit owner does not match",
+                {{"reason", "sequence_owner_mismatch"}}));
+      }
+      if (!found->second.armed_capture_slot.has_value()) {
+        return foundation::Result<SampleImportSession>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit has no active target",
+                {{"reason", "armed_capture_not_armed"}}));
+      }
+      if (*found->second.armed_capture_slot != request.slot ||
+          found->second.expected_revision != request.meta.expected_revision) {
+        return foundation::Result<SampleImportSession>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit target does not match",
+                {{"reason", "armed_capture_target_mismatch"}}));
+      }
     }
     std::lock_guard lock(sample_mutex);
     if (sample_imports.size() >= kMaximumSampleImportSessions) {
@@ -3987,10 +4148,45 @@ struct Application::Impl {
       sample_imports.erase(found);
     }
     auto state = std::move(*owned);
-    auto admitted = admit_non_sequence_authoring(state.request.project_path);
-    if (!admitted.has_value()) {
-      return foundation::Result<SampleMutationResult>::failure(
-          admitted.error());
+    std::optional<SequenceAuthoringAdmission> ordinary_admission;
+    std::unique_lock<std::mutex> capture_admission;
+    SequenceRuntime* active_sequence = nullptr;
+    if (state.request.sequence_session_id.has_value()) {
+      capture_admission = std::unique_lock(sequence_mutex);
+      const auto found = sequence_sessions.find(
+          sequence_key(state.request.project_path));
+      if (found == sequence_sessions.end() ||
+          found->second.session_id != *state.request.sequence_session_id) {
+        return foundation::Result<SampleMutationResult>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit owner does not match",
+                {{"reason", "sequence_owner_mismatch"}}));
+      }
+      if (!found->second.armed_capture_slot.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit has no active target",
+                {{"reason", "armed_capture_not_armed"}}));
+      }
+      if (*found->second.armed_capture_slot != state.request.slot ||
+          found->second.expected_revision !=
+              state.request.meta.expected_revision) {
+        return foundation::Result<SampleMutationResult>::failure(
+            sequence_error(
+                ErrorCode::invalid_argument,
+                "armed Capture commit target does not match",
+                {{"reason", "armed_capture_target_mismatch"}}));
+      }
+      active_sequence = &found->second;
+    } else {
+      auto admitted = admit_non_sequence_authoring(state.request.project_path);
+      if (!admitted.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            admitted.error());
+      }
+      ordinary_admission.emplace(std::move(admitted.value()));
     }
     SampleStagingCleanup cleanup{
         storage_platform,
@@ -4080,6 +4276,7 @@ struct Application::Impl {
             state.request.asset_id,
             "audio/wav",
             bytes.value(),
+            state.request.sequence_session_id,
         });
     if (!committed.has_value()) {
       return foundation::Result<SampleMutationResult>::failure(
@@ -4087,6 +4284,12 @@ struct Application::Impl {
     }
     if (project_revision != nullptr) {
       *project_revision = committed.value().state.revision;
+    }
+    if (active_sequence != nullptr) {
+      active_sequence->expected_revision = committed.value().state.revision;
+      active_sequence->available_slots |=
+          std::uint64_t{1} << slot_index(state.request.slot);
+      active_sequence->armed_capture_slot.reset();
     }
     return foundation::Result<SampleMutationResult>::success(
         SampleMutationResult{
@@ -4354,6 +4557,7 @@ struct Application::Impl {
         slot_value(request.at("slot")),
         foundation::AssetId{uuid_field(request, "asset_id")},
         unsigned_field(request, "byte_length", 1'048'576U),
+        std::nullopt,
     });
     if (!begun.has_value()) {
       return sample_error_envelope(begun.error());
@@ -4603,6 +4807,12 @@ struct Application::Impl {
                   found->second.expected_revision == revision &&
                   runtime_frame >= found->second.last_runtime_frame,
               "Sequence settings owner does not match");
+      if (bpm.has_value() && found->second.pending_pattern_id.has_value()) {
+        return error_envelope(sequence_error(
+            ErrorCode::invalid_argument,
+            "Sequence BPM cannot change while a Pattern switch is pending",
+            {{"reason", "switch_pending"}}));
+      }
     }
     const auto updated = projects.execute_with_identity(
         path,
@@ -5585,6 +5795,19 @@ Application::request_sequence_switch(const SequenceSwitchRequest& request) {
   }
 }
 
+foundation::Result<void> Application::disarm_sequence_capture(
+    const SequenceCaptureDisarmRequest& request) {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->disarm_sequence_capture(request);
+  } catch (...) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
 void Application::abandon_sequence_sessions() noexcept {
   impl_->abandon_sequence_sessions();
 }
@@ -5596,6 +5819,20 @@ foundation::Result<SequenceStatus> Application::query_sequence_status(
     return impl_->query_sequence_status(request);
   } catch (...) {
     return foundation::Result<SequenceStatus>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<SequenceOverlayProjection>
+Application::query_sequence_overlay(
+    const SequenceOverlayRequest& request) const {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->query_sequence_overlay(request);
+  } catch (...) {
+    return foundation::Result<SequenceOverlayProjection>::failure(Error{
         ErrorCode::internal_error,
         "unexpected Application Facade Host API failure",
     });

@@ -144,6 +144,7 @@ export interface SampleCommit {
 export interface SampleImportOptions {
   slot: number;
   expectedRevision: number;
+  sequenceSessionId?: string;
   signal?: AbortSignal;
   onProgress?: (progress: TransferProgress) => void;
 }
@@ -331,11 +332,16 @@ export interface CreatorSequenceRuntimeSession extends CreatorSampleRuntimeSessi
     sessionId: string;
     patternId: string;
     expectedRevision: number;
+    armedCaptureSlot?: number | null;
   }): Promise<SequenceMutation & {transportAnchor: {
     runtimeFrame: number;
     tickNumerator: number;
     bpm: number;
   }}>;
+  disarmSequenceCapture(request: {
+    sessionId: string;
+    slot: number;
+  }): Promise<boolean>;
   flushSequence(request: {sessionId: string; commandId: string}): Promise<SequenceMutation>;
   stopSequence(request: {sessionId: string; commandId: string}): Promise<SequenceMutation>;
   requestPatternSwitch(request: {

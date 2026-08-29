@@ -1018,6 +1018,7 @@ async function loadSourceRuntime({ window }) {
   const runtime = window?.lmdjWebRuntimeHost;
   if (
     typeof runtime?.registerAudioContext !== "function" ||
+    typeof runtime?.audioCallbackHeartbeat !== "function" ||
     typeof runtime?.startAudioWorklet !== "function"
   ) {
     throw typedError("HOST_STATE_INVALID", "Source runtime is not loaded");
@@ -1788,7 +1789,12 @@ function createRuntimeSessionController(options = {}) {
     return generationsMatch(status);
   }
 
-  async function activateRuntimeForRecovery(epoch) {
+  async function activateRuntimeForRecovery(
+    epoch,
+    activationDeadline =
+      monotonicNow() + deadlineForOperation("audio.activate"),
+    callbackReady = false,
+  ) {
     if (
       recoveryEpoch !== epoch ||
       epoch.activationStarted ||
@@ -1800,7 +1806,14 @@ function createRuntimeSessionController(options = {}) {
     epoch.activationStarted = true;
     epoch.contextUsable = true;
     try {
-      await boundedRequest("audio.activate", {});
+      if (!callbackReady) {
+        const callbackBaseline = readAudioCallbackHeartbeat();
+        await awaitAudioCallbackAfterResume(
+          callbackBaseline, activationDeadline);
+      }
+      await boundedRequest("audio.activate", {}, {
+        deadlineMs: remainingActivationBudget(activationDeadline),
+      });
       if (recoveryEpoch !== epoch || machine.state !== "recovering") {
         return;
       }
@@ -2236,6 +2249,47 @@ function createRuntimeSessionController(options = {}) {
     );
   }
 
+  function readAudioCallbackHeartbeat() {
+    const heartbeat = runtime?.audioCallbackHeartbeat?.();
+    if (
+      !Number.isInteger(heartbeat) ||
+      heartbeat < 0 ||
+      heartbeat > 0xffff_ffff
+    ) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH",
+        "AudioWorklet callback heartbeat is invalid",
+      );
+    }
+    return heartbeat;
+  }
+
+  async function awaitAudioCallbackAfterResume(baseline, deadline) {
+    let heartbeat = readAudioCallbackHeartbeat();
+    while (heartbeat === baseline && monotonicNow() < deadline) {
+      await new Promise((resolvePromise) =>
+        timers.setTimeout(resolvePromise, 0));
+      heartbeat = readAudioCallbackHeartbeat();
+    }
+    if (heartbeat === baseline) {
+      throw typedError(
+        "HOST_TIMEOUT",
+        "AudioWorklet callback did not resume",
+      );
+    }
+  }
+
+  function remainingActivationBudget(deadline) {
+    const remaining = Math.ceil(deadline - monotonicNow());
+    if (remaining <= 0) {
+      throw typedError(
+        "HOST_TIMEOUT",
+        "AudioWorklet activation deadline expired",
+      );
+    }
+    return Math.min(deadlineForOperation("audio.activate"), remaining);
+  }
+
   async function activateAudio(token) {
     if (
       createUserGestureToken.consume(token) !== true ||
@@ -2263,10 +2317,15 @@ function createRuntimeSessionController(options = {}) {
           return false;
         }
       }
+      const activationDeadline =
+        monotonicNow() + deadlineForOperation("audio.activate");
+      const callbackBaseline = readAudioCallbackHeartbeat();
       await audioContext.resume();
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
       }
+      await awaitAudioCallbackAfterResume(
+        callbackBaseline, activationDeadline);
       if (recoveryEpoch !== null) {
         machine.transition("recovering", {
           reason: "recovery_activation",
@@ -2274,7 +2333,8 @@ function createRuntimeSessionController(options = {}) {
         });
         recoveryEpoch.contextUsable = true;
         recoveryEpoch.suspendComplete = true;
-        await activateRuntimeForRecovery(recoveryEpoch);
+        await activateRuntimeForRecovery(
+          recoveryEpoch, activationDeadline, true);
         if (
           closing ||
           visibilityHidden ||
@@ -2285,7 +2345,9 @@ function createRuntimeSessionController(options = {}) {
         }
         return machine.state === "recovering";
       }
-      await boundedRequest("audio.activate", {});
+      await boundedRequest("audio.activate", {}, {
+        deadlineMs: remainingActivationBudget(activationDeadline),
+      });
       if (!activationIsCurrent(reservation, "audio-suspended")) {
         return false;
       }
@@ -2419,18 +2481,33 @@ function createRuntimeSessionController(options = {}) {
     if (
       request === null ||
       typeof request !== "object" ||
-      !exactKeys(request, ["sessionId", "patternId", "expectedRevision"]) ||
+      (!exactKeys(request, ["sessionId", "patternId", "expectedRevision"]) &&
+        !exactKeys(request, [
+          "sessionId", "patternId", "expectedRevision", "armedCaptureSlot",
+        ])) ||
       !isUnsignedInteger(request.expectedRevision)
     ) {
       throw new TypeError("Sequence begin request is invalid");
     }
     const sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
     const patternId = requireSequenceIdentity(request.patternId, "patternId");
+    let armedCaptureSlot;
+    try {
+      armedCaptureSlot = request.armedCaptureSlot === undefined ||
+          request.armedCaptureSlot === null
+        ? null
+        : flatSlotAddress(request.armedCaptureSlot);
+    } catch (error) {
+      throw new TypeError("Sequence armed capture slot is invalid", {cause: error});
+    }
     return serializeRuntimeAction(async () => {
       const value = await boundedRequest("sequence.record.begin", {
         session_id: sessionId,
         pattern_id: patternId,
         expected_revision: request.expectedRevision,
+        ...(request.armedCaptureSlot === undefined
+          ? {}
+          : {armed_capture_slot: armedCaptureSlot}),
       });
       const mutation = normalizeSequenceMutation(value, ["transport_anchor"]);
       const anchor = value.transport_anchor;
@@ -2454,6 +2531,34 @@ function createRuntimeSessionController(options = {}) {
       pendingSequenceSwitch = null;
       sequenceBoundaryFlush = null;
       return result;
+    });
+  }
+
+  function disarmSequenceCapture(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["sessionId", "slot"])
+    ) {
+      return Promise.reject(new TypeError("Sequence capture disarm request is invalid"));
+    }
+    let sessionId;
+    let slot;
+    try {
+      sessionId = requireSequenceIdentity(request.sessionId, "sessionId");
+      slot = flatSlotAddress(request.slot);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return serializeRuntimeAction(async () => {
+      const result = await boundedRequest("sequence.capture.disarm", {
+        session_id: sessionId,
+        slot,
+      });
+      if (!exactKeys(result, ["disarmed"]) || result.disarmed !== true) {
+        throw protocolMismatch("Sequence capture disarm result is invalid");
+      }
+      return true;
     });
   }
 
@@ -2498,10 +2603,28 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function commitSequenceBoundaryInLane(operation, sessionId, commandId) {
-    const value = await boundedRequest(operation, {
+    const payload = {
       session_id: sessionId,
       command_id: commandId,
-    });
+    };
+    let value;
+    try {
+      value = await boundedRequest(operation, payload);
+    } catch (error) {
+      if (
+        operation !== "sequence.record.stop" ||
+        error?.code !== "INVALID_ARGUMENT" ||
+        pendingSequenceSwitch?.sessionId !== sessionId ||
+        sequenceBoundaryFlush === null
+      ) {
+        throw error;
+      }
+      // The authoritative boundary notification can arrive while Stop is
+      // returning a post-commit ambiguity. Replay the same durable identity
+      // inside this lane before the queued boundary flush is allowed to run;
+      // a genuine pre-commit rejection fails again and remains observable.
+      value = await boundedRequest(operation, payload);
+    }
     const mutation = normalizeSequenceMutation(
       value,
       ["runtime_frame", "pattern_publication"],
@@ -2901,7 +3024,9 @@ function createRuntimeSessionController(options = {}) {
 
   function importAssignSample(file, importOptions = {}) {
     return serializeProjectAction(async () => {
-      const allowedKeys = ["slot", "expectedRevision", "signal", "onProgress"];
+      const allowedKeys = [
+        "slot", "expectedRevision", "sequenceSessionId", "signal", "onProgress",
+      ];
       if (
         importOptions === null ||
         typeof importOptions !== "object" ||
@@ -2909,7 +3034,9 @@ function createRuntimeSessionController(options = {}) {
         Object.keys(importOptions).some((key) => !allowedKeys.includes(key)) ||
         !Object.hasOwn(importOptions, "slot") ||
         !Object.hasOwn(importOptions, "expectedRevision") ||
-        !isUnsignedInteger(importOptions.expectedRevision)
+        !isUnsignedInteger(importOptions.expectedRevision) ||
+        (importOptions.sequenceSessionId !== undefined &&
+          !UUID_PATTERN.test(importOptions.sequenceSessionId))
       ) {
         throw new TypeError("Sample import options are invalid");
       }
@@ -2975,6 +3102,9 @@ function createRuntimeSessionController(options = {}) {
           import_token: importToken,
           command_id: commandId,
           expected_revision: importOptions.expectedRevision,
+          ...(importOptions.sequenceSessionId === undefined
+            ? {}
+            : {sequence_session_id: importOptions.sequenceSessionId}),
           slot,
           asset_id: assetId,
           byte_length: totalBytes,
@@ -3409,6 +3539,7 @@ function createRuntimeSessionController(options = {}) {
     openProject,
     inspectProject,
     beginSequence,
+    disarmSequenceCapture,
     recordSequenceEvent,
     flushSequence,
     stopSequence,

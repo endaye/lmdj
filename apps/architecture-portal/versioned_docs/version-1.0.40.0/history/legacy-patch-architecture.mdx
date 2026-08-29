@@ -1,0 +1,25 @@
+---
+title: Legacy Patch/Materials Architecture
+area: history
+status: retired
+owners: [docs, core]
+source_paths:
+  - references/demos
+  - docs/release-evidence/2026-07-24-stage1-creator-core-and-ui.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 退役范围
+<StatusBadge status="retired" /> `lmdj.patch.v1` 与 `lmdj.materials.v1` 属于旧 Patch/Materials 产品架构，只用于理解迁移历史。
+## 为什么退役
+Headless Core clean break 以 Project Truth、Runtime Snapshot、Pad Slot、Artifact Provider 和 Product Assembly 替代旧的耦合边界。
+## Active source 规则
+新代码不得恢复、包装、翻译或发出这些退役 Contract；`references/demos` 不是 active product source。
+## 历史证据
+旧 release evidence 可以解释当时交付，但不能证明当前 Product Build 的能力。
+## 迁移阅读方式
+从当前 Product/Contracts/Core 页面开始；只有追溯旧命名或资产迁移时才使用本页。

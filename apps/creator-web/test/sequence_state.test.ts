@@ -63,4 +63,52 @@ describe("Sequence state machine", () => {
     expect(overlay.phase).toBe("trim-overlay");
     expect(reduceSequence(overlay, {type: "trim-closed"}).phase).toBe("stopped");
   });
+
+  test("keeps an active Sequence session beneath the armed-Pad trim overlay", () => {
+    const recording = reduceSequence(initialSequenceState, {
+      type: "recording", status: status("active"), sessionId: "session-1",
+    });
+    const overlay = reduceSequence(recording, {type: "trim-overlay"});
+    expect(overlay.phase).toBe("trim-overlay");
+    expect(overlay.sessionId).toBe("session-1");
+    expect(overlay.status?.pendingEventCount).toBe(0);
+
+    const rebased = reduceSequence(overlay, {
+      type: "authority", status: status("active", {
+        expectedRevision: 5, pendingEventCount: 2,
+      }),
+    });
+    expect(rebased.phase).toBe("trim-overlay");
+    expect(rebased.status?.expectedRevision).toBe(5);
+    const withoutRecovery = reduceSequence(rebased, {
+      type: "recovery", candidates: [],
+    });
+    expect(withoutRecovery.phase).toBe("trim-overlay");
+    expect(reduceSequence(withoutRecovery, {type: "trim-closed"}).phase)
+      .toBe("recording");
+  });
+
+  test("keeps trim overlay while accepting only exact switch authority", () => {
+    const recording = reduceSequence(initialSequenceState, {
+      type: "recording", status: status("active"), sessionId: "session-1",
+    });
+    const switching = reduceSequence(recording, {
+      type: "switch-pending",
+      status: status("switching", {pendingPatternId: "pattern-2"}),
+    });
+    const overlay = reduceSequence(switching, {type: "trim-overlay"});
+
+    expect(reduceSequence(overlay, {
+      type: "boundary", patternId: "pattern-2",
+      status: status("switching", {pendingPatternId: "pattern-2"}),
+    })).toBe(overlay);
+    const acknowledged = reduceSequence(overlay, {
+      type: "boundary", patternId: "pattern-2",
+      status: status("active", {patternId: "pattern-2", effectiveRuntimeFrame: null}),
+    });
+    expect(acknowledged.phase).toBe("trim-overlay");
+    expect(acknowledged.selectedPatternId).toBe("pattern-2");
+    expect(reduceSequence(acknowledged, {type: "trim-closed"}).phase)
+      .toBe("recording");
+  });
 });

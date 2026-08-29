@@ -275,16 +275,20 @@ with no per-Pad cap; the quota model lives in Core, numbers are injected per
 Host manifest (the 512 MiB heap and Web values are browser-tier numbers);
 ingest (Host tier) and prepared (Core tier) split — capture and long-file
 import converge at one deterministic commit validation with a new
-`bank_quota_exhausted` failure class. The 2026-08-27 readiness audit preserved
-that product direction but found that the four 16-Pad user-Bank quotas, current
-64-Pad Runtime generation, live/pending/retiring total, revision-bound query,
-and Web pre-decode memory envelope still need one bounded amendment. Plan
-correction [#358](https://github.com/endaye/lmdj/issues/358) adds decision gate
-[#357](https://github.com/endaye/lmdj/issues/357) before implementation
-[#343](https://github.com/endaye/lmdj/issues/343)–[#346](https://github.com/endaye/lmdj/issues/346), followed by physical Safari
-acceptance [#359](https://github.com/endaye/lmdj/issues/359) under umbrella
-[#341](https://github.com/endaye/lmdj/issues/341). The original plan Task
-[#342](https://github.com/endaye/lmdj/issues/342) remains completed history.
+`BANK_QUOTA_EXHAUSTED` / `PROJECT_QUOTA_EXHAUSTED` failure classes. The
+2026-08-27 readiness gap was settled by [#357](https://github.com/endaye/lmdj/issues/357),
+and machine implementation [#343](https://github.com/endaye/lmdj/issues/343)–[#346](https://github.com/endaye/lmdj/issues/346)
+merged through PRs #400, #406, #408, and #411 as Product Build `1.0.38.0`.
+The first physical macOS Safari attempt found recoverability defect
+[#415](https://github.com/endaye/lmdj/issues/415); [PR #419](https://github.com/endaye/lmdj/pull/419)
+fixed it in Product Build `1.0.39.0`, with exact-main full CI passing at
+`925499293f7b79eb7dacbe85318595c4b11098a3`. No machine implementation remains
+inside umbrella [#341](https://github.com/endaye/lmdj/issues/341). Its final
+gate is the complete macOS Safari and physical iPadOS Safari acceptance matrix
+[#359](https://github.com/endaye/lmdj/issues/359), restarted from the beginning
+on exact `1.0.39.0`; the failed `1.0.38.0` prefix is not carried forward.
+The original plan Task [#342](https://github.com/endaye/lmdj/issues/342)
+remains completed history.
 
 ### ~~D2. Loop material BPM time-stretch~~ — decided 2026-08-26, merged 2026-08-26
 

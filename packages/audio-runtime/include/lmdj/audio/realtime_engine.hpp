@@ -28,7 +28,6 @@ inline constexpr std::size_t kRealtimeVoiceCapacity = 128;
 inline constexpr std::size_t kRealtimeBankCapacity = 4;
 inline constexpr std::size_t kRealtimePublishQueueCapacity = 4;
 inline constexpr std::size_t kRealtimePatternCapacity = 4;
-inline constexpr std::size_t kRealtimePatternPublishQueueCapacity = 1;
 inline constexpr std::size_t kRealtimeCaptureCapacity = 4'096;
 inline constexpr std::size_t kRealtimeTriggerOutcomeCapacity = 4'096;
 // A legacy one-shot can publish both started and completed edges. Keep room
@@ -61,6 +60,7 @@ enum class PatternPublishResult : std::uint8_t {
   publication_pending,
   pattern_slots_full,
   publish_queue_full,
+  generation_exhausted,
 };
 
 struct PatternPublication {
@@ -69,12 +69,26 @@ struct PatternPublication {
   std::uint64_t activation_frame;
 };
 
+// Exact control-thread authority for replacing a pending Pattern publication
+// with a different Pattern. Ordinary publications may only supersede the same
+// Pattern at the same boundary; Sequence switching and cancellation must prove
+// the generation, Pattern identity, and boundary they were authorized to
+// supersede.
+struct PatternReplacementAuthority {
+  std::uint64_t generation;
+  foundation::PatternId pattern_id;
+  std::uint64_t activation_frame;
+};
+
 struct PatternTelemetry {
   std::uint64_t current_generation;
   std::uint64_t pending_generation;
   std::uint64_t pending_activation_frame;
+  std::uint64_t pending_publications;
   std::uint64_t accepted_publications;
   std::uint64_t applied_publications;
+  std::uint64_t superseded_publications;
+  std::uint64_t canceled_publications;
   std::uint64_t reclaimed_patterns;
   std::uint64_t publication_rejections;
 };
@@ -277,11 +291,19 @@ class RealtimeEngine final {
   // remain Runtime-only and never mutate the source Runtime Snapshot.
   PatternPublication publish_pattern_view(
       PreparedPatternView&& pattern,
-      std::optional<std::uint64_t> activation_frame = std::nullopt) noexcept;
+      std::optional<std::uint64_t> activation_frame = std::nullopt,
+      std::optional<PatternReplacementAuthority> replacement_authority =
+          std::nullopt) noexcept;
+  // Control thread, concurrent with render. Cancels only the exact pending
+  // publication. False means render already claimed/applied it or authority
+  // was stale; callers that require fail-closed cancellation must quiesce.
+  bool cancel_pattern_publication(
+      const PatternReplacementAuthority& authority) noexcept;
   foundation::Result<void> clear_pattern_view() noexcept;
   std::size_t reclaim_retired_patterns() noexcept;
   std::optional<foundation::PatternId> current_pattern_id() const;
   std::optional<foundation::PatternId> pending_pattern_id() const;
+  std::optional<bool> current_pattern_has_overlay() const noexcept;
   std::optional<std::uint64_t> current_pattern_origin_frame() const noexcept;
   // Control thread, concurrent with render. Frees only reclaimable banks,
   // which by construction hold no live Voice.
@@ -353,6 +375,7 @@ class RealtimeEngine final {
     std::optional<PreparedPatternView> pattern;
     std::atomic<PatternState> state{PatternState::empty};
     std::uint64_t generation = 0;
+    std::uint64_t activation_frame = 0;
   };
 
   struct PatternPublishEntry {
@@ -415,10 +438,6 @@ class RealtimeEngine final {
       kRealtimePublishQueueCapacity>
       publish_queue_;
   std::array<PatternSlot, kRealtimePatternCapacity> pattern_slots_{};
-  detail::FixedSpscQueue<
-      PatternPublishEntry,
-      kRealtimePatternPublishQueueCapacity>
-      pattern_publish_queue_;
   std::optional<PatternPublishEntry> audio_pending_pattern_;
   detail::FixedSpscQueue<
       CapturedTriggerEvent,
@@ -464,10 +483,15 @@ class RealtimeEngine final {
   std::atomic<std::uint64_t> reclaimed_banks_{0};
   std::atomic<std::uint64_t> bank_slot_rejections_{0};
   std::atomic<std::uint64_t> publish_queue_drops_{0};
-  std::atomic<std::uint64_t> pending_pattern_generation_{0};
-  std::atomic<std::uint64_t> pending_pattern_activation_frame_{0};
+  // A generation-valued single-slot mailbox is the pattern publication
+  // linearization point. The control thread may replace an unclaimed
+  // generation; render marks it claimed with CAS before touching the slot.
+  std::atomic<std::uint64_t> queued_pattern_generation_{0};
+  std::atomic<std::uint64_t> audio_pending_pattern_generation_{0};
   std::atomic<std::uint64_t> accepted_pattern_publications_{0};
   std::atomic<std::uint64_t> applied_pattern_publications_{0};
+  std::atomic<std::uint64_t> superseded_pattern_publications_{0};
+  std::atomic<std::uint64_t> canceled_pattern_publications_{0};
   std::atomic<std::uint64_t> reclaimed_patterns_{0};
   std::atomic<std::uint64_t> pattern_publication_rejections_{0};
   std::atomic<CaptureState> capture_state_{CaptureState::idle};

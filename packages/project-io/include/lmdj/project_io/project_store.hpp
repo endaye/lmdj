@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <lmdj/domain/command_handler.hpp>
@@ -71,6 +72,22 @@ class ProjectStore {
     foundation::AssetId asset_id;
     std::string media_type;
     std::span<const std::byte> bytes;
+    std::optional<foundation::SequenceSessionId> sequence_session_id;
+
+    ImportAssignSampleBytesRequest(
+        domain::CommandMeta meta_value,
+        domain::PadSlotId slot_value,
+        foundation::AssetId asset_id_value,
+        std::string media_type_value,
+        std::span<const std::byte> bytes_value,
+        std::optional<foundation::SequenceSessionId> sequence_session_id_value =
+            std::nullopt)
+        : meta(std::move(meta_value)),
+          slot(slot_value),
+          asset_id(std::move(asset_id_value)),
+          media_type(std::move(media_type_value)),
+          bytes(bytes_value),
+          sequence_session_id(std::move(sequence_session_id_value)) {}
   };
 
   foundation::Result<void> create(
@@ -117,6 +134,10 @@ class ProjectStore {
       const foundation::CommandId& command_id);
   foundation::Result<std::vector<SequenceRecoveryCandidate>>
   reconcile_sequence_recovery(const std::filesystem::path& bundle);
+  foundation::Result<SequenceCaptureDisarmResult> disarm_sequence_capture(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      domain::PadSlotId slot);
   foundation::Result<std::vector<std::byte>> read_artifact(
       const std::filesystem::path& bundle,
       const foundation::ArtifactRef& artifact) const;

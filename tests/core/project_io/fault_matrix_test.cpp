@@ -14,6 +14,7 @@
 
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
 
 #include "packages/project-io/src/testing_hooks.hpp"
@@ -27,12 +28,15 @@ using lmdj::domain::CreatePattern;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
+using lmdj::domain::UpdateSequenceSettings;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::PatternId;
 using lmdj::foundation::ProjectId;
 using lmdj::project_io::ProjectStore;
+using lmdj::project_io::SequenceJournal;
+using lmdj::project_io::SequenceSessionState;
 using lmdj::project_io::testing::FaultPoint;
 
 enum class Boundary {
@@ -588,6 +592,360 @@ void test_crash_after_sample_manifest_publication_recovers_new_truth() {
   LMDJ_CHECK(recovered.value().banks.at(3).at(15).asset_id.has_value());
 }
 
+void test_armed_capture_retry_reconciles_manifest_published_journal() {
+  TempDirectory temp("armed-sample-post-publication");
+  const auto bundle = temp.path() / "project.lmdj";
+  auto platform = lmdj::project_io::make_default_project_storage_platform();
+  ProjectStore store{platform};
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+
+  const auto capture_pattern = pattern("armed-capture-pattern");
+  const auto created = store.execute(
+      bundle,
+      Command{CreatePattern{
+          meta("armed-capture-pattern-command", 0), capture_pattern}});
+  LMDJ_CHECK(created.has_value());
+  const auto session_id = lmdj::foundation::SequenceSessionId{
+      test_uuid("armed-capture-session")};
+  const auto slot = PadSlotId{2, 7};
+  SequenceJournal journal{platform};
+  LMDJ_CHECK(
+      journal
+          .begin(
+              bundle, session_id, capture_pattern.id, capture_pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(capture_pattern),
+              1, slot)
+          .has_value());
+
+  const std::array sample{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+      std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
+  };
+  const auto original_command = meta("armed-capture-import", 1);
+  const auto original_asset = AssetId{test_uuid("armed-capture-asset")};
+  lmdj::foundation::Result<lmdj::domain::AppliedCommand> interrupted =
+      lmdj::foundation::Result<lmdj::domain::AppliedCommand>::failure(
+          lmdj::foundation::Error{
+              ErrorCode::internal_error,
+              "armed Capture publication fault did not run",
+          });
+  {
+    SampleFaultGuard guard(FaultPoint::sample_after_manifest_publication);
+    interrupted = store.import_assign_sample_bytes(
+        bundle,
+        ProjectStore::ImportAssignSampleBytesRequest{
+            original_command, slot, original_asset, "audio/wav", sample,
+            session_id});
+    LMDJ_CHECK(sample_fault_calls == 1);
+  }
+  LMDJ_CHECK(!interrupted.has_value());
+  LMDJ_CHECK(interrupted.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(manifest_revision(bundle) == 2);
+  const auto incomplete = journal.read_active(bundle);
+  LMDJ_CHECK(incomplete.has_value());
+  LMDJ_CHECK(incomplete.value().expected_revision == 1);
+  LMDJ_CHECK(incomplete.value().armed_capture_slot == slot);
+  LMDJ_CHECK(incomplete.value().capture_commit.has_value());
+  LMDJ_CHECK(
+      incomplete.value().capture_commit->command_id ==
+      original_command.command_id);
+  LMDJ_CHECK(incomplete.value().capture_commit->asset_id == original_asset);
+  LMDJ_CHECK(incomplete.value().capture_commit->slot == slot);
+  LMDJ_CHECK(incomplete.value().capture_commit->expected_revision == 1);
+
+  auto conflicting_sample = sample;
+  conflicting_sample.back() = std::byte{0x05};
+  const auto conflicting_retry = store.import_assign_sample_bytes(
+      bundle,
+      ProjectStore::ImportAssignSampleBytesRequest{
+          meta("armed-capture-conflicting-retry", 1), slot,
+          AssetId{test_uuid("armed-capture-conflicting-retry-asset")},
+          "audio/wav", conflicting_sample, session_id});
+  LMDJ_CHECK(!conflicting_retry.has_value());
+  LMDJ_CHECK(conflicting_retry.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(
+      conflicting_retry.error().details.at("reason") ==
+      "armed_capture_recovery_conflict");
+  LMDJ_CHECK(conflicting_retry.error().details.contains("remedy"));
+  LMDJ_CHECK(manifest_revision(bundle) == 2);
+  const auto still_incomplete = journal.read_active(bundle);
+  LMDJ_CHECK(still_incomplete.has_value());
+  LMDJ_CHECK(still_incomplete.value() == incomplete.value());
+
+  const auto retried = store.import_assign_sample_bytes(
+      bundle,
+      ProjectStore::ImportAssignSampleBytesRequest{
+          meta("armed-capture-ui-retry", 1), slot,
+          AssetId{test_uuid("armed-capture-ui-retry-asset")}, "audio/wav",
+          sample, session_id});
+  LMDJ_CHECK(retried.has_value());
+  LMDJ_CHECK(retried.value().replayed);
+  LMDJ_CHECK(retried.value().state.revision == 2);
+  LMDJ_CHECK(
+      retried.value().event.at("command_id") ==
+      original_command.command_id.value());
+  LMDJ_CHECK(
+      retried.value().state.banks.at(slot.bank).at(slot.pad).asset_id ==
+      original_asset);
+  LMDJ_CHECK(retried.value().state.assets.size() == 1);
+
+  const auto reconciled = journal.read_active(bundle);
+  LMDJ_CHECK(reconciled.has_value());
+  LMDJ_CHECK(reconciled.value().expected_revision == 2);
+  LMDJ_CHECK(!reconciled.value().armed_capture_slot.has_value());
+
+  const auto flush_command = CommandId{test_uuid("armed-capture-flush")};
+  const std::array continued_events{
+      PatternEvent{PadSlotId{0, 1}, 240, 120, 96}};
+  const auto flush = journal.append_flush(
+      bundle, session_id, flush_command, capture_pattern.id, 2,
+      continued_events);
+  LMDJ_CHECK(flush.has_value());
+  const auto flushed = store.execute_sequence_flush(
+      bundle,
+      {session_id, flush.value().flush_seq, flush_command, capture_pattern.id});
+  LMDJ_CHECK(flushed.has_value());
+  LMDJ_CHECK(flushed.value().outcome.state.revision == 3);
+  LMDJ_CHECK(
+      journal.set_state(bundle, session_id, SequenceSessionState::stopped)
+          .has_value());
+  LMDJ_CHECK(journal.remove_active_if_complete(bundle, session_id).has_value());
+}
+
+void test_armed_capture_restart_reconciles_published_receipt_before_seal() {
+  TempDirectory temp("armed-sample-restart");
+  const auto bundle = temp.path() / "project.lmdj";
+  auto platform = lmdj::project_io::make_default_project_storage_platform();
+  ProjectStore store{platform};
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto capture_pattern = pattern("armed-restart-pattern");
+  LMDJ_CHECK(
+      store
+          .execute(
+              bundle,
+              Command{CreatePattern{
+                  meta("armed-restart-pattern-command", 0),
+                  capture_pattern}})
+          .has_value());
+  const auto session_id = lmdj::foundation::SequenceSessionId{
+      test_uuid("armed-restart-session")};
+  const auto slot = PadSlotId{1, 6};
+  SequenceJournal journal{platform};
+  LMDJ_CHECK(
+      journal
+          .begin(
+              bundle, session_id, capture_pattern.id, capture_pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(capture_pattern),
+              1, slot)
+          .has_value());
+  const std::array sample{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+  };
+  const auto asset_id = AssetId{test_uuid("armed-restart-asset")};
+  {
+    SampleFaultGuard guard(FaultPoint::sample_after_manifest_publication);
+    const auto interrupted = store.import_assign_sample_bytes(
+        bundle,
+        ProjectStore::ImportAssignSampleBytesRequest{
+            meta("armed-restart-import", 1), slot, asset_id, "audio/wav",
+            sample, session_id});
+    LMDJ_CHECK(!interrupted.has_value());
+  }
+  LMDJ_CHECK(manifest_revision(bundle) == 2);
+
+  ProjectStore restarted{platform};
+  const auto recovered = restarted.reconcile_sequence_recovery(bundle);
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(recovered.value().size() == 1);
+  LMDJ_CHECK(recovered.value().front().journal.expected_revision == 2);
+  LMDJ_CHECK(
+      !recovered.value().front().journal.armed_capture_slot.has_value());
+  LMDJ_CHECK(!recovered.value().front().journal.capture_commit.has_value());
+  const auto truth = restarted.load(bundle);
+  LMDJ_CHECK(truth.has_value());
+  LMDJ_CHECK(truth.value().revision == 2);
+  LMDJ_CHECK(truth.value().assets.size() == 1);
+  LMDJ_CHECK(truth.value().banks.at(slot.bank).at(slot.pad).asset_id == asset_id);
+}
+
+void test_armed_capture_discard_aborts_prepublication_marker() {
+  TempDirectory temp("armed-sample-prepublication-discard");
+  const auto bundle = temp.path() / "project.lmdj";
+  auto platform = lmdj::project_io::make_default_project_storage_platform();
+  ProjectStore store{platform};
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto capture_pattern = pattern("armed-discard-pattern");
+  LMDJ_CHECK(
+      store
+          .execute(
+              bundle,
+              Command{CreatePattern{
+                  meta("armed-discard-pattern-command", 0), capture_pattern}})
+          .has_value());
+  const auto session_id = lmdj::foundation::SequenceSessionId{
+      test_uuid("armed-discard-session")};
+  const auto slot = PadSlotId{1, 7};
+  SequenceJournal journal{platform};
+  LMDJ_CHECK(
+      journal
+          .begin(
+              bundle, session_id, capture_pattern.id, capture_pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(capture_pattern),
+              1, slot)
+          .has_value());
+  const std::array sample{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+      std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
+  };
+  {
+    SampleFaultGuard guard(FaultPoint::sample_after_manifest_preparation);
+    const auto interrupted = store.import_assign_sample_bytes(
+        bundle,
+        ProjectStore::ImportAssignSampleBytesRequest{
+            meta("armed-discard-import", 1), slot,
+            AssetId{test_uuid("armed-discard-asset")}, "audio/wav", sample,
+            session_id});
+    LMDJ_CHECK(!interrupted.has_value());
+    LMDJ_CHECK(interrupted.error().code == ErrorCode::io_error);
+    LMDJ_CHECK(sample_fault_calls == 1);
+  }
+  LMDJ_CHECK(manifest_revision(bundle) == 1);
+  const auto prepared = journal.read_active(bundle);
+  LMDJ_CHECK(prepared.has_value());
+  LMDJ_CHECK(prepared.value().expected_revision == 1);
+  LMDJ_CHECK(prepared.value().armed_capture_slot == slot);
+  LMDJ_CHECK(prepared.value().capture_commit.has_value());
+
+  const auto settings = store.execute(
+      bundle,
+      Command{UpdateSequenceSettings{
+          meta("armed-discard-settings", 1), 130, std::nullopt,
+          std::nullopt}});
+  LMDJ_CHECK(!settings.has_value());
+  LMDJ_CHECK(settings.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(manifest_revision(bundle) == 1);
+  const auto after_settings = journal.read_active(bundle);
+  LMDJ_CHECK(after_settings.has_value());
+  LMDJ_CHECK(after_settings.value() == prepared.value());
+  LMDJ_CHECK(
+      settings.error().details.at("reason") ==
+      "armed_capture_recovery_pending");
+  LMDJ_CHECK(settings.error().details.contains("remedy"));
+
+  const auto wrong_owner = store.disarm_sequence_capture(
+      bundle,
+      lmdj::foundation::SequenceSessionId{
+          test_uuid("armed-discard-wrong-session")},
+      slot);
+  LMDJ_CHECK(!wrong_owner.has_value());
+  LMDJ_CHECK(wrong_owner.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(
+      wrong_owner.error().details.at("reason") == "sequence_owner_mismatch");
+  const auto wrong_slot = store.disarm_sequence_capture(
+      bundle, session_id, PadSlotId{slot.bank, 6});
+  LMDJ_CHECK(!wrong_slot.has_value());
+  LMDJ_CHECK(wrong_slot.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(
+      wrong_slot.error().details.at("reason") ==
+      "armed_capture_target_mismatch");
+  const auto still_prepared = journal.read_active(bundle);
+  LMDJ_CHECK(still_prepared.has_value());
+  LMDJ_CHECK(still_prepared.value() == prepared.value());
+
+  const auto discarded = store.disarm_sequence_capture(
+      bundle, session_id, slot);
+  LMDJ_CHECK(discarded.has_value());
+  LMDJ_CHECK(!discarded.value().reconciled_commit);
+  LMDJ_CHECK(discarded.value().expected_revision == 1);
+  const auto disarmed = journal.read_active(bundle);
+  LMDJ_CHECK(disarmed.has_value());
+  LMDJ_CHECK(disarmed.value().expected_revision == 1);
+  LMDJ_CHECK(!disarmed.value().armed_capture_slot.has_value());
+  LMDJ_CHECK(!disarmed.value().capture_commit.has_value());
+  const auto unchanged = store.load(bundle);
+  LMDJ_CHECK(unchanged.has_value());
+  LMDJ_CHECK(unchanged.value().revision == 1);
+  LMDJ_CHECK(unchanged.value().assets.empty());
+  LMDJ_CHECK(
+      !unchanged.value().banks.at(slot.bank).at(slot.pad).asset_id.has_value());
+
+  const auto flush_command = CommandId{test_uuid("armed-discard-flush")};
+  const std::array continued_events{
+      PatternEvent{PadSlotId{0, 2}, 240, 120, 96}};
+  const auto flush = journal.append_flush(
+      bundle, session_id, flush_command, capture_pattern.id, 1,
+      continued_events);
+  LMDJ_CHECK(flush.has_value());
+  const auto flushed = store.execute_sequence_flush(
+      bundle,
+      {session_id, flush.value().flush_seq, flush_command, capture_pattern.id});
+  LMDJ_CHECK(flushed.has_value());
+  LMDJ_CHECK(flushed.value().outcome.state.revision == 2);
+  LMDJ_CHECK(
+      journal.set_state(bundle, session_id, SequenceSessionState::stopped)
+          .has_value());
+  LMDJ_CHECK(journal.remove_active_if_complete(bundle, session_id).has_value());
+}
+
+void test_armed_capture_restart_aborts_prepublication_marker_before_seal() {
+  TempDirectory temp("armed-sample-prepublication-restart");
+  const auto bundle = temp.path() / "project.lmdj";
+  auto platform = lmdj::project_io::make_default_project_storage_platform();
+  ProjectStore store{platform};
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto capture_pattern = pattern("armed-abort-restart-pattern");
+  LMDJ_CHECK(
+      store
+          .execute(
+              bundle,
+              Command{CreatePattern{
+                  meta("armed-abort-restart-pattern-command", 0),
+                  capture_pattern}})
+          .has_value());
+  const auto session_id = lmdj::foundation::SequenceSessionId{
+      test_uuid("armed-abort-restart-session")};
+  const auto slot = PadSlotId{2, 8};
+  SequenceJournal journal{platform};
+  LMDJ_CHECK(
+      journal
+          .begin(
+              bundle, session_id, capture_pattern.id, capture_pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(capture_pattern),
+              1, slot)
+          .has_value());
+  const std::array sample{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+      std::byte{0x05}, std::byte{0x06}, std::byte{0x07}, std::byte{0x08},
+  };
+  {
+    SampleFaultGuard guard(FaultPoint::sample_after_manifest_preparation);
+    const auto interrupted = store.import_assign_sample_bytes(
+        bundle,
+        ProjectStore::ImportAssignSampleBytesRequest{
+            meta("armed-abort-restart-import", 1), slot,
+            AssetId{test_uuid("armed-abort-restart-asset")}, "audio/wav",
+            sample, session_id});
+    LMDJ_CHECK(!interrupted.has_value());
+  }
+  LMDJ_CHECK(manifest_revision(bundle) == 1);
+
+  ProjectStore restarted{platform};
+  const auto recovered = restarted.reconcile_sequence_recovery(bundle);
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(recovered.value().size() == 1);
+  LMDJ_CHECK(recovered.value().front().reason == "owner_lost");
+  LMDJ_CHECK(recovered.value().front().journal.expected_revision == 1);
+  LMDJ_CHECK(
+      !recovered.value().front().journal.armed_capture_slot.has_value());
+  LMDJ_CHECK(!recovered.value().front().journal.capture_commit.has_value());
+  const auto unchanged = restarted.load(bundle);
+  LMDJ_CHECK(unchanged.has_value());
+  LMDJ_CHECK(unchanged.value().revision == 1);
+  LMDJ_CHECK(unchanged.value().assets.empty());
+  LMDJ_CHECK(
+      !unchanged.value().banks.at(slot.bank).at(slot.pad).asset_id.has_value());
+}
+
 void test_restart_classifies_committed_and_uncommitted_files() {
   TempDirectory temp("symlink-boundary");
   const auto bundle = temp.path() / "project.lmdj";
@@ -635,6 +993,10 @@ int main() {
     test_sample_staging_scavenger_is_generated_name_age_and_count_bounded();
     test_sample_import_reclaims_its_fresh_incomplete_crash_residue();
     test_crash_after_sample_manifest_publication_recovers_new_truth();
+    test_armed_capture_retry_reconciles_manifest_published_journal();
+    test_armed_capture_restart_reconciles_published_receipt_before_seal();
+    test_armed_capture_discard_aborts_prepublication_marker();
+    test_armed_capture_restart_aborts_prepublication_marker_before_seal();
     test_restart_classifies_committed_and_uncommitted_files();
     test_every_fault_point_is_observed_exactly_once();
   } catch (const std::exception& error) {
