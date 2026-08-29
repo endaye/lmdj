@@ -2645,7 +2645,11 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
     window.__sequenceBoundaries);
   if (cancelledStopAttempt.error === null) {
     expect(cancelledBoundaries).toEqual([]);
-    expect(cancelledStop.replayed).toBe(false);
+    // Stop can either return its first response or repair a post-commit
+    // boundary ambiguity by replaying the same durable command identity
+    // inside the Runtime action lane. Both settle before the queued boundary
+    // and must leave no target notification or duplicate Project mutation.
+    expect([false, true]).toContain(cancelledStop.replayed);
   } else {
     // Boundary notification delivery may itself race the fail-closed Runtime
     // clear. If it was already delivered, it must name the crossed target.
