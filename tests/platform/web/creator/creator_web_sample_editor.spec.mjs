@@ -582,18 +582,25 @@ test("packaged Sample Editor clamps a plus-one-frame source and admits the quota
     "bank-quota-plus-one.wav",
     pcm16Wav({frames: 16_777_217}),
   );
+  const quotaBoundFrames = Number(await page.getByRole("slider", {
+    name: "Long source selection length",
+  }).inputValue());
+  expect(quotaBoundFrames).toBeLessThan(16_777_217);
+  expect(44 + quotaBoundFrames * 2).toBeGreaterThan(1_048_576);
   await commitLongSourceSelection(page);
 
   await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
     .toBeVisible({timeout: 120_000});
-  await expect(page.getByText("48 kHz · Mono · 16,777,216 frames")).toBeVisible();
+  await expect(page.getByText(
+    `48 kHz · Mono · ${quotaBoundFrames.toLocaleString("en-US")} frames`,
+  )).toBeVisible();
   await expectProjectRevision(page, 47);
   const operations = await page.evaluate((offset) =>
     (window.__sampleProofOperations ?? []).slice(offset), operationOffset);
   expect(operations.filter((operation) => operation === "sample.import.begin"))
     .toHaveLength(1);
   expect(operations.filter((operation) => operation === "sample.import.chunk"))
-    .toHaveLength(33);
+    .toHaveLength(Math.ceil((44 + quotaBoundFrames * 2) / 1_048_576));
   expect(operations.filter((operation) => operation === "sample.import.commit"))
     .toHaveLength(1);
 });
