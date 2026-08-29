@@ -2635,14 +2635,16 @@ test("Stage 9 Chromium records across an acknowledged switch, reloads, and expos
     durationTick > 0)).toBe(true);
   const switchedPattern = truth.project.patterns[nextPatternId];
   expect(switchedPattern.events).toHaveLength(2);
-  expect(switchedPattern.events[0]).toMatchObject({
-    slot: {bank: 0, pad: 2},
-    velocity: 90,
-  });
-  expect(switchedPattern.events[1]).toMatchObject({
-    slot: {bank: 0, pad: 3},
-    velocity: 80,
-  });
+  // Canonical Pattern order is onset-first. These events were recorded in
+  // separate sessions, so a loop wrap can legitimately place either Pad
+  // first even though both identities and values must survive.
+  expect(switchedPattern.events.map(({slot, velocity}) => ({slot, velocity}))
+    .sort((left, right) => left.slot.pad - right.slot.pad)).toEqual([
+    {slot: {bank: 0, pad: 2}, velocity: 90},
+    {slot: {bank: 0, pad: 3}, velocity: 80},
+  ]);
+  expect(switchedPattern.events.every(({duration_tick: durationTick}) =>
+    durationTick > 0)).toBe(true);
   expect(success(await hostRequest(page, "snapshot.reload", {
     pattern_id: nextPatternId,
   }), "Stage 9 reload-visible truth")).toMatchObject({
