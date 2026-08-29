@@ -282,8 +282,9 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
     artifact: committedArtifact,
   });
 
-  expect(persisted.project_revision).toBe(48);
-  expect(persisted.project.revision).toBe(48);
+  const expectedFinalRevision = initialTruth.project_revision + 2;
+  expect(persisted.project_revision).toBe(expectedFinalRevision);
+  expect(persisted.project.revision).toBe(expectedFinalRevision);
 
   const persistedEvents = persisted.project.patterns[patternId].events;
   expect(persistedEvents).toHaveLength(initialEvents.length + 2);
