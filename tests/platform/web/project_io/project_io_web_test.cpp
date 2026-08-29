@@ -920,11 +920,23 @@ nlohmann::json run_suite() {
   project_io::SequenceJournal second_owner{platform};
   project_io::SequenceJournal third_owner{platform};
   const std::array second_events{
+      domain::PatternEvent{domain::PadSlotId{0, 0}, 240, 120, 101},
       domain::PatternEvent{domain::PadSlotId{0, 1}, 480, 120, 90},
   };
   const std::array third_events{
+      domain::PatternEvent{domain::PadSlotId{0, 0}, 240, 120, 101},
+      domain::PatternEvent{domain::PadSlotId{0, 1}, 480, 120, 90},
       domain::PatternEvent{domain::PadSlotId{0, 2}, 720, 120, 91},
   };
+  success(
+      second_owner.append_tail(
+          bundle,
+          session_id,
+          recorded_pattern_id,
+          0,
+          1,
+          second_events),
+      "second-owner SequenceJournal tail");
   value(
       second_owner.append_flush(
           bundle,
@@ -934,6 +946,15 @@ nlohmann::json run_suite() {
           0,
           second_events),
       "second-owner SequenceJournal append");
+  success(
+      third_owner.append_tail(
+          bundle,
+          session_id,
+          recorded_pattern_id,
+          0,
+          2,
+          third_events),
+      "third-owner SequenceJournal tail");
   value(
       third_owner.append_flush(
           bundle,
