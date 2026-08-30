@@ -693,9 +693,13 @@ class OneShotAudioDriver final {
     thread_.join();
   }
 
-  void render_one() {
+  void render_one() { render_frames(128); }
+
+  void render_frames(std::uint32_t frame_count) {
+    LMDJ_CHECK(frame_count > 0 && frame_count <= 128);
     std::unique_lock lock(mutex_);
     const auto target = completed_ + 1;
+    frame_count_ = frame_count;
     ++permits_;
     changed_.notify_all();
     changed_.wait(lock, [this, target] { return completed_ >= target; });
@@ -720,6 +724,7 @@ class OneShotAudioDriver final {
     std::array<float, 128> right{};
     while (true) {
       bool wait_for_bank_transition = false;
+      std::uint32_t frame_count = 128;
       {
         std::unique_lock lock(mutex_);
         changed_.wait(lock, [this] { return stopped_ || permits_ != 0; });
@@ -727,6 +732,8 @@ class OneShotAudioDriver final {
           return;
         }
         --permits_;
+        frame_count = frame_count_;
+        frame_count_ = 128;
         if (bank_transition_permits_ != 0) {
           --bank_transition_permits_;
           wait_for_bank_transition = true;
@@ -740,7 +747,7 @@ class OneShotAudioDriver final {
       if (stop_requested_.load(std::memory_order_acquire)) {
         return;
       }
-      engine_.render(left.data(), right.data(), 128);
+      engine_.render(left.data(), right.data(), frame_count);
       {
         std::lock_guard lock(mutex_);
         ++completed_;
@@ -755,6 +762,7 @@ class OneShotAudioDriver final {
   std::size_t permits_ = 0;
   std::size_t bank_transition_permits_ = 0;
   std::size_t completed_ = 0;
+  std::uint32_t frame_count_ = 128;
   std::atomic<bool> stop_requested_{false};
   bool stopped_ = false;
   std::thread thread_;
@@ -1873,7 +1881,7 @@ void test_sequence_switch_prepares_before_selecting_bar_boundary() {
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-  ContinuousAudioDriver audio(runtime->engine());
+  OneShotAudioDriver audio(runtime->engine());
   check_success(runtime->dispatch(
       "sequence.settings.update",
       {{"command_id", "00000000-0000-4000-8000-000000000099"},
@@ -1883,9 +1891,9 @@ void test_sequence_switch_prepares_before_selecting_bar_boundary() {
        {"quantize_enabled", nullptr},
        {"swing_percent", nullptr}},
       {}));
-  wait_until([&] {
-    return runtime->engine().pattern_telemetry().pending_generation == 0;
-  });
+  while (runtime->engine().pattern_telemetry().pending_generation != 0) {
+    audio.render_one();
+  }
   const auto& begun = check_exact_success(
       runtime->dispatch(
           "sequence.record.begin",
@@ -1902,10 +1910,14 @@ void test_sequence_switch_prepares_before_selecting_bar_boundary() {
   LMDJ_CHECK(bar_frames.has_value());
   const auto anchor_frame =
       begun.at("transport_anchor").at("runtime_frame").get<std::uint64_t>();
-  wait_until([&] {
-    return runtime->engine().telemetry().rendered_frames >=
-           anchor_frame + bar_frames.value() - 128;
-  });
+  const auto request_frame = anchor_frame + bar_frames.value() - 128;
+  while (runtime->engine().telemetry().rendered_frames < request_frame) {
+    const auto remaining =
+        request_frame - runtime->engine().telemetry().rendered_frames;
+    audio.render_frames(static_cast<std::uint32_t>(
+        remaining < 128 ? remaining : 128));
+  }
+  LMDJ_CHECK(runtime->engine().telemetry().rendered_frames == request_frame);
   const auto& switched = check_exact_success(
       runtime->dispatch(
           "sequence.record.switch-request",
@@ -1921,7 +1933,6 @@ void test_sequence_switch_prepares_before_selecting_bar_boundary() {
   LMDJ_CHECK(
       switched.at("effective_runtime_frame") ==
       switched.at("pattern_publication").at("activation_frame"));
-  audio.stop();
 }
 
 void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
