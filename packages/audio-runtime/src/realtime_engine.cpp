@@ -49,6 +49,7 @@ void invoke_pattern_apply_hook() noexcept {
 namespace {
 
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+static_assert(std::atomic<std::uint16_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
 static_assert(
     kRealtimeMaximumSampleFrames ==
@@ -85,6 +86,20 @@ bool valid_control_kind(PadControlKind kind) noexcept {
       return true;
   }
   return false;
+}
+
+bool valid_fx_gesture(FxGesture gesture) noexcept {
+  switch (gesture.kind) {
+    case FxGestureKind::hold_on:
+    case FxGestureKind::hold_off:
+      return true;
+    case FxGestureKind::engage:
+    case FxGestureKind::move:
+    case FxGestureKind::release:
+      break;
+  }
+  const auto index = static_cast<std::size_t>(gesture.fx);
+  return index < kFxChainOrder.size() && kFxChainOrder[index] == gesture.fx;
 }
 
 bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
@@ -935,6 +950,8 @@ foundation::Result<void> RealtimeEngine::start() {
   }
 
   queue_.clear_quiescent();
+  fx_queue_.clear_quiescent();
+  master_fx_.reset();
   publish_queue_.clear_quiescent();
   audio_pending_pattern_.reset();
   capture_ring_.clear_quiescent();
@@ -974,6 +991,14 @@ foundation::Result<void> RealtimeEngine::start() {
   published_voice_states_.store(0, std::memory_order_relaxed);
   drained_voice_states_.store(0, std::memory_order_relaxed);
   voice_state_drops_.store(0, std::memory_order_relaxed);
+  enqueued_fx_gestures_.store(0, std::memory_order_relaxed);
+  dequeued_fx_gestures_.store(0, std::memory_order_relaxed);
+  fx_queue_drops_.store(0, std::memory_order_relaxed);
+  master_fx_processed_frames_.store(0, std::memory_order_relaxed);
+  queued_fx_gestures_.store(0, std::memory_order_relaxed);
+  enqueued_tempo_updates_.store(0, std::memory_order_relaxed);
+  applied_tempo_updates_.store(0, std::memory_order_relaxed);
+  current_master_fx_bpm_.store(master_fx_.bpm(), std::memory_order_relaxed);
   state_.store(RealtimeState::running, std::memory_order_release);
   return foundation::Result<void>::success();
 }
@@ -982,6 +1007,9 @@ void RealtimeEngine::stop() noexcept {
   state_.store(RealtimeState::stopped, std::memory_order_release);
   cancelled_events_.fetch_add(
       queue_.clear_quiescent(), std::memory_order_relaxed);
+  fx_queue_.clear_quiescent();
+  queued_fx_gestures_.store(0, std::memory_order_relaxed);
+  master_fx_.reset();
 
   std::uint64_t active = 0;
   for (auto& voice : voices_) {
@@ -1099,6 +1127,66 @@ EnqueueResult RealtimeEngine::enqueue_control(PadControlEvent event) noexcept {
   return EnqueueResult::accepted;
 }
 
+foundation::Result<void> RealtimeEngine::prepare_master_fx(
+    std::uint16_t bpm) {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::stopped) {
+    return invalid_argument("Master FX must be prepared while stopped");
+  }
+  auto prepared =
+      master_fx_.prepare(MasterFxPreparation{kRealtimeSampleRate, bpm});
+  if (prepared.has_value()) {
+    current_master_fx_bpm_.store(bpm, std::memory_order_relaxed);
+  }
+  return prepared;
+}
+
+FxEnqueueResult RealtimeEngine::enqueue_fx_gesture(
+    FxGesture gesture) noexcept {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running) {
+    return FxEnqueueResult::not_running;
+  }
+  if (!master_fx_.prepared()) {
+    return FxEnqueueResult::not_prepared;
+  }
+  if (!valid_fx_gesture(gesture)) {
+    return FxEnqueueResult::invalid_fx;
+  }
+  if (gesture.value > kMasterFxValueMaximum) {
+    return FxEnqueueResult::invalid_value;
+  }
+  // Publish the count before the SPSC release-store makes the entry visible;
+  // render can therefore never subtract a gesture that is still uncounted.
+  queued_fx_gestures_.fetch_add(1, std::memory_order_relaxed);
+  if (!fx_queue_.try_push(MasterFxControlEvent{
+          MasterFxControlKind::gesture, gesture, 0})) {
+    queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
+    fx_queue_drops_.fetch_add(1, std::memory_order_relaxed);
+    return FxEnqueueResult::queue_full;
+  }
+  enqueued_fx_gestures_.fetch_add(1, std::memory_order_relaxed);
+  return FxEnqueueResult::accepted;
+}
+
+FxEnqueueResult RealtimeEngine::enqueue_master_fx_tempo(
+    std::uint16_t bpm) noexcept {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running) {
+    return FxEnqueueResult::not_running;
+  }
+  if (!master_fx_.prepared()) {
+    return FxEnqueueResult::not_prepared;
+  }
+  if (bpm < 40 || bpm > 240) {
+    return FxEnqueueResult::invalid_bpm;
+  }
+  if (!fx_queue_.try_push(MasterFxControlEvent{
+          MasterFxControlKind::tempo, {}, bpm})) {
+    fx_queue_drops_.fetch_add(1, std::memory_order_relaxed);
+    return FxEnqueueResult::queue_full;
+  }
+  enqueued_tempo_updates_.fetch_add(1, std::memory_order_relaxed);
+  return FxEnqueueResult::accepted;
+}
+
 void RealtimeEngine::render(
     float* left, float* right, std::uint32_t frames) noexcept {
   std::fill_n(left, frames, 0.0F);
@@ -1107,6 +1195,23 @@ void RealtimeEngine::render(
   const auto absolute_start_frame =
       rendered_frames_.fetch_add(frames, std::memory_order_relaxed);
   update_max(max_callback_frames_, frames);
+
+  MasterFxControlEvent fx_control{};
+  for (std::size_t processed = 0;
+       processed < kRealtimeQueueCapacity &&
+       fx_queue_.try_pop(fx_control);
+       ++processed) {
+    if (fx_control.kind == MasterFxControlKind::gesture) {
+      static_cast<void>(master_fx_.apply_gesture(fx_control.gesture));
+      dequeued_fx_gestures_.fetch_add(1, std::memory_order_relaxed);
+      queued_fx_gestures_.fetch_sub(1, std::memory_order_relaxed);
+    } else {
+      static_cast<void>(master_fx_.set_bpm(fx_control.bpm));
+      current_master_fx_bpm_.store(
+          fx_control.bpm, std::memory_order_relaxed);
+      applied_tempo_updates_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
 
   auto capture_state = CaptureState::arm_pending;
   if (capture_state_.load(std::memory_order_acquire) ==
@@ -1410,6 +1515,11 @@ void RealtimeEngine::render(
     right[frame] = std::clamp(right[frame], -1.0F, 1.0F);
   }
 
+  if (master_fx_.prepared()) {
+    master_fx_.process(left, right, frames);
+    master_fx_processed_frames_.fetch_add(frames, std::memory_order_relaxed);
+  }
+
   capture_state = CaptureState::disarm_pending;
   capture_state_.compare_exchange_strong(
       capture_state,
@@ -1519,6 +1629,19 @@ RuntimeVoiceStateTelemetry RealtimeEngine::voice_state_telemetry()
       published_voice_states_.load(std::memory_order_relaxed),
       drained_voice_states_.load(std::memory_order_relaxed),
       voice_state_drops_.load(std::memory_order_relaxed),
+  };
+}
+
+MasterFxTelemetry RealtimeEngine::master_fx_telemetry() const noexcept {
+  return MasterFxTelemetry{
+      enqueued_fx_gestures_.load(std::memory_order_relaxed),
+      dequeued_fx_gestures_.load(std::memory_order_relaxed),
+      queued_fx_gestures_.load(std::memory_order_relaxed),
+      fx_queue_drops_.load(std::memory_order_relaxed),
+      master_fx_processed_frames_.load(std::memory_order_relaxed),
+      enqueued_tempo_updates_.load(std::memory_order_relaxed),
+      applied_tempo_updates_.load(std::memory_order_relaxed),
+      current_master_fx_bpm_.load(std::memory_order_relaxed),
   };
 }
 

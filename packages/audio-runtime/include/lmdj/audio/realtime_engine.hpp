@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <lmdj/audio/detail/fixed_spsc_queue.hpp>
+#include <lmdj/audio/master_fx.hpp>
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/foundation/error.hpp>
 
@@ -330,6 +331,13 @@ class RealtimeEngine final {
   // Control thread, concurrent with render. Sole producer of the trigger queue.
   EnqueueResult enqueue(TriggerEvent event) noexcept;
   EnqueueResult enqueue_control(PadControlEvent event) noexcept;
+  // Control thread, quiescent. Allocates all Master FX render storage.
+  foundation::Result<void> prepare_master_fx(std::uint16_t bpm);
+  // Control thread, concurrent with render. Sole producer of the FX queue.
+  FxEnqueueResult enqueue_fx_gesture(FxGesture gesture) noexcept;
+  // Control thread, concurrent with render. Ordered with FX gestures and
+  // applied at the next render quantum boundary.
+  FxEnqueueResult enqueue_master_fx_tempo(std::uint16_t bpm) noexcept;
   // Audio thread only.
   void render(float* left, float* right, std::uint32_t frames) noexcept;
   // Any thread.
@@ -340,6 +348,7 @@ class RealtimeEngine final {
   CaptureTelemetry capture_telemetry() const noexcept;
   RuntimeTriggerOutcomeTelemetry trigger_outcome_telemetry() const noexcept;
   RuntimeVoiceStateTelemetry voice_state_telemetry() const noexcept;
+  MasterFxTelemetry master_fx_telemetry() const noexcept;
 
  private:
   enum class BankState : std::uint8_t {
@@ -384,6 +393,14 @@ class RealtimeEngine final {
     std::uint64_t activation_frame;
   };
   static_assert(std::is_trivially_copyable_v<PatternPublishEntry>);
+
+  enum class MasterFxControlKind : std::uint8_t { gesture, tempo };
+  struct MasterFxControlEvent {
+    MasterFxControlKind kind;
+    FxGesture gesture;
+    std::uint16_t bpm;
+  };
+  static_assert(std::is_trivially_copyable_v<MasterFxControlEvent>);
 
   struct Voice {
     std::uint64_t sequence = 0;
@@ -432,6 +449,9 @@ class RealtimeEngine final {
 
   std::array<std::vector<float>, kRealtimeSampleSlots> samples_;
   detail::FixedSpscQueue<PadControlEvent, kRealtimeQueueCapacity> queue_;
+  detail::FixedSpscQueue<MasterFxControlEvent, kRealtimeQueueCapacity>
+      fx_queue_;
+  MasterFxChain master_fx_;
   std::array<BankSlot, kRealtimeBankCapacity> bank_slots_{};
   detail::FixedSpscQueue<
       std::uint8_t,
@@ -507,6 +527,14 @@ class RealtimeEngine final {
   std::atomic<std::uint64_t> published_voice_states_{0};
   std::atomic<std::uint64_t> drained_voice_states_{0};
   std::atomic<std::uint64_t> voice_state_drops_{0};
+  std::atomic<std::uint64_t> enqueued_fx_gestures_{0};
+  std::atomic<std::uint64_t> dequeued_fx_gestures_{0};
+  std::atomic<std::uint64_t> fx_queue_drops_{0};
+  std::atomic<std::uint64_t> master_fx_processed_frames_{0};
+  std::atomic<std::uint64_t> queued_fx_gestures_{0};
+  std::atomic<std::uint64_t> enqueued_tempo_updates_{0};
+  std::atomic<std::uint64_t> applied_tempo_updates_{0};
+  std::atomic<std::uint16_t> current_master_fx_bpm_{0};
 };
 
 }  // namespace lmdj::audio
