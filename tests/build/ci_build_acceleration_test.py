@@ -89,7 +89,14 @@ class CiBuildAccelerationTest(unittest.TestCase):
                 job = self.workflow_job(job_name)
                 self.assertIn("needs: change-scope", job)
 
-    def test_linux_core_heavy_lanes_share_a_non_cancelling_capacity_lock(self) -> None:
+    def test_linux_core_heavy_lanes_retain_every_capacity_lock_waiter(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(
+            len(re.findall(r"(?m)^      queue: max$", source)),
+            2,
+            "why: ci.yml must retain every pending ASan and coverage capacity-lock waiter; "
+            "remedy: keep queue: max on exactly the core-asan and core-coverage concurrency blocks",
+        )
         for job_name in ("core-asan", "core-coverage"):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
@@ -97,7 +104,13 @@ class CiBuildAccelerationTest(unittest.TestCase):
                     job,
                     r"(?m)^    concurrency:\n"
                     r"      group: lmdj-native-heavy\n"
+                    r"      queue: max\n"
                     r"      cancel-in-progress: false$",
+                    msg=(
+                        "why: GitHub's default concurrency queue replaces an older pending "
+                        f"{job_name} waiter; remedy: keep queue: max before "
+                        "cancel-in-progress: false on this heavy lane"
+                    ),
                 )
                 self.assertIn(CORE_ROLE, job)
                 self.assertNotIn("select-ubuntu-runner", job)
