@@ -25,6 +25,8 @@ STARTUP_PATTERN_ID = "00000000-0000-4000-8000-000000000010"
 KICK_ASSET_ID = "00000000-0000-4000-8000-000000000101"
 SNARE_ASSET_ID = "00000000-0000-4000-8000-000000000102"
 RECORDED_SESSION_ID = "00000000-0000-4000-8000-000000000202"
+DEFAULT_RESPONSE_TIMEOUT_SECONDS = 10.0
+DURABLE_RECORD_STOP_TIMEOUT_SECONDS = 30.0
 
 
 def canonical_json(value: object) -> str:
@@ -42,6 +44,15 @@ def uuid(suffix: int) -> str:
 
 def slot(bank: int, pad: int) -> dict:
     return {"bank": bank, "pad": pad}
+
+
+def response_timeout_seconds(request: dict) -> float:
+    # record.stop drains the realtime Capture ring, joins the durable writer,
+    # and commits Project Truth before responding. Keep that durability
+    # boundary distinct from ordinary protocol responsiveness.
+    if request.get("operation") == "record.stop":
+        return DURABLE_RECORD_STOP_TIMEOUT_SECONDS
+    return DEFAULT_RESPONSE_TIMEOUT_SECONDS
 
 
 def check_error(response: dict, code: str | None = None) -> None:
@@ -222,10 +233,18 @@ class HostProcess:
             stderr=subprocess.PIPE,
         )
 
-    def read(self, timeout: float = 10.0) -> dict:
+    def read(
+        self,
+        timeout: float = DEFAULT_RESPONSE_TIMEOUT_SECONDS,
+        operation: str = "unsolicited response",
+    ) -> dict:
         assert self.process.stdout is not None
         readable, _, _ = select.select([self.process.stdout], [], [], timeout)
-        assert readable, "timed out waiting for Native Host response"
+        assert readable, (
+            f"timed out after {timeout:.0f}s waiting for Native Host response "
+            f"to {operation}; process_returncode={self.process.poll()}; "
+            f"stderr={self.stderr_so_far()!r}"
+        )
         line = self.process.stdout.readline()
         assert line, (self.process.poll(), self.stderr_so_far())
         decoded = line.decode("utf-8", errors="strict")
@@ -233,14 +252,25 @@ class HostProcess:
         assert decoded == canonical_json(response) + "\n"
         return response
 
-    def send_raw(self, line: bytes) -> dict:
+    def send_raw(
+        self,
+        line: bytes,
+        timeout: float = DEFAULT_RESPONSE_TIMEOUT_SECONDS,
+        operation: str = "raw request",
+    ) -> dict:
         assert self.process.stdin is not None
         self.process.stdin.write(line + b"\n")
         self.process.stdin.flush()
-        return self.read()
+        return self.read(timeout, operation)
 
     def request(self, request: dict) -> dict:
-        return self.send_raw(canonical_json(request).encode("utf-8"))
+        operation = request.get("operation")
+        operation_name = operation if isinstance(operation, str) else "invalid request"
+        return self.send_raw(
+            canonical_json(request).encode("utf-8"),
+            response_timeout_seconds(request),
+            operation_name,
+        )
 
     def stderr_so_far(self) -> bytes:
         if self.process.poll() is None or self.process.stderr is None:

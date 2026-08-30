@@ -133,10 +133,21 @@ if(BUILD_TESTING)
   lmdj_add_test(
     NAME facade.sequence_surface
     TIER component
-    COMMAND lmdj_facade_sequence_surface_tests
+    COMMAND lmdj_facade_sequence_surface_tests --shard=lifecycle
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
-
+  lmdj_add_test(
+    NAME facade.sequence_surface.recovery
+    TIER component
+    COMMAND lmdj_facade_sequence_surface_tests --shard=recovery
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
+    NAME facade.sequence_surface.rebase
+    TIER component
+    COMMAND lmdj_facade_sequence_surface_tests --shard=rebase
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
   add_executable(
     lmdj_facade_sample_surface_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/sample_surface_test.cpp"
@@ -164,7 +175,19 @@ if(BUILD_TESTING)
   lmdj_add_test(
     NAME facade.sample_surface
     TIER component
-    COMMAND lmdj_facade_sample_surface_tests
+    COMMAND lmdj_facade_sample_surface_tests --shard=mutation
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
+    NAME facade.sample_surface.quota_replay
+    TIER component
+    COMMAND lmdj_facade_sample_surface_tests --shard=quota-replay
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
+    NAME facade.sample_surface.projection
+    TIER component
+    COMMAND lmdj_facade_sample_surface_tests --shard=projection
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
 
@@ -301,9 +324,41 @@ if(BUILD_TESTING)
   lmdj_target_warnings(lmdj_application_c_api_stress_tests)
   lmdj_target_sanitizers(lmdj_application_c_api_stress_tests)
   lmdj_add_test(
-    NAME facade.c_api_stress
+    NAME facade.c_api_stress.independent_engines_0_63
     TIER stress
-    COMMAND lmdj_application_c_api_stress_tests
+    COMMAND lmdj_application_c_api_stress_tests --shard=independent-engines-0-63
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS abi concurrency
+    TIMEOUT 180
+  )
+  lmdj_add_test(
+    NAME facade.c_api_stress.independent_engines_64_127
+    TIER stress
+    COMMAND lmdj_application_c_api_stress_tests --shard=independent-engines-64-127
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS abi concurrency
+    TIMEOUT 180
+  )
+  lmdj_add_test(
+    NAME facade.c_api_stress.query_free_race
+    TIER stress
+    COMMAND lmdj_application_c_api_stress_tests --shard=query-free-race
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS abi concurrency
+    TIMEOUT 180
+  )
+  lmdj_add_test(
+    NAME facade.c_api_stress.stale_handles
+    TIER stress
+    COMMAND lmdj_application_c_api_stress_tests --shard=stale-handles
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS abi concurrency
+    TIMEOUT 180
+  )
+  lmdj_add_test(
+    NAME facade.c_api_stress.lifetime_isolation
+    TIER stress
+    COMMAND lmdj_application_c_api_stress_tests --shard=lifetime-isolation
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS abi concurrency
     TIMEOUT 180

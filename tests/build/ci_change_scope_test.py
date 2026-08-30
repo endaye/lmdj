@@ -11,6 +11,7 @@ import copy
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -76,7 +77,11 @@ SELF_HOSTED_JOBS = [
 CASES = {
     ".github/ISSUE_TEMPLATE/feature.yml": {"docs_static", "ci_contract"},
     "docs/guide.md": {"docs_static"},
-    "docs/governance/git-workflow.md": {"docs_static", "portal"},
+    # release_skill_test.py asserts on this page, so the release-facing
+    # lanes that hold it must run when it changes.
+    "docs/governance/git-workflow.md": {
+        "docs_static", "portal", "ci_contract", "deploy_contract"
+    },
     "docs/governance/github-work-management.md": {
         "docs_static", "portal", "ci_contract"
     },
@@ -115,6 +120,12 @@ CASES = {
     "tests/platform/web/project_io/project_io_web_test.cpp": {"web_toolchain"},
     "tests/fixtures/long-material/make_fixtures.py": {"creator"},
     "tests/build/ci_runner_fallback_test.py": {"ci_contract"},
+    "tests/build/facade_surface_sharding_test.py": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/build/facade_surface_sharding_unit_test.py": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
     "tests/build/web_runtime_public_deployment_docs_test.py": {"deploy_contract"},
     "tests/conformance/version_lock_test.py": {"core_ubuntu", "package"},
     "scripts/chameleon-lab.sh": {"chameleon_lab"},
@@ -339,6 +350,13 @@ class ChangeScopeTest(unittest.TestCase):
                         trusted_head=True,
                     )
 
+    def lanes_for_path(self, path):
+        """Return the exact lane union the policy gives one path."""
+        return {
+            lane for rule in self.policy["rules"]
+            if policy_match(rule["match"], path) for lane in rule["lanes"]
+        }
+
     def test_every_tracked_path_has_explicit_ownership_or_full_rule(self):
         inventory = subprocess.run(
             ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True
@@ -353,6 +371,58 @@ class ChangeScopeTest(unittest.TestCase):
             )
         ]
         self.assertEqual(unmatched, [], "unclassified tracked paths:\n" + "\n".join(unmatched))
+
+    def test_every_document_a_test_reads_reaches_that_test_lane(self):
+        # A test that asserts on a document's content is a gate over that
+        # document, so editing the document must run the lane that holds the
+        # test. Three tests once read eleven documents routed away from their
+        # own lane -- `web_runtime_public_deployment_docs_test.py` asserted on
+        # a design document routed only to `docs_static` -- and only the
+        # queue's unconditional full run caught it. Deriving the expectation
+        # from the tests' real read sites keeps a new document from repeating
+        # it. The scan reads literal paths only: a dynamically built path is
+        # invisible to it, so this gate closes the common case rather than
+        # proving the general one.
+        read_sites = re.compile(
+            r"""(?:readRepo|readFile)\s*\(\s*["'`](docs/[A-Za-z0-9_./-]+)"""
+            r"""|(?:REPO_ROOT|ROOT)\s*/\s*["'](docs/[A-Za-z0-9_./-]+)["']"""
+        )
+        inventory = subprocess.run(
+            ["git", "ls-files", "tests", "apps", "-z"],
+            cwd=ROOT, check=True, capture_output=True,
+        ).stdout
+        sources = [
+            item.decode("utf-8") for item in inventory.split(b"\0")
+            if item and re.search(r"(_test\.py|\.test\.mjs)$", item.decode("utf-8"))
+        ]
+        gaps = []
+        for source in sources:
+            source_lanes = self.lanes_for_path(source)
+            if not source_lanes:
+                continue
+            text = (ROOT / source).read_text(encoding="utf-8", errors="ignore")
+            documents = {
+                match[0] or match[1] for match in read_sites.findall(text)
+            }
+            for document in sorted(documents):
+                if not (ROOT / document).exists():
+                    continue
+                missing = source_lanes - self.lanes_for_path(document)
+                if missing:
+                    gaps.append(
+                        f"{document} is missing {sorted(missing)}, read by {source}"
+                    )
+        self.assertEqual(
+            gaps, [],
+            "a document a test asserts on does not reach that test's lane.\n"
+            "why: editing the document classifies without the lane that holds "
+            "the test, so the assertion over its content never runs on the "
+            "Pull Request:\n  " + "\n  ".join(gaps) + "\n"
+            "remedy: add an exact rule for each document in "
+            "scripts/ci/scope_policy.json carrying the missing lanes. Rules are "
+            "additive, so the rule needs only the lanes the document does not "
+            "already get.",
+        )
 
     def test_every_tracked_top_level_is_admitted_by_the_policy(self):
         # `_evaluate_ready_paths` checks the top-level segment against
@@ -562,11 +632,16 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(plain["mode"], "focused")
         self.assertEqual(labeled["mode"], "full")
 
-    def test_merge_queue_label_upgrades_synchronized_pr_run_to_full(self):
-        manifest = self.classify(["docs/guide.md"], labels={"merge:queue"})
-        self.assertEqual(manifest["mode"], "full")
-        self.assertTrue(all(manifest["lanes"].values()))
-        self.assertIn("merge:queue label", manifest["reasons"])
+    def test_merge_queue_label_authorizes_without_changing_scope(self):
+        # The label authorizes a merge; it does not widen one. Merge evidence
+        # is the classification, so a docs-only change carries the same
+        # manifest whether or not it is queued.
+        plain = self.classify(["docs/guide.md"])
+        labelled = self.classify(["docs/guide.md"], labels={"merge:queue"})
+        self.assertEqual(labelled["mode"], "focused")
+        self.assertEqual(self.true_lanes(labelled), {"docs_static"})
+        self.assertEqual(labelled["lanes"], plain["lanes"])
+        self.assertEqual(labelled["reasons"], plain["reasons"])
 
     def test_docs_main_push_is_focused(self):
         manifest = self.classify(["docs/guide.md"], event_name="push")
@@ -1035,7 +1110,7 @@ class ChangeScopeTest(unittest.TestCase):
         )
         self.assertEqual(head_drift.classification, "queue-head-drift")
 
-    def test_valid_queue_context_forces_full_and_closes_manifest_metadata(self):
+    def test_valid_queue_context_classifies_and_closes_manifest_metadata(self):
         queue = self.module.parse_queue_inputs(
             "mq:123:1", "220", "a" * 40, "b" * 40
         )
@@ -1068,7 +1143,12 @@ class ChangeScopeTest(unittest.TestCase):
             trusted_head=True,
             queue=queue,
         )
-        self.assertEqual(manifest["mode"], "full")
+        # A queue dispatch is the controller validating one exact PR, not an
+        # operator asking for full CI, so it classifies. The operator's own
+        # empty dispatch keeps its unconditional full -- release evidence
+        # depends on it -- and that is asserted separately.
+        self.assertEqual(manifest["mode"], "focused")
+        self.assertEqual(self.true_lanes(manifest), {"docs_static"})
         self.assertEqual(
             manifest["queue"],
             {
@@ -1083,6 +1163,39 @@ class ChangeScopeTest(unittest.TestCase):
         invalid["queue"]["extra"] = True
         with self.assertRaises(ValueError):
             self.module.validate_manifest(invalid, self.policy)
+
+    def test_queue_manifest_may_be_focused_but_never_untrusted(self):
+        # Merge evidence is the classification; trust is not negotiable at any
+        # breadth. PR Gate proves each selected lane succeeded and each
+        # unselected one was skipped, which is what makes focused sufficient.
+        queue = self.module.parse_queue_inputs(
+            "mq:123:1", "220", "a" * 40, "b" * 40
+        )
+        manifest = self.module.classify(
+            self.policy,
+            changed(self.module, "docs/guide.md"),
+            base_sha="a" * 40, head_sha="b" * 40,
+            event_name="workflow_dispatch", draft=False,
+            labels=("merge:queue",), trusted_head=True, queue=queue,
+        )
+        self.assertEqual(manifest["mode"], "focused")
+        self.module.validate_manifest(manifest, self.policy)
+
+        untrusted = copy.deepcopy(manifest)
+        untrusted["trusted_head"] = False
+        with self.assertRaisesRegex(ValueError, "trusted"):
+            self.module.validate_manifest(untrusted, self.policy)
+
+    def test_operator_dispatch_keeps_unconditional_full_for_release_evidence(self):
+        # scripts/release.sh rejects focused and requested evidence, so the
+        # operator's empty dispatch must stay the one way to produce full
+        # evidence for an exact main SHA.
+        manifest = self.classify(
+            ["docs/guide.md"], event_name="workflow_dispatch"
+        )
+        self.assertEqual(manifest["mode"], "full")
+        self.assertEqual(self.true_lanes(manifest), LANES)
+        self.assertIn("full event: workflow_dispatch", manifest["reasons"])
 
     def test_queue_validation_document_is_closed_for_valid_and_drift(self):
         queue = self.module.parse_queue_inputs(

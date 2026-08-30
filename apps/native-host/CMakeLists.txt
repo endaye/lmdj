@@ -61,6 +61,14 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
   lmdj_add_test(
+    NAME host.native_timeout_policy
+    TIER unit
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/host/native_host_timeout_policy_test.py"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
     NAME host.native
     TIER host
     COMMAND

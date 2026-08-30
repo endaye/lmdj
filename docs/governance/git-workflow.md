@@ -164,12 +164,15 @@ unverifiable base and runs full with that concrete reason and no path
 inventory. Main runs stay grouped per SHA and never cancel an earlier `main`
 run.
 
-Focused main is a CI cost decision, never a release decision. A Product Build or
-release operator who needs full evidence for an exact `main` SHA dispatches
-`ci.yml` on that SHA with an empty `lanes` input and records the resulting run
-ID in the release intent; `scripts/release.sh audit --remote` and `prepare`
-reject focused or `requested` evidence, and a full dispatch by itself authorizes
-no release mutation.
+Focused is a CI cost decision and a merge decision, never a release decision.
+A Product Build or release operator who needs full evidence for an exact `main`
+SHA dispatches `ci.yml` on that SHA with an empty `lanes` input and records the
+resulting run ID in the release intent; `scripts/release.sh audit --remote` and
+`prepare` reject focused or `requested` evidence, and a full dispatch by itself
+authorizes no release mutation. That operator dispatch is the one
+`workflow_dispatch` that stays unconditionally full: a queue dispatch carries a
+ticket and classifies, so the two never collapse into each other. See
+[`../prd/decisions/2026-08-29-focused-merge-evidence.md`](../prd/decisions/2026-08-29-focused-merge-evidence.md).
 
 To upgrade the current head to full CI, apply `ci:full`, then wait for the
 in-progress run to finish or explicitly cancel it. Because label changes do not
@@ -197,13 +200,23 @@ The controller re-reads eligibility and the label, then merges exact current
 `main` into the PR branch when needed. GitHub creates that `GITHUB_TOKEN`
 `synchronize` run in approval-required state; the controller binds the unique
 exact PR/head/bot `Core CI` run, approves it with `actions:write`, and uses its
-same-run full scope as the validation instead of dispatching duplicate CI. If
-the PR already contains current `main`, the controller dispatches full Core CI
-bound to one ticket, PR number, base SHA, head SHA, and numeric
-`workflow_run_id`. In either path the exact run must publish
-`core (ubuntu-latest)`, `core (macos-latest)`, and same-run `PR Gate` from GitHub
-Actions App ID `15368`. Only live-confirmed base/head drift may consume another
-attempt, with three attempts total.
+same-run scope as the validation instead of dispatching duplicate CI. If the
+PR already contains current `main`, the controller dispatches Core CI bound to
+one ticket, PR number, base SHA, head SHA, and numeric `workflow_run_id`. In
+either path the exact run must publish `core (ubuntu-latest)`,
+`core (macos-latest)`, and same-run `PR Gate` from GitHub Actions App ID
+`15368`. Only live-confirmed base/head drift may consume another attempt, with
+three attempts total.
+
+Merge evidence is the classification, at `focused` or `full`; a `requested`
+lane selection and a `draft` manifest are never merge evidence, and an
+untrusted head is never evidence at any breadth. The `merge:queue` label
+authorizes a merge and no longer widens one. Because the manifest may be
+focused, `core (ubuntu-latest)` and `core (macos-latest)` may be `skipped` when
+it did not select their lanes; `PR Gate` may not, because it is what makes the
+skip safe. It adjudicates the same run against the manifest and fails both when
+a selected job is not success and when an unselected job ran anyway, so its
+success already proves each skip was owed.
 
 Queue validation proves the tree that will land, not the history it will land
 as. Both paths run CI on a head that already contains exact current `main`, so

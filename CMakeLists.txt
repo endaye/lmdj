@@ -504,6 +504,26 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.facade_surface_sharding
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/facade_surface_sharding_test.py
+    "${CMAKE_BINARY_DIR}"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+lmdj_add_test(
+  NAME build.facade_surface_sharding_unit
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/facade_surface_sharding_unit_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 10
+)
+
+lmdj_add_test(
   NAME build.core_script
   TIER contract
   COMMAND

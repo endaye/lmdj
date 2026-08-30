@@ -55,6 +55,10 @@ QUEUE_CLASSIFICATIONS = {
     "valid", "queue-base-drift", "queue-head-drift", "invalid",
 }
 ALLOWED_MODES = {"draft", "focused", "full", "requested"}
+# Breadth that constitutes merge evidence. `requested` is an operator's lane
+# selection rather than a classification of the change, and `draft` never
+# establishes merge evidence at all, so neither may authorize a squash merge.
+MERGE_EVIDENCE_MODES = frozenset({"focused", "full"})
 ALLOWED_RESULTS = {"added", "copied", "deleted", "modified", "renamed", "type_changed"}
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -216,8 +220,8 @@ def queue_validation_document(
 ) -> dict[str, object]:
     if evaluation.classification not in QUEUE_CLASSIFICATIONS:
         raise ValueError("unknown queue validation classification")
-    if manifest_mode not in {None, "full"}:
-        raise ValueError("queue manifest mode must be null or full")
+    if manifest_mode is not None and manifest_mode not in MERGE_EVIDENCE_MODES:
+        raise ValueError("queue manifest mode is not merge evidence")
     document = {
         "schema": "lmdj.queue-validation.v1",
         "classification": evaluation.classification,
@@ -513,8 +517,6 @@ def classify(
         full_reasons.add("forced full")
     if "ci:full" in label_set:
         full_reasons.add("ci:full label")
-    if "merge:queue" in label_set:
-        full_reasons.add("merge:queue label")
     requested = set(requested_lanes or ())
     if requested:
         if event_name != "workflow_dispatch":
@@ -527,7 +529,13 @@ def classify(
     # verified range exactly like a Ready Pull Request; the central-CI,
     # Contract, Product Assembly, unknown-path and expensive-family rules above
     # already upgrade every unsafe main change to full on their own.
-    if event_name == "workflow_dispatch" and not requested:
+    # An empty operator `workflow_dispatch` stays unconditionally full: it is
+    # the authorized way to produce release evidence for an exact main SHA, and
+    # `release.sh` still rejects anything narrower. A queue dispatch is not an
+    # operator request -- the controller sends it to validate one exact
+    # PR/base/head -- so it classifies like the synchronized path instead of
+    # inheriting the operator's meaning. `queue` is what tells them apart.
+    if event_name == "workflow_dispatch" and not requested and queue is None:
         full_reasons.add(f"full event: {event_name}")
     if unverifiable_base is not None:
         full_reasons.add(UNVERIFIABLE_PUSH_BASE)
@@ -602,8 +610,12 @@ def validate_manifest(manifest: Mapping[str, object], policy: Mapping[str, objec
             queue["ticket"], str(queue["pr_number"]),
             queue["base_sha"], queue["head_sha"],
         )
-        if parsed is None or manifest["mode"] != "full" or not manifest["trusted_head"]:
-            raise ValueError("queue manifest must be trusted full evidence")
+        # Merge evidence is the classification, not a fixed breadth: PR Gate
+        # proves every selected lane succeeded and every unselected one was
+        # skipped. Trust is still absolute -- an untrusted head may never
+        # produce queue evidence at any breadth.
+        if parsed is None or not manifest["trusted_head"]:
+            raise ValueError("queue manifest must be trusted evidence")
         if parsed.base_sha != manifest["base_sha"] or parsed.head_sha != manifest["head_sha"]:
             raise ValueError("queue manifest metadata SHA mismatch")
     lanes = policy["lanes"]

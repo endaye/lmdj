@@ -25,7 +25,9 @@ from merge_queue import (
     UpdateResult,
     ValidationResult,
 )
-from change_scope import load_policy, reject_duplicates, validate_manifest
+from change_scope import (
+    MERGE_EVIDENCE_MODES, load_policy, reject_duplicates, validate_manifest,
+)
 
 
 API_ROOT = "https://api.github.com"
@@ -178,8 +180,11 @@ def parse_queue_validation_json(value: object) -> dict[str, object]:
         "queue_base_sha", "queue_head_sha", "observed_base_sha", "observed_head_sha"
     ):
         _sha(document[name], name)
-    if document["manifest_mode"] not in {None, "full"}:
-        raise ValueError("queue manifest mode must be null or full")
+    if (
+        document["manifest_mode"] is not None
+        and document["manifest_mode"] not in MERGE_EVIDENCE_MODES
+    ):
+        raise ValueError("queue manifest mode is not merge evidence")
     if not isinstance(document["trusted_head"], bool):
         raise ValueError("queue trusted head must be boolean")
     return document
@@ -228,8 +233,11 @@ def parse_scope_manifest_zip(
         raise ValueError("pull request scope must not contain dispatch queue metadata")
     if document.get("head_sha") != expected_head_sha:
         raise ValueError("scope manifest head does not match workflow run")
-    if document.get("mode") != "full" or document.get("trusted_head") is not True:
-        raise ValueError("synchronized validation requires trusted full scope")
+    if (
+        document.get("mode") not in MERGE_EVIDENCE_MODES
+        or document.get("trusted_head") is not True
+    ):
+        raise ValueError("synchronized validation requires trusted classified scope")
     return document
 
 
@@ -531,6 +539,9 @@ class GitHubQueueClient:
         return run_id
 
     def cancel_validation(self, run_id: int) -> None:
+        run = self._get_object(f"/actions/runs/{run_id}")
+        if run.get("status") == "completed":
+            return
         self._request(
             "POST",
             f"/actions/runs/{run_id}/cancel",
