@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -320,18 +322,79 @@ void test_blocked_engine_does_not_block_unrelated_engine_lifetimes() {
   LMDJ_CHECK(unrelated_query.response_present);
 }
 
+using Scenario = void (*)();
+
+constexpr std::array<Scenario, 1> kIndependentEngineScenarios{
+    test_32_independent_engines_inspect_samples_concurrently,
+};
+
+constexpr std::array<Scenario, 1> kQueryFreeRaceScenarios{
+    test_query_and_free_race_never_reuses_stale_handle,
+};
+
+constexpr std::array<Scenario, 1> kStaleHandleScenarios{
+    test_10000_create_free_cycles_keep_all_stale_handles_invalid,
+};
+
+constexpr std::array<Scenario, 1> kLifetimeIsolationScenarios{
+    test_blocked_engine_does_not_block_unrelated_engine_lifetimes,
+};
+
+struct Shard {
+  std::string_view name;
+  std::span<const Scenario> scenarios;
+};
+
+constexpr std::array<Shard, 4> kShards{
+    Shard{"independent-engines", kIndependentEngineScenarios},
+    Shard{"query-free-race", kQueryFreeRaceScenarios},
+    Shard{"stale-handles", kStaleHandleScenarios},
+    Shard{"lifetime-isolation", kLifetimeIsolationScenarios},
+};
+
+void run(std::span<const Scenario> scenarios) {
+  for (const auto scenario : scenarios) {
+    scenario();
+  }
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--list-shards") {
+    std::size_t total{};
+    for (const auto& shard : kShards) {
+      std::cout << shard.name << ' ' << shard.scenarios.size() << '\n';
+      total += shard.scenarios.size();
+    }
+    std::cout << "all " << total << '\n';
+    return 0;
+  }
+  const std::string_view prefix{"--shard="};
+  const auto selected =
+      argc == 2 ? std::string_view(argv[1]) : std::string_view{};
+  if (argc > 2 || (argc == 2 && !selected.starts_with(prefix))) {
+    std::cerr << "usage: lmdj_application_c_api_stress_tests "
+                 "[--list-shards|--shard=<name>]\n";
+    return 2;
+  }
   try {
-    test_32_independent_engines_inspect_samples_concurrently();
-    test_query_and_free_race_never_reuses_stale_handle();
-    test_10000_create_free_cycles_keep_all_stale_handles_invalid();
-    test_blocked_engine_does_not_block_unrelated_engine_lifetimes();
+    std::size_t executed{};
+    for (const auto& shard : kShards) {
+      if (argc == 1 || selected.substr(prefix.size()) == shard.name) {
+        run(shard.scenarios);
+        executed += shard.scenarios.size();
+      }
+    }
+    if (executed == 0) {
+      std::cerr << "unknown C API stress shard\n";
+      return 2;
+    }
+    std::cout << "facade C ABI stress tests: PASS (" << executed
+              << " scenarios)\n";
   } catch (const std::exception& exception) {
     std::cerr << exception.what() << '\n';
     return 1;
   }
-  std::cout << "facade C ABI stress tests: PASS\n";
   return 0;
 }
