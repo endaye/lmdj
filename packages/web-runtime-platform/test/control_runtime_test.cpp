@@ -3320,8 +3320,12 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
         "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
     check_success(runtime->dispatch(
         "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+    FakeRuntimeClock clock;
+    LMDJ_CHECK(
+        ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
     const auto& suspended = check_exact_success(
-        runtime->dispatch("audio.suspend", Json::object(), {}),
+        runtime->dispatch(
+            "audio.suspend", Json::object(), {}, clock.current),
         {"state", "changed", "stopped_sequence_id"});
     LMDJ_CHECK((
         suspended ==
@@ -3336,10 +3340,12 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
         lmdj::audio::RealtimeState::stopped);
     success.begin_acknowledgement =
         runtime->engine().bank_telemetry().accepted_publications;
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    check_success(runtime->dispatch(
+        "audio.activate", Json::object(), {}, clock.current));
     LMDJ_CHECK(success.begin_calls == 2);
     const auto& candidates = check_exact_success(
-        runtime->dispatch("sequence.recovery.list", Json::object(), {}),
+        runtime->dispatch(
+            "sequence.recovery.list", Json::object(), {}, clock.current),
         {"candidates", "project_revision"});
     LMDJ_CHECK(candidates.at("candidates").empty());
     LMDJ_CHECK(candidates.at("project_revision").is_null());
