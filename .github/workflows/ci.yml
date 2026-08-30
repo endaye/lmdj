@@ -288,6 +288,10 @@ jobs:
     name: Core package
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.package && needs.change-scope.outputs.trusted-head == 'true' }}
+    concurrency:
+      group: lmdj-native-heavy
+      queue: max
+      cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 35
     steps:
@@ -446,6 +450,10 @@ jobs:
     name: core (ubuntu-latest)
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu && needs.change-scope.outputs.trusted-head == 'true' }}
+    concurrency:
+      group: lmdj-native-heavy
+      queue: max
+      cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 30
     steps:
