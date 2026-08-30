@@ -20,6 +20,12 @@ EXPECTED = {
         "facade.sample_surface.quota_replay": "quota-replay",
         "facade.sample_surface.projection": "projection",
     },
+    "lmdj_application_c_api_stress_tests": {
+        "facade.c_api_stress": "independent-engines",
+        "facade.c_api_stress.query_free_race": "query-free-race",
+        "facade.c_api_stress.stale_handles": "stale-handles",
+        "facade.c_api_stress.lifetime_isolation": "lifetime-isolation",
+    },
 }
 
 
