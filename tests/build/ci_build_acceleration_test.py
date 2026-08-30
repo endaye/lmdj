@@ -88,6 +88,17 @@ class CiBuildAccelerationTest(unittest.TestCase):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertIn("needs: change-scope", job)
+
+    def test_linux_core_heavy_lanes_share_a_non_cancelling_capacity_lock(self) -> None:
+        for job_name in ("core-asan", "core-coverage"):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertRegex(
+                    job,
+                    r"(?m)^    concurrency:\n"
+                    r"      group: lmdj-native-heavy\n"
+                    r"      cancel-in-progress: false$",
+                )
                 self.assertIn(CORE_ROLE, job)
                 self.assertNotIn("select-ubuntu-runner", job)
                 self.assertIn(
