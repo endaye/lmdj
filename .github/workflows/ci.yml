@@ -777,6 +777,9 @@ jobs:
     # Same native Core role, same reasoning as core-ubuntu.
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan && needs.change-scope.outputs.trusted-head == 'true' }}
+    concurrency:
+      group: lmdj-native-heavy
+      cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 35
     steps:
@@ -813,6 +816,9 @@ jobs:
     # Same native Core role, same reasoning as core-ubuntu.
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage && needs.change-scope.outputs.trusted-head == 'true' }}
+    concurrency:
+      group: lmdj-native-heavy
+      cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 35
     steps:

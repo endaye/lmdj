@@ -3220,6 +3220,9 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
   {
     TempDirectory temp;
     auto runtime = make_runtime(temp.path());
+    FakeRuntimeClock clock;
+    LMDJ_CHECK(
+        ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
     check_success(runtime->dispatch("project.create", create_payload(), {}));
     const auto wav = mono_pcm16_wav(2'400);
     import_and_assign(*runtime, wav, kAssetId, 821, 822, 0);
