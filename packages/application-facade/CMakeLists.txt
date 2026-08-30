@@ -324,9 +324,17 @@ if(BUILD_TESTING)
   lmdj_target_warnings(lmdj_application_c_api_stress_tests)
   lmdj_target_sanitizers(lmdj_application_c_api_stress_tests)
   lmdj_add_test(
-    NAME facade.c_api_stress
+    NAME facade.c_api_stress.independent_engines_0_63
     TIER stress
-    COMMAND lmdj_application_c_api_stress_tests --shard=independent-engines
+    COMMAND lmdj_application_c_api_stress_tests --shard=independent-engines-0-63
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS abi concurrency
+    TIMEOUT 180
+  )
+  lmdj_add_test(
+    NAME facade.c_api_stress.independent_engines_64_127
+    TIER stress
+    COMMAND lmdj_application_c_api_stress_tests --shard=independent-engines-64-127
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS abi concurrency
     TIMEOUT 180

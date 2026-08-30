@@ -21,7 +21,12 @@ EXPECTED = {
         "facade.sample_surface.projection": "projection",
     },
     "lmdj_application_c_api_stress_tests": {
-        "facade.c_api_stress": "independent-engines",
+        "facade.c_api_stress.independent_engines_0_63": (
+            "independent-engines-0-63"
+        ),
+        "facade.c_api_stress.independent_engines_64_127": (
+            "independent-engines-64-127"
+        ),
         "facade.c_api_stress.query_free_race": "query-free-race",
         "facade.c_api_stress.stale_handles": "stale-handles",
         "facade.c_api_stress.lifetime_isolation": "lifetime-isolation",
