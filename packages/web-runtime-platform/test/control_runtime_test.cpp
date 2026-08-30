@@ -44,6 +44,7 @@ nlohmann::json normalize_error_for_testing(
 namespace {
 
 using Json = nlohmann::json;
+using lmdj::audio::BankTelemetry;
 using lmdj::audio::CaptureState;
 using lmdj::audio::RealtimeEngine;
 using lmdj::audio::RuntimePreparationLimits;
@@ -678,10 +679,40 @@ struct FakeCoordinator final {
   std::uint32_t acknowledgement_poll_delay_ms = 0;
 };
 
+struct OneShotAudioBackend final {
+  void* context;
+  BankTelemetry (*bank_telemetry)(void* context) noexcept;
+  void (*render)(
+      void* context,
+      float* left,
+      float* right,
+      std::uint32_t frames) noexcept;
+};
+
 class OneShotAudioDriver final {
  public:
   explicit OneShotAudioDriver(RealtimeEngine& engine)
-      : engine_(engine), thread_([this] { run(); }) {}
+      : OneShotAudioDriver(OneShotAudioBackend{
+            &engine,
+            [](void* context) noexcept {
+              return static_cast<RealtimeEngine*>(context)->bank_telemetry();
+            },
+            [](void* context,
+               float* left,
+               float* right,
+               std::uint32_t frames) noexcept {
+              static_cast<RealtimeEngine*>(context)->render(
+                  left, right, frames);
+            },
+        }) {}
+
+  explicit OneShotAudioDriver(OneShotAudioBackend backend)
+      : backend_(backend) {
+    LMDJ_CHECK(backend_.context != nullptr);
+    LMDJ_CHECK(backend_.bank_telemetry != nullptr);
+    LMDJ_CHECK(backend_.render != nullptr);
+    thread_ = std::thread([this] { run(); });
+  }
 
   ~OneShotAudioDriver() {
     stop_requested_.store(true, std::memory_order_release);
@@ -690,7 +721,9 @@ class OneShotAudioDriver final {
       stopped_ = true;
     }
     changed_.notify_all();
-    thread_.join();
+    if (thread_.joinable()) {
+      thread_.join();
+    }
   }
 
   void render_one() { render_frames(128); }
@@ -712,9 +745,17 @@ class OneShotAudioDriver final {
   }
 
   void schedule_bank_transition() {
+    const auto target_generation =
+        backend_.bank_telemetry(backend_.context).accepted_publications + 1;
+    LMDJ_CHECK(target_generation != 0);
     std::lock_guard lock(mutex_);
+    if (bank_transition_target_generation_ != 0) {
+      throw std::runtime_error(
+          "one-shot bank transition already in flight");
+    }
     ++permits_;
     ++bank_transition_permits_;
+    bank_transition_target_generation_ = target_generation;
     changed_.notify_all();
   }
 
@@ -724,6 +765,7 @@ class OneShotAudioDriver final {
     std::array<float, 128> right{};
     while (true) {
       bool wait_for_bank_transition = false;
+      std::uint64_t bank_transition_target_generation = 0;
       std::uint32_t frame_count = 128;
       {
         std::unique_lock lock(mutex_);
@@ -737,36 +779,159 @@ class OneShotAudioDriver final {
         if (bank_transition_permits_ != 0) {
           --bank_transition_permits_;
           wait_for_bank_transition = true;
+          bank_transition_target_generation =
+              bank_transition_target_generation_;
         }
       }
       while (wait_for_bank_transition &&
-             engine_.bank_telemetry().pending_publications == 0 &&
+             backend_.bank_telemetry(backend_.context)
+                     .accepted_publications <
+                 bank_transition_target_generation &&
              !stop_requested_.load(std::memory_order_acquire)) {
         std::this_thread::yield();
       }
       if (stop_requested_.load(std::memory_order_acquire)) {
         return;
       }
-      engine_.render(left.data(), right.data(), frame_count);
+      do {
+        backend_.render(
+            backend_.context, left.data(), right.data(), frame_count);
+        if (!wait_for_bank_transition ||
+            backend_.bank_telemetry(backend_.context)
+                    .applied_publications >=
+                bank_transition_target_generation) {
+          break;
+        }
+        std::this_thread::yield();
+      } while (!stop_requested_.load(std::memory_order_acquire));
+      if (stop_requested_.load(std::memory_order_acquire)) {
+        return;
+      }
       {
         std::lock_guard lock(mutex_);
+        if (wait_for_bank_transition) {
+          bank_transition_target_generation_ = 0;
+        }
         ++completed_;
       }
       changed_.notify_all();
     }
   }
 
-  RealtimeEngine& engine_;
+  OneShotAudioBackend backend_;
   std::mutex mutex_;
   std::condition_variable changed_;
   std::size_t permits_ = 0;
   std::size_t bank_transition_permits_ = 0;
+  std::uint64_t bank_transition_target_generation_ = 0;
   std::size_t completed_ = 0;
   std::uint32_t frame_count_ = 128;
   std::atomic<bool> stop_requested_{false};
   bool stopped_ = false;
   std::thread thread_;
 };
+
+struct DeterministicBankTransitionBackend final {
+  static BankTelemetry bank_telemetry(void* context) noexcept {
+    auto& self = *static_cast<DeterministicBankTransitionBackend*>(context);
+    self.telemetry_reads.fetch_add(1, std::memory_order_release);
+    return BankTelemetry{
+        1,
+        self.pending_publications.load(std::memory_order_acquire),
+        self.accepted_publications.load(std::memory_order_acquire),
+        self.applied_publications.load(std::memory_order_acquire),
+        0,
+        0,
+        0,
+    };
+  }
+
+  static void render(
+      void* context,
+      float*,
+      float*,
+      std::uint32_t) noexcept {
+    auto& self = *static_cast<DeterministicBankTransitionBackend*>(context);
+    const auto render_call =
+        self.render_calls.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (render_call == self.apply_on_render_call) {
+      self.applied_publications.store(
+          self.accepted_publications.load(std::memory_order_acquire),
+          std::memory_order_release);
+    }
+  }
+
+  OneShotAudioBackend backend() noexcept {
+    return OneShotAudioBackend{
+        this,
+        &DeterministicBankTransitionBackend::bank_telemetry,
+        &DeterministicBankTransitionBackend::render,
+    };
+  }
+
+  std::atomic<std::uint64_t> pending_publications{1};
+  std::atomic<std::uint64_t> accepted_publications{1};
+  std::atomic<std::uint64_t> applied_publications{1};
+  std::atomic<std::uint64_t> telemetry_reads{0};
+  std::atomic<std::uint64_t> render_calls{0};
+  std::uint64_t apply_on_render_call = 1;
+};
+
+void test_one_shot_bank_transition_waits_for_accepted_queue_commit() {
+  DeterministicBankTransitionBackend backend;
+  {
+    OneShotAudioDriver audio(backend.backend());
+    audio.schedule_bank_transition();
+    wait_until([&] {
+      return backend.telemetry_reads.load(std::memory_order_acquire) >= 2;
+    });
+    LMDJ_CHECK(backend.render_calls.load(std::memory_order_acquire) == 0);
+
+    backend.accepted_publications.store(2, std::memory_order_release);
+    wait_until([&] {
+      return backend.applied_publications.load(std::memory_order_acquire) == 2;
+    });
+  }
+  LMDJ_CHECK(backend.render_calls.load(std::memory_order_acquire) == 1);
+}
+
+void test_one_shot_bank_transition_renders_until_target_is_applied() {
+  DeterministicBankTransitionBackend backend;
+  backend.apply_on_render_call = 2;
+  {
+    OneShotAudioDriver audio(backend.backend());
+    audio.schedule_bank_transition();
+    wait_until([&] {
+      return backend.telemetry_reads.load(std::memory_order_acquire) >= 2;
+    });
+    backend.accepted_publications.store(2, std::memory_order_release);
+    wait_until([&] {
+      return backend.applied_publications.load(std::memory_order_acquire) == 2;
+    });
+  }
+  LMDJ_CHECK(backend.render_calls.load(std::memory_order_acquire) == 2);
+}
+
+void test_one_shot_bank_transition_rejects_overlap_until_completion() {
+  DeterministicBankTransitionBackend backend;
+  {
+    OneShotAudioDriver audio(backend.backend());
+    audio.schedule_bank_transition();
+    wait_until([&] {
+      return backend.telemetry_reads.load(std::memory_order_acquire) >= 2;
+    });
+
+    bool rejected = false;
+    try {
+      audio.schedule_bank_transition();
+    } catch (const std::runtime_error& error) {
+      rejected = std::string_view(error.what()) ==
+          "one-shot bank transition already in flight";
+    }
+    LMDJ_CHECK(rejected);
+  }
+  LMDJ_CHECK(backend.render_calls.load(std::memory_order_acquire) == 0);
+}
 
 void import_and_assign(
     ControlRuntime& runtime,
@@ -4789,6 +4954,9 @@ void test_bridge_preserves_error_responses_for_an_externally_failed_runtime() {
 
 int main() {
   try {
+    test_one_shot_bank_transition_waits_for_accepted_queue_commit();
+    test_one_shot_bank_transition_renders_until_target_is_applied();
+    test_one_shot_bank_transition_rejects_overlap_until_completion();
     test_facade_error_details_follow_an_explicit_safe_schema();
     test_project_bundle_stream_delegates_to_facade_and_lists_summary();
     test_host_close_aborts_active_project_bundle_import();
