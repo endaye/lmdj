@@ -120,6 +120,12 @@ CASES = {
     "tests/platform/web/project_io/project_io_web_test.cpp": {"web_toolchain"},
     "tests/fixtures/long-material/make_fixtures.py": {"creator"},
     "tests/build/ci_runner_fallback_test.py": {"ci_contract"},
+    "tests/build/facade_surface_sharding_test.py": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/build/facade_surface_sharding_unit_test.py": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
     "tests/build/web_runtime_public_deployment_docs_test.py": {"deploy_contract"},
     "tests/conformance/version_lock_test.py": {"core_ubuntu", "package"},
     "scripts/chameleon-lab.sh": {"chameleon_lab"},
