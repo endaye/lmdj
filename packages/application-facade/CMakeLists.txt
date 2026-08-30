@@ -326,7 +326,31 @@ if(BUILD_TESTING)
   lmdj_add_test(
     NAME facade.c_api_stress
     TIER stress
-    COMMAND lmdj_application_c_api_stress_tests
+    COMMAND lmdj_application_c_api_stress_tests --shard=independent-engines
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS abi concurrency
+    TIMEOUT 180
+  )
+  lmdj_add_test(
+    NAME facade.c_api_stress.query_free_race
+    TIER stress
+    COMMAND lmdj_application_c_api_stress_tests --shard=query-free-race
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS abi concurrency
+    TIMEOUT 180
+  )
+  lmdj_add_test(
+    NAME facade.c_api_stress.stale_handles
+    TIER stress
+    COMMAND lmdj_application_c_api_stress_tests --shard=stale-handles
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS abi concurrency
+    TIMEOUT 180
+  )
+  lmdj_add_test(
+    NAME facade.c_api_stress.lifetime_isolation
+    TIER stress
+    COMMAND lmdj_application_c_api_stress_tests --shard=lifetime-isolation
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS abi concurrency
     TIMEOUT 180
