@@ -104,9 +104,27 @@ class InvokeGateRelease {
   lmdj::facade::testing::InvokeGate& gate_;
 };
 
-void test_32_independent_engines_inspect_samples_concurrently() {
-  constexpr std::size_t kEngineCount = 32;
-  constexpr std::size_t kQueriesPerEngine = 128;
+constexpr std::size_t kIndependentEngineCount = 32;
+constexpr std::size_t kIndependentEngineQueriesPerEngine = 128;
+struct IndependentEngineQueryRange {
+  std::size_t begin;
+  std::size_t end;
+};
+constexpr std::array<IndependentEngineQueryRange, 2>
+    kIndependentEngineQueryRanges{
+        IndependentEngineQueryRange{0, 64},
+        IndependentEngineQueryRange{64, 128},
+    };
+static_assert(
+    kIndependentEngineQueryRanges.front().begin == 0 &&
+    kIndependentEngineQueryRanges.front().end ==
+        kIndependentEngineQueryRanges.back().begin &&
+    kIndependentEngineQueryRanges.back().end ==
+        kIndependentEngineQueriesPerEngine);
+
+void test_independent_engines_inspect_samples_concurrently(
+    IndependentEngineQueryRange query_range) {
+  constexpr std::size_t kEngineCount = kIndependentEngineCount;
 
   TempDirectory temp;
   const auto config = config_json(temp.path());
@@ -151,7 +169,9 @@ void test_32_independent_engines_inspect_samples_concurrently() {
       start.arrive_and_wait();
       auto result = CallResult{LMDJ_STATUS_OK, true};
       std::size_t progress = 0;
-      for (; progress < kQueriesPerEngine; ++progress) {
+      for (auto query_index = query_range.begin;
+           query_index < query_range.end;
+           ++query_index) {
         char* response = nullptr;
         const auto status = lmdj_engine_query(
             engines[index], requests[index].c_str(), &response);
@@ -164,6 +184,7 @@ void test_32_independent_engines_inspect_samples_concurrently() {
           result = CallResult{status, response_present};
           break;
         }
+        ++progress;
       }
       results[index] = result;
       completed[index] = progress;
@@ -175,9 +196,20 @@ void test_32_independent_engines_inspect_samples_concurrently() {
   for (std::size_t index = 0; index < kEngineCount; ++index) {
     LMDJ_CHECK(results.at(index).status == LMDJ_STATUS_OK);
     LMDJ_CHECK(results.at(index).response_present);
-    LMDJ_CHECK(completed.at(index) == kQueriesPerEngine);
+    LMDJ_CHECK(
+        completed.at(index) == query_range.end - query_range.begin);
     lmdj_engine_free(engines.at(index));
   }
+}
+
+void test_independent_engines_queries_0_63() {
+  test_independent_engines_inspect_samples_concurrently(
+      kIndependentEngineQueryRanges.at(0));
+}
+
+void test_independent_engines_queries_64_127() {
+  test_independent_engines_inspect_samples_concurrently(
+      kIndependentEngineQueryRanges.at(1));
 }
 
 void test_query_and_free_race_never_reuses_stale_handle() {
@@ -324,8 +356,12 @@ void test_blocked_engine_does_not_block_unrelated_engine_lifetimes() {
 
 using Scenario = void (*)();
 
-constexpr std::array<Scenario, 1> kIndependentEngineScenarios{
-    test_32_independent_engines_inspect_samples_concurrently,
+constexpr std::array<Scenario, 1> kIndependentEngineQueries0To63Scenarios{
+    test_independent_engines_queries_0_63,
+};
+
+constexpr std::array<Scenario, 1> kIndependentEngineQueries64To127Scenarios{
+    test_independent_engines_queries_64_127,
 };
 
 constexpr std::array<Scenario, 1> kQueryFreeRaceScenarios{
@@ -345,8 +381,13 @@ struct Shard {
   std::span<const Scenario> scenarios;
 };
 
-constexpr std::array<Shard, 4> kShards{
-    Shard{"independent-engines", kIndependentEngineScenarios},
+constexpr std::array<Shard, 5> kShards{
+    Shard{
+        "independent-engines-0-63",
+        kIndependentEngineQueries0To63Scenarios},
+    Shard{
+        "independent-engines-64-127",
+        kIndependentEngineQueries64To127Scenarios},
     Shard{"query-free-race", kQueryFreeRaceScenarios},
     Shard{"stale-handles", kStaleHandleScenarios},
     Shard{"lifetime-isolation", kLifetimeIsolationScenarios},
