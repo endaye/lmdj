@@ -180,10 +180,10 @@ jobs:
       # daemon and the shared host's runner users are outside the `docker`
       # group, so CI can never reach the socket that runs production.
       # actionlint still reads `.github/actionlint.yaml` from the workspace.
-      # v1.7.12 predates GitHub's concurrency.queue schema and reports that one
-      # key as unknown (https://github.com/rhysd/actionlint/issues/657). Keep
-      # the exception exact and removable: queue topology tests prove there is
-      # exactly one `queue: max`, while every other actionlint diagnostic still
+      # v1.7.12 predates GitHub's concurrency.queue schema and reports the
+      # approved keys as unknown (https://github.com/rhysd/actionlint/issues/657).
+      # Keep the exception exact and removable: workflow contract tests prove
+      # every `queue: max` site, while every other actionlint diagnostic still
       # fails this job.
       - name: Validate workflows with pinned actionlint
         env:
@@ -779,6 +779,7 @@ jobs:
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan && needs.change-scope.outputs.trusted-head == 'true' }}
     concurrency:
       group: lmdj-native-heavy
+      queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 35
@@ -818,6 +819,7 @@ jobs:
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage && needs.change-scope.outputs.trusted-head == 'true' }}
     concurrency:
       group: lmdj-native-heavy
+      queue: max
       cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 35
