@@ -89,15 +89,24 @@ class CiBuildAccelerationTest(unittest.TestCase):
                 job = self.workflow_job(job_name)
                 self.assertIn("needs: change-scope", job)
 
-    def test_linux_core_heavy_lanes_retain_every_capacity_lock_waiter(self) -> None:
+    def test_linux_native_jobs_retain_every_host_capacity_lock_waiter(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(
-            len(re.findall(r"(?m)^      queue: max$", source)),
-            2,
-            "why: ci.yml must retain every pending ASan and coverage capacity-lock waiter; "
-            "remedy: keep queue: max on exactly the core-asan and core-coverage concurrency blocks",
+            source.count("group: lmdj-native-heavy"),
+            5,
+            "why: every job that can contend with native Core work on the shared "
+            "Contabo host must join one capacity queue; remedy: keep the "
+            "lmdj-native-heavy concurrency block on portal, core-ubuntu, package, "
+            "core-asan, and core-coverage",
         )
-        for job_name in ("core-asan", "core-coverage"):
+        capacity_jobs = (
+            "portal",
+            "core-ubuntu",
+            "package",
+            "core-asan",
+            "core-coverage",
+        )
+        for job_name in capacity_jobs:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertRegex(
@@ -108,23 +117,32 @@ class CiBuildAccelerationTest(unittest.TestCase):
                     r"      cancel-in-progress: false$",
                     msg=(
                         "why: GitHub's default concurrency queue replaces an older pending "
-                        f"{job_name} waiter; remedy: keep queue: max before "
-                        "cancel-in-progress: false on this heavy lane"
+                        f"{job_name} waiter and sibling native work can consume the shared "
+                        "host's test budgets; remedy: keep queue: max before "
+                        "cancel-in-progress: false on every admitted shared-host lane"
                     ),
                 )
+
+        for job_name in ("core-ubuntu", "package", "core-asan", "core-coverage"):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
                 self.assertIn(CORE_ROLE, job)
                 self.assertNotIn("select-ubuntu-runner", job)
                 self.assertIn(
                     "uses: ./.github/actions/configure-build-acceleration", job
                 )
-                self.assertIn("use-ccache: true", job)
-                self.assertIn("ccache --show-log-stats", job)
-                self.assertIn(
-                    "if: ${{ always() }}\n"
-                    "        run: >-\n"
-                    "          ccache --show-log-stats",
-                    job,
-                )
+                if job_name == "package":
+                    self.assertIn("use-ccache: false", job)
+                    self.assertNotIn("ccache --show-log-stats", job)
+                else:
+                    self.assertIn("use-ccache: true", job)
+                    self.assertIn("ccache --show-log-stats", job)
+                    self.assertIn(
+                        "if: ${{ always() }}\n"
+                        "        run: >-\n"
+                        "          ccache --show-log-stats",
+                        job,
+                    )
 
     def test_package_uses_lfs_and_bounded_acceleration_without_ccache(self) -> None:
         job = self.workflow_job("package")
