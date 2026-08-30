@@ -18,12 +18,15 @@ role. A job-level role selector can therefore place coverage on one service and
 an ordinary Core proof or package build on the sibling service. Those jobs look
 independent to GitHub but compete for the same host CPU budget: main run
 33290370946 timed out two unchanged 30-second coverage tests while PR #444's
-Core proof occupied the sibling service.
+Core proof occupied the sibling service. PR #444 run 33320085818 later proved
+that the Architecture Portal is also a material host consumer: Portal occupied
+the sibling service while ordinary Core timed out unchanged Project Store and
+Sequence Journal tests at their exact 30-second budgets.
 
 ## How to apply
 
-Put every native Core job eligible for the shared Contabo host in the same
-repository-wide capacity queue, including ordinary proof and package jobs as
-well as ASan and coverage. Retain every waiter with `queue: max`, keep
-`cancel-in-progress: false`, and gate the complete admitted job set. Do not
-widen product test budgets to absorb sibling-runner contention.
+Put every material job eligible for the shared Contabo host in the same
+repository-wide capacity queue, including Architecture Portal, ordinary Core
+proof and package jobs, ASan, and coverage. Retain every waiter with
+`queue: max`, keep `cancel-in-progress: false`, and gate the complete admitted
+job set. Do not widen product test budgets to absorb sibling-runner contention.

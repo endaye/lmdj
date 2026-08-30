@@ -93,12 +93,20 @@ class CiBuildAccelerationTest(unittest.TestCase):
         source = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(
             source.count("group: lmdj-native-heavy"),
-            4,
-            "why: every native Core job that can occupy the shared Contabo host must "
-            "join one capacity queue; remedy: keep the lmdj-native-heavy concurrency "
-            "block on core-ubuntu, package, core-asan, and core-coverage",
+            5,
+            "why: every job that can contend with native Core work on the shared "
+            "Contabo host must join one capacity queue; remedy: keep the "
+            "lmdj-native-heavy concurrency block on portal, core-ubuntu, package, "
+            "core-asan, and core-coverage",
         )
-        for job_name in ("core-ubuntu", "package", "core-asan", "core-coverage"):
+        capacity_jobs = (
+            "portal",
+            "core-ubuntu",
+            "package",
+            "core-asan",
+            "core-coverage",
+        )
+        for job_name in capacity_jobs:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertRegex(
@@ -111,9 +119,13 @@ class CiBuildAccelerationTest(unittest.TestCase):
                         "why: GitHub's default concurrency queue replaces an older pending "
                         f"{job_name} waiter and sibling native work can consume the shared "
                         "host's test budgets; remedy: keep queue: max before "
-                        "cancel-in-progress: false on every native Core lane"
+                        "cancel-in-progress: false on every admitted shared-host lane"
                     ),
                 )
+
+        for job_name in ("core-ubuntu", "package", "core-asan", "core-coverage"):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
                 self.assertIn(CORE_ROLE, job)
                 self.assertNotIn("select-ubuntu-runner", job)
                 self.assertIn(

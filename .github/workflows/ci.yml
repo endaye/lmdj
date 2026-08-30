@@ -156,6 +156,10 @@ jobs:
     name: Architecture Portal
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.portal && needs.change-scope.outputs.trusted-head == 'true' }}
+    concurrency:
+      group: lmdj-native-heavy
+      queue: max
+      cancel-in-progress: false
     uses: ./.github/workflows/architecture-portal.yml
     with:
       check_documentation_impact: ${{ github.event_name == 'pull_request' || needs.change-scope.outputs.queue-mode == 'true' }}
