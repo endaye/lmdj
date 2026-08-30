@@ -133,7 +133,19 @@ if(BUILD_TESTING)
   lmdj_add_test(
     NAME facade.sequence_surface
     TIER component
-    COMMAND lmdj_facade_sequence_surface_tests
+    COMMAND lmdj_facade_sequence_surface_tests --shard=lifecycle
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
+    NAME facade.sequence_surface.recovery
+    TIER component
+    COMMAND lmdj_facade_sequence_surface_tests --shard=recovery
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
+    NAME facade.sequence_surface.rebase
+    TIER component
+    COMMAND lmdj_facade_sequence_surface_tests --shard=rebase
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
 
@@ -164,7 +176,19 @@ if(BUILD_TESTING)
   lmdj_add_test(
     NAME facade.sample_surface
     TIER component
-    COMMAND lmdj_facade_sample_surface_tests
+    COMMAND lmdj_facade_sample_surface_tests --shard=mutation
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
+    NAME facade.sample_surface.quota_replay
+    TIER component
+    COMMAND lmdj_facade_sample_surface_tests --shard=quota-replay
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_add_test(
+    NAME facade.sample_surface.projection
+    TIER component
+    COMMAND lmdj_facade_sample_surface_tests --shard=projection
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
 

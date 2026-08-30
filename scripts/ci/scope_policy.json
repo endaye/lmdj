@@ -149,6 +149,8 @@
     {"match": {"kind": "prefix", "value": "tests/build/web_runtime_deploy_"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "exact", "value": "tests/build/web_runtime_public_deployment_docs_test.py"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "exact", "value": "tests/build/core_script_test.py"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos", "package"]},
+    {"match": {"kind": "exact", "value": "tests/build/facade_surface_sharding_test.py"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
+    {"match": {"kind": "exact", "value": "tests/build/facade_surface_sharding_unit_test.py"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
     {"match": {"kind": "exact", "value": "tests/build/project_io_test_hook_symbols_test.py"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
     {"match": {"kind": "exact", "value": "tests/build/project_io_test_hook_symbols_unit_test.py"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
     {"match": {"kind": "exact", "value": "tests/build/proof_failure_artifacts_test.py"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
