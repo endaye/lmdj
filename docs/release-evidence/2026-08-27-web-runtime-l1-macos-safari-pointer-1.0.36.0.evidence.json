@@ -1,0 +1,3560 @@
+{
+  "evidenceVersion": 1,
+  "runs": [
+    {
+      "key": "macos-safari-pointer-performance",
+      "sessionId": "00e56cbc-5197-4eaf-aed4-376488193188",
+      "recordedAt": "2026-08-26T13:58:08.699Z",
+      "environment": {
+        "platform": "macos",
+        "browser": "safari",
+        "osVersion": "macOS 26.6.2 (25G83)",
+        "browserVersion": "Safari 26.6.2 (21624.5.1.11.3)",
+        "deviceClass": "mac",
+        "inputSource": "pointer",
+        "routeCategory": "built-in",
+        "sampleRate": 48000
+      },
+      "runtime": {
+        "audioContextStateHistory": [
+          {
+            "state": "running",
+            "atMs": 59115.96000000001
+          },
+          {
+            "state": "running",
+            "atMs": 59116.3
+          }
+        ],
+        "baseLatency": 0.0026666666666666666,
+        "outputLatency": 0.015625,
+        "observedQuantumSizes": [
+          128
+        ],
+        "processorCallbackCount": 242568
+      },
+      "errors": [],
+      "unsupportedCapabilities": [],
+      "triggerRecords": [
+        {
+          "sequence": 1,
+          "source": "pointer",
+          "eventAtMs": 62229.68,
+          "acknowledgementAtMs": 62231.72,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 2,
+          "source": "pointer",
+          "eventAtMs": 63981.920000000006,
+          "acknowledgementAtMs": 63984.880000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 3,
+          "source": "pointer",
+          "eventAtMs": 64623.14000000001,
+          "acknowledgementAtMs": 64625.9,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 4,
+          "source": "pointer",
+          "eventAtMs": 65421.16,
+          "acknowledgementAtMs": 65423.12000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 5,
+          "source": "pointer",
+          "eventAtMs": 66350.1,
+          "acknowledgementAtMs": 66352.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 6,
+          "source": "pointer",
+          "eventAtMs": 67290.62000000001,
+          "acknowledgementAtMs": 67292.8,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 7,
+          "source": "pointer",
+          "eventAtMs": 68375.24,
+          "acknowledgementAtMs": 68377.52,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 8,
+          "source": "pointer",
+          "eventAtMs": 69343.96,
+          "acknowledgementAtMs": 69346.5,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 9,
+          "source": "pointer",
+          "eventAtMs": 70356.2,
+          "acknowledgementAtMs": 70359.08,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 10,
+          "source": "pointer",
+          "eventAtMs": 71462.8,
+          "acknowledgementAtMs": 71465.28000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 11,
+          "source": "pointer",
+          "eventAtMs": 72498.62,
+          "acknowledgementAtMs": 72501.84,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 12,
+          "source": "pointer",
+          "eventAtMs": 73561.86000000002,
+          "acknowledgementAtMs": 73565.48000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 13,
+          "source": "pointer",
+          "eventAtMs": 74636.58000000002,
+          "acknowledgementAtMs": 74639.6,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 14,
+          "source": "pointer",
+          "eventAtMs": 75719.18000000001,
+          "acknowledgementAtMs": 75721.86,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 15,
+          "source": "pointer",
+          "eventAtMs": 76757.48,
+          "acknowledgementAtMs": 76759.28,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 16,
+          "source": "pointer",
+          "eventAtMs": 77773.26000000001,
+          "acknowledgementAtMs": 77775.6,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 17,
+          "source": "pointer",
+          "eventAtMs": 78815.92000000001,
+          "acknowledgementAtMs": 78819.40000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 18,
+          "source": "pointer",
+          "eventAtMs": 79844.12000000001,
+          "acknowledgementAtMs": 79847.62000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 19,
+          "source": "pointer",
+          "eventAtMs": 80914.96,
+          "acknowledgementAtMs": 80916.70000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 20,
+          "source": "pointer",
+          "eventAtMs": 81919.56,
+          "acknowledgementAtMs": 81921.50000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 21,
+          "source": "pointer",
+          "eventAtMs": 82949.72000000002,
+          "acknowledgementAtMs": 82951.98000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 22,
+          "source": "pointer",
+          "eventAtMs": 84029.08,
+          "acknowledgementAtMs": 84030.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 23,
+          "source": "pointer",
+          "eventAtMs": 85104.66,
+          "acknowledgementAtMs": 85106.58,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 24,
+          "source": "pointer",
+          "eventAtMs": 86202.20000000001,
+          "acknowledgementAtMs": 86204.54000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 25,
+          "source": "pointer",
+          "eventAtMs": 87259.52,
+          "acknowledgementAtMs": 87261.3,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 26,
+          "source": "pointer",
+          "eventAtMs": 88263.40000000001,
+          "acknowledgementAtMs": 88265.82,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 27,
+          "source": "pointer",
+          "eventAtMs": 89373.5,
+          "acknowledgementAtMs": 89376.24,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 28,
+          "source": "pointer",
+          "eventAtMs": 90616.58000000002,
+          "acknowledgementAtMs": 90618.94,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 29,
+          "source": "pointer",
+          "eventAtMs": 91695.58,
+          "acknowledgementAtMs": 91698.1,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 30,
+          "source": "pointer",
+          "eventAtMs": 92763.90000000001,
+          "acknowledgementAtMs": 92766.76000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 31,
+          "source": "pointer",
+          "eventAtMs": 93839.28,
+          "acknowledgementAtMs": 93843.92000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 32,
+          "source": "pointer",
+          "eventAtMs": 94898.16,
+          "acknowledgementAtMs": 94902.06000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 33,
+          "source": "pointer",
+          "eventAtMs": 96055.88,
+          "acknowledgementAtMs": 96059.48000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 34,
+          "source": "pointer",
+          "eventAtMs": 97140.02,
+          "acknowledgementAtMs": 97144.06000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 35,
+          "source": "pointer",
+          "eventAtMs": 98336.18000000001,
+          "acknowledgementAtMs": 98338.62000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 36,
+          "source": "pointer",
+          "eventAtMs": 99445.22,
+          "acknowledgementAtMs": 99449.22000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 37,
+          "source": "pointer",
+          "eventAtMs": 100534.24,
+          "acknowledgementAtMs": 100535.14000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 38,
+          "source": "pointer",
+          "eventAtMs": 101701.54000000001,
+          "acknowledgementAtMs": 101703.68000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 39,
+          "source": "pointer",
+          "eventAtMs": 102723.34000000001,
+          "acknowledgementAtMs": 102727.46,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 40,
+          "source": "pointer",
+          "eventAtMs": 103851.92000000001,
+          "acknowledgementAtMs": 103855.86,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 41,
+          "source": "pointer",
+          "eventAtMs": 104969.14000000001,
+          "acknowledgementAtMs": 104974.36,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 42,
+          "source": "pointer",
+          "eventAtMs": 106101.46,
+          "acknowledgementAtMs": 106103.54000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 43,
+          "source": "pointer",
+          "eventAtMs": 107826.32,
+          "acknowledgementAtMs": 107828.5,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 44,
+          "source": "pointer",
+          "eventAtMs": 108909.76000000001,
+          "acknowledgementAtMs": 108912.6,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 45,
+          "source": "pointer",
+          "eventAtMs": 110018.30000000002,
+          "acknowledgementAtMs": 110020.36000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 46,
+          "source": "pointer",
+          "eventAtMs": 111126.74,
+          "acknowledgementAtMs": 111129.42000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 47,
+          "source": "pointer",
+          "eventAtMs": 112225.88,
+          "acknowledgementAtMs": 112229.28,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 48,
+          "source": "pointer",
+          "eventAtMs": 113343.38,
+          "acknowledgementAtMs": 113347.32,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 49,
+          "source": "pointer",
+          "eventAtMs": 114473.20000000001,
+          "acknowledgementAtMs": 114477.72,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 50,
+          "source": "pointer",
+          "eventAtMs": 115535.70000000001,
+          "acknowledgementAtMs": 115539.72,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 51,
+          "source": "pointer",
+          "eventAtMs": 119060.78000000001,
+          "acknowledgementAtMs": 119062.78,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 52,
+          "source": "pointer",
+          "eventAtMs": 120116.92000000001,
+          "acknowledgementAtMs": 120126.92000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 53,
+          "source": "pointer",
+          "eventAtMs": 121283.58000000002,
+          "acknowledgementAtMs": 121286.54000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 54,
+          "source": "pointer",
+          "eventAtMs": 122372.94000000002,
+          "acknowledgementAtMs": 122375.94000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 55,
+          "source": "pointer",
+          "eventAtMs": 123524.72000000002,
+          "acknowledgementAtMs": 123527.18000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 56,
+          "source": "pointer",
+          "eventAtMs": 124635.84000000001,
+          "acknowledgementAtMs": 124638.68000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 57,
+          "source": "pointer",
+          "eventAtMs": 125766.06000000001,
+          "acknowledgementAtMs": 125767.94000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 58,
+          "source": "pointer",
+          "eventAtMs": 126849.54000000001,
+          "acknowledgementAtMs": 126851.94000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 59,
+          "source": "pointer",
+          "eventAtMs": 127982.94000000002,
+          "acknowledgementAtMs": 127986.18000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 60,
+          "source": "pointer",
+          "eventAtMs": 129122.5,
+          "acknowledgementAtMs": 129125.8,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 61,
+          "source": "pointer",
+          "eventAtMs": 130365.52,
+          "acknowledgementAtMs": 130367.44000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 62,
+          "source": "pointer",
+          "eventAtMs": 131543.48,
+          "acknowledgementAtMs": 131546.10000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 63,
+          "source": "pointer",
+          "eventAtMs": 132649.94,
+          "acknowledgementAtMs": 132651.98,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 64,
+          "source": "pointer",
+          "eventAtMs": 133863.9,
+          "acknowledgementAtMs": 133865.90000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 65,
+          "source": "pointer",
+          "eventAtMs": 135152.02000000002,
+          "acknowledgementAtMs": 135154.84,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 66,
+          "source": "pointer",
+          "eventAtMs": 136439.08000000002,
+          "acknowledgementAtMs": 136443.04000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 67,
+          "source": "pointer",
+          "eventAtMs": 137627.06,
+          "acknowledgementAtMs": 137630.18000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 68,
+          "source": "pointer",
+          "eventAtMs": 138913.7,
+          "acknowledgementAtMs": 138916.56,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 69,
+          "source": "pointer",
+          "eventAtMs": 140246.96,
+          "acknowledgementAtMs": 140249.5,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 70,
+          "source": "pointer",
+          "eventAtMs": 141536.12000000002,
+          "acknowledgementAtMs": 141539.80000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 71,
+          "source": "pointer",
+          "eventAtMs": 142812.18000000002,
+          "acknowledgementAtMs": 142815.94,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 72,
+          "source": "pointer",
+          "eventAtMs": 144064.58000000002,
+          "acknowledgementAtMs": 144068.28000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 73,
+          "source": "pointer",
+          "eventAtMs": 145409.5,
+          "acknowledgementAtMs": 145413.52000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 74,
+          "source": "pointer",
+          "eventAtMs": 147107.7,
+          "acknowledgementAtMs": 147110.04,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 75,
+          "source": "pointer",
+          "eventAtMs": 148346.46000000002,
+          "acknowledgementAtMs": 148349.5,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 76,
+          "source": "pointer",
+          "eventAtMs": 149638.92,
+          "acknowledgementAtMs": 149641.48,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 77,
+          "source": "pointer",
+          "eventAtMs": 150950.12,
+          "acknowledgementAtMs": 150953.58000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 78,
+          "source": "pointer",
+          "eventAtMs": 152212.06,
+          "acknowledgementAtMs": 152215,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 79,
+          "source": "pointer",
+          "eventAtMs": 153576.56,
+          "acknowledgementAtMs": 153579.64,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 80,
+          "source": "pointer",
+          "eventAtMs": 154903.66,
+          "acknowledgementAtMs": 154907.08000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 81,
+          "source": "pointer",
+          "eventAtMs": 156244.86000000002,
+          "acknowledgementAtMs": 156247.58,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 82,
+          "source": "pointer",
+          "eventAtMs": 157636.54000000004,
+          "acknowledgementAtMs": 157638.96000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 83,
+          "source": "pointer",
+          "eventAtMs": 158957.58000000002,
+          "acknowledgementAtMs": 158961.30000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 84,
+          "source": "pointer",
+          "eventAtMs": 160184.72000000003,
+          "acknowledgementAtMs": 160187.62,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 85,
+          "source": "pointer",
+          "eventAtMs": 161486.96000000002,
+          "acknowledgementAtMs": 161489.72,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 86,
+          "source": "pointer",
+          "eventAtMs": 162886.86000000002,
+          "acknowledgementAtMs": 162889.50000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 87,
+          "source": "pointer",
+          "eventAtMs": 164174.84000000003,
+          "acknowledgementAtMs": 164177.52000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 88,
+          "source": "pointer",
+          "eventAtMs": 165481.00000000003,
+          "acknowledgementAtMs": 165483.82,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 89,
+          "source": "pointer",
+          "eventAtMs": 166975.2,
+          "acknowledgementAtMs": 166978.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 90,
+          "source": "pointer",
+          "eventAtMs": 168507.72,
+          "acknowledgementAtMs": 168510.7,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 91,
+          "source": "pointer",
+          "eventAtMs": 170328.26,
+          "acknowledgementAtMs": 170330.32,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 92,
+          "source": "pointer",
+          "eventAtMs": 171745.54,
+          "acknowledgementAtMs": 171748.22,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 93,
+          "source": "pointer",
+          "eventAtMs": 173273.56,
+          "acknowledgementAtMs": 173275.98,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 94,
+          "source": "pointer",
+          "eventAtMs": 174609.34,
+          "acknowledgementAtMs": 174611.94,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 95,
+          "source": "pointer",
+          "eventAtMs": 176057.64,
+          "acknowledgementAtMs": 176060.56,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 96,
+          "source": "pointer",
+          "eventAtMs": 177495.54,
+          "acknowledgementAtMs": 177498.38000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 97,
+          "source": "pointer",
+          "eventAtMs": 178966.06000000003,
+          "acknowledgementAtMs": 178969.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 98,
+          "source": "pointer",
+          "eventAtMs": 180366.04000000004,
+          "acknowledgementAtMs": 180368.88,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 99,
+          "source": "pointer",
+          "eventAtMs": 181757.36000000002,
+          "acknowledgementAtMs": 181760.16,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 100,
+          "source": "pointer",
+          "eventAtMs": 183241.74000000002,
+          "acknowledgementAtMs": 183243.96000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 101,
+          "source": "pointer",
+          "eventAtMs": 184686.46000000002,
+          "acknowledgementAtMs": 184689.48,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 102,
+          "source": "pointer",
+          "eventAtMs": 186156.66,
+          "acknowledgementAtMs": 186159.54,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 103,
+          "source": "pointer",
+          "eventAtMs": 187530.04,
+          "acknowledgementAtMs": 187533.06,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 104,
+          "source": "pointer",
+          "eventAtMs": 188906.60000000003,
+          "acknowledgementAtMs": 188908.00000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 105,
+          "source": "pointer",
+          "eventAtMs": 190276.08000000002,
+          "acknowledgementAtMs": 190278.66,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 106,
+          "source": "pointer",
+          "eventAtMs": 191688.7,
+          "acknowledgementAtMs": 191691.26000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 107,
+          "source": "pointer",
+          "eventAtMs": 192995.9,
+          "acknowledgementAtMs": 192998.64,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 108,
+          "source": "pointer",
+          "eventAtMs": 194378.32,
+          "acknowledgementAtMs": 194380.90000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 109,
+          "source": "pointer",
+          "eventAtMs": 195824.6,
+          "acknowledgementAtMs": 195827.24000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 110,
+          "source": "pointer",
+          "eventAtMs": 197311.58000000002,
+          "acknowledgementAtMs": 197314.76,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 111,
+          "source": "pointer",
+          "eventAtMs": 198928.30000000002,
+          "acknowledgementAtMs": 198929.24000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 112,
+          "source": "pointer",
+          "eventAtMs": 200378.04000000004,
+          "acknowledgementAtMs": 200381.22,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 113,
+          "source": "pointer",
+          "eventAtMs": 201944.08000000002,
+          "acknowledgementAtMs": 201945.32,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 114,
+          "source": "pointer",
+          "eventAtMs": 203401.44,
+          "acknowledgementAtMs": 203404.00000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 115,
+          "source": "pointer",
+          "eventAtMs": 204870.84000000003,
+          "acknowledgementAtMs": 204873.44,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 116,
+          "source": "pointer",
+          "eventAtMs": 206400.24000000002,
+          "acknowledgementAtMs": 206403.34000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 117,
+          "source": "pointer",
+          "eventAtMs": 208019.86000000002,
+          "acknowledgementAtMs": 208022.6,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 118,
+          "source": "pointer",
+          "eventAtMs": 209577.90000000002,
+          "acknowledgementAtMs": 209580.80000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 119,
+          "source": "pointer",
+          "eventAtMs": 211143.96000000002,
+          "acknowledgementAtMs": 211147.12000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 120,
+          "source": "pointer",
+          "eventAtMs": 212668.46000000002,
+          "acknowledgementAtMs": 212671.32,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 121,
+          "source": "pointer",
+          "eventAtMs": 214177.5,
+          "acknowledgementAtMs": 214180.28,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 122,
+          "source": "pointer",
+          "eventAtMs": 215750.6,
+          "acknowledgementAtMs": 215753.48,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 123,
+          "source": "pointer",
+          "eventAtMs": 217319.94000000003,
+          "acknowledgementAtMs": 217322.54,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 124,
+          "source": "pointer",
+          "eventAtMs": 218934.98,
+          "acknowledgementAtMs": 218937.64,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 125,
+          "source": "pointer",
+          "eventAtMs": 220674.74000000002,
+          "acknowledgementAtMs": 220677.30000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 126,
+          "source": "pointer",
+          "eventAtMs": 222315.94,
+          "acknowledgementAtMs": 222318.74000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 127,
+          "source": "pointer",
+          "eventAtMs": 224037.04,
+          "acknowledgementAtMs": 224038.64,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 128,
+          "source": "pointer",
+          "eventAtMs": 225720.26000000004,
+          "acknowledgementAtMs": 225722.08000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 129,
+          "source": "pointer",
+          "eventAtMs": 227358.12000000002,
+          "acknowledgementAtMs": 227361.04000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 130,
+          "source": "pointer",
+          "eventAtMs": 228895.1,
+          "acknowledgementAtMs": 228897.84000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 131,
+          "source": "pointer",
+          "eventAtMs": 230527.62000000002,
+          "acknowledgementAtMs": 230530.24000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 132,
+          "source": "pointer",
+          "eventAtMs": 232089.00000000003,
+          "acknowledgementAtMs": 232089.86000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 133,
+          "source": "pointer",
+          "eventAtMs": 233695.94,
+          "acknowledgementAtMs": 233698.50000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 134,
+          "source": "pointer",
+          "eventAtMs": 235366.88,
+          "acknowledgementAtMs": 235369.34000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 135,
+          "source": "pointer",
+          "eventAtMs": 237086.28000000003,
+          "acknowledgementAtMs": 237087.12000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 136,
+          "source": "pointer",
+          "eventAtMs": 238707.76,
+          "acknowledgementAtMs": 238710.94000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 137,
+          "source": "pointer",
+          "eventAtMs": 240428.82000000004,
+          "acknowledgementAtMs": 240431.7,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 138,
+          "source": "pointer",
+          "eventAtMs": 242015.18000000002,
+          "acknowledgementAtMs": 242018.16000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 139,
+          "source": "pointer",
+          "eventAtMs": 243769.46000000002,
+          "acknowledgementAtMs": 243772.18000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 140,
+          "source": "pointer",
+          "eventAtMs": 245321.24000000002,
+          "acknowledgementAtMs": 245324.02000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 141,
+          "source": "pointer",
+          "eventAtMs": 247062.14,
+          "acknowledgementAtMs": 247065.14,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 142,
+          "source": "pointer",
+          "eventAtMs": 248766.86000000002,
+          "acknowledgementAtMs": 248769.50000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 143,
+          "source": "pointer",
+          "eventAtMs": 250569.72000000003,
+          "acknowledgementAtMs": 250572.00000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 144,
+          "source": "pointer",
+          "eventAtMs": 252161.42,
+          "acknowledgementAtMs": 252163.98,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 145,
+          "source": "pointer",
+          "eventAtMs": 253794.34000000003,
+          "acknowledgementAtMs": 253797.04,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 146,
+          "source": "pointer",
+          "eventAtMs": 255326.42,
+          "acknowledgementAtMs": 255328.06000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 147,
+          "source": "pointer",
+          "eventAtMs": 256881.48,
+          "acknowledgementAtMs": 256883.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 148,
+          "source": "pointer",
+          "eventAtMs": 258425.80000000005,
+          "acknowledgementAtMs": 258428.58000000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 149,
+          "source": "pointer",
+          "eventAtMs": 260021.86000000002,
+          "acknowledgementAtMs": 260024.69999999998,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 150,
+          "source": "pointer",
+          "eventAtMs": 261550.94000000003,
+          "acknowledgementAtMs": 261553.28000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 151,
+          "source": "pointer",
+          "eventAtMs": 263071.26,
+          "acknowledgementAtMs": 263074.60000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 152,
+          "source": "pointer",
+          "eventAtMs": 264662.32,
+          "acknowledgementAtMs": 264664.72000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 153,
+          "source": "pointer",
+          "eventAtMs": 266292.96,
+          "acknowledgementAtMs": 266295.22000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 154,
+          "source": "pointer",
+          "eventAtMs": 267795.26000000007,
+          "acknowledgementAtMs": 267798.36,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 155,
+          "source": "pointer",
+          "eventAtMs": 269587.32,
+          "acknowledgementAtMs": 269589.36,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 156,
+          "source": "pointer",
+          "eventAtMs": 270982.86000000004,
+          "acknowledgementAtMs": 270986.06,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 157,
+          "source": "pointer",
+          "eventAtMs": 272474.34,
+          "acknowledgementAtMs": 272476.54,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 158,
+          "source": "pointer",
+          "eventAtMs": 273894.98000000004,
+          "acknowledgementAtMs": 273897.54000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 159,
+          "source": "pointer",
+          "eventAtMs": 275323.20000000007,
+          "acknowledgementAtMs": 275325.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 160,
+          "source": "pointer",
+          "eventAtMs": 276837.10000000003,
+          "acknowledgementAtMs": 276839.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 161,
+          "source": "pointer",
+          "eventAtMs": 278161.30000000005,
+          "acknowledgementAtMs": 278163.88,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 162,
+          "source": "pointer",
+          "eventAtMs": 279509.5,
+          "acknowledgementAtMs": 279512,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 163,
+          "source": "pointer",
+          "eventAtMs": 281049.66000000003,
+          "acknowledgementAtMs": 281052.34,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 164,
+          "source": "pointer",
+          "eventAtMs": 282457.26,
+          "acknowledgementAtMs": 282459.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 165,
+          "source": "pointer",
+          "eventAtMs": 283909.50000000006,
+          "acknowledgementAtMs": 283912.24,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 166,
+          "source": "pointer",
+          "eventAtMs": 285373.42,
+          "acknowledgementAtMs": 285375.50000000006,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 167,
+          "source": "pointer",
+          "eventAtMs": 287007.62000000005,
+          "acknowledgementAtMs": 287010.12000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 168,
+          "source": "pointer",
+          "eventAtMs": 288478.5,
+          "acknowledgementAtMs": 288481.28,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 169,
+          "source": "pointer",
+          "eventAtMs": 290083.28,
+          "acknowledgementAtMs": 290085.30000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 170,
+          "source": "pointer",
+          "eventAtMs": 291487.42000000004,
+          "acknowledgementAtMs": 291489.98,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 171,
+          "source": "pointer",
+          "eventAtMs": 292926.74000000005,
+          "acknowledgementAtMs": 292929.5,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 172,
+          "source": "pointer",
+          "eventAtMs": 294513.26,
+          "acknowledgementAtMs": 294516.04000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 173,
+          "source": "pointer",
+          "eventAtMs": 295986.66000000003,
+          "acknowledgementAtMs": 295989.5,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 174,
+          "source": "pointer",
+          "eventAtMs": 297460.06,
+          "acknowledgementAtMs": 297462.70000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 175,
+          "source": "pointer",
+          "eventAtMs": 298888.76000000007,
+          "acknowledgementAtMs": 298892.02,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 176,
+          "source": "pointer",
+          "eventAtMs": 300436.54000000004,
+          "acknowledgementAtMs": 300438.76,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 177,
+          "source": "pointer",
+          "eventAtMs": 302078.24000000005,
+          "acknowledgementAtMs": 302081.26000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 178,
+          "source": "pointer",
+          "eventAtMs": 303606.18000000005,
+          "acknowledgementAtMs": 303609.28,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 179,
+          "source": "pointer",
+          "eventAtMs": 305166.70000000007,
+          "acknowledgementAtMs": 305169.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 180,
+          "source": "pointer",
+          "eventAtMs": 306786.12000000005,
+          "acknowledgementAtMs": 306788.58,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 181,
+          "source": "pointer",
+          "eventAtMs": 308174.86000000004,
+          "acknowledgementAtMs": 308177.48,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 182,
+          "source": "pointer",
+          "eventAtMs": 309630.94,
+          "acknowledgementAtMs": 309633.62,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 183,
+          "source": "pointer",
+          "eventAtMs": 311235.16000000003,
+          "acknowledgementAtMs": 311237.86,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 184,
+          "source": "pointer",
+          "eventAtMs": 312835.78,
+          "acknowledgementAtMs": 312838.58,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 185,
+          "source": "pointer",
+          "eventAtMs": 314349.0200000001,
+          "acknowledgementAtMs": 314351.94,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 186,
+          "source": "pointer",
+          "eventAtMs": 315935.88000000006,
+          "acknowledgementAtMs": 315938.82,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 187,
+          "source": "pointer",
+          "eventAtMs": 317481.96,
+          "acknowledgementAtMs": 317484.74000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 188,
+          "source": "pointer",
+          "eventAtMs": 319054.68,
+          "acknowledgementAtMs": 319057.5,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 189,
+          "source": "pointer",
+          "eventAtMs": 320677.84,
+          "acknowledgementAtMs": 320680.18,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 190,
+          "source": "pointer",
+          "eventAtMs": 322258.16000000003,
+          "acknowledgementAtMs": 322261,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 191,
+          "source": "pointer",
+          "eventAtMs": 324041.42000000004,
+          "acknowledgementAtMs": 324044.64,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 192,
+          "source": "pointer",
+          "eventAtMs": 325903.22000000003,
+          "acknowledgementAtMs": 325905.98,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 193,
+          "source": "pointer",
+          "eventAtMs": 327667.4,
+          "acknowledgementAtMs": 327670.38,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 194,
+          "source": "pointer",
+          "eventAtMs": 330117.48,
+          "acknowledgementAtMs": 330120.52,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 195,
+          "source": "pointer",
+          "eventAtMs": 331742.76,
+          "acknowledgementAtMs": 331745.82000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 196,
+          "source": "pointer",
+          "eventAtMs": 333577.44,
+          "acknowledgementAtMs": 333581.16000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 197,
+          "source": "pointer",
+          "eventAtMs": 335212.26,
+          "acknowledgementAtMs": 335214.58,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 198,
+          "source": "pointer",
+          "eventAtMs": 336769.72000000003,
+          "acknowledgementAtMs": 336772.56000000006,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 199,
+          "source": "pointer",
+          "eventAtMs": 338359.74000000005,
+          "acknowledgementAtMs": 338362.78,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 200,
+          "source": "pointer",
+          "eventAtMs": 339889.82000000007,
+          "acknowledgementAtMs": 339892.60000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 201,
+          "source": "pointer",
+          "eventAtMs": 341449.84,
+          "acknowledgementAtMs": 341452.56,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 202,
+          "source": "pointer",
+          "eventAtMs": 343060.5200000001,
+          "acknowledgementAtMs": 343063.16000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 203,
+          "source": "pointer",
+          "eventAtMs": 344623.0200000001,
+          "acknowledgementAtMs": 344625.66000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 204,
+          "source": "pointer",
+          "eventAtMs": 346245.64,
+          "acknowledgementAtMs": 346247.84,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 205,
+          "source": "pointer",
+          "eventAtMs": 347696.24000000005,
+          "acknowledgementAtMs": 347699.06000000006,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 206,
+          "source": "pointer",
+          "eventAtMs": 349113.92,
+          "acknowledgementAtMs": 349116.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 207,
+          "source": "pointer",
+          "eventAtMs": 350617.18,
+          "acknowledgementAtMs": 350620.02,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 208,
+          "source": "pointer",
+          "eventAtMs": 352112.78,
+          "acknowledgementAtMs": 352114.5800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 209,
+          "source": "pointer",
+          "eventAtMs": 353572.48000000004,
+          "acknowledgementAtMs": 353575.06,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 210,
+          "source": "pointer",
+          "eventAtMs": 355431.78,
+          "acknowledgementAtMs": 355434.1,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 211,
+          "source": "pointer",
+          "eventAtMs": 356942.32000000007,
+          "acknowledgementAtMs": 356945.08,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 212,
+          "source": "pointer",
+          "eventAtMs": 358492.04000000004,
+          "acknowledgementAtMs": 358494.60000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 213,
+          "source": "pointer",
+          "eventAtMs": 360003.94000000006,
+          "acknowledgementAtMs": 360006.60000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 214,
+          "source": "pointer",
+          "eventAtMs": 361441.14,
+          "acknowledgementAtMs": 361443.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 215,
+          "source": "pointer",
+          "eventAtMs": 363052.98000000004,
+          "acknowledgementAtMs": 363056.04000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 216,
+          "source": "pointer",
+          "eventAtMs": 364757.56,
+          "acknowledgementAtMs": 364760.30000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 217,
+          "source": "pointer",
+          "eventAtMs": 366386.98000000004,
+          "acknowledgementAtMs": 366389.76,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 218,
+          "source": "pointer",
+          "eventAtMs": 367914.86000000004,
+          "acknowledgementAtMs": 367917.48000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 219,
+          "source": "pointer",
+          "eventAtMs": 369465.9600000001,
+          "acknowledgementAtMs": 369468.82000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 220,
+          "source": "pointer",
+          "eventAtMs": 371180.10000000003,
+          "acknowledgementAtMs": 371182.66000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 221,
+          "source": "pointer",
+          "eventAtMs": 372815.64,
+          "acknowledgementAtMs": 372818.76000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 222,
+          "source": "pointer",
+          "eventAtMs": 374374.24000000005,
+          "acknowledgementAtMs": 374376.68,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 223,
+          "source": "pointer",
+          "eventAtMs": 375962.00000000006,
+          "acknowledgementAtMs": 375964.36000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 224,
+          "source": "pointer",
+          "eventAtMs": 376044.92000000004,
+          "acknowledgementAtMs": 376046.60000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 225,
+          "source": "pointer",
+          "eventAtMs": 377596.82000000007,
+          "acknowledgementAtMs": 377600.4600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 226,
+          "source": "pointer",
+          "eventAtMs": 379219.4,
+          "acknowledgementAtMs": 379221.74,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 227,
+          "source": "pointer",
+          "eventAtMs": 380684.82000000007,
+          "acknowledgementAtMs": 380686.88,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 228,
+          "source": "pointer",
+          "eventAtMs": 382215.16000000003,
+          "acknowledgementAtMs": 382218.08,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 229,
+          "source": "pointer",
+          "eventAtMs": 383753.34,
+          "acknowledgementAtMs": 383755.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 230,
+          "source": "pointer",
+          "eventAtMs": 385409.66000000003,
+          "acknowledgementAtMs": 385412.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 231,
+          "source": "pointer",
+          "eventAtMs": 386983.62000000005,
+          "acknowledgementAtMs": 386986.14,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 232,
+          "source": "pointer",
+          "eventAtMs": 388726.60000000003,
+          "acknowledgementAtMs": 388729.32,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 233,
+          "source": "pointer",
+          "eventAtMs": 390513.52,
+          "acknowledgementAtMs": 390516.16000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 234,
+          "source": "pointer",
+          "eventAtMs": 392707.62,
+          "acknowledgementAtMs": 392708.54000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 235,
+          "source": "pointer",
+          "eventAtMs": 394452.28,
+          "acknowledgementAtMs": 394454.56,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 236,
+          "source": "pointer",
+          "eventAtMs": 395806.9,
+          "acknowledgementAtMs": 395809.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 237,
+          "source": "pointer",
+          "eventAtMs": 397489.04000000004,
+          "acknowledgementAtMs": 397491.44,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 238,
+          "source": "pointer",
+          "eventAtMs": 399145.94000000006,
+          "acknowledgementAtMs": 399148.98000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 239,
+          "source": "pointer",
+          "eventAtMs": 400636.52,
+          "acknowledgementAtMs": 400639.38,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 240,
+          "source": "pointer",
+          "eventAtMs": 402251.84,
+          "acknowledgementAtMs": 402254.62000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 241,
+          "source": "pointer",
+          "eventAtMs": 403823.5,
+          "acknowledgementAtMs": 403826.68,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 242,
+          "source": "pointer",
+          "eventAtMs": 405638.4,
+          "acknowledgementAtMs": 405640.74000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 243,
+          "source": "pointer",
+          "eventAtMs": 407332.06,
+          "acknowledgementAtMs": 407335.00000000006,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 244,
+          "source": "pointer",
+          "eventAtMs": 409045.26000000007,
+          "acknowledgementAtMs": 409048.04000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 245,
+          "source": "pointer",
+          "eventAtMs": 410615.98000000004,
+          "acknowledgementAtMs": 410618.20000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 246,
+          "source": "pointer",
+          "eventAtMs": 412384.38,
+          "acknowledgementAtMs": 412386.68,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 247,
+          "source": "pointer",
+          "eventAtMs": 414020.86000000004,
+          "acknowledgementAtMs": 414023.4600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 248,
+          "source": "pointer",
+          "eventAtMs": 415724.24,
+          "acknowledgementAtMs": 415726.58,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 249,
+          "source": "pointer",
+          "eventAtMs": 417259.30000000005,
+          "acknowledgementAtMs": 417261.4600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 250,
+          "source": "pointer",
+          "eventAtMs": 418850.72000000003,
+          "acknowledgementAtMs": 418853.38,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 251,
+          "source": "pointer",
+          "eventAtMs": 420415.12000000005,
+          "acknowledgementAtMs": 420417.80000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 252,
+          "source": "pointer",
+          "eventAtMs": 421982.94000000006,
+          "acknowledgementAtMs": 421985.72000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 253,
+          "source": "pointer",
+          "eventAtMs": 423479.60000000003,
+          "acknowledgementAtMs": 423482.62000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 254,
+          "source": "pointer",
+          "eventAtMs": 425056.08,
+          "acknowledgementAtMs": 425058.62,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 255,
+          "source": "pointer",
+          "eventAtMs": 426506.14,
+          "acknowledgementAtMs": 426508.94000000006,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 256,
+          "source": "pointer",
+          "eventAtMs": 428048.7200000001,
+          "acknowledgementAtMs": 428052.26000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 257,
+          "source": "pointer",
+          "eventAtMs": 429565.08,
+          "acknowledgementAtMs": 429568.54000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 258,
+          "source": "pointer",
+          "eventAtMs": 431238.86000000004,
+          "acknowledgementAtMs": 431241.54000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 259,
+          "source": "pointer",
+          "eventAtMs": 432969.12000000005,
+          "acknowledgementAtMs": 432971.98000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 260,
+          "source": "pointer",
+          "eventAtMs": 434376.66000000003,
+          "acknowledgementAtMs": 434379.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 261,
+          "source": "pointer",
+          "eventAtMs": 435952.68000000005,
+          "acknowledgementAtMs": 435955.7800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 262,
+          "source": "pointer",
+          "eventAtMs": 437480.92000000004,
+          "acknowledgementAtMs": 437483.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 263,
+          "source": "pointer",
+          "eventAtMs": 439201.9,
+          "acknowledgementAtMs": 439204.30000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 264,
+          "source": "pointer",
+          "eventAtMs": 440822.88000000006,
+          "acknowledgementAtMs": 440825.64,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 265,
+          "source": "pointer",
+          "eventAtMs": 442312.78,
+          "acknowledgementAtMs": 442315.98000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 266,
+          "source": "pointer",
+          "eventAtMs": 443990.04000000004,
+          "acknowledgementAtMs": 443992.30000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 267,
+          "source": "pointer",
+          "eventAtMs": 445743.82,
+          "acknowledgementAtMs": 445746.84,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 268,
+          "source": "pointer",
+          "eventAtMs": 447448.18000000005,
+          "acknowledgementAtMs": 447451.24000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 269,
+          "source": "pointer",
+          "eventAtMs": 449236.20000000007,
+          "acknowledgementAtMs": 449239.12,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 270,
+          "source": "pointer",
+          "eventAtMs": 451098.92000000004,
+          "acknowledgementAtMs": 451101.72000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 271,
+          "source": "pointer",
+          "eventAtMs": 452814.4,
+          "acknowledgementAtMs": 452817.32000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 272,
+          "source": "pointer",
+          "eventAtMs": 454572.70000000007,
+          "acknowledgementAtMs": 454574.86000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 273,
+          "source": "pointer",
+          "eventAtMs": 456239.54000000004,
+          "acknowledgementAtMs": 456241.72000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 274,
+          "source": "pointer",
+          "eventAtMs": 458012.68000000005,
+          "acknowledgementAtMs": 458015.32,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 275,
+          "source": "pointer",
+          "eventAtMs": 459672.8400000001,
+          "acknowledgementAtMs": 459675.94,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 276,
+          "source": "pointer",
+          "eventAtMs": 461356.28,
+          "acknowledgementAtMs": 461359.04000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 277,
+          "source": "pointer",
+          "eventAtMs": 462995.94,
+          "acknowledgementAtMs": 462998.64,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 278,
+          "source": "pointer",
+          "eventAtMs": 464607.02,
+          "acknowledgementAtMs": 464609.7800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 279,
+          "source": "pointer",
+          "eventAtMs": 466273.2,
+          "acknowledgementAtMs": 466275.94000000006,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 280,
+          "source": "pointer",
+          "eventAtMs": 467835.22000000003,
+          "acknowledgementAtMs": 467837.82,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 281,
+          "source": "pointer",
+          "eventAtMs": 469399.64,
+          "acknowledgementAtMs": 469402.14,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 282,
+          "source": "pointer",
+          "eventAtMs": 471031.88000000006,
+          "acknowledgementAtMs": 471033.32000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 283,
+          "source": "pointer",
+          "eventAtMs": 472672.86,
+          "acknowledgementAtMs": 472675.44000000006,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 284,
+          "source": "pointer",
+          "eventAtMs": 474382.42000000004,
+          "acknowledgementAtMs": 474385.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 285,
+          "source": "pointer",
+          "eventAtMs": 476086.02,
+          "acknowledgementAtMs": 476089.32000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 286,
+          "source": "pointer",
+          "eventAtMs": 477785.60000000003,
+          "acknowledgementAtMs": 477788.24000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 287,
+          "source": "pointer",
+          "eventAtMs": 479645.84,
+          "acknowledgementAtMs": 479648.82000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 288,
+          "source": "pointer",
+          "eventAtMs": 481344.84,
+          "acknowledgementAtMs": 481347.62000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 289,
+          "source": "pointer",
+          "eventAtMs": 483032.30000000005,
+          "acknowledgementAtMs": 483034.9,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 290,
+          "source": "pointer",
+          "eventAtMs": 484881.54000000004,
+          "acknowledgementAtMs": 484884.18,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 291,
+          "source": "pointer",
+          "eventAtMs": 486665.48000000004,
+          "acknowledgementAtMs": 486667.98000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 292,
+          "source": "pointer",
+          "eventAtMs": 488452.38000000006,
+          "acknowledgementAtMs": 488454.92000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 293,
+          "source": "pointer",
+          "eventAtMs": 490092.12,
+          "acknowledgementAtMs": 490094.60000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 294,
+          "source": "pointer",
+          "eventAtMs": 491691.2,
+          "acknowledgementAtMs": 491693.98000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 295,
+          "source": "pointer",
+          "eventAtMs": 493611.0200000001,
+          "acknowledgementAtMs": 493613.74000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 296,
+          "source": "pointer",
+          "eventAtMs": 495256.6600000001,
+          "acknowledgementAtMs": 495259.60000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 297,
+          "source": "pointer",
+          "eventAtMs": 496976.92000000004,
+          "acknowledgementAtMs": 496978.88000000006,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 298,
+          "source": "pointer",
+          "eventAtMs": 498686.04000000004,
+          "acknowledgementAtMs": 498688.48000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 299,
+          "source": "pointer",
+          "eventAtMs": 500364.5,
+          "acknowledgementAtMs": 500367.28,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 300,
+          "source": "pointer",
+          "eventAtMs": 502010.54000000004,
+          "acknowledgementAtMs": 502012.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 301,
+          "source": "pointer",
+          "eventAtMs": 503843.44000000006,
+          "acknowledgementAtMs": 503846.54000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 302,
+          "source": "pointer",
+          "eventAtMs": 505516.48000000004,
+          "acknowledgementAtMs": 505519.00000000006,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 303,
+          "source": "pointer",
+          "eventAtMs": 507201.34,
+          "acknowledgementAtMs": 507204.04000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 304,
+          "source": "pointer",
+          "eventAtMs": 508760.42000000004,
+          "acknowledgementAtMs": 508763.54000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 305,
+          "source": "pointer",
+          "eventAtMs": 510269.3400000001,
+          "acknowledgementAtMs": 510271.32000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 306,
+          "source": "pointer",
+          "eventAtMs": 511101.80000000005,
+          "acknowledgementAtMs": 511104.84,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 307,
+          "source": "pointer",
+          "eventAtMs": 511886.54000000004,
+          "acknowledgementAtMs": 511889.68000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 308,
+          "source": "pointer",
+          "eventAtMs": 512652.0800000001,
+          "acknowledgementAtMs": 512654.70000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 309,
+          "source": "pointer",
+          "eventAtMs": 513445.68000000005,
+          "acknowledgementAtMs": 513448.52,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 310,
+          "source": "pointer",
+          "eventAtMs": 514240.12000000005,
+          "acknowledgementAtMs": 514242.8,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 311,
+          "source": "pointer",
+          "eventAtMs": 515013.86000000004,
+          "acknowledgementAtMs": 515016.2200000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 312,
+          "source": "pointer",
+          "eventAtMs": 515777.6600000001,
+          "acknowledgementAtMs": 515780.52,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 313,
+          "source": "pointer",
+          "eventAtMs": 516593.62,
+          "acknowledgementAtMs": 516596.56000000006,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 314,
+          "source": "pointer",
+          "eventAtMs": 517434.96,
+          "acknowledgementAtMs": 517438.24000000005,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 315,
+          "source": "pointer",
+          "eventAtMs": 518202.18,
+          "acknowledgementAtMs": 518203.8600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 316,
+          "source": "pointer",
+          "eventAtMs": 518952.86,
+          "acknowledgementAtMs": 518955.10000000003,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 317,
+          "source": "pointer",
+          "eventAtMs": 519695.36000000004,
+          "acknowledgementAtMs": 519698.02,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 318,
+          "source": "pointer",
+          "eventAtMs": 520420.74000000005,
+          "acknowledgementAtMs": 520424.22,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 319,
+          "source": "pointer",
+          "eventAtMs": 521129.22000000003,
+          "acknowledgementAtMs": 521131.88,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 320,
+          "source": "pointer",
+          "eventAtMs": 521865.3400000001,
+          "acknowledgementAtMs": 521867.92000000004,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 321,
+          "source": "pointer",
+          "eventAtMs": 522634.5200000001,
+          "acknowledgementAtMs": 522636.76000000007,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 322,
+          "source": "pointer",
+          "eventAtMs": 523433.4,
+          "acknowledgementAtMs": 523435.8400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 323,
+          "source": "pointer",
+          "eventAtMs": 524131.96,
+          "acknowledgementAtMs": 524134.94,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 324,
+          "source": "pointer",
+          "eventAtMs": 524833.66,
+          "acknowledgementAtMs": 524836.4800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 325,
+          "source": "pointer",
+          "eventAtMs": 525563.8600000001,
+          "acknowledgementAtMs": 525566.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 326,
+          "source": "pointer",
+          "eventAtMs": 526229.8800000001,
+          "acknowledgementAtMs": 526230.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 327,
+          "source": "pointer",
+          "eventAtMs": 526914.54,
+          "acknowledgementAtMs": 526916.4,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 328,
+          "source": "pointer",
+          "eventAtMs": 527578.02,
+          "acknowledgementAtMs": 527580.28,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 329,
+          "source": "pointer",
+          "eventAtMs": 528246.66,
+          "acknowledgementAtMs": 528249.18,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 330,
+          "source": "pointer",
+          "eventAtMs": 528912.28,
+          "acknowledgementAtMs": 528914.8,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 331,
+          "source": "pointer",
+          "eventAtMs": 529616.18,
+          "acknowledgementAtMs": 529618.9800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 332,
+          "source": "pointer",
+          "eventAtMs": 530298.2400000001,
+          "acknowledgementAtMs": 530301.1,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 333,
+          "source": "pointer",
+          "eventAtMs": 531026.7600000001,
+          "acknowledgementAtMs": 531029.8600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 334,
+          "source": "pointer",
+          "eventAtMs": 531703.1000000001,
+          "acknowledgementAtMs": 531705.92,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 335,
+          "source": "pointer",
+          "eventAtMs": 532325.7000000001,
+          "acknowledgementAtMs": 532328.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 336,
+          "source": "pointer",
+          "eventAtMs": 533031.88,
+          "acknowledgementAtMs": 533035.0000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 337,
+          "source": "pointer",
+          "eventAtMs": 533672.0599999999,
+          "acknowledgementAtMs": 533674.76,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 338,
+          "source": "pointer",
+          "eventAtMs": 534351.54,
+          "acknowledgementAtMs": 534354.06,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 339,
+          "source": "pointer",
+          "eventAtMs": 535069.66,
+          "acknowledgementAtMs": 535070.96,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 340,
+          "source": "pointer",
+          "eventAtMs": 535737.8600000001,
+          "acknowledgementAtMs": 535742.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 341,
+          "source": "pointer",
+          "eventAtMs": 536358.42,
+          "acknowledgementAtMs": 536362.5800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 342,
+          "source": "pointer",
+          "eventAtMs": 537029.18,
+          "acknowledgementAtMs": 537032.68,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 343,
+          "source": "pointer",
+          "eventAtMs": 537741.1000000001,
+          "acknowledgementAtMs": 537742.9400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 344,
+          "source": "pointer",
+          "eventAtMs": 538404.2000000001,
+          "acknowledgementAtMs": 538409.1000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 345,
+          "source": "pointer",
+          "eventAtMs": 539054.64,
+          "acknowledgementAtMs": 539059.2200000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 346,
+          "source": "pointer",
+          "eventAtMs": 539759.2000000001,
+          "acknowledgementAtMs": 539763.4,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 347,
+          "source": "pointer",
+          "eventAtMs": 540362.34,
+          "acknowledgementAtMs": 540368.14,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 348,
+          "source": "pointer",
+          "eventAtMs": 541011.6000000001,
+          "acknowledgementAtMs": 541013.04,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 349,
+          "source": "pointer",
+          "eventAtMs": 541625.78,
+          "acknowledgementAtMs": 541628,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 350,
+          "source": "pointer",
+          "eventAtMs": 542267.56,
+          "acknowledgementAtMs": 542271.7600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 351,
+          "source": "pointer",
+          "eventAtMs": 542929.0400000002,
+          "acknowledgementAtMs": 542932.8800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 352,
+          "source": "pointer",
+          "eventAtMs": 543573.64,
+          "acknowledgementAtMs": 543574.84,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 353,
+          "source": "pointer",
+          "eventAtMs": 544192.78,
+          "acknowledgementAtMs": 544196.42,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 354,
+          "source": "pointer",
+          "eventAtMs": 544779.42,
+          "acknowledgementAtMs": 544782.86,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 355,
+          "source": "pointer",
+          "eventAtMs": 545362.0000000001,
+          "acknowledgementAtMs": 545365.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 356,
+          "source": "pointer",
+          "eventAtMs": 545945.92,
+          "acknowledgementAtMs": 545950.1600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 357,
+          "source": "pointer",
+          "eventAtMs": 546538.04,
+          "acknowledgementAtMs": 546541.88,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 358,
+          "source": "pointer",
+          "eventAtMs": 547183.12,
+          "acknowledgementAtMs": 547185.78,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 359,
+          "source": "pointer",
+          "eventAtMs": 547783.46,
+          "acknowledgementAtMs": 547787.5,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 360,
+          "source": "pointer",
+          "eventAtMs": 548386.8200000001,
+          "acknowledgementAtMs": 548390.3,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 361,
+          "source": "pointer",
+          "eventAtMs": 549029.06,
+          "acknowledgementAtMs": 549031.56,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 362,
+          "source": "pointer",
+          "eventAtMs": 549603.4600000001,
+          "acknowledgementAtMs": 549606.3400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 363,
+          "source": "pointer",
+          "eventAtMs": 550249.52,
+          "acknowledgementAtMs": 550252.0000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 364,
+          "source": "pointer",
+          "eventAtMs": 550896.0800000001,
+          "acknowledgementAtMs": 550899.58,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 365,
+          "source": "pointer",
+          "eventAtMs": 551558.58,
+          "acknowledgementAtMs": 551561.3,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 366,
+          "source": "pointer",
+          "eventAtMs": 552223.74,
+          "acknowledgementAtMs": 552226.04,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 367,
+          "source": "pointer",
+          "eventAtMs": 552965.9800000001,
+          "acknowledgementAtMs": 552967.4400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 368,
+          "source": "pointer",
+          "eventAtMs": 553633.06,
+          "acknowledgementAtMs": 553635.9400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 369,
+          "source": "pointer",
+          "eventAtMs": 554245.4,
+          "acknowledgementAtMs": 554246.88,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 370,
+          "source": "pointer",
+          "eventAtMs": 554870.6799999999,
+          "acknowledgementAtMs": 554874.9,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 371,
+          "source": "pointer",
+          "eventAtMs": 555432.9600000001,
+          "acknowledgementAtMs": 555437.5,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 372,
+          "source": "pointer",
+          "eventAtMs": 556074.68,
+          "acknowledgementAtMs": 556078.64,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 373,
+          "source": "pointer",
+          "eventAtMs": 556632.6600000001,
+          "acknowledgementAtMs": 556634.22,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 374,
+          "source": "pointer",
+          "eventAtMs": 557191.4800000001,
+          "acknowledgementAtMs": 557195.4600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 375,
+          "source": "pointer",
+          "eventAtMs": 557700.1600000001,
+          "acknowledgementAtMs": 557704.1000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 376,
+          "source": "pointer",
+          "eventAtMs": 558217.1400000001,
+          "acknowledgementAtMs": 558220.3800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 377,
+          "source": "pointer",
+          "eventAtMs": 558762.1,
+          "acknowledgementAtMs": 558765.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 378,
+          "source": "pointer",
+          "eventAtMs": 559262.1,
+          "acknowledgementAtMs": 559266.14,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 379,
+          "source": "pointer",
+          "eventAtMs": 559732.7000000001,
+          "acknowledgementAtMs": 559736.8200000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 380,
+          "source": "pointer",
+          "eventAtMs": 560249.52,
+          "acknowledgementAtMs": 560252.14,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 381,
+          "source": "pointer",
+          "eventAtMs": 560757.9800000001,
+          "acknowledgementAtMs": 560761.6000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 382,
+          "source": "pointer",
+          "eventAtMs": 561258.66,
+          "acknowledgementAtMs": 561261.9400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 383,
+          "source": "pointer",
+          "eventAtMs": 561762.4800000001,
+          "acknowledgementAtMs": 561766.4600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 384,
+          "source": "pointer",
+          "eventAtMs": 562262.24,
+          "acknowledgementAtMs": 562264.1000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 385,
+          "source": "pointer",
+          "eventAtMs": 562757.4800000001,
+          "acknowledgementAtMs": 562762.6,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 386,
+          "source": "pointer",
+          "eventAtMs": 563249.5800000001,
+          "acknowledgementAtMs": 563254.3,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 387,
+          "source": "pointer",
+          "eventAtMs": 563744.92,
+          "acknowledgementAtMs": 563748.9800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 388,
+          "source": "pointer",
+          "eventAtMs": 564222.7000000001,
+          "acknowledgementAtMs": 564227.5000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 389,
+          "source": "pointer",
+          "eventAtMs": 564715.0200000001,
+          "acknowledgementAtMs": 564716.88,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 390,
+          "source": "pointer",
+          "eventAtMs": 565216.14,
+          "acknowledgementAtMs": 565217.18,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 391,
+          "source": "pointer",
+          "eventAtMs": 565687.3,
+          "acknowledgementAtMs": 565691.46,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 392,
+          "source": "pointer",
+          "eventAtMs": 566178.4600000001,
+          "acknowledgementAtMs": 566181.06,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 393,
+          "source": "pointer",
+          "eventAtMs": 566648.9800000001,
+          "acknowledgementAtMs": 566653.3800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 394,
+          "source": "pointer",
+          "eventAtMs": 567107.5000000001,
+          "acknowledgementAtMs": 567111.2400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 395,
+          "source": "pointer",
+          "eventAtMs": 567611.3400000001,
+          "acknowledgementAtMs": 567613.4600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 396,
+          "source": "pointer",
+          "eventAtMs": 568154.3200000001,
+          "acknowledgementAtMs": 568158.3800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 397,
+          "source": "pointer",
+          "eventAtMs": 568591.1000000001,
+          "acknowledgementAtMs": 568594.42,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 398,
+          "source": "pointer",
+          "eventAtMs": 569066.04,
+          "acknowledgementAtMs": 569069.54,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 399,
+          "source": "pointer",
+          "eventAtMs": 569592.4400000001,
+          "acknowledgementAtMs": 569597.3400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 400,
+          "source": "pointer",
+          "eventAtMs": 570078.26,
+          "acknowledgementAtMs": 570080.6200000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 401,
+          "source": "pointer",
+          "eventAtMs": 570536.78,
+          "acknowledgementAtMs": 570540.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 402,
+          "source": "pointer",
+          "eventAtMs": 570998.3,
+          "acknowledgementAtMs": 571000.42,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 403,
+          "source": "pointer",
+          "eventAtMs": 571469.64,
+          "acknowledgementAtMs": 571473.18,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 404,
+          "source": "pointer",
+          "eventAtMs": 571987.5000000001,
+          "acknowledgementAtMs": 571991.1000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 405,
+          "source": "pointer",
+          "eventAtMs": 572480.92,
+          "acknowledgementAtMs": 572482.9400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 406,
+          "source": "pointer",
+          "eventAtMs": 572974.2600000001,
+          "acknowledgementAtMs": 572979.1600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 407,
+          "source": "pointer",
+          "eventAtMs": 573500.22,
+          "acknowledgementAtMs": 573505.2000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 408,
+          "source": "pointer",
+          "eventAtMs": 573995.78,
+          "acknowledgementAtMs": 574000.3400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 409,
+          "source": "pointer",
+          "eventAtMs": 574487.9400000001,
+          "acknowledgementAtMs": 574491.38,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 410,
+          "source": "pointer",
+          "eventAtMs": 574948.8200000001,
+          "acknowledgementAtMs": 574953.06,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 411,
+          "source": "pointer",
+          "eventAtMs": 575407.16,
+          "acknowledgementAtMs": 575409.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 412,
+          "source": "pointer",
+          "eventAtMs": 575878.0800000001,
+          "acknowledgementAtMs": 575882.2,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 413,
+          "source": "pointer",
+          "eventAtMs": 576323.76,
+          "acknowledgementAtMs": 576327.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 414,
+          "source": "pointer",
+          "eventAtMs": 576823.92,
+          "acknowledgementAtMs": 576826.1,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 415,
+          "source": "pointer",
+          "eventAtMs": 577279.68,
+          "acknowledgementAtMs": 577283.72,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 416,
+          "source": "pointer",
+          "eventAtMs": 577788.22,
+          "acknowledgementAtMs": 577791.24,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 417,
+          "source": "pointer",
+          "eventAtMs": 578240.22,
+          "acknowledgementAtMs": 578241.94,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 418,
+          "source": "pointer",
+          "eventAtMs": 578739.78,
+          "acknowledgementAtMs": 578742.5000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 419,
+          "source": "pointer",
+          "eventAtMs": 579211.9,
+          "acknowledgementAtMs": 579216.3,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 420,
+          "source": "pointer",
+          "eventAtMs": 579714.56,
+          "acknowledgementAtMs": 579718.28,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 421,
+          "source": "pointer",
+          "eventAtMs": 580149.6400000001,
+          "acknowledgementAtMs": 580153.2200000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 422,
+          "source": "pointer",
+          "eventAtMs": 580628.96,
+          "acknowledgementAtMs": 580632.74,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 423,
+          "source": "pointer",
+          "eventAtMs": 581079.2600000001,
+          "acknowledgementAtMs": 581081.62,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 424,
+          "source": "pointer",
+          "eventAtMs": 581524.4400000001,
+          "acknowledgementAtMs": 581528.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 425,
+          "source": "pointer",
+          "eventAtMs": 581978.52,
+          "acknowledgementAtMs": 581980.68,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 426,
+          "source": "pointer",
+          "eventAtMs": 582478.4,
+          "acknowledgementAtMs": 582481.2000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 427,
+          "source": "pointer",
+          "eventAtMs": 582899.52,
+          "acknowledgementAtMs": 582904.2400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 428,
+          "source": "pointer",
+          "eventAtMs": 583352.9400000001,
+          "acknowledgementAtMs": 583357.08,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 429,
+          "source": "pointer",
+          "eventAtMs": 583782.56,
+          "acknowledgementAtMs": 583787.5200000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 430,
+          "source": "pointer",
+          "eventAtMs": 584299.62,
+          "acknowledgementAtMs": 584303.76,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 431,
+          "source": "pointer",
+          "eventAtMs": 584737.0000000001,
+          "acknowledgementAtMs": 584740.06,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 432,
+          "source": "pointer",
+          "eventAtMs": 585182.4400000001,
+          "acknowledgementAtMs": 585185.3200000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 433,
+          "source": "pointer",
+          "eventAtMs": 585611.8600000001,
+          "acknowledgementAtMs": 585614.6,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 434,
+          "source": "pointer",
+          "eventAtMs": 586127.7200000001,
+          "acknowledgementAtMs": 586129.7400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 435,
+          "source": "pointer",
+          "eventAtMs": 586582.2000000001,
+          "acknowledgementAtMs": 586585.6,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 436,
+          "source": "pointer",
+          "eventAtMs": 587019.78,
+          "acknowledgementAtMs": 587024.2800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 437,
+          "source": "pointer",
+          "eventAtMs": 587493.8400000001,
+          "acknowledgementAtMs": 587494.4200000002,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 438,
+          "source": "pointer",
+          "eventAtMs": 587931.66,
+          "acknowledgementAtMs": 587934.2000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 439,
+          "source": "pointer",
+          "eventAtMs": 588423.78,
+          "acknowledgementAtMs": 588426.68,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 440,
+          "source": "pointer",
+          "eventAtMs": 588853.7,
+          "acknowledgementAtMs": 588855.86,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 441,
+          "source": "pointer",
+          "eventAtMs": 589314.74,
+          "acknowledgementAtMs": 589317.32,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 442,
+          "source": "pointer",
+          "eventAtMs": 589815.56,
+          "acknowledgementAtMs": 589817.18,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 443,
+          "source": "pointer",
+          "eventAtMs": 590271.48,
+          "acknowledgementAtMs": 590275.3200000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 444,
+          "source": "pointer",
+          "eventAtMs": 590740.76,
+          "acknowledgementAtMs": 590744.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 445,
+          "source": "pointer",
+          "eventAtMs": 591182.9400000001,
+          "acknowledgementAtMs": 591186.8400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 446,
+          "source": "pointer",
+          "eventAtMs": 591652.76,
+          "acknowledgementAtMs": 591656.9600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 447,
+          "source": "pointer",
+          "eventAtMs": 592098.5800000001,
+          "acknowledgementAtMs": 592100.66,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 448,
+          "source": "pointer",
+          "eventAtMs": 592561.9,
+          "acknowledgementAtMs": 592565.78,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 449,
+          "source": "pointer",
+          "eventAtMs": 593020.76,
+          "acknowledgementAtMs": 593024.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 450,
+          "source": "pointer",
+          "eventAtMs": 593506.3200000001,
+          "acknowledgementAtMs": 593507.8600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 451,
+          "source": "pointer",
+          "eventAtMs": 593948.2000000001,
+          "acknowledgementAtMs": 593950.5200000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 452,
+          "source": "pointer",
+          "eventAtMs": 594403.3400000001,
+          "acknowledgementAtMs": 594407.14,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 453,
+          "source": "pointer",
+          "eventAtMs": 594824.54,
+          "acknowledgementAtMs": 594828.98,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 454,
+          "source": "pointer",
+          "eventAtMs": 595319.04,
+          "acknowledgementAtMs": 595322.0800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 455,
+          "source": "pointer",
+          "eventAtMs": 595770.2400000001,
+          "acknowledgementAtMs": 595774.4400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 456,
+          "source": "pointer",
+          "eventAtMs": 596207.3,
+          "acknowledgementAtMs": 596211.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 457,
+          "source": "pointer",
+          "eventAtMs": 596677.76,
+          "acknowledgementAtMs": 596679.8600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 458,
+          "source": "pointer",
+          "eventAtMs": 597153.26,
+          "acknowledgementAtMs": 597155.88,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 459,
+          "source": "pointer",
+          "eventAtMs": 597616.28,
+          "acknowledgementAtMs": 597620.1000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 460,
+          "source": "pointer",
+          "eventAtMs": 598086.36,
+          "acknowledgementAtMs": 598089.92,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 461,
+          "source": "pointer",
+          "eventAtMs": 598552.9600000001,
+          "acknowledgementAtMs": 598555.2000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 462,
+          "source": "pointer",
+          "eventAtMs": 599015.02,
+          "acknowledgementAtMs": 599017.1600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 463,
+          "source": "pointer",
+          "eventAtMs": 599452.3400000001,
+          "acknowledgementAtMs": 599454.56,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 464,
+          "source": "pointer",
+          "eventAtMs": 599912.9,
+          "acknowledgementAtMs": 599916.56,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 465,
+          "source": "pointer",
+          "eventAtMs": 600349.02,
+          "acknowledgementAtMs": 600353.74,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 466,
+          "source": "pointer",
+          "eventAtMs": 600844.2600000001,
+          "acknowledgementAtMs": 600846.66,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 467,
+          "source": "pointer",
+          "eventAtMs": 601286.7,
+          "acknowledgementAtMs": 601290.9600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 468,
+          "source": "pointer",
+          "eventAtMs": 601723.54,
+          "acknowledgementAtMs": 601725.7400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 469,
+          "source": "pointer",
+          "eventAtMs": 602228.88,
+          "acknowledgementAtMs": 602231.12,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 470,
+          "source": "pointer",
+          "eventAtMs": 602669.84,
+          "acknowledgementAtMs": 602673.68,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 471,
+          "source": "pointer",
+          "eventAtMs": 603106.9,
+          "acknowledgementAtMs": 603108.68,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 472,
+          "source": "pointer",
+          "eventAtMs": 603603.64,
+          "acknowledgementAtMs": 603608.04,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 473,
+          "source": "pointer",
+          "eventAtMs": 604069.6000000001,
+          "acknowledgementAtMs": 604073.62,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 474,
+          "source": "pointer",
+          "eventAtMs": 604507.56,
+          "acknowledgementAtMs": 604511.26,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 475,
+          "source": "pointer",
+          "eventAtMs": 604978.0800000001,
+          "acknowledgementAtMs": 604983.7,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 476,
+          "source": "pointer",
+          "eventAtMs": 605436.64,
+          "acknowledgementAtMs": 605440.88,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 477,
+          "source": "pointer",
+          "eventAtMs": 605923.8600000001,
+          "acknowledgementAtMs": 605926.7200000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 478,
+          "source": "pointer",
+          "eventAtMs": 606407.8400000001,
+          "acknowledgementAtMs": 606411.9,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 479,
+          "source": "pointer",
+          "eventAtMs": 606877.92,
+          "acknowledgementAtMs": 606881.4600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 480,
+          "source": "pointer",
+          "eventAtMs": 607348.84,
+          "acknowledgementAtMs": 607353.14,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 481,
+          "source": "pointer",
+          "eventAtMs": 607786.9400000001,
+          "acknowledgementAtMs": 607788.86,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 482,
+          "source": "pointer",
+          "eventAtMs": 608288.8400000001,
+          "acknowledgementAtMs": 608292.78,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 483,
+          "source": "pointer",
+          "eventAtMs": 608770.48,
+          "acknowledgementAtMs": 608774.8600000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 484,
+          "source": "pointer",
+          "eventAtMs": 609191.3200000001,
+          "acknowledgementAtMs": 609195.92,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 485,
+          "source": "pointer",
+          "eventAtMs": 609686.54,
+          "acknowledgementAtMs": 609690.9800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 486,
+          "source": "pointer",
+          "eventAtMs": 610145.38,
+          "acknowledgementAtMs": 610149.4400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 487,
+          "source": "pointer",
+          "eventAtMs": 610615.6400000001,
+          "acknowledgementAtMs": 610619.4400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 488,
+          "source": "pointer",
+          "eventAtMs": 611077.56,
+          "acknowledgementAtMs": 611079.4800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 489,
+          "source": "pointer",
+          "eventAtMs": 611581.4800000001,
+          "acknowledgementAtMs": 611582.48,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 490,
+          "source": "pointer",
+          "eventAtMs": 612112.12,
+          "acknowledgementAtMs": 612115.66,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 491,
+          "source": "pointer",
+          "eventAtMs": 612624.64,
+          "acknowledgementAtMs": 612628.76,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 492,
+          "source": "pointer",
+          "eventAtMs": 613107.16,
+          "acknowledgementAtMs": 613111.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 493,
+          "source": "pointer",
+          "eventAtMs": 613599.76,
+          "acknowledgementAtMs": 613601.42,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 494,
+          "source": "pointer",
+          "eventAtMs": 614061.2200000001,
+          "acknowledgementAtMs": 614065.0800000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 495,
+          "source": "pointer",
+          "eventAtMs": 614578.2000000001,
+          "acknowledgementAtMs": 614579.9400000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 496,
+          "source": "pointer",
+          "eventAtMs": 615065.92,
+          "acknowledgementAtMs": 615069.5000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 497,
+          "source": "pointer",
+          "eventAtMs": 615541.4,
+          "acknowledgementAtMs": 615546.04,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 498,
+          "source": "pointer",
+          "eventAtMs": 616028.1200000001,
+          "acknowledgementAtMs": 616032.28,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 499,
+          "source": "pointer",
+          "eventAtMs": 616511.84,
+          "acknowledgementAtMs": 616515.7000000001,
+          "quantumSize": 128
+        },
+        {
+          "sequence": 500,
+          "source": "pointer",
+          "eventAtMs": 617024.12,
+          "acknowledgementAtMs": 617028.2200000001,
+          "quantumSize": 128
+        }
+      ],
+      "physical": {
+        "method": "high-speed-video",
+        "captureRateHz": 240,
+        "calibrationOffsetMs": 20.833333333333332,
+        "triggerCount": 500,
+        "p50Ms": 29.166667,
+        "p95Ms": 37.5,
+        "p99Ms": 54.166667,
+        "missedOnsets": 0,
+        "duplicateOnsets": 0
+      },
+      "foreground": {
+        "durationMs": 637128.98,
+        "underruns": 0,
+        "processorErrors": 0,
+        "lostAcknowledgements": 0,
+        "duplicateAcknowledgements": 0
+      }
+    }
+  ]
+}
