@@ -1218,6 +1218,7 @@ class MergeQueueTest(unittest.TestCase):
         client = self.client()
         report = self.run_item(client)
         self.assertEqual(report.code, "merged")
+        self.assertEqual(len(client.dispatch_calls), 1)
         self.assertEqual(client.merge_box_lookup_calls, [SHA_B])
         self.assertEqual(client.merge_box_wait_calls[0][0], 8001)
         self.assertEqual(client.rerun_calls, [])
@@ -1249,7 +1250,9 @@ class MergeQueueTest(unittest.TestCase):
             [33281097878, 33281097878],
         )
         self.assertEqual(len(client.merge_calls), 1)
+        self.assertEqual(len(client.dispatch_calls), 1)
         self.assertEqual(client.dispatch_calls[0][0], 220)
+        self.assertEqual(report.attempts, 1)
 
     def test_merge_box_still_stale_after_rerun_names_the_context_and_remedy(self):
         cancelled = (
@@ -1267,6 +1270,8 @@ class MergeQueueTest(unittest.TestCase):
         self.assertEqual(report.code, "merge-rejected")
         self.assertFalse(report.ok)
         self.assertEqual(client.merge_calls, [])
+        self.assertEqual(len(client.dispatch_calls), 1)
+        self.assertEqual(report.attempts, 1)
         self.assertEqual(client.rerun_calls, [501])
         self.assertIn("merge-box:PR Gate=cancelled", report.evidence)
         self.assertIn("merge-box:core (ubuntu-latest)=cancelled", report.evidence)
