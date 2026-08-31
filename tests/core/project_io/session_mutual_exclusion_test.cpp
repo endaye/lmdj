@@ -44,6 +44,12 @@ constexpr std::string_view kPerformanceSessionId =
     "20000000-0000-4000-8000-000000000002";
 constexpr std::string_view kCommandId =
     "30000000-0000-4000-8000-000000000001";
+constexpr std::string_view kSecondPerformanceId =
+    "10000000-0000-4000-8000-000000000003";
+constexpr std::string_view kSecondPerformanceSessionId =
+    "20000000-0000-4000-8000-000000000003";
+constexpr std::string_view kSecondCommandId =
+    "30000000-0000-4000-8000-000000000002";
 
 class TempDirectory {
  public:
@@ -88,6 +94,13 @@ lmdj::domain::ProjectState project() {
   state.patterns.emplace(pattern.id, pattern);
   auto live = performance();
   state.performances.emplace(live.id, live);
+  return state;
+}
+
+lmdj::domain::ProjectState empty_v4_project() {
+  auto state = project();
+  state.patterns.clear();
+  state.performances.clear();
   return state;
 }
 
@@ -484,10 +497,68 @@ void test_legacy_v3_sequence_tail_flush_completion_and_seal_reconcile() {
   LMDJ_CHECK(std::filesystem::exists(candidates.value().front().path));
 }
 
+void test_atomic_performance_draft_begin_serializes_writer_lease(
+    int iterations) {
+  for (int iteration = 0; iteration < iterations; ++iteration) {
+    TempDirectory temp;
+    ProjectStore creator;
+    const auto bundle = temp.path() / "project.lmdj";
+    LMDJ_CHECK(creator.create(bundle, empty_v4_project()).has_value());
+    std::atomic<int> ready{0};
+    std::atomic<bool> start{false};
+    std::optional<lmdj::foundation::Result<
+        lmdj::project_io::PerformanceLifecycleReceipt>> first;
+    std::optional<lmdj::foundation::Result<
+        lmdj::project_io::PerformanceLifecycleReceipt>> second;
+    std::thread first_thread([&] {
+      ProjectStore store;
+      ready.fetch_add(1, std::memory_order_release);
+      while (!start.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      first = store.begin_performance_draft(
+          bundle,
+          {{CommandId{std::string{kCommandId}}, 0},
+           SequenceSessionId{std::string{kPerformanceSessionId}},
+           PerformanceId{std::string{kPerformanceId}}});
+    });
+    std::thread second_thread([&] {
+      ProjectStore store;
+      ready.fetch_add(1, std::memory_order_release);
+      while (!start.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      second = store.begin_performance_draft(
+          bundle,
+          {{CommandId{std::string{kSecondCommandId}}, 0},
+           SequenceSessionId{std::string{kSecondPerformanceSessionId}},
+           PerformanceId{std::string{kSecondPerformanceId}}});
+    });
+    while (ready.load(std::memory_order_acquire) != 2) {
+      std::this_thread::yield();
+    }
+    start.store(true, std::memory_order_release);
+    first_thread.join();
+    second_thread.join();
+    LMDJ_CHECK(first.has_value());
+    LMDJ_CHECK(second.has_value());
+    LMDJ_CHECK(first->has_value() != second->has_value());
+    const auto truth = creator.load(bundle);
+    LMDJ_CHECK(truth.has_value());
+    LMDJ_CHECK(truth.value().revision == 1);
+    LMDJ_CHECK(truth.value().performances.size() == 1);
+    const auto active = SequenceJournal{}.read_active_performance(bundle);
+    LMDJ_CHECK(active.has_value());
+    LMDJ_CHECK(
+        truth.value().performances.contains(active.value().performance_id));
+  }
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    const bool stress = argc == 2 && std::string_view{argv[1]} == "--stress";
     test_sequence_and_performance_are_mutually_exclusive();
     test_begin_validates_revision_under_admission_lease();
     test_v3_sequence_begin_bytes_remain_exactly_unchanged();
@@ -496,6 +567,8 @@ int main() {
     test_concurrent_sequence_begins_admit_only_one_session();
     test_concurrent_sequence_and_performance_begins_admit_only_one_kind();
     test_legacy_v3_sequence_tail_flush_completion_and_seal_reconcile();
+    test_atomic_performance_draft_begin_serializes_writer_lease(
+        stress ? 32 : 1);
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

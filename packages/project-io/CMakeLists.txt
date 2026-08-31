@@ -256,6 +256,42 @@ if(BUILD_TESTING)
     LABELS persistence concurrency
   )
 
+  foreach(lmdj_performance_contract_test IN ITEMS lifecycle rebase)
+    add_executable(
+      lmdj_performance_${lmdj_performance_contract_test}_tests
+      "${CMAKE_SOURCE_DIR}/tests/core/project_io/performance_${lmdj_performance_contract_test}_test.cpp"
+    )
+    target_include_directories(
+      lmdj_performance_${lmdj_performance_contract_test}_tests
+      PRIVATE
+        "${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(
+      lmdj_performance_${lmdj_performance_contract_test}_tests
+      PRIVATE
+        lmdj_project_io_testable
+        nlohmann_json::nlohmann_json
+        Threads::Threads
+    )
+    target_compile_definitions(
+      lmdj_performance_${lmdj_performance_contract_test}_tests
+      PRIVATE
+        LMDJ_PROJECT_IO_TESTING=1
+    )
+    lmdj_target_warnings(
+      lmdj_performance_${lmdj_performance_contract_test}_tests
+    )
+    lmdj_target_sanitizers(
+      lmdj_performance_${lmdj_performance_contract_test}_tests
+    )
+    lmdj_add_test(
+      NAME project_io.performance_${lmdj_performance_contract_test}
+      TIER component
+      COMMAND lmdj_performance_${lmdj_performance_contract_test}_tests
+      LABELS persistence concurrency
+    )
+  endforeach()
+
   add_executable(
     lmdj_session_mutual_exclusion_tests
     "${CMAKE_SOURCE_DIR}/tests/core/project_io/session_mutual_exclusion_test.cpp"
@@ -284,6 +320,13 @@ if(BUILD_TESTING)
     TIER component
     COMMAND lmdj_session_mutual_exclusion_tests
     LABELS persistence concurrency
+  )
+  lmdj_add_test(
+    NAME project_io.performance_writer_lease_stress
+    TIER stress
+    COMMAND lmdj_session_mutual_exclusion_tests --stress
+    LABELS persistence concurrency
+    TIMEOUT 30
   )
 
   add_executable(

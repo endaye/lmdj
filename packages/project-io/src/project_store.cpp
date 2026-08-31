@@ -51,6 +51,20 @@ using foundation::ErrorCode;
 
 constexpr std::uint64_t kMaximumArtifactBytes = 64U * 1024U * 1024U;
 
+struct FinalizePerformanceDraft {
+  domain::CommandMeta meta;
+  domain::PerformanceId performance_id;
+  std::string name;
+  std::optional<foundation::ArtifactRef> artifact;
+  std::vector<domain::PerformanceEvent> events;
+};
+
+struct BindPerformanceRecording {
+  domain::CommandMeta meta;
+  domain::PerformanceId performance_id;
+  foundation::ArtifactRef artifact;
+};
+
 using PersistedCommand = std::variant<
     domain::ImportAsset,
     domain::AssignPad,
@@ -66,7 +80,9 @@ using PersistedCommand = std::variant<
     PerformanceMutation,
     CreatePerformance,
     RenamePerformance,
-    DeletePerformance>;
+    DeletePerformance,
+    FinalizePerformanceDraft,
+    BindPerformanceRecording>;
 
 struct LoadedProject {
   domain::ProjectState state;
@@ -244,6 +260,61 @@ foundation::Result<foundation::ArtifactRef> describe_artifact(
   }
   return foundation::Result<foundation::ArtifactRef>::success(
       describe_bytes(bytes.value(), std::move(media_type)));
+}
+
+foundation::Result<void> verify_managed_wav_artifact(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle,
+    const foundation::ArtifactRef& artifact) {
+  if (artifact.media_type != "audio/wav" ||
+      !valid_sha256(artifact.sha256)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance recording must be a verified audio/wav ArtifactRef",
+        {{"reason", "performance_recording_artifact_invalid"},
+         {"remedy",
+          "provide an audio/wav ArtifactRef with the lowercase SHA-256 of its managed bytes"}},
+    });
+  }
+  const auto path = bundle / "assets" / (artifact.sha256 + ".wav");
+  auto described = describe_artifact(platform, path, artifact.media_type);
+  if (!described.has_value() || described.value() != artifact) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::missing_asset,
+        "Performance recording ArtifactRef does not match managed storage",
+        {{"path", path.generic_string()},
+         {"reason", "performance_recording_artifact_unverified"},
+         {"remedy",
+          "install the exact WAV bytes at assets/<sha256>.wav before saving or binding the recording"}},
+    });
+  }
+  return foundation::Result<void>::success();
+}
+
+std::string canonical_fingerprint(const nlohmann::json& value) {
+  const auto encoded = foundation::canonical_json(value);
+  picosha2::hash256_one_by_one hasher;
+  hasher.process(encoded.begin(), encoded.end());
+  hasher.finish();
+  return picosha2::get_hash_hex_string(hasher);
+}
+
+std::string_view performance_state_string(SequenceSessionState state) {
+  switch (state) {
+    case SequenceSessionState::active:
+      return "active";
+    case SequenceSessionState::switching:
+      return "switching";
+    case SequenceSessionState::stopped:
+      return "stopped";
+    case SequenceSessionState::recovery_required:
+      return "recovery_required";
+    case SequenceSessionState::owner_lost:
+      return "owner_lost";
+    case SequenceSessionState::abandoned:
+      return "abandoned";
+  }
+  return "unknown";
 }
 
 nlohmann::json slot_json(domain::PadSlotId slot) {
@@ -1273,6 +1344,31 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"performance_id", value.performance_id.value()},
               {"type", "DeletePerformance"},
           };
+        } else if constexpr (
+            std::is_same_v<Type, FinalizePerformanceDraft>) {
+          auto events = nlohmann::json::array();
+          for (const auto& event : value.events) {
+            events.push_back(domain::performance_event_json(event));
+          }
+          return {
+              {"artifact",
+               value.artifact.has_value()
+                   ? nlohmann::json(*value.artifact)
+                   : nlohmann::json(nullptr)},
+              {"events", std::move(events)},
+              {"meta", meta_json(value.meta)},
+              {"name", value.name},
+              {"performance_id", value.performance_id.value()},
+              {"type", "FinalizePerformanceDraft"},
+          };
+        } else if constexpr (
+            std::is_same_v<Type, BindPerformanceRecording>) {
+          return {
+              {"artifact", value.artifact},
+              {"meta", meta_json(value.meta)},
+              {"performance_id", value.performance_id.value()},
+              {"type", "BindPerformanceRecording"},
+          };
         } else {
           return {
               {"meta", meta_json(value.meta)},
@@ -1634,6 +1730,77 @@ foundation::Result<PersistedCommand> parse_command(
               domain::PerformanceId{performance_id},
           }});
     }
+    if (type == "FinalizePerformanceDraft") {
+      if (!exact_object_keys(
+              input,
+              {"artifact", "events", "meta", "name", "performance_id",
+               "type"}) ||
+          !input.at("events").is_array() || !input.at("name").is_string() ||
+          !input.at("performance_id").is_string()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "FinalizePerformanceDraft transaction shape is invalid",
+                path));
+      }
+      std::vector<domain::PerformanceEvent> events;
+      for (const auto& encoded : input.at("events")) {
+        auto parsed = domain::performance_event_from_json(encoded);
+        if (!parsed.has_value()) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "FinalizePerformanceDraft event is invalid", path,
+                  parsed.error().message));
+        }
+        events.push_back(std::move(parsed.value()));
+      }
+      if (events != domain::canonical_performance_events(events)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "FinalizePerformanceDraft events are not canonical", path));
+      }
+      std::optional<foundation::ArtifactRef> artifact;
+      if (!input.at("artifact").is_null()) {
+        artifact = input.at("artifact").get<foundation::ArtifactRef>();
+      }
+      const auto performance_id =
+          input.at("performance_id").get<std::string>();
+      if (!domain::is_valid_uuid(performance_id)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "FinalizePerformanceDraft Performance id is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{FinalizePerformanceDraft{
+              std::move(meta.value()),
+              domain::PerformanceId{performance_id},
+              input.at("name").get<std::string>(),
+              std::move(artifact),
+              std::move(events),
+          }});
+    }
+    if (type == "BindPerformanceRecording") {
+      if (!exact_object_keys(
+              input, {"artifact", "meta", "performance_id", "type"}) ||
+          !input.at("performance_id").is_string()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "BindPerformanceRecording transaction shape is invalid",
+                path));
+      }
+      const auto performance_id =
+          input.at("performance_id").get<std::string>();
+      if (!domain::is_valid_uuid(performance_id)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "BindPerformanceRecording Performance id is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{BindPerformanceRecording{
+              std::move(meta.value()),
+              domain::PerformanceId{performance_id},
+              input.at("artifact").get<foundation::ArtifactRef>(),
+          }});
+    }
     if (type == "AppendPerformanceEvents") {
       if (!exact_object_keys(
               input, {"events", "meta", "performance_id", "type"}) ||
@@ -1699,7 +1866,9 @@ foundation::Result<domain::AppliedCommand> apply_command(
             std::is_same_v<Type, PerformanceMutation> ||
             std::is_same_v<Type, CreatePerformance> ||
             std::is_same_v<Type, RenamePerformance> ||
-            std::is_same_v<Type, DeletePerformance>) {
+            std::is_same_v<Type, DeletePerformance> ||
+            std::is_same_v<Type, FinalizePerformanceDraft> ||
+            std::is_same_v<Type, BindPerformanceRecording>) {
           const auto receipt = receipts.find(value.meta.command_id);
           if (receipt != receipts.end()) {
             return foundation::Result<domain::AppliedCommand>::success(
@@ -1779,6 +1948,64 @@ foundation::Result<domain::AppliedCommand> apply_command(
                     validated.error());
               }
               event_type = "performance.renamed";
+            } else if constexpr (
+                std::is_same_v<Type, FinalizePerformanceDraft>) {
+              auto& target = found->second;
+              target.events.insert(
+                  target.events.end(), value.events.begin(), value.events.end());
+              target.events =
+                  domain::canonical_performance_events(target.events);
+              target.name = value.name;
+              if (value.artifact.has_value()) {
+                if (target.recording_artifact.has_value() &&
+                    target.recording_artifact != value.artifact) {
+                  return foundation::Result<domain::AppliedCommand>::failure(
+                      Error{
+                          ErrorCode::invalid_argument,
+                          "Performance recording ArtifactRef is already bound",
+                          {{"reason", "performance_recording_conflict"},
+                           {"remedy",
+                            "keep the existing recording ArtifactRef or create a new Performance; replacement is not permitted"}},
+                      });
+                }
+                target.recording_artifact = value.artifact;
+              }
+              auto validated = domain::validate_performance(target);
+              if (!validated.has_value()) {
+                return foundation::Result<domain::AppliedCommand>::failure(
+                    validated.error());
+              }
+              event_type = "performance.saved";
+            } else if constexpr (
+                std::is_same_v<Type, BindPerformanceRecording>) {
+              auto& target = found->second;
+              if (target.recording_artifact.has_value()) {
+                if (*target.recording_artifact == value.artifact) {
+                  return foundation::Result<domain::AppliedCommand>::failure(
+                      Error{
+                          ErrorCode::invalid_argument,
+                          "same ArtifactRef must replay through its original command id",
+                          {{"reason", "performance_recording_already_bound"},
+                           {"remedy",
+                            "replay the original bind command id or treat the identical ArtifactRef as already bound"}},
+                      });
+                }
+                return foundation::Result<domain::AppliedCommand>::failure(
+                    Error{
+                        ErrorCode::invalid_argument,
+                        "Performance recording ArtifactRef is already bound",
+                        {{"reason", "performance_recording_conflict"},
+                         {"remedy",
+                          "keep the existing recording ArtifactRef or create a new Performance; replacement is not permitted"}},
+                    });
+              }
+              target.recording_artifact = value.artifact;
+              auto validated = domain::validate_performance(target);
+              if (!validated.has_value()) {
+                return foundation::Result<domain::AppliedCommand>::failure(
+                    validated.error());
+              }
+              event_type = "performance.recording_bound";
             } else {
               next.performances.erase(found);
               event_type = "performance.deleted";
@@ -1794,7 +2021,8 @@ foundation::Result<domain::AppliedCommand> apply_command(
           };
           if constexpr (
               std::is_same_v<Type, CreatePerformance> ||
-              std::is_same_v<Type, RenamePerformance>) {
+              std::is_same_v<Type, RenamePerformance> ||
+              std::is_same_v<Type, FinalizePerformanceDraft>) {
             event["name"] = value.name;
           }
           return foundation::Result<domain::AppliedCommand>::success(
@@ -1842,7 +2070,9 @@ foundation::Result<domain::Command> legacy_command(
             std::is_same_v<Type, PerformanceMutation> ||
             std::is_same_v<Type, CreatePerformance> ||
             std::is_same_v<Type, RenamePerformance> ||
-            std::is_same_v<Type, DeletePerformance>) {
+            std::is_same_v<Type, DeletePerformance> ||
+            std::is_same_v<Type, FinalizePerformanceDraft> ||
+            std::is_same_v<Type, BindPerformanceRecording>) {
           return foundation::Result<domain::Command>::failure(
               Error{
                   ErrorCode::internal_error,
@@ -2466,7 +2696,8 @@ foundation::Result<void> recover_initial_create_residue(
 foundation::Result<void> recover_uncommitted(
     ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle,
-    const LoadedProject& loaded) {
+    const LoadedProject& loaded,
+    std::optional<std::string_view> retained_artifact_sha = std::nullopt) {
   const auto checkpoints = bundle / "history/checkpoints";
   const auto transactions = bundle / "history/transactions";
   const auto assets = bundle / "assets";
@@ -2512,6 +2743,16 @@ foundation::Result<void> recover_uncommitted(
   for (const auto& [asset_id, asset] : loaded.state.assets) {
     (void)asset_id;
     referenced_assets.insert(asset.artifact.sha256);
+  }
+  for (const auto& [performance_id, performance] :
+       loaded.state.performances) {
+    (void)performance_id;
+    if (performance.recording_artifact.has_value()) {
+      referenced_assets.insert(performance.recording_artifact->sha256);
+    }
+  }
+  if (retained_artifact_sha.has_value()) {
+    referenced_assets.insert(std::string{*retained_artifact_sha});
   }
   auto asset_names = platform.list_names(assets);
   if (!asset_names.has_value()) {
@@ -2793,7 +3034,9 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   const bool performance_truth_command =
       std::holds_alternative<CreatePerformance>(command) ||
       std::holds_alternative<RenamePerformance>(command) ||
-      std::holds_alternative<DeletePerformance>(command);
+      std::holds_alternative<DeletePerformance>(command) ||
+      std::holds_alternative<FinalizePerformanceDraft>(command) ||
+      std::holds_alternative<BindPerformanceRecording>(command);
   if (sequence_flush_identity.has_value() ||
       performance_flush_identity.has_value() || performance_truth_command) {
     const auto fault = testing::detail::invoke_fault(
@@ -3048,6 +3291,37 @@ admit_sequence_authoring(
       });
 }
 
+foundation::Result<void> admit_performance_sample_class(
+    const std::shared_ptr<ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle) {
+  SequenceJournal journal{platform};
+  auto active = journal.read_active_performance(bundle);
+  if (!active.has_value()) {
+    return active.error().code == ErrorCode::not_found
+               ? foundation::Result<void>::success()
+               : foundation::Result<void>::failure(active.error());
+  }
+  if (active.value().state == SequenceSessionState::recovery_required) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Sample-class mutation is blocked until durable Performance rebase reconciliation completes",
+        {{"reason", "performance_rebase_recovery_required"},
+         {"session_id", active.value().session_id.value()},
+         {"remedy",
+          "reopen the Project and retry the exact prepared command; no other Authoring Command is admissible"}},
+    });
+  }
+  return foundation::Result<void>::failure(Error{
+      ErrorCode::invalid_argument,
+      "Sample-class mutation is blocked while Performance recording remains active",
+      {{"reason", "performance_sample_command_blocked"},
+       {"session_id", active.value().session_id.value()},
+       {"recording_sealed", false},
+       {"remedy",
+        "stop and save or discard the Performance draft before retrying the Sample-class command"}},
+  });
+}
+
 foundation::Result<domain::AppliedCommand> execute_persisted(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
@@ -3076,6 +3350,63 @@ foundation::Result<domain::AppliedCommand> execute_persisted(
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
+  }
+  SequenceJournal recording{platform};
+  auto performance = recording.read_active_performance(bundle);
+  if (performance.has_value()) {
+    if (performance.value().state ==
+        SequenceSessionState::recovery_required) {
+      return foundation::Result<domain::AppliedCommand>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Project mutation is blocked until durable Performance rebase reconciliation completes",
+          {{"reason", "performance_rebase_recovery_required"},
+           {"session_id", performance.value().session_id.value()},
+           {"remedy",
+            "reopen the Project and retry the exact prepared command; no other Authoring Command is admissible"}},
+      });
+    }
+    return foundation::Result<domain::AppliedCommand>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Project mutation is blocked by the active Performance Journal",
+        {{"reason", "performance_session_active"},
+         {"session_id", performance.value().session_id.value()},
+         {"session_state",
+          performance_state_string(performance.value().state)},
+         {"remedy",
+          "stop, save, discard, or exactly reconcile the Performance session before retrying"}},
+    });
+  }
+  if (performance.error().code != ErrorCode::not_found) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        performance.error());
+  }
+  std::optional<domain::PerformanceId> managed_performance_id;
+  if (const auto* rename = std::get_if<RenamePerformance>(&command)) {
+    managed_performance_id = rename->performance_id;
+  } else if (const auto* remove =
+                 std::get_if<DeletePerformance>(&command)) {
+    managed_performance_id = remove->performance_id;
+  }
+  if (managed_performance_id.has_value()) {
+    auto candidates = recording.list_performance_recoverable(bundle);
+    if (!candidates.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          candidates.error());
+    }
+    if (std::ranges::any_of(
+            candidates.value(),
+            [&managed_performance_id](const auto& candidate) {
+              return candidate.journal.performance_id ==
+                     *managed_performance_id;
+            })) {
+      return foundation::Result<domain::AppliedCommand>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance management mutation is blocked by recovery",
+          {{"reason", "performance_recovery_pending"},
+           {"remedy",
+            "apply or discard the recoverable Performance tail before renaming or deleting the draft"}},
+      });
+    }
   }
   auto admitted = admit_sequence_authoring(platform, bundle);
   if (!admitted.has_value()) {
@@ -3299,6 +3630,55 @@ foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
     return foundation::Result<CommandExecution>::failure(
         recovered.error());
   }
+  SequenceJournal performance_journal{platform_};
+  auto performance = performance_journal.read_active_performance(bundle);
+  if (performance.has_value()) {
+    if (performance.value().state ==
+        SequenceSessionState::recovery_required) {
+      return foundation::Result<CommandExecution>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Project mutation is blocked until durable Performance rebase reconciliation completes",
+          {{"reason", "performance_rebase_recovery_required"},
+           {"session_id", performance.value().session_id.value()},
+           {"remedy",
+            "reopen the Project and retry the exact prepared command; no other Authoring Command is admissible"}},
+      });
+    }
+    const bool sample_class = std::visit(
+        [](const auto& value) {
+          using Type = std::decay_t<decltype(value)>;
+          return std::is_same_v<Type, domain::ImportAsset> ||
+                 std::is_same_v<Type, domain::AssignPad>;
+        },
+        command);
+    const bool settings =
+        std::holds_alternative<domain::UpdateSequenceSettings>(command);
+    return foundation::Result<CommandExecution>::failure(Error{
+        ErrorCode::invalid_argument,
+        settings
+            ? "Performance settings mutation requires the session-owned durable rebase path"
+            : sample_class
+                  ? "Sample-class mutation is blocked while Performance recording remains active"
+                  : "unknown Authoring Command fails closed during Performance recording",
+        {{"reason",
+          settings
+              ? "performance_rebase_owner_required"
+              : sample_class ? "performance_sample_command_blocked"
+                             : "performance_unknown_command_blocked"},
+         {"session_id", performance.value().session_id.value()},
+         {"recording_sealed", false},
+         {"remedy",
+          settings
+              ? "call execute_performance_rebase with the active session id"
+              : sample_class
+                    ? "stop and save or discard the Performance draft before retrying the Sample-class command"
+                    : "stop, save, discard, or exactly reconcile the Performance session before retrying"}},
+    });
+  }
+  if (performance.error().code != ErrorCode::not_found) {
+    return foundation::Result<CommandExecution>::failure(
+        performance.error());
+  }
   auto persisted_identity = persisted_command(command);
   auto admitted =
       admit_sequence_authoring(platform_, bundle, &persisted_identity);
@@ -3382,6 +3762,921 @@ foundation::Result<domain::AppliedCommand> ProjectStore::delete_performance(
     const std::filesystem::path& bundle,
     const DeletePerformance& command) {
   return execute_persisted(platform_, bundle, PersistedCommand{command});
+}
+
+foundation::Result<PerformanceLifecycleReceipt>
+ProjectStore::begin_performance_draft(
+    const std::filesystem::path& bundle,
+    const domain::CommandMeta& meta,
+    const foundation::SequenceSessionId& session_id,
+    const domain::PerformanceId& performance_id) {
+  return begin_performance_draft(
+      bundle, BeginPerformanceDraftRequest{meta, session_id, performance_id});
+}
+
+foundation::Result<PerformanceLifecycleReceipt>
+ProjectStore::begin_performance_draft(
+    const std::filesystem::path& bundle,
+    const BeginPerformanceDraftRequest& request) {
+  if (!domain::is_valid_uuid(request.meta.command_id.value()) ||
+      !domain::is_valid_uuid(request.session_id.value()) ||
+      !domain::is_valid_uuid(request.performance_id.value())) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance draft begin identity is invalid",
+    });
+  }
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        loaded.error());
+  }
+  auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        recovered.error());
+  }
+  const CreatePerformance command{
+      request.meta,
+      request.performance_id,
+      "Untitled Performance",
+  };
+  const domain::Performance intended{
+      request.performance_id,
+      command.name,
+      loaded.value().state.bpm,
+      std::nullopt,
+      {},
+  };
+  auto valid = domain::validate_performance(intended);
+  if (!valid.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        valid.error());
+  }
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active_performance(bundle);
+  if (active.has_value()) {
+    if (!active.value().begin_command_id.has_value() ||
+        *active.value().begin_command_id != request.meta.command_id ||
+        active.value().session_id != request.session_id ||
+        active.value().performance_id != request.performance_id) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance begin collides with the active recording session",
+          {{"reason", "performance_begin_command_conflict"},
+           {"remedy",
+            "retry the exact original begin identity or finish the active Performance session before starting another draft"}},
+      });
+    }
+  } else if (active.error().code == ErrorCode::not_found) {
+    auto begun = journal.begin_performance_draft_locked(
+        bundle,
+        request.meta.command_id,
+        request.session_id,
+        request.performance_id,
+        performance_fingerprint(intended),
+        request.meta.expected_revision);
+    if (!begun.has_value()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          begun.error());
+    }
+  } else {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        active.error());
+  }
+
+  auto outcome = commit_loaded(
+      platform_, bundle, std::move(loaded.value()),
+      PersistedCommand{command}, std::nullopt, nullptr);
+  if (!outcome.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        outcome.error());
+  }
+  auto refreshed = journal.read_active_performance(bundle);
+  if (!refreshed.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        refreshed.error());
+  }
+  if (refreshed.value().state ==
+          SequenceSessionState::recovery_required &&
+      refreshed.value().expected_revision == request.meta.expected_revision) {
+    const auto target =
+        outcome.value().state.performances.find(request.performance_id);
+    if (target == outcome.value().state.performances.end()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          invalid_project(
+              "Performance draft begin receipt target is missing",
+              bundle / "manifest.json"));
+    }
+    auto completed = journal.complete_performance_begin_locked(
+        bundle,
+        request.session_id,
+        outcome.value().state.revision,
+        performance_fingerprint(target->second));
+    if (!completed.has_value()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          completed.error());
+    }
+  }
+  return foundation::Result<PerformanceLifecycleReceipt>::success(
+      {request.performance_id,
+       outcome.value().state.revision,
+       outcome.value().replayed});
+}
+
+foundation::Result<PerformanceStopReceipt>
+ProjectStore::stop_performance_session(
+    const std::filesystem::path& bundle,
+    const foundation::SequenceSessionId& session_id,
+    const foundation::CommandId& request_id) {
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  SequenceJournal journal{platform_};
+  auto before = journal.read_active_performance(bundle);
+  if (!before.has_value()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(before.error());
+  }
+  const bool replayed =
+      before.value().stop_request_id.has_value() &&
+      *before.value().stop_request_id == request_id;
+  auto stopped =
+      journal.stop_performance_locked(bundle, session_id, request_id);
+  if (!stopped.has_value()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(
+        stopped.error());
+  }
+  auto after = journal.read_active_performance(bundle);
+  if (!after.has_value()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(after.error());
+  }
+  return foundation::Result<PerformanceStopReceipt>::success(
+      {request_id,
+       session_id,
+       after.value().performance_id,
+       after.value().state,
+       after.value().pending_events.size(),
+       replayed});
+}
+
+foundation::Result<PerformanceLifecycleReceipt>
+ProjectStore::save_performance_draft(
+    const std::filesystem::path& bundle,
+    const domain::CommandMeta& meta,
+    const domain::PerformanceId& performance_id,
+    std::string name,
+    std::optional<foundation::ArtifactRef> artifact) {
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        loaded.error());
+  }
+  auto recovered = recover_uncommitted(
+      *platform_,
+      bundle,
+      loaded.value(),
+      artifact.has_value()
+          ? std::optional<std::string_view>{artifact->sha256}
+          : std::nullopt);
+  if (!recovered.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        recovered.error());
+  }
+  if (artifact.has_value()) {
+    auto verified = verify_managed_wav_artifact(*platform_, bundle, *artifact);
+    if (!verified.has_value()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          verified.error());
+    }
+  }
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active_performance(bundle);
+  std::vector<domain::PerformanceEvent> tail;
+  foundation::SequenceSessionId session_id{""};
+  if (active.has_value()) {
+    if (active.value().performance_id != performance_id ||
+        active.value().state != SequenceSessionState::stopped ||
+        std::ranges::any_of(
+            active.value().flushes,
+            [](const auto& flush) { return !flush.completed; })) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance save requires the matching stopped draft",
+          {{"reason", "performance_draft_not_stopped"},
+           {"remedy",
+            "stop the matching Performance session and complete every pending flush before saving"}},
+      });
+    }
+    tail = active.value().pending_events;
+    session_id = active.value().session_id;
+  } else if (active.error().code != ErrorCode::not_found) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        active.error());
+  }
+
+  const auto existing = loaded.value().commands.find(meta.command_id);
+  if (existing != loaded.value().commands.end()) {
+    const auto* saved = std::get_if<FinalizePerformanceDraft>(&existing->second);
+    if (saved == nullptr || saved->performance_id != performance_id ||
+        saved->name != name || saved->artifact != artifact ||
+        (active.has_value() && saved->events != tail)) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance save command id is bound to another command",
+          {{"reason", "performance_save_command_conflict"},
+           {"remedy",
+            "retry the exact original save payload or issue a new command id for a different save"}},
+      });
+    }
+  } else if (!active.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::not_found,
+        "stopped Performance draft Journal does not exist",
+    });
+  }
+
+  const FinalizePerformanceDraft command{
+      meta,
+      performance_id,
+      std::move(name),
+      std::move(artifact),
+      existing != loaded.value().commands.end()
+          ? std::get<FinalizePerformanceDraft>(existing->second).events
+          : std::move(tail),
+  };
+  auto outcome = commit_loaded(
+      platform_, bundle, std::move(loaded.value()),
+      PersistedCommand{command}, std::nullopt, nullptr);
+  if (!outcome.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        outcome.error());
+  }
+  if (active.has_value()) {
+    auto removed = journal.remove_active_performance_locked(
+        bundle, session_id, true);
+    if (!removed.has_value()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          removed.error());
+    }
+  }
+  return foundation::Result<PerformanceLifecycleReceipt>::success(
+      {performance_id,
+       outcome.value().state.revision,
+       outcome.value().replayed});
+}
+
+foundation::Result<PerformanceLifecycleReceipt>
+ProjectStore::discard_performance_draft(
+    const std::filesystem::path& bundle,
+    const domain::CommandMeta& meta,
+    const domain::PerformanceId& performance_id) {
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        loaded.error());
+  }
+  auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        recovered.error());
+  }
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active_performance(bundle);
+  foundation::SequenceSessionId session_id{""};
+  if (active.has_value()) {
+    if (active.value().performance_id != performance_id ||
+        active.value().state != SequenceSessionState::stopped) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance discard requires the matching stopped draft",
+          {{"reason", "performance_draft_not_stopped"},
+           {"remedy",
+            "stop the matching Performance session before discarding its draft"}},
+      });
+    }
+    session_id = active.value().session_id;
+  } else if (active.error().code != ErrorCode::not_found) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        active.error());
+  }
+  const DeletePerformance command{meta, performance_id};
+  const auto existing = loaded.value().commands.find(meta.command_id);
+  if (existing != loaded.value().commands.end() &&
+      command_json(existing->second) !=
+          command_json(PersistedCommand{command})) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance discard command id is bound to another command",
+        {{"reason", "performance_discard_command_conflict"},
+         {"remedy",
+          "retry the exact original discard identity or issue a new command id"}},
+    });
+  }
+  if (!active.has_value() && existing == loaded.value().commands.end()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::not_found,
+        "stopped Performance draft Journal does not exist",
+    });
+  }
+  auto outcome = commit_loaded(
+      platform_, bundle, std::move(loaded.value()),
+      PersistedCommand{command}, std::nullopt, nullptr);
+  if (!outcome.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        outcome.error());
+  }
+  if (active.has_value()) {
+    auto removed = journal.remove_active_performance_locked(
+        bundle, session_id, true);
+    if (!removed.has_value()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          removed.error());
+    }
+  }
+  return foundation::Result<PerformanceLifecycleReceipt>::success(
+      {performance_id,
+       outcome.value().state.revision,
+       outcome.value().replayed});
+}
+
+foundation::Result<PerformanceLifecycleReceipt>
+ProjectStore::apply_performance_recovery(
+    const std::filesystem::path& bundle,
+    const domain::CommandMeta& meta,
+    const foundation::SequenceSessionId& session_id) {
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        loaded.error());
+  }
+  auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        recovered.error());
+  }
+  SequenceJournal journal{platform_};
+  auto candidates = journal.list_performance_recoverable(bundle);
+  if (!candidates.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        candidates.error());
+  }
+  auto active = journal.read_active_performance(bundle);
+  if (active.has_value() && active.value().session_id == session_id &&
+      active.value().state == SequenceSessionState::stopped) {
+    const auto command = loaded.value().commands.find(meta.command_id);
+    const auto* mutation =
+        command != loaded.value().commands.end()
+            ? std::get_if<PerformanceMutation>(&command->second)
+            : nullptr;
+    const auto receipt = loaded.value().receipts.find(meta.command_id);
+    if (mutation != nullptr && receipt != loaded.value().receipts.end() &&
+        mutation->performance_id == active.value().performance_id) {
+      const auto candidate = std::find_if(
+          candidates.value().begin(), candidates.value().end(),
+          [&session_id](const auto& value) {
+            return value.journal.session_id == session_id;
+          });
+      if (candidate != candidates.value().end()) {
+        const auto target = loaded.value().state.performances.find(
+            active.value().performance_id);
+        if (target == loaded.value().state.performances.end()) {
+          return foundation::Result<PerformanceLifecycleReceipt>::failure(
+              invalid_project(
+                  "recovered Performance draft is missing",
+                  bundle / "manifest.json"));
+        }
+        auto cleaned = journal.restore_stopped_performance_locked(
+            bundle,
+            *candidate,
+            loaded.value().state.revision,
+            performance_fingerprint(target->second),
+            meta.command_id);
+        if (!cleaned.has_value()) {
+          return foundation::Result<PerformanceLifecycleReceipt>::failure(
+              cleaned.error());
+        }
+      }
+      return foundation::Result<PerformanceLifecycleReceipt>::success(
+          {active.value().performance_id,
+           receipt->second.committed_revision,
+           true});
+    }
+  }
+  if (active.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::invalid_argument,
+        "active Performance session blocks recovery apply",
+        {{"reason", "recording_session_active"},
+         {"remedy",
+          "stop or reconcile the active Performance session before applying a sealed recovery candidate"}},
+    });
+  }
+  if (active.error().code != ErrorCode::not_found) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        active.error());
+  }
+  const auto candidate = std::find_if(
+      candidates.value().begin(), candidates.value().end(),
+      [&session_id](const auto& value) {
+        return value.journal.session_id == session_id;
+      });
+  if (candidate == candidates.value().end()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::not_found,
+        "Performance recovery candidate does not exist",
+    });
+  }
+  if (candidate->journal.pending_events.empty() ||
+      std::ranges::any_of(
+          candidate->journal.flushes,
+          [](const auto& flush) { return !flush.completed; })) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance recovery apply requires a durable stopped tail",
+        {{"reason", "performance_recovery_tail_incomplete"},
+         {"recovery_retained", true},
+         {"remedy",
+          "retain the candidate and retry after its durable tail and flush completions are available"}},
+    });
+  }
+  const PerformanceMutation mutation{
+      meta,
+      candidate->journal.performance_id,
+      candidate->journal.pending_events,
+  };
+  const auto existing_command =
+      loaded.value().commands.find(meta.command_id);
+  if (existing_command != loaded.value().commands.end() &&
+      command_json(existing_command->second) !=
+          command_json(PersistedCommand{mutation})) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance recovery command id is bound to another command",
+        {{"reason", "performance_recovery_command_conflict"},
+         {"recovery_retained", true},
+         {"remedy",
+          "retry the exact original recovery payload or use a new command id"}},
+    });
+  }
+  const auto existing_receipt = loaded.value().receipts.find(meta.command_id);
+  if (existing_receipt != loaded.value().receipts.end()) {
+    const auto updated = loaded.value().state.performances.find(
+        candidate->journal.performance_id);
+    if (updated == loaded.value().state.performances.end()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          invalid_project(
+              "committed Performance recovery target is missing",
+              bundle / "manifest.json"));
+    }
+    auto restored = journal.restore_stopped_performance_locked(
+        bundle,
+        *candidate,
+        loaded.value().state.revision,
+        performance_fingerprint(updated->second),
+        meta.command_id);
+    if (!restored.has_value()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          restored.error());
+    }
+    return foundation::Result<PerformanceLifecycleReceipt>::success(
+        {candidate->journal.performance_id,
+         existing_receipt->second.committed_revision,
+         true});
+  }
+  const auto target = loaded.value().state.performances.find(
+      candidate->journal.performance_id);
+  if (target == loaded.value().state.performances.end() ||
+      performance_fingerprint(target->second) !=
+          candidate->journal.performance_fingerprint ||
+      loaded.value().state.revision != candidate->journal.expected_revision) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::invalid_project,
+        "Performance recovery draft fingerprint does not match Project Truth",
+        {{"reason", "performance_recovery_target_incompatible"},
+         {"recovery_retained", true},
+         {"remedy",
+          "retain the candidate and recover it only against the matching Performance draft revision and fingerprint"}},
+    });
+  }
+  auto outcome = commit_loaded(
+      platform_, bundle, std::move(loaded.value()),
+      PersistedCommand{mutation}, std::nullopt, nullptr);
+  if (!outcome.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        outcome.error());
+  }
+  const auto updated = outcome.value().state.performances.find(
+      candidate->journal.performance_id);
+  if (updated == outcome.value().state.performances.end()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        invalid_project(
+            "Performance recovery target disappeared after publication",
+            bundle / "manifest.json"));
+  }
+  auto restored = journal.restore_stopped_performance_locked(
+      bundle,
+      *candidate,
+      outcome.value().state.revision,
+      performance_fingerprint(updated->second),
+      meta.command_id);
+  if (!restored.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        restored.error());
+  }
+  return foundation::Result<PerformanceLifecycleReceipt>::success(
+      {candidate->journal.performance_id,
+       outcome.value().state.revision,
+       outcome.value().replayed});
+}
+
+foundation::Result<PerformanceStopReceipt>
+ProjectStore::discard_performance_recovery(
+    const std::filesystem::path& bundle,
+    const foundation::SequenceSessionId& session_id,
+    const foundation::CommandId& request_id) {
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(loaded.error());
+  }
+  SequenceJournal journal{platform_};
+  auto candidates = journal.list_performance_recoverable(bundle);
+  if (!candidates.has_value()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(
+        candidates.error());
+  }
+  auto active = journal.read_active_performance(bundle);
+  if (active.has_value()) {
+    if (active.value().session_id == session_id &&
+        active.value().state == SequenceSessionState::stopped &&
+        active.value().stop_request_id == request_id) {
+      const auto candidate = std::find_if(
+          candidates.value().begin(), candidates.value().end(),
+          [&session_id](const auto& value) {
+            return value.journal.session_id == session_id;
+          });
+      if (candidate != candidates.value().end()) {
+        const auto target = loaded.value().state.performances.find(
+            active.value().performance_id);
+        if (target == loaded.value().state.performances.end()) {
+          return foundation::Result<PerformanceStopReceipt>::failure(
+              invalid_project(
+                  "recovered Performance draft is missing",
+                  bundle / "manifest.json"));
+        }
+        auto cleaned = journal.restore_stopped_performance_locked(
+            bundle,
+            *candidate,
+            loaded.value().state.revision,
+            performance_fingerprint(target->second),
+            request_id);
+        if (!cleaned.has_value()) {
+          return foundation::Result<PerformanceStopReceipt>::failure(
+              cleaned.error());
+        }
+      }
+      return foundation::Result<PerformanceStopReceipt>::success(
+          {request_id,
+           session_id,
+           active.value().performance_id,
+           SequenceSessionState::stopped,
+           0,
+           true});
+    }
+    return foundation::Result<PerformanceStopReceipt>::failure(Error{
+        ErrorCode::invalid_argument,
+        "active Performance session blocks recovery discard",
+        {{"reason", "recording_session_active"},
+         {"remedy",
+          "stop or reconcile the active Performance session before discarding a sealed recovery candidate"}},
+    });
+  }
+  if (active.error().code != ErrorCode::not_found) {
+    return foundation::Result<PerformanceStopReceipt>::failure(active.error());
+  }
+  const auto candidate = std::find_if(
+      candidates.value().begin(), candidates.value().end(),
+      [&session_id](const auto& value) {
+        return value.journal.session_id == session_id;
+      });
+  if (candidate == candidates.value().end()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(Error{
+        ErrorCode::not_found,
+        "Performance recovery candidate does not exist",
+    });
+  }
+  const auto target = loaded.value().state.performances.find(
+      candidate->journal.performance_id);
+  if (target == loaded.value().state.performances.end()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(Error{
+        ErrorCode::invalid_project,
+        "Performance recovery draft no longer exists",
+        {{"reason", "performance_recovery_target_missing"},
+         {"recovery_retained", true},
+         {"remedy",
+          "retain the candidate and restore the matching Performance draft before retrying recovery discard"}},
+    });
+  }
+  auto restored = journal.restore_stopped_performance_locked(
+      bundle,
+      *candidate,
+      loaded.value().state.revision,
+      performance_fingerprint(target->second),
+      request_id);
+  if (!restored.has_value()) {
+    return foundation::Result<PerformanceStopReceipt>::failure(
+        restored.error());
+  }
+  return foundation::Result<PerformanceStopReceipt>::success(
+      {request_id,
+       session_id,
+       candidate->journal.performance_id,
+       SequenceSessionState::stopped,
+       0,
+       false});
+}
+
+foundation::Result<PerformanceLifecycleReceipt>
+ProjectStore::bind_performance_recording(
+    const std::filesystem::path& bundle,
+    const domain::CommandMeta& meta,
+    const domain::PerformanceId& performance_id,
+    const foundation::ArtifactRef& artifact) {
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        loaded.error());
+  }
+  auto recovered = recover_uncommitted(
+      *platform_, bundle, loaded.value(), artifact.sha256);
+  if (!recovered.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        recovered.error());
+  }
+  auto verified = verify_managed_wav_artifact(*platform_, bundle, artifact);
+  if (!verified.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        verified.error());
+  }
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active_performance(bundle);
+  if (active.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance recording bind is blocked by an active draft",
+        {{"reason", "performance_session_active"},
+         {"remedy",
+          "stop and save or discard the active Performance draft before binding a recording"}},
+    });
+  }
+  if (active.error().code != ErrorCode::not_found) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        active.error());
+  }
+  auto candidates = journal.list_performance_recoverable(bundle);
+  if (!candidates.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        candidates.error());
+  }
+  if (std::ranges::any_of(
+          candidates.value(),
+          [&performance_id](const auto& candidate) {
+            return candidate.journal.performance_id == performance_id;
+          })) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance recording bind is blocked by recovery",
+        {{"reason", "performance_recovery_pending"},
+         {"remedy",
+          "apply or discard the recoverable Performance tail before binding a recording"}},
+    });
+  }
+  const auto target = loaded.value().state.performances.find(performance_id);
+  if (target == loaded.value().state.performances.end()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::not_found,
+        "Performance recording bind target does not exist",
+    });
+  }
+  if (target->second.recording_artifact.has_value()) {
+    if (*target->second.recording_artifact == artifact) {
+      return foundation::Result<PerformanceLifecycleReceipt>::success(
+          {performance_id, loaded.value().state.revision, true});
+    }
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance recording ArtifactRef is already bound",
+        {{"reason", "performance_recording_conflict"},
+         {"remedy",
+          "keep the existing recording ArtifactRef or create a new Performance; replacement is not permitted"}},
+    });
+  }
+  const BindPerformanceRecording command{meta, performance_id, artifact};
+  auto outcome = commit_loaded(
+      platform_, bundle, std::move(loaded.value()),
+      PersistedCommand{command}, std::nullopt, nullptr);
+  if (!outcome.has_value()) {
+    return foundation::Result<PerformanceLifecycleReceipt>::failure(
+        outcome.error());
+  }
+  return foundation::Result<PerformanceLifecycleReceipt>::success(
+      {performance_id,
+       outcome.value().state.revision,
+       outcome.value().replayed});
+}
+
+foundation::Result<CommandExecution>
+ProjectStore::execute_performance_rebase(
+    const std::filesystem::path& bundle,
+    const foundation::SequenceSessionId& session_id,
+    const domain::UpdateSequenceSettings& command) {
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<CommandExecution>::failure(tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<CommandExecution>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<CommandExecution>::failure(loaded.error());
+  }
+  auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<CommandExecution>::failure(recovered.error());
+  }
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active_performance(bundle);
+  if (!active.has_value() || active.value().session_id != session_id) {
+    return foundation::Result<CommandExecution>::failure(
+        active.has_value()
+            ? Error{ErrorCode::invalid_argument,
+                    "Performance rebase owner does not match",
+                    {{"reason", "performance_rebase_owner_mismatch"},
+                     {"remedy",
+                      "retry with the active Performance session id"}}}
+            : active.error());
+  }
+  const auto persisted = PersistedCommand{command};
+  const auto fingerprint = canonical_fingerprint(command_json(persisted));
+  const auto existing = std::find_if(
+      active.value().rebases.begin(), active.value().rebases.end(),
+      [&command](const auto& rebase) {
+        return rebase.command_id == command.meta.command_id;
+      });
+  if (active.value().state == SequenceSessionState::recovery_required &&
+      existing == active.value().rebases.end()) {
+    return foundation::Result<CommandExecution>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance rebase recovery requires the exact prepared command",
+        {{"reason", "performance_rebase_recovery_required"},
+         {"remedy",
+          "reopen the Project and retry the exact command_id and immutable command payload already recorded by rebase_prepare"}},
+    });
+  }
+  if (existing != active.value().rebases.end() &&
+      (existing->command_fingerprint != fingerprint ||
+       existing->from_revision != command.meta.expected_revision ||
+       existing->to_revision != command.meta.expected_revision + 1)) {
+    return foundation::Result<CommandExecution>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance rebase command id is bound to another command",
+        {{"reason", "performance_rebase_command_conflict"},
+         {"remedy",
+          "retry the exact prepared command payload or issue a new command id before preparation"}},
+    });
+  }
+  if (existing == active.value().rebases.end()) {
+    auto prepared = journal.prepare_performance_rebase_locked(
+        bundle,
+        session_id,
+        {command.meta.command_id,
+         fingerprint,
+         command.meta.expected_revision,
+         command.meta.expected_revision + 1,
+         std::nullopt,
+         false});
+    if (!prepared.has_value()) {
+      return foundation::Result<CommandExecution>::failure(prepared.error());
+    }
+  } else if (existing->completed) {
+    auto outcome = commit_loaded(
+        platform_, bundle, std::move(loaded.value()), persisted,
+        std::nullopt, nullptr);
+    if (!outcome.has_value()) {
+      return foundation::Result<CommandExecution>::failure(outcome.error());
+    }
+    return foundation::Result<CommandExecution>::success(
+        {domain::Command{command}, std::move(outcome.value())});
+  }
+
+  auto outcome = commit_loaded(
+      platform_, bundle, std::move(loaded.value()), persisted,
+      std::nullopt, nullptr);
+  if (!outcome.has_value()) {
+    return foundation::Result<CommandExecution>::failure(outcome.error());
+  }
+  const auto target = outcome.value().state.performances.find(
+      active.value().performance_id);
+  if (target == outcome.value().state.performances.end()) {
+    return foundation::Result<CommandExecution>::failure(
+        invalid_project(
+            "Performance rebase target disappeared after publication",
+            bundle / "manifest.json"));
+  }
+  auto completed = journal.complete_performance_rebase_locked(
+      bundle,
+      session_id,
+      command.meta.command_id,
+      outcome.value().state.revision,
+      command.bpm.has_value()
+          ? std::optional<std::uint16_t>{outcome.value().state.bpm}
+          : std::nullopt,
+      performance_fingerprint(target->second));
+  if (!completed.has_value()) {
+    return foundation::Result<CommandExecution>::failure(completed.error());
+  }
+  return foundation::Result<CommandExecution>::success(
+      {domain::Command{command}, std::move(outcome.value())});
 }
 
 foundation::Result<std::optional<SequenceFlushExecution>>
@@ -4228,6 +5523,12 @@ ProjectStore::import_artifact_with_identity(
     return foundation::Result<ImportArtifactExecution>::failure(
         recovered.error());
   }
+  auto performance_admitted =
+      admit_performance_sample_class(platform_, bundle);
+  if (!performance_admitted.has_value()) {
+    return foundation::Result<ImportArtifactExecution>::failure(
+        performance_admitted.error());
+  }
   auto admitted = admit_sequence_authoring(platform_, bundle);
   if (!admitted.has_value()) {
     return foundation::Result<ImportArtifactExecution>::failure(
@@ -4403,6 +5704,12 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
   }
+  auto performance_admitted =
+      admit_performance_sample_class(platform_, bundle);
+  if (!performance_admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        performance_admitted.error());
+  }
   auto admitted = admit_sequence_authoring(platform_, bundle);
   if (!admitted.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -4542,6 +5849,12 @@ ProjectStore::import_assign_sample_bytes(
   if (!recovered.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         recovered.error());
+  }
+  auto performance_admitted =
+      admit_performance_sample_class(platform_, bundle);
+  if (!performance_admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        performance_admitted.error());
   }
   auto admitted = admit_sequence_authoring(
       platform_, bundle, &command, request.sequence_session_id);
