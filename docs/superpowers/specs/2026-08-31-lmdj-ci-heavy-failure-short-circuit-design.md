@@ -2,18 +2,22 @@
 
 日期：2026-08-31
 
-状态：设计已由 Owner 确认；implementation 待本规格复核与正式计划，push、Pull Request、
-merge 与远端运行操作均待后续独立授权
+状态：设计已由 Owner 确认；2026-08-31 复核修订：gating 集合排除 macOS 链，补充绿色 run
+延迟代价、跨 run 交错说明与 untrusted-head 测试场景。implementation 待正式计划，push、
+Pull Request、merge 与远端运行操作均待后续独立授权
 
 ## 1. 结论
 
 LMDJ Core CI 改为两个显式阶段：现有非重型正式 lane 先并行收集反馈，只有本次 scope
-选中的前置 job 全部成功后，才进入共享 Contabo 主机上的重型阶段。重型阶段按
+选中的 gating 前置 job 全部成功后，才进入共享 Contabo 主机上的重型阶段。macOS 链
+（selector、primary、fallback 与两个 adjudicator）不在 gating 集合内：它并行运行，其
+结果只进入最终 `PR Gate`，既不推迟也不阻断重型阶段（决策记录见 5.1）。重型阶段按
 `Portal -> Core Ubuntu -> Package -> Coverage -> ASan` 的固定顺序执行；任一已选重型 job
 失败或取消后，后续重型 job 均不再启动。
 
 前置阶段已经开始的并行 job 不会因兄弟 job 失败而被主动取消。它们继续保留日志与 failure
-artifact，随后由 Hosted `Pre-heavy Gate` 拒绝重型阶段。最终 `PR Gate` 始终运行，并区分：
+artifact；gating 前置中的任何 selected failure 随后由 Hosted `Pre-heavy Gate` 拒绝重型
+阶段。最终 `PR Gate` 始终运行，并区分：
 
 - 真正执行后失败或取消的原始 failure；
 - 因前置或较早重型 failure 而跳过的 downstream job；
@@ -40,9 +44,23 @@ pending native-heavy job。与此同时，已经合并的 PR #445 仍有一轮 q
 重型并行收益，却会让一个确定失败的 run 消耗后续几十分钟的共享主机预算。本设计只改变该
 成本边界，不改变 Change Scope 对“哪些 lane 必须运行”的判定。
 
+### 2.1 显式接受的绿色 run 延迟代价
+
+重型↔重型的并行早已被单槽消除，但前置↔重型的重叠仍然真实存在：今天一个绿色 run 的
+Portal 或 Package 可以在 `web-runtime-host` 尚未结束时就占槽执行。两阶段化放弃这部分
+重叠，绿色 run 的关键路径变为 `max(gating 前置) + sum(已选重型)`，其中 gating 前置的
+上界由 `web-runtime-host` 决定（timeout 75 分钟；共享池实测约 40 分钟，netcup 专用角色
+预期更快）。
+
+本设计明确接受该延迟：失败 run 节省的是跨 run 共享的全局单槽预算，惠及所有并行 PR；
+绿色 run 增加的等待只属于该 run 自身。在多个并行工作流竞争同一重型槽的现状下，前者
+收益覆盖后者成本。首次远端验证须记录 full green run 的实际关键路径并与改造前基线对比，
+使这项代价成为已度量的预期行为，而不是被误报的 regression。
+
 ## 3. 目标
 
-- 任一已选前置 job 失败、取消或异常跳过时，不启动任何 native-heavy job。
+- 任一已选 gating 前置 job 失败、取消或异常跳过时，不启动任何 native-heavy job。
+- macOS 链保持仅由 `PR Gate` 裁决：其失败是 primary failure，不推迟也不阻断重型阶段。
 - 已启动的前置并行 job 继续完成并保留其诊断证据。
 - 重型 job 保持全局单槽，并在同一 run 内使用固定 cheap-to-expensive 顺序。
 - 任一已选重型 job 失败或取消时，后续重型 job 不启动。
@@ -71,54 +89,77 @@ pending native-heavy job。与此同时，已经合并的 PR #445 仍有一轮 q
 ```text
 Change Scope
     |
-    +--> Docs / CI Contract / Deploy Contract / Chameleon --------+
+    +--> Docs / CI Contract / Deploy Contract / Chameleon ---------+
     +--> Web Toolchain / Web Runtime / Creator / Web Lab ----------+--> Pre-heavy Gate
-    +--> macOS selector / primary / fallback / adjudicators -------+         |
-                                                                               | success
-                                                                               v
-                                      Portal -> Core Ubuntu -> Package -> Coverage -> ASan
-                                                                               |
-                                                                               v
-                                                                            PR Gate
+    |                                                                          |
+    |                                                                          | success
+    |                                                                          v
+    |                                     Portal -> Core Ubuntu -> Package -> Coverage -> ASan
+    |                                                                          |
+    +--> macOS selector / primary / fallback / adjudicators ---------------+   |
+                                                                           v   v
+                                                                           PR Gate
 ```
 
 `PR Gate` 继续直接观察本次 run 的所有正式与 support result，并以
 `always() && !cancelled()` 收尾。任何 phase failure 都不能跳过最终 adjudication。
 
-### 5.1 前置阶段
+### 5.1 前置阶段与 gating 集合
 
-前置阶段是现有正式 job 中除五个 native-heavy job 外的集合：
+前置阶段是现有正式 job 中除五个 native-heavy job 外的集合，划分为两组。
+
+gating 前置（`Pre-heavy Gate` 的 `needs` 与 expected set 来源）：
 
 - `docs-static`、`ci-contract`、`deploy-contract`、`chameleon-lab`；
-- `web-toolchain-conformance`、`web-runtime-host`、`creator-web`、`web-runtime-lab`；
+- `web-toolchain-conformance`、`web-runtime-host`、`creator-web`、`web-runtime-lab`。
+
+非 gating 前置（macOS 链）：
+
 - `select-macos-runner`、`macos-primary`、`macos-fallback`、`core-macos`、
   `core-asan-macos`。
 
-这些 job 保留现有并行、runner、timeout、trust、fallback 与 artifact 行为。兄弟 job failure
-不调用远端取消；已经 running 或 queued 的前置 job按正常语义完成。这样一次 run 可以保留
+两组都保留现有并行、runner、timeout、trust、fallback 与 artifact 行为。兄弟 job failure
+不调用远端取消；已经 running 或 queued 的前置 job 按正常语义完成。这样一次 run 可以保留
 多个独立原始 failure，而不是只留下最先结束的一项。
 
-`macos-fallback` 是 orchestration dependency，不是 `scope_policy.json` 中独立 required result；
-Gate 等待它收敛，但其 semantic verdict 只通过现有 `core-macos` 与 `core-asan-macos`
-adjudicator 进入 policy 判定。结果 JSON 不把它伪造成新的正式 job key。
+macOS 链排除在 gating 集合外是一项显式决策：`macos-primary` 是
+`continue-on-error: true`，语义 verdict 由 `core-macos` 与 `core-asan-macos` adjudicator
+经 `macos-fallback` 跳板收敛，最坏路径（primary 30 分钟超时后 Hosted fallback 再 30 分钟）
+是全 CI 最慢、基础设施波动最大的一条链，且其失败模式与 native-heavy lane 要验证的内容
+相关性最低。让重型阶段等它，会把绿色 run 的重型启动最坏推迟约一小时，换来的只是拦截
+“macOS 失败但重型仍运行”这一低概率浪费——而与平台无关的语义回归通常也会被重型链
+最前端的 Portal/Core Ubuntu 更早拦下。备选方案（全前置集合 gating）经评估被否决；若
+未来度量表明需要回退，只需扩展 `pre-heavy-gate` 的 `needs` 与 expected set 派生，不动
+其余拓扑。
+
+macOS 链的 semantic verdict 只通过现有 `core-macos` 与 `core-asan-macos` adjudicator 进入
+最终 `PR Gate` 判定。`macos-fallback` 仍是 orchestration dependency，不是
+`scope_policy.json` 中独立 required result；结果 JSON 不把它伪造成新的正式 job key。
 
 ### 5.2 Pre-heavy Gate
 
-新增 Hosted `pre-heavy-gate` job。它 `needs` `change-scope` 与全部前置 job，并在 workflow
-未被人工取消时始终运行。Gate 使用仓库脚本读取：
+新增 Hosted `pre-heavy-gate` job。它 `needs` `change-scope` 与全部 gating 前置 job，条件
+显式写为 `if: ${{ !cancelled() }}`——run 被人工或 superseding push 取消时不运行，其余
+情形（含上游 failure/skip）必须运行；不使用 `always()`，也不沿用既有 PR Gate 的
+`always() && !cancelled()` 冗余写法。Gate 使用仓库脚本读取：
 
 - exact Change Scope manifest；
 - `Change Scope` 自身 result；
-- 全部前置 `needs.<job>.result`。
+- 全部 gating 前置 `needs.<job>.result`。
 
 Gate 必须从 `scripts/ci/scope_policy.json` 派生 expected set，不维护第二套 path ownership。
 判定规则是：
 
 1. manifest 与 policy 必须有效，base/head/trust 仍由既有 Change Scope/PR Gate 合同负责；
-2. 本次 required 的前置 job 必须是 `success`；
-3. 未 required 的前置 job 必须是 `skipped`；
+2. 本次 required 的 gating 前置 job 必须是 `success`；
+3. 未 required 的 gating 前置 job 必须是 `skipped`；
 4. selected `failure`、`cancelled` 或 `skipped` 都拒绝重型阶段；
 5. 未知 result、缺失/多余 result key 或 selected/unselected 拓扑矛盾均 fail closed。
+
+untrusted head 是规则 4 的一个显式已知情形：fork Pull Request 上 selected gating job 因
+trust 条件以 `skipped` 收敛，Gate 按 unexpected skip 拒绝重型阶段——与重型 job 自身的
+trusted-head 条件双重闭合。expected set 派生不得把 trust skip 误分类为 scope skip；该
+行为由测试合同固定，不留给 implementation 现场解释。
 
 Gate 写入 Markdown summary，分别列出 primary failures、unexpected skips 与 scope skips；不复制
 job log，也不将错误文本升级成根因结论。Gate 成功只表示“允许开始重型阶段”，不是 PR、
@@ -139,6 +180,11 @@ merge 或 release evidence。
 Coverage 与包含 stress tier 的 ASan。全局 concurrency 仍是跨 run 的主机 capacity authority；
 run 内依赖只负责失败传播，不能用来增加并行度或绕过 capacity queue。
 
+needs 链改变跨 run 的交错模式：现状是一个 run 的五个重型 waiter 从 run 开始就全部进入
+`queue: max` 队列；改造后同一 run 在两个重型 job 之间释放全局槽，其他 run 的重型 job 可以
+在间隙插入。这是 capacity queue 的预期公平行为，不是本设计要消除的现象；竞争下同一 run
+的重型阶段总时长可能因此被拉长，属于 2.1 已接受代价的一部分。
+
 每个重型 job 必须：
 
 - 仅在 `pre-heavy-gate == success`、自身 lane selected、trusted-head 条件成立时运行；
@@ -149,6 +195,10 @@ run 内依赖只负责失败传播，不能用来增加并行度或绕过 capaci
 直接条件必须读取同一个 Change Scope manifest，才能让 focused run 跳过一个未选前序 lane 后
 继续运行后续已选 lane。不能只写单链默认 `success()`，否则合法 scope skip 会错误阻断后续
 lane。
+
+`portal` 是 reusable workflow caller job（`uses:`），不是普通 `runs-on` job；它同样承载
+`needs`、gate 条件与顺序合同，topology 测试必须把 caller job 形态显式覆盖，而不是只
+断言普通 job。
 
 ## 6. 失败分类与 PR Gate
 
@@ -162,8 +212,10 @@ skipped。展示层增加以下闭合分类：
 | Downstream blocked | selected 重型 job 因 Gate 或更早重型 failure 而为 `skipped` | `core-asan` blocked by `core-coverage` |
 | Scope skip | manifest 未选择且 result=`skipped` | docs-only run 的 ASan |
 
-一个 run 可以有多个 primary failures，因为前置并行 job 不互相取消。Downstream blocked 只解释
-为什么 workload 没有启动，不把 required check 变成成功；整次 `PR Gate` 仍失败。
+一个 run 可以有多个 primary failures，因为前置并行 job 不互相取消。macOS 链失败不产生
+重型 downstream blocked：重型阶段照常运行，macOS failure 以 primary failure 进入 verdict。
+Downstream blocked 只解释为什么 workload 没有启动，不把 required check 变成成功；整次
+`PR Gate` 仍失败。
 
 Gate summary 必须给出 exact job display name 与 result。具体 root cause 继续由 job log、step
 failure 与 retained artifact 提供。仓库不根据 `failure` 字符串自动修改代码，也不自动重跑；
@@ -191,18 +243,24 @@ runner 配置、merge queue controller 或产品源码。
 
 implementation 必须按 TDD 先建立失败测试，再修改 workflow/script。最小场景包括：
 
-1. 所有 selected 前置 job success，Gate success；
-2. 一个或多个 selected 前置 job failure，Gate 列出全部 primary failures；
-3. selected 前置 job cancelled，Gate failure；
-4. selected 前置 job skipped，Gate 作为 unexpected skip failure；
-5. unselected 前置 job skipped，Gate 接受为 scope skip；
-6. unselected 前置 job 意外运行，Gate fail closed；
-7. manifest/result 缺失、多余、未知或畸形时 Gate fail closed；
-8. workflow exact heavy order 为 Portal、Core、Package、Coverage、ASan；
-9. 中间 heavy lane 未选择时，后续 selected lane仍可运行；
-10. 中间 heavy lane failure/cancelled/unexpected-skip 时，后续 selected lane blocked；
-11. PR Gate 同时报告 primary failure 与 downstream blocked，但 verdict 保持 failure；
-12. 原有 focused/full/draft、trusted-head、macOS fallback、queue metadata 与 failure artifact
+1. 所有 selected gating 前置 job success，Gate success；
+2. 一个或多个 selected gating 前置 job failure，Gate 列出全部 primary failures；
+3. selected gating 前置 job cancelled，Gate failure；
+4. selected gating 前置 job skipped，Gate 作为 unexpected skip failure；
+5. untrusted head：selected gating job 因 trust 条件 skipped 时 Gate fail closed，且不被
+   误分类为 scope skip；
+6. unselected gating 前置 job skipped，Gate 接受为 scope skip；
+7. unselected gating 前置 job 意外运行，Gate fail closed；
+8. macOS 链任意结果（failure/cancelled/skipped）不进入 Gate 判定，重型阶段照常启动，
+   PR Gate 仍将其按既有合同裁决为 failure；
+9. manifest/result 缺失、多余、未知或畸形时 Gate fail closed；
+10. workflow exact heavy order 为 Portal、Core、Package、Coverage、ASan，且 gating 集合
+    恰为 5.1 所列八个 job（macOS 链不在 `pre-heavy-gate` 的 `needs` 中）；
+11. `portal` 作为 reusable workflow caller job 同样满足顺序与 gate 条件合同；
+12. 中间 heavy lane 未选择时，后续 selected lane 仍可运行；
+13. 中间 heavy lane failure/cancelled/unexpected-skip 时，后续 selected lane blocked；
+14. PR Gate 同时报告 primary failure 与 downstream blocked，但 verdict 保持 failure；
+15. 原有 focused/full/draft、trusted-head、macOS fallback、queue metadata 与 failure artifact
     合同全部继续通过。
 
 Task-specific verification 至少包括：
@@ -250,10 +308,14 @@ Build、Core Module、Host、Provider、Contract、Channel 或 release identity�
 
 首次远端验证必须单独证明：
 
-- 一个故意失败的可信测试分支在保留前置 failure evidence 后跳过全部重型 job；
-- 一个 full green run 依固定重型顺序通过；
+- 一个故意失败的可信测试分支在保留 gating 前置 failure evidence 后跳过全部重型 job；
+- 一个 full green run 依固定重型顺序通过，并记录实际关键路径
+  （`max(gating 前置) + sum(重型)`）与改造前基线的对比，作为 2.1 代价的度量证据；
+- 一个 macOS lane 故意失败的 run：重型阶段照常运行，`PR Gate` 将其报告为 primary
+  failure 而非 downstream blocked；
 - 一个 focused run 能越过未选重型 lane，而不会被合法 skip 错误阻断；
 - same-run `PR Gate` 正确区分 primary、downstream 与 scope skip；
-- job logs 识别实际 runner，且 `lmdj-native-heavy` 仍保持跨 run 单槽。
+- job logs 识别实际 runner，且 `lmdj-native-heavy` 仍保持跨 run 单槽；观察到其他 run 在
+  同一 run 两个重型 job 之间插槽属预期交错，不按故障处理。
 
 这些 probe、push、PR 与 merge 均是文档提交之外的远端 mutation，必须另行授权。
