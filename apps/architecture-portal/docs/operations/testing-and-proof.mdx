@@ -61,7 +61,12 @@ pending，且按 GitHub 定义的等待开始时间 FIFO 执行；dispatch 还�
 显式批准后把它作为 validation，不再重复 dispatch。若 PR 已包含 current main，才显式
 dispatch PR head；该路径的 ticket、PR number、base SHA、head SHA 和返回 run ID 必须完全
 匹配。两条路径都要求同一 run 内 `Change Scope`、manifest 选中的全部 lane 与 `PR Gate`
-成功后才可 merge。
+成功后才可 merge。GitHub merge box 只汇总 `pull_request` 事件的 check suite，
+`workflow_dispatch` 的绿不能单独满足受保护分支必过项；dispatch 路径因此不得取消
+该 PR 自己的 Core CI。Validation 通过后，Controller 读取 exact head 上最新的
+`pull_request` Core CI：必过上下文仍是 `FAILURE`/`CANCELLED` 时，rerun 该事件 run
+并在同一次 attempt 内等待，而不是再 dispatch 一份 validation。`merge-rejected`
+必须点出 stale 上下文和 `gh run rerun` 修复，而不是 `evidence-redacted`。
 
 Merge 证据就是分类结果，`focused` 或 `full` 皆可；`requested`（操作者指定 lane）与
 `draft` 都不是 merge 证据，untrusted head 在任何 breadth 下都不是证据。`merge:queue`

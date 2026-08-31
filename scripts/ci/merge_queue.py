@@ -97,8 +97,17 @@ _SAFE_SUMMARY_EVIDENCE = (
     re.compile(r"^(?:expected-head-tree|merge-tree|head-tree):(?:[0-9a-f]{40}|None)$"),
     re.compile(r"^(?:queue-seconds|execution-seconds):\d+(?:\.\d+)?$"),
     re.compile(r"^pull-merge-sha-lagging$"),
-    re.compile(r"^cancelled-pull-run:\d+$"),
-    re.compile(r"^pull-run-cancel-error:[A-Z][A-Za-z0-9_]*(?:Error|Exception)$"),
+    re.compile(
+        r"^merge-box:(?:missing:(?:core \(ubuntu-latest\)|core \(macos-latest\)|"
+        r"PR Gate|pull_request-run)|"
+        r"(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)="
+        r"(?:failure|cancelled|skipped|timed_out|None|invalid)|"
+        r"app:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)="
+        r"(?:\d+|invalid)|"
+        r"rerun:\d+|timeout|remedy=gh-run-rerun|"
+        r"required-checks=(?:cancelled|pending|failure|blocked)|"
+        r"(?:lookup|wait|rerun)-error:[A-Z][A-Za-z0-9_]*(?:Error|Exception))$"
+    ),
 )
 
 
@@ -139,6 +148,15 @@ class RequiredCheck:
     name: str
     app_id: int
     conclusion: str
+
+
+@dataclass(frozen=True)
+class PullRequestRun:
+    run_id: int
+    status: str
+    conclusion: str | None
+    event: str
+    head_sha: str
 
 
 @dataclass(frozen=True)
@@ -221,7 +239,11 @@ class QueueClient(Protocol):
         self, number: int, head_ref: str, inputs: Mapping[str, str]
     ) -> int: ...
     def cancel_validation(self, run_id: int) -> None: ...
-    def cancel_superseded_pull_runs(self, head_sha: str) -> tuple[int, ...]: ...
+    def newest_pull_request_run(self, head_sha: str) -> PullRequestRun | None: ...
+    def rerun_pull_request_run(self, run_id: int) -> None: ...
+    def wait_pull_request_checks(
+        self, run_id: int, timeout_seconds: int
+    ) -> tuple[RequiredCheck, ...]: ...
     def wait_validation(self, run_id: int, timeout_seconds: int) -> ValidationResult: ...
     def merge_pull(self, number: int, payload: Mapping[str, str]) -> MergeResult: ...
     def remove_label(self, number: int, label: str) -> None: ...
@@ -464,6 +486,133 @@ def _validation_contract_error(
     return None
 
 
+def _merge_box_failures(checks: Sequence[RequiredCheck]) -> tuple[str, ...]:
+    checks_by_name: dict[str, list[RequiredCheck]] = {
+        name: [] for name in REQUIRED_CHECKS
+    }
+    for check in checks:
+        if check.name in checks_by_name:
+            checks_by_name[check.name].append(check)
+    evidence: list[str] = []
+    for name in REQUIRED_CHECKS:
+        found = checks_by_name[name]
+        if not found:
+            evidence.append(f"merge-box:missing:{name}")
+            continue
+        check = found[0]
+        if check.app_id != GITHUB_ACTIONS_APP_ID:
+            app_id = (
+                str(check.app_id)
+                if isinstance(check.app_id, int) and not isinstance(check.app_id, bool)
+                else "invalid"
+            )
+            evidence.append(f"merge-box:app:{name}={app_id}")
+            continue
+        if check.conclusion == "skipped" and name in SKIPPABLE_CHECKS:
+            continue
+        if check.conclusion != "success":
+            safe_conclusion = (
+                check.conclusion
+                if check.conclusion in {"failure", "cancelled", "skipped", "timed_out", None}
+                else "invalid"
+            )
+            evidence.append(f"merge-box:{name}={safe_conclusion}")
+    return tuple(evidence)
+
+
+def _merge_rejection_evidence(message: str) -> tuple[str, ...]:
+    text = message.strip()
+    if re.fullmatch(
+        r"(\d+) of \1 required status checks are cancelled\.?", text, re.IGNORECASE
+    ):
+        return ("merge-box:required-checks=cancelled", "merge-box:remedy=gh-run-rerun")
+    if re.fullmatch(
+        r"(\d+) of \1 required status checks are pending\.?", text, re.IGNORECASE
+    ):
+        return ("merge-box:required-checks=pending", "merge-box:remedy=gh-run-rerun")
+    if re.fullmatch(
+        r"(\d+) of \1 required status checks failed\.?", text, re.IGNORECASE
+    ):
+        return ("merge-box:required-checks=failure", "merge-box:remedy=gh-run-rerun")
+    if "required status check" in text.lower():
+        return ("merge-box:required-checks=blocked", "merge-box:remedy=gh-run-rerun")
+    return ()
+
+
+def _converge_merge_box(
+    client: QueueClient,
+    head: str,
+    *,
+    clock: Callable[[], float],
+    mutation_deadline: float,
+    remaining_attempts: int,
+) -> tuple[str, ...]:
+    """Make the merge-box rollup match GitHub's squash-merge required contexts.
+
+    Queue `workflow_dispatch` checks never enter that rollup. The newest
+    `pull_request`-event Core CI run for this exact head does. Empty evidence
+    means the rollup is already acceptable; otherwise the tokens name the
+    stale context and the rerun remedy. This stays on the current attempt.
+    """
+    budget = validation_budget_seconds(
+        now=clock(),
+        mutation_deadline=mutation_deadline,
+        remaining_attempts=remaining_attempts,
+    )
+    try:
+        run = client.newest_pull_request_run(head)
+    except Exception as error:
+        return (
+            f"merge-box:lookup-error:{type(error).__name__}",
+            "merge-box:remedy=gh-run-rerun",
+        )
+    if run is None:
+        return (
+            "merge-box:missing:pull_request-run",
+            "merge-box:remedy=gh-run-rerun",
+        )
+    try:
+        checks = client.wait_pull_request_checks(run.run_id, budget)
+    except TimeoutError:
+        return ("merge-box:timeout", "merge-box:remedy=gh-run-rerun")
+    except Exception as error:
+        return (
+            f"merge-box:wait-error:{type(error).__name__}",
+            "merge-box:remedy=gh-run-rerun",
+        )
+    failures = _merge_box_failures(checks)
+    if not failures:
+        return ()
+    rerun_note = f"merge-box:rerun:{run.run_id}"
+    try:
+        client.rerun_pull_request_run(run.run_id)
+    except Exception as error:
+        return failures + (
+            rerun_note,
+            f"merge-box:rerun-error:{type(error).__name__}",
+            "merge-box:remedy=gh-run-rerun",
+        )
+    budget = validation_budget_seconds(
+        now=clock(),
+        mutation_deadline=mutation_deadline,
+        remaining_attempts=remaining_attempts,
+    )
+    try:
+        checks = client.wait_pull_request_checks(run.run_id, budget)
+    except TimeoutError:
+        return failures + (rerun_note, "merge-box:timeout", "merge-box:remedy=gh-run-rerun")
+    except Exception as error:
+        return failures + (
+            rerun_note,
+            f"merge-box:wait-error:{type(error).__name__}",
+            "merge-box:remedy=gh-run-rerun",
+        )
+    remaining = _merge_box_failures(checks)
+    if not remaining:
+        return ()
+    return remaining + (rerun_note, "merge-box:remedy=gh-run-rerun")
+
+
 def run_queue_item(
     request: QueueRequest, client: QueueClient, *,
     clock: Callable[[], float] = time.time,
@@ -630,23 +779,6 @@ def run_queue_item(
             )
         run_ids.append(run_id)
 
-        # The queue never consumes the PR's own pull_request run for this head;
-        # on the shared runner pool it only serializes the validation run's
-        # jobs (issue #304). Failure to cancel is evidence, never terminal.
-        redundant_run_evidence: tuple[str, ...] = ()
-        if synchronized_run_id is None:
-            try:
-                cancelled_pull_runs = client.cancel_superseded_pull_runs(head)
-            except Exception as error:
-                redundant_run_evidence = (
-                    f"pull-run-cancel-error:{type(error).__name__}",
-                )
-            else:
-                redundant_run_evidence = tuple(
-                    f"cancelled-pull-run:{cancelled}"
-                    for cancelled in cancelled_pull_runs
-                )
-
         def cancel_dispatched_validation() -> tuple[str, ...]:
             if synchronized_run_id is not None:
                 return ()
@@ -716,6 +848,29 @@ def run_queue_item(
             last_base, last_head = live_base, live_pull.head_sha
             continue
 
+        merge_box_failures = _converge_merge_box(
+            client,
+            head,
+            clock=clock,
+            mutation_deadline=mutation_deadline,
+            remaining_attempts=remaining_attempts,
+        )
+        if merge_box_failures:
+            return terminal("merge-rejected",
+                attempts=attempt_number, base=base, head=head, run_ids=run_ids,
+                evidence=merge_box_failures,
+            )
+        live_base = client.get_main_sha()
+        live_pull = client.get_pull(request.pr_number)
+        if not _labelled(live_pull):
+            return terminal("queue-label-removed", status="cancelled",
+                attempts=attempt_number, base=live_base, head=live_pull.head_sha,
+                run_ids=run_ids, cleanup=False, ok=True,
+            )
+        if live_base != base or live_pull.head_sha != head:
+            last_base, last_head = live_base, live_pull.head_sha
+            continue
+
         payload = {
             "merge_method": "squash",
             "sha": head,
@@ -726,10 +881,11 @@ def run_queue_item(
         if not merge.merged:
             reconciled = client.get_pull(request.pr_number)
             if not reconciled.merged:
+                evidence = _merge_rejection_evidence(merge.message)
                 return terminal("merge-state-uncertain" if merge.uncertain else "merge-rejected",
                     status="blocked-after-reconciliation" if merge.uncertain else "blocked",
                     attempts=attempt_number, base=base, head=head, run_ids=run_ids,
-                    evidence=((merge.message,) if merge.message else ()),
+                    evidence=evidence,
                 )
             merge = MergeResult(True, reconciled.merge_commit_sha)
 
@@ -821,8 +977,7 @@ def run_queue_item(
                 f"queue-seconds:{result.queue_seconds}",
                 f"execution-seconds:{result.execution_seconds}",
             )
-            + (("pull-merge-sha-lagging",) if merged_pull_sha_lagging else ())
-            + redundant_run_evidence,
+            + (("pull-merge-sha-lagging",) if merged_pull_sha_lagging else ()),
             ok=True,
         )
 

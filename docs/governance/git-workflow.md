@@ -208,6 +208,17 @@ either path the exact run must publish `core (ubuntu-latest)`,
 `15368`. Only live-confirmed base/head drift may consume another attempt, with
 three attempts total.
 
+GitHub's merge box and squash-merge API count only `pull_request`-event check
+suites. A green queue `workflow_dispatch` therefore cannot satisfy required
+contexts by itself, and cancelling the PR's own Core CI run poisons the rollup.
+The dispatch path does not cancel that event run. After either validation path
+succeeds, the controller reads the newest `pull_request`-event Core CI run for
+the exact head. If a required context is still `FAILURE` or `CANCELLED`, it
+re-runs that event run (reusing its payload), waits for it on the same attempt,
+and only then calls the merge API. It does not dispatch a second validation to
+unstick the rollup. A `merge-rejected` stop names the stale context and the
+`gh run rerun` remedy.
+
 Merge evidence is the classification, at `focused` or `full`; a `requested`
 lane selection and a `draft` manifest are never merge evidence, and an
 untrusted head is never evidence at any breadth. The `merge:queue` label
