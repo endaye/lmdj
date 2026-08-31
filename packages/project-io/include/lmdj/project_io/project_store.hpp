@@ -19,7 +19,7 @@
 namespace lmdj::project_io {
 
 inline constexpr std::string_view kProjectWriterContract =
-    "lmdj.project.v3";
+    "lmdj.project.v4";
 
 struct SequenceFlushIdentity {
   foundation::SequenceSessionId session_id;
@@ -35,6 +35,52 @@ struct SequenceFlushExecution {
   domain::MergePatternEvents command;
   std::uint64_t committed_revision{};
   domain::AppliedCommand outcome;
+};
+
+struct PerformanceFlushIdentity {
+  foundation::SequenceSessionId session_id;
+  std::uint64_t flush_seq{};
+  foundation::CommandId command_id;
+  domain::PerformanceId performance_id;
+
+  bool operator==(const PerformanceFlushIdentity&) const = default;
+};
+
+struct PerformanceMutation {
+  domain::CommandMeta meta;
+  domain::PerformanceId performance_id;
+  std::vector<domain::PerformanceEvent> events;
+};
+
+struct CreatePerformance {
+  domain::CommandMeta meta;
+  domain::PerformanceId performance_id;
+  std::string name;
+};
+
+struct RenamePerformance {
+  domain::CommandMeta meta;
+  domain::PerformanceId performance_id;
+  std::string name;
+};
+
+struct DeletePerformance {
+  domain::CommandMeta meta;
+  domain::PerformanceId performance_id;
+};
+
+struct PerformanceMutationReceipt {
+  std::uint64_t committed_revision{};
+
+  bool operator==(const PerformanceMutationReceipt&) const = default;
+};
+
+struct PerformanceFlushExecution {
+  PerformanceFlushIdentity identity;
+  PerformanceMutation mutation;
+  PerformanceMutationReceipt receipt;
+  domain::ProjectState state;
+  bool replayed{};
 };
 
 struct CommandExecution {
@@ -134,6 +180,24 @@ class ProjectStore {
       const foundation::CommandId& command_id);
   foundation::Result<std::vector<SequenceRecoveryCandidate>>
   reconcile_sequence_recovery(const std::filesystem::path& bundle);
+  foundation::Result<PerformanceFlushExecution> execute_performance_flush(
+      const std::filesystem::path& bundle,
+      const PerformanceFlushIdentity& identity);
+  foundation::Result<std::optional<PerformanceFlushExecution>>
+  replay_performance_flush(
+      const std::filesystem::path& bundle,
+      const PerformanceFlushIdentity& identity);
+  foundation::Result<domain::AppliedCommand> create_performance(
+      const std::filesystem::path& bundle,
+      const CreatePerformance& command);
+  foundation::Result<domain::AppliedCommand> rename_performance(
+      const std::filesystem::path& bundle,
+      const RenamePerformance& command);
+  foundation::Result<domain::AppliedCommand> delete_performance(
+      const std::filesystem::path& bundle,
+      const DeletePerformance& command);
+  foundation::Result<std::vector<PerformanceRecoveryCandidate>>
+  reconcile_performance_recovery(const std::filesystem::path& bundle);
   foundation::Result<SequenceCaptureDisarmResult> disarm_sequence_capture(
       const std::filesystem::path& bundle,
       const foundation::SequenceSessionId& session_id,
