@@ -1,0 +1,5076 @@
+{
+  "recordFormat": "web-runtime-lab-high-speed-timing-v1",
+  "sessionId": "444f33ee-19ac-45d5-b34a-db7e74484c36",
+  "capture": {
+    "method": "high-speed-video",
+    "captureRateHz": 240,
+    "containerPlaybackRateHz": 30,
+    "slowMotionFactor": 8,
+    "inputActuation": "physical Akai MPD218 pad press",
+    "triggerMarker": "first frame of the MPD218 pad red LED pulse; six red-channel thresholds independently reproduce 500 pulses",
+    "acousticOnset": "first sustained 110 Hz slow-motion spectral onset (the 880 Hz probe tone), backtracked from the dominant local tone peak with a fixed amplitude threshold of 60",
+    "calibrationOffsetMs": -25,
+    "calibrationBasis": "the co-captured physical pad-impact transient is median-aligned seven 240 fps frames after the visible LED edge at absolute-sample thresholds 100, 120, and 150; subtract only six frames (25 ms), retaining one full capture frame as conservative A/V and marker quantization uncertainty"
+  },
+  "clockFit": {
+    "offsetPlaybackFrames": -231843.055151,
+    "playbackFramesPerBrowserMs": 0.240004779273,
+    "slowMotionScale": 8.0001593091,
+    "matchedEvents": 500
+  },
+  "calibrationChecks": {
+    "physicalImpactMedianByAbsoluteSampleThreshold": {
+      "100": {
+        "medianPlaybackFrames": 7,
+        "medianCaptureMs": 29.166667
+      },
+      "120": {
+        "medianPlaybackFrames": 7,
+        "medianCaptureMs": 29.166667
+      },
+      "150": {
+        "medianPlaybackFrames": 7,
+        "medianCaptureMs": 29.166667
+      }
+    },
+    "retainedUncertaintyCaptureFrames": 1,
+    "appliedCorrectionCaptureFrames": 6
+  },
+  "summary": {
+    "triggerCount": 500,
+    "rawP50Ms": 67.1875,
+    "rawP95Ms": 75,
+    "rawP99Ms": 78.125,
+    "rawMaximumMs": 79.166667,
+    "p50Ms": 42.1875,
+    "p95Ms": 50,
+    "p99Ms": 53.125,
+    "maximumMs": 54.166667,
+    "missedOnsets": 0,
+    "duplicateOnsets": 0,
+    "independentPadLedRegionCounts": {
+      "160": 500,
+      "170": 500,
+      "175": 500,
+      "180": 500,
+      "185": 500,
+      "190": 500
+    },
+    "toneOnsetThresholdSensitivity": {
+      "40": {
+        "p50Ms": 41.145833,
+        "p95Ms": 45.3125,
+        "p99Ms": 48.958333,
+        "maximumMs": 53.645833
+      },
+      "60": {
+        "p50Ms": 42.1875,
+        "p95Ms": 50,
+        "p99Ms": 53.125,
+        "maximumMs": 54.166667
+      }
+    }
+  },
+  "records": [
+    {
+      "sequence": 1,
+      "padLedStartPlaybackFrame": 3029,
+      "padLedEndPlaybackFrame": 3056,
+      "padLedPeakPlaybackFrame": 3032,
+      "acousticToneOnsetPlaybackFrame": 3045.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 2,
+      "padLedStartPlaybackFrame": 3133,
+      "padLedEndPlaybackFrame": 3147,
+      "padLedPeakPlaybackFrame": 3134,
+      "acousticToneOnsetPlaybackFrame": 3149.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 3,
+      "padLedStartPlaybackFrame": 3231,
+      "padLedEndPlaybackFrame": 3239,
+      "padLedPeakPlaybackFrame": 3232,
+      "acousticToneOnsetPlaybackFrame": 3248,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 4,
+      "padLedStartPlaybackFrame": 3327,
+      "padLedEndPlaybackFrame": 3333,
+      "padLedPeakPlaybackFrame": 3329,
+      "acousticToneOnsetPlaybackFrame": 3342.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 5,
+      "padLedStartPlaybackFrame": 3425,
+      "padLedEndPlaybackFrame": 3430,
+      "padLedPeakPlaybackFrame": 3425,
+      "acousticToneOnsetPlaybackFrame": 3443.25,
+      "rawLedToToneMs": 76.041667,
+      "calibratedMidiToSoundMs": 51.041667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 6,
+      "padLedStartPlaybackFrame": 3526,
+      "padLedEndPlaybackFrame": 3532,
+      "padLedPeakPlaybackFrame": 3531,
+      "acousticToneOnsetPlaybackFrame": 3542.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 7,
+      "padLedStartPlaybackFrame": 3631,
+      "padLedEndPlaybackFrame": 3637,
+      "padLedPeakPlaybackFrame": 3636,
+      "acousticToneOnsetPlaybackFrame": 3648,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 8,
+      "padLedStartPlaybackFrame": 3728,
+      "padLedEndPlaybackFrame": 3735,
+      "padLedPeakPlaybackFrame": 3734,
+      "acousticToneOnsetPlaybackFrame": 3745.375,
+      "rawLedToToneMs": 72.395833,
+      "calibratedMidiToSoundMs": 47.395833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 9,
+      "padLedStartPlaybackFrame": 3825,
+      "padLedEndPlaybackFrame": 3831,
+      "padLedPeakPlaybackFrame": 3828,
+      "acousticToneOnsetPlaybackFrame": 3842.625,
+      "rawLedToToneMs": 73.4375,
+      "calibratedMidiToSoundMs": 48.4375,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 10,
+      "padLedStartPlaybackFrame": 3924,
+      "padLedEndPlaybackFrame": 3932,
+      "padLedPeakPlaybackFrame": 3927,
+      "acousticToneOnsetPlaybackFrame": 3940.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 11,
+      "padLedStartPlaybackFrame": 4020,
+      "padLedEndPlaybackFrame": 4027,
+      "padLedPeakPlaybackFrame": 4024,
+      "acousticToneOnsetPlaybackFrame": 4035.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 12,
+      "padLedStartPlaybackFrame": 4113,
+      "padLedEndPlaybackFrame": 4120,
+      "padLedPeakPlaybackFrame": 4113,
+      "acousticToneOnsetPlaybackFrame": 4128.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 13,
+      "padLedStartPlaybackFrame": 4207,
+      "padLedEndPlaybackFrame": 4212,
+      "padLedPeakPlaybackFrame": 4212,
+      "acousticToneOnsetPlaybackFrame": 4224.125,
+      "rawLedToToneMs": 71.354167,
+      "calibratedMidiToSoundMs": 46.354167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 14,
+      "padLedStartPlaybackFrame": 4292,
+      "padLedEndPlaybackFrame": 4297,
+      "padLedPeakPlaybackFrame": 4295,
+      "acousticToneOnsetPlaybackFrame": 4309.875,
+      "rawLedToToneMs": 74.479167,
+      "calibratedMidiToSoundMs": 49.479167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 15,
+      "padLedStartPlaybackFrame": 4392,
+      "padLedEndPlaybackFrame": 4397,
+      "padLedPeakPlaybackFrame": 4395,
+      "acousticToneOnsetPlaybackFrame": 4407.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 16,
+      "padLedStartPlaybackFrame": 4474,
+      "padLedEndPlaybackFrame": 4479,
+      "padLedPeakPlaybackFrame": 4476,
+      "acousticToneOnsetPlaybackFrame": 4489.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 205
+    },
+    {
+      "sequence": 17,
+      "padLedStartPlaybackFrame": 4564,
+      "padLedEndPlaybackFrame": 4580,
+      "padLedPeakPlaybackFrame": 4568,
+      "acousticToneOnsetPlaybackFrame": 4580.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 18,
+      "padLedStartPlaybackFrame": 4663,
+      "padLedEndPlaybackFrame": 4669,
+      "padLedPeakPlaybackFrame": 4667,
+      "acousticToneOnsetPlaybackFrame": 4679,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 19,
+      "padLedStartPlaybackFrame": 4765,
+      "padLedEndPlaybackFrame": 4774,
+      "padLedPeakPlaybackFrame": 4765,
+      "acousticToneOnsetPlaybackFrame": 4781.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 20,
+      "padLedStartPlaybackFrame": 4860,
+      "padLedEndPlaybackFrame": 4867,
+      "padLedPeakPlaybackFrame": 4861,
+      "acousticToneOnsetPlaybackFrame": 4876.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 21,
+      "padLedStartPlaybackFrame": 4956,
+      "padLedEndPlaybackFrame": 4963,
+      "padLedPeakPlaybackFrame": 4959,
+      "acousticToneOnsetPlaybackFrame": 4972.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 22,
+      "padLedStartPlaybackFrame": 5059,
+      "padLedEndPlaybackFrame": 5064,
+      "padLedPeakPlaybackFrame": 5061,
+      "acousticToneOnsetPlaybackFrame": 5075.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 23,
+      "padLedStartPlaybackFrame": 5151,
+      "padLedEndPlaybackFrame": 5157,
+      "padLedPeakPlaybackFrame": 5154,
+      "acousticToneOnsetPlaybackFrame": 5166.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 207
+    },
+    {
+      "sequence": 24,
+      "padLedStartPlaybackFrame": 5232,
+      "padLedEndPlaybackFrame": 5241,
+      "padLedPeakPlaybackFrame": 5236,
+      "acousticToneOnsetPlaybackFrame": 5248.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 25,
+      "padLedStartPlaybackFrame": 5325,
+      "padLedEndPlaybackFrame": 5334,
+      "padLedPeakPlaybackFrame": 5329,
+      "acousticToneOnsetPlaybackFrame": 5340.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 26,
+      "padLedStartPlaybackFrame": 5424,
+      "padLedEndPlaybackFrame": 5434,
+      "padLedPeakPlaybackFrame": 5429,
+      "acousticToneOnsetPlaybackFrame": 5440.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 27,
+      "padLedStartPlaybackFrame": 5523,
+      "padLedEndPlaybackFrame": 5533,
+      "padLedPeakPlaybackFrame": 5523,
+      "acousticToneOnsetPlaybackFrame": 5539.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 28,
+      "padLedStartPlaybackFrame": 5620,
+      "padLedEndPlaybackFrame": 5625,
+      "padLedPeakPlaybackFrame": 5620,
+      "acousticToneOnsetPlaybackFrame": 5636.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 29,
+      "padLedStartPlaybackFrame": 5722,
+      "padLedEndPlaybackFrame": 5729,
+      "padLedPeakPlaybackFrame": 5726,
+      "acousticToneOnsetPlaybackFrame": 5739.625,
+      "rawLedToToneMs": 73.4375,
+      "calibratedMidiToSoundMs": 48.4375,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 30,
+      "padLedStartPlaybackFrame": 5823,
+      "padLedEndPlaybackFrame": 5831,
+      "padLedPeakPlaybackFrame": 5824,
+      "acousticToneOnsetPlaybackFrame": 5840.75,
+      "rawLedToToneMs": 73.958333,
+      "calibratedMidiToSoundMs": 48.958333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 31,
+      "padLedStartPlaybackFrame": 5916,
+      "padLedEndPlaybackFrame": 5928,
+      "padLedPeakPlaybackFrame": 5921,
+      "acousticToneOnsetPlaybackFrame": 5932.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 32,
+      "padLedStartPlaybackFrame": 6017,
+      "padLedEndPlaybackFrame": 6027,
+      "padLedPeakPlaybackFrame": 6025,
+      "acousticToneOnsetPlaybackFrame": 6035.375,
+      "rawLedToToneMs": 76.5625,
+      "calibratedMidiToSoundMs": 51.5625,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 33,
+      "padLedStartPlaybackFrame": 6108,
+      "padLedEndPlaybackFrame": 6116,
+      "padLedPeakPlaybackFrame": 6113,
+      "acousticToneOnsetPlaybackFrame": 6123,
+      "rawLedToToneMs": 62.5,
+      "calibratedMidiToSoundMs": 37.5,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 34,
+      "padLedStartPlaybackFrame": 6200,
+      "padLedEndPlaybackFrame": 6210,
+      "padLedPeakPlaybackFrame": 6203,
+      "acousticToneOnsetPlaybackFrame": 6218.375,
+      "rawLedToToneMs": 76.5625,
+      "calibratedMidiToSoundMs": 51.5625,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 35,
+      "padLedStartPlaybackFrame": 6293,
+      "padLedEndPlaybackFrame": 6302,
+      "padLedPeakPlaybackFrame": 6293,
+      "acousticToneOnsetPlaybackFrame": 6310.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 36,
+      "padLedStartPlaybackFrame": 6395,
+      "padLedEndPlaybackFrame": 6403,
+      "padLedPeakPlaybackFrame": 6399,
+      "acousticToneOnsetPlaybackFrame": 6409.75,
+      "rawLedToToneMs": 61.458333,
+      "calibratedMidiToSoundMs": 36.458333,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 37,
+      "padLedStartPlaybackFrame": 6497,
+      "padLedEndPlaybackFrame": 6506,
+      "padLedPeakPlaybackFrame": 6503,
+      "acousticToneOnsetPlaybackFrame": 6512.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 38,
+      "padLedStartPlaybackFrame": 6580,
+      "padLedEndPlaybackFrame": 6588,
+      "padLedPeakPlaybackFrame": 6585,
+      "acousticToneOnsetPlaybackFrame": 6595.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 39,
+      "padLedStartPlaybackFrame": 6673,
+      "padLedEndPlaybackFrame": 6681,
+      "padLedPeakPlaybackFrame": 6673,
+      "acousticToneOnsetPlaybackFrame": 6690.75,
+      "rawLedToToneMs": 73.958333,
+      "calibratedMidiToSoundMs": 48.958333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 40,
+      "padLedStartPlaybackFrame": 6766,
+      "padLedEndPlaybackFrame": 6777,
+      "padLedPeakPlaybackFrame": 6767,
+      "acousticToneOnsetPlaybackFrame": 6782.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 41,
+      "padLedStartPlaybackFrame": 6870,
+      "padLedEndPlaybackFrame": 6879,
+      "padLedPeakPlaybackFrame": 6873,
+      "acousticToneOnsetPlaybackFrame": 6885.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 42,
+      "padLedStartPlaybackFrame": 6959,
+      "padLedEndPlaybackFrame": 6970,
+      "padLedPeakPlaybackFrame": 6963,
+      "acousticToneOnsetPlaybackFrame": 6975.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 43,
+      "padLedStartPlaybackFrame": 7055,
+      "padLedEndPlaybackFrame": 7065,
+      "padLedPeakPlaybackFrame": 7057,
+      "acousticToneOnsetPlaybackFrame": 7070.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 44,
+      "padLedStartPlaybackFrame": 7146,
+      "padLedEndPlaybackFrame": 7153,
+      "padLedPeakPlaybackFrame": 7150,
+      "acousticToneOnsetPlaybackFrame": 7161.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 205
+    },
+    {
+      "sequence": 45,
+      "padLedStartPlaybackFrame": 7232,
+      "padLedEndPlaybackFrame": 7238,
+      "padLedPeakPlaybackFrame": 7237,
+      "acousticToneOnsetPlaybackFrame": 7250.125,
+      "rawLedToToneMs": 75.520833,
+      "calibratedMidiToSoundMs": 50.520833,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 46,
+      "padLedStartPlaybackFrame": 7320,
+      "padLedEndPlaybackFrame": 7325,
+      "padLedPeakPlaybackFrame": 7320,
+      "acousticToneOnsetPlaybackFrame": 7335.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 47,
+      "padLedStartPlaybackFrame": 7419,
+      "padLedEndPlaybackFrame": 7424,
+      "padLedPeakPlaybackFrame": 7423,
+      "acousticToneOnsetPlaybackFrame": 7435,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 48,
+      "padLedStartPlaybackFrame": 7519,
+      "padLedEndPlaybackFrame": 7525,
+      "padLedPeakPlaybackFrame": 7519,
+      "acousticToneOnsetPlaybackFrame": 7534.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 49,
+      "padLedStartPlaybackFrame": 7610,
+      "padLedEndPlaybackFrame": 7615,
+      "padLedPeakPlaybackFrame": 7612,
+      "acousticToneOnsetPlaybackFrame": 7627,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 50,
+      "padLedStartPlaybackFrame": 7697,
+      "padLedEndPlaybackFrame": 7703,
+      "padLedPeakPlaybackFrame": 7700,
+      "acousticToneOnsetPlaybackFrame": 7714,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 51,
+      "padLedStartPlaybackFrame": 7794,
+      "padLedEndPlaybackFrame": 7800,
+      "padLedPeakPlaybackFrame": 7800,
+      "acousticToneOnsetPlaybackFrame": 7810,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 52,
+      "padLedStartPlaybackFrame": 7884,
+      "padLedEndPlaybackFrame": 7892,
+      "padLedPeakPlaybackFrame": 7885,
+      "acousticToneOnsetPlaybackFrame": 7899.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 53,
+      "padLedStartPlaybackFrame": 7976,
+      "padLedEndPlaybackFrame": 7986,
+      "padLedPeakPlaybackFrame": 7985,
+      "acousticToneOnsetPlaybackFrame": 7991.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 54,
+      "padLedStartPlaybackFrame": 8068,
+      "padLedEndPlaybackFrame": 8076,
+      "padLedPeakPlaybackFrame": 8069,
+      "acousticToneOnsetPlaybackFrame": 8084,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 55,
+      "padLedStartPlaybackFrame": 8165,
+      "padLedEndPlaybackFrame": 8172,
+      "padLedPeakPlaybackFrame": 8168,
+      "acousticToneOnsetPlaybackFrame": 8181.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 56,
+      "padLedStartPlaybackFrame": 8262,
+      "padLedEndPlaybackFrame": 8269,
+      "padLedPeakPlaybackFrame": 8262,
+      "acousticToneOnsetPlaybackFrame": 8278.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 57,
+      "padLedStartPlaybackFrame": 8369,
+      "padLedEndPlaybackFrame": 8377,
+      "padLedPeakPlaybackFrame": 8374,
+      "acousticToneOnsetPlaybackFrame": 8384.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 58,
+      "padLedStartPlaybackFrame": 8459,
+      "padLedEndPlaybackFrame": 8464,
+      "padLedPeakPlaybackFrame": 8459,
+      "acousticToneOnsetPlaybackFrame": 8474.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 59,
+      "padLedStartPlaybackFrame": 8553,
+      "padLedEndPlaybackFrame": 8559,
+      "padLedPeakPlaybackFrame": 8556,
+      "acousticToneOnsetPlaybackFrame": 8569,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 60,
+      "padLedStartPlaybackFrame": 8648,
+      "padLedEndPlaybackFrame": 8654,
+      "padLedPeakPlaybackFrame": 8650,
+      "acousticToneOnsetPlaybackFrame": 8663.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 61,
+      "padLedStartPlaybackFrame": 8743,
+      "padLedEndPlaybackFrame": 8749,
+      "padLedPeakPlaybackFrame": 8747,
+      "acousticToneOnsetPlaybackFrame": 8758.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 62,
+      "padLedStartPlaybackFrame": 8835,
+      "padLedEndPlaybackFrame": 8842,
+      "padLedPeakPlaybackFrame": 8835,
+      "acousticToneOnsetPlaybackFrame": 8850.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 63,
+      "padLedStartPlaybackFrame": 8929,
+      "padLedEndPlaybackFrame": 8937,
+      "padLedPeakPlaybackFrame": 8936,
+      "acousticToneOnsetPlaybackFrame": 8945.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 64,
+      "padLedStartPlaybackFrame": 9031,
+      "padLedEndPlaybackFrame": 9037,
+      "padLedPeakPlaybackFrame": 9035,
+      "acousticToneOnsetPlaybackFrame": 9048.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 65,
+      "padLedStartPlaybackFrame": 9125,
+      "padLedEndPlaybackFrame": 9133,
+      "padLedPeakPlaybackFrame": 9128,
+      "acousticToneOnsetPlaybackFrame": 9141.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 66,
+      "padLedStartPlaybackFrame": 9215,
+      "padLedEndPlaybackFrame": 9222,
+      "padLedPeakPlaybackFrame": 9216,
+      "acousticToneOnsetPlaybackFrame": 9230.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 67,
+      "padLedStartPlaybackFrame": 9302,
+      "padLedEndPlaybackFrame": 9308,
+      "padLedPeakPlaybackFrame": 9302,
+      "acousticToneOnsetPlaybackFrame": 9318,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 68,
+      "padLedStartPlaybackFrame": 9397,
+      "padLedEndPlaybackFrame": 9404,
+      "padLedPeakPlaybackFrame": 9398,
+      "acousticToneOnsetPlaybackFrame": 9412.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 69,
+      "padLedStartPlaybackFrame": 9489,
+      "padLedEndPlaybackFrame": 9496,
+      "padLedPeakPlaybackFrame": 9490,
+      "acousticToneOnsetPlaybackFrame": 9504.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 70,
+      "padLedStartPlaybackFrame": 9584,
+      "padLedEndPlaybackFrame": 9594,
+      "padLedPeakPlaybackFrame": 9585,
+      "acousticToneOnsetPlaybackFrame": 9602.75,
+      "rawLedToToneMs": 78.125,
+      "calibratedMidiToSoundMs": 53.125,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 71,
+      "padLedStartPlaybackFrame": 9688,
+      "padLedEndPlaybackFrame": 9697,
+      "padLedPeakPlaybackFrame": 9689,
+      "acousticToneOnsetPlaybackFrame": 9704.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 72,
+      "padLedStartPlaybackFrame": 9782,
+      "padLedEndPlaybackFrame": 9789,
+      "padLedPeakPlaybackFrame": 9785,
+      "acousticToneOnsetPlaybackFrame": 9797.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 73,
+      "padLedStartPlaybackFrame": 9876,
+      "padLedEndPlaybackFrame": 9883,
+      "padLedPeakPlaybackFrame": 9879,
+      "acousticToneOnsetPlaybackFrame": 9892.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 74,
+      "padLedStartPlaybackFrame": 9966,
+      "padLedEndPlaybackFrame": 9973,
+      "padLedPeakPlaybackFrame": 9970,
+      "acousticToneOnsetPlaybackFrame": 9982.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 75,
+      "padLedStartPlaybackFrame": 10060,
+      "padLedEndPlaybackFrame": 10068,
+      "padLedPeakPlaybackFrame": 10063,
+      "acousticToneOnsetPlaybackFrame": 10075.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 76,
+      "padLedStartPlaybackFrame": 10151,
+      "padLedEndPlaybackFrame": 10160,
+      "padLedPeakPlaybackFrame": 10151,
+      "acousticToneOnsetPlaybackFrame": 10167.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 77,
+      "padLedStartPlaybackFrame": 10242,
+      "padLedEndPlaybackFrame": 10250,
+      "padLedPeakPlaybackFrame": 10246,
+      "acousticToneOnsetPlaybackFrame": 10258.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 78,
+      "padLedStartPlaybackFrame": 10343,
+      "padLedEndPlaybackFrame": 10353,
+      "padLedPeakPlaybackFrame": 10346,
+      "acousticToneOnsetPlaybackFrame": 10360.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 79,
+      "padLedStartPlaybackFrame": 10436,
+      "padLedEndPlaybackFrame": 10446,
+      "padLedPeakPlaybackFrame": 10436,
+      "acousticToneOnsetPlaybackFrame": 10452,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 80,
+      "padLedStartPlaybackFrame": 10531,
+      "padLedEndPlaybackFrame": 10542,
+      "padLedPeakPlaybackFrame": 10535,
+      "acousticToneOnsetPlaybackFrame": 10546.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 81,
+      "padLedStartPlaybackFrame": 10629,
+      "padLedEndPlaybackFrame": 10640,
+      "padLedPeakPlaybackFrame": 10634,
+      "acousticToneOnsetPlaybackFrame": 10645.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 82,
+      "padLedStartPlaybackFrame": 10719,
+      "padLedEndPlaybackFrame": 10730,
+      "padLedPeakPlaybackFrame": 10722,
+      "acousticToneOnsetPlaybackFrame": 10734.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 83,
+      "padLedStartPlaybackFrame": 10733,
+      "padLedEndPlaybackFrame": 10736,
+      "padLedPeakPlaybackFrame": 10733,
+      "acousticToneOnsetPlaybackFrame": 10748.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 84,
+      "padLedStartPlaybackFrame": 10817,
+      "padLedEndPlaybackFrame": 10825,
+      "padLedPeakPlaybackFrame": 10818,
+      "acousticToneOnsetPlaybackFrame": 10832.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 85,
+      "padLedStartPlaybackFrame": 10910,
+      "padLedEndPlaybackFrame": 10920,
+      "padLedPeakPlaybackFrame": 10910,
+      "acousticToneOnsetPlaybackFrame": 10925.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 86,
+      "padLedStartPlaybackFrame": 11004,
+      "padLedEndPlaybackFrame": 11016,
+      "padLedPeakPlaybackFrame": 11007,
+      "acousticToneOnsetPlaybackFrame": 11019,
+      "rawLedToToneMs": 62.5,
+      "calibratedMidiToSoundMs": 37.5,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 87,
+      "padLedStartPlaybackFrame": 11019,
+      "padLedEndPlaybackFrame": 11022,
+      "padLedPeakPlaybackFrame": 11020,
+      "acousticToneOnsetPlaybackFrame": 11034.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 88,
+      "padLedStartPlaybackFrame": 11113,
+      "padLedEndPlaybackFrame": 11122,
+      "padLedPeakPlaybackFrame": 11115,
+      "acousticToneOnsetPlaybackFrame": 11128.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 89,
+      "padLedStartPlaybackFrame": 11201,
+      "padLedEndPlaybackFrame": 11211,
+      "padLedPeakPlaybackFrame": 11201,
+      "acousticToneOnsetPlaybackFrame": 11216.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 90,
+      "padLedStartPlaybackFrame": 11294,
+      "padLedEndPlaybackFrame": 11299,
+      "padLedPeakPlaybackFrame": 11295,
+      "acousticToneOnsetPlaybackFrame": 11309.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 91,
+      "padLedStartPlaybackFrame": 11384,
+      "padLedEndPlaybackFrame": 11395,
+      "padLedPeakPlaybackFrame": 11394,
+      "acousticToneOnsetPlaybackFrame": 11399.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 92,
+      "padLedStartPlaybackFrame": 11476,
+      "padLedEndPlaybackFrame": 11483,
+      "padLedPeakPlaybackFrame": 11476,
+      "acousticToneOnsetPlaybackFrame": 11491.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 205
+    },
+    {
+      "sequence": 93,
+      "padLedStartPlaybackFrame": 11570,
+      "padLedEndPlaybackFrame": 11584,
+      "padLedPeakPlaybackFrame": 11571,
+      "acousticToneOnsetPlaybackFrame": 11587.125,
+      "rawLedToToneMs": 71.354167,
+      "calibratedMidiToSoundMs": 46.354167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 94,
+      "padLedStartPlaybackFrame": 11666,
+      "padLedEndPlaybackFrame": 11676,
+      "padLedPeakPlaybackFrame": 11671,
+      "acousticToneOnsetPlaybackFrame": 11682.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 95,
+      "padLedStartPlaybackFrame": 11756,
+      "padLedEndPlaybackFrame": 11766,
+      "padLedPeakPlaybackFrame": 11760,
+      "acousticToneOnsetPlaybackFrame": 11771.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 96,
+      "padLedStartPlaybackFrame": 11845,
+      "padLedEndPlaybackFrame": 11851,
+      "padLedPeakPlaybackFrame": 11847,
+      "acousticToneOnsetPlaybackFrame": 11861.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 97,
+      "padLedStartPlaybackFrame": 11936,
+      "padLedEndPlaybackFrame": 11941,
+      "padLedPeakPlaybackFrame": 11941,
+      "acousticToneOnsetPlaybackFrame": 11952.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 98,
+      "padLedStartPlaybackFrame": 12028,
+      "padLedEndPlaybackFrame": 12032,
+      "padLedPeakPlaybackFrame": 12031,
+      "acousticToneOnsetPlaybackFrame": 12045.375,
+      "rawLedToToneMs": 72.395833,
+      "calibratedMidiToSoundMs": 47.395833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 99,
+      "padLedStartPlaybackFrame": 12115,
+      "padLedEndPlaybackFrame": 12119,
+      "padLedPeakPlaybackFrame": 12117,
+      "acousticToneOnsetPlaybackFrame": 12131.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 100,
+      "padLedStartPlaybackFrame": 12196,
+      "padLedEndPlaybackFrame": 12209,
+      "padLedPeakPlaybackFrame": 12196,
+      "acousticToneOnsetPlaybackFrame": 12213.125,
+      "rawLedToToneMs": 71.354167,
+      "calibratedMidiToSoundMs": 46.354167,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 101,
+      "padLedStartPlaybackFrame": 12284,
+      "padLedEndPlaybackFrame": 12299,
+      "padLedPeakPlaybackFrame": 12284,
+      "acousticToneOnsetPlaybackFrame": 12300.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 102,
+      "padLedStartPlaybackFrame": 12417,
+      "padLedEndPlaybackFrame": 12422,
+      "padLedPeakPlaybackFrame": 12419,
+      "acousticToneOnsetPlaybackFrame": 12433.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 103,
+      "padLedStartPlaybackFrame": 12523,
+      "padLedEndPlaybackFrame": 12528,
+      "padLedPeakPlaybackFrame": 12526,
+      "acousticToneOnsetPlaybackFrame": 12540.75,
+      "rawLedToToneMs": 73.958333,
+      "calibratedMidiToSoundMs": 48.958333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 104,
+      "padLedStartPlaybackFrame": 12618,
+      "padLedEndPlaybackFrame": 12623,
+      "padLedPeakPlaybackFrame": 12622,
+      "acousticToneOnsetPlaybackFrame": 12634.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 105,
+      "padLedStartPlaybackFrame": 12709,
+      "padLedEndPlaybackFrame": 12715,
+      "padLedPeakPlaybackFrame": 12711,
+      "acousticToneOnsetPlaybackFrame": 12725.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 106,
+      "padLedStartPlaybackFrame": 12719,
+      "padLedEndPlaybackFrame": 12721,
+      "padLedPeakPlaybackFrame": 12720,
+      "acousticToneOnsetPlaybackFrame": 12735.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 107,
+      "padLedStartPlaybackFrame": 12810,
+      "padLedEndPlaybackFrame": 12816,
+      "padLedPeakPlaybackFrame": 12811,
+      "acousticToneOnsetPlaybackFrame": 12826.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 108,
+      "padLedStartPlaybackFrame": 12899,
+      "padLedEndPlaybackFrame": 12906,
+      "padLedPeakPlaybackFrame": 12899,
+      "acousticToneOnsetPlaybackFrame": 12915.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 109,
+      "padLedStartPlaybackFrame": 12996,
+      "padLedEndPlaybackFrame": 13003,
+      "padLedPeakPlaybackFrame": 12999,
+      "acousticToneOnsetPlaybackFrame": 13012,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 110,
+      "padLedStartPlaybackFrame": 13086,
+      "padLedEndPlaybackFrame": 13091,
+      "padLedPeakPlaybackFrame": 13086,
+      "acousticToneOnsetPlaybackFrame": 13101.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 111,
+      "padLedStartPlaybackFrame": 13177,
+      "padLedEndPlaybackFrame": 13190,
+      "padLedPeakPlaybackFrame": 13180,
+      "acousticToneOnsetPlaybackFrame": 13192.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 112,
+      "padLedStartPlaybackFrame": 13270,
+      "padLedEndPlaybackFrame": 13276,
+      "padLedPeakPlaybackFrame": 13270,
+      "acousticToneOnsetPlaybackFrame": 13285.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 113,
+      "padLedStartPlaybackFrame": 13367,
+      "padLedEndPlaybackFrame": 13375,
+      "padLedPeakPlaybackFrame": 13375,
+      "acousticToneOnsetPlaybackFrame": 13382,
+      "rawLedToToneMs": 62.5,
+      "calibratedMidiToSoundMs": 37.5,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 114,
+      "padLedStartPlaybackFrame": 13457,
+      "padLedEndPlaybackFrame": 13464,
+      "padLedPeakPlaybackFrame": 13457,
+      "acousticToneOnsetPlaybackFrame": 13472.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 115,
+      "padLedStartPlaybackFrame": 13546,
+      "padLedEndPlaybackFrame": 13553,
+      "padLedPeakPlaybackFrame": 13546,
+      "acousticToneOnsetPlaybackFrame": 13561.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 116,
+      "padLedStartPlaybackFrame": 13641,
+      "padLedEndPlaybackFrame": 13647,
+      "padLedPeakPlaybackFrame": 13645,
+      "acousticToneOnsetPlaybackFrame": 13657.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 117,
+      "padLedStartPlaybackFrame": 13738,
+      "padLedEndPlaybackFrame": 13744,
+      "padLedPeakPlaybackFrame": 13738,
+      "acousticToneOnsetPlaybackFrame": 13754.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 118,
+      "padLedStartPlaybackFrame": 13828,
+      "padLedEndPlaybackFrame": 13834,
+      "padLedPeakPlaybackFrame": 13831,
+      "acousticToneOnsetPlaybackFrame": 13844,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 119,
+      "padLedStartPlaybackFrame": 13916,
+      "padLedEndPlaybackFrame": 13923,
+      "padLedPeakPlaybackFrame": 13922,
+      "acousticToneOnsetPlaybackFrame": 13932.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 120,
+      "padLedStartPlaybackFrame": 14006,
+      "padLedEndPlaybackFrame": 14010,
+      "padLedPeakPlaybackFrame": 14009,
+      "acousticToneOnsetPlaybackFrame": 14022,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 121,
+      "padLedStartPlaybackFrame": 14103,
+      "padLedEndPlaybackFrame": 14107,
+      "padLedPeakPlaybackFrame": 14106,
+      "acousticToneOnsetPlaybackFrame": 14119.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 122,
+      "padLedStartPlaybackFrame": 14188,
+      "padLedEndPlaybackFrame": 14192,
+      "padLedPeakPlaybackFrame": 14189,
+      "acousticToneOnsetPlaybackFrame": 14203.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 123,
+      "padLedStartPlaybackFrame": 14276,
+      "padLedEndPlaybackFrame": 14279,
+      "padLedPeakPlaybackFrame": 14276,
+      "acousticToneOnsetPlaybackFrame": 14292,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 124,
+      "padLedStartPlaybackFrame": 14367,
+      "padLedEndPlaybackFrame": 14371,
+      "padLedPeakPlaybackFrame": 14367,
+      "acousticToneOnsetPlaybackFrame": 14384,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 125,
+      "padLedStartPlaybackFrame": 14459,
+      "padLedEndPlaybackFrame": 14462,
+      "padLedPeakPlaybackFrame": 14461,
+      "acousticToneOnsetPlaybackFrame": 14476.125,
+      "rawLedToToneMs": 71.354167,
+      "calibratedMidiToSoundMs": 46.354167,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 126,
+      "padLedStartPlaybackFrame": 14557,
+      "padLedEndPlaybackFrame": 14563,
+      "padLedPeakPlaybackFrame": 14561,
+      "acousticToneOnsetPlaybackFrame": 14572.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 205
+    },
+    {
+      "sequence": 127,
+      "padLedStartPlaybackFrame": 14660,
+      "padLedEndPlaybackFrame": 14662,
+      "padLedPeakPlaybackFrame": 14660,
+      "acousticToneOnsetPlaybackFrame": 14676.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 128,
+      "padLedStartPlaybackFrame": 14665,
+      "padLedEndPlaybackFrame": 14668,
+      "padLedPeakPlaybackFrame": 14665,
+      "acousticToneOnsetPlaybackFrame": 14679,
+      "rawLedToToneMs": 58.333333,
+      "calibratedMidiToSoundMs": 33.333333,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 129,
+      "padLedStartPlaybackFrame": 14764,
+      "padLedEndPlaybackFrame": 14769,
+      "padLedPeakPlaybackFrame": 14764,
+      "acousticToneOnsetPlaybackFrame": 14779.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 130,
+      "padLedStartPlaybackFrame": 14853,
+      "padLedEndPlaybackFrame": 14857,
+      "padLedPeakPlaybackFrame": 14853,
+      "acousticToneOnsetPlaybackFrame": 14869.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 131,
+      "padLedStartPlaybackFrame": 14939,
+      "padLedEndPlaybackFrame": 14943,
+      "padLedPeakPlaybackFrame": 14942,
+      "acousticToneOnsetPlaybackFrame": 14955.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 132,
+      "padLedStartPlaybackFrame": 15033,
+      "padLedEndPlaybackFrame": 15040,
+      "padLedPeakPlaybackFrame": 15036,
+      "acousticToneOnsetPlaybackFrame": 15048.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 133,
+      "padLedStartPlaybackFrame": 15121,
+      "padLedEndPlaybackFrame": 15128,
+      "padLedPeakPlaybackFrame": 15124,
+      "acousticToneOnsetPlaybackFrame": 15136.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 134,
+      "padLedStartPlaybackFrame": 15209,
+      "padLedEndPlaybackFrame": 15215,
+      "padLedPeakPlaybackFrame": 15209,
+      "acousticToneOnsetPlaybackFrame": 15225.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 135,
+      "padLedStartPlaybackFrame": 15302,
+      "padLedEndPlaybackFrame": 15312,
+      "padLedPeakPlaybackFrame": 15308,
+      "acousticToneOnsetPlaybackFrame": 15318.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 136,
+      "padLedStartPlaybackFrame": 15401,
+      "padLedEndPlaybackFrame": 15409,
+      "padLedPeakPlaybackFrame": 15404,
+      "acousticToneOnsetPlaybackFrame": 15417.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 137,
+      "padLedStartPlaybackFrame": 15497,
+      "padLedEndPlaybackFrame": 15506,
+      "padLedPeakPlaybackFrame": 15497,
+      "acousticToneOnsetPlaybackFrame": 15512,
+      "rawLedToToneMs": 62.5,
+      "calibratedMidiToSoundMs": 37.5,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 138,
+      "padLedStartPlaybackFrame": 15593,
+      "padLedEndPlaybackFrame": 15598,
+      "padLedPeakPlaybackFrame": 15596,
+      "acousticToneOnsetPlaybackFrame": 15609.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 139,
+      "padLedStartPlaybackFrame": 15685,
+      "padLedEndPlaybackFrame": 15688,
+      "padLedPeakPlaybackFrame": 15686,
+      "acousticToneOnsetPlaybackFrame": 15702,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 140,
+      "padLedStartPlaybackFrame": 15778,
+      "padLedEndPlaybackFrame": 15784,
+      "padLedPeakPlaybackFrame": 15783,
+      "acousticToneOnsetPlaybackFrame": 15793.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 141,
+      "padLedStartPlaybackFrame": 15870,
+      "padLedEndPlaybackFrame": 15875,
+      "padLedPeakPlaybackFrame": 15874,
+      "acousticToneOnsetPlaybackFrame": 15885.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 142,
+      "padLedStartPlaybackFrame": 15957,
+      "padLedEndPlaybackFrame": 15961,
+      "padLedPeakPlaybackFrame": 15960,
+      "acousticToneOnsetPlaybackFrame": 15972.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 143,
+      "padLedStartPlaybackFrame": 16051,
+      "padLedEndPlaybackFrame": 16056,
+      "padLedPeakPlaybackFrame": 16051,
+      "acousticToneOnsetPlaybackFrame": 16066.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 144,
+      "padLedStartPlaybackFrame": 16135,
+      "padLedEndPlaybackFrame": 16144,
+      "padLedPeakPlaybackFrame": 16138,
+      "acousticToneOnsetPlaybackFrame": 16152.625,
+      "rawLedToToneMs": 73.4375,
+      "calibratedMidiToSoundMs": 48.4375,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 145,
+      "padLedStartPlaybackFrame": 16227,
+      "padLedEndPlaybackFrame": 16232,
+      "padLedPeakPlaybackFrame": 16228,
+      "acousticToneOnsetPlaybackFrame": 16242.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 146,
+      "padLedStartPlaybackFrame": 16330,
+      "padLedEndPlaybackFrame": 16333,
+      "padLedPeakPlaybackFrame": 16331,
+      "acousticToneOnsetPlaybackFrame": 16346.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 147,
+      "padLedStartPlaybackFrame": 16427,
+      "padLedEndPlaybackFrame": 16431,
+      "padLedPeakPlaybackFrame": 16427,
+      "acousticToneOnsetPlaybackFrame": 16442.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 148,
+      "padLedStartPlaybackFrame": 16513,
+      "padLedEndPlaybackFrame": 16518,
+      "padLedPeakPlaybackFrame": 16514,
+      "acousticToneOnsetPlaybackFrame": 16528.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 205
+    },
+    {
+      "sequence": 149,
+      "padLedStartPlaybackFrame": 16612,
+      "padLedEndPlaybackFrame": 16617,
+      "padLedPeakPlaybackFrame": 16615,
+      "acousticToneOnsetPlaybackFrame": 16626.875,
+      "rawLedToToneMs": 61.979167,
+      "calibratedMidiToSoundMs": 36.979167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 150,
+      "padLedStartPlaybackFrame": 16709,
+      "padLedEndPlaybackFrame": 16716,
+      "padLedPeakPlaybackFrame": 16710,
+      "acousticToneOnsetPlaybackFrame": 16725.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 207
+    },
+    {
+      "sequence": 151,
+      "padLedStartPlaybackFrame": 16807,
+      "padLedEndPlaybackFrame": 16816,
+      "padLedPeakPlaybackFrame": 16811,
+      "acousticToneOnsetPlaybackFrame": 16822.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 152,
+      "padLedStartPlaybackFrame": 16900,
+      "padLedEndPlaybackFrame": 16907,
+      "padLedPeakPlaybackFrame": 16902,
+      "acousticToneOnsetPlaybackFrame": 16916.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 153,
+      "padLedStartPlaybackFrame": 16990,
+      "padLedEndPlaybackFrame": 16999,
+      "padLedPeakPlaybackFrame": 16992,
+      "acousticToneOnsetPlaybackFrame": 17007.625,
+      "rawLedToToneMs": 73.4375,
+      "calibratedMidiToSoundMs": 48.4375,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 154,
+      "padLedStartPlaybackFrame": 17080,
+      "padLedEndPlaybackFrame": 17086,
+      "padLedPeakPlaybackFrame": 17085,
+      "acousticToneOnsetPlaybackFrame": 17096.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 155,
+      "padLedStartPlaybackFrame": 17175,
+      "padLedEndPlaybackFrame": 17179,
+      "padLedPeakPlaybackFrame": 17175,
+      "acousticToneOnsetPlaybackFrame": 17191.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 156,
+      "padLedStartPlaybackFrame": 17268,
+      "padLedEndPlaybackFrame": 17274,
+      "padLedPeakPlaybackFrame": 17269,
+      "acousticToneOnsetPlaybackFrame": 17284.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 157,
+      "padLedStartPlaybackFrame": 17361,
+      "padLedEndPlaybackFrame": 17367,
+      "padLedPeakPlaybackFrame": 17363,
+      "acousticToneOnsetPlaybackFrame": 17376.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 158,
+      "padLedStartPlaybackFrame": 17445,
+      "padLedEndPlaybackFrame": 17456,
+      "padLedPeakPlaybackFrame": 17454,
+      "acousticToneOnsetPlaybackFrame": 17461.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 159,
+      "padLedStartPlaybackFrame": 17544,
+      "padLedEndPlaybackFrame": 17549,
+      "padLedPeakPlaybackFrame": 17547,
+      "acousticToneOnsetPlaybackFrame": 17560,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 160,
+      "padLedStartPlaybackFrame": 17639,
+      "padLedEndPlaybackFrame": 17641,
+      "padLedPeakPlaybackFrame": 17640,
+      "acousticToneOnsetPlaybackFrame": 17656.625,
+      "rawLedToToneMs": 73.4375,
+      "calibratedMidiToSoundMs": 48.4375,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 161,
+      "padLedStartPlaybackFrame": 17727,
+      "padLedEndPlaybackFrame": 17731,
+      "padLedPeakPlaybackFrame": 17730,
+      "acousticToneOnsetPlaybackFrame": 17743.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 162,
+      "padLedStartPlaybackFrame": 17821,
+      "padLedEndPlaybackFrame": 17824,
+      "padLedPeakPlaybackFrame": 17824,
+      "acousticToneOnsetPlaybackFrame": 17836.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 163,
+      "padLedStartPlaybackFrame": 17910,
+      "padLedEndPlaybackFrame": 17913,
+      "padLedPeakPlaybackFrame": 17911,
+      "acousticToneOnsetPlaybackFrame": 17928,
+      "rawLedToToneMs": 75,
+      "calibratedMidiToSoundMs": 50,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 164,
+      "padLedStartPlaybackFrame": 17994,
+      "padLedEndPlaybackFrame": 17999,
+      "padLedPeakPlaybackFrame": 17996,
+      "acousticToneOnsetPlaybackFrame": 18010.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 165,
+      "padLedStartPlaybackFrame": 18081,
+      "padLedEndPlaybackFrame": 18086,
+      "padLedPeakPlaybackFrame": 18081,
+      "acousticToneOnsetPlaybackFrame": 18096.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 166,
+      "padLedStartPlaybackFrame": 18182,
+      "padLedEndPlaybackFrame": 18185,
+      "padLedPeakPlaybackFrame": 18182,
+      "acousticToneOnsetPlaybackFrame": 18199.375,
+      "rawLedToToneMs": 72.395833,
+      "calibratedMidiToSoundMs": 47.395833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 167,
+      "padLedStartPlaybackFrame": 18272,
+      "padLedEndPlaybackFrame": 18274,
+      "padLedPeakPlaybackFrame": 18273,
+      "acousticToneOnsetPlaybackFrame": 18289,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 168,
+      "padLedStartPlaybackFrame": 18344,
+      "padLedEndPlaybackFrame": 18349,
+      "padLedPeakPlaybackFrame": 18347,
+      "acousticToneOnsetPlaybackFrame": 18360,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 169,
+      "padLedStartPlaybackFrame": 18431,
+      "padLedEndPlaybackFrame": 18435,
+      "padLedPeakPlaybackFrame": 18431,
+      "acousticToneOnsetPlaybackFrame": 18447,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 170,
+      "padLedStartPlaybackFrame": 18514,
+      "padLedEndPlaybackFrame": 18518,
+      "padLedPeakPlaybackFrame": 18517,
+      "acousticToneOnsetPlaybackFrame": 18530.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 171,
+      "padLedStartPlaybackFrame": 18596,
+      "padLedEndPlaybackFrame": 18599,
+      "padLedPeakPlaybackFrame": 18597,
+      "acousticToneOnsetPlaybackFrame": 18614.125,
+      "rawLedToToneMs": 75.520833,
+      "calibratedMidiToSoundMs": 50.520833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 172,
+      "padLedStartPlaybackFrame": 18671,
+      "padLedEndPlaybackFrame": 18676,
+      "padLedPeakPlaybackFrame": 18674,
+      "acousticToneOnsetPlaybackFrame": 18686.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 173,
+      "padLedStartPlaybackFrame": 18744,
+      "padLedEndPlaybackFrame": 18747,
+      "padLedPeakPlaybackFrame": 18744,
+      "acousticToneOnsetPlaybackFrame": 18759.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 174,
+      "padLedStartPlaybackFrame": 18814,
+      "padLedEndPlaybackFrame": 18818,
+      "padLedPeakPlaybackFrame": 18815,
+      "acousticToneOnsetPlaybackFrame": 18829.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 175,
+      "padLedStartPlaybackFrame": 18881,
+      "padLedEndPlaybackFrame": 18884,
+      "padLedPeakPlaybackFrame": 18881,
+      "acousticToneOnsetPlaybackFrame": 18897.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 176,
+      "padLedStartPlaybackFrame": 18954,
+      "padLedEndPlaybackFrame": 18960,
+      "padLedPeakPlaybackFrame": 18955,
+      "acousticToneOnsetPlaybackFrame": 18969.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 177,
+      "padLedStartPlaybackFrame": 19015,
+      "padLedEndPlaybackFrame": 19017,
+      "padLedPeakPlaybackFrame": 19015,
+      "acousticToneOnsetPlaybackFrame": 19030.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 178,
+      "padLedStartPlaybackFrame": 19083,
+      "padLedEndPlaybackFrame": 19087,
+      "padLedPeakPlaybackFrame": 19086,
+      "acousticToneOnsetPlaybackFrame": 19099.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 179,
+      "padLedStartPlaybackFrame": 19147,
+      "padLedEndPlaybackFrame": 19150,
+      "padLedPeakPlaybackFrame": 19147,
+      "acousticToneOnsetPlaybackFrame": 19162.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 180,
+      "padLedStartPlaybackFrame": 19215,
+      "padLedEndPlaybackFrame": 19220,
+      "padLedPeakPlaybackFrame": 19220,
+      "acousticToneOnsetPlaybackFrame": 19233.625,
+      "rawLedToToneMs": 77.604167,
+      "calibratedMidiToSoundMs": 52.604167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 181,
+      "padLedStartPlaybackFrame": 19276,
+      "padLedEndPlaybackFrame": 19281,
+      "padLedPeakPlaybackFrame": 19277,
+      "acousticToneOnsetPlaybackFrame": 19291.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 182,
+      "padLedStartPlaybackFrame": 19345,
+      "padLedEndPlaybackFrame": 19349,
+      "padLedPeakPlaybackFrame": 19346,
+      "acousticToneOnsetPlaybackFrame": 19361,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 183,
+      "padLedStartPlaybackFrame": 19406,
+      "padLedEndPlaybackFrame": 19409,
+      "padLedPeakPlaybackFrame": 19406,
+      "acousticToneOnsetPlaybackFrame": 19424.375,
+      "rawLedToToneMs": 76.5625,
+      "calibratedMidiToSoundMs": 51.5625,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 184,
+      "padLedStartPlaybackFrame": 19473,
+      "padLedEndPlaybackFrame": 19477,
+      "padLedPeakPlaybackFrame": 19473,
+      "acousticToneOnsetPlaybackFrame": 19489,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 185,
+      "padLedStartPlaybackFrame": 19530,
+      "padLedEndPlaybackFrame": 19533,
+      "padLedPeakPlaybackFrame": 19530,
+      "acousticToneOnsetPlaybackFrame": 19545.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 186,
+      "padLedStartPlaybackFrame": 19599,
+      "padLedEndPlaybackFrame": 19602,
+      "padLedPeakPlaybackFrame": 19599,
+      "acousticToneOnsetPlaybackFrame": 19616.75,
+      "rawLedToToneMs": 73.958333,
+      "calibratedMidiToSoundMs": 48.958333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 187,
+      "padLedStartPlaybackFrame": 19658,
+      "padLedEndPlaybackFrame": 19662,
+      "padLedPeakPlaybackFrame": 19662,
+      "acousticToneOnsetPlaybackFrame": 19673.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 188,
+      "padLedStartPlaybackFrame": 19721,
+      "padLedEndPlaybackFrame": 19723,
+      "padLedPeakPlaybackFrame": 19723,
+      "acousticToneOnsetPlaybackFrame": 19737.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 189,
+      "padLedStartPlaybackFrame": 19785,
+      "padLedEndPlaybackFrame": 19787,
+      "padLedPeakPlaybackFrame": 19785,
+      "acousticToneOnsetPlaybackFrame": 19801.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 190,
+      "padLedStartPlaybackFrame": 19854,
+      "padLedEndPlaybackFrame": 19857,
+      "padLedPeakPlaybackFrame": 19855,
+      "acousticToneOnsetPlaybackFrame": 19870.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 191,
+      "padLedStartPlaybackFrame": 19917,
+      "padLedEndPlaybackFrame": 19919,
+      "padLedPeakPlaybackFrame": 19919,
+      "acousticToneOnsetPlaybackFrame": 19933.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 192,
+      "padLedStartPlaybackFrame": 19979,
+      "padLedEndPlaybackFrame": 19982,
+      "padLedPeakPlaybackFrame": 19979,
+      "acousticToneOnsetPlaybackFrame": 19994.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 193,
+      "padLedStartPlaybackFrame": 20049,
+      "padLedEndPlaybackFrame": 20052,
+      "padLedPeakPlaybackFrame": 20052,
+      "acousticToneOnsetPlaybackFrame": 20065,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 194,
+      "padLedStartPlaybackFrame": 20115,
+      "padLedEndPlaybackFrame": 20118,
+      "padLedPeakPlaybackFrame": 20116,
+      "acousticToneOnsetPlaybackFrame": 20130.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 195,
+      "padLedStartPlaybackFrame": 20178,
+      "padLedEndPlaybackFrame": 20181,
+      "padLedPeakPlaybackFrame": 20179,
+      "acousticToneOnsetPlaybackFrame": 20193,
+      "rawLedToToneMs": 62.5,
+      "calibratedMidiToSoundMs": 37.5,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 196,
+      "padLedStartPlaybackFrame": 20241,
+      "padLedEndPlaybackFrame": 20244,
+      "padLedPeakPlaybackFrame": 20242,
+      "acousticToneOnsetPlaybackFrame": 20257,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 197,
+      "padLedStartPlaybackFrame": 20303,
+      "padLedEndPlaybackFrame": 20305,
+      "padLedPeakPlaybackFrame": 20304,
+      "acousticToneOnsetPlaybackFrame": 20318.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 198,
+      "padLedStartPlaybackFrame": 20363,
+      "padLedEndPlaybackFrame": 20366,
+      "padLedPeakPlaybackFrame": 20363,
+      "acousticToneOnsetPlaybackFrame": 20380.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 199,
+      "padLedStartPlaybackFrame": 20429,
+      "padLedEndPlaybackFrame": 20431,
+      "padLedPeakPlaybackFrame": 20429,
+      "acousticToneOnsetPlaybackFrame": 20443.875,
+      "rawLedToToneMs": 61.979167,
+      "calibratedMidiToSoundMs": 36.979167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 200,
+      "padLedStartPlaybackFrame": 20490,
+      "padLedEndPlaybackFrame": 20494,
+      "padLedPeakPlaybackFrame": 20491,
+      "acousticToneOnsetPlaybackFrame": 20505.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 201,
+      "padLedStartPlaybackFrame": 20556,
+      "padLedEndPlaybackFrame": 20559,
+      "padLedPeakPlaybackFrame": 20558,
+      "acousticToneOnsetPlaybackFrame": 20571.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 202,
+      "padLedStartPlaybackFrame": 20613,
+      "padLedEndPlaybackFrame": 20617,
+      "padLedPeakPlaybackFrame": 20616,
+      "acousticToneOnsetPlaybackFrame": 20628.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 203,
+      "padLedStartPlaybackFrame": 20668,
+      "padLedEndPlaybackFrame": 20671,
+      "padLedPeakPlaybackFrame": 20669,
+      "acousticToneOnsetPlaybackFrame": 20684.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 197
+    },
+    {
+      "sequence": 204,
+      "padLedStartPlaybackFrame": 20734,
+      "padLedEndPlaybackFrame": 20736,
+      "padLedPeakPlaybackFrame": 20736,
+      "acousticToneOnsetPlaybackFrame": 20751.75,
+      "rawLedToToneMs": 73.958333,
+      "calibratedMidiToSoundMs": 48.958333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 205,
+      "padLedStartPlaybackFrame": 20798,
+      "padLedEndPlaybackFrame": 20801,
+      "padLedPeakPlaybackFrame": 20801,
+      "acousticToneOnsetPlaybackFrame": 20815.75,
+      "rawLedToToneMs": 73.958333,
+      "calibratedMidiToSoundMs": 48.958333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 206,
+      "padLedStartPlaybackFrame": 20865,
+      "padLedEndPlaybackFrame": 20868,
+      "padLedPeakPlaybackFrame": 20866,
+      "acousticToneOnsetPlaybackFrame": 20882.375,
+      "rawLedToToneMs": 72.395833,
+      "calibratedMidiToSoundMs": 47.395833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 207,
+      "padLedStartPlaybackFrame": 20928,
+      "padLedEndPlaybackFrame": 20931,
+      "padLedPeakPlaybackFrame": 20929,
+      "acousticToneOnsetPlaybackFrame": 20944.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 208,
+      "padLedStartPlaybackFrame": 20991,
+      "padLedEndPlaybackFrame": 20994,
+      "padLedPeakPlaybackFrame": 20992,
+      "acousticToneOnsetPlaybackFrame": 21007.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 209,
+      "padLedStartPlaybackFrame": 21053,
+      "padLedEndPlaybackFrame": 21056,
+      "padLedPeakPlaybackFrame": 21054,
+      "acousticToneOnsetPlaybackFrame": 21068.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 210,
+      "padLedStartPlaybackFrame": 21110,
+      "padLedEndPlaybackFrame": 21113,
+      "padLedPeakPlaybackFrame": 21112,
+      "acousticToneOnsetPlaybackFrame": 21128.125,
+      "rawLedToToneMs": 75.520833,
+      "calibratedMidiToSoundMs": 50.520833,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 211,
+      "padLedStartPlaybackFrame": 21167,
+      "padLedEndPlaybackFrame": 21171,
+      "padLedPeakPlaybackFrame": 21170,
+      "acousticToneOnsetPlaybackFrame": 21184.375,
+      "rawLedToToneMs": 72.395833,
+      "calibratedMidiToSoundMs": 47.395833,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 212,
+      "padLedStartPlaybackFrame": 21238,
+      "padLedEndPlaybackFrame": 21240,
+      "padLedPeakPlaybackFrame": 21240,
+      "acousticToneOnsetPlaybackFrame": 21256.125,
+      "rawLedToToneMs": 75.520833,
+      "calibratedMidiToSoundMs": 50.520833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 213,
+      "padLedStartPlaybackFrame": 21294,
+      "padLedEndPlaybackFrame": 21299,
+      "padLedPeakPlaybackFrame": 21297,
+      "acousticToneOnsetPlaybackFrame": 21310.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 214,
+      "padLedStartPlaybackFrame": 21361,
+      "padLedEndPlaybackFrame": 21364,
+      "padLedPeakPlaybackFrame": 21363,
+      "acousticToneOnsetPlaybackFrame": 21379,
+      "rawLedToToneMs": 75,
+      "calibratedMidiToSoundMs": 50,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 215,
+      "padLedStartPlaybackFrame": 21421,
+      "padLedEndPlaybackFrame": 21427,
+      "padLedPeakPlaybackFrame": 21426,
+      "acousticToneOnsetPlaybackFrame": 21437.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 216,
+      "padLedStartPlaybackFrame": 21491,
+      "padLedEndPlaybackFrame": 21493,
+      "padLedPeakPlaybackFrame": 21493,
+      "acousticToneOnsetPlaybackFrame": 21506.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 217,
+      "padLedStartPlaybackFrame": 21546,
+      "padLedEndPlaybackFrame": 21549,
+      "padLedPeakPlaybackFrame": 21548,
+      "acousticToneOnsetPlaybackFrame": 21562.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 218,
+      "padLedStartPlaybackFrame": 21606,
+      "padLedEndPlaybackFrame": 21608,
+      "padLedPeakPlaybackFrame": 21606,
+      "acousticToneOnsetPlaybackFrame": 21621.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 219,
+      "padLedStartPlaybackFrame": 21675,
+      "padLedEndPlaybackFrame": 21678,
+      "padLedPeakPlaybackFrame": 21675,
+      "acousticToneOnsetPlaybackFrame": 21692.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 220,
+      "padLedStartPlaybackFrame": 21731,
+      "padLedEndPlaybackFrame": 21733,
+      "padLedPeakPlaybackFrame": 21731,
+      "acousticToneOnsetPlaybackFrame": 21748.875,
+      "rawLedToToneMs": 74.479167,
+      "calibratedMidiToSoundMs": 49.479167,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 221,
+      "padLedStartPlaybackFrame": 21793,
+      "padLedEndPlaybackFrame": 21796,
+      "padLedPeakPlaybackFrame": 21794,
+      "acousticToneOnsetPlaybackFrame": 21809.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 222,
+      "padLedStartPlaybackFrame": 21853,
+      "padLedEndPlaybackFrame": 21858,
+      "padLedPeakPlaybackFrame": 21856,
+      "acousticToneOnsetPlaybackFrame": 21871.75,
+      "rawLedToToneMs": 78.125,
+      "calibratedMidiToSoundMs": 53.125,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 223,
+      "padLedStartPlaybackFrame": 21922,
+      "padLedEndPlaybackFrame": 21928,
+      "padLedPeakPlaybackFrame": 21924,
+      "acousticToneOnsetPlaybackFrame": 21938.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 224,
+      "padLedStartPlaybackFrame": 21985,
+      "padLedEndPlaybackFrame": 21990,
+      "padLedPeakPlaybackFrame": 21986,
+      "acousticToneOnsetPlaybackFrame": 22001.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 225,
+      "padLedStartPlaybackFrame": 22043,
+      "padLedEndPlaybackFrame": 22048,
+      "padLedPeakPlaybackFrame": 22046,
+      "acousticToneOnsetPlaybackFrame": 22059.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 226,
+      "padLedStartPlaybackFrame": 22112,
+      "padLedEndPlaybackFrame": 22116,
+      "padLedPeakPlaybackFrame": 22114,
+      "acousticToneOnsetPlaybackFrame": 22127.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 227,
+      "padLedStartPlaybackFrame": 22166,
+      "padLedEndPlaybackFrame": 22171,
+      "padLedPeakPlaybackFrame": 22168,
+      "acousticToneOnsetPlaybackFrame": 22184.125,
+      "rawLedToToneMs": 75.520833,
+      "calibratedMidiToSoundMs": 50.520833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 228,
+      "padLedStartPlaybackFrame": 22228,
+      "padLedEndPlaybackFrame": 22231,
+      "padLedPeakPlaybackFrame": 22230,
+      "acousticToneOnsetPlaybackFrame": 22245.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 229,
+      "padLedStartPlaybackFrame": 22288,
+      "padLedEndPlaybackFrame": 22292,
+      "padLedPeakPlaybackFrame": 22288,
+      "acousticToneOnsetPlaybackFrame": 22303.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 230,
+      "padLedStartPlaybackFrame": 22349,
+      "padLedEndPlaybackFrame": 22352,
+      "padLedPeakPlaybackFrame": 22350,
+      "acousticToneOnsetPlaybackFrame": 22365.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 231,
+      "padLedStartPlaybackFrame": 22407,
+      "padLedEndPlaybackFrame": 22412,
+      "padLedPeakPlaybackFrame": 22408,
+      "acousticToneOnsetPlaybackFrame": 22424,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 232,
+      "padLedStartPlaybackFrame": 22470,
+      "padLedEndPlaybackFrame": 22474,
+      "padLedPeakPlaybackFrame": 22473,
+      "acousticToneOnsetPlaybackFrame": 22486.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 233,
+      "padLedStartPlaybackFrame": 22525,
+      "padLedEndPlaybackFrame": 22532,
+      "padLedPeakPlaybackFrame": 22531,
+      "acousticToneOnsetPlaybackFrame": 22541.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 234,
+      "padLedStartPlaybackFrame": 22589,
+      "padLedEndPlaybackFrame": 22594,
+      "padLedPeakPlaybackFrame": 22591,
+      "acousticToneOnsetPlaybackFrame": 22607.75,
+      "rawLedToToneMs": 78.125,
+      "calibratedMidiToSoundMs": 53.125,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 235,
+      "padLedStartPlaybackFrame": 22647,
+      "padLedEndPlaybackFrame": 22653,
+      "padLedPeakPlaybackFrame": 22647,
+      "acousticToneOnsetPlaybackFrame": 22665.375,
+      "rawLedToToneMs": 76.5625,
+      "calibratedMidiToSoundMs": 51.5625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 236,
+      "padLedStartPlaybackFrame": 22708,
+      "padLedEndPlaybackFrame": 22714,
+      "padLedPeakPlaybackFrame": 22711,
+      "acousticToneOnsetPlaybackFrame": 22725.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 237,
+      "padLedStartPlaybackFrame": 22768,
+      "padLedEndPlaybackFrame": 22774,
+      "padLedPeakPlaybackFrame": 22769,
+      "acousticToneOnsetPlaybackFrame": 22783.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 238,
+      "padLedStartPlaybackFrame": 22831,
+      "padLedEndPlaybackFrame": 22834,
+      "padLedPeakPlaybackFrame": 22831,
+      "acousticToneOnsetPlaybackFrame": 22848.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 239,
+      "padLedStartPlaybackFrame": 22888,
+      "padLedEndPlaybackFrame": 22893,
+      "padLedPeakPlaybackFrame": 22893,
+      "acousticToneOnsetPlaybackFrame": 22906,
+      "rawLedToToneMs": 75,
+      "calibratedMidiToSoundMs": 50,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 240,
+      "padLedStartPlaybackFrame": 22943,
+      "padLedEndPlaybackFrame": 22950,
+      "padLedPeakPlaybackFrame": 22949,
+      "acousticToneOnsetPlaybackFrame": 22961.125,
+      "rawLedToToneMs": 75.520833,
+      "calibratedMidiToSoundMs": 50.520833,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 241,
+      "padLedStartPlaybackFrame": 23001,
+      "padLedEndPlaybackFrame": 23006,
+      "padLedPeakPlaybackFrame": 23005,
+      "acousticToneOnsetPlaybackFrame": 23018.625,
+      "rawLedToToneMs": 73.4375,
+      "calibratedMidiToSoundMs": 48.4375,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 242,
+      "padLedStartPlaybackFrame": 23064,
+      "padLedEndPlaybackFrame": 23068,
+      "padLedPeakPlaybackFrame": 23064,
+      "acousticToneOnsetPlaybackFrame": 23079.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 243,
+      "padLedStartPlaybackFrame": 23118,
+      "padLedEndPlaybackFrame": 23124,
+      "padLedPeakPlaybackFrame": 23121,
+      "acousticToneOnsetPlaybackFrame": 23133.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 244,
+      "padLedStartPlaybackFrame": 23177,
+      "padLedEndPlaybackFrame": 23179,
+      "padLedPeakPlaybackFrame": 23177,
+      "acousticToneOnsetPlaybackFrame": 23192.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 245,
+      "padLedStartPlaybackFrame": 23235,
+      "padLedEndPlaybackFrame": 23240,
+      "padLedPeakPlaybackFrame": 23238,
+      "acousticToneOnsetPlaybackFrame": 23252.875,
+      "rawLedToToneMs": 74.479167,
+      "calibratedMidiToSoundMs": 49.479167,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 246,
+      "padLedStartPlaybackFrame": 23299,
+      "padLedEndPlaybackFrame": 23304,
+      "padLedPeakPlaybackFrame": 23304,
+      "acousticToneOnsetPlaybackFrame": 23315,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 247,
+      "padLedStartPlaybackFrame": 23359,
+      "padLedEndPlaybackFrame": 23363,
+      "padLedPeakPlaybackFrame": 23363,
+      "acousticToneOnsetPlaybackFrame": 23375.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 248,
+      "padLedStartPlaybackFrame": 23418,
+      "padLedEndPlaybackFrame": 23425,
+      "padLedPeakPlaybackFrame": 23423,
+      "acousticToneOnsetPlaybackFrame": 23434,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 249,
+      "padLedStartPlaybackFrame": 23475,
+      "padLedEndPlaybackFrame": 23482,
+      "padLedPeakPlaybackFrame": 23480,
+      "acousticToneOnsetPlaybackFrame": 23490.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 250,
+      "padLedStartPlaybackFrame": 23531,
+      "padLedEndPlaybackFrame": 23537,
+      "padLedPeakPlaybackFrame": 23534,
+      "acousticToneOnsetPlaybackFrame": 23546.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 251,
+      "padLedStartPlaybackFrame": 23586,
+      "padLedEndPlaybackFrame": 23593,
+      "padLedPeakPlaybackFrame": 23591,
+      "acousticToneOnsetPlaybackFrame": 23601.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 252,
+      "padLedStartPlaybackFrame": 23642,
+      "padLedEndPlaybackFrame": 23648,
+      "padLedPeakPlaybackFrame": 23647,
+      "acousticToneOnsetPlaybackFrame": 23658,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 253,
+      "padLedStartPlaybackFrame": 23702,
+      "padLedEndPlaybackFrame": 23707,
+      "padLedPeakPlaybackFrame": 23707,
+      "acousticToneOnsetPlaybackFrame": 23718.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 208
+    },
+    {
+      "sequence": 254,
+      "padLedStartPlaybackFrame": 23759,
+      "padLedEndPlaybackFrame": 23765,
+      "padLedPeakPlaybackFrame": 23762,
+      "acousticToneOnsetPlaybackFrame": 23774.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 255,
+      "padLedStartPlaybackFrame": 23815,
+      "padLedEndPlaybackFrame": 23821,
+      "padLedPeakPlaybackFrame": 23820,
+      "acousticToneOnsetPlaybackFrame": 23832.75,
+      "rawLedToToneMs": 73.958333,
+      "calibratedMidiToSoundMs": 48.958333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 256,
+      "padLedStartPlaybackFrame": 23874,
+      "padLedEndPlaybackFrame": 23881,
+      "padLedPeakPlaybackFrame": 23880,
+      "acousticToneOnsetPlaybackFrame": 23889.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 257,
+      "padLedStartPlaybackFrame": 23930,
+      "padLedEndPlaybackFrame": 23936,
+      "padLedPeakPlaybackFrame": 23935,
+      "acousticToneOnsetPlaybackFrame": 23946,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 258,
+      "padLedStartPlaybackFrame": 23988,
+      "padLedEndPlaybackFrame": 23996,
+      "padLedPeakPlaybackFrame": 23993,
+      "acousticToneOnsetPlaybackFrame": 24006.875,
+      "rawLedToToneMs": 78.645833,
+      "calibratedMidiToSoundMs": 53.645833,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 259,
+      "padLedStartPlaybackFrame": 24042,
+      "padLedEndPlaybackFrame": 24048,
+      "padLedPeakPlaybackFrame": 24042,
+      "acousticToneOnsetPlaybackFrame": 24057.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 260,
+      "padLedStartPlaybackFrame": 24104,
+      "padLedEndPlaybackFrame": 24109,
+      "padLedPeakPlaybackFrame": 24107,
+      "acousticToneOnsetPlaybackFrame": 24120.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 261,
+      "padLedStartPlaybackFrame": 24162,
+      "padLedEndPlaybackFrame": 24168,
+      "padLedPeakPlaybackFrame": 24165,
+      "acousticToneOnsetPlaybackFrame": 24177.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 262,
+      "padLedStartPlaybackFrame": 24218,
+      "padLedEndPlaybackFrame": 24223,
+      "padLedPeakPlaybackFrame": 24220,
+      "acousticToneOnsetPlaybackFrame": 24234,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 263,
+      "padLedStartPlaybackFrame": 24272,
+      "padLedEndPlaybackFrame": 24279,
+      "padLedPeakPlaybackFrame": 24278,
+      "acousticToneOnsetPlaybackFrame": 24287.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 264,
+      "padLedStartPlaybackFrame": 24334,
+      "padLedEndPlaybackFrame": 24337,
+      "padLedPeakPlaybackFrame": 24335,
+      "acousticToneOnsetPlaybackFrame": 24350.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 265,
+      "padLedStartPlaybackFrame": 24389,
+      "padLedEndPlaybackFrame": 24394,
+      "padLedPeakPlaybackFrame": 24392,
+      "acousticToneOnsetPlaybackFrame": 24406.125,
+      "rawLedToToneMs": 71.354167,
+      "calibratedMidiToSoundMs": 46.354167,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 266,
+      "padLedStartPlaybackFrame": 24447,
+      "padLedEndPlaybackFrame": 24453,
+      "padLedPeakPlaybackFrame": 24448,
+      "acousticToneOnsetPlaybackFrame": 24463.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 267,
+      "padLedStartPlaybackFrame": 24503,
+      "padLedEndPlaybackFrame": 24509,
+      "padLedPeakPlaybackFrame": 24508,
+      "acousticToneOnsetPlaybackFrame": 24519.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 268,
+      "padLedStartPlaybackFrame": 24554,
+      "padLedEndPlaybackFrame": 24561,
+      "padLedPeakPlaybackFrame": 24559,
+      "acousticToneOnsetPlaybackFrame": 24570.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 207
+    },
+    {
+      "sequence": 269,
+      "padLedStartPlaybackFrame": 24609,
+      "padLedEndPlaybackFrame": 24615,
+      "padLedPeakPlaybackFrame": 24613,
+      "acousticToneOnsetPlaybackFrame": 24625.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 270,
+      "padLedStartPlaybackFrame": 24668,
+      "padLedEndPlaybackFrame": 24673,
+      "padLedPeakPlaybackFrame": 24671,
+      "acousticToneOnsetPlaybackFrame": 24684.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 271,
+      "padLedStartPlaybackFrame": 24723,
+      "padLedEndPlaybackFrame": 24727,
+      "padLedPeakPlaybackFrame": 24723,
+      "acousticToneOnsetPlaybackFrame": 24739.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 272,
+      "padLedStartPlaybackFrame": 24785,
+      "padLedEndPlaybackFrame": 24788,
+      "padLedPeakPlaybackFrame": 24786,
+      "acousticToneOnsetPlaybackFrame": 24801,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 273,
+      "padLedStartPlaybackFrame": 24840,
+      "padLedEndPlaybackFrame": 24843,
+      "padLedPeakPlaybackFrame": 24840,
+      "acousticToneOnsetPlaybackFrame": 24856.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 274,
+      "padLedStartPlaybackFrame": 24896,
+      "padLedEndPlaybackFrame": 24899,
+      "padLedPeakPlaybackFrame": 24896,
+      "acousticToneOnsetPlaybackFrame": 24912.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 275,
+      "padLedStartPlaybackFrame": 24955,
+      "padLedEndPlaybackFrame": 24957,
+      "padLedPeakPlaybackFrame": 24955,
+      "acousticToneOnsetPlaybackFrame": 24971.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 276,
+      "padLedStartPlaybackFrame": 25008,
+      "padLedEndPlaybackFrame": 25011,
+      "padLedPeakPlaybackFrame": 25011,
+      "acousticToneOnsetPlaybackFrame": 25023.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 277,
+      "padLedStartPlaybackFrame": 25070,
+      "padLedEndPlaybackFrame": 25072,
+      "padLedPeakPlaybackFrame": 25070,
+      "acousticToneOnsetPlaybackFrame": 25086.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 278,
+      "padLedStartPlaybackFrame": 25128,
+      "padLedEndPlaybackFrame": 25132,
+      "padLedPeakPlaybackFrame": 25129,
+      "acousticToneOnsetPlaybackFrame": 25144.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 279,
+      "padLedStartPlaybackFrame": 25183,
+      "padLedEndPlaybackFrame": 25186,
+      "padLedPeakPlaybackFrame": 25186,
+      "acousticToneOnsetPlaybackFrame": 25199.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 280,
+      "padLedStartPlaybackFrame": 25241,
+      "padLedEndPlaybackFrame": 25244,
+      "padLedPeakPlaybackFrame": 25242,
+      "acousticToneOnsetPlaybackFrame": 25258.75,
+      "rawLedToToneMs": 73.958333,
+      "calibratedMidiToSoundMs": 48.958333,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 281,
+      "padLedStartPlaybackFrame": 25295,
+      "padLedEndPlaybackFrame": 25298,
+      "padLedPeakPlaybackFrame": 25296,
+      "acousticToneOnsetPlaybackFrame": 25312.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 282,
+      "padLedStartPlaybackFrame": 25352,
+      "padLedEndPlaybackFrame": 25356,
+      "padLedPeakPlaybackFrame": 25354,
+      "acousticToneOnsetPlaybackFrame": 25368.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 283,
+      "padLedStartPlaybackFrame": 25406,
+      "padLedEndPlaybackFrame": 25411,
+      "padLedPeakPlaybackFrame": 25407,
+      "acousticToneOnsetPlaybackFrame": 25421.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 284,
+      "padLedStartPlaybackFrame": 25463,
+      "padLedEndPlaybackFrame": 25466,
+      "padLedPeakPlaybackFrame": 25464,
+      "acousticToneOnsetPlaybackFrame": 25479.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 285,
+      "padLedStartPlaybackFrame": 25521,
+      "padLedEndPlaybackFrame": 25524,
+      "padLedPeakPlaybackFrame": 25521,
+      "acousticToneOnsetPlaybackFrame": 25537.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 205
+    },
+    {
+      "sequence": 286,
+      "padLedStartPlaybackFrame": 25587,
+      "padLedEndPlaybackFrame": 25589,
+      "padLedPeakPlaybackFrame": 25589,
+      "acousticToneOnsetPlaybackFrame": 25602.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 287,
+      "padLedStartPlaybackFrame": 25645,
+      "padLedEndPlaybackFrame": 25648,
+      "padLedPeakPlaybackFrame": 25648,
+      "acousticToneOnsetPlaybackFrame": 25661.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 288,
+      "padLedStartPlaybackFrame": 25703,
+      "padLedEndPlaybackFrame": 25705,
+      "padLedPeakPlaybackFrame": 25704,
+      "acousticToneOnsetPlaybackFrame": 25720.875,
+      "rawLedToToneMs": 74.479167,
+      "calibratedMidiToSoundMs": 49.479167,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 289,
+      "padLedStartPlaybackFrame": 25763,
+      "padLedEndPlaybackFrame": 25767,
+      "padLedPeakPlaybackFrame": 25766,
+      "acousticToneOnsetPlaybackFrame": 25779,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 290,
+      "padLedStartPlaybackFrame": 25823,
+      "padLedEndPlaybackFrame": 25828,
+      "padLedPeakPlaybackFrame": 25827,
+      "acousticToneOnsetPlaybackFrame": 25839.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 291,
+      "padLedStartPlaybackFrame": 25885,
+      "padLedEndPlaybackFrame": 25889,
+      "padLedPeakPlaybackFrame": 25886,
+      "acousticToneOnsetPlaybackFrame": 25901.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 292,
+      "padLedStartPlaybackFrame": 25943,
+      "padLedEndPlaybackFrame": 25945,
+      "padLedPeakPlaybackFrame": 25943,
+      "acousticToneOnsetPlaybackFrame": 25958.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 293,
+      "padLedStartPlaybackFrame": 26002,
+      "padLedEndPlaybackFrame": 26006,
+      "padLedPeakPlaybackFrame": 26003,
+      "acousticToneOnsetPlaybackFrame": 26018.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 294,
+      "padLedStartPlaybackFrame": 26060,
+      "padLedEndPlaybackFrame": 26065,
+      "padLedPeakPlaybackFrame": 26064,
+      "acousticToneOnsetPlaybackFrame": 26076,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 295,
+      "padLedStartPlaybackFrame": 26124,
+      "padLedEndPlaybackFrame": 26126,
+      "padLedPeakPlaybackFrame": 26126,
+      "acousticToneOnsetPlaybackFrame": 26140,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 197
+    },
+    {
+      "sequence": 296,
+      "padLedStartPlaybackFrame": 26181,
+      "padLedEndPlaybackFrame": 26186,
+      "padLedPeakPlaybackFrame": 26182,
+      "acousticToneOnsetPlaybackFrame": 26197.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 297,
+      "padLedStartPlaybackFrame": 26237,
+      "padLedEndPlaybackFrame": 26240,
+      "padLedPeakPlaybackFrame": 26237,
+      "acousticToneOnsetPlaybackFrame": 26254.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 298,
+      "padLedStartPlaybackFrame": 26292,
+      "padLedEndPlaybackFrame": 26294,
+      "padLedPeakPlaybackFrame": 26292,
+      "acousticToneOnsetPlaybackFrame": 26307.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 299,
+      "padLedStartPlaybackFrame": 26349,
+      "padLedEndPlaybackFrame": 26351,
+      "padLedPeakPlaybackFrame": 26349,
+      "acousticToneOnsetPlaybackFrame": 26365.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 300,
+      "padLedStartPlaybackFrame": 26403,
+      "padLedEndPlaybackFrame": 26405,
+      "padLedPeakPlaybackFrame": 26405,
+      "acousticToneOnsetPlaybackFrame": 26419,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 301,
+      "padLedStartPlaybackFrame": 26462,
+      "padLedEndPlaybackFrame": 26465,
+      "padLedPeakPlaybackFrame": 26464,
+      "acousticToneOnsetPlaybackFrame": 26477.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 302,
+      "padLedStartPlaybackFrame": 26522,
+      "padLedEndPlaybackFrame": 26526,
+      "padLedPeakPlaybackFrame": 26525,
+      "acousticToneOnsetPlaybackFrame": 26538.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 303,
+      "padLedStartPlaybackFrame": 26584,
+      "padLedEndPlaybackFrame": 26586,
+      "padLedPeakPlaybackFrame": 26584,
+      "acousticToneOnsetPlaybackFrame": 26599.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 304,
+      "padLedStartPlaybackFrame": 26639,
+      "padLedEndPlaybackFrame": 26644,
+      "padLedPeakPlaybackFrame": 26644,
+      "acousticToneOnsetPlaybackFrame": 26654.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 305,
+      "padLedStartPlaybackFrame": 26702,
+      "padLedEndPlaybackFrame": 26705,
+      "padLedPeakPlaybackFrame": 26703,
+      "acousticToneOnsetPlaybackFrame": 26720.5,
+      "rawLedToToneMs": 77.083333,
+      "calibratedMidiToSoundMs": 52.083333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 306,
+      "padLedStartPlaybackFrame": 26764,
+      "padLedEndPlaybackFrame": 26768,
+      "padLedPeakPlaybackFrame": 26767,
+      "acousticToneOnsetPlaybackFrame": 26782,
+      "rawLedToToneMs": 75,
+      "calibratedMidiToSoundMs": 50,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 307,
+      "padLedStartPlaybackFrame": 26822,
+      "padLedEndPlaybackFrame": 26825,
+      "padLedPeakPlaybackFrame": 26822,
+      "acousticToneOnsetPlaybackFrame": 26837.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 308,
+      "padLedStartPlaybackFrame": 26884,
+      "padLedEndPlaybackFrame": 26889,
+      "padLedPeakPlaybackFrame": 26887,
+      "acousticToneOnsetPlaybackFrame": 26900.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 309,
+      "padLedStartPlaybackFrame": 26943,
+      "padLedEndPlaybackFrame": 26945,
+      "padLedPeakPlaybackFrame": 26943,
+      "acousticToneOnsetPlaybackFrame": 26959.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 310,
+      "padLedStartPlaybackFrame": 27004,
+      "padLedEndPlaybackFrame": 27009,
+      "padLedPeakPlaybackFrame": 27005,
+      "acousticToneOnsetPlaybackFrame": 27020.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 311,
+      "padLedStartPlaybackFrame": 27063,
+      "padLedEndPlaybackFrame": 27068,
+      "padLedPeakPlaybackFrame": 27066,
+      "acousticToneOnsetPlaybackFrame": 27079.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 312,
+      "padLedStartPlaybackFrame": 27125,
+      "padLedEndPlaybackFrame": 27129,
+      "padLedPeakPlaybackFrame": 27126,
+      "acousticToneOnsetPlaybackFrame": 27141,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 313,
+      "padLedStartPlaybackFrame": 27181,
+      "padLedEndPlaybackFrame": 27185,
+      "padLedPeakPlaybackFrame": 27184,
+      "acousticToneOnsetPlaybackFrame": 27197.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 314,
+      "padLedStartPlaybackFrame": 27242,
+      "padLedEndPlaybackFrame": 27246,
+      "padLedPeakPlaybackFrame": 27242,
+      "acousticToneOnsetPlaybackFrame": 27258.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 315,
+      "padLedStartPlaybackFrame": 27300,
+      "padLedEndPlaybackFrame": 27304,
+      "padLedPeakPlaybackFrame": 27301,
+      "acousticToneOnsetPlaybackFrame": 27316.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 316,
+      "padLedStartPlaybackFrame": 27360,
+      "padLedEndPlaybackFrame": 27365,
+      "padLedPeakPlaybackFrame": 27362,
+      "acousticToneOnsetPlaybackFrame": 27376.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 317,
+      "padLedStartPlaybackFrame": 27417,
+      "padLedEndPlaybackFrame": 27420,
+      "padLedPeakPlaybackFrame": 27417,
+      "acousticToneOnsetPlaybackFrame": 27436,
+      "rawLedToToneMs": 79.166667,
+      "calibratedMidiToSoundMs": 54.166667,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 318,
+      "padLedStartPlaybackFrame": 27475,
+      "padLedEndPlaybackFrame": 27480,
+      "padLedPeakPlaybackFrame": 27479,
+      "acousticToneOnsetPlaybackFrame": 27491.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 319,
+      "padLedStartPlaybackFrame": 27537,
+      "padLedEndPlaybackFrame": 27539,
+      "padLedPeakPlaybackFrame": 27539,
+      "acousticToneOnsetPlaybackFrame": 27551.875,
+      "rawLedToToneMs": 61.979167,
+      "calibratedMidiToSoundMs": 36.979167,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 320,
+      "padLedStartPlaybackFrame": 27601,
+      "padLedEndPlaybackFrame": 27603,
+      "padLedPeakPlaybackFrame": 27601,
+      "acousticToneOnsetPlaybackFrame": 27615.875,
+      "rawLedToToneMs": 61.979167,
+      "calibratedMidiToSoundMs": 36.979167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 321,
+      "padLedStartPlaybackFrame": 27653,
+      "padLedEndPlaybackFrame": 27657,
+      "padLedPeakPlaybackFrame": 27653,
+      "acousticToneOnsetPlaybackFrame": 27668.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 322,
+      "padLedStartPlaybackFrame": 27717,
+      "padLedEndPlaybackFrame": 27719,
+      "padLedPeakPlaybackFrame": 27717,
+      "acousticToneOnsetPlaybackFrame": 27732.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 323,
+      "padLedStartPlaybackFrame": 27773,
+      "padLedEndPlaybackFrame": 27778,
+      "padLedPeakPlaybackFrame": 27777,
+      "acousticToneOnsetPlaybackFrame": 27788.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 324,
+      "padLedStartPlaybackFrame": 27831,
+      "padLedEndPlaybackFrame": 27834,
+      "padLedPeakPlaybackFrame": 27833,
+      "acousticToneOnsetPlaybackFrame": 27846.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 325,
+      "padLedStartPlaybackFrame": 27890,
+      "padLedEndPlaybackFrame": 27892,
+      "padLedPeakPlaybackFrame": 27890,
+      "acousticToneOnsetPlaybackFrame": 27907.125,
+      "rawLedToToneMs": 71.354167,
+      "calibratedMidiToSoundMs": 46.354167,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 326,
+      "padLedStartPlaybackFrame": 27954,
+      "padLedEndPlaybackFrame": 27958,
+      "padLedPeakPlaybackFrame": 27955,
+      "acousticToneOnsetPlaybackFrame": 27969.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 327,
+      "padLedStartPlaybackFrame": 28009,
+      "padLedEndPlaybackFrame": 28013,
+      "padLedPeakPlaybackFrame": 28012,
+      "acousticToneOnsetPlaybackFrame": 28025.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 328,
+      "padLedStartPlaybackFrame": 28068,
+      "padLedEndPlaybackFrame": 28072,
+      "padLedPeakPlaybackFrame": 28068,
+      "acousticToneOnsetPlaybackFrame": 28086.25,
+      "rawLedToToneMs": 76.041667,
+      "calibratedMidiToSoundMs": 51.041667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 329,
+      "padLedStartPlaybackFrame": 28128,
+      "padLedEndPlaybackFrame": 28131,
+      "padLedPeakPlaybackFrame": 28128,
+      "acousticToneOnsetPlaybackFrame": 28144.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 330,
+      "padLedStartPlaybackFrame": 28185,
+      "padLedEndPlaybackFrame": 28189,
+      "padLedPeakPlaybackFrame": 28186,
+      "acousticToneOnsetPlaybackFrame": 28200.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 331,
+      "padLedStartPlaybackFrame": 28242,
+      "padLedEndPlaybackFrame": 28245,
+      "padLedPeakPlaybackFrame": 28245,
+      "acousticToneOnsetPlaybackFrame": 28257.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 332,
+      "padLedStartPlaybackFrame": 28298,
+      "padLedEndPlaybackFrame": 28302,
+      "padLedPeakPlaybackFrame": 28299,
+      "acousticToneOnsetPlaybackFrame": 28313.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 333,
+      "padLedStartPlaybackFrame": 28357,
+      "padLedEndPlaybackFrame": 28360,
+      "padLedPeakPlaybackFrame": 28357,
+      "acousticToneOnsetPlaybackFrame": 28372.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 197
+    },
+    {
+      "sequence": 334,
+      "padLedStartPlaybackFrame": 28414,
+      "padLedEndPlaybackFrame": 28418,
+      "padLedPeakPlaybackFrame": 28417,
+      "acousticToneOnsetPlaybackFrame": 28430,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 335,
+      "padLedStartPlaybackFrame": 28472,
+      "padLedEndPlaybackFrame": 28475,
+      "padLedPeakPlaybackFrame": 28472,
+      "acousticToneOnsetPlaybackFrame": 28487.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 336,
+      "padLedStartPlaybackFrame": 28532,
+      "padLedEndPlaybackFrame": 28536,
+      "padLedPeakPlaybackFrame": 28535,
+      "acousticToneOnsetPlaybackFrame": 28547.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 337,
+      "padLedStartPlaybackFrame": 28590,
+      "padLedEndPlaybackFrame": 28592,
+      "padLedPeakPlaybackFrame": 28590,
+      "acousticToneOnsetPlaybackFrame": 28605.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 338,
+      "padLedStartPlaybackFrame": 28647,
+      "padLedEndPlaybackFrame": 28651,
+      "padLedPeakPlaybackFrame": 28650,
+      "acousticToneOnsetPlaybackFrame": 28662.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 339,
+      "padLedStartPlaybackFrame": 28704,
+      "padLedEndPlaybackFrame": 28706,
+      "padLedPeakPlaybackFrame": 28706,
+      "acousticToneOnsetPlaybackFrame": 28719.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 340,
+      "padLedStartPlaybackFrame": 28761,
+      "padLedEndPlaybackFrame": 28763,
+      "padLedPeakPlaybackFrame": 28761,
+      "acousticToneOnsetPlaybackFrame": 28778.75,
+      "rawLedToToneMs": 73.958333,
+      "calibratedMidiToSoundMs": 48.958333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 341,
+      "padLedStartPlaybackFrame": 28814,
+      "padLedEndPlaybackFrame": 28818,
+      "padLedPeakPlaybackFrame": 28815,
+      "acousticToneOnsetPlaybackFrame": 28829.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 342,
+      "padLedStartPlaybackFrame": 28876,
+      "padLedEndPlaybackFrame": 28880,
+      "padLedPeakPlaybackFrame": 28878,
+      "acousticToneOnsetPlaybackFrame": 28892,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 343,
+      "padLedStartPlaybackFrame": 28937,
+      "padLedEndPlaybackFrame": 28939,
+      "padLedPeakPlaybackFrame": 28939,
+      "acousticToneOnsetPlaybackFrame": 28952.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 344,
+      "padLedStartPlaybackFrame": 28998,
+      "padLedEndPlaybackFrame": 29003,
+      "padLedPeakPlaybackFrame": 28999,
+      "acousticToneOnsetPlaybackFrame": 29014.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 345,
+      "padLedStartPlaybackFrame": 29052,
+      "padLedEndPlaybackFrame": 29056,
+      "padLedPeakPlaybackFrame": 29054,
+      "acousticToneOnsetPlaybackFrame": 29068.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 346,
+      "padLedStartPlaybackFrame": 29117,
+      "padLedEndPlaybackFrame": 29121,
+      "padLedPeakPlaybackFrame": 29121,
+      "acousticToneOnsetPlaybackFrame": 29135.875,
+      "rawLedToToneMs": 78.645833,
+      "calibratedMidiToSoundMs": 53.645833,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 347,
+      "padLedStartPlaybackFrame": 29173,
+      "padLedEndPlaybackFrame": 29177,
+      "padLedPeakPlaybackFrame": 29173,
+      "acousticToneOnsetPlaybackFrame": 29189,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 348,
+      "padLedStartPlaybackFrame": 29231,
+      "padLedEndPlaybackFrame": 29233,
+      "padLedPeakPlaybackFrame": 29231,
+      "acousticToneOnsetPlaybackFrame": 29248.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 349,
+      "padLedStartPlaybackFrame": 29291,
+      "padLedEndPlaybackFrame": 29294,
+      "padLedPeakPlaybackFrame": 29291,
+      "acousticToneOnsetPlaybackFrame": 29306.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 350,
+      "padLedStartPlaybackFrame": 29346,
+      "padLedEndPlaybackFrame": 29348,
+      "padLedPeakPlaybackFrame": 29347,
+      "acousticToneOnsetPlaybackFrame": 29361.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 351,
+      "padLedStartPlaybackFrame": 29401,
+      "padLedEndPlaybackFrame": 29405,
+      "padLedPeakPlaybackFrame": 29405,
+      "acousticToneOnsetPlaybackFrame": 29418.75,
+      "rawLedToToneMs": 73.958333,
+      "calibratedMidiToSoundMs": 48.958333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 352,
+      "padLedStartPlaybackFrame": 29465,
+      "padLedEndPlaybackFrame": 29469,
+      "padLedPeakPlaybackFrame": 29467,
+      "acousticToneOnsetPlaybackFrame": 29480.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 205
+    },
+    {
+      "sequence": 353,
+      "padLedStartPlaybackFrame": 29519,
+      "padLedEndPlaybackFrame": 29524,
+      "padLedPeakPlaybackFrame": 29523,
+      "acousticToneOnsetPlaybackFrame": 29535.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 354,
+      "padLedStartPlaybackFrame": 29579,
+      "padLedEndPlaybackFrame": 29585,
+      "padLedPeakPlaybackFrame": 29581,
+      "acousticToneOnsetPlaybackFrame": 29596,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 355,
+      "padLedStartPlaybackFrame": 29635,
+      "padLedEndPlaybackFrame": 29641,
+      "padLedPeakPlaybackFrame": 29640,
+      "acousticToneOnsetPlaybackFrame": 29653,
+      "rawLedToToneMs": 75,
+      "calibratedMidiToSoundMs": 50,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 356,
+      "padLedStartPlaybackFrame": 29698,
+      "padLedEndPlaybackFrame": 29703,
+      "padLedPeakPlaybackFrame": 29698,
+      "acousticToneOnsetPlaybackFrame": 29712.5,
+      "rawLedToToneMs": 60.416667,
+      "calibratedMidiToSoundMs": 35.416667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 357,
+      "padLedStartPlaybackFrame": 29756,
+      "padLedEndPlaybackFrame": 29763,
+      "padLedPeakPlaybackFrame": 29759,
+      "acousticToneOnsetPlaybackFrame": 29771.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 358,
+      "padLedStartPlaybackFrame": 29814,
+      "padLedEndPlaybackFrame": 29819,
+      "padLedPeakPlaybackFrame": 29816,
+      "acousticToneOnsetPlaybackFrame": 29829,
+      "rawLedToToneMs": 62.5,
+      "calibratedMidiToSoundMs": 37.5,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 359,
+      "padLedStartPlaybackFrame": 29868,
+      "padLedEndPlaybackFrame": 29873,
+      "padLedPeakPlaybackFrame": 29870,
+      "acousticToneOnsetPlaybackFrame": 29884.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 360,
+      "padLedStartPlaybackFrame": 29927,
+      "padLedEndPlaybackFrame": 29931,
+      "padLedPeakPlaybackFrame": 29927,
+      "acousticToneOnsetPlaybackFrame": 29942.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 361,
+      "padLedStartPlaybackFrame": 29985,
+      "padLedEndPlaybackFrame": 29991,
+      "padLedPeakPlaybackFrame": 29989,
+      "acousticToneOnsetPlaybackFrame": 30002.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 362,
+      "padLedStartPlaybackFrame": 30044,
+      "padLedEndPlaybackFrame": 30049,
+      "padLedPeakPlaybackFrame": 30049,
+      "acousticToneOnsetPlaybackFrame": 30059.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 363,
+      "padLedStartPlaybackFrame": 30106,
+      "padLedEndPlaybackFrame": 30111,
+      "padLedPeakPlaybackFrame": 30108,
+      "acousticToneOnsetPlaybackFrame": 30120.875,
+      "rawLedToToneMs": 61.979167,
+      "calibratedMidiToSoundMs": 36.979167,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 364,
+      "padLedStartPlaybackFrame": 30166,
+      "padLedEndPlaybackFrame": 30170,
+      "padLedPeakPlaybackFrame": 30166,
+      "acousticToneOnsetPlaybackFrame": 30181,
+      "rawLedToToneMs": 62.5,
+      "calibratedMidiToSoundMs": 37.5,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 365,
+      "padLedStartPlaybackFrame": 30226,
+      "padLedEndPlaybackFrame": 30228,
+      "padLedPeakPlaybackFrame": 30228,
+      "acousticToneOnsetPlaybackFrame": 30243.125,
+      "rawLedToToneMs": 71.354167,
+      "calibratedMidiToSoundMs": 46.354167,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 366,
+      "padLedStartPlaybackFrame": 30294,
+      "padLedEndPlaybackFrame": 30297,
+      "padLedPeakPlaybackFrame": 30294,
+      "acousticToneOnsetPlaybackFrame": 30309,
+      "rawLedToToneMs": 62.5,
+      "calibratedMidiToSoundMs": 37.5,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 367,
+      "padLedStartPlaybackFrame": 30354,
+      "padLedEndPlaybackFrame": 30358,
+      "padLedPeakPlaybackFrame": 30354,
+      "acousticToneOnsetPlaybackFrame": 30371.125,
+      "rawLedToToneMs": 71.354167,
+      "calibratedMidiToSoundMs": 46.354167,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 368,
+      "padLedStartPlaybackFrame": 30419,
+      "padLedEndPlaybackFrame": 30423,
+      "padLedPeakPlaybackFrame": 30423,
+      "acousticToneOnsetPlaybackFrame": 30434.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 369,
+      "padLedStartPlaybackFrame": 30485,
+      "padLedEndPlaybackFrame": 30489,
+      "padLedPeakPlaybackFrame": 30488,
+      "acousticToneOnsetPlaybackFrame": 30499.75,
+      "rawLedToToneMs": 61.458333,
+      "calibratedMidiToSoundMs": 36.458333,
+      "padRedPeak": 205
+    },
+    {
+      "sequence": 370,
+      "padLedStartPlaybackFrame": 30538,
+      "padLedEndPlaybackFrame": 30545,
+      "padLedPeakPlaybackFrame": 30543,
+      "acousticToneOnsetPlaybackFrame": 30555.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 371,
+      "padLedStartPlaybackFrame": 30595,
+      "padLedEndPlaybackFrame": 30599,
+      "padLedPeakPlaybackFrame": 30597,
+      "acousticToneOnsetPlaybackFrame": 30611.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 372,
+      "padLedStartPlaybackFrame": 30656,
+      "padLedEndPlaybackFrame": 30661,
+      "padLedPeakPlaybackFrame": 30656,
+      "acousticToneOnsetPlaybackFrame": 30673.25,
+      "rawLedToToneMs": 71.875,
+      "calibratedMidiToSoundMs": 46.875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 373,
+      "padLedStartPlaybackFrame": 30719,
+      "padLedEndPlaybackFrame": 30723,
+      "padLedPeakPlaybackFrame": 30722,
+      "acousticToneOnsetPlaybackFrame": 30735.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 374,
+      "padLedStartPlaybackFrame": 30780,
+      "padLedEndPlaybackFrame": 30784,
+      "padLedPeakPlaybackFrame": 30783,
+      "acousticToneOnsetPlaybackFrame": 30795.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 375,
+      "padLedStartPlaybackFrame": 30840,
+      "padLedEndPlaybackFrame": 30842,
+      "padLedPeakPlaybackFrame": 30841,
+      "acousticToneOnsetPlaybackFrame": 30855.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 376,
+      "padLedStartPlaybackFrame": 30900,
+      "padLedEndPlaybackFrame": 30904,
+      "padLedPeakPlaybackFrame": 30903,
+      "acousticToneOnsetPlaybackFrame": 30917.375,
+      "rawLedToToneMs": 72.395833,
+      "calibratedMidiToSoundMs": 47.395833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 377,
+      "padLedStartPlaybackFrame": 30958,
+      "padLedEndPlaybackFrame": 30962,
+      "padLedPeakPlaybackFrame": 30961,
+      "acousticToneOnsetPlaybackFrame": 30974.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 378,
+      "padLedStartPlaybackFrame": 31023,
+      "padLedEndPlaybackFrame": 31027,
+      "padLedPeakPlaybackFrame": 31027,
+      "acousticToneOnsetPlaybackFrame": 31040.625,
+      "rawLedToToneMs": 73.4375,
+      "calibratedMidiToSoundMs": 48.4375,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 379,
+      "padLedStartPlaybackFrame": 31084,
+      "padLedEndPlaybackFrame": 31088,
+      "padLedPeakPlaybackFrame": 31086,
+      "acousticToneOnsetPlaybackFrame": 31100,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 380,
+      "padLedStartPlaybackFrame": 31151,
+      "padLedEndPlaybackFrame": 31155,
+      "padLedPeakPlaybackFrame": 31154,
+      "acousticToneOnsetPlaybackFrame": 31169.875,
+      "rawLedToToneMs": 78.645833,
+      "calibratedMidiToSoundMs": 53.645833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 381,
+      "padLedStartPlaybackFrame": 31206,
+      "padLedEndPlaybackFrame": 31211,
+      "padLedPeakPlaybackFrame": 31209,
+      "acousticToneOnsetPlaybackFrame": 31222.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 382,
+      "padLedStartPlaybackFrame": 31272,
+      "padLedEndPlaybackFrame": 31276,
+      "padLedPeakPlaybackFrame": 31272,
+      "acousticToneOnsetPlaybackFrame": 31288.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 383,
+      "padLedStartPlaybackFrame": 31334,
+      "padLedEndPlaybackFrame": 31339,
+      "padLedPeakPlaybackFrame": 31338,
+      "acousticToneOnsetPlaybackFrame": 31349.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 205
+    },
+    {
+      "sequence": 384,
+      "padLedStartPlaybackFrame": 31401,
+      "padLedEndPlaybackFrame": 31405,
+      "padLedPeakPlaybackFrame": 31405,
+      "acousticToneOnsetPlaybackFrame": 31416.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 385,
+      "padLedStartPlaybackFrame": 31460,
+      "padLedEndPlaybackFrame": 31465,
+      "padLedPeakPlaybackFrame": 31463,
+      "acousticToneOnsetPlaybackFrame": 31476.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 386,
+      "padLedStartPlaybackFrame": 31523,
+      "padLedEndPlaybackFrame": 31526,
+      "padLedPeakPlaybackFrame": 31524,
+      "acousticToneOnsetPlaybackFrame": 31539.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 387,
+      "padLedStartPlaybackFrame": 31580,
+      "padLedEndPlaybackFrame": 31584,
+      "padLedPeakPlaybackFrame": 31584,
+      "acousticToneOnsetPlaybackFrame": 31596.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 388,
+      "padLedStartPlaybackFrame": 31640,
+      "padLedEndPlaybackFrame": 31643,
+      "padLedPeakPlaybackFrame": 31642,
+      "acousticToneOnsetPlaybackFrame": 31656.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 389,
+      "padLedStartPlaybackFrame": 31705,
+      "padLedEndPlaybackFrame": 31707,
+      "padLedPeakPlaybackFrame": 31705,
+      "acousticToneOnsetPlaybackFrame": 31722.875,
+      "rawLedToToneMs": 74.479167,
+      "calibratedMidiToSoundMs": 49.479167,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 390,
+      "padLedStartPlaybackFrame": 31766,
+      "padLedEndPlaybackFrame": 31769,
+      "padLedPeakPlaybackFrame": 31766,
+      "acousticToneOnsetPlaybackFrame": 31782.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 391,
+      "padLedStartPlaybackFrame": 31830,
+      "padLedEndPlaybackFrame": 31833,
+      "padLedPeakPlaybackFrame": 31832,
+      "acousticToneOnsetPlaybackFrame": 31846.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 392,
+      "padLedStartPlaybackFrame": 31893,
+      "padLedEndPlaybackFrame": 31897,
+      "padLedPeakPlaybackFrame": 31893,
+      "acousticToneOnsetPlaybackFrame": 31911,
+      "rawLedToToneMs": 75,
+      "calibratedMidiToSoundMs": 50,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 393,
+      "padLedStartPlaybackFrame": 31954,
+      "padLedEndPlaybackFrame": 31957,
+      "padLedPeakPlaybackFrame": 31954,
+      "acousticToneOnsetPlaybackFrame": 31970.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 394,
+      "padLedStartPlaybackFrame": 32016,
+      "padLedEndPlaybackFrame": 32020,
+      "padLedPeakPlaybackFrame": 32017,
+      "acousticToneOnsetPlaybackFrame": 32031.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 395,
+      "padLedStartPlaybackFrame": 32075,
+      "padLedEndPlaybackFrame": 32081,
+      "padLedPeakPlaybackFrame": 32075,
+      "acousticToneOnsetPlaybackFrame": 32090.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 396,
+      "padLedStartPlaybackFrame": 32136,
+      "padLedEndPlaybackFrame": 32140,
+      "padLedPeakPlaybackFrame": 32139,
+      "acousticToneOnsetPlaybackFrame": 32152.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 397,
+      "padLedStartPlaybackFrame": 32195,
+      "padLedEndPlaybackFrame": 32199,
+      "padLedPeakPlaybackFrame": 32198,
+      "acousticToneOnsetPlaybackFrame": 32212.375,
+      "rawLedToToneMs": 72.395833,
+      "calibratedMidiToSoundMs": 47.395833,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 398,
+      "padLedStartPlaybackFrame": 32256,
+      "padLedEndPlaybackFrame": 32258,
+      "padLedPeakPlaybackFrame": 32256,
+      "acousticToneOnsetPlaybackFrame": 32274.5,
+      "rawLedToToneMs": 77.083333,
+      "calibratedMidiToSoundMs": 52.083333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 399,
+      "padLedStartPlaybackFrame": 32314,
+      "padLedEndPlaybackFrame": 32318,
+      "padLedPeakPlaybackFrame": 32316,
+      "acousticToneOnsetPlaybackFrame": 32330.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 400,
+      "padLedStartPlaybackFrame": 32375,
+      "padLedEndPlaybackFrame": 32377,
+      "padLedPeakPlaybackFrame": 32377,
+      "acousticToneOnsetPlaybackFrame": 32392.375,
+      "rawLedToToneMs": 72.395833,
+      "calibratedMidiToSoundMs": 47.395833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 401,
+      "padLedStartPlaybackFrame": 32435,
+      "padLedEndPlaybackFrame": 32439,
+      "padLedPeakPlaybackFrame": 32436,
+      "acousticToneOnsetPlaybackFrame": 32450.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 402,
+      "padLedStartPlaybackFrame": 32489,
+      "padLedEndPlaybackFrame": 32493,
+      "padLedPeakPlaybackFrame": 32492,
+      "acousticToneOnsetPlaybackFrame": 32506.25,
+      "rawLedToToneMs": 71.875,
+      "calibratedMidiToSoundMs": 46.875,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 403,
+      "padLedStartPlaybackFrame": 32550,
+      "padLedEndPlaybackFrame": 32554,
+      "padLedPeakPlaybackFrame": 32552,
+      "acousticToneOnsetPlaybackFrame": 32565.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 404,
+      "padLedStartPlaybackFrame": 32610,
+      "padLedEndPlaybackFrame": 32614,
+      "padLedPeakPlaybackFrame": 32611,
+      "acousticToneOnsetPlaybackFrame": 32625.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 405,
+      "padLedStartPlaybackFrame": 32670,
+      "padLedEndPlaybackFrame": 32674,
+      "padLedPeakPlaybackFrame": 32670,
+      "acousticToneOnsetPlaybackFrame": 32684.75,
+      "rawLedToToneMs": 61.458333,
+      "calibratedMidiToSoundMs": 36.458333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 406,
+      "padLedStartPlaybackFrame": 32726,
+      "padLedEndPlaybackFrame": 32728,
+      "padLedPeakPlaybackFrame": 32727,
+      "acousticToneOnsetPlaybackFrame": 32741.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 407,
+      "padLedStartPlaybackFrame": 32785,
+      "padLedEndPlaybackFrame": 32787,
+      "padLedPeakPlaybackFrame": 32785,
+      "acousticToneOnsetPlaybackFrame": 32801.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 408,
+      "padLedStartPlaybackFrame": 32851,
+      "padLedEndPlaybackFrame": 32854,
+      "padLedPeakPlaybackFrame": 32853,
+      "acousticToneOnsetPlaybackFrame": 32868.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 409,
+      "padLedStartPlaybackFrame": 32905,
+      "padLedEndPlaybackFrame": 32910,
+      "padLedPeakPlaybackFrame": 32908,
+      "acousticToneOnsetPlaybackFrame": 32921.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 410,
+      "padLedStartPlaybackFrame": 32966,
+      "padLedEndPlaybackFrame": 32969,
+      "padLedPeakPlaybackFrame": 32966,
+      "acousticToneOnsetPlaybackFrame": 32981.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 411,
+      "padLedStartPlaybackFrame": 33022,
+      "padLedEndPlaybackFrame": 33025,
+      "padLedPeakPlaybackFrame": 33023,
+      "acousticToneOnsetPlaybackFrame": 33038,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 412,
+      "padLedStartPlaybackFrame": 33084,
+      "padLedEndPlaybackFrame": 33087,
+      "padLedPeakPlaybackFrame": 33084,
+      "acousticToneOnsetPlaybackFrame": 33099.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 413,
+      "padLedStartPlaybackFrame": 33141,
+      "padLedEndPlaybackFrame": 33143,
+      "padLedPeakPlaybackFrame": 33141,
+      "acousticToneOnsetPlaybackFrame": 33155.875,
+      "rawLedToToneMs": 61.979167,
+      "calibratedMidiToSoundMs": 36.979167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 414,
+      "padLedStartPlaybackFrame": 33214,
+      "padLedEndPlaybackFrame": 33216,
+      "padLedPeakPlaybackFrame": 33216,
+      "acousticToneOnsetPlaybackFrame": 33228.75,
+      "rawLedToToneMs": 61.458333,
+      "calibratedMidiToSoundMs": 36.458333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 415,
+      "padLedStartPlaybackFrame": 33270,
+      "padLedEndPlaybackFrame": 33272,
+      "padLedPeakPlaybackFrame": 33272,
+      "acousticToneOnsetPlaybackFrame": 33285.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 416,
+      "padLedStartPlaybackFrame": 33335,
+      "padLedEndPlaybackFrame": 33338,
+      "padLedPeakPlaybackFrame": 33338,
+      "acousticToneOnsetPlaybackFrame": 33351.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 417,
+      "padLedStartPlaybackFrame": 33395,
+      "padLedEndPlaybackFrame": 33398,
+      "padLedPeakPlaybackFrame": 33395,
+      "acousticToneOnsetPlaybackFrame": 33412.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 418,
+      "padLedStartPlaybackFrame": 33456,
+      "padLedEndPlaybackFrame": 33458,
+      "padLedPeakPlaybackFrame": 33456,
+      "acousticToneOnsetPlaybackFrame": 33474,
+      "rawLedToToneMs": 75,
+      "calibratedMidiToSoundMs": 50,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 419,
+      "padLedStartPlaybackFrame": 33517,
+      "padLedEndPlaybackFrame": 33520,
+      "padLedPeakPlaybackFrame": 33517,
+      "acousticToneOnsetPlaybackFrame": 33534,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 420,
+      "padLedStartPlaybackFrame": 33574,
+      "padLedEndPlaybackFrame": 33577,
+      "padLedPeakPlaybackFrame": 33574,
+      "acousticToneOnsetPlaybackFrame": 33589.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 421,
+      "padLedStartPlaybackFrame": 33631,
+      "padLedEndPlaybackFrame": 33635,
+      "padLedPeakPlaybackFrame": 33635,
+      "acousticToneOnsetPlaybackFrame": 33647.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 422,
+      "padLedStartPlaybackFrame": 33693,
+      "padLedEndPlaybackFrame": 33696,
+      "padLedPeakPlaybackFrame": 33695,
+      "acousticToneOnsetPlaybackFrame": 33708.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 423,
+      "padLedStartPlaybackFrame": 33753,
+      "padLedEndPlaybackFrame": 33756,
+      "padLedPeakPlaybackFrame": 33753,
+      "acousticToneOnsetPlaybackFrame": 33770.875,
+      "rawLedToToneMs": 74.479167,
+      "calibratedMidiToSoundMs": 49.479167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 424,
+      "padLedStartPlaybackFrame": 33813,
+      "padLedEndPlaybackFrame": 33816,
+      "padLedPeakPlaybackFrame": 33813,
+      "acousticToneOnsetPlaybackFrame": 33831,
+      "rawLedToToneMs": 75,
+      "calibratedMidiToSoundMs": 50,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 425,
+      "padLedStartPlaybackFrame": 33874,
+      "padLedEndPlaybackFrame": 33876,
+      "padLedPeakPlaybackFrame": 33874,
+      "acousticToneOnsetPlaybackFrame": 33892.5,
+      "rawLedToToneMs": 77.083333,
+      "calibratedMidiToSoundMs": 52.083333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 426,
+      "padLedStartPlaybackFrame": 33933,
+      "padLedEndPlaybackFrame": 33936,
+      "padLedPeakPlaybackFrame": 33936,
+      "acousticToneOnsetPlaybackFrame": 33949.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 427,
+      "padLedStartPlaybackFrame": 33990,
+      "padLedEndPlaybackFrame": 33995,
+      "padLedPeakPlaybackFrame": 33994,
+      "acousticToneOnsetPlaybackFrame": 34007,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 428,
+      "padLedStartPlaybackFrame": 34050,
+      "padLedEndPlaybackFrame": 34054,
+      "padLedPeakPlaybackFrame": 34050,
+      "acousticToneOnsetPlaybackFrame": 34065.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 429,
+      "padLedStartPlaybackFrame": 34111,
+      "padLedEndPlaybackFrame": 34113,
+      "padLedPeakPlaybackFrame": 34111,
+      "acousticToneOnsetPlaybackFrame": 34127.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 197
+    },
+    {
+      "sequence": 430,
+      "padLedStartPlaybackFrame": 34174,
+      "padLedEndPlaybackFrame": 34177,
+      "padLedPeakPlaybackFrame": 34177,
+      "acousticToneOnsetPlaybackFrame": 34190.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 431,
+      "padLedStartPlaybackFrame": 34233,
+      "padLedEndPlaybackFrame": 34237,
+      "padLedPeakPlaybackFrame": 34236,
+      "acousticToneOnsetPlaybackFrame": 34248.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 432,
+      "padLedStartPlaybackFrame": 34293,
+      "padLedEndPlaybackFrame": 34296,
+      "padLedPeakPlaybackFrame": 34296,
+      "acousticToneOnsetPlaybackFrame": 34309.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 433,
+      "padLedStartPlaybackFrame": 34350,
+      "padLedEndPlaybackFrame": 34354,
+      "padLedPeakPlaybackFrame": 34352,
+      "acousticToneOnsetPlaybackFrame": 34365.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 434,
+      "padLedStartPlaybackFrame": 34412,
+      "padLedEndPlaybackFrame": 34414,
+      "padLedPeakPlaybackFrame": 34414,
+      "acousticToneOnsetPlaybackFrame": 34430.125,
+      "rawLedToToneMs": 75.520833,
+      "calibratedMidiToSoundMs": 50.520833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 435,
+      "padLedStartPlaybackFrame": 34470,
+      "padLedEndPlaybackFrame": 34474,
+      "padLedPeakPlaybackFrame": 34473,
+      "acousticToneOnsetPlaybackFrame": 34487,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 436,
+      "padLedStartPlaybackFrame": 34528,
+      "padLedEndPlaybackFrame": 34531,
+      "padLedPeakPlaybackFrame": 34531,
+      "acousticToneOnsetPlaybackFrame": 34544.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 197
+    },
+    {
+      "sequence": 437,
+      "padLedStartPlaybackFrame": 34589,
+      "padLedEndPlaybackFrame": 34592,
+      "padLedPeakPlaybackFrame": 34592,
+      "acousticToneOnsetPlaybackFrame": 34606,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 438,
+      "padLedStartPlaybackFrame": 34647,
+      "padLedEndPlaybackFrame": 34650,
+      "padLedPeakPlaybackFrame": 34647,
+      "acousticToneOnsetPlaybackFrame": 34665.625,
+      "rawLedToToneMs": 77.604167,
+      "calibratedMidiToSoundMs": 52.604167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 439,
+      "padLedStartPlaybackFrame": 34708,
+      "padLedEndPlaybackFrame": 34711,
+      "padLedPeakPlaybackFrame": 34708,
+      "acousticToneOnsetPlaybackFrame": 34722.625,
+      "rawLedToToneMs": 60.9375,
+      "calibratedMidiToSoundMs": 35.9375,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 440,
+      "padLedStartPlaybackFrame": 34772,
+      "padLedEndPlaybackFrame": 34774,
+      "padLedPeakPlaybackFrame": 34774,
+      "acousticToneOnsetPlaybackFrame": 34788.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 441,
+      "padLedStartPlaybackFrame": 34829,
+      "padLedEndPlaybackFrame": 34832,
+      "padLedPeakPlaybackFrame": 34832,
+      "acousticToneOnsetPlaybackFrame": 34844.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 197
+    },
+    {
+      "sequence": 442,
+      "padLedStartPlaybackFrame": 34892,
+      "padLedEndPlaybackFrame": 34895,
+      "padLedPeakPlaybackFrame": 34892,
+      "acousticToneOnsetPlaybackFrame": 34906.875,
+      "rawLedToToneMs": 61.979167,
+      "calibratedMidiToSoundMs": 36.979167,
+      "padRedPeak": 196
+    },
+    {
+      "sequence": 443,
+      "padLedStartPlaybackFrame": 34953,
+      "padLedEndPlaybackFrame": 34956,
+      "padLedPeakPlaybackFrame": 34955,
+      "acousticToneOnsetPlaybackFrame": 34968.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 444,
+      "padLedStartPlaybackFrame": 35017,
+      "padLedEndPlaybackFrame": 35019,
+      "padLedPeakPlaybackFrame": 35017,
+      "acousticToneOnsetPlaybackFrame": 35032.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 445,
+      "padLedStartPlaybackFrame": 35072,
+      "padLedEndPlaybackFrame": 35076,
+      "padLedPeakPlaybackFrame": 35075,
+      "acousticToneOnsetPlaybackFrame": 35087.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 446,
+      "padLedStartPlaybackFrame": 35134,
+      "padLedEndPlaybackFrame": 35138,
+      "padLedPeakPlaybackFrame": 35137,
+      "acousticToneOnsetPlaybackFrame": 35150,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 447,
+      "padLedStartPlaybackFrame": 35192,
+      "padLedEndPlaybackFrame": 35195,
+      "padLedPeakPlaybackFrame": 35195,
+      "acousticToneOnsetPlaybackFrame": 35209.625,
+      "rawLedToToneMs": 73.4375,
+      "calibratedMidiToSoundMs": 48.4375,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 448,
+      "padLedStartPlaybackFrame": 35253,
+      "padLedEndPlaybackFrame": 35257,
+      "padLedPeakPlaybackFrame": 35253,
+      "acousticToneOnsetPlaybackFrame": 35269.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 449,
+      "padLedStartPlaybackFrame": 35315,
+      "padLedEndPlaybackFrame": 35319,
+      "padLedPeakPlaybackFrame": 35318,
+      "acousticToneOnsetPlaybackFrame": 35332.5,
+      "rawLedToToneMs": 72.916667,
+      "calibratedMidiToSoundMs": 47.916667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 450,
+      "padLedStartPlaybackFrame": 35376,
+      "padLedEndPlaybackFrame": 35380,
+      "padLedPeakPlaybackFrame": 35380,
+      "acousticToneOnsetPlaybackFrame": 35392,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 451,
+      "padLedStartPlaybackFrame": 35432,
+      "padLedEndPlaybackFrame": 35438,
+      "padLedPeakPlaybackFrame": 35437,
+      "acousticToneOnsetPlaybackFrame": 35449,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 452,
+      "padLedStartPlaybackFrame": 35494,
+      "padLedEndPlaybackFrame": 35496,
+      "padLedPeakPlaybackFrame": 35496,
+      "acousticToneOnsetPlaybackFrame": 35509.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 453,
+      "padLedStartPlaybackFrame": 35550,
+      "padLedEndPlaybackFrame": 35554,
+      "padLedPeakPlaybackFrame": 35550,
+      "acousticToneOnsetPlaybackFrame": 35564.875,
+      "rawLedToToneMs": 61.979167,
+      "calibratedMidiToSoundMs": 36.979167,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 454,
+      "padLedStartPlaybackFrame": 35557,
+      "padLedEndPlaybackFrame": 35560,
+      "padLedPeakPlaybackFrame": 35557,
+      "acousticToneOnsetPlaybackFrame": 35572.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 455,
+      "padLedStartPlaybackFrame": 35614,
+      "padLedEndPlaybackFrame": 35617,
+      "padLedPeakPlaybackFrame": 35614,
+      "acousticToneOnsetPlaybackFrame": 35630,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 456,
+      "padLedStartPlaybackFrame": 35669,
+      "padLedEndPlaybackFrame": 35673,
+      "padLedPeakPlaybackFrame": 35669,
+      "acousticToneOnsetPlaybackFrame": 35685.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 457,
+      "padLedStartPlaybackFrame": 35733,
+      "padLedEndPlaybackFrame": 35736,
+      "padLedPeakPlaybackFrame": 35733,
+      "acousticToneOnsetPlaybackFrame": 35749.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 458,
+      "padLedStartPlaybackFrame": 35792,
+      "padLedEndPlaybackFrame": 35796,
+      "padLedPeakPlaybackFrame": 35794,
+      "acousticToneOnsetPlaybackFrame": 35808,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 459,
+      "padLedStartPlaybackFrame": 35854,
+      "padLedEndPlaybackFrame": 35858,
+      "padLedPeakPlaybackFrame": 35857,
+      "acousticToneOnsetPlaybackFrame": 35869.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 460,
+      "padLedStartPlaybackFrame": 35909,
+      "padLedEndPlaybackFrame": 35913,
+      "padLedPeakPlaybackFrame": 35912,
+      "acousticToneOnsetPlaybackFrame": 35925.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 461,
+      "padLedStartPlaybackFrame": 35968,
+      "padLedEndPlaybackFrame": 35971,
+      "padLedPeakPlaybackFrame": 35969,
+      "acousticToneOnsetPlaybackFrame": 35984.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 462,
+      "padLedStartPlaybackFrame": 36034,
+      "padLedEndPlaybackFrame": 36036,
+      "padLedPeakPlaybackFrame": 36035,
+      "acousticToneOnsetPlaybackFrame": 36051,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 463,
+      "padLedStartPlaybackFrame": 36091,
+      "padLedEndPlaybackFrame": 36094,
+      "padLedPeakPlaybackFrame": 36094,
+      "acousticToneOnsetPlaybackFrame": 36106.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 464,
+      "padLedStartPlaybackFrame": 36152,
+      "padLedEndPlaybackFrame": 36155,
+      "padLedPeakPlaybackFrame": 36154,
+      "acousticToneOnsetPlaybackFrame": 36169,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 465,
+      "padLedStartPlaybackFrame": 36216,
+      "padLedEndPlaybackFrame": 36218,
+      "padLedPeakPlaybackFrame": 36216,
+      "acousticToneOnsetPlaybackFrame": 36231.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 466,
+      "padLedStartPlaybackFrame": 36273,
+      "padLedEndPlaybackFrame": 36275,
+      "padLedPeakPlaybackFrame": 36274,
+      "acousticToneOnsetPlaybackFrame": 36289.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 467,
+      "padLedStartPlaybackFrame": 36333,
+      "padLedEndPlaybackFrame": 36336,
+      "padLedPeakPlaybackFrame": 36334,
+      "acousticToneOnsetPlaybackFrame": 36349.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 468,
+      "padLedStartPlaybackFrame": 36394,
+      "padLedEndPlaybackFrame": 36397,
+      "padLedPeakPlaybackFrame": 36396,
+      "acousticToneOnsetPlaybackFrame": 36410.875,
+      "rawLedToToneMs": 70.3125,
+      "calibratedMidiToSoundMs": 45.3125,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 469,
+      "padLedStartPlaybackFrame": 36450,
+      "padLedEndPlaybackFrame": 36453,
+      "padLedPeakPlaybackFrame": 36451,
+      "acousticToneOnsetPlaybackFrame": 36467.25,
+      "rawLedToToneMs": 71.875,
+      "calibratedMidiToSoundMs": 46.875,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 470,
+      "padLedStartPlaybackFrame": 36510,
+      "padLedEndPlaybackFrame": 36513,
+      "padLedPeakPlaybackFrame": 36513,
+      "acousticToneOnsetPlaybackFrame": 36526.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 471,
+      "padLedStartPlaybackFrame": 36568,
+      "padLedEndPlaybackFrame": 36570,
+      "padLedPeakPlaybackFrame": 36568,
+      "acousticToneOnsetPlaybackFrame": 36583.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 472,
+      "padLedStartPlaybackFrame": 36625,
+      "padLedEndPlaybackFrame": 36628,
+      "padLedPeakPlaybackFrame": 36626,
+      "acousticToneOnsetPlaybackFrame": 36641.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 473,
+      "padLedStartPlaybackFrame": 36685,
+      "padLedEndPlaybackFrame": 36689,
+      "padLedPeakPlaybackFrame": 36686,
+      "acousticToneOnsetPlaybackFrame": 36701.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 474,
+      "padLedStartPlaybackFrame": 36753,
+      "padLedEndPlaybackFrame": 36755,
+      "padLedPeakPlaybackFrame": 36753,
+      "acousticToneOnsetPlaybackFrame": 36769.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 475,
+      "padLedStartPlaybackFrame": 36815,
+      "padLedEndPlaybackFrame": 36820,
+      "padLedPeakPlaybackFrame": 36820,
+      "acousticToneOnsetPlaybackFrame": 36832,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 476,
+      "padLedStartPlaybackFrame": 36878,
+      "padLedEndPlaybackFrame": 36881,
+      "padLedPeakPlaybackFrame": 36878,
+      "acousticToneOnsetPlaybackFrame": 36894.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 477,
+      "padLedStartPlaybackFrame": 36936,
+      "padLedEndPlaybackFrame": 36942,
+      "padLedPeakPlaybackFrame": 36936,
+      "acousticToneOnsetPlaybackFrame": 36952.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 478,
+      "padLedStartPlaybackFrame": 36997,
+      "padLedEndPlaybackFrame": 36999,
+      "padLedPeakPlaybackFrame": 36997,
+      "acousticToneOnsetPlaybackFrame": 37012.5,
+      "rawLedToToneMs": 64.583333,
+      "calibratedMidiToSoundMs": 39.583333,
+      "padRedPeak": 200
+    },
+    {
+      "sequence": 479,
+      "padLedStartPlaybackFrame": 37054,
+      "padLedEndPlaybackFrame": 37059,
+      "padLedPeakPlaybackFrame": 37058,
+      "acousticToneOnsetPlaybackFrame": 37070.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 207
+    },
+    {
+      "sequence": 480,
+      "padLedStartPlaybackFrame": 37119,
+      "padLedEndPlaybackFrame": 37121,
+      "padLedPeakPlaybackFrame": 37119,
+      "acousticToneOnsetPlaybackFrame": 37134.125,
+      "rawLedToToneMs": 63.020833,
+      "calibratedMidiToSoundMs": 38.020833,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 481,
+      "padLedStartPlaybackFrame": 37179,
+      "padLedEndPlaybackFrame": 37181,
+      "padLedPeakPlaybackFrame": 37181,
+      "acousticToneOnsetPlaybackFrame": 37194.25,
+      "rawLedToToneMs": 63.541667,
+      "calibratedMidiToSoundMs": 38.541667,
+      "padRedPeak": 197
+    },
+    {
+      "sequence": 482,
+      "padLedStartPlaybackFrame": 37241,
+      "padLedEndPlaybackFrame": 37243,
+      "padLedPeakPlaybackFrame": 37243,
+      "acousticToneOnsetPlaybackFrame": 37257.625,
+      "rawLedToToneMs": 69.270833,
+      "calibratedMidiToSoundMs": 44.270833,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 483,
+      "padLedStartPlaybackFrame": 37296,
+      "padLedEndPlaybackFrame": 37299,
+      "padLedPeakPlaybackFrame": 37297,
+      "acousticToneOnsetPlaybackFrame": 37314,
+      "rawLedToToneMs": 75,
+      "calibratedMidiToSoundMs": 50,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 484,
+      "padLedStartPlaybackFrame": 37358,
+      "padLedEndPlaybackFrame": 37361,
+      "padLedPeakPlaybackFrame": 37359,
+      "acousticToneOnsetPlaybackFrame": 37373.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 485,
+      "padLedStartPlaybackFrame": 37481,
+      "padLedEndPlaybackFrame": 37488,
+      "padLedPeakPlaybackFrame": 37484,
+      "acousticToneOnsetPlaybackFrame": 37496.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 202
+    },
+    {
+      "sequence": 486,
+      "padLedStartPlaybackFrame": 37585,
+      "padLedEndPlaybackFrame": 37590,
+      "padLedPeakPlaybackFrame": 37589,
+      "acousticToneOnsetPlaybackFrame": 37601.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 207
+    },
+    {
+      "sequence": 487,
+      "padLedStartPlaybackFrame": 37670,
+      "padLedEndPlaybackFrame": 37675,
+      "padLedPeakPlaybackFrame": 37672,
+      "acousticToneOnsetPlaybackFrame": 37685.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 199
+    },
+    {
+      "sequence": 488,
+      "padLedStartPlaybackFrame": 37742,
+      "padLedEndPlaybackFrame": 37749,
+      "padLedPeakPlaybackFrame": 37746,
+      "acousticToneOnsetPlaybackFrame": 37758.75,
+      "rawLedToToneMs": 69.791667,
+      "calibratedMidiToSoundMs": 44.791667,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 489,
+      "padLedStartPlaybackFrame": 37804,
+      "padLedEndPlaybackFrame": 37809,
+      "padLedPeakPlaybackFrame": 37804,
+      "acousticToneOnsetPlaybackFrame": 37820.25,
+      "rawLedToToneMs": 67.708333,
+      "calibratedMidiToSoundMs": 42.708333,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 490,
+      "padLedStartPlaybackFrame": 37866,
+      "padLedEndPlaybackFrame": 37871,
+      "padLedPeakPlaybackFrame": 37871,
+      "acousticToneOnsetPlaybackFrame": 37881.625,
+      "rawLedToToneMs": 65.104167,
+      "calibratedMidiToSoundMs": 40.104167,
+      "padRedPeak": 207
+    },
+    {
+      "sequence": 491,
+      "padLedStartPlaybackFrame": 37926,
+      "padLedEndPlaybackFrame": 37931,
+      "padLedPeakPlaybackFrame": 37930,
+      "acousticToneOnsetPlaybackFrame": 37941.875,
+      "rawLedToToneMs": 66.145833,
+      "calibratedMidiToSoundMs": 41.145833,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 492,
+      "padLedStartPlaybackFrame": 37984,
+      "padLedEndPlaybackFrame": 37989,
+      "padLedPeakPlaybackFrame": 37988,
+      "acousticToneOnsetPlaybackFrame": 37999.375,
+      "rawLedToToneMs": 64.0625,
+      "calibratedMidiToSoundMs": 39.0625,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 493,
+      "padLedStartPlaybackFrame": 38050,
+      "padLedEndPlaybackFrame": 38055,
+      "padLedPeakPlaybackFrame": 38054,
+      "acousticToneOnsetPlaybackFrame": 38066,
+      "rawLedToToneMs": 66.666667,
+      "calibratedMidiToSoundMs": 41.666667,
+      "padRedPeak": 206
+    },
+    {
+      "sequence": 494,
+      "padLedStartPlaybackFrame": 38111,
+      "padLedEndPlaybackFrame": 38118,
+      "padLedPeakPlaybackFrame": 38114,
+      "acousticToneOnsetPlaybackFrame": 38127.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 201
+    },
+    {
+      "sequence": 495,
+      "padLedStartPlaybackFrame": 38186,
+      "padLedEndPlaybackFrame": 38192,
+      "padLedPeakPlaybackFrame": 38190,
+      "acousticToneOnsetPlaybackFrame": 38203,
+      "rawLedToToneMs": 70.833333,
+      "calibratedMidiToSoundMs": 45.833333,
+      "padRedPeak": 205
+    },
+    {
+      "sequence": 496,
+      "padLedStartPlaybackFrame": 38293,
+      "padLedEndPlaybackFrame": 38300,
+      "padLedPeakPlaybackFrame": 38293,
+      "acousticToneOnsetPlaybackFrame": 38309.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 497,
+      "padLedStartPlaybackFrame": 38389,
+      "padLedEndPlaybackFrame": 38396,
+      "padLedPeakPlaybackFrame": 38394,
+      "acousticToneOnsetPlaybackFrame": 38405.125,
+      "rawLedToToneMs": 67.1875,
+      "calibratedMidiToSoundMs": 42.1875,
+      "padRedPeak": 203
+    },
+    {
+      "sequence": 498,
+      "padLedStartPlaybackFrame": 38463,
+      "padLedEndPlaybackFrame": 38470,
+      "padLedPeakPlaybackFrame": 38468,
+      "acousticToneOnsetPlaybackFrame": 38479.375,
+      "rawLedToToneMs": 68.229167,
+      "calibratedMidiToSoundMs": 43.229167,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 499,
+      "padLedStartPlaybackFrame": 38541,
+      "padLedEndPlaybackFrame": 38548,
+      "padLedPeakPlaybackFrame": 38546,
+      "acousticToneOnsetPlaybackFrame": 38557.5,
+      "rawLedToToneMs": 68.75,
+      "calibratedMidiToSoundMs": 43.75,
+      "padRedPeak": 204
+    },
+    {
+      "sequence": 500,
+      "padLedStartPlaybackFrame": 38657,
+      "padLedEndPlaybackFrame": 38663,
+      "padLedPeakPlaybackFrame": 38660,
+      "acousticToneOnsetPlaybackFrame": 38672.75,
+      "rawLedToToneMs": 65.625,
+      "calibratedMidiToSoundMs": 40.625,
+      "padRedPeak": 203
+    }
+  ]
+}

@@ -66,7 +66,7 @@ measured separately but never substitutes for a built-in or wired result.
 | --- | --- | --- | --- | --- | --- |
 | L1 | macOS | Safari | Pointer | 500 triggers + 10-minute foreground run | **`PASS` 2026-08-27** — Product Build `1.0.36.0`, tested revision `703b339f`, [retained evidence](../release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md) |
 | L2 | macOS | Chrome | Pointer | 500 triggers + 10-minute foreground run | **`PASS` 2026-08-31** — Product Build `1.0.40.0`, tested revision `5c094c98`, [retained evidence](../release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md) |
-| L3 | macOS | Chrome | Physical MIDI | 500 events + physical timing sample | `deferred / unverified` |
+| L3 | macOS | Chrome | Physical MIDI | 500 events + physical timing sample | **`PASS` 2026-08-31** — Product Build `1.0.40.0`, tested revision `1869a925`, Akai MPD218, [retained evidence](../release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md) |
 | L4 | iPadOS | Safari | Touch | 500 triggers + 10-minute foreground run | `deferred / unverified` |
 | L5 | iPadOS | Safari | Touch | background, foreground, lock, unlock, route interruption | `deferred / unverified` |
 
@@ -84,9 +84,11 @@ generic rule: its only hidden transition occurred 37.129 seconds after the
 ten-minute target completed. Both L1 and L2 use the owner-accepted Force Touch
 press-to-click run's visible `pointerdown` counter marker with a conservative
 20.833333 ms calibration offset. L2 completed without any post-start hidden
-transition or lifecycle exception. Both decisions and all derived frame
-observations are retained in the linked evidence; L3–L5 receive no implied
-exception or result.
+transition or lifecycle exception. L3 uses 500 physical MPD218 LED pulses and
+co-captured 880 Hz acoustic onsets, with a conservative signed 25 ms A/V
+calibration; it also completed without a post-start lifecycle interruption.
+All decisions and derived frame observations are retained in the linked
+evidence; L4–L5 receive no implied exception or result.
 
 **Then evaluate.** Per row:
 
