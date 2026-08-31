@@ -140,7 +140,7 @@ test('current Portal maps the corrected Creator lifecycle and automated evidence
   assert.match(proof, /synthetic lifecycle\/key repeat\/MIDI[^\n]+automated contract only/);
   assert.match(
     proof,
-    /macOS Chrome Physical MIDI `passed on 1\.0\.21\.0`/,
+    /macOS Chrome Physical MIDI `passed on 1\.0\.40\.0 local source`/,
   );
   assert.match(
     proof,
