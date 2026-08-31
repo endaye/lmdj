@@ -232,6 +232,11 @@ def publish_draft(
         raise TransitionError("GitHub Release metadata changed during publication")
     if before.asset_snapshot != after.asset_snapshot:
         raise TransitionError("GitHub Release assets changed during publication")
+    expected_url = _published_html_url(
+        mutation_authority.context.policy.repository, tag,
+    )
+    if after.release.html_url != expected_url:
+        raise TransitionError("GitHub Release html_url is not the exact published tag URL")
     return replace(after.result, status="published")
 
 
@@ -486,16 +491,21 @@ def _release_pair(
 
 
 def _release_projection(release: GitHubRelease) -> tuple[object, ...]:
-    return (_release_without_draft(release), release.draft)
+    return (_release_without_draft(release), release.draft, release.html_url)
 
 
 def _release_without_draft(release: GitHubRelease) -> tuple[object, ...]:
+    # html_url is not draft-invariant: publication rewrites the untagged draft URL.
     return (
         release.id, release.tag_name, release.target_commitish,
         release.name, release.body,
-        release.prerelease, release.make_latest, release.html_url,
+        release.prerelease, release.make_latest,
         release.upload_url,
     )
+
+
+def _published_html_url(repository: str, tag: str) -> str:
+    return f"https://github.com/{repository}/releases/tag/{tag}"
 
 
 def _verify_release_metadata(

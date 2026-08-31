@@ -121,7 +121,7 @@ test('current truth tracks the formal Web Host, candidate lifecycle, and evidenc
   );
   assert.match(
     proof,
-    /macOS Chrome Physical MIDI `passed on 1\.0\.21\.0`/,
+    /macOS Chrome Physical MIDI `passed on 1\.0\.40\.0 local source`/,
   );
   assert.match(proof, /PR run `31684663825`[\s\S]+exact-main run `31688172806`/);
   assert.doesNotMatch(proof, /pending retest on 1\.0\.21\.0/);
