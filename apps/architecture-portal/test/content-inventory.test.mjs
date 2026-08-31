@@ -110,7 +110,11 @@ test('current truth tracks the formal Web Host, candidate lifecycle, and evidenc
   assert.match(proof, /scripts\/creator-web\.sh/);
   assert.match(proof, /不继承历史 Build 的 PR、CI 或 merge 结论/);
   assert.doesNotMatch(proof, /Pull Request CI[^。]+pending/);
-  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 4);
+  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 3);
+  assert.match(
+    proof,
+    /macOS Safari Pointer `passed on 1\.0\.36\.0 local source`/,
+  );
   assert.match(
     proof,
     /macOS Chrome Physical MIDI `passed on 1\.0\.21\.0`/,
