@@ -88,6 +88,15 @@ function success(envelope, result = {}) {
   };
 }
 
+function resolveThen(response, action) {
+  return {
+    then(resolvePromise) {
+      resolvePromise(response);
+      action();
+    },
+  };
+}
+
 function defaultResult(operation) {
   const results = {
     "audio.activate": {},
@@ -3137,6 +3146,137 @@ test("returns typed admission and publishes normalized Runtime outcomes", async 
   assert.deepEqual(outcomes, [
     {sequence: 9, outcome: "voice_started", runtimeFrame: 42},
   ]);
+});
+
+test("retains an outcome delivered after the Trigger response resolves but before its continuation", async () => {
+  let emitNotification;
+  const runtime = fixture({
+    send: (envelope) => {
+      if (envelope.operation === "trigger") {
+        return resolveThen(success(envelope, {sequence: 9}), () => {
+          emitNotification({
+            protocol_version: 1,
+            event: "runtime.trigger_outcomes",
+            payload: {
+              events: [{
+                sequence: 9,
+                outcome: "voice_started",
+                runtime_frame: 42,
+              }],
+            },
+          });
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  emitNotification = runtime.emitNotification;
+  await runtime.session.start();
+  await runtime.session.activateAudio(
+    createUserGestureToken({isTrusted: true}),
+  );
+  const outcomes = [];
+  runtime.session.subscribeRuntimeOutcome((value) => outcomes.push(value));
+
+  assert.deepEqual(await runtime.session.trigger(3, 99, "keyboard"), {
+    sequence: 9,
+    slot: 3,
+    velocity: 99,
+    source: "keyboard",
+  });
+  assert.deepEqual(outcomes, [
+    {sequence: 9, outcome: "voice_started", runtimeFrame: 42},
+  ]);
+  assert.equal(runtime.session.diagnostics().state, "running");
+  assert.equal(runtime.session.diagnostics().trigger_admitted_count, 1);
+  assert.equal(runtime.session.diagnostics().trigger_outcome_count, 1);
+});
+
+test("fails closed when an early outcome does not match the Trigger response", async () => {
+  let emitNotification;
+  const runtime = fixture({
+    send: (envelope) => {
+      if (envelope.operation === "trigger") {
+        return resolveThen(success(envelope, {sequence: 9}), () => {
+          emitNotification({
+            protocol_version: 1,
+            event: "runtime.trigger_outcomes",
+            payload: {
+              events: [{
+                sequence: 8,
+                outcome: "voice_started",
+                runtime_frame: 42,
+              }],
+            },
+          });
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  emitNotification = runtime.emitNotification;
+  await runtime.session.start();
+  await runtime.session.activateAudio(
+    createUserGestureToken({isTrusted: true}),
+  );
+  const outcomes = [];
+  runtime.session.subscribeRuntimeOutcome((value) => outcomes.push(value));
+
+  assert.equal(await runtime.session.trigger(3, 99, "keyboard"), false);
+  assert.deepEqual(outcomes, []);
+  await drainTasks();
+  assert.equal(runtime.session.diagnostics().state, "failed");
+  assert.equal(
+    runtime.session.diagnostics().error_code,
+    "HOST_PROTOCOL_MISMATCH",
+  );
+  assert.equal(runtime.session.diagnostics().trigger_admitted_count, 0);
+});
+
+test("an early recovery-probe outcome completes the armed recovery epoch", async () => {
+  const browserWindow = new EventTarget();
+  let emitNotification;
+  const runtime = fixture({
+    browserWindow,
+    send: (envelope) => {
+      if (envelope.operation === "trigger") {
+        return resolveThen(success(envelope, {sequence: 7}), () => {
+          emitNotification({
+            protocol_version: 1,
+            event: "runtime.trigger_outcomes",
+            payload: {
+              events: [{
+                sequence: 7,
+                outcome: "voice_started",
+                runtime_frame: 42,
+              }],
+            },
+          });
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  emitNotification = runtime.emitNotification;
+  await runtime.session.start();
+  await runtime.session.activateAudio(
+    createUserGestureToken({isTrusted: true}),
+  );
+  browserWindow.dispatchEvent(browserEvent("pagehide", {persisted: true}));
+  for (let attempt = 0; attempt < 100; ++attempt) {
+    if (runtime.session.diagnostics().recovery_probe_ready === true) break;
+    await Promise.resolve();
+  }
+
+  assert.deepEqual(await runtime.session.trigger(0, 100, "keyboard"), {
+    sequence: 7,
+    slot: 0,
+    velocity: 100,
+    source: "keyboard",
+  });
+  assert.equal(runtime.session.diagnostics().state, "running");
+  assert.equal(runtime.session.diagnostics().recovery_probe_ready, false);
+  assert.equal(runtime.session.diagnostics().trigger_outcome_count, 1);
 });
 
 test("suppresses a late Trigger response after pagehide close", async () => {
