@@ -67,7 +67,7 @@ measured separately but never substitutes for a built-in or wired result.
 | L1 | macOS | Safari | Pointer | 500 triggers + 10-minute foreground run | **`PASS` 2026-08-27** — Product Build `1.0.36.0`, tested revision `703b339f`, [retained evidence](../release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md) |
 | L2 | macOS | Chrome | Pointer | 500 triggers + 10-minute foreground run | **`PASS` 2026-08-31** — Product Build `1.0.40.0`, tested revision `5c094c98`, [retained evidence](../release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md) |
 | L3 | macOS | Chrome | Physical MIDI | 500 events + physical timing sample | **`PASS` 2026-08-31** — Product Build `1.0.40.0`, tested revision `1869a925`, Akai MPD218, [retained evidence](../release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md) |
-| L4 | iPadOS | Safari | Touch | 500 triggers + 10-minute foreground run | `deferred / unverified` |
+| L4 | iPadOS | Safari | Touch | 500 triggers + 10-minute foreground run | **`PASS` 2026-09-01** — Product Build `1.0.40.0`, tested revision `e2cd0cf9`, iPad Air 13-inch (M3) model `A3268`, [retained evidence](../release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md) |
 | L5 | iPadOS | Safari | Touch | background, foreground, lock, unlock, route interruption | `deferred / unverified` |
 
 **Execution notes.** Reload the lab for a fresh session per row, select
@@ -87,8 +87,11 @@ press-to-click run's visible `pointerdown` counter marker with a conservative
 transition or lifecycle exception. L3 uses 500 physical MPD218 LED pulses and
 co-captured 880 Hz acoustic onsets, with a conservative signed 25 ms A/V
 calibration; it also completed without a post-start lifecycle interruption.
-All decisions and derived frame observations are retained in the linked
-evidence; L4–L5 receive no implied exception or result.
+L4 uses 500 visible Safari touch-counter transitions and 500 co-captured 880 Hz
+acoustic onsets, with the same conservative 20.833333 ms display/capture
+calibration; it completed 860820.620 ms visible/running with no post-start
+lifecycle interruption. All decisions and derived frame observations are
+retained in the linked evidence; L5 receives no implied exception or result.
 
 **Then evaluate.** Per row:
 
