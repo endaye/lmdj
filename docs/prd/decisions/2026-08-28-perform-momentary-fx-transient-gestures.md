@@ -1,6 +1,9 @@
 # 已确认：Momentary FX 是母线级瞬时 Runtime 状态；手势是连续滑条参数流、HOLD 是全局显式模式、串联链序进 Contract；Project Truth 零 FX 配置
 
 - 日期：2026-08-28
+- 2026-08-31 修订：FX quantum 合并、raw input 时间权威与 owner-loss 闭合由
+  [`2026-08-31-stage10-performance-contract-repair.md`](2026-08-31-stage10-performance-contract-repair.md)
+  补充；Core 是唯一语义合并权威，Host 不决定事件取舍。
 - 解决的问题：`docs/prd/questions/perform-momentary-fx-ownership.md`
   （问题文件已按约定在本决策的同一个 Task 删除），GitHub Issue
   [#383](https://github.com/endaye/lmdj/issues/383)。

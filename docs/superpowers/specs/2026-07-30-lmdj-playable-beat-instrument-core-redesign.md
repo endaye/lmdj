@@ -281,6 +281,13 @@ Perform 提供：
 - Stereo WAV 录制；
 - Replay、命名、导出和 Resample。
 
+Stage 10 的 Pattern Launch 表面不是 Host 私有列表。Project Truth 持久化恰好
+16 个有序 nullable Pattern 槽；占用槽引用同一 Project 中唯一存在的 Pattern。
+槽 assign/clear/move 是 Authoring Command。Performance 只记录 slot index，Replay
+在开始时固定的当前 Project revision 上解析该槽；空槽产生静默 gap。精确 schema、
+录制 draft 生命周期、Core 时间/边界/合并权威与 Facade 操作面见
+[2026-08-31 Contract 修复决策](../../prd/decisions/2026-08-31-stage10-performance-contract-repair.md)。
+
 首版 Momentary FX 包括（2026-08-29 Stage 10 设计评审勘误：Roll 更名为
 Cutter，八项逐一对位 Koala 官方手册 §9.1 的 perform FX 定义；Delay 取
 节拍同步语义，见
@@ -310,6 +317,7 @@ Sound → Pad → Pattern → Performance → New Sound
 - BPM / Key；
 - 64 Pads / 4 Banks；
 - Patterns；
+- 16 个有序 Pattern Launch 槽；
 - Performances；
 - Save / Load / Duplicate / Export。
 
@@ -474,6 +482,8 @@ Audio Thread
 - TrimAsset；
 - CommitCandidate；
 - Sequence 录音会话的 flush（把本批事件写入 Pattern）；
+- Pattern 槽 assign / clear / move；
+- Performance draft begin / flush / save / discard / recover / bind；
 - SavePattern；
 - ResamplePerformance。
 
