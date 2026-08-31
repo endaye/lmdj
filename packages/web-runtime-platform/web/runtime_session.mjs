@@ -1241,6 +1241,7 @@ function createRuntimeSessionController(options = {}) {
   let activeHostQueryAbort = null;
   let runtimeActionTail = Promise.resolve();
   let projectActionTail = Promise.resolve();
+  let triggerResponseReservation = null;
   let pendingSequenceSwitch = null;
   let sequenceBoundaryFlush = null;
   let interruptionReservation = null;
@@ -1527,6 +1528,12 @@ function createRuntimeSessionController(options = {}) {
     if (requestOptions.cancelQuery === true) {
       transportOptions.cancelQuery = true;
     }
+    if (
+      operation === "trigger" &&
+      typeof requestOptions.beforeDispatch === "function"
+    ) {
+      requestOptions.beforeDispatch();
+    }
     const response = validateResponseEnvelope(
       await transport.send(request, transportOptions),
     );
@@ -1716,10 +1723,17 @@ function createRuntimeSessionController(options = {}) {
       };
     }
 
+    const responseReservation = {earlyOutcome: null};
     try {
       const result = await boundedRequest("trigger", {
         slot: flatSlot,
         velocity,
+      }, {
+        // The Wasm transport may resolve this response and synchronously drain
+        // its following notification before this async continuation can run.
+        beforeDispatch() {
+          triggerResponseReservation = responseReservation;
+        },
       });
       const responseIsCurrent = recoveryProbe
         ? (
@@ -1734,9 +1748,27 @@ function createRuntimeSessionController(options = {}) {
       if (!responseIsCurrent) {
         return false;
       }
+      const earlyOutcome = responseReservation.earlyOutcome;
+      if (
+        earlyOutcome !== null &&
+        earlyOutcome.sequence !== result?.sequence
+      ) {
+        fail("HOST_PROTOCOL_MISMATCH");
+        return false;
+      }
       retainAdmission(result?.sequence, admissionEpoch, recoveryProbe);
       if (recoveryProbe && probeReservation?.epochId === admissionEpoch) {
         probeReservation.sequence = result.sequence;
+      }
+      triggerResponseReservation = null;
+      if (earlyOutcome !== null) {
+        acceptOutcome(earlyOutcome);
+      }
+      if (
+        recoveryProbe &&
+        probeReservation?.epochId === admissionEpoch &&
+        probeReservation.sequence === result.sequence
+      ) {
         probeReservation.timeout = timers.setTimeout(() => {
           if (
             probeReservation?.epochId === admissionEpoch &&
@@ -1756,6 +1788,10 @@ function createRuntimeSessionController(options = {}) {
     } catch (error) {
       fail(error);
       return false;
+    } finally {
+      if (triggerResponseReservation === responseReservation) {
+        triggerResponseReservation = null;
+      }
     }
   }
 
@@ -2002,6 +2038,42 @@ function createRuntimeSessionController(options = {}) {
     );
   }
 
+  function acceptOutcome(event) {
+    const admission = admittedSequences.get(event.sequence);
+    if (!admission || admission.outcome !== null) {
+      return false;
+    }
+    admission.outcome = event.outcome;
+    triggerOutcomeCount += 1;
+    const publicOutcome = Object.freeze({
+      sequence: event.sequence,
+      outcome: event.outcome,
+      runtimeFrame: event.runtime_frame,
+    });
+    for (const listener of runtimeOutcomeListeners) {
+      listener(publicOutcome);
+    }
+
+    const isCurrentProbe =
+      admission.isProbe &&
+      recoveryEpoch !== null &&
+      admission.epochId === recoveryEpoch.id &&
+      probeReservation?.epochId === recoveryEpoch.id &&
+      probeReservation.sequence === event.sequence;
+    if (!isCurrentProbe) {
+      return true;
+    }
+    timers.clearTimeout(probeReservation.timeout);
+    probeReservation = null;
+    if (event.outcome !== "voice_started") {
+      fail("HOST_STATE_INVALID");
+      return true;
+    }
+    recoveryEpoch = null;
+    machine.transition("running", { reason: "recovery_probe_completed" });
+    return true;
+  }
+
   function observeOutcomes(events) {
     if (!Array.isArray(events) || events.length === 0) {
       fail("HOST_PROTOCOL_MISMATCH");
@@ -2012,39 +2084,22 @@ function createRuntimeSessionController(options = {}) {
         fail("HOST_PROTOCOL_MISMATCH");
         return;
       }
-      const admission = admittedSequences.get(event.sequence);
-      if (!admission || admission.outcome !== null) {
-        fail("HOST_PROTOCOL_MISMATCH");
-        return;
-      }
-      admission.outcome = event.outcome;
-      triggerOutcomeCount += 1;
-      const publicOutcome = Object.freeze({
-        sequence: event.sequence,
-        outcome: event.outcome,
-        runtimeFrame: event.runtime_frame,
-      });
-      for (const listener of runtimeOutcomeListeners) {
-        listener(publicOutcome);
-      }
-
-      const isCurrentProbe =
-        admission.isProbe &&
-        recoveryEpoch !== null &&
-        admission.epochId === recoveryEpoch.id &&
-        probeReservation?.epochId === recoveryEpoch.id &&
-        probeReservation.sequence === event.sequence;
-      if (!isCurrentProbe) {
+      if (acceptOutcome(event)) {
         continue;
       }
-      timers.clearTimeout(probeReservation.timeout);
-      probeReservation = null;
-      if (event.outcome !== "voice_started") {
-        fail("HOST_STATE_INVALID");
-        return;
+      if (
+        triggerResponseReservation !== null &&
+        triggerResponseReservation.earlyOutcome === null
+      ) {
+        triggerResponseReservation.earlyOutcome = Object.freeze({
+          sequence: event.sequence,
+          outcome: event.outcome,
+          runtime_frame: event.runtime_frame,
+        });
+        continue;
       }
-      recoveryEpoch = null;
-      machine.transition("running", { reason: "recovery_probe_completed" });
+      fail("HOST_PROTOCOL_MISMATCH");
+      return;
     }
     renderDiagnostics();
   }
