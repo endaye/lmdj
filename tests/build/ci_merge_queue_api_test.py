@@ -225,62 +225,120 @@ class GitHubQueueApiTest(unittest.TestCase):
         with self.assertRaises(api.GitHubApiError):
             client.cancel_validation(991)
 
-    def test_cancel_superseded_pull_runs_matches_the_exact_head_sha(self):
-        """Only pull_request runs for exactly this head are cancelled; runs
-        for newer pushes or other events are never touched (#304)."""
-        in_progress = {
+    def test_newest_pull_request_run_selects_the_exact_head_by_id(self):
+        """Only pull_request Core CI runs for exactly this head are merge-box
+        evidence; runs for newer pushes or other events are ignored (#394)."""
+        document = {
             "workflow_runs": [
-                {"id": 501, "head_sha": SHA_B, "event": "pull_request"},
-                {"id": 502, "head_sha": SHA_A, "event": "pull_request"},
-                {"id": 503, "head_sha": SHA_B, "event": "workflow_dispatch"},
+                {
+                    "id": 501,
+                    "head_sha": SHA_B,
+                    "event": "pull_request",
+                    "status": "completed",
+                    "conclusion": "cancelled",
+                    "path": ".github/workflows/ci.yml",
+                },
+                {
+                    "id": 502,
+                    "head_sha": SHA_A,
+                    "event": "pull_request",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "path": ".github/workflows/ci.yml",
+                },
+                {
+                    "id": 503,
+                    "head_sha": SHA_B,
+                    "event": "workflow_dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "path": ".github/workflows/ci.yml",
+                },
+                {
+                    "id": 504,
+                    "head_sha": SHA_B,
+                    "event": "pull_request",
+                    "status": "completed",
+                    "conclusion": "cancelled",
+                    "path": ".github/workflows/ci.yml",
+                },
             ]
         }
-        queued = {
-            "workflow_runs": [
-                {"id": 504, "head_sha": SHA_B, "event": "pull_request"},
-            ]
-        }
-        client, transport = self.client([
-            json_response(200, in_progress),
-            (202, {}, b""),
-            json_response(200, queued),
-            (202, {}, b""),
-        ])
-        cancelled = client.cancel_superseded_pull_runs(SHA_B)
-        self.assertEqual(cancelled, (501, 504))
-        urls = [request.url for request in transport.requests]
+        client, transport = self.client([json_response(200, document)])
+        run = client.newest_pull_request_run(SHA_B)
+        self.assertEqual(run.run_id, 504)
+        self.assertEqual(run.conclusion, "cancelled")
+        self.assertEqual(run.event, "pull_request")
         self.assertEqual(
-            urls,
-            [
-                "https://api.github.com/repos/endaye/lmdj/actions/workflows/ci.yml/runs"
-                f"?event=pull_request&status=in_progress&head_sha={SHA_B}&per_page=100",
-                "https://api.github.com/repos/endaye/lmdj/actions/runs/501/cancel",
-                "https://api.github.com/repos/endaye/lmdj/actions/workflows/ci.yml/runs"
-                f"?event=pull_request&status=queued&head_sha={SHA_B}&per_page=100",
-                "https://api.github.com/repos/endaye/lmdj/actions/runs/504/cancel",
-            ],
+            transport.requests[0].url,
+            "https://api.github.com/repos/endaye/lmdj/actions/workflows/ci.yml/runs"
+            f"?event=pull_request&head_sha={SHA_B}&per_page=100",
         )
-        self.assertEqual(transport.requests[1].method, "POST")
 
-    def test_cancel_superseded_pull_runs_with_no_matches_cancels_nothing(self):
-        empty = {"workflow_runs": []}
+    def test_newest_pull_request_run_with_no_matches_returns_none(self):
         client, transport = self.client([
-            json_response(200, empty),
-            json_response(200, empty),
+            json_response(200, {"workflow_runs": []}),
         ])
-        self.assertEqual(client.cancel_superseded_pull_runs(SHA_B), ())
-        self.assertEqual(len(transport.requests), 2)
+        self.assertIsNone(client.newest_pull_request_run(SHA_B))
+        self.assertEqual(len(transport.requests), 1)
 
-    def test_cancel_superseded_pull_runs_rejects_a_malformed_run_list(self):
+    def test_newest_pull_request_run_rejects_a_malformed_run_list(self):
         client, _ = self.client([json_response(200, {"workflow_runs": "nope"})])
         with self.assertRaises(ValueError):
-            client.cancel_superseded_pull_runs(SHA_B)
+            client.newest_pull_request_run(SHA_B)
 
-    def test_cancel_superseded_pull_runs_rejects_a_non_numeric_run_id(self):
+    def test_newest_pull_request_run_rejects_a_non_numeric_run_id(self):
         document = {"workflow_runs": [{"id": "501", "head_sha": SHA_B, "event": "pull_request"}]}
         client, _ = self.client([json_response(200, document)])
         with self.assertRaises(ValueError):
-            client.cancel_superseded_pull_runs(SHA_B)
+            client.newest_pull_request_run(SHA_B)
+
+    def test_rerun_pull_request_run_posts_to_the_run_rerun_endpoint(self):
+        client, transport = self.client([(201, {}, b"")])
+        client.rerun_pull_request_run(504)
+        self.assertEqual(transport.requests[0].method, "POST")
+        self.assertEqual(
+            transport.requests[0].url,
+            "https://api.github.com/repos/endaye/lmdj/actions/runs/504/rerun",
+        )
+
+    def test_wait_pull_request_checks_reads_jobs_and_check_suite(self):
+        client, transport = self.client([
+            json_response(200, {
+                "id": 504,
+                "status": "completed",
+                "conclusion": "success",
+                "check_suite_id": 777,
+            }),
+            json_response(200, {"total_count": 3, "jobs": [
+                {"name": "core (ubuntu-latest)", "conclusion": "success"},
+                {"name": "core (macos-latest)", "conclusion": "success"},
+                {"name": "PR Gate", "conclusion": "success"},
+            ]}),
+            json_response(200, {"total_count": 3, "check_runs": [
+                {"name": "core (ubuntu-latest)", "conclusion": "success", "app": {"id": 15368}},
+                {"name": "core (macos-latest)", "conclusion": "success", "app": {"id": 15368}},
+                {"name": "PR Gate", "conclusion": "success", "app": {"id": 15368}},
+            ]}),
+        ])
+        checks = client.wait_pull_request_checks(504, 60)
+        self.assertEqual({check.name for check in checks}, set(mq.REQUIRED_CHECKS))
+        self.assertTrue(all(check.conclusion == "success" for check in checks))
+        self.assertTrue(transport.requests[1].url.endswith("/actions/runs/504/jobs?per_page=100"))
+        self.assertTrue(
+            transport.requests[2].url.endswith("/check-suites/777/check-runs?per_page=100")
+        )
+
+    def test_wait_pull_request_checks_times_out_without_downloading_artifacts(self):
+        now = [0.0]
+        client, transport = self.client(
+            [json_response(200, {"id": 504, "status": "in_progress", "check_suite_id": 777})],
+            clock=lambda: now[0],
+            sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds),
+        )
+        with self.assertRaises(TimeoutError):
+            client.wait_pull_request_checks(504, 0)
+        self.assertEqual(len(transport.requests), 1)
 
     def test_update_branch_maps_expected_head_conflict_and_accepted_poll(self):
         drift, _ = self.client([json_response(422, {"message": "head changed"})])

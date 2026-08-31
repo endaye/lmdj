@@ -20,6 +20,7 @@ from merge_queue import (
     DispatchContractError,
     MergeResult,
     PullRequest,
+    PullRequestRun,
     REQUIRED_CHECKS,
     RequiredCheck,
     UpdateResult,
@@ -548,37 +549,84 @@ class GitHubQueueClient:
             expected=tuple(range(200, 300)),
         )
 
-    def cancel_superseded_pull_runs(self, head_sha: str) -> tuple[int, ...]:
-        cancelled: list[int] = []
-        for status in ("in_progress", "queued"):
-            _, _, body = self._request(
-                "GET",
-                "/actions/workflows/ci.yml/runs"
-                f"?event=pull_request&status={status}"
-                f"&head_sha={head_sha}&per_page=100",
-                expected=(200,),
-            )
-            document = _object(_json(body), "workflow runs response")
-            runs = document.get("workflow_runs")
-            if not isinstance(runs, list):
-                raise ValueError("workflow runs response has no run list")
-            for value in runs:
-                run = _object(value, "workflow run")
-                run_id = run.get("id")
-                if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
-                    raise ValueError("workflow run has no numeric id")
-                # The server-side filters are convenience; the exact head SHA
-                # and event match here is the contract, so runs for newer
-                # pushes are never touched.
-                if run.get("head_sha") != head_sha or run.get("event") != "pull_request":
-                    continue
-                self._request(
-                    "POST",
-                    f"/actions/runs/{run_id}/cancel",
-                    expected=tuple(range(200, 300)),
-                )
-                cancelled.append(run_id)
-        return tuple(cancelled)
+    def newest_pull_request_run(self, head_sha: str) -> PullRequestRun | None:
+        _sha(head_sha, "pull request head SHA")
+        _, _, body = self._request(
+            "GET",
+            "/actions/workflows/ci.yml/runs"
+            f"?event=pull_request&head_sha={head_sha}&per_page=100",
+            expected=(200,),
+        )
+        document = _object(_json(body), "workflow runs response")
+        runs = document.get("workflow_runs")
+        if not isinstance(runs, list):
+            raise ValueError("workflow runs response has no run list")
+        newest: dict[str, Any] | None = None
+        newest_id = 0
+        for value in runs:
+            run = _object(value, "workflow run")
+            run_id = run.get("id")
+            if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
+                raise ValueError("workflow run has no numeric id")
+            # The server-side filters are convenience; the exact head SHA
+            # and event match here is the contract, so runs for newer
+            # pushes never become merge-box evidence for this head.
+            path = run.get("path")
+            if (
+                run.get("head_sha") != head_sha
+                or run.get("event") != "pull_request"
+                or (path is not None and path != ".github/workflows/ci.yml")
+            ):
+                continue
+            if run_id > newest_id:
+                newest_id = run_id
+                newest = run
+        if newest is None:
+            return None
+        conclusion = newest.get("conclusion")
+        status = newest.get("status")
+        if not isinstance(status, str) or not status:
+            raise ValueError("workflow run status is missing")
+        if conclusion is not None and not isinstance(conclusion, str):
+            raise ValueError("workflow run conclusion is invalid")
+        return PullRequestRun(
+            run_id=newest_id,
+            status=status,
+            conclusion=conclusion,
+            event="pull_request",
+            head_sha=head_sha,
+        )
+
+    def rerun_pull_request_run(self, run_id: int) -> None:
+        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
+            raise ValueError("workflow run has no numeric id")
+        self._request(
+            "POST",
+            f"/actions/runs/{run_id}/rerun",
+            expected=(201,),
+        )
+
+    def wait_pull_request_checks(
+        self, run_id: int, timeout_seconds: int
+    ) -> tuple[RequiredCheck, ...]:
+        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
+            raise ValueError("workflow run has no numeric id")
+        deadline = self._clock() + timeout_seconds
+        while True:
+            run = self._get_object(f"/actions/runs/{run_id}")
+            if run.get("status") == "completed":
+                break
+            if self._clock() >= deadline:
+                raise TimeoutError("pull_request merge-box run exceeded its deadline")
+            self._sleeper(15)
+        jobs = self._get_pages(f"/actions/runs/{run_id}/jobs?per_page=100", "jobs")
+        suite_id = run.get("check_suite_id")
+        if not isinstance(suite_id, int) or isinstance(suite_id, bool):
+            raise ValueError("workflow run check_suite_id is missing")
+        checks = self._get_pages(
+            f"/check-suites/{suite_id}/check-runs?per_page=100", "check_runs"
+        )
+        return self._required_checks(jobs, checks)
 
     def _required_checks(
         self, jobs: list[object], checks: list[object]

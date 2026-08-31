@@ -138,6 +138,11 @@ class MergeQueueTest(unittest.TestCase):
             cancel_calls = []
             validation_calls = []
             merge_calls = []
+            merge_box_lookup_calls = []
+            merge_box_wait_calls = []
+            rerun_calls = []
+            pull_request_run = None
+            merge_box_check_results = None
             pull_reads = []
 
             def get_permission(inner, actor):
@@ -195,14 +200,35 @@ class MergeQueueTest(unittest.TestCase):
             def cancel_validation(inner, run_id):
                 inner.cancel_calls.append(run_id)
 
-            superseded_pull_runs = ()
-            superseded_cancel_calls = []
+            def newest_pull_request_run(inner, head_sha):
+                inner.merge_box_lookup_calls.append(head_sha)
+                if isinstance(inner.pull_request_run, Exception):
+                    raise inner.pull_request_run
+                if inner.pull_request_run is not None:
+                    return inner.pull_request_run
+                return mq.PullRequestRun(
+                    8001, "completed", "success", "pull_request", head_sha
+                )
 
-            def cancel_superseded_pull_runs(inner, head_sha):
-                inner.superseded_cancel_calls.append(head_sha)
-                if isinstance(inner.superseded_pull_runs, Exception):
-                    raise inner.superseded_pull_runs
-                return tuple(inner.superseded_pull_runs)
+            def rerun_pull_request_run(inner, run_id):
+                inner.rerun_calls.append(run_id)
+                if isinstance(getattr(inner, "rerun_error", None), Exception):
+                    raise inner.rerun_error
+
+            def wait_pull_request_checks(inner, run_id, timeout_seconds):
+                inner.merge_box_wait_calls.append((run_id, timeout_seconds))
+                if inner.merge_box_check_results is None:
+                    return (
+                        mq.RequiredCheck("core (macos-latest)", 15368, "success"),
+                        mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+                        mq.RequiredCheck("PR Gate", 15368, "success"),
+                    )
+                if not inner.merge_box_check_results:
+                    raise AssertionError("unexpected wait_pull_request_checks call")
+                value = inner.merge_box_check_results.pop(0)
+                if isinstance(value, Exception):
+                    raise value
+                return value
 
             def wait_validation(inner, run_id, timeout_seconds):
                 inner.validation_calls.append((run_id, timeout_seconds))
@@ -1252,27 +1278,144 @@ class MergeQueueTest(unittest.TestCase):
         self.assertEqual(report.code, "postcondition-mismatch")
         self.assertIn(f"pull-merge-sha:{SHA_D}", report.evidence)
 
-    def test_dispatch_cancels_pull_runs_for_the_exact_head(self):
-        client = self.client(superseded_pull_runs=(777, 778))
+    def test_dispatch_does_not_cancel_the_pull_request_run(self):
+        client = self.client()
         report = self.run_item(client)
         self.assertEqual(report.code, "merged")
-        self.assertEqual(client.superseded_cancel_calls, [SHA_B])
-        self.assertIn("cancelled-pull-run:777", report.evidence)
-        self.assertIn("cancelled-pull-run:778", report.evidence)
+        self.assertEqual(len(client.dispatch_calls), 1)
+        self.assertEqual(client.merge_box_lookup_calls, [SHA_B])
+        self.assertEqual(client.merge_box_wait_calls[0][0], 8001)
+        self.assertEqual(client.rerun_calls, [])
+        self.assertEqual(client.cancel_calls, [])
 
-    def test_pull_run_cancellation_failure_is_non_fatal_evidence(self):
-        class CancelSweepError(Exception):
-            pass
-
-        client = self.client(superseded_pull_runs=CancelSweepError("boom"))
+    def test_stale_cancelled_merge_box_reruns_the_pull_request_run(self):
+        cancelled = (
+            self.mq.RequiredCheck("core (macos-latest)", 15368, "cancelled"),
+            self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "cancelled"),
+            self.mq.RequiredCheck("PR Gate", 15368, "cancelled"),
+        )
+        green = (
+            self.mq.RequiredCheck("core (macos-latest)", 15368, "success"),
+            self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+            self.mq.RequiredCheck("PR Gate", 15368, "success"),
+        )
+        client = self.client(
+            pull_request_run=self.mq.PullRequestRun(
+                33281097878, "completed", "cancelled", "pull_request", SHA_B
+            ),
+            merge_box_check_results=[cancelled, green],
+        )
         report = self.run_item(client)
         self.assertEqual(report.code, "merged")
         self.assertTrue(report.ok)
-        self.assertIn("pull-run-cancel-error:CancelSweepError", report.evidence)
+        self.assertEqual(client.rerun_calls, [33281097878])
+        self.assertEqual(
+            [run_id for run_id, _budget in client.merge_box_wait_calls],
+            [33281097878, 33281097878],
+        )
+        self.assertEqual(len(client.merge_calls), 1)
+        self.assertEqual(len(client.dispatch_calls), 1)
+        self.assertEqual(client.dispatch_calls[0][0], 220)
+        self.assertEqual(report.attempts, 1)
 
-    def test_synchronized_validation_never_sweeps_pull_runs(self):
-        """After update-branch, the queue consumes the synchronized run, so
-        the pull_request run for the new head must not be cancelled."""
+    def test_merge_box_still_stale_after_rerun_names_the_context_and_remedy(self):
+        cancelled = (
+            self.mq.RequiredCheck("core (macos-latest)", 15368, "cancelled"),
+            self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "cancelled"),
+            self.mq.RequiredCheck("PR Gate", 15368, "cancelled"),
+        )
+        client = self.client(
+            pull_request_run=self.mq.PullRequestRun(
+                501, "completed", "cancelled", "pull_request", SHA_B
+            ),
+            merge_box_check_results=[cancelled, cancelled],
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merge-rejected")
+        self.assertFalse(report.ok)
+        self.assertEqual(client.merge_calls, [])
+        self.assertEqual(len(client.dispatch_calls), 1)
+        self.assertEqual(report.attempts, 1)
+        self.assertEqual(client.rerun_calls, [501])
+        self.assertIn("merge-box:PR Gate=cancelled", report.evidence)
+        self.assertIn("merge-box:core (ubuntu-latest)=cancelled", report.evidence)
+        self.assertIn("merge-box:core (macos-latest)=cancelled", report.evidence)
+        self.assertIn("merge-box:rerun:501", report.evidence)
+        self.assertIn("merge-box:remedy=gh-run-rerun", report.evidence)
+        body = client.comments[0][1]
+        self.assertIn("merge-box:PR Gate=cancelled", body)
+        self.assertIn("merge-box:remedy=gh-run-rerun", body)
+        self.assertNotIn("evidence-redacted", body)
+
+    def test_missing_pull_request_run_is_a_named_merge_rejection(self):
+        client = self.client()
+
+        def newest_pull_request_run(head_sha):
+            client.merge_box_lookup_calls.append(head_sha)
+            return None
+
+        client.newest_pull_request_run = newest_pull_request_run
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merge-rejected")
+        self.assertEqual(client.merge_calls, [])
+        self.assertIn("merge-box:missing:pull_request-run", report.evidence)
+        self.assertIn("merge-box:remedy=gh-run-rerun", report.evidence)
+        self.assertIn("merge-box:missing:pull_request-run", client.comments[0][1])
+
+    def test_merge_api_cancelled_checks_are_named_not_redacted(self):
+        client = self.client(
+            merge_result=self.mq.MergeResult(
+                False,
+                None,
+                message="3 of 3 required status checks are cancelled.",
+            )
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merge-rejected")
+        self.assertIn("merge-box:required-checks=cancelled", report.evidence)
+        self.assertIn("merge-box:remedy=gh-run-rerun", report.evidence)
+        self.assertNotIn("3 of 3", self.mq.render_markdown(report))
+        body = client.comments[0][1]
+        self.assertIn("merge-box:required-checks=cancelled", body)
+        self.assertNotIn("evidence-redacted", body)
+
+    def test_hostile_merge_api_message_stays_redacted(self):
+        client = self.client(
+            merge_result=self.mq.MergeResult(
+                False,
+                None,
+                message='{"message":"raw merge API response token=ghp_super_secret"}',
+            )
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merge-rejected")
+        self.assertEqual(report.evidence, ())
+        rendered = self.mq.render_markdown(report) + client.comments[0][1]
+        self.assertNotIn("ghp_super_secret", rendered)
+        self.assertNotIn("raw merge API response", rendered)
+
+    def test_focused_merge_box_may_skip_core_contexts(self):
+        skipped_cores = (
+            self.mq.RequiredCheck("core (macos-latest)", 15368, "skipped"),
+            self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "skipped"),
+            self.mq.RequiredCheck("PR Gate", 15368, "success"),
+        )
+        validation = replace(
+            self.client().validation_results[0],
+            manifest_mode="focused",
+            required_checks=skipped_cores,
+        )
+        client = self.client(
+            validation_results=[validation],
+            merge_box_check_results=[skipped_cores],
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merged")
+        self.assertEqual(client.rerun_calls, [])
+
+    def test_synchronized_validation_still_converges_the_new_head_merge_box(self):
+        """After update-branch, the queue consumes the synchronized run and
+        still waits for that head's pull_request merge-box rollup."""
         validation = replace(
             self.client().validation_results[0],
             run_id=9101,
@@ -1287,7 +1430,8 @@ class MergeQueueTest(unittest.TestCase):
         )
         report = self.run_item(client)
         self.assertEqual(report.code, "merged")
-        self.assertEqual(client.superseded_cancel_calls, [])
+        self.assertEqual(client.merge_box_lookup_calls, [SHA_D])
+        self.assertEqual(client.rerun_calls, [])
 
     def test_successful_merge_waits_for_eventually_consistent_pr_metadata(self):
         client = self.client()
