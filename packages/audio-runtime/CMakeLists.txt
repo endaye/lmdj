@@ -9,6 +9,7 @@ add_library(lmdj::audio_runtime ALIAS lmdj_audio_runtime)
 target_sources(
   lmdj_audio_runtime
   PRIVATE
+    src/master_fx.cpp
     src/prepared_sample_bank.cpp
     src/realtime_engine.cpp
 )
@@ -43,6 +44,7 @@ if(BUILD_TESTING)
   add_library(
     lmdj_audio_runtime_testable
     STATIC
+      src/master_fx.cpp
       src/prepared_sample_bank.cpp
       src/realtime_engine.cpp
   )
@@ -146,6 +148,64 @@ if(BUILD_TESTING)
     LABELS audio concurrency
   )
 
+  add_executable(
+    lmdj_master_fx_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/master_fx_test.cpp"
+  )
+  target_include_directories(
+    lmdj_master_fx_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_master_fx_tests PRIVATE lmdj::audio_runtime
+  )
+  lmdj_target_warnings(lmdj_master_fx_tests)
+  lmdj_target_sanitizers(lmdj_master_fx_tests)
+  lmdj_add_test(
+    NAME audio.master_fx
+    TIER component
+    COMMAND lmdj_master_fx_tests
+    LABELS audio
+  )
+
+  add_executable(
+    lmdj_master_fx_determinism_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/master_fx_determinism_test.cpp"
+  )
+  target_include_directories(
+    lmdj_master_fx_determinism_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_master_fx_determinism_tests PRIVATE lmdj::audio_runtime
+  )
+  lmdj_target_warnings(lmdj_master_fx_determinism_tests)
+  lmdj_target_sanitizers(lmdj_master_fx_determinism_tests)
+  lmdj_add_test(
+    NAME audio.master_fx_determinism
+    TIER component
+    COMMAND lmdj_master_fx_determinism_tests
+    LABELS audio concurrency
+  )
+
+  add_executable(
+    lmdj_master_fx_allocation_guard_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/master_fx_allocation_guard_test.cpp"
+  )
+  target_include_directories(
+    lmdj_master_fx_allocation_guard_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_master_fx_allocation_guard_tests PRIVATE lmdj::audio_runtime
+  )
+  lmdj_target_warnings(lmdj_master_fx_allocation_guard_tests)
+  lmdj_target_sanitizers(lmdj_master_fx_allocation_guard_tests)
+  lmdj_add_test(
+    NAME audio.master_fx_allocation_guard
+    TIER component
+    COMMAND lmdj_master_fx_allocation_guard_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS audio concurrency
+  )
+
   find_package(Threads REQUIRED)
   add_executable(
     lmdj_realtime_engine_stress_tests
@@ -206,6 +266,38 @@ if(BUILD_TESTING)
     NAME audio.long_sample_publication_stress
     TIER stress
     COMMAND lmdj_long_sample_publication_stress_tests
+    LABELS audio concurrency
+    TIMEOUT 180
+  )
+
+  add_executable(
+    lmdj_master_fx_stress_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/master_fx_stress_test.cpp"
+  )
+  target_include_directories(
+    lmdj_master_fx_stress_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_master_fx_stress_tests
+    PRIVATE lmdj::audio_runtime Threads::Threads
+  )
+  if(LMDJ_SANITIZER STREQUAL "none")
+    target_compile_definitions(
+      lmdj_master_fx_stress_tests
+      PRIVATE LMDJ_MASTER_FX_VERIFY_REALTIME_DEADLINE=1
+    )
+  else()
+    target_compile_definitions(
+      lmdj_master_fx_stress_tests
+      PRIVATE LMDJ_MASTER_FX_VERIFY_REALTIME_DEADLINE=0
+    )
+  endif()
+  lmdj_target_warnings(lmdj_master_fx_stress_tests)
+  lmdj_target_sanitizers(lmdj_master_fx_stress_tests)
+  lmdj_add_test(
+    NAME audio.master_fx_stress
+    TIER stress
+    COMMAND lmdj_master_fx_stress_tests
     LABELS audio concurrency
     TIMEOUT 180
   )
