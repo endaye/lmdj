@@ -19,6 +19,7 @@ source_paths:
   - docs/deploy/web-runtime-host.md
   - docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md
   - docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md
+  - docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md
   - docs/release-evidence/release-intents.json
   - scripts/release.sh
   - .github/workflows/publish-release.yml
@@ -107,16 +108,16 @@ Trigger 与 `sequence.record.begin` 只在 `running` 接收。Sequence pad admis
 
 ## 非能力
 
-当前不能宣称离线安装/PWA、生产部署、物理 Safari/MIDI/iPad/延迟体验或 `beta`/`stable` 已获准；自动化 Sequence evidence 不替代这些独立边界。也不能把 WebKit automation 当作物理 Safari，或由单个 L1 结果推导 MIDI、iPad、完整物理矩阵、`beta` 或 `stable` 已获准。
+当前不能宣称离线安装/PWA、生产部署、物理 MIDI/iPad、完整跨设备延迟体验或 `beta`/`stable` 已获准；自动化 Sequence evidence 不替代这些独立边界。也不能把 WebKit automation 当作物理 Safari，或由 L1/L2 结果推导 MIDI、iPad、完整物理矩阵、`beta` 或 `stable` 已获准。
 
 ## 剩余验收边界
 
-Formal Web Runtime Host 已进入 Assembly；自动化结果不升级物理体验结论。L1 由独立物理证据升级，其余四行继续保持未验证：
+Formal Web Runtime Host 已进入 Assembly；自动化结果不升级物理体验结论。L1 与 L2 分别由独立物理证据升级，其余三行继续保持未验证：
 
 | 物理行 | 状态 |
 | --- | --- |
 | macOS Safari Pointer | `passed on 1.0.36.0 local source`；tested revision `703b339f`，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md) |
-| macOS Chrome Pointer | `deferred / unverified` |
+| macOS Chrome Pointer | `passed on 1.0.40.0 local source`；tested revision `5c094c98`，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md) |
 | macOS Chrome physical MIDI | `passed on 1.0.21.0`；AKAI MPD218 Channel 10 实体 UI 复验 |
 | iPadOS Safari Touch | `deferred / unverified` |
 | iPadOS Safari lifecycle | `deferred / unverified` |
