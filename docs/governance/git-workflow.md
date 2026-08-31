@@ -197,7 +197,13 @@ to update and automatically squash-merge that PR; it is not review approval.
 Only an actor whose live repository permission is `write`, `maintain`, or
 `admin` may authorize a same-repository, open, non-Draft PR targeting `main`.
 The controller re-reads eligibility and the label, then merges exact current
-`main` into the PR branch when needed. GitHub creates that `GITHUB_TOKEN`
+`main` into the PR branch when needed. GitHub computes `mergeable`
+asynchronously and resets it to `null` whenever the base branch moves; the
+controller re-polls that unknown with a bounded budget before any terminal
+decision. The re-poll does not consume an attempt and does not dispatch
+validation. A computed `false` is an immediate `merge-conflict`. A persistent
+`null` past the budget stops as `mergeable-unknown`, not `ineligible-pr`.
+GitHub creates that `GITHUB_TOKEN`
 `synchronize` run in approval-required state; the controller binds the unique
 exact PR/head/bot `Core CI` run, approves it with `actions:write`, and uses its
 same-run scope as the validation instead of dispatching duplicate CI. If the

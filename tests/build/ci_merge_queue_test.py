@@ -143,12 +143,15 @@ class MergeQueueTest(unittest.TestCase):
             rerun_calls = []
             pull_request_run = None
             merge_box_check_results = None
+            pull_reads = []
 
             def get_permission(inner, actor):
                 return inner.permission
 
             def get_pull(inner, number, *, timeout_seconds=None):
-                del timeout_seconds
+                del number, timeout_seconds
+                if inner.pull_reads:
+                    inner.pull = inner.pull_reads.pop(0)
                 return inner.pull
 
             def get_main_sha(inner, *, timeout_seconds=None):
@@ -555,6 +558,67 @@ class MergeQueueTest(unittest.TestCase):
             [self.run_item(self.client(pull=pull)).code for pull in cases],
             list(expected),
         )
+
+    def test_transient_null_mergeable_is_repolled_then_admitted(self):
+        client = self.client(
+            pull_reads=[self.pull(mergeable=None), self.pull(mergeable=True)],
+        )
+        clock = FakeClock()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "merged")
+        self.assertTrue(report.ok)
+        self.assertEqual(clock.value, self.mq.MERGEABLE_POLL_INTERVAL_SECONDS)
+        self.assertEqual(len(client.dispatch_calls), 1)
+
+    def test_persistent_null_mergeable_stops_as_named_unknown(self):
+        client = self.client(pull=self.pull(mergeable=None))
+        clock = FakeClock()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "mergeable-unknown")
+        self.assertFalse(report.ok)
+        self.assertEqual(report.attempts, 0)
+        self.assertEqual(report.message, self.mq.MERGEABLE_UNKNOWN_MESSAGE)
+        self.assertEqual(
+            report.evidence,
+            (f"mergeable-polls:{self.mq.MERGEABLE_POLL_ATTEMPTS}",),
+        )
+        self.assertEqual(
+            clock.value,
+            (self.mq.MERGEABLE_POLL_ATTEMPTS - 1)
+            * self.mq.MERGEABLE_POLL_INTERVAL_SECONDS,
+        )
+        self.assertEqual(client.dispatch_calls, [])
+        self.assertEqual(client.update_calls, [])
+        self.assertEqual(client.validation_calls, [])
+        self.assertEqual(client.removed, [(220, "merge:queue")])
+        body = client.comments[0][1]
+        self.assertIn("mergeable-unknown", body)
+        self.assertIn(f"mergeable-polls:{self.mq.MERGEABLE_POLL_ATTEMPTS}", body)
+        self.assertIn(self.mq.MERGEABLE_UNKNOWN_MESSAGE, body)
+        self.assertIn(
+            "Fix the named condition, then explicitly add `merge:queue` again.",
+            body,
+        )
+
+    def test_computed_false_mergeable_is_immediate_conflict(self):
+        client = self.client(pull=self.pull(mergeable=False))
+        clock = FakeClock()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "merge-conflict")
+        self.assertEqual(report.attempts, 0)
+        self.assertEqual(clock.value, 0)
+        self.assertEqual(client.dispatch_calls, [])
+
+    def test_null_then_false_mergeable_stops_as_conflict_without_further_polls(self):
+        client = self.client(
+            pull_reads=[self.pull(mergeable=None), self.pull(mergeable=False)],
+        )
+        clock = FakeClock()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "merge-conflict")
+        self.assertEqual(report.attempts, 0)
+        self.assertEqual(clock.value, self.mq.MERGEABLE_POLL_INTERVAL_SECONDS)
+        self.assertEqual(client.dispatch_calls, [])
 
     def test_event_head_must_match_the_first_live_pull(self):
         report = self.run_item(self.client(pull=self.pull(head_sha=SHA_C)))
