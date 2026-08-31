@@ -268,6 +268,7 @@ if(EMSCRIPTEN)
       -sPROXY_TO_PTHREAD
       -sINITIAL_MEMORY=536870912
       -sALLOW_MEMORY_GROWTH=0
+      -sASYNCIFY_STACK_SIZE=131072
       -sEXIT_RUNTIME=0
       -sENVIRONMENT=web,worker
       "--pre-js=${lmdj_web_runtime_pre_js_path}"

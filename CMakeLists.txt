@@ -96,6 +96,9 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_realtime_engine_tests
     lmdj_audio_realtime_queue_tests
     lmdj_snapshot_publication_invariant_tests
+    lmdj_master_fx_tests
+    lmdj_master_fx_determinism_tests
+    lmdj_master_fx_allocation_guard_tests
     lmdj_provider_durable_file_tests
     lmdj_provider_conformance_tests
     lmdj_provider_attempt_isolation_tests
