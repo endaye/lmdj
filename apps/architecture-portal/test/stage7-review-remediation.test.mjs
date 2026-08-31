@@ -146,7 +146,11 @@ test('current Portal maps the corrected Creator lifecycle and automated evidence
     proof,
     /macOS Safari Pointer `passed on 1\.0\.36\.0 local source`/,
   );
+  assert.match(
+    proof,
+    /macOS Chrome Pointer `passed on 1\.0\.40\.0 local source`/,
+  );
   assert.match(proof, /PR run `31684663825`[\s\S]+exact-main run `31688172806`/);
   assert.doesNotMatch(proof, /pending retest on 1\.0\.21\.0/);
-  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 3);
+  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 2);
 });
