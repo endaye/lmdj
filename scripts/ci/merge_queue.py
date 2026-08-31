@@ -31,6 +31,17 @@ POST_MERGE_RECONCILIATION_INTERVAL_SECONDS = 4
 # by the attempt count, and the widened window only keeps slow API reads from
 # converting a durable merge into a TimeoutError (issue #304).
 POST_MERGE_RECONCILIATION_SECONDS = 120
+# GitHub resets mergeable to null whenever the base moves and recomputes it
+# in seconds (issue #401). Bounded the same way as post-merge reconciliation:
+# attempt count is the loop bound; the deadline only keeps a slow read from
+# overrunning. This poll is not an attempt and must not dispatch validation.
+MERGEABLE_POLL_ATTEMPTS = 7
+MERGEABLE_POLL_INTERVAL_SECONDS = 4
+MERGEABLE_POLL_SECONDS = 30
+MERGEABLE_UNKNOWN_MESSAGE = (
+    "GitHub has not finished computing mergeable after a bounded re-poll; "
+    "null is an unknown, not a conflict or ineligible PR."
+)
 GITHUB_ACTIONS_APP_ID = 15368
 REQUIRED_CHECKS = (
     "core (ubuntu-latest)",
@@ -99,6 +110,7 @@ _SAFE_SUMMARY_EVIDENCE = (
     re.compile(r"^pull-merge-sha-lagging$"),
     re.compile(r"^cancelled-pull-run:\d+$"),
     re.compile(r"^pull-run-cancel-error:[A-Z][A-Za-z0-9_]*(?:Error|Exception)$"),
+    re.compile(r"^mergeable-polls:\d+$"),
 )
 
 
@@ -308,6 +320,8 @@ def _cleanup_failure(
         f"Queue run: `{request.queue_run_id}`",
         f"Observed base/head: `{report.observed_base_sha}` / `{report.observed_head_sha}`",
     ]
+    if report.message and report.message != report.code:
+        comment_lines.append(report.message)
     safe_evidence = _safe_evidence_values(report.evidence)
     if safe_evidence:
         comment_lines.append(
@@ -360,6 +374,7 @@ def _stop(
     run_ids: Sequence[int] = (), status: str = "blocked",
     evidence: Sequence[str] = (), cleanup: bool = True, ok: bool = False,
     sleeper: Callable[[float], None] = time.sleep,
+    message: str | None = None,
 ) -> QueueReport:
     report = _report(
         code=code,
@@ -370,6 +385,7 @@ def _stop(
         run_ids=run_ids,
         evidence=evidence,
         ok=ok,
+        message=message,
     )
     return _cleanup_failure(request, client, report, sleeper=sleeper) if cleanup else report
 
@@ -484,23 +500,55 @@ def run_queue_item(
         )
     if client.get_permission(request.actor) not in {"write", "maintain", "admin"}:
         return terminal("unauthorized-actor", head=pull.head_sha)
-    if (
-        pull.state != "open"
-        or pull.draft
-        or pull.base_ref != "main"
-        or pull.head_repository != request.repository
-        or pull.number != request.pr_number
-        or pull.head_sha != request.event_head_sha
-    ):
-        return terminal("ineligible-pr", base=pull.base_sha, head=pull.head_sha)
-    if not _labelled(pull):
-        return terminal("queue-label-removed", status="cancelled",
-            base=pull.base_sha, head=pull.head_sha, cleanup=False, ok=True,
+
+    mergeable_deadline = clock() + MERGEABLE_POLL_SECONDS
+    mergeable_polls = 0
+
+    def mergeable_unknown() -> QueueReport:
+        return terminal(
+            "mergeable-unknown",
+            base=pull.base_sha,
+            head=pull.head_sha,
+            evidence=(f"mergeable-polls:{mergeable_polls}",),
+            message=MERGEABLE_UNKNOWN_MESSAGE,
         )
-    if pull.mergeable is False:
-        return terminal("merge-conflict", base=pull.base_sha, head=pull.head_sha)
-    if pull.mergeable is None:
-        return terminal("ineligible-pr", base=pull.base_sha, head=pull.head_sha)
+
+    while True:
+        mergeable_polls += 1
+        if (
+            pull.state != "open"
+            or pull.draft
+            or pull.base_ref != "main"
+            or pull.head_repository != request.repository
+            or pull.number != request.pr_number
+            or pull.head_sha != request.event_head_sha
+        ):
+            return terminal("ineligible-pr", base=pull.base_sha, head=pull.head_sha)
+        if not _labelled(pull):
+            return terminal("queue-label-removed", status="cancelled",
+                base=pull.base_sha, head=pull.head_sha, cleanup=False, ok=True,
+            )
+        if pull.mergeable is False:
+            return terminal("merge-conflict", base=pull.base_sha, head=pull.head_sha)
+        if pull.mergeable is True:
+            break
+        remaining = mergeable_deadline - clock()
+        if mergeable_polls >= MERGEABLE_POLL_ATTEMPTS or remaining <= 0:
+            return mergeable_unknown()
+        sleeper(min(MERGEABLE_POLL_INTERVAL_SECONDS, remaining))
+        remaining = mergeable_deadline - clock()
+        if remaining <= 0:
+            return mergeable_unknown()
+        pull = client.get_pull(request.pr_number, timeout_seconds=remaining)
+        if pull.merged:
+            return _report(
+                code="already-merged",
+                status="already-merged",
+                head=pull.head_sha,
+                merge_sha=pull.merge_commit_sha,
+                ok=True,
+            )
+
     changed = set(client.list_changed_paths(request.pr_number))
     if changed.intersection(CONTROL_PLANE_PATHS):
         return terminal("queue-control-plane-change",

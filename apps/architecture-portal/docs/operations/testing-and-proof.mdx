@@ -56,7 +56,10 @@ pending，且按 GitHub 定义的等待开始时间 FIFO 执行；dispatch 还�
 
 启用后，具备实时 `write|maintain|admin` 权限的人给同仓库、open、非 Draft、base=`main`
 的 PR 添加 `merge:queue`，就是一次可撤销的自动 squash merge 授权。Controller 只执行默认
-分支上的控制代码，把 exact current main 合入 PR branch。GitHub 会把该 `GITHUB_TOKEN`
+分支上的控制代码，把 exact current main 合入 PR branch。GitHub 在 base 前进后会把
+`mergeable` 置为 `null` 直到重新算完；Controller 对这个未知做有界重试，不算
+attempt、不发起 validation。算完的 `false` 仍立即 `merge-conflict`，持续 `null`
+才以 `mergeable-unknown` 停，而不是 `ineligible-pr`。GitHub 会把该 `GITHUB_TOKEN`
 同步产生的 PR CI 置为 approval-required；Controller 只绑定 exact PR/head/bot 的唯一 run，
 显式批准后把它作为 validation，不再重复 dispatch。若 PR 已包含 current main，才显式
 dispatch PR head；该路径的 ticket、PR number、base SHA、head SHA 和返回 run ID 必须完全
