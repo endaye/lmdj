@@ -8,6 +8,12 @@ Stage 12 智能结果共用的 Candidate → Preview → 用户选择 → Derive
 采纳路径与通用 Lineage 记录。实施计划按 #471 验收另行落笔，不在本文。
 Lineage 的 Project 持久化位置与 Stage 10 Task 5（#431）对齐，见 S12L-Q1。
 
+评审修正（2026-08-31）：Candidate 的可用性与 Job 重试关系改由独立
+`JobRecord` / `CandidateIndex` 承担，terminal Attempt 保持不可变审计事实；
+Discard 只写 tombstone，不删除 Attempt 证据。输出 Schema 校验移入 execution
+并发生在 terminal 持久化前；采纳目标只保留明确 Pad，避免抢定仍开放的
+Project Bin 模型；Lineage source 改为封闭 typed variant。
+
 关联 Issue：[#472](https://github.com/endaye/lmdj/issues/472)（umbrella）、
 [#471](https://github.com/endaye/lmdj/issues/471)、
 [#467](https://github.com/endaye/lmdj/issues/467)（候选的生产方）、
@@ -53,14 +59,14 @@ Artifact → Preview → User Commit → Atomic Project Revision）是本文的
 
 | ID | 决策 | 依据 |
 | --- | --- | --- |
-| S12L-D1 | CandidateSet 是 Attempt 成功后的只读视图，身份 = `{job_id, attempt_id, capability_id+version, source: {asset_id, artifact_sha256, project_revision}, candidates[]}`；每个候选携带 `CandidateId`。CandidateSet 住在 Workspace 层 attempt 证据（AttemptStore 现有 `candidate_outputs` 的语义化），**永不进 Project Truth**。同一 Job 的新 Attempt 成功即把旧 CandidateSet 判 `Superseded`。 | §18、SDK 现状 |
+| S12L-D1 | CandidateSet 是成功 Attempt 输出经消费方验证后的只读视图，身份 = `{candidate_set_id, job_id, attempt_id, capability_id+version, source: {asset_id, artifact_sha256, project_revision}, candidates[]}`；每个候选携带 `CandidateId`。provider-sdk `2.0.0` 以 `AttemptResultV2.candidates: vector<Candidate>` 取代当前 singular `optional<Candidate>`，使多个候选成为显式执行结果；成功 terminal 的 `candidate_ids` 与聚合 outputs 据此产生。CandidateSet 由 Workspace 层独立 `CandidateIndex` 发布，**不写回 terminal Attempt，也永不进 Project Truth**。SDK 同时增加 `JobId` 与独立 `JobRecord {job_id, capability, ordered_attempt_ids, active_candidate_set_id?}`，明确 Attempt → Job 关系；同一 Job 的新 Attempt 成功只更新 JobRecord active pointer，并把旧 Set 在 CandidateIndex 标为 `superseded`，绝不把 terminal Attempt 改成 Superseded。 | §18；当前模型尚无 Job 关系且结果只有单 Candidate，必须显式补齐 |
 | S12L-D2 | 候选两种形态：**字节候选**（候选即输出 Artifact，如 stem WAV）与 **recipe 候选**（候选是对源 Asset 的确定性派生配方，如 `lmdj.slice-points.v1` 的一个切片区间）。recipe 候选不物化字节，预览与采纳时由 Core 从源 Asset 确定性执行配方——切割真相在 Core，不在 Provider 输出。 | S12C-D2、存储成本 |
-| S12L-D3 | 候选可见前，采纳层按该 capability 声明的输出 Schema 做字节级校验（S12C-D9 的消费方归属）：非法输出把 Attempt 判 `Failed`，用户永远看不到坏候选。 | 决策点 3 归属 |
+| S12L-D3 | 输出 Schema validator 由消费方模块拥有、在 capability 注册时注入 AttemptStore execution。Provider 返回后，执行路径先验证未发布 outputs，再决定并持久化 terminal Attempt，最后才允许 Artifact Store 与 CandidateIndex 发布；不存在“先成功落盘、采纳层稍后改成 Failed”的回写。成功的候选型 Attempt 必须满足 `candidate_outputs == minted_outputs`；非法输出以 `PROVIDER_FAILED` + `details.reason = output_schema_invalid` 终结，terminal v2 两组 outputs 均为空，未发布 bytes 不 mint Artifact，CandidateIndex 不产生记录。 | S12C-D9；terminal-attempt-v2 不变量 |
 | S12L-D4 | Preview 是零变更操作：字节候选经普通 Runtime 试听路径播放；recipe 候选按配方对源 Asset 做只读区间试听（Stage 8 start/end 试听机制的复用）。Preview 不产生 revision、不写 Project、不触发准备以外的持久化。 | §5.2「Preview」 |
-| S12L-D5 | 采纳是一个原子 Facade Command `AdoptCandidates`（带 `expected_revision`）：输入为显式清单 `[{candidate_id, target: pad slot 或 新 asset（不上 Pad）}]`，目标永远用户显式给出，命令不做任何自动选槽。多候选一次 revision 完成，内部按 target slot index 升序应用；配额按全清单字节和在任何变更前判定——all-or-nothing，`BANK_QUOTA_EXHAUSTED` 或任何一项校验失败即整体拒绝且零变更。源 Asset 与未采纳候选不受影响。 | §5.2「用户选择」、D1 配额 |
-| S12L-D6 | 通用 Lineage 记录（#431 记录的超集）：`{derived_asset_id, source: {artifact_sha256, asset_id?, project_revision}, derivation: {kind, capability_id?, capability_version?, provider_id?, provider_version?, model_identity?, parameters_sha256?, attempt_id?, range?, performance_id?}, }`。`kind` 词表 v1：`capability_adoption`、`resample`（#431 实例）、`trim`、`copy`、`soundset_install`（S11-D9）。#431 的四个字段分别映射到 `source.artifact_sha256`、`range`、`performance_id`、`source.project_revision`。记录不含挂钟时间戳（确定性；时间在 Attempt 证据里已有）。 | P10-D11 超集义务 |
-| S12L-D7 | 生命周期：Discard 是显式操作，只删 Workspace 候选证据；`Superseded` 由新 Attempt 触发（S12L-D1）；Host 重启后 CandidateSet 从 AttemptStore 证据重建，重建不出来则该 Set 以 `CANDIDATE_UNAVAILABLE` 类型化不可用——永不损坏 Project、永不半可见。候选证据的磁盘 GC 随 S8-D5 的 Artifact GC 一并延后设计。 | §18.1、S8-D5 |
-| S12L-D8 | 失败矩阵（全部零 Project 变更）：Provider 失败/超时（§18.1 原文）；采纳时源 Asset 已被删（`SOURCE_ASSET_MISSING`）；采纳时 `expected_revision` 不符（标准 revision 冲突）；候选已 `Superseded`/已 Discard（`CANDIDATE_UNAVAILABLE`）；配额超限（`BANK_QUOTA_EXHAUSTED`）；recipe 越界（源被裁剪后配方失效，类型化拒绝）。 | §18.1 |
+| S12L-D5 | 采纳是一个原子 Facade Command `AdoptCandidates`（带 `expected_revision`）：输入为显式清单 `[{candidate_id, target: {bank_id, pad_index}}]`。v1 只允许明确 Pad target，不提供“新 asset（不上 Pad）”；后者依赖仍开放的 Project Bin/未分配 Asset 持久化决策，本文不抢定。命令不自动选槽；多候选一次 revision 完成，按 `(bank_id, pad_index)` 稳定升序应用。配额按采纳后的每 Pad decoded float PCM bytes 预演所有受影响 Bank 与整个 generation ledger；相同 Artifact 到多个 Pad 分别计 residency，不能按 content hash 去重。任何变更前按既有 binding-constraint 规则判 `BANK_QUOTA_EXHAUSTED` / `PROJECT_QUOTA_EXHAUSTED`——all-or-nothing，任一失败整体拒绝且零变更。源 Asset 与未采纳候选不受影响。 | §5.2「用户选择」、D1 配额与 2026-08-28 记账修正；Project Bin 问题仍开放 |
+| S12L-D6 | 通用 Lineage 记录使用封闭 typed source variant：`source = {kind: asset_artifact, artifact_sha256, asset_id?, project_revision}` 或 `{kind: soundset, set_id, set_version, manifest_sha256, slot_index, artifact_sha256}`；`derivation = {kind, capability_id?, capability_version?, provider_id?, provider_version?, model_identity?, parameters_sha256?, job_id?, attempt_id?, range?, performance_id?}`。derivation `kind` v1：`capability_adoption`、`resample`、`trim`、`copy`、`soundset_install`。每个 variant 的必填字段由 Contract 条件约束，禁止只有自由文本 `kind`。#431 的字段映射到 `asset_artifact` source、`range`、`performance_id`；S11-D9 精确映射到 `soundset` source。记录不含挂钟时间戳。 | P10-D11 超集义务；Sound Set 与能力采纳只能有一个 Lineage Contract |
+| S12L-D7 | 生命周期：Discard 是显式操作，只在 CandidateIndex 写 `discarded` tombstone；Supersede 同理只改变 index 可用性。两者都不得改写或删除 terminal Attempt、JobRecord 的 attempt 历史、minted/candidate output refs、provider/request/error 证据。Host 重启按 JobRecord + CandidateIndex 重建视图；若可用候选的 bytes 不可取，返回 `NOT_FOUND` + `details.reason = candidate_unavailable`，不损坏 Project、不半可见。Artifact bytes 的保留/GC 随 S8-D5 另行设计；Discard 本身绝不触发 GC。 | §18.1、S8-D5；审计事实与 UI 可用性分离 |
+| S12L-D8 | 失败矩阵（全部零 Project 变更）：Provider 失败/超时（§18.1 原文）；源 Asset 已不存在 → `NOT_FOUND` + `details.reason = source_asset_missing`；`expected_revision` 不符 → `REVISION_CONFLICT`；候选已 superseded/discarded 或 bytes 不可取 → `NOT_FOUND` + `details.reason = candidate_unavailable`；配额超限 → `BANK_QUOTA_EXHAUSTED` / `PROJECT_QUOTA_EXHAUSTED`；recipe 越界 → `INVALID_ARGUMENT` + `details.reason = candidate_recipe_invalid`。`details.reason` 是稳定 lowercase token；不新增公共 error code。 | §18.1 与当前封闭 Error Contract |
 | S12L-D9 | Pattern 候选走同一 CandidateSet 身份与 Preview 语义，commit 出口是 §6.4 的四个（新 Pattern Slot / Merge / 替换当前编辑版 / Discard），经 Pattern 命令而非 Asset 命令；「不得覆盖用户已录入演奏事件”是命令级不变量。细节按 S12L-Q2 延后。 | §6.4 |
 
 ## 5. Contract 影响
@@ -69,18 +75,23 @@ Artifact → Preview → User Commit → Atomic Project Revision）是本文的
   `lmdj.capability.v2`。
 - Lineage 的 Project 内承载位若成立（S12L-Q1），走 v4 之后的 Project
   Contract 版本，属实施计划的 Version Management。
-- 复用：`lmdj.error.v1` 惯例；新增错误 token：`CANDIDATE_UNAVAILABLE`、
-  `SOURCE_ASSET_MISSING`。
+- 复用：`lmdj.error.v1` 现有 code；本文只新增稳定 lowercase
+  `details.reason`：`candidate_unavailable`、`source_asset_missing`、
+  `candidate_recipe_invalid`、`output_schema_invalid`。
 
 ## 6. 测试清单（实施计划再展开为逐条 RED-GREEN）
 
-1. 候选可见性：坏输出被消费方校验拦下，Attempt `Failed`，无候选可见。
+1. 候选可见性：坏输出在 terminal 持久化前被 execution 中的消费方 validator
+   拦下，Attempt 首次即以 `Failed` 写入，无 CandidateIndex 记录；成功路径
+   断言 `candidate_outputs == minted_outputs`。
 2. Preview 零变更：字节/recipe 两形态预览后 revision、Project、Asset
    逐项不变。
-3. 采纳原子性：多候选全清单配额预判；任一失败整体零变更；成功恰一次
-   revision、slot 升序、Lineage 逐字段齐全。
+3. 采纳原子性：多候选按每 Pad prepared bytes 预演 Bank/generation ledger，
+   重复 Artifact 多 Pad 分别计量；任一失败整体零变更；成功恰一次 revision、
+   slot 升序、Lineage 逐字段齐全。
 4. 永不自动：无显式 target 的采纳请求是 `INVALID_ARGUMENT`。
-5. 生命周期：Supersede/Discard/重启重建/重建失败逐条；源 Asset 全程不变。
+5. 生命周期：Job 多 Attempt 的 active pointer、Supersede/Discard tombstone、
+   重启重建/bytes 缺失逐条；terminal Attempt 与 Job 历史逐 byte 不变。
 6. 失败矩阵逐行（S12L-D8）。
 7. Lineage 超集：`resample` kind 的记录与 #431 落地字段一一映射。
 
@@ -88,14 +99,15 @@ Artifact → Preview → User Commit → Atomic Project Revision）是本文的
 
 Version impact: none——本文只是设计文档。实施计划必须分配：
 `application-facade`（AdoptCandidates）与 provider-sdk（候选证据语义化）
-的 SemVer、可能的 Project Contract 版本（S12L-Q1）；Product 整合与 #436
+的 SemVer（含 `JobId`/JobRecord/CandidateIndex，跟随 #467 的 provider-sdk
+`2.0.0` 实施序列）、可能的 Project Contract 版本（S12L-Q1）；Product 整合与 #436
 串行，实现自身串行在 #431 与 #427 之后。
 
 ## 8. Documentation Impact
 
-Documentation impact: required——本文自身是新增 retained 设计文档；实施
-时 Facade、Provider SDK、Project Contract 的 Portal 路由由实施计划声明。
-本文不改当前 Portal 真相。
+Documentation impact: none——本次只修订 retained 设计文档，不改变当前
+Portal 真相。实施时 Facade、Provider SDK、Project Contract 的 Portal 路由
+由实施计划按实际身份变更声明。
 
 ## 9. 拒绝的替代
 
@@ -124,6 +136,16 @@ Documentation impact: required——本文自身是新增 retained 设计文档�
 ### 9.6 Lineage 记挂钟时间
 
 拒绝。破坏 Project 确定性；时间属于 Attempt 证据。
+
+### 9.7 Discard 时删除 Candidate 或 Attempt 证据
+
+拒绝。Discard 是用户可见性选择，不是审计擦除授权；它只写 CandidateIndex
+tombstone。Artifact bytes 的长期保留由未来 GC policy 独立裁决。
+
+### 9.8 v1 采纳为不上 Pad 的新 Asset
+
+拒绝。该目标要求先回答 Project Bin/未分配 Asset 的权威持久化模型；开放问题
+解决前，v1 只接受明确 Bank/Pad target。
 
 ## 10. 实施入口（前置条件）
 
