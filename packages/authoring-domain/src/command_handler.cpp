@@ -1,5 +1,6 @@
 #include <lmdj/domain/command_handler.hpp>
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -104,8 +105,11 @@ nlohmann::json command_event(
 AppliedCommand applied(
     ProjectState state,
     std::string_view type,
-    const CommandMeta& meta) {
-  state.contract = ProjectContract::v3;
+    const CommandMeta& meta,
+    ProjectContract contract = ProjectContract::v3) {
+  state.contract = state.contract == ProjectContract::v4
+                       ? ProjectContract::v4
+                       : contract;
   ++state.revision;
   const auto committed_revision = state.revision;
   return AppliedCommand{
@@ -113,6 +117,102 @@ AppliedCommand applied(
       command_event(type, meta, committed_revision),
       false,
   };
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const AssignPatternSlot& command) {
+  const auto current = validate_pattern_slots(state);
+  if (!current.has_value()) {
+    return invalid(current.error().message);
+  }
+  if (command.slot >= kPatternSlotCount) {
+    return invalid("Pattern slot is out of range");
+  }
+  if (!is_valid_uuid(command.pattern_id.value()) ||
+      !state.patterns.contains(command.pattern_id)) {
+    return invalid("assigned Pattern does not exist");
+  }
+  if (state.pattern_slots.at(command.slot).has_value()) {
+    return invalid("Pattern slot is already occupied");
+  }
+  if (std::ranges::find(
+          state.pattern_slots,
+          std::optional<foundation::PatternId>{command.pattern_id}) !=
+      state.pattern_slots.end()) {
+    return invalid("Pattern is already assigned to a slot");
+  }
+  auto copy = state;
+  copy.pattern_slots.at(command.slot) = command.pattern_id;
+  auto result = applied(
+      std::move(copy),
+      "pattern.slot_assigned",
+      command.meta,
+      ProjectContract::v4);
+  result.event["pattern_id"] = command.pattern_id.value();
+  result.event["pattern_slot"] = command.slot;
+  return foundation::Result<AppliedCommand>::success(std::move(result));
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const ClearPatternSlot& command) {
+  const auto current = validate_pattern_slots(state);
+  if (!current.has_value()) {
+    return invalid(current.error().message);
+  }
+  if (command.slot >= kPatternSlotCount) {
+    return invalid("Pattern slot is out of range");
+  }
+  if (!state.pattern_slots.at(command.slot).has_value()) {
+    return invalid("Pattern slot is empty");
+  }
+  const auto pattern_id = *state.pattern_slots.at(command.slot);
+  auto copy = state;
+  copy.pattern_slots.at(command.slot) = std::nullopt;
+  auto result = applied(
+      std::move(copy),
+      "pattern.slot_cleared",
+      command.meta,
+      ProjectContract::v4);
+  result.event["pattern_id"] = pattern_id.value();
+  result.event["pattern_slot"] = command.slot;
+  return foundation::Result<AppliedCommand>::success(std::move(result));
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const MovePatternSlot& command) {
+  const auto current = validate_pattern_slots(state);
+  if (!current.has_value()) {
+    return invalid(current.error().message);
+  }
+  if (command.from_slot >= kPatternSlotCount ||
+      command.to_slot >= kPatternSlotCount) {
+    return invalid("Pattern slot is out of range");
+  }
+  if (command.from_slot == command.to_slot) {
+    return invalid("Pattern slot move requires different slots");
+  }
+  if (!state.pattern_slots.at(command.from_slot).has_value()) {
+    return invalid("Pattern slot move source is empty");
+  }
+  if (state.pattern_slots.at(command.to_slot).has_value()) {
+    return invalid("Pattern slot move target is occupied");
+  }
+  const auto pattern_id = *state.pattern_slots.at(command.from_slot);
+  auto copy = state;
+  copy.pattern_slots.at(command.from_slot) = std::nullopt;
+  copy.pattern_slots.at(command.to_slot) = pattern_id;
+  auto result = applied(
+      std::move(copy),
+      "pattern.slot_moved",
+      command.meta,
+      ProjectContract::v4);
+  result.event["from_slot"] = command.from_slot;
+  result.event["pattern_id"] = pattern_id.value();
+  result.event["to_slot"] = command.to_slot;
+  return foundation::Result<AppliedCommand>::success(std::move(result));
 }
 
 foundation::Result<AppliedCommand> apply_new_command(

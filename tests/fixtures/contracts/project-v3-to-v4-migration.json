@@ -763,6 +763,24 @@
       "pattern_id": "30000000-0000-4000-8000-000000000001"
     }
   ],
+  "pattern_slots": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
   "project_id": "00000000-0000-4000-8000-000000000001",
   "revision": 7,
   "sequence_settings": {

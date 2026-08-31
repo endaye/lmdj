@@ -55,6 +55,9 @@ using PersistedCommand = std::variant<
     domain::ImportAsset,
     domain::AssignPad,
     domain::CreatePattern,
+    domain::AssignPatternSlot,
+    domain::ClearPatternSlot,
+    domain::MovePatternSlot,
     domain::MergePatternEvents,
     domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
@@ -409,6 +412,14 @@ nlohmann::json project_json(const domain::ProjectState& state) {
        }},
   };
   if (state.contract == domain::ProjectContract::v4) {
+    auto pattern_slots = nlohmann::json::array();
+    for (const auto& pattern_id : state.pattern_slots) {
+      pattern_slots.push_back(
+          pattern_id.has_value()
+              ? nlohmann::json(pattern_id->value())
+              : nlohmann::json(nullptr));
+    }
+    encoded["pattern_slots"] = std::move(pattern_slots);
     auto performances = nlohmann::json::array();
     for (const auto& [id, performance] : state.performances) {
       auto value = performance_value_json(performance);
@@ -814,6 +825,7 @@ foundation::Result<domain::ProjectState> parse_project(
                 "bpm",
                 "contract",
                 "patterns",
+                "pattern_slots",
                 "performances",
                 "project_id",
                 "revision",
@@ -821,6 +833,7 @@ foundation::Result<domain::ProjectState> parse_project(
             }) &&
         input.at("assets").is_array() &&
         input.at("patterns").is_array() &&
+        input.at("pattern_slots").is_array() &&
         input.at("performances").is_array() &&
         exact_object_keys(
             input.at("sequence_settings"),
@@ -1063,6 +1076,31 @@ foundation::Result<domain::ProjectState> parse_project(
       }
     }
     if (is_v4) {
+      const auto& encoded_slots = input.at("pattern_slots");
+      if (encoded_slots.size() != domain::kPatternSlotCount) {
+        return foundation::Result<domain::ProjectState>::failure(
+            invalid_project("project Pattern slot count is invalid", path));
+      }
+      for (std::size_t slot = 0; slot < encoded_slots.size(); ++slot) {
+        const auto& encoded = encoded_slots.at(slot);
+        if (encoded.is_null()) {
+          continue;
+        }
+        if (!encoded.is_string()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              invalid_project("project Pattern slot is invalid", path));
+        }
+        state.pattern_slots.at(slot) = foundation::PatternId{
+            encoded.get<std::string>()};
+      }
+      const auto slots_valid = domain::validate_pattern_slots(state);
+      if (!slots_valid.has_value()) {
+        return foundation::Result<domain::ProjectState>::failure(
+            invalid_project(
+                "project Pattern slots are invalid",
+                path,
+                slots_valid.error().message));
+      }
       for (const auto& encoded : input.at("performances")) {
         auto performance = parse_performance(encoded, path);
         if (!performance.has_value() ||
@@ -1131,6 +1169,29 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"meta", meta_json(value.meta)},
               {"pattern", pattern_json(value.pattern)},
               {"type", "CreatePattern"},
+          };
+        } else if constexpr (
+            std::is_same_v<Type, domain::AssignPatternSlot>) {
+          return {
+              {"meta", meta_json(value.meta)},
+              {"pattern_id", value.pattern_id.value()},
+              {"slot", value.slot},
+              {"type", "AssignPatternSlot"},
+          };
+        } else if constexpr (
+            std::is_same_v<Type, domain::ClearPatternSlot>) {
+          return {
+              {"meta", meta_json(value.meta)},
+              {"slot", value.slot},
+              {"type", "ClearPatternSlot"},
+          };
+        } else if constexpr (
+            std::is_same_v<Type, domain::MovePatternSlot>) {
+          return {
+              {"from_slot", value.from_slot},
+              {"meta", meta_json(value.meta)},
+              {"to_slot", value.to_slot},
+              {"type", "MovePatternSlot"},
           };
         } else if constexpr (
             std::is_same_v<Type, domain::MergePatternEvents>) {
@@ -1311,6 +1372,75 @@ foundation::Result<PersistedCommand> parse_command(
           PersistedCommand{domain::CreatePattern{
               std::move(meta.value()),
               std::move(pattern.value()),
+          }});
+    }
+    if (type == "AssignPatternSlot") {
+      if (!exact_object_keys(
+              input, {"meta", "pattern_id", "slot", "type"}) ||
+          !input.at("pattern_id").is_string() ||
+          !nonnegative_integer(input.at("slot"))) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "AssignPatternSlot transaction shape is invalid", path));
+      }
+      const auto slot = unsigned_integer_value(input.at("slot"));
+      if (!slot.has_value() ||
+          *slot > std::numeric_limits<std::uint8_t>::max()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "AssignPatternSlot index is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::AssignPatternSlot{
+              std::move(meta.value()),
+              static_cast<std::uint8_t>(*slot),
+              foundation::PatternId{
+                  input.at("pattern_id").get<std::string>()},
+          }});
+    }
+    if (type == "ClearPatternSlot") {
+      if (!exact_object_keys(input, {"meta", "slot", "type"}) ||
+          !nonnegative_integer(input.at("slot"))) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "ClearPatternSlot transaction shape is invalid", path));
+      }
+      const auto slot = unsigned_integer_value(input.at("slot"));
+      if (!slot.has_value() ||
+          *slot > std::numeric_limits<std::uint8_t>::max()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "ClearPatternSlot index is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::ClearPatternSlot{
+              std::move(meta.value()),
+              static_cast<std::uint8_t>(*slot),
+          }});
+    }
+    if (type == "MovePatternSlot") {
+      if (!exact_object_keys(
+              input, {"from_slot", "meta", "to_slot", "type"}) ||
+          !nonnegative_integer(input.at("from_slot")) ||
+          !nonnegative_integer(input.at("to_slot"))) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "MovePatternSlot transaction shape is invalid", path));
+      }
+      const auto from_slot = unsigned_integer_value(input.at("from_slot"));
+      const auto to_slot = unsigned_integer_value(input.at("to_slot"));
+      if (!from_slot.has_value() || !to_slot.has_value() ||
+          *from_slot > std::numeric_limits<std::uint8_t>::max() ||
+          *to_slot > std::numeric_limits<std::uint8_t>::max()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "MovePatternSlot index is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::MovePatternSlot{
+              std::move(meta.value()),
+              static_cast<std::uint8_t>(*from_slot),
+              static_cast<std::uint8_t>(*to_slot),
           }});
     }
     if (type == "MergePatternEvents") {

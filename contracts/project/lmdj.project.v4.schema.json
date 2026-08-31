@@ -13,6 +13,7 @@
     "banks",
     "assets",
     "patterns",
+    "pattern_slots",
     "performances"
   ],
   "properties": {
@@ -117,6 +118,21 @@
         "$ref": "#/$defs/pattern"
       },
       "uniqueItems": true
+    },
+    "pattern_slots": {
+      "type": "array",
+      "minItems": 16,
+      "maxItems": 16,
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/uuid"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
     },
     "performances": {
       "type": "array",

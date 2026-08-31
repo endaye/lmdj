@@ -47,6 +47,23 @@ struct CreatePattern {
   Pattern pattern;
 };
 
+struct AssignPatternSlot {
+  CommandMeta meta;
+  std::uint8_t slot;
+  foundation::PatternId pattern_id;
+};
+
+struct ClearPatternSlot {
+  CommandMeta meta;
+  std::uint8_t slot;
+};
+
+struct MovePatternSlot {
+  CommandMeta meta;
+  std::uint8_t from_slot;
+  std::uint8_t to_slot;
+};
+
 struct MergePatternEvents {
   CommandMeta meta;
   foundation::PatternId pattern_id;
@@ -64,6 +81,9 @@ using Command = std::variant<
     ImportAsset,
     AssignPad,
     CreatePattern,
+    AssignPatternSlot,
+    ClearPatternSlot,
+    MovePatternSlot,
     MergePatternEvents,
     UpdateSequenceSettings>;
 
