@@ -8,6 +8,11 @@
 [#465](https://github.com/endaye/lmdj/issues/465)，本文只锁机制与字段承载位，
 不裁决权利与映射策略；决策文件合入后回填绑定表。
 
+评审修正（2026-08-31）：补齐 canonical manifest 与 content-addressed blobs
+构成的逻辑包边界；明确 v1 不接收 archive；把公开错误收敛到现有
+`lmdj.error.v1` code + `details.reason`；并把 Sound Set 来源纳入 #471 的
+typed Lineage source，避免只记录 `kind` 而丢失 Set 身份。
+
 关联 Issue：[#470](https://github.com/endaye/lmdj/issues/470)（umbrella）、
 [#464](https://github.com/endaye/lmdj/issues/464)、
 [#465](https://github.com/endaye/lmdj/issues/465)、
@@ -48,7 +53,7 @@ Stage 11 的成功命题是：
 
 | ID | 问题 | 归属 | 本文的承载位 |
 | --- | --- | --- | --- |
-| S11-Q1 | 权利与 License 溯源：哪些字段是权威、缺失/矛盾/吊销时 listing/preview/download/install 各自在哪一步 fail closed。 | #465 | S11-D2 的 `license` 块与 S11-D10 的 `SOUNDSET_LICENSE_*` 错误族预留承载位；字段清单与判定边界待决策。 |
+| S11-Q1 | 权利与 License 溯源：哪些字段是权威、缺失/矛盾/吊销时 listing/preview/download/install 各自在哪一步 fail closed。 | #465 | S11-D2 的 `license` 块与 S11-D10 的 `details.reason = soundset_license_*` 预留承载位；字段清单与判定边界待决策。 |
 | S11-Q2 | 确定性映射：把 Set 套用到已有 Pattern 时 role/BPM/Key/音域映射的权威输入、占用槽冲突与空槽行为、何时必须显式用户选择。 | #465 | S11-D11 锁机制框架（映射是纯函数、冲突必须显式确认、Pattern 事件引用不被静默改写）；映射表本身待决策。 |
 | S11-Q3 | 映射若要求安装或套用时改变素材时长（BPM 对齐），离线 time-stretch 是否成为 Stage 11 前置。 | #465 → #347 | S11-D11 显式排除 v1 安装路径做任何 DSP；若决策要求，#347 从 Later 升级。 |
 
@@ -60,16 +65,16 @@ Stage 11 的成功命题是：
 
 | ID | 决策 | 依据 |
 | --- | --- | --- |
-| S11-D1 | Sound Set 的身份是 `set_id`（UUID）+ SemVer `version` + 规范化 manifest 的 SHA-256。同一 `(set_id, version)` 永远指向同一 manifest 哈希；任何内容变更都是新 `version`。不存在就地更新。 | 规格 §5.4「原始 Set 不可变」 |
+| S11-D1 | Sound Set 的身份是 `set_id`（UUID）+ SemVer `version` + canonical manifest 的 SHA-256。接收端先要求原始 object 是无 BOM 的有效 UTF-8 bounded JSON、通过 `lmdj.soundset.v1` Schema，再生成 `foundation::canonical_json(parsed_manifest)`；canonical bytes 精确定义为该 UTF-8 输出、无尾随换行。原始 object 必须与 canonical bytes byte-for-byte 相等（因此重复 key、非规范 key 顺序/空白/数字表示均拒绝），哈希覆盖这组 bytes。同一 `(set_id, version)` 永远指向同一 manifest 哈希；任何 manifest 或被引用内容变更都是新 `version`。不存在就地更新。 | 规格 §5.4「原始 Set 不可变」与仓库既有 bounded parse/canonical JSON 实现 |
 | S11-D2 | 新 Contract `lmdj.soundset.v1`（`contracts/soundset/`，Contract SemVer 独立）。manifest 声明：Set 身份、`name`、`publisher`、可选 `description`、可选 set 级 `bpm`/`key`、`license` 块（字段清单待 S11-Q1）、恰好 16 个 `slots`。每个 slot 是 `occupied`（引用一个 Artifact：sha256 + media_type + byte_length，外加 `role`、`name`、可选 `bpm`/`key`）或 `empty`。允许空槽：Set 作者的留白是内容的一部分。 | 规格 §5.4、§17.4 Artifact Ref 惯例 |
 | S11-D3 | Set 内音频 Artifact 复用 S8-D6 约束：PCM16 WAV、mono/stereo、44.1/48 kHz。不为 Sound Set 引入新格式；压缩分发格式是具名后续能力，届时也在下载层解包为 WAV 后走同一校验。 | S8-D6 |
 | S11-D4 | Role 词表 v1 钉死为封闭枚举：`kick`、`snare`、`clap`、`hat_closed`、`hat_open`、`perc`、`cymbal`、`bass`、`melody`、`chord`、`vocal`、`fx`、`other`。manifest 中 role 必填；未知值是校验错误，不是自由文本。词表扩展走 Contract SemVer。 | S11-Q2 的映射需要确定性输入 |
 | S11-D5 | 试听分两层：set 级可选 `demo` Artifact（同 S8-D6 约束的一段演示混音）；单音色试听直接以该 slot 的 Artifact 字节经普通 Runtime 试听路径播放。不建第二套预览引擎，不做低码率预览变体。试听不产生 Project 变更。 | 规格 §5.4「整套与单个音色试听」 |
-| S11-D6 | Catalog 是新 Contract `lmdj.soundset-catalog.v1`：一份可缓存的只读索引，条目 = Set 身份 + manifest 哈希 + 下载体积 + 元数据摘要 + License 摘要。Catalog 端点与本地缓存归 Workspace/Host settings，永不进 Project Truth（与 Provider 选择同一不变量）。v1 允许「本地目录也是合法 Catalog 源」，网络只是传输方式之一。 | CLAUDE.md 不变量类比 |
-| S11-D7 | 下载与完整性：所有字节按 content-address 获取；manifest 哈希先验证，再逐 Artifact 验证 sha256 + byte_length；任何不匹配 fail closed，缓存中的半成品不可见。已验证的 Set 进 Host 层只读 Set Store（Workspace 下），与 Project bundle 无关。Catalog 不可达是非致命：已缓存 Set 照常可用。 | §17.4、规格 §18.1 Storage 惯例 |
-| S11-D8 | 安装是一个原子 Facade Command（`InstallSoundSet`，带 `expected_revision`）：用户显式选择目标 Bank；命令把 occupied slots 的 Artifact 经既有导入 commit 路径物化为普通 Project Asset 并完成 Pad assignment，一次 revision 完成。配额按整个 Set 的字节和在任何变更前判定，超限返回 `BANK_QUOTA_EXHAUSTED` 且零变更。目标 Bank 有占用 Pad 时的行为（覆盖需确认/合并/拒绝）待 S11-Q2 裁决，机制上冲突必须显式用户确认，永不静默覆盖。 | 规格 §5.2「不得自动覆盖 Bank」、D1 配额 |
-| S11-D9 | 安装产生的每个 Asset 记 Lineage：`{set_id, set_version, slot_index, artifact_sha256}`，复用 #471 的通用 Lineage 记录（`derivation.kind = soundset_install`），不为 Sound Set 发明第二套。之后的裁剪/复制/再派生是普通 §5.2 流程；原始 Set Store 内容永不因用户编辑改变。 | 规格 §5.4、#471 |
-| S11-D10 | 错误词表（`lmdj.error.v1` 惯例，全大写 token）：`SOUNDSET_MANIFEST_INVALID`、`SOUNDSET_HASH_MISMATCH`、`SOUNDSET_UNSUPPORTED_AUDIO`、`SOUNDSET_SLOT_INVALID`、`SOUNDSET_LICENSE_INCOMPLETE`（判定字段待 S11-Q1）、`CATALOG_UNAVAILABLE`、`BANK_QUOTA_EXHAUSTED`（复用）。所有安装期错误保证 Project、Asset、Pad 与 revision 不变。 | 规格 §18.1 |
+| S11-D6 | Catalog 是新 Contract `lmdj.soundset-catalog.v1`：一份可缓存的只读索引，条目 = Set 身份 + manifest 哈希 + **去重后**下载体积 + 元数据摘要 + License 摘要。Sound Set v1 是逻辑包，不是 archive：一个 canonical manifest object 加其引用的 content-addressed Artifact blobs。Catalog transport 只提供按 `{object_kind, sha256}` 解析 immutable object 的能力；网络端点与本地目录只是两种 adapter。本地 adapter 把已验证的 lowercase sha256 映射为配置根下的单个 basename（调用方不能提供 `/`、`..` 或路径），root-relative open 禁止跟随 symlink，打开后 fstat 必须为 regular file，再做有界读取与 hash 校验。Catalog 配置与缓存归 Workspace/Host settings，永不进 Project Truth。 | CLAUDE.md 不变量类比；避免 archive/路径权限 |
+| S11-D7 | 下载与完整性：先按 catalog 声明读取 manifest object，依 S11-D1 完成 bounded parse、Schema、canonical byte equality 与 manifest sha256 验证，再由已验证 manifest 枚举 blobs；每个 blob 在发布到 Set Store 前验证 sha256 + byte_length。相同 Artifact hash 可被多个 slot/demo 复用，只下载/计费一次；`total_bytes` 是 canonical manifest bytes 加唯一 blob byte_length 之和，并必须等于 catalog 声明。Host manifest 必须提供 `maximum_soundset_manifest_bytes`、`maximum_soundset_blob_bytes`、`maximum_soundset_unique_bytes`、`maximum_soundset_staging_bytes`；在分配或下载前同时对单对象、单 Set unique bytes 与当前 staging 总量 fail closed。任何不匹配或超限都使 staging 整体不可见。已验证 Set 原子发布到 Workspace 下只读 Set Store，与 Project bundle 无关。Catalog 不可达是非致命：已缓存 Set 照常可用。 | §17.4、规格 §18.1 Storage 惯例 |
+| S11-D8 | 安装是一个原子 Facade Command（`InstallSoundSet`，带 `expected_revision`）：用户显式选择目标 Bank；命令把 occupied slots 的 Artifact 经既有导入 commit 路径物化为普通 Project Asset 并完成 Pad assignment，一次 revision 完成。下载侧 S11-D7 的 unique blob 计量不得复用为 prepared quota：命令按最终每个 Pad 的 decoded float PCM bytes 预演目标 Bank 与整个 generation ledger，同一 Artifact 若占两个 Pad 就按两份 residency 计；在任何变更前分别对 `maximum_user_bank_bytes` / `maximum_generation_bytes` 判定，按既有 binding-constraint 规则返回 `BANK_QUOTA_EXHAUSTED` 或 `PROJECT_QUOTA_EXHAUSTED`，且零变更。目标 Bank 有占用 Pad 时的行为待 S11-Q2 裁决，冲突必须显式用户确认，永不静默覆盖。 | 规格 §5.2「不得自动覆盖 Bank」、D1 配额与 2026-08-28 记账修正 |
+| S11-D9 | 安装产生的每个 Asset 复用 #471 的单一 Lineage Contract，并使用 typed source：`source = {kind: soundset, set_id, set_version, manifest_sha256, slot_index, artifact_sha256}`、`derivation.kind = soundset_install`。这些字段全部必填，不能只记 `kind`。之后的裁剪/复制/再派生是普通 §5.2 流程；原始 Set Store 内容永不因用户编辑改变。 | 规格 §5.4、#471 |
+| S11-D10 | 不扩张当前封闭的 `lmdj.error.v1` code 枚举。公开 code 与稳定细因分别为：manifest/slot 非法 → `INVALID_ARGUMENT` + `details.reason = soundset_manifest_invalid|soundset_slot_invalid`；内容哈希或长度不符 → `IO_ERROR` + `details.reason = soundset_content_mismatch`；音频不支持 → `UNSUPPORTED_AUDIO` + `details.reason = soundset_audio_unsupported`；License 不满足 #465 的门禁 → `PERMISSION_DENIED` + `details.reason = soundset_license_ineligible`；Catalog 不可达 → `IO_ERROR` + `details.reason = catalog_unavailable`；配额复用 `BANK_QUOTA_EXHAUSTED` / `PROJECT_QUOTA_EXHAUSTED` 及其既有 details。`reason` 是本文锁定的 lowercase token，UI 可解释但不得改变 code 语义。所有安装期错误保证 Project、Asset、Pad 与 revision 不变。 | 当前 Error Contract/Foundation 枚举、规格 §18.1 |
 | S11-D11 | 把 Set 套用到已有 Pattern（regenerate 声音而保留演奏）在机制上是：一个纯函数 `map(set manifest, 当前 Bank 状态) → {slot 替换清单}`，输出先预览、经用户确认后按 S11-D8 同一原子路径 commit。映射函数的输入只有已声明的 manifest 元数据与 Project 状态，无网络、无 AI 依赖；映射表与冲突策略待 S11-Q2。v1 安装与套用路径不做任何 time-stretch/pitch DSP（S11-Q3）。 | 规格 §5.4、2026-08-26 D2 |
 | S11-D12 | Pattern 事件引用 Pad Slot（规格 §6.6），因此安装/套用改变的是「槽位发出什么声音」，不触碰 Pattern 事件本身；被 Set 置空的槽位使已有事件落空静默（非致命），与 P10-D10 的空槽惯例一致。 | 规格 §6.6、P10-D10 |
 
@@ -95,7 +100,13 @@ Stage 11 的成功命题是：
 ```
 
 `lmdj.soundset-catalog.v1` 条目 = `{set_id, version, manifest_sha256,
-total_bytes, name, publisher, roles_summary, bpm?, key?, license_summary}`。
+total_bytes, name, publisher, roles_summary, bpm?, key?, license_summary}`；其中
+`total_bytes` 按 S11-D7 的唯一 blob 集合计算。
+
+v1 分发没有 ZIP/TAR 或其他容器。网络 Catalog adapter 与本地目录 adapter
+都只实现两个逻辑读取：canonical manifest object 与 content-addressed blob。
+因此 v1 没有 archive 路径、解包、symlink 跟随或压缩炸弹语义；任何未来单文件
+分发容器必须另立版本化 Contract 与安全评审，解包结果仍需还原为同一逻辑对象集。
 
 Host 层状态（永不进 Project Truth）：Catalog 端点、Catalog 缓存、只读
 Set Store。Project Truth 新增的只有普通 Asset + #471 Lineage 记录（其
@@ -106,18 +117,25 @@ Project 持久化位置随 #471/#431 对齐，串行在 v4 之后）。
 - 新增：`lmdj.soundset.v1`、`lmdj.soundset-catalog.v1`（独立 Contract SemVer）。
 - 不改：`lmdj.capability.v2`、`lmdj.project.v4`（安装用既有 Asset/assignment
   语义即可表达；Lineage 的 Project 字段归 #471 的后续 Project 版本）。
-- 复用：`lmdj.error.v1` 错误惯例、Artifact Ref 三元组。
+- 复用：`lmdj.error.v1` 现有 code + `details.reason`、Artifact Ref 三元组；
+  本设计不新增公共错误 code。
 
 ## 7. 测试清单（实施计划再展开为逐条 RED-GREEN）
 
-1. manifest 校验：合法/16 槽不足或超出/未知 role/坏哈希/坏 media_type/
+1. manifest 校验：canonical bytes golden vectors；BOM/尾随换行/空白、key
+   重排、重复 key、非规范数字、过深 JSON；16 槽不足或超出/未知 role/坏哈希/坏 media_type/
    License 块缺失（按 #465 裁决展开）逐条拒绝。
-2. 完整性：篡改任一 Artifact 字节 → `SOUNDSET_HASH_MISMATCH`，缓存不可见。
-3. 安装原子性：配额超限、目标 Bank 冲突未确认、中途失败均零变更；成功恰好
-   一次 revision，Lineage 齐全。
+2. 完整性：篡改任一 Artifact 字节 → `IO_ERROR` +
+   `details.reason = soundset_content_mismatch`，缓存不可见；重复 hash 只计费和
+   下载一次；声明总量与唯一 blob 总量不符 fail closed。
+3. 安装原子性：按每 Pad prepared bytes 预演 Bank/generation ledger（重复
+   Artifact 占多个 Pad 分别计量）；两种配额超限、目标 Bank 冲突未确认、
+   中途失败均零变更；成功恰好一次 revision，Lineage 齐全。
 4. 不可变性：安装后编辑 Pad 产生 Derived Asset，Set Store 字节不变。
 5. 套用映射：同输入同输出的纯函数性；冲突必须显式确认；置空槽事件落空静默。
-6. Catalog：不可达非致命；缓存 Set 可试听可安装。
+6. Catalog：不可达非致命；缓存 Set 可试听可安装；本地 adapter 拒绝 symlink、
+   非 lowercase-sha256 key、路径分隔/`..`、非 regular file 与越界对象；四个
+   Host 上限逐条 exact/+1；网络 adapter 不能引入 archive 解包。
 
 ## 8. Version Management
 
@@ -129,9 +147,9 @@ Build 整合。
 
 ## 9. Documentation Impact
 
-Documentation impact: required——本文自身是新增的 retained 设计文档；
-实施时受影响的 Portal 路由（Contracts、Facade、Host 存储）由实施计划
-按 manifest 派生声明，本文不改当前 Portal 真相。
+Documentation impact: none——本次只修订 retained 设计文档，不改变当前
+manifest 派生的 Portal 真相。实施时受影响的 Portal 路由（Contracts、Facade、
+Host 存储）由实施计划按实际身份变更声明。
 
 ## 10. 拒绝的替代
 
@@ -163,6 +181,12 @@ Documentation impact: required——本文自身是新增的 retained 设计文�
 
 拒绝 v1（S11-Q3 承载）。2026-08-26 D2 已定采样无 BPM 语义；离线 stretch
 是 #347 的具名能力，是否成为 Stage 11 前置由 #465 裁决。
+
+### 10.7 v1 单文件 archive
+
+拒绝。逻辑 manifest + content-addressed blobs 已满足下载、缓存、完整性与本地
+Catalog；archive 会新增路径穿越、symlink、压缩炸弹与双重身份问题。以后若有
+离线搬运需求，另立容器 Contract，不能改变 Set 的 canonical manifest 身份。
 
 ## 11. 实施入口（前置条件）
 
