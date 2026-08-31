@@ -39,14 +39,24 @@
      [`2026-08-19-lmdj-attempt-replay-provider.md`](../../superpowers/plans/2026-08-19-lmdj-attempt-replay-provider.md)
      的 Task 0 就此解除阻塞，按 Tasks 1–4 继续；`ArtifactSource` 落地后再
      评估重放 Provider 是否迁移到正式接口。
+- 2026-08-31 触发时点修正（#467 设计评审）：首个真实消费方
+  `sample.slice.v1` 已出现，API 形状现已由 retained 设计
+  [`2026-08-31-lmdj-stage12-capability-artifactsource-design.md`](../../superpowers/specs/2026-08-31-lmdj-stage12-capability-artifactsource-design.md)
+  锁定。输入 custody 是 Artifact owner → SDK 私有 scoped staging → 已校验
+  immutable owned bytes → capability-gated `ArtifactSource` → Provider；哈希不
+  能定位字节，正式路径不得推导 Host 私有文件路径。由于 Provider 执行签名与
+  ABI 不兼容，原结论第 4 点对 provider-sdk MINOR 的预测被纠正为 `2.0.0`
+  MAJOR；Provider v2 不提供忽略 source 的旧接口默认委托。结构化输出的
+  consumer-owned validator 必须由 AttemptStore execution 在 terminal Attempt
+  或 Candidate 发布前调用。
 - 原因：缺口是双向的且有两个独立消费方（首个解析结构化字节的正式
   Capability、重放 Provider）撞上同一面墙。三个候选中，A 是唯一让既定架构
   不变量成真、又不需要给 Provider 任何特权的答案；B 只对小型 proof fixture
   可行，作为退路使等待可承受；C 同时破坏 Attempt 记录的可审计性与
   artifact-port 权限模型。首个真实消费方尚无紧迫性，故现在只冻结方向与
   否决项，不支付 API 变更级联。
-- 影响：本条只记录结论，不修改 Contract、SDK 或任何版本身份。D3 不再
-  blocked on decision，但其实现工作保持 deferred 至上述触发时点；重放
-  Provider 计划解除 Task 0 阻塞，按选项 B 继续。`ArtifactSource` 与输出侧
-  访问口的 API 形状、校验边界与对现有实现/mock 的影响，属于触发时点后的
-  独立 Task。
+- 影响：2026-08-24 当时本条只记录结论，未修改 Contract、SDK 或任何版本
+  身份；该事实不变。2026-08-31 的触发设计现要求未来实施分配 provider-sdk
+  `2.0.0` 并迁移全部 Provider/mock/Host 依赖；两个日期的文档修正本身仍不
+  改当前版本身份。重放 Provider 的选项 B 只保留为小型 proof fixture 方案，
+  迁移到 Provider v2 后不得被解释为正式输入机制。
