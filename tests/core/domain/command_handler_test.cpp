@@ -14,6 +14,8 @@ namespace {
 
 using lmdj::domain::AppliedCommand;
 using lmdj::domain::AssignPad;
+using lmdj::domain::AssignPatternSlot;
+using lmdj::domain::ClearPatternSlot;
 using lmdj::domain::Command;
 using lmdj::domain::CommandMeta;
 using lmdj::domain::CommandReceipt;
@@ -21,6 +23,7 @@ using lmdj::domain::CreatePattern;
 using lmdj::domain::ImportAsset;
 using lmdj::domain::ImportAssignSample;
 using lmdj::domain::MergePatternEvents;
+using lmdj::domain::MovePatternSlot;
 using lmdj::domain::PadPlayback;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
@@ -50,6 +53,14 @@ constexpr auto kSequenceSettingsCommand1 =
     "10000000-0000-4000-8000-00000000000a";
 constexpr auto kSequenceSettingsCommand2 =
     "10000000-0000-4000-8000-00000000000b";
+constexpr auto kAssignPatternSlotCommand =
+    "10000000-0000-4000-8000-00000000000c";
+constexpr auto kAssignSecondPatternSlotCommand =
+    "10000000-0000-4000-8000-00000000000d";
+constexpr auto kMovePatternSlotCommand =
+    "10000000-0000-4000-8000-00000000000e";
+constexpr auto kClearPatternSlotCommand =
+    "10000000-0000-4000-8000-00000000000f";
 constexpr auto kAsset1 = "20000000-0000-4000-8000-000000000001";
 constexpr auto kAsset2 = "20000000-0000-4000-8000-000000000002";
 constexpr auto kPattern1 = "30000000-0000-4000-8000-000000000001";
@@ -701,6 +712,115 @@ void test_sequence_settings_update_enforces_locked_ranges() {
   }
 }
 
+void test_pattern_slot_commands_enforce_ownership_and_receipts() {
+  auto initial = new_project();
+  initial.contract = lmdj::domain::ProjectContract::v4;
+  const PatternId pattern1{kPattern1};
+  const PatternId pattern2{kPattern2};
+  initial.patterns.emplace(pattern1, Pattern{pattern1, 1, {}});
+  initial.patterns.emplace(pattern2, Pattern{pattern2, 1, {}});
+
+  const Command assign_first{AssignPatternSlot{
+      meta(kAssignPatternSlotCommand, 0), 0, pattern1}};
+  const auto assigned = apply_or_throw(initial, assign_first);
+  LMDJ_CHECK(assigned.state.contract == lmdj::domain::ProjectContract::v4);
+  LMDJ_CHECK(assigned.state.revision == 1);
+  LMDJ_CHECK(assigned.state.pattern_slots.at(0) == pattern1);
+  LMDJ_CHECK(!assigned.replayed);
+
+  const std::map<CommandId, CommandReceipt> receipts{
+      {CommandId{kAssignPatternSlotCommand},
+       {assigned.state.revision, assigned.event}},
+  };
+  const auto replay = lmdj::domain::apply(
+      assigned.state, assign_first, receipts);
+  LMDJ_CHECK(replay.has_value());
+  LMDJ_CHECK(replay.value().replayed);
+  LMDJ_CHECK(replay.value().state == assigned.state);
+  LMDJ_CHECK(replay.value().event == assigned.event);
+
+  for (const Command& rejected : {
+           Command{AssignPatternSlot{
+               meta(kAssignSecondPatternSlotCommand, 1), 0, pattern2}},
+           Command{AssignPatternSlot{
+               meta(kAssignSecondPatternSlotCommand, 1), 1, pattern1}},
+           Command{AssignPatternSlot{
+               meta(kAssignSecondPatternSlotCommand, 1),
+               1,
+               PatternId{"30000000-0000-4000-8000-000000000099"}}},
+           Command{AssignPatternSlot{
+               meta(kAssignSecondPatternSlotCommand, 1), 16, pattern2}},
+       }) {
+    check_invalid_without_state_change(assigned.state, rejected);
+  }
+
+  const auto assigned_second = apply_or_throw(
+      assigned.state,
+      Command{AssignPatternSlot{
+          meta(kAssignSecondPatternSlotCommand, 1), 1, pattern2}});
+  LMDJ_CHECK(assigned_second.state.revision == 2);
+
+  for (const Command& rejected : {
+           Command{MovePatternSlot{
+               meta(kMovePatternSlotCommand, 2), 0, 1}},
+           Command{MovePatternSlot{
+               meta(kMovePatternSlotCommand, 2), 0, 0}},
+           Command{MovePatternSlot{
+               meta(kMovePatternSlotCommand, 2), 2, 3}},
+           Command{MovePatternSlot{
+               meta(kMovePatternSlotCommand, 2), 0, 16}},
+       }) {
+    check_invalid_without_state_change(assigned_second.state, rejected);
+  }
+
+  const auto moved = apply_or_throw(
+      assigned_second.state,
+      Command{MovePatternSlot{
+          meta(kMovePatternSlotCommand, 2), 0, 2}});
+  LMDJ_CHECK(moved.state.revision == 3);
+  LMDJ_CHECK(!moved.state.pattern_slots.at(0).has_value());
+  LMDJ_CHECK(moved.state.pattern_slots.at(2) == pattern1);
+  LMDJ_CHECK(moved.state.pattern_slots.at(1) == pattern2);
+
+  check_invalid_without_state_change(
+      moved.state,
+      Command{ClearPatternSlot{
+          meta(kClearPatternSlotCommand, 3), 0}});
+  check_invalid_without_state_change(
+      moved.state,
+      Command{ClearPatternSlot{
+          meta(kClearPatternSlotCommand, 3), 16}});
+
+  const auto cleared = apply_or_throw(
+      moved.state,
+      Command{ClearPatternSlot{
+          meta(kClearPatternSlotCommand, 3), 2}});
+  LMDJ_CHECK(cleared.state.revision == 4);
+  LMDJ_CHECK(!cleared.state.pattern_slots.at(2).has_value());
+  LMDJ_CHECK(cleared.state.pattern_slots.at(1) == pattern2);
+}
+
+void test_v4_authoring_commands_preserve_pattern_slot_truth() {
+  auto initial = new_project();
+  initial.contract = lmdj::domain::ProjectContract::v4;
+  const PatternId pattern1{kPattern1};
+  initial.patterns.emplace(pattern1, Pattern{pattern1, 1, {}});
+
+  const auto assigned = apply_or_throw(
+      initial,
+      Command{AssignPatternSlot{
+          meta(kAssignPatternSlotCommand, 0), 0, pattern1}});
+  const auto updated = apply_or_throw(
+      assigned.state,
+      Command{UpdateSequenceSettings{
+          meta(kSequenceSettingsCommand1, 1), 121, {}, {}}});
+
+  LMDJ_CHECK(updated.state.contract == lmdj::domain::ProjectContract::v4);
+  LMDJ_CHECK(updated.state.revision == 2);
+  LMDJ_CHECK(updated.state.pattern_slots == assigned.state.pattern_slots);
+  LMDJ_CHECK(updated.state.pattern_slots.at(0) == pattern1);
+}
+
 }  // namespace
 
 int main() {
@@ -730,6 +850,8 @@ int main() {
     test_merge_pattern_events_replaces_duplicates_and_orders_canonically();
     test_tick_pattern_validation_enforces_loop_remainder();
     test_sequence_settings_update_enforces_locked_ranges();
+    test_pattern_slot_commands_enforce_ownership_and_receipts();
+    test_v4_authoring_commands_preserve_pattern_slot_truth();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

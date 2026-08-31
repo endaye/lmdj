@@ -220,10 +220,11 @@ assert tick_limits == {
 
 project_v4 = schemas["project_v4"]
 assert set(project_v4["required"]) == set(project_v3["required"]) | {
-    "performances"
+    "pattern_slots",
+    "performances",
 }, (
-    "why: Project v4 must add only the required performances collection; "
-    "remedy: derive the root fields from v3 and add performances"
+    "why: Project v4 must add the required Pattern slots and Performances; "
+    "remedy: derive the root fields from v3 and add both fields"
 )
 assert project_v4["properties"]["contract"]["const"] == "lmdj.project.v4", (
     "why: a v4 document must self-identify as lmdj.project.v4; "
@@ -236,6 +237,20 @@ assert project_v4["properties"]["performances"] == {
 }, (
     "why: Project Truth stores Performances as an identity-bearing collection; "
     "remedy: restore the array of performance definitions"
+)
+assert project_v4["properties"]["pattern_slots"] == {
+    "type": "array",
+    "minItems": 16,
+    "maxItems": 16,
+    "items": {
+        "oneOf": [
+            {"$ref": "#/$defs/uuid"},
+            {"type": "null"},
+        ]
+    },
+}, (
+    "why: Project Truth owns exactly 16 ordered nullable Pattern IDs; "
+    "remedy: restore the fixed-length nullable UUID array"
 )
 performance_v4 = project_v4["$defs"]["performance"]
 assert set(performance_v4["required"]) == {
@@ -408,6 +423,10 @@ invalid_project_v3 = load_json(
 valid_project_v4 = load_json(fixture_root / "project-v4-valid.json")
 invalid_project_v4 = load_json(
     fixture_root / "project-v4-invalid-event.json"
+)
+invalid_project_v4["pattern_slots"] = valid_project_v4["pattern_slots"]
+invalid_pattern_slots_v4 = load_json(
+    fixture_root / "project-v4-invalid-pattern-slots.json"
 )
 migration_project_v4 = load_json(
     fixture_root / "project-v3-to-v4-migration.json"
@@ -662,6 +681,7 @@ json_schema.check(
 migration_project_v3 = json.loads(json.dumps(migration_project_v4))
 migration_project_v3["contract"] = "lmdj.project.v3"
 del migration_project_v3["performances"]
+del migration_project_v3["pattern_slots"]
 json_schema.check(
     migration_project_v3,
     project_v3,
@@ -678,6 +698,26 @@ assert migration_project_v4["performances"] == [], (
     "why: every migrated v3 Project starts with no Performances; "
     "remedy: restore an empty performances array in the golden vector"
 )
+assert migration_project_v4["pattern_slots"] == [None] * 16, (
+    "why: every migrated v3 Project starts with 16 empty Pattern slots; "
+    "remedy: restore the all-null Pattern slot migration vector"
+)
+v3_with_pattern_slots = json.loads(json.dumps(migration_project_v3))
+v3_with_pattern_slots["pattern_slots"] = [None] * 16
+assert json_schema.validate(v3_with_pattern_slots, project_v3), (
+    "why: a v3-declared Project must not carry pre-existing Pattern slots; "
+    "remedy: keep v3 additionalProperties closed"
+)
+for case_name in ("wrong_length", "invalid_pattern_id"):
+    malformed_slots = mutated(
+        valid_project_v4,
+        ["pattern_slots"],
+        invalid_pattern_slots_v4[case_name],
+    )
+    assert json_schema.validate(malformed_slots, project_v4), (
+        f"why: Project v4 must reject {case_name} Pattern slots; "
+        "remedy: restore the exact 16-item nullable UUID schema"
+    )
 invalid_project_v4_violations = json_schema.validate(
     invalid_project_v4, project_v4
 )
