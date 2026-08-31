@@ -12,6 +12,7 @@ schema_paths = {
     "project": contract_root / "project" / "lmdj.project.v1.schema.json",
     "project_v2": contract_root / "project" / "lmdj.project.v2.schema.json",
     "project_v3": contract_root / "project" / "lmdj.project.v3.schema.json",
+    "project_v4": contract_root / "project" / "lmdj.project.v4.schema.json",
     "project_bundle": (
         contract_root / "project" / "lmdj.project-bundle.v1.schema.json"
     ),
@@ -57,12 +58,16 @@ contract_versions = {
         "1.1.0"
         if name in {"project_bundle", "error"}
         else (
-            "3.0.0"
-            if name == "project_v3"
+            "4.0.0"
+            if name == "project_v4"
             else (
-                "2.0.0"
-                if name in {"assembly", "capability_v2", "project_v2"}
-                else "1.0.0"
+                "3.0.0"
+                if name == "project_v3"
+                else (
+                    "2.0.0"
+                    if name in {"assembly", "capability_v2", "project_v2"}
+                    else "1.0.0"
+                )
             )
         )
     )
@@ -213,6 +218,111 @@ assert tick_limits == {
     8: (30719, 30720),
 }
 
+project_v4 = schemas["project_v4"]
+assert set(project_v4["required"]) == set(project_v3["required"]) | {
+    "performances"
+}, (
+    "why: Project v4 must add only the required performances collection; "
+    "remedy: derive the root fields from v3 and add performances"
+)
+assert project_v4["properties"]["contract"]["const"] == "lmdj.project.v4", (
+    "why: a v4 document must self-identify as lmdj.project.v4; "
+    "remedy: set the v4 contract const"
+)
+assert project_v4["properties"]["performances"] == {
+    "type": "array",
+    "items": {"$ref": "#/$defs/performance"},
+    "uniqueItems": True,
+}, (
+    "why: Project Truth stores Performances as an identity-bearing collection; "
+    "remedy: restore the array of performance definitions"
+)
+performance_v4 = project_v4["$defs"]["performance"]
+assert set(performance_v4["required"]) == {
+    "performance_id",
+    "name",
+    "created_bpm",
+    "recording_artifact",
+    "events",
+}, (
+    "why: a Performance must carry stable identity, name, BPM anchor, optional "
+    "recording reference, and events; remedy: restore every required field"
+)
+performance_name_v4 = performance_v4["properties"]["name"]
+assert performance_name_v4["type"] == "string"
+assert performance_name_v4["minLength"] == 1
+assert "pattern" in performance_name_v4, (
+    "why: the repository validator needs an executable Unicode-aware upper "
+    "bound for Performance names; remedy: restore the strict one-to-64-code-"
+    "point constraint and its boundary behavior below"
+)
+event_definitions_v4 = [
+    "performance_pad_hit_event",
+    "performance_pattern_launch_event",
+    "performance_fx_engage_event",
+    "performance_fx_move_event",
+    "performance_fx_release_event",
+    "performance_hold_on_event",
+    "performance_hold_off_event",
+]
+assert project_v4["$defs"]["performance_event"]["oneOf"] == [
+    {"$ref": f"#/$defs/{name}"} for name in event_definitions_v4
+], (
+    "why: the v4 event union and kind ordinals follow the locked vocabulary; "
+    "remedy: restore the seven per-kind references in ordinal order"
+)
+assert [
+    project_v4["$defs"][name]["properties"]["kind"]["const"]
+    for name in event_definitions_v4
+] == [
+    "pad_hit",
+    "pattern_launch",
+    "fx_engage",
+    "fx_move",
+    "fx_release",
+    "hold_on",
+    "hold_off",
+], (
+    "why: the Performance kind vocabulary is a cross-language Contract; "
+    "remedy: use the approved seven kind strings in ordinal order"
+)
+pad_hit_v4 = project_v4["$defs"]["performance_pad_hit_event"]
+assert pad_hit_v4["properties"]["slot"] == {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 63,
+}, (
+    "why: pad_hit references one of the 64 Pad Slots; "
+    "remedy: restore the global slot range 0 through 63"
+)
+pattern_launch_v4 = project_v4["$defs"]["performance_pattern_launch_event"]
+assert pattern_launch_v4["properties"]["pattern_slot"] == {
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 15,
+}, (
+    "why: PATTERN_SLOT_MIN/MAX are 0 and 15; "
+    "remedy: restore the Pattern Slot index bounds"
+)
+for fx_event_name in (
+    "performance_fx_engage_event",
+    "performance_fx_move_event",
+):
+    assert project_v4["$defs"][fx_event_name]["properties"]["value"] == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1000,
+    }, (
+        "why: FX_VALUE_MIN/MAX are 0 and 1000; "
+        f"remedy: restore the integer value bounds on {fx_event_name}"
+    )
+for event_name in event_definitions_v4:
+    event_schema = project_v4["$defs"][event_name]
+    assert event_schema["additionalProperties"] is False, (
+        "why: Performance events must not smuggle Asset, pattern_id, or Bank "
+        f"references; remedy: keep additionalProperties false on {event_name}"
+    )
+
 capability = schemas["capability"]
 assert set(capability["required"]) == {
     "contract",
@@ -294,6 +404,13 @@ invalid_project_v2 = load_json(
 valid_project_v3 = load_json(fixture_root / "project-v3-valid.json")
 invalid_project_v3 = load_json(
     fixture_root / "project-v3-invalid-event.json"
+)
+valid_project_v4 = load_json(fixture_root / "project-v4-valid.json")
+invalid_project_v4 = load_json(
+    fixture_root / "project-v4-invalid-event.json"
+)
+migration_project_v4 = load_json(
+    fixture_root / "project-v3-to-v4-migration.json"
 )
 assert valid_project_v2["banks"][0]["pads"][0]["asset_id"] == (
     valid_project_v2["banks"][0]["pads"][1]["asset_id"]
@@ -536,6 +653,107 @@ json_schema.check(
 )
 json_schema.check(valid_project_v2, project_v2, "project-v2-valid")
 json_schema.check(valid_project_v3, project_v3, "project-v3-valid")
+json_schema.check(valid_project_v4, project_v4, "project-v4-valid")
+json_schema.check(
+    migration_project_v4,
+    project_v4,
+    "project-v3-to-v4-migration output",
+)
+migration_project_v3 = json.loads(json.dumps(migration_project_v4))
+migration_project_v3["contract"] = "lmdj.project.v3"
+del migration_project_v3["performances"]
+json_schema.check(
+    migration_project_v3,
+    project_v3,
+    "project-v3-to-v4-migration input",
+)
+for key, value in migration_project_v3.items():
+    if key == "contract":
+        continue
+    assert migration_project_v4[key] == value, (
+        "why: v3-to-v4 migration must preserve every non-contract field; "
+        f"remedy: restore the byte-identical {key} value in the golden vector"
+    )
+assert migration_project_v4["performances"] == [], (
+    "why: every migrated v3 Project starts with no Performances; "
+    "remedy: restore an empty performances array in the golden vector"
+)
+invalid_project_v4_violations = json_schema.validate(
+    invalid_project_v4, project_v4
+)
+assert any(
+    "expected exactly one oneOf branch to match, matched 0" in violation
+    for violation in invalid_project_v4_violations
+), (
+    "why: Performance pattern_launch events reference slots, never pattern_id; "
+    "remedy: retain per-event additionalProperties false"
+)
+overlong_performance_name = mutated(
+    valid_project_v4,
+    ["performances", 0, "name"],
+    "x" * 65,
+)
+assert any(
+    "does not match pattern" in violation
+    for violation in json_schema.validate(overlong_performance_name, project_v4)
+), (
+    "why: Performance names beyond PERFORMANCE_NAME_MAX must be rejected; "
+    "remedy: restore the 64-code-point name pattern"
+)
+for case_name, accepted_name, rejected_name in (
+    ("LF boundary", "x" * 63 + "\n", "x" * 64 + "\n"),
+    ("CRLF boundary", "x" * 62 + "\r\n", "x" * 63 + "\r\n"),
+):
+    assert len(accepted_name) == 64
+    assert len(rejected_name) == 65
+    json_schema.check(
+        mutated(
+            valid_project_v4,
+            ["performances", 0, "name"],
+            accepted_name,
+        ),
+        project_v4,
+        f"project-v4 64-code-point {case_name} Performance name",
+    )
+    violations = json_schema.validate(
+        mutated(
+            valid_project_v4,
+            ["performances", 0, "name"],
+            rejected_name,
+        ),
+        project_v4,
+    )
+    assert violations, (
+        f"why: 65-code-point {case_name} exceeds PERFORMANCE_NAME_MAX even "
+        "when it ends in line terminators; remedy: use a strict end-of-input "
+        "1-to-64-code-point constraint"
+    )
+
+non_bmp_code_point = "\U0001F39B"
+non_bmp_name_64 = non_bmp_code_point * 64
+non_bmp_name_65 = non_bmp_code_point * 65
+assert len(non_bmp_name_64) == 64
+assert len(non_bmp_name_65) == 65
+json_schema.check(
+    mutated(
+        valid_project_v4,
+        ["performances", 0, "name"],
+        non_bmp_name_64,
+    ),
+    project_v4,
+    "project-v4 64-code-point non-BMP Performance name",
+)
+assert json_schema.validate(
+    mutated(
+        valid_project_v4,
+        ["performances", 0, "name"],
+        non_bmp_name_65,
+    ),
+    project_v4,
+), (
+    "why: PERFORMANCE_NAME_MAX counts Unicode code points, not UTF-8 bytes; "
+    "remedy: reject a 65-code-point non-BMP name while accepting 64"
+)
 invalid_project_v3_violations = json_schema.validate(
     invalid_project_v3, project_v3
 )
