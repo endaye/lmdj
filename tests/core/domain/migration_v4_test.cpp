@@ -23,11 +23,12 @@ Json load_fixture(std::string_view name) {
   return Json::parse(stream);
 }
 
-void test_v3_to_v4_adds_only_an_empty_performances_collection() {
+void test_v3_to_v4_adds_empty_pattern_slots_and_performances() {
   const auto expected = load_fixture("project-v3-to-v4-migration.json");
   auto source = expected;
   source["contract"] = "lmdj.project.v3";
   source.erase("performances");
+  source.erase("pattern_slots");
   const auto source_before = source;
 
   const auto result = lmdj::domain::migrate_project_v3_to_v4(source);
@@ -37,6 +38,11 @@ void test_v3_to_v4_adds_only_an_empty_performances_collection() {
   LMDJ_CHECK(source == source_before);
   LMDJ_CHECK(result.value().at("contract") == "lmdj.project.v4");
   LMDJ_CHECK(result.value().at("performances") == Json::array());
+  LMDJ_CHECK(result.value().at("pattern_slots") ==
+             Json::array({nullptr, nullptr, nullptr, nullptr,
+                          nullptr, nullptr, nullptr, nullptr,
+                          nullptr, nullptr, nullptr, nullptr,
+                          nullptr, nullptr, nullptr, nullptr}));
   for (auto iterator = source.begin(); iterator != source.end(); ++iterator) {
     if (iterator.key() == "contract") {
       continue;
@@ -48,6 +54,20 @@ void test_v3_to_v4_adds_only_an_empty_performances_collection() {
 void test_v3_declared_document_with_performances_is_rejected() {
   auto source = load_fixture("project-v3-to-v4-migration.json");
   source["contract"] = "lmdj.project.v3";
+  source.erase("pattern_slots");
+
+  const auto result = lmdj::domain::migrate_project_v3_to_v4(source);
+
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(
+      result.error().code ==
+      lmdj::foundation::ErrorCode::invalid_project);
+}
+
+void test_v3_declared_document_with_pattern_slots_is_rejected() {
+  auto source = load_fixture("project-v3-to-v4-migration.json");
+  source["contract"] = "lmdj.project.v3";
+  source.erase("performances");
 
   const auto result = lmdj::domain::migrate_project_v3_to_v4(source);
 
@@ -60,6 +80,7 @@ void test_v3_declared_document_with_performances_is_rejected() {
 void test_migration_edge_accepts_only_v3_declared_documents() {
   auto source = load_fixture("project-v3-to-v4-migration.json");
   source.erase("performances");
+  source.erase("pattern_slots");
 
   const auto result = lmdj::domain::migrate_project_v3_to_v4(source);
 
@@ -89,8 +110,9 @@ void test_migration_rejects_malformed_contract_declarations() {
 
 int main() {
   try {
-    test_v3_to_v4_adds_only_an_empty_performances_collection();
+    test_v3_to_v4_adds_empty_pattern_slots_and_performances();
     test_v3_declared_document_with_performances_is_rejected();
+    test_v3_declared_document_with_pattern_slots_is_rejected();
     test_migration_edge_accepts_only_v3_declared_documents();
     test_migration_rejects_malformed_contract_declarations();
   } catch (const std::exception& error) {

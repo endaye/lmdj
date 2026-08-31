@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -298,6 +299,32 @@ std::vector<PatternEvent> merge_pattern_events(
         };
       });
   return merged;
+}
+
+foundation::Result<void> validate_pattern_slots(
+    const ProjectState& state) {
+  std::set<foundation::PatternId> occupied;
+  for (const auto& pattern_id : state.pattern_slots) {
+    if (!pattern_id.has_value()) {
+      continue;
+    }
+    if (!is_valid_uuid(pattern_id->value()) ||
+        !state.patterns.contains(*pattern_id)) {
+      return foundation::Result<void>::failure(
+          foundation::Error{
+              foundation::ErrorCode::invalid_argument,
+              "Pattern slot references an invalid or missing Pattern",
+          });
+    }
+    if (!occupied.insert(*pattern_id).second) {
+      return foundation::Result<void>::failure(
+          foundation::Error{
+              foundation::ErrorCode::invalid_argument,
+              "Pattern occupies more than one Pattern slot",
+          });
+    }
+  }
+  return foundation::Result<void>::success();
 }
 
 PerformanceEventKind performance_event_kind(

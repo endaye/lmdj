@@ -32,6 +32,7 @@ inline constexpr std::uint8_t kSwingPercentMin = 50;
 inline constexpr std::uint8_t kSwingPercentMax = 75;
 inline constexpr std::size_t kPerformanceNameMax = 64;
 inline constexpr std::uint8_t kPerformancePadSlotMax = 63;
+inline constexpr std::size_t kPatternSlotCount = 16;
 inline constexpr std::uint8_t kPatternSlotMin = 0;
 inline constexpr std::uint8_t kPatternSlotMax = 15;
 inline constexpr std::uint16_t kFxValueMin = 0;
@@ -218,6 +219,8 @@ struct ProjectState {
   std::map<foundation::AssetId, Asset> assets;
   std::map<foundation::PatternId, Pattern> patterns;
   std::map<PerformanceId, Performance> performances;
+  std::array<std::optional<foundation::PatternId>, kPatternSlotCount>
+      pattern_slots{};
 
   bool operator==(const ProjectState&) const = default;
 };
@@ -259,6 +262,8 @@ foundation::Result<void> validate_performance_events(
     const std::vector<PerformanceEvent>& events);
 foundation::Result<void> validate_performance(
     const Performance& performance);
+foundation::Result<void> validate_pattern_slots(
+    const ProjectState& state);
 foundation::Result<PerformanceEvent> performance_event_from_json(
     const nlohmann::json& input);
 nlohmann::json performance_event_json(const PerformanceEvent& event);
