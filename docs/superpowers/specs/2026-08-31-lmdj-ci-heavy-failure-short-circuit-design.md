@@ -2,9 +2,9 @@
 
 日期：2026-08-31
 
-状态：设计已由 Owner 确认；2026-08-31 复核修订：gating 集合排除 macOS 链，补充绿色 run
-延迟代价、跨 run 交错说明与 untrusted-head 测试场景。implementation 待正式计划，push、
-Pull Request、merge 与远端运行操作均待后续独立授权
+状态：设计及 2026-08-31 复核修订已由 Owner 确认：gating 集合排除 macOS 链，补充绿色
+run 延迟代价、跨 run 交错说明与 untrusted-head 测试场景。implementation 待正式计划，
+push、Pull Request、merge 与远端运行操作均待后续独立授权
 
 ## 1. 结论
 
@@ -48,14 +48,16 @@ pending native-heavy job。与此同时，已经合并的 PR #445 仍有一轮 q
 
 重型↔重型的并行早已被单槽消除，但前置↔重型的重叠仍然真实存在：今天一个绿色 run 的
 Portal 或 Package 可以在 `web-runtime-host` 尚未结束时就占槽执行。两阶段化放弃这部分
-重叠，绿色 run 的关键路径变为 `max(gating 前置) + sum(已选重型)`，其中 gating 前置的
-上界由 `web-runtime-host` 决定（timeout 75 分钟；共享池实测约 40 分钟，netcup 专用角色
-预期更快）。
+重叠。在不包含 runner 排队和跨 run capacity 竞争的执行模型中，绿色 run 的 own-run
+关键路径为 `max(gating 前置执行) + sum(已选重型执行)`。`web-runtime-host` 的单 job
+执行 timeout 是 75 分钟（共享池实测约 40 分钟，netcup 专用角色预期更快），但该 timeout
+不覆盖 runner 排队，因此不是 `Pre-heavy Gate` 等待时间的上界。
 
 本设计明确接受该延迟：失败 run 节省的是跨 run 共享的全局单槽预算，惠及所有并行 PR；
 绿色 run 增加的等待只属于该 run 自身。在多个并行工作流竞争同一重型槽的现状下，前者
-收益覆盖后者成本。首次远端验证须记录 full green run 的实际关键路径并与改造前基线对比，
-使这项代价成为已度量的预期行为，而不是被误报的 regression。
+收益覆盖后者成本。首次远端验证须分别记录 gating job 执行与 runner 排队、Gate ready、
+每个重型 job 的全局槽等待与实际执行，以及 end-to-end 关键路径，再与改造前基线对比，使
+这项代价成为已度量的预期行为，而不是被误报的 regression。
 
 ## 3. 目标
 
@@ -251,16 +253,21 @@ implementation 必须按 TDD 先建立失败测试，再修改 workflow/script�
    误分类为 scope skip；
 6. unselected gating 前置 job skipped，Gate 接受为 scope skip；
 7. unselected gating 前置 job 意外运行，Gate fail closed；
-8. macOS 链任意结果（failure/cancelled/skipped）不进入 Gate 判定，重型阶段照常启动，
-   PR Gate 仍将其按既有合同裁决为 failure；
-9. manifest/result 缺失、多余、未知或畸形时 Gate fail closed；
-10. workflow exact heavy order 为 Portal、Core、Package、Coverage、ASan，且 gating 集合
+8. selected `core_macos` lane 的 semantic failure 或 unexpected skip 不进入 Gate 判定，
+   重型阶段照常启动，PR Gate 仍按既有合同裁决为 failure；
+9. unselected `core_macos` lane 的 macOS chain skip 不进入 Gate 判定，并由 PR Gate 接受为
+   正常 scope skip；
+10. workflow 被人工或 superseding push 取消时，`!cancelled()` 阻止 `Pre-heavy Gate`、
+    后续重型 job 与最终 `PR Gate` 运行；不得把 run cancellation 建模成“macOS cancelled
+    但重型阶段照常启动”；
+11. manifest/result 缺失、多余、未知或畸形时 Gate fail closed；
+12. workflow exact heavy order 为 Portal、Core、Package、Coverage、ASan，且 gating 集合
     恰为 5.1 所列八个 job（macOS 链不在 `pre-heavy-gate` 的 `needs` 中）；
-11. `portal` 作为 reusable workflow caller job 同样满足顺序与 gate 条件合同；
-12. 中间 heavy lane 未选择时，后续 selected lane 仍可运行；
-13. 中间 heavy lane failure/cancelled/unexpected-skip 时，后续 selected lane blocked；
-14. PR Gate 同时报告 primary failure 与 downstream blocked，但 verdict 保持 failure；
-15. 原有 focused/full/draft、trusted-head、macOS fallback、queue metadata 与 failure artifact
+13. `portal` 作为 reusable workflow caller job 同样满足顺序与 gate 条件合同；
+14. 中间 heavy lane 未选择时，后续 selected lane 仍可运行；
+15. 中间 heavy lane failure/cancelled/unexpected-skip 时，后续 selected lane blocked；
+16. PR Gate 同时报告 primary failure 与 downstream blocked，但 verdict 保持 failure；
+17. 原有 focused/full/draft、trusted-head、macOS fallback、queue metadata 与 failure artifact
     合同全部继续通过。
 
 Task-specific verification 至少包括：
@@ -309,8 +316,8 @@ Build、Core Module、Host、Provider、Contract、Channel 或 release identity�
 首次远端验证必须单独证明：
 
 - 一个故意失败的可信测试分支在保留 gating 前置 failure evidence 后跳过全部重型 job；
-- 一个 full green run 依固定重型顺序通过，并记录实际关键路径
-  （`max(gating 前置) + sum(重型)`）与改造前基线的对比，作为 2.1 代价的度量证据；
+- 一个 full green run 依固定重型顺序通过，并分别记录 gating runner 排队与执行、Gate ready、
+  重型全局槽等待与执行、end-to-end 关键路径，再与改造前基线对比，作为 2.1 代价的度量证据；
 - 一个 macOS lane 故意失败的 run：重型阶段照常运行，`PR Gate` 将其报告为 primary
   failure 而非 downstream blocked；
 - 一个 focused run 能越过未选重型 lane，而不会被合法 skip 错误阻断；
