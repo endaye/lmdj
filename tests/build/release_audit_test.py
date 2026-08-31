@@ -1641,6 +1641,12 @@ class ReleaseAuditTest(ReleaseAuditFixture, unittest.TestCase):
 
 
 class ReleaseAuditIntegrationTest(ReleaseAuditFixture, unittest.TestCase):
+    def test_local_audit_context_has_no_remote_credential_dependency(self) -> None:
+        with patch.object(cli, "_authenticated_github_client", return_value=None):
+            context = cli.build_audit_context(ROOT)
+
+        self.assertIsNotNone(context.github)
+
     def test_remote_canonical_product_build_without_intent_audits_registered_entries(self) -> None:
         revision = subprocess.run(
             ["git", "-C", str(ROOT), "rev-parse", "HEAD"],

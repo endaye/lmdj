@@ -117,11 +117,13 @@ def build_context(
     )
 
 
-def build_audit_context(root: Path) -> AuditContext:
+def build_audit_context(root: Path, *, remote: bool = False) -> AuditContext:
     """Build an audit context without contacting remote state."""
     policy, ledger = load_authority_documents(root)
     selected_git = GitRepository(root)
-    selected_github = _authenticated_github_client(selected_git.runner)
+    selected_github = (
+        _authenticated_github_client(selected_git.runner) if remote else GitHubClient()
+    )
     return _audit_context_for_authority(
         root, policy, ledger, selected_git, selected_github,
         authority_reader=load_authority_documents,
@@ -203,7 +205,9 @@ def main(argv: list[str] | None = None) -> int:
         root = options.repo_root.expanduser().resolve(strict=True)
         if options.command == "audit":
             report = audit(
-                build_audit_context(root), remote=options.remote, tag=options.tag,
+                build_audit_context(root, remote=options.remote),
+                remote=options.remote,
+                tag=options.tag,
             )
             if options.json is not None:
                 destination = options.json if options.json.is_absolute() else root / options.json
