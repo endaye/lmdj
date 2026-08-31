@@ -27,6 +27,9 @@ _SCOPE_SPEC.loader.exec_module(change_scope)
 
 
 FORMAL_RESULTS = {"success", "failure", "cancelled", "skipped"}
+HEAVY_JOBS = (
+    "portal", "core-ubuntu", "package", "core-coverage", "core-asan",
+)
 _FORMAL_JOB_DISPLAY_NAMES = {
     "docs-static": ("Docs / static", "docs-static"),
     "portal": ("Architecture Portal / portal", "Architecture Portal", "portal"),
@@ -62,6 +65,11 @@ class GateReport:
     errors: tuple[str, ...]
     requested_jobs: tuple[str, ...]
     skipped_jobs: tuple[str, ...]
+    primary_failures: tuple[str, ...] = ()
+    unexpected_skips: tuple[str, ...] = ()
+    downstream_blocked: tuple[str, ...] = ()
+    scope_skips: tuple[str, ...] = ()
+    observed_results: tuple[tuple[str, str], ...] = ()
 
 
 def normalize_needs(needs: Mapping[str, object]) -> dict[str, str]:
@@ -97,6 +105,7 @@ def validate_gate(
     expected_base_sha: str,
     change_scope_result: str = "success",
     expected_queue: change_scope.QueueInputs | None = None,
+    pre_heavy_gate_result: str = "success",
 ) -> GateReport:
     """Return the exact selected-success/unselected-skipped gate decision."""
     try:
@@ -140,6 +149,17 @@ def validate_gate(
         errors.append(
             f"change-scope producer is {change_scope_result}, expected success"
         )
+    if pre_heavy_gate_result not in FORMAL_RESULTS:
+        errors.append(
+            "why: Pre-heavy Gate reported an unknown result "
+            f"{pre_heavy_gate_result!r}; remedy: pass its direct GitHub result"
+        )
+    elif pre_heavy_gate_result != "success":
+        errors.append(
+            "why: Pre-heavy Gate is "
+            f"{pre_heavy_gate_result}, expected success; remedy: repair the selected "
+            "preflight result before native-heavy work is admitted"
+        )
     if manifest["base_sha"].lower() != expected_base:
         errors.append(
             f"manifest base SHA {manifest['base_sha']} does not match expected {expected_base}"
@@ -170,7 +190,41 @@ def validate_gate(
     for job in skipped:
         if job in results and results[job] in FORMAL_RESULTS and results[job] != "skipped":
             errors.append(f"unselected job {job} is {results[job]}, expected skipped")
-    return GateReport(not errors, tuple(errors), requested, skipped)
+    observed_results = tuple(
+        (job, results[job]) for job in formal
+        if isinstance(results.get(job), str) and results[job] in FORMAL_RESULTS
+    )
+    selected = set(requested)
+    primary = sorted(
+        job for job in selected
+        if results.get(job) in {"failure", "cancelled"}
+    )
+    scope_skips = sorted(
+        job for job in skipped if results.get(job) == "skipped"
+    )
+    blocked = pre_heavy_gate_result != "success"
+    downstream: list[str] = []
+    unexpected: list[str] = []
+    for job in HEAVY_JOBS:
+        if job not in selected:
+            continue
+        result = results.get(job)
+        if result == "skipped":
+            if blocked:
+                downstream.append(job)
+            else:
+                unexpected.append(job)
+                blocked = True
+        elif result in {"failure", "cancelled"}:
+            blocked = True
+    for job in sorted(selected - set(HEAVY_JOBS)):
+        if results.get(job) == "skipped":
+            unexpected.append(job)
+    return GateReport(
+        not errors, tuple(errors), requested, skipped,
+        tuple(primary), tuple(unexpected), tuple(downstream), tuple(scope_skips),
+        observed_results,
+    )
 
 
 def read_actions_jobs(repository: str, run_id: str, token: str | None = None) -> list[dict[str, object]]:
@@ -232,10 +286,25 @@ def render_summary(
     timing_reader: Callable[[], Sequence[Mapping[str, object]]] | None = None,
 ) -> str:
     """Render gate evidence; timing observations are intentionally non-blocking."""
+    observed = dict(report.observed_results)
+
+    def render_category(jobs: tuple[str, ...]) -> str:
+        return ", ".join(
+            f"{_FORMAL_JOB_DISPLAY_NAMES.get(job, (job,))[0]} (`{job}`)="
+            f"{observed.get(job, 'unknown')}"
+            for job in jobs
+        ) or "none"
+
     rows = ["| PR gate | Value |", "| --- | --- |",
             f"| Result | {'pass' if report.ok else 'fail'} |",
             f"| Required jobs | {', '.join(report.requested_jobs) or 'none'} |",
             f"| Skipped jobs | {', '.join(report.skipped_jobs) or 'none'} |"]
+    rows.extend((
+        f"| Primary failure | {render_category(report.primary_failures)} |",
+        f"| Unexpected skip | {render_category(report.unexpected_skips)} |",
+        f"| Downstream blocked | {render_category(report.downstream_blocked)} |",
+        f"| Scope skip | {render_category(report.scope_skips)} |",
+    ))
     for error in report.errors:
         rows.append(f"| Error | {error} |")
     if timing_reader is None:
@@ -315,6 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--manifest-json", required=True)
     parser.add_argument("--results-json", required=True)
     parser.add_argument("--change-scope-result", required=True)
+    parser.add_argument("--pre-heavy-gate-result", required=True)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--summary", required=True)
@@ -343,6 +413,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_base_sha=args.base_sha,
             change_scope_result=args.change_scope_result,
             expected_queue=expected_queue,
+            pre_heavy_gate_result=args.pre_heavy_gate_result,
         )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         report = GateReport(False, (f"PR gate failed closed: {error}",), (), ())
