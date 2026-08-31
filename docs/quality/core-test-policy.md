@@ -192,6 +192,35 @@ enforced transitively by `core-macos` and `core-asan-macos`. The producer is
 not an eighteenth result key, but its own job result must independently be
 `success`; a manifest output cannot make a later artifact-upload failure pass.
 
+### Pre-heavy Admission and Sparse Native Sequence
+
+Eight non-macOS preflight jobs — Docs/static, CI Contract, Deploy Contract,
+Chameleon Lab, Web Toolchain, Web Runtime Host, Creator, and Web Runtime Lab —
+run in parallel. Hosted `Pre-heavy Gate` validates their selected-success /
+unselected-skipped results before native-heavy work is admitted. macOS stays
+parallel and outside this gate: a selected macOS failure remains a PR Gate
+primary failure, but does not block Linux heavy work.
+
+The five jobs sharing the repository-wide `lmdj-native-heavy` `queue: max`
+capacity group run in sparse order: Portal, Core Ubuntu, Package, Coverage,
+then ASan. Each later job waits only for selected earlier jobs; an unselected
+earlier job is a legal scope skip. A gating or earlier selected-heavy failure
+therefore yields downstream skips rather than additional product failures.
+PR Gate remains the sole aggregate verdict and still requires selected success
+and unselected skip. `pre-heavy-gate` is its support dependency, outside the
+closed 17 formal-result keys; its non-success fails the control plane while
+the Gate reports primary failures, unexpected skips, downstream-blocked jobs,
+and scope skips separately.
+
+The existing automatic PR Gate summary reports Change Scope and formal-job
+queue/execution timing plus a pre-Gate critical-path span. It does not yet
+separate Pre-heavy Gate execution, Gate-ready time, native-heavy global-slot
+wait, heavy execution, or end-to-end span. Those phases are manual
+first-rollout evidence until matching automation is added. The 75-minute Web
+Runtime Host execution timeout is a hang bound, not an upper bound on Gate
+wait. This adds no API cancellation, workflow permission increase, retry,
+runner change, Product Build allocation, or immutable Portal snapshot.
+
 `Change Scope` and every selected lane or support job contribute timing
 evidence and a pre-Gate critical-path span to the Gate summary. Queue time is
 reported separately; only execution time is compared when the policy defines
@@ -205,11 +234,11 @@ is not retried. `main` and manual dispatch always run the full manifest.
 
 ### Hosted Control Plane and Head Trust
 
-`Change Scope`, `PR Gate` and `select-macos-runner` stay on GitHub-hosted
+`Change Scope`, `Pre-heavy Gate`, `PR Gate` and `select-macos-runner` stay on GitHub-hosted
 `ubuntu-24.04`. Change Scope must publish the exact diff, scope, trust,
 and upgrade reasons even when every self-hosted Linux runner is offline, and
 the Gate must adjudicate a workload without depending on that workload's host.
-These three are the only declared exception to routing Linux work to the
+These four are the only declared exception to routing Linux work to the
 trusted hosts; their minutes are reported as hosted control plane rather than
 as routine self-hosted workload. The two macOS adjudicators also run on
 `ubuntu-24.04`, but they republish an already produced result under the
@@ -361,9 +390,10 @@ burst ramps one service per cooldown interval rather than jumping to the
 ceiling; that ramp latency is the accepted cost of keeping credentials off the
 hosts, not a defect. Routing splits two ways:
 
-- **Hosted control plane, the declared exception.** Change Scope, PR Gate and
-  `select-macos-runner` stay on `ubuntu-24.04`. Change Scope decides what runs
-  and whether the head is trusted, and PR Gate decides whether the run passed,
+- **Hosted control plane, the declared exception.** Change Scope, Pre-heavy
+  Gate, PR Gate and `select-macos-runner` stay on `ubuntu-24.04`. Change Scope
+  decides what runs and whether the head is trusted, Pre-heavy Gate admits
+  native-heavy work, and PR Gate decides whether the run passed,
   so a self-hosted outage must not be able to take the scope and trust
   evidence down with the jobs it governs. The macOS selector is Hosted for the
   same reason and is deliberately unchanged by this migration.

@@ -154,8 +154,14 @@ jobs:
     # `workflow_call`-only with this as its single caller, so the role there
     # reroutes Portal and nothing else.
     name: Architecture Portal
-    needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.portal && needs.change-scope.outputs.trusted-head == 'true' }}
+    needs: [change-scope, pre-heavy-gate]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.pre-heavy-gate.result == 'success'
+        && fromJSON(needs.change-scope.outputs.manifest).lanes.portal
+        && needs.change-scope.outputs.trusted-head == 'true'
+      }}
     concurrency:
       group: lmdj-native-heavy
       queue: max
@@ -290,8 +296,18 @@ jobs:
     # job instead of buying paid Ubuntu capacity for it. Trust therefore
     # cannot come from a selector's fork branch and stays on the job itself.
     name: Core package
-    needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.package && needs.change-scope.outputs.trusted-head == 'true' }}
+    # Direct needs: change-scope is preserved; admission also requires the
+    # Pre-heavy Gate and each earlier selected native-heavy predecessor.
+    needs: [change-scope, pre-heavy-gate, portal, core-ubuntu]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.pre-heavy-gate.result == 'success'
+        && fromJSON(needs.change-scope.outputs.manifest).lanes.package
+        && needs.change-scope.outputs.trusted-head == 'true'
+        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
+        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || needs.core-ubuntu.result == 'success')
+      }}
     concurrency:
       group: lmdj-native-heavy
       queue: max
@@ -444,6 +460,28 @@ jobs:
           node-version: "22"
       - run: scripts/web-runtime-lab.sh test
 
+  pre-heavy-gate:
+    name: Pre-heavy Gate
+    needs: [change-scope, docs-static, ci-contract, deploy-contract, chameleon-lab, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+      - name: Admit native-heavy work after selected preflight success
+        env:
+          PREFLIGHT_RESULTS_JSON: >-
+            {"docs-static":{"result":"${{ needs.docs-static.result }}"},"ci-contract":{"result":"${{ needs.ci-contract.result }}"},"deploy-contract":{"result":"${{ needs.deploy-contract.result }}"},"chameleon-lab":{"result":"${{ needs.chameleon-lab.result }}"},"web-toolchain-conformance":{"result":"${{ needs.web-toolchain-conformance.result }}"},"web-runtime-host":{"result":"${{ needs.web-runtime-host.result }}"},"creator-web":{"result":"${{ needs.creator-web.result }}"},"web-runtime-lab":{"result":"${{ needs.web-runtime-lab.result }}"}}
+          SCOPE_MANIFEST: ${{ needs.change-scope.outputs.manifest }}
+          CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
+        run: >-
+          python3 scripts/ci/phase_gate.py
+          --policy scripts/ci/scope_policy.json
+          --manifest-json "$SCOPE_MANIFEST"
+          --results-json "$PREFLIGHT_RESULTS_JSON"
+          --change-scope-result "$CHANGE_SCOPE_RESULT"
+          --summary "$GITHUB_STEP_SUMMARY"
+
   core-ubuntu:
     # First of the three native Core lanes on the shared host's role. The
     # persistent native ccache and the coverage toolchain are host state, so
@@ -452,8 +490,17 @@ jobs:
     # busy or absent role queues these lanes rather than diverting a whole
     # manifest to paid runners, so trust stays on each job itself.
     name: core (ubuntu-latest)
-    needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu && needs.change-scope.outputs.trusted-head == 'true' }}
+    # Direct needs: change-scope is preserved; admission also requires the
+    # Pre-heavy Gate and each earlier selected native-heavy predecessor.
+    needs: [change-scope, pre-heavy-gate, portal]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.pre-heavy-gate.result == 'success'
+        && fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu
+        && needs.change-scope.outputs.trusted-head == 'true'
+        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
+      }}
     concurrency:
       group: lmdj-native-heavy
       queue: max
@@ -511,7 +558,7 @@ jobs:
 
   pr-gate:
     name: PR Gate
-    needs: [change-scope, docs-static, portal, ci-contract, select-macos-runner, macos-primary, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package]
+    needs: [change-scope, pre-heavy-gate, docs-static, portal, ci-contract, select-macos-runner, macos-primary, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package]
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -523,6 +570,7 @@ jobs:
             {"docs-static":{"result":"${{ needs.docs-static.result }}"},"portal":{"result":"${{ needs.portal.result }}"},"ci-contract":{"result":"${{ needs.ci-contract.result }}"},"select-macos-runner":{"result":"${{ needs.select-macos-runner.result }}"},"macos-primary":{"result":"${{ needs.macos-primary.result }}"},"core-ubuntu":{"result":"${{ needs.core-ubuntu.result }}"},"core-asan":{"result":"${{ needs.core-asan.result }}"},"core-coverage":{"result":"${{ needs.core-coverage.result }}"},"core-macos":{"result":"${{ needs.core-macos.result }}"},"core-asan-macos":{"result":"${{ needs.core-asan-macos.result }}"},"web-toolchain-conformance":{"result":"${{ needs.web-toolchain-conformance.result }}"},"web-runtime-host":{"result":"${{ needs.web-runtime-host.result }}"},"creator-web":{"result":"${{ needs.creator-web.result }}"},"web-runtime-lab":{"result":"${{ needs.web-runtime-lab.result }}"},"deploy-contract":{"result":"${{ needs.deploy-contract.result }}"},"chameleon-lab":{"result":"${{ needs.chameleon-lab.result }}"},"package":{"result":"${{ needs.package.result }}"}}
           SCOPE_MANIFEST: ${{ needs.change-scope.outputs.manifest }}
           CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
+          PRE_HEAVY_GATE_RESULT: ${{ needs.pre-heavy-gate.result }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
           python3 scripts/ci/pr_gate.py
@@ -530,6 +578,7 @@ jobs:
           --manifest-json "$SCOPE_MANIFEST"
           --results-json "$FORMAL_RESULTS_JSON"
           --change-scope-result "$CHANGE_SCOPE_RESULT"
+          --pre-heavy-gate-result "$PRE_HEAVY_GATE_RESULT"
           --base-sha "${{ needs.change-scope.outputs.resolved-base-sha }}"
           --head-sha "${{ needs.change-scope.outputs.resolved-head-sha }}"
           --queue-ticket "${{ inputs.queue_ticket }}"
@@ -787,8 +836,20 @@ jobs:
 
   core-asan:
     # Same native Core role, same reasoning as core-ubuntu.
-    needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan && needs.change-scope.outputs.trusted-head == 'true' }}
+    # Direct needs: change-scope is preserved; admission also requires the
+    # Pre-heavy Gate and each earlier selected native-heavy predecessor.
+    needs: [change-scope, pre-heavy-gate, portal, core-ubuntu, package, core-coverage]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.pre-heavy-gate.result == 'success'
+        && fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan
+        && needs.change-scope.outputs.trusted-head == 'true'
+        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
+        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || needs.core-ubuntu.result == 'success')
+        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.package || needs.package.result == 'success')
+        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage || needs.core-coverage.result == 'success')
+      }}
     concurrency:
       group: lmdj-native-heavy
       queue: max
@@ -827,8 +888,19 @@ jobs:
 
   core-coverage:
     # Same native Core role, same reasoning as core-ubuntu.
-    needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage && needs.change-scope.outputs.trusted-head == 'true' }}
+    # Direct needs: change-scope is preserved; admission also requires the
+    # Pre-heavy Gate and each earlier selected native-heavy predecessor.
+    needs: [change-scope, pre-heavy-gate, portal, core-ubuntu, package]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.pre-heavy-gate.result == 'success'
+        && fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage
+        && needs.change-scope.outputs.trusted-head == 'true'
+        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
+        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || needs.core-ubuntu.result == 'success')
+        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.package || needs.package.result == 'success')
+      }}
     concurrency:
       group: lmdj-native-heavy
       queue: max
