@@ -121,6 +121,13 @@ class FakeGit:
             yield Path(directory)
 
 
+_DRAFT_HTML_URL = "https://github.com/endaye/lmdj/releases/tag/untagged-0123456789ab"
+
+
+def _published_html_url(tag: str) -> str:
+    return f"https://github.com/endaye/lmdj/releases/tag/{tag}"
+
+
 # The closed v2 lane and full job identities, written independently of the CI
 # policy file and of the release modules under test.
 LANES = (
@@ -222,7 +229,7 @@ class FakeGitHub:
         self.create_calls += 1
         self.release = GitHubRelease(
             17, tag, name, body, True, prerelease, make_latest,
-            "https://github.com/endaye/lmdj/releases/tag/test",
+            _DRAFT_HTML_URL,
             "https://uploads.github.com/repos/endaye/lmdj/releases/17/assets{?name,label}", (),
             self.target,
         )
@@ -277,6 +284,7 @@ class FakeGitHub:
         self.release = GitHubRelease(**{
             **self.release.__dict__, "draft": False, "prerelease": prerelease,
             "make_latest": make_latest,
+            "html_url": _published_html_url(self.release.tag_name),
         })
         self._touch_release()
         if self.publish_mutation == "name":
@@ -306,6 +314,10 @@ class FakeGitHub:
             self.release = GitHubRelease(**{
                 **self.release.__dict__,
                 "assets": (changed,) + self.release.assets[1:],
+            })
+        elif self.publish_mutation == "html-url":
+            self.release = GitHubRelease(**{
+                **self.release.__dict__, "html_url": _DRAFT_HTML_URL,
             })
         if self.fail_publish_after_write:
             raise GitHubApiError("GitHub release request is unavailable")
@@ -775,12 +787,39 @@ class ReleaseTransitionsTest(unittest.TestCase):
             "draft": False, "prerelease": True, "make_latest": False,
         })])
         self.assertEqual(result.status, "published")
+        self.assertEqual(original.html_url, _DRAFT_HTML_URL)
+        self.assertEqual(result.release_url, _published_html_url(self.tag))
         self.assertEqual(result.assets, original.assets)
         assert self.github.release is not None
+        self.assertFalse(self.github.release.draft)
+        self.assertEqual(self.github.release.html_url, _published_html_url(self.tag))
         self.assertEqual(
-            {**self.github.release.__dict__, "draft": True},
+            {
+                **self.github.release.__dict__,
+                "draft": True,
+                "html_url": original.html_url,
+            },
             original.__dict__,
         )
+
+    def test_publish_rejects_stale_untagged_html_url_after_publication(self) -> None:
+        created = self._push_and_create()
+        assert created.release_id is not None
+        self.github.publish_mutation = "html-url"
+        with self.assertRaisesRegex(
+            TransitionError, "html_url is not the exact published tag URL",
+        ):
+            publish_draft(
+                self.tag, created.release_id, created.plan_sha256, self.context(),
+                actions_environment={
+                    "GITHUB_ACTIONS": "true",
+                    "GITHUB_EVENT_NAME": "workflow_dispatch",
+                },
+            )
+        self.assertEqual(len(self.github.patch_calls), 1)
+        assert self.github.release is not None
+        self.assertFalse(self.github.release.draft)
+        self.assertEqual(self.github.release.html_url, _DRAFT_HTML_URL)
 
     def test_publish_reconciles_an_accepted_patch_by_numeric_id(self) -> None:
         created = self._push_and_create()
