@@ -59,7 +59,11 @@ using PersistedCommand = std::variant<
     domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
     domain::UpdatePadPlayback,
-    domain::ResetPadPlayback>;
+    domain::ResetPadPlayback,
+    PerformanceMutation,
+    CreatePerformance,
+    RenamePerformance,
+    DeletePerformance>;
 
 struct LoadedProject {
   domain::ProjectState state;
@@ -67,6 +71,8 @@ struct LoadedProject {
   std::map<foundation::CommandId, domain::CommandReceipt> receipts;
   std::map<foundation::CommandId, SequenceFlushIdentity>
       sequence_flush_identities;
+  std::map<foundation::CommandId, PerformanceFlushIdentity>
+      performance_flush_identities;
   std::vector<std::string> transactions;
 };
 
@@ -310,19 +316,46 @@ nlohmann::json pattern_json(const domain::Pattern& pattern) {
   return encoded;
 }
 
-domain::ProjectState persisted_v3_projection(
+domain::ProjectState persisted_projection(
     const domain::ProjectState& state) {
   auto projected = state;
-  if (projected.contract != domain::ProjectContract::v3) {
+  if (projected.contract == domain::ProjectContract::v1 ||
+      projected.contract == domain::ProjectContract::v2) {
     projected.quantize_enabled = true;
     projected.swing_percent = 50;
   }
-  projected.contract = domain::ProjectContract::v3;
+  projected.contract =
+      projected.contract == domain::ProjectContract::v4 ||
+              !projected.performances.empty()
+          ? domain::ProjectContract::v4
+          : domain::ProjectContract::v3;
   for (auto& [id, pattern] : projected.patterns) {
     (void)id;
     pattern.events = domain::merge_pattern_events({}, pattern.events);
   }
+  for (auto& [id, performance] : projected.performances) {
+    (void)id;
+    performance.events =
+        domain::canonical_performance_events(performance.events);
+  }
   return projected;
+}
+
+nlohmann::json performance_value_json(
+    const domain::Performance& performance) {
+  auto events = nlohmann::json::array();
+  for (const auto& event : performance.events) {
+    events.push_back(domain::performance_event_json(event));
+  }
+  return {
+      {"created_bpm", performance.created_bpm},
+      {"events", std::move(events)},
+      {"name", performance.name},
+      {"recording_artifact",
+       performance.recording_artifact.has_value()
+           ? nlohmann::json(*performance.recording_artifact)
+           : nlohmann::json(nullptr)},
+  };
 }
 
 nlohmann::json project_json(const domain::ProjectState& state) {
@@ -358,11 +391,14 @@ nlohmann::json project_json(const domain::ProjectState& state) {
     encoded["pattern_id"] = id.value();
     patterns.push_back(std::move(encoded));
   }
-  return {
+  nlohmann::json encoded = {
       {"assets", std::move(assets)},
       {"banks", std::move(banks)},
       {"bpm", state.bpm},
-      {"contract", kProjectWriterContract},
+      {"contract",
+       state.contract == domain::ProjectContract::v4
+           ? kProjectWriterContract
+           : std::string_view{"lmdj.project.v3"}},
       {"patterns", std::move(patterns)},
       {"project_id", state.id.value()},
       {"revision", state.revision},
@@ -372,6 +408,16 @@ nlohmann::json project_json(const domain::ProjectState& state) {
            {"swing_percent", state.swing_percent},
        }},
   };
+  if (state.contract == domain::ProjectContract::v4) {
+    auto performances = nlohmann::json::array();
+    for (const auto& [id, performance] : state.performances) {
+      auto value = performance_value_json(performance);
+      value["performance_id"] = id.value();
+      performances.push_back(std::move(value));
+    }
+    encoded["performances"] = std::move(performances);
+  }
+  return encoded;
 }
 
 bool exact_object_keys(
@@ -637,6 +683,79 @@ foundation::Result<domain::Pattern> parse_project_pattern(
   return parse_pattern(encoded, path, true);
 }
 
+foundation::Result<domain::Performance> parse_performance(
+    const nlohmann::json& input,
+    const std::filesystem::path& path) {
+  try {
+    if (!exact_object_keys(
+            input,
+            {"created_bpm",
+             "events",
+             "name",
+             "performance_id",
+             "recording_artifact"}) ||
+        !input.at("performance_id").is_string() ||
+        !input.at("name").is_string() ||
+        !nonnegative_integer(input.at("created_bpm")) ||
+        !input.at("events").is_array()) {
+      return foundation::Result<domain::Performance>::failure(
+          invalid_project("project Performance shape is invalid", path));
+    }
+    const auto created_bpm = unsigned_integer_value(input.at("created_bpm"));
+    if (!created_bpm.has_value() ||
+        *created_bpm > std::numeric_limits<std::uint16_t>::max()) {
+      return foundation::Result<domain::Performance>::failure(
+          invalid_project("project Performance BPM is invalid", path));
+    }
+    std::optional<foundation::ArtifactRef> recording_artifact;
+    if (!input.at("recording_artifact").is_null()) {
+      recording_artifact =
+          input.at("recording_artifact").get<foundation::ArtifactRef>();
+    }
+    domain::Performance performance{
+        domain::PerformanceId{
+            input.at("performance_id").get<std::string>()},
+        input.at("name").get<std::string>(),
+        static_cast<std::uint16_t>(*created_bpm),
+        std::move(recording_artifact),
+        {},
+    };
+    for (const auto& encoded : input.at("events")) {
+      auto event = domain::performance_event_from_json(encoded);
+      if (!event.has_value()) {
+        return foundation::Result<domain::Performance>::failure(
+            invalid_project(
+                "project Performance event is invalid",
+                path,
+                event.error().message));
+      }
+      performance.events.push_back(std::move(event.value()));
+    }
+    if (performance.events !=
+        domain::canonical_performance_events(performance.events)) {
+      return foundation::Result<domain::Performance>::failure(
+          invalid_project(
+              "project Performance events are not canonical", path));
+    }
+    auto validated = domain::validate_performance(performance);
+    if (!validated.has_value()) {
+      return foundation::Result<domain::Performance>::failure(
+          invalid_project(
+              "project Performance is invalid",
+              path,
+              validated.error().message));
+    }
+    return foundation::Result<domain::Performance>::success(
+        std::move(performance));
+  } catch (const std::exception& exception) {
+    return foundation::Result<domain::Performance>::failure(
+        invalid_project(
+            "project Performance could not be parsed",
+            path,
+            exception.what()));
+  }
+}
+
 foundation::Result<domain::ProjectState> parse_project(
     const nlohmann::json& input,
     const std::filesystem::path& path) {
@@ -648,6 +767,7 @@ foundation::Result<domain::ProjectState> parse_project(
     const bool is_v1 = contract == "lmdj.project.v1";
     const bool is_v2 = contract == "lmdj.project.v2";
     const bool is_v3 = contract == "lmdj.project.v3";
+    const bool is_v4 = contract == "lmdj.project.v4";
     const bool legacy_shape =
         (is_v1 || is_v2) &&
         exact_object_keys(
@@ -684,7 +804,28 @@ foundation::Result<domain::ProjectState> parse_project(
         exact_object_keys(
             input.at("sequence_settings"),
             {"quantize_enabled", "swing_percent"});
-    if ((!legacy_shape && !v3_shape) ||
+    const bool v4_shape =
+        is_v4 &&
+        exact_object_keys(
+            input,
+            {
+                "assets",
+                "banks",
+                "bpm",
+                "contract",
+                "patterns",
+                "performances",
+                "project_id",
+                "revision",
+                "sequence_settings",
+            }) &&
+        input.at("assets").is_array() &&
+        input.at("patterns").is_array() &&
+        input.at("performances").is_array() &&
+        exact_object_keys(
+            input.at("sequence_settings"),
+            {"quantize_enabled", "swing_percent"});
+    if ((!legacy_shape && !v3_shape && !v4_shape) ||
         !nonnegative_integer(input.at("revision")) ||
         !nonnegative_integer(input.at("bpm")) ||
         !input.at("banks").is_array()) {
@@ -708,9 +849,10 @@ foundation::Result<domain::ProjectState> parse_project(
           invalid_project("project metadata is invalid", path));
     }
     auto state = std::move(created.value());
-    state.contract = domain::ProjectContract::v3;
+    state.contract = is_v4 ? domain::ProjectContract::v4
+                           : domain::ProjectContract::v3;
     state.revision = *revision;
-    if (is_v3) {
+    if (is_v3 || is_v4) {
       const auto swing = unsigned_integer_value(
           input.at("sequence_settings").at("swing_percent"));
       if (!input.at("sequence_settings")
@@ -841,7 +983,7 @@ foundation::Result<domain::ProjectState> parse_project(
       }
       return foundation::Result<void>::success();
     };
-    if (is_v3) {
+    if (is_v3 || is_v4) {
       for (const auto& encoded : input.at("assets")) {
         if (!exact_object_keys(encoded, {"artifact", "asset_id"}) ||
             !encoded.at("asset_id").is_string()) {
@@ -878,7 +1020,7 @@ foundation::Result<domain::ProjectState> parse_project(
       }
     }
 
-    if (is_v3) {
+    if (is_v3 || is_v4) {
       for (const auto& encoded : input.at("patterns")) {
         if (!exact_object_keys(
                 encoded, {"bars", "events", "pattern_id"}) ||
@@ -918,6 +1060,21 @@ foundation::Result<domain::ProjectState> parse_project(
               pattern.error());
         }
         state.patterns.emplace(pattern.value().id, pattern.value());
+      }
+    }
+    if (is_v4) {
+      for (const auto& encoded : input.at("performances")) {
+        auto performance = parse_performance(encoded, path);
+        if (!performance.has_value() ||
+            !state.performances
+                 .emplace(performance.value().id, performance.value())
+                 .second) {
+          return foundation::Result<domain::ProjectState>::failure(
+              performance.has_value()
+                  ? invalid_project(
+                        "project Performance id is duplicated", path)
+                  : performance.error());
+        }
       }
     }
     return foundation::Result<domain::ProjectState>::success(std::move(state));
@@ -1023,6 +1180,37 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"playback", playback_json(value.playback)},
               {"slot", slot_json(value.slot)},
               {"type", "UpdatePadPlayback"},
+          };
+        } else if constexpr (std::is_same_v<Type, PerformanceMutation>) {
+          auto events = nlohmann::json::array();
+          for (const auto& event : value.events) {
+            events.push_back(domain::performance_event_json(event));
+          }
+          return {
+              {"events", std::move(events)},
+              {"meta", meta_json(value.meta)},
+              {"performance_id", value.performance_id.value()},
+              {"type", "AppendPerformanceEvents"},
+          };
+        } else if constexpr (std::is_same_v<Type, CreatePerformance>) {
+          return {
+              {"meta", meta_json(value.meta)},
+              {"name", value.name},
+              {"performance_id", value.performance_id.value()},
+              {"type", "CreatePerformance"},
+          };
+        } else if constexpr (std::is_same_v<Type, RenamePerformance>) {
+          return {
+              {"meta", meta_json(value.meta)},
+              {"name", value.name},
+              {"performance_id", value.performance_id.value()},
+              {"type", "RenamePerformance"},
+          };
+        } else if constexpr (std::is_same_v<Type, DeletePerformance>) {
+          return {
+              {"meta", meta_json(value.meta)},
+              {"performance_id", value.performance_id.value()},
+              {"type", "DeletePerformance"},
           };
         } else {
           return {
@@ -1264,6 +1452,101 @@ foundation::Result<PersistedCommand> parse_command(
               slot.value(),
           }});
     }
+    if (type == "CreatePerformance" || type == "RenamePerformance") {
+      if (!exact_object_keys(
+              input, {"meta", "name", "performance_id", "type"}) ||
+          !input.at("name").is_string() ||
+          !input.at("performance_id").is_string()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                type + " transaction shape is invalid", path));
+      }
+      const auto performance_id =
+          input.at("performance_id").get<std::string>();
+      if (!domain::is_valid_uuid(performance_id)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                type + " Performance id is invalid", path));
+      }
+      if (type == "CreatePerformance") {
+        return foundation::Result<PersistedCommand>::success(
+            PersistedCommand{CreatePerformance{
+                std::move(meta.value()),
+                domain::PerformanceId{performance_id},
+                input.at("name").get<std::string>(),
+            }});
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{RenamePerformance{
+              std::move(meta.value()),
+              domain::PerformanceId{performance_id},
+              input.at("name").get<std::string>(),
+          }});
+    }
+    if (type == "DeletePerformance") {
+      if (!exact_object_keys(
+              input, {"meta", "performance_id", "type"}) ||
+          !input.at("performance_id").is_string()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "DeletePerformance transaction shape is invalid", path));
+      }
+      const auto performance_id =
+          input.at("performance_id").get<std::string>();
+      if (!domain::is_valid_uuid(performance_id)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "DeletePerformance Performance id is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{DeletePerformance{
+              std::move(meta.value()),
+              domain::PerformanceId{performance_id},
+          }});
+    }
+    if (type == "AppendPerformanceEvents") {
+      if (!exact_object_keys(
+              input, {"events", "meta", "performance_id", "type"}) ||
+          !input.at("events").is_array() ||
+          !input.at("performance_id").is_string()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "AppendPerformanceEvents transaction shape is invalid",
+                path));
+      }
+      const auto performance_id =
+          input.at("performance_id").get<std::string>();
+      if (!domain::is_valid_uuid(performance_id)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "AppendPerformanceEvents Performance id is invalid",
+                path));
+      }
+      std::vector<domain::PerformanceEvent> events;
+      for (const auto& encoded : input.at("events")) {
+        auto parsed = domain::performance_event_from_json(encoded);
+        if (!parsed.has_value()) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "AppendPerformanceEvents event is invalid",
+                  path,
+                  parsed.error().message));
+        }
+        events.push_back(std::move(parsed.value()));
+      }
+      if (events.empty() ||
+          events != domain::canonical_performance_events(events)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "AppendPerformanceEvents events are invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{PerformanceMutation{
+              std::move(meta.value()),
+              domain::PerformanceId{performance_id},
+              std::move(events),
+          }});
+    }
     return foundation::Result<PersistedCommand>::failure(
         invalid_project("transaction command type is unknown", path));
   } catch (const std::exception& exception) {
@@ -1283,6 +1566,111 @@ foundation::Result<domain::AppliedCommand> apply_command(
       [&state, &receipts](const auto& value) {
         using Type = std::decay_t<decltype(value)>;
         if constexpr (
+            std::is_same_v<Type, PerformanceMutation> ||
+            std::is_same_v<Type, CreatePerformance> ||
+            std::is_same_v<Type, RenamePerformance> ||
+            std::is_same_v<Type, DeletePerformance>) {
+          const auto receipt = receipts.find(value.meta.command_id);
+          if (receipt != receipts.end()) {
+            return foundation::Result<domain::AppliedCommand>::success(
+                domain::AppliedCommand{
+                    state, receipt->second.event, true});
+          }
+          if (state.revision != value.meta.expected_revision) {
+            return foundation::Result<domain::AppliedCommand>::failure(Error{
+                ErrorCode::revision_conflict,
+                "Performance command expected revision does not match",
+                {{"actual_revision", state.revision},
+                 {"expected_revision", value.meta.expected_revision}},
+            });
+          }
+          if (!domain::is_valid_uuid(value.performance_id.value())) {
+            return foundation::Result<domain::AppliedCommand>::failure(Error{
+                ErrorCode::invalid_argument,
+                "Performance id is invalid",
+            });
+          }
+          auto next = state;
+          std::string_view event_type;
+          if constexpr (std::is_same_v<Type, CreatePerformance>) {
+            domain::Performance performance{
+                value.performance_id,
+                value.name,
+                state.bpm,
+                std::nullopt,
+                {},
+            };
+            auto validated = domain::validate_performance(performance);
+            if (!validated.has_value()) {
+              return foundation::Result<domain::AppliedCommand>::failure(
+                  validated.error());
+            }
+            if (!next.performances
+                     .emplace(performance.id, std::move(performance))
+                     .second) {
+              return foundation::Result<domain::AppliedCommand>::failure(
+                  Error{
+                      ErrorCode::duplicate_id,
+                      "Performance id already exists",
+                      {{"performance_id", value.performance_id.value()}},
+                  });
+            }
+            event_type = "performance.created";
+          } else {
+            const auto found =
+                next.performances.find(value.performance_id);
+            if (found == next.performances.end()) {
+              return foundation::Result<domain::AppliedCommand>::failure(
+                  Error{
+                      ErrorCode::not_found,
+                      "Performance mutation target does not exist",
+                      {{"performance_id", value.performance_id.value()}},
+                  });
+            }
+            if constexpr (std::is_same_v<Type, PerformanceMutation>) {
+              auto& target = found->second;
+              target.events.insert(
+                  target.events.end(),
+                  value.events.begin(),
+                  value.events.end());
+              target.events =
+                  domain::canonical_performance_events(target.events);
+              auto validated = domain::validate_performance(target);
+              if (!validated.has_value()) {
+                return foundation::Result<domain::AppliedCommand>::failure(
+                    validated.error());
+              }
+              event_type = "performance.events_appended";
+            } else if constexpr (std::is_same_v<Type, RenamePerformance>) {
+              found->second.name = value.name;
+              auto validated = domain::validate_performance(found->second);
+              if (!validated.has_value()) {
+                return foundation::Result<domain::AppliedCommand>::failure(
+                    validated.error());
+              }
+              event_type = "performance.renamed";
+            } else {
+              next.performances.erase(found);
+              event_type = "performance.deleted";
+            }
+          }
+          next.contract = domain::ProjectContract::v4;
+          ++next.revision;
+          nlohmann::json event = {
+              {"command_id", value.meta.command_id.value()},
+              {"performance_id", value.performance_id.value()},
+              {"revision", next.revision},
+              {"type", event_type},
+          };
+          if constexpr (
+              std::is_same_v<Type, CreatePerformance> ||
+              std::is_same_v<Type, RenamePerformance>) {
+            event["name"] = value.name;
+          }
+          return foundation::Result<domain::AppliedCommand>::success(
+              domain::AppliedCommand{
+                  std::move(next), std::move(event), false});
+        } else if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
             std::is_same_v<Type, domain::ResetPadPlayback>) {
@@ -1320,11 +1708,15 @@ foundation::Result<domain::Command> legacy_command(
         if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
-            std::is_same_v<Type, domain::ResetPadPlayback>) {
+            std::is_same_v<Type, domain::ResetPadPlayback> ||
+            std::is_same_v<Type, PerformanceMutation> ||
+            std::is_same_v<Type, CreatePerformance> ||
+            std::is_same_v<Type, RenamePerformance> ||
+            std::is_same_v<Type, DeletePerformance>) {
           return foundation::Result<domain::Command>::failure(
               Error{
                   ErrorCode::internal_error,
-                  "persisted Sample command is not a legacy command",
+                  "persisted internal mutation is not a legacy command",
               });
         } else {
           return foundation::Result<domain::Command>::success(
@@ -1409,11 +1801,13 @@ foundation::Result<LoadedProject> load_project(
     if (!checkpoint.has_value()) {
       return foundation::Result<LoadedProject>::failure(checkpoint.error());
     }
-    const bool checkpoint_is_v3 =
-        checkpoint_json.value().at("contract") == "lmdj.project.v3";
+    const bool checkpoint_is_current =
+        checkpoint_json.value().at("contract") == "lmdj.project.v3" ||
+        checkpoint_json.value().at("contract") == "lmdj.project.v4";
 
     LoadedProject loaded{
         std::move(initial.value()),
+        {},
         {},
         {},
         {},
@@ -1491,6 +1885,40 @@ foundation::Result<LoadedProject> load_project(
                   exception.what()));
         }
       }
+      if (transaction.value().contains("performance_flush")) {
+        try {
+          const auto& encoded = transaction.value().at("performance_flush");
+          PerformanceFlushIdentity identity{
+              foundation::SequenceSessionId{
+                  encoded.at("session_id").get<std::string>()},
+              encoded.at("flush_seq").get<std::uint64_t>(),
+              foundation::CommandId{
+                  encoded.at("command_id").get<std::string>()},
+              domain::PerformanceId{
+                  encoded.at("performance_id").get<std::string>()},
+          };
+          const auto* mutation =
+              std::get_if<PerformanceMutation>(&command.value());
+          if (mutation == nullptr ||
+              !domain::is_valid_uuid(identity.session_id.value()) ||
+              identity.command_id != meta.command_id ||
+              identity.performance_id != mutation->performance_id) {
+            return foundation::Result<LoadedProject>::failure(
+                invalid_project(
+                    "project transaction Performance flush identity is "
+                    "invalid",
+                    bundle / relative));
+          }
+          loaded.performance_flush_identities.emplace(
+              meta.command_id, std::move(identity));
+        } catch (const std::exception& exception) {
+          return foundation::Result<LoadedProject>::failure(
+              invalid_project(
+                  "project transaction Performance flush identity is invalid",
+                  bundle / relative,
+                  exception.what()));
+        }
+      }
       loaded.state = applied.value().state;
       loaded.transactions.push_back(relative.generic_string());
     }
@@ -1501,8 +1929,8 @@ foundation::Result<LoadedProject> load_project(
               manifest_path));
     }
 
-    if (checkpoint.value() != persisted_v3_projection(loaded.state) ||
-        (checkpoint_is_v3 &&
+    if (checkpoint.value() != persisted_projection(loaded.state) ||
+        (checkpoint_is_current &&
          foundation::canonical_json(checkpoint_json.value()) !=
              foundation::canonical_json(project_json(loaded.state)))) {
       return foundation::Result<LoadedProject>::failure(
@@ -2067,7 +2495,9 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     const std::optional<ArtifactStage>& artifact_stage,
     PersistedCommand* persisted_identity,
     const std::optional<SequenceFlushIdentity>& sequence_flush_identity =
-        std::nullopt) {
+        std::nullopt,
+    const std::optional<PerformanceFlushIdentity>&
+        performance_flush_identity = std::nullopt) {
   const auto& meta = command_meta(command);
   if (!domain::is_valid_uuid(meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -2125,7 +2555,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
       parse_project(encoded_state, bundle / "manifest.json");
   if (!validated_state.has_value() ||
       validated_state.value() !=
-          persisted_v3_projection(applied.value().state)) {
+          persisted_projection(applied.value().state)) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -2218,10 +2648,24 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
         {"session_id", sequence_flush_identity->session_id.value()},
     };
   }
+  if (performance_flush_identity.has_value()) {
+    transaction["performance_flush"] = {
+        {"command_id", performance_flush_identity->command_id.value()},
+        {"flush_seq", performance_flush_identity->flush_seq},
+        {"performance_id",
+         performance_flush_identity->performance_id.value()},
+        {"session_id", performance_flush_identity->session_id.value()},
+    };
+  }
   const auto transaction_bytes =
       foundation::canonical_json(transaction) + "\n";
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  if (sequence_flush_identity.has_value()) {
+  const bool performance_truth_command =
+      std::holds_alternative<CreatePerformance>(command) ||
+      std::holds_alternative<RenamePerformance>(command) ||
+      std::holds_alternative<DeletePerformance>(command);
+  if (sequence_flush_identity.has_value() ||
+      performance_flush_identity.has_value() || performance_truth_command) {
     const auto fault = testing::detail::invoke_fault(
         testing::FaultPoint::sequence_transaction_write, transaction_final);
     if (!fault.has_value()) {
@@ -2243,7 +2687,8 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   const auto checkpoint_bytes =
       foundation::canonical_json(project_json(applied.value().state)) + "\n";
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  if (sequence_flush_identity.has_value()) {
+  if (sequence_flush_identity.has_value() ||
+      performance_flush_identity.has_value() || performance_truth_command) {
     const auto fault = testing::detail::invoke_fault(
         testing::FaultPoint::sequence_checkpoint_write, checkpoint_final);
     if (!fault.has_value()) {
@@ -2323,7 +2768,8 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
         });
   }
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  if (sequence_flush_identity.has_value()) {
+  if (sequence_flush_identity.has_value() ||
+      performance_flush_identity.has_value() || performance_truth_command) {
     const auto fault = testing::detail::invoke_fault(
         testing::FaultPoint::sequence_manifest_publish,
         bundle / "manifest.json");
@@ -2535,7 +2981,7 @@ foundation::Result<void> ProjectStore::create(
             "project bundle must end in .lmdj and start at revision zero",
         });
   }
-  const auto persisted_initial = persisted_v3_projection(initial);
+  const auto persisted_initial = persisted_projection(initial);
   const auto encoded = project_json(persisted_initial);
   const auto validated = parse_project(encoded, bundle);
   if (!validated.has_value() || validated.value() != persisted_initial) {
@@ -2787,6 +3233,24 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
 foundation::Result<domain::AppliedCommand> ProjectStore::execute(
     const std::filesystem::path& bundle,
     const domain::ResetPadPlayback& command) {
+  return execute_persisted(platform_, bundle, PersistedCommand{command});
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::create_performance(
+    const std::filesystem::path& bundle,
+    const CreatePerformance& command) {
+  return execute_persisted(platform_, bundle, PersistedCommand{command});
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::rename_performance(
+    const std::filesystem::path& bundle,
+    const RenamePerformance& command) {
+  return execute_persisted(platform_, bundle, PersistedCommand{command});
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::delete_performance(
+    const std::filesystem::path& bundle,
+    const DeletePerformance& command) {
   return execute_persisted(platform_, bundle, PersistedCommand{command});
 }
 
@@ -3071,6 +3535,342 @@ ProjectStore::execute_sequence_flush(
   result.outcome.replayed = committed.value().replayed;
   return foundation::Result<SequenceFlushExecution>::success(
       std::move(result));
+}
+
+foundation::Result<std::optional<PerformanceFlushExecution>>
+ProjectStore::replay_performance_flush(
+    const std::filesystem::path& bundle,
+    const PerformanceFlushIdentity& identity) {
+  if (!domain::is_valid_uuid(identity.session_id.value()) ||
+      !domain::is_valid_uuid(identity.command_id.value()) ||
+      !domain::is_valid_uuid(identity.performance_id.value())) {
+    return foundation::Result<
+        std::optional<PerformanceFlushExecution>>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance flush identity is invalid",
+    });
+  }
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<
+        std::optional<PerformanceFlushExecution>>::failure(tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<
+        std::optional<PerformanceFlushExecution>>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<
+        std::optional<PerformanceFlushExecution>>::failure(loaded.error());
+  }
+  auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<
+        std::optional<PerformanceFlushExecution>>::failure(
+        recovered.error());
+  }
+  const auto command = loaded.value().commands.find(identity.command_id);
+  if (command == loaded.value().commands.end()) {
+    return foundation::Result<
+        std::optional<PerformanceFlushExecution>>::success(std::nullopt);
+  }
+  const auto stored =
+      loaded.value().performance_flush_identities.find(identity.command_id);
+  const auto* mutation =
+      std::get_if<PerformanceMutation>(&command->second);
+  if (stored == loaded.value().performance_flush_identities.end() ||
+      stored->second != identity || mutation == nullptr ||
+      mutation->performance_id != identity.performance_id) {
+    return foundation::Result<
+        std::optional<PerformanceFlushExecution>>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance flush identity does not match the persisted mutation",
+    });
+  }
+  const auto receipt = loaded.value().receipts.find(identity.command_id);
+  if (receipt == loaded.value().receipts.end()) {
+    return foundation::Result<
+        std::optional<PerformanceFlushExecution>>::failure(
+        invalid_project(
+            "persisted Performance flush receipt is missing",
+            bundle / "manifest.json"));
+  }
+  return foundation::Result<
+      std::optional<PerformanceFlushExecution>>::success(
+      PerformanceFlushExecution{
+          identity,
+          *mutation,
+          PerformanceMutationReceipt{receipt->second.committed_revision},
+          std::move(loaded.value().state),
+          true,
+      });
+}
+
+foundation::Result<PerformanceFlushExecution>
+ProjectStore::execute_performance_flush(
+    const std::filesystem::path& bundle,
+    const PerformanceFlushIdentity& identity) {
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active_performance(bundle);
+  if (!active.has_value()) {
+    return foundation::Result<PerformanceFlushExecution>::failure(
+        active.error());
+  }
+  if (active.value().session_id != identity.session_id ||
+      active.value().performance_id != identity.performance_id) {
+    return foundation::Result<PerformanceFlushExecution>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance flush session does not match the active Journal",
+    });
+  }
+  const auto flush = std::find_if(
+      active.value().flushes.begin(), active.value().flushes.end(),
+      [&identity](const auto& candidate) {
+        return candidate.flush_seq == identity.flush_seq;
+      });
+  if (flush == active.value().flushes.end() ||
+      flush->command_id != identity.command_id ||
+      flush->performance_id != identity.performance_id) {
+    return foundation::Result<PerformanceFlushExecution>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance flush identity is not durably journaled",
+        {{"reason", "performance_command_conflict"}},
+    });
+  }
+  if (flush->completed) {
+    auto replayed = replay_performance_flush(bundle, identity);
+    if (!replayed.has_value()) {
+      return foundation::Result<PerformanceFlushExecution>::failure(
+          replayed.error());
+    }
+    if (!replayed.value().has_value()) {
+      return foundation::Result<PerformanceFlushExecution>::failure(
+          invalid_project(
+              "completed Performance flush receipt is missing",
+              bundle / "manifest.json"));
+    }
+    return foundation::Result<PerformanceFlushExecution>::success(
+        std::move(*replayed.value()));
+  }
+
+  const PerformanceMutation mutation{
+      {identity.command_id, flush->expected_revision},
+      identity.performance_id,
+      flush->canonical_events,
+  };
+  auto committed = [&]() -> foundation::Result<domain::AppliedCommand> {
+    auto tree = validate_managed_bundle_tree(*platform_, bundle);
+    if (!tree.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+    }
+    auto lease = platform_->acquire_writer(bundle);
+    if (!lease.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          lease.error());
+    }
+    auto operation = std::move(lease.value());
+    (void)operation;
+    auto loaded = load_project(*platform_, bundle);
+    if (!loaded.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          loaded.error());
+    }
+    auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+    if (!recovered.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          recovered.error());
+    }
+    auto locked_active = journal.read_active_performance(bundle);
+    if (!locked_active.has_value() ||
+        locked_active.value().session_id != identity.session_id) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          locked_active.has_value()
+              ? Error{
+                    ErrorCode::invalid_argument,
+                    "Performance Journal changed before flush admission",
+                }
+              : locked_active.error());
+    }
+    const auto locked_flush = std::find_if(
+        locked_active.value().flushes.begin(),
+        locked_active.value().flushes.end(),
+        [&identity](const auto& candidate) {
+          return candidate.flush_seq == identity.flush_seq;
+        });
+    if (locked_flush == locked_active.value().flushes.end() ||
+        locked_flush->completed ||
+        locked_flush->command_id != identity.command_id ||
+        locked_flush->performance_id != identity.performance_id ||
+        locked_flush->expected_revision != flush->expected_revision ||
+        locked_flush->canonical_events != flush->canonical_events) {
+      return foundation::Result<domain::AppliedCommand>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance Journal changed before flush admission",
+      });
+    }
+    const auto existing =
+        loaded.value().performance_flush_identities.find(identity.command_id);
+    const bool has_receipt =
+        loaded.value().receipts.contains(identity.command_id);
+    if (has_receipt &&
+        (existing == loaded.value().performance_flush_identities.end() ||
+         existing->second != identity)) {
+      return foundation::Result<domain::AppliedCommand>::failure(Error{
+          ErrorCode::invalid_argument,
+          "command id is bound to a different Performance flush identity",
+      });
+    }
+    if (!has_receipt) {
+      const auto target =
+          loaded.value().state.performances.find(identity.performance_id);
+      if (target == loaded.value().state.performances.end() ||
+          performance_fingerprint(target->second) !=
+              locked_active.value().performance_fingerprint) {
+        return foundation::Result<domain::AppliedCommand>::failure(Error{
+            ErrorCode::invalid_project,
+            "Performance recovery target was deleted or changed",
+            {{"reason", "performance_recovery_target_incompatible"},
+             {"recovery_retained", true},
+             {"remedy",
+              "retain the recovery journal and choose an explicitly "
+              "compatible Performance before retrying"}},
+        });
+      }
+    }
+    return commit_loaded(
+        platform_,
+        bundle,
+        std::move(loaded.value()),
+        PersistedCommand{mutation},
+        std::nullopt,
+        nullptr,
+        std::nullopt,
+        identity);
+  }();
+  if (!committed.has_value()) {
+    return foundation::Result<PerformanceFlushExecution>::failure(
+        committed.error());
+  }
+  auto visible = replay_performance_flush(bundle, identity);
+  if (!visible.has_value()) {
+    return foundation::Result<PerformanceFlushExecution>::failure(
+        visible.error());
+  }
+  if (!visible.value().has_value()) {
+    return foundation::Result<PerformanceFlushExecution>::failure(Error{
+        ErrorCode::io_error,
+        "Performance flush receipt is not visible from the manifest head",
+    });
+  }
+  const auto target =
+      visible.value()->state.performances.find(identity.performance_id);
+  if (target == visible.value()->state.performances.end()) {
+    return foundation::Result<PerformanceFlushExecution>::failure(
+        invalid_project(
+            "Performance flush target disappeared after publication",
+            bundle / "manifest.json"));
+  }
+  auto completed = journal.complete_performance_flush(
+      bundle,
+      identity.session_id,
+      identity.flush_seq,
+      visible.value()->state.revision,
+      performance_fingerprint(target->second));
+  if (!completed.has_value()) {
+    return foundation::Result<PerformanceFlushExecution>::failure(
+        completed.error());
+  }
+  auto result = std::move(*visible.value());
+  result.replayed = committed.value().replayed;
+  return foundation::Result<PerformanceFlushExecution>::success(
+      std::move(result));
+}
+
+foundation::Result<std::vector<PerformanceRecoveryCandidate>>
+ProjectStore::reconcile_performance_recovery(
+    const std::filesystem::path& bundle) {
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active_performance(bundle);
+  if (!active.has_value()) {
+    if (active.error().code == ErrorCode::not_found) {
+      return journal.list_performance_recoverable(bundle);
+    }
+    return foundation::Result<
+        std::vector<PerformanceRecoveryCandidate>>::failure(active.error());
+  }
+  for (const auto& flush : active.value().flushes) {
+    if (flush.completed) {
+      continue;
+    }
+    const PerformanceFlushIdentity identity{
+        active.value().session_id,
+        flush.flush_seq,
+        flush.command_id,
+        flush.performance_id,
+    };
+    auto visible = replay_performance_flush(bundle, identity);
+    if (!visible.has_value()) {
+      return foundation::Result<
+          std::vector<PerformanceRecoveryCandidate>>::failure(
+          visible.error());
+    }
+    if (!visible.value().has_value()) {
+      continue;
+    }
+    const auto target =
+        visible.value()->state.performances.find(identity.performance_id);
+    if (target == visible.value()->state.performances.end()) {
+      return foundation::Result<
+          std::vector<PerformanceRecoveryCandidate>>::failure(Error{
+          ErrorCode::invalid_project,
+          "committed Performance flush target is missing",
+          {{"recovery_retained", true}},
+      });
+    }
+    auto completed = journal.complete_performance_flush(
+        bundle,
+        identity.session_id,
+        identity.flush_seq,
+        visible.value()->state.revision,
+        performance_fingerprint(target->second));
+    if (!completed.has_value()) {
+      return foundation::Result<
+          std::vector<PerformanceRecoveryCandidate>>::failure(
+          completed.error());
+    }
+  }
+  active = journal.read_active_performance(bundle);
+  if (!active.has_value()) {
+    return foundation::Result<
+        std::vector<PerformanceRecoveryCandidate>>::failure(active.error());
+  }
+  const bool has_pending =
+      !active.value().pending_events.empty() ||
+      std::ranges::any_of(
+          active.value().flushes,
+          [](const auto& flush) { return !flush.completed; });
+  if (has_pending || active.value().flushes.empty()) {
+    auto sealed = journal.seal_performance(
+        bundle, active.value().session_id, "owner_lost");
+    if (!sealed.has_value()) {
+      return foundation::Result<
+          std::vector<PerformanceRecoveryCandidate>>::failure(
+          sealed.error());
+    }
+  } else {
+    auto removed = journal.remove_active_performance_if_complete(
+        bundle, active.value().session_id);
+    if (!removed.has_value()) {
+      return foundation::Result<
+          std::vector<PerformanceRecoveryCandidate>>::failure(
+          removed.error());
+    }
+  }
+  return journal.list_performance_recoverable(bundle);
 }
 
 foundation::Result<SequenceCaptureDisarmResult>

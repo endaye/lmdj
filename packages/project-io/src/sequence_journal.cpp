@@ -26,13 +26,128 @@ namespace {
 using foundation::Error;
 using foundation::ErrorCode;
 
-constexpr std::string_view kJournalContract = "lmdj.sequence.journal.v1";
-constexpr std::string_view kRecoveryContract = "lmdj.sequence.recovery.v1";
+struct RecordingProtocol {
+  std::string_view name;
+  std::string_view journal_contract;
+  std::string_view recovery_contract;
+  std::string_view active_filename;
+  std::string_view sealed_name_marker;
+  std::string_view torn_reason;
+  std::string_view torn_message;
+  std::string_view torn_remedy;
+  bool tail_while_switching;
+  bool tail_while_flush_pending;
+  bool cumulative_flushes;
+  std::uint64_t completion_revision_step;
+};
 
-struct JournalDocument {
-  ActiveSequenceJournal journal;
+constexpr RecordingProtocol kSequenceProtocol{
+    "Sequence",
+    "lmdj.sequence.journal.v1",
+    "lmdj.sequence.recovery.v1",
+    "sequence.jsonl",
+    "",
+    "sequence_journal_torn_tail",
+    "active Sequence Journal has a torn trailing record",
+    "retain the journal; repair the invalid suffix or discard the recovery "
+    "journal explicitly",
+    true,
+    true,
+    true,
+    1,
+};
+
+constexpr RecordingProtocol kPerformanceProtocol{
+    "Performance",
+    "lmdj.performance.journal.v1",
+    "lmdj.performance.recovery.v1",
+    "performance.jsonl",
+    "-performance",
+    "performance_journal_torn_tail",
+    "active Performance Journal has a torn trailing record",
+    "retain the journal; repair the invalid record or discard the recovery "
+    "journal explicitly",
+    false,
+    false,
+    false,
+    1,
+};
+
+constexpr const RecordingProtocol& recording_protocol(SessionKind kind) {
+  return kind == SessionKind::sequence ? kSequenceProtocol
+                                       : kPerformanceProtocol;
+}
+
+constexpr SessionKind other_session_kind(SessionKind kind) {
+  return kind == SessionKind::sequence ? SessionKind::performance
+                                       : SessionKind::sequence;
+}
+
+constexpr std::string_view session_kind_string(SessionKind kind) {
+  return kind == SessionKind::sequence ? "sequence" : "performance";
+}
+
+bool recording_accepts_tail_state(
+    SessionKind kind,
+    SequenceSessionState state) {
+  return state == SequenceSessionState::active ||
+         (recording_protocol(kind).tail_while_switching &&
+          state == SequenceSessionState::switching);
+}
+
+template <typename FlushRange>
+bool recording_accepts_tail(
+    SessionKind kind,
+    SequenceSessionState state,
+    const FlushRange& flushes) {
+  return recording_accepts_tail_state(kind, state) &&
+         (recording_protocol(kind).tail_while_flush_pending ||
+          std::ranges::none_of(
+              flushes,
+              [](const auto& flush) { return !flush.completed; }));
+}
+
+template <typename FlushRange>
+bool recording_accepts_flush(
+    SessionKind kind,
+    SequenceSessionState state,
+    const FlushRange& flushes) {
+  return state == SequenceSessionState::active &&
+         (recording_protocol(kind).cumulative_flushes ||
+          std::ranges::none_of(
+              flushes,
+              [](const auto& flush) { return !flush.completed; }));
+}
+
+bool recording_completion_revision_is_valid(
+    SessionKind kind,
+    std::uint64_t expected_revision,
+    std::uint64_t committed_revision) {
+  return committed_revision ==
+         expected_revision +
+             recording_protocol(kind).completion_revision_step;
+}
+
+template <typename FlushRange>
+bool recording_command_is_new(
+    const FlushRange& flushes,
+    const foundation::CommandId& command_id) {
+  return std::ranges::none_of(
+      flushes,
+      [&command_id](const auto& flush) {
+        return flush.command_id == command_id;
+      });
+}
+
+template <typename Journal>
+struct RecordingJournalDocument {
+  Journal journal;
   std::uint64_t valid_prefix_length{};
 };
+
+using JournalDocument = RecordingJournalDocument<ActiveSequenceJournal>;
+using PerformanceJournalDocument =
+    RecordingJournalDocument<ActivePerformanceJournal>;
 
 template <typename Source>
 nlohmann::json parse_bounded_or_throw(Source&& source) {
@@ -81,8 +196,11 @@ bool valid_bars(std::uint8_t bars) {
   return bars == 1 || bars == 2 || bars == 4 || bars == 8;
 }
 
-std::filesystem::path active_path(const std::filesystem::path& bundle) {
-  return bundle / "recovery/active/sequence.jsonl";
+std::filesystem::path recording_active_path(
+    const std::filesystem::path& bundle,
+    SessionKind kind) {
+  return bundle / "recovery/active" /
+         recording_protocol(kind).active_filename;
 }
 
 foundation::Result<void> validate_journal_tree(
@@ -307,6 +425,96 @@ foundation::Result<nlohmann::json> checked_payload(
             "sequence_journal_record_envelope_invalid",
             "Sequence Journal record envelope is invalid"));
   }
+}
+
+struct CheckedJournalRecord {
+  nlohmann::json payload;
+  std::size_t offset{};
+};
+
+struct CheckedJournalRecords {
+  std::vector<CheckedJournalRecord> records;
+  std::uint64_t valid_prefix_length{};
+  std::size_t observed_length{};
+};
+
+foundation::Result<CheckedJournalRecords> read_checked_journal_records(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle,
+    SessionKind session_kind) {
+  auto tree = validate_journal_tree(platform, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<CheckedJournalRecords>::failure(tree.error());
+  }
+  const auto& protocol = recording_protocol(session_kind);
+  const auto path = recording_active_path(bundle, session_kind);
+  auto exists = platform.exists(path);
+  if (!exists.has_value()) {
+    return foundation::Result<CheckedJournalRecords>::failure(exists.error());
+  }
+  if (!exists.value()) {
+    return foundation::Result<CheckedJournalRecords>::failure(Error{
+        ErrorCode::not_found,
+        "active " + std::string{protocol.name} + " Journal does not exist",
+        {{"path", path.generic_string()}},
+    });
+  }
+  auto read = platform.read_complete(path);
+  if (!read.has_value()) {
+    return foundation::Result<CheckedJournalRecords>::failure(read.error());
+  }
+  const auto bytes = byte_string(read.value());
+  CheckedJournalRecords checked{{}, 0, bytes.size()};
+  std::size_t cursor = 0;
+  while (cursor < bytes.size()) {
+    const auto record_offset = cursor;
+    const auto line_end = bytes.find('\n', cursor);
+    if (line_end == std::string::npos) {
+      return foundation::Result<CheckedJournalRecords>::failure(
+          Error{
+              ErrorCode::invalid_project,
+              std::string{protocol.torn_message},
+              {{"durable_prefix_length", cursor},
+               {"journal_retained", true},
+               {"observed_length", bytes.size()},
+               {"path", path.generic_string()},
+               {"reason", protocol.torn_reason},
+               {"record_offset", cursor},
+               {"remedy", protocol.torn_remedy}},
+          });
+    }
+    const auto line = bytes.substr(cursor, line_end - cursor);
+    cursor = line_end + 1;
+    checked.valid_prefix_length = cursor;
+    if (line.empty()) {
+      continue;
+    }
+    try {
+      const auto envelope = parse_bounded_or_throw(line);
+      auto payload = checked_payload(
+          envelope, path, record_offset, bytes.size());
+      if (!payload.has_value()) {
+        return foundation::Result<CheckedJournalRecords>::failure(
+            payload.error());
+      }
+      checked.records.push_back(
+          {std::move(payload.value()), record_offset});
+    } catch (const std::exception& exception) {
+      (void)exception;
+      return foundation::Result<CheckedJournalRecords>::failure(
+          corrupt_record_error(
+              path,
+              record_offset,
+              bytes.size(),
+              session_kind == SessionKind::sequence
+                  ? "sequence_journal_record_invalid"
+                  : "performance_journal_record_invalid",
+              "active " + std::string{protocol.name} +
+                  " Journal record is invalid"));
+    }
+  }
+  return foundation::Result<CheckedJournalRecords>::success(
+      std::move(checked));
 }
 
 nlohmann::json flush_json(const SequenceFlushRecord& flush) {
@@ -598,28 +806,12 @@ foundation::Result<ActiveSequenceJournal> parse_journal_snapshot(
 foundation::Result<JournalDocument> read_journal(
     const ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle) {
-  auto tree = validate_journal_tree(platform, bundle);
-  if (!tree.has_value()) {
-    return foundation::Result<JournalDocument>::failure(tree.error());
+  auto checked = read_checked_journal_records(
+      platform, bundle, SessionKind::sequence);
+  if (!checked.has_value()) {
+    return foundation::Result<JournalDocument>::failure(checked.error());
   }
-  const auto path = active_path(bundle);
-  auto exists = platform.exists(path);
-  if (!exists.has_value()) {
-    return foundation::Result<JournalDocument>::failure(exists.error());
-  }
-  if (!exists.value()) {
-    return foundation::Result<JournalDocument>::failure(
-        Error{
-            ErrorCode::not_found,
-            "active Sequence Journal does not exist",
-            {{"path", path.generic_string()}},
-        });
-  }
-  auto read = platform.read_complete(path);
-  if (!read.has_value()) {
-    return foundation::Result<JournalDocument>::failure(read.error());
-  }
-  const auto bytes = byte_string(read.value());
+  const auto path = recording_active_path(bundle, SessionKind::sequence);
   JournalDocument document{
       ActiveSequenceJournal{
           foundation::SequenceSessionId{""},
@@ -636,38 +828,24 @@ foundation::Result<JournalDocument> read_journal(
           std::nullopt,
           {},
       },
-      0,
+      checked.value().valid_prefix_length,
   };
-  std::size_t cursor = 0;
   std::size_t record_offset = 0;
   std::string_view record_reason = "sequence_journal_record_invalid";
   std::string record_message = "active Sequence Journal record is invalid";
   bool saw_begin = false;
   try {
-    while (cursor < bytes.size()) {
-      record_offset = cursor;
+    for (const auto& record : checked.value().records) {
+      record_offset = record.offset;
       record_reason = "sequence_journal_record_invalid";
       record_message = "active Sequence Journal record is invalid";
-      const auto line_end = bytes.find('\n', cursor);
-      if (line_end == std::string::npos) {
-        break;
-      }
-      const auto line = bytes.substr(cursor, line_end - cursor);
-      cursor = line_end + 1;
-      if (line.empty()) {
-        document.valid_prefix_length = cursor;
-        continue;
-      }
-      const auto envelope = parse_bounded_or_throw(line);
-      auto payload = checked_payload(
-          envelope, path, record_offset, bytes.size());
-      if (!payload.has_value()) {
-        return foundation::Result<JournalDocument>::failure(payload.error());
-      }
+      auto payload = foundation::Result<nlohmann::json>::success(
+          record.payload);
       const auto kind = payload.value().at("kind").get<std::string>();
       if (!saw_begin) {
         if (kind != "begin" ||
-            payload.value().at("contract") != kJournalContract) {
+            payload.value().at("contract") !=
+                recording_protocol(SessionKind::sequence).journal_contract) {
           throw std::runtime_error("first record is not a Sequence begin");
         }
         document.journal = ActiveSequenceJournal{
@@ -713,8 +891,10 @@ foundation::Result<JournalDocument> read_journal(
              input_sequence <= *document.journal.last_input_sequence) ||
             pattern_id != document.journal.pattern_id ||
             expected_revision != document.journal.expected_revision ||
-            (document.journal.state != SequenceSessionState::active &&
-             document.journal.state != SequenceSessionState::switching)) {
+            !recording_accepts_tail(
+                document.journal.kind,
+                document.journal.state,
+                document.journal.flushes)) {
           throw std::runtime_error("Sequence tail identity is invalid");
         }
         std::vector<domain::PatternEvent> pending_events;
@@ -753,8 +933,14 @@ foundation::Result<JournalDocument> read_journal(
         };
         if (document.journal.capture_commit.has_value() ||
             flush.flush_seq != document.journal.next_flush_seq ||
+            !recording_accepts_flush(
+                document.journal.kind,
+                document.journal.state,
+                document.journal.flushes) ||
             payload_version > 2 || payload_version < 1 ||
             !domain::is_valid_uuid(flush.command_id.value()) ||
+            !recording_command_is_new(
+                document.journal.flushes, flush.command_id) ||
             !domain::is_valid_uuid(flush.pattern_id.value()) ||
             flush.pattern_id != document.journal.pattern_id) {
           throw std::runtime_error("Sequence flush identity is invalid");
@@ -961,25 +1147,6 @@ foundation::Result<JournalDocument> read_journal(
       } else {
         throw std::runtime_error("Sequence Journal record kind is invalid");
       }
-      document.valid_prefix_length = cursor;
-    }
-    if (cursor != bytes.size()) {
-      return foundation::Result<JournalDocument>::failure(
-          Error{
-              ErrorCode::invalid_project,
-              "active Sequence Journal has a torn trailing record",
-              {
-                  {"durable_prefix_length", cursor},
-                  {"journal_retained", true},
-                  {"observed_length", bytes.size()},
-                  {"path", path.generic_string()},
-                  {"reason", "sequence_journal_torn_tail"},
-                  {"record_offset", cursor},
-                  {"remedy",
-                   "retain the journal; repair the invalid suffix or discard "
-                   "the recovery journal explicitly"},
-              },
-          });
     }
     if (!saw_begin) {
       throw std::runtime_error("Sequence Journal has no durable begin record");
@@ -991,7 +1158,7 @@ foundation::Result<JournalDocument> read_journal(
         corrupt_record_error(
             path,
             record_offset,
-            bytes.size(),
+            checked.value().observed_length,
             record_reason,
             std::move(record_message)));
   }
@@ -1020,14 +1187,16 @@ std::shared_ptr<std::mutex> append_mutex(
   return created;
 }
 
-foundation::Result<void> append_record(
+foundation::Result<void> append_recording_record(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
-    const JournalDocument& document,
+    SessionKind session_kind,
+    std::uint64_t valid_prefix_length,
     nlohmann::json payload) {
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
   const auto fault = testing::detail::invoke_fault(
-      testing::FaultPoint::sequence_journal_write, active_path(bundle));
+      testing::FaultPoint::sequence_journal_write,
+      recording_active_path(bundle, session_kind));
   if (!fault.has_value()) {
     return fault;
   }
@@ -1036,7 +1205,141 @@ foundation::Result<void> append_record(
                          checked_record(std::move(payload))) +
                      "\n";
   return platform->append_durable(
-      active_path(bundle), document.valid_prefix_length, byte_span(bytes));
+      recording_active_path(bundle, session_kind),
+      valid_prefix_length,
+      byte_span(bytes));
+}
+
+foundation::Result<std::uint64_t> manifest_head_revision(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle) {
+  const auto path = bundle / "manifest.json";
+  auto read = platform.read_complete(path);
+  if (!read.has_value()) {
+    return foundation::Result<std::uint64_t>::failure(read.error());
+  }
+  try {
+    const auto manifest = parse_bounded_or_throw(
+        std::string_view(byte_string(read.value())));
+    if (manifest.at("contract") != "lmdj.project.manifest.v1" ||
+        !manifest.at("head_revision").is_number_unsigned()) {
+      throw std::runtime_error("Project manifest head is invalid");
+    }
+    return foundation::Result<std::uint64_t>::success(
+        manifest.at("head_revision").get<std::uint64_t>());
+  } catch (const std::exception& exception) {
+    return foundation::Result<std::uint64_t>::failure(Error{
+        ErrorCode::invalid_project,
+        "recording session could not validate the Project revision",
+        {{"detail", exception.what()}, {"path", path.generic_string()}},
+    });
+  }
+}
+
+foundation::Result<std::optional<SessionKind>> active_recording_session(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle,
+    SessionKind requested_kind) {
+  for (const auto candidate :
+       {requested_kind, other_session_kind(requested_kind)}) {
+    auto exists = platform.exists(recording_active_path(bundle, candidate));
+    if (!exists.has_value()) {
+      return foundation::Result<std::optional<SessionKind>>::failure(
+          exists.error());
+    }
+    if (exists.value()) {
+      return foundation::Result<std::optional<SessionKind>>::success(
+          candidate);
+    }
+  }
+  return foundation::Result<std::optional<SessionKind>>::success(
+      std::nullopt);
+}
+
+struct CheckedRecoveryDocument {
+  nlohmann::json payload;
+  std::filesystem::path path;
+};
+
+foundation::Result<std::vector<CheckedRecoveryDocument>>
+read_checked_recovery_documents(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle,
+    SessionKind requested_kind) {
+  auto tree = validate_journal_tree(platform, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<
+        std::vector<CheckedRecoveryDocument>>::failure(tree.error());
+  }
+  auto names = platform.list_names(bundle / "recovery/sealed");
+  if (!names.has_value()) {
+    return foundation::Result<
+        std::vector<CheckedRecoveryDocument>>::failure(names.error());
+  }
+  const auto& requested = recording_protocol(requested_kind);
+  const auto& other = recording_protocol(other_session_kind(requested_kind));
+  std::vector<CheckedRecoveryDocument> result;
+  for (const auto& name : names.value()) {
+    const auto path = bundle / "recovery/sealed" / name;
+    if (path.extension() != ".json") {
+      continue;
+    }
+    auto read = platform.read_complete(path);
+    if (!read.has_value()) {
+      return foundation::Result<
+          std::vector<CheckedRecoveryDocument>>::failure(read.error());
+    }
+    try {
+      const auto bytes = byte_string(read.value());
+      const auto envelope = parse_bounded_or_throw(bytes);
+      auto payload = checked_payload(envelope, path, 0, bytes.size());
+      if (!payload.has_value()) {
+        return foundation::Result<
+            std::vector<CheckedRecoveryDocument>>::failure(payload.error());
+      }
+      if (!payload.value().is_object() ||
+          !payload.value().contains("contract") ||
+          !payload.value().at("contract").is_string() ||
+          !payload.value().contains("journal") ||
+          !payload.value().contains("reason") ||
+          !payload.value().at("reason").is_string()) {
+        throw std::runtime_error(
+            "recording recovery payload shape is invalid");
+      }
+      const auto contract =
+          payload.value().at("contract").get<std::string>();
+      if (contract == other.recovery_contract) {
+        continue;
+      }
+      if (contract != requested.recovery_contract) {
+        throw std::runtime_error(
+            "recording recovery contract is unknown");
+      }
+      result.push_back({std::move(payload.value()), path});
+    } catch (const std::exception& exception) {
+      return foundation::Result<
+          std::vector<CheckedRecoveryDocument>>::failure(Error{
+          ErrorCode::invalid_project,
+          std::string{requested.name} +
+              " recovery payload is invalid and has been retained",
+          {{"detail", exception.what()},
+           {"path", path.generic_string()},
+           {"reason",
+            requested_kind == SessionKind::sequence
+                ? "sequence_recovery_payload_invalid"
+                : "performance_recovery_payload_invalid"},
+           {"recovery_retained", true},
+           {"remedy",
+            "retain the recovery file; repair its versioned payload or "
+            "discard this recovery candidate explicitly"}},
+      });
+    }
+  }
+  std::ranges::sort(result, {}, [](const auto& document) {
+    return document.path.generic_string();
+  });
+  return foundation::Result<
+      std::vector<CheckedRecoveryDocument>>::success(std::move(result));
 }
 
 std::string file_reason(std::string_view reason) {
@@ -1049,6 +1352,56 @@ std::string file_reason(std::string_view reason) {
             : '_');
   }
   return result.empty() ? "recovery" : result;
+}
+
+foundation::Result<std::filesystem::path> seal_recording_session(
+    const std::shared_ptr<ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle,
+    SessionKind session_kind,
+    const foundation::SequenceSessionId& session_id,
+    std::string_view reason,
+    nlohmann::json journal) {
+  const auto& protocol = recording_protocol(session_kind);
+  const auto payload = nlohmann::json{
+      {"contract", protocol.recovery_contract},
+      {"journal", std::move(journal)},
+      {"reason", reason},
+  };
+  const auto bytes = foundation::canonical_json(checked_record(payload)) +
+                     "\n";
+  const auto directory = bundle / "recovery/sealed";
+  const auto stem = session_id.value() +
+                    std::string{protocol.sealed_name_marker} + "-" +
+                    file_reason(reason);
+  auto destination = directory / (stem + ".json");
+  std::uint64_t suffix = 1;
+  auto exists = platform->exists(destination);
+  if (!exists.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(
+        exists.error());
+  }
+  while (exists.value()) {
+    destination = directory /
+                  (stem + "-" + std::to_string(suffix++) + ".json");
+    exists = platform->exists(destination);
+    if (!exists.has_value()) {
+      return foundation::Result<std::filesystem::path>::failure(
+          exists.error());
+    }
+  }
+  auto written = platform->create_immutable(destination, byte_span(bytes));
+  if (!written.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(
+        written.error());
+  }
+  auto removed = platform->remove(
+      recording_active_path(bundle, session_kind));
+  if (!removed.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(
+        removed.error());
+  }
+  return foundation::Result<std::filesystem::path>::success(
+      std::move(destination));
 }
 
 }  // namespace
@@ -1103,31 +1456,52 @@ foundation::Result<void> SequenceJournal::begin(
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  const auto path = active_path(bundle);
-  auto exists = platform_->exists(path);
-  if (!exists.has_value()) {
-    return foundation::Result<void>::failure(exists.error());
+  auto active_kind = active_recording_session(
+      *platform_, bundle, SessionKind::sequence);
+  if (!active_kind.has_value()) {
+    return foundation::Result<void>::failure(active_kind.error());
   }
-  if (exists.value()) {
-    auto active = read_journal(*platform_, bundle);
-    auto details = nlohmann::json{{"reason", "sequence_session_active"}};
-    if (active.has_value()) {
-      details["session_id"] = active.value().journal.session_id.value();
+  if (active_kind.value().has_value()) {
+    const auto kind = *active_kind.value();
+    auto details = nlohmann::json{
+        {"reason",
+         kind == SessionKind::sequence ? "sequence_session_active"
+                                       : "recording_session_active"},
+        {"session_kind", session_kind_string(kind)},
+    };
+    if (kind == SessionKind::sequence) {
+      auto active = read_journal(*platform_, bundle);
+      if (active.has_value()) {
+        details["session_id"] = active.value().journal.session_id.value();
+      }
     }
-    return foundation::Result<void>::failure(
-        Error{
-            ErrorCode::invalid_argument,
-            "a Sequence session is already active for this Project",
-            std::move(details),
-        });
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "a " + std::string{recording_protocol(kind).name} +
+            " session is already active for this Project",
+        std::move(details),
+    });
   }
+  auto head_revision = manifest_head_revision(*platform_, bundle);
+  if (!head_revision.has_value()) {
+    return foundation::Result<void>::failure(head_revision.error());
+  }
+  if (head_revision.value() != expected_revision) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::revision_conflict,
+        "Sequence begin expected revision does not match Project Truth",
+        {{"actual_revision", head_revision.value()},
+         {"expected_revision", expected_revision}},
+    });
+  }
+  const auto path = recording_active_path(bundle, SessionKind::sequence);
   const auto payload = nlohmann::json{
       {"armed_capture_slot",
        armed_capture_slot.has_value()
            ? nlohmann::json(slot_json(*armed_capture_slot))
            : nlohmann::json(nullptr)},
       {"bars", bars},
-      {"contract", kJournalContract},
+      {"contract", recording_protocol(SessionKind::sequence).journal_contract},
       {"expected_revision", expected_revision},
       {"kind", "begin"},
       {"pattern_fingerprint", std::move(pattern_fingerprint)},
@@ -1200,8 +1574,8 @@ foundation::Result<void> SequenceJournal::append_tail(
       journal.expected_revision != expected_revision ||
       (journal.last_input_sequence.has_value() &&
        input_sequence <= *journal.last_input_sequence) ||
-      (journal.state != SequenceSessionState::active &&
-       journal.state != SequenceSessionState::switching)) {
+      !recording_accepts_tail(
+          journal.kind, journal.state, journal.flushes)) {
     return foundation::Result<void>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -1220,8 +1594,9 @@ foundation::Result<void> SequenceJournal::append_tail(
           Error{ErrorCode::invalid_argument, "Sequence tail event is invalid"});
     }
   }
-  return append_record(
-      platform_, bundle, document.value(),
+  return append_recording_record(
+      platform_, bundle, document.value().journal.kind,
+      document.value().valid_prefix_length,
       tail_json(journal, input_sequence, canonical));
 }
 
@@ -1282,7 +1657,8 @@ foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
   }
   if (journal.pattern_id != pattern_id ||
       journal.expected_revision != expected_revision ||
-      journal.state != SequenceSessionState::active ||
+      !recording_accepts_flush(
+          journal.kind, journal.state, journal.flushes) ||
       journal.capture_commit.has_value()) {
     return foundation::Result<SequenceFlushRecord>::failure(
         Error{
@@ -1317,7 +1693,9 @@ foundation::Result<SequenceFlushRecord> SequenceJournal::append_flush(
       std::move(canonical),
       false,
   };
-  auto appended = append_record(platform_, bundle, document.value(), flush_json(flush));
+  auto appended = append_recording_record(
+      platform_, bundle, document.value().journal.kind,
+      document.value().valid_prefix_length, flush_json(flush));
   if (!appended.has_value()) {
     return foundation::Result<SequenceFlushRecord>::failure(appended.error());
   }
@@ -1365,15 +1743,17 @@ foundation::Result<void> SequenceJournal::complete_flush(
   }
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
   const auto fault = testing::detail::invoke_fault(
-      testing::FaultPoint::sequence_journal_completion, active_path(bundle));
+      testing::FaultPoint::sequence_journal_completion,
+      recording_active_path(bundle, SessionKind::sequence));
   if (!fault.has_value()) {
     return fault;
   }
 #endif
-  return append_record(
+  return append_recording_record(
       platform_,
       bundle,
-      document.value(),
+      document.value().journal.kind,
+      document.value().valid_prefix_length,
       {
           {"committed_revision", committed_revision},
           {"flush_seq", flush_seq},
@@ -1403,8 +1783,9 @@ foundation::Result<void> SequenceJournal::set_state(
     return foundation::Result<void>::failure(
         Error{ErrorCode::invalid_argument, "Sequence session does not match"});
   }
-  return append_record(
-      platform_, bundle, document.value(),
+  return append_recording_record(
+      platform_, bundle, document.value().journal.kind,
+      document.value().valid_prefix_length,
       {{"kind", "state"}, {"state", state_string(state)}});
 }
 
@@ -1438,8 +1819,9 @@ foundation::Result<void> SequenceJournal::rebase(
         "Sequence rebase does not match the active session",
     });
   }
-  return append_record(
-      platform_, bundle, document.value(),
+  return append_recording_record(
+      platform_, bundle, document.value().journal.kind,
+      document.value().valid_prefix_length,
       {{"expected_revision", expected_revision}, {"kind", "rebase"}});
 }
 
@@ -1488,8 +1870,9 @@ foundation::Result<void> SequenceJournal::complete_armed_capture(
         {{"reason", "armed_capture_target_mismatch"}},
     });
   }
-  return append_record(
-      platform_, bundle, document.value(),
+  return append_recording_record(
+      platform_, bundle, document.value().journal.kind,
+      document.value().valid_prefix_length,
       {{"command_id", command_id.value()},
        {"committed_revision", committed_revision},
        {"kind", "capture-complete"},
@@ -1541,8 +1924,9 @@ foundation::Result<void> SequenceJournal::prepare_armed_capture(
         {{"reason", "armed_capture_target_mismatch"}},
     });
   }
-  return append_record(
-      platform_, bundle, document.value(),
+  return append_recording_record(
+      platform_, bundle, document.value().journal.kind,
+      document.value().valid_prefix_length,
       capture_json(SequenceCaptureCommit{
           std::move(command_id), std::move(asset_id), slot,
           std::move(artifact), expected_revision}));
@@ -1599,8 +1983,9 @@ foundation::Result<void> SequenceJournal::disarm_capture(
          {"remedy", "retry or reconcile the durable Capture commit first"}},
     });
   }
-  return append_record(
-      platform_, bundle, document.value(),
+  return append_recording_record(
+      platform_, bundle, document.value().journal.kind,
+      document.value().valid_prefix_length,
       {{"kind", "capture-disarm"}, {"slot", slot_json(slot)}});
 }
 
@@ -1655,8 +2040,9 @@ SequenceJournal::resolve_capture_disarm(
     });
   }
   if (!journal.capture_commit.has_value()) {
-    auto appended = append_record(
-        platform_, bundle, document.value(),
+    auto appended = append_recording_record(
+        platform_, bundle, document.value().journal.kind,
+        document.value().valid_prefix_length,
         {{"kind", "capture-disarm"}, {"slot", slot_json(slot)}});
     if (!appended.has_value()) {
       return foundation::Result<SequenceCaptureDisarmResult>::failure(
@@ -1683,8 +2069,9 @@ SequenceJournal::resolve_capture_disarm(
             "inspect the committed Capture receipt and Project Truth"}},
       });
     }
-    auto completed = append_record(
-        platform_, bundle, document.value(),
+    auto completed = append_recording_record(
+        platform_, bundle, document.value().journal.kind,
+        document.value().valid_prefix_length,
         {{"command_id", capture.command_id.value()},
          {"committed_revision", committed_revision},
          {"kind", "capture-complete"},
@@ -1697,8 +2084,9 @@ SequenceJournal::resolve_capture_disarm(
         SequenceCaptureDisarmResult{true, committed_revision});
   }
 
-  auto aborted = append_record(
-      platform_, bundle, document.value(),
+  auto aborted = append_recording_record(
+      platform_, bundle, document.value().journal.kind,
+      document.value().valid_prefix_length,
       {{"command_id", capture.command_id.value()},
        {"expected_revision", capture.expected_revision},
        {"kind", "capture-abort"},
@@ -1753,8 +2141,9 @@ foundation::Result<void> SequenceJournal::switch_pattern(
         "Sequence switch does not match the active session",
     });
   }
-  return append_record(
-      platform_, bundle, document.value(),
+  return append_recording_record(
+      platform_, bundle, document.value().journal.kind,
+      document.value().valid_prefix_length,
       {
           {"bars", bars},
           {"expected_revision", expected_revision},
@@ -1789,104 +2178,36 @@ foundation::Result<std::filesystem::path> SequenceJournal::seal(
         Error{ErrorCode::invalid_argument, "Sequence session does not match"});
   }
   document.value().journal.state = SequenceSessionState::owner_lost;
-  const auto payload = nlohmann::json{
-      {"contract", kRecoveryContract},
-      {"journal", journal_json(document.value().journal)},
-      {"reason", reason},
-  };
-  const auto bytes = foundation::canonical_json(checked_record(payload)) + "\n";
-  const auto directory = bundle / "recovery/sealed";
-  auto destination = directory /
-                     (session_id.value() + "-" + file_reason(reason) + ".json");
-  std::uint64_t suffix = 1;
-  auto exists = platform_->exists(destination);
-  if (!exists.has_value()) {
-    return foundation::Result<std::filesystem::path>::failure(exists.error());
-  }
-  while (exists.value()) {
-    destination = directory /
-                  (session_id.value() + "-" + file_reason(reason) + "-" +
-                   std::to_string(suffix++) + ".json");
-    exists = platform_->exists(destination);
-    if (!exists.has_value()) {
-      return foundation::Result<std::filesystem::path>::failure(exists.error());
-    }
-  }
-  auto written = platform_->create_immutable(destination, byte_span(bytes));
-  if (!written.has_value()) {
-    return foundation::Result<std::filesystem::path>::failure(written.error());
-  }
-  auto removed = platform_->remove(active_path(bundle));
-  if (!removed.has_value()) {
-    return foundation::Result<std::filesystem::path>::failure(removed.error());
-  }
-  return foundation::Result<std::filesystem::path>::success(
-      std::move(destination));
+  return seal_recording_session(
+      platform_,
+      bundle,
+      document.value().journal.kind,
+      session_id,
+      reason,
+      journal_json(document.value().journal));
 }
 
 foundation::Result<std::vector<SequenceRecoveryCandidate>>
 SequenceJournal::list_recoverable(const std::filesystem::path& bundle) const {
-  auto tree = validate_journal_tree(*platform_, bundle);
-  if (!tree.has_value()) {
+  auto documents = read_checked_recovery_documents(
+      *platform_, bundle, SessionKind::sequence);
+  if (!documents.has_value()) {
     return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
-        tree.error());
-  }
-  auto names = platform_->list_names(bundle / "recovery/sealed");
-  if (!names.has_value()) {
-    return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
-        names.error());
+        documents.error());
   }
   std::vector<SequenceRecoveryCandidate> result;
-  for (const auto& name : names.value()) {
-    const auto path = bundle / "recovery/sealed" / name;
-    if (path.extension() != ".json") {
-      continue;
-    }
-    auto read = platform_->read_complete(path);
-    if (!read.has_value()) {
+  for (auto& document : documents.value()) {
+    auto journal = parse_journal_snapshot(
+        document.payload.at("journal"), document.path);
+    if (!journal.has_value()) {
       return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
-          read.error());
+          journal.error());
     }
-    try {
-      const auto bytes = byte_string(read.value());
-      const auto envelope = parse_bounded_or_throw(bytes);
-      auto payload = checked_payload(envelope, path, 0, bytes.size());
-      if (!payload.has_value()) {
-        return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
-            payload.error());
-      }
-      if (payload.value().at("contract") != kRecoveryContract) {
-        throw std::runtime_error("Sequence recovery contract is invalid");
-      }
-      auto journal = parse_journal_snapshot(payload.value().at("journal"), path);
-      if (!journal.has_value()) {
-        return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
-            journal.error());
-      }
-      result.push_back(
-          {std::move(journal.value()),
-           payload.value().at("reason").get<std::string>(), path});
-    } catch (const std::exception& exception) {
-      return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
-          Error{
-              ErrorCode::invalid_project,
-              "Sequence recovery payload is invalid and has been retained",
-              {
-                  {"detail", exception.what()},
-                  {"path", path.generic_string()},
-                  {"reason", "sequence_recovery_payload_invalid"},
-                  {"recovery_retained", true},
-                  {"remedy",
-                   "retain the recovery file; repair its versioned payload or "
-                   "discard this recovery candidate explicitly"},
-              },
-          });
-    }
+    result.push_back(
+        {std::move(journal.value()),
+         document.payload.at("reason").get<std::string>(),
+         std::move(document.path)});
   }
-  std::sort(
-      result.begin(), result.end(), [](const auto& left, const auto& right) {
-        return left.path.generic_string() < right.path.generic_string();
-      });
   return foundation::Result<std::vector<SequenceRecoveryCandidate>>::success(
       std::move(result));
 }
@@ -1923,12 +2244,817 @@ foundation::Result<void> SequenceJournal::remove_active_if_complete(
   }
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
   const auto fault = testing::detail::invoke_fault(
-      testing::FaultPoint::sequence_journal_deletion, active_path(bundle));
+      testing::FaultPoint::sequence_journal_deletion,
+      recording_active_path(bundle, SessionKind::sequence));
   if (!fault.has_value()) {
     return fault;
   }
 #endif
-  return platform_->remove(active_path(bundle));
+  return platform_->remove(
+      recording_active_path(bundle, SessionKind::sequence));
+}
+
+namespace {
+
+nlohmann::json performance_events_json(
+    std::span<const domain::PerformanceEvent> events) {
+  auto encoded = nlohmann::json::array();
+  for (const auto& event : events) {
+    encoded.push_back(domain::performance_event_json(event));
+  }
+  return encoded;
+}
+
+foundation::Result<void> validate_performance_event_structure(
+    std::span<const domain::PerformanceEvent> events) {
+  for (const auto& event : events) {
+    auto parsed = domain::performance_event_from_json(
+        domain::performance_event_json(event));
+    if (!parsed.has_value() || parsed.value() != event) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Performance event contains an invalid field value",
+      });
+    }
+  }
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<std::vector<domain::PerformanceEvent>>
+parse_performance_events(
+    const nlohmann::json& input,
+    const std::filesystem::path& path) {
+  if (!input.is_array()) {
+    return foundation::Result<
+        std::vector<domain::PerformanceEvent>>::failure(Error{
+        ErrorCode::invalid_project,
+        "Performance Journal events are not an array",
+        {{"path", path.generic_string()}},
+    });
+  }
+  std::vector<domain::PerformanceEvent> events;
+  for (const auto& encoded : input) {
+    auto parsed = domain::performance_event_from_json(encoded);
+    if (!parsed.has_value()) {
+      auto error = parsed.error();
+      error.details["path"] = path.generic_string();
+      return foundation::Result<
+          std::vector<domain::PerformanceEvent>>::failure(std::move(error));
+    }
+    events.push_back(std::move(parsed.value()));
+  }
+  const auto canonical = domain::canonical_performance_events(events);
+  if (canonical != events) {
+    return foundation::Result<
+        std::vector<domain::PerformanceEvent>>::failure(Error{
+        ErrorCode::invalid_project,
+        "Performance Journal events are not canonical",
+        {{"path", path.generic_string()}},
+    });
+  }
+  return foundation::Result<std::vector<domain::PerformanceEvent>>::success(
+      std::move(events));
+}
+
+nlohmann::json performance_flush_json(const PerformanceFlushRecord& flush) {
+  return {
+      {"command_id", flush.command_id.value()},
+      {"events", performance_events_json(flush.canonical_events)},
+      {"expected_revision", flush.expected_revision},
+      {"flush_seq", flush.flush_seq},
+      {"kind", "flush"},
+      {"performance_id", flush.performance_id.value()},
+  };
+}
+
+nlohmann::json performance_journal_json(
+    const ActivePerformanceJournal& journal) {
+  auto flushes = nlohmann::json::array();
+  for (const auto& flush : journal.flushes) {
+    auto encoded = performance_flush_json(flush);
+    encoded["completed"] = flush.completed;
+    flushes.push_back(std::move(encoded));
+  }
+  return {
+      {"expected_revision", journal.expected_revision},
+      {"flushes", std::move(flushes)},
+      {"last_input_sequence",
+       journal.last_input_sequence.has_value()
+           ? nlohmann::json(*journal.last_input_sequence)
+           : nlohmann::json(nullptr)},
+      {"next_flush_seq", journal.next_flush_seq},
+      {"next_tail_seq", journal.next_tail_seq},
+      {"pending_events", performance_events_json(journal.pending_events)},
+      {"performance_fingerprint", journal.performance_fingerprint},
+      {"performance_id", journal.performance_id.value()},
+      {"session_id", journal.session_id.value()},
+      {"state", state_string(journal.state)},
+  };
+}
+
+foundation::Result<ActivePerformanceJournal> parse_performance_snapshot(
+    const nlohmann::json& input,
+    const std::filesystem::path& path) {
+  try {
+    ActivePerformanceJournal journal{
+        foundation::SequenceSessionId{
+            input.at("session_id").get<std::string>()},
+        domain::PerformanceId{
+            input.at("performance_id").get<std::string>()},
+        input.at("performance_fingerprint").get<std::string>(),
+        input.at("expected_revision").get<std::uint64_t>(),
+        input.at("next_flush_seq").get<std::uint64_t>(),
+        parse_state(input.at("state").get<std::string>()),
+        {},
+        input.at("next_tail_seq").get<std::uint64_t>(),
+        std::nullopt,
+        {},
+    };
+    if (!domain::is_valid_uuid(journal.session_id.value()) ||
+        !domain::is_valid_uuid(journal.performance_id.value()) ||
+        !lowercase_sha256(journal.performance_fingerprint)) {
+      throw std::runtime_error("Performance recovery metadata is invalid");
+    }
+    if (!input.at("last_input_sequence").is_null()) {
+      journal.last_input_sequence =
+          input.at("last_input_sequence").get<std::uint64_t>();
+    }
+    auto pending = parse_performance_events(input.at("pending_events"), path);
+    if (!pending.has_value()) {
+      return foundation::Result<ActivePerformanceJournal>::failure(
+          pending.error());
+    }
+    journal.pending_events = std::move(pending.value());
+    for (const auto& encoded : input.at("flushes")) {
+      auto events = parse_performance_events(encoded.at("events"), path);
+      if (!events.has_value()) {
+        return foundation::Result<ActivePerformanceJournal>::failure(
+            events.error());
+      }
+      PerformanceFlushRecord flush{
+          encoded.at("flush_seq").get<std::uint64_t>(),
+          foundation::CommandId{
+              encoded.at("command_id").get<std::string>()},
+          domain::PerformanceId{
+              encoded.at("performance_id").get<std::string>()},
+          encoded.at("expected_revision").get<std::uint64_t>(),
+          std::move(events.value()),
+          encoded.at("completed").get<bool>(),
+      };
+      if (!domain::is_valid_uuid(flush.command_id.value()) ||
+          !recording_command_is_new(journal.flushes, flush.command_id) ||
+          flush.performance_id != journal.performance_id ||
+          flush.flush_seq != journal.flushes.size() ||
+          flush.canonical_events.empty() ||
+          (!recording_protocol(journal.kind).cumulative_flushes &&
+           std::ranges::any_of(
+               journal.flushes,
+               [](const auto& candidate) {
+                 return !candidate.completed;
+               }))) {
+        throw std::runtime_error(
+            "Performance recovery flush identity is invalid");
+      }
+      if (!journal.flushes.empty()) {
+        const auto& predecessor = journal.flushes.back();
+        const auto next_revision = predecessor.expected_revision + 1;
+        if (!predecessor.completed ||
+            flush.expected_revision != next_revision) {
+          throw std::runtime_error(
+              "Performance recovery flush revision is invalid");
+        }
+      }
+      journal.flushes.push_back(std::move(flush));
+    }
+    if (journal.next_flush_seq != journal.flushes.size()) {
+      throw std::runtime_error(
+          "Performance recovery flush sequence is invalid");
+    }
+    if (!journal.flushes.empty()) {
+      const auto& last = journal.flushes.back();
+      const auto visible_revision =
+          last.expected_revision + (last.completed ? 1 : 0);
+      if (journal.expected_revision != visible_revision ||
+          (!last.completed && !journal.pending_events.empty())) {
+        throw std::runtime_error(
+            "Performance recovery revision state is invalid");
+      }
+    }
+    return foundation::Result<ActivePerformanceJournal>::success(
+        std::move(journal));
+  } catch (const std::exception& exception) {
+    return foundation::Result<ActivePerformanceJournal>::failure(Error{
+        ErrorCode::invalid_project,
+        "Performance recovery payload is invalid and has been retained",
+        {{"detail", exception.what()},
+         {"path", path.generic_string()},
+         {"reason", "performance_recovery_payload_invalid"},
+         {"recovery_retained", true},
+         {"remedy",
+          "retain the recovery file; repair its versioned payload or discard "
+          "this recovery candidate explicitly"}},
+    });
+  }
+}
+
+foundation::Result<PerformanceJournalDocument> read_performance_journal(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle) {
+  auto checked = read_checked_journal_records(
+      platform, bundle, SessionKind::performance);
+  if (!checked.has_value()) {
+    return foundation::Result<PerformanceJournalDocument>::failure(
+        checked.error());
+  }
+  const auto path = recording_active_path(bundle, SessionKind::performance);
+  PerformanceJournalDocument document{
+      ActivePerformanceJournal{
+          foundation::SequenceSessionId{""},
+          domain::PerformanceId{""},
+          {},
+          0,
+          0,
+          SequenceSessionState::active,
+          {},
+          0,
+          std::nullopt,
+          {},
+      },
+      checked.value().valid_prefix_length,
+  };
+  bool saw_begin = false;
+  try {
+    for (const auto& record : checked.value().records) {
+      auto payload = foundation::Result<nlohmann::json>::success(
+          record.payload);
+      const auto kind = payload.value().at("kind").get<std::string>();
+      if (!saw_begin) {
+        if (kind != "begin" ||
+            payload.value().at("contract") !=
+                recording_protocol(SessionKind::performance)
+                    .journal_contract) {
+          throw std::runtime_error(
+              "first record is not a Performance begin");
+        }
+        document.journal = ActivePerformanceJournal{
+            foundation::SequenceSessionId{
+                payload.value().at("session_id").get<std::string>()},
+            domain::PerformanceId{
+                payload.value().at("performance_id").get<std::string>()},
+            payload.value().at("performance_fingerprint").get<std::string>(),
+            payload.value().at("expected_revision").get<std::uint64_t>(),
+            0,
+            SequenceSessionState::active,
+            {},
+            0,
+            std::nullopt,
+            {},
+        };
+        if (!domain::is_valid_uuid(document.journal.session_id.value()) ||
+            !domain::is_valid_uuid(document.journal.performance_id.value()) ||
+            !lowercase_sha256(
+                document.journal.performance_fingerprint)) {
+          throw std::runtime_error("Performance begin metadata is invalid");
+        }
+        saw_begin = true;
+      } else if (kind == "tail") {
+        const auto tail_seq =
+            payload.value().at("tail_seq").get<std::uint64_t>();
+        const auto input_sequence =
+            payload.value().at("input_sequence").get<std::uint64_t>();
+        const auto performance_id = domain::PerformanceId{
+            payload.value().at("performance_id").get<std::string>()};
+        const auto expected_revision =
+            payload.value().at("expected_revision").get<std::uint64_t>();
+        if (tail_seq != document.journal.next_tail_seq ||
+            performance_id != document.journal.performance_id ||
+            expected_revision != document.journal.expected_revision ||
+            (document.journal.last_input_sequence.has_value() &&
+             input_sequence <= *document.journal.last_input_sequence) ||
+            !recording_accepts_tail(
+                document.journal.kind,
+                document.journal.state,
+                document.journal.flushes)) {
+          throw std::runtime_error(
+              "Performance tail identity is invalid");
+        }
+        auto events = parse_performance_events(
+            payload.value().at("events"), path);
+        if (!events.has_value() || events.value().empty()) {
+          throw std::runtime_error("Performance tail events are invalid");
+        }
+        document.journal.pending_events = std::move(events.value());
+        document.journal.last_input_sequence = input_sequence;
+        ++document.journal.next_tail_seq;
+      } else if (kind == "flush") {
+        auto events = parse_performance_events(
+            payload.value().at("events"), path);
+        if (!events.has_value() || events.value().empty()) {
+          throw std::runtime_error("Performance flush events are invalid");
+        }
+        PerformanceFlushRecord flush{
+            payload.value().at("flush_seq").get<std::uint64_t>(),
+            foundation::CommandId{
+                payload.value().at("command_id").get<std::string>()},
+            domain::PerformanceId{
+                payload.value().at("performance_id").get<std::string>()},
+            payload.value().at("expected_revision").get<std::uint64_t>(),
+            std::move(events.value()),
+            false,
+        };
+        if (!domain::is_valid_uuid(flush.command_id.value()) ||
+            !recording_command_is_new(
+                document.journal.flushes, flush.command_id) ||
+            flush.flush_seq != document.journal.next_flush_seq ||
+            flush.performance_id != document.journal.performance_id ||
+            flush.expected_revision != document.journal.expected_revision ||
+            !recording_accepts_flush(
+                document.journal.kind,
+                document.journal.state,
+                document.journal.flushes) ||
+            (!document.journal.pending_events.empty() &&
+             flush.canonical_events != document.journal.pending_events)) {
+          throw std::runtime_error(
+              "Performance flush identity is invalid");
+        }
+        document.journal.pending_events.clear();
+        document.journal.flushes.push_back(std::move(flush));
+        ++document.journal.next_flush_seq;
+      } else if (kind == "complete") {
+        const auto flush_seq =
+            payload.value().at("flush_seq").get<std::uint64_t>();
+        const auto found = std::find_if(
+            document.journal.flushes.begin(),
+            document.journal.flushes.end(),
+            [flush_seq](const auto& flush) {
+              return flush.flush_seq == flush_seq;
+            });
+        const auto fingerprint = payload.value()
+                                     .at("performance_fingerprint")
+                                     .get<std::string>();
+        const auto committed_revision = payload.value()
+                                            .at("committed_revision")
+                                            .get<std::uint64_t>();
+        if (found == document.journal.flushes.end() || found->completed ||
+            !lowercase_sha256(fingerprint) ||
+            !recording_completion_revision_is_valid(
+                document.journal.kind,
+                found->expected_revision,
+                committed_revision)) {
+          throw std::runtime_error(
+              "Performance completion is invalid");
+        }
+        found->completed = true;
+        document.journal.expected_revision = committed_revision;
+        document.journal.performance_fingerprint = fingerprint;
+      } else {
+        throw std::runtime_error(
+            "Performance Journal record kind is invalid");
+      }
+    }
+    if (!saw_begin) {
+      throw std::runtime_error(
+          "Performance Journal has no durable begin record");
+    }
+    return foundation::Result<PerformanceJournalDocument>::success(
+        std::move(document));
+  } catch (const std::exception& exception) {
+    return foundation::Result<PerformanceJournalDocument>::failure(Error{
+        ErrorCode::invalid_project,
+        "Performance Journal is invalid and has been retained",
+        {{"detail", exception.what()},
+         {"path", path.generic_string()},
+         {"reason", "performance_journal_record_invalid"},
+         {"journal_retained", true},
+         {"remedy",
+          "retain the journal; repair the invalid record or discard the "
+          "recovery journal explicitly"}},
+    });
+  }
+}
+
+}  // namespace
+
+std::string performance_fingerprint(const domain::Performance& performance) {
+  const nlohmann::json preimage = {
+      {"created_bpm", performance.created_bpm},
+      {"events",
+       performance_events_json(
+           domain::canonical_performance_events(performance.events))},
+      {"name", performance.name},
+      {"recording_artifact",
+       performance.recording_artifact.has_value()
+           ? nlohmann::json(*performance.recording_artifact)
+           : nlohmann::json(nullptr)},
+  };
+  return sha256(foundation::canonical_json(preimage));
+}
+
+foundation::Result<void> SequenceJournal::begin_performance(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    domain::PerformanceId performance_id,
+    std::string fingerprint,
+    std::uint64_t expected_revision) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(performance_id.value()) ||
+      !lowercase_sha256(fingerprint)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance begin metadata is invalid",
+    });
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto tree = validate_journal_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return tree;
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto active_kind = active_recording_session(
+      *platform_, bundle, SessionKind::performance);
+  if (!active_kind.has_value()) {
+    return foundation::Result<void>::failure(active_kind.error());
+  }
+  if (active_kind.value().has_value()) {
+    const auto kind = *active_kind.value();
+    auto details = nlohmann::json{
+        {"reason", "recording_session_active"},
+        {"session_kind", session_kind_string(kind)},
+    };
+    if (kind == SessionKind::performance) {
+      auto active = read_performance_journal(*platform_, bundle);
+      if (active.has_value()) {
+        details["session_id"] = active.value().journal.session_id.value();
+      }
+    }
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "a " + std::string{recording_protocol(kind).name} +
+            " session is already active for this Project",
+        std::move(details),
+    });
+  }
+  auto head_revision = manifest_head_revision(*platform_, bundle);
+  if (!head_revision.has_value()) {
+    return foundation::Result<void>::failure(head_revision.error());
+  }
+  if (head_revision.value() != expected_revision) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::revision_conflict,
+        "Performance begin expected revision does not match Project Truth",
+        {{"actual_revision", head_revision.value()},
+         {"expected_revision", expected_revision}},
+    });
+  }
+  const auto path = recording_active_path(bundle, SessionKind::performance);
+  const auto payload = nlohmann::json{
+      {"contract",
+       recording_protocol(SessionKind::performance).journal_contract},
+      {"expected_revision", expected_revision},
+      {"kind", "begin"},
+      {"performance_fingerprint", std::move(fingerprint)},
+      {"performance_id", performance_id.value()},
+      {"session_id", session_id.value()},
+  };
+  const auto bytes = foundation::canonical_json(checked_record(payload)) +
+                     "\n";
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto fault = testing::detail::invoke_fault(
+      testing::FaultPoint::sequence_journal_write, path);
+  if (!fault.has_value()) {
+    return fault;
+  }
+#endif
+  auto created = platform_->create_immutable(path, byte_span(bytes));
+  if (!created.has_value()) {
+    return foundation::Result<void>::failure(created.error());
+  }
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<ActivePerformanceJournal>
+SequenceJournal::read_active_performance(
+    const std::filesystem::path& bundle) const {
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<ActivePerformanceJournal>::failure(
+        document.error());
+  }
+  return foundation::Result<ActivePerformanceJournal>::success(
+      std::move(document.value().journal));
+}
+
+foundation::Result<void> SequenceJournal::append_performance_tail(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    domain::PerformanceId performance_id,
+    std::uint64_t expected_revision,
+    std::uint64_t input_sequence,
+    std::span<const domain::PerformanceEvent> events) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(performance_id.value()) || events.empty()) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance tail metadata is invalid",
+    });
+  }
+  auto validated = validate_performance_event_structure(events);
+  if (!validated.has_value()) {
+    return validated;
+  }
+  auto canonical = domain::canonical_performance_events(
+      std::vector<domain::PerformanceEvent>{events.begin(), events.end()});
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id ||
+      journal.performance_id != performance_id ||
+      journal.expected_revision != expected_revision ||
+      (journal.last_input_sequence.has_value() &&
+       input_sequence <= *journal.last_input_sequence) ||
+      !recording_accepts_tail(
+          journal.kind, journal.state, journal.flushes)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance tail does not match the active session",
+    });
+  }
+  return append_recording_record(
+      platform_,
+      bundle,
+      document.value().journal.kind,
+      document.value().valid_prefix_length,
+      {{"events", performance_events_json(canonical)},
+       {"expected_revision", expected_revision},
+       {"input_sequence", input_sequence},
+       {"kind", "tail"},
+       {"performance_id", performance_id.value()},
+       {"tail_seq", journal.next_tail_seq}});
+}
+
+foundation::Result<PerformanceFlushRecord>
+SequenceJournal::append_performance_flush(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    foundation::CommandId command_id,
+    domain::PerformanceId performance_id,
+    std::uint64_t expected_revision,
+    std::span<const domain::PerformanceEvent> events) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(command_id.value()) ||
+      !domain::is_valid_uuid(performance_id.value()) || events.empty()) {
+    return foundation::Result<PerformanceFlushRecord>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance flush metadata is invalid",
+    });
+  }
+  auto validated = validate_performance_event_structure(events);
+  if (!validated.has_value()) {
+    return foundation::Result<PerformanceFlushRecord>::failure(
+        validated.error());
+  }
+  auto canonical = domain::canonical_performance_events(
+      std::vector<domain::PerformanceEvent>{events.begin(), events.end()});
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<PerformanceFlushRecord>::failure(
+        lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<PerformanceFlushRecord>::failure(
+        document.error());
+  }
+  const auto& journal = document.value().journal;
+  const auto repeated = std::find_if(
+      journal.flushes.begin(), journal.flushes.end(),
+      [&command_id](const auto& flush) {
+        return flush.command_id == command_id;
+      });
+  if (repeated != journal.flushes.end()) {
+    if (repeated->performance_id == performance_id &&
+        repeated->expected_revision == expected_revision &&
+        repeated->canonical_events == canonical) {
+      return foundation::Result<PerformanceFlushRecord>::success(*repeated);
+    }
+    return foundation::Result<PerformanceFlushRecord>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance command id is bound to a different flush",
+        {{"reason", "performance_command_conflict"}},
+    });
+  }
+  if (journal.session_id != session_id ||
+      journal.performance_id != performance_id ||
+      journal.expected_revision != expected_revision ||
+      !recording_accepts_flush(
+          journal.kind, journal.state, journal.flushes) ||
+      (!journal.pending_events.empty() &&
+       journal.pending_events != canonical)) {
+    return foundation::Result<PerformanceFlushRecord>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance flush does not match the active session",
+    });
+  }
+  PerformanceFlushRecord flush{
+      journal.next_flush_seq,
+      std::move(command_id),
+      std::move(performance_id),
+      expected_revision,
+      std::move(canonical),
+      false,
+  };
+  auto appended = append_recording_record(
+      platform_, bundle, document.value().journal.kind,
+      document.value().valid_prefix_length, performance_flush_json(flush));
+  if (!appended.has_value()) {
+    return foundation::Result<PerformanceFlushRecord>::failure(
+        appended.error());
+  }
+  return foundation::Result<PerformanceFlushRecord>::success(
+      std::move(flush));
+}
+
+foundation::Result<void> SequenceJournal::complete_performance_flush(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    std::uint64_t flush_seq,
+    std::uint64_t committed_revision,
+    std::string fingerprint) {
+  if (!lowercase_sha256(fingerprint)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance completion fingerprint is invalid",
+    });
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  const auto found = std::find_if(
+      journal.flushes.begin(), journal.flushes.end(),
+      [flush_seq](const auto& flush) {
+        return flush.flush_seq == flush_seq;
+      });
+  if (journal.session_id != session_id ||
+      found == journal.flushes.end() || found->completed ||
+      !recording_completion_revision_is_valid(
+          journal.kind, found->expected_revision, committed_revision)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance completion does not match the active session",
+    });
+  }
+  return append_recording_record(
+      platform_,
+      bundle,
+      document.value().journal.kind,
+      document.value().valid_prefix_length,
+      {{"committed_revision", committed_revision},
+       {"flush_seq", flush_seq},
+       {"kind", "complete"},
+       {"performance_fingerprint", std::move(fingerprint)}});
+}
+
+foundation::Result<std::filesystem::path>
+SequenceJournal::seal_performance(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    std::string reason) {
+  if (reason.empty()) {
+    return foundation::Result<std::filesystem::path>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance recovery reason is empty",
+    });
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(
+        lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(
+        document.error());
+  }
+  if (document.value().journal.session_id != session_id) {
+    return foundation::Result<std::filesystem::path>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance session does not match",
+    });
+  }
+  document.value().journal.state = SequenceSessionState::owner_lost;
+  return seal_recording_session(
+      platform_,
+      bundle,
+      document.value().journal.kind,
+      session_id,
+      reason,
+      performance_journal_json(document.value().journal));
+}
+
+foundation::Result<std::vector<PerformanceRecoveryCandidate>>
+SequenceJournal::list_performance_recoverable(
+    const std::filesystem::path& bundle) const {
+  auto documents = read_checked_recovery_documents(
+      *platform_, bundle, SessionKind::performance);
+  if (!documents.has_value()) {
+    return foundation::Result<
+        std::vector<PerformanceRecoveryCandidate>>::failure(
+        documents.error());
+  }
+  std::vector<PerformanceRecoveryCandidate> result;
+  for (auto& document : documents.value()) {
+    auto journal = parse_performance_snapshot(
+        document.payload.at("journal"), document.path);
+    if (!journal.has_value()) {
+      return foundation::Result<
+          std::vector<PerformanceRecoveryCandidate>>::failure(
+          journal.error());
+    }
+    result.push_back(
+        {std::move(journal.value()),
+         document.payload.at("reason").get<std::string>(),
+         std::move(document.path)});
+  }
+  return foundation::Result<
+      std::vector<PerformanceRecoveryCandidate>>::success(std::move(result));
+}
+
+foundation::Result<void>
+SequenceJournal::remove_active_performance_if_complete(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id) {
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance session does not match",
+    });
+  }
+  if (!journal.pending_events.empty() ||
+      std::ranges::any_of(
+          journal.flushes,
+          [](const auto& flush) { return !flush.completed; })) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance Journal still contains uncommitted events",
+    });
+  }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto fault = testing::detail::invoke_fault(
+      testing::FaultPoint::sequence_journal_deletion,
+      recording_active_path(bundle, SessionKind::performance));
+  if (!fault.has_value()) {
+    return fault;
+  }
+#endif
+  return platform_->remove(
+      recording_active_path(bundle, SessionKind::performance));
 }
 
 }  // namespace lmdj::project_io
