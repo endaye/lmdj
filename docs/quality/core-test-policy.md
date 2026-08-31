@@ -374,7 +374,10 @@ hosts, not a defect. Routing splits two ways:
   `ci-general` literally. The four native Core jobs — Ubuntu Core, Linux ASan,
   Coverage and Core package — name `ci-core` literally. Architecture Portal
   declares its role inside the called `architecture-portal.yml`, because GitHub
-  does not allow a `uses:` job to carry `runs-on`.
+  does not allow a `uses:` job to carry `runs-on`. Outside the formal PR graph,
+  Nightly Release stress also names `ci-core`; an explicit manual TSan
+  compatibility probe may name the same role, but scheduled TSan remains
+  Hosted until that probe supplies accepted same-revision runtime evidence.
 
 `ci-core` deliberately does not span both hosts: the persistent native `ccache`
 and the preinstalled clang-18/llvm-18 coverage toolchain are shared-host state,
@@ -422,9 +425,16 @@ sanitizer failure is final and must not start the fallback lane.
 Local Mac preflight may run additional focused, Proof, or browser checks before
 push, but local results do not replace the commit-bound GitHub required checks.
 
-The nightly Release stress lane is bounded stability sampling: it runs at most
-20 consecutive successful repetitions and stops on the first failure. It does
-not retry a failed execution.
+The nightly Release stress lane is trusted native workload on `ci-core`: it
+runs at most 20 consecutive successful repetitions and stops on the first
+failure. It does not retry a failed execution. Scheduled TSan remains on the
+clean `ubuntu-24.04` authority because a historical Contabo execution built but
+the TSan runtime failed with an unexpected memory mapping. A manual dispatch
+may set `probe_self_hosted_tsan` to run an additional `ci-core` job with the
+same fixture, dependency, configure, build and test commands as Hosted TSan.
+That probe is compatibility evidence only: it does not replace or skip the
+Hosted job, and changing scheduled TSan routing requires separately accepted
+same-revision runner-name and successful-job evidence.
 
 ## Sanitizer Selection
 

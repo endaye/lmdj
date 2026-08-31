@@ -541,7 +541,7 @@ struct ControlBridge::Impl {
         fail_control();
         return;
       }
-      outcome_message = reserve_message();
+      outcome_message = reserve_realtime_message();
       if (outcome_message == nullptr) {
         return;
       }
@@ -609,7 +609,7 @@ struct ControlBridge::Impl {
         outcome_message = nullptr;
       }
 
-      voice_message = reserve_message();
+      voice_message = reserve_realtime_message();
       if (voice_message == nullptr) {
         return;
       }
@@ -674,7 +674,7 @@ struct ControlBridge::Impl {
         voice_message = nullptr;
       }
 
-      boundary_message = reserve_message();
+      boundary_message = reserve_realtime_message();
       if (boundary_message == nullptr) {
         return;
       }
@@ -806,6 +806,23 @@ struct ControlBridge::Impl {
       }
     }
     return nullptr;
+  }
+
+  MessageSlot* reserve_realtime_message() noexcept {
+    const auto free_messages = std::count_if(
+        messages.begin(), messages.end(), [](const auto& message) {
+          return message.state.load(std::memory_order_acquire) ==
+                 MessageState::free;
+        });
+    if (free_messages <= 1) {
+      return nullptr;
+    }
+    // Browser-main can only release slots while the Control FIFO owns this
+    // producer, so the free count cannot shrink before this reservation. Keep
+    // one fixed slot available for the next authoritative control response;
+    // realtime notification pressure must never turn a valid request into a
+    // terminal response-backpressure failure.
+    return reserve_message();
   }
 
   bool publish_message(

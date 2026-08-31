@@ -44,6 +44,7 @@ nlohmann::json normalize_error_for_testing(
 namespace {
 
 using Json = nlohmann::json;
+using lmdj::audio::BankTelemetry;
 using lmdj::audio::CaptureState;
 using lmdj::audio::RealtimeEngine;
 using lmdj::audio::RuntimePreparationLimits;
@@ -678,10 +679,40 @@ struct FakeCoordinator final {
   std::uint32_t acknowledgement_poll_delay_ms = 0;
 };
 
+struct OneShotAudioBackend final {
+  void* context;
+  BankTelemetry (*bank_telemetry)(void* context) noexcept;
+  void (*render)(
+      void* context,
+      float* left,
+      float* right,
+      std::uint32_t frames) noexcept;
+};
+
 class OneShotAudioDriver final {
  public:
   explicit OneShotAudioDriver(RealtimeEngine& engine)
-      : engine_(engine), thread_([this] { run(); }) {}
+      : OneShotAudioDriver(OneShotAudioBackend{
+            &engine,
+            [](void* context) noexcept {
+              return static_cast<RealtimeEngine*>(context)->bank_telemetry();
+            },
+            [](void* context,
+               float* left,
+               float* right,
+               std::uint32_t frames) noexcept {
+              static_cast<RealtimeEngine*>(context)->render(
+                  left, right, frames);
+            },
+        }) {}
+
+  explicit OneShotAudioDriver(OneShotAudioBackend backend)
+      : backend_(backend) {
+    LMDJ_CHECK(backend_.context != nullptr);
+    LMDJ_CHECK(backend_.bank_telemetry != nullptr);
+    LMDJ_CHECK(backend_.render != nullptr);
+    thread_ = std::thread([this] { run(); });
+  }
 
   ~OneShotAudioDriver() {
     stop_requested_.store(true, std::memory_order_release);
@@ -690,7 +721,9 @@ class OneShotAudioDriver final {
       stopped_ = true;
     }
     changed_.notify_all();
-    thread_.join();
+    if (thread_.joinable()) {
+      thread_.join();
+    }
   }
 
   void render_one() { render_frames(128); }
@@ -712,9 +745,17 @@ class OneShotAudioDriver final {
   }
 
   void schedule_bank_transition() {
+    const auto target_generation =
+        backend_.bank_telemetry(backend_.context).accepted_publications + 1;
+    LMDJ_CHECK(target_generation != 0);
     std::lock_guard lock(mutex_);
+    if (bank_transition_target_generation_ != 0) {
+      throw std::runtime_error(
+          "one-shot bank transition already in flight");
+    }
     ++permits_;
     ++bank_transition_permits_;
+    bank_transition_target_generation_ = target_generation;
     changed_.notify_all();
   }
 
@@ -724,6 +765,7 @@ class OneShotAudioDriver final {
     std::array<float, 128> right{};
     while (true) {
       bool wait_for_bank_transition = false;
+      std::uint64_t bank_transition_target_generation = 0;
       std::uint32_t frame_count = 128;
       {
         std::unique_lock lock(mutex_);
@@ -737,36 +779,159 @@ class OneShotAudioDriver final {
         if (bank_transition_permits_ != 0) {
           --bank_transition_permits_;
           wait_for_bank_transition = true;
+          bank_transition_target_generation =
+              bank_transition_target_generation_;
         }
       }
       while (wait_for_bank_transition &&
-             engine_.bank_telemetry().pending_publications == 0 &&
+             backend_.bank_telemetry(backend_.context)
+                     .accepted_publications <
+                 bank_transition_target_generation &&
              !stop_requested_.load(std::memory_order_acquire)) {
         std::this_thread::yield();
       }
       if (stop_requested_.load(std::memory_order_acquire)) {
         return;
       }
-      engine_.render(left.data(), right.data(), frame_count);
+      do {
+        backend_.render(
+            backend_.context, left.data(), right.data(), frame_count);
+        if (!wait_for_bank_transition ||
+            backend_.bank_telemetry(backend_.context)
+                    .applied_publications >=
+                bank_transition_target_generation) {
+          break;
+        }
+        std::this_thread::yield();
+      } while (!stop_requested_.load(std::memory_order_acquire));
+      if (stop_requested_.load(std::memory_order_acquire)) {
+        return;
+      }
       {
         std::lock_guard lock(mutex_);
+        if (wait_for_bank_transition) {
+          bank_transition_target_generation_ = 0;
+        }
         ++completed_;
       }
       changed_.notify_all();
     }
   }
 
-  RealtimeEngine& engine_;
+  OneShotAudioBackend backend_;
   std::mutex mutex_;
   std::condition_variable changed_;
   std::size_t permits_ = 0;
   std::size_t bank_transition_permits_ = 0;
+  std::uint64_t bank_transition_target_generation_ = 0;
   std::size_t completed_ = 0;
   std::uint32_t frame_count_ = 128;
   std::atomic<bool> stop_requested_{false};
   bool stopped_ = false;
   std::thread thread_;
 };
+
+struct DeterministicBankTransitionBackend final {
+  static BankTelemetry bank_telemetry(void* context) noexcept {
+    auto& self = *static_cast<DeterministicBankTransitionBackend*>(context);
+    self.telemetry_reads.fetch_add(1, std::memory_order_release);
+    return BankTelemetry{
+        1,
+        self.pending_publications.load(std::memory_order_acquire),
+        self.accepted_publications.load(std::memory_order_acquire),
+        self.applied_publications.load(std::memory_order_acquire),
+        0,
+        0,
+        0,
+    };
+  }
+
+  static void render(
+      void* context,
+      float*,
+      float*,
+      std::uint32_t) noexcept {
+    auto& self = *static_cast<DeterministicBankTransitionBackend*>(context);
+    const auto render_call =
+        self.render_calls.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (render_call == self.apply_on_render_call) {
+      self.applied_publications.store(
+          self.accepted_publications.load(std::memory_order_acquire),
+          std::memory_order_release);
+    }
+  }
+
+  OneShotAudioBackend backend() noexcept {
+    return OneShotAudioBackend{
+        this,
+        &DeterministicBankTransitionBackend::bank_telemetry,
+        &DeterministicBankTransitionBackend::render,
+    };
+  }
+
+  std::atomic<std::uint64_t> pending_publications{1};
+  std::atomic<std::uint64_t> accepted_publications{1};
+  std::atomic<std::uint64_t> applied_publications{1};
+  std::atomic<std::uint64_t> telemetry_reads{0};
+  std::atomic<std::uint64_t> render_calls{0};
+  std::uint64_t apply_on_render_call = 1;
+};
+
+void test_one_shot_bank_transition_waits_for_accepted_queue_commit() {
+  DeterministicBankTransitionBackend backend;
+  {
+    OneShotAudioDriver audio(backend.backend());
+    audio.schedule_bank_transition();
+    wait_until([&] {
+      return backend.telemetry_reads.load(std::memory_order_acquire) >= 2;
+    });
+    LMDJ_CHECK(backend.render_calls.load(std::memory_order_acquire) == 0);
+
+    backend.accepted_publications.store(2, std::memory_order_release);
+    wait_until([&] {
+      return backend.applied_publications.load(std::memory_order_acquire) == 2;
+    });
+  }
+  LMDJ_CHECK(backend.render_calls.load(std::memory_order_acquire) == 1);
+}
+
+void test_one_shot_bank_transition_renders_until_target_is_applied() {
+  DeterministicBankTransitionBackend backend;
+  backend.apply_on_render_call = 2;
+  {
+    OneShotAudioDriver audio(backend.backend());
+    audio.schedule_bank_transition();
+    wait_until([&] {
+      return backend.telemetry_reads.load(std::memory_order_acquire) >= 2;
+    });
+    backend.accepted_publications.store(2, std::memory_order_release);
+    wait_until([&] {
+      return backend.applied_publications.load(std::memory_order_acquire) == 2;
+    });
+  }
+  LMDJ_CHECK(backend.render_calls.load(std::memory_order_acquire) == 2);
+}
+
+void test_one_shot_bank_transition_rejects_overlap_until_completion() {
+  DeterministicBankTransitionBackend backend;
+  {
+    OneShotAudioDriver audio(backend.backend());
+    audio.schedule_bank_transition();
+    wait_until([&] {
+      return backend.telemetry_reads.load(std::memory_order_acquire) >= 2;
+    });
+
+    bool rejected = false;
+    try {
+      audio.schedule_bank_transition();
+    } catch (const std::runtime_error& error) {
+      rejected = std::string_view(error.what()) ==
+          "one-shot bank transition already in flight";
+    }
+    LMDJ_CHECK(rejected);
+  }
+  LMDJ_CHECK(backend.render_calls.load(std::memory_order_acquire) == 0);
+}
 
 void import_and_assign(
     ControlRuntime& runtime,
@@ -1933,6 +2098,83 @@ void test_sequence_switch_prepares_before_selecting_bar_boundary() {
   LMDJ_CHECK(
       switched.at("effective_runtime_frame") ==
       switched.at("pattern_publication").at("activation_frame"));
+}
+
+void test_sequence_switch_supersedes_a_near_boundary_recording_overlay() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  import_and_assign(*runtime, wav, kAssetId, 1'211, 1'212, 0);
+  check_exact_success(
+      runtime->dispatch(
+          "pattern.create",
+          {{"command_id", uuid(1'213)},
+           {"expected_revision", 2},
+           {"pattern_id", kNextPatternId},
+           {"bars", 1}},
+          {}),
+      {"committed_revision", "pattern_id", "bars", "replayed",
+       "project_revision"});
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_exact_success(
+      runtime->dispatch(
+          "sequence.record.begin",
+          {{"session_id", kSequenceSessionId},
+           {"pattern_id", kPatternId},
+           {"expected_revision", 3}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "transport_anchor"});
+
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+  const auto overlay = runtime->engine().pattern_telemetry();
+  LMDJ_CHECK(overlay.pending_generation != 0);
+  OneShotAudioDriver audio(runtime->engine());
+  struct PublicationGate final {
+    OneShotAudioDriver& audio;
+    RealtimeEngine& engine;
+    std::uint64_t boundary;
+  } gate{audio, runtime->engine(), overlay.pending_activation_frame};
+  lmdj::web_runtime::testing::SequenceSwitchPublicationHook hook{
+      &gate,
+      [](void* context) noexcept {
+        auto& publication = *static_cast<PublicationGate*>(context);
+        while (publication.engine.telemetry().rendered_frames <=
+               publication.boundary) {
+          publication.audio.render_one();
+        }
+      }};
+  lmdj::web_runtime::testing::set_sequence_switch_publication_hook(&hook);
+
+  const auto& switched = check_exact_success(
+      runtime->dispatch(
+          "sequence.record.switch-request",
+          {{"session_id", kSequenceSessionId},
+           {"next_pattern_id", kNextPatternId}},
+          {}),
+      {"state", "session_id", "pattern_id", "pending_pattern_id",
+       "expected_revision", "next_flush_seq", "pending_event_count",
+       "effective_runtime_frame", "committed_revision", "replayed",
+       "project_revision", "pattern_publication"});
+  LMDJ_CHECK(switched.at("state") == "switching");
+  LMDJ_CHECK(switched.at("pending_pattern_id") == kNextPatternId);
+  LMDJ_CHECK(
+      switched.at("effective_runtime_frame") ==
+      switched.at("pattern_publication").at("activation_frame"));
+  LMDJ_CHECK(!runtime->failed());
 }
 
 void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
@@ -3231,9 +3473,6 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
   {
     TempDirectory temp;
     auto runtime = make_runtime(temp.path());
-    FakeRuntimeClock clock;
-    LMDJ_CHECK(
-        ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
     check_success(runtime->dispatch("project.create", create_payload(), {}));
     const auto wav = mono_pcm16_wav(2'400);
     import_and_assign(*runtime, wav, kAssetId, 821, 822, 0);
@@ -3257,8 +3496,12 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
         "trigger", {{"slot", 0}, {"velocity", 100}}, {}));
     check_success(runtime->dispatch(
         "trigger", {{"slot", 0}, {"kind", "release"}}, {}));
+    FakeRuntimeClock clock;
+    LMDJ_CHECK(
+        ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
     const auto& suspended = check_exact_success(
-        runtime->dispatch("audio.suspend", Json::object(), {}),
+        runtime->dispatch(
+            "audio.suspend", Json::object(), {}, clock.current),
         {"state", "changed", "stopped_sequence_id"});
     LMDJ_CHECK((
         suspended ==
@@ -3273,10 +3516,12 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
         lmdj::audio::RealtimeState::stopped);
     success.begin_acknowledgement =
         runtime->engine().bank_telemetry().accepted_publications;
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    check_success(runtime->dispatch(
+        "audio.activate", Json::object(), {}, clock.current));
     LMDJ_CHECK(success.begin_calls == 2);
     const auto& candidates = check_exact_success(
-        runtime->dispatch("sequence.recovery.list", Json::object(), {}),
+        runtime->dispatch(
+            "sequence.recovery.list", Json::object(), {}, clock.current),
         {"candidates", "project_revision"});
     LMDJ_CHECK(candidates.at("candidates").empty());
     LMDJ_CHECK(candidates.at("project_revision").is_null());
@@ -3905,6 +4150,70 @@ void test_bridge_response_backpressure_fails_before_mutation() {
   LMDJ_CHECK(!std::filesystem::exists(
       temp.path() / "projects" /
       (std::string(kProjectId) + ".lmdj")));
+}
+
+void
+test_bridge_reserves_response_capacity_under_realtime_notification_pressure() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(256);
+  import_and_assign(*runtime, wav, kAssetId, 721, 722, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto activate_id = uuid(723);
+  const auto activate = encode(request(
+      activate_id, "audio.activate", Json::object()));
+  LMDJ_CHECK(
+      bridge->submit(activate, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  LMDJ_CHECK(poll_message(*bridge).at("request_id") == activate_id);
+  proxy.pump_one();
+
+  OneShotAudioDriver audio(runtime->engine());
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 127}}, {}));
+  audio.render_one();
+  proxy.pump_one();
+
+  // Each poll frees one notification slot and schedules another realtime
+  // drain. Each drain has both an outcome and a Voice-state batch available,
+  // so without a reserved response slot the notification stream can occupy
+  // every fixed message slot before the next control request is processed.
+  for (std::size_t index = 0; index + 2 < kBridgeMessageSlotCount; ++index) {
+    const auto notification = poll_message(*bridge);
+    LMDJ_CHECK(!notification.contains("request_id"));
+    check_success(runtime->dispatch(
+        "trigger", {{"slot", 0}, {"velocity", 127}}, {}));
+    audio.render_one();
+    proxy.pump_one();
+  }
+
+  const auto status_id = uuid(724);
+  const auto status = encode(request(
+      status_id, "host.status", Json::object()));
+  LMDJ_CHECK(
+      bridge->submit(status, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+
+  bool found_response = false;
+  for (std::size_t index = 0; index < kBridgeMessageSlotCount; ++index) {
+    const auto message = poll_message(*bridge);
+    if (message.value("request_id", "") == status_id) {
+      LMDJ_CHECK(message.at("ok") == true);
+      found_response = true;
+      break;
+    }
+  }
+  LMDJ_CHECK(found_response);
+  LMDJ_CHECK(!bridge->failed());
 }
 
 void test_bridge_exception_reuses_the_reserved_response_slot() {
@@ -4645,6 +4954,9 @@ void test_bridge_preserves_error_responses_for_an_externally_failed_runtime() {
 
 int main() {
   try {
+    test_one_shot_bank_transition_waits_for_accepted_queue_commit();
+    test_one_shot_bank_transition_renders_until_target_is_applied();
+    test_one_shot_bank_transition_rejects_overlap_until_completion();
     test_facade_error_details_follow_an_explicit_safe_schema();
     test_project_bundle_stream_delegates_to_facade_and_lists_summary();
     test_host_close_aborts_active_project_bundle_import();
@@ -4658,6 +4970,7 @@ int main() {
     test_stop_fails_closed_if_target_applies_between_cancel_queries();
     test_bpm_publication_then_switch_flushes_old_events_at_exact_boundary();
     test_sequence_switch_prepares_before_selecting_bar_boundary();
+    test_sequence_switch_supersedes_a_near_boundary_recording_overlay();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
     test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();
@@ -4687,6 +5000,7 @@ int main() {
     test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
     test_bridge_rejects_duplicates_until_response_consumption();
     test_bridge_response_backpressure_fails_before_mutation();
+    test_bridge_reserves_response_capacity_under_realtime_notification_pressure();
     test_bridge_exception_reuses_the_reserved_response_slot();
     test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
     test_bridge_emits_only_real_snapshot_notifications_after_response();

@@ -1668,6 +1668,52 @@ void test_switch_pending_bpm_rejects_before_project_mutation() {
   LMDJ_CHECK(inspected.value().bpm == 120);
 }
 
+void test_missed_switch_boundary_rebases_only_the_same_target() {
+  TempDirectory temp;
+  const auto project = temp.path() / "switch-boundary-rebase.lmdj";
+  const PatternId pattern_id{uuid(110)};
+  const PatternId target_pattern_id{uuid(111)};
+  const SequenceSessionId session_id{uuid(112)};
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+  const auto created = application.command({
+      {"operation", "pattern.create"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(113)},
+      {"expected_revision", 2},
+      {"pattern_id", target_pattern_id.value()},
+      {"bars", 1},
+  });
+  LMDJ_CHECK(created.value("ok", false));
+  LMDJ_CHECK(application.begin_sequence(
+      {project, session_id, pattern_id, 3, 0}).has_value());
+
+  const auto first = application.request_sequence_switch(
+      {project, session_id, target_pattern_id, 1});
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(first.value().status.effective_runtime_frame.has_value());
+  const auto first_boundary =
+      *first.value().status.effective_runtime_frame;
+  const auto early_duplicate = application.request_sequence_switch(
+      {project, session_id, target_pattern_id, first_boundary - 1});
+  LMDJ_CHECK(!early_duplicate.has_value());
+  LMDJ_CHECK(early_duplicate.error().details.at("reason") ==
+             "switch_pending");
+
+  const auto rebased = application.request_sequence_switch(
+      {project, session_id, target_pattern_id, first_boundary});
+  LMDJ_CHECK(rebased.has_value());
+  LMDJ_CHECK(rebased.value().status.pending_pattern_id == target_pattern_id);
+  LMDJ_CHECK(rebased.value().status.effective_runtime_frame.has_value());
+  LMDJ_CHECK(
+      *rebased.value().status.effective_runtime_frame > first_boundary);
+  LMDJ_CHECK(!rebased.value().committed_revision.has_value());
+  LMDJ_CHECK(application.query_sequence_status({project}).value() ==
+             rebased.value().status);
+  lmdj::project_io::ProjectStore store;
+  LMDJ_CHECK(store.load(project).value().revision == 3);
+}
+
 using Scenario = void (*)();
 
 constexpr std::array<Scenario, 7> kLifecycleScenarios{
@@ -1691,13 +1737,14 @@ constexpr std::array<Scenario, 8> kRecoveryScenarios{
     test_orphan_journal_is_sealed_before_authoring,
 };
 
-constexpr std::array<Scenario, 6> kRebaseScenarios{
+constexpr std::array<Scenario, 7> kRebaseScenarios{
     test_settings_rebase_and_pattern_creation_are_authoritative,
     test_armed_capture_commit_rebases_without_losing_pending_events,
     test_cancelled_armed_capture_keeps_sequence_active_and_disarms_commit,
     test_prepublication_capture_marker_can_disarm_and_preserve_pending_events,
     test_pending_overlay_projection_is_owner_scoped_and_replaceable,
     test_switch_pending_bpm_rejects_before_project_mutation,
+    test_missed_switch_boundary_rebases_only_the_same_target,
 };
 
 struct Shard {

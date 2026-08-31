@@ -287,6 +287,7 @@ expected_contract_sources = {
     "contracts/project/lmdj.project.v1.schema.json": "1.0.0",
     "contracts/project/lmdj.project.v2.schema.json": "2.0.0",
     "contracts/project/lmdj.project.v3.schema.json": "3.0.0",
+    "contracts/project/lmdj.project.v4.schema.json": "4.0.0",
     "contracts/project/lmdj.project-bundle.v1.schema.json": "1.1.0",
     "contracts/version/lmdj.product-version.v1.schema.json": "1.0.0",
 }

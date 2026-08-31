@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-08-20
     occurrence: https://github.com/endaye/lmdj/pull/196
     observed_by: unknown
+  - date: 2026-08-30
+    occurrence: https://github.com/endaye/lmdj/pull/445
+    observed_by: codex
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 

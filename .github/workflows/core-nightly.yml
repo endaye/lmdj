@@ -2,6 +2,12 @@ name: Core Nightly
 
 on:
   workflow_dispatch:
+    inputs:
+      probe_self_hosted_tsan:
+        description: Run the matching TSan lane on ci-core for compatibility evidence.
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "0 19 * * *"
 
@@ -14,6 +20,8 @@ concurrency:
 
 jobs:
   core-tsan:
+    # Keep the scheduled authority on a clean Hosted image until an explicit
+    # same-revision probe proves that Contabo can execute the TSan runtime.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -30,8 +38,28 @@ jobs:
       - run: scripts/core.sh build tsan
       - run: scripts/core.sh test tsan stress
 
+  core-tsan-self-hosted-probe:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.probe_self_hosted_tsan }}
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python3 tests/fixtures/audio/make_fixtures.py
+      - run: python3 tests/fixtures/golden/reference_render.py
+      - run: bash scripts/verify-core-dependencies.sh
+      - run: scripts/core.sh configure tsan
+      - run: scripts/core.sh build tsan
+      - run: scripts/core.sh test tsan stress
+
   core-stress:
-    runs-on: ubuntu-24.04
+    # Release stress is trusted native Core workload. The literal role queues
+    # behind other native lanes instead of consuming Hosted Ubuntu minutes.
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6

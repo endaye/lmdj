@@ -82,6 +82,8 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_foundation_json_tests
     lmdj_domain_project_tests
     lmdj_domain_command_handler_tests
+    lmdj_domain_performance_tests
+    lmdj_domain_migration_v4_tests
     lmdj_domain_model_sequence_tests
     lmdj_project_store_tests
     lmdj_project_storage_platform_tests
@@ -115,6 +117,8 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_native_host
     lmdj_core_c
     lmdj_sequence_journal_tests
+    lmdj_performance_journal_tests
+    lmdj_session_mutual_exclusion_tests
     lmdj_project_io_fault_matrix_tests
     lmdj_application_c_api_stress_tests
   )
