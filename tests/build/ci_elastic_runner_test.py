@@ -12,6 +12,7 @@ scheduling.
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -32,12 +33,12 @@ def netcup_config(**overrides):
         "baseline": [
             {"service": f"runner-{i:02d}", "user": f"u{i:02d}", "index": i,
              "roles": ["ci-general", "ci-web-heavy"]}
-            for i in (1, 2, 3)
+            for i in (1, 2, 3, 4)
         ],
         "elastic": [
             {"service": f"runner-{i:02d}", "user": f"u{i:02d}", "index": i,
              "roles": ["ci-general", "ci-web-heavy"]}
-            for i in (4, 5, 6, 7, 8)
+            for i in (5, 6, 7, 8)
         ],
         "operational_ceiling": 8,
         "busy_observations_required": 3,
@@ -63,11 +64,14 @@ def contabo_config():
             {"service": f"runner-{i:02d}", "user": f"u{i:02d}", "index": i,
              "roles": ["ci-general", "ci-core"]}
             for i in (1, 2)
+        ] + [
+            {"service": "runner-03", "user": "u03", "index": 3,
+             "roles": ["ci-general"]}
         ],
         "elastic": [
             {"service": f"runner-{i:02d}", "user": f"u{i:02d}", "index": i,
              "roles": ["ci-general"]}
-            for i in (3, 4, 5, 6)
+            for i in (4, 5, 6)
         ],
         "operational_ceiling": 4,
         "busy_observations_required": 3,
@@ -116,7 +120,38 @@ def fresh_state(config, heartbeat_ok_at=1_000_000.0):
     return state
 
 
-BASELINE = ("runner-01", "runner-02", "runner-03")
+BASELINE = ("runner-01", "runner-02", "runner-03", "runner-04")
+
+
+class CheckedInTopologyTest(unittest.TestCase):
+    def test_checked_in_configs_use_four_and_three_baseline_runners(self):
+        expected = {
+            "netcup": ([1, 2, 3, 4], [5, 6, 7, 8], 8),
+            "contabo": ([1, 2, 3], [4, 5, 6], 4),
+        }
+        for host, (baseline, elastic, ceiling) in expected.items():
+            path = ROOT / "scripts/ci/elastic-runner" / f"{host}.json"
+            raw = json.loads(path.read_text())
+            self.assertEqual([entry["index"] for entry in raw["baseline"]], baseline)
+            self.assertEqual([entry["index"] for entry in raw["elastic"]], elastic)
+            self.assertEqual(raw["operational_ceiling"], ceiling)
+
+
+class DeploymentContractTest(unittest.TestCase):
+    def test_deploy_enables_declared_baselines_after_daemon_reload(self):
+        script = (
+            ROOT / "scripts/ci/elastic-runner/deploy-controller.sh"
+        ).read_text()
+        reconciliation = (
+            'for unit in $baseline_units; do\n'
+            '  systemctl enable --now "$unit"\n'
+            'done'
+        )
+        self.assertIn(reconciliation, script)
+        self.assertLess(
+            script.index("systemctl daemon-reload"),
+            script.index(reconciliation),
+        )
 
 
 def run_busy_ticks(config, state, active, ticks, now=1_000_000.0, core_jobs=None, **host):
@@ -142,7 +177,7 @@ class ScaleOutTest(unittest.TestCase):
         config = netcup_config()
         decision, state = run_busy_ticks(config, fresh_state(config), BASELINE, 3)
         self.assertEqual(decision.action, "scale_out")
-        self.assertEqual(decision.service, "runner-04")
+        self.assertEqual(decision.service, "runner-05")
         self.assertEqual(state.all_busy_streak, 0)
         self.assertEqual(state.last_scale_out_ts, 1_000_002.0)
 
@@ -233,7 +268,7 @@ class CooldownTest(unittest.TestCase):
         state = fresh_state(config)
         decision, state = run_busy_ticks(config, state, BASELINE, 3)
         self.assertEqual(decision.action, "scale_out")
-        active = BASELINE + ("runner-04",)
+        active = BASELINE + ("runner-05",)
         decision, state = run_busy_ticks(
             config, state, active, 3, now=1_000_010.0
         )
@@ -244,12 +279,12 @@ class CooldownTest(unittest.TestCase):
         config = netcup_config()
         state = fresh_state(config)
         _, state = run_busy_ticks(config, state, BASELINE, 3)
-        active = BASELINE + ("runner-04",)
+        active = BASELINE + ("runner-05",)
         decision, _ = run_busy_ticks(
             config, state, active, 3, now=1_000_002.0 + 301
         )
         self.assertEqual(decision.action, "scale_out")
-        self.assertEqual(decision.service, "runner-05")
+        self.assertEqual(decision.service, "runner-06")
 
 
 class CeilingTest(unittest.TestCase):
@@ -264,13 +299,10 @@ class CeilingTest(unittest.TestCase):
         """Ceiling 4 on contabo: 05 and 06 can never be capacity targets."""
         config = contabo_config()
         state = fresh_state(config)
-        for step, expected in ((0, "runner-03"), (400, "runner-04")):
-            active = ("runner-01", "runner-02") + (("runner-03",) if step else ())
-            decision, state = run_busy_ticks(
-                config, state, active, 3, now=1_000_000.0 + step
-            )
-            self.assertEqual(decision.action, "scale_out")
-            self.assertEqual(decision.service, expected)
+        active = ("runner-01", "runner-02", "runner-03")
+        decision, state = run_busy_ticks(config, state, active, 3)
+        self.assertEqual(decision.action, "scale_out")
+        self.assertEqual(decision.service, "runner-04")
         active = ("runner-01", "runner-02", "runner-03", "runner-04")
         decision, _ = run_busy_ticks(config, state, active, 3, now=1_002_000.0)
         self.assertEqual(decision.action, "none")
@@ -284,13 +316,13 @@ class ScaleInTest(unittest.TestCase):
     def test_sustained_idle_stops_highest_numbered_elastic(self):
         config = netcup_config()
         state = fresh_state(config)
-        active = BASELINE + ("runner-04", "runner-05")
+        active = BASELINE + ("runner-05", "runner-06")
         decision = None
         for i in range(5):
             obs = observation(config, active=active, busy=BASELINE, now=1_000_000.0 + i)
             decision, state = er.decide(config, obs, state)
         self.assertEqual(decision.action, "scale_in")
-        self.assertEqual(decision.service, "runner-05")
+        self.assertEqual(decision.service, "runner-06")
 
     def test_baseline_is_never_a_scale_in_target(self):
         config = netcup_config()
@@ -306,10 +338,10 @@ class BusyWorkerProtectionTest(unittest.TestCase):
     def test_a_service_with_a_worker_is_never_stopped(self):
         config = netcup_config()
         state = fresh_state(config)
-        active = BASELINE + ("runner-04",)
+        active = BASELINE + ("runner-05",)
         for i in range(20):
             obs = observation(
-                config, active=active, busy=("runner-04",), now=1_000_000.0 + i
+                config, active=active, busy=("runner-05",), now=1_000_000.0 + i
             )
             decision, state = er.decide(config, obs, state)
             self.assertNotEqual(decision.action, "scale_in")
@@ -387,7 +419,7 @@ class RebootBaselineTest(unittest.TestCase):
 class CiCoreSuppressionTest(unittest.TestCase):
     def test_running_core_job_suppresses_scale_out(self):
         config = contabo_config()
-        active = ("runner-01", "runner-02")
+        active = ("runner-01", "runner-02", "runner-03")
         decision, _ = run_busy_ticks(
             config, fresh_state(config), active, 3,
             core_jobs={"runner-01": True, "runner-02": False},
@@ -398,7 +430,7 @@ class CiCoreSuppressionTest(unittest.TestCase):
     def test_unclassifiable_job_on_a_core_service_suppresses(self):
         """Unknown is treated as core: the observer fails closed."""
         config = contabo_config()
-        active = ("runner-01", "runner-02")
+        active = ("runner-01", "runner-02", "runner-03")
         decision, _ = run_busy_ticks(
             config, fresh_state(config), active, 3,
             core_jobs={"runner-01": None, "runner-02": False},
@@ -410,10 +442,10 @@ class CiCoreSuppressionTest(unittest.TestCase):
         """Contabo baselines carry both roles; busy with general jobs they
         must still admit elastic capacity, or elastic would be dead code."""
         config = contabo_config()
-        active = ("runner-01", "runner-02")
+        active = ("runner-01", "runner-02", "runner-03")
         decision, _ = run_busy_ticks(config, fresh_state(config), active, 3)
         self.assertEqual(decision.action, "scale_out")
-        self.assertEqual(decision.service, "runner-03")
+        self.assertEqual(decision.service, "runner-04")
 
     def test_core_host_without_job_classifier_is_a_config_error(self):
         with self.assertRaises(er.ConfigError):
@@ -454,7 +486,7 @@ class HeartbeatTest(unittest.TestCase):
         obs = observation(config, active=BASELINE, busy=())
         decision, _ = er.decide(config, obs, er.ControllerState())
         self.assertEqual(decision.action, "heartbeat")
-        self.assertEqual(decision.service, "runner-04")
+        self.assertEqual(decision.service, "runner-05")
 
     def test_heartbeat_fires_inside_the_14_day_window(self):
         config = netcup_config()
@@ -477,25 +509,25 @@ class HeartbeatTest(unittest.TestCase):
 
     def test_registration_loss_is_reported_and_never_retried(self):
         config = netcup_config()
-        ok, message = er.heartbeat_outcome(False, "runner-04")
+        ok, message = er.heartbeat_outcome(False, "runner-05")
         self.assertFalse(ok)
         self.assertIn(er.REGISTRATION_LOSS_TAG, message)
         self.assertIn("why=", message)
         self.assertIn("remedy=", message)
         state = fresh_state(config, heartbeat_ok_at=0.0)
-        state.registration_loss["runner-04"] = message
+        state.registration_loss["runner-05"] = message
         obs = observation(config, active=BASELINE, busy=(), now=30 * 86400.0)
         decision, _ = er.decide(config, obs, state)
         self.assertEqual(decision.action, "heartbeat")
-        self.assertNotEqual(decision.service, "runner-04")
+        self.assertNotEqual(decision.service, "runner-05")
 
     def test_activation_clears_a_registration_loss(self):
         config = netcup_config()
         state = fresh_state(config)
-        state.registration_loss["runner-04"] = "lost"
-        obs = observation(config, active=BASELINE + ("runner-04",), busy=())
+        state.registration_loss["runner-05"] = "lost"
+        obs = observation(config, active=BASELINE + ("runner-05",), busy=())
         _, new_state = er.decide(config, obs, state)
-        self.assertNotIn("runner-04", new_state.registration_loss)
+        self.assertNotIn("runner-05", new_state.registration_loss)
 
     def test_interval_at_or_beyond_14_days_is_a_config_error(self):
         with self.assertRaises(er.ConfigError):

@@ -334,11 +334,12 @@ carrying that role; additional selected jobs queue behind them. Capacity is no
 longer a fixed count: each host runs a baseline of always-on services plus
 pre-registered elastic services that are stopped by default, and a host-local,
 systemd-timer-driven controller (`scripts/ci/elastic_runner.py`, issue #327)
-decides expansion. Netcup runs three baseline services with an elastic ceiling
-of eight; Contabo runs two baseline services with four elastic services
-registered and an operational ceiling of four — runners 05-06 exist as GitHub
-identities but stay outside controller consideration until real queueing
-evidence from operation at four justifies the approved ceiling of six.
+decides expansion. Netcup runs four baseline services with four elastic
+services and an operational ceiling of eight; Contabo runs three baseline
+services with three elastic services registered and an operational ceiling of
+four — runners 05-06 exist as GitHub identities but stay outside controller
+consideration until real queueing evidence from operation at four justifies
+the approved ceiling of six.
 
 The controller holds no GitHub PAT and observes only host-local state. It
 scales out one service at a time, only when every active service has been busy

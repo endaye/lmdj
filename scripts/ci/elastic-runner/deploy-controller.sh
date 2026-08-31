@@ -38,6 +38,9 @@ for unit in $baseline_units; do
 done
 
 systemctl daemon-reload
+for unit in $baseline_units; do
+  systemctl enable --now "$unit"
+done
 systemctl enable --now lmdj-elastic-runner.timer
 
 # One dry run proves the controller can observe and decide on this host.
