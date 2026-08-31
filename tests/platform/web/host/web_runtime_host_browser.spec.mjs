@@ -28,6 +28,7 @@ const deadlineFixtureSha256 = createHash("sha256")
 const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
 const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
+const ACKNOWLEDGED_GENERATION_TIMEOUT_MS = 10_000;
 const TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS = 15_000;
 const DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS = 300_000;
 const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = 90_000;
@@ -642,6 +643,32 @@ async function waitForRecoveryReadiness(page, responseMarker) {
       diagnostics.control_generation > 0 &&
       diagnostics.control_generation === diagnostics.acknowledged_generation;
   })).toBe(true);
+}
+
+
+async function waitForAcknowledgedGeneration(page, expectedGeneration) {
+  let lastStatus = null;
+  try {
+    await expect.poll(async () => {
+      const response = await hostRequest(page, "host.status", {});
+      lastStatus = response.ok === true ? response.result : null;
+      return lastStatus != null &&
+        lastStatus.control_generation === expectedGeneration &&
+        lastStatus.acknowledged_generation === expectedGeneration;
+    }, { timeout: ACKNOWLEDGED_GENERATION_TIMEOUT_MS }).toBe(true);
+  } catch (error) {
+    if (!(error instanceof Error) || !/timeout/i.test(error.message)) {
+      throw error;
+    }
+    throw new Error(
+      `Snapshot generation ${expectedGeneration} was never acknowledged ` +
+        `within ${ACKNOWLEDGED_GENERATION_TIMEOUT_MS}ms; last observed ` +
+        `control_generation=${lastStatus?.control_generation ?? "n/a"} ` +
+        `acknowledged_generation=${lastStatus?.acknowledged_generation ?? "n/a"}`,
+      { cause: error },
+    );
+  }
+  return lastStatus;
 }
 
 
@@ -1495,16 +1522,12 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   expect(accepted44100Snapshot.generation).toBeGreaterThan(
     priorStatus.control_generation,
   );
-  const accepted44100Status = success(await hostRequest(page, "host.status", {}),
-    "status after accepted 44.1 kHz Snapshot");
   expect(await page.evaluate((start) =>
     window.__lmdjTask11.notifications.slice(start)
       .filter(({ event }) => event === "snapshot.rejected"),
   accepted44100Marker.notifications)).toEqual([]);
-  expect(accepted44100Status.control_generation).toBe(
-    accepted44100Snapshot.generation,
-  );
-  expect(accepted44100Status.acknowledged_generation).toBe(
+  await waitForAcknowledgedGeneration(
+    page,
     accepted44100Snapshot.generation,
   );
   expect(success(await hostRequest(page, "project.inspect", {}),
