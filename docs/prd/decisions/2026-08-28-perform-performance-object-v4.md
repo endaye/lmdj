@@ -1,6 +1,10 @@
 # 已确认：Performance 是 lmdj.project.v4 的命名事件流对象，复用 Stage 9 会话机制且与 Sequence 录制互斥；Replay 按当前 Project 回放、不做指纹门控
 
 - 日期：2026-08-28
+- 2026-08-31 修订：Pattern 槽 authority、耐久 draft、stop/save/discard、恢复、
+  两阶段 rebase 与精确 Facade shape 由
+  [`2026-08-31-stage10-performance-contract-repair.md`](2026-08-31-stage10-performance-contract-repair.md)
+  补充；冲突处以后者为准。
 - 解决的问题：`docs/prd/questions/perform-performance-object-persistence.md`
   （问题文件已按约定在本决策的同一个 Task 删除），GitHub Issue
   [#384](https://github.com/endaye/lmdj/issues/384)。
