@@ -27,6 +27,50 @@ class ProjectStoragePlatform;
 
 namespace lmdj::facade {
 
+class PerformanceClock {
+public:
+  virtual ~PerformanceClock() = default;
+  virtual foundation::Result<std::uint64_t> read_tick() = 0;
+};
+
+class PerformanceInputSequencer {
+public:
+  virtual ~PerformanceInputSequencer() = default;
+  virtual foundation::Result<std::uint64_t> next() = 0;
+};
+
+struct PatternLaunchReservation {
+  std::uint64_t target_tick{};
+  bool claimed{};
+};
+
+enum class PatternLaunchOutcomeKind : std::uint8_t {
+  applied,
+  cancelled,
+  failed,
+};
+
+struct PatternLaunchOutcome {
+  foundation::SequenceSessionId session_id;
+  foundation::CommandId request_id;
+  std::uint8_t pattern_slot{};
+  std::uint64_t effective_tick{};
+  PatternLaunchOutcomeKind kind{PatternLaunchOutcomeKind::failed};
+};
+
+class PatternLaunchAcknowledger {
+public:
+  virtual ~PatternLaunchAcknowledger() = default;
+  virtual foundation::Result<PatternLaunchReservation>
+  reserve(const foundation::SequenceSessionId &session_id,
+          const foundation::CommandId &request_id, std::uint8_t pattern_slot,
+          std::uint64_t earliest_target_tick) = 0;
+  virtual std::vector<PatternLaunchOutcome>
+  drain(const foundation::SequenceSessionId &session_id) = 0;
+  virtual void
+  cancel(const foundation::SequenceSessionId &session_id) noexcept = 0;
+};
+
 struct ApplicationConfig {
   std::filesystem::path workspace_root;
   std::shared_ptr<provider::Registry> providers;
@@ -35,6 +79,11 @@ struct ApplicationConfig {
   std::optional<audio::RuntimePreparationLimits> runtime_preparation_limits =
       std::nullopt;
   std::shared_ptr<project_io::ProjectStoragePlatform> storage_platform =
+      nullptr;
+  std::shared_ptr<PerformanceClock> performance_clock = nullptr;
+  std::shared_ptr<PerformanceInputSequencer> performance_input_sequencer =
+      nullptr;
+  std::shared_ptr<PatternLaunchAcknowledger> pattern_launch_acknowledger =
       nullptr;
 };
 

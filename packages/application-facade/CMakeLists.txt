@@ -148,6 +148,55 @@ if(BUILD_TESTING)
     COMMAND lmdj_facade_sequence_surface_tests --shard=rebase
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
+
+  add_executable(
+    lmdj_facade_performance_operation_contract_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/performance_operation_contract_test.cpp"
+  )
+  target_include_directories(
+    lmdj_facade_performance_operation_contract_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_facade_performance_operation_contract_tests
+    PRIVATE
+      lmdj::application
+  )
+  lmdj_target_warnings(lmdj_facade_performance_operation_contract_tests)
+  lmdj_target_sanitizers(lmdj_facade_performance_operation_contract_tests)
+  lmdj_add_test(
+    NAME facade.performance_operation_contract
+    TIER component
+    COMMAND lmdj_facade_performance_operation_contract_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+
+  foreach(performance_suite IN ITEMS session gesture_admission rebase_matrix)
+    add_executable(
+      lmdj_facade_performance_${performance_suite}_tests
+      "${CMAKE_SOURCE_DIR}/tests/core/facade/performance_${performance_suite}_test.cpp"
+    )
+    target_include_directories(
+      lmdj_facade_performance_${performance_suite}_tests
+      PRIVATE
+        "${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(
+      lmdj_facade_performance_${performance_suite}_tests
+      PRIVATE
+        lmdj::application
+    )
+    lmdj_target_warnings(lmdj_facade_performance_${performance_suite}_tests)
+    lmdj_target_sanitizers(lmdj_facade_performance_${performance_suite}_tests)
+    lmdj_add_test(
+      NAME facade.performance_${performance_suite}
+      TIER component
+      COMMAND lmdj_facade_performance_${performance_suite}_tests
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
+  endforeach()
+
   add_executable(
     lmdj_facade_sample_surface_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/sample_surface_test.cpp"
