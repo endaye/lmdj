@@ -89,6 +89,8 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_project_storage_platform_tests
     lmdj_project_bundle_transfer_tests
     lmdj_project_cooker_sample_analysis_tests
+    lmdj_project_cooker_performance_replay_tests
+    lmdj_project_cooker_wav_selection_tests
     lmdj_project_cooker_tests
     lmdj_project_cooker_determinism_matrix_tests
     lmdj_audio_runtime_tests
@@ -109,6 +111,8 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_application_facade_failure_tests
     lmdj_facade_sequence_surface_tests
     lmdj_facade_performance_operation_contract_tests
+    lmdj_facade_performance_replay_tests
+    lmdj_facade_resample_performance_tests
     lmdj_facade_performance_session_tests
     lmdj_facade_performance_gesture_admission_tests
     lmdj_facade_performance_rebase_matrix_tests

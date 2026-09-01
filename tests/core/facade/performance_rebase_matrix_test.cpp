@@ -43,7 +43,16 @@ void check_ok(const nlohmann::json &response) {
 void test_active_performance_settings_use_durable_rebase() {
   TempDirectory temp;
   lmdj::facade::Application application(
-      {temp.path(), nullptr, {}, {}, std::nullopt, nullptr});
+      {temp.path(),
+       nullptr,
+       {},
+       {},
+       std::nullopt,
+       nullptr,
+       nullptr,
+       nullptr,
+       nullptr,
+       lmdj::facade::make_unavailable_performance_replay_controller()});
   const auto bundle = temp.path() / "project.lmdj";
   check_ok(application.command({{"operation", "project.create"},
                                 {"project_path", bundle.generic_string()},
