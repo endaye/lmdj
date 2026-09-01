@@ -27,7 +27,7 @@ from merge_queue import (
     ValidationResult,
 )
 from change_scope import (
-    MERGE_EVIDENCE_MODES, load_policy, reject_duplicates, validate_manifest,
+    is_merge_evidence_mode, load_policy, reject_duplicates, validate_manifest,
 )
 
 
@@ -183,7 +183,7 @@ def parse_queue_validation_json(value: object) -> dict[str, object]:
         _sha(document[name], name)
     if (
         document["manifest_mode"] is not None
-        and document["manifest_mode"] not in MERGE_EVIDENCE_MODES
+        and not is_merge_evidence_mode(document["manifest_mode"])
     ):
         raise ValueError("queue manifest mode is not merge evidence")
     if not isinstance(document["trusted_head"], bool):
@@ -235,7 +235,7 @@ def parse_scope_manifest_zip(
     if document.get("head_sha") != expected_head_sha:
         raise ValueError("scope manifest head does not match workflow run")
     if (
-        document.get("mode") not in MERGE_EVIDENCE_MODES
+        not is_merge_evidence_mode(document.get("mode"))
         or document.get("trusted_head") is not True
     ):
         raise ValueError("synchronized validation requires trusted classified scope")
