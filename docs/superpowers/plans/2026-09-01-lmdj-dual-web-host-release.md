@@ -632,7 +632,7 @@ Run:
 
 ```bash
 scripts/architecture-portal.sh check
-node --test apps/architecture-portal/test/release-docs.test.mjs
+node --test apps/architecture-portal/test/version-docs.test.mjs
 ```
 
 Expected: PASS with snapshot Product Build, Assembly lock, and source projection matching the current branch.
