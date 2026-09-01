@@ -27,11 +27,18 @@ from needle_spike.tool_surface import (  # noqa: E402
 for name in PERFORMANCE_SURFACE:
     assert name in SERVER.TOOLS_BY_NAME, f"performance surface names unknown tool: {name}"
 
-for tool in SERVER.TOOLS:
-    assert tool.name in MODEL_TOOL_NAMES, f"no verb alias for {tool.name}"
+# Only the surface the spike actually drives must be fully aliased. Requiring
+# an alias for all 30 MCP tools would make every new Core tool break this
+# spike, and a parallel validation must not become a tax on product work -
+# `model_name` degrades to the wire name for anything unaliased.
+for name in PERFORMANCE_SURFACE:
+    assert name in MODEL_TOOL_NAMES, f"no verb alias for {name}"
 
 aliases = list(MODEL_TOOL_NAMES.values())
 assert len(aliases) == len(set(aliases)), "verb aliases must be unique"
+assert set(MODEL_TOOL_NAMES).issubset(
+    set(SERVER.TOOLS_BY_NAME)
+), "alias map names a tool the MCP table does not have"
 
 performance = build_tools("performance")
 full = build_tools("full")
@@ -54,7 +61,9 @@ for tool in full:
 
     assert tool.production_schema is SERVER.TOOLS_BY_NAME[tool.name].input_schema
     assert tool.model_name("mcp") == tool.name
-    assert tool.needle_tool("verb")["name"] == MODEL_TOOL_NAMES[tool.name]
+    # Unaliased tools fall back to the wire name rather than raising.
+    expected_alias = MODEL_TOOL_NAMES.get(tool.name, tool.name)
+    assert tool.needle_tool("verb")["name"] == expected_alias
 
 # Deep-copied, so projecting the surface cannot mutate the MCP table in place.
 assert build_tools("full")[0].production_schema == SERVER.TOOLS[0].input_schema
