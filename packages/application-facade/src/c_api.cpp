@@ -258,6 +258,12 @@ int lmdj_engine_create(
             std::move(providers),
             std::move(provider_policy),
             {},
+            std::nullopt,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            lmdj::facade::make_unavailable_performance_replay_controller(),
         });
     auto state = std::make_shared<EngineState>(std::move(application));
     auto shell = std::make_unique<lmdj_engine>();

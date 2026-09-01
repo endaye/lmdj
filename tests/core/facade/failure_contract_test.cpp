@@ -140,6 +140,12 @@ ApplicationConfig config(
       [] {
         return std::string("2026-07-31T00:00:00.000Z");
       },
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
   };
 }
 

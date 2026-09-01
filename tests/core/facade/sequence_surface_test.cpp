@@ -106,6 +106,10 @@ ApplicationConfig config(const std::filesystem::path& root) {
       lmdj::audio::RuntimePreparationLimits{
           1'048'576, 240'000, 67'108'864, 134'217'728},
       nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
   };
 }
 

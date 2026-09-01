@@ -2610,6 +2610,11 @@ int main() {
           ProviderPolicy{},
           {},
           limits,
+          nullptr,
+          nullptr,
+          nullptr,
+          nullptr,
+          lmdj::facade::make_unavailable_performance_replay_controller(),
       }),
       limits);
   if (!created.has_value()) {

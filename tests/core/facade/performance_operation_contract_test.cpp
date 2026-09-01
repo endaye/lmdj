@@ -36,7 +36,18 @@ private:
 };
 
 ApplicationConfig config(const std::filesystem::path &root) {
-  return ApplicationConfig{root, nullptr, {}, {}, std::nullopt, nullptr};
+  return ApplicationConfig{
+      root,
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+  };
 }
 
 void require_registered(Application &application, std::string_view operation,
@@ -67,6 +78,9 @@ void test_locked_task4_operations_are_registered_with_exact_kinds() {
            "performance.record.launch-request",
            "performance.record.flush",
            "performance.record.stop",
+           "performance.replay.begin",
+           "performance.replay.stop",
+           "performance.resample.commit",
            "performance.save",
            "performance.discard",
            "performance.recovery.apply",
@@ -82,6 +96,7 @@ void test_locked_task4_operations_are_registered_with_exact_kinds() {
            "performance.list",
            "performance.inspect",
            "performance.record.status",
+           "performance.replay.status",
            "performance.recovery.list",
        }) {
     require_registered(application, operation, false);
@@ -98,6 +113,23 @@ void test_locked_task4_operations_are_registered_with_exact_kinds() {
   }) {
     LMDJ_CHECK(!response.at("ok").get<bool>());
   }
+
+  const auto malformed_replay = application.command(
+      {{"operation", "performance.replay.begin"},
+       {"project_path", missing},
+       {"replay_id", "not-a-uuid"},
+       {"performance_id", "00000000-0000-4000-8000-000000000001"}});
+  LMDJ_CHECK(!malformed_replay.at("ok").get<bool>());
+  LMDJ_CHECK(malformed_replay.at("error").at("code") == "INVALID_ARGUMENT");
+
+  const auto extra_key = application.query(
+      {{"operation", "performance.replay.status"},
+       {"project_path", missing},
+       {"replay_id", "00000000-0000-4000-8000-000000000001"},
+       {"extra", true}});
+  LMDJ_CHECK(!extra_key.at("ok").get<bool>());
+  LMDJ_CHECK(extra_key.at("error").at("message") ==
+             "performance.replay.status request shape is invalid");
 }
 
 } // namespace

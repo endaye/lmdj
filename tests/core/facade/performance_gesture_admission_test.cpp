@@ -112,8 +112,18 @@ void check_ok(const nlohmann::json &response) {
 void test_raw_gesture_admission_and_launch_ack() {
   TempDirectory temp;
   auto acknowledger = std::make_shared<LaunchAcknowledger>();
-  lmdj::facade::ApplicationConfig config{temp.path(), nullptr,      {},
-                                         {},          std::nullopt, nullptr};
+  lmdj::facade::ApplicationConfig config{
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+  };
   config.performance_clock = std::make_shared<Clock>();
   config.performance_input_sequencer = std::make_shared<Sequencer>();
   config.pattern_launch_acknowledger = acknowledger;
