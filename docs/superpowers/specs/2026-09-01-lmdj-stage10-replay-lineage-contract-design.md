@@ -178,8 +178,19 @@ Task 5 提供可测试的 reference controller 和注入边界；后续 Host/Run
 
 ### RLC-D8：Replay lifecycle、并发与幂等
 
-一个 Project bundle 同时最多一个 `playing` replay。不同 `replay_id` 在已有
-playing replay 时 begin 返回 `INVALID_ARGUMENT`；同 replay ID、同
+一个 Application Facade 实例同时最多一个 `playing` replay。Replay 是只读
+Runtime action、不取 writer lease，Core 没有跨进程共享状态可实施 per-bundle
+排他，因此排他边界是 Facade 实例而不是 Project bundle；跨进程并发 replay 不在
+本 Contract 承诺范围，测试只须证明实例内排他。
+
+已有 playing replay 时，不同 `replay_id` 的 begin 返回 `INVALID_ARGUMENT`，
+`details` 锁定为 exact shape：
+
+```json
+{ "active_replay_id": "<lowercase canonical uuid>" }
+```
+
+使 Host 能把「replay 占用中」与请求畸形区分开。同 replay ID、同
 `project_path + performance_id` 是 retry 并返回当前 status；同 ID、不同 payload
 是 collision。
 
@@ -204,10 +215,22 @@ replay ID 复用。
 
 自然结束、显式 stop 和 Runtime apply failure 都必须无条件把八个 FX 与全局 HOLD
 恢复 neutral。Controller 只有在 Runtime 确认 reset 完成后才能发布
-`complete`/`stopped` terminal status。Reset 失败时外部 `state` 保持 `playing`，
-cursor 不再推进，controller 保留该 replay 的独占执行权，并对重复 `status`/`stop`
-返回同一稳定 Runtime 错误，直到后续 reset 重试成功后才发布原本目标的 terminal
-状态；不得谎报 terminal，也不得由 Host 补 reset。
+`complete`/`stopped` terminal status；不得谎报 terminal，也不得由 Host 补
+reset。
+
+Reset 失败时的协议精确固定为：
+
+- 第一个触发 reset 的结束路径决定目标 terminal 状态（natural end →
+  `complete`，显式 stop → `stopped`），此后不再改变；
+- replay 进入 reset-pending：cursor 冻结、不再应用事件，controller 保留该
+  replay 的独占执行权；
+- `status` 保持只读、不触发 reset 重试，且仍返回锁定的固定字段——`state` 为
+  `playing`，`event_cursor` 为冻结值——不新增 error 字段（P10-D25 固定返回）；
+- 每个 `performance.replay.stop` 请求（含同 `request_id` 重试）触发一次 reset
+  重试；重试失败时该 stop 返回同一稳定 Runtime 错误，不产生 terminal
+  acknowledgement，也不消费该 `request_id` 的幂等身份；
+- 重试成功后 controller 发布既定目标 terminal 状态，本次 stop 返回该 terminal
+  status，其后 status/stop 按 RLC-D8 的幂等规则。
 
 Imported/recovered event stream 即使以开放 FX 或 HOLD 结束，也执行同一 reset。
 Reset 不写 Project、不写 Performance event、不消费 revision。
@@ -220,8 +243,9 @@ Reset 不写 Project、不写 Performance event、不消费 revision。
 - Bank quota：沿用 `BANK_QUOTA_EXHAUSTED` 及既有 detail shape；
 - generation quota：沿用既有 Project/generation quota error；
 - Project revision mismatch：沿用 `REVISION_CONFLICT`；
-- replay Runtime apply/reset failure：保留可观察 controller ownership，不改
-  Project；重复 status/stop 必须得到同一可解释状态或相同错误；
+- replay Runtime apply/reset failure：按 RLC-D9 的 reset-pending 协议——
+  `status` 仍返回固定字段（`state: playing`、cursor 冻结），`stop` 触发 reset
+  重试并在失败时返回同一稳定 Runtime 错误，不改 Project；
 - 任一失败不得留下新 Asset、orphan Artifact、Lineage-only record、被覆盖 Pad、
   新 revision 或假的 replay cursor。
 
@@ -283,7 +307,8 @@ Portal routes 与 source diagrams，Task 11 负责 immutable snapshot。
    与 Asset/Pad/revision 同原子边界；
 3. replay begin 固定 revision，status 只读，controller 独占 progression；
 4. active replay 对中途 Project 变更稳定，新 replay 解析新 current truth；
-5. natural end、stop、apply failure 都有 neutral-reset acknowledgement witness；
+5. natural end、stop、apply failure 都有 neutral-reset acknowledgement witness，
+   且 reset 失败路径证明 `status` 固定字段冻结与 `stop` 重试协议；
 6. resample invalid range、Artifact mismatch、cancel-before-commit、quota failure、
    command collision 均证明 far side 零变化；
 7. full Core、coverage 与 Architecture Portal checks 通过且不降低 floor。
