@@ -213,6 +213,15 @@ class LaneCommandDriftTest(unittest.TestCase):
             "tests/build/release_publish_workflow_test.py", workflow_tests
         )
 
+    def test_deploy_contract_job_runs_both_public_deployment_docs_suites(self) -> None:
+        workflow_tests = python_test_files(workflow_job("deploy-contract"))
+        self.assertIn(
+            "tests/build/web_runtime_public_deployment_docs_test.py", workflow_tests
+        )
+        self.assertIn(
+            "tests/build/creator_web_public_deployment_docs_test.py", workflow_tests
+        )
+
     def test_deploy_contract_local_commands_cover_the_workflow_job(self) -> None:
         workflow_tests = python_test_files(workflow_job("deploy-contract"))
         self.assertTrue(workflow_tests, "deploy-contract runs no Python test file")

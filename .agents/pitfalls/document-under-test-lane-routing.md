@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-08-29
     occurrence: https://github.com/endaye/lmdj/pull/421
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-01
+    occurrence: https://github.com/endaye/lmdj/pull/520
+    observed_by: Codex
 exit: gate:tests/build/ci_change_scope_test.py
 ---
 

@@ -265,6 +265,7 @@ jobs:
       - run: python3 tests/build/web_runtime_deploy_workflow_test.py
       - run: python3 tests/build/creator_web_deploy_workflow_test.py
       - run: python3 tests/build/web_runtime_public_deployment_docs_test.py
+      - run: python3 tests/build/creator_web_public_deployment_docs_test.py
       # The suite is hermetic per test, so it shards across the runner's cores
       # instead of spending its serial wall clock on process spawns. The runner
       # runs its two timing-sensitive signal tests alone after the shards and
