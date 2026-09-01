@@ -695,6 +695,23 @@ def encode_manifest(manifest: Mapping[str, object]) -> str:
 
 
 def read_git_inventory(repository: str | Path, base_sha: str, head_sha: str) -> tuple[ChangedFile, ...]:
+    """Read the change's own inventory, measured from the merge base.
+
+    A Pull Request's `base_sha` is the base branch tip at event time, not the
+    merge base, so a two-dot `base_sha head_sha` range would additionally report,
+    in reverse, everything that landed on the base branch after the branch was
+    cut. The three-dot range is `merge-base(base, head)..head`, which is this
+    change's own contribution and the same set GitHub's own
+    `/pulls/{number}/files` reports -- the set `merge_queue.py` already reads for
+    its control-plane check, and the range `scripts/ci/local_preflight.py`
+    already measures locally. Issue #531 fixed the same defect in the
+    Architecture Portal gate, where it failed a truthful declaration instead of
+    merely over-selecting lanes.
+
+    A push range is unaffected: `resolve_push_inventory` admits a base only after
+    proving it is an ancestor of the head, and the merge base of an ancestor is
+    that ancestor.
+    """
     base_sha, head_sha = _validate_sha(base_sha), _validate_sha(head_sha)
     for sha in (base_sha, head_sha):
         result = subprocess.run(
@@ -704,8 +721,8 @@ def read_git_inventory(repository: str | Path, base_sha: str, head_sha: str) -> 
         if result.returncode != 0:
             raise RuntimeError(f"Git commit object unavailable: {sha}")
     result = subprocess.run(
-        ["git", "diff", "--name-status", "-z", base_sha, head_sha], cwd=repository,
-        capture_output=True,
+        ["git", "diff", "--name-status", "-z", f"{base_sha}...{head_sha}"],
+        cwd=repository, capture_output=True,
     )
     if result.returncode != 0:
         raise RuntimeError("git diff --name-status failed")

@@ -263,6 +263,21 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertNotIn("github.event.pull_request.base.sha", step)
         self.assertNotIn("github.event.pull_request.head.sha", step)
 
+    def test_docs_static_checks_whitespace_over_the_merge_base_range(self) -> None:
+        """The whitespace check measures the change's own contribution.
+
+        `resolved-base-sha` is the base branch tip at event time, so a two-dot
+        range reports, in reverse, everything that landed on the base branch
+        after the branch was cut. A line carrying trailing whitespace that the
+        base branch *deleted* after the cut would then read as added here, and
+        `--check` would fail a branch that never wrote it. Issue #539 tracks
+        this range and `read_git_inventory` together;
+        `tests/build/ci_change_scope_test.py` owns the git behaviour.
+        """
+        job = self.workflow_job("docs-static")
+        self.assertIn('run: git diff --check "$BASE_SHA...$HEAD_SHA"', job)
+        self.assertNotIn('git diff --check "$BASE_SHA" "$HEAD_SHA"', job)
+
     def test_portal_never_measures_a_two_dot_range_between_the_inputs(self) -> None:
         """The range belongs to the checkers, which measure it from the merge base.
 
