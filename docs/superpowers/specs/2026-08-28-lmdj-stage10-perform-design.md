@@ -10,9 +10,14 @@
 定为引用槽位 index；重设计规格 §7 勘误同 Task 落笔。2026-08-31 Contract
 修复评审——#488 逐项确认 P10-D18–D25：Pattern 槽权威、耐久 draft、完整
 Facade 操作面、Core 时间/合并/边界权威、owner-loss 闭合与两阶段 rebase。
+2026-09-01 Replay/Lineage 修复评审——
+[`2026-09-01-lmdj-stage10-replay-lineage-contract-design.md`](2026-09-01-lmdj-stage10-replay-lineage-contract-design.md)
+锁定 Project v4 Lineage、begin-time recording revision、不可变 replay
+projection/controller 及 reset-pending 协议；prerequisite #516 先于 #431。
 
-状态：**已批准，2026-08-31 修复后重新确认**——2026-08-28/29 brainstorming
-评审逐节批准，P10-D18–D25 由 2026-08-31 #488 逐项确认并固化到第六个决策文件。
+状态：**已批准，2026-09-01 修复后重新确认**——2026-08-28/29 brainstorming
+评审逐节批准，P10-D18–D25 由 2026-08-31 #488 逐项确认并固化到第六个决策文件，
+Replay/Lineage 边界由 2026-09-01 修复 spec 确认。
 本文定义 Stage 10 Perform 的产品与 Contract 边界，不分配 Product Build，
 不改产品代码。
 
@@ -85,10 +90,10 @@ transport、resample 是含 live FX 的现场捕获、Bank 是即时视图切签
 | P10-D5 | 八种 FX 是母线级瞬时状态，Project Truth 零 FX 配置。每个 FX 是连续滑条：手势事件为 `engage/move/release` 带整数量化参数值，时间戳取整数 tick 时钟 admission 读数；节拍锁定类按拍分段解释，双向类以带符号中点偏移编码。 | #383 决策 1/2 |
 | P10-D6 | HOLD 是一颗全局显式模式按钮：开启时松手的 FX 冻结当前值，关闭时全部释放；事件为全局 `hold_on`/`hold_off`。无逐 FX latch，无长按计时。 | #383 决策 3 |
 | P10-D7 | 八 FX 以 Contract 钉死的固定顺序串联；全部可同时激活；DSP 状态与缓冲在 Snapshot/引擎准备阶段预分配，`render` 保持零分配零锁 `noexcept`；CPU 预算按八效全开取最坏情形。live 与 Replay 跑同一段 DSP，给定相同 Snapshot、事件流与链序输出样本级一致。 | #383 决策 4/5 |
-| P10-D8 | Performance 是 `lmdj.project.v4` 的命名事件流对象（Pad 击打、Pattern Launch at effective tick、FX 手势与全局 HOLD；无 Bank 事件），并引用录音 Artifact。v3→v4 总迁移，旧 Project 得空 `performances`。 | #384 决策 1/2/3 |
+| P10-D8 | Performance 是 `lmdj.project.v4` 的命名事件流对象（Pad 击打、Pattern Launch at effective tick、FX 手势与全局 HOLD；无 Bank 事件），并引用录音 Artifact；`recording_revision` 固定为 record.begin 输入 revision。v3→v4 总迁移，旧 Project 得空 `performances`，既有 Asset 得 `lineage: null`。 | #384 决策 1/2/3；2026-09-01 Replay/Lineage 修复 |
 | P10-D9 | Performance 录制会话按 session kind 泛化 Stage 9 机制（writer-lease admission、耐久 journal 链、幂等 flush、封存、指纹门控恢复）；一个 Project 同时至多一个录制会话——Perform 与 Sequence 录制互斥，后到 begin 返回 `INVALID_ARGUMENT`。 | #384 决策 4 |
 | P10-D10 | Replay 是只读回放，按**当前** Project 状态重放（Sampler 惯例，SR-D4 延伸）：换采样出新声音、被删/空槽的 Launch 该段落空并非致命提示。Replay 不做指纹门控；指纹门控只在写回真相的恢复路径。冻结版本由 WAV 承担。 | #384 决策 5 |
-| P10-D11 | ResamplePerformance v1 = 现场捕获：在演出录音 Artifact 上选区，经 D1 长源路径 commit（同配额判定、同 `BANK_QUOTA_EXHAUSTED`、同 revision 绑定），Lineage 记源哈希+范围+Performance 身份；无新 Job 类别。离线重渲染立为具名后续能力，届时也永不进实时引擎。 | #385 决策 |
+| P10-D11 | ResamplePerformance v1 = 现场捕获：在演出录音 Artifact 上选区，经 D1 长源路径 commit（同配额判定、同 `BANK_QUOTA_EXHAUSTED`、同 revision 绑定），Project Asset Lineage 记源哈希+半开 frame 范围+Performance 身份+录制 revision；无新 Job 类别。离线重渲染立为具名后续能力，届时也永不进实时引擎。 | #385 决策；2026-09-01 Replay/Lineage 修复 |
 | P10-D12 | Stereo WAV 录制是 Host 层母线 tap（镜像 Stage 8B worklet 的 4,800-frame 批量模式，走 JS 堆）流式写 OPFS，PCM16 48 kHz stereo；录制待命后由 PLAY 启动、停播即停录、停录后显式命名保存或丢弃。Host manifest `resource_limits.perform_recording_frames = 86400000`，即单次最多 30 分钟；`resource_limits.perform_recording_queue_batches = 32`，即最多积压 153,600 frames / 3.2 秒 / 1,228,800 bytes 的 Float32 stereo 数据。达到时长上限、队列第 33 批到达、写手出错或 OPFS 失败时，按 SR-D17 先例封存最后已耐久帧形成的合法 WAV、丢弃未耐久 tail、显示可操作错误；tap 永不等待写手且永不阻塞或反向通知 `render`。30 分钟的 PCM payload 是 345,600,000 bytes，标准 44-byte RIFF/WAV 文件上限是 345,600,044 bytes。 | #387 决策；#426 plan refresh |
 | P10-D13 | CLI、MCP、Native、Web Runtime、Creator 通过同一 Facade 表面暴露 Perform 语义；无 UI 的 Host 能完整驱动录制、回放与 Resample commit（Web 的 WAV tap 除外，属 Host 层能力）。 | 规格 §10.2 |
 | P10-D14 | **FX 名单定版（2026-08-29 评审，2026-08-30 口径澄清）**：Filter（中点双向 HP/LP 共振）、Delay（节拍同步立体声，Koala TEMPO DELAY 行为对位）、Reverb、Stutter（节拍同步 beat repeat，½–1/64 bar）、Gate（阈值门）、Reverse、Crush（降采样 bitcrush）、**Cutter**（原 Roll 更名，节拍同步静音门，1–1/64 bar，Koala CUTTER 行为对位）。Koala 手册 §9.1 只提供产品行为与方向，不公开 DSP 系数或算法；首版实现因此是满足本 Contract、可测试且确定性的 **LMDJ reference DSP**，不宣称复制或等同 Koala 的专有声音算法。DUB 式长反馈 delay 留作后续 FX 扩展。 | 2026-08-29 评审；#426 plan refresh |
