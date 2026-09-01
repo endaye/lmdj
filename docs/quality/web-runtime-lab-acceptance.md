@@ -115,7 +115,9 @@ For each Safari/iPad run:
 5. perform one available route interruption, such as connecting/disconnecting
    a wired route or another system audio session;
 6. record every `AudioContext` and document lifecycle transition;
-7. if needed, use exactly one explicit recovery activation;
+7. for each interruption that needs it, use exactly one explicit recovery
+   activation; `maxExplicitActivations` is the maximum for any one recovery
+   episode, not the session-wide sum;
 8. trigger once and require exactly one onset.
 
 Unsupported or unreproducible interruption steps remain unverified; they are
