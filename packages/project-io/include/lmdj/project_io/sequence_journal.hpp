@@ -23,6 +23,7 @@ enum class SequenceSessionState : std::uint8_t {
   active,
   switching,
   stopped,
+  recovery_required,
   owner_lost,
   abandoned,
 };
@@ -98,6 +99,34 @@ struct PerformanceFlushRecord {
   bool operator==(const PerformanceFlushRecord&) const = default;
 };
 
+struct PerformanceRebaseRecord {
+  foundation::CommandId command_id;
+  std::string command_fingerprint;
+  std::uint64_t from_revision{};
+  std::uint64_t to_revision{};
+  std::optional<std::uint16_t> bpm_anchor;
+  bool completed{};
+
+  bool operator==(const PerformanceRebaseRecord&) const = default;
+};
+
+struct PerformanceRebasePrepare {
+  foundation::CommandId command_id;
+  std::string command_fingerprint;
+  std::uint64_t from_revision{};
+  std::uint64_t to_revision{};
+
+  bool operator==(const PerformanceRebasePrepare&) const = default;
+};
+
+struct PerformanceRebaseComplete {
+  foundation::CommandId command_id;
+  std::uint64_t committed_revision{};
+  std::optional<std::uint16_t> bpm_anchor;
+
+  bool operator==(const PerformanceRebaseComplete&) const = default;
+};
+
 struct ActivePerformanceJournal {
   foundation::SequenceSessionId session_id;
   domain::PerformanceId performance_id;
@@ -110,6 +139,9 @@ struct ActivePerformanceJournal {
   std::optional<std::uint64_t> last_input_sequence;
   std::vector<domain::PerformanceEvent> pending_events;
   SessionKind kind{SessionKind::performance};
+  std::optional<foundation::CommandId> begin_command_id;
+  std::optional<foundation::CommandId> stop_request_id;
+  std::vector<PerformanceRebaseRecord> rebases;
 
   bool operator==(const ActivePerformanceJournal&) const = default;
 };
@@ -252,6 +284,46 @@ class SequenceJournal {
       foundation::SequenceSessionId session_id);
 
  private:
+  friend class ProjectStore;
+
+  foundation::Result<void> begin_performance_draft_locked(
+      const std::filesystem::path& bundle,
+      foundation::CommandId command_id,
+      foundation::SequenceSessionId session_id,
+      domain::PerformanceId performance_id,
+      std::string performance_fingerprint,
+      std::uint64_t from_revision);
+  foundation::Result<void> complete_performance_begin_locked(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      std::uint64_t committed_revision,
+      std::string performance_fingerprint);
+  foundation::Result<void> stop_performance_locked(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      foundation::CommandId request_id);
+  foundation::Result<void> prepare_performance_rebase_locked(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      PerformanceRebaseRecord record);
+  foundation::Result<void> complete_performance_rebase_locked(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      foundation::CommandId command_id,
+      std::uint64_t committed_revision,
+      std::optional<std::uint16_t> bpm_anchor,
+      std::string performance_fingerprint);
+  foundation::Result<void> remove_active_performance_locked(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      bool require_stopped);
+  foundation::Result<void> restore_stopped_performance_locked(
+      const std::filesystem::path& bundle,
+      const PerformanceRecoveryCandidate& candidate,
+      std::uint64_t expected_revision,
+      std::string performance_fingerprint,
+      foundation::CommandId request_id);
+
   std::shared_ptr<ProjectStoragePlatform> platform_;
 };
 

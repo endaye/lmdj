@@ -83,6 +83,31 @@ struct PerformanceFlushExecution {
   bool replayed{};
 };
 
+struct BeginPerformanceDraftRequest {
+  domain::CommandMeta meta;
+  foundation::SequenceSessionId session_id;
+  domain::PerformanceId performance_id;
+};
+
+struct PerformanceLifecycleReceipt {
+  domain::PerformanceId performance_id;
+  std::uint64_t committed_revision{};
+  bool replayed{};
+
+  bool operator==(const PerformanceLifecycleReceipt&) const = default;
+};
+
+struct PerformanceStopReceipt {
+  foundation::CommandId request_id;
+  foundation::SequenceSessionId session_id;
+  domain::PerformanceId performance_id;
+  SequenceSessionState state{SequenceSessionState::stopped};
+  std::size_t pending_event_count{};
+  bool replayed{};
+
+  bool operator==(const PerformanceStopReceipt&) const = default;
+};
+
 struct CommandExecution {
   domain::Command command;
   domain::AppliedCommand outcome;
@@ -196,6 +221,45 @@ class ProjectStore {
   foundation::Result<domain::AppliedCommand> delete_performance(
       const std::filesystem::path& bundle,
       const DeletePerformance& command);
+  foundation::Result<PerformanceLifecycleReceipt> begin_performance_draft(
+      const std::filesystem::path& bundle,
+      const BeginPerformanceDraftRequest& request);
+  foundation::Result<PerformanceLifecycleReceipt> begin_performance_draft(
+      const std::filesystem::path& bundle,
+      const domain::CommandMeta& meta,
+      const foundation::SequenceSessionId& session_id,
+      const domain::PerformanceId& performance_id);
+  foundation::Result<PerformanceStopReceipt> stop_performance_session(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      const foundation::CommandId& request_id);
+  foundation::Result<PerformanceLifecycleReceipt> save_performance_draft(
+      const std::filesystem::path& bundle,
+      const domain::CommandMeta& meta,
+      const domain::PerformanceId& performance_id,
+      std::string name,
+      std::optional<foundation::ArtifactRef> artifact);
+  foundation::Result<PerformanceLifecycleReceipt> discard_performance_draft(
+      const std::filesystem::path& bundle,
+      const domain::CommandMeta& meta,
+      const domain::PerformanceId& performance_id);
+  foundation::Result<PerformanceLifecycleReceipt> apply_performance_recovery(
+      const std::filesystem::path& bundle,
+      const domain::CommandMeta& meta,
+      const foundation::SequenceSessionId& session_id);
+  foundation::Result<PerformanceStopReceipt> discard_performance_recovery(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      const foundation::CommandId& request_id);
+  foundation::Result<PerformanceLifecycleReceipt> bind_performance_recording(
+      const std::filesystem::path& bundle,
+      const domain::CommandMeta& meta,
+      const domain::PerformanceId& performance_id,
+      const foundation::ArtifactRef& artifact);
+  foundation::Result<CommandExecution> execute_performance_rebase(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      const domain::UpdateSequenceSettings& command);
   foundation::Result<std::vector<PerformanceRecoveryCandidate>>
   reconcile_performance_recovery(const std::filesystem::path& bundle);
   foundation::Result<SequenceCaptureDisarmResult> disarm_sequence_capture(
