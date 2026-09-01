@@ -93,8 +93,13 @@ class ReleaseModelTest(unittest.TestCase):
         self.assertEqual(self.policy.blocking_workflow, "Core CI")
         self.assertEqual(self.policy.product_fingerprint, "2B5EE362F058800036AD4FB5116ECE156F954D29")
         self.assertEqual(self.policy.checksum_fingerprint, "CB928A6E89DE498851688EF1AAC3E7019FC1478B")
+        self.assertEqual(
+            self.policy.product_profiles,
+            frozenset(("core-package", "web-runtime-host", "web-hosts")),
+        )
         self.assertEqual(self.policy.release_environment, "release")
         self.assertEqual(self.policy.runtime_canary_environment, "runtime-canary")
+        self.assertEqual(self.policy.creator_canary_environment, "creator-canary")
         self.assertEqual(self.policy.channel_release("canary"), (True, False))
         self.assertEqual(self.policy.channel_release("stable", make_latest=False), (False, False))
         self.assertEqual(self.policy.channel_release("stable", make_latest=True), (False, True))
@@ -112,6 +117,13 @@ class ReleaseModelTest(unittest.TestCase):
             path.write_text(json.dumps(document), encoding="utf-8")
             with self.assertRaisesRegex(ReleaseModelError, "blocking workflow"):
                 load_policy(path)
+
+    def test_ledger_accepts_the_closed_dual_web_host_profile(self) -> None:
+        ledger = load_ledger_document(
+            self.ledger_fixture(profile="web-hosts"),
+            self.policy,
+        )
+        self.assertEqual(ledger.entries[0].profile, "web-hosts")
 
     def test_ledger_rejects_unknown_fields_duplicate_identities_and_bad_scalars(self) -> None:
         cases: list[tuple[str, dict[str, object], str]] = []

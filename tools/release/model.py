@@ -116,6 +116,7 @@ class ReleasePolicy:
     channels: Mapping[str, Mapping[str, object]]
     release_environment: str
     runtime_canary_environment: str
+    creator_canary_environment: str
     historical_cutoff: str
 
     def channel_release(self, channel: str, make_latest: bool = False) -> tuple[bool, bool]:
@@ -206,7 +207,7 @@ def load_policy(path: Path | str) -> ReleasePolicy:
     _require_exact_keys(profiles, {"product", "source"}, "profiles")
     product_profiles = _string_set(profiles["product"], "product profiles")
     source_profiles = _string_set(profiles["source"], "source profiles")
-    if product_profiles != {"core-package", "web-runtime-host"} or source_profiles != {"source-only"}:
+    if product_profiles != {"core-package", "web-runtime-host", "web-hosts"} or source_profiles != {"source-only"}:
         raise ReleaseModelError("profiles do not satisfy the closed release policy")
     channels_document = _require_mapping(document["channels"], "channels")
     _require_exact_keys(channels_document, {"canary", "dev", "beta", "stable"}, "channels")
@@ -218,11 +219,29 @@ def load_policy(path: Path | str) -> ReleasePolicy:
             raise ReleaseModelError(f"{name} channel prerelease policy is invalid")
         channels[name] = dict(item)
     environments = _require_mapping(document["environments"], "environments")
-    _require_exact_keys(environments, {"release", "runtime_canary"}, "environments")
+    _require_exact_keys(
+        environments,
+        {"release", "runtime_canary", "creator_canary"},
+        "environments",
+    )
     cutoff = _require_utc(document["historical_cutoff"], "historical_cutoff")
     release_environment = _require_string(environments["release"], "release environment")
     runtime_canary_environment = _require_string(environments["runtime_canary"], "runtime-canary environment")
-    if (release_environment, runtime_canary_environment, cutoff) != ("release", "runtime-canary", _HISTORICAL_CUTOFF):
+    creator_canary_environment = _require_string(
+        environments["creator_canary"],
+        "creator-canary environment",
+    )
+    if (
+        release_environment,
+        runtime_canary_environment,
+        creator_canary_environment,
+        cutoff,
+    ) != (
+        "release",
+        "runtime-canary",
+        "creator-canary",
+        _HISTORICAL_CUTOFF,
+    ):
         raise ReleaseModelError("policy environments or historical cutoff are not canonical")
     return ReleasePolicy(
         repository=repository, branch=branch, blocking_workflow=blocking_workflow,
@@ -230,7 +249,9 @@ def load_policy(path: Path | str) -> ReleasePolicy:
         checksum_fingerprint=checksum_fingerprint, tag_patterns=MappingProxyType(tag_patterns),
         product_profiles=frozenset(product_profiles), source_profiles=frozenset(source_profiles),
         channels=MappingProxyType({name: MappingProxyType(dict(item)) for name, item in channels.items()}),
-        release_environment=release_environment, runtime_canary_environment=runtime_canary_environment,
+        release_environment=release_environment,
+        runtime_canary_environment=runtime_canary_environment,
+        creator_canary_environment=creator_canary_environment,
         historical_cutoff=cutoff,
     )
 
