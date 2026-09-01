@@ -14,10 +14,15 @@ Facade 操作面、Core 时间/合并/边界权威、owner-loss 闭合与两阶�
 [`2026-09-01-lmdj-stage10-replay-lineage-contract-design.md`](2026-09-01-lmdj-stage10-replay-lineage-contract-design.md)
 锁定 Project v4 Lineage、begin-time recording revision、不可变 replay
 projection/controller 及 reset-pending 协议；prerequisite #516 先于 #431。
+2026-09-01 Host Runtime/Session 修复评审——
+[`2026-09-01-lmdj-stage10-host-runtime-session-design.md`](2026-09-01-lmdj-stage10-host-runtime-session-design.md)
+以 HRS-D1–D9 锁定 Core runtime 权威实现、headless transport 边界泛化、
+跨进程 flush 身份、`recovery.list` 只读化、CLI session 模式与 Native
+adapter；prerequisites #523/#524/#525 先于 Task 6（#432）。
 
 状态：**已批准，2026-09-01 修复后重新确认**——2026-08-28/29 brainstorming
 评审逐节批准，P10-D18–D25 由 2026-08-31 #488 逐项确认并固化到第六个决策文件，
-Replay/Lineage 边界由 2026-09-01 修复 spec 确认。
+Replay/Lineage 与 Host runtime/session 边界由 2026-09-01 两份修复 spec 确认。
 本文定义 Stage 10 Perform 的产品与 Contract 边界，不分配 Product Build，
 不改产品代码。
 
@@ -95,7 +100,7 @@ transport、resample 是含 live FX 的现场捕获、Bank 是即时视图切签
 | P10-D10 | Replay 是只读回放，按**当前** Project 状态重放（Sampler 惯例，SR-D4 延伸）：换采样出新声音、被删/空槽的 Launch 该段落空并非致命提示。Replay 不做指纹门控；指纹门控只在写回真相的恢复路径。冻结版本由 WAV 承担。 | #384 决策 5 |
 | P10-D11 | ResamplePerformance v1 = 现场捕获：在演出录音 Artifact 上选区，经 D1 长源路径 commit（同配额判定、同 `BANK_QUOTA_EXHAUSTED`、同 revision 绑定），Project Asset Lineage 记源哈希+半开 frame 范围+Performance 身份+录制 revision；无新 Job 类别。离线重渲染立为具名后续能力，届时也永不进实时引擎。 | #385 决策；2026-09-01 Replay/Lineage 修复 |
 | P10-D12 | Stereo WAV 录制是 Host 层母线 tap（镜像 Stage 8B worklet 的 4,800-frame 批量模式，走 JS 堆）流式写 OPFS，PCM16 48 kHz stereo；录制待命后由 PLAY 启动、停播即停录、停录后显式命名保存或丢弃。Host manifest `resource_limits.perform_recording_frames = 86400000`，即单次最多 30 分钟；`resource_limits.perform_recording_queue_batches = 32`，即最多积压 153,600 frames / 3.2 秒 / 1,228,800 bytes 的 Float32 stereo 数据。达到时长上限、队列第 33 批到达、写手出错或 OPFS 失败时，按 SR-D17 先例封存最后已耐久帧形成的合法 WAV、丢弃未耐久 tail、显示可操作错误；tap 永不等待写手且永不阻塞或反向通知 `render`。30 分钟的 PCM payload 是 345,600,000 bytes，标准 44-byte RIFF/WAV 文件上限是 345,600,044 bytes。 | #387 决策；#426 plan refresh |
-| P10-D13 | CLI、MCP、Native、Web Runtime、Creator 通过同一 Facade 表面暴露 Perform 语义；无 UI 的 Host 能完整驱动录制、回放与 Resample commit（Web 的 WAV tap 除外，属 Host 层能力）。 | 规格 §10.2 |
+| P10-D13 | CLI、MCP、Native、Web Runtime、Creator 通过同一 Facade 表面暴露 Perform 语义；无 UI 的 Host 能完整驱动录制、回放与 Resample commit（Web 的 WAV tap 除外，属 Host 层能力）。 | 规格 §10.2；2026-09-01 Host Runtime/Session 修复 |
 | P10-D14 | **FX 名单定版（2026-08-29 评审，2026-08-30 口径澄清）**：Filter（中点双向 HP/LP 共振）、Delay（节拍同步立体声，Koala TEMPO DELAY 行为对位）、Reverb、Stutter（节拍同步 beat repeat，½–1/64 bar）、Gate（阈值门）、Reverse、Crush（降采样 bitcrush）、**Cutter**（原 Roll 更名，节拍同步静音门，1–1/64 bar，Koala CUTTER 行为对位）。Koala 手册 §9.1 只提供产品行为与方向，不公开 DSP 系数或算法；首版实现因此是满足本 Contract、可测试且确定性的 **LMDJ reference DSP**，不宣称复制或等同 Koala 的专有声音算法。DUB 式长反馈 delay 留作后续 FX 扩展。 | 2026-08-29 评审；#426 plan refresh |
 | P10-D15 | **值标度与密度（2026-08-29 评审，2026-08-31 权威修复）**：FX 参数值为整数 0–1000，双向类以 500 为中点、带符号偏移解释。`move` 在 Core admission 记录；同值去重与每 FX 每 128-frame quantum 最多一条的 last-write-wins 合并均由 Core 执行，Host 不决定事件取舍。 | 2026-08-29 评审；#488 决策 6 |
 | P10-D16 | **Perform rebase 白名单（2026-08-29 评审）**：Perform 会话的选择性 rebase 白名单 = {BPM、Quantize/Swing}。BPM 同 SR-D14（已记 tick 不动）；Quantize/Swing 可 rebase 但对 Perform 事件**零语义作用**——演出记录原始 timing，不吸格、不烘焙。武装 Pad capture 提交在 v1 Perform 白名单中**排除**，按 Sample 类处理（Command 失败、录制继续、不封存，Host 须先停录）；未知 Authoring Command fail closed。 | 2026-08-29 评审 |
@@ -103,8 +108,8 @@ transport、resample 是含 live FX 的现场捕获、Bank 是即时视图切签
 | P10-D18 | **Pattern 槽权威**：Project v4 持久化恰好 16 个有序 nullable `pattern_slots`；占用项保存存在且唯一的 PatternId。v3→v4 初始化全空；assign/clear/move 是 revision-bearing Command。Performance Launch 只记录 slot，Replay 从开始时固定的当前 revision 解析。 | #488 决策 1 |
 | P10-D19 | **耐久 draft 生命周期**：`record.begin` 在同一 writer lease 原子创建 Untitled Performance 与 active Journal；flush 写回 draft；stop 只封存 session；save 原子消费 tail、名称与可选 WAV；discard 删除 draft/Journal。恢复始终指向 draft fingerprint。 | #488 决策 2 |
 | P10-D20 | **完整 Facade 操作面**：list/inspect、record begin/event/launch-request/flush/stop/status、save/discard、recovery list/apply/discard、rename/delete/recording.bind、replay begin/stop/status、resample.commit 均使用固定名称和严格 request shape；无 `performance.replay.*` 通配符。 | #488 决策 6/8 |
-| P10-D21 | **Core 输入权威**：raw Pad/FX/HOLD 输入带稳定 event/gesture ID，但 Host 不提供 tick、runtime frame 或 input sequence；Core admission 分配时间与顺序。开放 Pad 在 owner loss 时以最少 1 tick 耐久闭合。 | #488 决策 7 |
-| P10-D22 | **Launch acknowledgement**：Host 只提交 slot。Core 预约下一 Bar；只有 Audio Runtime 实际边界 ack 后才记录 effective tick。未 claim 可由最新请求覆盖，已 claim 后来请求顺延；失败、取消或 owner loss 不产生 ghost event。 | #488 决策 3 |
+| P10-D21 | **Core 输入权威**：raw Pad/FX/HOLD 输入带稳定 event/gesture ID，但 Host 不提供 tick、runtime frame 或 input sequence；Core admission 分配时间与顺序。开放 Pad 在 owner loss 时以最少 1 tick 耐久闭合。 | #488 决策 7；2026-09-01 修复 HRS-D1（权威实现是 Core 交付物） |
+| P10-D22 | **Launch acknowledgement**：Host 只提交 slot。Core 预约下一 Bar；只有 Audio Runtime 实际边界 ack 后才记录 effective tick。未 claim 可由最新请求覆盖，已 claim 后来请求顺延；失败、取消或 owner loss 不产生 ghost event。 | #488 决策 3；2026-09-01 修复 HRS-D2（边界权威泛化为已安装 Core Runtime transport） |
 | P10-D23 | **FX 合并与 owner loss**：Core 每 FX/quantum last-write-wins；release 先排 pending move；owner loss 按链序补 release，必要时再补 hold_off；Replay 结束/中止无条件 reset neutral。 | #488 决策 5 |
 | P10-D24 | **两阶段 Performance rebase**：白名单命令在同一 writer lease 下先写 `rebase_prepare`，Project receipt 可见后写 `rebase_complete`。中间失败进入 recovery-required 并阻止新输入；精确重试只对账补全，不重复 Project mutation。 | #488 决策 4 |
 | P10-D25 | **Mutation/Artifact/response 纪律**：外部 Project mutation 带 command ID 与 expected revision；session flush 的 revision 只来自 Journal。WAV 绑定只接受 Project 管理存储中经 digest/length 验证的 `audio/wav` ArtifactRef。所有 mutation/event/launch/status/recovery/replay 返回固定字段。 | #488 决策 8 |
