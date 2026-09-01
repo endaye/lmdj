@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -14,6 +15,7 @@
 namespace {
 
 using Json = nlohmann::json;
+using lmdj::domain::AssetLineage;
 using lmdj::domain::Performance;
 using lmdj::domain::PerformanceEvent;
 using lmdj::domain::PerformanceEventKind;
@@ -26,8 +28,16 @@ Performance valid_performance() {
       lmdj::domain::PerformanceId{kPerformanceId},
       "Performance",
       120,
+      0,
       std::nullopt,
       {},
+  };
+}
+
+AssetLineage valid_lineage() {
+  return AssetLineage{
+      {std::string(64, 'a'), 7},
+      {{10, 20}, lmdj::domain::PerformanceId{kPerformanceId}},
   };
 }
 
@@ -171,6 +181,7 @@ void test_valid_stream_and_performance_are_accepted() {
       lmdj::domain::PerformanceId{kPerformanceId},
       std::string(64, 'x'),
       120,
+      42,
       std::nullopt,
       std::move(events),
   };
@@ -186,6 +197,77 @@ void test_valid_stream_and_performance_are_accepted() {
   LMDJ_CHECK(lmdj::domain::validate_performance(performance).has_value());
   performance.name += "\xe5\x87\xba";
   LMDJ_CHECK(!lmdj::domain::validate_performance(performance).has_value());
+}
+
+void test_asset_lineage_round_trips_exactly() {
+  const auto lineage = valid_lineage();
+  const Json expected{
+      {"source",
+       {{"kind", "asset_artifact"},
+        {"artifact_sha256", std::string(64, 'a')},
+        {"project_revision", 7}}},
+      {"derivation",
+       {{"kind", "resample"},
+        {"range", {{"start_frame", 10}, {"end_frame", 20}}},
+        {"performance_id", kPerformanceId}}},
+  };
+  LMDJ_CHECK(lmdj::domain::validate_asset_lineage(lineage).has_value());
+  LMDJ_CHECK(lmdj::domain::asset_lineage_json(lineage) == expected);
+  const auto decoded = lmdj::domain::asset_lineage_from_json(expected);
+  LMDJ_CHECK(decoded.has_value());
+  LMDJ_CHECK(decoded.value() == lineage);
+}
+
+void test_asset_lineage_rejects_invalid_values_and_shapes() {
+  auto lineage = valid_lineage();
+  lineage.source.artifact_sha256 = std::string(64, 'A');
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+  lineage = valid_lineage();
+  lineage.source.artifact_sha256 = std::string(63, 'a');
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+  lineage = valid_lineage();
+  lineage.derivation.performance_id =
+      lmdj::domain::PerformanceId{"not-a-uuid"};
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+  lineage = valid_lineage();
+  lineage.derivation.range.end_frame = lineage.derivation.range.start_frame;
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+  lineage = valid_lineage();
+  lineage.derivation.range.end_frame = lineage.derivation.range.start_frame - 1;
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+
+  const std::vector<Json> malformed{
+      nullptr,
+      Json::object(),
+      {{"source", Json::object()}, {"derivation", Json::object()}},
+      {{"source",
+        {{"kind", "asset_artifact"},
+         {"artifact_sha256", std::string(64, 'a')},
+         {"project_revision", 7},
+         {"extra", true}}},
+       {"derivation",
+        {{"kind", "resample"},
+         {"range", {{"start_frame", 10}, {"end_frame", 20}}},
+         {"performance_id", kPerformanceId}}}},
+      {{"source",
+        {{"kind", "asset_artifact"},
+         {"artifact_sha256", std::string(64, 'a')},
+         {"project_revision", 7}}},
+       {"derivation",
+        {{"kind", "resample"},
+         {"range",
+          {{"start_frame", 10}, {"end_frame", 20}, {"extra", true}}},
+         {"performance_id", kPerformanceId}}}},
+  };
+  for (const auto& value : malformed) {
+    LMDJ_CHECK(!lmdj::domain::asset_lineage_from_json(value).has_value());
+  }
+}
+
+void test_recording_revision_accepts_any_unsigned_64_bit_value() {
+  auto performance = valid_performance();
+  performance.recording_revision = std::numeric_limits<std::uint64_t>::max();
+  LMDJ_CHECK(lmdj::domain::validate_performance(performance).has_value());
 }
 
 void test_unmatched_release_and_move_are_rejected() {
@@ -430,6 +512,9 @@ int main() {
     test_each_locked_event_shape_round_trips_exactly();
     test_events_are_canonically_ordered_by_tick_kind_and_fx_or_slot();
     test_valid_stream_and_performance_are_accepted();
+    test_asset_lineage_round_trips_exactly();
+    test_asset_lineage_rejects_invalid_values_and_shapes();
+    test_recording_revision_accepts_any_unsigned_64_bit_value();
     test_unmatched_release_and_move_are_rejected();
     test_double_engage_is_rejected();
     test_double_hold_transitions_are_rejected();

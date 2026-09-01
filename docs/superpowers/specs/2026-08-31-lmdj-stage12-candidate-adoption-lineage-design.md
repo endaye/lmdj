@@ -6,7 +6,8 @@
 [#471](https://github.com/endaye/lmdj/issues/471) 的设计半部：定义所有
 Stage 12 智能结果共用的 Candidate → Preview → 用户选择 → Derived Asset
 采纳路径与通用 Lineage 记录。实施计划按 #471 验收另行落笔，不在本文。
-Lineage 的 Project 持久化位置与 Stage 10 Task 5（#431）对齐，见 S12L-Q1。
+Lineage 的 Project 持久化位置已由 Stage 10 replay/lineage contract repair
+确认：复用 `lmdj.project.v4` 的 `Asset.lineage`，见已解决的 S12L-Q1。
 
 评审修正（2026-08-31）：Candidate 的可用性与 Job 重试关系改由独立
 `JobRecord` / `CandidateIndex` 承担，terminal Attempt 保持不可变审计事实；
@@ -52,7 +53,7 @@ Artifact → Preview → User Commit → Atomic Project Revision）是本文的
 
 | ID | 问题 | 归属 |
 | --- | --- | --- |
-| S12L-Q1 | Lineage 记录的 Project 持久化位置：随 #431 落地形态对齐——若 Task 5 把 resample Lineage 记在 Project Truth 之外（Workspace 证据），通用记录先同址，Project 内字段（需要 v4 之后的 Project Contract 版本）作为具名后续；若记在 Project 内，本文直接复用其承载位。本文只锁记录形状（S12L-D6），不与未合入的 #431 抢定位置。 | #431 合入后回填 |
+| S12L-Q1（已解决，2026-09-01） | Lineage 属于 Project Asset truth。Stage 10 在 `lmdj.project.v4` 增加唯一承载位 `Asset.lineage`，普通/迁移 Asset 写 `null`，resample 写首个封闭 typed variant；Stage 12 必须扩展并复用这个字段与同一 typed Lineage 模型，不得另建 Project 字段或 Workspace-only Lineage。 | #516 持久化；#431 首个写入方 |
 | S12L-Q2 | Pattern 候选（`pattern.suggest`）的完整采纳细节（Merge 语义、替换当前编辑版的边界）在该 capability 的 Contract 设计内展开；本文只锁 §6.4 的四个出口与「不覆盖已录事件」。 | 后续 capability 设计 |
 
 ## 4. Proposed Decisions（待评审）
@@ -71,10 +72,11 @@ Artifact → Preview → User Commit → Atomic Project Revision）是本文的
 
 ## 5. Contract 影响
 
-- 不改：`lmdj.project.v4`（CandidateSet 不进 Project Truth）、
-  `lmdj.capability.v2`。
-- Lineage 的 Project 内承载位若成立（S12L-Q1），走 v4 之后的 Project
-  Contract 版本，属实施计划的 Version Management。
+- CandidateSet 仍不进 Project Truth；不改 `lmdj.capability.v2`。
+- Lineage 必须复用 `lmdj.project.v4` 已有的 `Asset.lineage` 承载位与 typed
+  model。若 Stage 12 新 source/derivation variants 需要扩展封闭 union，实施计划
+  可分配后继 Project Contract 版本，但只能扩展该字段，不能增加第二个字段或
+  第二套 Lineage model。
 - 复用：`lmdj.error.v1` 现有 code；本文只新增稳定 lowercase
   `details.reason`：`candidate_unavailable`、`source_asset_missing`、
   `candidate_recipe_invalid`、`output_schema_invalid`。
@@ -100,7 +102,8 @@ Artifact → Preview → User Commit → Atomic Project Revision）是本文的
 Version impact: none——本文只是设计文档。实施计划必须分配：
 `application-facade`（AdoptCandidates）与 provider-sdk（候选证据语义化）
 的 SemVer（含 `JobId`/JobRecord/CandidateIndex，跟随 #467 的 provider-sdk
-`2.0.0` 实施序列）、可能的 Project Contract 版本（S12L-Q1）；Product 整合与 #436
+`2.0.0` 实施序列）、仅在扩展 `Asset.lineage` 封闭 variant union 时可能需要的
+后继 Project Contract 版本；不得为 Lineage 分配新 Project 字段。Product 整合与 #436
 串行，实现自身串行在 #431 与 #427 之后。
 
 ## 8. Documentation Impact
@@ -149,7 +152,8 @@ tombstone。Artifact bytes 的长期保留由未来 GC policy 独立裁决。
 
 ## 10. 实施入口（前置条件）
 
-1. #431 合入，S12L-Q1 回填持久化位置，本文按需勘误。
+1. #516 与 #431 合入，提供 `Asset.lineage` 持久化与首个 resample 写入方；
+   S12L-Q1 已解决，不再等待位置决策。
 2. #467 的 `sample.slice.v1` 与输出 Schema 定稿（recipe 候选的第一个
    生产方）。
 3. 本文评审通过后落笔实施计划：候选存储语义化、AdoptCandidates、Lineage

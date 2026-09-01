@@ -29,6 +29,9 @@ void test_v3_to_v4_adds_empty_pattern_slots_and_performances() {
   source["contract"] = "lmdj.project.v3";
   source.erase("performances");
   source.erase("pattern_slots");
+  for (auto& asset : source.at("assets")) {
+    asset.erase("lineage");
+  }
   const auto source_before = source;
 
   const auto result = lmdj::domain::migrate_project_v3_to_v4(source);
@@ -47,8 +50,31 @@ void test_v3_to_v4_adds_empty_pattern_slots_and_performances() {
     if (iterator.key() == "contract") {
       continue;
     }
+    if (iterator.key() == "assets") {
+      for (std::size_t index = 0; index < iterator.value().size(); ++index) {
+        auto expected_asset = iterator.value().at(index);
+        expected_asset["lineage"] = nullptr;
+        LMDJ_CHECK(
+            result.value().at("assets").at(index) == expected_asset);
+      }
+      continue;
+    }
     LMDJ_CHECK(result.value().at(iterator.key()).dump() == iterator.value().dump());
   }
+}
+
+void test_v3_declared_asset_with_lineage_is_rejected() {
+  auto source = load_fixture("project-v3-to-v4-migration.json");
+  source["contract"] = "lmdj.project.v3";
+  source.erase("performances");
+  source.erase("pattern_slots");
+
+  const auto result = lmdj::domain::migrate_project_v3_to_v4(source);
+
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(
+      result.error().code ==
+      lmdj::foundation::ErrorCode::invalid_project);
 }
 
 void test_v3_declared_document_with_performances_is_rejected() {
@@ -113,6 +139,7 @@ int main() {
     test_v3_to_v4_adds_empty_pattern_slots_and_performances();
     test_v3_declared_document_with_performances_is_rejected();
     test_v3_declared_document_with_pattern_slots_is_rejected();
+    test_v3_declared_asset_with_lineage_is_rejected();
     test_migration_edge_accepts_only_v3_declared_documents();
     test_migration_rejects_malformed_contract_declarations();
   } catch (const std::exception& error) {

@@ -149,6 +149,7 @@ void test_begin_stop_save_is_one_durable_draft_lifecycle() {
   const auto draft = store.load(bundle).value().performances.at(performance_id);
   LMDJ_CHECK(draft.name == "Untitled Performance");
   LMDJ_CHECK(draft.created_bpm == 120);
+  LMDJ_CHECK(draft.recording_revision == 0);
   LMDJ_CHECK(!draft.recording_artifact.has_value());
   LMDJ_CHECK(draft.events.empty());
 
@@ -196,6 +197,89 @@ void test_begin_stop_save_is_one_durable_draft_lifecycle() {
   LMDJ_CHECK(truth.performances.at(performance_id).events ==
              std::vector{pad_hit()});
   LMDJ_CHECK(!journal.read_active_performance(bundle).has_value());
+}
+
+void test_recording_revision_is_fixed_at_nonzero_begin_revision() {
+  TempDirectory temp("recording-revision");
+  ProjectStore store;
+  const auto bundle = temp.path() / "project.lmdj";
+  LMDJ_CHECK(store.create(bundle, empty_project()).has_value());
+  LMDJ_CHECK(
+      store
+          .create_performance(
+              bundle,
+              {{CommandId{"30000000-0000-4000-8000-000000000010"}, 0},
+               PerformanceId{std::string{kSecondPerformanceId}},
+               "Existing"})
+          .has_value());
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto performance_id = PerformanceId{std::string{kPerformanceId}};
+  const auto request = lmdj::project_io::BeginPerformanceDraftRequest{
+      {CommandId{std::string{kBeginCommandId}}, 1},
+      session_id,
+      performance_id,
+  };
+
+  const auto begun = store.begin_performance_draft(bundle, request);
+  LMDJ_CHECK(begun.has_value());
+  LMDJ_CHECK(begun.value().committed_revision == 2);
+  LMDJ_CHECK(
+      store.load(bundle)
+          .value()
+          .performances.at(performance_id)
+          .recording_revision == 1);
+  const auto replayed = store.begin_performance_draft(bundle, request);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(
+      store.load(bundle)
+          .value()
+          .performances.at(performance_id)
+          .recording_revision == 1);
+
+  SequenceJournal journal;
+  LMDJ_CHECK(
+      journal
+          .append_performance_tail(
+              bundle, session_id, performance_id, 2, 1,
+              std::vector{pad_hit()})
+          .has_value());
+  LMDJ_CHECK(
+      store
+          .stop_performance_session(
+              bundle, session_id,
+              CommandId{std::string{kStopRequestId}})
+          .has_value());
+  LMDJ_CHECK(
+      store
+          .save_performance_draft(
+              bundle,
+              {CommandId{std::string{kSaveCommandId}}, 2},
+              performance_id,
+              "Saved",
+              std::nullopt)
+          .has_value());
+  LMDJ_CHECK(
+      store.load(bundle)
+          .value()
+          .performances.at(performance_id)
+          .recording_revision == 1);
+
+  const auto artifact = install_managed_wav(
+      bundle, temp.path() / "recording.wav", "RIFF-recording-revision");
+  LMDJ_CHECK(
+      store
+          .bind_performance_recording(
+              bundle,
+              {CommandId{"30000000-0000-4000-8000-000000000011"}, 3},
+              performance_id,
+              artifact)
+          .has_value());
+  LMDJ_CHECK(
+      store.load(bundle)
+          .value()
+          .performances.at(performance_id)
+          .recording_revision == 1);
 }
 
 void test_stopped_draft_can_be_discarded() {
@@ -263,6 +347,11 @@ void test_recovery_apply_and_discard_return_stopped_drafts() {
     LMDJ_CHECK(applied.value().committed_revision == 2);
     LMDJ_CHECK(store.load(bundle).value().performances.at(performance_id).events ==
                std::vector{pad_hit()});
+    LMDJ_CHECK(
+        store.load(bundle)
+            .value()
+            .performances.at(performance_id)
+            .recording_revision == 0);
     const auto stopped = journal.read_active_performance(bundle);
     LMDJ_CHECK(stopped.has_value());
     LMDJ_CHECK(stopped.value().state == SequenceSessionState::stopped);
@@ -598,6 +687,7 @@ void test_recovery_cleanup_faults_reconcile_exactly_once() {
 int main() {
   try {
     test_begin_stop_save_is_one_durable_draft_lifecycle();
+    test_recording_revision_is_fixed_at_nonzero_begin_revision();
     test_stopped_draft_can_be_discarded();
     test_recovery_apply_and_discard_return_stopped_drafts();
     test_recording_bind_verifies_managed_wav_and_is_null_only();

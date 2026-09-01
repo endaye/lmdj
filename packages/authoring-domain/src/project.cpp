@@ -36,6 +36,23 @@ foundation::Result<void> invalid_performance(std::string_view message) {
       });
 }
 
+foundation::Result<void> invalid_asset_lineage(std::string_view message) {
+  return foundation::Result<void>::failure(
+      foundation::Error{
+          foundation::ErrorCode::invalid_argument,
+          std::string(message),
+      });
+}
+
+foundation::Result<AssetLineage> invalid_asset_lineage_value(
+    std::string_view message) {
+  return foundation::Result<AssetLineage>::failure(
+      foundation::Error{
+          foundation::ErrorCode::invalid_argument,
+          std::string(message),
+      });
+}
+
 bool exact_object_keys(
     const nlohmann::json& input,
     std::initializer_list<std::string_view> keys) {
@@ -493,6 +510,95 @@ foundation::Result<void> validate_performance(
         "performance events must use canonical ordering");
   }
   return validate_performance_events(performance.events);
+}
+
+foundation::Result<void> validate_asset_lineage(
+    const AssetLineage& lineage) {
+  if (!valid_sha256(lineage.source.artifact_sha256)) {
+    return invalid_asset_lineage(
+        "asset Lineage source digest must be lowercase SHA-256");
+  }
+  if (!is_valid_uuid(lineage.derivation.performance_id.value())) {
+    return invalid_asset_lineage(
+        "asset Lineage Performance id must be a lowercase UUID");
+  }
+  if (lineage.derivation.range.start_frame >=
+      lineage.derivation.range.end_frame) {
+    return invalid_asset_lineage(
+        "asset Lineage frame range must be non-empty and increasing");
+  }
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<AssetLineage> asset_lineage_from_json(
+    const nlohmann::json& input) {
+  try {
+    if (!exact_object_keys(input, {"source", "derivation"})) {
+      return invalid_asset_lineage_value(
+          "asset Lineage must contain exact source and derivation objects");
+    }
+    const auto& source = input.at("source");
+    const auto& derivation = input.at("derivation");
+    if (!exact_object_keys(
+            source,
+            {"kind", "artifact_sha256", "project_revision"}) ||
+        !source.at("kind").is_string() ||
+        source.at("kind").get<std::string>() != "asset_artifact" ||
+        !source.at("artifact_sha256").is_string()) {
+      return invalid_asset_lineage_value(
+          "asset Lineage source shape or value is invalid");
+    }
+    if (!exact_object_keys(
+            derivation,
+            {"kind", "range", "performance_id"}) ||
+        !derivation.at("kind").is_string() ||
+        derivation.at("kind").get<std::string>() != "resample" ||
+        !derivation.at("performance_id").is_string()) {
+      return invalid_asset_lineage_value(
+          "asset Lineage derivation shape or value is invalid");
+    }
+    const auto& range = derivation.at("range");
+    if (!exact_object_keys(range, {"start_frame", "end_frame"})) {
+      return invalid_asset_lineage_value(
+          "asset Lineage range shape is invalid");
+    }
+    const auto project_revision = unsigned_value(source.at("project_revision"));
+    const auto start_frame = unsigned_value(range.at("start_frame"));
+    const auto end_frame = unsigned_value(range.at("end_frame"));
+    if (!project_revision.has_value() || !start_frame.has_value() ||
+        !end_frame.has_value()) {
+      return invalid_asset_lineage_value(
+          "asset Lineage integer value is invalid");
+    }
+    AssetLineage lineage{
+        {source.at("artifact_sha256").get<std::string>(), *project_revision},
+        {{*start_frame, *end_frame},
+         PerformanceId{derivation.at("performance_id").get<std::string>()}},
+    };
+    const auto valid = validate_asset_lineage(lineage);
+    if (!valid.has_value()) {
+      return foundation::Result<AssetLineage>::failure(valid.error());
+    }
+    return foundation::Result<AssetLineage>::success(std::move(lineage));
+  } catch (const std::exception&) {
+    return invalid_asset_lineage_value(
+        "asset Lineage shape or value is invalid");
+  }
+}
+
+nlohmann::json asset_lineage_json(const AssetLineage& lineage) {
+  return {
+      {"source",
+       {{"kind", "asset_artifact"},
+        {"artifact_sha256", lineage.source.artifact_sha256},
+        {"project_revision", lineage.source.project_revision}}},
+      {"derivation",
+       {{"kind", "resample"},
+        {"range",
+         {{"start_frame", lineage.derivation.range.start_frame},
+          {"end_frame", lineage.derivation.range.end_frame}}},
+        {"performance_id", lineage.derivation.performance_id.value()}}},
+  };
 }
 
 foundation::Result<PerformanceEvent> performance_event_from_json(

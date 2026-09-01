@@ -144,6 +144,7 @@ class ProjectStore {
     std::string media_type;
     std::span<const std::byte> bytes;
     std::optional<foundation::SequenceSessionId> sequence_session_id;
+    std::optional<domain::AssetLineage> lineage;
 
     ImportAssignSampleBytesRequest(
         domain::CommandMeta meta_value,
@@ -152,13 +153,15 @@ class ProjectStore {
         std::string media_type_value,
         std::span<const std::byte> bytes_value,
         std::optional<foundation::SequenceSessionId> sequence_session_id_value =
-            std::nullopt)
+            std::nullopt,
+        std::optional<domain::AssetLineage> lineage_value = std::nullopt)
         : meta(std::move(meta_value)),
           slot(slot_value),
           asset_id(std::move(asset_id_value)),
           media_type(std::move(media_type_value)),
           bytes(bytes_value),
-          sequence_session_id(std::move(sequence_session_id_value)) {}
+          sequence_session_id(std::move(sequence_session_id_value)),
+          lineage(std::move(lineage_value)) {}
   };
 
   foundation::Result<void> create(
