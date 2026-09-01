@@ -2,6 +2,8 @@
 
 > 日期：2026-08-27
 >
+> 更新：2026-09-01 增补第 9 节目标芯片选型
+>
 > 评估对象：当前 New Headless Core 主线源码与 ESP-IDF 平台能力
 >
 > 文档性质：静态可行性研究，不是已批准的产品范围、实施计划、排期承诺或硬件选型
@@ -25,6 +27,8 @@ Audio Runtime 和平台 Host，难度中等，估计为 **5/10**，具备明确�
 
 这些工期是风险分档，不是交付承诺。最终估算必须由真实硬件 spike 提供的固件尺寸、
 峰值内存、callback 时间和 underrun 数据校准。
+
+目标芯片见第 9 节：spike 选 ESP32-S3，ESP32-P4 记为升级路径，其余型号被初筛淘汰。
 
 ## 1. 评估范围
 
@@ -115,7 +119,8 @@ ESP-IDF 源码表明，在目标没有硬件 64 位原子时，64 位 atomic 由
 - 64 Pad availability mask 拆成两个 32 位 atomic mask；
 - SPSC Queue 的 producer/consumer index 保持原生 32 位 lock-free。
 
-这是小范围架构调整，但属于必须完成的第一道门槛。
+这是小范围架构调整，但属于必须完成的第一道门槛。它也无法通过选型规避：
+整个 ESP32 家族都是 32 位架构，没有任何一颗芯片具备硬件 64 位原子，详见 9.3 节。
 
 ## 4. 内存评估
 
@@ -310,11 +315,121 @@ ESP32 Host -> RealtimeEngine -> I2S DMA -> DAC
 是否定义新的 runtime Artifact/传输 Contract、是否允许设备本地 Cook、以及断网时设备保存
 何种状态，都是产品级 Contract 问题。本研究不替产品静默决定这些问题。
 
-## 9. 推荐的可行性 Spike
+## 9. 目标芯片选型
+
+ESP32 是一个芯片系列，不是一颗芯片。选型直接决定第 3 节的原子改造范围、第 4 节的内存
+预算和第 5 节的 CPU 余量，因此必须在 spike 开始前收敛，否则测量对象无法固定。
+
+### 9.1 家族全景
+
+| 芯片 | 架构 / 核数 | 主频 | SRAM | PSRAM | FPU | I2S | 无线 |
+| --- | --- | ---: | ---: | --- | :-: | :-: | --- |
+| ESP32（经典） | Xtensa LX6 ×2 | 240 MHz | 520 KB | 支持 | 有 | 2 | WiFi 4 + BT Classic + BLE 4.2 |
+| ESP32-S2 | Xtensa LX7 ×1 | 240 MHz | 320 KB | 支持 | 无 | 1 | 仅 WiFi 4 |
+| ESP32-S3 | Xtensa LX7 ×2 | 240 MHz | 512 KB | 支持，Octal，模组常见 8 MB | 有，含向量指令 | 2 | WiFi 4 + BLE 5 |
+| ESP32-P4 | RISC-V ×2 + LP 核 | 400 MHz | 768 KB + 8 KB TCM | 支持，最高 32 MB 封装内 | 有 | 3 | 无 |
+| ESP32-S31 | RISC-V ×2，128-bit SIMD | 320 MHz | 512 KB | 支持，DDR PSRAM | 官方页面未声明 | 2 | WiFi 6 + BT Classic + BLE 5.4 + 802.15.4 + GbE MAC |
+| ESP32-C2 | RISC-V ×1 | 120 MHz | 272 KB | 不支持 | 无 | 无 | WiFi 4 + BLE 5 |
+| ESP32-C3 | RISC-V ×1 | 160 MHz | 400 KB | 不支持 | 无 | 1 | WiFi 4 + BLE 5 |
+| ESP32-C5 | RISC-V ×1 | 240 MHz | 384 KB | 支持 | 无 | 1 | 双频 WiFi 6 + BLE 5 + 802.15.4 |
+| ESP32-C6 | RISC-V ×1 | 160 MHz | 512 KB | 不支持 | 无 | 1 | WiFi 6 + BLE 5.3 + Thread/Zigbee |
+| ESP32-C61 | RISC-V ×1 | 160 MHz | 320 KB | 支持 | 无 | 1 | WiFi 6 + BLE |
+| ESP32-H2 | RISC-V ×1 | 96 MHz | 320 KB | 不支持 | 无 | 1 | 无 WiFi，BLE 5 + Thread/Zigbee |
+| ESP32-H4 | RISC-V ×2 | 96 MHz | 384 KB | 未核对 | 有 | 1 | 无 WiFi，BLE 5.4 + 802.15.4 |
+
+数据边界：上表用于选型初筛，取自 2026-09-01 检索到的乐鑫官方产品页、数据手册与开发者
+门户。被初筛淘汰分档的外设数量仅作参考；进入 spike 的候选必须以锁定版本的数据手册复核。
+
+来源：
+
+- [Espressif Product Selector](https://products.espressif.com/)
+- [Floating-Point Units on Espressif SoCs](https://developer.espressif.com/blog/2025/10/cores_with_fpu/)
+
+### 9.2 初筛条件
+
+本 Core 的实时播放路径给出四条硬性条件：
+
+1. **必须有硬件 FPU。** `PreparedSampleBank` 保存 float，混音循环也按 float 执行；软件
+   浮点无法满足 Audio Thread 的 callback deadline。乐鑫现有 FPU 均为单精度，`double`
+   仍走软件实现，因此实时路径同样不应引入 `double`。
+2. **必须支持外部 PSRAM。** 见 4.2 节：单个五秒 float Pad 约 937 KiB，任何一颗芯片的
+   内部 SRAM 都装不下目标 Sample Set。
+3. **必须有 I2S。** 产品需外接 I2S DAC 或 codec。经典 ESP32 与 ESP32-S2 上的内建 DAC
+   为 8 位，不满足乐器产品的输出质量要求。
+4. **属于算力档而非连接档。** 见第 5 节：混音循环规模需要双核与 240 MHz 以上主频。
+
+仅条件 1 即可淘汰 ESP32-S2、C2、C3、C5、C6、C61、H2。其中 ESP32-C6 虽有 512 KB SRAM，
+但无 FPU 且不支持 PSRAM，对本用途无价值。ESP32-H2 与 H4 属低功耗无线档，不满足条件 4。
+经典 ESP32 满足条件 1 至 3，但内存与 PSRAM 地址空间比 ESP32-S3 更紧，9.4 节的结论不变。
+
+### 9.3 换芯片解决不了 64 位原子
+
+需要明确记录一条否定结论：**整个 ESP32 家族没有任何一颗芯片具备硬件 64 位原子。**
+Xtensa LX6/LX7 与乐鑫全部 RISC-V 核心都是 32 位架构。32 位原子在 Xtensa 上由 `S32C1I`
+条件存储提供，在 RISC-V 上由标准 `A` 扩展提供，两者都满足需求；但 64 位原子在两种架构
+上都只能由 ESP-IDF 用全局自旋锁模拟。
+
+因此第 3 节的阻断项是架构层面的事实，不是选型问题。无论最终选 ESP32-S3、ESP32-P4 还是
+后续任何一颗乐鑫芯片，Audio Thread 上消除 64 位原子的改造都必须完成。
+
+### 9.4 候选对比与建议
+
+通过初筛的算力档候选为 ESP32-S3 与 ESP32-P4。
+
+| 维度 | ESP32-S3 | ESP32-P4 |
+| --- | --- | --- |
+| 算力 | 双核 Xtensa LX7 240 MHz | 双核 RISC-V 400 MHz |
+| 内部 SRAM | 512 KB | 768 KB + 8 KB TCM |
+| PSRAM 上限 | 模组常见 8 MB | 最高 32 MB |
+| I2S | 2 | 3 |
+| 无线 | 自带 WiFi + BLE | 无，需外挂 ESP32-C6/C61 |
+| 发布时间 | 2020-12 发布 | 2023-01 发布，2024 起供货 |
+| 音频方向生态成熟度 | 高 | 低 |
+
+建议维持 10.1 节的 ESP32-S3 起点，理由是变量隔离：spike 的目的是量出本 Core 自身的行为，
+而 S3 的 ESP-IDF 支持、I2S codec 驱动与 PSRAM 调优经验最成熟，能把未知集中在我们的代码
+上，而不是同时叠加平台本身的未知。
+
+同时把 ESP32-P4 记为明确的升级路径。若第 11 节的产品问题最终指向 Standalone 范围、更多
+Pad、更长 Sample 或设备端 Cook，S3 的 8 MB PSRAM 与 240 MHz 会先于架构成为约束，届时应
+重新评估 P4；代价是增加一颗协处理无线芯片与相应的板级复杂度。这仍是选型问题，不改变
+第 3、4、7 节的任何阻断项。
+
+### 9.5 ESP32-S31 列为观察项，不进入本轮 spike
+
+ESP32-S31 于 2026-07-27 宣布量产。它不适合作为本轮 spike 的目标：
+
+- 官方零售渠道为乐鑫 AliExpress 店铺，首批开发板数量极少且很快售罄；
+- 模组与开发板料号、flash/PSRAM 配置组合尚未公开文档化；
+- ESP-IDF 支持刚起步，音频方向参考设计为零；
+- 官方页面强调 128-bit SIMD，未声明传统 FPU，9.2 节条件 1 无法确认；
+- SRAM 仍为 512 KB，主频 320 MHz；相对 S3 的提升集中在无线与影像/显示，不在本 Core 的
+  瓶颈方向。
+
+若产品后续需要 LE Audio 或以太网，应在其 FPU 情况、模组料号与 ESP-IDF 支持稳定后重新
+评估，而不是在本轮 spike 中引入。
+
+来源：
+[ESP32-S31 Now in Mass Production](https://www.espressif.com/en/news/ESP32_S31_Mass_Production)
+
+### 9.6 Xtensa 与 RISC-V 的长期取向
+
+ESP32-C3 之后乐鑫发布的每一颗新芯片都是 RISC-V，ESP32-S3 是目前最后一颗 Xtensa 算力型
+芯片。这不影响 S3 的短期可用性，但对长期投入有两点影响：
+
+- **工具链**：Xtensa 依赖乐鑫维护的 GCC/LLVM 分叉，上游支持较晚且有限；RISC-V 是上游
+  GCC/LLVM 的一等目标。C++20 特性、标准库更新与静态分析工具在 RISC-V 目标上跟进更快。
+- **SIMD 不可移植**：若将来为混音内核编写 SIMD，Xtensa PIE 与 RISC-V 向量/DSP 扩展互不
+  兼容，需分别实现。这应作为 Embedded Runtime Profile 的可选优化，不进入产品中立模块。
+
+除此之外，ESP-IDF 已抹平两种架构在应用层的绝大部分差异，本 Core 是可移植 C++，架构本身
+不应成为选型的主要理由；决定性因素仍是 9.4 节的内存、算力与生态成熟度。
+
+## 10. 推荐的可行性 Spike
 
 建议先做一个 1–2 周、有明确停止条件的真实硬件 spike。
 
-### 9.1 建议硬件起点
+### 10.1 建议硬件起点
 
 - ESP32-S3；
 - 至少 8 MiB PSRAM；
@@ -325,7 +440,12 @@ ESP32 Host -> RealtimeEngine -> I2S DMA -> DAC
 经典 ESP32 不建议作为第一个目标。它的内存和 PSRAM 地址空间更紧，会同时放大容量、缓存
 和工具链风险。
 
-### 9.2 Spike 必须完成的证据
+选择 ESP32-S3 而非 ESP32-P4 或 ESP32-S31 的完整理由见 9.4 与 9.5 节；简言之，本轮 spike
+要量的是本 Core 自身的行为，应把平台未知降到最低。购买开发板时须确认模组带 PSRAM，
+即料号含 `R` 后缀（如 `ESP32-S3-WROOM-1-N8R8` 为 8 MB flash 加 8 MB PSRAM）；
+不带该后缀的模组只有片上 512 KB SRAM，无法完成 9.2 节条件 2。
+
+### 10.2 Spike 必须完成的证据
 
 1. ESP-IDF 交叉编译选定 Core 子集；
 2. 报告完整 linker map 和 `idf.py size`；
@@ -338,7 +458,7 @@ ESP32 Host -> RealtimeEngine -> I2S DMA -> DAC
 9. 运行至少两小时，不出现 crash、corruption 或不可解释的 heap 下降；
 10. 输出下一阶段内存预算与明确 go/no-go 结论。
 
-### 9.3 Stop conditions
+### 10.3 Stop conditions
 
 出现以下任一结果时，不应直接扩大实现范围：
 
@@ -349,7 +469,7 @@ ESP32 Host -> RealtimeEngine -> I2S DMA -> DAC
 - Storage Platform 无法满足批准范围内的掉电恢复语义；
 - 为适配 ESP32 必须改变未批准的 Project/Runtime Contract。
 
-## 10. 待产品确认的问题
+## 11. 待产品确认的问题
 
 在正式实施计划前至少需要回答：
 
@@ -364,7 +484,7 @@ ESP32 Host -> RealtimeEngine -> I2S DMA -> DAC
 
 这些答案会使任务规模相差数倍。
 
-## 11. 结论与建议
+## 12. 结论与建议
 
 推荐决策不是“移植整个 Core”，而是先验证一个受约束的 Embedded Runtime Profile：
 
@@ -380,13 +500,16 @@ ESP32 Host -> RealtimeEngine -> I2S DMA -> DAC
 创作、Cook、持久化和 Provider，ESP32 会从平台移植演变为一次新的产品架构项目，应单独
 立项，而不是被描述为普通 Host port。
 
-## 12. 研究边界、版本与文档影响
+## 13. 研究边界、版本与文档影响
 
-- 资料检索日期：2026-08-27。ESP-IDF latest/stable 文档可能随版本更新，正式 spike 必须锁定
-  精确 ESP-IDF 版本、工具链和开发板。
+- 资料检索日期：第 1 至 8 节为 2026-08-27，第 9 节为 2026-09-01。ESP-IDF latest/stable
+  文档可能随版本更新，正式 spike 必须锁定精确 ESP-IDF 版本、工具链和开发板。
+- 第 9 节的芯片参数取自乐鑫公开产品页、数据手册与开发者门户，未经实物核对；正式选型
+  必须以锁定版本的数据手册和供货确认为准，被初筛淘汰型号的外设数量尤其只作参考。
 - 本文的内存数字来自源码常量和字段布局估算，不替代目标 ABI 的 `sizeof`、linker map、
   heap trace 或真机测量。
-- 本文没有批准新的 Contract、Embedded Host、Product Assembly 或硬件 SKU。
+- 本文没有批准新的 Contract、Embedded Host、Product Assembly 或硬件 SKU。第 9 节是选型
+  建议与初筛依据，不是已批准的硬件决策。
 - Version impact: none。本文只增加研究资料，不改变 Product Build、Core Module、Host、
   Provider、Contract、Assembly 或运行时行为。
 - Documentation impact: none。本文不改变 Architecture Portal 的当前架构事实、页面或源图；
