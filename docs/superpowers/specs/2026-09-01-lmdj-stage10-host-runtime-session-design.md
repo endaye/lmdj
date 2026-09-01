@@ -8,6 +8,13 @@ progression 权威是 Core 交付物，Host 只组合与转发；会话连续性
 不可实现边界锁定为可执行 Contract；先交付 prerequisite #523 → #524 → #525，
 再恢复 Task 6。
 
+修订（2026-09-01，实现前评审，PR #527 合并后）：补齐四处实现级缺口——
+HRS-D3 锚定与序号续接改为按「进程内 attach」定义（re-attach 必须锚定并从
+journal 续接 input sequence）；HRS-D5 增加 owner 存活证明（advisory owner
+lock），封孤儿前必须抢锁；HRS-D7 的 service 节拍按 Host 类别分化（带活跃
+音频的 Host 必须周期性 service）；HRS-D9 的 launch 材料解析归属 Core
+（`reserve` 携带 Facade 已解析的不可变 pattern 材料）。
+
 关联权威：
 
 - [`2026-08-28-lmdj-stage10-perform-design.md`](2026-08-28-lmdj-stage10-perform-design.md)
@@ -89,12 +96,21 @@ transport 在 service 泵观察到 tick 跨过 `target_tick` 时以恰好 `targe
 transport 的时间源可注入以获得确定性测试。claimed-defer 路径的 witness 属于
 native/web adapter 与 facade fake，headless transport 不伪造 claim。
 
-### HRS-D3：权威时钟的 BPM 锚点由 Facade 通知
+### HRS-D3：权威时钟的锚定与序号续接按「进程内 attach」定义
 
-`PerformanceClock` 接口增加锚点通知：Facade 在 `performance.record.begin`
-成功后以 draft BPM 锚定，在白名单 BPM rebase 的 `rebase_complete` 可见后以
-新 BPM 在当前 tick 重锚。锚点算术遵守 SR-D25 的整数有理规则；已记 tick 不动
-（SR-D14）。测试 fake 同步实现该方法。
+`PerformanceClock` 接口增加锚点通知 `anchor(bpm, at_tick)`。Facade 在**每次
+进程内 session attach**——即为该 Project 路径创建进程内 PerformanceRuntime
+时——恰好锚定一次：
+
+- fresh `performance.record.begin`：以 draft BPM 在当前 tick 锚定；
+- journal re-attach（HRS-D4 的 exact-begin 重放通道）：以 journal/draft 的
+  `created_bpm` 锚定，`at_tick` 取 journal 内全部耐久事件的最大 tick（无
+  事件时为 0），使 `read_tick()` 相对该会话的已记事件保持单调；同时 input
+  sequencer 从 journal 的 `last_input_sequence` 续接，序号在会话内永不重复。
+
+对已存在进程内 runtime 的重放 begin 不重锚、不消费权威读数。白名单 BPM
+rebase 的 `rebase_complete` 可见后以新 BPM 在当前 tick 重锚。锚点算术遵守
+SR-D25 的整数有理规则；已记 tick 不动（SR-D14）。测试 fake 同步实现该方法。
 
 ### HRS-D4：会话连续性 = 进程内活跃会话 + 跨进程耐久身份
 
@@ -112,9 +128,10 @@ owner loss 按 P10-D21/P10-D23 确定性闭合后封存，这条既有语义不�
   支持（其重放窗口 = 会话存续期），这是显式决定而非遗漏。
 - 既有的 exact `record.begin` 重放 re-attach 路径（journal 存活且
   begin_command_id/session/performance 三元组精确匹配）保持不变，作为
-  SIGKILL 后同身份恢复的通道。
+  SIGKILL 后同身份恢复的通道；re-attach 的锚定与序号续接义务见 HRS-D3，
+  owner lock 的重新持有见 HRS-D5。
 
-### HRS-D5：`performance.recovery.list` 是纯 query
+### HRS-D5：`performance.recovery.list` 是纯 query；封孤儿必须先证明 owner 已死
 
 `performance.recovery.list` 与 `performance.record.status` 一律只读：列举
 `recovery/sealed/` 候选并如实报告活跃 journal，不再调用会封存活跃 journal 的
@@ -124,6 +141,15 @@ reconcile 路径。孤儿活跃 journal（owner 已死、未封存）的封存�
 `owner_lost` 完成封存再继续各自语义。这与 Sequence 的 list 只读先例对齐，
 并消除观察者进程封掉活跃会话的跨进程危害。
 
+**Owner 存活证明**：拥有进程从 attach（fresh begin 或 re-attach）起到 seal
+为止，对 `recovery/active/` 下该会话的 lock 文件持有 advisory 独占
+flock（POSIX 目标，与 CLI 既有 POSIX-only 文件路径一致）。任何 command
+边界要把活跃 journal 封成 `owner_lost`，必须先**非阻塞**取得该锁：取锁失败
+即 owner 存活，返回既有 `recording_session_active` typed refusal，不封存；
+取锁成功即 owner 已死（进程崩溃/被杀由内核自动释放锁），封存后按各自语义
+继续。lock 文件是 advisory 运行时元数据，不进 Project Truth，seal 时随
+active journal 一并清除。
+
 ### HRS-D6：C API 组合 headless bridge，零新符号
 
 `lmdj_engine_create` 默认组合 headless 权威与可用的 replay controller
@@ -132,14 +158,24 @@ reconcile 路径。孤儿活跃 journal（owner 已死、未封存）的封存�
 Host 可见旋钮。MCP 经既有五符号继承完整可驱动的 Performance 表面；MCP 的
 23 个 tool 注册仍归 Task 6（#432）。
 
-### HRS-D7：Replay progression 由 service 泵驱动，`status` 保持只读
+### HRS-D7：Replay progression 由 service 泵驱动，`status` 保持只读，节拍按 Host 类别分化
 
-headless bridge 的 replay progression 沿用 web runtime 的 request-driven 泵
-先例：Host/C API 在每次请求分发前调用 bridge 的 service 泵，泵按 transport
-时钟推进（`advance_to(elapsed_tick)`）并 drain launch outcomes。cursor 位置
-是流逝时间的函数而非调用次数的函数，因此查询频率不改变声音或 cursor（RLC
-拒绝项 8.3 的关切不适用）；`performance.replay.status` 与
+replay progression 与 launch outcome 推进只发生在 bridge/adapter 的 service
+泵内：泵按 transport 时钟推进（`advance_to(elapsed_tick)`）并 drain launch
+outcomes。cursor 位置是流逝时间的函数而非调用次数的函数，因此查询频率不改变
+声音或 cursor（RLC 拒绝项 8.3 的关切不适用）；`performance.replay.status` 与
 `performance.record.status` 自身仍不推进任何状态。时间源可注入时整条链确定。
+
+service 节拍按 Host 类别分化：
+
+- **headless Host（CLI、MCP/C API）**：request-driven 泵足够——每次请求
+  分发前 service 一次。无可闻输出，progression 是时间的函数，迟到的批量
+  推进产生与逐拍推进完全相同的 cursor 与事件序。
+- **持有活跃 Audio Runtime 的 Host（Native；Web 归 Task 7）**：除每请求
+  service 外，**必须**在控制线程以周期节拍调用 service（复用 Host 既有
+  控制循环），使 replay sink 对真实引擎的施加与 launch outcome 的产生跟随
+  实际音乐边界，不依赖请求到达。周期 service 仍是控制线程行为，render
+  线程不获得任何新入口。
 
 ### HRS-D8：CLI 增加持久 session 模式，一次性模式不变
 
@@ -152,7 +188,15 @@ response envelope；超长行、非 UTF-8、非对象、缺键或多键 fail clo
 usage 行仅把模式集合扩为 `(command|query|session)`。session 模式退出码：EOF
 干净退出为 0，I/O 失败为 2。
 
-### HRS-D9：Native adapter 移植 #376 谓词并拥有 frame→tick 换算
+### HRS-D9：Native adapter 移植 #376 谓词并拥有 frame→tick 换算；launch 材料由 Core 解析
+
+`PatternLaunchAcknowledger::reserve` 携带 **Facade 已解析的不可变 pattern
+材料**：Facade 在 launch admission 时把 `pattern_slot` 解析为占用的
+PatternId 并经 Project Cooker 产出该会话当前 revision 的不可变 cooked
+材料（空槽传 null），随 reserve 交给 acknowledger。gateway/adapter 只发布
+Core 解析好的材料，headless transport 忽略材料参数；Host 代码在任何路径上
+都不解析 Project Truth、不把 slot 映射到 Pattern。空槽 launch 走同一 ack
+路径（记录事件、不改变正在播放的内容，#488 §5 不变）。
 
 Native Host 建立 pattern publication 路径（`publish_pattern_view` +
 `PatternReplacementAuthority`），acknowledger adapter 在控制线程轮询
@@ -179,6 +223,9 @@ outcome，无 ghost event（P10-D22 不变）。
   已有会话状态不受影响；不可恢复的 stdout 失败按既有 write 失败路径退出 2。
 - recovery.list/status 只读化后，任何 query 都不得改变 `recovery/active/`、
   `recovery/sealed/` 或 Project 字节。
+- 对 owner lock 仍被持有的活跃 journal 尝试封孤儿（begin/apply/discard 任一
+  command 边界）返回既有 `recording_session_active` typed refusal，零磁盘
+  变更；只有取锁成功才允许 `owner_lost` 封存。
 - transport/adapter 的 outcome 必须 exactly-once；drain 后 journal append
   失败沿用既有全量回滚语义。
 
@@ -242,11 +289,16 @@ snapshot。
 2. headless transport 的 ack 只在实际跨界发生，effective tick 恰为
    `target_tick`，latest-wins 与 no-ghost-event 有 witness；
 3. 新进程对已完成 flush 身份得 `replayed: true` 且 `project.inspect` 字节
-   一致；raw event 跨进程重放明确不支持且有 fail-closed witness；
+   一致；raw event 跨进程重放明确不支持且有 fail-closed witness；journal
+   re-attach 有「锚定一次 + 序号自 `last_input_sequence` 续接 + 已记 tick
+   单调不破」的 witness；
 4. 一切 query（含 recovery.list、record.status、replay.status）零磁盘变更；
+   owner lock 被持有时封孤儿被拒且零磁盘变更，owner 被 SIGKILL 后封存成功；
 5. CLI session 模式完成完整 headless journey；一次性模式行为逐字节不变；
 6. Native adapter 在 `--no-device` 下有确定性 launch-ack 与 replay 黑盒
-   witness，render 线程零新入口；
+   witness，render 线程零新入口；无请求到达时周期 service 仍使 replay 与
+   launch 在实际边界推进，且 launch 材料全部来自 `reserve` 携带的 Core
+   解析结果；
 7. full Core、coverage 与 Architecture Portal checks 通过且不降低 floor。
 
 ## 8. Rejected alternatives

@@ -88,6 +88,7 @@ docs PR carrying this plan.
 - Modify: `packages/application-facade/CMakeLists.txt`
 - Modify: `packages/project-io/include/lmdj/project_io/project_store.hpp`
 - Modify: `packages/project-io/src/project_store.cpp`
+- Modify: `packages/project-io/src/sequence_journal.cpp`
 - Create: `tests/core/facade/performance_runtime_bridge_test.cpp`
 - Modify: `tests/core/facade/performance_session_test.cpp`
 - Modify: `tests/core/facade/performance_gesture_admission_test.cpp`
@@ -125,11 +126,32 @@ PerformanceRuntimeBridge make_headless_performance_runtime_bridge(
 
 - `PerformanceClock` (in `application.hpp`) gains
   `virtual void anchor(std::uint16_t bpm, std::uint64_t at_tick) = 0;`
-  (HRS-D3). The Facade calls it after a successful
-  `performance.record.begin` (draft BPM, current tick) and after a whitelist
-  BPM `rebase_complete` becomes visible (new BPM, current tick). Both test
-  fakes implement it. All three port classes gain the locked contract
-  comments from HRS-D1.
+  (HRS-D3). The Facade calls it exactly once per **in-process session
+  attach**: a fresh `performance.record.begin` anchors at (draft BPM,
+  current tick); a journal re-attach anchors at (journal `created_bpm`,
+  maximum durable event tick in the journal, 0 when none) and additionally
+  seeds the input sequencer from the journal's `last_input_sequence`. A
+  replayed begin against an already-attached in-memory runtime neither
+  re-anchors nor consumes authority reads. A whitelist BPM
+  `rebase_complete` re-anchors at (new BPM, current tick). Both test fakes
+  implement it. All three port classes gain the locked contract comments
+  from HRS-D1.
+- `PatternLaunchAcknowledger::reserve` gains a trailing
+  `std::shared_ptr<const cooker::RuntimeSnapshot> resolved_pattern`
+  parameter (HRS-D9): the Facade resolves `pattern_slot` → occupying
+  PatternId → immutable cooked material at the session's current revision
+  during launch admission and passes it (null for an empty slot). The
+  headless transport ignores the material; both test fakes record it. No
+  Host code resolves slots or parses Project Truth.
+- Sealing an active Performance journal as `owner_lost` at a command
+  boundary (`performance.record.begin` / `performance.recovery.apply` /
+  `performance.recovery.discard`) first takes a **non-blocking exclusive
+  advisory flock** on the session's lock file under `recovery/active/`
+  (HRS-D5). The owning process holds that lock from attach until seal; a
+  held lock returns the existing `recording_session_active` typed refusal
+  with zero disk change; a crash releases it automatically. The lock file
+  is runtime metadata, never Project Truth, and is removed with the active
+  journal at seal.
 - The headless transport implements `PatternLaunchAcknowledger` exactly as
   HRS-D2: `reserve` returns the requested `earliest_target_tick` with
   `claimed = false`; a later `reserve` before the boundary replaces the
@@ -171,13 +193,24 @@ in `application.hpp` and add the `anchor` method. Update both facade test
 fakes. Wire the new test executable into facade CMake and the root coverage
 list. Run Step 1's suite; expect PASS.
 
-- [ ] **Step 3: Anchor the clock from the Facade (RED then GREEN)**
+- [ ] **Step 3: Anchor and seed per in-process attach (RED then GREEN)**
 
-In `performance_session_test.cpp`, assert the fake clock records exactly one
-`anchor(draft_bpm, current_tick)` on successful `record.begin` (none on
-replayed begin), and one `anchor(new_bpm, current_tick)` after a BPM
-rebase completes. Implement the two call sites in `application.cpp`. Expect
-PASS.
+In `performance_session_test.cpp`, assert per HRS-D3:
+
+- a fresh successful `record.begin` records exactly one
+  `anchor(draft_bpm, current_tick)`;
+- a replayed begin against the already-attached in-memory runtime records
+  no further anchor and consumes no `read_tick()`/`next()`;
+- a journal re-attach (destroy the first Application with the journal kept
+  alive at the store layer, then replay the exact original begin in a
+  second Application) records exactly one
+  `anchor(created_bpm, max_durable_event_tick)`, seeds the sequencer so its
+  next value is `last_input_sequence + 1`, and subsequently admitted events
+  never receive a tick below the journal's maximum durable tick or a
+  repeated input sequence;
+- a BPM `rebase_complete` records one `anchor(new_bpm, current_tick)`.
+
+Implement the call sites in `application.cpp`. Expect PASS.
 
 - [ ] **Step 4: Write the cross-process flush identity RED suite**
 
@@ -204,20 +237,29 @@ witnesses that a second process replaying an `event_id` gets the owner
 mismatch refusal, fail closed with zero disk change. Run Step 4's suites;
 expect PASS.
 
-- [ ] **Step 6: Make Performance recovery queries read-only (RED then GREEN)**
+- [ ] **Step 6: Make recovery queries read-only and gate orphan sealing on the owner lock (RED then GREEN)**
 
 RED in `performance_lifecycle_test.cpp`: while one store/Facade holds a live
 active Performance journal, `performance.recovery.list` and
 `performance.record.status` from a second instance report the truthful state
-and leave `recovery/active/performance.jsonl` byte-identical; an orphaned
-active journal (owner destroyed without sealing, simulated at the store
-layer) is sealed `owner_lost` only by the next
-`performance.record.begin` / `performance.recovery.apply` /
-`performance.recovery.discard` command. Implement by moving the
-`reconcile_performance_recovery` sealing off the query path into those
-command boundaries in `project_store.cpp`, keeping the sealed-candidate
-listing pure. Expect PASS, including every existing recovery fault-matrix
-case.
+and leave `recovery/active/performance.jsonl` byte-identical. Orphan sealing
+is command-boundary-only and lock-gated (HRS-D5):
+
+- while the owner lock is held (hold it from a helper process so the lock is
+  a genuine cross-process witness), a second instance's
+  `performance.record.begin` (different session) /
+  `performance.recovery.apply` / `performance.recovery.discard` returns the
+  existing `recording_session_active` refusal with zero disk change;
+- after the lock holder is killed (SIGKILL — the kernel releases the lock),
+  the same command seals the journal `owner_lost` and proceeds;
+- the owning instance acquires the lock at attach (fresh begin and
+  re-attach), and seal removes the lock file with the active journal.
+
+Implement by moving the `reconcile_performance_recovery` sealing off the
+query path into those command boundaries in `project_store.cpp` /
+`sequence_journal.cpp`, adding the advisory-flock owner lock, and keeping
+the sealed-candidate listing pure. Expect PASS, including every existing
+recovery fault-matrix case.
 
 - [ ] **Step 7: Compose the bridge in the C API (RED then GREEN)**
 
@@ -330,11 +372,14 @@ Extend `performance_cli_session_test.py` with two CLI-only journeys:
   asserts `replayed: true`, one revision, and byte-identical
   `project.inspect` before/after;
 - **owner loss:** session process A begins and admits events, is killed
-  (SIGKILL) before stop; one-shot process B observes
+  (SIGKILL) before stop — the kernel releases A's owner lock, which is what
+  lets B treat the journal as orphaned (HRS-D5); one-shot process B observes
   `performance.record.status`, seals via the Step 6 command-boundary
   reconciliation on `performance.recovery.apply`, applies, and asserts the
   complete far side (revision, Performance events, receipts); a second run
-  discards instead and asserts zero Project change.
+  discards instead and asserts zero Project change. Additionally, while A is
+  still alive, B's `performance.recovery.apply` returns
+  `recording_session_active` with zero disk change.
 
 Expect PASS.
 
@@ -397,15 +442,21 @@ EnginePerformanceAdapter make_engine_performance_adapter(
 - The clock converts `engine.telemetry().rendered_frames` to ticks with
   SR-D25 integer-rational anchoring at 48 kHz, re-anchored through the same
   `anchor(bpm, at_tick)` notification as Task 1.
-- `PatternPublicationGateway` is the adapter's only way to publish: it wraps
-  `PreparedPatternView` preparation, `engine.publish_pattern_view(view,
+- `PatternPublicationGateway` is the adapter's only way to publish. It
+  receives the immutable `cooker::RuntimeSnapshot` that the Facade resolved
+  and passed through `reserve` (HRS-D9), converts it to a
+  `PreparedPatternView`, and wraps `engine.publish_pattern_view(view,
   activation_frame, replacement_authority)` and
-  `cancel_pattern_publication`, so the acknowledger controls latest-wins
-  replacement and claimed-defer without the Host choosing anything.
-- `reserve` publishes at the frame of the requested bar tick and returns
-  `{target_tick, claimed}` from the publication result; a later request
-  before the render thread claims the boundary replaces it (latest-wins); a
-  claimed boundary defers the new request to the following bar.
+  `cancel_pattern_publication`. It never resolves a slot, never touches
+  Project Truth, and the acknowledger controls latest-wins replacement and
+  claimed-defer without the Host choosing anything.
+- `reserve` publishes the Core-resolved material at the frame of the
+  requested bar tick and returns `{target_tick, claimed}` from the
+  publication result; a later request before the render thread claims the
+  boundary replaces it (latest-wins); a claimed boundary defers the new
+  request to the following bar. An empty-slot reserve (null material)
+  publishes nothing: `service` acknowledges it at the boundary as `applied`
+  without changing what is playing (#488 §5).
 - `service` ports the #376 predicate:
   `pattern_telemetry().current_generation == reserved generation` **and**
   `telemetry().rendered_frames >= activation_frame`, with an exactly-once
@@ -420,10 +471,14 @@ EnginePerformanceAdapter make_engine_performance_adapter(
   rendered-frame time.
 - Native Host wiring: construct the `RealtimeEngine` before the
   `Application` (hoist), build the adapter, inject its members into
-  `ApplicationConfig`, and call `adapter.service()` inside the existing
-  per-request `drain_trigger_outcomes_once` wrapper. The Host's own protocol
-  surface does not change in this Task; registering the 23 operations stays
-  in Task 6 (#432).
+  `ApplicationConfig`, and call `adapter.service()` both inside the existing
+  per-request `drain_trigger_outcomes_once` wrapper **and on the Host's
+  existing periodic control-loop tick** (HRS-D7): a host with a live audio
+  runtime must keep replay sink application and launch outcomes tracking the
+  actual boundaries even when no request arrives. The periodic call runs on
+  the control thread under `facade_mutex_`; the render thread gains nothing.
+  The Host's own protocol surface does not change in this Task; registering
+  the 23 operations stays in Task 6 (#432).
 
 - [ ] **Step 1: Write the adapter RED suite**
 
@@ -433,10 +488,13 @@ deterministically from the test thread (`render` in 128-frame blocks, the
 `target_tick`/`claimed`; render across the boundary and assert `service`
 emits exactly one `applied` outcome whose `effective_tick` equals the
 reserved bar tick under the frame→tick anchor; latest-wins before claim;
-claimed-defer to the following bar; cancel and publication failure produce
+claimed-defer to the following bar; an empty-slot reserve (null material)
+publishes nothing yet is acknowledged `applied` at the boundary with the
+playing content unchanged; cancel and publication failure produce
 no `applied` outcome; clock monotonicity across BPM re-anchor; replay
 begin→progression→natural end with neutral reset against the engine-backed
-sink. Expect FAIL (RED).
+sink, where progression is driven purely by rendering plus periodic
+`service` calls with no interleaved Facade requests. Expect FAIL (RED).
 
 - [ ] **Step 2: Implement the adapter**
 
@@ -455,7 +513,7 @@ stop, status, start/stop, quit) byte-compatible, and a
 the same workspace must show the host process's Performance surface healthy
 (no `performance_*_unavailable`). Implement: hoist the engine ahead of the
 `Application`, build the adapter, inject, and service it in the existing
-request wrapper. Expect PASS.
+request wrapper plus the periodic control-loop tick (HRS-D7). Expect PASS.
 
 - [ ] **Step 4: Run Task 3 full verification**
 
