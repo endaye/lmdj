@@ -113,6 +113,23 @@ struct CommandExecution {
   domain::AppliedCommand outcome;
 };
 
+class PerformanceOwnerLock final {
+ public:
+  ~PerformanceOwnerLock();
+  PerformanceOwnerLock(PerformanceOwnerLock&&) noexcept;
+  PerformanceOwnerLock& operator=(PerformanceOwnerLock&&) noexcept;
+
+  PerformanceOwnerLock(const PerformanceOwnerLock&) = delete;
+  PerformanceOwnerLock& operator=(const PerformanceOwnerLock&) = delete;
+
+ private:
+  struct Impl;
+  explicit PerformanceOwnerLock(std::unique_ptr<Impl> impl);
+
+  std::unique_ptr<Impl> impl_;
+  friend class ProjectStore;
+};
+
 struct ImportArtifactExecution {
   domain::ImportAsset command;
   domain::AppliedCommand outcome;
@@ -215,6 +232,11 @@ class ProjectStore {
   replay_performance_flush(
       const std::filesystem::path& bundle,
       const PerformanceFlushIdentity& identity);
+  foundation::Result<std::optional<PerformanceFlushExecution>>
+  replay_performance_flush(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      const foundation::CommandId& command_id);
   foundation::Result<domain::AppliedCommand> create_performance(
       const std::filesystem::path& bundle,
       const CreatePerformance& command);
@@ -232,6 +254,10 @@ class ProjectStore {
       const domain::CommandMeta& meta,
       const foundation::SequenceSessionId& session_id,
       const domain::PerformanceId& performance_id);
+  foundation::Result<std::unique_ptr<PerformanceOwnerLock>>
+  acquire_performance_owner_lock(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id);
   foundation::Result<PerformanceStopReceipt> stop_performance_session(
       const std::filesystem::path& bundle,
       const foundation::SequenceSessionId& session_id,
@@ -265,6 +291,8 @@ class ProjectStore {
       const domain::UpdateSequenceSettings& command);
   foundation::Result<std::vector<PerformanceRecoveryCandidate>>
   reconcile_performance_recovery(const std::filesystem::path& bundle);
+  foundation::Result<std::vector<PerformanceRecoveryCandidate>>
+  list_performance_recovery(const std::filesystem::path& bundle) const;
   foundation::Result<SequenceCaptureDisarmResult> disarm_sequence_capture(
       const std::filesystem::path& bundle,
       const foundation::SequenceSessionId& session_id,
@@ -274,7 +302,16 @@ class ProjectStore {
       const foundation::ArtifactRef& artifact) const;
 
  private:
+  struct PerformanceOwnerLocks;
+
+  foundation::Result<void> hold_performance_owner_lock(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id);
+  void release_performance_owner_lock(
+      const std::filesystem::path& bundle) noexcept;
+
   std::shared_ptr<ProjectStoragePlatform> platform_;
+  std::shared_ptr<PerformanceOwnerLocks> performance_owner_locks_;
 };
 
 }  // namespace lmdj::project_io

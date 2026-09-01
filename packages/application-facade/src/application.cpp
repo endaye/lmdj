@@ -5240,6 +5240,18 @@ struct Application::Impl {
                          "Performance recording session is already active",
                          {{"reason", "performance_session_active"}}));
     }
+    std::optional<std::uint64_t> fresh_anchor_tick;
+    if (existing == performance_sessions.end() && performance_clock) {
+      auto active_before = sequence_journals.read_active_performance(path);
+      if (!active_before.has_value() &&
+          active_before.error().code == ErrorCode::not_found) {
+        auto tick = performance_clock->read_tick();
+        if (!tick.has_value()) {
+          return error_envelope(tick.error());
+        }
+        fresh_anchor_tick = tick.value();
+      }
+    }
     auto begun = projects.begin_performance_draft(
         path, {{foundation::CommandId{uuid_field(request, "command_id")},
                 unsigned_field(request, "expected_revision")},
@@ -5253,6 +5265,41 @@ struct Application::Impl {
       return error_envelope(journal.error());
     }
     if (existing == performance_sessions.end()) {
+      auto loaded = projects.load(path);
+      if (!loaded.has_value()) {
+        return error_envelope(loaded.error());
+      }
+      const auto draft = loaded.value().performances.find(performance_id);
+      if (draft == loaded.value().performances.end()) {
+        return error_envelope(sequence_error(
+            ErrorCode::invalid_project,
+            "Performance draft is missing after begin"));
+      }
+      if (performance_clock) {
+        if (fresh_anchor_tick.has_value()) {
+          performance_clock->anchor(
+              draft->second.created_bpm, *fresh_anchor_tick);
+        } else {
+          std::uint64_t maximum_tick = 0;
+          for (const auto& event : journal.value().pending_events) {
+            maximum_tick = std::max(
+                maximum_tick, domain::performance_event_tick(event));
+          }
+          for (const auto& flush : journal.value().flushes) {
+            for (const auto& event : flush.canonical_events) {
+              maximum_tick = std::max(
+                  maximum_tick, domain::performance_event_tick(event));
+            }
+          }
+          performance_clock->anchor(
+              draft->second.created_bpm, maximum_tick);
+        }
+      }
+      if (performance_input_sequencer &&
+          journal.value().last_input_sequence.has_value()) {
+        performance_input_sequencer->seed(
+            *journal.value().last_input_sequence);
+      }
       PerformanceRuntime runtime{
           session_id,
           performance_id,
@@ -5286,6 +5333,20 @@ struct Application::Impl {
     auto found = performance_sessions.find(sequence_key(path));
     if (found == performance_sessions.end() ||
         found->second.session_id != session_id) {
+      auto replayed =
+          projects.replay_performance_flush(path, session_id, command_id);
+      if (!replayed.has_value()) {
+        return error_envelope(replayed.error());
+      }
+      if (replayed.value().has_value()) {
+        return success_envelope(
+            {{"performance_id",
+              replayed.value()->identity.performance_id.value()},
+             {"committed_revision",
+              replayed.value()->receipt.committed_revision},
+             {"replayed", true}},
+            replayed.value()->receipt.committed_revision);
+      }
       return error_envelope(
           sequence_error(ErrorCode::invalid_argument,
                          "Performance flush owner does not match"));
@@ -5391,8 +5452,9 @@ struct Application::Impl {
     require(exact_keys(request, {"operation", "project_path", "command_id",
                                  "expected_revision", "performance_id"}),
             "performance.discard request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
     auto discarded = projects.discard_performance_draft(
-        absolute_path_field(request, "project_path"),
+        path,
         {foundation::CommandId{uuid_field(request, "command_id")},
          unsigned_field(request, "expected_revision")},
         domain::PerformanceId{uuid_field(request, "performance_id")});
@@ -5406,7 +5468,7 @@ struct Application::Impl {
   nlohmann::json performance_recovery_list(const nlohmann::json &request) {
     require(exact_keys(request, {"operation", "project_path"}),
             "performance.recovery.list request shape is invalid");
-    auto candidates = projects.reconcile_performance_recovery(
+    auto candidates = projects.list_performance_recovery(
         absolute_path_field(request, "project_path"));
     if (!candidates.has_value()) {
       return error_envelope(candidates.error());
@@ -6214,6 +6276,25 @@ struct Application::Impl {
     if (!drained.has_value()) {
       return error_envelope(drained.error());
     }
+    auto loaded = projects.load(path);
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    if (loaded.value().revision != runtime.expected_revision) {
+      return error_envelope(sequence_error(
+          ErrorCode::revision_conflict,
+          "Performance launch Project revision does not match the active session"));
+    }
+    std::shared_ptr<const cooker::RuntimeSnapshot> resolved_pattern;
+    const auto& occupying_pattern = loaded.value().pattern_slots.at(slot);
+    if (occupying_pattern.has_value()) {
+      auto cooked = cook_project(
+          path, loaded.value(), *occupying_pattern, sample_limits);
+      if (!cooked.has_value()) {
+        return error_envelope(cooked.error());
+      }
+      resolved_pattern = std::move(cooked.value());
+    }
     auto tick = performance_clock->read_tick();
     if (!tick.has_value()) {
       return error_envelope(tick.error());
@@ -6221,7 +6302,8 @@ struct Application::Impl {
     const auto earliest =
         ((tick.value() / domain::kBarTicks4x4) + 1U) * domain::kBarTicks4x4;
     auto reservation = pattern_launch_acknowledger->reserve(
-        session_id, request_id, static_cast<std::uint8_t>(slot), earliest);
+        session_id, request_id, static_cast<std::uint8_t>(slot), earliest,
+        std::move(resolved_pattern));
     if (!reservation.has_value()) {
       return error_envelope(reservation.error());
     }
@@ -6331,7 +6413,7 @@ struct Application::Impl {
     if (journal.error().code != ErrorCode::not_found) {
       return error_envelope(journal.error());
     }
-    auto recovery = projects.reconcile_performance_recovery(path);
+    auto recovery = projects.list_performance_recovery(path);
     if (!recovery.has_value()) {
       return error_envelope(recovery.error());
     }
@@ -6412,6 +6494,13 @@ struct Application::Impl {
         return error_envelope(updated.error());
       }
       const auto &outcome = updated.value().outcome;
+      if (bpm.has_value() && !outcome.replayed && performance_clock) {
+        auto tick = performance_clock->read_tick();
+        if (!tick.has_value()) {
+          return error_envelope(tick.error());
+        }
+        performance_clock->anchor(outcome.state.bpm, tick.value());
+      }
       performance->second.expected_revision = outcome.state.revision;
       return success_envelope(
           {{"committed_revision", outcome.state.revision},
