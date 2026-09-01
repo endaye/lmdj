@@ -11,6 +11,7 @@ source_paths:
   - products/lmdj/assembly.json
   - docs/quality/2026-08-07-stage7-creator-editor-acceptance.md
   - docs/quality/2026-08-09-stage8-sample-editor-acceptance.md
+  - docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md
   - docs/quality/2026-08-16-stage8b-pad-capture-acceptance.md
   - docs/quality/2026-08-24-creator-capture-precommit-crop.md
   - docs/superpowers/specs/2026-08-23-creator-capture-precommit-crop-design.md
@@ -43,6 +44,8 @@ Open local 在已有 Project 时仍保持可达；list/import/open/reopen 属于
 ## 演奏边界
 
 Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
+
+`1.0.40.0` 的 macOS Chrome M2 实体听感已验证非零裁剪、One Shot、Gate release、Volume/Mute、16 Pads、Replace/reload；Loop Gate 与 Loop Toggle 的 repeat seam 均可闻咔哒，所以该行是 `FAILED / UNVERIFIED`，由 [#511](https://github.com/endaye/lmdj/issues/511) 跟踪。该结果不表示其他浏览器或设备通过，也不能由 passing prefix 推导出完整听感验收。
 
 ## 分发与身份
 

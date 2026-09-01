@@ -42,7 +42,7 @@ latency. These block any physical-pass claim and promotion to Beta or Stable.
 | 1.0.23.0 | macOS Chrome — external audio interface input | `deferred / unverified` |
 | 1.0.23.0 | macOS Safari — `getUserMedia` and AudioWorklet capture | `deferred / unverified` |
 | 1.0.23.0 | iPadOS Safari — capture behaviour | `deferred / unverified` |
-| 1.0.22.0 | macOS Chrome — human hearing and subjective audio quality | `deferred / unverified` |
+| 1.0.40.0 | macOS Chrome — human hearing and subjective audio quality | **`FAILED / UNVERIFIED` 2026-09-01** — Loop Gate and Toggle seam clicks ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md), [#511](https://github.com/endaye/lmdj/issues/511)) |
 | 1.0.22.0 | macOS Chrome — physical MIDI controller | `deferred / unverified` |
 | 1.0.22.0 | macOS Safari — pointer plus physical hearing | `deferred / unverified` |
 | 1.0.22.0 | iPadOS Safari — physical touch ergonomics | `deferred / unverified` |
@@ -385,9 +385,11 @@ F1–F4 were found while performing A1's real-microphone row (M1); F5 and F6 cam
 from the first check of row M2, which stopped there. Each was reproduced or
 traced to source before being recorded; measurements for F1–F4 are in the
 [evidence file](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md).
-F1–F5 and F6 are combined into Product Build `1.0.36.0` (Creator `1.5.5`,
-audio-runtime `0.5.1`) — all six session defects are fixed in source, while
-their physical re-runs remain open.
+F1–F5 and the F6 attack/release ramp are combined into Product Build
+`1.0.36.0` (Creator `1.5.5`, audio-runtime `0.5.1`). The 2026-09-01 M2 run on
+`1.0.40.0` physically confirmed the strict non-zero trim boundary and stop
+ramp, then reproduced the separately deferred loop-seam click in both loop
+modes. That remaining product defect is [#511](https://github.com/endaye/lmdj/issues/511).
 
 F1, F2, F3 and F5 are Creator front-end defects and are scoped together in
 [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
@@ -516,8 +518,9 @@ release ramp, no fade at the trim boundary, no crossfade at the loop seam and
 no zero-crossing snap. A trim edge on a non-zero sample is a step
 discontinuity, which is what the click is.
 
-The same absence predicts clicks at the loop seam and on releasing a held
-voice; neither has been tested yet.
+The same absence predicted clicks at the loop seam and on releasing a held
+voice. The later physical rerun distinguished them: held release is clean,
+while the loop seam clicks.
 
 Fixed 2026-08-24 in Product Build `1.0.36.0` (audio-runtime `0.5.1`),
 implementing the
@@ -529,12 +532,14 @@ zero across the last 96 frames before `end_frame`, and turns `stop_voice`
 into a 96-frame release tail with the `stopped` publication timing unchanged
 (published at stop initiation) — a second stop or a steal hard-kills a
 releasing voice. All ramp state is POD fields on the voice; the render path
-stays allocation-free and lock-free. The loop-seam crossfade remains
-**deferred** by the decision: M2 check 5 (loop seam) is EXPECTED to remain
-clicky until it lands — that expectation is recorded here, not hidden. The
-human re-run of M2 checks 1 and 5 stays open in
-`2026-08-17-manual-verification-todo.md` (the "F6 ramp policy lands" trigger
-row).
+stays allocation-free and lock-free. The loop-seam crossfade remained
+**deferred** by the decision. The 2026-09-01 physical M2 rerun on `1.0.40.0`
+confirmed a clean strict non-zero trim boundary and clean Gate release/Toggle
+stop, but both Loop Gate and Loop Toggle clicked at each seam. The exact run is
+retained in the
+[hearing evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md),
+and [#511](https://github.com/endaye/lmdj/issues/511) owns the loop repair and
+corrected-candidate rerun. M2 therefore remains failed/unverified.
 
 ---
 
