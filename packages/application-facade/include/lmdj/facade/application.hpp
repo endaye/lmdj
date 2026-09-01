@@ -17,6 +17,7 @@
 #include <lmdj/cooker/runtime_snapshot.hpp>
 #include <lmdj/cooker/sample_analysis.hpp>
 #include <lmdj/domain/command_handler.hpp>
+#include <lmdj/facade/performance_replay.hpp>
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
@@ -85,6 +86,7 @@ struct ApplicationConfig {
       nullptr;
   std::shared_ptr<PatternLaunchAcknowledger> pattern_launch_acknowledger =
       nullptr;
+  std::shared_ptr<PerformanceReplayController> performance_replay_controller;
 };
 
 struct RuntimeSnapshotRequest {

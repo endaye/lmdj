@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-08-19
     occurrence: https://github.com/endaye/lmdj/pull/190
     observed_by: unknown
+  - date: 2026-09-01
+    occurrence: https://github.com/endaye/lmdj/pull/518
+    observed_by: Codex GPT-5
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
