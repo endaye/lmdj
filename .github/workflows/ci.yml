@@ -263,12 +263,14 @@ jobs:
           EOF
       - run: python3 -m unittest discover -s tests/build -p 'release_*_test.py'
       - run: python3 tests/build/web_runtime_deploy_workflow_test.py
+      - run: python3 tests/build/creator_web_deploy_workflow_test.py
       - run: python3 tests/build/web_runtime_public_deployment_docs_test.py
       # The suite is hermetic per test, so it shards across the runner's cores
       # instead of spending its serial wall clock on process spawns. The runner
       # runs its two timing-sensitive signal tests alone after the shards and
       # fails closed if the executed test set differs from the discovered one.
       - run: python3 apps/web-runtime-host/test/deploy_command_test.py --shards 4
+      - run: python3 apps/creator-web/test/deploy_command_test.py --shards 4
 
   chameleon-lab:
     # On the dual-node trusted role with the rest of the general group. Like

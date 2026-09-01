@@ -28,7 +28,7 @@ SmokeError = _RUNTIME_SMOKE.SmokeError
 
 
 def _timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def discover_http_identity(

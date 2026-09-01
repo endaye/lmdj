@@ -2,11 +2,10 @@ import {readFile} from "node:fs/promises";
 
 import {expect, test} from "@playwright/test";
 
+import {creatorProjectBundle} from "./creator_project_fixture.mjs";
 
-const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 const expectedProductBuild = process.env.LMDJ_CREATOR_WEB_EXPECTED_PRODUCT_BUILD;
 const expectedHostVersion = process.env.LMDJ_CREATOR_WEB_EXPECTED_VERSION;
-if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
 if (!expectedProductBuild) {
   throw new Error("LMDJ_CREATOR_WEB_EXPECTED_PRODUCT_BUILD is required");
 }
@@ -44,7 +43,11 @@ async function importProject(page) {
   });
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
-  await (await chooserPromise).setFiles(bundle);
+  await (await chooserPromise).setFiles({
+    name: "creator-deployment-project.lmdj",
+    mimeType: "application/vnd.lmdj.project-bundle",
+    buffer: creatorProjectBundle(),
+  });
   await expect(page.getByRole("heading", {name: /^Project /}))
     .toBeVisible({timeout: 120_000});
 }
