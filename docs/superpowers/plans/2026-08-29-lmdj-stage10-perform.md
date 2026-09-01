@@ -6,11 +6,16 @@
 
 **Authoring gate (refreshed 2026-09-01):** The authority is the approved
 [`2026-08-28-lmdj-stage10-perform-design.md`](../specs/2026-08-28-lmdj-stage10-perform-design.md)
-(P10-D1–D25), its six decision files, #488, and the approved
-[`2026-09-01-lmdj-stage10-replay-lineage-contract-design.md`](../specs/2026-09-01-lmdj-stage10-replay-lineage-contract-design.md).
-Tasks 1–4 and repair Tasks 3A/3B are merged. Task 5 is gated by Contract
-prerequisite #516, whose exact execution order is in
-[`2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md`](2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md).
+(P10-D1–D25), its six decision files, #488, the approved
+[`2026-09-01-lmdj-stage10-replay-lineage-contract-design.md`](../specs/2026-09-01-lmdj-stage10-replay-lineage-contract-design.md),
+and the approved
+[`2026-09-01-lmdj-stage10-host-runtime-session-design.md`](../specs/2026-09-01-lmdj-stage10-host-runtime-session-design.md)
+(HRS-D1–D9).
+Tasks 1–5 (including Contract prerequisite #516, executed per
+[`2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md`](2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md))
+and repair Tasks 3A/3B are merged. Task 6 is gated by the host runtime/
+session prerequisites #523, #524 and #525, whose exact execution order is in
+[`2026-09-01-lmdj-stage10-host-runtime-session-repair.md`](2026-09-01-lmdj-stage10-host-runtime-session-repair.md).
 Product Build
 `1.0.40.0` remains the protected-main baseline; the locked Stage 10 target
 remains `1.0.41.0` unless Task 10's required fresh allocation audit proves it
@@ -224,7 +229,11 @@ Design repair #488 ─────┬─ Task 3A #498 durable Pattern slots
 Tasks 2, 3, 3A, 3B ── Task 4 #430 authoritative recording/management Facade
                          ├─ prerequisite #516 Lineage + recording revision
                          │    └─ Task 5 #431 replay resolution + resample commit
-                         │         └─ Task 6 #432 CLI/MCP/Native parity
+                         │         └─ prerequisite #523 Core runtime bridge
+                         │              ├─ prerequisite #524 CLI session mode
+                         │              ├─ prerequisite #525 Native adapter
+                         │              └─ Task 6 #432 CLI/MCP/Native parity
+                         │                   (needs #523, #524 and #525)
                          └─ Task 7 #433 Web Runtime raw-input + launch bridge
                               └─ Task 8 #434 Host WAV tap/OPFS writer
 Tasks 5, 7, 8 ───────────── Task 9 #435 Creator Perform surface
@@ -233,12 +242,14 @@ Tasks 1-9 + 3A/3B ─── Task 10 #436 versions/Assembly/current Portal/automa
                                 └─ Task 12 #468 release intent + canary Release
 ```
 
-Tasks 1–4 and repair Tasks 3A/3B are complete. Prerequisite #516 must merge
-before Task 5. Task 7 may run independently of #516/#431 on its disjoint
-primary files; Task 6 starts after Task 5 because its shared Host journey
-consumes replay/resample. Task 8 starts after Task 7; Task 9 waits for Tasks 5,
-7 and 8. Integration,
-snapshotting and release stay serial through Tasks 10–12.
+Tasks 1–5 (with prerequisite #516) and repair Tasks 3A/3B are complete.
+Task 6 starts only after host runtime/session prerequisites #523, #524 and
+#525 merge: its shared Host journey consumes replay/resample and needs the
+Core runtime bridge, the CLI session mode and the Native adapter. #524 and
+#525 may run in parallel worktrees after #523. Task 7 may run independently
+on its disjoint primary files. Task 8 starts after Task 7; Task 9 waits for
+Tasks 5, 7 and 8. Integration, snapshotting and release stay serial through
+Tasks 10–12.
 
 ## Design Traceability
 
@@ -265,6 +276,7 @@ snapshotting and release stay serial through Tasks 10–12.
 | P10-D22: actual launch acknowledgement | 4, 7 | unclaimed replace, claimed defer, ghost-event rejection |
 | P10-D23: Core FX/owner-loss rules | 4, 7 | quantum last-write-wins and deterministic closure vectors |
 | P10-D24: two-phase durable rebase | 3B, 4 | every prepare/receipt/complete crash point and exact retry |
+| HRS-D1–D9: Core runtime authorities and session continuity (2026-09-01 repair) | #523, #524, #525, 6 | bridge/adapter suites; cross-process flush replay; CLI session journey |
 
 ## Task 1: Add Project v4 and the Performance Authoring Domain — delivered
 
@@ -576,9 +588,33 @@ Surface while adding immutable Project Cooker projection, required injected
 controller, deterministic command-derived Asset identity, and D1-only
 resample commit.
 
+## Host Runtime/Session Prerequisite: Make the Performance Surface Drivable
+
+**Issues:** #523, #524, #525. Hard dependencies: #430, #431 and the merged
+docs PR carrying the repair design and plan.
+
+The Task 6 start-gate audit found the locked surface undrivable by any
+production Host: the three Performance authority ports have no production
+implementation (all four Host construction sites inject `nullptr` plus the
+unavailable replay controller), the CLI cannot hold a session across
+requests, the Facade's in-memory owner guard blocks the fully idempotent
+cross-process flush replay, and `performance.recovery.list` seals a live
+journal from a query. The independently reviewable corrections are
+adjudicated as HRS-D1–D9 in
+[`2026-09-01-lmdj-stage10-host-runtime-session-design.md`](../specs/2026-09-01-lmdj-stage10-host-runtime-session-design.md).
+Execute Tasks 1–3 of
+[`2026-09-01-lmdj-stage10-host-runtime-session-repair.md`](2026-09-01-lmdj-stage10-host-runtime-session-repair.md)
+as their complete file lists, RED/GREEN sequences, verification and commit
+authority: Task 1 (#523) Core Performance runtime bridge, cross-process
+flush identity and read-only recovery queries; Task 2 (#524) CLI persistent
+NDJSON session mode and CLI-only cross-process journeys; Task 3 (#525)
+Native Host `RealtimeEngine` adapter and construction-order repair.
+
 ## Task 6: Migrate CLI, MCP and Native Host to Performance Operations
 
-**Issue:** #432. Hard dependencies: #430 and #431.
+**Issue:** #432. Hard dependencies: #430, #431 and merged #523, #524, #525.
+The CLI journey legs run in the #524 session mode; every Host injects only
+the #523 bridge or #525 adapter and adds no runtime semantics of its own.
 
 **Files:**
 
@@ -905,7 +941,9 @@ The immutable Product Build snapshot is created only after the Task 10 version/c
 
 The Stage 10 umbrella is #425. #426 created the original map; #488 repaired its
 Contract before Task 4, creating #498/#499 and incorporating the already-open
-release boundary #468.
+release boundary #468. The 2026-09-01 Replay/Lineage repair created #516 before
+Task 5; the 2026-09-01 host runtime/session repair created #523/#524/#525
+before Task 6.
 
 | Plan Task | GitHub Issue | Priority | Primary Project area | Hard dependencies |
 |---|---|---|---|---|
@@ -919,7 +957,10 @@ release boundary #468.
 | 3B | #499 | P1 | Core | #428, #488 |
 | 4 | #430 | P1 | Core | #428, #429, #498, #499 |
 | 5 | #431 | P1 | Core | #430 |
-| 6 | #432 | P2 | Native Host | #430, #431 |
+| Prerequisite | #523 | P1 | Core | #431, repair docs PR |
+| Prerequisite | #524 | P1 | Core | #523 |
+| Prerequisite | #525 | P1 | Core/Native Host | #523 |
+| 6 | #432 | P2 | Native Host | #430, #431, #523, #524, #525 |
 | 7 | #433 | P1 | Web Host | #430 |
 | 8 | #434 | P1 | Creator | #433 |
 | 9 | #435 | P1 | Creator | #431, #433, #434 |
