@@ -1,9 +1,7 @@
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
 
-const execFileAsync = promisify(execFile);
+import {resolveChangedFiles} from './lib/changed-files.mjs';
 
 export function checkDocumentationImpact({body, changedFiles}) {
   const errors = [];
@@ -35,8 +33,16 @@ async function main() {
   let changedFiles = (process.env.PORTAL_CHANGED_FILES ?? '').split(/\r?\n/).filter(Boolean);
   if (!changedFiles.length) {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-    const {stdout} = await execFileAsync('git', ['diff', '--name-only', 'HEAD^', 'HEAD'], {cwd: repoRoot});
-    changedFiles = stdout.split(/\r?\n/).filter(Boolean);
+    try {
+      changedFiles = await resolveChangedFiles(repoRoot, {
+        baseSha: process.env.PORTAL_BASE_SHA,
+        headSha: process.env.PORTAL_HEAD_SHA,
+      });
+    } catch (error) {
+      console.error(`the changed-file range cannot be measured: ${error.message}`);
+      process.exitCode = 1;
+      return;
+    }
   }
   const errors = checkDocumentationImpact({body, changedFiles});
   if (errors.length) {

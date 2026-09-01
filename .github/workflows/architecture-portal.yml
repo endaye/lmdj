@@ -45,18 +45,19 @@ jobs:
           cache-dependency-path: apps/architecture-portal/package-lock.json
       - name: Install locked portal dependencies
         run: scripts/architecture-portal.sh install
+      # Both checks below measure this change from its merge base, which the
+      # checkers resolve themselves from the two revisions. `base_sha` is the
+      # base branch tip at event time, so a two-dot range would additionally
+      # report, in reverse, everything that landed on `main` after the branch
+      # was cut -- and a branch that is merely behind would inherit unrelated
+      # portal pages as its own. Issue #531 is that failure.
       - name: Check Pull Request documentation impact
         if: ${{ inputs.check_documentation_impact }}
         env:
           PORTAL_PR_BODY: ${{ inputs.pull_request_body }}
           PORTAL_BASE_SHA: ${{ inputs.base_sha }}
           PORTAL_HEAD_SHA: ${{ inputs.head_sha }}
-        run: |
-          set -euo pipefail
-          [[ "$PORTAL_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
-          [[ "$PORTAL_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
-          changed_files="$(git diff --name-only "$PORTAL_BASE_SHA" "$PORTAL_HEAD_SHA")"
-          PORTAL_CHANGED_FILES="$changed_files" npm --prefix apps/architecture-portal run check:impact
+        run: npm --prefix apps/architecture-portal run check:impact
       # A squash merge never keeps the branch commit a snapshot records as its
       # revision, so on `main` the snapshot is only provable when its recorded
       # projection matches the introducing commit's tree -- and that commit is
@@ -70,12 +71,6 @@ jobs:
         env:
           PORTAL_BASE_SHA: ${{ inputs.base_sha }}
           PORTAL_HEAD_SHA: ${{ inputs.head_sha }}
-        run: |
-          set -euo pipefail
-          [[ "$PORTAL_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
-          [[ "$PORTAL_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
-          added_files="$(git diff --name-only --diff-filter=A "$PORTAL_BASE_SHA" "$PORTAL_HEAD_SHA")"
-          PORTAL_ADDED_FILES="$added_files" \
-            npm --prefix apps/architecture-portal run check:snapshot-projection
+        run: npm --prefix apps/architecture-portal run check:snapshot-projection
       - name: Verify architecture portal
         run: scripts/architecture-portal.sh check
