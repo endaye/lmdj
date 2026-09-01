@@ -79,7 +79,17 @@ cd tools/needle-spike
 ../../.venv/bin/python -m needle_spike.bench
 ../../.venv/bin/python -m needle_spike.bench --naming mcp     # the A/B above
 ../../.venv/bin/python -m needle_spike.bench --surface full   # all 30 tools
-../../.venv/bin/python -m needle_spike.bench --repeats 3      # decoding is greedy
+../../.venv/bin/python -m needle_spike.bench --repeats 3      # stability check
+```
+
+Tests, from the repo root:
+
+```bash
+# No engine needed - pure schema projection and composition properties.
+python3 tools/needle-spike/tests/tool_surface_test.py
+
+# Needs the engine; SKIPs (exit 0) rather than fails when it is absent.
+.venv/bin/python tools/needle-spike/tests/router_smoke_test.py
 ```
 
 On one machine the routing decision is stable: across four fresh runs the three
