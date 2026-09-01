@@ -26,6 +26,8 @@ source_paths:
   - scripts/release.sh
   - .github/workflows/publish-release.yml
   - .github/workflows/deploy-web-runtime-host.yml
+  - .github/workflows/deploy-creator-web.yml
+  - docs/deploy/creator-web.md
   - tests/platform/web/host/web_runtime_host_manifest_gate.spec.mjs
   - tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs
   - tests/platform/web/host/web_runtime_host_browser.spec.mjs
@@ -69,6 +71,13 @@ smoke/recovery 与 evidence；Channel promotion 继续是后续独立边界。�
 已经 implemented 也不表示当前 Product Build `1.0.21.0` 已经 released、deployed 或 promoted。
 
 ## 公共发布边界
+
+后续标准 Web Release profile 是 `web-hosts`：Creator 与 Runtime 各自提供 archive、checksum、
+detached checksum signature，同一 Product Release 精确六资产。Runtime 与 Creator verifier 都先
+验证闭合 inventory，再各自只 staging 所属 triplet。Runtime 生产 URL 是
+`https://lmdj-runtime.netlify.app/`，Creator 是 `https://lmdj-creator.netlify.app/`；两条部署
+manual-only 且具有独立 Site、Environment、授权、evidence 与 exact prior rollback。Release
+publication 不 fan-out。历史 `1.0.40.0` Release 与部署保持不可变，不能按新 profile 改写。
 
 两阶段 Netlify release/deploy 工具已进入仓库源码：部署 workflow 先运行不加入
 `runtime-canary` environment、因而读不到 Netlify credential 的 preflight job，它只用 Python

@@ -73,6 +73,20 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
                 ):
                     self.assertIn(expected, source)
 
+    def test_current_runtime_docs_use_the_dual_host_release_without_coupling_deployments(self) -> None:
+        runbook = self.read(RUNBOOK)
+        portal = self.read(PORTAL_CURRENT_PAGES[0])
+        for source in (runbook, portal):
+            with self.subTest(source=source[:40]):
+                self.assertIn("web-hosts", source)
+                self.assertRegex(source, r"六(?:项|个|资产)")
+                self.assertIn("lmdj-runtime.netlify.app", source)
+                self.assertIn("lmdj-creator.netlify.app", source)
+                self.assertIn("独立", source)
+                self.assertIn("manual-only", source)
+                self.assertIn("1.0.40.0", source)
+                self.assertIn("不可变", source)
+
     def test_predeploy_record_is_explicitly_historical(self) -> None:
         source = self.read(ACCEPTANCE)
         for expected in (

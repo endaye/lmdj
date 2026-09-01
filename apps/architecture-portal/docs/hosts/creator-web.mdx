@@ -23,6 +23,9 @@ source_paths:
   - docs/prd/decisions/2026-08-24-capture-input-gate-and-identity.md
   - docs/superpowers/plans/2026-08-24-lmdj-capture-input-gate-and-identity.md
   - scripts/creator-web.sh
+  - scripts/creator-web-deploy.sh
+  - docs/deploy/creator-web.md
+  - .github/workflows/deploy-creator-web.yml
   - tests/platform/web/creator
 ---
 
@@ -53,10 +56,25 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 ## 自动化证据
 
+## 公共部署边界
+
+后续 Web 产品使用 `web-hosts` profile：同一 Product Release 精确包含 Creator 与 Runtime
+各自的 ZIP、checksum、detached checksum signature，共六资产。Creator verifier 在闭合验证
+六资产后只选择 Creator triplet，生产 URL 固定为 `https://lmdj-creator.netlify.app/`；Runtime
+保持 `https://lmdj-runtime.netlify.app/`。两者是独立 Host、独立 Site、独立 manual-only
+workflow、独立 evidence 与 exact prior rollback，Release publication 不 fan-out deployment。
+
+Creator workflow 源码使用 `creator-canary` Environment 与 `NETLIFY_CREATOR_SITE_ID`，但这只
+证明操作路径已实现。站点创建、Environment 配置与真实 dispatch 仍各需授权和 live evidence；
+在这些证据出现前，Portal 不声称 Creator 已生产部署。历史 `1.0.40.0` Release 和 Runtime
+部署事实保持不可变，不能被重述为六资产 Creator deployment。
+
+## 自动化证据
+
 Vitest 覆盖长素材容器嗅探、pre/post-decode boundary、单一缓冲、配额选区/拒绝保留，以及 Sequence stopped/recording/switch-pending/flushing/recovery/trim-overlay 状态、边界后的 active authority 校验、统一输入、Capture 互操作与 privacy-safe acceptance report；A9 的七个物理 fixture 由仓库脚本可复现并记录 SHA-256。packaged Playwright 使用真实 Facade 验证组合旅程；armed-Pad journey 在 Capture commit 前录 A2、以 armed A1 stop（不入 journal）、commit 后再录 A1，随后 Stop、reload/reopen 并检查 exact event delta/order/count、revision、Pad/Asset 以及 WAV media type/SHA-256/byte length Project Truth。Core fault journey另覆盖 pre-publication prepare failure 后的 Discard/disarm、continued flush/Stop 与 restart。自动化不替代 #359 的 macOS/iPadOS Safari 内存证据或物理 MIDI/Touch/音频验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
 
 自动化结论不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 
 ## 非能力
 
-当前不宣称离线安装/PWA、云同步、协作、素材智能、生产部署、`beta`/`stable` 或未执行的物理设备体验已完成。Sequence recording 已交付，但通用 Sequence event editor、Undo/redo、持久化 Asset DSP 与自动 slicing 仍不在当前能力内。
+当前不宣称离线安装/PWA、云同步、协作、素材智能、生产部署已执行、`beta`/`stable` 或未执行的物理设备体验已完成。Sequence recording 已交付，但通用 Sequence event editor、Undo/redo、持久化 Asset DSP 与自动 slicing 仍不在当前能力内。

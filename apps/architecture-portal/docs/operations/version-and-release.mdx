@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md]
 ---
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
@@ -101,6 +101,20 @@ schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资�
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
 当前候选 Product tag 文本为 `lmdj-v1.0.40.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份不宣称远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 Portal 校验器判定；历史 Build 证据不自动升级。
+
+## 双 Web Host Product Release
+
+后续标准 profile `web-hosts` 为一个 Product Build/tag 创建一份精确六资产 Release：Creator 与
+Runtime 各自贡献 ZIP、checksum 和 detached checksum signature。Release assets 是签名输入，
+Creator 与 Runtime 仍是不同 Host/SemVer 和不同部署状态。Creator 生产目标是
+`https://lmdj-creator.netlify.app/`，Runtime 是 `https://lmdj-runtime.netlify.app/`；两条
+manual-only dispatch 的授权、Environment、Site credential、evidence 与 exact prior rollback
+独立，publish-release.yml 不 fan-out 到部署。
+
+历史 `1.0.40.0` tag、Release 与已记录部署保持不可变，不能补写 Creator 资产或重解释成
+`web-hosts`。新 profile 只约束后续已分配并经 protected main 合并的 Product Build。Creator
+Site 的外部 provisioning 尚须 live 证据；workflow 已存在不自动表示它已 deployed，Runtime
+成功也不自动表示 Creator deployed，任一部署都不表示 promoted。
 
 ## Runtime Host 公共发布
 

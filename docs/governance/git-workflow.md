@@ -373,6 +373,15 @@ promotion. Normal operations do not use handwritten tag/Release commands,
 one-step publication, destructive asset replacement, all-tags push, tag
 movement, or published-history deletion.
 
+For the current `web-hosts` profile, one Product Release contains exactly six
+assets: Creator and Runtime each contribute an archive, checksum, and detached
+checksum signature. Creator and Runtime deployments remain independent,
+manual-only exact-tag workflow dispatches to `https://lmdj-creator.netlify.app/`
+and `https://lmdj-runtime.netlify.app/`; each has its own authorization,
+Environment, Site identity, evidence, and exact-prior rollback. Publication must
+not fan out to either deployment. Historical `1.0.40.0` release and deployment
+state is immutable and is not rewritten into the `web-hosts` profile.
+
 An urgent fix follows the normal `fix/<task>` path from `main` through focused
 verification, Pull Request, CI, and squash merge. Urgency can change scheduling
 and test focus, but it does not authorize direct commits to `main` or bypassing
