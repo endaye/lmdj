@@ -68,7 +68,7 @@ measured separately but never substitutes for a built-in or wired result.
 | L2 | macOS | Chrome | Pointer | 500 triggers + 10-minute foreground run | **`PASS` 2026-08-31** — Product Build `1.0.40.0`, tested revision `5c094c98`, [retained evidence](../release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md) |
 | L3 | macOS | Chrome | Physical MIDI | 500 events + physical timing sample | **`PASS` 2026-08-31** — Product Build `1.0.40.0`, tested revision `1869a925`, Akai MPD218, [retained evidence](../release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md) |
 | L4 | iPadOS | Safari | Touch | 500 triggers + 10-minute foreground run | **`PASS` 2026-09-01** — Product Build `1.0.40.0`, tested revision `e2cd0cf9`, iPad Air 13-inch (M3) model `A3268`, [retained evidence](../release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md) |
-| L5 | iPadOS | Safari | Touch | background, foreground, lock, unlock, route interruption | `deferred / unverified` |
+| L5 | iPadOS | Safari | Touch | background, foreground, lock, unlock, route interruption | **`PASS` 2026-09-01** — Product Build `1.0.40.0`, tested revision `67a7ac03`, iPad Air 13-inch (M3) model `A3268`, Voice Memos route interruption, [retained evidence](../release-evidence/2026-09-01-web-runtime-l5-ipados-safari-lifecycle-1.0.40.0.md) |
 
 **Execution notes.** Reload the lab for a fresh session per row, select
 **Built-in** or **Wired** (Start is disabled otherwise), start audio once, and
@@ -90,8 +90,13 @@ calibration; it also completed without a post-start lifecycle interruption.
 L4 uses 500 visible Safari touch-counter transitions and 500 co-captured 880 Hz
 acoustic onsets, with the same conservative 20.833333 ms display/capture
 calibration; it completed 860820.620 ms visible/running with no post-start
-lifecycle interruption. All decisions and derived frame observations are
-retained in the linked evidence; L5 receives no implied exception or result.
+lifecycle interruption. L5 uses the same physical iPad and built-in route; it
+retains 55.932 seconds background, 70.351 seconds locked, a Voice Memos audio
+session interruption, at most one explicit activation per interruption,
+104.166667 ms recovery p95, and exactly one final onset. All decisions and
+derived frame observations are retained in the linked evidence. Family L is
+complete for the exact named local-source revisions; this does not promote a
+Channel or inherit one Build's result into another.
 
 **Then evaluate.** Per row:
 
@@ -121,7 +126,7 @@ run against the current Build.
 | --- | --- | --- | --- |
 | M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) | **`PASS` 2026-08-17** ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
 | M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **`PASS` 2026-09-01 on `1.0.40.0`** ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) — the strict non-zero trim boundary, One Shot, Gate release, Loop Gate, Loop Toggle, Volume/Mute, 16 Pads, Replace and reload all passed. Exact replay produced no obvious seam transient; the operator corrected the initially reported rapid texture to normal 40 ms loop playback. The prior 2026-08-17 stopped run remains historical evidence: trim boundaries clicked and the F5 handles could not be aimed; checks 2–8 were not performed then |
-| M3 | Pointer input | inherited from Stage 6/7 | not started |
+| M3 | Pointer input | inherited from Stage 6/7 | **`PASS` 2026-09-01 on `1.0.40.0`** ([evidence](../release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md)) — tested revision `3aeba5c5`, built-in MacBook trackpad; ordered A1–A16, Bank/corner targets, separated and double clicks, drag-off/mistake targets, mode navigation, audio recovery and report export passed with 115 admissions / 115 outcomes / 0 rejections |
 | M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today | open |
 
 ### Session M-B — macOS Chrome with external hardware
@@ -281,8 +286,9 @@ omitted and not called passed.
 1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. ~~**M2**~~ was rerun
    on `1.0.40.0` and is `PASS`: all eight checklist groups passed. Exact replay
    let the operator correct the initial description of the 40 ms loop's rapid
-   texture; no obvious independent seam click was heard. **M3** is independent
-   and can run at any time.
+   texture; no obvious independent seam click was heard. ~~**M3**~~ is also
+   `PASS` on the same Build: the built-in trackpad completed the full Creator
+   Pointer journey with 115 admissions / 115 outcomes / 0 rejections.
 2. ~~**P2**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md)). ~~P1~~ resolved
    2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)): rows re-run
    unless a recorded unchanged-tree derivation carries them, so M6 stays on
@@ -303,6 +309,6 @@ omitted and not called passed.
 6. **A2**, **A3**, ~~**D1 + D2**~~ (decided 2026-08-26), **D3** — schedule as the work they gate
    comes up; A2 and A3 are due before the first external distribution.
    (~~**F4**~~ — settled 2026-08-24, [decision](../prd/decisions/2026-08-24-capture-input-gate-and-identity.md).)
-7. **L1 through L5** — most expensive, needs instrumentation and five runs of
-   500 triggers plus ten minutes. Schedule when the Web/PWA launch-platform
-   conclusion actually has to land.
+7. ~~**L1 through L5**~~ — completed 2026-09-01 for the exact retained
+   local-source revisions. The five-row evaluator passes; release, deployment,
+   publication, and Channel promotion remain separate gates.

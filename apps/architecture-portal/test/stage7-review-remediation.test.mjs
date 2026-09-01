@@ -154,7 +154,11 @@ test('current Portal maps the corrected Creator lifecycle and automated evidence
     proof,
     /iPadOS Safari Touch `passed on 1\.0\.40\.0 local source`/,
   );
+  assert.match(
+    proof,
+    /iPadOS Safari lifecycle `passed on 1\.0\.40\.0 local source`/,
+  );
   assert.match(proof, /PR run `31684663825`[\s\S]+exact-main run `31688172806`/);
   assert.doesNotMatch(proof, /pending retest on 1\.0\.21\.0/);
-  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 1);
+  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 0);
 });
