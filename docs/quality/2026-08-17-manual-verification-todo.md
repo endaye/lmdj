@@ -120,7 +120,7 @@ run against the current Build.
 | ID | Journey | Origin | Status |
 | --- | --- | --- | --- |
 | M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) | **`PASS` 2026-08-17** ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
-| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **`FAILED / UNVERIFIED` 2026-09-01 on `1.0.40.0`** ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) — the strict non-zero trim boundary, One Shot, Gate release, Loop release/stop, Volume/Mute, 16 Pads, Replace and reload passed; Loop Gate and Loop Toggle both had an audible click at every seam. [#511](https://github.com/endaye/lmdj/issues/511) owns the loop-seam repair and corrected-candidate rerun. The prior 2026-08-17 stopped run remains historical evidence: trim boundaries clicked and the F5 handles could not be aimed; checks 2–8 were not performed then |
+| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **`PASS` 2026-09-01 on `1.0.40.0`** ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) — the strict non-zero trim boundary, One Shot, Gate release, Loop Gate, Loop Toggle, Volume/Mute, 16 Pads, Replace and reload all passed. Exact replay produced no obvious seam transient; the operator corrected the initially reported rapid texture to normal 40 ms loop playback. The prior 2026-08-17 stopped run remains historical evidence: trim boundaries clicked and the F5 handles could not be aimed; checks 2–8 were not performed then |
 | M3 | Pointer input | inherited from Stage 6/7 | not started |
 | M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today | open |
 
@@ -253,7 +253,7 @@ untestable by hand.
 | Trigger | Rows to run | Why |
 | --- | --- | --- |
 | Creator UI remediation lands (F1, F2, F3, F5) | re-walk M1's capture journey far enough to confirm the panel, `Stop` and the recovery path are usable without prior knowledge; then run M2 and M3 | Task 5 of the remediation plan. All four fixes are combined into Product Build `1.0.36.0` / Creator `1.5.5`, so the re-walk is ready to run. This does **not** re-open M1's hearing result, which stands on its own |
-| F6 ramp policy lands | M2 checks 1 and 5 | rerun performed 2026-09-01 on `1.0.40.0`: check 1's strict non-zero trim boundary passed, while check 5 reproduced an audible seam click in both Loop Gate and Loop Toggle. [#511](https://github.com/endaye/lmdj/issues/511) owns the repair; M2 remains failed/unverified until a corrected candidate reruns the complete checklist |
+| F6 ramp policy lands | M2 checks 1 and 5 | rerun performed 2026-09-01 on `1.0.40.0`: check 1's strict non-zero trim boundary and both loop modes passed. The operator corrected an initial misclassification after exact replay distinguished the normal rapid texture of a 40 ms loop from an obvious seam transient; the complete M2 checklist passes |
 | F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated. The resolution is combined into Product Build `1.0.36.0` / Creator `1.5.5`, so the re-run is ready |
 | Any new Product Build allocated for team testing or release | every row whose trigger-set diff is non-empty since its last pass, derived per the [carry-forward rule](../prd/decisions/2026-08-24-physical-acceptance-carry-forward.md); the derivation is recorded in the Build's acceptance record | answered 2026-08-24 by P1 ([#236](https://github.com/endaye/lmdj/issues/236)) |
 
@@ -278,19 +278,19 @@ omitted and not called passed.
 
 ## Suggested order
 
-1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. **M2 was rerun on
-   `1.0.40.0` and is `FAILED / UNVERIFIED`**: the repaired trim boundary and
-   every non-loop checklist group passed, but both loop modes clicked at the
-   seam. [#511](https://github.com/endaye/lmdj/issues/511) owns the repair and a
-   corrected-candidate full rerun. **M3** is independent and can run at any
-   time.
+1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. ~~**M2**~~ was rerun
+   on `1.0.40.0` and is `PASS`: all eight checklist groups passed. Exact replay
+   let the operator correct the initial description of the 40 ms loop's rapid
+   texture; no obvious independent seam click was heard. **M3** is independent
+   and can run at any time.
 2. ~~**P2**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md)). ~~P1~~ resolved
    2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)): rows re-run
    unless a recorded unchanged-tree derivation carries them, so M6 stays on
    the list and every future Build derives its own re-run set.
 3. ~~**F6 trim ramp**~~ — settled 2026-08-24, combined into Product Build
    `1.0.36.0` / audio-runtime `0.5.1`, and physically confirmed on `1.0.40.0`;
-   the separately deferred loop seam failed and is now [#511](https://github.com/endaye/lmdj/issues/511). ~~**D4 + D5**~~
+   exact replay also confirmed the separately deferred loop seam has no obvious
+   audible defect. #511 records the superseded initial interpretation. ~~**D4 + D5**~~
    were decided and their original Stage 9 delivery map merged in
    [#334](https://github.com/endaye/lmdj/pull/334); Stage 9 now waits on neither
    decision. Its unperformed physical/manual rows are tracked separately under

@@ -140,7 +140,7 @@ source inventory was re-inspected on merged `main` at
 
 | Platform | Browser / device | Journey | Status |
 | --- | --- | --- | --- |
-| macOS | Chrome | Human hearing and subjective audio quality | **`FAILED / UNVERIFIED` 2026-09-01 on `1.0.40.0`** — both loop modes clicked at the seam ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md), [#511](https://github.com/endaye/lmdj/issues/511)) |
+| macOS | Chrome | Human hearing and subjective audio quality | **`PASS` 2026-09-01 on `1.0.40.0`** — all eight checklist groups passed; the operator corrected the initial interpretation of the 40 ms loop's rapid texture after exact replay ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) |
 | macOS | Chrome | Physical MIDI controller | `deferred / unverified` |
 | macOS | Safari | Pointer plus physical hearing | `deferred / unverified` |
 | iPadOS | Safari | Physical touch ergonomics | `deferred / unverified` |
@@ -154,11 +154,12 @@ they block any physical-pass claim and promotion to Beta or Stable.
 
 The 2026-09-01 M2 run preserves rather than overwrites the 2026-08-17 stopped
 run. On the exact `1.0.40.0` package, a strict non-zero trim boundary, One
-Shot, Gate release, Loop release/stop, Volume/Mute, all 16 Pads, Replace and
-reload passed by ear. Loop Gate and Loop Toggle both produced an audible click
-at every repeat seam. The measured failure is tracked by #511; automation and
-the passing prefix cannot convert this row to a pass before a corrected
-candidate completes the full checklist.
+Shot, Gate release, Loop Gate, Loop Toggle, Volume/Mute, all 16 Pads, Replace
+and reload passed by ear. The approximately 40 ms loop's rapid repeated
+texture was initially described as a click; exact replay produced no obvious
+independent seam transient, and the operator explicitly corrected the sound
+to normal short-loop playback. The evidence retains both the superseded
+description and the final authoritative classification.
 
 ## External state
 
