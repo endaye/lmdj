@@ -31,6 +31,9 @@ SOURCE_RELEASE_BUNDLE = SOURCE_ROOT / "apps/web-runtime-host/tools/release_bundl
 SOURCE_RELEASE_INIT = SOURCE_ROOT / "tools/release/__init__.py"
 SOURCE_RELEASE_COMMANDS = SOURCE_ROOT / "tools/release/commands.py"
 SOURCE_RELEASE_OPENPGP = SOURCE_ROOT / "tools/release/openpgp.py"
+SOURCE_WEB_HOST_BUNDLE = SOURCE_ROOT / "tools/release/web_host_bundle.py"
+SOURCE_WEB_DEPLOY_INIT = SOURCE_ROOT / "tools/web_deploy/__init__.py"
+SOURCE_RELEASE_SELECTION = SOURCE_ROOT / "tools/web_deploy/release_selection.py"
 SOURCE_TAG_VERIFIER = SOURCE_ROOT / "tools/release/tag_verifier.py"
 REAL_EVIDENCE_ROOT = SOURCE_ROOT / "build/deploy/web-runtime-host"
 TAG = "lmdj-v1.0.15.3"
@@ -369,6 +372,12 @@ class DeployCommandTest(unittest.TestCase):
         self.copy_source(SOURCE_RELEASE_INIT, "tools/release/__init__.py")
         self.copy_source(SOURCE_RELEASE_COMMANDS, "tools/release/commands.py")
         self.copy_source(SOURCE_RELEASE_OPENPGP, "tools/release/openpgp.py")
+        self.copy_source(SOURCE_WEB_HOST_BUNDLE, "tools/release/web_host_bundle.py")
+        self.copy_source(SOURCE_WEB_DEPLOY_INIT, "tools/web_deploy/__init__.py")
+        self.copy_source(
+            SOURCE_RELEASE_SELECTION,
+            "tools/web_deploy/release_selection.py",
+        )
         self.copy_source(SOURCE_TAG_VERIFIER, "tools/release/tag_verifier.py")
         api_base = f"http://127.0.0.1:{self.server.server_port}/api/v1"
         netlify_source = SOURCE_NETLIFY.read_text(encoding="utf-8")
@@ -855,6 +864,14 @@ def verify_distribution(dist_root, repo_root):
                 checksum = os.environ.get("FAKE_CHECKSUM_NAME", archive + ".sha256")
                 signature = os.environ.get("FAKE_SIGNATURE_NAME", checksum + ".asc")
                 assets = [{{"name": archive}}, {{"name": checksum}}, {{"name": signature}}]
+                if os.environ.get("FAKE_DUAL_RELEASE") == "1":
+                    creator = f"lmdj-creator-web-2.1.1-product-{{product_build}}.zip"
+                    assets = [
+                        {{"name": creator}},
+                        {{"name": creator + ".sha256"}},
+                        {{"name": creator + ".sha256.asc"}},
+                        *assets,
+                    ]
                 if os.environ.get("FAKE_DUPLICATE_ARCHIVE") == "1":
                     assets.append({{"name": archive}})
                 if os.environ.get("FAKE_RELEASE_SECRET_FIELD") == "1":
@@ -880,12 +897,20 @@ def verify_distribution(dist_root, repo_root):
                     while True:
                         time.sleep(1)
                 destination = Path(args[args.index("--dir") + 1])
-                patterns = [args[index + 1] for index, value in enumerate(args) if value == "--pattern"]
-                archive_name = next(name for name in patterns if name.endswith(".zip"))
-                checksum_name = next(name for name in patterns if name.endswith(".zip.sha256"))
-                signature_name = next(name for name in patterns if name.endswith(".zip.sha256.asc"))
-                destination.mkdir(parents=True, exist_ok=True)
                 product_build = tag.removeprefix("lmdj-v")
+                patterns = [args[index + 1] for index, value in enumerate(args) if value == "--pattern"]
+                if patterns:
+                    archive_name = next(name for name in patterns if name.endswith(".zip"))
+                    checksum_name = next(name for name in patterns if name.endswith(".zip.sha256"))
+                    signature_name = next(name for name in patterns if name.endswith(".zip.sha256.asc"))
+                else:
+                    archive_name = os.environ.get(
+                        "FAKE_ARCHIVE_NAME",
+                        f"lmdj-web-runtime-host-{HOST_VERSION}-product-{{product_build}}.zip",
+                    )
+                    checksum_name = os.environ.get("FAKE_CHECKSUM_NAME", archive_name + ".sha256")
+                    signature_name = os.environ.get("FAKE_SIGNATURE_NAME", checksum_name + ".asc")
+                destination.mkdir(parents=True, exist_ok=True)
                 assets = [{{
                     "bytes": 1,
                     "path": f"assets/asset-{{index}}.{{str(index) * 64}}.mjs",
@@ -913,6 +938,18 @@ def verify_distribution(dist_root, repo_root):
                         "-----BEGIN PGP SIGNATURE-----\\n" + signature_payload
                         + "\\n-----END PGP SIGNATURE-----\\n",
                         encoding="ascii",
+                    )
+                if os.environ.get("FAKE_DUAL_RELEASE") == "1":
+                    creator_name = f"lmdj-creator-web-2.1.1-product-{{product_build}}.zip"
+                    creator_path = destination / creator_name
+                    creator_path.write_bytes(b"creator")
+                    creator_digest = hashlib.sha256(creator_path.read_bytes()).hexdigest()
+                    (destination / (creator_name + ".sha256")).write_text(
+                        f"{{creator_digest}}  {{creator_name}}\\n", encoding="ascii"
+                    )
+                    (destination / (creator_name + ".sha256.asc")).write_text(
+                        "-----BEGIN PGP SIGNATURE-----\\nfixture\\n"
+                        "-----END PGP SIGNATURE-----\\n", encoding="ascii"
                     )
                 Path(os.environ["ARCHIVE_DIGEST"]).write_text(digest, encoding="utf-8")
             else:
@@ -1090,6 +1127,13 @@ def verify_distribution(dist_root, repo_root):
             self.server.authorization_headers,
             [f"Bearer {NETLIFY_TOKEN}"] * 5,
         )
+
+    def test_dual_release_validates_full_inventory_and_stages_runtime_triplet(self) -> None:
+        completed = self.run_command(
+            "verify", TAG, environment={"FAKE_DUAL_RELEASE": "1"}
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("release_bundle stage", self.command_log())
 
     def test_product_tag_verification_uses_the_agentless_gpg_boundary(self) -> None:
         gpg_log = self.root / "gpg-operations.log"

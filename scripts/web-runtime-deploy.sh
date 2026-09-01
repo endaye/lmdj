@@ -47,6 +47,7 @@ recovery_immutable_http_result='{}'
 recovery_immutable_browser_result='{}'
 recovery_production_http_result='{}'
 recovery_production_browser_result='{}'
+release_asset_inventory=''
 
 usage() {
   cat >&2 <<'EOF'
@@ -389,12 +390,16 @@ parse_release_metadata() {
     fail "GitHub Release identity verification failed"
     return
   }
-  IFS=$'\t' read -r archive_name checksum_name signature_name release_url <<<"$fields"
+  IFS=$'\t' read -r archive_name checksum_name signature_name release_url release_asset_inventory <<<"$fields"
   [[ \
     -n "$archive_name" && \
     "$checksum_name" == "$archive_name.sha256" && \
     "$signature_name" == "$checksum_name.asc" && \
-    -n "$release_url" \
+    -n "$release_url" && \
+    "$release_asset_inventory" =~ ^[A-Za-z0-9._,-]+$ && \
+    ",$release_asset_inventory," == *",$archive_name,"* && \
+    ",$release_asset_inventory," == *",$checksum_name,"* && \
+    ",$release_asset_inventory," == *",$signature_name,"* \
   ]] || {
     fail "GitHub Release identity output is invalid"
     return
@@ -407,16 +412,14 @@ download_release_assets() {
   mkdir "$download_root"
   with_pinned_github gh release download "$tag" \
     --repo endaye/lmdj \
-    --pattern "$archive_name" \
-    --pattern "$checksum_name" \
-    --pattern "$signature_name" \
     --dir "$download_root" \
     --clobber >/dev/null 2>&1 || {
     fail "GitHub Release asset download failed"
     return
   }
   without_deploy_secrets "$python_bin" "$orchestrator_tool" downloaded-assets \
-    "$download_root" "$archive_name" "$checksum_name" "$signature_name" || {
+    "$download_root" "$archive_name" "$checksum_name" "$signature_name" \
+    "$release_asset_inventory" || {
     fail "downloaded GitHub Release asset verification failed"
     return
   }

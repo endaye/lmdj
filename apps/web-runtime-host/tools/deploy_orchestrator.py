@@ -17,6 +17,17 @@ from urllib.parse import urlsplit
 from netlify_api import DraftDeploy, NetlifyClient, NetlifyError
 
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.web_deploy.release_selection import (  # noqa: E402
+    HostAssetSelection,
+    ReleaseSelectionError,
+    select_host_assets,
+)
+
+
 CANONICAL_GITHUB_REPOSITORY = "endaye/lmdj"
 CANONICAL_RELEASE_PREFIX = (
     f"https://github.com/{CANONICAL_GITHUB_REPOSITORY}/releases/tag/"
@@ -161,52 +172,65 @@ def parse_release_metadata(
     host_version: str,
 ) -> tuple[str, str, str, str]:
     release = parse_json_document(source, "GitHub Release metadata")
-    required = {
-        "tagName",
-        "isDraft",
-        "isPrerelease",
-        "targetCommitish",
-        "assets",
-        "url",
-    }
-    if set(release) != required:
-        raise DeployOrchestratorError("GitHub Release metadata is invalid")
-    if release["tagName"] != tag or release["isDraft"] is not False:
-        raise DeployOrchestratorError(
-            "GitHub Release is not the exact published Product tag"
+    try:
+        selected = select_host_assets(
+            release,
+            host_id="web-runtime-host",
+            host_version=host_version,
+            product_build=product_build,
         )
-    if release["isPrerelease"] is not True:
-        raise DeployOrchestratorError("GitHub Release is not a canary prerelease")
-    if (
-        not isinstance(release["targetCommitish"], str)
-        or not release["targetCommitish"]
-        or "\n" in release["targetCommitish"]
-        or "\r" in release["targetCommitish"]
-    ):
-        raise DeployOrchestratorError("GitHub Release target metadata is invalid")
-    assets = release["assets"]
-    if not isinstance(assets, list) or any(
-        not isinstance(asset, dict) for asset in assets
-    ):
-        raise DeployOrchestratorError("GitHub Release asset inventory is invalid")
-    names = [asset.get("name") for asset in assets]
-    if any(not isinstance(name, str) or not name for name in names):
-        raise DeployOrchestratorError("GitHub Release asset inventory is invalid")
-    archive = f"lmdj-web-runtime-host-{host_version}-product-{product_build}.zip"
-    checksum = archive + ".sha256"
-    signature = checksum + ".asc"
-    if sorted(names) != sorted((archive, checksum, signature)):
-        raise DeployOrchestratorError("GitHub Release Host asset identity is invalid")
-    expected_release_url = CANONICAL_RELEASE_PREFIX + tag
-    if release["url"] != expected_release_url:
-        raise DeployOrchestratorError("GitHub Release URL is invalid")
-    return archive, checksum, signature, expected_release_url
+    except ReleaseSelectionError as error:
+        message = str(error)
+        if "asset" in message:
+            message = "GitHub Release Host asset identity is invalid"
+        raise DeployOrchestratorError(message) from error
+    if tag != f"lmdj-v{product_build}":
+        raise DeployOrchestratorError("GitHub Release tag is invalid")
+    return (
+        selected.archive,
+        selected.checksum,
+        selected.signature,
+        selected.release_url,
+    )
+
+
+def release_asset_selection(
+    source: str,
+    *,
+    tag: str,
+    tag_target: str,
+    product_build: str,
+    host_version: str,
+) -> HostAssetSelection:
+    release = parse_json_document(source, "GitHub Release metadata")
+    try:
+        selection = select_host_assets(
+            release,
+            host_id="web-runtime-host",
+            host_version=host_version,
+            product_build=product_build,
+        )
+    except ReleaseSelectionError as error:
+        message = str(error)
+        if "asset" in message:
+            message = "GitHub Release Host asset identity is invalid"
+        raise DeployOrchestratorError(message) from error
+    if tag != f"lmdj-v{product_build}":
+        raise DeployOrchestratorError("GitHub Release tag is invalid")
+    return selection
 
 
 def validate_downloaded_assets(
-    root: Path, archive_name: str, checksum_name: str, signature_name: str
+    root: Path,
+    archive_name: str,
+    checksum_name: str,
+    signature_name: str,
+    expected_inventory: tuple[str, ...] | None = None,
 ) -> None:
-    expected = sorted((archive_name, checksum_name, signature_name))
+    expected = sorted(
+        expected_inventory
+        or (archive_name, checksum_name, signature_name)
+    )
     try:
         entries = list(root.iterdir())
     except OSError as error:
@@ -1056,6 +1080,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     downloaded.add_argument("archive")
     downloaded.add_argument("checksum")
     downloaded.add_argument("signature")
+    downloaded.add_argument("inventory", nargs="?")
 
     staged = commands.add_parser("staged-bundle")
     staged.add_argument("stage_root", type=Path)
@@ -1104,21 +1129,37 @@ def run(options: argparse.Namespace) -> None:
         print("\t".join(read_tag_identity(options.root, options.product_build)))
         return
     if options.command == "release-metadata":
+        selection = release_asset_selection(
+            sys.stdin.read(),
+            tag=options.tag,
+            tag_target=options.tag_target,
+            product_build=options.product_build,
+            host_version=options.host_version,
+        )
         print(
             "\t".join(
-                parse_release_metadata(
-                    sys.stdin.read(),
-                    tag=options.tag,
-                    tag_target=options.tag_target,
-                    product_build=options.product_build,
-                    host_version=options.host_version,
+                (
+                    selection.archive,
+                    selection.checksum,
+                    selection.signature,
+                    selection.release_url,
+                    ",".join(selection.asset_names),
                 )
             )
         )
         return
     if options.command == "downloaded-assets":
+        inventory = (
+            tuple(options.inventory.split(","))
+            if options.inventory is not None
+            else None
+        )
         validate_downloaded_assets(
-            options.root, options.archive, options.checksum, options.signature
+            options.root,
+            options.archive,
+            options.checksum,
+            options.signature,
+            inventory,
         )
         return
     if options.command == "staged-bundle":
