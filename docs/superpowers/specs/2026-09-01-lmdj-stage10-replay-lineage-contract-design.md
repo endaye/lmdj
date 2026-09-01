@@ -2,10 +2,10 @@
 
 日期：2026-09-01
 
-状态：**待用户书面复核**——产品方向已确认：Resample Lineage 持久化进
+状态：**已确认（2026-09-01）**——Resample Lineage 持久化进
 `lmdj.project.v4`，Replay 通过 Facade 注入的 Core controller 消费固定 revision
 的不可变 projection。本文把实现前仍缺失的数据形状、身份、并发和失败语义锁定
-为可执行 Contract；书面复核通过前不恢复 Stage 10 Task 5（#431）产品代码。
+为可执行 Contract；先交付 prerequisite #516，再恢复 Stage 10 Task 5（#431）。
 
 关联权威：
 
@@ -221,7 +221,7 @@ reset。
 Reset 失败时的协议精确固定为：
 
 - 第一个触发 reset 的结束路径决定目标 terminal 状态（natural end →
-  `complete`，显式 stop → `stopped`），此后不再改变；
+  `complete`，显式 stop 或 Runtime apply failure → `stopped`），此后不再改变；
 - replay 进入 reset-pending：cursor 冻结、不再应用事件，controller 保留该
   replay 的独占执行权；
 - `status` 保持只读、不触发 reset 重试，且仍返回锁定的固定字段——`state` 为

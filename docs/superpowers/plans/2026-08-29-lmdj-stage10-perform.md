@@ -4,13 +4,14 @@
 
 **Goal:** Deliver a testable Stage 10 candidate in which Creator performs live — playing Pads, launching Patterns at Bar boundaries, switching Banks instantly, applying eight momentary FX as continuous slider gestures with a global HOLD — records that performance as a `lmdj.project.v4` Performance event stream plus a streamed stereo WAV, replays it against the current Project, and resamples a selected range of that recording into a Pad through the existing Bank-quota commit path.
 
-**Authoring gate (refreshed 2026-08-31):** The authority is the approved
+**Authoring gate (refreshed 2026-09-01):** The authority is the approved
 [`2026-08-28-lmdj-stage10-perform-design.md`](../specs/2026-08-28-lmdj-stage10-perform-design.md)
-(P10-D1–D25), its six decision files, and #488. Tasks 1–3 are merged and
-accepted through PRs #445, #484 and #485. Their start gate exposed two
-pre-Facade corrections: Task 3A #498 adds durable Pattern slots and Task 3B
-#499 completes the Performance draft/rebase journal. **Task 4 #430 cannot
-start until #488, #498 and #499 are merged and accepted.** Product Build
+(P10-D1–D25), its six decision files, #488, and the approved
+[`2026-09-01-lmdj-stage10-replay-lineage-contract-design.md`](../specs/2026-09-01-lmdj-stage10-replay-lineage-contract-design.md).
+Tasks 1–4 and repair Tasks 3A/3B are merged. Task 5 is gated by Contract
+prerequisite #516, whose exact execution order is in
+[`2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md`](2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md).
+Product Build
 `1.0.40.0` remains the protected-main baseline; the locked Stage 10 target
 remains `1.0.41.0` unless Task 10's required fresh allocation audit proves it
 has been consumed.
@@ -24,9 +25,9 @@ time/order admission, FX quantum coalescing, Pattern boundary acknowledgement,
 the exact Performance operation surface, replay resolution against one fixed
 current revision, and D1 resample commit. Audio Runtime supplies the delivered
 fixed-order, pre-allocated FX chain and authoritative boundary acknowledgements;
-the Host-layer WAV tap remains outside the engine. Tasks 1–3 are delivered;
-the two repair Tasks and Tasks 4–12 remain separately reviewable, with one
-Issue, Conventional Commit and Pull Request per Task.
+the Host-layer WAV tap remains outside the engine. Tasks 1–4 and repair Tasks
+3A/3B are delivered; prerequisite #516 and Tasks 5–12 remain separately
+reviewable, with one Issue, Conventional Commit and Pull Request per Task.
 
 **Tech Stack:** C++20, CMake 3.24+, JSON Schema, nlohmann/json, SHA-256 canonical JSON vectors, Emscripten `6.0.5`, WasmFS OPFS, SharedArrayBuffer, Wasm AudioWorklet, JavaScript ES modules, React `19.2.8`, TypeScript `7.0.2`, Vite `8.2.1`, Vitest `4.1.10`, Playwright `1.62.1`, Python 3.11, Docusaurus Architecture Portal, GitHub Issues/Projects.
 
@@ -115,7 +116,9 @@ v3 → v4 is a deterministic total migration:
 - `contract` becomes `lmdj.project.v4`.
 - A `pattern_slots` array with exactly 16 `null` entries is added.
 - A `performances` array is added, empty for every migrated v3 Project.
-- No other field changes; `patterns`, `banks`, `assets`, `bpm` and `sequence_settings` migrate byte-identically.
+- Every migrated Asset gains exactly `lineage: null`; `patterns`, `banks`,
+  Asset identity/artifact content, `bpm` and `sequence_settings` otherwise
+  migrate byte-identically.
 - v1 and v2 remain read-only migration inputs through their existing v3 path; the migration chain is v1→v2→v3→v4 with no new direct edges.
 - A `performances` or `pattern_slots` key present in a v3-declared document is invalid input, not an implicit upgrade.
 
@@ -219,8 +222,9 @@ Design repair #488 ─────┬─ Task 3A #498 durable Pattern slots
                          └─ Task 3B #499 draft lifecycle + durable rebase
 
 Tasks 2, 3, 3A, 3B ── Task 4 #430 authoritative recording/management Facade
-                         ├─ Task 5 #431 replay resolution + resample commit
-                         │    └─ Task 6 #432 CLI/MCP/Native parity
+                         ├─ prerequisite #516 Lineage + recording revision
+                         │    └─ Task 5 #431 replay resolution + resample commit
+                         │         └─ Task 6 #432 CLI/MCP/Native parity
                          └─ Task 7 #433 Web Runtime raw-input + launch bridge
                               └─ Task 8 #434 Host WAV tap/OPFS writer
 Tasks 5, 7, 8 ───────────── Task 9 #435 Creator Perform surface
@@ -229,11 +233,11 @@ Tasks 1-9 + 3A/3B ─── Task 10 #436 versions/Assembly/current Portal/automa
                                 └─ Task 12 #468 release intent + canary Release
 ```
 
-Tasks 1–3 are complete. Tasks 3A and 3B may run in parallel only after #488
-merges; Task 4 waits for both. Tasks 5 and 7 may then run in parallel on
-their disjoint primary files; Task 6 starts after Task 5 because its shared
-Host journey consumes replay/resample. Task 8 starts after Task 7; Task 9 waits
-for Tasks 5, 7 and 8. Integration,
+Tasks 1–4 and repair Tasks 3A/3B are complete. Prerequisite #516 must merge
+before Task 5. Task 7 may run independently of #516/#431 on its disjoint
+primary files; Task 6 starts after Task 5 because its shared Host journey
+consumes replay/resample. Task 8 starts after Task 7; Task 9 waits for Tasks 5,
+7 and 8. Integration,
 snapshotting and release stay serial through Tasks 10–12.
 
 ## Design Traceability
@@ -246,10 +250,10 @@ snapshotting and release stay serial through Tasks 10–12.
 | P10-D5, P10-D15: continuous gesture stream and integer scale | 3, 4, 7 | gesture vectors; dedup and coalescing boundary tests |
 | P10-D6: global HOLD | 3, 4, 9 | latch/release state-machine tests |
 | P10-D7: fixed chain order, pre-allocation, determinism | 3, 10 | zero-allocation guard; live-vs-replay sample equality |
-| P10-D8: v4 Performance object | 1, 10 | Contract fixtures and migration vectors |
+| P10-D8: v4 Performance object | 1, #516, 10 | Contract fixtures, recording revision and migration vectors |
 | P10-D9: generalized session and mutual exclusion | 2, 4, 6 | second-begin `INVALID_ARGUMENT`; fault matrix |
 | P10-D10: replay against the current Project | 5, 9 | changed-sample, moved-slot and empty-slot replay tests |
-| P10-D11: live-capture resample over the D1 commit path | 5, 8 | Lineage assertions; `BANK_QUOTA_EXHAUSTED` non-destructive test |
+| P10-D11: live-capture resample over the D1 commit path | #516, 5, 8 | durable Lineage assertions; `BANK_QUOTA_EXHAUSTED` non-destructive test |
 | P10-D12: Host-layer streamed WAV with sealing | 8 | long-record OPFS test; sealed-prefix validity; render glitch-free stress |
 | P10-D13: one Facade surface across Hosts | 4, 6, 7 | CLI/MCP black-box journey parity |
 | P10-D14: FX roster with Cutter | 3 | per-effect audible-change and division-ladder tests |
@@ -267,7 +271,10 @@ snapshotting and release stay serial through Tasks 10–12.
 **Delivered evidence:** Issue #427 closed; PR #445 merged as
 `cd1f17954db63091c68ccb41efd69b32243af6e0`. Task 3A is an explicit
 pre-release correction, not a claim that this original Task delivered Pattern
-slot truth.
+slot truth. Prerequisite #516 is the corresponding pre-release correction for
+Asset Lineage and Performance recording revision; it supersedes this Task's
+historical “all other fields byte-identical” migration detail only as stated in
+the current Locked Project v4 Migration section.
 
 **Files:**
 
@@ -545,53 +552,29 @@ CI each completed 19 successful jobs with zero failures.
 - [ ] Commit only the listed files with
   `feat(facade): add the Performance recording surface (fixes #430)`.
 
+## Contract Prerequisite: Persist Replay/Resample Truth
+
+**Issue:** #516. Hard dependencies: #430, #498 and #499.
+
+This independently reviewable correction adds Project v4 `Asset.lineage`,
+`Performance.recording_revision`, and Lineage-aware D1 transaction/recovery
+identity. It does not implement replay or the resample operation. Execute Task
+1 of
+[`2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md`](2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md)
+as its complete file list, RED/GREEN sequence, verification and commit
+authority.
+
 ## Task 5: Add Replay Resolution and the Resample Selection Commit
 
-**Issue:** #431. Hard dependencies: #430 and #498.
+**Issue:** #431. Hard dependencies: #430, #498 and merged #516.
 
-**Files:**
-
-- Modify: `packages/application-facade/include/lmdj/facade/application.hpp`
-- Modify: `packages/application-facade/src/application.cpp`
-- Modify: `packages/application-facade/CMakeLists.txt`
-- Modify: `packages/project-cooker/include/lmdj/cooker/project_cooker.hpp`
-- Modify: `packages/project-cooker/src/project_cooker.cpp`
-- Modify: `packages/project-cooker/CMakeLists.txt`
-- Modify: `CMakeLists.txt`
-- Test: `tests/core/facade/performance_replay_test.cpp`
-- Test: `tests/core/facade/resample_performance_test.cpp`
-
-**Interfaces:**
-
-- Produces exact operations `performance.replay.begin`,
-  `performance.replay.stop`, `performance.replay.status` and
-  `performance.resample.commit` from the Locked Facade Surface.
-- Replay holds a read-only resolved projection plus the begin-time Project
-  revision; it never holds a mutable Project or Project path in Audio Runtime.
-
-- [ ] **RED — replay resolution:** begin on revision R, replace a Pad and move/
-  clear Pattern slots after begin, then prove that the active replay stays on
-  R while a new replay resolves the new current revision. Replaced Pad sound
-  and moved slot follow current truth at each begin; empty slot is a silent
-  nonfatal gap; no fingerprint gate or Project mutation occurs.
-- [ ] **RED — replay lifecycle:** cover stable replay ID retry/collision,
-  begin/status/stop exact results, cursor at every event boundary, natural end,
-  explicit stop, invalid Performance deletion before begin, and unconditional
-  FX/HOLD neutral reset after both end paths.
-- [ ] **RED — resample commit:** assert strict frame range, user-selected target
-  Pad, verified recording Artifact identity (digest and byte length), D1 quota
-  parity, complete Lineage, command receipt replay/collision and far-side
-  non-mutation after cancellation, invalid range or `BANK_QUOTA_EXHAUSTED`.
-- [ ] Implement replay as a read-only Project Cooker projection and Runtime
-  controller. Implement `performance.resample.commit` as the existing D1
-  atomic selection commit; add no Job category and no offline FX render.
-- [ ] Wire both tests into their package CMake files, root inventory and
-  coverage target list.
-- [ ] GREEN: run `scripts/core.sh test dev full`; expect PASS.
-- [ ] Run `scripts/core.sh coverage check`; expect PASS without lowering a floor.
-- [ ] Run `scripts/architecture-portal.sh check`; expect PASS.
-- [ ] Commit only the listed files with
-  `feat(facade): add Performance replay and resample commit (fixes #431)`.
+Execute Task 2 of
+[`2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md`](2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md)
+as the complete authority for files, interfaces, lifecycle/reset-pending
+semantics, tests, verification and commit. It preserves the Locked Facade
+Surface while adding immutable Project Cooker projection, required injected
+controller, deterministic command-derived Asset identity, and D1-only
+resample commit.
 
 ## Task 6: Migrate CLI, MCP and Native Host to Performance Operations
 
