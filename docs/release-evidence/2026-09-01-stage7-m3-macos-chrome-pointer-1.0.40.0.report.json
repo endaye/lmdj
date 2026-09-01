@@ -1,0 +1,50 @@
+{
+  "contract": "lmdj.creator-web.acceptance.v1",
+  "product_build": "1.0.40.0",
+  "host_id": "creator-web",
+  "host_version": "2.1.1",
+  "platform_version": "2.0.1",
+  "protocol_version": 1,
+  "capabilities": {
+    "secure_context": true,
+    "cross_origin_isolated": true,
+    "shared_array_buffer": true,
+    "web_assembly": true,
+    "audio_worklet": true,
+    "opfs": true,
+    "opfs_sync_access_handle": true,
+    "opfs_writable_replace": true,
+    "web_midi": true
+  },
+  "state": "running",
+  "bank_count": 4,
+  "pad_count": 64,
+  "trigger_admitted_count": 115,
+  "trigger_outcome_count": 115,
+  "trigger_rejected_count": 0,
+  "error_code": null,
+  "sample": {
+    "project_revision": 88,
+    "runtime_revision": 88,
+    "operation_outcomes": [],
+    "trigger_mode_coverage": []
+  },
+  "sequence": {
+    "semantic_state": "stopped",
+    "session_id": null,
+    "last_command_id": null,
+    "project_revision": 88,
+    "expected_revision": null,
+    "next_flush_sequence": 0,
+    "pending_event_count": 0,
+    "effective_runtime_frame": null,
+    "recovery_candidate_count": 0
+  },
+  "physical": {
+    "macos_safari_pointer": "deferred / unverified",
+    "macos_chrome_pointer": "deferred / unverified",
+    "macos_chrome_physical_midi": "deferred / unverified",
+    "ipados_safari_touch": "deferred / unverified",
+    "ipados_safari_lifecycle": "deferred / unverified"
+  }
+}
