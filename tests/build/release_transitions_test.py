@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -332,13 +333,14 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.target = "a" * 40
         self.tag = "lmdj-v1.0.21.0"
+        self.profile = "web-runtime-host"
         self.policy = load_policy(ROOT / "tools/release/policy.json")
         self.ledger = load_ledger_document({
             "schema": "lmdj.release-intents.v1",
             "entries": [{
                 "tag": self.tag, "kind": "product", "identity": "1.0.21.0",
                 "target_revision": self.target, "channel": "canary",
-                "disposition": "releasable", "profile": "web-runtime-host",
+                "disposition": "releasable", "profile": self.profile,
                 "snapshot": "1.0.21.0", "merged_main_run_id": 123,
                 "evidence_paths": ["docs/quality/example-proof.md"],
             }],
@@ -353,6 +355,18 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def _asset_payloads(self) -> tuple[tuple[str, bytes], ...]:
+        if self.profile == "web-hosts":
+            result: list[tuple[str, bytes]] = []
+            for host in ("creator-web", "web-runtime-host"):
+                archive = f"lmdj-{host}-2.1.1-product-1.0.21.0.zip"
+                result.extend(
+                    (
+                        (archive, f"{host}-zip".encode("ascii")),
+                        (archive + ".sha256", f"{host}-checksum".encode("ascii")),
+                        (archive + ".sha256.asc", f"{host}-signature".encode("ascii")),
+                    )
+                )
+            return tuple(result)
         archive = "lmdj-web-runtime-host-1.1.2-product-1.0.21.0.zip"
         return ((archive, b"zip"), (archive + ".sha256", b"checksum"),
                 (archive + ".sha256.asc", b"signature"))
@@ -365,7 +379,7 @@ class ReleaseTransitionsTest(unittest.TestCase):
         return {
             "schema": "lmdj.release-plan.v1", "repository": "endaye/lmdj", "tag": self.tag,
             "tag_object": "b" * 40, "target_revision": self.target, "kind": "product",
-            "identity": "1.0.21.0", "channel": "canary", "profile": "web-runtime-host",
+            "identity": "1.0.21.0", "channel": "canary", "profile": self.profile,
             "ci": {"run_id": 123, "event": "push", "head_sha": self.target, "conclusion": "success"},
             "release": {"draft": True, "prerelease": True, "make_latest": False, "name": "LMDJ 1.0.21.0"},
             "assets": assets,
@@ -581,6 +595,30 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertEqual(second.status, "draft-verified")
         self.assertEqual(self.github.create_calls, 1)
         self.assertEqual(len(self.github.upload_calls), 3)
+
+    def test_create_draft_uploads_and_reconciles_six_dual_host_assets(self) -> None:
+        self.profile = "web-hosts"
+        self.ledger = load_ledger_document({
+            "schema": "lmdj.release-intents.v1",
+            "entries": [{
+                "tag": self.tag, "kind": "product", "identity": "1.0.21.0",
+                "target_revision": self.target, "channel": "canary",
+                "disposition": "releasable", "profile": self.profile,
+                "snapshot": "1.0.21.0", "merged_main_run_id": 123,
+                "evidence_paths": ["docs/quality/example-proof.md"],
+            }],
+            "historical_exceptions": [],
+        }, self.policy)
+        shutil.rmtree(self.root / "build/release/lmdj-v1.0.21.0")
+        self._write_prepared_output()
+
+        first = self._push_and_create()
+        second = create_draft(self.tag, self.context())
+
+        self.assertEqual(first.status, "draft-created")
+        self.assertEqual(second.status, "draft-verified")
+        self.assertEqual(len(self.github.release.assets), 6)
+        self.assertEqual(len(self.github.upload_calls), 6)
 
     def test_draft_discovery_uses_complete_release_inventory_not_published_by_tag(self) -> None:
         self.github.by_tag_unavailable = True

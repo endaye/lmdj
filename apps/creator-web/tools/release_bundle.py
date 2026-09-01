@@ -17,23 +17,17 @@ from tools.release.web_host_bundle import (  # noqa: E402
     StagedBundle,
     WebHostReleaseSpec,
     canonical_json,
-    normalized_member_path,
-    parse_detached_checksum,
-    read_manifest_identity,
-    sha256_file,
     stage_host_bundle,
-    validate_archive_entries,
-    verify_detached_checksum_signature,
 )
 
 
-WEB_RUNTIME_SPEC = WebHostReleaseSpec(
-    host_id="web-runtime-host",
-    script="scripts/web-runtime-host.sh",
-    dist_relative="build/web/host/dist",
-    module_relative="apps/web-runtime-host/module.json",
-    archive_prefix="lmdj-web-runtime-host",
-    verifier_relative="apps/web-runtime-host/tools/package.py",
+CREATOR_WEB_SPEC = WebHostReleaseSpec(
+    host_id="creator-web",
+    script="scripts/creator-web.sh",
+    dist_relative="build/web/creator/dist",
+    module_relative="apps/creator-web/module.json",
+    archive_prefix="lmdj-creator-web",
+    verifier_relative="apps/creator-web/tools/package.py",
 )
 
 
@@ -46,15 +40,6 @@ class UsageParser(argparse.ArgumentParser):
         self.print_usage(sys.stderr)
         print(f"release bundle usage error: {message}", file=sys.stderr)
         raise UsageError(message)
-
-
-def default_verifier(dist_root: Path, repo_root: Path) -> None:
-    from tools.release.web_host_bundle import load_distribution_verifier
-
-    load_distribution_verifier(
-        repo_root,
-        WEB_RUNTIME_SPEC.verifier_relative,
-    )(dist_root, repo_root)
 
 
 def stage_release_bundle(
@@ -73,7 +58,7 @@ def stage_release_bundle(
     gpg_program: str = "gpg",
 ) -> StagedBundle:
     return stage_host_bundle(
-        spec=WEB_RUNTIME_SPEC,
+        spec=CREATOR_WEB_SPEC,
         repo_root=repo_root,
         archive_path=archive_path,
         checksum_path=checksum_path,
@@ -90,9 +75,7 @@ def stage_release_bundle(
 
 
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
-    parser = UsageParser(
-        description="Validate and stage a released Web Runtime Host bundle"
-    )
+    parser = UsageParser(description="Validate and stage a released Creator Web bundle")
     commands = parser.add_subparsers(
         dest="command",
         required=True,
@@ -131,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     except UsageError:
         return 64
     except (BundleError, OSError) as error:
-        print(f"Web Runtime deployment bundle error: {error}", file=sys.stderr)
+        print(f"Creator Web deployment bundle error: {error}", file=sys.stderr)
         return 2
     print(canonical_json(bundle))
     return 0
