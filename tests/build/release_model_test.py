@@ -231,11 +231,11 @@ class ReleaseModelTest(unittest.TestCase):
         )
         stage9 = ledger.intent_for_tag("lmdj-v1.0.40.0")
         self.assertIsNotNone(stage9)
-        # The Stage 9 Sequence recording candidate. Its target is the squash
-        # merge of #420, which is the revision that carries both the Task 10
+        # Published 2026-09-01 through publish-release.yml run 33453258287.
+        # Its target is the squash merge of #420, which carries both the Task 10
         # version integration and the Task 11 immutable snapshot; the exact-main
         # full run was dispatched on that same SHA.
-        self.assertEqual(stage9.disposition.value, "releasable")  # type: ignore[union-attr]
+        self.assertEqual(stage9.disposition.value, "published")  # type: ignore[union-attr]
         self.assertEqual(stage9.channel, "canary")  # type: ignore[union-attr]
         self.assertEqual(stage9.profile, "web-runtime-host")  # type: ignore[union-attr]
         self.assertEqual(  # type: ignore[union-attr]
