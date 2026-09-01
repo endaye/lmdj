@@ -43,6 +43,7 @@ MANIFEST_KEYS = {
     "resource_limits",
 }
 LEGACY_MANIFEST_KEYS = MANIFEST_KEYS - {"host_id", "platform_version"}
+CREATOR_MANIFEST_KEYS = MANIFEST_KEYS | {"compatible_hosts"}
 CONTENT_TYPES = {
     ".css": "text/css",
     ".js": "text/javascript",
@@ -61,6 +62,7 @@ ALLOWED_ASSET_ROLES = frozenset(
         "host_main",
         "host_module",
         "host_style",
+        "capture_worklet",
         "platform_module",
         "product_identity",
         "runtime_script",
@@ -408,13 +410,28 @@ def _require_traversal_rejection(
         raise SmokeError(f"{path} returned a non-empty response body")
 
 
-def _manifest_identity(manifest: object) -> tuple[str, str]:
+def _manifest_identity(
+    manifest: object,
+    *,
+    expected_host_id: str = "web-runtime-host",
+) -> tuple[str, str]:
+    accepted_keys = (
+        (CREATOR_MANIFEST_KEYS,)
+        if expected_host_id == "creator-web"
+        else (MANIFEST_KEYS, LEGACY_MANIFEST_KEYS)
+    )
     if (
         not isinstance(manifest, dict)
-        or set(manifest) not in (MANIFEST_KEYS, LEGACY_MANIFEST_KEYS)
+        or set(manifest) not in accepted_keys
     ):
         raise SmokeError("manifest root schema is invalid")
-    if manifest["distribution_contract"] != "lmdj.web-runtime-host.distribution.v1":
+    expected_contract = {
+        "creator-web": "lmdj.creator-web.distribution.v1",
+        "web-runtime-host": "lmdj.web-runtime-host.distribution.v1",
+    }.get(expected_host_id)
+    if expected_contract is None:
+        raise SmokeError("expected Host ID is invalid")
+    if manifest["distribution_contract"] != expected_contract:
         raise SmokeError("manifest distribution identity is invalid")
     if manifest["manifest_version"] != 1:
         raise SmokeError("manifest version is invalid")
@@ -424,13 +441,23 @@ def _manifest_identity(manifest: object) -> tuple[str, str]:
         raise SmokeError("Product Build identity is invalid")
     if not isinstance(host_version, str) or not host_version:
         raise SmokeError("Host version identity is invalid")
-    if set(manifest) == MANIFEST_KEYS and (
-        not isinstance(manifest["host_id"], str)
-        or not manifest["host_id"]
+    accepted_host_ids = (
+        frozenset(("web-runtime-host", "lmdj-web-runtime-host"))
+        if expected_host_id == "web-runtime-host"
+        else frozenset((expected_host_id,))
+    )
+    if set(manifest) != LEGACY_MANIFEST_KEYS and (
+        manifest["host_id"] not in accepted_host_ids
         or not isinstance(manifest["platform_version"], str)
         or not manifest["platform_version"]
     ):
-        raise SmokeError("manifest extended identity is invalid")
+        raise SmokeError("Host ID or extended manifest identity is invalid")
+    if expected_host_id == "creator-web":
+        compatible_hosts = manifest["compatible_hosts"]
+        if compatible_hosts != [
+            {"host_id": "web-runtime-host", "host_version": host_version}
+        ]:
+            raise SmokeError("manifest compatible Host identity is invalid")
     return product_build, host_version
 
 
@@ -439,8 +466,11 @@ def _validate_manifest(
     *,
     expected_product_build: str,
     expected_host_version: str,
+    expected_host_id: str = "web-runtime-host",
 ) -> list[dict[str, object]]:
-    product_build, host_version = _manifest_identity(manifest)
+    product_build, host_version = _manifest_identity(
+        manifest, expected_host_id=expected_host_id
+    )
     if product_build != expected_product_build:
         raise SmokeError(
             f"Product Build mismatch: expected {expected_product_build!r}, "
@@ -488,14 +518,34 @@ def _validate_manifest(
         seen.add(path)
         role_counts[role] += 1
         validated.append(entry)
-    if any(role_counts[role] != 1 for role in SINGLETON_ASSET_ROLES):
+    required_singletons = (
+        frozenset(
+            (
+                "capture_worklet",
+                "host_main",
+                "host_style",
+                "runtime_script",
+                "runtime_wasm",
+            )
+        )
+        if expected_host_id == "creator-web"
+        else SINGLETON_ASSET_ROLES
+    )
+    if any(role_counts[role] != 1 for role in required_singletons):
         raise SmokeError("manifest required asset role inventory is invalid")
-    if role_counts["host_module"] < 1:
-        raise SmokeError("manifest required asset role inventory is invalid")
-    if legacy_manifest and role_counts["platform_module"] != 0:
-        raise SmokeError("manifest required asset role inventory is invalid")
-    if not legacy_manifest and role_counts["platform_module"] < 1:
-        raise SmokeError("manifest required asset role inventory is invalid")
+    if expected_host_id == "creator-web":
+        if len(validated) != 5 or any(
+            role_counts[role] != 0
+            for role in ALLOWED_ASSET_ROLES - required_singletons
+        ):
+            raise SmokeError("manifest required asset role inventory is invalid")
+    else:
+        if role_counts["host_module"] < 1:
+            raise SmokeError("manifest required asset role inventory is invalid")
+        if legacy_manifest and role_counts["platform_module"] != 0:
+            raise SmokeError("manifest required asset role inventory is invalid")
+        if not legacy_manifest and role_counts["platform_module"] < 1:
+            raise SmokeError("manifest required asset role inventory is invalid")
     return validated
 
 
@@ -550,6 +600,7 @@ def discover_http_identity(
     base_url: str,
     require_https: bool = True,
     timeout_seconds: float = 10.0,
+    expected_host_id: str = "web-runtime-host",
 ) -> dict[str, str]:
     """Strictly read the published manifest identity before a deployment smoke."""
     root = _validated_base_url(
@@ -569,11 +620,14 @@ def discover_http_identity(
         timeout_seconds=timeout_seconds,
     )
     manifest = _decode_manifest(manifest_bytes)
-    product_build, host_version = _manifest_identity(manifest)
+    product_build, host_version = _manifest_identity(
+        manifest, expected_host_id=expected_host_id
+    )
     _validate_manifest(
         manifest,
         expected_product_build=product_build,
         expected_host_version=host_version,
+        expected_host_id=expected_host_id,
     )
     return {
         "host_version": host_version,
@@ -587,6 +641,7 @@ def smoke_http(
     base_url: str,
     expected_product_build: str,
     expected_host_version: str,
+    expected_host_id: str | None = None,
     expected_deploy_id: str | None = None,
     require_https: bool = True,
     timeout_seconds: float = 10.0,
@@ -598,6 +653,7 @@ def smoke_http(
         timeout_seconds=timeout_seconds,
     )
     _, hostname, _ = _origin(base_url)
+    resolved_host_id = expected_host_id or "web-runtime-host"
     if not expected_product_build or not expected_host_version:
         raise SmokeError("expected Product Build and Host version are required")
     if expected_deploy_id is not None:
@@ -654,6 +710,7 @@ def smoke_http(
         manifest,
         expected_product_build=expected_product_build,
         expected_host_version=expected_host_version,
+        expected_host_id=resolved_host_id,
     )
     manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
     _require_exact_once(
@@ -667,7 +724,14 @@ def smoke_http(
         (f'<meta name="lmdj-host-version" content="{expected_host_version}">', "Host version"),
     ):
         _require_exact_once(index, fragment, label)
+    if expected_host_id is not None:
+        _require_exact_once(
+            index,
+            f'<meta name="lmdj-host-id" content="{resolved_host_id}">',
+            "Host ID",
+        )
 
+    published_payloads = [index_bytes, manifest_bytes]
     for entry in assets:
         path = str(entry["path"])
         suffix = next(suffix for suffix in CONTENT_TYPES if path.endswith(suffix))
@@ -684,6 +748,14 @@ def smoke_http(
             raise SmokeError(f"asset size mismatch: {path}")
         if hashlib.sha256(payload).hexdigest() != entry["sha256"]:
             raise SmokeError(f"asset digest mismatch: {path}")
+        published_payloads.append(payload)
+
+    if expected_host_id == "creator-web" and any(
+        marker in payload
+        for payload in published_payloads
+        for marker in (b"lmdj.patch.v1", b"lmdj.materials.v1")
+    ):
+        raise SmokeError("retired Contract marker is present")
 
     main = next(entry for entry in assets if entry["role"] == "host_main")
     style = next(entry for entry in assets if entry["role"] == "host_style")
@@ -716,6 +788,8 @@ def smoke_http(
     }
     if expected_deploy_id is not None:
         result["deploy_id"] = expected_deploy_id
+    if expected_host_id is not None:
+        result["host_id"] = resolved_host_id
     return result
 
 
