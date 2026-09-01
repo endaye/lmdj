@@ -46,6 +46,22 @@
 - 不代表已评估 Needle 在移动端、WASM 或 ESP32 目标上的表现；
 - 不代表微调路径（`cactus-needle[train]`、JAX）已验证。
 
+### 1.4 本报告刻意未决的产品问题
+
+验证过程中浮出四个产品级问题。它们不在实施 Task 内决定，已按
+[open-questions](../prd/open-questions.md) 的约定各自建档：
+
+| 问题 | 档案 |
+| --- | --- |
+| 自然语言控制属于哪个用户、哪个 Stage？ | [nl-control-target-user-and-stage](../prd/questions/nl-control-target-user-and-stage.md) |
+| 离线可用是硬需求还是可选便利？ | [offline-operation-requirement](../prd/questions/offline-operation-requirement.md) |
+| 模型产出的 Pattern 候选是否越过产品定位边界？ | [model-generated-pattern-candidates](../prd/questions/model-generated-pattern-candidates.md) |
+| AI 提议的状态变更：确认在前还是撤销在后？ | [ai-change-confirm-or-undo](../prd/questions/ai-change-confirm-or-undo.md) |
+
+其中「离线是否硬需求」是决定性的一条：若答案为否，则云端一个模型即可覆盖全部
+讨论过的任务，端侧模型没有存在理由，本报告的价值只剩 §4.4 与 §4.1 两条关于
+LMDJ 自身的结论——它们与是否采用 Needle 无关。
+
 ## 2. 研究范围与证据口径
 
 ### 2.1 本次回答的问题
