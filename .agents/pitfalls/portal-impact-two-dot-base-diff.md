@@ -36,7 +36,7 @@ behind-base branch, and
 keeps the range out of the workflow.
 
 A gate failure naming portal pages is therefore the branch's own edit. Two
-sibling two-dot ranges are out of this entry's scope and remain open:
+sibling two-dot ranges are out of this entry's scope and tracked in #539:
 `ci.yml`'s docs-static `git diff --check "$BASE_SHA" "$HEAD_SHA"`, and
 `read_git_inventory` in `scripts/ci/change_scope.py`, whose only effect is
 conservative lane over-selection.
