@@ -1,7 +1,7 @@
 ---
 id: portal-impact-two-dot-base-diff
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-01
     occurrence: https://github.com/endaye/lmdj/pull/527
@@ -9,45 +9,34 @@ recurrences:
   - date: 2026-09-01
     occurrence: https://github.com/endaye/lmdj/pull/530
     observed_by: claude-opus-5
-exit: none
+exit: gate:apps/architecture-portal/test/changed-files.test.mjs
 ---
 
-# The portal impact gate diffs `PORTAL_BASE_SHA..PORTAL_HEAD_SHA` two-dot, so a branch behind `main` inherits every portal page merged after its base as "changed by this PR" and a truthful `Documentation impact: none` fails.
+# The portal impact gate diffed `PORTAL_BASE_SHA..PORTAL_HEAD_SHA` two-dot, so a branch behind `main` inherited every portal page merged after its base as "changed by this PR" and a truthful `Documentation impact: none` failed.
 
 ## Why
 
 `PORTAL_BASE_SHA` comes from the `pull_request` event's `base.sha`, which is
 the tip of `main` at event time, not the merge base. `git diff A B` (two-dot)
 compares the trees, so commits that landed on `main` after the branch was cut
-appear in the diff in reverse. On PR #527 a four-file `docs/superpowers/**`
-branch based two commits behind `main` was blamed for the
-`apps/architecture-portal/docs/**.mdx` pages that #521 had merged in the
-meantime, and `check:impact` failed with "documentation impact is none but
-current portal pages changed" — a message that points at the PR's own edits
-and never mentions base drift.
+appeared in the diff in reverse. PR #527 was a four-file `docs/superpowers/**`
+branch blamed for the pages #521 had merged; PR #530 was a single-file
+`docs/research/**` branch blamed for five pages merged by #527 and #529.
+Neither touched a portal page.
 
-## How to avoid
+## How to apply
 
-Before pushing a PR that declares `Documentation impact: none`, rebase the
-branch onto current `origin/main` (or verify
-`git diff --name-only origin/main HEAD` contains only the Task's files). If
-the gate fails with "portal pages changed" that the branch never touched,
-the fix is to bring the branch up to date — not changing the declaration to
-`required`.
+Absorbed by #531. `apps/architecture-portal/scripts/lib/changed-files.mjs`
+resolves both the documentation-impact and snapshot-projection ranges from the
+merge base, which is the range `scripts/ci/local_preflight.py` already measured
+locally, and `.github/workflows/architecture-portal.yml` computes no range of
+its own. `apps/architecture-portal/test/changed-files.test.mjs` pins the
+behind-base branch, and
+`tests/build/ci_workflow_topology_test.py::test_portal_never_measures_a_two_dot_range_between_the_inputs`
+keeps the range out of the workflow.
 
-`gh pr update-branch <n>` is the cheapest remedy: it merges current `main`
-into the branch server-side, needs no force push, and emits the `synchronize`
-event the gate requires anyway, because the gate reads the PR body from the
-frozen event payload and `gh run rerun` reuses the stale one. A local rebase
-plus force-with-lease works too. Note the PR object can lag the branch tip by
-a minute after `update-branch`; read `.head.sha` back before concluding the
-event did not fire.
-
-The durable fix — diffing against `git merge-base` or three-dot `...` in the
-portal workflow — is escalated to #531 at recurrence 2. It meets the gate
-admission criteria, so the entry stays `open` only until that Task lands.
-
-Recurrence 2 (PR #530) was a single-file `docs/research/**` change blamed for
-five portal pages merged by #527 and #529 while the branch sat behind `main`;
-the same PR had already passed `scripts/local-ci.sh`, which does not model the
-gate's base SHA and so cannot catch this locally.
+A gate failure naming portal pages is therefore the branch's own edit. Two
+sibling two-dot ranges are out of this entry's scope and tracked in #539:
+`ci.yml`'s docs-static `git diff --check "$BASE_SHA" "$HEAD_SHA"`, and
+`read_git_inventory` in `scripts/ci/change_scope.py`, whose only effect is
+conservative lane over-selection.
