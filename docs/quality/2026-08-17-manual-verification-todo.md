@@ -121,7 +121,7 @@ run against the current Build.
 | --- | --- | --- | --- |
 | M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) | **`PASS` 2026-08-17** ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
 | M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **`PASS` 2026-09-01 on `1.0.40.0`** ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) — the strict non-zero trim boundary, One Shot, Gate release, Loop Gate, Loop Toggle, Volume/Mute, 16 Pads, Replace and reload all passed. Exact replay produced no obvious seam transient; the operator corrected the initially reported rapid texture to normal 40 ms loop playback. The prior 2026-08-17 stopped run remains historical evidence: trim boundaries clicked and the F5 handles could not be aimed; checks 2–8 were not performed then |
-| M3 | Pointer input | inherited from Stage 6/7 | not started |
+| M3 | Pointer input | inherited from Stage 6/7 | **`PASS` 2026-09-01 on `1.0.40.0`** ([evidence](../release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md)) — tested revision `3aeba5c5`, built-in MacBook trackpad; ordered A1–A16, Bank/corner targets, separated and double clicks, drag-off/mistake targets, mode navigation, audio recovery and report export passed with 115 admissions / 115 outcomes / 0 rejections |
 | M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today | open |
 
 ### Session M-B — macOS Chrome with external hardware
@@ -281,8 +281,9 @@ omitted and not called passed.
 1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. ~~**M2**~~ was rerun
    on `1.0.40.0` and is `PASS`: all eight checklist groups passed. Exact replay
    let the operator correct the initial description of the 40 ms loop's rapid
-   texture; no obvious independent seam click was heard. **M3** is independent
-   and can run at any time.
+   texture; no obvious independent seam click was heard. ~~**M3**~~ is also
+   `PASS` on the same Build: the built-in trackpad completed the full Creator
+   Pointer journey with 115 admissions / 115 outcomes / 0 rejections.
 2. ~~**P2**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md)). ~~P1~~ resolved
    2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)): rows re-run
    unless a recorded unchanged-tree derivation carries them, so M6 stays on

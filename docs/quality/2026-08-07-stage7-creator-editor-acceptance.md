@@ -140,7 +140,7 @@ not Safari product acceptance.
 | Platform | Browser | Input / journey | Status |
 | --- | --- | --- | --- |
 | macOS | Safari | Pointer | `deferred / unverified`; separate Bundle import check did not reproduce >20 s `importing` |
-| macOS | Chrome | Pointer | `deferred / unverified` |
+| macOS | Chrome | Pointer | `PASS — 1.0.40.0 exact packaged Creator at tested revision 3aeba5c5; built-in MacBook trackpad completed A1–A16, all Banks/corners, repeat/double-click, drag/mistake, modes, audio recovery and report export; 115 admitted / 115 outcomes / 0 rejected` — [evidence](../release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md) |
 | macOS | Chrome | Physical keyboard + hearing | `PASS — 1.0.20.0 ten-step Canary confirmed by endaye; report SHA-256 7e2a2b…333a` |
 | macOS | Chrome | Physical MIDI | `PASS — 1.0.21.0 accepted MPD218 Channel 10 across all 16 Bank-A Pads, Creator B/C/D samples, reconnect, suspend/re-authorize, and reload/reopen; final report SHA-256 b0491e…603` |
 | iPadOS | Safari | Touch | `deferred / unverified` |
@@ -172,10 +172,12 @@ missing repository document to a missing execution was incorrect. G1 is now a
 recovered documentation binding, not a historical Proof execution failure.
 
 T1 is closed for the `1.0.20.0` branch-local candidate; physical MIDI failed on
-that Build, Safari import was checked separately without reproducing the
-importing stall, and Safari Pointer plus iPadOS remain unverified. Product
-`1.0.21.0` automated Proof, immutable snapshot, Chrome MPD218 physical retest,
-protected merge, and exact merged-main Proof are complete. The remaining
-physical rows stay authoritative for their individual platforms and continue
-to block broader physical-device, `beta`, and `stable` claims. No Product tag,
-Release, deployment, publication, or Channel promotion is implied.
+that Build, and Safari import was checked separately without reproducing the
+importing stall. Product `1.0.21.0` automated Proof, immutable snapshot, Chrome
+MPD218 physical retest, protected merge, and exact merged-main Proof are
+complete. Creator macOS Chrome Pointer later passed on the exact packaged
+`1.0.40.0` surface; Safari Pointer and iPadOS remain unverified. Every physical
+row stays authoritative only for its individual platform, so the remaining
+rows continue to block broader physical-device, `beta`, and `stable` claims.
+No Product tag, Release, deployment, publication, or Channel promotion is
+implied.
