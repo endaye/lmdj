@@ -2,7 +2,7 @@
 
 Date: 2026-09-01
 
-Status: Approved direction; written design awaiting product-owner review
+Status: Approved
 
 ## 1. Problem
 
