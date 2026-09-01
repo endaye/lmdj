@@ -329,6 +329,8 @@ std::string state_string(SequenceSessionState state) {
       return "switching";
     case SequenceSessionState::stopped:
       return "stopped";
+    case SequenceSessionState::recovery_required:
+      return "recovery_required";
     case SequenceSessionState::owner_lost:
       return "owner_lost";
     case SequenceSessionState::abandoned:
@@ -346,6 +348,9 @@ SequenceSessionState parse_state(std::string_view value) {
   }
   if (value == "stopped") {
     return SequenceSessionState::stopped;
+  }
+  if (value == "recovery_required") {
+    return SequenceSessionState::recovery_required;
   }
   if (value == "owner_lost") {
     return SequenceSessionState::owner_lost;
@@ -2335,7 +2340,25 @@ nlohmann::json performance_journal_json(
     encoded["completed"] = flush.completed;
     flushes.push_back(std::move(encoded));
   }
+  auto rebases = nlohmann::json::array();
+  for (const auto& rebase : journal.rebases) {
+    rebases.push_back({
+        {"bpm_anchor",
+         rebase.bpm_anchor.has_value()
+             ? nlohmann::json(*rebase.bpm_anchor)
+             : nlohmann::json(nullptr)},
+        {"command_fingerprint", rebase.command_fingerprint},
+        {"command_id", rebase.command_id.value()},
+        {"completed", rebase.completed},
+        {"from_revision", rebase.from_revision},
+        {"to_revision", rebase.to_revision},
+    });
+  }
   return {
+      {"begin_command_id",
+       journal.begin_command_id.has_value()
+           ? nlohmann::json(journal.begin_command_id->value())
+           : nlohmann::json(nullptr)},
       {"expected_revision", journal.expected_revision},
       {"flushes", std::move(flushes)},
       {"last_input_sequence",
@@ -2348,6 +2371,11 @@ nlohmann::json performance_journal_json(
       {"performance_fingerprint", journal.performance_fingerprint},
       {"performance_id", journal.performance_id.value()},
       {"session_id", journal.session_id.value()},
+      {"stop_request_id",
+       journal.stop_request_id.has_value()
+           ? nlohmann::json(journal.stop_request_id->value())
+           : nlohmann::json(nullptr)},
+      {"rebases", std::move(rebases)},
       {"state", state_string(journal.state)},
   };
 }
@@ -2369,6 +2397,10 @@ foundation::Result<ActivePerformanceJournal> parse_performance_snapshot(
         input.at("next_tail_seq").get<std::uint64_t>(),
         std::nullopt,
         {},
+        SessionKind::performance,
+        std::nullopt,
+        std::nullopt,
+        {},
     };
     if (!domain::is_valid_uuid(journal.session_id.value()) ||
         !domain::is_valid_uuid(journal.performance_id.value()) ||
@@ -2378,6 +2410,34 @@ foundation::Result<ActivePerformanceJournal> parse_performance_snapshot(
     if (!input.at("last_input_sequence").is_null()) {
       journal.last_input_sequence =
           input.at("last_input_sequence").get<std::uint64_t>();
+    }
+    if (input.contains("begin_command_id") &&
+        !input.at("begin_command_id").is_null()) {
+      journal.begin_command_id = foundation::CommandId{
+          input.at("begin_command_id").get<std::string>()};
+    }
+    if (input.contains("stop_request_id") &&
+        !input.at("stop_request_id").is_null()) {
+      journal.stop_request_id = foundation::CommandId{
+          input.at("stop_request_id").get<std::string>()};
+    }
+    if (input.contains("rebases")) {
+      for (const auto& encoded : input.at("rebases")) {
+        PerformanceRebaseRecord rebase{
+            foundation::CommandId{
+                encoded.at("command_id").get<std::string>()},
+            encoded.at("command_fingerprint").get<std::string>(),
+            encoded.at("from_revision").get<std::uint64_t>(),
+            encoded.at("to_revision").get<std::uint64_t>(),
+            std::nullopt,
+            encoded.at("completed").get<bool>(),
+        };
+        if (!encoded.at("bpm_anchor").is_null()) {
+          rebase.bpm_anchor =
+              encoded.at("bpm_anchor").get<std::uint16_t>();
+        }
+        journal.rebases.push_back(std::move(rebase));
+      }
     }
     auto pending = parse_performance_events(input.at("pending_events"), path);
     if (!pending.has_value()) {
@@ -2479,6 +2539,10 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
           0,
           std::nullopt,
           {},
+          SessionKind::performance,
+          std::nullopt,
+          std::nullopt,
+          {},
       },
       checked.value().valid_prefix_length,
   };
@@ -2509,7 +2573,17 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
             0,
             std::nullopt,
             {},
+            SessionKind::performance,
+            std::nullopt,
+            std::nullopt,
+            {},
         };
+        if (payload.value().contains("command_id")) {
+          document.journal.begin_command_id = foundation::CommandId{
+              payload.value().at("command_id").get<std::string>()};
+          document.journal.state =
+              SequenceSessionState::recovery_required;
+        }
         if (!domain::is_valid_uuid(document.journal.session_id.value()) ||
             !domain::is_valid_uuid(document.journal.performance_id.value()) ||
             !lowercase_sha256(
@@ -2517,6 +2591,21 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
           throw std::runtime_error("Performance begin metadata is invalid");
         }
         saw_begin = true;
+      } else if (kind == "begin-complete") {
+        const auto committed_revision =
+            payload.value().at("committed_revision").get<std::uint64_t>();
+        const auto fingerprint = payload.value()
+                                     .at("performance_fingerprint")
+                                     .get<std::string>();
+        if (!document.journal.begin_command_id.has_value() ||
+            committed_revision != document.journal.expected_revision + 1 ||
+            !lowercase_sha256(fingerprint)) {
+          throw std::runtime_error(
+              "Performance draft begin completion is invalid");
+        }
+        document.journal.expected_revision = committed_revision;
+        document.journal.performance_fingerprint = fingerprint;
+        document.journal.state = SequenceSessionState::active;
       } else if (kind == "tail") {
         const auto tail_seq =
             payload.value().at("tail_seq").get<std::uint64_t>();
@@ -2607,6 +2696,76 @@ foundation::Result<PerformanceJournalDocument> read_performance_journal(
         found->completed = true;
         document.journal.expected_revision = committed_revision;
         document.journal.performance_fingerprint = fingerprint;
+      } else if (kind == "stop") {
+        const auto request_id = foundation::CommandId{
+            payload.value().at("request_id").get<std::string>()};
+        if (!domain::is_valid_uuid(request_id.value()) ||
+            document.journal.stop_request_id.has_value() ||
+            document.journal.state != SequenceSessionState::active ||
+            std::ranges::any_of(
+                document.journal.flushes,
+                [](const auto& flush) { return !flush.completed; })) {
+          throw std::runtime_error("Performance stop record is invalid");
+        }
+        document.journal.stop_request_id = request_id;
+        document.journal.state = SequenceSessionState::stopped;
+      } else if (kind == "rebase_prepare") {
+        PerformanceRebaseRecord rebase{
+            foundation::CommandId{
+                payload.value().at("command_id").get<std::string>()},
+            payload.value().at("command_fingerprint").get<std::string>(),
+            payload.value().at("from_revision").get<std::uint64_t>(),
+            payload.value().at("to_revision").get<std::uint64_t>(),
+            std::nullopt,
+            false,
+        };
+        if (!domain::is_valid_uuid(rebase.command_id.value()) ||
+            !lowercase_sha256(rebase.command_fingerprint) ||
+            rebase.from_revision != document.journal.expected_revision ||
+            rebase.to_revision != rebase.from_revision + 1 ||
+            document.journal.state != SequenceSessionState::active ||
+            std::ranges::any_of(
+                document.journal.rebases,
+                [&rebase](const auto& existing) {
+                  return existing.command_id == rebase.command_id;
+                }) ||
+            std::ranges::any_of(
+                document.journal.flushes,
+                [](const auto& flush) { return !flush.completed; })) {
+          throw std::runtime_error(
+              "Performance rebase preparation is invalid");
+        }
+        document.journal.rebases.push_back(std::move(rebase));
+        document.journal.state = SequenceSessionState::recovery_required;
+      } else if (kind == "rebase_complete") {
+        const auto command_id = foundation::CommandId{
+            payload.value().at("command_id").get<std::string>()};
+        const auto committed_revision =
+            payload.value().at("committed_revision").get<std::uint64_t>();
+        const auto fingerprint = payload.value()
+                                     .at("performance_fingerprint")
+                                     .get<std::string>();
+        const auto found = std::find_if(
+            document.journal.rebases.begin(),
+            document.journal.rebases.end(),
+            [&command_id](const auto& rebase) {
+              return rebase.command_id == command_id;
+            });
+        if (found == document.journal.rebases.end() || found->completed ||
+            committed_revision != found->to_revision ||
+            document.journal.state !=
+                SequenceSessionState::recovery_required ||
+            !lowercase_sha256(fingerprint)) {
+          throw std::runtime_error("Performance rebase completion is invalid");
+        }
+        if (!payload.value().at("bpm_anchor").is_null()) {
+          found->bpm_anchor =
+              payload.value().at("bpm_anchor").get<std::uint16_t>();
+        }
+        found->completed = true;
+        document.journal.expected_revision = committed_revision;
+        document.journal.performance_fingerprint = fingerprint;
+        document.journal.state = SequenceSessionState::active;
       } else {
         throw std::runtime_error(
             "Performance Journal record kind is invalid");
@@ -2650,6 +2809,336 @@ std::string performance_fingerprint(const domain::Performance& performance) {
   return sha256(foundation::canonical_json(preimage));
 }
 
+foundation::Result<void> SequenceJournal::begin_performance_draft_locked(
+    const std::filesystem::path& bundle,
+    foundation::CommandId command_id,
+    foundation::SequenceSessionId session_id,
+    domain::PerformanceId performance_id,
+    std::string fingerprint,
+    std::uint64_t from_revision) {
+  if (!domain::is_valid_uuid(command_id.value()) ||
+      !domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(performance_id.value()) ||
+      !lowercase_sha256(fingerprint)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance draft begin metadata is invalid",
+    });
+  }
+  auto active_kind = active_recording_session(
+      *platform_, bundle, SessionKind::performance);
+  if (!active_kind.has_value()) {
+    return foundation::Result<void>::failure(active_kind.error());
+  }
+  if (active_kind.value().has_value()) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "a recording session is already active for this Project",
+        {{"reason", "recording_session_active"},
+         {"session_kind", session_kind_string(*active_kind.value())},
+         {"remedy",
+          "finish or reconcile the active recording session before beginning a Performance draft"}},
+    });
+  }
+  const auto path = recording_active_path(bundle, SessionKind::performance);
+  const auto payload = nlohmann::json{
+      {"command_id", command_id.value()},
+      {"contract",
+       recording_protocol(SessionKind::performance).journal_contract},
+      {"expected_revision", from_revision},
+      {"kind", "begin"},
+      {"performance_fingerprint", std::move(fingerprint)},
+      {"performance_id", performance_id.value()},
+      {"session_id", session_id.value()},
+  };
+  const auto bytes = foundation::canonical_json(checked_record(payload)) +
+                     "\n";
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto fault = testing::detail::invoke_fault(
+      testing::FaultPoint::sequence_journal_write, path);
+  if (!fault.has_value()) {
+    return fault;
+  }
+#endif
+  auto created = platform_->create_immutable(path, byte_span(bytes));
+  return created.has_value()
+             ? foundation::Result<void>::success()
+             : foundation::Result<void>::failure(created.error());
+}
+
+foundation::Result<void> SequenceJournal::complete_performance_begin_locked(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    std::uint64_t committed_revision,
+    std::string fingerprint) {
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  if (document.value().journal.session_id != session_id ||
+      !document.value().journal.begin_command_id.has_value() ||
+      document.value().journal.expected_revision + 1 != committed_revision ||
+      !lowercase_sha256(fingerprint)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance draft begin completion does not match the Journal",
+    });
+  }
+  return append_recording_record(
+      platform_, bundle, SessionKind::performance,
+      document.value().valid_prefix_length,
+      {{"committed_revision", committed_revision},
+       {"kind", "begin-complete"},
+       {"performance_fingerprint", std::move(fingerprint)}});
+}
+
+foundation::Result<void> SequenceJournal::stop_performance_locked(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    foundation::CommandId request_id) {
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id ||
+      !domain::is_valid_uuid(request_id.value())) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance stop identity does not match the active Journal",
+    });
+  }
+  if (journal.stop_request_id.has_value()) {
+    if (*journal.stop_request_id == request_id &&
+        journal.state == SequenceSessionState::stopped) {
+      return foundation::Result<void>::success();
+    }
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance stop request id is bound to another request",
+        {{"reason", "performance_stop_request_conflict"},
+         {"remedy",
+          "retry the exact original stop request id or start a new session before issuing a different request"}},
+    });
+  }
+  if (journal.state == SequenceSessionState::recovery_required) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance stop is blocked until durable rebase reconciliation completes",
+        {{"reason", "performance_rebase_recovery_required"},
+         {"remedy",
+          "reopen the Project and retry the exact prepared command before stopping the session"}},
+    });
+  }
+  if (journal.state != SequenceSessionState::active ||
+      std::ranges::any_of(
+          journal.flushes,
+          [](const auto& flush) { return !flush.completed; })) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance session cannot stop in its current state",
+    });
+  }
+  return append_recording_record(
+      platform_, bundle, SessionKind::performance,
+      document.value().valid_prefix_length,
+      {{"kind", "stop"}, {"request_id", request_id.value()}});
+}
+
+foundation::Result<void> SequenceJournal::prepare_performance_rebase_locked(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    PerformanceRebaseRecord record) {
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  const auto existing = std::find_if(
+      journal.rebases.begin(), journal.rebases.end(),
+      [&record](const auto& candidate) {
+        return candidate.command_id == record.command_id;
+      });
+  if (existing != journal.rebases.end()) {
+    if (existing->command_fingerprint == record.command_fingerprint &&
+        existing->from_revision == record.from_revision &&
+        existing->to_revision == record.to_revision) {
+      return foundation::Result<void>::success();
+    }
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance rebase command id is bound to another command",
+        {{"reason", "performance_rebase_command_conflict"},
+         {"remedy",
+          "retry the exact prepared command payload or issue a new command id before preparation"}},
+    });
+  }
+  if (journal.session_id != session_id ||
+      journal.state != SequenceSessionState::active ||
+      journal.expected_revision != record.from_revision ||
+      record.to_revision != record.from_revision + 1 ||
+      !domain::is_valid_uuid(record.command_id.value()) ||
+      !lowercase_sha256(record.command_fingerprint) ||
+      std::ranges::any_of(
+          journal.flushes,
+          [](const auto& flush) { return !flush.completed; })) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance rebase cannot be prepared in the current state",
+    });
+  }
+  return append_recording_record(
+      platform_, bundle, SessionKind::performance,
+      document.value().valid_prefix_length,
+      {{"command_fingerprint", std::move(record.command_fingerprint)},
+       {"command_id", record.command_id.value()},
+       {"from_revision", record.from_revision},
+       {"kind", "rebase_prepare"},
+       {"to_revision", record.to_revision}});
+}
+
+foundation::Result<void> SequenceJournal::complete_performance_rebase_locked(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    foundation::CommandId command_id,
+    std::uint64_t committed_revision,
+    std::optional<std::uint16_t> bpm_anchor,
+    std::string fingerprint) {
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  const auto found = std::find_if(
+      journal.rebases.begin(), journal.rebases.end(),
+      [&command_id](const auto& rebase) {
+        return rebase.command_id == command_id;
+      });
+  if (journal.session_id != session_id || found == journal.rebases.end() ||
+      found->completed || found->to_revision != committed_revision ||
+      journal.state != SequenceSessionState::recovery_required ||
+      !lowercase_sha256(fingerprint)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance rebase completion does not match the Journal",
+    });
+  }
+  return append_recording_record(
+      platform_, bundle, SessionKind::performance,
+      document.value().valid_prefix_length,
+      {{"bpm_anchor",
+        bpm_anchor.has_value() ? nlohmann::json(*bpm_anchor)
+                               : nlohmann::json(nullptr)},
+       {"command_id", command_id.value()},
+       {"committed_revision", committed_revision},
+       {"kind", "rebase_complete"},
+       {"performance_fingerprint", std::move(fingerprint)}});
+}
+
+foundation::Result<void> SequenceJournal::remove_active_performance_locked(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    bool require_stopped) {
+  auto document = read_performance_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  if (document.value().journal.session_id != session_id ||
+      (require_stopped &&
+       document.value().journal.state != SequenceSessionState::stopped)) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance Journal cleanup precondition failed",
+    });
+  }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto fault = testing::detail::invoke_fault(
+      testing::FaultPoint::sequence_journal_deletion,
+      recording_active_path(bundle, SessionKind::performance));
+  if (!fault.has_value()) {
+    return fault;
+  }
+#endif
+  return platform_->remove(
+      recording_active_path(bundle, SessionKind::performance));
+}
+
+foundation::Result<void> SequenceJournal::restore_stopped_performance_locked(
+    const std::filesystem::path& bundle,
+    const PerformanceRecoveryCandidate& candidate,
+    std::uint64_t expected_revision,
+    std::string fingerprint,
+    foundation::CommandId request_id) {
+  const auto active_path =
+      recording_active_path(bundle, SessionKind::performance);
+  auto active_exists = platform_->exists(active_path);
+  if (!active_exists.has_value()) {
+    return foundation::Result<void>::failure(active_exists.error());
+  }
+  if (active_exists.value()) {
+    auto active = read_performance_journal(*platform_, bundle);
+    if (!active.has_value()) {
+      return foundation::Result<void>::failure(active.error());
+    }
+    if (active.value().journal.session_id != candidate.journal.session_id ||
+        active.value().journal.performance_id !=
+            candidate.journal.performance_id ||
+        active.value().journal.state != SequenceSessionState::stopped ||
+        active.value().journal.stop_request_id != request_id) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::invalid_argument,
+          "another recording session blocks Performance recovery",
+          {{"reason", "recording_session_active"}},
+      });
+    }
+  } else {
+    const auto begin = foundation::canonical_json(checked_record({
+                           {"contract",
+                            recording_protocol(SessionKind::performance)
+                                .journal_contract},
+                           {"expected_revision", expected_revision},
+                           {"kind", "begin"},
+                           {"performance_fingerprint", fingerprint},
+                           {"performance_id",
+                            candidate.journal.performance_id.value()},
+                           {"session_id",
+                            candidate.journal.session_id.value()},
+                       })) +
+                       "\n";
+    const auto stop = foundation::canonical_json(checked_record({
+                          {"kind", "stop"},
+                          {"request_id", request_id.value()},
+                      })) +
+                      "\n";
+    const auto bytes = begin + stop;
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    const auto fault = testing::detail::invoke_fault(
+        testing::FaultPoint::sequence_journal_write, active_path);
+    if (!fault.has_value()) {
+      return fault;
+    }
+#endif
+    auto created = platform_->create_immutable(active_path, byte_span(bytes));
+    if (!created.has_value()) {
+      return foundation::Result<void>::failure(created.error());
+    }
+  }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto cleanup_fault = testing::detail::invoke_fault(
+      testing::FaultPoint::sequence_journal_deletion, candidate.path);
+  if (!cleanup_fault.has_value()) {
+    return cleanup_fault;
+  }
+#endif
+  auto candidate_exists = platform_->exists(candidate.path);
+  if (!candidate_exists.has_value()) {
+    return foundation::Result<void>::failure(candidate_exists.error());
+  }
+  return candidate_exists.value()
+             ? platform_->remove(candidate.path)
+             : foundation::Result<void>::success();
+}
+
 foundation::Result<void> SequenceJournal::begin_performance(
     const std::filesystem::path& bundle,
     foundation::SequenceSessionId session_id,
@@ -2686,6 +3175,8 @@ foundation::Result<void> SequenceJournal::begin_performance(
     auto details = nlohmann::json{
         {"reason", "recording_session_active"},
         {"session_kind", session_kind_string(kind)},
+        {"remedy",
+         "finish or reconcile the active recording session before beginning another Performance session"},
     };
     if (kind == SessionKind::performance) {
       auto active = read_performance_journal(*platform_, bundle);
@@ -2783,6 +3274,15 @@ foundation::Result<void> SequenceJournal::append_performance_tail(
     return foundation::Result<void>::failure(document.error());
   }
   const auto& journal = document.value().journal;
+  if (journal.state == SequenceSessionState::recovery_required) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance admission is blocked until durable rebase reconciliation completes",
+        {{"reason", "performance_rebase_recovery_required"},
+         {"remedy",
+          "retry the exact prepared command after reopening the Project; do not submit new events or flushes"}},
+    });
+  }
   if (journal.session_id != session_id ||
       journal.performance_id != performance_id ||
       journal.expected_revision != expected_revision ||
@@ -2846,6 +3346,15 @@ SequenceJournal::append_performance_flush(
         document.error());
   }
   const auto& journal = document.value().journal;
+  if (journal.state == SequenceSessionState::recovery_required) {
+    return foundation::Result<PerformanceFlushRecord>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance flush is blocked until durable rebase reconciliation completes",
+        {{"reason", "performance_rebase_recovery_required"},
+         {"remedy",
+          "retry the exact prepared command after reopening the Project; do not submit new events or flushes"}},
+    });
+  }
   const auto repeated = std::find_if(
       journal.flushes.begin(), journal.flushes.end(),
       [&command_id](const auto& flush) {
@@ -2860,7 +3369,9 @@ SequenceJournal::append_performance_flush(
     return foundation::Result<PerformanceFlushRecord>::failure(Error{
         ErrorCode::invalid_argument,
         "Performance command id is bound to a different flush",
-        {{"reason", "performance_command_conflict"}},
+        {{"reason", "performance_command_conflict"},
+         {"remedy",
+          "retry the exact original flush payload or issue a new command id"}},
     });
   }
   if (journal.session_id != session_id ||
