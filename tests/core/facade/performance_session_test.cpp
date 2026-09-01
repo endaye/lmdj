@@ -63,8 +63,18 @@ private:
 };
 
 lmdj::facade::Application make_application(const std::filesystem::path &root) {
-  lmdj::facade::ApplicationConfig config{root, nullptr,      {},
-                                         {},   std::nullopt, nullptr};
+  lmdj::facade::ApplicationConfig config{
+      root,
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+  };
   config.performance_clock = std::make_shared<Clock>();
   config.performance_input_sequencer = std::make_shared<Sequencer>();
   return lmdj::facade::Application(std::move(config));

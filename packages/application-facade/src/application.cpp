@@ -30,7 +30,9 @@
 #include <lmdj/audio/offline_renderer.hpp>
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/cooker/project_cooker.hpp>
+#include <lmdj/cooker/performance_replay.hpp>
 #include <lmdj/cooker/sample_analysis.hpp>
+#include <lmdj/cooker/wav_selection.hpp>
 #include <lmdj/cooker/wav_reader.hpp>
 #include <lmdj/domain/commands.hpp>
 #include <lmdj/domain/project.hpp>
@@ -150,6 +152,10 @@ const std::map<std::string, OperationKind>& operations() {
       {"performance.record.status", OperationKind::query},
       {"performance.record.stop", OperationKind::command},
       {"performance.recording.bind", OperationKind::command},
+      {"performance.replay.begin", OperationKind::command},
+      {"performance.replay.status", OperationKind::query},
+      {"performance.replay.stop", OperationKind::command},
+      {"performance.resample.commit", OperationKind::command},
       {"performance.recovery.apply", OperationKind::command},
       {"performance.recovery.discard", OperationKind::command},
       {"performance.recovery.list", OperationKind::query},
@@ -1766,6 +1772,17 @@ struct Application::Impl {
     std::unique_ptr<project_io::ProjectWriterLease> lease;
   };
 
+  struct ReplayIdentity {
+    std::filesystem::path project_path;
+    domain::PerformanceId performance_id;
+  };
+
+  struct ReplayStopReceipt {
+    std::filesystem::path project_path;
+    ReplayId replay_id;
+    ReplayRuntimeStatus status;
+  };
+
   struct PressedSequencePad {
     std::uint64_t raw_attack_tick{};
     std::uint32_t onset_tick{};
@@ -1854,6 +1871,8 @@ struct Application::Impl {
             std::move(config.performance_input_sequencer)),
         pattern_launch_acknowledger(
             std::move(config.pattern_launch_acknowledger)),
+        performance_replay_controller(
+            std::move(config.performance_replay_controller)),
         sample_limits(
             config.runtime_preparation_limits.value_or(kDefaultSampleLimits)),
         projects(storage_platform),
@@ -1870,6 +1889,10 @@ struct Application::Impl {
                 : default_timestamp_source()) {
     if (!workspace_root.is_absolute()) {
       throw std::invalid_argument("workspace_root must be absolute");
+    }
+    if (!performance_replay_controller) {
+      throw std::invalid_argument(
+          "performance_replay_controller is required");
     }
     const auto cleaned = bundle_transfers.cleanup_incomplete(workspace_root);
     if (!cleaned.has_value()) {
@@ -3484,6 +3507,15 @@ struct Application::Impl {
     if (operation == "performance.recording.bind") {
       return performance_recording_bind(request);
     }
+    if (operation == "performance.replay.begin") {
+      return performance_replay_begin(request);
+    }
+    if (operation == "performance.replay.stop") {
+      return performance_replay_stop(request);
+    }
+    if (operation == "performance.resample.commit") {
+      return performance_resample_commit(request);
+    }
     if (operation == "sample.inspect") {
       return sample_inspect(request);
     }
@@ -3561,6 +3593,9 @@ struct Application::Impl {
     }
     if (operation == "performance.record.status") {
       return performance_status(request);
+    }
+    if (operation == "performance.replay.status") {
+      return performance_replay_status(request);
     }
     if (operation == "performance.recovery.list") {
       return performance_recovery_list(request);
@@ -5088,6 +5123,30 @@ struct Application::Impl {
     };
   }
 
+  static std::string_view replay_state_name(ReplayState state) {
+    switch (state) {
+      case ReplayState::playing:
+        return "playing";
+      case ReplayState::stopped:
+        return "stopped";
+      case ReplayState::complete:
+        return "complete";
+    }
+    return "playing";
+  }
+
+  static nlohmann::json replay_status_json(
+      const ReplayId& replay_id,
+      const ReplayRuntimeStatus& status) {
+    return {
+        {"replay_id", replay_id.value()},
+        {"state", replay_state_name(status.state)},
+        {"resolved_revision", status.resolved_revision},
+        {"event_cursor", status.event_cursor},
+        {"event_count", status.event_count},
+    };
+  }
+
   static foundation::ArtifactRef
   performance_artifact(const nlohmann::json &encoded) {
     require(exact_keys(encoded, {"sha256", "media_type", "byte_length"}),
@@ -5471,6 +5530,300 @@ struct Application::Impl {
     }
     return success_envelope(performance_lifecycle_json(bound.value()),
                             bound.value().committed_revision);
+  }
+
+  nlohmann::json performance_replay_begin(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "replay_id", "performance_id"}),
+        "performance.replay.begin request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const ReplayId replay_id{uuid_field(request, "replay_id")};
+    const domain::PerformanceId performance_id{
+        uuid_field(request, "performance_id")};
+
+    std::lock_guard lock(replay_mutex);
+    const auto existing = replay_identities.find(replay_id.value());
+    if (existing != replay_identities.end()) {
+      if (existing->second.project_path != path ||
+          existing->second.performance_id != performance_id) {
+        return error_envelope(Error{
+            ErrorCode::duplicate_id,
+            "Performance replay id already exists with different payload",
+            {{"replay_id", replay_id.value()}},
+        });
+      }
+      const auto current = performance_replay_controller->status(replay_id);
+      if (!current.has_value()) {
+        return error_envelope(current.error());
+      }
+      if (current.value().state != ReplayState::playing &&
+          active_replay_id == replay_id.value()) {
+        active_replay_id.clear();
+      }
+      return success_envelope(
+          replay_status_json(replay_id, current.value()), std::nullopt);
+    }
+    if (!active_replay_id.empty()) {
+      const ReplayId active_id{active_replay_id};
+      const auto active_status =
+          performance_replay_controller->status(active_id);
+      if (!active_status.has_value()) {
+        return error_envelope(active_status.error());
+      }
+      if (active_status.value().state == ReplayState::playing) {
+        return error_envelope(Error{
+            ErrorCode::invalid_argument,
+            "a Performance replay is already playing",
+            {{"active_replay_id", active_replay_id}},
+        });
+      }
+      active_replay_id.clear();
+    }
+
+    const auto loaded = projects.load(path);
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    const auto projection = cooker::cook_performance_replay(
+        loaded.value(), performance_id,
+        [this, path](const foundation::ArtifactRef& artifact) {
+          return projects.read_artifact(path, artifact);
+        });
+    if (!projection.has_value()) {
+      return error_envelope(projection.error());
+    }
+    const auto begun =
+        performance_replay_controller->begin(replay_id, projection.value());
+    if (!begun.has_value()) {
+      return error_envelope(begun.error());
+    }
+    replay_identities.emplace(
+        replay_id.value(), ReplayIdentity{path, performance_id});
+    if (begun.value().state == ReplayState::playing) {
+      active_replay_id = replay_id.value();
+    }
+    return success_envelope(
+        replay_status_json(replay_id, begun.value()), std::nullopt);
+  }
+
+  foundation::Result<ReplayRuntimeStatus> checked_replay_status(
+      const std::filesystem::path& path,
+      const ReplayId& replay_id) {
+    const auto identity = replay_identities.find(replay_id.value());
+    if (identity == replay_identities.end()) {
+      return foundation::Result<ReplayRuntimeStatus>::failure(Error{
+          ErrorCode::not_found,
+          "Performance replay does not exist",
+      });
+    }
+    if (identity->second.project_path != path) {
+      return foundation::Result<ReplayRuntimeStatus>::failure(Error{
+          ErrorCode::duplicate_id,
+          "Performance replay id already exists for another Project",
+          {{"replay_id", replay_id.value()}},
+      });
+    }
+    auto status = performance_replay_controller->status(replay_id);
+    if (status.has_value() && status.value().state != ReplayState::playing &&
+        active_replay_id == replay_id.value()) {
+      active_replay_id.clear();
+    }
+    return status;
+  }
+
+  nlohmann::json performance_replay_status(const nlohmann::json& request) {
+    require(
+        exact_keys(request, {"operation", "project_path", "replay_id"}),
+        "performance.replay.status request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const ReplayId replay_id{uuid_field(request, "replay_id")};
+    std::lock_guard lock(replay_mutex);
+    const auto status = checked_replay_status(path, replay_id);
+    if (!status.has_value()) {
+      return error_envelope(status.error());
+    }
+    return success_envelope(
+        replay_status_json(replay_id, status.value()), std::nullopt);
+  }
+
+  nlohmann::json performance_replay_stop(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "replay_id", "request_id"}),
+        "performance.replay.stop request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const ReplayId replay_id{uuid_field(request, "replay_id")};
+    const auto request_id = uuid_field(request, "request_id");
+    std::lock_guard lock(replay_mutex);
+
+    const auto receipt = replay_stop_receipts.find(request_id);
+    if (receipt != replay_stop_receipts.end()) {
+      if (receipt->second.project_path != path ||
+          receipt->second.replay_id != replay_id) {
+        return error_envelope(Error{
+            ErrorCode::duplicate_id,
+            "Performance replay stop request id already exists",
+            {{"request_id", request_id}},
+        });
+      }
+      auto result = replay_status_json(replay_id, receipt->second.status);
+      result["request_id"] = request_id;
+      result["replayed"] = true;
+      return success_envelope(std::move(result), std::nullopt);
+    }
+
+    auto status = checked_replay_status(path, replay_id);
+    if (!status.has_value()) {
+      return error_envelope(status.error());
+    }
+    if (status.value().state == ReplayState::playing) {
+      status = performance_replay_controller->stop(replay_id);
+      if (!status.has_value()) {
+        return error_envelope(status.error());
+      }
+      if (status.value().state != ReplayState::playing &&
+          active_replay_id == replay_id.value()) {
+        active_replay_id.clear();
+      }
+    }
+    replay_stop_receipts.emplace(
+        request_id, ReplayStopReceipt{path, replay_id, status.value()});
+    auto result = replay_status_json(replay_id, status.value());
+    result["request_id"] = request_id;
+    result["replayed"] = false;
+    return success_envelope(std::move(result), std::nullopt);
+  }
+
+  nlohmann::json performance_resample_commit(
+      const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id",
+             "expected_revision", "performance_id", "source_start_frame",
+             "source_end_frame", "target_slot"}),
+        "performance.resample.commit request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const domain::CommandMeta meta{
+        foundation::CommandId{command_id},
+        unsigned_field(request, "expected_revision")};
+    const domain::PerformanceId performance_id{
+        uuid_field(request, "performance_id")};
+    const auto start_frame = unsigned_field(request, "source_start_frame");
+    const auto end_frame = unsigned_field(request, "source_end_frame");
+    const auto target = slot_value(request.at("target_slot"));
+
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto loaded = projects.load(path);
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    const auto found = loaded.value().performances.find(performance_id);
+    if (found == loaded.value().performances.end()) {
+      return error_envelope(Error{
+          ErrorCode::not_found,
+          "Performance does not exist",
+      });
+    }
+    const auto& performance = found->second;
+    if (!performance.recording_artifact.has_value() ||
+        performance.recording_artifact->media_type != "audio/wav") {
+      return error_envelope(Error{
+          ErrorCode::invalid_argument,
+          "Performance does not have a verified audio/wav recording Artifact",
+      });
+    }
+    const auto bytes = projects.read_artifact(
+        path, *performance.recording_artifact);
+    if (!bytes.has_value()) {
+      return error_envelope(bytes.error());
+    }
+    const auto selected = cooker::select_pcm16_stereo_wav(
+        bytes.value(), start_frame, end_frame);
+    if (!selected.has_value()) {
+      return error_envelope(selected.error());
+    }
+    if (loaded.value().revision == meta.expected_revision) {
+      const auto candidate = measure_prepared_quota(selected.value());
+      if (!candidate.has_value()) {
+        return error_envelope(candidate.error());
+      }
+      const auto quota = compute_sample_quota(path, loaded.value(), target);
+      if (!quota.has_value()) {
+        return error_envelope(quota.error());
+      }
+      const auto assessment = audio::assess_runtime_quota(
+          quota.value().result.bank_used_bytes,
+          quota.value().result.project_used_bytes,
+          candidate.value().bytes,
+          *sample_limits);
+      if (!assessment.has_value()) {
+        return error_envelope(Error{
+            ErrorCode::invalid_project,
+            "Sample quota ledger exceeds configured limits",
+        });
+      }
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::user_bank) {
+        std::vector<nlohmann::json> consumed;
+        consumed.reserve(quota.value().result.consumed.size());
+        for (const auto& entry : quota.value().result.consumed) {
+          consumed.push_back({
+              {"pad", entry.slot.pad},
+              {"prepared_bytes", entry.prepared_bytes},
+              {"prepared_frames", entry.prepared_frames},
+          });
+        }
+        return sample_error_envelope(runtime_bank_quota_error(
+            target,
+            candidate.value().bytes,
+            candidate.value().frames,
+            assessment->user_bank_remaining_bytes,
+            sample_limits->maximum_user_bank_bytes,
+            consumed));
+      }
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::generation) {
+        return sample_error_envelope(runtime_project_quota_error(
+            candidate.value().bytes,
+            candidate.value().frames,
+            quota.value().result.project_used_bytes,
+            assessment->generation_remaining_bytes,
+            sample_limits->maximum_generation_bytes,
+            quota.value().bank_used_bytes));
+      }
+    }
+    const domain::AssetLineage lineage{
+        {performance.recording_artifact->sha256,
+         performance.recording_revision},
+        {{start_frame, end_frame}, performance.id},
+    };
+    const auto committed = projects.import_assign_sample_bytes(
+        path,
+        {meta,
+         target,
+         foundation::AssetId{command_id},
+         "audio/wav",
+         selected.value(),
+         std::nullopt,
+         lineage});
+    if (!committed.has_value()) {
+      return error_envelope(committed.error());
+    }
+    const auto revision =
+        committed.value().event.at("revision").get<std::uint64_t>();
+    return success_envelope(
+        {{"performance_id", performance_id.value()},
+         {"committed_revision", revision},
+         {"runtime_prepare_required", true}},
+        committed.value().state.revision);
   }
 
   static domain::PerformanceFx performance_fx(std::string_view value) {
@@ -6664,6 +7017,7 @@ struct Application::Impl {
   std::shared_ptr<PerformanceClock> performance_clock;
   std::shared_ptr<PerformanceInputSequencer> performance_input_sequencer;
   std::shared_ptr<PatternLaunchAcknowledger> pattern_launch_acknowledger;
+  std::shared_ptr<PerformanceReplayController> performance_replay_controller;
   std::optional<audio::RuntimePreparationLimits> sample_limits;
   project_io::ProjectStore projects;
   project_io::SequenceJournal sequence_journals;
@@ -6671,9 +7025,13 @@ struct Application::Impl {
   project_io::WorkspaceCacheStore waveform_cache;
   provider::AttemptStore attempts;
   mutable std::mutex sample_mutex;
+  mutable std::mutex replay_mutex;
   mutable std::mutex sequence_mutex;
   std::map<std::string, SequenceRuntime> sequence_sessions;
   std::map<std::string, PerformanceRuntime> performance_sessions;
+  std::map<std::string, ReplayIdentity> replay_identities;
+  std::map<std::string, ReplayStopReceipt> replay_stop_receipts;
+  std::string active_replay_id;
   std::map<std::string, SampleImportState> sample_imports;
   std::set<std::string> used_sample_import_tokens;
   std::deque<std::string> remembered_sample_import_tokens;

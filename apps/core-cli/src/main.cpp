@@ -369,6 +369,12 @@ int run(const Invocation& invocation) {
           std::move(providers),
           std::move(provider_policy),
           {},
+          std::nullopt,
+          nullptr,
+          nullptr,
+          nullptr,
+          nullptr,
+          lmdj::facade::make_unavailable_performance_replay_controller(),
       });
   if (invocation.mode == Mode::command) {
     return write_response(application.command(*request));
