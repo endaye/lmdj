@@ -78,6 +78,7 @@ Performance performance() {
       PerformanceId{std::string{kPerformanceId}},
       "Live set",
       120,
+      0,
       std::nullopt,
       {},
   };

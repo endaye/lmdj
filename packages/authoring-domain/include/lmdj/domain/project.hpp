@@ -71,9 +71,41 @@ struct PadSlot {
   bool operator==(const PadSlot&) const = default;
 };
 
+struct PerformanceIdTag;
+using PerformanceId = foundation::StrongId<PerformanceIdTag>;
+
+struct AssetArtifactLineageSource {
+  std::string artifact_sha256;
+  std::uint64_t project_revision{};
+
+  bool operator==(const AssetArtifactLineageSource&) const = default;
+};
+
+struct ResampleFrameRange {
+  std::uint64_t start_frame{};
+  std::uint64_t end_frame{};
+
+  bool operator==(const ResampleFrameRange&) const = default;
+};
+
+struct ResampleLineageDerivation {
+  ResampleFrameRange range;
+  PerformanceId performance_id;
+
+  bool operator==(const ResampleLineageDerivation&) const = default;
+};
+
+struct AssetLineage {
+  AssetArtifactLineageSource source;
+  ResampleLineageDerivation derivation;
+
+  bool operator==(const AssetLineage&) const = default;
+};
+
 struct Asset {
   foundation::AssetId id;
   foundation::ArtifactRef artifact;
+  std::optional<AssetLineage> lineage;
 
   bool operator==(const Asset&) const = default;
 };
@@ -107,9 +139,6 @@ struct Pattern {
 
   bool operator==(const Pattern&) const = default;
 };
-
-struct PerformanceIdTag;
-using PerformanceId = foundation::StrongId<PerformanceIdTag>;
 
 enum class PerformanceEventKind : std::uint8_t {
   pad_hit,
@@ -202,6 +231,7 @@ struct Performance {
   PerformanceId id;
   std::string name;
   std::uint16_t created_bpm;
+  std::uint64_t recording_revision{};
   std::optional<foundation::ArtifactRef> recording_artifact;
   std::vector<PerformanceEvent> events;
 
@@ -262,6 +292,11 @@ foundation::Result<void> validate_performance_events(
     const std::vector<PerformanceEvent>& events);
 foundation::Result<void> validate_performance(
     const Performance& performance);
+foundation::Result<void> validate_asset_lineage(
+    const AssetLineage& lineage);
+foundation::Result<AssetLineage> asset_lineage_from_json(
+    const nlohmann::json& input);
+nlohmann::json asset_lineage_json(const AssetLineage& lineage);
 foundation::Result<void> validate_pattern_slots(
     const ProjectState& state);
 foundation::Result<PerformanceEvent> performance_event_from_json(

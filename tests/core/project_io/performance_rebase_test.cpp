@@ -129,6 +129,11 @@ void test_visible_rebase_receipt_requires_exact_completion_retry() {
   }
   LMDJ_CHECK(store.load(bundle).value().revision == 2);
   LMDJ_CHECK(store.load(bundle).value().bpm == 130);
+  LMDJ_CHECK(
+      store.load(bundle)
+          .value()
+          .performances.at(performance_id)
+          .recording_revision == 0);
   const auto blocked = SequenceJournal{}.read_active_performance(bundle);
   LMDJ_CHECK(blocked.has_value());
   LMDJ_CHECK(blocked.value().state ==
@@ -193,6 +198,10 @@ void test_visible_rebase_receipt_requires_exact_completion_retry() {
   LMDJ_CHECK(retry.has_value());
   LMDJ_CHECK(retry.value().outcome.replayed);
   LMDJ_CHECK(retry.value().outcome.state.revision == 2);
+  LMDJ_CHECK(
+      retry.value()
+          .outcome.state.performances.at(performance_id)
+          .recording_revision == 0);
   const auto active = SequenceJournal{}.read_active_performance(bundle);
   LMDJ_CHECK(active.has_value());
   LMDJ_CHECK(active.value().state == SequenceSessionState::active);

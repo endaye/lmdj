@@ -516,6 +516,7 @@ void test_authoring_project_cooks_directly_into_golden_render() {
           {
               AssetId{kKickAssetId},
               kick_artifact.value(),
+              std::nullopt,
           },
       }});
   project = apply_command(
@@ -528,6 +529,7 @@ void test_authoring_project_cooks_directly_into_golden_render() {
           {
               AssetId{kSnareAssetId},
               snare_artifact.value(),
+              std::nullopt,
           },
       }});
   project = apply_command(

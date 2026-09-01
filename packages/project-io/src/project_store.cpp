@@ -425,6 +425,7 @@ nlohmann::json performance_value_json(
       {"created_bpm", performance.created_bpm},
       {"events", std::move(events)},
       {"name", performance.name},
+      {"recording_revision", performance.recording_revision},
       {"recording_artifact",
        performance.recording_artifact.has_value()
            ? nlohmann::json(*performance.recording_artifact)
@@ -456,8 +457,15 @@ nlohmann::json project_json(const domain::ProjectState& state) {
 
   auto assets = nlohmann::json::array();
   for (const auto& [id, asset] : state.assets) {
-    assets.push_back(
-        {{"artifact", asset.artifact}, {"asset_id", id.value()}});
+    nlohmann::json encoded_asset{
+        {"artifact", asset.artifact}, {"asset_id", id.value()}};
+    if (state.contract == domain::ProjectContract::v4) {
+      encoded_asset["lineage"] =
+          asset.lineage.has_value()
+              ? domain::asset_lineage_json(*asset.lineage)
+              : nlohmann::json(nullptr);
+    }
+    assets.push_back(std::move(encoded_asset));
   }
   auto patterns = nlohmann::json::array();
   for (const auto& [id, pattern] : state.patterns) {
@@ -775,16 +783,20 @@ foundation::Result<domain::Performance> parse_performance(
              "events",
              "name",
              "performance_id",
+             "recording_revision",
              "recording_artifact"}) ||
         !input.at("performance_id").is_string() ||
         !input.at("name").is_string() ||
         !nonnegative_integer(input.at("created_bpm")) ||
+        !nonnegative_integer(input.at("recording_revision")) ||
         !input.at("events").is_array()) {
       return foundation::Result<domain::Performance>::failure(
           invalid_project("project Performance shape is invalid", path));
     }
     const auto created_bpm = unsigned_integer_value(input.at("created_bpm"));
-    if (!created_bpm.has_value() ||
+    const auto recording_revision =
+        unsigned_integer_value(input.at("recording_revision"));
+    if (!created_bpm.has_value() || !recording_revision.has_value() ||
         *created_bpm > std::numeric_limits<std::uint16_t>::max()) {
       return foundation::Result<domain::Performance>::failure(
           invalid_project("project Performance BPM is invalid", path));
@@ -799,6 +811,7 @@ foundation::Result<domain::Performance> parse_performance(
             input.at("performance_id").get<std::string>()},
         input.at("name").get<std::string>(),
         static_cast<std::uint16_t>(*created_bpm),
+        *recording_revision,
         std::move(recording_artifact),
         {},
     };
@@ -1026,7 +1039,9 @@ foundation::Result<domain::ProjectState> parse_project(
 
     const auto parse_asset_entry = [&state, &path](
                                        std::string_view id,
-                                       const nlohmann::json& encoded)
+                                       const nlohmann::json& encoded,
+                                       std::optional<domain::AssetLineage>
+                                           lineage = std::nullopt)
         -> foundation::Result<void> {
       if (!domain::is_valid_uuid(id) ||
           !exact_object_keys(encoded, {"artifact"}) ||
@@ -1056,6 +1071,7 @@ foundation::Result<domain::ProjectState> parse_project(
                   .at("byte_length")
                   .get<std::uint64_t>(),
           },
+          std::move(lineage),
       };
       if (!valid_sha256(asset.artifact.sha256)) {
         return foundation::Result<void>::failure(
@@ -1069,14 +1085,34 @@ foundation::Result<domain::ProjectState> parse_project(
     };
     if (is_v3 || is_v4) {
       for (const auto& encoded : input.at("assets")) {
-        if (!exact_object_keys(encoded, {"artifact", "asset_id"}) ||
+        const bool valid_asset_shape =
+            is_v4
+                ? exact_object_keys(
+                      encoded, {"artifact", "asset_id", "lineage"})
+                : exact_object_keys(encoded, {"artifact", "asset_id"});
+        if (!valid_asset_shape ||
             !encoded.at("asset_id").is_string()) {
           return foundation::Result<domain::ProjectState>::failure(
               invalid_project("project asset entry is invalid", path));
         }
+        std::optional<domain::AssetLineage> lineage;
+        if (is_v4 && !encoded.at("lineage").is_null()) {
+          auto parsed_lineage =
+              domain::asset_lineage_from_json(encoded.at("lineage"));
+          if (!parsed_lineage.has_value()) {
+            return foundation::Result<domain::ProjectState>::failure(
+                invalid_project(
+                    "project Asset Lineage is invalid",
+                    path,
+                    parsed_lineage.error().message));
+          }
+          lineage = std::move(parsed_lineage.value());
+        }
         auto value = nlohmann::json{{"artifact", encoded.at("artifact")}};
         auto parsed = parse_asset_entry(
-            encoded.at("asset_id").get<std::string>(), value);
+            encoded.at("asset_id").get<std::string>(),
+            value,
+            std::move(lineage));
         if (!parsed.has_value()) {
           return foundation::Result<domain::ProjectState>::failure(
               parsed.error());
@@ -1085,7 +1121,8 @@ foundation::Result<domain::ProjectState> parse_project(
     } else {
       for (auto iterator = input.at("assets").begin();
            iterator != input.at("assets").end(); ++iterator) {
-        auto parsed = parse_asset_entry(iterator.key(), iterator.value());
+        auto parsed = parse_asset_entry(
+            iterator.key(), iterator.value(), std::nullopt);
         if (!parsed.has_value()) {
           return foundation::Result<domain::ProjectState>::failure(
               parsed.error());
@@ -1221,6 +1258,10 @@ nlohmann::json command_json(const PersistedCommand& command) {
                {
                    {"artifact", value.asset.artifact},
                    {"id", value.asset.id.value()},
+                   {"lineage",
+                    value.asset.lineage.has_value()
+                        ? domain::asset_lineage_json(*value.asset.lineage)
+                        : nlohmann::json(nullptr)},
                }},
               {"meta", meta_json(value.meta)},
               {"type", "ImportAsset"},
@@ -1300,6 +1341,10 @@ nlohmann::json command_json(const PersistedCommand& command) {
                {
                    {"artifact", value.asset.artifact},
                    {"id", value.asset.id.value()},
+                   {"lineage",
+                    value.asset.lineage.has_value()
+                        ? domain::asset_lineage_json(*value.asset.lineage)
+                        : nlohmann::json(nullptr)},
                }},
               {"meta", meta_json(value.meta)},
               {"slot", slot_json(value.slot)},
@@ -1416,22 +1461,50 @@ foundation::Result<PersistedCommand> parse_command(
       return foundation::Result<PersistedCommand>::failure(meta.error());
     }
     const auto type = input.at("type").get<std::string>();
+    const auto parse_transaction_asset = [&path](
+                                             const nlohmann::json& encoded)
+        -> foundation::Result<domain::Asset> {
+      const bool legacy_shape =
+          exact_object_keys(encoded, {"artifact", "id"});
+      const bool current_shape =
+          exact_object_keys(encoded, {"artifact", "id", "lineage"});
+      if ((!legacy_shape && !current_shape) ||
+          !encoded.at("id").is_string()) {
+        return foundation::Result<domain::Asset>::failure(
+            invalid_project("transaction Asset shape is invalid", path));
+      }
+      std::optional<domain::AssetLineage> lineage;
+      if (current_shape && !encoded.at("lineage").is_null()) {
+        auto parsed = domain::asset_lineage_from_json(encoded.at("lineage"));
+        if (!parsed.has_value()) {
+          return foundation::Result<domain::Asset>::failure(
+              invalid_project(
+                  "transaction Asset Lineage is invalid",
+                  path,
+                  parsed.error().message));
+        }
+        lineage = std::move(parsed.value());
+      }
+      return foundation::Result<domain::Asset>::success(domain::Asset{
+          foundation::AssetId{encoded.at("id").get<std::string>()},
+          encoded.at("artifact").get<foundation::ArtifactRef>(),
+          std::move(lineage),
+      });
+    };
     if (type == "ImportAsset") {
       const auto& encoded = input.at("asset");
-      if (!exact_object_keys(input, {"asset", "meta", "type"}) ||
-          !exact_object_keys(input.at("asset"), {"artifact", "id"})) {
+      if (!exact_object_keys(input, {"asset", "meta", "type"})) {
         return foundation::Result<PersistedCommand>::failure(
             invalid_project("ImportAsset transaction shape is invalid", path));
+      }
+      auto asset = parse_transaction_asset(encoded);
+      if (!asset.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(asset.error());
       }
       return foundation::Result<PersistedCommand>::success(
           PersistedCommand{domain::ImportAsset{
               std::move(meta.value()),
-              domain::Asset{
-                  foundation::AssetId{
-                      encoded.at("id").get<std::string>()},
-                  encoded.at("artifact")
-                      .get<foundation::ArtifactRef>(),
-              },
+              std::move(asset.value()),
           }});
     }
     if (type == "AssignPad") {
@@ -1619,8 +1692,7 @@ foundation::Result<PersistedCommand> parse_command(
               std::move(meta.value()), bpm, quantize_enabled, swing_percent}});
     }
     if (type == "ImportAssignSample") {
-      if (!exact_object_keys(input, {"asset", "meta", "slot", "type"}) ||
-          !exact_object_keys(input.at("asset"), {"artifact", "id"})) {
+      if (!exact_object_keys(input, {"asset", "meta", "slot", "type"})) {
         return foundation::Result<PersistedCommand>::failure(
             invalid_project(
                 "ImportAssignSample transaction shape is invalid", path));
@@ -1630,13 +1702,14 @@ foundation::Result<PersistedCommand> parse_command(
         return foundation::Result<PersistedCommand>::failure(slot.error());
       }
       const auto& encoded = input.at("asset");
+      auto asset = parse_transaction_asset(encoded);
+      if (!asset.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(asset.error());
+      }
       return foundation::Result<PersistedCommand>::success(
           PersistedCommand{domain::ImportAssignSample{
               std::move(meta.value()),
-              domain::Asset{
-                  foundation::AssetId{encoded.at("id").get<std::string>()},
-                  encoded.at("artifact").get<foundation::ArtifactRef>(),
-              },
+              std::move(asset.value()),
               slot.value(),
           }});
     }
@@ -1896,6 +1969,7 @@ foundation::Result<domain::AppliedCommand> apply_command(
                 value.performance_id,
                 value.name,
                 state.bpm,
+                value.meta.expected_revision,
                 std::nullopt,
                 {},
             };
@@ -3817,6 +3891,7 @@ ProjectStore::begin_performance_draft(
       request.performance_id,
       command.name,
       loaded.value().state.bpm,
+      request.meta.expected_revision,
       std::nullopt,
       {},
   };
@@ -5593,7 +5668,7 @@ ProjectStore::import_artifact_with_identity(
   }
   const PersistedCommand command = domain::ImportAsset{
       request.meta,
-      domain::Asset{request.asset_id, described.value()},
+      domain::Asset{request.asset_id, described.value(), std::nullopt},
   };
   auto persisted_identity = command;
   auto outcome = commit_loaded(
@@ -5755,7 +5830,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
 
   const PersistedCommand command = domain::ImportAsset{
       request.meta,
-      domain::Asset{request.asset_id, artifact},
+      domain::Asset{request.asset_id, artifact, std::nullopt},
   };
   auto outcome = commit_loaded(
       platform_,
@@ -5801,6 +5876,14 @@ ProjectStore::import_assign_sample_bytes(
             "asset id must be a lowercase UUID",
         });
   }
+  if (request.lineage.has_value()) {
+    const auto valid_lineage =
+        domain::validate_asset_lineage(*request.lineage);
+    if (!valid_lineage.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          valid_lineage.error());
+    }
+  }
   if (request.media_type.empty()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
@@ -5825,7 +5908,7 @@ ProjectStore::import_assign_sample_bytes(
   const auto artifact = describe_bytes(request.bytes, request.media_type);
   const PersistedCommand command = domain::ImportAssignSample{
       request.meta,
-      domain::Asset{request.asset_id, artifact},
+      domain::Asset{request.asset_id, artifact, request.lineage},
       request.slot,
   };
   auto lock_result = platform_->acquire_writer(bundle);
@@ -5843,6 +5926,13 @@ ProjectStore::import_assign_sample_bytes(
   if (!loaded.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
+  }
+  if (request.lineage.has_value() &&
+      loaded.value().state.contract != domain::ProjectContract::v4) {
+    return foundation::Result<domain::AppliedCommand>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Asset Lineage requires lmdj.project.v4 Project Truth",
+    });
   }
   const auto recovered = recover_uncommitted(
       *platform_, bundle, loaded.value());
@@ -5881,6 +5971,7 @@ ProjectStore::import_assign_sample_bytes(
       });
     };
     if (!request.sequence_session_id.has_value() ||
+        request.lineage.has_value() ||
         admitted.value()->session_id != *request.sequence_session_id ||
         capture.slot != request.slot ||
         capture.expected_revision != request.meta.expected_revision ||
@@ -5890,7 +5981,7 @@ ProjectStore::import_assign_sample_bytes(
     }
     const domain::ImportAssignSample durable_command{
         domain::CommandMeta{capture.command_id, capture.expected_revision},
-        domain::Asset{capture.asset_id, capture.artifact},
+        domain::Asset{capture.asset_id, capture.artifact, std::nullopt},
         capture.slot,
     };
     const PersistedCommand persisted = durable_command;

@@ -6,7 +6,8 @@
         "media_type": "audio/wav",
         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       },
-      "asset_id": "20000000-0000-4000-8000-000000000001"
+      "asset_id": "20000000-0000-4000-8000-000000000001",
+      "lineage": null
     }
   ],
   "banks": [
@@ -792,6 +793,7 @@
       "performance_id": "40000000-0000-4000-8000-000000000001",
       "name": "First performance",
       "created_bpm": 120,
+      "recording_revision": 0,
       "recording_artifact": null,
       "events": [
         {

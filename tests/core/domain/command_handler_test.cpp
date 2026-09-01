@@ -84,7 +84,7 @@ ImportAsset import_asset(std::string command_id, std::uint64_t revision,
                              ArtifactRef{kValidSha256, "audio/wav", 1}) {
   return ImportAsset{
       meta(std::move(command_id), revision),
-      {AssetId{std::move(asset_id)}, std::move(artifact)},
+      {AssetId{std::move(asset_id)}, std::move(artifact), std::nullopt},
   };
 }
 
@@ -102,7 +102,8 @@ ImportAssignSample import_assign_sample(
   return ImportAssignSample{
       meta(std::move(command_id), revision),
       {AssetId{std::move(asset_id)},
-       ArtifactRef{kValidSha256, "audio/wav", 1}},
+       ArtifactRef{kValidSha256, "audio/wav", 1},
+       std::nullopt},
       slot,
   };
 }

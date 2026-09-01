@@ -601,7 +601,14 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   }
   auto assets = nlohmann::json::object();
   for (const auto& [id, asset] : state.assets) {
-    assets[id.value()] = {{"artifact", asset.artifact}};
+    auto encoded_asset = nlohmann::json{{"artifact", asset.artifact}};
+    if (state.contract == domain::ProjectContract::v4) {
+      encoded_asset["lineage"] =
+          asset.lineage.has_value()
+              ? domain::asset_lineage_json(*asset.lineage)
+              : nlohmann::json(nullptr);
+    }
+    assets[id.value()] = std::move(encoded_asset);
   }
   auto patterns = nlohmann::json::object();
   for (const auto& [id, pattern] : state.patterns) {
@@ -614,8 +621,11 @@ nlohmann::json project_json(const domain::ProjectState& state) {
         {"events", std::move(events)},
     };
   }
-  return {
-      {"contract", "lmdj.project.v3"},
+  nlohmann::json encoded{
+      {"contract",
+       state.contract == domain::ProjectContract::v4
+           ? "lmdj.project.v4"
+           : "lmdj.project.v3"},
       {"project_id", state.id.value()},
       {"revision", state.revision},
       {"bpm", state.bpm},
@@ -626,6 +636,24 @@ nlohmann::json project_json(const domain::ProjectState& state) {
       {"assets", std::move(assets)},
       {"patterns", std::move(patterns)},
   };
+  if (state.contract == domain::ProjectContract::v4) {
+    auto pattern_slots = nlohmann::json::array();
+    for (const auto& pattern_id : state.pattern_slots) {
+      pattern_slots.push_back(
+          pattern_id.has_value()
+              ? nlohmann::json(pattern_id->value())
+              : nlohmann::json(nullptr));
+    }
+    encoded["pattern_slots"] = std::move(pattern_slots);
+    auto performances = nlohmann::json::object();
+    for (const auto& [id, performance] : state.performances) {
+      auto value = performance_json(performance);
+      value["recording_revision"] = performance.recording_revision;
+      performances[id.value()] = std::move(value);
+    }
+    encoded["performances"] = std::move(performances);
+  }
+  return encoded;
 }
 
 nlohmann::json error_envelope(const Error& error) {

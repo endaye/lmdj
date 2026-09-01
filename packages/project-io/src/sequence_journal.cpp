@@ -2801,6 +2801,7 @@ std::string performance_fingerprint(const domain::Performance& performance) {
        performance_events_json(
            domain::canonical_performance_events(performance.events))},
       {"name", performance.name},
+      {"recording_revision", performance.recording_revision},
       {"recording_artifact",
        performance.recording_artifact.has_value()
            ? nlohmann::json(*performance.recording_artifact)

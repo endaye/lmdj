@@ -334,6 +334,7 @@ Command generated_valid_command(
                   "audio/wav",
                   44U + rng.bounded(4096),
               },
+              std::nullopt,
           },
       }};
     case 1:

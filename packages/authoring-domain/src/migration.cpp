@@ -23,9 +23,31 @@ foundation::Result<nlohmann::json> migrate_project_v3_to_v4(
             "a v3-declared Project must not carry v4 fields",
         });
   }
+  if (!project_v3.contains("assets") ||
+      !project_v3.at("assets").is_array()) {
+    return foundation::Result<nlohmann::json>::failure(
+        foundation::Error{
+            foundation::ErrorCode::invalid_project,
+            "v3 to v4 migration requires an Asset array",
+        });
+  }
+  for (const auto& asset : project_v3.at("assets")) {
+    if (!asset.is_object() || asset.size() != 2 ||
+        !asset.contains("asset_id") || !asset.contains("artifact") ||
+        asset.contains("lineage")) {
+      return foundation::Result<nlohmann::json>::failure(
+          foundation::Error{
+              foundation::ErrorCode::invalid_project,
+              "a v3-declared Asset must use the exact legacy shape",
+          });
+    }
+  }
 
   auto project_v4 = project_v3;
   project_v4["contract"] = "lmdj.project.v4";
+  for (auto& asset : project_v4.at("assets")) {
+    asset["lineage"] = nullptr;
+  }
   project_v4["pattern_slots"] = nlohmann::json::array();
   for (std::size_t slot = 0; slot < kPatternSlotCount; ++slot) {
     project_v4["pattern_slots"].push_back(nullptr);

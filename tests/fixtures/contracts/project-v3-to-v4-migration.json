@@ -6,7 +6,8 @@
         "media_type": "audio/wav",
         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       },
-      "asset_id": "20000000-0000-4000-8000-000000000001"
+      "asset_id": "20000000-0000-4000-8000-000000000001",
+      "lineage": null
     }
   ],
   "banks": [

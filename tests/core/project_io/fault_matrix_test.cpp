@@ -25,9 +25,12 @@ namespace {
 using lmdj::domain::Command;
 using lmdj::domain::CommandMeta;
 using lmdj::domain::CreatePattern;
+using lmdj::domain::AssetLineage;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
+using lmdj::domain::PerformanceId;
+using lmdj::domain::ProjectContract;
 using lmdj::domain::UpdateSequenceSettings;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
@@ -399,13 +402,20 @@ void test_atomic_sample_import_faults_preserve_every_project_truth_projection() 
     TempDirectory temp("sample-atomic");
     const auto bundle = temp.path() / "project.lmdj";
     ProjectStore store;
-    LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+    auto initial = new_project();
+    initial.contract = ProjectContract::v4;
+    LMDJ_CHECK(store.create(bundle, initial).has_value());
     const auto original_manifest = read_bytes(bundle / "manifest.json");
     const auto original = store.load(bundle);
     LMDJ_CHECK(original.has_value());
     const std::array sample{
         std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
         std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
+    };
+    const AssetLineage lineage{
+        {std::string(64, 'a'), 7},
+        {{10, 20},
+         PerformanceId{"40000000-0000-4000-8000-000000000001"}},
     };
 
     lmdj::foundation::Result<lmdj::domain::AppliedCommand> result =
@@ -424,6 +434,8 @@ void test_atomic_sample_import_faults_preserve_every_project_truth_projection() 
               AssetId{test_uuid("sample-asset")},
               "audio/wav",
               sample,
+              std::nullopt,
+              lineage,
           });
       LMDJ_CHECK(sample_fault_calls == 1);
     }
@@ -558,9 +570,17 @@ void test_crash_after_sample_manifest_publication_recovers_new_truth() {
   TempDirectory temp("sample-post-publication");
   const auto bundle = temp.path() / "project.lmdj";
   ProjectStore store;
-  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  auto initial = new_project();
+  initial.contract = ProjectContract::v4;
+  LMDJ_CHECK(store.create(bundle, initial).has_value());
   const std::array sample{
       std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+  };
+  const auto asset_id = AssetId{test_uuid("sample-post-publication-asset")};
+  const AssetLineage lineage{
+      {std::string(64, 'b'), 9},
+      {{20, 40},
+       PerformanceId{"40000000-0000-4000-8000-000000000002"}},
   };
   lmdj::foundation::Result<lmdj::domain::AppliedCommand> result =
       lmdj::foundation::Result<lmdj::domain::AppliedCommand>::failure(
@@ -575,9 +595,11 @@ void test_crash_after_sample_manifest_publication_recovers_new_truth() {
         ProjectStore::ImportAssignSampleBytesRequest{
             meta("sample-post-publication", 0),
             PadSlotId{3, 15},
-            AssetId{test_uuid("sample-post-publication-asset")},
+            asset_id,
             "audio/wav",
             sample,
+            std::nullopt,
+            lineage,
         });
     LMDJ_CHECK(sample_fault_calls == 1);
   }
@@ -589,7 +611,8 @@ void test_crash_after_sample_manifest_publication_recovers_new_truth() {
   LMDJ_CHECK(recovered.has_value());
   LMDJ_CHECK(recovered.value().revision == 1);
   LMDJ_CHECK(recovered.value().assets.size() == 1);
-  LMDJ_CHECK(recovered.value().banks.at(3).at(15).asset_id.has_value());
+  LMDJ_CHECK(recovered.value().assets.at(asset_id).lineage == lineage);
+  LMDJ_CHECK(recovered.value().banks.at(3).at(15).asset_id == asset_id);
 }
 
 void test_armed_capture_retry_reconciles_manifest_published_journal() {

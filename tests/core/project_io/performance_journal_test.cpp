@@ -82,6 +82,7 @@ Performance empty_performance() {
       PerformanceId{std::string{kPerformanceId}},
       "Live set",
       120,
+      0,
       std::nullopt,
       {},
   };
@@ -798,6 +799,15 @@ void test_performance_recovery_fails_closed_after_fingerprint_change() {
       std::filesystem::exists(bundle / "recovery/active/performance.jsonl"));
 }
 
+void test_performance_fingerprint_includes_recording_revision() {
+  const auto original = empty_performance();
+  auto changed = original;
+  changed.recording_revision = 1;
+  LMDJ_CHECK(
+      lmdj::project_io::performance_fingerprint(original) !=
+      lmdj::project_io::performance_fingerprint(changed));
+}
+
 void test_unknown_recovery_contract_is_retained_and_rejected() {
   TempDirectory temp("unknown-contract");
   ProjectStore store;
@@ -989,6 +999,7 @@ int main() {
     test_visible_receipt_replays_after_journal_completion_failure();
     test_performance_recovery_fails_closed_after_target_deletion();
     test_performance_recovery_fails_closed_after_fingerprint_change();
+    test_performance_fingerprint_includes_recording_revision();
     test_unknown_recovery_contract_is_retained_and_rejected();
     test_incomplete_performance_flush_cannot_have_a_successor();
     test_invalid_performance_completion_revision_is_retained();

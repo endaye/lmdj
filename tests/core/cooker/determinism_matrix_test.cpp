@@ -259,15 +259,15 @@ GeneratedProject generated_project(
   project = apply_or_throw(
       project,
       Command{ImportAsset{
-          meta(), {mono_first, fixtures.mono_artifact()}}});
+          meta(), {mono_first, fixtures.mono_artifact(), std::nullopt}}});
   project = apply_or_throw(
       project,
       Command{ImportAsset{
-          meta(), {mono_second, fixtures.mono_artifact()}}});
+          meta(), {mono_second, fixtures.mono_artifact(), std::nullopt}}});
   project = apply_or_throw(
       project,
       Command{ImportAsset{
-          meta(), {stereo, fixtures.stereo_artifact()}}});
+          meta(), {stereo, fixtures.stereo_artifact(), std::nullopt}}});
   project = apply_or_throw(
       project,
       Command{AssignPad{meta(), reassigned_slot, mono_first}});

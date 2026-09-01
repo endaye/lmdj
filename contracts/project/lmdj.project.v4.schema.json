@@ -174,11 +174,87 @@
       },
       "additionalProperties": false
     },
+    "asset_artifact_lineage_source": {
+      "type": "object",
+      "required": [
+        "kind",
+        "artifact_sha256",
+        "project_revision"
+      ],
+      "properties": {
+        "kind": {
+          "const": "asset_artifact"
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "project_revision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "resample_frame_range": {
+      "type": "object",
+      "required": [
+        "start_frame",
+        "end_frame"
+      ],
+      "properties": {
+        "start_frame": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_frame": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "resample_lineage_derivation": {
+      "type": "object",
+      "required": [
+        "kind",
+        "range",
+        "performance_id"
+      ],
+      "properties": {
+        "kind": {
+          "const": "resample"
+        },
+        "range": {
+          "$ref": "#/$defs/resample_frame_range"
+        },
+        "performance_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "asset_lineage": {
+      "type": "object",
+      "required": [
+        "source",
+        "derivation"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/asset_artifact_lineage_source"
+        },
+        "derivation": {
+          "$ref": "#/$defs/resample_lineage_derivation"
+        }
+      },
+      "additionalProperties": false
+    },
     "asset": {
       "type": "object",
       "required": [
         "asset_id",
-        "artifact"
+        "artifact",
+        "lineage"
       ],
       "properties": {
         "asset_id": {
@@ -186,6 +262,16 @@
         },
         "artifact": {
           "$ref": "#/$defs/artifact_ref"
+        },
+        "lineage": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/asset_lineage"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -682,6 +768,7 @@
         "performance_id",
         "name",
         "created_bpm",
+        "recording_revision",
         "recording_artifact",
         "events"
       ],
@@ -698,6 +785,10 @@
           "type": "integer",
           "minimum": 40,
           "maximum": 240
+        },
+        "recording_revision": {
+          "type": "integer",
+          "minimum": 0
         },
         "recording_artifact": {
           "oneOf": [

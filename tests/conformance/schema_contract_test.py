@@ -257,6 +257,7 @@ assert set(performance_v4["required"]) == {
     "performance_id",
     "name",
     "created_bpm",
+    "recording_revision",
     "recording_artifact",
     "events",
 }, (
@@ -271,6 +272,17 @@ assert "pattern" in performance_name_v4, (
     "bound for Performance names; remedy: restore the strict one-to-64-code-"
     "point constraint and its boundary behavior below"
 )
+asset_v4 = project_v4["$defs"]["asset"]
+assert set(asset_v4["required"]) == {"asset_id", "artifact", "lineage"}, (
+    "why: every v4 Asset must explicitly declare its optional Lineage; "
+    "remedy: require lineage and encode ordinary assets as null"
+)
+assert asset_v4["properties"]["lineage"] == {
+    "oneOf": [
+        {"$ref": "#/$defs/asset_lineage"},
+        {"type": "null"},
+    ]
+}
 event_definitions_v4 = [
     "performance_pad_hit_event",
     "performance_pattern_launch_event",
@@ -682,6 +694,8 @@ migration_project_v3 = json.loads(json.dumps(migration_project_v4))
 migration_project_v3["contract"] = "lmdj.project.v3"
 del migration_project_v3["performances"]
 del migration_project_v3["pattern_slots"]
+for asset in migration_project_v3["assets"]:
+    del asset["lineage"]
 json_schema.check(
     migration_project_v3,
     project_v3,
@@ -689,6 +703,14 @@ json_schema.check(
 )
 for key, value in migration_project_v3.items():
     if key == "contract":
+        continue
+    if key == "assets":
+        assert len(migration_project_v4[key]) == len(value)
+        for asset_v4, asset_v3 in zip(migration_project_v4[key], value):
+            assert asset_v4 == {**asset_v3, "lineage": None}, (
+                "why: v3-to-v4 migration adds only explicit null Lineage to "
+                "each Asset; remedy: preserve every legacy Asset field"
+            )
         continue
     assert migration_project_v4[key] == value, (
         "why: v3-to-v4 migration must preserve every non-contract field; "
@@ -702,6 +724,91 @@ assert migration_project_v4["pattern_slots"] == [None] * 16, (
     "why: every migrated v3 Project starts with 16 empty Pattern slots; "
     "remedy: restore the all-null Pattern slot migration vector"
 )
+v3_with_lineage = json.loads(json.dumps(migration_project_v3))
+v3_with_lineage["assets"][0]["lineage"] = None
+assert json_schema.validate(v3_with_lineage, project_v3), (
+    "why: a v3-declared Asset must not carry v4 Lineage; "
+    "remedy: keep the legacy Asset shape closed"
+)
+valid_lineage = {
+    "source": {
+        "kind": "asset_artifact",
+        "artifact_sha256": "b" * 64,
+        "project_revision": 7,
+    },
+    "derivation": {
+        "kind": "resample",
+        "range": {"start_frame": 10, "end_frame": 20},
+        "performance_id": "40000000-0000-4000-8000-000000000001",
+    },
+}
+json_schema.check(
+    mutated(valid_project_v4, ["assets", 0, "lineage"], valid_lineage),
+    project_v4,
+    "project-v4-valid resample Lineage",
+)
+missing_asset_lineage = json.loads(json.dumps(valid_project_v4))
+del missing_asset_lineage["assets"][0]["lineage"]
+assert json_schema.validate(missing_asset_lineage, project_v4), (
+    "why: every v4 Asset must explicitly encode Lineage or null; "
+    "remedy: keep lineage required"
+)
+for case_name, path, value in (
+    ("missing source", ["source"], None),
+    ("uppercase SHA-256", ["source", "artifact_sha256"], "B" * 64),
+    ("short SHA-256", ["source", "artifact_sha256"], "b" * 63),
+    ("malformed Performance UUID", ["derivation", "performance_id"], "bad"),
+):
+    malformed_lineage = json.loads(json.dumps(valid_lineage))
+    if value is None:
+        del malformed_lineage[path[0]]
+    else:
+        target = malformed_lineage
+        for segment in path[:-1]:
+            target = target[segment]
+        target[path[-1]] = value
+    project_with_lineage = mutated(
+        valid_project_v4,
+        ["assets", 0, "lineage"],
+        malformed_lineage,
+    )
+    assert json_schema.validate(project_with_lineage, project_v4), (
+        f"why: Project v4 must reject {case_name} Lineage; "
+        "remedy: preserve the exact closed Lineage shape"
+    )
+for extra_path in (["source"], ["derivation"], []):
+    extra_lineage = json.loads(json.dumps(valid_lineage))
+    target = extra_lineage
+    for segment in extra_path:
+        target = target[segment]
+    target["unexpected"] = True
+    project_with_lineage = mutated(
+        valid_project_v4,
+        ["assets", 0, "lineage"],
+        extra_lineage,
+    )
+    assert json_schema.validate(project_with_lineage, project_v4), (
+        "why: Lineage objects must reject extra keys; "
+        "remedy: keep every nested object closed"
+    )
+for case_name, mutator in (
+    (
+        "missing recording revision",
+        lambda project: project["performances"][0].pop("recording_revision"),
+    ),
+    (
+        "negative recording revision",
+        lambda project: project["performances"][0].__setitem__(
+            "recording_revision", -1
+        ),
+    ),
+):
+    malformed_performance = json.loads(json.dumps(valid_project_v4))
+    mutator(malformed_performance)
+    assert json_schema.validate(malformed_performance, project_v4), (
+        f"why: Project v4 must reject {case_name}; "
+        "remedy: require a non-negative recording revision"
+    )
 v3_with_pattern_slots = json.loads(json.dumps(migration_project_v3))
 v3_with_pattern_slots["pattern_slots"] = [None] * 16
 assert json_schema.validate(v3_with_pattern_slots, project_v3), (
