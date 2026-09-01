@@ -1,0 +1,123 @@
+{
+  "schema": "lmdj.web-runtime-lifecycle-observations.v1",
+  "row": "ipados-safari-touch-lifecycle",
+  "sessionId": "021e2f03-7ebf-427a-b7d4-e754c3fd74e9",
+  "testedRevision": "67a7ac03d16f8a449ea47696779f8d6130b78e35",
+  "capture": {
+    "file": "IMG_4366.mov",
+    "captureRateHz": 240,
+    "presentationRateHz": 30,
+    "presentationScale": 8,
+    "width": 1920,
+    "height": 1080,
+    "frames": 73662,
+    "durationSeconds": 2456.52,
+    "calibrationOffsetMs": 20.833333,
+    "calibrationBasis": "one 60 Hz display refresh plus one 240 fps capture frame"
+  },
+  "lifecycleEpisodes": [
+    {
+      "action": "background-foreground",
+      "hiddenAtMs": 47724.28,
+      "visibleAtMs": 103656.38,
+      "hiddenDurationMs": 55932.1,
+      "browserStatePath": [
+        "interrupted",
+        "suspended",
+        "running"
+      ],
+      "explicitActivations": 1,
+      "browserSuspendedToRunningMs": 74.32,
+      "retainedUpperBoundFrames": 23,
+      "activationToRunningMs": 95.833333
+    },
+    {
+      "action": "lock-unlock",
+      "hiddenAtMs": 152567.52,
+      "visibleAtMs": 222918.3,
+      "hiddenDurationMs": 70350.78,
+      "browserStatePath": [
+        "interrupted",
+        "running"
+      ],
+      "explicitActivations": 1,
+      "browserSuspendedToRunningMs": null,
+      "retainedUpperBoundFrames": 12,
+      "activationToRunningMs": 50
+    },
+    {
+      "action": "route-interruption",
+      "interruptionMethod": "iPadOS Voice Memos recording session",
+      "hiddenAtMs": 282069.16,
+      "visibleAtMs": 294233.54,
+      "hiddenDurationMs": 12164.38,
+      "browserStatePath": [
+        "interrupted",
+        "suspended",
+        "running"
+      ],
+      "explicitActivations": 1,
+      "browserSuspendedToRunningMs": 80.96,
+      "retainedUpperBoundFrames": 25,
+      "activationToRunningMs": 104.166667
+    }
+  ],
+  "onsetChecks": [
+    {
+      "position": "initial",
+      "sequence": 1,
+      "eventAtMs": 40785.58,
+      "acknowledgementAtMs": 40789.12,
+      "acknowledgements": 1,
+      "slowMotionAudioWindowSeconds": [
+        105,
+        135
+      ],
+      "nonSilentRegions": 1,
+      "regionSecondsWithinWindow": [
+        7.962396,
+        8.222375
+      ]
+    },
+    {
+      "position": "final-post-recovery",
+      "sequence": 2,
+      "eventAtMs": 316587.14,
+      "acknowledgementAtMs": 316592.12,
+      "acknowledgements": 1,
+      "slowMotionAudioWindowSeconds": [
+        2310,
+        2340
+      ],
+      "nonSilentRegions": 1,
+      "regionSecondsWithinWindow": [
+        17.333958,
+        17.633333
+      ]
+    }
+  ],
+  "audioRegionDetection": {
+    "stream": "AAC stereo",
+    "thresholdDb": -35,
+    "minimumSilenceDurationSeconds": 0.15
+  },
+  "summary": {
+    "actions": [
+      "background",
+      "foreground",
+      "lock",
+      "unlock",
+      "route-interruption"
+    ],
+    "recoverySamplesMs": [
+      95.833333,
+      50,
+      104.166667
+    ],
+    "p95ActivationToRunningMs": 104.166667,
+    "maxExplicitActivations": 1,
+    "postRecoveryMissedOnsets": 0,
+    "postRecoveryDuplicateOnsets": 0
+  },
+  "excludedObservations": []
+}
