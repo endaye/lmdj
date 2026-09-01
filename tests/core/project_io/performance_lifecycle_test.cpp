@@ -2,14 +2,20 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <fcntl.h>
 #include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
+#include <signal.h>
+#include <sys/file.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "packages/project-io/src/testing_hooks.hpp"
 #include "tests/core/support/test.hpp"
@@ -69,6 +75,80 @@ class TempDirectory {
 
  private:
   std::filesystem::path path_;
+};
+
+using FileInventory = std::map<std::string, std::string>;
+
+FileInventory file_inventory(const std::filesystem::path& root) {
+  FileInventory files;
+  for (const auto& item :
+       std::filesystem::recursive_directory_iterator(root)) {
+    if (!item.is_regular_file()) {
+      continue;
+    }
+    std::ifstream stream(item.path(), std::ios::binary);
+    files.emplace(
+        std::filesystem::relative(item.path(), root).generic_string(),
+        std::string(
+            std::istreambuf_iterator<char>{stream},
+            std::istreambuf_iterator<char>{}));
+  }
+  return files;
+}
+
+class OwnerLockHolder final {
+ public:
+  explicit OwnerLockHolder(const std::filesystem::path& lock_path) {
+    int ready[2]{};
+    LMDJ_CHECK(::pipe(ready) == 0);
+    process_ = ::fork();
+    LMDJ_CHECK(process_ >= 0);
+    if (process_ == 0) {
+      ::close(ready[0]);
+      const auto descriptor = ::open(
+          lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+      const char result =
+          descriptor >= 0 && ::flock(descriptor, LOCK_EX | LOCK_NB) == 0
+              ? '1'
+              : '0';
+      if (::write(ready[1], &result, 1) != 1) {
+        _exit(1);
+      }
+      if (result == '1') {
+        for (;;) {
+          ::pause();
+        }
+      }
+      _exit(1);
+    }
+    ::close(ready[1]);
+    char acquired{};
+    const auto read_count = ::read(ready[0], &acquired, 1);
+    ::close(ready[0]);
+    if (read_count != 1 || acquired != '1') {
+      kill_and_wait();
+    }
+    LMDJ_CHECK(read_count == 1);
+    LMDJ_CHECK(acquired == '1');
+  }
+
+  ~OwnerLockHolder() { kill_and_wait(); }
+
+  OwnerLockHolder(const OwnerLockHolder&) = delete;
+  OwnerLockHolder& operator=(const OwnerLockHolder&) = delete;
+
+  void kill_and_wait() {
+    if (process_ <= 0) {
+      return;
+    }
+    (void)::kill(process_, SIGKILL);
+    int status{};
+    (void)::waitpid(process_, &status, 0);
+    process_ = -1;
+  }
+
+ private:
+  pid_t process_{-1};
 };
 
 lmdj::domain::ProjectState empty_project() {
@@ -468,6 +548,268 @@ void test_recording_bind_verifies_managed_wav_and_is_null_only() {
              "performance_recording_conflict");
 }
 
+void test_completed_flush_identity_is_replayable_without_a_live_journal() {
+  TempDirectory temp("flush-identity");
+  ProjectStore store;
+  const auto bundle = temp.path() / "project.lmdj";
+  LMDJ_CHECK(store.create(bundle, empty_project()).has_value());
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto performance_id = PerformanceId{std::string{kPerformanceId}};
+  const auto command_id =
+      CommandId{"30000000-0000-4000-8000-000000000020"};
+  LMDJ_CHECK(
+      store
+          .begin_performance_draft(
+              bundle,
+              {{CommandId{std::string{kBeginCommandId}}, 0},
+               session_id,
+               performance_id})
+          .has_value());
+  SequenceJournal journal;
+  LMDJ_CHECK(
+      journal
+          .append_performance_tail(
+              bundle, session_id, performance_id, 1, 1,
+              std::vector{pad_hit()})
+          .has_value());
+  const auto flush = journal.append_performance_flush(
+      bundle,
+      session_id,
+      command_id,
+      performance_id,
+      1,
+      std::vector{pad_hit()});
+  LMDJ_CHECK(flush.has_value());
+  const lmdj::project_io::PerformanceFlushIdentity identity{
+      session_id, flush.value().flush_seq, command_id, performance_id};
+  const auto executed = store.execute_performance_flush(bundle, identity);
+  LMDJ_CHECK(executed.has_value());
+  LMDJ_CHECK(!executed.value().replayed);
+  LMDJ_CHECK(
+      journal.seal_performance(bundle, session_id, "owner_lost").has_value());
+  const auto before = store.load(bundle).value();
+
+  const auto replayed =
+      store.replay_performance_flush(bundle, session_id, command_id);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().has_value());
+  LMDJ_CHECK(replayed.value()->replayed);
+  LMDJ_CHECK(replayed.value()->receipt.committed_revision == 2);
+  LMDJ_CHECK(store.load(bundle).value() == before);
+
+  const auto collision = store.replay_performance_flush(
+      bundle,
+      SequenceSessionId{"20000000-0000-4000-8000-000000000099"},
+      command_id);
+  LMDJ_CHECK(!collision.has_value());
+  LMDJ_CHECK(collision.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(store.load(bundle).value() == before);
+
+  const auto unknown = store.replay_performance_flush(
+      bundle,
+      session_id,
+      CommandId{"30000000-0000-4000-8000-000000000099"});
+  LMDJ_CHECK(unknown.has_value());
+  LMDJ_CHECK(!unknown.value().has_value());
+  LMDJ_CHECK(store.load(bundle).value() == before);
+}
+
+void test_every_orphan_sealing_command_boundary_requires_owner_death() {
+  enum class Boundary {
+    begin,
+    apply,
+    discard,
+  };
+
+  for (const auto boundary : {
+           Boundary::begin,
+           Boundary::apply,
+           Boundary::discard,
+       }) {
+    const auto label = boundary == Boundary::begin
+                           ? "owner-lock-begin"
+                           : boundary == Boundary::apply
+                                 ? "owner-lock-apply"
+                                 : "owner-lock-discard";
+    TempDirectory temp(label);
+    const auto bundle = temp.path() / "project.lmdj";
+    const auto session_id = SequenceSessionId{std::string{kSessionId}};
+    const auto performance_id = PerformanceId{std::string{kPerformanceId}};
+    {
+      ProjectStore owner;
+      LMDJ_CHECK(owner.create(bundle, empty_project()).has_value());
+      LMDJ_CHECK(
+          owner
+              .begin_performance_draft(
+                  bundle,
+                  {{CommandId{std::string{kBeginCommandId}}, 0},
+                   session_id,
+                   performance_id})
+              .has_value());
+      LMDJ_CHECK(
+          SequenceJournal{}
+              .append_performance_tail(
+                  bundle, session_id, performance_id, 1, 1,
+                  std::vector{pad_hit()})
+              .has_value());
+    }
+
+    const auto lock_path = bundle / "recovery/active/performance.lock";
+    OwnerLockHolder holder(lock_path);
+    ProjectStore observer;
+    const auto before = file_inventory(bundle);
+    if (boundary == Boundary::begin) {
+      const auto refused = observer.begin_performance_draft(
+          bundle,
+          {{CommandId{"30000000-0000-4000-8000-000000000030"}, 1},
+           SequenceSessionId{"20000000-0000-4000-8000-000000000030"},
+           PerformanceId{"10000000-0000-4000-8000-000000000030"}});
+      LMDJ_CHECK(!refused.has_value());
+      LMDJ_CHECK(refused.error().details.at("reason") ==
+                 "recording_session_active");
+    } else if (boundary == Boundary::apply) {
+      const auto refused = observer.apply_performance_recovery(
+          bundle,
+          {CommandId{"30000000-0000-4000-8000-000000000031"}, 1},
+          session_id);
+      LMDJ_CHECK(!refused.has_value());
+      LMDJ_CHECK(refused.error().details.at("reason") ==
+                 "recording_session_active");
+    } else {
+      const auto refused = observer.discard_performance_recovery(
+          bundle,
+          session_id,
+          CommandId{"40000000-0000-4000-8000-000000000030"});
+      LMDJ_CHECK(!refused.has_value());
+      LMDJ_CHECK(refused.error().details.at("reason") ==
+                 "recording_session_active");
+    }
+    LMDJ_CHECK(file_inventory(bundle) == before);
+
+    holder.kill_and_wait();
+    if (boundary == Boundary::begin) {
+      const auto proceeded = observer.begin_performance_draft(
+          bundle,
+          {{CommandId{"30000000-0000-4000-8000-000000000030"}, 1},
+           SequenceSessionId{"20000000-0000-4000-8000-000000000030"},
+           PerformanceId{"10000000-0000-4000-8000-000000000030"}});
+      LMDJ_CHECK(proceeded.has_value());
+      LMDJ_CHECK(
+          SequenceJournal{}.read_active_performance(bundle).value().session_id ==
+          SequenceSessionId{"20000000-0000-4000-8000-000000000030"});
+      LMDJ_CHECK(
+          SequenceJournal{}.list_performance_recoverable(bundle).value().size() ==
+          1);
+    } else if (boundary == Boundary::apply) {
+      const auto proceeded = observer.apply_performance_recovery(
+          bundle,
+          {CommandId{"30000000-0000-4000-8000-000000000031"}, 1},
+          session_id);
+      LMDJ_CHECK(proceeded.has_value());
+      LMDJ_CHECK(
+          observer.load(bundle).value().performances.at(performance_id).events ==
+          std::vector{pad_hit()});
+    } else {
+      const auto proceeded = observer.discard_performance_recovery(
+          bundle,
+          session_id,
+          CommandId{"40000000-0000-4000-8000-000000000030"});
+      LMDJ_CHECK(proceeded.has_value());
+      LMDJ_CHECK(
+          observer.load(bundle).value().performances.at(performance_id).events
+              .empty());
+    }
+    LMDJ_CHECK(!std::filesystem::exists(lock_path) ||
+               boundary == Boundary::begin);
+  }
+}
+
+void test_orphan_reconciliation_requires_owner_lock_proof() {
+  TempDirectory temp("owner-lock");
+  const auto bundle = temp.path() / "project.lmdj";
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto performance_id = PerformanceId{std::string{kPerformanceId}};
+  SequenceJournal journal;
+  {
+    ProjectStore owner;
+    LMDJ_CHECK(owner.create(bundle, empty_project()).has_value());
+    LMDJ_CHECK(
+        owner
+            .begin_performance_draft(
+                bundle,
+                {{CommandId{std::string{kBeginCommandId}}, 0},
+                 session_id,
+                 performance_id})
+            .has_value());
+    LMDJ_CHECK(
+        journal
+            .append_performance_tail(
+                bundle, session_id, performance_id, 1, 1,
+                std::vector{pad_hit()})
+            .has_value());
+  }
+  ProjectStore store;
+  const auto active_path = bundle / "recovery/active/performance.jsonl";
+  const auto lock_path = bundle / "recovery/active/performance.lock";
+  std::ifstream before_stream(active_path, std::ios::binary);
+  const std::string before(
+      std::istreambuf_iterator<char>{before_stream},
+      std::istreambuf_iterator<char>{});
+
+  int ready[2]{};
+  LMDJ_CHECK(::pipe(ready) == 0);
+  const auto child = ::fork();
+  LMDJ_CHECK(child >= 0);
+  if (child == 0) {
+    ::close(ready[0]);
+    const auto descriptor = ::open(
+        lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+    const char result =
+        descriptor >= 0 && ::flock(descriptor, LOCK_EX | LOCK_NB) == 0
+            ? '1'
+            : '0';
+    if (::write(ready[1], &result, 1) != 1) {
+      _exit(1);
+    }
+    if (result == '1') {
+      for (;;) {
+        ::pause();
+      }
+    }
+    _exit(1);
+  }
+  ::close(ready[1]);
+  char acquired{};
+  LMDJ_CHECK(::read(ready[0], &acquired, 1) == 1);
+  ::close(ready[0]);
+  LMDJ_CHECK(acquired == '1');
+
+  const auto held = store.reconcile_performance_recovery(bundle);
+  std::ifstream held_stream(active_path, std::ios::binary);
+  const std::string held_bytes(
+      std::istreambuf_iterator<char>{held_stream},
+      std::istreambuf_iterator<char>{});
+  const auto sealed_while_held =
+      journal.list_performance_recoverable(bundle);
+
+  LMDJ_CHECK(::kill(child, SIGKILL) == 0);
+  int child_status{};
+  LMDJ_CHECK(::waitpid(child, &child_status, 0) == child);
+  LMDJ_CHECK(WIFSIGNALED(child_status));
+  LMDJ_CHECK(!held.has_value());
+  LMDJ_CHECK(held.error().details.at("reason") ==
+             "recording_session_active");
+  LMDJ_CHECK(held_bytes == before);
+  LMDJ_CHECK(sealed_while_held.has_value());
+  LMDJ_CHECK(sealed_while_held.value().empty());
+  const auto orphaned = store.reconcile_performance_recovery(bundle);
+  LMDJ_CHECK(orphaned.has_value());
+  LMDJ_CHECK(orphaned.value().size() == 1);
+  LMDJ_CHECK(orphaned.value().front().reason == "owner_lost");
+  LMDJ_CHECK(!journal.read_active_performance(bundle).has_value());
+  LMDJ_CHECK(!std::filesystem::exists(lock_path));
+}
+
 void test_begin_stop_and_save_faults_are_retryable_without_orphans() {
   for (const auto fault : {
            FaultPoint::sequence_transaction_write,
@@ -691,6 +1033,9 @@ int main() {
     test_stopped_draft_can_be_discarded();
     test_recovery_apply_and_discard_return_stopped_drafts();
     test_recording_bind_verifies_managed_wav_and_is_null_only();
+    test_completed_flush_identity_is_replayable_without_a_live_journal();
+    test_every_orphan_sealing_command_boundary_requires_owner_death();
+    test_orphan_reconciliation_requires_owner_lock_proof();
     test_begin_stop_and_save_faults_are_retryable_without_orphans();
     test_recovery_cleanup_faults_reconcile_exactly_once();
   } catch (const std::exception& error) {

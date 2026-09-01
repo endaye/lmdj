@@ -1,5 +1,6 @@
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <vector>
@@ -7,6 +8,8 @@
 #include <nlohmann/json.hpp>
 
 #include <lmdj/facade/application.hpp>
+#include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
 
 #include "tests/core/support/test.hpp"
 
@@ -44,9 +47,18 @@ private:
 
 class Clock final : public lmdj::facade::PerformanceClock {
 public:
+  void anchor(std::uint16_t bpm, std::uint64_t at_tick) override {
+    anchors.emplace_back(bpm, at_tick);
+    next_ = std::max(next_, at_tick);
+  }
+
   lmdj::foundation::Result<std::uint64_t> read_tick() override {
+    ++read_count;
     return lmdj::foundation::Result<std::uint64_t>::success(next_ += 10U);
   }
+
+  std::vector<std::pair<std::uint16_t, std::uint64_t>> anchors;
+  std::uint64_t read_count{};
 
 private:
   std::uint64_t next_{};
@@ -54,15 +66,25 @@ private:
 
 class Sequencer final : public lmdj::facade::PerformanceInputSequencer {
 public:
+  void seed(std::uint64_t last_input_sequence) override {
+    seeded_after = last_input_sequence;
+    next_ = std::max(next_, last_input_sequence);
+  }
+
   lmdj::foundation::Result<std::uint64_t> next() override {
     return lmdj::foundation::Result<std::uint64_t>::success(++next_);
   }
+
+  std::optional<std::uint64_t> seeded_after;
 
 private:
   std::uint64_t next_{};
 };
 
-lmdj::facade::Application make_application(const std::filesystem::path &root) {
+lmdj::facade::Application make_application(
+    const std::filesystem::path &root,
+    std::shared_ptr<Clock> clock = std::make_shared<Clock>(),
+    std::shared_ptr<Sequencer> sequencer = std::make_shared<Sequencer>()) {
   lmdj::facade::ApplicationConfig config{
       root,
       nullptr,
@@ -75,8 +97,8 @@ lmdj::facade::Application make_application(const std::filesystem::path &root) {
       nullptr,
       lmdj::facade::make_unavailable_performance_replay_controller(),
   };
-  config.performance_clock = std::make_shared<Clock>();
-  config.performance_input_sequencer = std::make_shared<Sequencer>();
+  config.performance_clock = std::move(clock);
+  config.performance_input_sequencer = std::move(sequencer);
   return lmdj::facade::Application(std::move(config));
 }
 
@@ -239,6 +261,124 @@ void test_begin_flush_stop_save_and_inspect() {
   LMDJ_CHECK(deleted.at("result").at("committed_revision") == 9);
 }
 
+void test_authorities_attach_once_and_resume_from_durable_journal() {
+  TempDirectory temp;
+  const auto fresh_bundle = temp.path() / "fresh-project.lmdj";
+  auto fresh_clock = std::make_shared<Clock>();
+  auto fresh_sequencer = std::make_shared<Sequencer>();
+  auto fresh = make_application(temp.path(), fresh_clock, fresh_sequencer);
+  check_ok(fresh.command({
+      {"operation", "project.create"},
+      {"project_path", fresh_bundle.generic_string()},
+      {"project_id", "40000000-0000-4000-8000-000000000001"},
+      {"bpm", 120},
+  }));
+  const nlohmann::json begin = {
+      {"operation", "performance.record.begin"},
+      {"project_path", fresh_bundle.generic_string()},
+      {"command_id", "40000000-0000-4000-8000-000000000002"},
+      {"expected_revision", 0},
+      {"session_id", "40000000-0000-4000-8000-000000000003"},
+      {"performance_id", "40000000-0000-4000-8000-000000000004"},
+  };
+  check_ok(fresh.command(begin));
+  LMDJ_CHECK((fresh_clock->anchors ==
+              std::vector<std::pair<std::uint16_t, std::uint64_t>>{
+                  {120, 10}}));
+  LMDJ_CHECK(fresh_clock->read_count == 1);
+  check_ok(fresh.command(begin));
+  LMDJ_CHECK(fresh_clock->anchors.size() == 1);
+  LMDJ_CHECK(fresh_clock->read_count == 1);
+  LMDJ_CHECK(!fresh_sequencer->seeded_after.has_value());
+
+  check_ok(fresh.command({
+      {"operation", "sequence.settings.update"},
+      {"project_path", fresh_bundle.generic_string()},
+      {"command_id", "40000000-0000-4000-8000-000000000005"},
+      {"expected_revision", 1},
+      {"session_id", "40000000-0000-4000-8000-000000000003"},
+      {"bpm", 90},
+      {"quantize_enabled", true},
+      {"swing_percent", 50},
+  }));
+  LMDJ_CHECK(fresh_clock->anchors.size() == 2);
+  LMDJ_CHECK((fresh_clock->anchors.back() ==
+              std::pair<std::uint16_t, std::uint64_t>{90, 20}));
+
+  const auto reattach_bundle = temp.path() / "reattach-project.lmdj";
+  {
+    auto setup = make_application(temp.path());
+    check_ok(setup.command({
+        {"operation", "project.create"},
+        {"project_path", reattach_bundle.generic_string()},
+        {"project_id", "40000000-0000-4000-8000-000000000011"},
+        {"bpm", 130},
+    }));
+  }
+  const lmdj::foundation::CommandId begin_id{
+      "40000000-0000-4000-8000-000000000012"};
+  const lmdj::foundation::SequenceSessionId session_id{
+      "40000000-0000-4000-8000-000000000013"};
+  const lmdj::domain::PerformanceId performance_id{
+      "40000000-0000-4000-8000-000000000014"};
+  {
+    const auto storage =
+        lmdj::project_io::make_default_project_storage_platform();
+    lmdj::project_io::ProjectStore projects{storage};
+    lmdj::project_io::SequenceJournal journal{storage};
+    LMDJ_CHECK(projects
+                   .begin_performance_draft(
+                       reattach_bundle,
+                       {{begin_id, 0}, session_id, performance_id})
+                   .has_value());
+    const std::vector<lmdj::domain::PerformanceEvent> durable_events{
+        lmdj::domain::PerformanceEvent{
+            lmdj::domain::HoldOnPerformanceEvent{500}}};
+    LMDJ_CHECK(journal
+                   .append_performance_tail(
+                       reattach_bundle,
+                       session_id,
+                       performance_id,
+                       1,
+                       7,
+                       durable_events)
+                   .has_value());
+  }
+
+  auto reattach_clock = std::make_shared<Clock>();
+  auto reattach_sequencer = std::make_shared<Sequencer>();
+  auto reattached =
+      make_application(temp.path(), reattach_clock, reattach_sequencer);
+  check_ok(reattached.command({
+      {"operation", "performance.record.begin"},
+      {"project_path", reattach_bundle.generic_string()},
+      {"command_id", begin_id.value()},
+      {"expected_revision", 0},
+      {"session_id", session_id.value()},
+      {"performance_id", performance_id.value()},
+  }));
+  LMDJ_CHECK((reattach_clock->anchors ==
+              std::vector<std::pair<std::uint16_t, std::uint64_t>>{
+                  {130, 500}}));
+  LMDJ_CHECK(reattach_clock->read_count == 0);
+  LMDJ_CHECK(reattach_sequencer->seeded_after == 7);
+
+  const auto admitted = reattached.command({
+      {"operation", "performance.record.event"},
+      {"project_path", reattach_bundle.generic_string()},
+      {"session_id", session_id.value()},
+      {"event_id", "40000000-0000-4000-8000-000000000015"},
+      {"event",
+       {{"kind", "pad_press"},
+        {"gesture_id", "40000000-0000-4000-8000-000000000016"},
+        {"slot", 0},
+        {"velocity", 100}}},
+  });
+  check_ok(admitted);
+  LMDJ_CHECK(admitted.at("result").at("accepted_tick") >= 500);
+  LMDJ_CHECK(admitted.at("result").at("input_sequence") == 8);
+}
+
 void test_owner_loss_recovery_is_publicly_observable_and_applicable() {
   TempDirectory temp;
   const auto bundle = temp.path() / "recovery-project.lmdj";
@@ -307,12 +447,153 @@ void test_owner_loss_recovery_is_publicly_observable_and_applicable() {
              2U);
 }
 
+void test_flush_replay_crosses_application_process_identity_boundary() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "flush-replay-project.lmdj";
+  constexpr std::string_view project = "50000000-0000-4000-8000-000000000001";
+  constexpr std::string_view session = "50000000-0000-4000-8000-000000000002";
+  constexpr std::string_view performance =
+      "50000000-0000-4000-8000-000000000003";
+  constexpr std::string_view begin = "50000000-0000-4000-8000-000000000004";
+  constexpr std::string_view event = "50000000-0000-4000-8000-000000000005";
+  constexpr std::string_view flush = "50000000-0000-4000-8000-000000000006";
+  {
+    auto owner = make_application(temp.path());
+    check_ok(owner.command({{"operation", "project.create"},
+                            {"project_path", bundle.generic_string()},
+                            {"project_id", project},
+                            {"bpm", 120}}));
+    check_ok(owner.command({{"operation", "performance.record.begin"},
+                            {"project_path", bundle.generic_string()},
+                            {"command_id", begin},
+                            {"expected_revision", 0},
+                            {"session_id", session},
+                            {"performance_id", performance}}));
+    check_ok(owner.command({
+        {"operation", "performance.record.event"},
+        {"project_path", bundle.generic_string()},
+        {"session_id", session},
+        {"event_id", event},
+        {"event", {{"kind", "hold_on"}}},
+    }));
+    check_ok(owner.command({{"operation", "performance.record.flush"},
+                            {"project_path", bundle.generic_string()},
+                            {"session_id", session},
+                            {"command_id", flush}}));
+  }
+
+  auto observer = make_application(temp.path());
+  const auto inspect_request = nlohmann::json{
+      {"operation", "project.inspect"},
+      {"project_path", bundle.generic_string()},
+  };
+  const auto before = observer.query(inspect_request);
+  check_ok(before);
+  const auto replayed = observer.command({
+      {"operation", "performance.record.flush"},
+      {"project_path", bundle.generic_string()},
+      {"session_id", session},
+      {"command_id", flush},
+  });
+  check_ok(replayed);
+  LMDJ_CHECK(replayed.at("result").at("replayed") == true);
+  LMDJ_CHECK(replayed.at("result").at("committed_revision") == 2);
+  LMDJ_CHECK(observer.query(inspect_request) == before);
+
+  const auto collision = observer.command({
+      {"operation", "performance.record.flush"},
+      {"project_path", bundle.generic_string()},
+      {"session_id", "50000000-0000-4000-8000-000000000099"},
+      {"command_id", flush},
+  });
+  LMDJ_CHECK(!collision.at("ok").get<bool>());
+  LMDJ_CHECK(observer.query(inspect_request) == before);
+
+  const auto unknown = observer.command({
+      {"operation", "performance.record.flush"},
+      {"project_path", bundle.generic_string()},
+      {"session_id", session},
+      {"command_id", "50000000-0000-4000-8000-000000000098"},
+  });
+  LMDJ_CHECK(!unknown.at("ok").get<bool>());
+  LMDJ_CHECK(unknown.at("error").at("message") ==
+             "Performance flush owner does not match");
+  LMDJ_CHECK(observer.query(inspect_request) == before);
+
+  const auto raw_event_replay = observer.command({
+      {"operation", "performance.record.event"},
+      {"project_path", bundle.generic_string()},
+      {"session_id", session},
+      {"event_id", event},
+      {"event", {{"kind", "hold_on"}}},
+  });
+  LMDJ_CHECK(!raw_event_replay.at("ok").get<bool>());
+  LMDJ_CHECK(observer.query(inspect_request) == before);
+}
+
+void test_recovery_queries_are_read_only_while_owner_is_alive() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "live-owner-project.lmdj";
+  auto owner = make_application(temp.path());
+  check_ok(owner.command({
+      {"operation", "project.create"},
+      {"project_path", bundle.generic_string()},
+      {"project_id", "60000000-0000-4000-8000-000000000001"},
+      {"bpm", 120},
+  }));
+  check_ok(owner.command({
+      {"operation", "performance.record.begin"},
+      {"project_path", bundle.generic_string()},
+      {"command_id", "60000000-0000-4000-8000-000000000002"},
+      {"expected_revision", 0},
+      {"session_id", "60000000-0000-4000-8000-000000000003"},
+      {"performance_id", "60000000-0000-4000-8000-000000000004"},
+  }));
+  check_ok(owner.command({
+      {"operation", "performance.record.event"},
+      {"project_path", bundle.generic_string()},
+      {"session_id", "60000000-0000-4000-8000-000000000003"},
+      {"event_id", "60000000-0000-4000-8000-000000000005"},
+      {"event", {{"kind", "hold_on"}}},
+  }));
+  const auto active_path = bundle / "recovery/active/performance.jsonl";
+  std::ifstream before_stream(active_path, std::ios::binary);
+  const std::string before(
+      std::istreambuf_iterator<char>{before_stream},
+      std::istreambuf_iterator<char>{});
+
+  auto observer = make_application(temp.path());
+  const auto listed = observer.query({
+      {"operation", "performance.recovery.list"},
+      {"project_path", bundle.generic_string()},
+  });
+  check_ok(listed);
+  LMDJ_CHECK(listed.at("result").at("candidates").size() == 1);
+  LMDJ_CHECK(listed.at("result").at("candidates").at(0).at("reason") ==
+             "active");
+  const auto status = observer.query({
+      {"operation", "performance.record.status"},
+      {"project_path", bundle.generic_string()},
+  });
+  check_ok(status);
+  LMDJ_CHECK(status.at("result").at("state") == "active");
+  std::ifstream after_stream(active_path, std::ios::binary);
+  const std::string after(
+      std::istreambuf_iterator<char>{after_stream},
+      std::istreambuf_iterator<char>{});
+  LMDJ_CHECK(after == before);
+  LMDJ_CHECK(std::filesystem::is_empty(bundle / "recovery/sealed"));
+}
+
 } // namespace
 
 int main() {
   try {
     test_begin_flush_stop_save_and_inspect();
+    test_authorities_attach_once_and_resume_from_durable_journal();
     test_owner_loss_recovery_is_publicly_observable_and_applicable();
+    test_flush_replay_crosses_application_process_identity_boundary();
+    test_recovery_queries_are_read_only_while_owner_is_alive();
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;
