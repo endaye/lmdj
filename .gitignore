@@ -104,3 +104,6 @@ testdata/audio/suno/**/*.mp3
 .env
 **/worktrees/
 .aider*
+
+# Local Netlify folder
+.netlify
