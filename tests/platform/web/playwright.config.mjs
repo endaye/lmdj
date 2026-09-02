@@ -11,6 +11,7 @@ const fullChromium = process.env.LMDJ_WEB_HOST_FULL_CHROMIUM === "1" ||
   process.env.LMDJ_CREATOR_WEB_FULL_CHROMIUM === "1";
 const sampleEditorSpec = /creator_web_sample_editor\.spec\.mjs/;
 const captureSpec = /creator_web_capture\.spec\.mjs/;
+const creatorDeploymentSpec = /creator_web_deployment\.spec\.mjs/;
 // Written at config load so the file exists before Chromium launches with
 // --use-file-for-fake-audio-capture; the flag silently yields silence if the
 // path is missing, which would turn a real capture regression into a green run.
@@ -110,6 +111,14 @@ export default defineConfig({
         launchOptions: {
           args: ["--use-fake-device-for-media-stream"],
         },
+      },
+    },
+    {
+      name: "creator-deployment",
+      testMatch: creatorDeploymentSpec,
+      use: {
+        ...devices["Desktop Chrome"],
+        channel: "chromium",
       },
     },
   ],

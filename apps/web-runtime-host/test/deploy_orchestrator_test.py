@@ -69,6 +69,26 @@ class DeployOrchestratorReleaseTest(unittest.TestCase):
                 ):
                     self.parse(self.metadata(assets=assets))
 
+    def test_selects_runtime_assets_from_a_complete_dual_host_release(self) -> None:
+        creator = "lmdj-creator-web-2.1.1-product-1.0.15.2.zip"
+        assets = [
+            creator,
+            creator + ".sha256",
+            creator + ".sha256.asc",
+            self.ARCHIVE,
+            self.ARCHIVE + ".sha256",
+            self.ARCHIVE + ".sha256.asc",
+        ]
+        self.assertEqual(
+            self.parse(self.metadata(assets=assets)),
+            (
+                self.ARCHIVE,
+                self.ARCHIVE + ".sha256",
+                self.ARCHIVE + ".sha256.asc",
+                f"https://github.com/endaye/lmdj/releases/tag/{self.TAG}",
+            ),
+        )
+
     def test_rejects_invalid_target_metadata_without_using_it_as_attestation(self) -> None:
         for target in (None, "", "main\nother"):
             with self.subTest(target=target):

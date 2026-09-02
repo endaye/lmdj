@@ -95,7 +95,7 @@ def build_context(
     selected_git.fetch_authority(CANONICAL_REPOSITORY, CANONICAL_BRANCH)
     with selected_git.detached_worktree(selected_git.main_revision()) as authority_tree:
         policy, ledger = (authority_reader or load_authority_documents)(authority_tree)
-    home = Path(os.environ.get("GNUPGHOME", Path.home() / ".gnupg"))
+    home = Path.home() / ".gnupg-lmdj-release"
     runtime = ProfileRuntime(
         runner=runner,
         checksum_verifier=OpenPgpVerifier(),
@@ -151,7 +151,7 @@ def _audit_context_for_authority(
 ) -> AuditContext:
     """Rebuild every path/key-dependent audit verifier for one authority tree."""
     runner = selected_git.runner
-    home = Path(os.environ.get("GNUPGHOME", Path.home() / ".gnupg"))
+    home = Path.home() / ".gnupg-lmdj-release"
     runtime = ProfileRuntime(
         runner=runner,
         checksum_verifier=OpenPgpVerifier(),

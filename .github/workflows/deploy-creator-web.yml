@@ -1,0 +1,130 @@
+name: Deploy Creator Web Host
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact signed Product tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: creator-web-production
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.release-tag.outputs.tag }}
+    steps:
+      - name: Checkout protected main tooling
+        timeout-minutes: 5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        timeout-minutes: 3
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Select exact signed Product tag
+        timeout-minutes: 2
+        id: release-tag
+        shell: bash
+        env:
+          MANUAL_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$MANUAL_TAG"
+          [[ "$tag" =~ ^lmdj-v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Deployment tag must be an exact Product tag" >&2
+            exit 64
+          }
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Verify signed Creator Web Host release
+        timeout-minutes: 7
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LMDJ_RELEASE_TAG: ${{ steps.release-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$LMDJ_RELEASE_TAG"
+          timeout --signal=TERM --kill-after=30s 300s \
+            scripts/creator-web-deploy.sh verify "$tag"
+
+  deploy:
+    needs: preflight
+    environment: creator-canary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Checkout protected main tooling
+        timeout-minutes: 5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        timeout-minutes: 3
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        timeout-minutes: 3
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/platform/web/package-lock.json
+
+      - name: Install browser smoke dependencies
+        timeout-minutes: 5
+        working-directory: tests/platform/web
+        run: npm ci
+
+      - name: Install Chromium
+        timeout-minutes: 10
+        working-directory: tests/platform/web
+        run: npx --no-install playwright install --with-deps chromium
+
+      - name: Deploy signed Creator Web Host release
+        timeout-minutes: 35
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NETLIFY_CREATOR_SITE_ID: ${{ secrets.NETLIFY_CREATOR_SITE_ID }}
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          LMDJ_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/deploy/creator-web
+          tag="$LMDJ_RELEASE_TAG"
+          timeout --signal=TERM --kill-after=900s 1080s \
+            scripts/creator-web-deploy.sh deploy "$tag" 2>&1 |
+            tee build/deploy/creator-web/deployment.log
+
+      - name: Upload deployment evidence and failure logs
+        timeout-minutes: 5
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: creator-host-deployment-evidence
+          path: |
+            build/deploy/creator-web/evidence.json
+            build/deploy/creator-web/recovery-evidence.json
+            build/deploy/creator-web/deployment.log
+          if-no-files-found: warn

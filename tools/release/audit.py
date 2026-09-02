@@ -30,7 +30,12 @@ from .model import (
 )
 from .openpgp import OpenPgpError, OpenPgpVerifier
 from .prepare import LocalTag, ProductProof
-from .profiles import AssetBuild, ProfileBuild
+from .profiles import (
+    AssetBuild,
+    ProfileBuild,
+    ProfileError,
+    canonical_product_asset_names,
+)
 from scripts.version import _provider_source_package_sha256
 
 
@@ -826,15 +831,15 @@ def _asset_problem(context: object, intent: ReleaseIntent, release: GitHubReleas
         return "GitHub Release asset inventory is ambiguous"
     if intent.profile == "source-only":
         return None if not assets else "source-only Release contains unauthorized assets"
-    if intent.profile not in {"core-package", "web-runtime-host"}:
-        return "Product Release profile is unknown"
     archive_names = [name for name in names if name.endswith(".zip")]
-    if len(archive_names) != 1:
+    try:
+        expected_names = canonical_product_asset_names(
+            intent.profile,
+            names,
+            intent.identity,
+        )
+    except ProfileError:
         return "Product Release archive inventory is not canonical"
-    archive_name = archive_names[0]
-    expected_names = {archive_name, archive_name + ".sha256", archive_name + ".sha256.asc"}
-    if intent.profile == "core-package":
-        expected_names.add(archive_name[: -len(".zip")] + ".build-manifest.json")
     if set(names) != expected_names:
         return "Product Release asset names conflict with its profile"
     with tempfile.TemporaryDirectory(prefix="lmdj-release-audit-assets-") as directory:
@@ -849,10 +854,14 @@ def _asset_problem(context: object, intent: ReleaseIntent, release: GitHubReleas
             path = root / asset.name
             path.write_bytes(payload)
             builds.append(AssetBuild(path, asset.name, len(payload), hashlib.sha256(payload).hexdigest()))
-        checksum = payloads[archive_name + ".sha256"]
-        expected = f"{hashlib.sha256(payloads[archive_name]).hexdigest()}  {archive_name}\n".encode("ascii")
-        if checksum != expected:
-            return "Product checksum asset conflicts with downloaded archive bytes"
+        for archive_name in archive_names:
+            checksum = payloads[archive_name + ".sha256"]
+            expected = (
+                f"{hashlib.sha256(payloads[archive_name]).hexdigest()}  "
+                f"{archive_name}\n"
+            ).encode("ascii")
+            if checksum != expected:
+                return "Product checksum asset conflicts with downloaded archive bytes"
         try:
             selected = tuple(ProfileBuild(tuple(builds)).assets)
             worktree = _worktree(context, intent.target_revision)

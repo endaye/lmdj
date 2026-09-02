@@ -379,6 +379,15 @@ promotion. Normal operations do not use handwritten tag/Release commands,
 one-step publication, destructive asset replacement, all-tags push, tag
 movement, or published-history deletion.
 
+For the current `web-hosts` profile, one Product Release contains exactly six
+assets: Creator and Runtime each contribute an archive, checksum, and detached
+checksum signature. Creator and Runtime deployments remain independent,
+manual-only exact-tag workflow dispatches to `https://lmdj-creator.netlify.app/`
+and `https://lmdj-runtime.netlify.app/`; each has its own authorization,
+Environment, Site identity, evidence, and exact-prior rollback. Publication must
+not fan out to either deployment. Historical `1.0.40.0` release and deployment
+state is immutable and is not rewritten into the `web-hosts` profile.
+
 ### Release cut
 
 A Product Build is cut from `main`, not assembled on a branch. The release cut
@@ -413,6 +422,12 @@ allocation of that Build:
    `fix/<task>` from the released tag, allocate the next PATCH, release it
    through the same path, and land the same fix on `main` through an ordinary
    Pull Request. No `release/*` or `hotfix/*` branch outlives that fix.
+
+This rule governs every Product Build allocated after `1.0.41.0`. `1.0.41.0`
+itself was already built, reviewed, and verified under the previous practice,
+so it was merged as the last Build cut under it; splitting a finished
+control-plane Pull Request would have multiplied the chasing it describes
+rather than removed it.
 
 A Pull Request that mixes Assembly allocation with feature or control-plane
 changes is split before it is labelled, not chased. This rule is motivated by

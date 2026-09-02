@@ -7,17 +7,21 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
+import re
 import shutil
-import stat
 import sys
 import tempfile
-import zipfile
 from typing import Callable
 
 from .commands import CommandRunner
 from .model import AssetRecord, ReleaseIntent
 from .openpgp import OpenPgpVerifier
+from .web_host_bundle import (
+    BundleError,
+    WebHostReleaseSpec,
+    create_dist_zip,
+)
 
 
 class ProfileError(RuntimeError):
@@ -46,6 +50,25 @@ class ProfileRuntime:
     checksum_verifier: OpenPgpVerifier
     checksum_home: Path
     checksum_fingerprint: str
+
+
+CREATOR_WEB_SPEC = WebHostReleaseSpec(
+    host_id="creator-web",
+    script="scripts/creator-web.sh",
+    dist_relative="build/web/creator/dist",
+    module_relative="apps/creator-web/module.json",
+    archive_prefix="lmdj-creator-web",
+    verifier_relative="apps/creator-web/tools/package.py",
+)
+
+WEB_RUNTIME_SPEC = WebHostReleaseSpec(
+    host_id="web-runtime-host",
+    script="scripts/web-runtime-host.sh",
+    dist_relative="build/web/host/dist",
+    module_relative="apps/web-runtime-host/module.json",
+    archive_prefix="lmdj-web-runtime-host",
+    verifier_relative="apps/web-runtime-host/tools/package.py",
+)
 
 
 def build_profile(
@@ -97,33 +120,108 @@ def build_core_package(
 def build_web_runtime_host(
     worktree: Path, output: Path, intent: ReleaseIntent | None, runtime: ProfileRuntime | None,
 ) -> ProfileBuild:
-    if intent is None or intent.kind.value != "product":
-        raise ProfileError("Web Runtime Host profile requires a Product intent")
+    _require_product_intent(intent)
     selected = _require_runtime(runtime)
+    _install_web_dependencies(worktree, selected, include_creator=False)
+    return _build_web_host(WEB_RUNTIME_SPEC, worktree, output, intent, selected)
+
+
+def build_web_hosts(
+    worktree: Path,
+    output: Path,
+    intent: ReleaseIntent | None,
+    runtime: ProfileRuntime | None,
+) -> ProfileBuild:
+    _require_product_intent(intent)
+    selected = _require_runtime(runtime)
+    _install_web_dependencies(worktree, selected, include_creator=True)
+    creator = _build_web_host(
+        CREATOR_WEB_SPEC,
+        worktree,
+        output,
+        intent,
+        selected,
+    )
+    runtime_host = _build_web_host(
+        WEB_RUNTIME_SPEC,
+        worktree,
+        output,
+        intent,
+        selected,
+    )
+    return ProfileBuild(
+        tuple(
+            sorted(
+                (*creator.assets, *runtime_host.assets),
+                key=lambda asset: asset.name,
+            )
+        )
+    )
+
+
+def _require_product_intent(intent: ReleaseIntent | None) -> None:
+    if intent is None or intent.kind.value != "product":
+        raise ProfileError("Web Host profile requires a Product intent")
+
+
+def _install_web_dependencies(
+    worktree: Path,
+    runtime: ProfileRuntime,
+    *,
+    include_creator: bool,
+) -> None:
     node = os.environ.get("EMSDK_NODE")
     environment = (
         {"PATH": str(Path(node).parent) + os.pathsep + os.environ.get("PATH", "")}
         if node else None
     )
-    selected.runner.run(
+    runtime.runner.run(
         ["npm", "--prefix", "tests/platform/web", "ci"],
         cwd=worktree,
         environment=environment,
     )
+    if include_creator:
+        runtime.runner.run(
+            ["npm", "--prefix", "apps/creator-web", "ci"],
+            cwd=worktree,
+            environment=environment,
+        )
+
+
+def _build_web_host(
+    spec: WebHostReleaseSpec,
+    worktree: Path,
+    output: Path,
+    intent: ReleaseIntent,
+    runtime: ProfileRuntime,
+) -> ProfileBuild:
     for command in ("configure", "build", "test", "proof"):
-        selected.runner.run(["bash", "scripts/web-runtime-host.sh", command], cwd=worktree)
-    dist = _require_directory(worktree / "build/web/host/dist", "Web Runtime Host distribution")
-    host_version = _host_version(worktree)
-    archive = output / f"lmdj-web-runtime-host-{host_version}-product-{intent.identity}.zip"
+        runtime.runner.run(["bash", spec.script, command], cwd=worktree)
+    dist = _require_directory(
+        worktree / spec.dist_relative,
+        f"{spec.host_id} distribution",
+    )
+    host_version = _host_version(worktree, spec)
+    archive = output / (
+        f"{spec.archive_prefix}-{host_version}-product-{intent.identity}.zip"
+    )
     output.mkdir(parents=True, exist_ok=True)
     _create_dist_zip(dist, archive)
     checksum = archive.with_name(archive.name + ".sha256")
     checksum.write_text(f"{_sha256_file(archive)}  {archive.name}\n", encoding="ascii", newline="\n")
     build = _stage_and_sign(
-        (archive, checksum), output, selected,
+        (archive, checksum), output, runtime,
         worktree / ".github/release-signing-keys/lmdj-release-checksum.asc",
     )
-    _stage_web_bundle(worktree, build, output, intent, host_version, selected)
+    _stage_web_bundle(
+        spec,
+        worktree,
+        build,
+        output,
+        intent,
+        host_version,
+        runtime,
+    )
     return build
 
 
@@ -131,7 +229,67 @@ PROFILE_BUILDERS: dict[str, Callable[[Path, Path, ReleaseIntent | None, ProfileR
     "source-only": build_source_only,
     "core-package": build_core_package,
     "web-runtime-host": build_web_runtime_host,
+    "web-hosts": build_web_hosts,
 }
+
+
+def canonical_product_asset_names(
+    profile: str,
+    names: tuple[str, ...] | list[str],
+    product_build: str,
+) -> frozenset[str]:
+    """Return the exact allowed inventory for a Product binary profile."""
+    archives = [name for name in names if name.endswith(".zip")]
+    if profile in {"core-package", "web-runtime-host"}:
+        if len(archives) != 1:
+            raise ProfileError(
+                "Product release profile must produce exactly one archive"
+            )
+        archive = archives[0]
+        expected = {
+            archive,
+            f"{archive}.sha256",
+            f"{archive}.sha256.asc",
+        }
+        if profile == "core-package":
+            expected.add(
+                archive[: -len(".zip")] + ".build-manifest.json"
+            )
+        return frozenset(expected)
+    if profile == "web-hosts":
+        if len(archives) != 2:
+            raise ProfileError(
+                "dual Web Host profile must produce exactly two archives"
+            )
+        matched: dict[str, str] = {}
+        for archive in archives:
+            match = re.fullmatch(
+                r"lmdj-(creator-web|web-runtime-host)-"
+                r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\."
+                r"(?:0|[1-9][0-9]*)-product-"
+                + re.escape(product_build)
+                + r"\.zip",
+                archive,
+            )
+            if match is None or match.group(1) in matched:
+                raise ProfileError(
+                    "dual Web Host archive names are not canonical"
+                )
+            matched[match.group(1)] = archive
+        if set(matched) != {"creator-web", "web-runtime-host"}:
+            raise ProfileError(
+                "dual Web Host archive names are not canonical"
+            )
+        return frozenset(
+            name
+            for archive in matched.values()
+            for name in (
+                archive,
+                f"{archive}.sha256",
+                f"{archive}.sha256.asc",
+            )
+        )
+    raise ProfileError("unknown release profile")
 
 
 def verify_existing_profile(
@@ -147,9 +305,18 @@ def verify_existing_profile(
         if assets:
             raise ProfileError("source-only releases must not create release assets")
         return
-    if profile not in {"core-package", "web-runtime-host"}:
+    if profile not in {"core-package", "web-runtime-host", "web-hosts"}:
         raise ValueError("unknown release profile")
     selected = _require_runtime(runtime)
+    if profile == "web-hosts":
+        _verify_existing_web_hosts(
+            worktree,
+            assets_root,
+            intent,
+            assets,
+            selected,
+        )
+        return
     archive, checksum, signature, manifest = _profile_asset_paths(assets_root, assets, profile)
     _verify_checksum(checksum, archive)
     _verify_detached_checksum_signature(
@@ -160,10 +327,16 @@ def verify_existing_profile(
     if manifest is not None:
         _verify_core_manifest(manifest, intent)
     if profile == "web-runtime-host":
-        host_version = _host_version(worktree)
+        host_version = _host_version(worktree, WEB_RUNTIME_SPEC)
         with tempfile.TemporaryDirectory(prefix="lmdj-release-existing-web-") as directory:
             _stage_web_bundle(
-                worktree, ProfileBuild(assets), Path(directory), intent, host_version, selected,
+                WEB_RUNTIME_SPEC,
+                worktree,
+                ProfileBuild(assets),
+                Path(directory),
+                intent,
+                host_version,
+                selected,
             )
 
 
@@ -171,6 +344,63 @@ def _require_runtime(runtime: ProfileRuntime | None) -> ProfileRuntime:
     if runtime is None:
         raise ProfileError("release checksum signer is unavailable")
     return runtime
+
+
+def _verify_existing_web_hosts(
+    worktree: Path,
+    assets_root: Path,
+    intent: ReleaseIntent,
+    assets: tuple[AssetBuild, ...],
+    runtime: ProfileRuntime,
+) -> None:
+    names = tuple(asset.name for asset in assets)
+    expected: list[str] = []
+    versions: dict[str, str] = {}
+    for spec in (CREATOR_WEB_SPEC, WEB_RUNTIME_SPEC):
+        version = _host_version(worktree, spec)
+        versions[spec.host_id] = version
+        archive = (
+            f"{spec.archive_prefix}-{version}-product-{intent.identity}.zip"
+        )
+        expected.extend((archive, f"{archive}.sha256", f"{archive}.sha256.asc"))
+    if len(set(names)) != len(names) or set(names) != set(expected):
+        raise ProfileError("dual Web Host release asset inventory is not canonical")
+    by_name = {asset.name: asset for asset in assets}
+    for spec in (CREATOR_WEB_SPEC, WEB_RUNTIME_SPEC):
+        archive_name = (
+            f"{spec.archive_prefix}-{versions[spec.host_id]}-product-"
+            f"{intent.identity}.zip"
+        )
+        selected_assets = tuple(
+            by_name[name]
+            for name in (
+                archive_name,
+                f"{archive_name}.sha256",
+                f"{archive_name}.sha256.asc",
+            )
+        )
+        archive, checksum, signature = (asset.path for asset in selected_assets)
+        if any(path.parent != assets_root for path in (archive, checksum, signature)):
+            raise ProfileError("dual Web Host release asset inventory is not canonical")
+        _verify_checksum(checksum, archive)
+        _verify_detached_checksum_signature(
+            checksum,
+            signature,
+            worktree / ".github/release-signing-keys/lmdj-release-checksum.asc",
+            runtime,
+        )
+        with tempfile.TemporaryDirectory(
+            prefix=f"lmdj-release-existing-{spec.host_id}-"
+        ) as directory:
+            _stage_web_bundle(
+                spec,
+                worktree,
+                ProfileBuild(selected_assets),
+                Path(directory),
+                intent,
+                versions[spec.host_id],
+                runtime,
+            )
 
 
 def _stage_and_sign(
@@ -266,48 +496,26 @@ def _verify_checksum(checksum: Path, archive: Path) -> None:
 
 
 def _create_dist_zip(dist: Path, archive: Path) -> None:
-    if archive.exists() or archive.is_symlink():
-        raise ProfileError("release archive output must be absent")
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as output:
-        for source in sorted(dist.rglob("*")):
-            relative = PurePosixPath("dist") / source.relative_to(dist).as_posix()
-            if source.is_symlink() or any(part in {"", ".", ".."} for part in relative.parts):
-                raise ProfileError("Web Runtime Host distribution contains an unsafe member")
-            if source.is_dir():
-                continue
-            if not source.is_file():
-                raise ProfileError("Web Runtime Host distribution contains an unsafe member")
-            info = zipfile.ZipInfo(relative.as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
-            info.create_system = 3
-            info.external_attr = (stat.S_IFREG | 0o644) << 16
-            info.compress_type = zipfile.ZIP_DEFLATED
-            output.writestr(info, source.read_bytes(), compresslevel=9)
-    _verify_dist_zip(archive)
-
-
-def _verify_dist_zip(archive: Path) -> None:
-    with zipfile.ZipFile(archive) as opened:
-        names: set[str] = set()
-        for item in opened.infolist():
-            path = PurePosixPath(item.filename)
-            if (
-                item.filename in names or not item.filename.startswith("dist/") or "\\" in item.filename
-                or item.filename.startswith("/") or any(part in {"", ".", ".."} for part in path.parts)
-                or stat.S_IFMT(item.external_attr >> 16) not in {0, stat.S_IFREG}
-            ):
-                raise ProfileError("release archive member inventory is invalid")
-            names.add(item.filename)
-        if not names:
-            raise ProfileError("release archive must contain a dist tree")
+    try:
+        create_dist_zip(dist, archive)
+    except BundleError as error:
+        raise ProfileError(str(error)) from error
 
 
 def _stage_web_bundle(
-    worktree: Path, build: ProfileBuild, output: Path, intent: ReleaseIntent, host_version: str, runtime: ProfileRuntime,
+    host: WebHostReleaseSpec,
+    worktree: Path,
+    build: ProfileBuild,
+    output: Path,
+    intent: ReleaseIntent,
+    host_version: str,
+    runtime: ProfileRuntime,
 ) -> None:
-    tool = worktree / "apps/web-runtime-host/tools/release_bundle.py"
-    spec = importlib.util.spec_from_file_location("lmdj_release_bundle", tool)
+    tool = worktree / host.verifier_relative.replace("package.py", "release_bundle.py")
+    module_name = "lmdj_release_bundle_" + host.host_id.replace("-", "_")
+    spec = importlib.util.spec_from_file_location(module_name, tool)
     if spec is None or spec.loader is None:
-        raise ProfileError("Web Runtime Host release verifier is unavailable")
+        raise ProfileError(f"{host.host_id} release verifier is unavailable")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -327,14 +535,16 @@ def _stage_web_bundle(
     shutil.rmtree(stage)
 
 
-def _host_version(worktree: Path) -> str:
+def _host_version(worktree: Path, host: WebHostReleaseSpec) -> str:
     try:
-        document = json.loads((worktree / "apps/web-runtime-host/module.json").read_text(encoding="utf-8"))
+        document = json.loads(
+            (worktree / host.module_relative).read_text(encoding="utf-8")
+        )
         version = document["version"]
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
-        raise ProfileError("Web Runtime Host version is unavailable") from error
+        raise ProfileError(f"{host.host_id} version is unavailable") from error
     if not isinstance(version, str) or not version:
-        raise ProfileError("Web Runtime Host version is unavailable")
+        raise ProfileError(f"{host.host_id} version is unavailable")
     return version
 
 

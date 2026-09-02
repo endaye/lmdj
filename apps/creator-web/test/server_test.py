@@ -173,6 +173,9 @@ class CreatorServerTest(unittest.TestCase):
         self.assertEqual(headers["cross-origin-embedder-policy"], "require-corp")
         self.assertEqual(headers["cross-origin-resource-policy"], "same-origin")
         self.assertEqual(headers["content-security-policy"], self.module.CSP)
+        self.assertEqual(
+            headers["x-robots-tag"], "noindex, nofollow, noarchive"
+        )
         self.assertEqual(headers["cache-control"], "no-store")
 
         status, headers, payload = self.request(
@@ -210,7 +213,9 @@ class CreatorServerTest(unittest.TestCase):
             "/" + alias.relative_to(self.dist).as_posix(),
         ]:
             with self.subTest(path=path):
-                self.assertEqual(self.request("GET", path)[0], 404)
+                status, headers, _ = self.request("GET", path)
+                self.assertEqual(status, 404)
+                self.assertEqual(headers["cache-control"], "no-store")
         self.assertEqual(
             self.request(
                 "GET",

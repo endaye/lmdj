@@ -68,12 +68,14 @@ from tools.release.prepare import (  # noqa: E402
     ProductProof,
     prepare,
     read_product_snapshot_proof,
+    _verify_profile_assets,
 )
 from tools.release.profiles import (  # noqa: E402
     AssetBuild,
     ProfileBuild,
     ProfileError,
     ProfileRuntime,
+    WEB_RUNTIME_SPEC,
     _create_dist_zip,
     _stage_web_bundle,
     _stage_and_sign,
@@ -704,8 +706,148 @@ class ReleasePrepareTest(unittest.TestCase):
     def test_exact_profiles_have_closed_asset_inventories(self) -> None:
         source = build_profile("source-only", self.root, self.root / "source", None)
         self.assertEqual(source.assets, ())
+        with self.assertRaisesRegex(ProfileError, "Product intent"):
+            build_profile("web-hosts", self.root, self.root / "web-hosts", None)
         with self.assertRaisesRegex(ValueError, "unknown release profile"):
             build_profile("source-and-binary", self.root, self.root / "invalid", None)
+
+    def test_dual_web_host_profile_accepts_exactly_two_signed_triplets(self) -> None:
+        output = self.root / "dual-assets"
+        output.mkdir()
+        names = (
+            "lmdj-creator-web-2.1.1-product-1.0.21.0.zip",
+            "lmdj-creator-web-2.1.1-product-1.0.21.0.zip.sha256",
+            "lmdj-creator-web-2.1.1-product-1.0.21.0.zip.sha256.asc",
+            "lmdj-web-runtime-host-2.1.1-product-1.0.21.0.zip",
+            "lmdj-web-runtime-host-2.1.1-product-1.0.21.0.zip.sha256",
+            "lmdj-web-runtime-host-2.1.1-product-1.0.21.0.zip.sha256.asc",
+        )
+        assets = []
+        for name in names:
+            path = output / name
+            path.write_bytes(name.encode("utf-8"))
+            assets.append(
+                AssetBuild(
+                    path,
+                    name,
+                    path.stat().st_size,
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                )
+            )
+        intent = ReleaseIntent(
+            self.tag,
+            ReleaseKind.PRODUCT,
+            "1.0.21.0",
+            self.target_sha,
+            Disposition.RELEASABLE,
+            "web-hosts",
+            ("evidence.md",),
+            "canary",
+            "1.0.21.0",
+            123,
+        )
+
+        verified = _verify_profile_assets(intent, ProfileBuild(tuple(assets)))
+
+        self.assertEqual(tuple(asset.name for asset in verified), names)
+
+    def test_dual_web_host_builder_emits_the_exact_six_asset_inventory(self) -> None:
+        for host, version in (("creator-web", "2.1.1"), ("web-runtime-host", "2.1.1")):
+            module = self.root / f"apps/{host}/module.json"
+            module.parent.mkdir(parents=True)
+            module.write_text(json.dumps({"version": version}), encoding="utf-8")
+            adapter = module.parent / "tools/release_bundle.py"
+            adapter.parent.mkdir()
+            adapter.write_text(
+                "def stage_release_bundle(**arguments):\n"
+                "    arguments['output_root'].mkdir(parents=True)\n",
+                encoding="utf-8",
+            )
+        key = self.root / ".github/release-signing-keys/lmdj-release-checksum.asc"
+        key.parent.mkdir(parents=True)
+        key.write_text("fixture", encoding="ascii")
+        calls: list[tuple[str, ...]] = []
+
+        def executor(vector, **kwargs):
+            calls.append(vector)
+            if vector[:2] == ("bash", "scripts/creator-web.sh") and vector[2] == "proof":
+                dist = self.root / "build/web/creator/dist"
+                dist.mkdir(parents=True)
+                (dist / "host-manifest.json").write_text(
+                    '{"host_version":"2.1.1","product_build":"1.0.21.0"}',
+                    encoding="utf-8",
+                )
+            if vector[:2] == ("bash", "scripts/web-runtime-host.sh") and vector[2] == "proof":
+                dist = self.root / "build/web/host/dist"
+                dist.mkdir(parents=True)
+                (dist / "host-manifest.json").write_text(
+                    '{"host_version":"2.1.1","product_build":"1.0.21.0"}',
+                    encoding="utf-8",
+                )
+            return subprocess.CompletedProcess(vector, 0, stdout="", stderr="")
+
+        runtime = ProfileRuntime(
+            runner=CommandRunner(executor=executor),
+            checksum_verifier=RecordingVerifier(),
+            checksum_home=self.root,
+            checksum_fingerprint=self.policy.checksum_fingerprint,
+        )
+        intent = ReleaseIntent(
+            self.tag,
+            ReleaseKind.PRODUCT,
+            "1.0.21.0",
+            self.target_sha,
+            Disposition.RELEASABLE,
+            "web-hosts",
+            ("evidence.md",),
+            "canary",
+            "1.0.21.0",
+            123,
+        )
+
+        build = build_profile(
+            "web-hosts",
+            self.root,
+            self.root / "release-assets",
+            intent,
+            runtime=runtime,
+        )
+
+        self.assertEqual(
+            tuple(asset.name for asset in build.assets),
+            (
+                "lmdj-creator-web-2.1.1-product-1.0.21.0.zip",
+                "lmdj-creator-web-2.1.1-product-1.0.21.0.zip.sha256",
+                "lmdj-creator-web-2.1.1-product-1.0.21.0.zip.sha256.asc",
+                "lmdj-web-runtime-host-2.1.1-product-1.0.21.0.zip",
+                "lmdj-web-runtime-host-2.1.1-product-1.0.21.0.zip.sha256",
+                "lmdj-web-runtime-host-2.1.1-product-1.0.21.0.zip.sha256.asc",
+            ),
+        )
+        self.assertEqual(
+            calls[:2],
+            [
+                ("npm", "--prefix", "tests/platform/web", "ci"),
+                ("npm", "--prefix", "apps/creator-web", "ci"),
+            ],
+        )
+        verify_existing_profile(
+            "web-hosts",
+            self.root,
+            self.root / "release-assets",
+            intent,
+            build.assets,
+            runtime,
+        )
+        with self.assertRaisesRegex(ProfileError, "inventory"):
+            verify_existing_profile(
+                "web-hosts",
+                self.root,
+                self.root / "release-assets",
+                intent,
+                build.assets[:-1],
+                runtime,
+            )
 
     def test_web_profile_installs_locked_dependencies_before_configuring(self) -> None:
         dependencies_ready = False
@@ -782,6 +924,33 @@ class ReleasePrepareTest(unittest.TestCase):
         self.assertEqual(context.policy.repository, "endaye/lmdj")
         self.assertIn("fetch:endaye/lmdj:main", self.git.calls)
         self.assertTrue(callable(context.profile_verifier))
+
+    def test_cli_context_keeps_checksum_keyring_distinct_from_product_keyring(self) -> None:
+        captured: list[ProfileRuntime] = []
+
+        def capture_builder(runtime: ProfileRuntime):
+            captured.append(runtime)
+            return mock.Mock()
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"GNUPGHOME": "/operator/product-keyring"},
+            ),
+            mock.patch.object(cli, "default_profile_builder", side_effect=capture_builder),
+        ):
+            cli.build_context(
+                self.root,
+                git=self.git,
+                github=self.github,
+                authority_reader=lambda worktree: (self.policy, self.ledger),
+            )
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(
+            captured[0].checksum_home,
+            Path.home() / ".gnupg-lmdj-release",
+        )
 
     def test_cli_context_uses_logged_in_gh_credentials_when_token_env_is_empty(self) -> None:
         token = "ghp_LOCAL_CREDENTIAL_FIXTURE"
@@ -907,7 +1076,13 @@ def stage_release_bundle(**arguments):
 
         try:
             _stage_web_bundle(
-                worktree, build, output, self.ledger.entries[0], "1.2.3", runtime,
+                WEB_RUNTIME_SPEC,
+                worktree,
+                build,
+                output,
+                self.ledger.entries[0],
+                "1.2.3",
+                runtime,
             )
         except Exception as error:
             self.fail(f"exact-target release verifier import failed: {type(error).__name__}: {error}")
