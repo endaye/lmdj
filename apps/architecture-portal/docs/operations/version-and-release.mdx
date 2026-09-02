@@ -22,6 +22,10 @@ Product Build `1.0.24.0 · canary · g<short-sha>` 曾是 source candidate。那
 
 Product Build 从 `main` 切出，不在分支上组装。功能、Host、Provider、deploy workflow 与发布脚本先各自经 Integration Queue 合入 `main`；control-plane 改动（`ci.yml`、`scope_policy.json`、queue 与 gate 脚本）单独更早合入，因为它们不能进队列。切版 PR 只携带分配材料：`version.json` Build 分配、必要时的 `assembly.json` 与 `assembly.lock.json`、该 Build 的 immutable Portal snapshot 与 release-evidence 文档，因此可以进队列由控制器同步并 squash 合入。squash 产生的精确 `main` SHA 就是该 Build 唯一合法的 release target；之后的 `main` 提交不进入该 Build。发布后的修复走 PATCH：从已发布 tag 拉短命 `fix/<task>`，分配下一 PATCH，同一修复经普通 PR 回 `main`；仓库不设 `release/*` 或 `hotfix/*` 长期分支。规则全文见 `docs/governance/git-workflow.md` §6。
 
+## Channel promotion
+
+晋级只改发布记录，不改 GitHub Release。ledger 里 Product intent 的 `channel` 固定为发布时的 Channel，发布后不可变并继续决定 `prerelease` 与 `latest`；晋级写入可选的 `promotions` 列表，每条记录目标 Channel、UTC 时间、证据路径、各 Host 部署 run 与其 `evidence.json` 的 SHA-256。当前 Channel 等于最后一条记录。晋级严格向前、一次一档、不超过 policy 的 `promotion.max_channel`（M1 为 `dev`）。`dev` 的门禁是可判定的：intent 已发布、full exact-main CI 成立、profile 的每个部署 Host 各有一次成功的 `workflow_dispatch` 部署 run 且其保留证据记录同一 tag、target revision、Product Build 并全部 `passed`。`beta` 另需人工验收文档。`stable` 被工具拒绝，因为 D8 禁止切换已发布 Release 的 `prerelease`；这是开放问题。入口是 `scripts/release.sh promote TAG CHANNEL --deployment-run HOST=RUN_ID ...`，只向工作区写一份证据文档和一条 ledger 记录，再作为 docs PR 经队列合入。规则全文见 `docs/governance/version-management.md` §3.1。
+
 ## Product Build 权威与诊断
 
 `products/lmdj/version.json` 是当前 Product Build 的唯一源码权威。CMake、Runtime identity、

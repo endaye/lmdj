@@ -68,6 +68,15 @@ Use `scripts/release.sh verify-draft TAG RELEASE_ID PLAN_SHA256` only for
 read-only Draft verification. The audit before and after a mutation is
 `scripts/release.sh audit --remote --tag TAG`.
 
+Channel promotion is `scripts/release.sh promote TAG CHANNEL --deployment-run
+HOST=RUN_ID ... [--evidence PATH ...]`. It is a local mutation of the ledger and
+one evidence document only: it audits first, verifies every Host deployment
+run's retained evidence for the exact tag, and never edits the GitHub Release.
+The written files ship as a docs Pull Request through the Integration Queue.
+`stable` is refused; the open question it points at is the authority, not this
+skill. Promotion requires a published intent and both Host deployments to have
+succeeded; it is a separate boundary from deployment and does not follow from it.
+
 ## Full exact-main CI evidence
 
 An ordinary `main` merge is classified from its own changed paths, so a merge

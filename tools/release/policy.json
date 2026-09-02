@@ -28,5 +28,25 @@
     "runtime_canary": "runtime-canary",
     "creator_canary": "creator-canary"
   },
-  "historical_cutoff": "2026-08-13T00:00:00Z"
+  "historical_cutoff": "2026-08-13T00:00:00Z",
+  "promotion": {
+    "max_channel": "dev",
+    "deployment_evidence": {
+      "core-package": [],
+      "web-runtime-host": ["runtime"],
+      "web-hosts": ["runtime", "creator"]
+    },
+    "hosts": {
+      "runtime": {
+        "workflow_path": ".github/workflows/deploy-web-runtime-host.yml",
+        "artifact": "runtime-host-deployment-evidence",
+        "contract_prefix": "lmdj.web-runtime-host.deployment-evidence."
+      },
+      "creator": {
+        "workflow_path": ".github/workflows/deploy-creator-web.yml",
+        "artifact": "creator-host-deployment-evidence",
+        "contract_prefix": "lmdj.creator-web.deployment-evidence."
+      }
+    }
+  }
 }
