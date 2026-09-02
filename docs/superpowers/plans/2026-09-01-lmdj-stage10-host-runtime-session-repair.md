@@ -415,9 +415,19 @@ Push, open the PR, wait for CI, squash-merge, clean the worktree.
 
 - Create: `packages/application-facade/include/lmdj/facade/performance_engine_adapter.hpp`
 - Create: `packages/application-facade/src/performance_engine_adapter.cpp`
+- Modify: `packages/application-facade/include/lmdj/facade/performance_replay.hpp`
+- Modify: `packages/application-facade/src/performance_replay.cpp`
+- Modify: `packages/application-facade/src/performance_runtime.cpp`
+- Modify: `packages/application-facade/src/application.cpp`
 - Modify: `packages/application-facade/CMakeLists.txt`
+- Modify: `packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp`
+- Modify: `packages/audio-runtime/src/realtime_engine.cpp`
 - Modify: `apps/native-host/src/main.cpp`
 - Create: `tests/core/facade/performance_engine_adapter_test.cpp`
+- Modify: `tests/core/facade/performance_replay_test.cpp`
+- Modify: `tests/core/facade/performance_runtime_bridge_test.cpp`
+- Modify: `tests/core/facade/application_test.cpp`
+- Modify: `tests/core/audio/realtime_engine_test.cpp`
 - Modify: `tests/host/native_host_test.py`
 - Modify: `CMakeLists.txt`
 
@@ -437,6 +447,24 @@ struct EnginePerformanceAdapter {
 EnginePerformanceAdapter make_engine_performance_adapter(
     audio::RealtimeEngine& engine,
     PatternPublicationGateway gateway);
+
+enum class NeutralResetProgress : std::uint8_t {
+  pending,
+  complete,
+};
+
+// PerformanceReplayRuntimeSink contract:
+virtual foundation::Result<NeutralResetProgress> reset_neutral() = 0;
+
+enum class PadControlOrigin : std::uint8_t {
+  host_input,
+  performance_replay,
+};
+
+// Trailing PadControlEvent fields; existing aggregate callers retain the
+// host_input / zero-duration defaults.
+PadControlOrigin origin{PadControlOrigin::host_input};
+std::uint64_t duration_frames{};
 ```
 
 - The clock converts `engine.telemetry().rendered_frames` to ticks with
@@ -457,6 +485,11 @@ EnginePerformanceAdapter make_engine_performance_adapter(
   request to the following bar. An empty-slot reserve (null material)
   publishes nothing: `service` acknowledges it at the boundary as `applied`
   without changing what is playing (#488 §5).
+- A failed cancellation means the prior reservation was claimed, not
+  cancelled. Keep that reservation until its original #376 predicate emits
+  exactly one `applied`; retain the new reservation separately at the
+  following Bar. Per-session storage is ordered and may therefore contain a
+  claimed predecessor plus one replaceable, not-yet-claimed successor.
 - `service` ports the #376 predicate:
   `pattern_telemetry().current_generation == reserved generation` **and**
   `telemetry().rendered_frames >= activation_frame`, with an exactly-once
@@ -464,11 +497,41 @@ EnginePerformanceAdapter make_engine_performance_adapter(
   the reserved tick. Failed, superseded and cancelled publications produce
   `cancelled`/`failed` outcomes and never an `applied` one (no ghost event).
 - The replay controller composes `ReferencePerformanceReplayController` over
-  an engine-backed `PerformanceReplayRuntimeSink` (pad hits →
-  existing trigger path, pattern launches → the same publication gateway,
-  FX gestures → the Stage 10 FX chain entry points, `reset_neutral` →
-  neutral FX/HOLD state); progression is driven by `service` from
-  rendered-frame time.
+  an engine-backed `PerformanceReplayRuntimeSink`. Pad hits use the existing
+  `enqueue_control` / Voice render path with `performance_replay` origin and
+  an SR-D25 integer `duration_frames`; render derives the release from the
+  actual Voice start frame and the existing scheduled-release latch. Replay
+  origin never enters live trigger outcomes, voice-state outcomes or Capture.
+  Pattern launches use the same publication gateway and FX gestures use the
+  Stage 10 FX chain entry points.
+- `reset_neutral` returns `pending` until render has dequeued the one logical
+  `hold_off + 8 release` reset, using `MasterFxTelemetry` as the completion
+  witness; queue-pressure continuation must not duplicate gestures. Reference
+  controller state retains identity/ownership while pending. Natural-end
+  progression polls an accepted pending reset, `status` remains read-only,
+  and true reset failures are retried only by `stop` as locked by RLC-D9. An
+  empty replay begin creates the identity and returns `playing` while its
+  reset is pending instead of erasing the replay.
+- The existing headless `SilentPerformanceReplayRuntimeSink` adopts the same
+  tri-state interface and returns `complete` immediately because it owns no
+  audible Runtime state or render queue. Keep a focused
+  `performance_runtime_bridge_test` witness so this product implementation is
+  not covered only by compilation while the engine-backed sink exercises
+  `pending`.
+- Facade stop writes `replay_stop_receipts` only for `complete`/`stopped`.
+  A `pending` poll returns the current `playing` response with
+  `replayed:false` but does not consume `request_id`, so the same request ID
+  reaches the controller again; a true reset failure likewise writes no
+  receipt. For an empty replay whose begin-time reset truly fails, Facade
+  retains the controller-created identity/active exclusion before returning
+  the stable error, so an exact begin retry can observe `playing` and `stop`
+  can perform the locked retry.
+- `EnginePerformanceAdapter::service` remains the locked `void` composition
+  surface. An `advance_to` failure must leave the controller-owned reset
+  target, frozen cursor and active latch intact; periodic service does not
+  retry a true failure or clear the replay. The externally visible recovery
+  surface remains read-only `status` plus `stop`, with no Host-specific error
+  field or process-fatal side channel.
 - Native Host wiring: construct the `RealtimeEngine` before the
   `Application` (hoist), build the adapter, inject its members into
   `ApplicationConfig`, and call `adapter.service()` both inside the existing
@@ -488,21 +551,38 @@ deterministically from the test thread (`render` in 128-frame blocks, the
 `target_tick`/`claimed`; render across the boundary and assert `service`
 emits exactly one `applied` outcome whose `effective_tick` equals the
 reserved bar tick under the frame→tick anchor; latest-wins before claim;
-claimed-defer to the following bar; an empty-slot reserve (null material)
+claimed-defer to the following bar while the claimed predecessor still emits
+one `applied` at its original target; a third request replaces only the
+unclaimed deferred successor; an empty-slot reserve (null material)
 publishes nothing yet is acknowledged `applied` at the boundary with the
 playing content unchanged; cancel and publication failure produce
 no `applied` outcome; clock monotonicity across BPM re-anchor; replay
 begin→progression→natural end with neutral reset against the engine-backed
 sink, where progression is driven purely by rendering plus periodic
-`service` calls with no interleaved Facade requests. Expect FAIL (RED).
+`service` calls with no interleaved Facade requests. The replay witness must
+use a non-one-shot Pad and prove `duration_tick` becomes an exact relative
+render-frame release, produces no live outcome/capture event, remains
+`playing` after reset enqueue, and becomes terminal only after render dequeues
+the final reset gesture. Also cover partial reset enqueue continuation without
+duplicates; pending stop calls must not create a receipt, and the same request
+ID must poll again until terminal before later replaying the receipt. Cover an
+empty replay retaining its identity while reset is pending and after a true
+begin-time reset error. In `performance_runtime_bridge_test.cpp`, update the
+headless replay witness to prove the silent sink still completes/reset-closes
+without an artificial pending cycle under the tri-state contract. Expect FAIL
+(RED).
 
 - [ ] **Step 2: Implement the adapter**
 
 Implement `performance_engine_adapter.hpp/.cpp` per **Interfaces**, reusing
 the web runtime's ack predicate shape (`drain_sequence_bar_boundary`) and
 respecting the engine's two-thread contract (control-thread polling only,
-no callback, no allocation on the render path). Wire CMake and the root
-coverage list. Run Step 1's suite; expect PASS.
+no callback, no allocation on the render path). Extend the existing
+`PadControlEvent` queue entry only with the locked trailing origin/duration
+fields, and reuse the current Voice `scheduled_release_frame`; do not add a
+second render queue or a Host timer. Repair the reference controller's
+tri-state reset handling and zero-event identity retention. Wire CMake and the
+root coverage list. Run Step 1's suite; expect PASS.
 
 - [ ] **Step 3: Repair the Native Host construction order and inject (RED then GREEN)**
 

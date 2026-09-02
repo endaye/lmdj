@@ -210,6 +210,37 @@ outcome 耐久写一次 journal，重复 outcome 即双写）。frame→tick 换
 第二份时间或 slot 真相。publication 失败、取消、被替换不产生 `applied`
 outcome，无 ghost event（P10-D22 不变）。
 
+`claimed-defer` 不得把已被 render 线程 claim 的旧 reservation 记为
+`cancelled`。Adapter 必须同时保留「已 claimed、等待原边界的旧
+reservation」和「延后到下一 Bar 的新 reservation」：旧请求在 #376
+谓词成立时仍恰好一次 `applied`，只有新请求返回 `claimed:true` 并
+defer。后续 latest-wins 只替换尚未 claim 的最新 reservation，不得抹除
+更早的 claimed acknowledgement。
+
+Engine-backed replay 的 Pad 事件继续走 `RealtimeEngine` 既有 control queue 与
+Voice render 路径，但必须显式标识 `performance_replay` origin。Adapter 按
+projection BPM 使用 SR-D25 整数换算把 `duration_tick` 变为相对
+`duration_frames`；render 在真实 Voice start frame 上加该时长，对所有非
+one-shot trigger mode 使用已有的 `scheduled_release_frame` 精确释放。禁止
+由 2 ms control-loop 延迟发 release，也禁止丢弃 `duration_tick`。Replay-origin
+Voice 不发布 Host live trigger outcome/voice-state，不进 capture ring，因此不消费或
+冲突 Native/Web 的 live trigger sequence，也不会在同时录制时把 replay 反馈进
+Performance Journal。
+
+Engine-backed `reset_neutral` 遵守 RLC-D9 的
+`NeutralResetProgress { pending, complete }`：同一逻辑 reset 只依次入队一次
+`hold_off + 8 release`，在 queue pressure 下从未入队的下一项续接；全部
+入队后，以 `MasterFxTelemetry::dequeued_gestures` 确认 render 已消费到该
+reset 的最后一项。仅 enqueue accepted 不是 `complete`。空 replay 也保留
+identity 与 reset-pending 状态，不得因首次尚未消费而删除 identity。
+Facade 只在 stop 返回 `complete`/`stopped` 后写 stop receipt；`pending` 对应的
+`playing` response 与真实 reset failure 都不消费 request identity。
+
+Adapter `service` 保持既定 `void` 组合面，不新增 Host error channel。异步
+apply/reset failure 由 reference controller 保留为 reset-pending 状态：active latch
+不清理、cursor 不前进，以后的 periodic service 不在真实 failure 后自动
+重发 mutation；对外仍通过只读 status 与 stop retry 闭环。
+
 ## 3. Error and non-destructive rules
 
 - 权威缺席保持既有 typed refusal：`performance_authority_unavailable`、
