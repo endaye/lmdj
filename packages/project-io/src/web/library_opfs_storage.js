@@ -48,16 +48,20 @@ mergeInto(LibraryManager.library, {
     },
 
     // Every OPFS entry point suspends the calling Wasm thread through
-    // Asyncify. Asyncify keeps one pending suspension per thread: a second
-    // handleAsync while `currData` is still set overwrites the first call's
-    // rewind data, and the first rewind then resumes into garbage ("memory
-    // access out of bounds"). The Control bridge dispatches one request at a
-    // time to make that impossible (#443, #551); this guard is the fail-closed
-    // backstop should any other path ever call into storage while a
-    // suspension is pending -- refuse the call and name the invariant instead
-    // of corrupting memory.
+    // Asyncify. Asyncify keeps one pending suspension per thread: while a
+    // call is suspended, `state` is back to Normal and `currData` still holds
+    // its rewind data. A *new* import call in that window is a re-entry: its
+    // handleSleep would overwrite `currData`, and the first rewind would then
+    // resume into garbage ("memory access out of bounds"). The Control bridge
+    // dispatches one request at a time to make that impossible (#443, #551);
+    // this guard is the fail-closed backstop should any other path ever call
+    // into storage while a suspension is pending -- refuse the call and name
+    // the invariant instead of corrupting memory.
+    //
+    // The Rewinding state is not a re-entry: Asyncify re-invokes the very same
+    // import to finish the rewind, and that call must reach handleAsync.
     suspend(work) {
-      if (Asyncify.state !== Asyncify.State.Normal || Asyncify.currData) {
+      if (Asyncify.state === Asyncify.State.Normal && Asyncify.currData) {
         console.error(
             "lmdj web runtime: OPFS storage was entered while another storage " +
             "call is suspended on this thread; the Control bridge must dispatch " +
