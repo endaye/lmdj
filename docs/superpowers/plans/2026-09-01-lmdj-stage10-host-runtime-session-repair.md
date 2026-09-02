@@ -417,6 +417,7 @@ Push, open the PR, wait for CI, squash-merge, clean the worktree.
 - Create: `packages/application-facade/src/performance_engine_adapter.cpp`
 - Modify: `packages/application-facade/include/lmdj/facade/performance_replay.hpp`
 - Modify: `packages/application-facade/src/performance_replay.cpp`
+- Modify: `packages/application-facade/src/performance_runtime.cpp`
 - Modify: `packages/application-facade/src/application.cpp`
 - Modify: `packages/application-facade/CMakeLists.txt`
 - Modify: `packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp`
@@ -424,6 +425,7 @@ Push, open the PR, wait for CI, squash-merge, clean the worktree.
 - Modify: `apps/native-host/src/main.cpp`
 - Create: `tests/core/facade/performance_engine_adapter_test.cpp`
 - Modify: `tests/core/facade/performance_replay_test.cpp`
+- Modify: `tests/core/facade/performance_runtime_bridge_test.cpp`
 - Modify: `tests/core/facade/application_test.cpp`
 - Modify: `tests/core/audio/realtime_engine_test.cpp`
 - Modify: `tests/host/native_host_test.py`
@@ -510,6 +512,12 @@ std::uint64_t duration_frames{};
   and true reset failures are retried only by `stop` as locked by RLC-D9. An
   empty replay begin creates the identity and returns `playing` while its
   reset is pending instead of erasing the replay.
+- The existing headless `SilentPerformanceReplayRuntimeSink` adopts the same
+  tri-state interface and returns `complete` immediately because it owns no
+  audible Runtime state or render queue. Keep a focused
+  `performance_runtime_bridge_test` witness so this product implementation is
+  not covered only by compilation while the engine-backed sink exercises
+  `pending`.
 - Facade stop writes `replay_stop_receipts` only for `complete`/`stopped`.
   A `pending` poll returns the current `playing` response with
   `replayed:false` but does not consume `request_id`, so the same request ID
@@ -559,7 +567,10 @@ the final reset gesture. Also cover partial reset enqueue continuation without
 duplicates; pending stop calls must not create a receipt, and the same request
 ID must poll again until terminal before later replaying the receipt. Cover an
 empty replay retaining its identity while reset is pending and after a true
-begin-time reset error. Expect FAIL (RED).
+begin-time reset error. In `performance_runtime_bridge_test.cpp`, update the
+headless replay witness to prove the silent sink still completes/reset-closes
+without an artificial pending cycle under the tri-state contract. Expect FAIL
+(RED).
 
 - [ ] **Step 2: Implement the adapter**
 
