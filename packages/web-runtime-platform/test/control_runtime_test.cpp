@@ -3919,6 +3919,7 @@ struct FakeProxy final {
 
   static void after_capture_drain(void* context) {
     auto& self = *static_cast<FakeProxy*>(context);
+    ++self.capture_drains;
     if (!std::exchange(self.inject_capture_drop, false)) {
       return;
     }
@@ -3959,6 +3960,7 @@ struct FakeProxy final {
   std::uint32_t response_delay_ms = 0;
   RealtimeEngine* capture_engine = nullptr;
   std::function<void()> during_dispatch;
+  std::size_t capture_drains = 0;
   std::vector<Task> tasks;
 };
 
@@ -4810,6 +4812,123 @@ void test_bridge_defers_the_seal_when_a_failure_lands_during_a_dispatch() {
   LMDJ_CHECK(bridge->failed());
 }
 
+namespace {
+struct ForeignTaskCounter {
+  int runs = 0;
+};
+
+void bump_foreign_task(void* context) noexcept {
+  ++static_cast<ForeignTaskCounter*>(context)->runs;
+}
+}  // namespace
+
+// Control-thread tasks proxied from outside the bridge (audio failure,
+// manifest failure, coordinator install) ask the same gate. While a dispatch
+// is in progress they are parked and re-proxied afterwards; terminal release is
+// not ready while the control thread is owned that way.
+void test_bridge_parks_foreign_control_tasks_during_a_dispatch() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  ForeignTaskCounter counter;
+
+  // Idle: the caller runs its task itself, and release is ready.
+  LMDJ_CHECK(!bridge->defer_while_dispatching(&bump_foreign_task, &counter));
+  LMDJ_CHECK(bridge->terminal_release_ready());
+
+  const auto request_id = uuid(800);
+  LMDJ_CHECK(
+      bridge->submit(encode(request(request_id, "host.status", Json::object())), {}) ==
+      BridgeSubmitStatus::accepted);
+  bool parked_during_dispatch = false;
+  proxy.during_dispatch = [&] {
+    LMDJ_CHECK(!bridge->terminal_release_ready());
+    const auto queued_before = proxy.tasks.size();
+    LMDJ_CHECK(bridge->defer_while_dispatching(&bump_foreign_task, &counter));
+    LMDJ_CHECK(counter.runs == 0);
+    // Parked, not proxied, while the dispatch owns the control thread.
+    LMDJ_CHECK(proxy.tasks.size() == queued_before);
+    parked_during_dispatch = true;
+  };
+  proxy.pump_one();
+  LMDJ_CHECK(parked_during_dispatch);
+  LMDJ_CHECK(counter.runs == 0);
+  LMDJ_CHECK(bridge->terminal_release_ready());
+  LMDJ_CHECK(poll_message(*bridge).at("request_id") == request_id);
+
+  // Re-proxied after the dispatch returned; it runs on its own mailbox turn.
+  for (std::size_t budget = proxy.tasks.size(); budget > 0 && counter.runs == 0; --budget) {
+    proxy.pump_one();
+  }
+  LMDJ_CHECK(counter.runs == 1);
+  LMDJ_CHECK(!bridge->failed());
+}
+
+// The realtime service drains Runtime state that dispatch also writes, and its
+// health checks seal the Runtime directly, so the whole service -- not only its
+// seal -- waits for a suspended dispatch and runs once it has returned.
+void test_bridge_parks_the_realtime_service_during_a_dispatch() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(256);
+  import_and_assign(*runtime, wav, kAssetId, 811, 812, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto activate_id = uuid(813);
+  LMDJ_CHECK(
+      bridge->submit(
+          encode(request(activate_id, "audio.activate", Json::object())), {}) ==
+      BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  LMDJ_CHECK(poll_message(*bridge).at("request_id") == activate_id);
+  // Settle: run whatever the activation and its poll scheduled, so no realtime
+  // service is pending when the probe request starts.
+  while (!proxy.tasks.empty()) {
+    proxy.pump_one();
+  }
+
+  const auto probe_id = uuid(814);
+  LMDJ_CHECK(
+      bridge->submit(encode(request(probe_id, "host.status", Json::object())), {}) ==
+      BridgeSubmitStatus::accepted);
+  bool service_parked = false;
+  proxy.during_dispatch = [&] {
+    // A poll from the browser main thread while the dispatch is suspended
+    // requests realtime service, which proxies the service thunk; the mailbox
+    // then delivers it during the dispatch.
+    std::array<std::byte, kBridgeMaximumEnvelopeBytes> output{};
+    std::size_t required = 0;
+    static_cast<void>(bridge->poll(output, required));
+    LMDJ_CHECK(!proxy.tasks.empty());
+    const auto drains_before = proxy.capture_drains;
+    proxy.pump_last();
+    LMDJ_CHECK(proxy.capture_drains == drains_before);
+    service_parked = true;
+  };
+  const auto drains_before_probe = proxy.capture_drains;
+  proxy.pump_one();
+  LMDJ_CHECK(service_parked);
+  LMDJ_CHECK(proxy.capture_drains == drains_before_probe);
+
+  // The service was re-proxied after the dispatch returned and runs now.
+  for (std::size_t budget = proxy.tasks.size();
+       budget > 0 && proxy.capture_drains == drains_before_probe; --budget) {
+    proxy.pump_one();
+  }
+  LMDJ_CHECK(proxy.capture_drains == drains_before_probe + 1);
+  LMDJ_CHECK(!bridge->failed());
+  LMDJ_CHECK(!runtime->failed());
+}
+
 void test_bridge_benign_query_cancel_does_not_fail_the_runtime() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -5142,6 +5261,8 @@ int main() {
     test_bridge_cancelled_before_dispatch_skips_facade_work();
     test_bridge_defers_a_request_whose_thunk_runs_during_a_dispatch();
     test_bridge_defers_the_seal_when_a_failure_lands_during_a_dispatch();
+    test_bridge_parks_foreign_control_tasks_during_a_dispatch();
+    test_bridge_parks_the_realtime_service_during_a_dispatch();
     test_bridge_benign_query_cancel_does_not_fail_the_runtime();
     test_bridge_rechecks_deadline_before_success_publication();
     test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound();
