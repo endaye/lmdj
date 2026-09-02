@@ -10,11 +10,13 @@ end-to-end by production Hosts, so Stage 10 Task 6 (#432) can migrate CLI, MCP
 and Native Host honestly: deliver Core-owned runtime authorities (clock, input
 sequencer, headless launch transport, replay progression), cross-process flush
 identity from Project Truth, read-only recovery queries, a persistent CLI
-session mode, and the Native `RealtimeEngine` adapter.
+session mode, the Native `RealtimeEngine` adapter, and crash-durable transient
+closure before recovery or re-attach, plus an explicit launch-outcome service
+mutation that keeps status read-only.
 
 **Design authority:**
 [`2026-09-01-lmdj-stage10-host-runtime-session-design.md`](../specs/2026-09-01-lmdj-stage10-host-runtime-session-design.md)
-(HRS-D1–D9). Any conflict returns to design review; a Task must not silently
+(HRS-D1–D11). Any conflict returns to design review; a Task must not silently
 choose a different semantic.
 
 **Architecture:** Task 1 (#523) adds the production authority implementations
@@ -28,7 +30,12 @@ flush-replay and owner-loss recovery journeys with CLI processes alone. Task 3
 `RealtimeEngine` pattern publication as a Core adapter, owns the frame→tick
 conversion, and repairs the Native Host construction order. Hosts never gain
 time, order, coalescing, slot-truth or replay semantics of their own
-(P10-D21/P10-D22 unchanged).
+(P10-D21/P10-D22 unchanged). Task 4 (#570) repairs the Task 6 RED exposed by
+hard owner loss: raw admission durably checkpoints non-Project-Truth transient
+state before acknowledgement, and Core closes that checkpoint exactly once
+after owner-death proof.
+Task 5 (#571) removes launch-outcome draining from status and introduces a
+two-phase Core service mutation used at command/control-loop boundaries.
 
 **Tech Stack:** C++20, nlohmann/json, CMake/CTest, Python 3.11 host tests,
 existing integer tick/frame transports, `lmdj_core_c@1` five-symbol C ABI.
@@ -50,10 +57,15 @@ existing integer tick/frame transports, `lmdj_core_c@1` five-symbol C ABI.
 - Every query (`performance.record.status`, `performance.recovery.list`,
   `performance.replay.status`, `performance.list`, `performance.inspect`)
   performs zero disk mutation (HRS-D5).
-- Acknowledger outcomes are exactly-once: `drain` must never redeliver an
-  outcome, because `Application::drain_performance_launches` durably journals
-  each `applied` outcome once and rolls back the whole runtime on append
-  failure.
+- Every accepted raw Performance event, including a Pad press that produces no
+  canonical event yet, durably appends its post-admission transient checkpoint
+  before acknowledgement. The checkpoint is Runtime metadata only; no raw
+  event or gesture identity enters Project Truth (HRS-D10).
+- Acknowledger outcomes are exactly-once under the HRS-D11 two-phase protocol:
+  `peek` retains each outcome until Application has established its durable
+  consequence and `commit` removes that exact request identity. A definitive
+  append failure leaves it retryable; an ambiguous tail result freezes the
+  session under HRS-D10.
 - The `RealtimeEngine` two-thread contract is inviolable: adapters poll from
   the control thread; the render thread gains no new entry point, allocation,
   lock or callback.
@@ -61,9 +73,9 @@ existing integer tick/frame transports, `lmdj_core_c@1` five-symbol C ABI.
   count; `status` never advances state (HRS-D7, RLC-D8).
 - Version impact: no new allocation. Everything is paid by the locked Stage 10
   targets: application-facade `3.0.0`, project-io `2.0.0`, core-cli `3.0.0`,
-  native-host `3.0.0`, Product Build `1.0.41.0`. The C ABI stays
+  native-host `3.0.0`, Product Build `1.0.42.0`. The C ABI stays
   `lmdj_core_c@1` with exactly five exported symbols.
-- Documentation impact: none for all three Tasks (no active manifest, Product
+- Documentation impact: none for all five Tasks (no active manifest, Product
   Build or Portal current truth change). Stage 10 Task 10 (#436) owns Portal
   integration; Task 11 (#438) owns the immutable snapshot.
 - Never lower a coverage floor. New test executables must be added to the root
@@ -657,11 +669,238 @@ Push, open the PR, wait for CI (including both ASAN/stress lanes),
 squash-merge, clean the worktree. Only then may Stage 10 Task 6 (#432)
 begin.
 
+### Task 4: Make Hard Owner-Loss Transient Closure Durable
+
+**Issue:** #570. Hard dependencies: merged #523; execute after the docs PR
+carrying HRS-D10 and this Task. It blocks #432 independently of #524/#525.
+
+**Files:**
+
+- Modify: `packages/project-io/include/lmdj/project_io/sequence_journal.hpp`
+- Modify: `packages/project-io/include/lmdj/project_io/project_store.hpp`
+- Modify: `packages/project-io/src/sequence_journal.cpp`
+- Modify: `packages/project-io/src/project_store.cpp`
+- Modify: `packages/application-facade/src/application.cpp`
+- Modify: `tests/core/project_io/performance_journal_test.cpp`
+- Modify: `tests/core/project_io/performance_lifecycle_test.cpp`
+- Modify: `tests/core/facade/performance_session_test.cpp`
+- Modify: `tests/core/facade/performance_gesture_admission_test.cpp`
+
+**Interfaces and durability model:**
+
+- Add a typed Performance transient checkpoint to the active journal. It holds
+  sorted open Pad records `(gesture_id, slot, onset_tick, velocity)`, per-FX
+  open state, HOLD, and `last_accepted_tick`. It is Runtime metadata and must
+  never appear in Project Truth, Performance JSON, a flush identity, or a
+  Runtime Snapshot.
+- Expose one pure closure preview used by the journal mutation and read-only
+  Facade projections. Cross-process `record.status` reports checkpoint-backed
+  open Pad/FX/HOLD state, while `recovery.list.pending_event_count` includes
+  the canonical closure that apply would commit; neither query acquires the
+  owner lock or changes disk.
+- Extend the existing checksummed Performance tail record so one append stores
+  the complete canonical pending-event snapshot, complete post-event transient
+  checkpoint, and `input_sequence`. An empty event snapshot is valid only when
+  it accompanies a valid checkpoint transition, so `pad_press` is durable
+  before its acknowledgement.
+- A tail append error is potentially post-write. Resolve exact read-back plus
+  one bounded exact retry inside the journal operation; if durable success is
+  still unknowable, return `performance_tail_outcome_unknown`, freeze the
+  in-process session as `recovery_required`, and reject later event/flush/stop
+  so stale memory cannot overwrite the durable prefix. Owner teardown then
+  leaves explicit recovery to apply/discard instead of appending from memory.
+- Add one Project I/O owner-loss closure operation used only after the caller
+  holds the HRS-D5 owner-death lock. It computes
+  `closure_tick = max(last_accepted_tick, max_durable_event_tick) + 1`, refuses
+  tick or input-sequence overflow, appends Pad closures ordered by
+  `(slot, gesture_id)`, FX releases
+  in chain order after pending moves, then `hold_off`, and atomically records a
+  neutral checkpoint with the next input sequence. A neutral checkpoint is an
+  idempotent no-op, so crash-after-close/before-seal retry cannot duplicate an
+  event.
+- Publish a Performance sealed candidate under stable session identity. An
+  exact existing candidate makes seal replay finish only active-file removal;
+  a same-session/different-digest candidate fails closed and retains both
+  witnesses. Never create a suffixed second candidate after a
+  candidate-publication/active-remove crash gap.
+- `reconcile_performance_recovery()` closes before `owner_lost` seal. Exact
+  begin replay in a fresh process also proves the previous owner dead, closes
+  the checkpoint in place, then attaches a neutral runtime to the preserved
+  canonical tail. An already-attached in-process begin replay remains a pure
+  short circuit; a live foreign flock remains `recording_session_active` with
+  byte-identical disk state.
+- Fresh-process exact re-attach retains the same acquired flock continuously
+  through closure and insertion into the ProjectStore retained-owner map. A
+  two-process race has one winner; the loser is `recording_session_active`.
+- Missing-checkpoint legacy migration is allowed only for a validated stopped
+  journal. Active, recovery-required, or owner-lost legacy state is retained
+  fail-closed even when its canonical pending list is empty.
+- The Facade persists the post-admission checkpoint before returning every raw
+  event acknowledgement. A definitive pre-write failure may roll back; an
+  ambiguous failure freezes the session and never permits a later stale
+  snapshot. Event receipts and unacknowledged launch reservations remain
+  process-local; owner loss cancels the latter with no ghost event.
+
+- [ ] **Step 1: Write Project I/O journal REDs.** Cover round-trip/checksum and
+  strict shape validation for neutral/open Pad/open FX/HOLD checkpoints; an
+  empty canonical event snapshot with a checkpoint transition; malformed,
+  torn, non-monotone sequence, tick/input-sequence overflow, and active legacy
+  missing-checkpoint retention. Expect FAIL.
+- [ ] **Step 2: Implement typed checkpoint persistence.** Update the active
+  journal reader/writer and append validation. Keep legacy active journals
+  readable only when they are validated and stopped; otherwise fail closed
+  rather than guessing an open Pad. Run Step 1; expect PASS.
+- [ ] **Step 3: Write closure and command-boundary REDs.** In Project I/O,
+  leave Pad/FX/HOLD open, release the helper process by SIGKILL, and assert
+  status/list truthfully preview open state and closure count while remaining
+  byte-identical; apply closes and commits exactly one revision;
+  discard removes the candidate with zero Project mutation; retry after a
+  simulated close-append/seal gap adds no duplicate. Inject the post-write
+  `active_journal_sync` failure and prove the session freezes instead of
+  allowing a stale next snapshot. Cover live-lock refusal, stable candidate
+  replay after publication/remove failure, and two re-attach contenders.
+  Expect FAIL.
+- [ ] **Step 4: Implement Core closure.** Close only after owner-death proof,
+  before seal or fresh-process exact re-attach. Reuse canonical event ordering
+  and the active journal append protocol; do not synthesize Host time, expose
+  checkpoint fields through Facade schemas, or alter the 23-operation surface.
+- [ ] **Step 5: Write Facade admission/re-attach REDs, then GREEN.** Prove each
+  accepted raw union member durably advances the checkpoint before response;
+  a pre-write rejection is not accepted, while ambiguous post-write failure
+  returns the stable recovery-required error and cannot be overwritten; exact
+  begin after SIGKILL closes the old checkpoint once, anchors at the neutral
+  checkpoint's `last_accepted_tick`/durable temporal high-water mark after that
+  closure (including Pad `onset_tick + duration_tick`), seeds the next input
+  sequence,
+  and starts neutral without rehydrating gesture ownership or
+  releasing/reacquiring the flock. Prove no raw IDs occur in inspect/save/
+  replay output.
+- [ ] **Step 6: Run complete verification.** Run
+  `scripts/core.sh test dev full`, `scripts/core.sh coverage check`,
+  `scripts/core.sh test dev stress`, and
+  `scripts/architecture-portal.sh check`. Never lower a floor.
+- [ ] **Step 7: Ship one review unit.** Follow `issue-done`, stage only the
+  files above, and commit
+  `fix(facade): preserve Performance transients across owner loss (fixes #570)`.
+  Push, queue, squash-merge, verify exact merged-main CI, and clean only this
+  worktree/branch. Then resume #432 from its retained RED.
+
+### Task 5: Separate Read-Only Status From Launch-Outcome Service Mutation
+
+**Issue:** #571. Hard dependencies: merged #523, #525 and #570 plus the docs PR
+carrying HRS-D11. It blocks both #432 and #433.
+
+**Files:**
+
+- Modify: `packages/application-facade/include/lmdj/facade/application.hpp`
+- Modify: `packages/application-facade/include/lmdj/facade/performance_engine_adapter.hpp`
+- Modify: `packages/project-io/include/lmdj/project_io/sequence_journal.hpp`
+- Modify: `packages/project-io/src/sequence_journal.cpp`
+- Modify: `packages/application-facade/src/application.cpp`
+- Modify: `packages/application-facade/src/c_api.cpp`
+- Modify: `packages/application-facade/src/performance_runtime.cpp`
+- Modify: `packages/application-facade/src/performance_engine_adapter.cpp`
+- Modify: `apps/core-cli/src/main.cpp`
+- Modify: `apps/native-host/src/main.cpp`
+- Modify: `tests/core/facade/performance_runtime_bridge_test.cpp`
+- Modify: `tests/core/facade/performance_engine_adapter_test.cpp`
+- Modify: `tests/core/facade/performance_gesture_admission_test.cpp`
+- Modify: `tests/core/facade/c_api_test.cpp`
+- Modify: `tests/core/project_io/performance_journal_test.cpp`
+- Modify: `tests/host/performance_cli_session_test.py`
+- Modify: `tests/host/native_host_test.py`
+
+**Interfaces:**
+
+- Replace destructive `PatternLaunchAcknowledger::drain(session)` with a
+  two-phase Core protocol: `peek(session)` returns ordered uncommitted outcomes
+  without removal; `commit(session, request_id)` removes exactly that outcome
+  after its durable consequence is established. Headless and engine adapters
+  retain outcomes until commit and never redeliver afterward.
+- Application processes only the ordered front outcome for a session: one
+  applied outcome gets one append followed by one commit, and no later outcome
+  is examined until that commit succeeds. Never batch multiple outcomes behind
+  a single durable `last_launch_ack` marker.
+- Extend the Performance tail/runtime metadata with an optional durable
+  `last_launch_ack` carrying the exact request identity, slot and effective
+  tick. It is never a Project Truth event field, flush identity input or
+  Runtime Snapshot field. Cross-process status may project it; applied-outcome
+  retry compares it with the front peeked outcome before deciding append versus
+  commit-only.
+- Add `Application::service_performance()` as an explicit mutating control
+  operation outside the 23-operation request surface. Under the existing
+  serialization it peeks each active session, appends an applied launch event
+  once, then commits the outcome; failed/cancelled outcomes are committed only
+  after confirming they produce no event. Exact request identity plus the
+  durable pending snapshot resolves append-success/commit-gap retry without a
+  duplicate event.
+- `performance.record.status` removes all drain/service calls. It reports only
+  already-durable runtime/journal projection and is byte-identical even when an
+  outcome is waiting in the acknowledger.
+- The C API/CLI Host composition calls Runtime bridge service before every
+  request, while Application's serialized dispatch calls
+  `service_performance()` only before command execution. Native
+  calls adapter service then Application service on its existing periodic
+  serialized control tick and before commands. Queries never invoke the
+  mutating service; the render thread gains no entry point.
+- A definitive pre-write Application append failure leaves the outcome
+  peekable, rolls runtime projection back, and retries the same front identity.
+  If exact read-back cannot resolve a possible post-write result, HRS-D10
+  freezes the session as recovery-required; service must not append again or
+  allow a later command to overwrite the unknown tail. If read-back proves the
+  applied ack durable, retry is commit-only. Hosts do not drop the outcome,
+  fabricate an ack, or terminate the render callback.
+- Native stores the first Application service typed failure in a non-terminal
+  control-thread latch under `facade_mutex_`. Each later control tick retries
+  the same front; a command also services first and returns the latched/current
+  typed error without dispatch when retry fails, clearing the latch only after
+  success. Queries never run the mutating service and may still project
+  already-durable state. Headless command dispatch follows the same refusal
+  rule without inventing a Host-specific error.
+
+- [ ] **Step 1: Write two-phase acknowledger REDs.** In headless and engine
+  adapter suites, prove repeated peek is identical, wrong/out-of-order commit
+  fails closed, exact commit removes once, and cancelled/failed/applied
+  outcomes cannot cross sessions. Expect FAIL.
+- [ ] **Step 2: Implement `peek`/`commit`.** Update all production adapters and
+  test fakes; preserve claimed-defer/latest-wins and engine boundary predicates.
+  Run Step 1; expect PASS.
+- [ ] **Step 3: Write journal/Application service/status REDs.** Round-trip and
+  strictly validate the Runtime-only durable launch-ack identity. Make an applied
+  outcome ready, hash active/sealed/Project bytes, call status repeatedly, and
+  require byte identity plus still-pending outcome. Call explicit service and
+  require one durable `pattern_launch`; repeat service/status and require no
+  change. Inject journal append failure and append-success/commit-gap failure;
+  distinguish definitive pre-write retry from ambiguous post-write freeze,
+  and require commit-only retry from a proven durable identity with no lost or
+  duplicate event. Queue at least two outcomes and crash between each
+  append/commit boundary to prove strict front-only progress. Expect FAIL.
+- [ ] **Step 4: Implement Application service and remove query mutation.** Keep
+  all Project/fingerprint/time/order logic in Core. Do not add an operation,
+  schema field, Host clock, or query-side writer lease.
+- [ ] **Step 5: Prove Host cadence.** C API/CLI tests prove query-only requests
+  are disk-read-only and the next command services the outcome. Native test
+  crosses a launch boundary with no request, waits for the periodic control
+  tick, then observes the already-durable ack through status without status
+  changing disk. Inject a service failure: render/audio remains non-terminal,
+  the next control tick retries the same front, query remains read-only, and a
+  command returns the typed error without dispatch until service succeeds.
+  Existing request and protocol bytes remain compatible.
+- [ ] **Step 6: Run complete verification.** Run
+  `scripts/core.sh test dev full`, `scripts/core.sh coverage check`,
+  `scripts/core.sh test dev stress`, and
+  `scripts/architecture-portal.sh check`.
+- [ ] **Step 7: Ship one review unit.** Follow `issue-done`, stage only the
+  files above, and commit
+  `fix(facade): keep Performance status read-only (fixes #571)`. Push, queue,
+  squash-merge, verify exact merged-main CI, and clean only this worktree/
+  branch. Then #432/#433 may consume the explicit service boundary.
+
 ## Version Management
 
 Version impact: no new allocation.
 
-All three Tasks land before Stage 10 Task 10 enables the v4 writer and
+All five Tasks land before Stage 10 Task 10 enables the v4 writer and
 publishes module versions. They consume the already locked targets:
 
 - application-facade `3.0.0` (bridge/adapter headers, port contract
@@ -671,15 +910,15 @@ publishes module versions. They consume the already locked targets:
 - core-cli `3.0.0` (session mode);
 - native-host `3.0.0` (construction order and adapter wiring);
 - C ABI unchanged at `lmdj_core_c@1` with exactly five symbols;
-- Product Build `1.0.41.0`.
+- Product Build `1.0.42.0`.
 
 Before #436 allocates or publishes identities, rerun its fresh allocation
 audit. If any identity has become occupied, stop and refresh the Stage 10
-allocation rather than changing it inside #523, #524 or #525.
+allocation rather than changing it inside #523, #524, #525, #570 or #571.
 
 ## Documentation Impact
 
-Documentation impact: none for #523, #524 and #525.
+Documentation impact: none for #523, #524, #525, #570 and #571.
 
 None of the Tasks changes active manifests, Assembly, Product Build, or
 Portal current pages. Stage 10 Task 10 (#436) must declare the required
@@ -693,8 +932,11 @@ docs PR (this design + plan + Stage 10 plan/spec revision)
   -> Issue #523 isolated worktree / one commit / PR / merge / cleanup
   -> Issue #524 one commit / PR / merge / cleanup   (needs #523)
   -> Issue #525 one commit / PR / merge / cleanup   (needs #523)
+  -> Issue #570 one commit / PR / merge / cleanup   (needs #523)
+  -> Issue #571 one commit / PR / merge / cleanup   (needs #523, #525, #570)
   -> Stage 10 Task 6 (#432) — CLI/MCP/Native migration and cross-Host journeys
 ```
 
 #524 and #525 touch disjoint primary files and may run in parallel worktrees
-after #523 merges. Task 6 (#432) requires all three merged.
+after #523 merges. #570 may also run after #523; #571 needs #523, #525 and #570.
+Task 6 (#432) requires all five merged, and Task 7 (#433) requires #525/#571.
