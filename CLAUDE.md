@@ -34,7 +34,7 @@ release, publication, deployment, or Channel promotion.
 
 ## Task shipping and issue operations
 
-- For querying and triaging open issues and parallel workstreams, follow `.agents/skills/issue-list/SKILL.md`.
+- For querying/triaging open issues, parallel workstreams, and auditing/cleaning local branches and worktrees, follow `.agents/skills/issue-list/SKILL.md`.
 - For shipping a locally completed issue or task, coding agents must follow `.agents/skills/issue-done/SKILL.md` (handles verification, Conventional Commit, push, PR creation, CI auto-merge, and worktree/branch cleanup).
 
 ## Pitfall ledger
