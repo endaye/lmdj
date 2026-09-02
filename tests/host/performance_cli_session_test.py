@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -5,6 +6,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 
@@ -675,8 +677,9 @@ def owner_loss_apply_and_discard(executable: Path, root: Path) -> None:
         },
     )
     events = check_success(performance, 2)["performance"]["events"]
-    assert [event["kind"] for event in events] == ["hold_on"], events
+    assert [event["kind"] for event in events] == ["hold_on", "hold_off"], events
     assert isinstance(events[0]["tick"], int)
+    assert events[1]["tick"] == events[0]["tick"] + 1
 
     discard_project = root / "owner-discard.lmdj"
     discard_owner, discard_session, _ = start_orphan(
@@ -701,6 +704,63 @@ def owner_loss_apply_and_discard(executable: Path, root: Path) -> None:
     assert after == before
 
 
+def exact_reattach_has_one_cross_process_winner(
+    executable: Path, root: Path
+) -> None:
+    workspace = root / "reattach-workspace"
+    workspace.mkdir()
+    project = root / "reattach-contention.lmdj"
+    owner, session_id, performance_id = start_orphan(
+        executable, workspace, project, 501
+    )
+    owner.kill()
+
+    request = {
+        "operation": "performance.record.begin",
+        "project_path": str(project),
+        "command_id": uuid(504),
+        "expected_revision": 0,
+        "session_id": session_id,
+        "performance_id": performance_id,
+    }
+    contenders = [Session(executable, workspace), Session(executable, workspace)]
+    barrier = threading.Barrier(len(contenders))
+
+    def reattach(candidate: Session) -> dict:
+        barrier.wait(timeout=configured_timeout(executable))
+        return candidate.request("command", request)
+
+    with ThreadPoolExecutor(max_workers=len(contenders)) as pool:
+        responses = list(pool.map(reattach, contenders))
+
+    winners = [index for index, response in enumerate(responses) if response["ok"]]
+    assert len(winners) == 1, responses
+    winner_index = winners[0]
+    loser_index = 1 - winner_index
+    check_success(responses[winner_index], 1)
+    check_invalid(responses[loser_index])
+    assert (
+        responses[loser_index]["error"]["details"]["reason"]
+        == "recording_session_active"
+    )
+
+    status = one_shot(
+        executable,
+        workspace,
+        "query",
+        {"operation": "performance.record.status", "project_path": str(project)},
+    )
+    projected = check_success(status)
+    assert projected["state"] == "active", projected
+    assert projected["pending_event_count"] == 2, projected
+    assert projected["open_pad_gestures"] == 0, projected
+    assert projected["open_fx_gestures"] == 0, projected
+    assert projected["hold"] is False, projected
+
+    contenders[loser_index].close()
+    contenders[winner_index].close()
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit(
@@ -715,7 +775,8 @@ def main() -> int:
         clean_eof_seals_owner(executable, root)
         flush_replay_cross_process(executable, root)
         owner_loss_apply_and_discard(executable, root)
-    print("performance CLI session journeys: 6 passed")
+        exact_reattach_has_one_cross_process_winner(executable, root)
+    print("performance CLI session journeys: 7 passed")
     return 0
 
 
