@@ -235,6 +235,7 @@ Tasks 2, 3, 3A, 3B ── Task 4 #430 authoritative recording/management Facade
                          │              └─ Task 6 #432 CLI/MCP/Native parity
                          │                   (needs #523, #524 and #525)
                          └─ Task 7 #433 Web Runtime raw-input + launch bridge
+                              (also needs #525 shared engine adapter)
                               └─ Task 8 #434 Host WAV tap/OPFS writer
 Tasks 5, 7, 8 ───────────── Task 9 #435 Creator Perform surface
 Tasks 1-9 + 3A/3B ─── Task 10 #436 versions/Assembly/current Portal/automation
@@ -246,10 +247,11 @@ Tasks 1–5 (with prerequisite #516) and repair Tasks 3A/3B are complete.
 Task 6 starts only after host runtime/session prerequisites #523, #524 and
 #525 merge: its shared Host journey consumes replay/resample and needs the
 Core runtime bridge, the CLI session mode and the Native adapter. #524 and
-#525 may run in parallel worktrees after #523. Task 7 may run independently
-on its disjoint primary files. Task 8 starts after Task 7; Task 9 waits for
-Tasks 5, 7 and 8. Integration, snapshotting and release stay serial through
-Tasks 10–12.
+#525 may run in parallel worktrees after #523. Task 7 starts after #525 so Web
+Runtime reuses the same Core `EnginePerformanceAdapter` instead of owning a
+second frame→tick, launch-ack or replay progression implementation. Task 8
+starts after Task 7; Task 9 waits for Tasks 5, 7 and 8. Integration,
+snapshotting and release stay serial through Tasks 10–12.
 
 ## Design Traceability
 
@@ -276,7 +278,7 @@ Tasks 10–12.
 | P10-D22: actual launch acknowledgement | 4, 7 | unclaimed replace, claimed defer, ghost-event rejection |
 | P10-D23: Core FX/owner-loss rules | 4, 7 | quantum last-write-wins and deterministic closure vectors |
 | P10-D24: two-phase durable rebase | 3B, 4 | every prepare/receipt/complete crash point and exact retry |
-| HRS-D1–D9: Core runtime authorities and session continuity (2026-09-01 repair) | #523, #524, #525, 6 | bridge/adapter suites; cross-process flush replay; CLI session journey |
+| HRS-D1–D9: Core runtime authorities and session continuity (2026-09-01 repair) | #523, #524, #525, 6, 7 | bridge/adapter suites; cross-process flush replay; CLI session journey; request-free Web progression |
 
 ## Task 1: Add Project v4 and the Performance Authoring Domain — delivered
 
@@ -647,19 +649,44 @@ the #523 bridge or #525 adapter and adds no runtime semantics of its own.
 
 ## Task 7: Add the Web Runtime Gesture and Launch Bridge
 
-**Issue:** #433. Hard dependency: #430; Task 9 also consumes Task 5 replay.
+**Issue:** #433. Hard dependencies: #430 and merged #525; Task 9 also consumes
+Task 5 replay.
 
 **Files:**
 
 - Modify: `packages/web-runtime-platform/include/lmdj/web_runtime/control_runtime.hpp`
 - Modify: `packages/web-runtime-platform/src/control_runtime.cpp`
+- Modify: `packages/web-runtime-platform/src/bridge.cpp`
+- Modify: `packages/web-runtime-platform/CMakeLists.txt`
 - Modify: `packages/web-runtime-platform/web/protocol.mjs`
 - Modify: `packages/web-runtime-platform/web/runtime_session.mjs`
 - Modify: `packages/web-runtime-platform/web/runtime_types.d.ts`
 - Modify: `apps/web-runtime-host/src/main.mjs`
+- Modify: `CMakeLists.txt`
 - Test: `packages/web-runtime-platform/test/performance_bridge_test.cpp`
 - Test: `packages/web-runtime-platform/test/performance_protocol.test.mjs`
 - Modify: `packages/web-runtime-platform/test/source_boundary_test.py`
+
+**Interfaces:**
+
+- Consume the #525 public `facade::EnginePerformanceAdapter` and
+  `facade::PatternPublicationGateway`; Web Runtime must not implement a second
+  Performance clock, input sequencer, launch acknowledger or replay
+  controller.
+- Change `ControlRuntime::create` so its `RealtimeEngine` exists before the
+  `Application` is constructed. Build the engine adapter against that engine,
+  inject its four authorities into `ApplicationConfig`, and retain only the
+  adapter's `service` callable in the control runtime. The Web entry point in
+  `bridge.cpp` no longer constructs an `Application` with null Performance
+  authorities.
+- The gateway receives only the immutable `RuntimeSnapshot` resolved by the
+  Facade. It converts/publishes that material through the existing
+  `PreparedPatternView` and replacement-authority path; it never maps a slot,
+  loads Project Truth or accepts a Host-supplied tick/frame.
+- Call `adapter.service()` before each Performance dispatch and from the
+  existing periodic control-thread realtime service under the same control
+  serialization. Query methods remain read-only; the render thread gains no
+  entry point, callback, allocation or lock.
 
 - [ ] RED: extend the source-boundary suite to forbid, in Host JavaScript, any
   wall-clock/tick/frame/sequence field, semantic gesture coalescing, FX
@@ -672,11 +699,18 @@ the #523 bridge or #525 adapter and adds no runtime semantics of its own.
   replacement, claimed request deferral, actual ack, empty-slot no-change ack,
   and failure/cancel/owner-loss with no canonical event. Host messages never
   contain the effective tick before Core emits the acknowledgement.
+- [ ] RED: add a construction/service witness proving the Web `Application`
+  receives all four #525 adapter authorities and that render-only progression
+  plus the existing periodic control service produces launch/replay progress
+  with no intervening Host request. A one-shot `status` query must not advance
+  either state.
 - [ ] Implement thin protocol translation only. Host may batch raw move
   messages for transport efficiency only if it preserves every message and
-  order; it may not last-write-win or deduplicate. Reuse the Stage 9
-  acknowledgement mechanism repaired by #376.
+  order; it may not last-write-win or deduplicate. Reuse the #525 engine
+  adapter and the Stage 9 acknowledgement predicate repaired by #376.
 - [ ] GREEN: run `scripts/core.sh test dev full`; expect PASS.
+- [ ] Run `scripts/core.sh test dev stress`; expect the render/concurrency
+  guards to pass unchanged.
 - [ ] Run `scripts/architecture-portal.sh check`; expect PASS.
 - [ ] Commit only the listed files with
   `feat(web-runtime): bridge Performance gestures and launches (fixes #433)`.
@@ -961,7 +995,7 @@ before Task 6.
 | Prerequisite | #524 | P1 | Core | #523 |
 | Prerequisite | #525 | P1 | Core/Native Host | #523 |
 | 6 | #432 | P2 | Native Host | #430, #431, #523, #524, #525 |
-| 7 | #433 | P1 | Web Host | #430 |
+| 7 | #433 | P1 | Web Host | #430, #525 |
 | 8 | #434 | P1 | Creator | #433 |
 | 9 | #435 | P1 | Creator | #431, #433, #434 |
 | 10 | #436 | P1 | Product | #427, #428, #429, #430, #431, #432, #433, #434, #435, #498, #499 |
