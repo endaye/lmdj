@@ -18,6 +18,7 @@
 
 #include <lmdj/facade/application.hpp>
 #include <lmdj/facade/assembly_loader.hpp>
+#include <lmdj/facade/performance_runtime.hpp>
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/foundation/json.hpp>
 
@@ -60,11 +61,15 @@ constexpr std::size_t kMaximumConfigBytes = 64U * 1024U;
 constexpr std::size_t kMaximumRequestBytes = 16U * 1024U * 1024U;
 
 struct EngineState {
-  explicit EngineState(std::shared_ptr<lmdj::facade::Application> value)
-      : application(std::move(value)) {}
+  EngineState(
+      std::shared_ptr<lmdj::facade::Application> value,
+      lmdj::facade::PerformanceRuntimeBridge runtime_bridge)
+      : application(std::move(value)),
+        bridge(std::move(runtime_bridge)) {}
 
   std::mutex serial;
   std::shared_ptr<lmdj::facade::Application> application;
+  lmdj::facade::PerformanceRuntimeBridge bridge;
 };
 
 std::mutex engines_mutex;
@@ -166,6 +171,7 @@ int invoke_application(
     }
     nlohmann::json response;
     try {
+      guard->state->bridge.service();
       response = invoke(*guard->state->application, *request);
     } catch (...) {
       response = internal_error_envelope();
@@ -252,6 +258,9 @@ int lmdj_engine_create(
       providers = std::move(loaded.value().providers);
       provider_policy = std::move(loaded.value().provider_policy);
     }
+    auto bridge =
+        lmdj::facade::make_headless_performance_runtime_bridge(
+            lmdj::facade::make_steady_performance_time_source());
     auto application = std::make_shared<lmdj::facade::Application>(
         lmdj::facade::ApplicationConfig{
             workspace_root,
@@ -260,12 +269,13 @@ int lmdj_engine_create(
             {},
             std::nullopt,
             nullptr,
-            nullptr,
-            nullptr,
-            nullptr,
-            lmdj::facade::make_unavailable_performance_replay_controller(),
+            bridge.clock,
+            bridge.input_sequencer,
+            bridge.launch_acknowledger,
+            bridge.replay_controller,
         });
-    auto state = std::make_shared<EngineState>(std::move(application));
+    auto state = std::make_shared<EngineState>(
+        std::move(application), std::move(bridge));
     auto shell = std::make_unique<lmdj_engine>();
     std::lock_guard lock(engines_mutex);
     shell->sequence = ++engine_sequence;

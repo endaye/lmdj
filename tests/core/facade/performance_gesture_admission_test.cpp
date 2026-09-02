@@ -45,19 +45,25 @@ private:
 
 class Clock final : public lmdj::facade::PerformanceClock {
 public:
+  void anchor(std::uint16_t, std::uint64_t) override {}
+
   lmdj::foundation::Result<std::uint64_t> read_tick() override {
     const auto value = ticks_.at(cursor_++);
     return lmdj::foundation::Result<std::uint64_t>::success(value);
   }
 
 private:
-  std::vector<std::uint64_t> ticks_{10,  30,  40,  100, 110, 120, 200,
+  std::vector<std::uint64_t> ticks_{0,   10,  30,  40,  100, 110, 120, 200,
                                     210, 220, 230, 240, 245, 250};
   std::size_t cursor_{};
 };
 
 class Sequencer final : public lmdj::facade::PerformanceInputSequencer {
 public:
+  void seed(std::uint64_t last_input_sequence) override {
+    next_ = std::max(next_, last_input_sequence);
+  }
+
   lmdj::foundation::Result<std::uint64_t> next() override {
     return lmdj::foundation::Result<std::uint64_t>::success(++next_);
   }
@@ -73,11 +79,14 @@ public:
   reserve(const lmdj::foundation::SequenceSessionId &session_id,
           const lmdj::foundation::CommandId &request_id,
           std::uint8_t pattern_slot,
-          std::uint64_t earliest_target_tick) override {
+          std::uint64_t earliest_target_tick,
+          std::shared_ptr<const lmdj::cooker::RuntimeSnapshot>
+              resolved_pattern) override {
     session_id_ = session_id;
     request_id_ = request_id;
     pattern_slot_ = pattern_slot;
     target_tick_ = earliest_target_tick;
+    resolved_pattern_ = std::move(resolved_pattern);
     return lmdj::foundation::Result<
         lmdj::facade::PatternLaunchReservation>::success({earliest_target_tick,
                                                           false});
@@ -95,11 +104,17 @@ public:
                          lmdj::facade::PatternLaunchOutcomeKind::applied});
   }
 
+  const std::shared_ptr<const lmdj::cooker::RuntimeSnapshot>&
+  resolved_pattern() const {
+    return resolved_pattern_;
+  }
+
 private:
   lmdj::foundation::SequenceSessionId session_id_{""};
   lmdj::foundation::CommandId request_id_{""};
   std::uint8_t pattern_slot_{};
   std::uint64_t target_tick_{};
+  std::shared_ptr<const lmdj::cooker::RuntimeSnapshot> resolved_pattern_;
   std::vector<lmdj::facade::PatternLaunchOutcome> outcomes_;
 };
 
@@ -310,11 +325,70 @@ void test_raw_gesture_admission_and_launch_ack() {
   LMDJ_CHECK(encoded_events.find("hold_off") != std::string::npos);
 }
 
+void test_launch_receives_core_resolved_immutable_pattern_material() {
+  TempDirectory temp;
+  auto acknowledger = std::make_shared<LaunchAcknowledger>();
+  lmdj::facade::ApplicationConfig config{
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      std::make_shared<Clock>(),
+      std::make_shared<Sequencer>(),
+      acknowledger,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+  };
+  lmdj::facade::Application application(std::move(config));
+  const auto bundle = temp.path() / "resolved-pattern-project.lmdj";
+  constexpr auto pattern = "10000000-0000-4000-8000-000000000030";
+  check_ok(application.command({{"operation", "project.create"},
+                                {"project_path", bundle.generic_string()},
+                                {"project_id", "10000000-0000-4000-8000-000000000031"},
+                                {"bpm", 120}}));
+  check_ok(application.command({
+      {"operation", "pattern.create"},
+      {"project_path", bundle.generic_string()},
+      {"command_id", "10000000-0000-4000-8000-000000000032"},
+      {"expected_revision", 0},
+      {"pattern_id", pattern},
+      {"bars", 1},
+  }));
+  check_ok(application.command({
+      {"operation", "pattern.slot.assign"},
+      {"project_path", bundle.generic_string()},
+      {"command_id", "10000000-0000-4000-8000-000000000033"},
+      {"expected_revision", 1},
+      {"pattern_slot", 3},
+      {"pattern_id", pattern},
+  }));
+  check_ok(application.command({
+      {"operation", "performance.record.begin"},
+      {"project_path", bundle.generic_string()},
+      {"command_id", "10000000-0000-4000-8000-000000000034"},
+      {"expected_revision", 2},
+      {"session_id", "10000000-0000-4000-8000-000000000035"},
+      {"performance_id", "10000000-0000-4000-8000-000000000036"},
+  }));
+  check_ok(application.command({
+      {"operation", "performance.record.launch-request"},
+      {"project_path", bundle.generic_string()},
+      {"session_id", "10000000-0000-4000-8000-000000000035"},
+      {"request_id", "10000000-0000-4000-8000-000000000037"},
+      {"pattern_slot", 3},
+  }));
+  LMDJ_CHECK(acknowledger->resolved_pattern() != nullptr);
+  LMDJ_CHECK(acknowledger->resolved_pattern()->pattern_id.value() == pattern);
+  LMDJ_CHECK(acknowledger->resolved_pattern()->project_revision == 3);
+}
+
 } // namespace
 
 int main() {
   try {
     test_raw_gesture_admission_and_launch_ack();
+    test_launch_receives_core_resolved_immutable_pattern_material();
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;

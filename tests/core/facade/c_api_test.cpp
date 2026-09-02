@@ -473,6 +473,187 @@ void test_asset_and_pad_replay_identity_through_c_abi() {
   lmdj_engine_free(engine);
 }
 
+void test_headless_performance_journey_through_c_abi() {
+  using namespace std::chrono_literals;
+
+  TempDirectory temp;
+  const auto config = config_json(temp.path());
+  lmdj_engine* engine = nullptr;
+  char* error = nullptr;
+  LMDJ_CHECK(
+      lmdj_engine_create(config.c_str(), &engine, &error) ==
+      LMDJ_STATUS_OK);
+  LMDJ_CHECK(error == nullptr);
+
+  std::vector<nlohmann::json> responses;
+  const auto checked = [&responses](nlohmann::json response) {
+    if (!response.at("ok").get<bool>()) {
+      throw std::runtime_error(response.dump());
+    }
+    responses.push_back(response);
+    return response;
+  };
+  const auto project = temp.path() / "performance-c-api.lmdj";
+  checked(command(
+      engine,
+      {{"operation", "project.create"},
+       {"project_path", project.generic_string()},
+       {"project_id", uuid(120)},
+       {"bpm", 240}}));
+
+  const auto source = std::filesystem::absolute(
+      "tests/fixtures/audio/stereo.wav");
+  const auto imported = checked(command(
+      engine,
+      {{"operation", "asset.import"},
+       {"project_path", project.generic_string()},
+       {"command_id", uuid(121)},
+       {"expected_revision", 0},
+       {"asset_id", uuid(122)},
+       {"source_path", source.generic_string()},
+       {"media_type", "audio/wav"}}));
+  checked(command(
+      engine,
+      {{"operation", "pad.assign"},
+       {"project_path", project.generic_string()},
+       {"command_id", uuid(123)},
+       {"expected_revision", 1},
+       {"slot", {{"bank", 0}, {"pad", 0}}},
+       {"asset_id", uuid(122)}}));
+
+  const auto session_id = uuid(124);
+  const auto performance_id = uuid(125);
+  checked(command(
+      engine,
+      {{"operation", "performance.record.begin"},
+       {"project_path", project.generic_string()},
+       {"command_id", uuid(126)},
+       {"expected_revision", 2},
+       {"session_id", session_id},
+       {"performance_id", performance_id}}));
+  const auto record_event = [&](std::uint32_t event_id,
+                                nlohmann::json event) {
+    checked(command(
+        engine,
+        {{"operation", "performance.record.event"},
+         {"project_path", project.generic_string()},
+         {"session_id", session_id},
+         {"event_id", uuid(event_id)},
+         {"event", std::move(event)}}));
+  };
+  record_event(
+      127,
+      {{"kind", "pad_press"},
+       {"gesture_id", uuid(128)},
+       {"slot", 0},
+       {"velocity", 100}});
+  record_event(
+      129,
+      {{"kind", "pad_release"},
+       {"gesture_id", uuid(128)},
+       {"slot", 0}});
+  record_event(
+      130,
+      {{"kind", "fx_engage"},
+       {"gesture_id", uuid(131)},
+       {"fx", "filter"},
+       {"value", 500}});
+  record_event(
+      132,
+      {{"kind", "fx_move"},
+       {"gesture_id", uuid(131)},
+       {"fx", "filter"},
+       {"value", 600}});
+  record_event(
+      133,
+      {{"kind", "fx_release"},
+       {"gesture_id", uuid(131)},
+       {"fx", "filter"}});
+  record_event(134, {{"kind", "hold_on"}});
+  record_event(135, {{"kind", "hold_off"}});
+
+  const auto launch = checked(command(
+      engine,
+      {{"operation", "performance.record.launch-request"},
+       {"project_path", project.generic_string()},
+       {"session_id", session_id},
+       {"request_id", uuid(136)},
+       {"pattern_slot", 3}}));
+  const auto target_tick = launch.at("result").at("target_tick");
+  std::this_thread::sleep_for(1050ms);
+  const auto status = checked(query(
+      engine,
+      {{"operation", "performance.record.status"},
+       {"project_path", project.generic_string()}}));
+  LMDJ_CHECK(
+      status.at("result").at("last_launch_ack").at("effective_tick") ==
+      target_tick);
+
+  const auto flushed = checked(command(
+      engine,
+      {{"operation", "performance.record.flush"},
+       {"project_path", project.generic_string()},
+       {"session_id", session_id},
+       {"command_id", uuid(137)}}));
+  LMDJ_CHECK(flushed.at("result").at("committed_revision") == 4);
+  checked(command(
+      engine,
+      {{"operation", "performance.record.stop"},
+       {"project_path", project.generic_string()},
+       {"session_id", session_id},
+       {"request_id", uuid(138)}}));
+  checked(command(
+      engine,
+      {{"operation", "performance.save"},
+       {"project_path", project.generic_string()},
+       {"command_id", uuid(139)},
+       {"expected_revision", 4},
+       {"performance_id", performance_id},
+       {"name", "C ABI Take"},
+       {"recording_artifact", imported.at("result").at("artifact")}}));
+
+  const auto replay_id = uuid(140);
+  checked(command(
+      engine,
+      {{"operation", "performance.replay.begin"},
+       {"project_path", project.generic_string()},
+       {"replay_id", replay_id},
+       {"performance_id", performance_id}}));
+  checked(query(
+      engine,
+      {{"operation", "performance.replay.status"},
+       {"project_path", project.generic_string()},
+       {"replay_id", replay_id}}));
+  checked(command(
+      engine,
+      {{"operation", "performance.replay.stop"},
+       {"project_path", project.generic_string()},
+       {"replay_id", replay_id},
+       {"request_id", uuid(141)}}));
+  const auto resampled = checked(command(
+      engine,
+      {{"operation", "performance.resample.commit"},
+       {"project_path", project.generic_string()},
+       {"command_id", uuid(142)},
+       {"expected_revision", 5},
+       {"performance_id", performance_id},
+       {"source_start_frame", 1},
+       {"source_end_frame", 3},
+       {"target_slot", {{"bank", 1}, {"pad", 2}}}}));
+  LMDJ_CHECK(resampled.at("result").at("committed_revision") == 6);
+
+  const auto encoded = nlohmann::json(responses).dump();
+  for (const auto* reason : {
+           "performance_clock_unavailable",
+           "performance_input_sequencer_unavailable",
+           "performance_launch_acknowledger_unavailable",
+           "performance_replay_unavailable",
+       }) {
+    LMDJ_CHECK(encoded.find(reason) == std::string::npos);
+  }
+  lmdj_engine_free(engine);
+}
+
 void test_sample_operations_have_exact_shapes_and_private_errors() {
   TempDirectory temp;
   const auto config = config_json(temp.path());
@@ -1144,6 +1325,7 @@ int main() {
     test_assembly_composition_through_c_abi();
     test_sequence_surface_is_routed_through_c_abi();
     test_asset_and_pad_replay_identity_through_c_abi();
+    test_headless_performance_journey_through_c_abi();
     test_sample_operations_have_exact_shapes_and_private_errors();
     test_transport_failures_null_outputs_and_valid_facade_errors();
     test_stale_unknown_aba_and_racing_free_are_safe();

@@ -15,7 +15,7 @@ import tempfile
 import time
 from typing import Protocol
 
-from change_scope import MERGE_EVIDENCE_MODES
+from change_scope import is_merge_evidence_mode
 
 
 QUEUE_LABEL = "merge:queue"
@@ -437,7 +437,7 @@ def _validation_contract_error(
     # The queue accepts the classification as merge evidence; what it may not
     # accept is evidence whose breadth is unknown. A manifest that never
     # published a mode proves nothing about which lanes were owed.
-    if result.manifest_mode not in MERGE_EVIDENCE_MODES:
+    if not is_merge_evidence_mode(result.manifest_mode):
         mode = (
             result.manifest_mode
             if result.manifest_mode in {"focused", None}
