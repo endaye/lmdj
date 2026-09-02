@@ -308,6 +308,9 @@ struct ControlBridge::Impl {
     std::string request_id;
     bool has_request_id = false;
     std::atomic<PublicationState> publication{PublicationState::open};
+    // Next request waiting for the control thread while a dispatch is in
+    // progress; see process(). Control-thread state, never shared.
+    RequestSlot* next_deferred = nullptr;
   };
 
   struct DeadlineProof {
@@ -341,17 +344,36 @@ struct ControlBridge::Impl {
     request.owner->process(request);
   }
 
+  // Every proxied task other than a request dispatch runs inside this scope.
+  // While a dispatch is suspended in Asyncify (see process()), the mailbox
+  // still runs these tasks; the scope lets fail_control() know it is being
+  // called from one of them rather than from the dispatch itself.
+  struct ForeignTaskScope {
+    Impl& owner;
+    explicit ForeignTaskScope(Impl& target) noexcept : owner(target) {
+      ++owner.foreign_task_depth;
+    }
+    ~ForeignTaskScope() { --owner.foreign_task_depth; }
+    ForeignTaskScope(const ForeignTaskScope&) = delete;
+    ForeignTaskScope& operator=(const ForeignTaskScope&) = delete;
+  };
+
   static void fail_thunk(void* argument) noexcept {
-    static_cast<Impl*>(argument)->fail_control();
+    auto& self = *static_cast<Impl*>(argument);
+    ForeignTaskScope scope(self);
+    self.fail_control();
   }
 
   static void release_thunk(void* argument) noexcept {
     auto& request = *static_cast<RequestSlot*>(argument);
+    ForeignTaskScope scope(*request.owner);
     request.owner->release_consumed_request(request);
   }
 
   static void service_realtime_thunk(void* argument) noexcept {
-    static_cast<Impl*>(argument)->service_realtime();
+    auto& self = *static_cast<Impl*>(argument);
+    ForeignTaskScope scope(self);
+    self.service_realtime();
   }
 
   static bool claim_publication(void* context) noexcept {
@@ -879,6 +901,14 @@ struct ControlBridge::Impl {
     realtime_service_enabled.store(false, std::memory_order_release);
     realtime_service_requested.store(false, std::memory_order_release);
     failed.store(true, std::memory_order_release);
+    if (dispatch_in_progress && foreign_task_depth > 0) {
+      // Sealing aborts imports and so reaches OPFS through Asyncify. A foreign
+      // task observing this failure is running while a dispatch is suspended
+      // (see process()); the flags above take effect now, the seal waits for
+      // that dispatch to return and runs from resume_deferred().
+      seal_deferred = true;
+      return;
+    }
     runtime.fail_and_seal("bridge_failure");
   }
 
@@ -903,7 +933,68 @@ struct ControlBridge::Impl {
     request.has_request_id = true;
   }
 
+  // runtime.dispatch() may suspend in Asyncify while the Facade waits on OPFS.
+  // The control thread then returns to its event loop, and the proxying
+  // mailbox runs whatever task is queued next -- including another request's
+  // process_thunk. Asyncify cannot be re-entered on one thread: a second
+  // suspension overwrites the first one's rewind data, and the first rewind
+  // then resumes into garbage ("memory access out of bounds"), after which the
+  // suspended Facade call fails and surfaces as INVALID_PROJECT. The Runtime
+  // Session serializes its own requests, so this was reachable only through
+  // a caller that submits to the transport directly (#443, #551).
+  //
+  // Dispatch is therefore strictly sequential on the control thread. A request
+  // whose thunk runs while a dispatch is in progress waits in FIFO order and
+  // is re-proxied once that dispatch has fully returned -- which, under
+  // Asyncify, is after its rewind. Its deadline keeps running while it waits,
+  // exactly as it would in the mailbox. Any other control-thread task that can
+  // reach an Asyncify import must go through this gate as well; today the
+  // only such path is sealing, handled in fail_control().
   void process(RequestSlot& request) noexcept {
+    if (dispatch_in_progress) {
+      defer_request(request);
+      return;
+    }
+    dispatch_in_progress = true;
+    process_now(request);
+    dispatch_in_progress = false;
+    resume_deferred();
+  }
+
+  void defer_request(RequestSlot& request) noexcept {
+    request.next_deferred = nullptr;
+    if (deferred_tail == nullptr) {
+      deferred_head = &request;
+    } else {
+      deferred_tail->next_deferred = &request;
+    }
+    deferred_tail = &request;
+  }
+
+  void resume_deferred() noexcept {
+    if (seal_deferred) {
+      seal_deferred = false;
+      runtime.fail_and_seal("bridge_failure");
+    }
+    auto* next = deferred_head;
+    if (next == nullptr) {
+      return;
+    }
+    deferred_head = next->next_deferred;
+    if (deferred_head == nullptr) {
+      deferred_tail = nullptr;
+    }
+    next->next_deferred = nullptr;
+    // Re-proxy rather than dispatch inline so the mailbox keeps its turn
+    // order and the control thread's stack stays flat.
+    if (hooks.schedule == nullptr ||
+        !hooks.schedule(hooks.context, &Impl::process_thunk, next)) {
+      release_request(*next);
+      fail_control();
+    }
+  }
+
+  void process_now(RequestSlot& request) noexcept {
     ProcessReservations reservations;
     try {
       process_throwing(request, reservations);
@@ -1230,6 +1321,13 @@ struct ControlBridge::Impl {
   std::atomic<bool> realtime_service_requested{false};
   std::atomic<bool> realtime_service_scheduled{false};
   std::atomic<bool> failed{false};
+  // Control-thread-only dispatch gate; see process(). Not atomics on purpose:
+  // no other thread reads them.
+  bool dispatch_in_progress = false;
+  bool seal_deferred = false;
+  int foreign_task_depth = 0;
+  RequestSlot* deferred_head = nullptr;
+  RequestSlot* deferred_tail = nullptr;
 };
 
 ControlBridge::ControlBridge(ControlRuntime& runtime, BridgeHooks hooks)

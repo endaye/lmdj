@@ -1593,6 +1593,59 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
 });
 
 
+test("Chromium serializes concurrent Control requests across an OPFS suspension", async ({
+  browserName,
+  page,
+}) => {
+  // Facade requests suspend the control thread in Asyncify while they wait on
+  // OPFS. The Runtime Session serializes its own requests, so the bridge's
+  // dispatch order was only ever exercised one request at a time; a caller
+  // that submits to the transport directly could land a second request while
+  // the first was suspended, re-enter Asyncify, and trap the runtime with
+  // "memory access out of bounds" (#443, #551). The bridge now dispatches one
+  // request at a time; this proves it from the transport, where the Session's
+  // own lane cannot help.
+  test.skip(browserName !== "chromium");
+  test.setTimeout(360_000);
+  const pageErrors = [];
+  page.on("pageerror", (error) => {
+    pageErrors.push(String(error?.message ?? error));
+  });
+  const workerErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" && /worker sent an error|RuntimeError/.test(message.text())) {
+      workerErrors.push(message.text());
+    }
+  });
+
+  await openPackagedHost(page);
+  await page.locator("#diagnostic-project-load").click();
+  await waitForDiagnosticProjectReady(page);
+
+  const CONCURRENT_REQUESTS = 6;
+  const responses = await page.evaluate(async (count) => {
+    // Straight to the transport, on purpose: this is the path the Session's
+    // request lane does not cover.
+    const send = () => window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "project.inspect",
+      payload: {},
+    }, { deadlineMs: 30_000 });
+    return Promise.all(Array.from({ length: count }, send));
+  }, CONCURRENT_REQUESTS);
+
+  expect(pageErrors, "the Wasm runtime must not trap").toEqual([]);
+  expect(workerErrors, "no runtime worker may report an error").toEqual([]);
+  expect(responses).toHaveLength(CONCURRENT_REQUESTS);
+  for (const [index, response] of responses.entries()) {
+    expect(response, `project.inspect #${index}`).toMatchObject({ ok: true });
+  }
+  const revisions = new Set(responses.map(({ result }) => result.project_revision));
+  expect(revisions.size, "every read saw the same Project Truth").toBe(1);
+});
+
+
 test("Chromium rejects protocol mismatch before OPFS mutation", async ({
   browserName,
   page,

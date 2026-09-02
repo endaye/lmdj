@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -3907,6 +3908,13 @@ struct FakeProxy final {
     if (std::exchange(self.throw_before_response_serialization, false)) {
       throw std::runtime_error("injected response serialization failure");
     }
+    // Runs while a dispatch is in progress and before its response exists:
+    // the point at which, in the browser, Asyncify has suspended the dispatch
+    // and the proxying mailbox may run the next task.
+    if (self.during_dispatch) {
+      auto during = std::exchange(self.during_dispatch, nullptr);
+      during();
+    }
   }
 
   static void after_capture_drain(void* context) {
@@ -3926,9 +3934,22 @@ struct FakeProxy final {
     LMDJ_CHECK(!tasks.empty());
     auto task = tasks.front();
     tasks.erase(tasks.begin());
-    is_control = true;
+    run_as_control(task);
+  }
+
+  void pump_last() {
+    LMDJ_CHECK(!tasks.empty());
+    auto task = tasks.back();
+    tasks.pop_back();
+    run_as_control(task);
+  }
+
+  void run_as_control(const Task& task) {
+    // Nested pumps model the mailbox running inside a suspended dispatch, so
+    // they must leave the outer task's control-thread identity intact.
+    const auto previous = std::exchange(is_control, true);
     task.function(task.argument);
-    is_control = false;
+    is_control = previous;
   }
 
   bool accept = true;
@@ -3937,6 +3958,7 @@ struct FakeProxy final {
   bool inject_capture_drop = false;
   std::uint32_t response_delay_ms = 0;
   RealtimeEngine* capture_engine = nullptr;
+  std::function<void()> during_dispatch;
   std::vector<Task> tasks;
 };
 
@@ -4683,6 +4705,111 @@ void test_bridge_cancelled_before_dispatch_skips_facade_work() {
       (std::string(kProjectId) + ".lmdj") / "history/transactions"));
 }
 
+// Under Asyncify the control thread returns to its event loop while
+// runtime.dispatch() waits on OPFS, and the mailbox then runs the next proxied
+// request. Asyncify cannot be re-entered on one thread, so that second request
+// must wait for the first dispatch to return and be re-proxied afterwards.
+// before_response_serialization is the harness's window into "dispatch in
+// progress": request B's thunk is pumped from inside request A's dispatch.
+void test_bridge_defers_a_request_whose_thunk_runs_during_a_dispatch() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto first_id = uuid(760);
+  const auto second_id = uuid(761);
+  LMDJ_CHECK(
+      bridge->submit(encode(request(first_id, "host.status", Json::object())), {}) ==
+      BridgeSubmitStatus::accepted);
+  LMDJ_CHECK(
+      bridge->submit(encode(request(second_id, "host.status", Json::object())), {}) ==
+      BridgeSubmitStatus::accepted);
+  LMDJ_CHECK(proxy.tasks.size() == 2);
+
+  bool second_ran_during_first = false;
+  proxy.during_dispatch = [&] {
+    // The mailbox delivers B while A is suspended. B's thunk is still at the
+    // front: it was proxied before anything A's own dispatch may have queued.
+    const auto queued_before = proxy.tasks.size();
+    proxy.pump_one();
+    second_ran_during_first = true;
+    // B must not have been dispatched: no response exists for either request
+    // yet, the bridge is healthy, and B was parked rather than re-proxied
+    // while A still owns the control thread.
+    check_no_bridge_message(*bridge);
+    LMDJ_CHECK(!bridge->failed());
+    LMDJ_CHECK(proxy.tasks.size() == queued_before - 1);
+  };
+  proxy.pump_one();
+  LMDJ_CHECK(second_ran_during_first);
+
+  // A completed and published first; B was re-proxied after A returned and
+  // answers only once its own thunk runs again.
+  const auto first = poll_message(*bridge);
+  LMDJ_CHECK(first.at("request_id") == first_id);
+  LMDJ_CHECK(first.at("ok") == true);
+  check_no_bridge_message(*bridge);
+  LMDJ_CHECK(!proxy.tasks.empty());
+
+  std::optional<Json> second;
+  for (std::size_t budget = proxy.tasks.size(); budget > 0 && !second; --budget) {
+    proxy.pump_one();
+    std::array<std::byte, kBridgeMaximumEnvelopeBytes> output{};
+    std::size_t required = 0;
+    if (bridge->poll(output, required) == BridgePollStatus::message) {
+      const auto* text = reinterpret_cast<const char*>(output.data());
+      second = Json::parse(text, text + required);
+    }
+  }
+  LMDJ_CHECK(second.has_value());
+  LMDJ_CHECK(second->at("request_id") == second_id);
+  LMDJ_CHECK(second->at("ok") == true);
+  LMDJ_CHECK(!bridge->failed());
+  LMDJ_CHECK(!runtime->failed());
+}
+
+// Sealing the runtime aborts imports and so reaches OPFS through Asyncify. A
+// failure observed by a foreign mailbox task while a dispatch is suspended must
+// set the failure flags at once but seal only after that dispatch returns.
+void test_bridge_defers_the_seal_when_a_failure_lands_during_a_dispatch() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto first_id = uuid(770);
+  LMDJ_CHECK(
+      bridge->submit(encode(request(first_id, "host.status", Json::object())), {}) ==
+      BridgeSubmitStatus::accepted);
+
+  bool failure_deferred_seal = false;
+  proxy.during_dispatch = [&] {
+    // Exhaust the request slots while A is suspended: the overflow submit
+    // schedules fail_thunk, which the mailbox then runs during A.
+    for (std::uint32_t index = 0; index < 15; ++index) {
+      LMDJ_CHECK(
+          bridge->submit(
+              encode(request(uuid(780 + index), "host.status", Json::object())),
+              {}) == BridgeSubmitStatus::accepted);
+    }
+    LMDJ_CHECK(
+        bridge->submit(
+            encode(request(uuid(799), "host.status", Json::object())), {}) ==
+        BridgeSubmitStatus::queue_full);
+    LMDJ_CHECK(bridge->failed());
+    proxy.pump_last();
+    // The bridge is failed, but the runtime is not yet sealed: that would
+    // re-enter Asyncify while A is suspended.
+    LMDJ_CHECK(bridge->failed());
+    LMDJ_CHECK(!runtime->failed());
+    failure_deferred_seal = true;
+  };
+  proxy.pump_one();
+  LMDJ_CHECK(failure_deferred_seal);
+  // A has returned; the deferred seal ran from resume_deferred().
+  LMDJ_CHECK(runtime->failed());
+  LMDJ_CHECK(bridge->failed());
+}
+
 void test_bridge_benign_query_cancel_does_not_fail_the_runtime() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -5013,6 +5140,8 @@ int main() {
     test_bridge_emits_commit_quota_rejection_without_snapshot_notification();
     test_bridge_rejects_an_expired_control_request_without_late_success();
     test_bridge_cancelled_before_dispatch_skips_facade_work();
+    test_bridge_defers_a_request_whose_thunk_runs_during_a_dispatch();
+    test_bridge_defers_the_seal_when_a_failure_lands_during_a_dispatch();
     test_bridge_benign_query_cancel_does_not_fail_the_runtime();
     test_bridge_rechecks_deadline_before_success_publication();
     test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound();
