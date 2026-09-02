@@ -188,6 +188,10 @@ def pattern() -> dict:
 
 def usage_contract(executable: Path, workspace: Path) -> None:
     provider_request = encoded_request({"operation": "provider.list"})
+    expected_usage = (
+        b"usage: lmdj-core --workspace WORKSPACE [--assembly ASSEMBLY] "
+        b"(command|query|session) (--request JSON|--request-file FILE)\n"
+    )
     invalid_arguments = [
         [],
         ["--unknown"],
@@ -217,12 +221,21 @@ def usage_contract(executable: Path, workspace: Path) -> None:
             str(workspace / "request.json"),
         ],
         ["--workspace", str(workspace), "query", "--request"],
+        ["--workspace", str(workspace), "session", "extra"],
+        [
+            "--workspace",
+            str(workspace),
+            "--assembly",
+            str(REPO_ROOT / "products/lmdj/assembly.json"),
+            "session",
+            "extra",
+        ],
     ]
     for arguments in invalid_arguments:
         completed = run_raw(executable, arguments)
         assert completed.returncode == 64
         assert completed.stdout == b""
-        assert completed.stderr
+        assert completed.stderr == expected_usage
         assert b"\x1b[" not in completed.stderr
         completed.stderr.decode("ascii", errors="strict")
 
@@ -987,6 +1000,7 @@ def host_boundary_and_identity(executable: Path) -> None:
     assert lmdj_headers == [
         "lmdj/facade/application.hpp",
         "lmdj/facade/assembly_loader.hpp",
+        "lmdj/facade/performance_runtime.hpp",
     ]
     for forbidden in (
         "project_io",

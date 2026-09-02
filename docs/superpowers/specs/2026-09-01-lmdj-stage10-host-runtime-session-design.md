@@ -210,6 +210,54 @@ outcome 耐久写一次 journal，重复 outcome 即双写）。frame→tick 换
 第二份时间或 slot 真相。publication 失败、取消、被替换不产生 `applied`
 outcome，无 ghost event（P10-D22 不变）。
 
+`claimed-defer` 不得把已被 render 线程 claim 的旧 reservation 记为
+`cancelled`。Adapter 必须同时保留「已 claimed、等待原边界的旧
+reservation」和「延后到下一 Bar 的新 reservation」：旧请求在 #376
+谓词成立时仍恰好一次 `applied`，只有新请求返回 `claimed:true` 并
+defer。后续 latest-wins 只替换尚未 claim 的最新 reservation，不得抹除
+更早的 claimed acknowledgement。
+
+Engine-backed replay 的 Pad 事件继续走 `RealtimeEngine` 既有 control queue 与
+Voice render 路径，但必须显式标识 `performance_replay` origin。Adapter 按
+projection BPM 使用 SR-D25 整数换算把 `duration_tick` 变为相对
+`duration_frames`；render 在真实 Voice start frame 上加该时长，对所有非
+one-shot trigger mode 使用已有的 `scheduled_release_frame` 精确释放。禁止
+由 2 ms control-loop 延迟发 release，也禁止丢弃 `duration_tick`。Replay-origin
+Voice 不发布 Host live trigger outcome/voice-state，不进 capture ring，因此不消费或
+冲突 Native/Web 的 live trigger sequence，也不会在同时录制时把 replay 反馈进
+Performance Journal。
+
+Projection 材料用一个统一、trivially-copyable 的
+`PreparedSampleMaterialView { const int16_t* interleaved; uint32_t frame_count;
+uint16_t channels; }` 穿过实时边界：它既是 `PadControlEvent` 的尾部字段，也是
+`PreparedPatternEvent` 的材料字段。Render 必须直接读取该 PCM16 view，使用与
+`PreparedSampleBank` 完全相同的符号归一化与 stereo averaging；禁止把
+`shared_ptr`、锁、分配或回调放入实时队列。`host_input` 的 direct Pad event 若 view
+为空，仍走当前 float sample bank，保持既有 live 行为字节兼容。
+
+Owner 由控制侧持有：`PreparedPatternView::prepare` 从不可变 Runtime Snapshot
+构造 view，并保存去重的 `shared_ptr<const PcmSample>` owners；Pattern slot 以
+`active_voices` 计数和 `retiring` 状态阻止材料在自然结束、scheduled release tail
+或 hard kill 完成前被回收。Direct replay Pad 的 adapter 同样保留去重 owner，直到
+engine stop/quiescence 后 adapter 析构；后续 replay 或 live bank reload 不得替换这批
+仍可能被 Voice 引用的 owner。Native Host 析构顺序必须先停止 engine、确认 queue 与
+Voice quiescent，再销毁 adapter。由此，Pattern publication 被替换只停止新 Voice
+取得旧材料，不会截断已发声的旧 Voice。
+
+Engine-backed `reset_neutral` 遵守 RLC-D9 的
+`NeutralResetProgress { pending, complete }`：同一逻辑 reset 只依次入队一次
+`hold_off + 8 release`，在 queue pressure 下从未入队的下一项续接；全部
+入队后，以 `MasterFxTelemetry::dequeued_gestures` 确认 render 已消费到该
+reset 的最后一项。仅 enqueue accepted 不是 `complete`。空 replay 也保留
+identity 与 reset-pending 状态，不得因首次尚未消费而删除 identity。
+Facade 只在 stop 返回 `complete`/`stopped` 后写 stop receipt；`pending` 对应的
+`playing` response 与真实 reset failure 都不消费 request identity。
+
+Adapter `service` 保持既定 `void` 组合面，不新增 Host error channel。异步
+apply/reset failure 由 reference controller 保留为 reset-pending 状态：active latch
+不清理、cursor 不前进，以后的 periodic service 不在真实 failure 后自动
+重发 mutation；对外仍通过只读 status 与 stop retry 闭环。
+
 ## 3. Error and non-destructive rules
 
 - 权威缺席保持既有 typed refusal：`performance_authority_unavailable`、

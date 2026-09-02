@@ -52,7 +52,7 @@ GENERAL_JOBS = {
 # path verbatim. Pinning the command per job keeps the cutover a change of
 # where they run and not of what they run.
 GENERAL_PROOFS = {
-    "docs-static": 'run: git diff --check "$BASE_SHA" "$HEAD_SHA"',
+    "docs-static": 'run: git diff --check "$BASE_SHA...$HEAD_SHA"',
     "ci-contract": "run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'",
     "deploy-contract": (
         "run: python3 apps/web-runtime-host/test/deploy_command_test.py --shards 4"
