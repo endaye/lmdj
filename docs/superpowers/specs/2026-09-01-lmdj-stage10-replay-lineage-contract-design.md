@@ -153,6 +153,13 @@ callback 或恢复 fingerprint。Begin 完成后修改 Pad、移动/清空 Patte
 Performance 或推进 Project revision，都不改变已交付 projection；新 replay begin
 重新读取最新 current Project。
 
+Projection 中的 prepared playback/material 是 Runtime **实际渲染的材料**，不是只供
+调度辨识的元数据。Replay Pad 与 Pattern Voice 必须读取 projection 固定的 PCM；
+begin 后重新加载 live sample bank、替换 Pad、重新 cook 或发布新的 Runtime Snapshot，
+都不得改变已排队或仍在发声（包括 release tail）的 replay。Controller、runtime sink
+与 adapter 必须让 projection 的材料 owner 至少存活到对应排队事件和所有派生 Voice
+完全 quiescent；禁止在 render 时按 AssetId、Pad slot 或当前 sample bank 延迟解析。
+
 ### RLC-D7：Facade 注入单一 Core Replay controller
 
 Application Facade configuration 增加一个必填 `PerformanceReplayController`。
@@ -218,6 +225,21 @@ replay ID 复用。
 `complete`/`stopped` terminal status；不得谎报 terminal，也不得由 Host 补
 reset。
 
+Runtime sink 的 reset acknowledgement 是三态而不是「入队即完成」：
+
+```text
+reset_neutral() -> Result<NeutralResetProgress>
+NeutralResetProgress = pending | complete
+```
+
+`pending` 表示同一逻辑 reset 已被 Runtime 接受、但尚未由实际运行路径
+消费完毕；它不是 reset 失败，也不得重复入队。`complete` 才允许发布
+terminal status。`foundation::Result` 的 failure 仅表示真实 Runtime 错误。
+自然结束的 progression/service 可以轮询已接受 reset 的 `pending -> complete`
+进度，但不得在 failure 后自动重发 reset mutation；真实失败仍只由
+`performance.replay.stop` 请求按下述规则重试。`status` 在两种情况下都
+保持只读。
+
 Reset 失败时的协议精确固定为：
 
 - 第一个触发 reset 的结束路径决定目标 terminal 状态（natural end →
@@ -229,8 +251,26 @@ Reset 失败时的协议精确固定为：
 - 每个 `performance.replay.stop` 请求（含同 `request_id` 重试）触发一次 reset
   重试；重试失败时该 stop 返回同一稳定 Runtime 错误，不产生 terminal
   acknowledgement，也不消费该 `request_id` 的幂等身份；
+- stop 轮询到 `pending` 时返回当前 `playing` status，不写
+  `replay_stop_receipts`、不消费 `request_id`；同 request ID 的下次调用仍
+  必须进入 controller 轮询，直到 terminal 后才写 receipt。因此 terminal
+  前每次返回都是 `replayed:false`，terminal 那次仍是 `false`，只有再次
+  重放已写 receipt 才是 `true`；
 - 重试成功后 controller 发布既定目标 terminal 状态，本次 stop 返回该 terminal
   status，其后 status/stop 按 RLC-D8 的幂等规则。
+
+空 event stream 也是自然结束，不是 begin 失败。Begin 必须建立 replay
+identity 并尝试同一 neutral reset；若 Runtime 返回 `pending`，begin 返回
+`playing` 且保留独占权，后续 progression/service 只轮询该 reset 直到
+`complete`。若 Runtime 返回 failure，返回稳定错误但仍保留 identity、
+reset target 与独占权，不得回滚成「从未 begin」。
+
+Progression 仍由 Core controller 拥有，Host 不新增异步错误字段或第二条
+error channel。Bridge/adapter 的 `service()` 保持 `void`；`advance_to` 的 apply/reset
+failure 必须留下 controller-owned reset target、冻结 cursor 与活跃 identity，
+service 不得因为该 failure 清理 active latch 或继续施加事件。外部可见
+恢复面仍是已锁定的只读 `status` 与 `stop` reset retry；Host 不得
+为了暴露异步错误而改 response shape 或终止进程。
 
 Imported/recovered event stream 即使以开放 FX 或 HOLD 结束，也执行同一 reset。
 Reset 不写 Project、不写 Performance event、不消费 revision。

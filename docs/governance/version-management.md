@@ -120,6 +120,10 @@ for another PATCH-level Assembly change.
 - 功能增加、依赖升级、Contract 变化或 Assembly 变化必须分配新 Build，而不是
   增加 Patch。
 - Patch 修复必须同时回到 `main`，避免 release branch 成为第二 Source of Truth。
+- Patch 从已发布 tag 上的短命 `fix/<task>` 分支产生，用完即删；仓库不设 `release/*`
+  或 `hotfix/*` 长期分支。新 Build 的分配遵循
+  [`git-workflow.md`](git-workflow.md) 的 Release cut 规则：功能与 control-plane
+  改动先各自合入 `main`，切版 PR 只携带分配材料并经 Integration Queue 合入。
 
 示例：
 

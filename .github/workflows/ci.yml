@@ -140,11 +140,16 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      # Three-dot for the same reason `read_git_inventory` uses it: `BASE_SHA`
+      # is the base branch tip at event time, so a two-dot range would report,
+      # in reverse, everything that landed on the base branch after the branch
+      # was cut. A whitespace-carrying line the base branch *deleted* after the
+      # cut would then read as added here and fail a branch that never wrote it.
       - name: Validate the exact selected revision range
         env:
           BASE_SHA: ${{ needs.change-scope.outputs.resolved-base-sha }}
           HEAD_SHA: ${{ needs.change-scope.outputs.resolved-head-sha }}
-        run: git diff --check "$BASE_SHA" "$HEAD_SHA"
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"
 
   portal:
     # The one general lane that runs as a reusable workflow. GitHub does not

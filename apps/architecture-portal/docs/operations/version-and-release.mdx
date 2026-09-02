@@ -18,6 +18,10 @@ Product Build `1.0.26.0 · canary · g<short-sha>` 曾是 G3 Host settings crash
 Product Build `1.0.25.0 · canary · g<short-sha>` 曾是 G2 evidence-durability source candidate。
 Product Build `1.0.24.0 · canary · g<short-sha>` 曾是 source candidate。那次候选来自 provider-sdk G1/G4 缺陷修复级联：Attempt reservation 泄漏回收与 temp sibling 进程级唯一性修复已经进入 active manifests 与 Assembly Lock；历史 `1.0.21.0` 的 MPD218 复验和 `1.0.22.0` / `1.0.23.0` 的旧候选证据都不自动升级为 `1.0.24.0` 的候选结论。版本值由 active manifests 与 Assembly Lock 派生。
 
+## Release cut
+
+Product Build 从 `main` 切出，不在分支上组装。功能、Host、Provider、deploy workflow 与发布脚本先各自经 Integration Queue 合入 `main`；control-plane 改动（`ci.yml`、`scope_policy.json`、queue 与 gate 脚本）单独更早合入，因为它们不能进队列。切版 PR 只携带分配材料：`version.json` Build 分配、必要时的 `assembly.json` 与 `assembly.lock.json`、该 Build 的 immutable Portal snapshot 与 release-evidence 文档，因此可以进队列由控制器同步并 squash 合入。squash 产生的精确 `main` SHA 就是该 Build 唯一合法的 release target；之后的 `main` 提交不进入该 Build。发布后的修复走 PATCH：从已发布 tag 拉短命 `fix/<task>`，分配下一 PATCH，同一修复经普通 PR 回 `main`；仓库不设 `release/*` 或 `hotfix/*` 长期分支。规则全文见 `docs/governance/git-workflow.md` §6。
+
 ## Product Build 权威与诊断
 
 `products/lmdj/version.json` 是当前 Product Build 的唯一源码权威。CMake、Runtime identity、

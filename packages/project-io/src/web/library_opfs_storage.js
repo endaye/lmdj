@@ -47,6 +47,30 @@ mergeInto(LibraryManager.library, {
       return [await this.directory(parts.slice(0, -1), create), parts.at(-1)];
     },
 
+    // Every OPFS entry point suspends the calling Wasm thread through
+    // Asyncify. Asyncify keeps one pending suspension per thread: while a
+    // call is suspended, `state` is back to Normal and `currData` still holds
+    // its rewind data. A *new* import call in that window is a re-entry: its
+    // handleSleep would overwrite `currData`, and the first rewind would then
+    // resume into garbage ("memory access out of bounds"). The Control bridge
+    // dispatches one request at a time to make that impossible (#443, #551);
+    // this guard is the fail-closed backstop should any other path ever call
+    // into storage while a suspension is pending -- refuse the call and name
+    // the invariant instead of corrupting memory.
+    //
+    // The Rewinding state is not a re-entry: Asyncify re-invokes the very same
+    // import to finish the rewind, and that call must reach handleAsync.
+    suspend(work) {
+      if (Asyncify.state === Asyncify.State.Normal && Asyncify.currData) {
+        console.error(
+            "lmdj web runtime: OPFS storage was entered while another storage " +
+            "call is suspended on this thread; the Control bridge must dispatch " +
+            "one request at a time -- refusing the call as an invalid state");
+        return -5;
+      }
+      return Asyncify.handleAsync(work);
+    },
+
     status(error) {
       const table = Object.freeze({
         NotFoundError: -2,
@@ -933,7 +957,7 @@ mergeInto(LibraryManager.library, {
   },
 
   lmdj_opfs_acquire_writer__deps: ["$LmdjOpfs"],
-  lmdj_opfs_acquire_writer: (path, length, platformIdentity) => Asyncify.handleAsync(async () => {
+  lmdj_opfs_acquire_writer: (path, length, platformIdentity) => LmdjOpfs.suspend(async () => {
     try {
       return await LmdjOpfs.acquireWriter(path, length, platformIdentity);
     } catch (error) {
@@ -945,7 +969,7 @@ mergeInto(LibraryManager.library, {
   lmdj_opfs_release_writer: (token) => LmdjOpfs.releaseWriter(token),
 
   lmdj_opfs_ensure_directory__deps: ["$LmdjOpfs"],
-  lmdj_opfs_ensure_directory: (path, length) => Asyncify.handleAsync(async () => {
+  lmdj_opfs_ensure_directory: (path, length) => LmdjOpfs.suspend(async () => {
     try {
       await LmdjOpfs.directory(LmdjOpfs.parts(path, length), true);
       return 0;
@@ -955,7 +979,7 @@ mergeInto(LibraryManager.library, {
   }),
 
   lmdj_opfs_exists__deps: ["$LmdjOpfs"],
-  lmdj_opfs_exists: (path, length) => Asyncify.handleAsync(async () => {
+  lmdj_opfs_exists: (path, length) => LmdjOpfs.suspend(async () => {
     try {
       return await LmdjOpfs.exists(LmdjOpfs.parts(path, length)) ? 1 : 0;
     } catch (error) {
@@ -965,7 +989,7 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_directory_exists__deps: ["$LmdjOpfs"],
   lmdj_opfs_directory_exists:
-      (path, length) => Asyncify.handleAsync(async () => {
+      (path, length) => LmdjOpfs.suspend(async () => {
         try {
           return await LmdjOpfs.directoryExists(
               LmdjOpfs.parts(path, length)) ? 1 : 0;
@@ -975,7 +999,7 @@ mergeInto(LibraryManager.library, {
       }),
 
   lmdj_opfs_byte_length__deps: ["$LmdjOpfs"],
-  lmdj_opfs_byte_length: (path, length) => Asyncify.handleAsync(async () => {
+  lmdj_opfs_byte_length: (path, length) => LmdjOpfs.suspend(async () => {
     try {
       const [parent, name] = await LmdjOpfs.parent(
           LmdjOpfs.parts(path, length), false);
@@ -987,7 +1011,7 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_read_complete__deps: ["$LmdjOpfs"],
   lmdj_opfs_read_complete:
-      (path, length, output, outputLength) => Asyncify.handleAsync(async () => {
+      (path, length, output, outputLength) => LmdjOpfs.suspend(async () => {
         try {
           const [parent, name] = await LmdjOpfs.parent(
               LmdjOpfs.parts(path, length), false);
@@ -1005,7 +1029,7 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_create_immutable__deps: ["$LmdjOpfs"],
   lmdj_opfs_create_immutable:
-      (path, length, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
+      (path, length, data, dataLength, platformIdentity) => LmdjOpfs.suspend(async () => {
         try {
           return await LmdjOpfs.createImmutable(
               path, length, data, dataLength, platformIdentity, null);
@@ -1016,7 +1040,7 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_create_immutable_test__deps: ["$LmdjOpfs", "$LmdjOpfsTest"],
   lmdj_opfs_create_immutable_test:
-      (path, length, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
+      (path, length, data, dataLength, platformIdentity) => LmdjOpfs.suspend(async () => {
         try {
           return await LmdjOpfs.createImmutable(
               path, length, data, dataLength, platformIdentity, LmdjOpfsTest);
@@ -1027,7 +1051,7 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_replace_complete__deps: ["$LmdjOpfs"],
   lmdj_opfs_replace_complete:
-      (path, length, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
+      (path, length, data, dataLength, platformIdentity) => LmdjOpfs.suspend(async () => {
         try {
           await LmdjOpfs.replaceComplete(
               path, length, data, dataLength, platformIdentity, null);
@@ -1039,7 +1063,7 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_replace_complete_test__deps: ["$LmdjOpfs", "$LmdjOpfsTest"],
   lmdj_opfs_replace_complete_test:
-      (path, length, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
+      (path, length, data, dataLength, platformIdentity) => LmdjOpfs.suspend(async () => {
         try {
           await LmdjOpfs.replaceComplete(
               path, length, data, dataLength, platformIdentity, LmdjOpfsTest);
@@ -1051,7 +1075,7 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_append_durable__deps: ["$LmdjOpfs"],
   lmdj_opfs_append_durable:
-      (path, length, prefix, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
+      (path, length, prefix, data, dataLength, platformIdentity) => LmdjOpfs.suspend(async () => {
         try {
           return await LmdjOpfs.appendDurable(
               path, length, prefix, data, dataLength, platformIdentity, null);
@@ -1062,7 +1086,7 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_append_durable_test__deps: ["$LmdjOpfs", "$LmdjOpfsTest"],
   lmdj_opfs_append_durable_test:
-      (path, length, prefix, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
+      (path, length, prefix, data, dataLength, platformIdentity) => LmdjOpfs.suspend(async () => {
         try {
           return await LmdjOpfs.appendDurable(
               path, length, prefix, data, dataLength, platformIdentity,
@@ -1079,7 +1103,7 @@ mergeInto(LibraryManager.library, {
   lmdj_opfs_immutable_write_count: () => LmdjOpfsTest.immutableWrites,
 
   lmdj_opfs_remove__deps: ["$LmdjOpfs"],
-  lmdj_opfs_remove: (path, length) => Asyncify.handleAsync(async () => {
+  lmdj_opfs_remove: (path, length) => LmdjOpfs.suspend(async () => {
     try {
       const [parent, name] = await LmdjOpfs.parent(
           LmdjOpfs.parts(path, length), false);
@@ -1098,7 +1122,7 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_list_names__deps: ["$LmdjOpfs"],
   lmdj_opfs_list_names:
-      (path, length, output, outputLength) => Asyncify.handleAsync(async () => {
+      (path, length, output, outputLength) => LmdjOpfs.suspend(async () => {
         try {
           const names = await LmdjOpfs.listEntries(
               LmdjOpfs.parts(path, length), "file");
@@ -1111,7 +1135,7 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_list_directories__deps: ["$LmdjOpfs"],
   lmdj_opfs_list_directories:
-      (path, length, output, outputLength) => Asyncify.handleAsync(async () => {
+      (path, length, output, outputLength) => LmdjOpfs.suspend(async () => {
         try {
           const names = await LmdjOpfs.listEntries(
               LmdjOpfs.parts(path, length), "directory");
@@ -1123,7 +1147,7 @@ mergeInto(LibraryManager.library, {
       }),
 
   lmdj_opfs_remove_tree__deps: ["$LmdjOpfs"],
-  lmdj_opfs_remove_tree: (path, length) => Asyncify.handleAsync(async () => {
+  lmdj_opfs_remove_tree: (path, length) => LmdjOpfs.suspend(async () => {
     try {
       const [parent, name] = await LmdjOpfs.parent(
           LmdjOpfs.parts(path, length), false);
@@ -1143,7 +1167,7 @@ mergeInto(LibraryManager.library, {
   lmdj_opfs_publish_directory_if_absent__deps: ["$LmdjOpfs"],
   lmdj_opfs_publish_directory_if_absent:
       (source, sourceLength, destination, destinationLength, platformIdentity) =>
-          Asyncify.handleAsync(async () => {
+          LmdjOpfs.suspend(async () => {
             try {
               const sourceParts = LmdjOpfs.parts(source, sourceLength);
               const destinationParts =
@@ -1159,7 +1183,7 @@ mergeInto(LibraryManager.library, {
       ["$LmdjOpfs", "$LmdjOpfsTest"],
   lmdj_opfs_publish_directory_if_absent_test:
       (source, sourceLength, destination, destinationLength, platformIdentity) =>
-          Asyncify.handleAsync(async () => {
+          LmdjOpfs.suspend(async () => {
             try {
               const sourceParts = LmdjOpfs.parts(source, sourceLength);
               const destinationParts =
@@ -1176,7 +1200,7 @@ mergeInto(LibraryManager.library, {
       () => LmdjOpfsTest.publicationMaxChunkBytes,
 
   lmdj_opfs_validate_tree__deps: ["$LmdjOpfs"],
-  lmdj_opfs_validate_tree: (path, length) => Asyncify.handleAsync(async () => {
+  lmdj_opfs_validate_tree: (path, length) => LmdjOpfs.suspend(async () => {
     try {
       const parts = LmdjOpfs.parts(path, length);
       if (parts.length === 0) return 0;

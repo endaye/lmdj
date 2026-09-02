@@ -14,6 +14,7 @@
 
 #include <lmdj/facade/application.hpp>
 #include <lmdj/facade/assembly_loader.hpp>
+#include <lmdj/facade/performance_runtime.hpp>
 
 #if defined(__APPLE__) || defined(__linux__)
 #define LMDJ_CLI_HAS_POSIX_REQUEST_FILES 1
@@ -31,7 +32,7 @@ constexpr int kMaximumJsonContainerDepth = 64;
 constexpr std::string_view kUsage =
     "usage: lmdj-core --workspace WORKSPACE "
     "[--assembly ASSEMBLY] "
-    "(command|query) (--request JSON|--request-file FILE)\n";
+    "(command|query|session) (--request JSON|--request-file FILE)\n";
 constexpr std::string_view kInternalErrorFallback =
     "{\"error\":{\"code\":\"INTERNAL_ERROR\",\"details\":{},"
     "\"message\":\"unexpected CLI Host failure\"},\"ok\":false}\n";
@@ -39,6 +40,7 @@ constexpr std::string_view kInternalErrorFallback =
 enum class Mode {
   command,
   query,
+  session,
 };
 
 struct Invocation {
@@ -144,23 +146,37 @@ std::optional<nlohmann::json> parse_bounded_json(
 std::optional<Invocation> parse_invocation(
     int argc,
     char** argv) {
-  if ((argc != 6 && argc != 8) ||
-      std::string_view(argv[1]) != "--workspace") {
+  if (argc < 4 || std::string_view(argv[1]) != "--workspace") {
     return std::nullopt;
   }
   int mode_index = 3;
   std::optional<std::string_view> assembly;
-  if (argc == 8) {
-    if (std::string_view(argv[3]) != "--assembly") {
-      return std::nullopt;
-    }
+  if (argc >= 6 && std::string_view(argv[3]) == "--assembly") {
     assembly = std::string_view(argv[4]);
     mode_index = 5;
   }
+  const auto mode_name = std::string_view(argv[mode_index]);
+  if (mode_name == "session") {
+    const auto expected_argc = assembly.has_value() ? 6 : 4;
+    if (argc != expected_argc) {
+      return std::nullopt;
+    }
+    return Invocation{
+        std::string_view(argv[2]),
+        assembly,
+        Mode::session,
+        false,
+        {},
+    };
+  }
+  const auto expected_argc = assembly.has_value() ? 8 : 6;
+  if (argc != expected_argc) {
+    return std::nullopt;
+  }
   Mode mode;
-  if (std::string_view(argv[mode_index]) == "command") {
+  if (mode_name == "command") {
     mode = Mode::command;
-  } else if (std::string_view(argv[mode_index]) == "query") {
+  } else if (mode_name == "query") {
     mode = Mode::query;
   } else {
     return std::nullopt;
@@ -330,6 +346,156 @@ int write_response(const nlohmann::json& response) {
              : 2;
 }
 
+bool write_session_response(const nlohmann::json& response) {
+  const auto encoded = response.dump();
+  std::cout.write(
+      encoded.data(), static_cast<std::streamsize>(encoded.size()));
+  std::cout.put('\n');
+  std::cout.flush();
+  return static_cast<bool>(std::cout);
+}
+
+struct Runtime {
+  lmdj::facade::PerformanceRuntimeBridge bridge;
+  std::unique_ptr<lmdj::facade::Application> application;
+};
+
+std::optional<Runtime> make_runtime(
+    const Invocation& invocation,
+    std::filesystem::path workspace,
+    nlohmann::json* error) {
+  auto providers = std::make_shared<lmdj::provider::Registry>();
+  lmdj::provider::ProviderPolicy provider_policy;
+  if (invocation.assembly.has_value()) {
+    std::filesystem::path assembly;
+    if (!valid_workspace(*invocation.assembly, &assembly)) {
+      *error = error_response(
+          "INVALID_ARGUMENT",
+          "assembly must be non-empty UTF-8, absolute, and normalized");
+      return std::nullopt;
+    }
+    auto loaded = lmdj::facade::load_installed_assembly(assembly);
+    if (!loaded.has_value()) {
+      *error = error_response(
+          "INVALID_ARGUMENT",
+          "assembly validation or composition failed");
+      return std::nullopt;
+    }
+    providers = std::move(loaded.value().providers);
+    provider_policy = std::move(loaded.value().provider_policy);
+  }
+  auto bridge =
+      lmdj::facade::make_headless_performance_runtime_bridge(
+          lmdj::facade::make_steady_performance_time_source());
+  auto application = std::make_unique<lmdj::facade::Application>(
+      lmdj::facade::ApplicationConfig{
+          std::move(workspace),
+          std::move(providers),
+          std::move(provider_policy),
+          {},
+          std::nullopt,
+          nullptr,
+          bridge.clock,
+          bridge.input_sequencer,
+          bridge.launch_acknowledger,
+          bridge.replay_controller,
+      });
+  return Runtime{std::move(bridge), std::move(application)};
+}
+
+enum class LineReadResult {
+  line,
+  end,
+  overlong,
+  failure,
+};
+
+LineReadResult read_bounded_line(std::string* line) {
+  line->clear();
+  bool overlong = false;
+  while (true) {
+    const auto next = std::cin.get();
+    if (next == std::char_traits<char>::eof()) {
+      if (std::cin.eof()) {
+        if (line->empty() && !overlong) {
+          return LineReadResult::end;
+        }
+        return overlong ? LineReadResult::overlong : LineReadResult::line;
+      }
+      return LineReadResult::failure;
+    }
+    if (next == '\n') {
+      return overlong ? LineReadResult::overlong : LineReadResult::line;
+    }
+    if (overlong) {
+      continue;
+    }
+    if (line->size() == kMaximumRequestBytes) {
+      overlong = true;
+      line->clear();
+      continue;
+    }
+    line->push_back(static_cast<char>(next));
+  }
+}
+
+std::optional<std::pair<Mode, nlohmann::json>> decode_session_request(
+    std::string_view line) {
+  if (line.empty() || !valid_utf8(line)) {
+    return std::nullopt;
+  }
+  auto envelope = parse_bounded_json(line);
+  if (!envelope.has_value() || !envelope->is_object() ||
+      envelope->size() != 2 || !envelope->contains("surface") ||
+      !envelope->contains("request") ||
+      !envelope->at("surface").is_string() ||
+      !envelope->at("request").is_object()) {
+    return std::nullopt;
+  }
+  const auto& surface = envelope->at("surface");
+  if (surface == "command") {
+    return std::pair{Mode::command, std::move(envelope->at("request"))};
+  }
+  if (surface == "query") {
+    return std::pair{Mode::query, std::move(envelope->at("request"))};
+  }
+  return std::nullopt;
+}
+
+int run_session(Runtime* runtime) {
+  std::string line;
+  line.reserve(64U * 1024U);
+  while (true) {
+    const auto read = read_bounded_line(&line);
+    if (read == LineReadResult::end) {
+      return 0;
+    }
+    if (read == LineReadResult::failure) {
+      return 2;
+    }
+    if (read == LineReadResult::overlong) {
+      if (!write_session_response(invalid_request_response())) {
+        return 2;
+      }
+      continue;
+    }
+    auto request = decode_session_request(line);
+    if (!request.has_value()) {
+      if (!write_session_response(invalid_request_response())) {
+        return 2;
+      }
+      continue;
+    }
+    runtime->bridge.service();
+    const auto response = request->first == Mode::command
+                              ? runtime->application->command(request->second)
+                              : runtime->application->query(request->second);
+    if (!write_session_response(response)) {
+      return 2;
+    }
+  }
+}
+
 int run(const Invocation& invocation) {
   std::filesystem::path workspace;
   if (!valid_workspace(invocation.workspace, &workspace)) {
@@ -339,47 +505,26 @@ int run(const Invocation& invocation) {
             "workspace must be non-empty UTF-8, absolute, and normalized"));
   }
   nlohmann::json host_error;
-  auto request = decode_request(invocation, &host_error);
-  if (!request.has_value()) {
+  std::optional<nlohmann::json> request;
+  if (invocation.mode != Mode::session) {
+    request = decode_request(invocation, &host_error);
+    if (!request.has_value()) {
+      return write_response(host_error);
+    }
+  }
+  auto runtime = make_runtime(
+      invocation, std::move(workspace), &host_error);
+  if (!runtime.has_value()) {
     return write_response(host_error);
   }
-  auto providers = std::make_shared<lmdj::provider::Registry>();
-  lmdj::provider::ProviderPolicy provider_policy;
-  if (invocation.assembly.has_value()) {
-    std::filesystem::path assembly;
-    if (!valid_workspace(*invocation.assembly, &assembly)) {
-      return write_response(
-          error_response(
-              "INVALID_ARGUMENT",
-              "assembly must be non-empty UTF-8, absolute, and normalized"));
-    }
-    auto loaded = lmdj::facade::load_installed_assembly(assembly);
-    if (!loaded.has_value()) {
-      return write_response(
-          error_response(
-              "INVALID_ARGUMENT",
-              "assembly validation or composition failed"));
-    }
-    providers = std::move(loaded.value().providers);
-    provider_policy = std::move(loaded.value().provider_policy);
+  if (invocation.mode == Mode::session) {
+    return run_session(&*runtime);
   }
-  lmdj::facade::Application application(
-      lmdj::facade::ApplicationConfig{
-          std::move(workspace),
-          std::move(providers),
-          std::move(provider_policy),
-          {},
-          std::nullopt,
-          nullptr,
-          nullptr,
-          nullptr,
-          nullptr,
-          lmdj::facade::make_unavailable_performance_replay_controller(),
-      });
+  runtime->bridge.service();
   if (invocation.mode == Mode::command) {
-    return write_response(application.command(*request));
+    return write_response(runtime->application->command(*request));
   }
-  return write_response(application.query(*request));
+  return write_response(runtime->application->query(*request));
 }
 
 int write_fallback() noexcept {

@@ -1,0 +1,576 @@
+# 百様図（Hyakuyozu）纸层视觉与 WebGL 技术研究
+
+> 研究对象：[大丸松坂屋百貨店「百様図」官网](https://www.daimaru-matsuzakaya.com/vi/en/)
+>
+> 研究日期：2026-09-02（初稿）；同日追加实时截图与运行态探针验证（§1.1、§3.8）
+>
+> 关联工作：[Creator 产品视觉语言 #522](https://github.com/endaye/lmdj/issues/522)、
+> [Creator 产品视觉语言 Brief](./2026-09-01-creator-visual-language-brief.md)、
+> [ThreeUI 与 Creator Three.js 视觉底层调研](./2026-09-02-threeui-creator-visual-effects-research.md)
+>
+> 研究性质：#522 Phase 1 的视觉方向备选参考，与 [KUMALEON 研究](./2026-07-26-kumaleon-visual-technology-study.md)并列。
+> 不是方向选择、依赖批准、设计规格或实施授权。
+
+## 0. 结论先行
+
+百様図官网不是「剪纸风格的网页」，而是一台**把物理色纸重叠玩法完整搬进 WebGL 的互动绘本**：
+
+1. **视觉语法只有四个变量**：色纸（8 种实拍纸张纹理）、形（正方形孔或圆孔）、重叠（0–7 层，层距固定）、移动（只平移，永不旋转）。所有变化都来自这四个变量的组合。
+2. **材料感来自真实光照，不来自插画**：Three.js r170 自定义管线，先渲染阴影图，再多目标输出颜色 / 阴影坐标 / 文字区域，最后用 PCSS 软阴影合成。孔洞边缘有斜切和翻边法线，纸面有实拍凸起图，所以「纸」读起来像纸。
+3. **文字被烙进纸里**：正文和标题以贴图形式压进纸面着色器，跟随光照与凸起；DOM 中另存一份隐藏文本供无障碍与搜索。这是展览式站点的做法，不能直接用于工具。
+4. **动效按音乐节拍量化**：所有帧切换都等 86 BPM、三拍一小节的「小节尾」事件才触发；纸张移动有独立的沙沙声层，音量随移动量变化。这一点与 LMDJ「乐器」定位天然契合。
+5. **整站是一套数据驱动的舞台机**：95 张纸定义、858 条逐帧变换、195 帧、19 段、6 幕，全部由团队自建的 `_tools/studio` 编辑器输出为 JSON；网页只是播放器。
+
+追加的实时截图与运行态探针（§3.8）证实了第 1–3 点，并修正了初稿的三处判断：官网 WebGL 正片的四章是「Element 1–4：Color / Shape / Paper / Layering」，官方叙事的四个视角只出现在 About 模态页（§2）；结尾购物袋段是 DOM 视频，不是 WebGL（§3.7）；百様図并非「几乎无随机」，而是把随机限制在备选段落、帧间时长与音效轮换上，纸的几何与编排本身不随机（§7）。
+
+对 LMDJ 最值得保留的不是大丸的配色、纸张照片或 Logo，而是这个结构：
+
+```text
+极少的几何变量（形 × 色 × 层 × 位移）
+  + 真实光照给出的材料感（软阴影、边缘法线、纸纹）
+  + 与节拍对齐的状态切换
+  + 数据驱动的场景编排（编辑器 → JSON → 播放器）
+```
+
+作为 #522 的备选方向，百様図与 KUMALEON 的分工很清楚：KUMALEON 提供「严格版式 × 受控随机 × 品牌角色」的展览语法；百様図提供「穿孔纸层 × 物理光照 × 节拍量化」的材料语法。两者都不能逐像素复制，但百様図更贴近 brief 的「印刷 / 面板 / 海报」参考类，并且天然给出了一种**不依赖角色、不依赖 kawaii 的 Pad 身份几何**。
+
+## 1. 研究方法与证据等级
+
+| 等级 | 证据 | 本报告中的用法 |
+|---|---|---|
+| A | 官网 HTML、内联 CSS、`main.js`（723 KB）、GLSL 着色器源、`pc-en.json` 场景数据、8 张纸张纹理、OG 图与内页照片 | 判断技术栈、渲染管线、几何规则、配色、排版、动效与音频结构 |
+| A | 本机 Playwright 1.62.1 + Chromium 无头实时截图与运行态探针：桌面 1440 × 810、手机 375 × 639 @2x，用 `?page=N&noAuto&noBgm` 逐段定格，`?albedo` / `?noText` 等生产包自带的开关做对照，CDP 合成触点做拖拽（[§3.8](#38-实时截图实录)，图片在 [`assets/hyakuyozu/`](./assets/hyakuyozu/README.md)） | 验证材料感、文字贴图、章节结构、推压与拖拽手感、手机端排版 |
+| A | [日本デザインセンター项目页](https://www.ndc.co.jp/en/projects/daimarumatsuzakaya-hyakuyozu/)、[三澤デザイン研究室公告](https://misawa.ndc.co.jp/news/3233/) | 判断设计概念、制作方法与署名 |
+| B | [Awwwards 条目](https://www.awwwards.com/sites/hyakuyozu-daimaru-matsuzakaya)、[mount inc. Spikes Asia 报道](https://mount.jp/en/magazine/behind-spikesasia-2603/)、日经 / JDN / PR TIMES 报道 | 判断奖项、制作公司与发布时间 |
+| C | 基于以上证据的工程推断 | 转译为 LMDJ 的视觉映射、预算与路线建议 |
+
+### 1.1 已知限制
+
+- 初稿在 Windows 机器上因无头 Chromium 缺少系统库未能截图；本次在 macOS 上用仓库自带的 Playwright 完成了实时截图（§3.8）。截图走的是 SwiftShader 软件 WebGL2：页面把 `<html>` 标成 `no3DAccel`，但该 class 在内联 CSS 与 `main.js` 中都没有任何消费者，渲染管线与真机一致，只是帧率不代表真机。
+- 软件渲染下 `requestAnimationFrame` 平均 149 ms 一帧（720 × 405 视口），因此**节拍量化没有被实测**：靠截图差分或钩住 `AudioBufferSourceNode.start` 都测不出 698 ms 拍点。§4.1 的结论仍只基于 `main.js` 的配置与事件逻辑，需要在真 GPU 浏览器里由人复核。
+- 手机端只验证了合成触点的拖拽响应与回弹（§3.8.5），没有验证真机手指的阻尼曲线与惯性手感；「像真纸一样滑动」的描述仍来自三澤研究室公告。
+- `main.js` 是压缩产物，能证明所用运行时与公开客户端逻辑，不能证明构建流水线、内部 `_tools/studio` 编辑器的完整功能或私有资产来源。
+- 纸张平均色由 2048² 纹理缩放到 1 像素计算得出，是材料的代表色，不是品牌规范色值。
+- 本文提到的 LMDJ 方案均为建议。现役约束以 [2026-09-01 brief](./2026-09-01-creator-visual-language-brief.md) 为准；Creator 视觉层是否以 Three.js 为渲染器，以 #522 下并行进行的决策为准，本文不替它做决定。
+
+## 2. 项目背景与品牌定位
+
+「百様図（ひゃくようず，hundred-way graphic）」是大丸松坂屋百貨店 2025 年发布的新视觉识别。大丸 35 年、松坂屋 23 年来首次更换购物袋，2025 年 7 月 17 日公告，7 月 30 日起全国 15 店陆续使用。
+
+- 艺术指导：三澤遥（日本デザインセンター 三澤デザイン研究室）；设计：佐々木耕平、鈴木真樹、山口敏生；文案：永瀬恭子；摄影：北村圭介、小川真輝；创意指导：吉泉聡（TAKT PROJECT）。
+- 网页、影像与音乐：mount inc.（东京）。官网获 Spikes Asia 2026 Digital Craft 银奖、Awwwards Honorable Mention（2026-01）；mount 另提到在 NY ADC / The One Show 获奖。
+- 核心概念：「它的每一样（それぞれらしさ）」。把顾客各自的价值观与百货店重叠所产生的「丰富的调和」画成图案。
+
+官方叙事把百様図拆成四个视角。初稿以为官网正片按它们分章，实测并非如此：四个视角只出现在「About Hyakuyo」模态页的四个小节里（英文小节标题 History / Locally Grounded / Transience / The Human Touch，导航按钮写作 History / Locally Grounded / Changing / Feelings）；WebGL 正片按四个「Element」推进：Color、Shape、Paper、Layering（§3.7、§3.8）。下表是四个视角与纸层动作的对应：
+
+| 章节 | 官方标题 | 纸层对应的动作 |
+|---|---|---|
+| 1/4 History | 圆与方 / 蓝与绿 | 两种形、两种主色分别代表大丸与松坂屋，中央重叠处代表合并 |
+| 2/4 Locally Grounded | 重叠的纸 / 简单的形 | 用随处可得的纸和最简单的形，呼应「没有旗舰店、十五家店各自扎根」 |
+| 3/4 Changing | 移动 / 小位移带来大变化 | 移动一张纸，整幅图案随之改变，「从不显示同一张脸」 |
+| 4/4 Feelings | 用手移动 / 纸的质感 | 纸与人手是百货店与顾客之间的两条纽带 |
+
+购物袋图案全部从同一张百様図中截取：左半给大丸（绿系、圆孔），右半给松坂屋（蓝系、方孔）。实体版是手工层叠、实拍成像；官网版是同一规则的 WebGL 重建。
+
+## 3. 视觉设计语言拆解
+
+### 3.1 基础视觉语法
+
+| 视觉元素 | 实际表现 | 产生的感受 |
+|---|---|---|
+| 色纸 | 8 种实拍纸张纹理（2048² 无缝贴图），带纤维与轻微色斑 | 美术纸、丹迪纸一类的手工感，不是平涂色块 |
+| 孔 | 每张纸只有一种孔：正方形或圆形，正交栅格排布 | 秩序感；孔本身不是图案，透出的下层才是图案 |
+| 重叠 | 0–7 层，层距固定；上层的孔透出下层的色与孔 | 深度来自遮挡和阴影，而非透视 |
+| 位移 | 纸只做 XY 平移与整体推压，旋转永远为 0 | 「拨一张纸」的手势读法 |
+| 软阴影 | 单一方向光 + PCSS 软阴影，随层间距变宽 | 让重叠读成真实的厚度 |
+| 切边 | 孔洞边缘的斜切与翻边法线，外缘同样处理 | 纸像被裁刀切过，而不是遮罩镂空 |
+| 文字 | 压进纸面的贴图文字，跟随光照与凸起 | 文字像印在纸上，而不是浮在屏幕上 |
+| 留白 | 大面积单色纸作为背景，UI 仅在边角 | 画册式，页面本身就是一张纸 |
+
+最重要的设计对比是：
+
+```text
+极少的几何变量（形 / 色 / 层 / 位移）
+                 ×
+极高的材料真实度（光照 / 阴影 / 纸纹 / 切边）
+```
+
+没有真实材料，这只是 Bauhaus 式的几何图案；没有几何约束，实拍纸又会变成普通的产品摄影。百様図的辨识度来自「最少的规则，最实的材料」。
+
+### 3.2 风格命名与边界
+
+用户口中的「剪纸风格」在检索时需要精确化。百様図不是民俗意义上的剪纸（silhouette paper-cut，强调轮廓与镂花），而是：
+
+> **穿孔色纸重叠（perforated layered colored paper）× 几何构成 × 实拍材料的互动绘本。**
+
+其中「层叠色纸、丸与四角」是三澤研究室的官方自述；其余是基于页面、着色器与数据的设计分析，不应写成大丸或 NDC 的官方声明。
+
+| 层次 | 风格归类 | 对应页面特征 |
+|---|---|---|
+| 材料 | Tactile Paper / Paper Craft Realism | 实拍纸纹、软阴影、切边法线 |
+| 几何 | Bauhaus / 构成主义基础几何；Swiss Grid | 正方形与圆形、正交栅格、固定层距 |
+| 叙事 | Interactive Picture Book；Brand Story Microsite | 六幕、按章节推进、文字压在纸上 |
+| 动效 | Music-quantized Motion；Stop-motion 感 | 帧切换等小节尾，纸张移动配沙沙声 |
+| 品牌 | Dual-identity VI（圆 / 方，绿 / 蓝） | 左右半幅分属两家百货店 |
+
+用于设计检索时，可组合使用：
+
+- `layered paper cutout website`
+- `perforated paper WebGL`
+- `paper craft brand identity motion`
+- `重ね紙 ビジュアルアイデンティティ`
+- `PCSS soft shadow paper Three.js`
+- `music quantized UI transition`
+
+用于 LMDJ 设计 Brief 时，可以写成：
+
+> **穿孔纸层乐器：Pad 是一叠带孔的色纸，身份来自透出的底色，状态来自纸的开合、推压与阴影；只用圆与方两种孔、一套材料、一个光源。**
+
+这一定义只描述可借鉴的视觉关系，不授权复制大丸松坂屋的纹理照片、配色规范、Logo、文案或页面版式。
+
+### 3.3 调色板
+
+场景数据里只有 8 种纸色，全部是实拍纹理。下表的代表色由纹理平均得出：
+
+| 纸色 ID | 代表色 | 在 95 张纸定义中的使用次数 | 角色 |
+|---|---|---|---|
+| `peacock` | `#1691a4` | 15（含唯一的背景纸） | 大丸侧主色、默认背景 |
+| `blue` | `#3463ae` | 12 | 松坂屋侧主色 |
+| `green` | `#1b5548` | 8 | 大丸侧深色 |
+| `beige` | `#d6c9c2` | 24 | 最常用的中性层 |
+| `gray` | `#5d7380` | 16 | 中性冷灰 |
+| `brown` | `#c46645` | 12 | 暖色点缀 |
+| `yellow` | `#ebae3e` | 7 | 高亮点缀 |
+| `white` | `#f3e9f4` | 1 | 仅一张 |
+
+Awwwards 标注的两个品牌色 `#008EA0` 与 `#3458A4` 与 `peacock`、`blue` 的平均色一致。整套配色的规律是：**两种品牌色 + 三种中性纸 + 三种点缀色**，饱和度靠纸张本身，不靠 CSS。DOM 层的 UI 只用 `#fff`、`#4d4d4d`、`#6d6d6d` 等灰阶；文本选中色用半透明的品牌蓝绿。
+
+### 3.4 几何规则
+
+场景数据与运行时配置给出的默认值如下：
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| 默认纸尺寸 | 410 × 460 | 场景单位；实际尺寸有 336 × 441、391 × 441、600 × 900 等十余种 |
+| 背景纸 | 2400 × 1738 | 唯一的 `bg` 类型，可切换纸色 |
+| 方孔 | 边长 40，间距 10 | 单元格 50；60 / 95 张纸用此规格 |
+| 方孔变体 | 75 + 25、50 + 10、25 + 10 | 用于不同章节的放大或密集图案 |
+| 圆孔 | 半径 25，间距 `50/√2 − 25` | 栅格旋转 45°，形成菱形排布 |
+| 孔偏移 | 方孔 (0, 0)；圆孔 (6, 8) | 圆孔相对纸边有半格错位 |
+| 边距 | 方孔 (10, 0, 0, 10)；圆孔 (10, 0, 10, 10) | `raw_edge` 控制边缘是否保留完整孔 |
+| 层距 | `layer_pitch_z` = 4 | 8 层纸总厚度 28 单位 |
+| 层数 | 0–7 | 858 条变换中，第 2、3 层最常用 |
+| 旋转 | 全部为 0 | 纸只平移，不旋转 |
+| 相机 | 焦距 130，位于 z = 4470 | 近似正交的长焦透视 |
+| 光源 | z = 2000，投射长度 2500 | 单一方向光，PCSS 光源尺寸 0.058 |
+
+**95 张纸里 76 张是方孔、8 张圆孔、11 张无孔。** 圆孔是「大丸 = 圆」的身份标记，用量克制；无孔纸做底与遮挡。这种比例本身就是设计决策：大多数变化由方孔叠出，圆孔一出现就有辨识度。
+
+### 3.5 材质与光照
+
+着色器层面的材料由四张贴图叠成：
+
+1. **颜色贴图**：实拍纸张纹理，按 100 单位一个周期平铺，可与第二张纸色按 `color2_alpha` 交叉过渡。
+2. **凸起贴图**：80 单位一个周期的纸纹凸起，用于孔洞边缘翻边的强弱。
+3. **文字凸起贴图**：20 单位周期，让压进去的文字有印刷凹凸。
+4. **文字贴图**：最多 12 个文字矩形，按光照调整明暗后混入纸色。
+
+光照公式极简：`color = mix(color − 0.5, color + 0.1, diffuse)`。没有 PBR，没有环境光遮蔽，没有 tone mapping 之外的后处理。材料感全部来自：
+
+- 孔洞边缘的斜切法线（`bevel`）与翻边法线（`flip`），翻边宽度随纸纹凸起变化，模拟切纸毛边；
+- 外缘同样做法线处理；
+- 单一光源 + PCSS 软阴影：阴影随遮挡层与接收层的距离变宽。
+
+这意味着复现这一材料感的成本主要在**阴影管线**，不在材质本身。
+
+### 3.6 字体与排版
+
+| 层次 | 字体 | 来源 |
+|---|---|---|
+| 日文正文 | こぶりなゴシック StdN W3 / W6 | FONTPLUS 网页字体服务 |
+| 日文辅助 | ヒラギノ角ゴ StdN W1、たづがね角ゴシック Thin | FONTPLUS |
+| 拉丁文 | Neue Frutiger World Book / Medium / Light | FONTPLUS（Monotype） |
+| 回退 | Noto Sans、Helvetica Now Text、sans-serif | 系统 |
+
+排版特征：
+
+- 字号通过 `--t-s`（正文）与 `--cn-s`（内容标题）两个缩放 token 派生，正文 12–17，标题 23–40，均按设计稿 1440 × 810 / 375 × 639 等比缩放；
+- 字距只用 0.36 一级，行高 24–48；
+- 圆角几乎不存在（最多 3 px），按钮是细线与圆点；
+- 自建的 `js_typo` 排版引擎负责两端对齐、断行位标记与悬挂标点，并有「typo 调试模式」把断点标红；
+- WebGL 中的文字与 DOM 中的隐藏文本（`.h_alt`，4 px、透明、不可点）并存。
+
+对 LMDJ 的启示：百様図的字体授权（FONTPLUS、Monotype）与运行时远程加载都不能进入 Creator 的同源离线分发；可借鉴的是「一套无衬线、两个缩放 token、极少圆角」的克制，而不是具体字体。
+
+### 3.7 页面结构
+
+整站是一个**固定视口的 WebGL 舞台**（`html { overflow: hidden }`），DOM 只负责：入口按钮、语言切换、章节导航、两个模态内页（About Hyakuyo / About shopping bags）与隐藏文本。
+
+场景数据的层级：
+
+```text
+devices（pc / sp / pc-en / sp-en 各一份场景 id 列表）
+  └── scenes ×6
+        ├── 幕 1：1 个 clip、46 帧（splash / entrance / intro / lead ×6 / bag / return / sub ×35）
+        ├── 幕 2–5：Element 1–4，各 3 / 5 / 5 / 4 个备选 clip，每个 clip = genri + mitate + sub
+        └── 幕 6：1 个 clip、22 帧（all_near / all_far / random_camera / loop_camera / sub ×18）
+              └── frames ×195 → paper_transforms ×858（layer / position / process / visible / color2）
+papers ×95（形 / 色 / 尺寸 / 孔参数）
+texts ×92（pc-en；每设备一套文字贴图尺寸）
+```
+
+帧类型里的 `genri`（原理）与 `mitate`（見立て，「把它看成什么」）成对出现 17 次：先演示一次纸的操作，再问「你看到了什么」。这是绘本节奏，不是产品导航。
+
+运行时把 6 幕摊成 12 个「段」加 1 个入口，`?page=N` 直接跳到第 N 段，第 13 段回到第 1 段（实测 `page=12` 与 `page=25` 都是购物袋结尾）。每个 Element 幕一次只播放一个备选 clip：首次访问取第一个，回访（`localStorage.vi_entered`）时打乱 clip 顺序并随机选 mitate 段。段与画面的对应见 §3.8.2。
+
+第 12 段的购物袋结尾**不是 WebGL**：`.js_last_container` 是 DOM 层，用 `<video muted playsinline loop>` 播放 `assets/mov/*@{av1|h265|h264}.mp4`（按浏览器解码能力选编码，另有 `@image.jpg` 首帧做背景），配 DOM 文案「Each with its own Hyakuyo. All at once.」与两家 Logo。也就是说，实拍与三维渲染的购物袋从未进入纸层着色器。
+
+两个模态内页是传统 DOM 页面：`webp` 实拍照片（建筑浮雕、街头人群、层叠纸张特写）、小标题、编号「1/4 … 4/4」、右侧说明栏。视觉密度低，字号小，是展览说明卡的读法（§3.8.6）。
+
+### 3.8 实时截图实录
+
+以下截图全部由本机 Playwright 1.62.1（`tests/platform/web` 自带）驱动 Chromium 无头浏览器实时渲染，SwiftShader 软件 WebGL2，桌面 1440 × 810 @1x、手机 375 × 639 @2x，JPEG 质量 80–82。抓取方法与开关记录在 [`assets/hyakuyozu/README.md`](./assets/hyakuyozu/README.md)。
+
+> 版权提示：这些图是大丸松坂屋百貨店 / 日本デザインセンター / mount inc. 作品的运行画面，只作为本研究的证据引用；不得作为 LMDJ 产品、宣传、Portal 或设计标本的素材，也不得裁切复用其中的纸张纹理与图案。
+
+#### 3.8.1 入口页
+
+| 桌面 1440 × 810 | 手机 375 × 639 |
+|---|---|
+| ![桌面入口页：左侧白纸面上的标题与「The site plays music」，右侧蓝色方孔纸透出橙、米、灰三层](./assets/hyakuyozu/pc-00-splash.jpg) | ![手机入口页：标题面板在上，纸层在下，底部有点按提示框](./assets/hyakuyozu/sp-00-splash.jpg) |
+
+入口页就已经是完整的材料语法：软阴影随层距变宽、孔洞边缘有斜切亮边、纸面有纤维噪点。左侧 UI 面板本身也是一张「纸」（白纸 + 阴影），而不是 DOM 卡片。桌面与手机各自取用 pc / sp 场景数据，不是同一画面缩放：手机把标题面板放到纸层上方，并加了点按提示框。两次抓取入口页时右侧纸层的排布不同（入口纸层带 `random_camera` 慢漂移，且 bag 段从 d_S / m_S 等备选中取）。
+
+#### 3.8.2 正片 12 段（桌面，`?page=N&noAuto&noBgm`）
+
+| 段 | 幕 | 画面 | 纸面文字 |
+|---|---|---|---|
+| 1 | 幕 1 · intro | ![第 1 段：蓝色方孔纸透出橙与米色，下方蓝纸带上有引言](./assets/hyakuyozu/pc-01.jpg) | 「Hyakuyozu—the "hundred-way graphic"—symbolizes the creation of many different patterns.」 |
+| 2 | 幕 2 · Element 1 : Color（genri） | ![第 2 段：大圆孔的孔雀蓝纸叠在深蓝纸上](./assets/hyakuyozu/pc-02.jpg) | 「and Daimaru's green」 |
+| 3 | 幕 2 · Element 1 : Color（mitate） | ![第 3 段：密集方孔透出蓝色，纸面文字 Many patterns emerge](./assets/hyakuyozu/pc-03.jpg) | 「Many patterns emerge」 |
+| 4 | 幕 3 · Element 2 : Shape（genri） | ![第 4 段：三张米色方纸各开一个圆孔透出橙色，顶端一条橙纸](./assets/hyakuyozu/pc-04.jpg) | 「and circles」 |
+| 5 | 幕 3 · Element 2 : Shape（mitate） | ![第 5 段：深绿背景上灰纸方孔透出橙色半圆](./assets/hyakuyozu/pc-05.jpg) | 「What can you see?」 |
+| 6 | 幕 4 · Element 3 : Paper（genri） | ![第 6 段：米色纸上大方孔透出黄色纸](./assets/hyakuyozu/pc-06.jpg) | 「Layered together」 |
+| 7 | 幕 4 · Element 3 : Paper（mitate） | ![第 7 段：绿、灰、蓝、橙四色纸交错，右侧橙纸上有文字](./assets/hyakuyozu/pc-07.jpg) | 「Patterns emerge」 |
+| 8 | 幕 5 · Element 4 : Layering（genri） | ![第 8 段：五条横向纸带，标注 1 到 5 layers](./assets/hyakuyozu/pc-08.jpg) | 「1 / 2 / 3 / 4 / 5 layers」 |
+| 9 | 幕 5 · Element 4 : Layering（mitate） | ![第 9 段：蓝色方孔纸叠在橙、灰、米色纸上，右侧留白](./assets/hyakuyozu/pc-09.jpg) | （无） |
+| 10 | 幕 6 · all_near | ![第 10 段：孔雀蓝方孔纸近景，透出黄与灰](./assets/hyakuyozu/pc-10.jpg) | 「Coming together one by one」 |
+| 11 | 幕 6 · all_far | ![第 11 段：整幅百様図远景，左半绿圆右半蓝方](./assets/hyakuyozu/pc-11.jpg) | 「One, Two, Ta-Da!— A new culture begins」 |
+| 12 | 幕 1 · bag / return | ![第 12 段：灰白摄影棚背景里的一只孔雀蓝购物袋视频，上方 DOM 文案](./assets/hyakuyozu/pc-12.jpg) | DOM：「Each with its own Hyakuyo. All at once.」 |
+
+可以直接从图里读出几条初稿只能从数据推断的事实：
+
+- 每一段只有一到两种孔形、两到四种纸色，画面从不超过五层可见纸；§3.4「76 方孔 / 8 圆孔 / 11 无孔」的比例在画面上就是「方孔为主、圆孔一出现就成为主角」。
+- 顶栏「Hyakuyozu · Element N : Name」和右下角两个链接是 DOM，纸面上的短句是贴图；§3.8.3 有对照证明。
+- 第 11 段的整幅百様図与购物袋模态页里的图案是同一张图：左半绿系圆孔归大丸，右半蓝系方孔归松坂屋。
+- 第 12 段的结尾切回 DOM 视频，材料语法在此终止；LMDJ 若采用纸层方向，不需要这样的「落地」段。
+
+#### 3.8.3 渲染管线对照（第 3 段）
+
+| 正常渲染 | `?albedo`（跳过阴影合成） |
+|---|---|
+| ![正常渲染：孔洞内有随深度变宽的软阴影与斜切亮边](./assets/hyakuyozu/pc-03-element1-baseline.jpg) | ![仅 albedo：同一场景变成平涂色块，孔洞没有深度](./assets/hyakuyozu/pc-03-element1-albedo-only.jpg) |
+
+`?albedo` 让全屏合成着色器以 `IS_ALBEDO = 1` 编译，直接输出 gAlbedo。对比可见：纸纹、纸色与孔形全部来自 albedo，而**全部深度感只来自阴影 pass**，没有任何来自几何或透视的深度线索。这印证了 §3.5 的判断：复现成本在阴影管线，不在材质。
+
+| 正常渲染（纸面文字） | `?noText`（关闭文字贴图） |
+|---|---|
+| ![纸面下缘印着 Many patterns emerge](./assets/hyakuyozu/pc-03-element1-text-baseline.jpg) | ![同一位置文字消失，顶栏 DOM 标题仍在](./assets/hyakuyozu/pc-03-element1-text-notext.jpg) |
+
+`?noText` 后「Many patterns emerge」消失，而顶栏「Hyakuyozu · Element 1 : Color」不受影响，证明前者是压进纸面着色器的贴图（§0 第 3 点、§8.5）。
+
+（两组对照分别加载，帧内 `genri` 动画进度不同，所以孔形与位置略有差异。）
+
+#### 3.8.4 指针推压与拖拽（第 3 段，桌面）
+
+| 悬停 | 按住 | 按住后拖动 |
+|---|---|---|
+| ![悬停：孔洞阴影完整](./assets/hyakuyozu/pc-03-element1-hover.jpg) | ![按住：光标附近的纸被压下，孔内阴影收窄](./assets/hyakuyozu/pc-03-element1-press.jpg) | ![拖动：上层纸随光标平移，孔位与底层错开](./assets/hyakuyozu/pc-03-element1-drag.jpg) |
+
+按住时光标附近的纸沿 z 轴下压，孔内阴影收窄、透出的底色面积变化，这就是 §4.3 的 `mousePressure` 推压；拖动时上层纸整体平移，孔位与底层错开，纸本身不旋转。
+
+#### 3.8.5 手机端触点拖拽（`?page=3`，CDP 合成触点）
+
+| 触点落下前 | 拖动 24 步（约 120 px）后 | 松开 1.75 s 后 |
+|---|---|---|
+| ![手机端第 3 段初始画面](./assets/hyakuyozu/sp-03-touch-0-before.jpg) | ![拖动中：整叠纸随触点位移并略微倾斜，纸面文字一起移动](./assets/hyakuyozu/sp-03-touch-1-during.jpg) | ![松开后：纸回弹并已切到下一帧，孔形与配色改变](./assets/hyakuyozu/sp-03-touch-3-release-1750ms.jpg) |
+
+拖动中整叠纸随触点位移并轻微倾斜（纸面文字随之倾斜，说明倾斜的是舞台 / 相机而不是单张纸，§3.4 的「旋转永远为 0」仍成立）；松开 250 ms 内回弹到原位；松开 1.75 s 后画面已切到下一帧，也就是拖拽被判为一次翻页（`goByDir(…, {byDrag: true})`）。这只证明了手势的响应与回弹链路，没有证明真机手指的阻尼曲线。
+
+#### 3.8.6 模态内页
+
+| About Hyakuyo | About shopping bags |
+|---|---|
+| ![About Hyakuyo 模态：引言、四个视角链接、History 小节与实拍照片](./assets/hyakuyozu/pc-modal-about.jpg) | ![About shopping bags 模态：两只购物袋并列，下方整幅百様図](./assets/hyakuyozu/pc-modal-bags.jpg) |
+
+两个模态页都是传统 DOM 长页：白底、小字号、细线分隔、编号「1/4」，图片为实拍 `webp`。这印证了 §3.7 的判断，也说明官方四个视角（History / Locally Grounded / Changing / Feelings）只在这里出现。
+
+## 4. 动效与交互语言
+
+### 4.1 节拍量化
+
+运行时配置：
+
+| 参数 | 值 |
+|---|---|
+| BPM | 86 |
+| 每小节拍数 | 3 |
+| 一拍 | 698 ms |
+| 一小节 | 2093 ms |
+| 帧到帧时长 | 900–2000 ms |
+| 段到段 | 900 ms |
+| 幕到幕 | 1800 ms |
+| 小节尾提前量 | 0.4 拍 |
+
+音频未启动时用定时器伪造节拍。播放中的帧不会到点就切，而是等 `preMeasureFinish` 事件（小节结束前 0.4 拍）才触发下一帧，因此所有纸张移动都落在音乐的小节边界上。三拍子让节奏不像常见四拍子的机械感。
+
+以上仍是对 `main.js` 配置与事件逻辑的读解。本次没有实测到拍点：软件渲染下每帧约 149 ms，截图差分与音频节点钩子都无法分辨 698 ms 的拍（§1.1）。帧到帧时长的 900–2000 ms 区间在没有逐帧 `custom_duration` 时按 `Math.random()` 取值，再对齐到下一个小节尾；也就是「随机时长、量化落点」。
+
+### 4.2 声音层
+
+Web Audio 播放，`vorbis.webm` 优先、`mp3` 回退，每类一个增益节点：
+
+| 层 | 文件组 | 默认音量 | 触发 |
+|---|---|---|---|
+| bgm | `r-base-005` | 0.4（`?noBgm` 关闭） | 循环 |
+| rustle | `r-papermovement-003` | 0.45 | 纸张移动量驱动音量 |
+| starter / restarter | 4 段 | 0.5 | 入口与回到开头 |
+| transition | `r-se-002.a–d`、`r-se-003.a–e` | 1 | 帧切换，轮换 9 段 |
+| hover | `r-hover-002` | 0.6 | 悬停 |
+| click | `r-click-001–003` | 1 | 点击，轮换 |
+
+模态打开时 bgm 在 600 ms 内降到 0，关闭时 2400 ms 回升。这是一个完整的**声音设计层**，与视觉共享同一时间轴。
+
+### 4.3 指针与推压
+
+- 鼠标 / 触点位置以 0.07 的插值系数平滑，`mousePower` 以 0.08 衰减；
+- 顶点着色器把光标附近的纸沿 z 轴推下（`LAYER_PITCH_Z × 10 × nearMouse × pressure`），无孔纸整体再下压半层；`reverse_mouse_fb` 模式改为把远处抬起；
+- 带孔的纸叠加 3D simplex 噪声的缓慢起伏（`uWave`），让静止画面也有呼吸；
+- 拖拽开始时 `dragAffection` 用 `easeOutQuart` 在 750 ms 内到 1，结束时随机 600–1200 ms 回落；
+- 自建滚轮类带惯性与「korokoro」（滚动）两种模式，帧率变化通过 `frameStretch` 修正时间步。
+
+### 4.4 纸的过程动画
+
+`uProcess` 四个分量让纸可以「正在被裁」：上下裁切、中段拉伸或错位；`uHoleOpen` 让孔从 0 开到满；`color2_alpha` 让同一张纸在两种纸色间过渡。这三个参数就是全部的状态动画词汇。
+
+## 5. 响应式设计
+
+- 设备判断用方向而非宽度：横屏 = PC 场景，竖屏 = SP 场景；竖屏且 ≥ 720 px 视为平板，仍用 SP 数据；
+- PC 与 SP 各有一整套场景 JSON、文字贴图和入口纸，不是同一份数据缩放；
+- 设计稿基准 1440 × 810 与 375 × 639，所有尺寸经 `calc(var(--t-s) * n)` 派生；
+- 图片按 `@1x / @1.5x / @2x` 与 pc / sp 分发；
+- 没有 `prefers-reduced-motion` 处理；调试模式、无 bgm、强制 mp3 都用 URL 查询参数。
+
+手机端截图（§3.8.1、§3.8.5）证实这是两套编排而不是缩放：入口页把标题面板搬到纸层上方并加点按提示框；正片把段标题放大到两行、纸面文字与「About Hyakuyo / shopping bags」链接改为底部单行；纸层本身按 sp 数据重新排布，孔径相对视口明显更大。
+
+可借鉴的是「同一规则、两套编排」；不应照搬的是「竖屏一律走手机数据」和「无 reduced-motion」。
+
+## 6. 底层前端技术
+
+### 6.1 可确认的技术栈
+
+| 层 | 事实 |
+|---|---|
+| 托管 | 静态 HTML 于 Amazon S3 + CloudFront；`IS_PHP = false`；资产以 `?v=202512181305` 版本号缓存 |
+| 打包 | 单一 `main.js` 723 KB（数字模块 ID，webpack 风格），CSS 64 KB 内联在 HTML 中，HTML 总计 184 KB |
+| 渲染 | Three.js r170（WebGL2 必需；r163 起不再支持 WebGL1） |
+| 着色器 | glslify 模块化 GLSL，含 Ashima 3D simplex noise（MIT） |
+| 管线 | 自定义三段：阴影图 → 多目标输出（Albedo / ShadowCoords / TextArea / 工具态 Pick）→ PCSS 合成 |
+| 材质 | 全部 `RawShaderMaterial` / `ShaderMaterial`；Three 的 Lambert / Phong / Standard 仅作为库内置存在 |
+| 动效 | 自建 tween（`easeOutQuart` 等命名缓动）、自建事件总线、`requestAnimationFrame` 单循环 |
+| 音频 | Web Audio API，webm/vorbis 优先、mp3 回退 |
+| 视频 | 结尾购物袋段为 DOM `<video>`，`assets/mov/*@{av1|h265|h264}.mp4` 按解码能力选择，另有 jpg 首帧 |
+| 运行开关 | URL 查询键（存入 `sessionStorage.query-stored-keys`）：`page=N` 跳段、`noAuto`、`noBgm`、`skip`、`first`、`albedo`、`noText`、`noNoise`、`helper`、`hq`（阴影图 4096）、`fps`、`device`、`detail` / `detailBag`（直开模态）、`typo`、`debug` |
+| 字体 | FONTPLUS 远程脚本按需加载 |
+| 状态 | `sessionStorage` 保存查询参数与调试开关 |
+| 无障碍 | 隐藏 DOM 文本、`lang` 切换；无 reduced-motion |
+| 工具 | `_tools/studio` 编辑器（GPU 拾取、时间轴、保存 JSON）；`.js_guide` 设计稿差值叠加层（`mix-blend-mode: difference`）；typo 调试模式 |
+
+没有 React / Vue / Svelte，没有 GSAP / Lenis / Barba，没有物理引擎。所有「手感」都是自写的插值与缓动。
+
+### 6.2 渲染管线
+
+```text
+每帧
+  1. 排序渲染顺序（按 z 降序）
+  2. 所有纸切到阴影图模式 → 用光源相机渲染到 shadow map
+  3. 切回正常模式 → 多目标渲染到 gAlbedo / gShadowCoords / gTextArea
+  4. 全屏合成：PCSS(shadow map, shadowCoords) × Albedo → 屏幕
+```
+
+PCSS 用 9 个泊松采样做遮挡搜索，再用 9 + 9 采样做 PCF，光源尺寸固定为 `0.058 / lightFrustumSize`。这是全站最贵的部分，但只做一次全屏 pass。§3.8.3 的 `?albedo` 对照图直接展示了第 4 步被跳过后的画面：没有阴影合成，整站就只是平涂色块。阴影图默认 2048²（桌面）/ 1024²（其他），`?hq` 提到 4096²。
+
+孔洞不是几何，而是**着色器内按栅格 discard**：把 UV 换算到单元格坐标，圆孔用 `length`、方孔用 `max(|x|, |y|)` 判断是否丢弃。因此每张纸只是一个 `PlaneGeometry`，孔的数量、大小、开合都是 uniform。这是最值得借鉴的工程决策：**几何极简，变化全在着色器参数里。**
+
+### 6.3 资源体量
+
+| 资源 | 体量 |
+|---|---|
+| `main.js` | 723 KB（含 Three.js 与所有着色器） |
+| HTML + 内联 CSS | 184 KB |
+| 场景 JSON | 388 KB（pc-en）/ 407 KB（pc） |
+| 纸张纹理 | 8 × 2048²，@2x 每张 16–460 KB webp，另有凸起图两张 |
+| 文字贴图 | 每设备约 50 张 webp |
+| 音频 | 约 20 段 webm / mp3 |
+| 内页照片 | 约 20 张 webp，分 1x / 1.5x / 2x |
+
+这是一个体量可观的展览站点，但仍在单一 bundle、单一 WebGL context、单一 RAF 循环内完成。
+
+### 6.4 编排模型
+
+编辑器输出的数据把「纸是什么」与「纸在何时何处」严格分开：
+
+- `papers` 只描述材料与几何；
+- `paper_transforms` 以 `frameId_paperId` 为键，只描述层、位置、过程、可见与第二纸色；
+- `frames` 只有类型与备注（`d_S/fused`、`m_M`、`second`、`noloop` 等生产备注）；
+- 自定义时长与延迟是逐帧可覆盖的例外值。
+
+这与 LMDJ「Project Truth 只存作者意图、Runtime Snapshot 派生」的分层一致：纸定义类似 Asset，逐帧变换类似 Pattern 事件，播放器类似 Runtime。
+
+## 7. 与 KUMALEON 的对照
+
+| 维度 | KUMALEON | 百様図 |
+|---|---|---|
+| 核心载体 | 固定 3D 角色 + 生成艺术贴图 | 无角色，纯材料与几何 |
+| 版式骨架 | 粗黑边框、瑞士网格、表格化导航 | 单色纸背景、边角 UI、几乎无框线 |
+| 色彩 | 高饱和 Y2K 几何、米白纸面 | 8 种实拍纸色，两种品牌色 + 中性 + 点缀 |
+| 随机性 | 规则驱动的生成艺术 | 受控随机：纸的几何、层序与位置全由编辑器定死；随机只出现在备选 clip 的顺序与 mitate 选择（回访时）、帧间时长（900–2000 ms 内取值再对齐小节尾）、过场 / 点击音效的轮换起点、入口纸层的漂移相机相位、拖拽回落时长（600–1200 ms） |
+| 3D 深度 | 真透视、可旋转角色 | 近正交长焦、纸只平移 |
+| 材料来源 | 程序化 Canvas 纹理 | 实拍纸张纹理 |
+| 动效驱动 | 时间函数 + 交互 | 音乐节拍量化 + 指针推压 |
+| 声音 | 无 | 完整声音设计层 |
+| 可复用结构 | 严格版式 × 受控随机 | 极少几何变量 × 真实光照 × 节拍 |
+| 对 brief 的位置 | 演奏 UI / 海报类参考 | 印刷 / 面板类参考 |
+| 与 Three.js 决策的关系 | Canvas → `CanvasTexture` → 3D 表面 | 自定义着色器 + 阴影管线；不依赖模型 |
+
+两者互补而不重叠：KUMALEON 解决「页面如何有秩序地容纳变化」，百様図解决「一个物件如何在最少规则下有材料感」。#522 Phase 1 的三份标本若采用其中一份走百様図方向，另两份仍需在材料轴上与之互斥（例如深色面板或第三种材料）。
+
+## 8. 对 LMDJ Creator 的映射
+
+### 8.1 Brief 禁区自检
+
+| brief 条款 | 百様図方向的判定 |
+|---|---|
+| Creator 是乐器，不是海报 | 纸层可以做成「一叠可拨动的色纸」，但必须去掉绘本叙事；不做章节、不做 genri / mitate |
+| 变色龙 / 3D 皮肤 / kawaii 不当主视觉 | 天然满足：百様図没有角色 |
+| 不复制 Kumaleon | 不涉及 |
+| 不用现役深底 + 薄荷绿 + Inter 圆角卡 | 满足：纸面、无圆角、无衬线 |
+| 不用「米白衬线 + 陶土强调」模板 | 需要注意：`beige` + `brown` 组合会滑向该模板；应以品牌双色和冷灰为主 |
+| 颜色只绑真实状态与 `assetId` 身份色 | 满足：底层纸色 = 身份色，孔的开合 / 推压 = 状态 |
+| 只有 Pad 区可以高饱和 | 满足：顶栏、Rail、Surface 用无孔中性纸或 DOM 灰阶 |
+| 不为未实现能力画可点入口 | 不涉及 |
+| 不做两套皮 | 满足：Project / Sequence / Sample 共用同一材料 |
+| 直角、零阴影是开放轴 | 百様図恰好是「直角 + 软阴影」，可以作为该轴上的一个明确取值 |
+
+### 8.2 Pad 状态词汇
+
+如果把每个 Pad 做成一叠 2–3 层的带孔色纸，百様図的三个动画参数刚好覆盖 brief 要求的六种状态：
+
+| Pad 状态 | 纸层表达 | 来源参数 |
+|---|---|---|
+| empty | 单张无孔中性纸，无阴影 | `hole_type: none`，层 0 |
+| assigned | 上层开孔，透出 `assetId` 派生的底纸色 | `uHoleOpen = 1`，底层 `color` |
+| idle（有 asset） | 孔全开，静止，微弱起伏 | `uWave` 极小 |
+| capturing | 孔从 0 逐渐开到满 | `uHoleOpen` 0 → 1 |
+| playing | 整叠被按下，阴影收窄；按住期间保持 | `mousePressure`，层距压缩 |
+| error | 上层纸被「裁掉一段」露出底色，不用红色 | `uProcess` 上下裁切 |
+
+身份色的确定性来自 brief 已锁的 `assetId → 稳定色`；纸层只需要把这个色作为底纸。圆孔 / 方孔可以留给另一个真实字段（例如 Bank 或 Slot 奇偶），不绑音乐角色。
+
+### 8.3 节拍量化的直接价值
+
+百様図为了配乐才做节拍量化；LMDJ 本来就有 Project 的 BPM 与 Transport。把 Pad 的非即时反馈（capturing 完成、Bank 切换、模式切换的纸张重排）量化到下一拍或下一小节，是百様図给 Creator 最有针对性的启发。即时反馈（按下 Pad 的推压、错误出现）仍必须零延迟，不可量化。
+
+### 8.4 实现层级与预算
+
+结合 [ThreeUI 调研](./2026-09-02-threeui-creator-visual-effects-research.md)对 Three.js 的架构建议，纸层方向有三个成本层级：
+
+| 层级 | 做法 | 能得到的 | 得不到的 | 适用阶段 |
+|---|---|---|---|---|
+| A. CSS / SVG | `box-shadow` 多层、`radial-gradient` 孔、SVG 噪点叠加 | 纸色、孔、层次、硬阴影 | 切边法线、随层距变化的软阴影、推压变形 | Phase 1 静态标本 |
+| B. Three.js 单 pass | 每 Pad 一个 Plane，着色器 discard 孔，预烘焙的阴影贴图 | 上述全部 + 孔开合 + 推压 + 纸纹 | 层距变化时的正确软阴影 | Phase 4 首版 |
+| C. 百様図同款 | 阴影图 + MRT + PCSS 全屏合成 | 完整材料感 | 无 | 仅当测量证明 B 不够时 |
+
+预算提示：百様図的整站只有几十张纸同屏；Creator 有 16 个 Pad × 2–3 层 = 32–48 张纸，加 Bank 与 Surface。层级 B 在单一共享 Renderer 内可控；层级 C 的全屏 PCSS 与 AudioWorklet / Wasm 同帧竞争，必须先测。
+
+### 8.5 必须改写的部分
+
+- **文字不进贴图**：Pad 地址、Assigned / Empty、键帽、错误说明都必须留在 DOM，保证选择、缩放、屏幕阅读器与 Playwright 可观察。百様図的文字烙印只能用于纯装饰。
+- **纹理不能复用**：8 张纸张照片是 NDC / 大丸的资产。LMDJ 若要实拍纹理，需自行扫描并入库；若走程序化纸纹（噪声 + 纤维方向），可以零资产实现，且符合当前 Creator 打包白名单只接受 CSS / JS / Wasm 的现状。
+- **字体不能远程加载**：FONTPLUS 与 Monotype 字体不进同源离线分发。
+- **必须有 reduced-motion 与 WebGL 失败回退**：静态纸层帧（层级 A）就是天然的回退。
+- **不做绘本叙事**：不要章节、不要「你看到了什么」、不要入口仪式。乐器打开即可演奏。
+
+## 9. 授权与品牌边界
+
+### 9.1 可以学习的
+
+- 「形 × 色 × 层 × 位移」四变量的几何纪律；
+- 着色器内栅格 discard 造孔、几何保持为单一 Plane；
+- 斜切 + 翻边法线制造切纸边缘；
+- 单光源 + 软阴影而非 PBR 的材料策略；
+- 节拍量化的非即时反馈；
+- 编辑器 → JSON → 播放器的编排分层；
+- 纸张移动配沙沙声的多层声音设计（LMDJ 有真实音频，需谨慎避免与用户声音冲突）。
+
+### 9.2 不应复制的
+
+- 大丸 / 松坂屋的纹理照片、代表色组合、Logo、文案、四章叙事；
+- 「左圆右方、左绿右蓝」的双品牌语义；
+- 购物袋、提手等任何与百货店包装相关的图形；
+- FONTPLUS / Monotype 字体与 Neue Frutiger 的品牌排版；
+- Awwwards / NDC 页面上的截图作为 LMDJ 资产；
+- 本文 [`assets/hyakuyozu/`](./assets/hyakuyozu/README.md) 下的运行画面截图同样只是研究证据，不得进入产品、宣传、Portal 或设计标本，也不得裁出其中的纹理与图案复用。
+
+## 10. 风险登记
+
+| 风险 | 影响 | 缓解 |
+|---|---|---|
+| 纸层方向滑向「米白 + 陶土」通用模板 | 违反 brief 禁区 | 中性纸用冷灰与品牌双色，点缀色限一种 |
+| 16 × 3 层纸 + PCSS 与音频引擎争帧 | 演奏延迟 | 先做层级 B；PCSS 只在测量后考虑 |
+| 实拍纸纹引入资产授权与打包 Contract 变更 | 阻塞实现 | 首版用程序化纸纹 |
+| 把文字压进贴图 | 无障碍与测试不可观察 | 文字全部留在 DOM |
+| 节拍量化误用于即时反馈 | 乐器手感变差 | 只量化非即时反馈 |
+| 与并行 Three.js 决策不一致 | 文档冲突 | 本文只给映射，不写渲染器决策 |
+| 截图来自软件渲染，无真 GPU 帧率与拍点实测 | 性能预算与节拍手感判断可能偏差 | Phase 1 标本前由人在真 GPU 浏览器复核运行画面与节拍；层级 B / C 的帧成本以自测为准 |
+
+## 11. 建议
+
+### 应立即吸收（进入 #522 Phase 1）
+
+- 把「穿孔纸层乐器」列为三份互斥标本之一，覆盖 brief 4.2 的「印刷 / 面板 / 海报」参考类；
+- 标本以层级 A（CSS / SVG）绘制，按现役 4×4 壳重画，Pad 六态用 8.2 的词汇；
+- 标本材料轴取值：纸面、直角、软阴影；与另两份在材料上互斥；
+- 标本文字全部为 DOM 文本，不做贴图文字。
+
+### 应原型验证（Phase 4 前的有边界 Spike）
+
+- 单 Plane + 着色器 discard 造孔 + 推压变形，测量 48 张纸在共享 Renderer 内的帧成本；
+- 程序化纸纹能否替代实拍纹理；
+- 非即时反馈量化到 Transport 拍点的手感。
+
+### 应推迟
+
+- PCSS 全屏软阴影管线；
+- 任何实拍纹理入库与打包 Contract 变更；
+- 声音设计层与用户音频的混合策略。
+
+## 12. 版本与文档
+
+- Version impact: none。研究文档，不分配 Product / Host / Module / Contract 版本。
+- Documentation impact: none。不改变 Architecture Portal 当前页、快照或产品身份；不新增源图。
+
+## 13. 主要来源
+
+- 官网（英文）：<https://www.daimaru-matsuzakaya.com/vi/en/>
+- 官网运行时：`/vi/assets/js/main.js?v=202512181305`；场景数据 `/vi/assets/tool-data/json-device/pc-en.json`；纸张纹理 `/vi/assets/data/texture/color_2048/`
+- 实时截图与运行态探针：[`assets/hyakuyozu/README.md`](./assets/hyakuyozu/README.md)（抓取环境、URL 开关、视口与操作序列）
+- 日本デザインセンター项目页：<https://www.ndc.co.jp/en/projects/daimarumatsuzakaya-hyakuyozu/>
+- 三澤デザイン研究室公告：<https://misawa.ndc.co.jp/news/3233/>
+- Awwwards 条目：<https://www.awwwards.com/sites/hyakuyozu-daimaru-matsuzakaya>
+- mount inc. Spikes Asia 2026 报道：<https://mount.jp/en/magazine/behind-spikesasia-2603/>
+- 日経クロストレンド：<https://xtrend.nikkei.com/atcl/contents/18/00947/00204/>
+- JDN：<https://www.japandesign.ne.jp/news/2025/07/83152/>
+- 宣伝会議 AdverTimes：<https://www.advertimes.com/20250722/article505808/>
+- PR TIMES 新闻稿：<https://prtimes.jp/main/html/rd/p/000003185.000025003.html>
+- Three.js r170 与 Ashima webgl-noise（MIT）：见 `main.js` 内嵌版权
