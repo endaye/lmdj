@@ -379,6 +379,48 @@ promotion. Normal operations do not use handwritten tag/Release commands,
 one-step publication, destructive asset replacement, all-tags push, tag
 movement, or published-history deletion.
 
+### Release cut
+
+A Product Build is cut from `main`, not assembled on a branch. The release cut
+Pull Request is the last change before the release SHA, and it carries only the
+allocation of that Build:
+
+1. **Features and infrastructure land first.** Every product, Host, Provider,
+   deploy workflow, release script, or packaging change merges to `main`
+   through its own Pull Request before the cut. None of it rides the release
+   cut Pull Request.
+2. **Control-plane changes land separately and earlier.** Any change to the
+   control-plane paths listed in §5 (`ci.yml`, `scope_policy.json`, the queue
+   and gate scripts) lands as its own Pull Request at least one queue cycle
+   before the cut. A control-plane Pull Request cannot use the Integration
+   Queue, so a cut that carries one must chase `main` by hand; the busier
+   `main` is, the longer it chases.
+3. **The cut Pull Request contains only allocation material:** the
+   `products/lmdj/version.json` Build allocation, `products/lmdj/assembly.json`
+   and `assembly.lock.json` when Assembly identity changes, the immutable
+   Portal snapshot for that Build, and its release-evidence document. It is
+   not control-plane, so it merges through the Integration Queue, which syncs
+   `main` and squash-merges without manual chasing. If it must also refreeze
+   the snapshot because a projected file changed, refreeze at its own tip.
+4. **One cut at a time.** While a cut Pull Request carries `merge:queue`, do
+   not label other Pull Requests; the queue is FIFO, and every merge ahead of
+   the cut costs it one of its three attempts.
+5. **The squash SHA is the release SHA.** The exact `main` commit the queue
+   produces is the only legal release target for that Build, per
+   [`version-management.md`](version-management.md). Later `main` commits do
+   not enter the Build and do not move its tag.
+6. **Fixes after the cut are PATCH Builds, not branches.** Branch
+   `fix/<task>` from the released tag, allocate the next PATCH, release it
+   through the same path, and land the same fix on `main` through an ordinary
+   Pull Request. No `release/*` or `hotfix/*` branch outlives that fix.
+
+A Pull Request that mixes Assembly allocation with feature or control-plane
+changes is split before it is labelled, not chased. This rule is motivated by
+PR #520, which carried CI routing, a new deploy workflow, release scripts, and
+the `1.0.41.0` allocation together, was excluded from the queue as a
+control-plane change, and synchronised `main` six times while unrelated
+documentation Pull Requests kept landing ahead of it.
+
 An urgent fix follows the normal `fix/<task>` path from `main` through focused
 verification, Pull Request, CI, and squash merge. Urgency can change scheduling
 and test focus, but it does not authorize direct commits to `main` or bypassing
