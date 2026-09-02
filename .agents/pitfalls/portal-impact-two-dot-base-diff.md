@@ -35,8 +35,10 @@ behind-base branch, and
 `tests/build/ci_workflow_topology_test.py::test_portal_never_measures_a_two_dot_range_between_the_inputs`
 keeps the range out of the workflow.
 
-A gate failure naming portal pages is therefore the branch's own edit. Two
-sibling two-dot ranges are out of this entry's scope and tracked in #539:
-`ci.yml`'s docs-static `git diff --check "$BASE_SHA" "$HEAD_SHA"`, and
-`read_git_inventory` in `scripts/ci/change_scope.py`, whose only effect is
-conservative lane over-selection.
+A gate failure naming portal pages is therefore the branch's own edit. #539
+converged the two sibling ranges on the same rule: `ci.yml`'s docs-static
+`git diff --check` and `read_git_inventory` in `scripts/ci/change_scope.py`
+both measure from the merge base, pinned by
+`tests/build/ci_change_scope_test.py` and
+`tests/build/ci_workflow_topology_test.py`. No CI range now reads a Pull
+Request's base branch tip as its range endpoint.

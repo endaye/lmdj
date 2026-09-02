@@ -235,6 +235,13 @@ class TemporaryGitRepository:
         self.run("git", "commit", "--quiet", "-m", message)
         return self.run("git", "rev-parse", "HEAD").stdout.strip()
 
+    def checkout(self, ref, *, create=False):
+        args = ["git", "checkout", "--quiet"]
+        if create:
+            args.append("-b")
+        self.run(*args, ref)
+        return self.run("git", "rev-parse", "HEAD").stdout.strip()
+
 
 class ChangeScopeTest(unittest.TestCase):
     @classmethod
@@ -710,6 +717,85 @@ class ChangeScopeTest(unittest.TestCase):
                 {path for record in inventory for path in record.paths},
                 {"apps/creator-web/src/editor.ts"},
             )
+
+    def behind_base_branch(self, repository):
+        """Cut a branch, then land an unrelated change on the base branch.
+
+        Returns the base branch tip a `pull_request` event would carry, which is
+        strictly ahead of the branch's merge base, and the branch head.
+        """
+        repository.write_and_commit("docs/guide.md", "one\n", "base")
+        repository.checkout("task", create=True)
+        head = repository.write_and_commit(
+            "docs/research/note.md", "branch work\n", "branch",
+        )
+        repository.checkout("-")
+        base = repository.write_and_commit(
+            "apps/creator-web/src/editor.ts", "landed elsewhere\n", "main moves on",
+        )
+        return base, head
+
+    def test_behind_base_branch_reports_only_its_own_inventory(self):
+        with TemporaryGitRepository() as repository:
+            base, head = self.behind_base_branch(repository)
+            inventory = self.module.read_git_inventory(
+                str(repository.path), base, head,
+            )
+            self.assertEqual(
+                {path for record in inventory for path in record.paths},
+                {"docs/research/note.md"},
+            )
+            # The two-dot range the classifier used before issue #539, for
+            # contrast: it blames the branch for the base branch's own commit.
+            two_dot = repository.run(
+                "git", "diff", "--name-only", base, head,
+            ).stdout.split()
+            self.assertIn("apps/creator-web/src/editor.ts", two_dot)
+
+    def test_behind_base_branch_does_not_over_select_lanes(self):
+        with TemporaryGitRepository() as repository:
+            base, head = self.behind_base_branch(repository)
+            manifest = self.module.classify(
+                self.policy,
+                self.module.read_git_inventory(str(repository.path), base, head),
+                base_sha=base, head_sha=head, event_name="pull_request",
+                draft=False, labels=(), trusted_head=True,
+            )
+            self.assertEqual(manifest["mode"], "focused")
+            self.assertEqual(
+                [entry["paths"] for entry in manifest["changed_files"]],
+                [["docs/research/note.md"]],
+            )
+            selected = {lane for lane, on in manifest["lanes"].items() if on}
+            self.assertEqual(selected, {"docs_static"})
+            self.assertNotIn("creator_web", selected)
+
+    def test_a_base_side_deletion_does_not_read_as_an_addition(self):
+        """The shape that would fail `docs-static`'s whitespace check.
+
+        `git diff --check` reads added lines. Two-dot reverses a base-side
+        deletion into an addition, so a trailing-whitespace line the base branch
+        removed after the branch was cut would be attributed to a branch that
+        never wrote it.
+        """
+        with TemporaryGitRepository() as repository:
+            repository.write_and_commit("docs/guide.md", "trailing \n", "base")
+            repository.checkout("task", create=True)
+            head = repository.write_and_commit(
+                "docs/research/note.md", "clean\n", "branch",
+            )
+            repository.checkout("-")
+            base = repository.write_and_commit(
+                "docs/guide.md", "clean\n", "main drops the whitespace",
+            )
+            two_dot = repository.run(
+                "git", "diff", "--check", base, head, check=False,
+            )
+            self.assertNotEqual(two_dot.returncode, 0, two_dot.stdout)
+            three_dot = repository.run(
+                "git", "diff", "--check", f"{base}...{head}", check=False,
+            )
+            self.assertEqual(three_dot.returncode, 0, three_dot.stdout)
 
     def test_unverifiable_push_base_never_carries_a_path_inventory(self):
         with self.assertRaises(ValueError):
