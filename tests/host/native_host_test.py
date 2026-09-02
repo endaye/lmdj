@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -368,6 +369,135 @@ def command_validation(process: HostProcess) -> None:
     assert process.request({"operation": "status"})["ok"] is True
 
 
+def native_performance_adapter_wiring_contract() -> None:
+    source = (
+        REPO_ROOT / "apps" / "native-host" / "src" / "main.cpp"
+    ).read_text(encoding="utf-8")
+    assert "make_engine_pattern_publication_gateway" in source
+    assert "make_engine_performance_adapter" in source
+    assert "performance_adapter_.service()" in source
+    assert "bridge.performance_clock" not in source
+    assert source.index("RealtimeEngine engine_;") < source.index(
+        "EnginePerformanceAdapter performance_adapter_;"
+    )
+    assert source.index("EnginePerformanceAdapter performance_adapter_;") < source.index(
+        "Application application_;"
+    )
+    destructor = source[source.index("~NativeHost()") : source.index("Result<void> startup()")]
+    assert "stop_backend()" in destructor
+
+
+def buffered_input_services_control_tick(
+    host: Path,
+    workspace: Path,
+    assembly: Path,
+    project: Path,
+) -> None:
+    input_path = project.parent / "buffered-native-host-input"
+    status = canonical_json({"operation": "status"}).encode("utf-8")
+    quit_request = canonical_json({"operation": "quit"}).encode("utf-8")
+    input_path.write_bytes(
+        status
+        + b"\n"
+        + b"x" * (COMMAND_LIMIT * 4)
+        + b"\n"
+        + status
+        + b"\n"
+        + quit_request
+        + b"\n"
+    )
+    arguments = [
+        str(host),
+        "--workspace",
+        str(workspace),
+        "--assembly",
+        str(assembly),
+        "--project",
+        str(project),
+        "--pattern",
+        STARTUP_PATTERN_ID,
+        "--no-device",
+    ]
+    with input_path.open("rb") as buffered_input:
+        completed = subprocess.run(
+            arguments,
+            cwd=REPO_ROOT,
+            stdin=buffered_input,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    assert completed.returncode == 0, (completed.returncode, completed.stderr)
+    assert completed.stderr == b""
+    responses = [json.loads(line) for line in completed.stdout.splitlines()]
+    assert len(responses) == 5, responses
+    assert responses[0]["operation"] == "ready"
+    assert responses[1]["operation"] == "status"
+    check_error(responses[2], "INVALID_ARGUMENT")
+    assert "65536" in responses[2]["error"]["message"]
+    assert responses[3]["operation"] == "status"
+    assert (
+        responses[3]["result"]["engine"]["rendered_frames"]
+        > responses[1]["result"]["engine"]["rendered_frames"]
+    )
+    assert responses[4]["operation"] == "quit"
+
+
+def short_buffered_lines_service_control_tick(
+    host: Path,
+    workspace: Path,
+    assembly: Path,
+    project: Path,
+) -> None:
+    input_path = project.parent / "short-buffered-native-host-input"
+    status = canonical_json({"operation": "status"}).encode("utf-8")
+    quit_request = canonical_json({"operation": "quit"}).encode("utf-8")
+    input_path.write_bytes(
+        status
+        + b"\n"
+        + b"\n" * 5_000
+        + status
+        + b"\n"
+        + quit_request
+        + b"\n"
+    )
+    arguments = [
+        str(host),
+        "--workspace",
+        str(workspace),
+        "--assembly",
+        str(assembly),
+        "--project",
+        str(project),
+        "--pattern",
+        STARTUP_PATTERN_ID,
+        "--no-device",
+    ]
+    with input_path.open("rb") as buffered_input:
+        completed = subprocess.run(
+            arguments,
+            cwd=REPO_ROOT,
+            stdin=buffered_input,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    assert completed.returncode == 0, (completed.returncode, completed.stderr)
+    assert completed.stderr == b""
+    responses = [json.loads(line) for line in completed.stdout.splitlines()]
+    assert len(responses) == 5_004, len(responses)
+    assert responses[0]["operation"] == "ready"
+    assert responses[1]["operation"] == "status"
+    check_error(responses[2], "INVALID_ARGUMENT")
+    check_error(responses[-3], "INVALID_ARGUMENT")
+    assert responses[-2]["operation"] == "status"
+    assert (
+        responses[-2]["result"]["engine"]["rendered_frames"]
+        > responses[1]["result"]["engine"]["rendered_frames"]
+    )
+    assert responses[-1]["operation"] == "quit"
+
+
 def happy_path(
     host: Path,
     cli: Path,
@@ -395,6 +525,31 @@ def happy_path(
         f"{PRODUCT_BUILD} from products/lmdj/version.json, found "
         f"{ready['result']['product_build']} in native Host ready response"
     )
+
+    observed = cli_request(
+        cli,
+        workspace,
+        assembly,
+        "query",
+        {
+            "operation": "performance.record.status",
+            "project_path": str(project),
+        },
+    )
+    assert observed["ok"] is True, observed
+    assert observed["result"]["state"] == "idle", observed
+    assert "performance_authority_unavailable" not in canonical_json(observed)
+    assert "performance_launch_authority_unavailable" not in canonical_json(observed)
+    assert "performance_input_authority_unavailable" not in canonical_json(observed)
+    assert "performance_replay_runtime_unavailable" not in canonical_json(observed)
+
+    # The deterministic audio Runtime must keep crossing boundaries while the
+    # Host is idle, so the periodic control tick can progress replay and launch
+    # acknowledgements without a request acting as an accidental clock.
+    time.sleep(0.05)
+    idle_status = process.request({"operation": "status"})
+    assert idle_status["ok"] is True, idle_status
+    assert idle_status["result"]["engine"]["rendered_frames"] > 0
 
     for pad in (0, 1):
         triggered = process.request(
@@ -599,14 +754,25 @@ def main() -> int:
         temp_root = Path(root).resolve()
         workspace = temp_root / "workspace"
         workspace.mkdir()
+        native_performance_adapter_wiring_contract()
         invocation_contract(host, temp_root, assembly)
 
         base_project = temp_root / "base.lmdj"
         author_project(cli, workspace, assembly, base_project)
+        buffered_project = temp_root / "buffered.lmdj"
+        short_buffered_project = temp_root / "short-buffered.lmdj"
         happy_project = temp_root / "happy.lmdj"
         sample_project = temp_root / "sample.lmdj"
+        shutil.copytree(base_project, buffered_project)
+        shutil.copytree(base_project, short_buffered_project)
         shutil.copytree(base_project, happy_project)
         shutil.copytree(base_project, sample_project)
+        buffered_input_services_control_tick(
+            host, workspace, assembly, buffered_project
+        )
+        short_buffered_lines_service_control_tick(
+            host, workspace, assembly, short_buffered_project
+        )
         happy_path(host, cli, workspace, assembly, happy_project)
         sample_facade_snapshot_path(
             host, cli, workspace, assembly, sample_project

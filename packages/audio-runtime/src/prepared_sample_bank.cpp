@@ -95,11 +95,6 @@ foundation::Result<PreparedSampleBank> project_quota_exhausted(
   });
 }
 
-float pcm16_to_float(std::int16_t value) noexcept {
-  return value < 0 ? static_cast<float>(value) / 32768.0F
-                   : static_cast<float>(value) / 32767.0F;
-}
-
 std::uint8_t global_slot(domain::PadSlotId slot) noexcept {
   return static_cast<std::uint8_t>(slot.bank * 16U + slot.pad);
 }
@@ -150,13 +145,44 @@ foundation::Result<PreparedPatternView> PreparedPatternView::prepare(
         invalid_timing("runtime snapshot Pattern timing is invalid"));
   }
 
-  std::array<bool, 64> available{};
+  struct PatternPadMaterial {
+    PreparedSampleMaterialView view;
+    cooker::ResolvedPlayback playback;
+  };
+  std::array<std::optional<PatternPadMaterial>, 64> materials{};
+  std::vector<std::shared_ptr<const cooker::PcmSample>> material_owners;
+  material_owners.reserve(snapshot.pads.size());
   for (const auto& pad : snapshot.pads) {
-    if (!domain::is_valid_slot(pad.slot)) {
+    const auto slot = global_slot(pad.slot);
+    if (!domain::is_valid_slot(pad.slot) || materials.at(slot).has_value() ||
+        !pad.sample || pad.sample->sample_rate != kTransportSampleRate ||
+        (pad.sample->channels != 1 && pad.sample->channels != 2) ||
+        pad.sample->interleaved.empty() ||
+        pad.sample->interleaved.size() % pad.sample->channels != 0) {
       return foundation::Result<PreparedPatternView>::failure(
           invalid_timing("runtime snapshot Pattern Pad is invalid"));
     }
-    available.at(global_slot(pad.slot)) = true;
+    const auto frame_count =
+        pad.sample->interleaved.size() / pad.sample->channels;
+    if (frame_count > std::numeric_limits<std::uint32_t>::max() ||
+        !valid_playback(pad.playback, frame_count)) {
+      return foundation::Result<PreparedPatternView>::failure(
+          invalid_timing("runtime snapshot Pattern Pad material is invalid"));
+    }
+    if (std::none_of(material_owners.begin(), material_owners.end(),
+                     [&pad](const auto& owner) {
+                       return owner.get() == pad.sample.get();
+                     })) {
+      material_owners.push_back(pad.sample);
+    }
+    materials.at(slot) = PatternPadMaterial{
+        PreparedSampleMaterialView{
+            pad.sample->interleaved.data(),
+            static_cast<std::uint32_t>(frame_count),
+            pad.sample->channels,
+        },
+        pad.playback,
+    };
   }
 
   std::vector<domain::PatternEvent> base;
@@ -188,7 +214,7 @@ foundation::Result<PreparedPatternView> PreparedPatternView::prepare(
   for (const auto& event : merged) {
     if (!domain::is_valid_slot(event.slot) || event.velocity < 1 ||
         event.velocity > 127 ||
-        !available.at(global_slot(event.slot)) ||
+        !materials.at(global_slot(event.slot)).has_value() ||
         event.onset_tick >= snapshot.loop_length_ticks ||
         event.duration_tick < 1 ||
         event.duration_tick >
@@ -210,6 +236,7 @@ foundation::Result<PreparedPatternView> PreparedPatternView::prepare(
       return foundation::Result<PreparedPatternView>::failure(
           invalid_timing("runtime snapshot Pattern event frame is invalid"));
     }
+    const auto& material = *materials.at(global_slot(event.slot));
     prepared.push_back(PreparedPatternEvent{
         event.slot,
         event.onset_tick,
@@ -217,6 +244,8 @@ foundation::Result<PreparedPatternView> PreparedPatternView::prepare(
         event.velocity,
         start.value(),
         release.value(),
+        material.view,
+        material.playback,
     });
   }
   return foundation::Result<PreparedPatternView>::success(
@@ -230,6 +259,7 @@ foundation::Result<PreparedPatternView> PreparedPatternView::prepare(
           loop_frames.value(),
           bar_frames.value(),
           std::move(prepared),
+          std::move(material_owners),
           !journal_overlay.empty(),
       });
 }
@@ -307,6 +337,7 @@ PreparedPatternView::PreparedPatternView(
     std::uint64_t loop_frames,
     std::uint64_t bar_frames,
     std::vector<PreparedPatternEvent> events,
+    std::vector<std::shared_ptr<const cooker::PcmSample>> material_owners,
     bool has_overlay)
     : project_id_(std::move(project_id)),
       pattern_id_(std::move(pattern_id)),
@@ -317,6 +348,7 @@ PreparedPatternView::PreparedPatternView(
       loop_frames_(loop_frames),
       bar_frames_(bar_frames),
       events_(std::move(events)),
+      material_owners_(std::move(material_owners)),
       has_overlay_(has_overlay) {}
 
 foundation::Result<PreparedPatternView> PreparedPatternView::from_snapshot(
@@ -470,14 +502,15 @@ foundation::Result<PreparedSampleBank> PreparedSampleBank::from_snapshot(
     mono.reserve(source.interleaved.size() / source.channels);
     if (source.channels == 1) {
       for (const auto value : source.interleaved) {
-        mono.push_back(pcm16_to_float(value));
+        mono.push_back(prepared_pcm16_to_float(value));
       }
     } else {
       for (std::size_t index = 0; index < source.interleaved.size();
            index += 2) {
-        mono.push_back((pcm16_to_float(source.interleaved.at(index)) +
-                        pcm16_to_float(source.interleaved.at(index + 1))) *
-                       0.5F);
+        mono.push_back(
+            (prepared_pcm16_to_float(source.interleaved.at(index)) +
+             prepared_pcm16_to_float(source.interleaved.at(index + 1))) *
+            0.5F);
       }
     }
     const auto assigned = bank.set_sample(slot, mono, pad.playback);

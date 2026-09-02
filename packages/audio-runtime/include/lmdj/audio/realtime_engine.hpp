@@ -122,12 +122,20 @@ enum class PadControlKind : std::uint8_t {
   preview_clear,
 };
 
+enum class PadControlOrigin : std::uint8_t {
+  host_input,
+  performance_replay,
+};
+
 struct PadControlEvent {
   std::uint64_t sequence;
   std::uint8_t slot;
   std::uint8_t velocity;
   PadControlKind kind;
   cooker::ResolvedPlayback playback;
+  PadControlOrigin origin{PadControlOrigin::host_input};
+  std::uint64_t duration_frames{};
+  PreparedSampleMaterialView material{};
 };
 
 enum class RuntimeVoiceState : std::uint8_t {
@@ -162,6 +170,9 @@ struct RuntimeTriggerOutcomeEvent {
 
 struct RealtimeTelemetry {
   RealtimeState state;
+  // Monotone process-local identity for the current start/render frame epoch.
+  // A successful start increments it before publishing the running state.
+  std::uint64_t start_epoch;
   std::uint64_t enqueued_events;
   std::uint64_t dequeued_events;
   std::uint64_t queued_events;
@@ -295,10 +306,20 @@ class RealtimeEngine final {
       std::optional<std::uint64_t> activation_frame = std::nullopt,
       std::optional<PatternReplacementAuthority> replacement_authority =
           std::nullopt) noexcept;
-  // Control thread, concurrent with render. Cancels only the exact pending
-  // publication. False means render already claimed/applied it or authority
-  // was stale; callers that require fail-closed cancellation must quiesce.
+  // Control thread. Publishes at the first render frame that can observe the
+  // new mailbox entry. Unlike exact scheduled publication, a render callback
+  // racing this call cannot make the internally observed frame stale.
+  PatternPublication publish_pattern_view_immediate(
+      PreparedPatternView&& pattern) noexcept;
+  // Control thread, concurrent with render. Cancels the exact pending
+  // publication until the render apply point claims it. False means the
+  // authority was stale or the apply point already won.
   bool cancel_pattern_publication(
+      const PatternReplacementAuthority& authority) noexcept;
+  // Control thread, concurrent with render. Cancels only an exact publication
+  // still owned by the control mailbox. False includes audio-owned pending
+  // material, so latest-wins callers can defer instead of replacing it.
+  bool cancel_unclaimed_pattern_publication(
       const PatternReplacementAuthority& authority) noexcept;
   foundation::Result<void> clear_pattern_view() noexcept;
   std::size_t reclaim_retired_patterns() noexcept;
@@ -349,6 +370,10 @@ class RealtimeEngine final {
   RuntimeTriggerOutcomeTelemetry trigger_outcome_telemetry() const noexcept;
   RuntimeVoiceStateTelemetry voice_state_telemetry() const noexcept;
   MasterFxTelemetry master_fx_telemetry() const noexcept;
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+  // Test-only overflow seam. The engine must be stopped.
+  void set_start_epoch_for_testing(std::uint64_t epoch) noexcept;
+#endif
 
  private:
   enum class BankState : std::uint8_t {
@@ -362,7 +387,12 @@ class RealtimeEngine final {
     empty,
     current,
     pending,
+    retiring,
     reclaimable,
+  };
+  enum class PatternPublicationTiming : std::uint8_t {
+    scheduled,
+    immediate,
   };
   static_assert(std::atomic<BankState>::is_always_lock_free);
   static_assert(std::atomic<PatternState>::is_always_lock_free);
@@ -385,6 +415,7 @@ class RealtimeEngine final {
     std::atomic<PatternState> state{PatternState::empty};
     std::uint64_t generation = 0;
     std::uint64_t activation_frame = 0;
+    std::size_t active_voices = 0;
   };
 
   struct PatternPublishEntry {
@@ -406,6 +437,7 @@ class RealtimeEngine final {
     std::uint64_t sequence = 0;
     std::uint8_t slot = 0;
     const float* samples = nullptr;
+    PreparedSampleMaterialView material{};
     std::size_t frame_count = 0;
     std::uint32_t start_frame = 0;
     std::uint32_t end_frame = 0;
@@ -419,6 +451,8 @@ class RealtimeEngine final {
     std::uint32_t release_frames_remaining = 0;
     std::uint64_t scheduled_release_frame = 0;
     bool pattern_voice = false;
+    PadControlOrigin origin = PadControlOrigin::host_input;
+    std::uint8_t pattern_slot = kNoPatternSlot;
   };
 
   std::uint64_t legacy_availability_mask() const noexcept;
@@ -426,6 +460,7 @@ class RealtimeEngine final {
   void retire_current_bank() noexcept;
   void apply_published_bank(std::uint8_t slot) noexcept;
   void release_voice_bank(Voice& voice) noexcept;
+  void release_voice_pattern(Voice& voice) noexcept;
   void capture_voice_start(
       const PadControlEvent& event,
       std::uint64_t absolute_start_frame) noexcept;
@@ -442,6 +477,11 @@ class RealtimeEngine final {
   void apply_published_pattern(
       const PatternPublishEntry& publication,
       std::uint64_t runtime_frame) noexcept;
+  PatternPublication publish_pattern_view_impl(
+      PreparedPatternView&& pattern,
+      std::optional<std::uint64_t> activation_frame,
+      std::optional<PatternReplacementAuthority> replacement_authority,
+      PatternPublicationTiming timing) noexcept;
   void schedule_pattern_events(std::uint64_t runtime_frame) noexcept;
   void start_pattern_voice(
       const PreparedPatternEvent& event,
@@ -482,7 +522,9 @@ class RealtimeEngine final {
   std::atomic<std::uint64_t> pattern_origin_frame_{0};
   std::size_t pattern_event_index_ = 0;
   std::atomic<RealtimeState> state_{RealtimeState::stopped};
+  std::atomic<std::uint64_t> start_epoch_{0};
   std::atomic<std::uint64_t> enqueued_events_{0};
+  std::atomic<std::uint64_t> queued_host_input_events_{0};
   std::atomic<std::uint64_t> dequeued_events_{0};
   std::atomic<std::uint64_t> cancelled_events_{0};
   std::atomic<std::uint64_t> started_voices_{0};
