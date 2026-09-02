@@ -10,16 +10,16 @@
 [`2026-09-01-lmdj-stage10-replay-lineage-contract-design.md`](../specs/2026-09-01-lmdj-stage10-replay-lineage-contract-design.md),
 and the approved
 [`2026-09-01-lmdj-stage10-host-runtime-session-design.md`](../specs/2026-09-01-lmdj-stage10-host-runtime-session-design.md)
-(HRS-D1–D9).
+(HRS-D1–D11).
 Tasks 1–5 (including Contract prerequisite #516, executed per
 [`2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md`](2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md))
 and repair Tasks 3A/3B are merged. Task 6 is gated by the host runtime/
-session prerequisites #523, #524 and #525, whose exact execution order is in
+session prerequisites #523, #524, #525, #570 and #571, whose exact execution order is in
 [`2026-09-01-lmdj-stage10-host-runtime-session-repair.md`](2026-09-01-lmdj-stage10-host-runtime-session-repair.md).
-Product Build
-`1.0.40.0` remains the protected-main baseline; the locked Stage 10 target
-remains `1.0.41.0` unless Task 10's required fresh allocation audit proves it
-has been consumed.
+Product Build `1.0.41.0` is now the protected-main baseline and published
+canary; the 2026-09-02 refresh audit proved the old Stage 10 target consumed
+and locks `1.0.42.0` as the next unoccupied Stage 10 target. Task 10 must still
+repeat the required fresh allocation audit immediately before mutation.
 
 **Architecture:** Extend the Stage 9 foundation rather than parallel it.
 `lmdj.project.v4` owns both 16 ordered nullable Pattern launch slots and durable
@@ -232,10 +232,11 @@ Tasks 2, 3, 3A, 3B ── Task 4 #430 authoritative recording/management Facade
                          │         └─ prerequisite #523 Core runtime bridge
                          │              ├─ prerequisite #524 CLI session mode
                          │              ├─ prerequisite #525 Native adapter
-                         │              └─ Task 6 #432 CLI/MCP/Native parity
-                         │                   (needs #523, #524 and #525)
-                         └─ Task 7 #433 Web Runtime raw-input + launch bridge
-                              (also needs #525 shared engine adapter)
+                         │              └─ prerequisite #570 owner-loss closure
+                         │                   (#525 + #570) ── #571 status/service split
+                         │
+                         ├─ (#524 + #525 + #570 + #571) ── Task 6 #432 CLI/MCP/Native parity
+                         └─ (#525 + #571) ── Task 7 #433 Web Runtime raw-input + launch bridge
                               └─ Task 8 #434 Host WAV tap/OPFS writer
 Tasks 5, 7, 8 ───────────── Task 9 #435 Creator Perform surface
 Tasks 1-9 + 3A/3B ─── Task 10 #436 versions/Assembly/current Portal/automation
@@ -244,10 +245,12 @@ Tasks 1-9 + 3A/3B ─── Task 10 #436 versions/Assembly/current Portal/automa
 ```
 
 Tasks 1–5 (with prerequisite #516) and repair Tasks 3A/3B are complete.
-Task 6 starts only after host runtime/session prerequisites #523, #524 and
-#525 merge: its shared Host journey consumes replay/resample and needs the
-Core runtime bridge, the CLI session mode and the Native adapter. #524 and
-#525 may run in parallel worktrees after #523. Task 7 starts after #525 so Web
+Task 6 starts only after host runtime/session prerequisites #523, #524, #525,
+#570 and #571 merge: its shared Host journey consumes replay/resample and needs the
+Core runtime bridge, the CLI session mode, the Native adapter and crash-durable
+owner-loss transient closure plus the read-only status/service split. #524,
+#525 and #570 may run in parallel worktrees after #523; #571 follows both.
+Task 7 starts after #525/#571 so Web
 Runtime reuses the same Core `EnginePerformanceAdapter` instead of owning a
 second frame→tick, launch-ack or replay progression implementation. Task 8
 starts after Task 7; Task 9 waits for Tasks 5, 7 and 8. Integration,
@@ -278,7 +281,7 @@ snapshotting and release stay serial through Tasks 10–12.
 | P10-D22: actual launch acknowledgement | 4, 7 | unclaimed replace, claimed defer, ghost-event rejection |
 | P10-D23: Core FX/owner-loss rules | 4, 7 | quantum last-write-wins and deterministic closure vectors |
 | P10-D24: two-phase durable rebase | 3B, 4 | every prepare/receipt/complete crash point and exact retry |
-| HRS-D1–D9: Core runtime authorities and session continuity (2026-09-01 repair) | #523, #524, #525, 6, 7 | bridge/adapter suites; cross-process flush replay; CLI session journey; request-free Web progression |
+| HRS-D1–D11: Core runtime authorities, session continuity, hard-owner-loss closure and read-only status (2026-09-01/02 repair) | #523, #524, #525, #570, #571, 6, 7 | bridge/adapter suites; cross-process flush replay; durable transient closure; two-phase launch service; CLI session journey; request-free Web progression |
 
 ## Task 1: Add Project v4 and the Performance Authoring Domain — delivered
 
@@ -592,7 +595,7 @@ resample commit.
 
 ## Host Runtime/Session Prerequisite: Make the Performance Surface Drivable
 
-**Issues:** #523, #524, #525. Hard dependencies: #430, #431 and the merged
+**Issues:** #523, #524, #525, #570, #571. Hard dependencies: #430, #431 and the merged
 docs PR carrying the repair design and plan.
 
 The Task 6 start-gate audit found the locked surface undrivable by any
@@ -602,19 +605,23 @@ unavailable replay controller), the CLI cannot hold a session across
 requests, the Facade's in-memory owner guard blocks the fully idempotent
 cross-process flush replay, and `performance.recovery.list` seals a live
 journal from a query. The independently reviewable corrections are
-adjudicated as HRS-D1–D9 in
+adjudicated as HRS-D1–D11 in
 [`2026-09-01-lmdj-stage10-host-runtime-session-design.md`](../specs/2026-09-01-lmdj-stage10-host-runtime-session-design.md).
-Execute Tasks 1–3 of
+Execute Tasks 1–5 of
 [`2026-09-01-lmdj-stage10-host-runtime-session-repair.md`](2026-09-01-lmdj-stage10-host-runtime-session-repair.md)
 as their complete file lists, RED/GREEN sequences, verification and commit
 authority: Task 1 (#523) Core Performance runtime bridge, cross-process
 flush identity and read-only recovery queries; Task 2 (#524) CLI persistent
 NDJSON session mode and CLI-only cross-process journeys; Task 3 (#525)
-Native Host `RealtimeEngine` adapter and construction-order repair.
+Native Host `RealtimeEngine` adapter and construction-order repair; Task 4
+(#570) crash-durable transient checkpoints and deterministic hard-owner-loss
+closure; Task 5 (#571) read-only status projection plus explicit two-phase
+launch-outcome service mutation.
 
 ## Task 6: Migrate CLI, MCP and Native Host to Performance Operations
 
-**Issue:** #432. Hard dependencies: #430, #431 and merged #523, #524, #525.
+**Issue:** #432. Hard dependencies: #430, #431 and merged #523, #524, #525,
+#570, #571.
 The CLI journey legs run in the #524 session mode; every Host injects only
 the #523 bridge or #525 adapter and adds no runtime semantics of its own.
 
@@ -635,7 +642,9 @@ the #523 bridge or #525 adapter and adds no runtime semantics of its own.
   Locked Facade Surface (three Pattern-slot plus twenty Performance
   operations), asserting operation kind and strict request/result schema match
   the Facade one-to-one. A set comparison must fail when either side adds,
-  removes or wildcard-collapses a name.
+  removes or wildcard-collapses a name. MCP `outputSchema` success results are
+  operation-specific closed schemas; a generic `{type: object}` result is not
+  parity and must fail this gate.
 - [ ] RED: add `cross_host_performance_idempotency_test.py` asserting an MCP flush replayed by the CLI with the same identity returns `replayed: true`, produces one revision, and leaves `project.inspect` byte-identical.
 - [ ] Extend the black-box journey across CLI→MCP→Native for begin, raw event,
   launch request/ack fixture, flush, stop, save, inspect, replay, stop, delayed
@@ -654,8 +663,8 @@ the #523 bridge or #525 adapter and adds no runtime semantics of its own.
 
 ## Task 7: Add the Web Runtime Gesture and Launch Bridge
 
-**Issue:** #433. Hard dependencies: #430 and merged #525; Task 9 also consumes
-Task 5 replay.
+**Issue:** #433. Hard dependencies: #430 and merged #525/#571; Task 9 also
+consumes Task 5 replay.
 
 **Files:**
 
@@ -743,7 +752,7 @@ Task 5 replay.
   Facade, retains an unbound temp file after retryable bind failure, and deletes
   it only after successful discard or bind acknowledgement.
 - [ ] Implement the tap as a same-origin AudioWorklet distribution asset (the hardened CSP rejects blob:/data: module URLs), reusing the delivered capture worklet's batch contract; extend `wav_encoder.ts` for streaming rather than forking it.
-- [ ] Make `wav_stream_writer.ts` require the Host parameters named `perform_recording_frames` and `perform_recording_queue_batches`; unit tests inject the locked values `86400000` and `32`. Do not add a default or mutate an active manifest in this Task. Task 10 adds the exact keys to Assembly, generated identity, manifest gates, packaging tests and the distribution manifest together with Product Build `1.0.41.0`.
+- [ ] Make `wav_stream_writer.ts` require the Host parameters named `perform_recording_frames` and `perform_recording_queue_batches`; unit tests inject the locked values `86400000` and `32`. Do not add a default or mutate an active manifest in this Task. Task 10 adds the exact keys to Assembly, generated identity, manifest gates, packaging tests and the distribution manifest together with Product Build `1.0.42.0`.
 - [ ] Implement `performance_recording_store.ts` as the Host owner of temp and
   finalized OPFS handles. It may copy/finalize bytes into managed storage but
   never asks Core to open a Host path and never deletes a file before the
@@ -869,7 +878,7 @@ Task 5 replay.
 - Modify: `docs/quality/2026-08-30-stage10-perform-acceptance.md`
 
 - [ ] Confirm the working tree is clean and the Task 10 commit is merged before snapshotting; the snapshot must bind a committed, non-dangling revision (Stage 9 squash-witness lesson; see `.agents/pitfalls/squash-witness-provenance.md`).
-- [ ] Run `scripts/architecture-portal.sh version 1.0.41.0 canary`; expect a new immutable snapshot.
+- [ ] Run `scripts/architecture-portal.sh version 1.0.42.0 canary`; expect a new immutable snapshot.
 - [ ] Attach the snapshot identity and final evidence to the acceptance ledger.
 - [ ] Run `scripts/architecture-portal.sh check`; expect PASS.
 - [ ] Commit only the listed files with
@@ -884,32 +893,32 @@ outside this Task.
 **Files for the release-intent PR:**
 
 - Modify: `tests/build/release_model_test.py`
-- Create: `docs/superpowers/plans/2026-08-31-lmdj-1-0-41-release-intent.md`
-- Create: `docs/release-evidence/2026-08-31-lmdj-1.0.41.0-canary-release-intent.md`
+- Create: dated `docs/superpowers/plans/YYYY-MM-DD-lmdj-1-0-42-release-intent.md`
+- Create: dated `docs/release-evidence/YYYY-MM-DD-lmdj-1.0.42.0-canary-release-intent.md`
 - Modify: `docs/release-evidence/release-intents.json`
 - Modify only if publication changes current truth:
   `apps/architecture-portal/docs/operations/version-and-release.mdx`
 
 - [ ] Read `.agents/skills/lmdj-release/SKILL.md` and the four release pitfalls
   named by #468. Start with
-  `scripts/release.sh audit --remote --tag lmdj-v1.0.41.0`; any state other
+  `scripts/release.sh audit --remote --tag lmdj-v1.0.42.0`; any state other
   than the exact expected pre-intent state stops the Task.
 - [ ] Resolve `TARGET` to the Task 11 squash on protected main. Prove it is a
-  main ancestor, Product Build is `1.0.41.0`, Assembly lock digest equals the
+  main ancestor, Product Build is `1.0.42.0`, Assembly lock digest equals the
   immutable snapshot metadata, and snapshot provenance validates after squash.
 - [ ] Establish retained **full** exact-main Core CI for `TARGET`. A focused or
   requested manifest is not evidence. Record the successful run ID, exact head,
   Change Scope, PR Gate and retained `ci-scope-<TARGET>` artifact.
 - [ ] **RED:** make `release_model_test.py` require the exact tag, target,
-  snapshot, channel `canary`, profile `web-runtime-host`, disposition
+  snapshot, channel `canary`, profile `web-hosts`, disposition
   `releasable`, full-CI run ID and dated evidence path. Run the release model,
   audit and CI evidence tests; expect the missing intent to fail.
 - [ ] Create the dated intent plan/evidence and add exactly one immutable row to
   `release-intents.json`. Run the three release test modules, Portal check,
   version verification and `scripts/release.sh audit --local --tag
-  lmdj-v1.0.41.0`; expect all pass.
+  lmdj-v1.0.42.0`; expect all pass.
 - [ ] Commit the four declared intent files as
-  `docs(release): authorize 1.0.41.0 canary intent (fixes #468)`, ship its PR
+  `docs(release): authorize 1.0.42.0 canary intent (fixes #468)`, ship its PR
   through `issue-done`, then rerun the canonical remote audit on merged main.
 - [ ] Execute `prepare`, `push-tag`, `create-draft`, `verify-draft` and protected
   `publish-release.yml` only through the stable `scripts/release.sh` mapping.
@@ -922,18 +931,20 @@ outside this Task.
 
 ## Version Management
 
-Allocation was locked by #426 after Stage 9 remediation closed. The audit read
-protected `main` `184b808920dcc7a97974c88a814c252ddbfc6f6f`, every active
-module/Host manifest, `products/lmdj/version.json`, Assembly lock, immutable
-snapshot inventory, local and remote tags, GitHub Releases, open PRs and
-`docs/release-evidence/release-intents.json`. `1.0.41.0` was absent from every
-allocation surface on 2026-08-30. Task 10 must repeat that read-only audit
-immediately before mutation; if any exact target has since been consumed, stop
-and refresh this table rather than substituting an identity.
+Allocation was refreshed on 2026-09-02 after `1.0.41.0` became the current
+protected-main Product Build, immutable Portal snapshot, signed tag, published
+canary Release and release-intent row. The refresh read protected `origin/main`
+`9264d8def1d321e284b82eca4f448df256c6ca14`, every active module/Host manifest,
+`products/lmdj/version.json`, Assembly lock, snapshot inventory, local/remote
+tags, GitHub Releases, open Issues/PRs and
+`docs/release-evidence/release-intents.json`; `1.0.42.0` was absent from every
+allocation surface. Task 10 must repeat that read-only audit immediately before
+mutation; if any exact target has since been consumed, stop and refresh this
+table rather than substituting an identity.
 
 | Component | Protected-main baseline | Locked Stage 10 target | Reason |
 |---|---|---|---|
-| Product Build | `1.0.40.0` | `1.0.41.0` | new integrated Assembly, Contract and Host resource identity |
+| Product Build | `1.0.41.0` | `1.0.42.0` | new integrated Assembly, Contract and Host resource identity |
 | `lmdj.project` Contract | `v3` / `3.0.0` | add `v4` / `4.0.0`; v3 becomes read-only migration input | incompatible Project writer Contract |
 | foundation | `0.3.0` | unchanged `0.3.0` | Task 1 keeps Performance identity in authoring-domain; no foundation API change |
 | authoring-domain | `1.0.0` | `2.0.0` | `pattern_slots`, Performances and event vocabulary change the public domain surface |
@@ -982,7 +993,7 @@ The Stage 10 umbrella is #425. #426 created the original map; #488 repaired its
 Contract before Task 4, creating #498/#499 and incorporating the already-open
 release boundary #468. The 2026-09-01 Replay/Lineage repair created #516 before
 Task 5; the 2026-09-01 host runtime/session repair created #523/#524/#525
-before Task 6.
+before Task 6, and its 2026-09-02 cross-Host RED/review created #570/#571.
 
 | Plan Task | GitHub Issue | Priority | Primary Project area | Hard dependencies |
 |---|---|---|---|---|
@@ -999,8 +1010,10 @@ before Task 6.
 | Prerequisite | #523 | P1 | Core | #431, repair docs PR |
 | Prerequisite | #524 | P1 | Core | #523 |
 | Prerequisite | #525 | P1 | Core/Native Host | #523 |
-| 6 | #432 | P2 | Native Host | #430, #431, #523, #524, #525 |
-| 7 | #433 | P1 | Web Host | #430, #525 |
+| Prerequisite | #570 | P1 | Core | #523, repair docs PR |
+| Prerequisite | #571 | P1 | Core/Native Host | #523, #525, #570, repair docs PR |
+| 6 | #432 | P2 | Native Host | #430, #431, #523, #524, #525, #570, #571 |
+| 7 | #433 | P1 | Web Host | #430, #525, #571 |
 | 8 | #434 | P1 | Creator | #433 |
 | 9 | #435 | P1 | Creator | #431, #433, #434 |
 | 10 | #436 | P1 | Product | #427, #428, #429, #430, #431, #432, #433, #434, #435, #498, #499 |
@@ -1014,7 +1027,7 @@ Stage 10 is **implementation-complete** only when Tasks 1–11 plus repair Tasks
 active writer Contract, full/stress/coverage/proof and complete cross-Host
 journeys pass on the integrated head, Browser and Native evidence is attached,
 the OPFS physical fixture has real evidence or an honest `deferred`, and Product
-Build `1.0.41.0` has an immutable Portal snapshot.
+Build `1.0.42.0` has an immutable Portal snapshot.
 
 Stage 10 is **canary-release-complete** only after Task 12's final remote audit
 reports the immutable signed tag and published Release with exact asset hashes.
