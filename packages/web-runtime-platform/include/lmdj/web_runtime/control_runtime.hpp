@@ -179,6 +179,11 @@ class ControlBridge final {
       bool force_publication_error) noexcept;
   bool release_deadline_proof() noexcept;
   int deadline_proof_state(std::string_view request_id) const noexcept;
+  // Park a control-thread task while a request dispatch is in progress (it
+  // may be suspended in Asyncify); the bridge re-proxies it once that dispatch
+  // has returned. Returns false when the caller should run the task itself.
+  bool defer_while_dispatching(
+      void (*function)(void*) noexcept, void* argument) noexcept;
   bool terminal_release_ready() const noexcept;
   bool failed() const noexcept;
 
