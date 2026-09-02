@@ -420,7 +420,9 @@ Push, open the PR, wait for CI, squash-merge, clean the worktree.
 - Modify: `packages/application-facade/src/performance_runtime.cpp`
 - Modify: `packages/application-facade/src/application.cpp`
 - Modify: `packages/application-facade/CMakeLists.txt`
+- Modify: `packages/audio-runtime/include/lmdj/audio/prepared_sample_bank.hpp`
 - Modify: `packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp`
+- Modify: `packages/audio-runtime/src/prepared_sample_bank.cpp`
 - Modify: `packages/audio-runtime/src/realtime_engine.cpp`
 - Modify: `apps/native-host/src/main.cpp`
 - Create: `tests/core/facade/performance_engine_adapter_test.cpp`
@@ -461,10 +463,19 @@ enum class PadControlOrigin : std::uint8_t {
   performance_replay,
 };
 
+// prepared_sample_bank.hpp — one trivially-copyable material view used by
+// direct replay Pad events and prepared Pattern events.
+struct PreparedSampleMaterialView {
+  const std::int16_t* interleaved{};
+  std::uint32_t frame_count{};
+  std::uint16_t channels{};
+};
+
 // Trailing PadControlEvent fields; existing aggregate callers retain the
-// host_input / zero-duration defaults.
+// host_input / zero-duration / empty-material defaults.
 PadControlOrigin origin{PadControlOrigin::host_input};
 std::uint64_t duration_frames{};
+PreparedSampleMaterialView material{};
 ```
 
 - The clock converts `engine.telemetry().rendered_frames` to ticks with
@@ -499,11 +510,25 @@ std::uint64_t duration_frames{};
 - The replay controller composes `ReferencePerformanceReplayController` over
   an engine-backed `PerformanceReplayRuntimeSink`. Pad hits use the existing
   `enqueue_control` / Voice render path with `performance_replay` origin and
-  an SR-D25 integer `duration_frames`; render derives the release from the
-  actual Voice start frame and the existing scheduled-release latch. Replay
-  origin never enters live trigger outcomes, voice-state outcomes or Capture.
-  Pattern launches use the same publication gateway and FX gestures use the
-  Stage 10 FX chain entry points.
+  an SR-D25 integer `duration_frames` plus the projection's immutable
+  `PreparedSampleMaterialView`; render derives the release from the actual
+  Voice start frame and the existing scheduled-release latch. Render consumes
+  that PCM16 view with the same conversion/stereo averaging as
+  `PreparedSampleBank`, never late-resolves through the current live bank.
+  Replay origin never enters live trigger outcomes, voice-state outcomes or
+  Capture. An empty material on a live `host_input` event keeps the existing
+  float-bank path byte-compatible. Pattern launches use the same publication
+  gateway, and every `PreparedPatternEvent` carries the same material view;
+  FX gestures use the Stage 10 FX chain entry points.
+- `PreparedPatternView::prepare` owns deduplicated
+  `shared_ptr<const PcmSample>` values from the immutable Runtime Snapshot.
+  Pattern slots track `active_voices` and a `retiring` state so replacement or
+  reclaim cannot invalidate old material until natural completion, scheduled
+  release tails and hard kills have all decremented the count. The adapter
+  retains deduplicated direct-replay material owners until engine
+  stop/quiescence and adapter destruction; a later replay or live bank reload
+  cannot clear or replace owners that queued/active Voices may still read. No
+  shared ownership, allocation, lock or callback crosses the render queue.
 - `reset_neutral` returns `pending` until render has dequeued the one logical
   `hold_off + 8 release` reset, using `MasterFxTelemetry` as the completion
   witness; queue-pressure continuation must not duplicate gestures. Reference
@@ -563,14 +588,19 @@ sink, where progression is driven purely by rendering plus periodic
 use a non-one-shot Pad and prove `duration_tick` becomes an exact relative
 render-frame release, produces no live outcome/capture event, remains
 `playing` after reset enqueue, and becomes terminal only after render dequeues
-the final reset gesture. Also cover partial reset enqueue continuation without
-duplicates; pending stop calls must not create a receipt, and the same request
-ID must poll again until terminal before later replaying the receipt. Cover an
-empty replay retaining its identity while reset is pending and after a true
-begin-time reset error. In `performance_runtime_bridge_test.cpp`, update the
-headless replay witness to prove the silent sink still completes/reset-closes
-without an artificial pending cycle under the tri-state contract. Expect FAIL
-(RED).
+the final reset gesture. After enqueueing that direct replay Pad, publish a
+different live sample bank before render and prove the Voice still renders the
+projection's old PCM. For Pattern replay, publish material from projection R,
+replace/reload the live bank and Pattern slot, then prove the replay uses R's
+PCM and that an old Pattern Voice release tail survives replacement/reclaim
+attempts until its final frame. Also cover partial reset enqueue continuation
+without duplicates; pending stop calls must not create a receipt, and the same
+request ID must poll again until terminal before later replaying the receipt.
+Cover an empty replay retaining its identity while reset is pending and after
+a true begin-time reset error. In `performance_runtime_bridge_test.cpp`,
+update the headless replay witness to prove the silent sink still
+completes/reset-closes without an artificial pending cycle under the tri-state
+contract. Expect FAIL (RED).
 
 - [ ] **Step 2: Implement the adapter**
 
@@ -578,11 +608,17 @@ Implement `performance_engine_adapter.hpp/.cpp` per **Interfaces**, reusing
 the web runtime's ack predicate shape (`drain_sequence_bar_boundary`) and
 respecting the engine's two-thread contract (control-thread polling only,
 no callback, no allocation on the render path). Extend the existing
-`PadControlEvent` queue entry only with the locked trailing origin/duration
-fields, and reuse the current Voice `scheduled_release_frame`; do not add a
-second render queue or a Host timer. Repair the reference controller's
-tri-state reset handling and zero-event identity retention. Wire CMake and the
-root coverage list. Run Step 1's suite; expect PASS.
+`PadControlEvent` queue entry only with the locked trailing
+origin/duration/material fields, and reuse the current Voice
+`scheduled_release_frame`; do not add a second render queue or a Host timer.
+Teach `PreparedPatternView` to retain deduplicated PCM owners and the engine to
+retire Pattern material only after its active Voice count reaches zero. Reuse
+the existing PCM16 conversion exactly, including stereo averaging. Ensure
+natural completion, scheduled release and hard kill all release the Pattern
+Voice reference, while engine stop/quiescence precedes adapter owner
+destruction. Repair the reference controller's tri-state reset handling and
+zero-event identity retention. Wire CMake and the root coverage list. Run Step
+1's suite; expect PASS.
 
 - [ ] **Step 3: Repair the Native Host construction order and inject (RED then GREEN)**
 
