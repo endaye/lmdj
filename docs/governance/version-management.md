@@ -152,6 +152,35 @@ Channel 降级或撤回只改变发布记录，不删除原 Build、tag 或验�
 M1 Headless Core Proof 最多进入 `dev`；它没有 Creator UI 和真实用户闭环，不能被
 标记为 `beta` 或 `stable`。
 
+### 3.1 Channel promotion 机制
+
+晋级是一次经 review 的发布记录变更，永不改动 GitHub Release。ledger 中 Product intent 的
+`channel` 字段固定为**发布时的 Channel**，发布后不可变，并继续决定 Release 的
+`prerelease` 与 `latest`（见发布管线设计 D6、D8）。晋级写入该 intent 的可选 `promotions`
+列表；每条记录固定目标 Channel、UTC 时间、证据路径、每个 Host 部署 run 的 ID 与其保留
+`evidence.json` 的 SHA-256，以及 attestation。当前 Channel 等于最后一条晋级记录，没有则等于
+`channel`。
+
+晋级只能严格向前，一次一档，且不得超过 `tools/release/policy.json` 的
+`promotion.max_channel`（M1 为 `dev`）。各档门禁的可判定形态：
+
+| 目标 | 工具判定 | attestation |
+| --- | --- | --- |
+| `dev` | intent 已 `published`；full exact-main CI 成立；profile 的每个部署 Host 各有一次成功的 `workflow_dispatch` 部署 run，其保留 `evidence.json` 记录同一 tag、同一 target revision、同一 Product Build，且 immutable 与 production 的 HTTP 和 browser 检查均 `passed`。这是"对应 E2E"的可判定形态。 | `verified` |
+| `beta` | `dev` 条件之外，至少一份 `docs/release-evidence/` 或 `docs/quality/` 下被跟踪的人工验收文档；工具只核验存在与跟踪，内容由人判断。 | `manual-attested` |
+| `stable` | 工具拒绝。D8 禁止切换已发布 Release 的 `prerelease`，而 `stable` 要求 `prerelease=false`，两者冲突；见 `docs/prd/questions/stable-channel-prerelease-flip.md`。 | 不适用 |
+
+操作入口是 `scripts/release.sh promote TAG CHANNEL --deployment-run HOST=RUN_ID ...`
+`[--evidence PATH ...]`。它先运行 exact-tag remote audit 且要求全部通过，再校验转换与门禁并
+下载核对部署证据，然后只向工作区写入一份晋级证据文档与一条 ledger 记录，并打印下一步。它不
+push、不改 GitHub。这两个文件作为 docs PR 经 Integration Queue 评审合入，与 release intent
+的绑定方式一致。`audit` 会核验 `promotions` 的结构与顺序、`max_channel`，以及每条记录的部署
+run 仍然存在、属于该 Host 的部署 workflow、由 `main` 上的 `workflow_dispatch` 触发并成功。
+保留制品有生命周期，因此审计不重新下载 `evidence.json`；记录中的 SHA-256 与证据文档是持久
+记录。
+
+降级与撤回按本节前文允许，但尚无工具实现，作为后续任务。
+
 ## 4. Git Revision 与 Build Identity
 
 每个可运行 Build 必须同时显示：
@@ -529,7 +558,7 @@ release-verified
 
 正常发布只通过 `scripts/release.sh` 与受保护 workflow 完成。每次操作先运行 exact-tag
 remote audit；随后 `prepare`、单 tag push、Draft 创建、Draft 发布、Runtime deployment 与
-Channel promotion 分别授权、分别验证，并在一个 mutation 后停止。命令输出的下一步只是导航，
+Channel promotion（`promote`，见 §3.1）分别授权、分别验证，并在一个 mutation 后停止。命令输出的下一步只是导航，
 不构成下一权限边界的批准。
 
 `docs/release-evidence/release-intents.json` 是经 review 的 release intent ledger：它记录允许

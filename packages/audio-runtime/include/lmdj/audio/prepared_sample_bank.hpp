@@ -4,8 +4,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 #include <lmdj/audio/runtime_preparation_limits.hpp>
@@ -67,6 +69,32 @@ foundation::Result<std::uint64_t> tick_boundary_frame(
     std::uint16_t bpm,
     std::uint32_t ppq = kTransportPpq) noexcept;
 
+struct PreparedSampleMaterialView {
+  const std::int16_t* interleaved{};
+  std::uint32_t frame_count{};
+  std::uint16_t channels{};
+
+  bool operator==(const PreparedSampleMaterialView&) const = default;
+};
+
+static_assert(std::is_trivially_copyable_v<PreparedSampleMaterialView>);
+
+constexpr float prepared_pcm16_to_float(std::int16_t value) noexcept {
+  return value < 0 ? static_cast<float>(value) / 32768.0F
+                   : static_cast<float>(value) / 32767.0F;
+}
+
+inline float prepared_material_sample(PreparedSampleMaterialView material,
+                                      std::uint32_t frame) noexcept {
+  const auto index = static_cast<std::size_t>(frame) * material.channels;
+  const auto first = prepared_pcm16_to_float(material.interleaved[index]);
+  return material.channels == 1
+             ? first
+             : (first +
+                prepared_pcm16_to_float(material.interleaved[index + 1])) *
+                   0.5F;
+}
+
 struct PreparedPatternEvent {
   domain::PadSlotId slot;
   std::uint32_t onset_tick{};
@@ -74,8 +102,21 @@ struct PreparedPatternEvent {
   std::uint8_t velocity{};
   std::uint64_t start_frame{};
   std::uint64_t release_frame{};
+  PreparedSampleMaterialView material{};
+  cooker::ResolvedPlayback playback{};
 
-  bool operator==(const PreparedPatternEvent&) const = default;
+  // Material equality is view identity plus bounds; it never scans PCM.
+  bool operator==(const PreparedPatternEvent& other) const noexcept {
+    return slot == other.slot && onset_tick == other.onset_tick &&
+           duration_tick == other.duration_tick && velocity == other.velocity &&
+           start_frame == other.start_frame &&
+           release_frame == other.release_frame && material == other.material &&
+           playback.start_frame == other.playback.start_frame &&
+           playback.end_frame == other.playback.end_frame &&
+           playback.trigger_mode == other.playback.trigger_mode &&
+           playback.linear_gain == other.playback.linear_gain &&
+           playback.muted == other.playback.muted;
+  }
 };
 
 class PreparedPatternView final {
@@ -116,6 +157,7 @@ class PreparedPatternView final {
       std::uint64_t loop_frames,
       std::uint64_t bar_frames,
       std::vector<PreparedPatternEvent> events,
+      std::vector<std::shared_ptr<const cooker::PcmSample>> material_owners,
       bool has_overlay);
 
   foundation::ProjectId project_id_;
@@ -127,6 +169,7 @@ class PreparedPatternView final {
   std::uint64_t loop_frames_{};
   std::uint64_t bar_frames_{};
   std::vector<PreparedPatternEvent> events_;
+  std::vector<std::shared_ptr<const cooker::PcmSample>> material_owners_;
   bool has_overlay_{};
 };
 

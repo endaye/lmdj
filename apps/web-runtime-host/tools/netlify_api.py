@@ -119,7 +119,10 @@ class NetlifyClient:
             response.get("id") != site_id
             or not isinstance(state, str)
             or not state
-            or not isinstance(disabled, bool)
+            # A newly provisioned site reports `disabled` as null until a
+            # deploy sets it, and a null flag means "not disabled". Only a
+            # non-boolean, non-null value is an unusable identity.
+            or not (disabled is None or isinstance(disabled, bool))
             or not self._https_url(ssl_url)
         ):
             raise NetlifyError("Netlify site identity is invalid")

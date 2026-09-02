@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstddef>
@@ -9,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -18,6 +20,9 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+
+#include <poll.h>
+#include <unistd.h>
 
 #include <nlohmann/json.hpp>
 
@@ -29,6 +34,7 @@
 #include <lmdj/domain/project.hpp>
 #include <lmdj/facade/application.hpp>
 #include <lmdj/facade/assembly_loader.hpp>
+#include <lmdj/facade/performance_engine_adapter.hpp>
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/foundation/json.hpp>
 
@@ -53,6 +59,7 @@ using lmdj::native_host::CaptureWriter;
 constexpr std::size_t kMaximumCommandBytes = 64U * 1024U;
 constexpr int kMaximumJsonContainerDepth = 32;
 constexpr std::uint32_t kNoDeviceRenderFrames = 128;
+constexpr int kControlTickMilliseconds = 2;
 constexpr auto kControlDeadline = std::chrono::seconds(2);
 constexpr std::string_view kHostVersion = "2.0.0";
 #if !defined(LMDJ_NATIVE_PRODUCT_BUILD)
@@ -263,12 +270,69 @@ bool write_response(const Json& response) {
   return static_cast<bool>(std::cout);
 }
 
-LineRead read_line() {
+class ControlTicker final {
+ public:
+  explicit ControlTicker(std::function<void()> control_tick)
+      : control_tick_(std::move(control_tick)),
+        next_tick_(std::chrono::steady_clock::now() + kPeriod) {}
+
+  void service_if_due() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_tick_) {
+      return;
+    }
+    control_tick_();
+    const auto completed = std::chrono::steady_clock::now();
+    do {
+      next_tick_ += kPeriod;
+    } while (next_tick_ <= completed);
+  }
+
+  int poll_timeout_milliseconds() const {
+    const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
+        next_tick_ - std::chrono::steady_clock::now());
+    return static_cast<int>(
+        std::max<std::int64_t>(0, remaining.count()));
+  }
+
+ private:
+  static constexpr auto kPeriod =
+      std::chrono::milliseconds(kControlTickMilliseconds);
+  std::function<void()> control_tick_;
+  std::chrono::steady_clock::time_point next_tick_;
+};
+
+LineRead read_line(ControlTicker& control_ticker) {
   std::string bytes;
   bytes.reserve(kMaximumCommandBytes);
   bool too_large = false;
   char value = 0;
-  while (std::cin.get(value)) {
+  while (true) {
+    control_ticker.service_if_due();
+    pollfd input{STDIN_FILENO, POLLIN, 0};
+    const auto ready =
+        ::poll(&input, 1, control_ticker.poll_timeout_milliseconds());
+    control_ticker.service_if_due();
+    if (ready == 0) {
+      continue;
+    }
+    if (ready < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
+    const auto count = ::read(STDIN_FILENO, &value, 1);
+    control_ticker.service_if_due();
+    if (count == 0) {
+      break;
+    }
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
     if (value == '\n') {
       return LineRead{
           too_large ? LineStatus::too_large : LineStatus::line,
@@ -373,9 +437,26 @@ std::string_view capture_state_name(CaptureState state) noexcept {
 
 class NativeHost final {
  public:
-  NativeHost(Invocation invocation, Application application)
+  NativeHost(
+      Invocation invocation,
+      std::shared_ptr<lmdj::provider::Registry> providers,
+      lmdj::provider::ProviderPolicy provider_policy)
       : invocation_(std::move(invocation)),
-        application_(std::move(application)) {
+        performance_adapter_(lmdj::facade::make_engine_performance_adapter(
+            engine_,
+            lmdj::facade::make_engine_pattern_publication_gateway(engine_))),
+        application_(lmdj::facade::ApplicationConfig{
+            invocation_.workspace,
+            std::move(providers),
+            std::move(provider_policy),
+            {},
+            std::nullopt,
+            nullptr,
+            performance_adapter_.clock,
+            performance_adapter_.input_sequencer,
+            performance_adapter_.launch_acknowledger,
+            performance_adapter_.replay_controller,
+        }) {
 #if defined(__APPLE__)
     if (!invocation_.no_device) {
       output_ = std::make_unique<lmdj::audio::apple::CoreAudioOutput>(engine_);
@@ -413,6 +494,10 @@ class NativeHost final {
       return host_failure(
           ErrorCode::internal_error,
           "initial Sample Bank publication failed");
+    }
+    auto prepared_fx = engine_.prepare_master_fx(prepared.value()->bpm);
+    if (!prepared_fx.has_value()) {
+      return prepared_fx;
     }
     snapshot_ = prepared.value();
     pattern_id_ = invocation_.pattern_id;
@@ -488,6 +573,11 @@ class NativeHost final {
 
   bool quitting() const noexcept { return quitting_; }
 
+  void service_control_tick() {
+    drive_no_device_once();
+    drain_trigger_outcomes_once();
+  }
+
   bool terminal_audio_failure() const noexcept {
 #if defined(__APPLE__)
     return trigger_outcome_failed() ||
@@ -511,7 +601,9 @@ class NativeHost final {
     return application_.query(request);
   }
 
-  void drain_trigger_outcomes_once() noexcept {
+  void drain_trigger_outcomes_once() {
+    std::lock_guard lock(facade_mutex_);
+    performance_adapter_.service();
     std::array<RuntimeTriggerOutcomeEvent, 64> outcomes{};
     (void)engine_.drain_trigger_outcomes(outcomes);
   }
@@ -1007,8 +1099,9 @@ class NativeHost final {
   }
 
   Invocation invocation_;
-  Application application_;
   RealtimeEngine engine_;
+  lmdj::facade::EnginePerformanceAdapter performance_adapter_;
+  Application application_;
   std::mutex facade_mutex_;
   std::shared_ptr<const lmdj::cooker::RuntimeSnapshot> snapshot_;
   PatternId pattern_id_{"00000000-0000-4000-8000-000000000000"};
@@ -1050,19 +1143,10 @@ int run(const RawInvocation& raw) {
     (void)write_response(error_response(assembly.error()));
     return 2;
   }
-  Application application(lmdj::facade::ApplicationConfig{
-      invocation.value().workspace,
+  NativeHost host(
+      std::move(invocation.value()),
       std::move(assembly.value().providers),
-      std::move(assembly.value().provider_policy),
-      {},
-      std::nullopt,
-      nullptr,
-      nullptr,
-      nullptr,
-      nullptr,
-      lmdj::facade::make_unavailable_performance_replay_controller(),
-  });
-  NativeHost host(std::move(invocation.value()), std::move(application));
+      std::move(assembly.value().provider_policy));
   const auto started = host.startup();
   if (!started.has_value()) {
     (void)write_response(error_response(started.error()));
@@ -1075,8 +1159,9 @@ int run(const RawInvocation& raw) {
     return 2;
   }
 
+  ControlTicker control_ticker([&host] { host.service_control_tick(); });
   while (!host.quitting()) {
-    const auto line = read_line();
+    const auto line = read_line(control_ticker);
     Json response;
     if (line.status == LineStatus::too_large) {
       response = invalid_request("command exceeds the 65536 byte limit");
