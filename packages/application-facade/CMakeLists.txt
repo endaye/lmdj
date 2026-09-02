@@ -4,6 +4,7 @@ add_library(
     src/application.cpp
     src/assembly_loader.cpp
     src/mutation_publish_scope.cpp
+    src/performance_engine_adapter.cpp
     src/performance_replay.cpp
     src/performance_runtime.cpp
 )
@@ -218,6 +219,30 @@ if(BUILD_TESTING)
     TIER component
     COMMAND lmdj_facade_performance_runtime_bridge_tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+
+  add_executable(
+    lmdj_facade_performance_engine_adapter_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/performance_engine_adapter_test.cpp"
+  )
+  target_include_directories(
+    lmdj_facade_performance_engine_adapter_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_facade_performance_engine_adapter_tests
+    PRIVATE
+      lmdj::application
+  )
+  lmdj_target_warnings(lmdj_facade_performance_engine_adapter_tests)
+  lmdj_target_sanitizers(lmdj_facade_performance_engine_adapter_tests)
+  lmdj_add_test(
+    NAME facade.performance_engine_adapter
+    TIER component
+    COMMAND lmdj_facade_performance_engine_adapter_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS audio concurrency
   )
 
   add_executable(

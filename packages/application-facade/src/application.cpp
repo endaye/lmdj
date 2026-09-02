@@ -5659,6 +5659,14 @@ struct Application::Impl {
     const auto begun =
         performance_replay_controller->begin(replay_id, projection.value());
     if (!begun.has_value()) {
+      const auto retained =
+          performance_replay_controller->status(replay_id);
+      if (retained.has_value() &&
+          retained.value().state == ReplayState::playing) {
+        replay_identities.emplace(
+            replay_id.value(), ReplayIdentity{path, performance_id});
+        active_replay_id = replay_id.value();
+      }
       return error_envelope(begun.error());
     }
     replay_identities.emplace(
@@ -5751,8 +5759,10 @@ struct Application::Impl {
         active_replay_id.clear();
       }
     }
-    replay_stop_receipts.emplace(
-        request_id, ReplayStopReceipt{path, replay_id, status.value()});
+    if (status.value().state != ReplayState::playing) {
+      replay_stop_receipts.emplace(
+          request_id, ReplayStopReceipt{path, replay_id, status.value()});
+    }
     auto result = replay_status_json(replay_id, status.value());
     result["request_id"] = request_id;
     result["replayed"] = false;

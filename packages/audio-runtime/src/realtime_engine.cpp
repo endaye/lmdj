@@ -134,6 +134,11 @@ bool is_looping(domain::TriggerMode mode) noexcept {
          mode == domain::TriggerMode::loop_toggle;
 }
 
+bool valid_material(PreparedSampleMaterialView material) noexcept {
+  return material.interleaved != nullptr && material.frame_count != 0 &&
+         (material.channels == 1 || material.channels == 2);
+}
+
 constexpr float kRealtimeRampScale =
     1.0F / static_cast<float>(kRealtimeRampFrames);
 
@@ -197,6 +202,20 @@ void RealtimeEngine::release_voice_bank(Voice& voice) noexcept {
       slot.state.load(std::memory_order_relaxed) == BankState::retiring) {
     slot.state.store(BankState::reclaimable, std::memory_order_release);
   }
+  voice.bank_slot = kLegacyBankSlot;
+}
+
+void RealtimeEngine::release_voice_pattern(Voice& voice) noexcept {
+  if (voice.pattern_slot == kNoPatternSlot) {
+    return;
+  }
+  auto& slot = pattern_slots_[voice.pattern_slot];
+  --slot.active_voices;
+  if (slot.active_voices == 0 &&
+      slot.state.load(std::memory_order_relaxed) == PatternState::retiring) {
+    slot.state.store(PatternState::reclaimable, std::memory_order_release);
+  }
+  voice.pattern_slot = kNoPatternSlot;
 }
 
 const std::vector<float>& RealtimeEngine::current_sample(
@@ -256,6 +275,7 @@ bool RealtimeEngine::publish_voice_state(
 void RealtimeEngine::deactivate_voice(Voice& voice) noexcept {
   voice.active = false;
   release_voice_bank(voice);
+  release_voice_pattern(voice);
   cancelled_voices_.fetch_add(1, std::memory_order_relaxed);
   active_voices_.fetch_sub(1, std::memory_order_relaxed);
 }
@@ -267,12 +287,16 @@ void RealtimeEngine::apply_published_pattern(
       current_pattern_slot_.load(std::memory_order_relaxed);
   if (current != kNoPatternSlot) {
     for (auto& voice : voices_) {
-      if (voice.active && voice.pattern_voice) {
+      if (voice.active && voice.pattern_slot == current) {
         stop_voice(voice, runtime_frame);
       }
     }
-    pattern_slots_[current].state.store(
-        PatternState::reclaimable, std::memory_order_release);
+    auto& previous = pattern_slots_[current];
+    previous.state.store(
+        PatternState::retiring, std::memory_order_release);
+    if (previous.active_voices == 0) {
+      previous.state.store(PatternState::reclaimable, std::memory_order_release);
+    }
   }
   auto& next = pattern_slots_[publication.slot];
   next.state.store(PatternState::current, std::memory_order_release);
@@ -287,14 +311,9 @@ void RealtimeEngine::start_pattern_voice(
     const PreparedPatternEvent& event,
     std::uint64_t loop_origin_frame) noexcept {
   const auto slot = global_slot(event.slot);
-  if ((availability_mask_.load(std::memory_order_relaxed) &
-       (std::uint64_t{1} << slot)) == 0) {
-    invalid_events_.fetch_add(1, std::memory_order_relaxed);
-    return;
-  }
-  const auto& sample = current_sample(slot);
-  const auto playback = published_playback(slot);
-  if (!valid_playback(playback, sample.size())) {
+  const auto playback = event.playback;
+  if (!valid_material(event.material) ||
+      !valid_playback(playback, event.material.frame_count)) {
     invalid_events_.fetch_add(1, std::memory_order_relaxed);
     return;
   }
@@ -309,33 +328,26 @@ void RealtimeEngine::start_pattern_voice(
     voice_drops_.fetch_add(1, std::memory_order_relaxed);
     return;
   }
-  const auto bank_slot =
-      current_bank_slot_.load(std::memory_order_relaxed);
-  *voice = Voice{
-      0,
-      slot,
-      sample.data(),
-      sample.size(),
-      playback.start_frame,
-      playback.end_frame,
-      playback.start_frame,
-      (static_cast<float>(event.velocity) / 127.0F) *
-          playback.linear_gain,
-      playback.trigger_mode,
-      false,
-      bank_slot,
-      kRealtimeRampFrames,
-      false,
-      0,
+  *voice = Voice{};
+  voice->slot = slot;
+  voice->material = event.material;
+  voice->frame_count = event.material.frame_count;
+  voice->start_frame = playback.start_frame;
+  voice->end_frame = playback.end_frame;
+  voice->cursor = playback.start_frame;
+  voice->gain = (static_cast<float>(event.velocity) / 127.0F) *
+                playback.linear_gain;
+  voice->trigger_mode = playback.trigger_mode;
+  voice->attack_frames_remaining = kRealtimeRampFrames;
+  voice->scheduled_release_frame =
       playback.trigger_mode == domain::TriggerMode::one_shot
           ? 0
-          : loop_origin_frame + event.release_frame,
-      true,
-  };
+          : loop_origin_frame + event.release_frame;
+  voice->pattern_voice = true;
+  voice->origin = PadControlOrigin::performance_replay;
+  voice->pattern_slot = current_pattern_slot_.load(std::memory_order_relaxed);
   voice->active = true;
-  if (bank_slot != kLegacyBankSlot) {
-    ++bank_slots_[bank_slot].active_voices;
-  }
+  ++pattern_slots_[voice->pattern_slot].active_voices;
   started_voices_.fetch_add(1, std::memory_order_relaxed);
   active_voices_.fetch_add(1, std::memory_order_relaxed);
 }
@@ -381,7 +393,7 @@ void RealtimeEngine::stop_voice(
     deactivate_voice(voice);
     return;
   }
-  if (!voice.pattern_voice) {
+  if (!voice.pattern_voice && voice.origin == PadControlOrigin::host_input) {
     static_cast<void>(publish_voice_state(
         voice,
         RuntimeVoiceState::stopped,
@@ -467,7 +479,8 @@ PublishResult RealtimeEngine::publish_sample_bank(
     PreparedSampleBank&& bank) noexcept {
   const auto running =
       state_.load(std::memory_order_acquire) == RealtimeState::running;
-  if (running && queue_.size_approx() != 0) {
+  if (running &&
+      queued_host_input_events_.load(std::memory_order_acquire) != 0) {
     return PublishResult::events_pending;
   }
 
@@ -516,6 +529,23 @@ PatternPublication RealtimeEngine::publish_pattern_view(
     PreparedPatternView&& pattern,
     std::optional<std::uint64_t> requested_activation_frame,
     std::optional<PatternReplacementAuthority> replacement_authority) noexcept {
+  return publish_pattern_view_impl(
+      std::move(pattern), requested_activation_frame,
+      std::move(replacement_authority), PatternPublicationTiming::scheduled);
+}
+
+PatternPublication RealtimeEngine::publish_pattern_view_immediate(
+    PreparedPatternView&& pattern) noexcept {
+  return publish_pattern_view_impl(
+      std::move(pattern), std::nullopt, std::nullopt,
+      PatternPublicationTiming::immediate);
+}
+
+PatternPublication RealtimeEngine::publish_pattern_view_impl(
+    PreparedPatternView&& pattern,
+    std::optional<std::uint64_t> requested_activation_frame,
+    std::optional<PatternReplacementAuthority> replacement_authority,
+    PatternPublicationTiming timing) noexcept {
   for (;;) {
     const auto observed_mailbox =
         queued_pattern_generation_.load(std::memory_order_acquire);
@@ -620,6 +650,7 @@ PatternPublication RealtimeEngine::publish_pattern_view(
           PatternPublishResult::generation_exhausted, 0, 0};
     }
     slot->pattern.emplace(std::move(pattern));
+    slot->active_voices = 0;
     slot->generation = *generation;
 
     const auto running =
@@ -629,7 +660,10 @@ PatternPublication RealtimeEngine::publish_pattern_view(
       const auto observed_frame =
           rendered_frames_.load(std::memory_order_acquire);
       activation_frame = observed_frame;
-      if (authorized_replacement && requested_activation_frame.has_value()) {
+      if (timing == PatternPublicationTiming::immediate) {
+        activation_frame = observed_frame;
+      } else if (authorized_replacement &&
+                 requested_activation_frame.has_value()) {
         if (*requested_activation_frame < observed_frame) {
           slot->pattern.reset();
           slot->generation = 0;
@@ -725,6 +759,9 @@ PatternPublication RealtimeEngine::publish_pattern_view(
 
 bool RealtimeEngine::cancel_pattern_publication(
     const PatternReplacementAuthority& authority) noexcept {
+  if (cancel_unclaimed_pattern_publication(authority)) {
+    return true;
+  }
   const auto pending = std::find_if(
       pattern_slots_.begin(),
       pattern_slots_.end(),
@@ -740,17 +777,6 @@ bool RealtimeEngine::cancel_pattern_publication(
   }
 
   auto expected = authority.generation;
-  if (queued_pattern_generation_.compare_exchange_strong(
-          expected,
-          0,
-          std::memory_order_acq_rel,
-          std::memory_order_acquire)) {
-    pending->state.store(PatternState::reclaimable, std::memory_order_release);
-    canceled_pattern_publications_.fetch_add(1, std::memory_order_relaxed);
-    return true;
-  }
-
-  expected = authority.generation;
   if (audio_pending_pattern_generation_.compare_exchange_strong(
           expected,
           0,
@@ -760,6 +786,35 @@ bool RealtimeEngine::cancel_pattern_publication(
     return true;
   }
   return false;
+}
+
+bool RealtimeEngine::cancel_unclaimed_pattern_publication(
+    const PatternReplacementAuthority& authority) noexcept {
+  const auto pending = std::find_if(
+      pattern_slots_.begin(),
+      pattern_slots_.end(),
+      [&authority](const PatternSlot& candidate) {
+        return candidate.state.load(std::memory_order_acquire) ==
+                   PatternState::pending &&
+               candidate.generation == authority.generation &&
+               candidate.activation_frame == authority.activation_frame &&
+               candidate.pattern->pattern_id() == authority.pattern_id;
+      });
+  if (pending == pattern_slots_.end()) {
+    return false;
+  }
+
+  auto expected = authority.generation;
+  if (!queued_pattern_generation_.compare_exchange_strong(
+          expected,
+          0,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return false;
+  }
+  pending->state.store(PatternState::reclaimable, std::memory_order_release);
+  canceled_pattern_publications_.fetch_add(1, std::memory_order_relaxed);
+  return true;
 }
 
 foundation::Result<void> RealtimeEngine::clear_pattern_view() noexcept {
@@ -774,8 +829,12 @@ foundation::Result<void> RealtimeEngine::clear_pattern_view() noexcept {
   const auto current =
       current_pattern_slot_.exchange(kNoPatternSlot, std::memory_order_acq_rel);
   if (current != kNoPatternSlot) {
-    pattern_slots_[current].state.store(
-        PatternState::reclaimable, std::memory_order_release);
+    auto& slot = pattern_slots_[current];
+    slot.state.store(
+        PatternState::retiring, std::memory_order_release);
+    if (slot.active_voices == 0) {
+      slot.state.store(PatternState::reclaimable, std::memory_order_release);
+    }
   }
   pattern_origin_frame_.store(0, std::memory_order_release);
   pattern_event_index_ = 0;
@@ -792,6 +851,7 @@ std::size_t RealtimeEngine::reclaim_retired_patterns() noexcept {
     slot.pattern.reset();
     slot.generation = 0;
     slot.activation_frame = 0;
+    slot.active_voices = 0;
     slot.state.store(PatternState::empty, std::memory_order_release);
     ++reclaimed;
   }
@@ -948,6 +1008,12 @@ foundation::Result<void> RealtimeEngine::start() {
   if (state_.load(std::memory_order_acquire) != RealtimeState::stopped) {
     return invalid_argument("realtime engine is already running");
   }
+  const auto start_epoch = start_epoch_.load(std::memory_order_acquire);
+  if (start_epoch == std::numeric_limits<std::uint64_t>::max()) {
+    return invalid_argument(
+        "realtime engine start epoch is exhausted; restart the host process "
+        "with a new engine instance");
+  }
 
   queue_.clear_quiescent();
   fx_queue_.clear_quiescent();
@@ -965,6 +1031,7 @@ foundation::Result<void> RealtimeEngine::start() {
   std::fill(voices_.begin(), voices_.end(), Voice{});
   preview_mask_ = 0;
   enqueued_events_.store(0, std::memory_order_relaxed);
+  queued_host_input_events_.store(0, std::memory_order_relaxed);
   dequeued_events_.store(0, std::memory_order_relaxed);
   cancelled_events_.store(0, std::memory_order_relaxed);
   started_voices_.store(0, std::memory_order_relaxed);
@@ -999,6 +1066,7 @@ foundation::Result<void> RealtimeEngine::start() {
   enqueued_tempo_updates_.store(0, std::memory_order_relaxed);
   applied_tempo_updates_.store(0, std::memory_order_relaxed);
   current_master_fx_bpm_.store(master_fx_.bpm(), std::memory_order_relaxed);
+  start_epoch_.store(start_epoch + 1, std::memory_order_release);
   state_.store(RealtimeState::running, std::memory_order_release);
   return foundation::Result<void>::success();
 }
@@ -1007,6 +1075,7 @@ void RealtimeEngine::stop() noexcept {
   state_.store(RealtimeState::stopped, std::memory_order_release);
   cancelled_events_.fetch_add(
       queue_.clear_quiescent(), std::memory_order_relaxed);
+  queued_host_input_events_.store(0, std::memory_order_relaxed);
   fx_queue_.clear_quiescent();
   queued_fx_gestures_.store(0, std::memory_order_relaxed);
   master_fx_.reset();
@@ -1016,6 +1085,7 @@ void RealtimeEngine::stop() noexcept {
     if (voice.active) {
       ++active;
       release_voice_bank(voice);
+      release_voice_pattern(voice);
     }
     voice = Voice{};
   }
@@ -1102,8 +1172,21 @@ EnqueueResult RealtimeEngine::enqueue_control(PadControlEvent event) noexcept {
     invalid_events_.fetch_add(1, std::memory_order_relaxed);
     return EnqueueResult::invalid_velocity;
   }
-  if (event.kind == PadControlKind::press ||
-      event.kind == PadControlKind::preview_set) {
+  const auto replay = event.origin == PadControlOrigin::performance_replay;
+  if (event.origin != PadControlOrigin::host_input && !replay) {
+    invalid_events_.fetch_add(1, std::memory_order_relaxed);
+    return EnqueueResult::invalid_velocity;
+  }
+  if (replay &&
+      (event.kind != PadControlKind::press || !valid_material(event.material) ||
+       event.duration_frames == 0 ||
+       !valid_playback(event.playback, event.material.frame_count))) {
+    invalid_events_.fetch_add(1, std::memory_order_relaxed);
+    return EnqueueResult::invalid_velocity;
+  }
+  if (!replay &&
+      (event.kind == PadControlKind::press ||
+       event.kind == PadControlKind::preview_set)) {
     if (pending_publications_.load(std::memory_order_acquire) != 0) {
       return EnqueueResult::bank_transition;
     }
@@ -1113,12 +1196,18 @@ EnqueueResult RealtimeEngine::enqueue_control(PadControlEvent event) noexcept {
       return EnqueueResult::sample_unavailable;
     }
   }
-  if (event.kind == PadControlKind::preview_set &&
+  if (!replay && event.kind == PadControlKind::preview_set &&
       !valid_playback(event.playback, current_sample(event.slot).size())) {
     invalid_events_.fetch_add(1, std::memory_order_relaxed);
     return EnqueueResult::invalid_velocity;
   }
+  if (!replay) {
+    queued_host_input_events_.fetch_add(1, std::memory_order_relaxed);
+  }
   if (!queue_.try_push(event)) {
+    if (!replay) {
+      queued_host_input_events_.fetch_sub(1, std::memory_order_relaxed);
+    }
     queue_drops_.fetch_add(1, std::memory_order_relaxed);
     return EnqueueResult::queue_full;
   }
@@ -1230,7 +1319,10 @@ void RealtimeEngine::render(
     apply_published_bank(published_slot);
     pending_publications_.fetch_sub(1, std::memory_order_release);
   }
-  auto mailbox = queued_pattern_generation_.load(std::memory_order_acquire);
+  auto mailbox = audio_pending_pattern_.has_value()
+                     ? std::uint64_t{0}
+                     : queued_pattern_generation_.load(
+                           std::memory_order_acquire);
   std::uint64_t claimed_pattern_generation = 0;
   while (mailbox != 0 && (mailbox & detail::kPatternClaimedMask) == 0) {
     const auto claimed_mailbox = mailbox | detail::kPatternClaimedMask;
@@ -1258,21 +1350,6 @@ void RealtimeEngine::render(
               std::distance(pattern_slots_.begin(), claimed)),
           claimed->generation,
           claimed->activation_frame};
-      if (audio_pending_pattern_.has_value()) {
-        auto superseded_generation = audio_pending_pattern_->generation;
-        const auto claimed_superseded_generation =
-            superseded_generation | detail::kPatternClaimedMask;
-        if (audio_pending_pattern_generation_.compare_exchange_strong(
-                superseded_generation,
-                claimed_superseded_generation,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire)) {
-          superseded_pattern_publications_.fetch_add(
-              1, std::memory_order_relaxed);
-        }
-        pattern_slots_[audio_pending_pattern_->slot].state.store(
-            PatternState::reclaimable, std::memory_order_release);
-      }
       audio_pending_pattern_ = publication;
       audio_pending_pattern_generation_.store(
           publication.generation, std::memory_order_release);
@@ -1288,6 +1365,10 @@ void RealtimeEngine::render(
        processed < kRealtimeQueueCapacity && queue_.try_pop(event);
        ++processed) {
     dequeued_events_.fetch_add(1, std::memory_order_relaxed);
+    const auto replay = event.origin == PadControlOrigin::performance_replay;
+    if (!replay) {
+      queued_host_input_events_.fetch_sub(1, std::memory_order_relaxed);
+    }
     if (event.kind == PadControlKind::preview_set) {
       previews_[event.slot] = event.playback;
       preview_mask_ |= std::uint64_t{1} << event.slot;
@@ -1300,6 +1381,7 @@ void RealtimeEngine::render(
     if (event.kind == PadControlKind::release) {
       for (auto& voice : voices_) {
         if (voice.active && voice.slot == event.slot &&
+            voice.origin == PadControlOrigin::host_input &&
             (voice.trigger_mode == domain::TriggerMode::gate ||
              voice.trigger_mode == domain::TriggerMode::loop_gate)) {
           stop_voice(voice, absolute_start_frame);
@@ -1320,32 +1402,37 @@ void RealtimeEngine::render(
     }
 
     bool stopped_toggle = false;
-    for (auto& candidate : voices_) {
-      if (candidate.active && candidate.slot == event.slot &&
-          candidate.trigger_mode == domain::TriggerMode::loop_toggle) {
-        stop_voice(candidate, absolute_start_frame);
-        stopped_toggle = true;
+    if (!replay) {
+      for (auto& candidate : voices_) {
+        if (candidate.active && candidate.slot == event.slot &&
+            candidate.origin == PadControlOrigin::host_input &&
+            candidate.trigger_mode == domain::TriggerMode::loop_toggle) {
+          stop_voice(candidate, absolute_start_frame);
+          stopped_toggle = true;
+        }
       }
     }
     if (stopped_toggle) {
       continue;
     }
 
-    const auto& sample = current_sample(event.slot);
     auto playback = event.playback;
-    if (is_default_playback_sentinel(playback)) {
+    if (!replay && is_default_playback_sentinel(playback)) {
       playback = (preview_mask_ & (std::uint64_t{1} << event.slot)) != 0
                      ? previews_[event.slot]
                      : published_playback(event.slot);
     }
-    if (!valid_playback(playback, sample.size())) {
+    const auto frame_count =
+        replay ? static_cast<std::size_t>(event.material.frame_count)
+               : current_sample(event.slot).size();
+    if (!valid_playback(playback, frame_count)) {
       invalid_events_.fetch_add(1, std::memory_order_relaxed);
       continue;
     }
     if (playback.muted) {
       continue;
     }
-    if (voice_state_stream_state_.load(std::memory_order_relaxed) ==
+    if (!replay && voice_state_stream_state_.load(std::memory_order_relaxed) ==
         RuntimeVoiceStateStreamState::corrupted) {
       voice_drops_.fetch_add(1, std::memory_order_relaxed);
       continue;
@@ -1356,39 +1443,48 @@ void RealtimeEngine::render(
         });
     if (voice == voices_.end()) {
       voice_drops_.fetch_add(1, std::memory_order_relaxed);
-      if (trigger_outcome_ring_.try_push(RuntimeTriggerOutcomeEvent{
-              event.sequence,
-              RuntimeTriggerOutcome::voice_capacity,
-              absolute_start_frame,
-          })) {
-        published_outcomes_.fetch_add(1, std::memory_order_relaxed);
-      } else {
-        runtime_outcome_drops_.fetch_add(1, std::memory_order_relaxed);
+      if (!replay) {
+        if (trigger_outcome_ring_.try_push(RuntimeTriggerOutcomeEvent{
+                event.sequence,
+                RuntimeTriggerOutcome::voice_capacity,
+                absolute_start_frame,
+            })) {
+          published_outcomes_.fetch_add(1, std::memory_order_relaxed);
+        } else {
+          runtime_outcome_drops_.fetch_add(1, std::memory_order_relaxed);
+        }
       }
       continue;
     }
+    if (replay && playback.trigger_mode != domain::TriggerMode::one_shot &&
+        event.duration_frames >
+            std::numeric_limits<std::uint64_t>::max() - absolute_start_frame) {
+      invalid_events_.fetch_add(1, std::memory_order_relaxed);
+      continue;
+    }
     const auto bank_slot =
-        current_bank_slot_.load(std::memory_order_relaxed);
-    *voice = Voice{
-        event.sequence,
-        event.slot,
-        sample.data(),
-        sample.size(),
-        playback.start_frame,
-        playback.end_frame,
-        playback.start_frame,
-        (static_cast<float>(event.velocity) / 127.0F) *
-            playback.linear_gain,
-        playback.trigger_mode,
-        false,
-        bank_slot,
-        kRealtimeRampFrames,
-        false,
-        0,
-        0,
-        false,
-    };
-    if (!publish_voice_state(
+        replay ? kLegacyBankSlot
+               : current_bank_slot_.load(std::memory_order_relaxed);
+    *voice = Voice{};
+    voice->sequence = event.sequence;
+    voice->slot = event.slot;
+    voice->samples = replay ? nullptr : current_sample(event.slot).data();
+    voice->material = replay ? event.material : PreparedSampleMaterialView{};
+    voice->frame_count = frame_count;
+    voice->start_frame = playback.start_frame;
+    voice->end_frame = playback.end_frame;
+    voice->cursor = playback.start_frame;
+    voice->gain = (static_cast<float>(event.velocity) / 127.0F) *
+                  playback.linear_gain;
+    voice->trigger_mode = playback.trigger_mode;
+    voice->bank_slot = bank_slot;
+    voice->attack_frames_remaining = kRealtimeRampFrames;
+    voice->scheduled_release_frame =
+        replay && playback.trigger_mode != domain::TriggerMode::one_shot
+            ? absolute_start_frame + event.duration_frames
+            : 0;
+    voice->origin = event.origin;
+    if (!replay && !publish_voice_state(
             *voice,
             RuntimeVoiceState::started,
             absolute_start_frame,
@@ -1403,16 +1499,18 @@ void RealtimeEngine::render(
     }
     started_voices_.fetch_add(1, std::memory_order_relaxed);
     active_voices_.fetch_add(1, std::memory_order_relaxed);
-    if (trigger_outcome_ring_.try_push(RuntimeTriggerOutcomeEvent{
-            event.sequence,
-            RuntimeTriggerOutcome::voice_started,
-            absolute_start_frame,
-        })) {
-      published_outcomes_.fetch_add(1, std::memory_order_relaxed);
-    } else {
-      runtime_outcome_drops_.fetch_add(1, std::memory_order_relaxed);
+    if (!replay) {
+      if (trigger_outcome_ring_.try_push(RuntimeTriggerOutcomeEvent{
+              event.sequence,
+              RuntimeTriggerOutcome::voice_started,
+              absolute_start_frame,
+          })) {
+        published_outcomes_.fetch_add(1, std::memory_order_relaxed);
+      } else {
+        runtime_outcome_drops_.fetch_add(1, std::memory_order_relaxed);
+      }
+      capture_voice_start(event, absolute_start_frame);
     }
-    capture_voice_start(event, absolute_start_frame);
   }
 
   for (std::uint32_t frame = 0; frame < frames; ++frame) {
@@ -1437,7 +1535,7 @@ void RealtimeEngine::render(
       audio_pending_pattern_.reset();
     }
     for (auto& voice : voices_) {
-      if (voice.active && voice.pattern_voice &&
+      if (voice.active && !voice.releasing &&
           voice.scheduled_release_frame != 0 &&
           runtime_frame >= voice.scheduled_release_frame) {
         stop_voice(voice, runtime_frame);
@@ -1474,7 +1572,11 @@ void RealtimeEngine::render(
             static_cast<float>(voice.release_frames_remaining) *
             kRealtimeRampScale;
       }
-      const auto value = voice.samples[voice.cursor] * voice.gain * ramp;
+      const auto sample = voice.material.interleaved != nullptr
+                              ? prepared_material_sample(
+                                    voice.material, voice.cursor)
+                              : voice.samples[voice.cursor];
+      const auto value = sample * voice.gain * ramp;
       left[frame] += value;
       right[frame] += value;
       ++voice.cursor;
@@ -1498,7 +1600,8 @@ void RealtimeEngine::render(
         deactivate_voice(voice);
         continue;
       }
-      if (!voice.pattern_voice) {
+      if (!voice.pattern_voice &&
+          voice.origin == PadControlOrigin::host_input) {
         static_cast<void>(publish_voice_state(
             voice,
             RuntimeVoiceState::completed,
@@ -1507,6 +1610,7 @@ void RealtimeEngine::render(
       }
       voice.active = false;
       release_voice_bank(voice);
+      release_voice_pattern(voice);
       completed_voices_.fetch_add(1, std::memory_order_relaxed);
       active_voices_.fetch_sub(1, std::memory_order_relaxed);
       continue;
@@ -1531,6 +1635,7 @@ void RealtimeEngine::render(
 RealtimeTelemetry RealtimeEngine::telemetry() const noexcept {
   return RealtimeTelemetry{
       state_.load(std::memory_order_acquire),
+      start_epoch_.load(std::memory_order_acquire),
       enqueued_events_.load(std::memory_order_relaxed),
       dequeued_events_.load(std::memory_order_relaxed),
       queue_.size_approx(),
@@ -1548,6 +1653,15 @@ RealtimeTelemetry RealtimeEngine::telemetry() const noexcept {
       max_callback_frames_.load(std::memory_order_relaxed),
   };
 }
+
+#if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
+void RealtimeEngine::set_start_epoch_for_testing(
+    std::uint64_t epoch) noexcept {
+  if (state_.load(std::memory_order_acquire) == RealtimeState::stopped) {
+    start_epoch_.store(epoch, std::memory_order_release);
+  }
+}
+#endif
 
 BankTelemetry RealtimeEngine::bank_telemetry() const noexcept {
   return BankTelemetry{
