@@ -423,6 +423,12 @@ allocation of that Build:
    through the same path, and land the same fix on `main` through an ordinary
    Pull Request. No `release/*` or `hotfix/*` branch outlives that fix.
 
+This rule governs every Product Build allocated after `1.0.41.0`. `1.0.41.0`
+itself was already built, reviewed, and verified under the previous practice,
+so it was merged as the last Build cut under it; splitting a finished
+control-plane Pull Request would have multiplied the chasing it describes
+rather than removed it.
+
 A Pull Request that mixes Assembly allocation with feature or control-plane
 changes is split before it is labelled, not chased. This rule is motivated by
 PR #520, which carried CI routing, a new deploy workflow, release scripts, and
