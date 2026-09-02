@@ -9,6 +9,19 @@
 signed tag、受保护 `main` ancestry、Release 三资产、workflow run 与 deployment evidence；
 不得从该快照、本地同名 tag、Portal 页面或先前命令输出推断当前状态。
 
+## 当前双 Host Release 边界
+
+历史 `1.0.15.2` 三资产 Runtime Release 与已公开的 `1.0.40.0` tag、Release、部署证据均保持
+不可变；下文保留其精确操作证据，不能重写成新 profile。从后续获准 Product Build 起，当前
+标准 profile 是 `web-hosts`：一个 Product Release 精确包含 Creator 与 Runtime 各自的
+ZIP、checksum、detached checksum signature，共六项资产。Runtime verifier 先验证完整六资产
+inventory，再只选择 Runtime 三项 staging；Creator verifier 独立选择 Creator 三项。
+
+Creator 的生产 URL 是 `https://lmdj-creator.netlify.app/`，Runtime 保持
+`https://lmdj-runtime.netlify.app/`。两条 workflow 都是 manual-only exact-tag dispatch，具有
+不同的 Site、Environment、credential、smoke、evidence 和 exact prior rollback。公开 Release
+不 fan-out deployment；Creator deployment 也不授权或触发 Runtime deployment，反之亦然。
+
 ## 发布不变量
 
 - 目标 Product tag 为 `lmdj-v1.0.15.2`，其签名 target 必须是

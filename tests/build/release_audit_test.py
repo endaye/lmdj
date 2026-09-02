@@ -1499,6 +1499,64 @@ class ReleaseAuditTest(ReleaseAuditFixture, unittest.TestCase):
         report = audit(context, remote=True, tag=tag)
         self.assertEqual(report.findings[0].code, "conflict")
 
+    def test_dual_web_host_release_audit_accepts_both_signed_triplets(self) -> None:
+        item = self.entry(
+            tag="lmdj-v1.0.41.0",
+            disposition="published",
+            kind="product",
+            identity="1.0.41.0",
+            profile="web-hosts",
+        )
+        intent = load_ledger_document(
+            {
+                "schema": "lmdj.release-intents.v1",
+                "entries": [item],
+                "historical_exceptions": [],
+            },
+            self.policy,
+        ).entries[0]
+        payload_by_name: dict[str, bytes] = {}
+        for host in ("creator-web", "web-runtime-host"):
+            archive_name = f"lmdj-{host}-2.1.1-product-1.0.41.0.zip"
+            archive = host.encode("ascii")
+            payload_by_name[archive_name] = archive
+            payload_by_name[f"{archive_name}.sha256"] = (
+                f"{hashlib.sha256(archive).hexdigest()}  {archive_name}\n".encode("ascii")
+            )
+            payload_by_name[f"{archive_name}.sha256.asc"] = b"signature"
+        assets = tuple(
+            GitHubAsset(
+                70 + index,
+                name,
+                len(payload),
+                f"https://api.github.com/repos/endaye/lmdj/releases/assets/{70 + index}",
+                f"https://github.com/endaye/lmdj/releases/download/test/{name}",
+                17,
+                None,
+                "application/octet-stream",
+                "uploaded",
+            )
+            for index, (name, payload) in enumerate(payload_by_name.items())
+        )
+        release = self.release(
+            intent.tag,
+            assets=assets,
+            prerelease=True,
+            kind="product",
+            identity=intent.identity,
+            profile=intent.profile,
+            channel="canary",
+        )
+        self.github.releases[intent.tag] = release
+        self.github.payloads = {
+            asset.id: payload_by_name[asset.name] for asset in assets
+        }
+        context = self.context([item], ensure_current_product_intent=False)
+
+        problem = audit_module._asset_problem(context, intent, release)
+
+        self.assertIsNone(problem)
+
     def test_network_or_pagination_failure_is_external_error(self) -> None:
         self.github.error = TimeoutError("fixture secret")
         report = audit(self.context(), remote=True)

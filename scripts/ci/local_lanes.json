@@ -152,8 +152,11 @@
       "commands": [
         "python3 -m unittest discover -s tests/build -p 'release_*_test.py'",
         "python3 tests/build/web_runtime_deploy_workflow_test.py",
+        "python3 tests/build/creator_web_deploy_workflow_test.py",
         "python3 tests/build/web_runtime_public_deployment_docs_test.py",
-        "python3 apps/web-runtime-host/test/deploy_command_test.py"
+        "python3 tests/build/creator_web_public_deployment_docs_test.py",
+        "python3 apps/web-runtime-host/test/deploy_command_test.py",
+        "python3 apps/creator-web/test/deploy_command_test.py"
       ],
       "ci_only": [
         "the deploy command suite pins --shards 4 to the hosted runner's four vCPUs; the local run takes the default min(4, os.cpu_count())"

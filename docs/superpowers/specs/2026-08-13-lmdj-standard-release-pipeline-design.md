@@ -7,6 +7,14 @@
 修订：2026-08-26 — §8.4 preflight/publish 验证边界。GitHub 不向只读身份暴露 Draft
 Release，Draft 专属验证从 preflight 移交 publish job（维护者批准，#335）。
 
+修订：2026-09-01 — 后续 Web 产品发布采用 `web-hosts` profile：Creator 与 Runtime 各自
+贡献 ZIP、checksum 和 detached checksum signature，一个 Product Release 精确六资产。
+Creator 使用 `https://lmdj-creator.netlify.app/`，Runtime 使用
+`https://lmdj-runtime.netlify.app/`；两条部署都是独立 manual-only dispatch，具有独立
+Environment、Site credential、evidence 与 exact prior rollback，Release publication 不产生
+deployment fan-out。历史 `1.0.40.0` 及更早的三资产 Runtime Release/部署保持不可变；本修订
+只约束后续获准 Product Build。
+
 ## 1. 结论
 
 LMDJ 将 tag、GitHub Release 与部署从临时人工命令收敛为一个仓库拥有、分段授权、

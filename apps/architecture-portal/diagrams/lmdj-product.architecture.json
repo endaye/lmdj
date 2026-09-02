@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "meta": {"title": "LMDJ 全产品架构", "summary": "Creator、共享 Web Runtime、Project transfer、Runtime 与 Product Assembly 边界"},
+  "meta": {"title": "LMDJ 全产品架构", "summary": "Creator、共享 Web Runtime、Project transfer、双 Host Release 与独立部署边界"},
   "boundaries": [
     {"id": "core", "label": "Product-neutral Headless Core", "x": 520, "y": 96, "width": 1000, "height": 470}
   ],
@@ -34,6 +34,7 @@
   "cards": [
     {"title": "Project Truth", "body": "唯一权威创作状态；Bundle 只传输，Runtime Snapshot 只派生。"},
     {"title": "Product Assembly", "body": "Product Build、Host allowlist 与 Provider wiring 只在 products/lmdj。"},
-    {"title": "当前交付", "body": "Stage 9 remediation 已集成 writer-lease admission、durable tail、pending overlay、armed Capture rebase 与可重放 boundary；生产 Provider 与物理验收仍有独立门禁。"}
+    {"title": "当前交付", "body": "Stage 9 remediation 已集成 writer-lease admission、durable tail、pending overlay、armed Capture rebase 与可重放 boundary；生产 Provider 与物理验收仍有独立门禁。"},
+    {"title": "Web Hosts", "body": "web-hosts Release 精确六资产；Creator 与 Runtime 的 Site、授权、证据和回滚互不推断。"}
   ]
 }

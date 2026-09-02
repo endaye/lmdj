@@ -19,7 +19,15 @@ from .github_api import (
     RunProjection,
 )
 from .model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, Disposition, ReleaseIntent, ReleaseLedger, ReleaseModelError, ReleasePlan, ReleasePolicy, canonical_json, classify_tag, load_ledger, load_policy
-from .profiles import AssetBuild, ProfileBuild, ProfileRuntime, build_profile, verify_existing_profile
+from .profiles import (
+    AssetBuild,
+    ProfileBuild,
+    ProfileError,
+    ProfileRuntime,
+    build_profile,
+    canonical_product_asset_names,
+    verify_existing_profile,
+)
 
 
 class PrepareError(RuntimeError):
@@ -241,20 +249,20 @@ def _verify_profile_assets(intent: ReleaseIntent, built: ProfileBuild) -> tuple[
         if assets:
             raise PrepareError("source-only releases must not create release assets")
         return assets
-    if intent.profile not in {"core-package", "web-runtime-host"}:
-        raise PrepareError("unknown release profile")
     names = [asset.name for asset in assets]
     if len(names) != len(set(names)) or any(asset.path.name != asset.name for asset in assets):
         raise PrepareError("release asset inventory contains duplicate or renamed assets")
-    archive = next((name for name in names if name.endswith(".zip")), None)
-    expected = (
-        None
-        if archive is None
-        else {archive, archive + ".sha256", archive + ".sha256.asc"}
-    )
-    if intent.profile == "core-package" and expected is not None:
-        expected.add(archive[: -len(".zip")] + ".build-manifest.json")
-    if archive is None or set(names) != expected:
+    try:
+        expected = canonical_product_asset_names(
+            intent.profile,
+            names,
+            intent.identity,
+        )
+    except ProfileError:
+        raise PrepareError(
+            "Product release asset inventory is not canonical for its profile"
+        ) from None
+    if set(names) != expected:
         raise PrepareError("Product release asset inventory is not canonical for its profile")
     for asset in assets:
         try:
