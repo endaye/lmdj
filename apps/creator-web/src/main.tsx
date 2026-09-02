@@ -5,11 +5,24 @@ import {WEB_RUNTIME_IDENTITY} from
   "../../../products/lmdj/generated/web-runtime-identity.mjs";
 
 import {App} from "./app";
+import {
+  announceBuildIdentity,
+  creatorBuildIdentity,
+} from "./runtime/build_identity";
 import type {CreatorRuntimeSession} from "./runtime/runtime_types";
 import "./styles.css";
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("Creator root is missing");
+
+const buildIdentity = creatorBuildIdentity(WEB_RUNTIME_IDENTITY);
+announceBuildIdentity(buildIdentity);
+Object.defineProperty(window, "__LMDJ_CREATOR_BUILD__", {
+  value: buildIdentity,
+  configurable: false,
+  enumerable: false,
+  writable: false,
+});
 
 function createCreatorRuntimeSession(): CreatorRuntimeSession {
   const host = WEB_RUNTIME_IDENTITY.hosts["creator-web"];
@@ -48,5 +61,8 @@ function createCreatorRuntimeSession(): CreatorRuntimeSession {
 }
 
 createRoot(root).render(
-  <App runtimeFactory={createCreatorRuntimeSession} />,
+  <App
+    runtimeFactory={createCreatorRuntimeSession}
+    buildIdentity={buildIdentity}
+  />,
 );

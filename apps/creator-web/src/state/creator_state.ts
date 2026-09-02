@@ -137,6 +137,7 @@ export type CreatorAction =
       action: SampleProjectionRefresh;
     }
   | {type: "sample-projection-refresh-failed"; errorCode: string}
+  | {type: "runtime-error-dismissed"}
   | {type: "pressed-cleared"};
 
 export const initialCreatorState: CreatorState = {
@@ -274,6 +275,11 @@ export function isCreatorActionAllowed(
     case "sample-project-refreshed":
     case "sample-projection-refresh-failed":
       return true;
+    case "runtime-error-dismissed":
+      // Only an advisory error may be dismissed; a Runtime that is failed,
+      // unsupported, closed or awaiting restart keeps its code until the
+      // Runtime itself changes phase.
+      return state.runtime.phase === "ready" && state.runtime.errorCode !== null;
     case "pressed-cleared":
       return true;
   }
@@ -561,6 +567,14 @@ export function creatorReducer(
         sampleProjectionRefresh: null,
       };
     }
+    case "runtime-error-dismissed":
+      return {
+        ...state,
+        project: state.project.phase === "error"
+          ? {...state.project, phase: state.project.current === null ? "empty" : "ready"}
+          : state.project,
+        runtime: {...state.runtime, errorCode: null, errorDetails: {}},
+      };
     case "pressed-cleared":
       return state.pressed.size === 0 ? state : {...state, pressed: new Map()};
   }

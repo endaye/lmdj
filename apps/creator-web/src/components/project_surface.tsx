@@ -12,8 +12,16 @@ interface ProjectSurfaceProps {
   canImport?: boolean;
   showLocalProjects?: boolean;
   onShowLocal?: () => void;
+  onHideLocal?: () => void;
   onOpen?: (project: LocalProjectSummary) => void;
   onImport?: (file: File) => void;
+}
+
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 export function ProjectSurface({
@@ -22,11 +30,13 @@ export function ProjectSurface({
   canImport = false,
   showLocalProjects = false,
   onShowLocal,
+  onHideLocal,
   onOpen,
   onImport,
 }: ProjectSurfaceProps) {
   const project = state.project.current;
   const showChooser = project === null || showLocalProjects;
+  const importing = state.transfer.phase === "importing";
   const fileInput = useRef<HTMLInputElement>(null);
   const onImportFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.item(0);
@@ -41,6 +51,11 @@ export function ProjectSurface({
           <h1>{showChooser ? "Local Projects" : `Project ${shortProjectId(project.projectId)}`}</h1>
         </div>
         <div className="project-actions">
+          {project !== null && showLocalProjects && onHideLocal ? (
+            <button type="button" onClick={onHideLocal}>
+              Back to Project
+            </button>
+          ) : null}
           <button
             type="button"
             aria-controls="local-projects"
@@ -67,6 +82,18 @@ export function ProjectSurface({
           />
         </div>
       </div>
+      {importing ? (
+        <section className="import-progress" aria-label="Import progress">
+          <p role="status">
+            Importing… {formatBytes(state.transfer.completedBytes)} of{" "}
+            {formatBytes(state.transfer.totalBytes)}
+          </p>
+          <progress
+            max={Math.max(state.transfer.totalBytes, 1)}
+            value={Math.min(state.transfer.completedBytes, state.transfer.totalBytes)}
+          />
+        </section>
+      ) : null}
       {!showChooser && project ? (
         <dl className="project-summary">
           <div><dt>Project ID</dt><dd>{project.projectId}</dd></div>
@@ -74,17 +101,34 @@ export function ProjectSurface({
           <div><dt>BPM</dt><dd>{project.bpm}</dd></div>
           <div><dt>Assigned Pads</dt><dd>{project.assignedPadCount} / 64</dd></div>
           <div><dt>Assets</dt><dd>{project.assetCount}</dd></div>
+          <div><dt>Patterns</dt><dd>{project.patterns.length}</dd></div>
+          <div>
+            <dt>Quantize</dt>
+            <dd>{project.sequenceSettings.quantizeEnabled ? "On" : "Off"}</dd>
+          </div>
+          <div><dt>Swing</dt><dd>{project.sequenceSettings.swingPercent}%</dd></div>
         </dl>
       ) : state.project.projects.length === 0 ? (
-        <p className="empty-state">No local Project is open.</p>
+        <p className="empty-state">
+          {project === null ? (
+            <>
+              <span>No local Project is open.</span>{" "}
+              <span className="empty-hint">Import a .lmdj bundle to begin.</span>
+            </>
+          ) : (
+            <span>No other local Project is stored on this device.</span>
+          )}
+        </p>
       ) : (
         <ul className="local-projects" id="local-projects">
           {state.project.projects.map((summary) => {
             const id = shortProjectId(summary.projectId);
+            const isCurrent = project?.projectId === summary.projectId;
             return (
-              <li key={summary.projectId}>
+              <li key={summary.projectId} aria-current={isCurrent ? "true" : undefined}>
                 <div>
                   <strong>Project {id}</strong>
+                  {isCurrent ? <span>Open now</span> : null}
                   <span>Revision {summary.revision}</span>
                   <span>{summary.bpm} BPM</span>
                   <span>
@@ -106,7 +150,7 @@ export function ProjectSurface({
         </ul>
       )}
       <p className="stage-note">
-        Sample, Sequence, and Perform editing arrive in Stages 8–10.
+        Perform mode arrives in Stage 10.
       </p>
     </main>
   );
