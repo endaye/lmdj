@@ -1854,6 +1854,8 @@ struct Application::Impl {
         launch_receipts;
     std::optional<PendingPerformanceLaunch> pending_launch;
     std::optional<PatternLaunchOutcome> last_launch_ack;
+    std::uint64_t last_accepted_tick{};
+    bool recovery_required{};
   };
 
   explicit Impl(ApplicationConfig config)
@@ -3204,9 +3206,12 @@ struct Application::Impl {
       std::lock_guard lock(sequence_mutex);
       for (auto &[path_text, runtime] : performance_sessions) {
         const std::filesystem::path path{path_text};
-        (void)close_performance_transients(path, runtime);
+        const auto closed = close_performance_transients(path, runtime);
         if (pattern_launch_acknowledger) {
           pattern_launch_acknowledger->cancel(runtime.session_id);
+        }
+        if (!closed.has_value()) {
+          continue;
         }
         (void)sequence_journals.seal_performance(path, runtime.session_id,
                                                  "owner_lost");
@@ -5281,15 +5286,28 @@ struct Application::Impl {
               draft->second.created_bpm, *fresh_anchor_tick);
         } else {
           std::uint64_t maximum_tick = 0;
+          const auto include_event = [&maximum_tick](
+                                         const domain::PerformanceEvent &event) {
+            auto tick = domain::performance_event_tick(event);
+            if (const auto *pad =
+                    std::get_if<domain::PadHitPerformanceEvent>(
+                        &event.payload)) {
+              tick = pad->onset_tick + pad->duration_tick;
+            }
+            maximum_tick = std::max(maximum_tick, tick);
+          };
           for (const auto& event : journal.value().pending_events) {
-            maximum_tick = std::max(
-                maximum_tick, domain::performance_event_tick(event));
+            include_event(event);
           }
           for (const auto& flush : journal.value().flushes) {
             for (const auto& event : flush.canonical_events) {
-              maximum_tick = std::max(
-                  maximum_tick, domain::performance_event_tick(event));
+              include_event(event);
             }
+          }
+          if (journal.value().transient_checkpoint.has_value()) {
+            maximum_tick = std::max(
+                maximum_tick,
+                journal.value().transient_checkpoint->last_accepted_tick);
           }
           performance_clock->anchor(
               draft->second.created_bpm, maximum_tick);
@@ -5313,6 +5331,10 @@ struct Application::Impl {
           {},
           std::nullopt,
           std::nullopt,
+          journal.value().transient_checkpoint.has_value()
+              ? journal.value().transient_checkpoint->last_accepted_tick
+              : 0,
+          false,
       };
       performance_sessions.emplace(key, std::move(runtime));
     }
@@ -5351,6 +5373,12 @@ struct Application::Impl {
           sequence_error(ErrorCode::invalid_argument,
                          "Performance flush owner does not match"));
     }
+    if (found->second.recovery_required) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance session requires recovery",
+          {{"reason", "performance_tail_outcome_unknown"}}));
+    }
     auto acknowledged = drain_performance_launches(path, found->second);
     if (!acknowledged.has_value()) {
       return error_envelope(acknowledged.error());
@@ -5376,12 +5404,22 @@ struct Application::Impl {
     found->second.expected_revision =
         executed.value().receipt.committed_revision;
     found->second.next_flush_seq = appended.value().flush_seq + 1U;
-    found->second.pending_events.clear();
     for (auto &[fx, state] : found->second.open_fx) {
       (void)fx;
+      if (state.pending_event_index.has_value() &&
+          *state.pending_event_index < found->second.pending_events.size()) {
+        const auto *move = std::get_if<domain::FxMovePerformanceEvent>(
+            &found->second.pending_events
+                 .at(*state.pending_event_index)
+                 .payload);
+        if (move != nullptr) {
+          state.effective_value = move->value;
+        }
+      }
       state.pending_window.reset();
       state.pending_event_index.reset();
     }
+    found->second.pending_events.clear();
     return success_envelope(
         {{"performance_id", found->second.performance_id.value()},
          {"committed_revision", executed.value().receipt.committed_revision},
@@ -5405,6 +5443,12 @@ struct Application::Impl {
         return error_envelope(
             sequence_error(ErrorCode::invalid_argument,
                            "Performance stop owner does not match"));
+      }
+      if (found->second.recovery_required) {
+        return error_envelope(sequence_error(
+            ErrorCode::invalid_argument,
+            "Performance session requires recovery",
+            {{"reason", "performance_tail_outcome_unknown"}}));
       }
       auto closed = close_performance_transients(path, found->second);
       if (!closed.has_value()) {
@@ -5909,15 +5953,72 @@ struct Application::Impl {
   }
 
   foundation::Result<void>
+  performance_transient_checkpoint(
+      const PerformanceRuntime &runtime,
+      project_io::PerformanceTransientCheckpoint &checkpoint) const {
+    checkpoint = project_io::PerformanceTransientCheckpoint{
+        {}, {}, runtime.hold, runtime.last_accepted_tick};
+    checkpoint.open_pads.reserve(runtime.open_pads.size());
+    for (const auto &[gesture_id, pad] : runtime.open_pads) {
+      checkpoint.open_pads.push_back(project_io::PerformanceOpenPadTransient{
+          gesture_id, pad.slot, pad.onset_tick, pad.velocity});
+    }
+    std::ranges::sort(
+        checkpoint.open_pads,
+        {},
+        [](const auto &pad) {
+          return std::pair{pad.slot, pad.gesture_id};
+        });
+    checkpoint.open_fx.reserve(runtime.open_fx.size());
+    for (const auto &[fx, state] : runtime.open_fx) {
+      std::optional<std::uint16_t> pending_value;
+      if (state.pending_event_index.has_value()) {
+        if (*state.pending_event_index >= runtime.pending_events.size()) {
+          return foundation::Result<void>::failure(sequence_error(
+              ErrorCode::internal_error,
+              "Performance FX checkpoint index is invalid"));
+        }
+        const auto *pending = std::get_if<domain::FxMovePerformanceEvent>(
+            &runtime.pending_events.at(*state.pending_event_index).payload);
+        if (pending == nullptr || pending->fx != fx) {
+          return foundation::Result<void>::failure(sequence_error(
+              ErrorCode::internal_error,
+              "Performance FX checkpoint state is invalid"));
+        }
+        pending_value = pending->value;
+      }
+      checkpoint.open_fx.push_back(project_io::PerformanceOpenFxTransient{
+          fx, state.gesture_id, state.effective_value, pending_value});
+    }
+    return foundation::Result<void>::success();
+  }
+
+  static bool performance_tail_outcome_unknown(
+      const foundation::Error &error) {
+    return error.details.is_object() && error.details.contains("reason") &&
+           error.details.at("reason") ==
+               "performance_tail_outcome_unknown";
+  }
+
+  foundation::Result<void>
   append_performance_runtime_tail(const std::filesystem::path &path,
                                   PerformanceRuntime &runtime,
                                   std::uint64_t input_sequence) {
-    if (runtime.pending_events.empty()) {
-      return foundation::Result<void>::success();
+    if (runtime.recovery_required) {
+      return foundation::Result<void>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance session requires recovery",
+          {{"reason", "performance_tail_outcome_unknown"}}));
+    }
+    project_io::PerformanceTransientCheckpoint checkpoint;
+    auto built = performance_transient_checkpoint(runtime, checkpoint);
+    if (!built.has_value()) {
+      return built;
     }
     return sequence_journals.append_performance_tail(
         path, runtime.session_id, runtime.performance_id,
-        runtime.expected_revision, input_sequence, runtime.pending_events);
+        runtime.expected_revision, input_sequence, runtime.pending_events,
+        std::move(checkpoint));
   }
 
   static void canonicalize_performance_pending(PerformanceRuntime &runtime) {
@@ -5946,6 +6047,12 @@ struct Application::Impl {
   foundation::Result<void>
   drain_performance_launches(const std::filesystem::path &path,
                              PerformanceRuntime &runtime) {
+    if (runtime.recovery_required) {
+      return foundation::Result<void>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance session requires recovery",
+          {{"reason", "performance_tail_outcome_unknown"}}));
+    }
     if (!pattern_launch_acknowledger) {
       return foundation::Result<void>::success();
     }
@@ -5988,7 +6095,11 @@ struct Application::Impl {
     auto durable =
         append_performance_runtime_tail(path, runtime, sequence.value());
     if (!durable.has_value()) {
-      runtime = std::move(before);
+      if (performance_tail_outcome_unknown(durable.error())) {
+        runtime.recovery_required = true;
+      } else {
+        runtime = std::move(before);
+      }
       return durable;
     }
     return foundation::Result<void>::success();
@@ -6024,7 +6135,9 @@ struct Application::Impl {
       runtime.pending_events.push_back(
           domain::PerformanceEvent{domain::PadHitPerformanceEvent{
               pad.slot, pad.onset_tick,
-              std::max<std::uint64_t>(1U, tick.value() - pad.onset_tick),
+              tick.value() > pad.onset_tick
+                  ? tick.value() - pad.onset_tick
+                  : std::uint64_t{1},
               pad.velocity}});
     }
     for (const auto &[fx, state] : runtime.open_fx) {
@@ -6039,11 +6152,16 @@ struct Application::Impl {
     runtime.open_pads.clear();
     runtime.open_fx.clear();
     runtime.hold = false;
+    runtime.last_accepted_tick = tick.value();
     canonicalize_performance_pending(runtime);
     auto durable =
         append_performance_runtime_tail(path, runtime, sequence.value());
     if (!durable.has_value()) {
-      runtime = std::move(before);
+      if (performance_tail_outcome_unknown(durable.error())) {
+        runtime.recovery_required = true;
+      } else {
+        runtime = std::move(before);
+      }
       return durable;
     }
     return foundation::Result<void>::success();
@@ -6083,6 +6201,12 @@ struct Application::Impl {
            {"coalesced", replay->second.coalesced},
            {"replayed", true}},
           std::nullopt);
+    }
+    if (runtime.recovery_required) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance session requires recovery",
+          {{"reason", "performance_tail_outcome_unknown"}}));
     }
     if (!performance_clock || !performance_input_sequencer) {
       return error_envelope(
@@ -6131,8 +6255,9 @@ struct Application::Impl {
       runtime.pending_events.push_back(
           domain::PerformanceEvent{domain::PadHitPerformanceEvent{
               pad->second.slot, pad->second.onset_tick,
-              std::max<std::uint64_t>(1U,
-                                      tick.value() - pad->second.onset_tick),
+              tick.value() > pad->second.onset_tick
+                  ? tick.value() - pad->second.onset_tick
+                  : std::uint64_t{1},
               pad->second.velocity}});
       runtime.open_pads.erase(pad);
     } else if (kind == "fx_engage") {
@@ -6223,11 +6348,16 @@ struct Application::Impl {
     } else {
       require(false, "Performance event kind is invalid");
     }
+    runtime.last_accepted_tick = tick.value();
     canonicalize_performance_pending(runtime);
     auto durable =
         append_performance_runtime_tail(path, runtime, input_sequence.value());
     if (!durable.has_value()) {
-      runtime = std::move(before);
+      if (performance_tail_outcome_unknown(durable.error())) {
+        runtime.recovery_required = true;
+      } else {
+        runtime = std::move(before);
+      }
       return error_envelope(durable.error());
     }
     runtime.event_receipts.emplace(
@@ -6275,6 +6405,12 @@ struct Application::Impl {
                                {"state", "pending"},
                                {"target_tick", receipt.target_tick}},
                               std::nullopt);
+    }
+    if (runtime.recovery_required) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance session requires recovery",
+          {{"reason", "performance_tail_outcome_unknown"}}));
     }
     if (!performance_clock || !pattern_launch_acknowledger) {
       return error_envelope(sequence_error(
@@ -6389,14 +6525,17 @@ struct Application::Impl {
     std::lock_guard lock(sequence_mutex);
     auto found = performance_sessions.find(sequence_key(path));
     if (found != performance_sessions.end()) {
-      auto drained = drain_performance_launches(path, found->second);
-      if (!drained.has_value()) {
-        return error_envelope(drained.error());
+      if (!found->second.recovery_required) {
+        auto drained = drain_performance_launches(path, found->second);
+        if (!drained.has_value()) {
+          return error_envelope(drained.error());
+        }
       }
       const auto &runtime = found->second;
       return success_envelope(
           performance_status_json(
-              "active", runtime.session_id, runtime.performance_id,
+              runtime.recovery_required ? "recovery_required" : "active",
+              runtime.session_id, runtime.performance_id,
               runtime.expected_revision, runtime.next_flush_seq,
               runtime.pending_events.size(), runtime.open_pads.size(),
               runtime.open_fx.size(), runtime.hold, runtime.pending_launch,
@@ -6405,6 +6544,7 @@ struct Application::Impl {
     }
     auto journal = sequence_journals.read_active_performance(path);
     if (journal.has_value()) {
+      const auto &checkpoint = journal.value().transient_checkpoint;
       const auto state =
           journal.value().state == project_io::SequenceSessionState::stopped
               ? "stopped"
@@ -6416,7 +6556,10 @@ struct Application::Impl {
           performance_status_json(
               state, journal.value().session_id, journal.value().performance_id,
               journal.value().expected_revision, journal.value().next_flush_seq,
-              journal.value().pending_events.size(), 0, 0, false, std::nullopt,
+              journal.value().pending_events.size(),
+              checkpoint.has_value() ? checkpoint->open_pads.size() : 0,
+              checkpoint.has_value() ? checkpoint->open_fx.size() : 0,
+              checkpoint.has_value() && checkpoint->hold, std::nullopt,
               std::nullopt),
           std::nullopt);
     }
