@@ -370,7 +370,12 @@ each transition independently authorized and verified:
    required reviewer);
 6. rerun the exact-tag remote audit and report the observed published state;
 7. separately authorize manual Runtime deployment and then any Channel
-   promotion, each with its own evidence.
+   promotion, each with its own evidence. Promotion is
+   `scripts/release.sh promote TAG CHANNEL --deployment-run HOST=RUN_ID ...`:
+   it audits, verifies each Host deployment run's retained evidence, and
+   writes one ledger record plus one evidence document locally, which then
+   ship as a docs Pull Request through the Integration Queue. It never edits
+   the GitHub Release; `stable` is refused pending an open question.
 
 `prepare` does not authorize a tag push. A tag push does not authorize a Draft.
 A verified Draft does not authorize publication. A published Release neither

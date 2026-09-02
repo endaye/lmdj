@@ -59,6 +59,57 @@ class AssetRecord:
         _require_digest(self.sha256, "asset sha256")
 
 
+CHANNEL_ORDER: tuple[str, ...] = ("canary", "dev", "beta", "stable")
+STABLE_PROMOTION_QUESTION = "docs/prd/questions/stable-channel-prerelease-flip.md"
+PROMOTION_ATTESTATIONS: Mapping[str, str] = MappingProxyType({
+    # dev is decided from retained deployment evidence; beta additionally
+    # rests on a human acceptance record the tool can only locate, not judge.
+    "dev": "verified",
+    "beta": "manual-attested",
+})
+
+
+def channel_rank(channel: str) -> int:
+    if channel not in CHANNEL_ORDER:
+        raise ReleaseModelError(f"unknown channel: {channel}")
+    return CHANNEL_ORDER.index(channel)
+
+
+@dataclass(frozen=True)
+class DeploymentRunRecord:
+    host: str
+    run_id: int
+    evidence_sha256: str
+
+
+@dataclass(frozen=True)
+class PromotionRecord:
+    channel: str
+    promoted_at: str
+    evidence_paths: tuple[str, ...]
+    deployment_runs: tuple[DeploymentRunRecord, ...]
+    attestation: str
+
+
+@dataclass(frozen=True)
+class HostDeploymentPolicy:
+    workflow_path: str
+    artifact: str
+    contract_prefix: str
+
+
+@dataclass(frozen=True)
+class PromotionPolicy:
+    max_channel: str
+    deployment_evidence: Mapping[str, tuple[str, ...]]
+    hosts: Mapping[str, HostDeploymentPolicy]
+
+    def required_hosts(self, profile: str) -> tuple[str, ...]:
+        if profile not in self.deployment_evidence:
+            raise ReleaseModelError(f"promotion policy has no deployment evidence rule for profile: {profile}")
+        return self.deployment_evidence[profile]
+
+
 @dataclass(frozen=True)
 class ReleaseIntent:
     tag: str
@@ -72,6 +123,14 @@ class ReleaseIntent:
     snapshot: str | None = None
     merged_main_run_id: int | None = None
     make_latest: bool = False
+    promotions: tuple[PromotionRecord, ...] = ()
+
+    @property
+    def current_channel(self) -> str | None:
+        """The Channel after promotions; `channel` stays the publication Channel."""
+        if self.channel is None:
+            return None
+        return self.promotions[-1].channel if self.promotions else self.channel
 
 
 @dataclass(frozen=True)
@@ -118,6 +177,7 @@ class ReleasePolicy:
     runtime_canary_environment: str
     creator_canary_environment: str
     historical_cutoff: str
+    promotion: PromotionPolicy
 
     def channel_release(self, channel: str, make_latest: bool = False) -> tuple[bool, bool]:
         if channel not in self.channels:
@@ -172,7 +232,7 @@ def load_policy(path: Path | str) -> ReleasePolicy:
     document = _load_json(path, "policy")
     _require_exact_keys(document, {
         "schema", "repository", "branch", "blocking_workflow", "fingerprints", "tag_patterns", "profiles",
-        "channels", "environments", "historical_cutoff",
+        "channels", "environments", "historical_cutoff", "promotion",
     }, "policy")
     if document["schema"] != _POLICY_SCHEMA:
         raise ReleaseModelError("unsupported policy schema")
@@ -243,6 +303,7 @@ def load_policy(path: Path | str) -> ReleasePolicy:
         _HISTORICAL_CUTOFF,
     ):
         raise ReleaseModelError("policy environments or historical cutoff are not canonical")
+    promotion = _parse_promotion_policy(document["promotion"], frozenset(product_profiles))
     return ReleasePolicy(
         repository=repository, branch=branch, blocking_workflow=blocking_workflow,
         product_fingerprint=product_fingerprint,
@@ -253,7 +314,121 @@ def load_policy(path: Path | str) -> ReleasePolicy:
         runtime_canary_environment=runtime_canary_environment,
         creator_canary_environment=creator_canary_environment,
         historical_cutoff=cutoff,
+        promotion=promotion,
     )
+
+
+def _parse_promotion_policy(value: object, product_profiles: frozenset[str]) -> PromotionPolicy:
+    document = _require_mapping(value, "promotion policy")
+    _require_exact_keys(document, {"max_channel", "deployment_evidence", "hosts"}, "promotion policy")
+    max_channel = _require_string(document["max_channel"], "promotion max_channel")
+    if max_channel not in CHANNEL_ORDER:
+        raise ReleaseModelError("promotion max_channel is not a known channel")
+    hosts_document = _require_mapping(document["hosts"], "promotion hosts")
+    hosts: dict[str, HostDeploymentPolicy] = {}
+    for name in sorted(hosts_document):
+        if not isinstance(name, str) or re.fullmatch(r"[a-z][a-z0-9-]*", name) is None:
+            raise ReleaseModelError("promotion host names must be lowercase identifiers")
+        item = _require_mapping(hosts_document[name], f"promotion host {name}")
+        _require_exact_keys(item, {"workflow_path", "artifact", "contract_prefix"}, f"promotion host {name}")
+        workflow_path = _require_string(item["workflow_path"], f"{name} workflow_path")
+        if not workflow_path.startswith(".github/workflows/") or not workflow_path.endswith(".yml"):
+            raise ReleaseModelError(f"{name} workflow_path must name a repository workflow")
+        hosts[name] = HostDeploymentPolicy(
+            workflow_path,
+            _require_string(item["artifact"], f"{name} artifact"),
+            _require_string(item["contract_prefix"], f"{name} contract_prefix"),
+        )
+    evidence_document = _require_mapping(document["deployment_evidence"], "promotion deployment_evidence")
+    _require_exact_keys(evidence_document, set(product_profiles), "promotion deployment_evidence")
+    deployment_evidence: dict[str, tuple[str, ...]] = {}
+    for profile in sorted(evidence_document):
+        names = _require_list(evidence_document[profile], f"{profile} deployment evidence hosts")
+        resolved: list[str] = []
+        for host in names:
+            host = _require_string(host, f"{profile} deployment evidence host")
+            if host not in hosts:
+                raise ReleaseModelError(f"{profile} deployment evidence names an unknown host: {host}")
+            resolved.append(host)
+        if len(set(resolved)) != len(resolved):
+            raise ReleaseModelError(f"{profile} deployment evidence hosts must not repeat")
+        deployment_evidence[profile] = tuple(resolved)
+    return PromotionPolicy(
+        max_channel=max_channel,
+        deployment_evidence=MappingProxyType(deployment_evidence),
+        hosts=MappingProxyType(hosts),
+    )
+
+
+def _parse_promotions(
+    value: object,
+    policy: ReleasePolicy,
+    *,
+    publication_channel: str,
+    disposition: Disposition,
+    profile: str,
+) -> tuple[PromotionRecord, ...]:
+    items = _require_list(value, "promotions")
+    if not items:
+        raise ReleaseModelError("promotions must not be empty when present")
+    if disposition is not Disposition.PUBLISHED:
+        raise ReleaseModelError("only a published Product intent may carry promotions")
+    previous_rank = channel_rank(publication_channel)
+    max_rank = channel_rank(policy.promotion.max_channel)
+    required_hosts = policy.promotion.required_hosts(profile)
+    records: list[PromotionRecord] = []
+    for index, raw in enumerate(items):
+        item = _require_mapping(raw, f"promotion {index}")
+        _require_exact_keys(
+            item, {"channel", "promoted_at", "evidence_paths", "deployment_runs", "attestation"},
+            f"promotion {index}",
+        )
+        channel = _require_string(item["channel"], f"promotion {index} channel")
+        if channel == "stable":
+            raise ReleaseModelError(
+                "stable promotion is not implemented: publication pins prerelease and D8 forbids "
+                f"flipping it on a published Release; see {STABLE_PROMOTION_QUESTION}"
+            )
+        rank = channel_rank(channel)
+        if rank <= previous_rank:
+            raise ReleaseModelError(f"promotion {index} must move strictly forward from {CHANNEL_ORDER[previous_rank]}")
+        if rank > max_rank:
+            raise ReleaseModelError(
+                f"promotion {index} exceeds the policy max_channel {policy.promotion.max_channel}"
+            )
+        promoted_at = _require_utc(item["promoted_at"], f"promotion {index} promoted_at")
+        evidence_paths = _paths(item["evidence_paths"], f"promotion {index} evidence_paths")
+        attestation = _require_string(item["attestation"], f"promotion {index} attestation")
+        if attestation != PROMOTION_ATTESTATIONS[channel]:
+            raise ReleaseModelError(
+                f"promotion {index} to {channel} must be attested as {PROMOTION_ATTESTATIONS[channel]}"
+            )
+        runs_document = _require_list(item["deployment_runs"], f"promotion {index} deployment_runs")
+        runs: list[DeploymentRunRecord] = []
+        for run_index, raw_run in enumerate(runs_document):
+            run_item = _require_mapping(raw_run, f"promotion {index} deployment run {run_index}")
+            _require_exact_keys(
+                run_item, {"host", "run_id", "evidence_sha256"},
+                f"promotion {index} deployment run {run_index}",
+            )
+            host = _require_string(run_item["host"], "deployment run host")
+            if host not in policy.promotion.hosts:
+                raise ReleaseModelError(f"promotion {index} names an unknown deployment host: {host}")
+            run_id = run_item["run_id"]
+            if type(run_id) is not int or run_id <= 0:
+                raise ReleaseModelError("deployment run_id must be a positive integer")
+            digest = _require_string(run_item["evidence_sha256"], "deployment evidence_sha256")
+            if _SHA256.fullmatch(digest) is None:
+                raise ReleaseModelError("deployment evidence_sha256 must be a lowercase SHA-256")
+            runs.append(DeploymentRunRecord(host, run_id, digest))
+        if tuple(run.host for run in runs) != tuple(required_hosts):
+            raise ReleaseModelError(
+                f"promotion {index} deployment runs must cover exactly the profile hosts in order: "
+                + (", ".join(required_hosts) or "none")
+            )
+        records.append(PromotionRecord(channel, promoted_at, evidence_paths, tuple(runs), attestation))
+        previous_rank = rank
+    return tuple(records)
 
 
 def classify_tag(tag: str, policy: ReleasePolicy) -> TagIdentity:
@@ -320,7 +495,7 @@ def _parse_entry(value: object, policy: ReleasePolicy) -> ReleaseIntent:
         required.add("channel")
     _require_exact_keys(
         item, required, "ledger entry",
-        optional={"snapshot", "merged_main_run_id", "make_latest"},
+        optional={"snapshot", "merged_main_run_id", "make_latest", "promotions"},
     )
     tag = _require_string(item["tag"], "tag")
     tag_identity = classify_tag(tag, policy)
@@ -349,15 +524,27 @@ def _parse_entry(value: object, policy: ReleasePolicy) -> ReleaseIntent:
             make_latest = False
         policy.channel_release(channel, make_latest)
         snapshot = _optional_string(item, "snapshot")
+        promotions = (
+            _parse_promotions(
+                item["promotions"], policy,
+                publication_channel=channel, disposition=disposition, profile=profile,
+            )
+            if "promotions" in item else ()
+        )
     else:
         if profile not in policy.source_profiles:
             raise ReleaseModelError("non-Product profile must be source-only")
-        if "channel" in item or "snapshot" in item or "make_latest" in item:
-            raise ReleaseModelError("non-Product ledger entry may not contain channel, snapshot, or make_latest")
-        channel, snapshot, make_latest = None, None, False
+        if "channel" in item or "snapshot" in item or "make_latest" in item or "promotions" in item:
+            raise ReleaseModelError(
+                "non-Product ledger entry may not contain channel, snapshot, make_latest, or promotions"
+            )
+        channel, snapshot, make_latest, promotions = None, None, False, ()
     run_id = _optional_positive_int(item, "merged_main_run_id")
     evidence_paths = _paths(item["evidence_paths"], "evidence_paths")
-    return ReleaseIntent(tag, kind, identity, target_revision, disposition, profile, evidence_paths, channel, snapshot, run_id, make_latest)
+    return ReleaseIntent(
+        tag, kind, identity, target_revision, disposition, profile, evidence_paths,
+        channel, snapshot, run_id, make_latest, promotions,
+    )
 
 
 def _parse_exception(value: object, policy: ReleasePolicy) -> HistoricalException:

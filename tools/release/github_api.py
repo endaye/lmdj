@@ -49,6 +49,18 @@ class RunProjection:
 
 
 @dataclass(frozen=True)
+class WorkflowRunProjection:
+    """One run addressed by numeric ID, bound to its workflow file path."""
+    id: int
+    event: str
+    head_sha: str
+    head_branch: str
+    path: str
+    status: str
+    conclusion: str | None
+
+
+@dataclass(frozen=True)
 class RunJobProjection:
     id: int
     run_id: int
@@ -368,6 +380,64 @@ class GitHubClient:
         if artifact.size_in_bytes > _CI_SCOPE_SIZE_CAP:
             raise CiScopeConflictError("retained CI scope evidence exceeds its size cap")
         return _parse_ci_scope(self._download_artifact(artifact))
+
+    def get_run(self, repository: str, run_id: int) -> WorkflowRunProjection:
+        """Project one run by numeric ID with its workflow path as identity."""
+        _require_repository(repository)
+        _require_id(run_id, "run")
+        response = self._request("GET", f"/repos/{repository}/actions/runs/{run_id}")
+        document = _json_response(response, {200})
+        if not isinstance(document, dict):
+            raise GitHubApiError("GitHub run projection is invalid")
+        identifier, event, head_sha, head_branch, path, status, conclusion = (
+            document.get("id"), document.get("event"), document.get("head_sha"),
+            document.get("head_branch"), document.get("path"), document.get("status"),
+            document.get("conclusion"),
+        )
+        if (
+            identifier != run_id or not isinstance(event, str) or not event
+            or not _sha(head_sha) or not isinstance(head_branch, str) or not head_branch
+            or not isinstance(path, str) or not path.startswith(".github/workflows/")
+            or not isinstance(status, str) or not status
+            or (conclusion is not None and not isinstance(conclusion, str))
+        ):
+            raise GitHubApiError("GitHub run projection is invalid")
+        return WorkflowRunProjection(run_id, event, head_sha, head_branch, path, status, conclusion)
+
+    def get_run_artifact_member(
+        self, repository: str, run_id: int, artifact_name: str, member: str, *, size_cap: int,
+    ) -> bytes:
+        """Return one named file from one exactly-named, unexpired artifact of a run."""
+        _require_repository(repository)
+        _require_id(run_id, "run")
+        if not artifact_name or not member or "/" in member or member.startswith("."):
+            raise GitHubApiError("GitHub artifact member selection is invalid")
+        matching = [a for a in self.list_run_artifacts(repository, run_id) if a.name == artifact_name]
+        if len(matching) > 1:
+            raise GitHubApiError("retained run artifact is ambiguous")
+        if not matching:
+            raise GitHubApiError("retained run artifact is absent")
+        artifact = matching[0]
+        if artifact.expired:
+            raise GitHubApiError("retained run artifact has expired")
+        if artifact.run_id != run_id or artifact.repository_id != artifact.head_repository_id:
+            raise GitHubApiError("retained run artifact identity conflicts")
+        if artifact.size_in_bytes > size_cap:
+            raise GitHubApiError("retained run artifact exceeds its size cap")
+        payload = self._download_artifact(artifact)
+        if not isinstance(payload, (bytes, bytearray)):
+            raise GitHubApiError("GitHub artifact download is invalid")
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                names = [info.filename for info in archive.infolist() if not info.is_dir()]
+                if names.count(member) != 1:
+                    raise GitHubApiError(f"retained run artifact does not contain exactly one {member}")
+                info = archive.getinfo(member)
+                if info.file_size > size_cap:
+                    raise GitHubApiError("retained run artifact member exceeds its size cap")
+                return archive.read(member)
+        except (zipfile.BadZipFile, OSError, ValueError, RuntimeError):
+            raise GitHubApiError("retained run artifact archive is unreadable") from None
 
     def _download_artifact(self, artifact: ActionsArtifactProjection) -> bytes:
         """Download one artifact archive without forwarding credentials onward."""
