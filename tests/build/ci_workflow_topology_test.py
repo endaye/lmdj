@@ -258,16 +258,26 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("PORTAL_BASE_SHA: ${{ inputs.base_sha }}", step)
         self.assertIn("PORTAL_HEAD_SHA: ${{ inputs.head_sha }}", step)
         self.assertIn(
-            '[[ "$PORTAL_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]', step
-        )
-        self.assertIn(
-            '[[ "$PORTAL_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]', step
-        )
-        self.assertIn(
-            'git diff --name-only "$PORTAL_BASE_SHA" "$PORTAL_HEAD_SHA"', step
+            "run: npm --prefix apps/architecture-portal run check:impact", step
         )
         self.assertNotIn("github.event.pull_request.base.sha", step)
         self.assertNotIn("github.event.pull_request.head.sha", step)
+
+    def test_portal_never_measures_a_two_dot_range_between_the_inputs(self) -> None:
+        """The range belongs to the checkers, which measure it from the merge base.
+
+        `base_sha` is the base branch tip at event time, so a two-dot range
+        additionally reports, in reverse, everything that landed on the base
+        branch after the branch was cut. Issue #531 is a branch that was merely
+        behind inheriting portal pages it never touched. The workflow therefore
+        computes no range at all: `apps/architecture-portal/test/changed-files.test.mjs`
+        owns the behaviour, where a behind-base branch is expressible as a test.
+        """
+        self.assertNotRegex(
+            self.portal_source,
+            r'git diff[^\n]*"\$PORTAL_BASE_SHA"\s+"\$PORTAL_HEAD_SHA"',
+        )
+        self.assertNotIn("git diff", self.portal_source)
 
     def test_portal_reusable_job_keeps_fetch_depth_zero_node_22_and_full_check(self) -> None:
         self.assertIn("fetch-depth: 0", self.portal_source)

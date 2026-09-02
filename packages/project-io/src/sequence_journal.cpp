@@ -203,6 +203,23 @@ std::filesystem::path recording_active_path(
          recording_protocol(kind).active_filename;
 }
 
+std::filesystem::path performance_owner_lock_path(
+    const std::filesystem::path& bundle) {
+  return bundle / "recovery/active/performance.lock";
+}
+
+foundation::Result<void> remove_performance_owner_lock(
+    const std::shared_ptr<ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle) {
+  const auto path = performance_owner_lock_path(bundle);
+  auto exists = platform->exists(path);
+  if (!exists.has_value()) {
+    return foundation::Result<void>::failure(exists.error());
+  }
+  return exists.value() ? platform->remove(path)
+                        : foundation::Result<void>::success();
+}
+
 foundation::Result<void> validate_journal_tree(
     const ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle) {
@@ -1404,6 +1421,13 @@ foundation::Result<std::filesystem::path> seal_recording_session(
   if (!removed.has_value()) {
     return foundation::Result<std::filesystem::path>::failure(
         removed.error());
+  }
+  if (session_kind == SessionKind::performance) {
+    auto lock_removed = remove_performance_owner_lock(platform, bundle);
+    if (!lock_removed.has_value()) {
+      return foundation::Result<std::filesystem::path>::failure(
+          lock_removed.error());
+    }
   }
   return foundation::Result<std::filesystem::path>::success(
       std::move(destination));
@@ -3060,8 +3084,12 @@ foundation::Result<void> SequenceJournal::remove_active_performance_locked(
     return fault;
   }
 #endif
-  return platform_->remove(
+  auto removed = platform_->remove(
       recording_active_path(bundle, SessionKind::performance));
+  if (!removed.has_value()) {
+    return removed;
+  }
+  return remove_performance_owner_lock(platform_, bundle);
 }
 
 foundation::Result<void> SequenceJournal::restore_stopped_performance_locked(
@@ -3565,8 +3593,12 @@ SequenceJournal::remove_active_performance_if_complete(
     return fault;
   }
 #endif
-  return platform_->remove(
+  auto removed = platform_->remove(
       recording_active_path(bundle, SessionKind::performance));
+  if (!removed.has_value()) {
+    return removed;
+  }
+  return remove_performance_owner_lock(platform_, bundle);
 }
 
 }  // namespace lmdj::project_io

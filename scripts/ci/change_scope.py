@@ -61,6 +61,18 @@ ALLOWED_MODES = {"draft", "focused", "full", "requested"}
 MERGE_EVIDENCE_MODES = frozenset({"focused", "full"})
 ALLOWED_RESULTS = {"added", "copied", "deleted", "modified", "renamed", "type_changed"}
 
+
+def is_merge_evidence_mode(mode: object) -> bool:
+    """Return whether *mode* is classified merge evidence.
+
+    ``requested`` is an operator lane selection and ``draft`` never
+    establishes merge evidence, so neither may authorize a squash merge.
+    A missing mode is not evidence: it proves nothing about which lanes
+    were owed.
+    """
+    return mode in MERGE_EVIDENCE_MODES
+
+
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _STATUS_RESULTS = {
     "A": "added", "C": "copied", "D": "deleted", "M": "modified",
@@ -220,7 +232,7 @@ def queue_validation_document(
 ) -> dict[str, object]:
     if evaluation.classification not in QUEUE_CLASSIFICATIONS:
         raise ValueError("unknown queue validation classification")
-    if manifest_mode is not None and manifest_mode not in MERGE_EVIDENCE_MODES:
+    if manifest_mode is not None and not is_merge_evidence_mode(manifest_mode):
         raise ValueError("queue manifest mode is not merge evidence")
     document = {
         "schema": "lmdj.queue-validation.v1",
@@ -481,7 +493,9 @@ def classify(
         raise ValueError("trusted head must be a boolean")
     if queue is not None:
         if event_name != "workflow_dispatch" or draft or requested_lanes:
-            raise ValueError("queue validation must be a full workflow_dispatch")
+            raise ValueError(
+                "queue validation must be a workflow_dispatch without lane selection"
+            )
         if base_sha.lower() != queue.base_sha or head_sha.lower() != queue.head_sha:
             raise ValueError("queue manifest SHA inputs do not match")
         if not trusted_head:
@@ -616,6 +630,8 @@ def validate_manifest(manifest: Mapping[str, object], policy: Mapping[str, objec
         # produce queue evidence at any breadth.
         if parsed is None or not manifest["trusted_head"]:
             raise ValueError("queue manifest must be trusted evidence")
+        if not is_merge_evidence_mode(manifest["mode"]):
+            raise ValueError("queue manifest mode is not merge evidence")
         if parsed.base_sha != manifest["base_sha"] or parsed.head_sha != manifest["head_sha"]:
             raise ValueError("queue manifest metadata SHA mismatch")
     lanes = policy["lanes"]
@@ -972,7 +988,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not args.queue_validation_out:
                 raise ValueError("queue validation output path is required")
             if args.event != "workflow_dispatch" or args.lanes:
-                raise ValueError("queue validation must be a full workflow_dispatch")
+                raise ValueError(
+                    "queue validation must be a workflow_dispatch without lane selection"
+                )
             if args.base_sha.lower() != queue.base_sha or args.head_sha.lower() != queue.head_sha:
                 raise ValueError("queue CLI SHA inputs do not match")
             queue_evaluation = fetch_queue_evaluation(args.repository, queue)
