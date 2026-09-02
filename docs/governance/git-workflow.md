@@ -154,6 +154,12 @@ exact range), and CI Contract (pinned actionlint plus `ci_*` contracts). They do
 not establish merge evidence. Marking the Pull Request Ready triggers a new
 classification and formal result for the current head.
 
+A Pull Request is classified from its merge-base range, never from the base
+branch tip the event payload carries. A branch that is merely behind `main`
+therefore contributes nothing it did not write, and lane selection, the
+Docs/static whitespace check and the Architecture Portal documentation-impact
+gate all measure the same set GitHub reports as that Pull Request's files.
+
 An ordinary `main` push is classified from the exact `before..after` range with
 the same path ownership rules as a Ready Pull Request, so a docs-only merge runs
 focused CI while Product Assembly, Contract, central CI-control, unknown-path
