@@ -219,8 +219,9 @@ class SilentPerformanceReplayRuntimeSink final
     return foundation::Result<void>::success();
   }
 
-  foundation::Result<void> reset_neutral() override {
-    return foundation::Result<void>::success();
+  foundation::Result<NeutralResetProgress> reset_neutral() override {
+    return foundation::Result<NeutralResetProgress>::success(
+        NeutralResetProgress::complete);
   }
 };
 
@@ -242,6 +243,13 @@ class HeadlessPerformanceReplayController final
     const auto bpm = projection ? projection->bpm : 0;
     auto begun = controller_.begin(replay_id, std::move(projection));
     if (!begun.has_value()) {
+      const auto retained = controller_.status(replay_id);
+      if (!already_active && retained.has_value() &&
+          retained.value().state == ReplayState::playing) {
+        active_replay_id_ = replay_id;
+        started_ns_ = time_source_->now_ns();
+        bpm_ = bpm;
+      }
       return begun;
     }
     if (!already_active && begun.value().state == ReplayState::playing) {
@@ -261,7 +269,8 @@ class HeadlessPerformanceReplayController final
       const ReplayId& replay_id) override {
     std::lock_guard lock(mutex_);
     auto stopped = controller_.stop(replay_id);
-    if (stopped.has_value() && active_replay_id_.has_value() &&
+    if (stopped.has_value() && stopped.value().state != ReplayState::playing &&
+        active_replay_id_.has_value() &&
         *active_replay_id_ == replay_id) {
       active_replay_id_.reset();
     }
