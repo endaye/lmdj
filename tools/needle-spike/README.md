@@ -112,7 +112,8 @@ choice: the engine has a fixed context window, and each hidden UUID field is a
 ~90-character regex. On the performance surface the projection cuts the tool
 JSON from 6585 to 4861 bytes.
 
-The window is small and does not grow: the parallel desk study in PR #532
+The window is small and does not grow: the parallel desk study in
+`docs/research/2026-09-01-needle-class-on-device-command-models-for-lmdj.md`
 records a 256-token sliding window with tools held as fixed KV sinks, which is
 why raising `max_new_tokens` changes nothing and why every byte saved converts
 directly into tools that fit.

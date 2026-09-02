@@ -187,9 +187,9 @@ LMDJ 的 `tool_table()` 已给每个工具标了 `surface: "query" | "command"`�
 
 因此工具面规模在这个模型上是**硬约束**，不是调参项。
 
-机制来自上游架构：并行进行的案头研究（PR #532，`docs/research/2026-09-01-needle-class-on-device-command-models-for-lmdj.md`，
-本报告写作时尚未合并，故此处不作相对链接）记录 Needle 2 使用
-**256-token 滑动窗口，工具作为固定 KV sinks**。这与本节实测
+机制来自上游架构：并行进行的案头研究
+[Needle-class 端侧命令模型评估](2026-09-01-needle-class-on-device-command-models-for-lmdj.md)（PR #532）
+记录 Needle 2 使用 **256-token 滑动窗口，工具作为固定 KV sinks**。这与本节实测
 吻合，并解释了为何抬 `max_new_tokens` 无效——预算不是输出长度，而是被工具 sinks
 占据之后剩下的那点总上下文。它也意味着「压缩 schema」的收益有上限：省下的每个
 字节都直接兑换成可容纳的工具数，但窗口本身不会变大。
