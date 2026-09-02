@@ -7,6 +7,7 @@ import base64
 import hashlib
 from pathlib import Path
 import re
+import subprocess
 import unittest
 
 
@@ -555,6 +556,95 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
     def test_public_key_parser_rejects_truncated_packet_lengths(self) -> None:
         with self.assertRaisesRegex(ValueError, "truncated OpenPGP packet"):
             list(openpgp_packets(bytes([0xC6])))
+
+
+class WebRuntimeDeployOperatorEnvironmentTest(unittest.TestCase):
+    """The secret-stripping helper must survive an operator environment."""
+
+    BARE_ENVIRONMENT = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/tmp"}
+    SOCKET_BUDGET = 104
+
+    @classmethod
+    def _shell_fragment(cls) -> str:
+        # The script dispatches on its arguments at the end of the file and
+        # exits 64 for unknown usage, so it cannot be sourced. Lift exactly the
+        # helpers under test out of its text instead of changing the script to
+        # be sourceable.
+        source = DEPLOY_SCRIPT.read_text(encoding="utf-8").splitlines()
+        wanted = (
+            "with_gh_environment_removed",
+            "without_deploy_secrets",
+            "owned_temp_parent_fits_gnupg_socket",
+        )
+        fragment: list[str] = []
+        for line in source:
+            if line.startswith("_GNUPG_SOCKET_BUDGET="):
+                fragment.append(line)
+        for name in wanted:
+            starts = [
+                index for index, line in enumerate(source)
+                if line.startswith(name + "()")
+            ]
+            if not starts:
+                # A helper this fragment does not find is reported by the test
+                # that needs it, so the other tests still exercise real bash
+                # behaviour instead of failing on extraction.
+                continue
+            start = starts[0]
+            end = next(
+                index for index in range(start, len(source)) if source[index] == "}"
+            )
+            fragment.extend(source[start:end + 1])
+        return "\n".join(fragment)
+
+    def _run(self, body: str, environment: dict, *arguments: str):
+        program = "set -euo pipefail\n" + self._shell_fragment() + "\n" + body
+        return subprocess.run(
+            ["bash", "-c", program, "helper", *arguments],
+            capture_output=True, text=True, env=environment,
+            cwd=str(REPO_ROOT), check=False,
+        )
+
+    def test_helper_survives_an_environment_with_no_gh_variables(self) -> None:
+        # bash 3.2 expands an empty array's "${a[@]}" to an unbound variable
+        # error under set -u, and an `&&` append whose test fails aborts under
+        # set -e. GitHub runners always export GITHUB_* names, which match GH*,
+        # so only operator machines reach the empty case.
+        self.assertFalse([n for n in self.BARE_ENVIRONMENT if n.startswith("GH")])
+        completed = self._run("without_deploy_secrets printf ok\n", self.BARE_ENVIRONMENT)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout, "ok")
+
+    def test_helper_still_strips_gh_variables_when_present(self) -> None:
+        environment = dict(self.BARE_ENVIRONMENT)
+        environment.update({"GH_TOKEN": "must-not-survive", "GITHUB_ACTIONS": "true"})
+        body = "without_deploy_secrets sh -c 'printf \"[%s]\" \"${GH_TOKEN:-absent}\"'\n"
+        completed = self._run(body, environment)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout, "[absent]")
+
+    def test_owned_temp_parent_must_fit_the_gnupg_agent_socket(self) -> None:
+        # A GnuPG home holds the agent socket, whose absolute path must fit the
+        # platform sun_path limit. A long macOS per-user TMPDIR overflows it by
+        # a single character and gpg then exits non-zero on an otherwise
+        # successful public-key import.
+        self.assertIn(
+            "owned_temp_parent_fits_gnupg_socket", DEPLOY_SCRIPT.read_text(encoding="utf-8"),
+            "the deploy script must bound its GnuPG home path",
+        )
+        long_parent = "/private/var/folders/kf/0jqm4t_j2v16b7ms9st4ph980000gn/T"
+        projected = long_parent + "/lmdj-web-runtime-deploy.XXXXXX/gnupg/S.gpg-agent"
+        self.assertGreater(len(projected), self.SOCKET_BUDGET)
+        body = (
+            'if owned_temp_parent_fits_gnupg_socket "$1"; then printf fits;'
+            " else printf overflows; fi\n"
+        )
+        overflowing = self._run(body, self.BARE_ENVIRONMENT, long_parent)
+        self.assertEqual(overflowing.returncode, 0, overflowing.stderr)
+        self.assertEqual(overflowing.stdout, "overflows")
+        fitting = self._run(body, self.BARE_ENVIRONMENT, "/tmp")
+        self.assertEqual(fitting.returncode, 0, fitting.stderr)
+        self.assertEqual(fitting.stdout, "fits")
 
 
 if __name__ == "__main__":
