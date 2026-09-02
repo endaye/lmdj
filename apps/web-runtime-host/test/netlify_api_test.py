@@ -450,6 +450,32 @@ class NetlifyClientTest(unittest.TestCase):
         }
         self.assertEqual(self.client.get_site(site_id="site-123").state, "disabled")
 
+    def test_get_site_accepts_a_newly_provisioned_site_with_a_null_disabled_flag(self) -> None:
+        # Netlify reports `disabled` as null on a site that has never been
+        # deployed, and a null flag means the site is not disabled. Requiring a
+        # boolean rejected the first deployment to every new site.
+        self.server.site_response = {
+            "id": "site-123",
+            "state": "current",
+            "disabled": None,
+            "ssl_url": "https://runtime.example",
+            "published_deploy": None,
+        }
+        site = self.client.get_site(site_id="site-123")
+        self.assertEqual(site.state, "current")
+        self.assertIsNone(site.published_deploy)
+
+    def test_get_site_rejects_a_non_boolean_non_null_disabled_flag(self) -> None:
+        self.server.site_response = {
+            "id": "site-123",
+            "state": "current",
+            "disabled": "false",
+            "ssl_url": "https://runtime.example",
+            "published_deploy": None,
+        }
+        with self.assertRaisesRegex(netlify_api.NetlifyError, "site identity is invalid"):
+            self.client.get_site(site_id="site-123")
+
     def test_get_site_file_count_accepts_exact_file_inventory(self) -> None:
         self.assertEqual(self.client.get_site_file_count(site_id="site-123"), 1)
         self.assertEqual(self.server.requests[-1].method, "GET")
