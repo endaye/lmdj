@@ -658,6 +658,33 @@ class GitHubQueueApiTest(unittest.TestCase):
         self.assertEqual(client.list_review_comments(220), ("<!-- marker -->",))
         self.assertIn("status=queued", transport.requests[3].url)
 
+    def test_watchdog_counts_a_concurrency_pending_queue_run_as_live(self):
+        # `queue: max` holds a waiting run in GitHub status `pending`, which is
+        # neither `queued` nor `in_progress`. PR #567 sat behind a long
+        # validation in exactly that state and the watchdog stripped its label
+        # as stalled while it was still in line.
+        client, transport = self.client([
+            json_response(200, {"workflow_runs": []}),
+            json_response(200, {"workflow_runs": []}),
+            json_response(200, {"workflow_runs": [
+                {"status": "pending", "created_at": "1970-01-01T00:02:00Z", "pull_requests": [{"number": 567}]},
+            ]}),
+        ])
+        self.assertTrue(client.has_active_queue_run(567, 100.0))
+        self.assertEqual(
+            [request.url.split("status=")[1].split("&")[0] for request in transport.requests],
+            ["queued", "in_progress", "pending"],
+        )
+
+    def test_watchdog_reports_no_live_run_when_every_status_is_empty(self):
+        client, transport = self.client([
+            json_response(200, {"workflow_runs": []}) for _ in range(5)
+        ])
+        self.assertFalse(client.has_active_queue_run(567, 100.0))
+        self.assertEqual(len(transport.requests), 5)
+        self.assertIn("status=waiting", transport.requests[3].url)
+        self.assertIn("status=requested", transport.requests[4].url)
+
     def test_api_errors_never_expose_the_token(self):
         client, _ = self.client([json_response(403, {"message": "forbidden"})])
         with self.assertRaises(api.GitHubApiError) as context:
