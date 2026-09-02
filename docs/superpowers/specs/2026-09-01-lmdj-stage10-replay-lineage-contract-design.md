@@ -153,6 +153,13 @@ callback 或恢复 fingerprint。Begin 完成后修改 Pad、移动/清空 Patte
 Performance 或推进 Project revision，都不改变已交付 projection；新 replay begin
 重新读取最新 current Project。
 
+Projection 中的 prepared playback/material 是 Runtime **实际渲染的材料**，不是只供
+调度辨识的元数据。Replay Pad 与 Pattern Voice 必须读取 projection 固定的 PCM；
+begin 后重新加载 live sample bank、替换 Pad、重新 cook 或发布新的 Runtime Snapshot，
+都不得改变已排队或仍在发声（包括 release tail）的 replay。Controller、runtime sink
+与 adapter 必须让 projection 的材料 owner 至少存活到对应排队事件和所有派生 Voice
+完全 quiescent；禁止在 render 时按 AssetId、Pad slot 或当前 sample bank 延迟解析。
+
 ### RLC-D7：Facade 注入单一 Core Replay controller
 
 Application Facade configuration 增加一个必填 `PerformanceReplayController`。
