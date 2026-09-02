@@ -6,7 +6,7 @@
 progression 权威是 Core 交付物，Host 只组合与转发；会话连续性走「进程内活跃
 会话 + 跨进程耐久身份」双路径。本文把 Stage 10 Task 6（#432）开工预检发现的
 不可实现边界锁定为可执行 Contract；先交付 prerequisite #523 → #524 → #525，
-再恢复 Task 6。
+再交付 Task 6 RED/审查发现的 #570 与 #571，之后恢复 Task 6。
 
 修订（2026-09-01，实现前评审，PR #527 合并后）：补齐四处实现级缺口——
 HRS-D3 锚定与序号续接改为按「进程内 attach」定义（re-attach 必须锚定并从
@@ -14,6 +14,17 @@ journal 续接 input sequence）；HRS-D5 增加 owner 存活证明（advisory o
 lock），封孤儿前必须抢锁；HRS-D7 的 service 节拍按 Host 类别分化（带活跃
 音频的 Host 必须周期性 service）；HRS-D9 的 launch 材料解析归属 Core
 （`reserve` 携带 Facade 已解析的不可变 pattern 材料）。
+
+修订（2026-09-02，Task 6 跨 Host RED）：增加 HRS-D10。PR #538 虽已把
+orphan sealing 移到带 owner-death 证明的 command 边界，但 active journal
+没有耐久保存开放 Pad/FX/HOLD 的闭合材料；SIGKILL 后的新进程只能直接 seal，
+`recovery.apply` 因而可提交不带 `hold_off`/release/Pad closure 的不完整
+Performance。新增 prerequisite #570 必须先交付，再恢复 Task 6。
+
+同次审查增加 HRS-D11 与 prerequisite #571：当前
+`performance.record.status` 会调用 `drain_performance_launches()`，实际边界
+outcome 可在 query 内 append journal。query 只读与 launch ack durability 必须
+以显式 Core service mutation 及两阶段 outcome consumption 同时满足。
 
 关联权威：
 
@@ -71,6 +82,15 @@ Task 6 的开工预检确认五项无法从当前代码和批准文档唯一推�
 把守）；开放手势的耐久闭合路径 `close_performance_transients` 本身依赖缺失的
 clock/sequencer，权威缺席时 owner-loss 闭合被静默吞掉。
 
+Task 6 的跨进程验收进一步实证第六处缺口：拥有 MCP 进程接受
+`hold_on@tick1` 后被 SIGKILL，fresh CLI 的只读 `recovery.list` 正确返回 active
+candidate，随后 `recovery.apply` 也正确取得已释放的 flock、seal 并提交，但
+Project Truth 只有 `hold_on`，没有 P10-D23 要求的 `hold_off`。原因是
+`ProjectStore::reconcile_performance_recovery` 只有 journal 的 canonical pending
+events，直接 `seal_performance(..., "owner_lost")`；它无法访问已随进程消失的
+`PerformanceRuntime`。Pad press 更没有任何 canonical durable event，因此不能
+靠扫描 pending events 补救。
+
 ## 2. 结论
 
 ### HRS-D1：Performance Runtime 权威是 Core 交付物
@@ -104,8 +124,12 @@ native/web adapter 与 facade fake，headless transport 不伪造 claim。
 
 - fresh `performance.record.begin`：以 draft BPM 在当前 tick 锚定；
 - journal re-attach（HRS-D4 的 exact-begin 重放通道）：以 journal/draft 的
-  `created_bpm` 锚定，`at_tick` 取 journal 内全部耐久事件的最大 tick（无
-  事件时为 0），使 `read_tick()` 相对该会话的已记事件保持单调；同时 input
+  `created_bpm` 锚定，`at_tick` 取 journal 的 durable temporal high-water
+  mark：有 checkpoint 时至少取 `last_accepted_tick`，事件中 PadHit 取
+  `onset_tick + duration_tick`，其他事件取自身 tick，再与 durable
+  `last_launch_ack.effective_tick` 取最大（全无时为 0）。任一端点加法
+  溢出都 fail closed，使 `read_tick()` 不早于该会话已耐久的任何
+  时间端点；同时 input
   sequencer 从 journal 的 `last_input_sequence` 续接，序号在会话内永不重复。
 
 对已存在进程内 runtime 的重放 begin 不重锚、不消费权威读数。白名单 BPM
@@ -127,9 +151,9 @@ owner loss 按 P10-D21/P10-D23 确定性闭合后封存，这条既有语义不�
 - **event/launch receipts 仍是会话生命周期状态**，跨进程重放 raw event 不受
   支持（其重放窗口 = 会话存续期），这是显式决定而非遗漏。
 - 既有的 exact `record.begin` 重放 re-attach 路径（journal 存活且
-  begin_command_id/session/performance 三元组精确匹配）保持不变，作为
-  SIGKILL 后同身份恢复的通道；re-attach 的锚定与序号续接义务见 HRS-D3，
-  owner lock 的重新持有见 HRS-D5。
+begin_command_id/session/performance 三元组精确匹配）保持不变，作为
+SIGKILL 后同身份恢复的通道；re-attach 的锚定与序号续接义务见 HRS-D3，
+owner lock 的重新持有见 HRS-D5，前 owner transient 的闭合见 HRS-D10。
 
 ### HRS-D5：`performance.recovery.list` 是纯 query；封孤儿必须先证明 owner 已死
 
@@ -202,8 +226,9 @@ Native Host 建立 pattern publication 路径（`publish_pattern_view` +
 `PatternReplacementAuthority`），acknowledger adapter 在控制线程轮询
 `pattern_telemetry().current_generation == 保留 generation` 且
 `telemetry().rendered_frames >= activation_frame` 的谓词，配 exactly-once
-notified 闩（`Application::drain_performance_launches` 对每个 `applied`
-outcome 耐久写一次 journal，重复 outcome 即双写）。frame→tick 换算由 adapter
+notified 闩（经 HRS-D11 两阶段 `peek`/`commit` 交给
+`Application::service_performance`，每个 `applied` outcome 只耐久写一次
+journal）。frame→tick 换算由 adapter
 拥有，按 SR-D25 整数有理锚点；`RealtimeEngine` 的双线程契约不变，render
 线程不获得任何新入口。构造顺序修复：engine 先于 `Application` 构造或经
 共享间接层安装 adapter，二选一由实现计划锁定，Host 不得为绕过顺序引入
@@ -258,6 +283,116 @@ apply/reset failure 由 reference controller 保留为 reset-pending 状态：ac
 不清理、cursor 不前进，以后的 periodic service 不在真实 failure 后自动
 重发 mutation；对外仍通过只读 status 与 stop retry 闭环。
 
+### HRS-D10：硬 owner loss 由耐久 transient checkpoint 闭合，不迁移手势所有权
+
+HRS-D4 的“开放手势不跨进程 rehydrate”保持不变，但它不等于“开放状态无需
+耐久”。active Performance journal 增加一个只属于 Runtime metadata 的
+`transient_checkpoint`：开放 Pad 保存 `(gesture_id, slot, onset_tick, velocity)`，
+开放 FX 保存链位置与当前有效/待定值，HOLD 保存 on/off，另保存最后一个已接受
+Core tick。gesture ID 只用于 owner-loss 的 `(slot, gesture_id)` 确定性排序，闭合
+后删除；checkpoint、raw event ID、gesture ID 均不进入 Project Truth、flush
+identity、Performance event 或 Runtime Snapshot。
+
+每个成功的 `performance.record.event` 必须在返回 acknowledgement **之前**，以
+同一条 checksummed journal append 原子写入：完整 canonical pending-event
+snapshot、event 后的完整 transient checkpoint、以及本次 Core 分配的
+`input_sequence`。即使 canonical events 为空（例如 `pad_press`），也必须写这条
+record；只有能证明 record 未写入的失败才回滚，任何失败都不返回 accepted。
+event receipt 与
+pending launch reservation 仍不跨进程耐久：event retry 窗口仍等于原进程会话，
+未经 HRS-D11 service 耐久的 `applied` outcome 在 owner loss 时取消且不
+产生 ghost event。已经 service 成功耐久的 applied outcome 由 canonical
+pending event 与 Runtime-only `last_launch_ack` 共同承担。
+
+`append_durable` 的失败可能发生在 bytes 已写入之后，因此不能把所有错误都当作
+“零写入”并继续。任何无法由本次调用内的 exact read-back + bounded exact retry
+确定为 durable success 的 tail append，都返回稳定
+`performance_tail_outcome_unknown`，把该进程内 session 冻结为
+`recovery_required`，禁止后续 event/flush/stop 覆盖 journal snapshot；owner
+teardown 不再用内存态追加 closure。显式 recovery 随后只消费校验通过的 durable
+prefix：本次 record 若存在就纳入 checkpoint/closure，不存在就不猜测。调用方未
+收到 accepted response，必须从 recovery list 观察并选择 apply/discard；这是
+ambiguous storage completion，不伪装成可安全 rollback 的普通拒绝。
+
+只读 `performance.record.status` 从 checkpoint 如实投影
+`open_pad_gestures`/`open_fx_gestures`/`hold`；只读 `recovery.list` 的
+`pending_event_count` 是“若此刻 owner loss，apply 将得到的 canonical event
+数”，因此包含 checkpoint 可确定生成的 closure。两者共用同一纯 closure
+preview，不 append、不抢 owner lock、不改变任何文件；不得继续把跨进程开放
+状态伪报为 neutral 或把 Pad press 报成零可恢复事件。
+
+取得 HRS-D5 owner-death lock 后，Core 在 seal/apply/discard 或 exact-begin
+re-attach 继续之前先消费 checkpoint。闭合 tick 是
+`max(last_accepted_tick, max_durable_event_tick) + 1`；加一溢出 fail closed 并
+保留 recovery。开放 Pad 以至少 1 tick duration 闭合，先按
+`(slot, gesture_id)` 排序；开放 FX 在已耐久 pending move 之后按 FX chain 顺序
+补 release；必要时最后补 `hold_off`。闭合 append 同时写 neutral checkpoint，
+其 `last_accepted_tick` 等于 `closure_tick`，并写 `last_input_sequence + 1`；
+tick 或 input sequence 的加一溢出均 fail closed；然后
+才允许 seal。若 append 已成功而 seal 中断，重试
+看到 neutral checkpoint，只 seal 而不重复事件。
+
+seal publication 自身也必须幂等：Performance sealed candidate 以 session 的稳定
+identity 发布。若 candidate 已存在且内容 digest 与将发布内容完全相同，重试只
+完成 active-journal remove 并返回原 candidate；同 session 不同内容 fail closed
+并同时保留两侧证据。由此 candidate 已发布、active 尚未删除的 crash gap 不会
+创建 `-1` sibling，也不会让同一 PadHit/closure 被 apply 两次。
+
+exact begin re-attach 不恢复旧 gesture ownership。若同一进程已经 attach，既有
+begin replay 仍完全短路；若 fresh 进程取得已释放的 owner lock，它先按上述规则
+把前 owner 的 checkpoint 原地闭合，再以 neutral `PerformanceRuntime` attach，
+保留 journal 的 canonical pending events，并按 HRS-D3 从闭合后的最大 tick/序号
+锚定续接。若 flock 仍由活 owner 持有，re-attach 返回
+`recording_session_active` 且零磁盘变更。
+
+fresh re-attach 从 owner-death 证明、checkpoint closure 到把 owner lock 纳入
+`ProjectStore` retained-owner map，连续持有**同一个 flock descriptor**，中间不得
+释放再抢。两个 fresh 竞争者只有一个能完成 closure/attach，另一个得到
+`recording_session_active`。同一 `ProjectStore` 已持有该 session lock 的 exact
+begin replay 则不走 closure、不写 journal，保持原有纯短路。
+
+HRS-D10 之前没有 checkpoint 的 legacy active journal 不能证明 neutral：旧实现
+可能已接受过不写 canonical tail 的 Pad press。只有 durable stopped 且已通过既有
+完整校验的 legacy journal 可按 neutral 读取；active、recovery_required 或
+owner_lost 记录缺 checkpoint 一律 retained fail closed，不能从“pending 为空”
+猜测没有开放手势。
+
+### HRS-D11：Launch outcome 由显式 service mutation 两阶段消费，status 只投影
+
+`performance.record.status` 删除 `drain_performance_launches()`：它只投影已经
+耐久的 active journal/runtime 状态，任何 status-only 调用都不消费 outcome、不
+取得 writer lease、不改文件。为了不丢实际边界 ack，`Application` 增加显式
+Performance service mutation；它与 command dispatch 同属 Core admission
+边界，不是 query 的隐藏副作用。
+
+`PatternLaunchAcknowledger` 的 outcome 消费改为两阶段：Core 可按 session
+`peek` 未提交 outcomes，但只有对应 applied outcome 已成功 append 到 journal 后
+才 `commit`/移除；failed/cancelled outcome 在 Core 确认其 no-event 语义后移除。
+definitive pre-write append 失败保留 outcome 供显式 service 重试，并
+回滚 pending runtime projection；ambiguous post-write 按 HRS-D10 冻结为
+recovery-required，禁止 service 再次 append；
+append 已成功但 commit 前中断时，重试以 request identity 与已耐久 canonical
+tail 的 Runtime-only `last_launch_ack`（request identity、slot、effective tick）识别
+原 outcome，只完成 commit，不再追加第二个 event。这个字段不进入 Project Truth、
+flush identity 或 Runtime Snapshot，但跨进程 status 可从 journal 投影它。Adapter/headless
+transport 不把同一 outcome 交给另一个 session，也不在 commit 后重现。
+每个 session 严格只处理 ordered queue 的 front：一个 applied outcome
+完成一次 append 与一次 commit 后才可处理下一个；禁止把多个
+outcome 批量 append 后只保存单个 identity。
+
+headless Host 每次 **command** dispatch 前依次调用 Runtime transport service 与
+Application service mutation；query dispatch 只可推进时间函数型 Runtime service，
+不可调用会写 journal 的 Application service。持有 Audio Runtime 的 Host 在既有
+serialized control loop 周期内依次调用 adapter service 与 Application service，
+因此即使没有请求到达，实际 boundary outcome 仍及时耐久；query 自身仍只读。
+Native Host 在 `facade_mutex_` 下保留第一个 Application service typed
+error latch，不把它升级为 render/audio terminal failure；下一 control tick
+对同一 front outcome 重试。下一 command 也必须先 service，失败则返回
+该 typed error 且不执行 command，成功才清 latch；query 不触发 mutation，
+仍可读取已耐久状态。headless Host 以同样的 command-boundary 规则
+拒绝失败 command。任一 Host 都不能吞掉 outcome、终止 render thread
+或发明 Host 特有时间/顺序语义。
+
 ## 3. Error and non-destructive rules
 
 - 权威缺席保持既有 typed refusal：`performance_authority_unavailable`、
@@ -274,8 +409,15 @@ apply/reset failure 由 reference controller 保留为 reset-pending 状态：ac
 - 对 owner lock 仍被持有的活跃 journal 尝试封孤儿（begin/apply/discard 任一
   command 边界）返回既有 `recording_session_active` typed refusal，零磁盘
   变更；只有取锁成功才允许 `owner_lost` 封存。
-- transport/adapter 的 outcome 必须 exactly-once；drain 后 journal append
-  失败沿用既有全量回滚语义。
+- orphan closure 的 checkpoint append 与 acknowledgement/重试遵守 HRS-D10；
+  torn/checksum/shape/overflow 错误保留 recovery 并给出稳定 reason/remedy，禁止
+  猜测中间手势或提交单边 HOLD/FX/Pad 状态。
+- status-only 调用必须在 outcome 已就绪和 writer fault 两种情况下都保持 journal
+  byte-identical；只有 HRS-D11 显式 service mutation 可两阶段提交/消费 outcome。
+- transport/adapter 的 outcome 必须 exactly-once；journal append 失败不得
+  commit 两阶段 outcome，且必须保留可重试 identity 与回滚 pending runtime
+  projection；若 append 结果不确定，则按 HRS-D10 冻结为 recovery-required，
+  禁止同进程后续 service 覆盖未知 tail。
 
 ## 4. Task decomposition
 
@@ -296,9 +438,24 @@ flush-replay / owner-loss recovery 旅程测试。
 HRS-D9 Native Host adapter：pattern publication 路径、acknowledger/clock/
 replay sink、构造顺序修复、`--no-device` 确定性黑盒覆盖。
 
+### Task 4（#570，独立 Issue / Commit / PR）
+
+HRS-D10 硬 owner-loss transient durability：每个 accepted raw event 原子持久化
+非 Project-Truth checkpoint；command-boundary seal 与 fresh-process exact begin
+在取得 owner-death lock 后确定性闭合成 canonical events；apply exact-once，
+discard 零 Project mutation。
+
+### Task 5（#571，独立 Issue / Commit / PR）
+
+HRS-D11 query/service 分离：status 纯投影；acknowledger outcome 两阶段
+peek/commit；headless command boundary 与 Audio Runtime 周期控制循环显式调用
+Application service mutation；Runtime-only durable `last_launch_ack` 关闭
+append-success/commit-gap，append failure 不丢 outcome、不重复 canonical launch
+event。
+
 ### Revised Task 6（#432）
 
-三个 prerequisite 合并后恢复：MCP 注册 23 个 tool、三 Host schema 集合等价
+五个 prerequisite 合并后恢复：MCP 注册 23 个 tool、三 Host schema 集合等价
 门、跨 Host journey 与 `cross_host_performance_idempotency_test.py`。#432 不再
 承担任何 runtime/session 基础设施。
 
@@ -314,14 +471,15 @@ Version impact: no new allocation.
 - core-cli 仍由既定 `3.0.0` 支付（session 模式）；
 - native-host 仍由既定 `3.0.0` 支付（adapter 与构造顺序）；
 - C ABI 保持 `lmdj_core_c@1` 五符号不变；
-- Product Build 仍由既定 Stage 10 target `1.0.41.0` 支付。
+- Product Build 由 2026-09-02 刷新后的 Stage 10 target `1.0.42.0` 支付；
+  `1.0.41.0` 已被发布流占用，不得复用。
 
 若 Task 10 开工前 fresh allocation audit 发现任一身份已被占用，仍按 Stage 10
 主计划停止并刷新，不在本修复中静默改号。
 
 ## 6. Documentation Impact
 
-Documentation impact: none for the three prerequisite Tasks.
+Documentation impact: none for the five prerequisite Tasks.
 
 理由：它们修正尚未由 active Assembly 启用的 Facade/Host 实现边界，不改
 active manifest、Product Build 或 Portal current truth。Stage 10 Task 10 仍
@@ -342,12 +500,19 @@ snapshot。
    单调不破」的 witness；
 4. 一切 query（含 recovery.list、record.status、replay.status）零磁盘变更；
    owner lock 被持有时封孤儿被拒且零磁盘变更，owner 被 SIGKILL 后封存成功；
-5. CLI session 模式完成完整 headless journey；一次性模式行为逐字节不变；
-6. Native adapter 在 `--no-device` 下有确定性 launch-ack 与 replay 黑盒
+5. 每个 accepted raw event（含 canonical event 为空的 Pad press）先耐久完整
+   transient checkpoint；SIGKILL 后 apply 生成确定性的 Pad/FX/HOLD closure，
+   exact begin 先闭合旧 checkpoint 后以 neutral runtime re-attach，discard 不改
+   Project，任一路径都不把 raw identity 写入 Project Truth；
+6. status-only 在 ready outcome 与 writer fault 下都 byte-identical；显式
+   Application service 以两阶段 peek/commit 恰好一次耐久 launch outcome，
+   headless command 与 Audio Runtime 周期路径都不依赖 query 才推进；
+7. CLI session 模式完成完整 headless journey；一次性模式行为逐字节不变；
+8. Native adapter 在 `--no-device` 下有确定性 launch-ack 与 replay 黑盒
    witness，render 线程零新入口；无请求到达时周期 service 仍使 replay 与
    launch 在实际边界推进，且 launch 材料全部来自 `reserve` 携带的 Core
    解析结果；
-7. full Core、coverage 与 Architecture Portal checks 通过且不降低 floor。
+9. full Core、coverage 与 Architecture Portal checks 通过且不降低 floor。
 
 ## 8. Rejected alternatives
 
@@ -382,3 +547,16 @@ Stage 10 范围且无产品需求。
 
 拒绝。按调用次数推进使查询频率改变 cursor（RLC 8.3 同款教训）；第二套
 时钟违反 SR-D25 单锚点纪律。progression 是流逝时间的函数，时间源可注入。
+
+### 8.7 只扫描 canonical pending events 推断硬 owner-loss 状态
+
+拒绝。HOLD 与部分 FX 状态或许可由事件推断，但 Pad press 在 release 前没有
+canonical event，且扫描无法原子证明“事件已被接受但 checkpoint 尚未写入”的
+中间状态。ack 前写入完整 checkpoint 才能同时覆盖 Pad、FX、HOLD，并让 crash
+retry 明确区分 neutral、待闭合与已闭合。
+
+### 8.8 为保持 status 新鲜而允许 query drain outcome
+
+拒绝。query append journal 会让观察频率改变 durable state，也无法在 append
+失败时安全地“既消费 outcome 又回滚”。显式 service mutation 与两阶段
+peek/commit 才能同时满足只读查询、真实边界 ack 和 exactly-once durability。
