@@ -67,6 +67,11 @@ std::unique_ptr<ControlRuntime> make_runtime(
           ProviderPolicy{},
           [] { return std::string("2026-08-04T00:00:00.000Z"); },
           limits,
+          nullptr,
+          nullptr,
+          nullptr,
+          nullptr,
+          lmdj::facade::make_unavailable_performance_replay_controller(),
       }),
       limits);
   LMDJ_CHECK(created.has_value());

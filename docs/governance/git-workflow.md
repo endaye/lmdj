@@ -154,6 +154,12 @@ exact range), and CI Contract (pinned actionlint plus `ci_*` contracts). They do
 not establish merge evidence. Marking the Pull Request Ready triggers a new
 classification and formal result for the current head.
 
+A Pull Request is classified from its merge-base range, never from the base
+branch tip the event payload carries. A branch that is merely behind `main`
+therefore contributes nothing it did not write, and lane selection, the
+Docs/static whitespace check and the Architecture Portal documentation-impact
+gate all measure the same set GitHub reports as that Pull Request's files.
+
 An ordinary `main` push is classified from the exact `before..after` range with
 the same path ownership rules as a Ready Pull Request, so a docs-only merge runs
 focused CI while Product Assembly, Contract, central CI-control, unknown-path
@@ -164,12 +170,15 @@ unverifiable base and runs full with that concrete reason and no path
 inventory. Main runs stay grouped per SHA and never cancel an earlier `main`
 run.
 
-Focused main is a CI cost decision, never a release decision. A Product Build or
-release operator who needs full evidence for an exact `main` SHA dispatches
-`ci.yml` on that SHA with an empty `lanes` input and records the resulting run
-ID in the release intent; `scripts/release.sh audit --remote` and `prepare`
-reject focused or `requested` evidence, and a full dispatch by itself authorizes
-no release mutation.
+Focused is a CI cost decision and a merge decision, never a release decision.
+A Product Build or release operator who needs full evidence for an exact `main`
+SHA dispatches `ci.yml` on that SHA with an empty `lanes` input and records the
+resulting run ID in the release intent; `scripts/release.sh audit --remote` and
+`prepare` reject focused or `requested` evidence, and a full dispatch by itself
+authorizes no release mutation. That operator dispatch is the one
+`workflow_dispatch` that stays unconditionally full: a queue dispatch carries a
+ticket and classifies, so the two never collapse into each other. See
+[`../prd/decisions/2026-08-29-focused-merge-evidence.md`](../prd/decisions/2026-08-29-focused-merge-evidence.md).
 
 To upgrade the current head to full CI, apply `ci:full`, then wait for the
 in-progress run to finish or explicitly cancel it. Because label changes do not
@@ -194,16 +203,43 @@ to update and automatically squash-merge that PR; it is not review approval.
 Only an actor whose live repository permission is `write`, `maintain`, or
 `admin` may authorize a same-repository, open, non-Draft PR targeting `main`.
 The controller re-reads eligibility and the label, then merges exact current
-`main` into the PR branch when needed. GitHub creates that `GITHUB_TOKEN`
+`main` into the PR branch when needed. GitHub computes `mergeable`
+asynchronously and resets it to `null` whenever the base branch moves; the
+controller re-polls that unknown with a bounded budget before any terminal
+decision. The re-poll does not consume an attempt and does not dispatch
+validation. A computed `false` is an immediate `merge-conflict`. A persistent
+`null` past the budget stops as `mergeable-unknown`, not `ineligible-pr`.
+GitHub creates that `GITHUB_TOKEN`
 `synchronize` run in approval-required state; the controller binds the unique
 exact PR/head/bot `Core CI` run, approves it with `actions:write`, and uses its
-same-run full scope as the validation instead of dispatching duplicate CI. If
-the PR already contains current `main`, the controller dispatches full Core CI
-bound to one ticket, PR number, base SHA, head SHA, and numeric
-`workflow_run_id`. In either path the exact run must publish
-`core (ubuntu-latest)`, `core (macos-latest)`, and same-run `PR Gate` from GitHub
-Actions App ID `15368`. Only live-confirmed base/head drift may consume another
-attempt, with three attempts total.
+same-run scope as the validation instead of dispatching duplicate CI. If the
+PR already contains current `main`, the controller dispatches Core CI bound to
+one ticket, PR number, base SHA, head SHA, and numeric `workflow_run_id`. In
+either path the exact run must publish `core (ubuntu-latest)`,
+`core (macos-latest)`, and same-run `PR Gate` from GitHub Actions App ID
+`15368`. Only live-confirmed base/head drift may consume another attempt, with
+three attempts total.
+
+GitHub's merge box and squash-merge API count only `pull_request`-event check
+suites. A green queue `workflow_dispatch` therefore cannot satisfy required
+contexts by itself, and cancelling the PR's own Core CI run poisons the rollup.
+The dispatch path does not cancel that event run. After either validation path
+succeeds, the controller reads the newest `pull_request`-event Core CI run for
+the exact head. If a required context is still `FAILURE` or `CANCELLED`, it
+re-runs that event run (reusing its payload), waits for it on the same attempt,
+and only then calls the merge API. It does not dispatch a second validation to
+unstick the rollup. A `merge-rejected` stop names the stale context and the
+`gh run rerun` remedy.
+
+Merge evidence is the classification, at `focused` or `full`; a `requested`
+lane selection and a `draft` manifest are never merge evidence, and an
+untrusted head is never evidence at any breadth. The `merge:queue` label
+authorizes a merge and no longer widens one. Because the manifest may be
+focused, `core (ubuntu-latest)` and `core (macos-latest)` may be `skipped` when
+it did not select their lanes; `PR Gate` may not, because it is what makes the
+skip safe. It adjudicates the same run against the manifest and fails both when
+a selected job is not success and when an unselected job ran anyway, so its
+success already proves each skip was owed.
 
 Queue validation proves the tree that will land, not the history it will land
 as. Both paths run CI on a head that already contains exact current `main`, so
@@ -342,6 +378,48 @@ triggers nor authorizes deployment, and deployment does not authorize Channel
 promotion. Normal operations do not use handwritten tag/Release commands,
 one-step publication, destructive asset replacement, all-tags push, tag
 movement, or published-history deletion.
+
+### Release cut
+
+A Product Build is cut from `main`, not assembled on a branch. The release cut
+Pull Request is the last change before the release SHA, and it carries only the
+allocation of that Build:
+
+1. **Features and infrastructure land first.** Every product, Host, Provider,
+   deploy workflow, release script, or packaging change merges to `main`
+   through its own Pull Request before the cut. None of it rides the release
+   cut Pull Request.
+2. **Control-plane changes land separately and earlier.** Any change to the
+   control-plane paths listed in §5 (`ci.yml`, `scope_policy.json`, the queue
+   and gate scripts) lands as its own Pull Request at least one queue cycle
+   before the cut. A control-plane Pull Request cannot use the Integration
+   Queue, so a cut that carries one must chase `main` by hand; the busier
+   `main` is, the longer it chases.
+3. **The cut Pull Request contains only allocation material:** the
+   `products/lmdj/version.json` Build allocation, `products/lmdj/assembly.json`
+   and `assembly.lock.json` when Assembly identity changes, the immutable
+   Portal snapshot for that Build, and its release-evidence document. It is
+   not control-plane, so it merges through the Integration Queue, which syncs
+   `main` and squash-merges without manual chasing. If it must also refreeze
+   the snapshot because a projected file changed, refreeze at its own tip.
+4. **One cut at a time.** While a cut Pull Request carries `merge:queue`, do
+   not label other Pull Requests; the queue is FIFO, and every merge ahead of
+   the cut costs it one of its three attempts.
+5. **The squash SHA is the release SHA.** The exact `main` commit the queue
+   produces is the only legal release target for that Build, per
+   [`version-management.md`](version-management.md). Later `main` commits do
+   not enter the Build and do not move its tag.
+6. **Fixes after the cut are PATCH Builds, not branches.** Branch
+   `fix/<task>` from the released tag, allocate the next PATCH, release it
+   through the same path, and land the same fix on `main` through an ordinary
+   Pull Request. No `release/*` or `hotfix/*` branch outlives that fix.
+
+A Pull Request that mixes Assembly allocation with feature or control-plane
+changes is split before it is labelled, not chased. This rule is motivated by
+PR #520, which carried CI routing, a new deploy workflow, release scripts, and
+the `1.0.41.0` allocation together, was excluded from the queue as a
+control-plane change, and synchronised `main` six times while unrelated
+documentation Pull Requests kept landing ahead of it.
 
 An urgent fix follows the normal `fix/<task>` path from `main` through focused
 verification, Pull Request, CI, and squash merge. Urgency can change scheduling

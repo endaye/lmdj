@@ -30,13 +30,18 @@ namespace {
 using lmdj::domain::Command;
 using lmdj::domain::CommandMeta;
 using lmdj::domain::CreatePattern;
+using lmdj::domain::AssignPatternSlot;
+using lmdj::domain::ClearPatternSlot;
 using lmdj::domain::MergePatternEvents;
+using lmdj::domain::MovePatternSlot;
 using lmdj::domain::Asset;
+using lmdj::domain::AssetLineage;
 using lmdj::domain::PadPlayback;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
 using lmdj::domain::ProjectContract;
+using lmdj::domain::PerformanceId;
 using lmdj::domain::ResetPadPlayback;
 using lmdj::domain::TriggerMode;
 using lmdj::domain::UpdatePadPlayback;
@@ -505,7 +510,7 @@ void test_canonical_checkpoint_round_trip_and_bundle_shape() {
   const auto asset_id = AssetId{test_uuid("asset-1")};
   const auto pattern_id = PatternId{test_uuid("pattern-1")};
   initial.assets.emplace(
-      asset_id, Asset{asset_id, described.value()});
+      asset_id, Asset{asset_id, described.value(), std::nullopt});
   initial.banks.at(0).at(0).asset_id = asset_id;
   initial.patterns.emplace(
       pattern_id,
@@ -1207,6 +1212,27 @@ void test_imported_assets_are_content_addressed_and_deduplicated() {
       first.value().state.assets.at(
           AssetId{test_uuid("asset-1")}).artifact ==
       artifact);
+
+  const auto manifest = read_json(bundle / "manifest.json");
+  const auto transaction_path =
+      bundle / manifest.at("transactions").at(0).get<std::filesystem::path>();
+  auto transaction = read_json(transaction_path);
+  LMDJ_CHECK(transaction.at("command").at("asset").at("lineage").is_null());
+  transaction.at("command").at("asset").erase("lineage");
+  write_bytes(
+      transaction_path,
+      lmdj::foundation::canonical_json(transaction) + "\n");
+  const auto legacy_replayed = store.import_artifact(
+      bundle,
+      ProjectStore::ImportArtifactRequest{
+          meta("import-1", 0),
+          AssetId{test_uuid("asset-1")},
+          source,
+          "audio/wav",
+      });
+  LMDJ_CHECK(legacy_replayed.has_value());
+  LMDJ_CHECK(legacy_replayed.value().replayed);
+  LMDJ_CHECK(legacy_replayed.value().state.revision == 2);
 }
 
 void test_byte_backed_import_publishes_immutable_artifact_without_staging() {
@@ -1365,12 +1391,30 @@ void test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly() 
       sample,
   };
 
+  auto v3_lineage = request;
+  v3_lineage.lineage = AssetLineage{
+      {std::string(64, 'a'), 0},
+      {{0, 1},
+       PerformanceId{"40000000-0000-4000-8000-000000000001"}},
+  };
+  const auto rejected_v3_lineage =
+      store.import_assign_sample_bytes(bundle, v3_lineage);
+  LMDJ_CHECK(!rejected_v3_lineage.has_value());
+  LMDJ_CHECK(
+      rejected_v3_lineage.error().code == ErrorCode::invalid_argument);
+  const auto unchanged_v3 = store.load(bundle);
+  LMDJ_CHECK(unchanged_v3.has_value());
+  LMDJ_CHECK(unchanged_v3.value().revision == 0);
+  LMDJ_CHECK(unchanged_v3.value().assets.empty());
+
   const auto imported = store.import_assign_sample_bytes(bundle, request);
   LMDJ_CHECK(imported.has_value());
   LMDJ_CHECK(!imported.value().replayed);
   LMDJ_CHECK(imported.value().state.contract == ProjectContract::v3);
   LMDJ_CHECK(imported.value().state.revision == 1);
   LMDJ_CHECK(imported.value().state.assets.size() == 1);
+  LMDJ_CHECK(
+      !imported.value().state.assets.at(request.asset_id).lineage.has_value());
   const auto& pad = imported.value().state.banks.at(2).at(7);
   LMDJ_CHECK(pad.asset_id == request.asset_id);
   LMDJ_CHECK(pad.playback == PadPlayback{});
@@ -1381,6 +1425,16 @@ void test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly() 
   LMDJ_CHECK(stored.has_value());
   LMDJ_CHECK(stored.value() == expected_bytes);
   sample.back() = std::byte{0x40};
+
+  const auto manifest = read_json(bundle / "manifest.json");
+  const auto transaction_path =
+      bundle / manifest.at("transactions").at(0).get<std::filesystem::path>();
+  auto transaction = read_json(transaction_path);
+  LMDJ_CHECK(transaction.at("command").at("asset").at("lineage").is_null());
+  transaction.at("command").at("asset").erase("lineage");
+  write_bytes(
+      transaction_path,
+      lmdj::foundation::canonical_json(transaction) + "\n");
 
   const auto replayed = store.import_assign_sample_bytes(bundle, request);
   LMDJ_CHECK(replayed.has_value());
@@ -1401,6 +1455,64 @@ void test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly() 
       store.import_assign_sample_bytes(bundle, conflict);
   LMDJ_CHECK(!rejected_conflict.has_value());
   LMDJ_CHECK(rejected_conflict.error().code == ErrorCode::revision_conflict);
+  const auto unchanged = store.load(bundle);
+  LMDJ_CHECK(unchanged.has_value());
+  LMDJ_CHECK(unchanged.value() == imported.value().state);
+}
+
+void test_import_assign_sample_bytes_persists_lineage_and_collides_on_change() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "derived-sample-import.lmdj";
+  auto initial = new_project();
+  initial.contract = ProjectContract::v4;
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, initial).has_value());
+  const std::vector<std::byte> sample{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+      std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44},
+  };
+  const AssetLineage lineage{
+      {std::string(64, 'a'), 7},
+      {{10, 20},
+       PerformanceId{"40000000-0000-4000-8000-000000000001"}},
+  };
+  const auto request = ProjectStore::ImportAssignSampleBytesRequest{
+      meta("derived-sample-import", 0),
+      PadSlotId{1, 4},
+      AssetId{test_uuid("derived-sample-asset")},
+      "audio/wav",
+      sample,
+      std::nullopt,
+      lineage,
+  };
+
+  const auto imported = store.import_assign_sample_bytes(bundle, request);
+  LMDJ_CHECK(imported.has_value());
+  LMDJ_CHECK(
+      imported.value().state.assets.at(request.asset_id).lineage == lineage);
+  LMDJ_CHECK(
+      imported.value().state.banks.at(1).at(4).asset_id == request.asset_id);
+  const auto reopened = store.load(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value().assets.at(request.asset_id).lineage == lineage);
+
+  const auto manifest = read_json(bundle / "manifest.json");
+  const auto transaction = read_json(
+      bundle / manifest.at("transactions").at(0).get<std::filesystem::path>());
+  LMDJ_CHECK(
+      transaction.at("command").at("asset").at("lineage") ==
+      lmdj::domain::asset_lineage_json(lineage));
+
+  const auto replayed = store.import_assign_sample_bytes(bundle, request);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().state.revision == 1);
+
+  auto changed = request;
+  changed.lineage->source.project_revision = 8;
+  const auto collision = store.import_assign_sample_bytes(bundle, changed);
+  LMDJ_CHECK(!collision.has_value());
+  LMDJ_CHECK(collision.error().code == ErrorCode::invalid_argument);
   const auto unchanged = store.load(bundle);
   LMDJ_CHECK(unchanged.has_value());
   LMDJ_CHECK(unchanged.value() == imported.value().state);
@@ -2056,6 +2168,130 @@ void test_artifact_read_rejects_symlinked_intermediate_directory() {
   LMDJ_CHECK(read.error().code == ErrorCode::invalid_project);
 }
 
+void test_pattern_slots_round_trip_validate_and_preserve_command_identity() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "pattern-slots.lmdj";
+  auto initial = new_project();
+  initial.contract = ProjectContract::v4;
+  const PatternId pattern1{
+      "30000000-0000-4000-8000-000000000001"};
+  const PatternId pattern2{
+      "30000000-0000-4000-8000-000000000002"};
+  initial.patterns.emplace(pattern1, Pattern{pattern1, 1, {}});
+  initial.patterns.emplace(pattern2, Pattern{pattern2, 1, {}});
+
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, initial).has_value());
+  const auto created = store.load(bundle);
+  LMDJ_CHECK(created.has_value());
+  LMDJ_CHECK(created.value().pattern_slots == initial.pattern_slots);
+
+  const Command assign{AssignPatternSlot{
+      meta("pattern-slot-assign", 0), 0, pattern1}};
+  const auto assigned = store.execute(bundle, assign);
+  LMDJ_CHECK(assigned.has_value());
+  LMDJ_CHECK(assigned.value().state.revision == 1);
+  LMDJ_CHECK(assigned.value().state.pattern_slots.at(0) == pattern1);
+
+  const auto replayed = store.execute(bundle, assign);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().state.revision == 1);
+
+  const Command collision{AssignPatternSlot{
+      meta("pattern-slot-assign", 0),
+      1,
+      pattern2}};
+  const auto rejected_collision = store.execute(bundle, collision);
+  LMDJ_CHECK(!rejected_collision.has_value());
+  LMDJ_CHECK(
+      rejected_collision.error().code == ErrorCode::invalid_argument);
+
+  const auto settings = store.execute(
+      bundle,
+      Command{UpdateSequenceSettings{
+          meta("pattern-slot-settings", 1), 121, {}, {}}});
+  LMDJ_CHECK(settings.has_value());
+  LMDJ_CHECK(settings.value().state.contract == ProjectContract::v4);
+  LMDJ_CHECK(settings.value().state.pattern_slots.at(0) == pattern1);
+
+  const auto moved = store.execute(
+      bundle,
+      Command{MovePatternSlot{
+          meta("pattern-slot-move", 2), 0, 2}});
+  LMDJ_CHECK(moved.has_value());
+  LMDJ_CHECK(moved.value().state.revision == 3);
+  LMDJ_CHECK(moved.value().state.pattern_slots.at(2) == pattern1);
+
+  const auto cleared = store.execute(
+      bundle,
+      Command{ClearPatternSlot{
+          meta("pattern-slot-clear", 3), 2}});
+  LMDJ_CHECK(cleared.has_value());
+  LMDJ_CHECK(cleared.value().state.revision == 4);
+  LMDJ_CHECK(!cleared.value().state.pattern_slots.at(2).has_value());
+
+  const auto reopened = store.load(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value() == cleared.value().state);
+
+  const auto manifest = read_json(bundle / "manifest.json");
+  std::vector<std::string> transaction_types;
+  for (const auto& relative : manifest.at("transactions")) {
+    transaction_types.push_back(
+        read_json(bundle / relative.get<std::filesystem::path>())
+            .at("command")
+            .at("type")
+            .get<std::string>());
+  }
+  LMDJ_CHECK(
+      transaction_types ==
+      (std::vector<std::string>{
+          "AssignPatternSlot",
+          "UpdateSequenceSettings",
+          "MovePatternSlot",
+          "ClearPatternSlot"}));
+
+  const auto checkpoint_path =
+      bundle / manifest.at("head_checkpoint").get<std::filesystem::path>();
+  const auto valid_checkpoint = read_json(checkpoint_path);
+  const auto invalid_slots = read_json(
+      std::filesystem::path{__FILE__}
+              .parent_path()
+              .parent_path()
+              .parent_path() /
+      "fixtures/contracts/project-v4-invalid-pattern-slots.json");
+  const auto write_and_reject = [&](nlohmann::json malformed) {
+    write_bytes(
+        checkpoint_path,
+        lmdj::foundation::canonical_json(malformed) + "\n");
+    const auto rejected = store.load(bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  };
+
+  auto wrong_length = valid_checkpoint;
+  wrong_length["pattern_slots"] = invalid_slots.at("wrong_length");
+  write_and_reject(std::move(wrong_length));
+
+  auto invalid_id = valid_checkpoint;
+  invalid_id["pattern_slots"] = invalid_slots.at("invalid_pattern_id");
+  write_and_reject(std::move(invalid_id));
+
+  auto missing_pattern = valid_checkpoint;
+  missing_pattern["pattern_slots"] = invalid_slots.at("missing_pattern");
+  write_and_reject(std::move(missing_pattern));
+
+  auto duplicate_pattern = valid_checkpoint;
+  duplicate_pattern["pattern_slots"] = invalid_slots.at("duplicate_pattern");
+  write_and_reject(std::move(duplicate_pattern));
+
+  write_bytes(
+      checkpoint_path,
+      lmdj::foundation::canonical_json(valid_checkpoint) + "\n");
+  LMDJ_CHECK(store.load(bundle).has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -2079,6 +2315,7 @@ int main() {
     test_imported_assets_are_content_addressed_and_deduplicated();
     test_byte_backed_import_publishes_immutable_artifact_without_staging();
     test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly();
+    test_import_assign_sample_bytes_persists_lineage_and_collides_on_change();
     test_import_assign_sample_bytes_obeys_generic_artifact_safety_boundary();
     test_duplicate_command_ids_require_complete_persisted_identity();
     test_import_rejects_invalid_command_before_receipt_and_source_io();
@@ -2095,6 +2332,7 @@ int main() {
     test_independent_platform_reports_busy_until_release();
     test_artifact_reads_are_bounded_symlink_safe_and_integrity_verified();
     test_artifact_read_rejects_symlinked_intermediate_directory();
+    test_pattern_slots_round_trip_validate_and_preserve_command_identity();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

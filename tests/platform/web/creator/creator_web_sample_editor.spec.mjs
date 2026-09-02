@@ -108,6 +108,19 @@ async function installHostProofRecorder(page) {
   });
 }
 
+// A Wasm trap in the runtime worker surfaces to the page as a `pageerror`
+// ("memory access out of bounds") and only afterwards as whatever sanitized
+// refusal the suspended Facade call turns into (#443 diagnosed INVALID_PROJECT
+// that way). Recording page errors and asserting on them next to the refusal
+// assertion makes the trap the failure's headline rather than its footnote.
+function recordPageErrors(page) {
+  const errors = [];
+  page.on("pageerror", (error) => {
+    errors.push(String(error?.message ?? error));
+  });
+  return () => expect(errors, "the Wasm runtime must not trap").toEqual([]);
+}
+
 async function rawRequest(page, operation, payload) {
   return page.evaluate(async ({operation: requestedOperation, payload: requestedPayload}) => {
     return window.lmdjWebRuntimeHost.transport.send({
@@ -282,6 +295,7 @@ function assertMirroredWaveform(path) {
 test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(600_000);
+  const expectNoPageErrors = recordPageErrors(page);
   await installHostProofRecorder(page);
   await page.goto("/index.html");
   await importV1SampleProject(page);
@@ -426,6 +440,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     slot: SLOT_A1,
     playback: conflictPlayback,
   });
+  expectNoPageErrors();
   expect(conflict).toEqual(expect.objectContaining({
     ok: false,
     error: expect.objectContaining({

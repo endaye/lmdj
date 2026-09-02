@@ -7,7 +7,7 @@
 #
 # Usage:
 #   echo "$TOKEN" | provision-runner.sh \
-#     --index 04 --name netcup-lmdj-linux-04 \
+#     --index 05 --name netcup-lmdj-linux-05 \
 #     --labels lmdj-linux,lmdj-linux-pool,ci-general,netcup,ci-only-host,ci-web-heavy,elastic \
 #     --template /root/unit.template --mode elastic
 #

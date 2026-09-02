@@ -1,0 +1,839 @@
+{
+  "assets": [
+    {
+      "artifact": {
+        "byte_length": 44,
+        "media_type": "audio/wav",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "asset_id": "20000000-0000-4000-8000-000000000001",
+      "lineage": null
+    }
+  ],
+  "banks": [
+    {
+      "bank": 0,
+      "pads": [
+        {
+          "asset_id": "20000000-0000-4000-8000-000000000001",
+          "pad": 0,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 1,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 2,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 3,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 4,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 5,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 6,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 7,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 8,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 9,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 10,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 11,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 12,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 13,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 14,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 15,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        }
+      ]
+    },
+    {
+      "bank": 1,
+      "pads": [
+        {
+          "asset_id": null,
+          "pad": 0,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 1,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 2,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 3,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 4,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 5,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 6,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 7,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 8,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 9,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 10,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 11,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 12,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 13,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 14,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 15,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        }
+      ]
+    },
+    {
+      "bank": 2,
+      "pads": [
+        {
+          "asset_id": null,
+          "pad": 0,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 1,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 2,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 3,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 4,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 5,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 6,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 7,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 8,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 9,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 10,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 11,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 12,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 13,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 14,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 15,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        }
+      ]
+    },
+    {
+      "bank": 3,
+      "pads": [
+        {
+          "asset_id": null,
+          "pad": 0,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 1,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 2,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 3,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 4,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 5,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 6,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 7,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 8,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 9,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 10,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 11,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 12,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 13,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 14,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        },
+        {
+          "asset_id": null,
+          "pad": 15,
+          "playback": {
+            "gain_millidb": 0,
+            "muted": false,
+            "trigger_mode": "one_shot",
+            "trim_end_frame": null,
+            "trim_start_frame": 0
+          }
+        }
+      ]
+    }
+  ],
+  "bpm": 120,
+  "contract": "lmdj.project.v4",
+  "patterns": [
+    {
+      "bars": 1,
+      "events": [
+        {
+          "duration_tick": 120,
+          "onset_tick": 0,
+          "slot": {
+            "bank": 0,
+            "pad": 1
+          },
+          "velocity": 110
+        },
+        {
+          "duration_tick": 240,
+          "onset_tick": 240,
+          "slot": {
+            "bank": 0,
+            "pad": 0
+          },
+          "velocity": 100
+        }
+      ],
+      "pattern_id": "30000000-0000-4000-8000-000000000001"
+    }
+  ],
+  "pattern_slots": [
+    "30000000-0000-4000-8000-000000000001",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "project_id": "00000000-0000-4000-8000-000000000001",
+  "revision": 7,
+  "sequence_settings": {
+    "quantize_enabled": true,
+    "swing_percent": 50
+  },
+  "performances": [
+    {
+      "performance_id": "40000000-0000-4000-8000-000000000001",
+      "name": "First performance",
+      "created_bpm": 120,
+      "recording_revision": 0,
+      "recording_artifact": null,
+      "events": [
+        {
+          "kind": "pad_hit",
+          "slot": 0,
+          "onset_tick": 0,
+          "duration_tick": 240,
+          "velocity": 100
+        },
+        {
+          "kind": "pattern_launch",
+          "pattern_slot": 0,
+          "effective_tick": 3840
+        },
+        {
+          "kind": "fx_engage",
+          "fx": 0,
+          "value": 500,
+          "tick": 3840
+        },
+        {
+          "kind": "fx_move",
+          "fx": 0,
+          "value": 750,
+          "tick": 3841
+        },
+        {
+          "kind": "hold_on",
+          "tick": 3842
+        },
+        {
+          "kind": "fx_release",
+          "fx": 0,
+          "tick": 3843
+        },
+        {
+          "kind": "hold_off",
+          "tick": 3844
+        }
+      ]
+    }
+  ]
+}

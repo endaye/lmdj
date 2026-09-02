@@ -221,7 +221,7 @@ ProjectState project_with_pattern(
       project,
       Command{ImportAsset{
           meta(kImportKick, project.revision),
-          {AssetId{kAssetKick}, artifact},
+          {AssetId{kAssetKick}, artifact, std::nullopt},
       }});
   project = apply_or_throw(
       project,
@@ -366,7 +366,7 @@ void test_cooker_resolves_events_through_current_pad_slot() {
       project,
       Command{ImportAsset{
           meta(kImportSnare, project.revision),
-          {AssetId{kAssetSnare}, snare},
+          {AssetId{kAssetSnare}, snare, std::nullopt},
       }});
   project = apply_or_throw(
       project,
@@ -403,7 +403,7 @@ void test_cooker_resolves_every_assigned_pad_in_global_slot_order() {
       project,
       Command{ImportAsset{
           meta(kImportSnare, project.revision),
-          {AssetId{kAssetSnare}, stereo},
+          {AssetId{kAssetSnare}, stereo, std::nullopt},
       }});
   project = apply_or_throw(
       project,
@@ -455,7 +455,7 @@ void test_cooker_rejects_invalid_unused_assigned_pad_artifacts() {
       project,
       Command{ImportAsset{
           meta(kImportSnare, project.revision),
-          {AssetId{kAssetSnare}, stereo},
+          {AssetId{kAssetSnare}, stereo, std::nullopt},
       }});
   project = apply_or_throw(
       project,
@@ -554,13 +554,13 @@ void test_cooker_rejects_cached_artifact_with_later_wrong_length() {
       project,
       Command{ImportAsset{
           meta(kImportKick, project.revision),
-          {AssetId{kAssetKick}, correct_artifact},
+          {AssetId{kAssetKick}, correct_artifact, std::nullopt},
       }});
   project = apply_or_throw(
       project,
       Command{ImportAsset{
           meta(kImportSnare, project.revision),
-          {AssetId{kAssetSnare}, wrong_length_artifact},
+          {AssetId{kAssetSnare}, wrong_length_artifact, std::nullopt},
       }});
   project = apply_or_throw(
       project,

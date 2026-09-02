@@ -26,9 +26,10 @@ an earlier revision of this record reported are no longer present: those
 journeys now live at `creator_web_lifecycle.spec.mjs:402`, `:438` and `:476`
 and all pass. This record therefore claims automated acceptance at `ca846f96`.
 
-Physical and manual acceptance remains `deferred / unverified` in every row
-below; automation does not convert those rows. Stage 8B remains unimplemented
-and unversioned by this Product Build.
+Physical and manual acceptance keeps the exact per-row state below; automation
+does not convert those rows. The macOS Chrome hearing row is now a measured
+failure rather than a deferred row. Stage 8B remains unimplemented and
+unversioned by this Product Build.
 
 Squash merging collapsed the allocation revision, so the `1.0.22.0` snapshot
 provenance was re-authenticated on `main` by
@@ -139,7 +140,7 @@ source inventory was re-inspected on merged `main` at
 
 | Platform | Browser / device | Journey | Status |
 | --- | --- | --- | --- |
-| macOS | Chrome | Human hearing and subjective audio quality | `deferred / unverified` |
+| macOS | Chrome | Human hearing and subjective audio quality | **`PASS` 2026-09-01 on `1.0.40.0`** — all eight checklist groups passed; the operator corrected the initial interpretation of the 40 ms loop's rapid texture after exact replay ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) |
 | macOS | Chrome | Physical MIDI controller | `deferred / unverified` |
 | macOS | Safari | Pointer plus physical hearing | `deferred / unverified` |
 | iPadOS | Safari | Physical touch ergonomics | `deferred / unverified` |
@@ -150,6 +151,15 @@ macOS Safari pointer, macOS Chrome pointer, macOS Chrome physical MIDI, iPadOS
 Safari touch, and iPadOS Safari lifecycle. Automation does not convert any of
 these rows into a pass. They do not block a canary implementation merge, but
 they block any physical-pass claim and promotion to Beta or Stable.
+
+The 2026-09-01 M2 run preserves rather than overwrites the 2026-08-17 stopped
+run. On the exact `1.0.40.0` package, a strict non-zero trim boundary, One
+Shot, Gate release, Loop Gate, Loop Toggle, Volume/Mute, all 16 Pads, Replace
+and reload passed by ear. The approximately 40 ms loop's rapid repeated
+texture was initially described as a click; exact replay produced no obvious
+independent seam transient, and the operator explicitly corrected the sound
+to normal short-loop playback. The evidence retains both the superseded
+description and the final authoritative classification.
 
 ## External state
 

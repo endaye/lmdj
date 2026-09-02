@@ -18,6 +18,10 @@ source_paths:
   - docs/quality/2026-08-27-stage9-sequence-recording-review.md
   - docs/deploy/web-runtime-host.md
   - docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md
+  - docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md
+  - docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md
+  - docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md
+  - docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md
   - docs/release-evidence/release-intents.json
   - scripts/release.sh
   - .github/workflows/publish-release.yml
@@ -106,16 +110,16 @@ Trigger 与 `sequence.record.begin` 只在 `running` 接收。Sequence pad admis
 
 ## 非能力
 
-当前不能宣称离线安装/PWA、生产部署、物理 Safari/MIDI/iPad/延迟体验或 `beta`/`stable` 已获准；自动化 Sequence evidence 不替代这些独立边界。
+当前不能宣称离线安装/PWA、生产部署、任意未命名设备上的一致体验或 `beta`/`stable` 已获准；自动化 Sequence evidence 不替代这些独立边界。也不能把 WebKit automation 当作物理 Safari，或由已经通过的五行 local-source 物理矩阵推导 tag、Release、部署、publication 或 Channel promotion 已获准。
 
 ## 剩余验收边界
 
-Formal Web Runtime Host 已进入 Assembly；自动化结果不升级物理体验结论。五个物理行继续保持：
+Formal Web Runtime Host 已进入 Assembly；自动化结果不升级物理体验结论。L1–L5 分别由独立物理证据升级，完整 retained physical matrix 已通过：
 
 | 物理行 | 状态 |
 | --- | --- |
-| macOS Safari Pointer | `deferred / unverified` |
-| macOS Chrome Pointer | `deferred / unverified` |
-| macOS Chrome physical MIDI | `passed on 1.0.21.0`；AKAI MPD218 Channel 10 实体 UI 复验 |
-| iPadOS Safari Touch | `deferred / unverified` |
-| iPadOS Safari lifecycle | `deferred / unverified` |
+| macOS Safari Pointer | `passed on 1.0.36.0 local source`；tested revision `703b339f`，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md) |
+| macOS Chrome Pointer | `passed on 1.0.40.0 local source`；tested revision `5c094c98`，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md) |
+| macOS Chrome physical MIDI | `passed on 1.0.40.0 local source`；tested revision `1869a925`，Akai MPD218，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md) |
+| iPadOS Safari Touch | `passed on 1.0.40.0 local source`；tested revision `e2cd0cf9`，iPad Air 13-inch (M3) model `A3268`，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md) |
+| iPadOS Safari lifecycle | `passed on 1.0.40.0 local source`；tested revision `67a7ac03`，iPad Air 13-inch (M3) model `A3268`，Voice Memos route interruption，[lifecycle evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l5-ipados-safari-lifecycle-1.0.40.0.md) |

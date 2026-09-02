@@ -57,6 +57,7 @@ SELF_HOSTED_JOBS = (
 )
 HOSTED_CONTROL_PLANE_JOBS = (
     "change-scope",
+    "pre-heavy-gate",
     "pr-gate",
     "select-macos-runner",
 )
@@ -140,13 +141,28 @@ RELEASE_NODE_CONSUMERS = (
     "macos-fallback",
 )
 FORMAL_RESULTS = FORMAL_LANE_JOBS + SUPPORT_JOBS
+GATING_PREFLIGHT_JOBS = (
+    "docs-static", "ci-contract", "deploy-contract", "chameleon-lab",
+    "web-toolchain-conformance", "web-runtime-host", "creator-web",
+    "web-runtime-lab",
+)
+HEAVY_JOBS = (
+    "portal", "core-ubuntu", "package", "core-coverage", "core-asan",
+)
+HEAVY_LANES = {
+    "portal": "portal",
+    "core-ubuntu": "core_ubuntu",
+    "package": "package",
+    "core-coverage": "core_coverage",
+    "core-asan": "core_asan",
+}
 FORMAL_RESULT_LANE_GUARDS = {
     "docs-static": {"docs_static"},
     "portal": {"portal"},
     "ci-contract": {"ci_contract"},
-    "core-ubuntu": {"core_ubuntu"},
-    "core-asan": {"core_asan"},
-    "core-coverage": {"core_coverage"},
+    "core-ubuntu": {"portal", "core_ubuntu"},
+    "core-asan": {"portal", "core_ubuntu", "package", "core_coverage", "core_asan"},
+    "core-coverage": {"portal", "core_ubuntu", "package", "core_coverage"},
     "core-macos": {"core_macos"},
     "core-asan-macos": {"core_macos"},
     "web-toolchain-conformance": {"web_toolchain"},
@@ -155,7 +171,7 @@ FORMAL_RESULT_LANE_GUARDS = {
     "web-runtime-lab": {"web_runtime_lab"},
     "deploy-contract": {"deploy_contract"},
     "chameleon-lab": {"chameleon_lab"},
-    "package": {"package"},
+    "package": {"portal", "core_ubuntu", "package"},
     "select-macos-runner": {"core_macos"},
     "macos-primary": {"core_macos"},
 }
@@ -242,16 +258,41 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("PORTAL_BASE_SHA: ${{ inputs.base_sha }}", step)
         self.assertIn("PORTAL_HEAD_SHA: ${{ inputs.head_sha }}", step)
         self.assertIn(
-            '[[ "$PORTAL_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]', step
-        )
-        self.assertIn(
-            '[[ "$PORTAL_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]', step
-        )
-        self.assertIn(
-            'git diff --name-only "$PORTAL_BASE_SHA" "$PORTAL_HEAD_SHA"', step
+            "run: npm --prefix apps/architecture-portal run check:impact", step
         )
         self.assertNotIn("github.event.pull_request.base.sha", step)
         self.assertNotIn("github.event.pull_request.head.sha", step)
+
+    def test_docs_static_checks_whitespace_over_the_merge_base_range(self) -> None:
+        """The whitespace check measures the change's own contribution.
+
+        `resolved-base-sha` is the base branch tip at event time, so a two-dot
+        range reports, in reverse, everything that landed on the base branch
+        after the branch was cut. A line carrying trailing whitespace that the
+        base branch *deleted* after the cut would then read as added here, and
+        `--check` would fail a branch that never wrote it. Issue #539 tracks
+        this range and `read_git_inventory` together;
+        `tests/build/ci_change_scope_test.py` owns the git behaviour.
+        """
+        job = self.workflow_job("docs-static")
+        self.assertIn('run: git diff --check "$BASE_SHA...$HEAD_SHA"', job)
+        self.assertNotIn('git diff --check "$BASE_SHA" "$HEAD_SHA"', job)
+
+    def test_portal_never_measures_a_two_dot_range_between_the_inputs(self) -> None:
+        """The range belongs to the checkers, which measure it from the merge base.
+
+        `base_sha` is the base branch tip at event time, so a two-dot range
+        additionally reports, in reverse, everything that landed on the base
+        branch after the branch was cut. Issue #531 is a branch that was merely
+        behind inheriting portal pages it never touched. The workflow therefore
+        computes no range at all: `apps/architecture-portal/test/changed-files.test.mjs`
+        owns the behaviour, where a behind-base branch is expressible as a test.
+        """
+        self.assertNotRegex(
+            self.portal_source,
+            r'git diff[^\n]*"\$PORTAL_BASE_SHA"\s+"\$PORTAL_HEAD_SHA"',
+        )
+        self.assertNotIn("git diff", self.portal_source)
 
     def test_portal_reusable_job_keeps_fetch_depth_zero_node_22_and_full_check(self) -> None:
         self.assertIn("fetch-depth: 0", self.portal_source)
@@ -347,9 +388,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_change_scope_and_pr_gate_stay_on_the_hosted_control_plane(self) -> None:
         """The control plane must outlive the pool it adjudicates.
 
-        Change Scope publishes what runs and whether the head is trusted; PR
-        Gate decides whether the run passed. Now that no Linux workload is
-        left beside them these three must not follow it either, or a
+        Change Scope publishes what runs and whether the head is trusted;
+        Pre-heavy Gate admits the native-heavy sequence; PR Gate decides
+        whether the run passed. These four must not follow Linux workload, or a
         self-hosted outage would take the scope and trust evidence down with
         the jobs it governs.
         """
@@ -485,7 +526,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         for job_name in GENERAL_REUSABLE_JOBS:
             with self.subTest(job=job_name):
                 caller = self.workflow_job(job_name)
-                self.assertEqual(self.job_needs(job_name), {"change-scope"})
+                self.assertEqual(
+                    self.job_needs(job_name), {"change-scope", "pre-heavy-gate"}
+                )
                 self.assertIn(TRUST_CONDITION, caller)
                 self.assertNotIn("runs-on:", caller)
         called = self.workflow_job("portal", portal=True)
@@ -607,7 +650,8 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_pr_gate_has_every_formal_lane_in_static_needs_and_runs_with_always(self) -> None:
         job = self.workflow_job("pr-gate")
         self.assertEqual(
-            self.job_needs("pr-gate"), {"change-scope", *FORMAL_RESULTS}
+            self.job_needs("pr-gate"),
+            {"change-scope", "pre-heavy-gate", *FORMAL_RESULTS},
         )
         self.assertIn("if: ${{ always() && !cancelled() }}", job)
         result_keys = set(
@@ -622,7 +666,11 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn(
             "CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}", job
         )
+        self.assertIn(
+            "PRE_HEAVY_GATE_RESULT: ${{ needs.pre-heavy-gate.result }}", job
+        )
         self.assertIn('--change-scope-result "$CHANGE_SCOPE_RESULT"', job)
+        self.assertIn('--pre-heavy-gate-result "$PRE_HEAVY_GATE_RESULT"', job)
         self.assertIn(
             '--base-sha "${{ needs.change-scope.outputs.resolved-base-sha }}"',
             job,
@@ -632,33 +680,90 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             job,
         )
 
+    def test_pre_heavy_gate_is_closed_hosted_preflight_admission(self) -> None:
+        job = self.workflow_job("pre-heavy-gate")
+        self.assertEqual(
+            self.job_needs("pre-heavy-gate"),
+            {"change-scope", *GATING_PREFLIGHT_JOBS},
+        )
+        self.assertIn("if: ${{ !cancelled() }}", job)
+        self.assertIn("runs-on: ubuntu-24.04", job)
+        self.assertIn("timeout-minutes: 3", job)
+        for forbidden in (
+            "ci-general", "ci-web-heavy", "ci-core", "lmdj-linux-pool",
+            "permissions:",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, job)
+        result_keys = set(re.findall(
+            r'"([a-z0-9-]+)":\{"result":"\$\{\{ needs\.[a-z0-9-]+\.result \}\}"\}',
+            job,
+        ))
+        self.assertEqual(result_keys, set(GATING_PREFLIGHT_JOBS))
+        for job_name in (
+            "select-macos-runner", "macos-primary", "macos-fallback",
+            "core-macos", "core-asan-macos",
+        ):
+            with self.subTest(job=job_name):
+                self.assertNotIn(job_name, self.job_needs("pre-heavy-gate"))
+                self.assertNotIn(f"needs.{job_name}.result", job)
+
+    def test_heavy_jobs_form_the_sparse_predecessor_chain(self) -> None:
+        for index, job_name in enumerate(HEAVY_JOBS):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                earlier = HEAVY_JOBS[:index]
+                self.assertEqual(
+                    self.job_needs(job_name),
+                    {"change-scope", "pre-heavy-gate", *earlier},
+                )
+                self.assertIn("needs.pre-heavy-gate.result == 'success'", job)
+                self.assertIn(TRUST_CONDITION, job)
+                for predecessor in earlier:
+                    self.assertIn(
+                        "(!fromJSON(needs.change-scope.outputs.manifest).lanes."
+                        f"{HEAVY_LANES[predecessor]} || needs.{predecessor}.result == 'success')",
+                        job,
+                    )
+                for later in HEAVY_JOBS[index + 1:]:
+                    self.assertNotIn(later, self.job_needs(job_name))
+        portal = self.workflow_job("portal")
+        self.assertIn("uses: ./.github/workflows/architecture-portal.yml", portal)
+        self.assertNotIn("runs-on:", portal)
+
     def test_native_core_lanes_use_the_static_core_role_not_the_selector(self) -> None:
         """The last four Linux lanes move by role, retiring the selector.
 
         Ubuntu Core, Linux ASan, Coverage and Core package were the only jobs
         still resolving `runs-on` from a once-per-run API snapshot that could
-        buy paid Ubuntu. Naming the literal label set makes a saturated or
-        absent role queue instead, so each keeps `needs: change-scope` alone
-        and carries the closed trust condition itself. Pinning the exact job
-        set keeps a later lane from inheriting the route without its own proof
-        run.
+        buy paid Ubuntu. Naming the literal label set makes them queue on a
+        saturated or absent role rather than diverting a whole manifest to paid
+        runners. Each retains direct Change Scope and trust dependencies, then
+        adds Pre-heavy Gate plus every earlier native-heavy predecessor. The
+        exact job set keeps a later lane from inheriting the route without its
+        own proof run.
         """
         for job_name, lane in CORE_JOBS.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertEqual(self.job_needs(job_name), {"change-scope"})
+                self.assertEqual(
+                    self.job_needs(job_name),
+                    {"change-scope", "pre-heavy-gate", *HEAVY_JOBS[:HEAVY_JOBS.index(job_name)]},
+                )
                 self.assertIn(CORE_ROLE, job)
                 self.assertNotIn("runs-on: ubuntu-24.04", job)
                 self.assertNotIn("select-ubuntu-runner", job)
                 self.assertIn(TRUST_CONDITION, job)
                 self.assertEqual(
-                    set(re.findall(r"lanes\.([a-z_]+)", job)), {lane}
+                    set(re.findall(r"lanes\.([a-z_]+)", job)),
+                    {HEAVY_LANES[heavy] for heavy in HEAVY_JOBS[:HEAVY_JOBS.index(job_name) + 1]},
                 )
         self.assertEqual(self.main_source.count("ci-core"), len(CORE_JOBS))
 
     def test_scope_and_gate_timeouts_are_three_minutes_and_lane_limits_match_policy(self) -> None:
         expected = {
             "change-scope": 3,
+            "pre-heavy-gate": 3,
             "pr-gate": 3,
             "docs-static": 10,
             "ci-contract": 10,

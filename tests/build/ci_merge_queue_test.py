@@ -26,12 +26,19 @@ SAFE_VALIDATION_EVIDENCE = re.compile(
     r"duplicate:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)|"
     r"unexpected:required-check|"
     r"field:(?:run_id=invalid|run_event|workflow_path|head_sha|ticket|base_sha|"
-    r"classification=(?:invalid|unexpected)|manifest_mode=(?:focused|None)|"
+    r"classification=(?:invalid|unexpected)|manifest_mode=(?:focused|None|invalid)|"
     r"trusted_head|run_status|run_conclusion))$"
 )
 
 
 def load_module():
+    # merge_queue.py imports its sibling change_scope for the shared
+    # merge-evidence predicate, which resolves from `scripts/ci` when the
+    # controller runs as a script. Loading it here has to offer the same path
+    # rather than depend on another test module having inserted it first.
+    scripts_ci = str(MODULE_PATH.parent)
+    if scripts_ci not in sys.path:
+        sys.path.insert(0, scripts_ci)
     spec = importlib.util.spec_from_file_location("merge_queue", MODULE_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load merge queue controller")
@@ -131,12 +138,20 @@ class MergeQueueTest(unittest.TestCase):
             cancel_calls = []
             validation_calls = []
             merge_calls = []
+            merge_box_lookup_calls = []
+            merge_box_wait_calls = []
+            rerun_calls = []
+            pull_request_run = None
+            merge_box_check_results = None
+            pull_reads = []
 
             def get_permission(inner, actor):
                 return inner.permission
 
             def get_pull(inner, number, *, timeout_seconds=None):
-                del timeout_seconds
+                del number, timeout_seconds
+                if inner.pull_reads:
+                    inner.pull = inner.pull_reads.pop(0)
                 return inner.pull
 
             def get_main_sha(inner, *, timeout_seconds=None):
@@ -185,14 +200,35 @@ class MergeQueueTest(unittest.TestCase):
             def cancel_validation(inner, run_id):
                 inner.cancel_calls.append(run_id)
 
-            superseded_pull_runs = ()
-            superseded_cancel_calls = []
+            def newest_pull_request_run(inner, head_sha):
+                inner.merge_box_lookup_calls.append(head_sha)
+                if isinstance(inner.pull_request_run, Exception):
+                    raise inner.pull_request_run
+                if inner.pull_request_run is not None:
+                    return inner.pull_request_run
+                return mq.PullRequestRun(
+                    8001, "completed", "success", "pull_request", head_sha
+                )
 
-            def cancel_superseded_pull_runs(inner, head_sha):
-                inner.superseded_cancel_calls.append(head_sha)
-                if isinstance(inner.superseded_pull_runs, Exception):
-                    raise inner.superseded_pull_runs
-                return tuple(inner.superseded_pull_runs)
+            def rerun_pull_request_run(inner, run_id):
+                inner.rerun_calls.append(run_id)
+                if isinstance(getattr(inner, "rerun_error", None), Exception):
+                    raise inner.rerun_error
+
+            def wait_pull_request_checks(inner, run_id, timeout_seconds):
+                inner.merge_box_wait_calls.append((run_id, timeout_seconds))
+                if inner.merge_box_check_results is None:
+                    return (
+                        mq.RequiredCheck("core (macos-latest)", 15368, "success"),
+                        mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+                        mq.RequiredCheck("PR Gate", 15368, "success"),
+                    )
+                if not inner.merge_box_check_results:
+                    raise AssertionError("unexpected wait_pull_request_checks call")
+                value = inner.merge_box_check_results.pop(0)
+                if isinstance(value, Exception):
+                    raise value
+                return value
 
             def wait_validation(inner, run_id, timeout_seconds):
                 inner.validation_calls.append((run_id, timeout_seconds))
@@ -523,6 +559,67 @@ class MergeQueueTest(unittest.TestCase):
             list(expected),
         )
 
+    def test_transient_null_mergeable_is_repolled_then_admitted(self):
+        client = self.client(
+            pull_reads=[self.pull(mergeable=None), self.pull(mergeable=True)],
+        )
+        clock = FakeClock()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "merged")
+        self.assertTrue(report.ok)
+        self.assertEqual(clock.value, self.mq.MERGEABLE_POLL_INTERVAL_SECONDS)
+        self.assertEqual(len(client.dispatch_calls), 1)
+
+    def test_persistent_null_mergeable_stops_as_named_unknown(self):
+        client = self.client(pull=self.pull(mergeable=None))
+        clock = FakeClock()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "mergeable-unknown")
+        self.assertFalse(report.ok)
+        self.assertEqual(report.attempts, 0)
+        self.assertEqual(report.message, self.mq.MERGEABLE_UNKNOWN_MESSAGE)
+        self.assertEqual(
+            report.evidence,
+            (f"mergeable-polls:{self.mq.MERGEABLE_POLL_ATTEMPTS}",),
+        )
+        self.assertEqual(
+            clock.value,
+            (self.mq.MERGEABLE_POLL_ATTEMPTS - 1)
+            * self.mq.MERGEABLE_POLL_INTERVAL_SECONDS,
+        )
+        self.assertEqual(client.dispatch_calls, [])
+        self.assertEqual(client.update_calls, [])
+        self.assertEqual(client.validation_calls, [])
+        self.assertEqual(client.removed, [(220, "merge:queue")])
+        body = client.comments[0][1]
+        self.assertIn("mergeable-unknown", body)
+        self.assertIn(f"mergeable-polls:{self.mq.MERGEABLE_POLL_ATTEMPTS}", body)
+        self.assertIn(self.mq.MERGEABLE_UNKNOWN_MESSAGE, body)
+        self.assertIn(
+            "Fix the named condition, then explicitly add `merge:queue` again.",
+            body,
+        )
+
+    def test_computed_false_mergeable_is_immediate_conflict(self):
+        client = self.client(pull=self.pull(mergeable=False))
+        clock = FakeClock()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "merge-conflict")
+        self.assertEqual(report.attempts, 0)
+        self.assertEqual(clock.value, 0)
+        self.assertEqual(client.dispatch_calls, [])
+
+    def test_null_then_false_mergeable_stops_as_conflict_without_further_polls(self):
+        client = self.client(
+            pull_reads=[self.pull(mergeable=None), self.pull(mergeable=False)],
+        )
+        clock = FakeClock()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "merge-conflict")
+        self.assertEqual(report.attempts, 0)
+        self.assertEqual(clock.value, self.mq.MERGEABLE_POLL_INTERVAL_SECONDS)
+        self.assertEqual(client.dispatch_calls, [])
+
     def test_event_head_must_match_the_first_live_pull(self):
         report = self.run_item(self.client(pull=self.pull(head_sha=SHA_C)))
         self.assertEqual(report.code, "ineligible-pr")
@@ -712,14 +809,77 @@ class MergeQueueTest(unittest.TestCase):
         self.assertIn("duplicate:PR Gate", report.evidence)
         self.assert_evidence_is_safe(report)
 
-    def test_run_field_mismatch_names_the_field(self):
+    def test_focused_validation_is_merge_evidence(self):
+        # PR Gate adjudicates the same run against the manifest, failing both
+        # when a selected job is not success and when an unselected job ran, so
+        # a focused validation already proves every lane the change owed.
         focused = replace(
             self.client().validation_results[0], manifest_mode="focused"
         )
         report = self.run_item(self.client(validation_results=[focused]))
+        self.assertEqual(report.code, "merged")
+
+    def test_skippable_checks_stay_a_subset_that_excludes_pr_gate(self):
+        # Listing the skippable checks explicitly is what makes a newly added
+        # required check fail closed: it is not skippable until someone says
+        # so. This pins the other half -- a stale name after a rename, and
+        # PR Gate never becoming skippable, since it is what vouches for a
+        # skip being owed.
+        self.assertTrue(
+            set(self.mq.SKIPPABLE_CHECKS)
+            < set(self.mq.REQUIRED_CHECKS),
+            "skippable checks must be a proper subset of required checks",
+        )
+        self.assertNotIn("PR Gate", self.mq.SKIPPABLE_CHECKS)
+
+    def test_skipped_core_context_is_owed_only_because_pr_gate_vouches(self):
+        # A focused manifest legitimately skips the Core contexts, so a skip
+        # there is not a failure. PR Gate is what makes that safe: it fails
+        # both when a selected job is not success and when an unselected job
+        # ran anyway, so it is never allowed to be skipped itself.
+        base = self.client().validation_results[0]
+        for name in ("core (ubuntu-latest)", "core (macos-latest)"):
+            with self.subTest(skipped=name):
+                checks = tuple(
+                    replace(check, conclusion="skipped")
+                    if check.name == name else check
+                    for check in base.required_checks
+                )
+                result = replace(
+                    base, manifest_mode="focused", required_checks=checks
+                )
+                report = self.run_item(self.client(validation_results=[result]))
+                self.assertEqual(report.code, "merged")
+
+        checks = tuple(
+            replace(check, conclusion="skipped")
+            if check.name == "PR Gate" else check
+            for check in base.required_checks
+        )
+        result = replace(base, manifest_mode="focused", required_checks=checks)
+        report = self.run_item(self.client(validation_results=[result]))
         self.assertEqual(report.code, "validation-failed")
-        self.assertIn("field:manifest_mode=focused", report.evidence)
+        self.assertIn("check:PR Gate=skipped", report.evidence)
         self.assert_evidence_is_safe(report)
+
+    def test_unclassified_validation_mode_names_the_field(self):
+        # Breadth must be known. A run that published no mode proves nothing
+        # about which lanes were owed, and a `requested` lane selection is an
+        # operator's choice rather than a classification of the change.
+        for mode in (None, "requested", "draft"):
+            with self.subTest(mode=mode):
+                unclassified = replace(
+                    self.client().validation_results[0], manifest_mode=mode
+                )
+                report = self.run_item(
+                    self.client(validation_results=[unclassified])
+                )
+                self.assertEqual(report.code, "validation-failed")
+                self.assertTrue(
+                    any(e.startswith("field:manifest_mode=") for e in report.evidence),
+                    report.evidence,
+                )
+                self.assert_evidence_is_safe(report)
 
     def assert_evidence_is_safe(self, report):
         for evidence in report.evidence:
@@ -1118,27 +1278,144 @@ class MergeQueueTest(unittest.TestCase):
         self.assertEqual(report.code, "postcondition-mismatch")
         self.assertIn(f"pull-merge-sha:{SHA_D}", report.evidence)
 
-    def test_dispatch_cancels_pull_runs_for_the_exact_head(self):
-        client = self.client(superseded_pull_runs=(777, 778))
+    def test_dispatch_does_not_cancel_the_pull_request_run(self):
+        client = self.client()
         report = self.run_item(client)
         self.assertEqual(report.code, "merged")
-        self.assertEqual(client.superseded_cancel_calls, [SHA_B])
-        self.assertIn("cancelled-pull-run:777", report.evidence)
-        self.assertIn("cancelled-pull-run:778", report.evidence)
+        self.assertEqual(len(client.dispatch_calls), 1)
+        self.assertEqual(client.merge_box_lookup_calls, [SHA_B])
+        self.assertEqual(client.merge_box_wait_calls[0][0], 8001)
+        self.assertEqual(client.rerun_calls, [])
+        self.assertEqual(client.cancel_calls, [])
 
-    def test_pull_run_cancellation_failure_is_non_fatal_evidence(self):
-        class CancelSweepError(Exception):
-            pass
-
-        client = self.client(superseded_pull_runs=CancelSweepError("boom"))
+    def test_stale_cancelled_merge_box_reruns_the_pull_request_run(self):
+        cancelled = (
+            self.mq.RequiredCheck("core (macos-latest)", 15368, "cancelled"),
+            self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "cancelled"),
+            self.mq.RequiredCheck("PR Gate", 15368, "cancelled"),
+        )
+        green = (
+            self.mq.RequiredCheck("core (macos-latest)", 15368, "success"),
+            self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+            self.mq.RequiredCheck("PR Gate", 15368, "success"),
+        )
+        client = self.client(
+            pull_request_run=self.mq.PullRequestRun(
+                33281097878, "completed", "cancelled", "pull_request", SHA_B
+            ),
+            merge_box_check_results=[cancelled, green],
+        )
         report = self.run_item(client)
         self.assertEqual(report.code, "merged")
         self.assertTrue(report.ok)
-        self.assertIn("pull-run-cancel-error:CancelSweepError", report.evidence)
+        self.assertEqual(client.rerun_calls, [33281097878])
+        self.assertEqual(
+            [run_id for run_id, _budget in client.merge_box_wait_calls],
+            [33281097878, 33281097878],
+        )
+        self.assertEqual(len(client.merge_calls), 1)
+        self.assertEqual(len(client.dispatch_calls), 1)
+        self.assertEqual(client.dispatch_calls[0][0], 220)
+        self.assertEqual(report.attempts, 1)
 
-    def test_synchronized_validation_never_sweeps_pull_runs(self):
-        """After update-branch, the queue consumes the synchronized run, so
-        the pull_request run for the new head must not be cancelled."""
+    def test_merge_box_still_stale_after_rerun_names_the_context_and_remedy(self):
+        cancelled = (
+            self.mq.RequiredCheck("core (macos-latest)", 15368, "cancelled"),
+            self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "cancelled"),
+            self.mq.RequiredCheck("PR Gate", 15368, "cancelled"),
+        )
+        client = self.client(
+            pull_request_run=self.mq.PullRequestRun(
+                501, "completed", "cancelled", "pull_request", SHA_B
+            ),
+            merge_box_check_results=[cancelled, cancelled],
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merge-rejected")
+        self.assertFalse(report.ok)
+        self.assertEqual(client.merge_calls, [])
+        self.assertEqual(len(client.dispatch_calls), 1)
+        self.assertEqual(report.attempts, 1)
+        self.assertEqual(client.rerun_calls, [501])
+        self.assertIn("merge-box:PR Gate=cancelled", report.evidence)
+        self.assertIn("merge-box:core (ubuntu-latest)=cancelled", report.evidence)
+        self.assertIn("merge-box:core (macos-latest)=cancelled", report.evidence)
+        self.assertIn("merge-box:rerun:501", report.evidence)
+        self.assertIn("merge-box:remedy=gh-run-rerun", report.evidence)
+        body = client.comments[0][1]
+        self.assertIn("merge-box:PR Gate=cancelled", body)
+        self.assertIn("merge-box:remedy=gh-run-rerun", body)
+        self.assertNotIn("evidence-redacted", body)
+
+    def test_missing_pull_request_run_is_a_named_merge_rejection(self):
+        client = self.client()
+
+        def newest_pull_request_run(head_sha):
+            client.merge_box_lookup_calls.append(head_sha)
+            return None
+
+        client.newest_pull_request_run = newest_pull_request_run
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merge-rejected")
+        self.assertEqual(client.merge_calls, [])
+        self.assertIn("merge-box:missing:pull_request-run", report.evidence)
+        self.assertIn("merge-box:remedy=gh-run-rerun", report.evidence)
+        self.assertIn("merge-box:missing:pull_request-run", client.comments[0][1])
+
+    def test_merge_api_cancelled_checks_are_named_not_redacted(self):
+        client = self.client(
+            merge_result=self.mq.MergeResult(
+                False,
+                None,
+                message="3 of 3 required status checks are cancelled.",
+            )
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merge-rejected")
+        self.assertIn("merge-box:required-checks=cancelled", report.evidence)
+        self.assertIn("merge-box:remedy=gh-run-rerun", report.evidence)
+        self.assertNotIn("3 of 3", self.mq.render_markdown(report))
+        body = client.comments[0][1]
+        self.assertIn("merge-box:required-checks=cancelled", body)
+        self.assertNotIn("evidence-redacted", body)
+
+    def test_hostile_merge_api_message_stays_redacted(self):
+        client = self.client(
+            merge_result=self.mq.MergeResult(
+                False,
+                None,
+                message='{"message":"raw merge API response token=ghp_super_secret"}',
+            )
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merge-rejected")
+        self.assertEqual(report.evidence, ())
+        rendered = self.mq.render_markdown(report) + client.comments[0][1]
+        self.assertNotIn("ghp_super_secret", rendered)
+        self.assertNotIn("raw merge API response", rendered)
+
+    def test_focused_merge_box_may_skip_core_contexts(self):
+        skipped_cores = (
+            self.mq.RequiredCheck("core (macos-latest)", 15368, "skipped"),
+            self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "skipped"),
+            self.mq.RequiredCheck("PR Gate", 15368, "success"),
+        )
+        validation = replace(
+            self.client().validation_results[0],
+            manifest_mode="focused",
+            required_checks=skipped_cores,
+        )
+        client = self.client(
+            validation_results=[validation],
+            merge_box_check_results=[skipped_cores],
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "merged")
+        self.assertEqual(client.rerun_calls, [])
+
+    def test_synchronized_validation_still_converges_the_new_head_merge_box(self):
+        """After update-branch, the queue consumes the synchronized run and
+        still waits for that head's pull_request merge-box rollup."""
         validation = replace(
             self.client().validation_results[0],
             run_id=9101,
@@ -1153,7 +1430,8 @@ class MergeQueueTest(unittest.TestCase):
         )
         report = self.run_item(client)
         self.assertEqual(report.code, "merged")
-        self.assertEqual(client.superseded_cancel_calls, [])
+        self.assertEqual(client.merge_box_lookup_calls, [SHA_D])
+        self.assertEqual(client.rerun_calls, [])
 
     def test_successful_merge_waits_for_eventually_consistent_pr_metadata(self):
         client = self.client()

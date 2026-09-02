@@ -32,4 +32,14 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     TIMEOUT 60
   )
+  lmdj_add_test(
+    NAME host.performance-cli-session
+    TIER host
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/host/performance_cli_session_test.py"
+      "$<TARGET_FILE:lmdj_core_cli>"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 90
+  )
 endif()

@@ -229,6 +229,25 @@ class ReleaseModelTest(unittest.TestCase):
             candidate.evidence_paths,
             ("docs/release-evidence/2026-08-25-lmdj-1.0.36.0-canary-release-intent.md",),
         )
+        stage9 = ledger.intent_for_tag("lmdj-v1.0.40.0")
+        self.assertIsNotNone(stage9)
+        # Published 2026-09-01 through publish-release.yml run 33453258287.
+        # Its target is the squash merge of #420, which carries both the Task 10
+        # version integration and the Task 11 immutable snapshot; the exact-main
+        # full run was dispatched on that same SHA.
+        self.assertEqual(stage9.disposition.value, "published")  # type: ignore[union-attr]
+        self.assertEqual(stage9.channel, "canary")  # type: ignore[union-attr]
+        self.assertEqual(stage9.profile, "web-runtime-host")  # type: ignore[union-attr]
+        self.assertEqual(  # type: ignore[union-attr]
+            stage9.target_revision,
+            "bb0544c46d4b3fc3a7c96cb848e10cdecb4be040",
+        )
+        self.assertEqual(stage9.snapshot, "1.0.40.0")  # type: ignore[union-attr]
+        self.assertEqual(stage9.merged_main_run_id, 33259586218)  # type: ignore[union-attr]
+        self.assertEqual(  # type: ignore[union-attr]
+            stage9.evidence_paths,
+            ("docs/release-evidence/2026-08-31-lmdj-1.0.40.0-canary-release-intent.md",),
+        )
         self.assertEqual(len(ledger.historical_exceptions), 3)
 
     def test_canonical_json_digest_and_slash_safe_output_name_are_deterministic(self) -> None:

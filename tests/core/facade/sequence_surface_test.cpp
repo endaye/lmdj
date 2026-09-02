@@ -106,6 +106,10 @@ ApplicationConfig config(const std::filesystem::path& root) {
       lmdj::audio::RuntimePreparationLimits{
           1'048'576, 240'000, 67'108'864, 134'217'728},
       nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
   };
 }
 
@@ -1668,35 +1672,139 @@ void test_switch_pending_bpm_rejects_before_project_mutation() {
   LMDJ_CHECK(inspected.value().bpm == 120);
 }
 
+void test_missed_switch_boundary_rebases_only_the_same_target() {
+  TempDirectory temp;
+  const auto project = temp.path() / "switch-boundary-rebase.lmdj";
+  const PatternId pattern_id{uuid(110)};
+  const PatternId target_pattern_id{uuid(111)};
+  const SequenceSessionId session_id{uuid(112)};
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+  const auto created = application.command({
+      {"operation", "pattern.create"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(113)},
+      {"expected_revision", 2},
+      {"pattern_id", target_pattern_id.value()},
+      {"bars", 1},
+  });
+  LMDJ_CHECK(created.value("ok", false));
+  LMDJ_CHECK(application.begin_sequence(
+      {project, session_id, pattern_id, 3, 0}).has_value());
+
+  const auto first = application.request_sequence_switch(
+      {project, session_id, target_pattern_id, 1});
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(first.value().status.effective_runtime_frame.has_value());
+  const auto first_boundary =
+      *first.value().status.effective_runtime_frame;
+  const auto early_duplicate = application.request_sequence_switch(
+      {project, session_id, target_pattern_id, first_boundary - 1});
+  LMDJ_CHECK(!early_duplicate.has_value());
+  LMDJ_CHECK(early_duplicate.error().details.at("reason") ==
+             "switch_pending");
+
+  const auto rebased = application.request_sequence_switch(
+      {project, session_id, target_pattern_id, first_boundary});
+  LMDJ_CHECK(rebased.has_value());
+  LMDJ_CHECK(rebased.value().status.pending_pattern_id == target_pattern_id);
+  LMDJ_CHECK(rebased.value().status.effective_runtime_frame.has_value());
+  LMDJ_CHECK(
+      *rebased.value().status.effective_runtime_frame > first_boundary);
+  LMDJ_CHECK(!rebased.value().committed_revision.has_value());
+  LMDJ_CHECK(application.query_sequence_status({project}).value() ==
+             rebased.value().status);
+  lmdj::project_io::ProjectStore store;
+  LMDJ_CHECK(store.load(project).value().revision == 3);
+}
+
+using Scenario = void (*)();
+
+constexpr std::array<Scenario, 7> kLifecycleScenarios{
+    test_sequence_lifecycle_idempotence_and_mutation_exclusion,
+    test_post_commit_retry_preserves_later_events_for_a_new_command,
+    test_post_commit_stop_retry_preserves_later_unreleased_press,
+    test_older_flush_replay_preserves_pending_events,
+    test_project_command_collision_does_not_poison_sequence_journal,
+    test_prior_sequence_collision_does_not_poison_new_session,
+    test_owner_loss_apply_and_discard_are_explicit,
+};
+
+constexpr std::array<Scenario, 8> kRecoveryScenarios{
+    test_sigkill_owner_recovers_acknowledged_unflushed_events,
+    test_later_flush_supersedes_failed_flush_before_recovery_apply,
+    test_replayed_completion_applies_only_durable_tail_residual_once,
+    test_inverse_completion_recovery_applies_only_effective_residual_once,
+    test_durable_tail_overrides_older_flush_residual_in_recovery,
+    test_writer_lease_blocks_competing_sequence_owner,
+    test_begin_cannot_cross_an_authoring_admission,
+    test_orphan_journal_is_sealed_before_authoring,
+};
+
+constexpr std::array<Scenario, 7> kRebaseScenarios{
+    test_settings_rebase_and_pattern_creation_are_authoritative,
+    test_armed_capture_commit_rebases_without_losing_pending_events,
+    test_cancelled_armed_capture_keeps_sequence_active_and_disarms_commit,
+    test_prepublication_capture_marker_can_disarm_and_preserve_pending_events,
+    test_pending_overlay_projection_is_owner_scoped_and_replaceable,
+    test_switch_pending_bpm_rejects_before_project_mutation,
+    test_missed_switch_boundary_rebases_only_the_same_target,
+};
+
+struct Shard {
+  std::string_view name;
+  std::span<const Scenario> scenarios;
+};
+
+constexpr std::array<Shard, 3> kShards{
+    Shard{"lifecycle", kLifecycleScenarios},
+    Shard{"recovery", kRecoveryScenarios},
+    Shard{"rebase", kRebaseScenarios},
+};
+
+void run(std::span<const Scenario> scenarios) {
+  for (const auto scenario : scenarios) {
+    scenario();
+  }
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--list-shards") {
+    std::size_t total{};
+    for (const auto& shard : kShards) {
+      std::cout << shard.name << ' ' << shard.scenarios.size() << '\n';
+      total += shard.scenarios.size();
+    }
+    std::cout << "all " << total << '\n';
+    return 0;
+  }
+  const std::string_view prefix{"--shard="};
+  const auto selected =
+      argc == 2 ? std::string_view(argv[1]) : std::string_view{};
+  if (argc > 2 || (argc == 2 && !selected.starts_with(prefix))) {
+    std::cerr << "usage: lmdj_facade_sequence_surface_tests "
+                 "[--list-shards|--shard=<name>]\n";
+    return 2;
+  }
   try {
-    test_sequence_lifecycle_idempotence_and_mutation_exclusion();
-    test_post_commit_retry_preserves_later_events_for_a_new_command();
-    test_post_commit_stop_retry_preserves_later_unreleased_press();
-    test_older_flush_replay_preserves_pending_events();
-    test_project_command_collision_does_not_poison_sequence_journal();
-    test_prior_sequence_collision_does_not_poison_new_session();
-    test_owner_loss_apply_and_discard_are_explicit();
-    test_sigkill_owner_recovers_acknowledged_unflushed_events();
-    test_later_flush_supersedes_failed_flush_before_recovery_apply();
-    test_replayed_completion_applies_only_durable_tail_residual_once();
-    test_inverse_completion_recovery_applies_only_effective_residual_once();
-    test_durable_tail_overrides_older_flush_residual_in_recovery();
-    test_writer_lease_blocks_competing_sequence_owner();
-    test_begin_cannot_cross_an_authoring_admission();
-    test_orphan_journal_is_sealed_before_authoring();
-    test_settings_rebase_and_pattern_creation_are_authoritative();
-    test_armed_capture_commit_rebases_without_losing_pending_events();
-    test_cancelled_armed_capture_keeps_sequence_active_and_disarms_commit();
-    test_prepublication_capture_marker_can_disarm_and_preserve_pending_events();
-    test_pending_overlay_projection_is_owner_scoped_and_replaceable();
-    test_switch_pending_bpm_rejects_before_project_mutation();
+    std::size_t executed{};
+    for (const auto& shard : kShards) {
+      if (argc == 1 || selected.substr(prefix.size()) == shard.name) {
+        run(shard.scenarios);
+        executed += shard.scenarios.size();
+      }
+    }
+    if (executed == 0) {
+      std::cerr << "unknown sequence surface shard\n";
+      return 2;
+    }
+    std::cout << "sequence facade surface tests: PASS (" << executed
+              << " scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
   }
-  std::cout << "sequence facade surface tests: PASS\n";
   return 0;
 }

@@ -308,6 +308,14 @@ struct ControlBridge::Impl {
     std::string request_id;
     bool has_request_id = false;
     std::atomic<PublicationState> publication{PublicationState::open};
+    // Next request waiting for the control thread while a dispatch is in
+    // progress; see process(). Control-thread state, never shared.
+    RequestSlot* next_deferred = nullptr;
+  };
+
+  struct DeferredTask {
+    void (*function)(void*) noexcept = nullptr;
+    void* argument = nullptr;
   };
 
   struct DeadlineProof {
@@ -341,17 +349,62 @@ struct ControlBridge::Impl {
     request.owner->process(request);
   }
 
+  // Every proxied task other than a request dispatch runs inside this scope.
+  // While a dispatch is suspended in Asyncify (see process()), the mailbox
+  // still runs these tasks; the scope lets fail_control() know it is being
+  // called from one of them rather than from the dispatch itself.
+  struct ForeignTaskScope {
+    Impl& owner;
+    explicit ForeignTaskScope(Impl& target) noexcept : owner(target) {
+      ++owner.foreign_task_depth;
+    }
+    ~ForeignTaskScope() { --owner.foreign_task_depth; }
+    ForeignTaskScope(const ForeignTaskScope&) = delete;
+    ForeignTaskScope& operator=(const ForeignTaskScope&) = delete;
+  };
+
   static void fail_thunk(void* argument) noexcept {
-    static_cast<Impl*>(argument)->fail_control();
+    auto& self = *static_cast<Impl*>(argument);
+    ForeignTaskScope scope(self);
+    self.fail_control();
   }
 
   static void release_thunk(void* argument) noexcept {
     auto& request = *static_cast<RequestSlot*>(argument);
+    ForeignTaskScope scope(*request.owner);
     request.owner->release_consumed_request(request);
   }
 
   static void service_realtime_thunk(void* argument) noexcept {
-    static_cast<Impl*>(argument)->service_realtime();
+    auto& self = *static_cast<Impl*>(argument);
+    if (self.dispatch_in_progress) {
+      // Realtime service drains Runtime state that dispatch also writes
+      // (pending_sequence_boundary) and its health checks seal through the
+      // Runtime directly, so the whole service waits for the suspended
+      // dispatch, not just its seal. realtime_service_scheduled stays set:
+      // the service is still pending, merely parked.
+      self.realtime_service_deferred = true;
+      return;
+    }
+    ForeignTaskScope scope(self);
+    self.service_realtime();
+  }
+
+  // Control-thread tasks proxied from outside the bridge (audio and manifest
+  // failure, coordinator install) call the same gate before touching the
+  // Runtime; see ControlBridge::defer_while_dispatching.
+  bool defer_foreign_task(
+      void (*function)(void*) noexcept, void* argument) noexcept {
+    if (!dispatch_in_progress) {
+      return false;
+    }
+    if (deferred_task_count == deferred_tasks.size()) {
+      // Each caller is one-shot, so this cannot fill; if it ever did, running
+      // the task now is the pre-gate behaviour rather than losing it.
+      return false;
+    }
+    deferred_tasks[deferred_task_count++] = DeferredTask{function, argument};
+    return true;
   }
 
   static bool claim_publication(void* context) noexcept {
@@ -541,7 +594,7 @@ struct ControlBridge::Impl {
         fail_control();
         return;
       }
-      outcome_message = reserve_message();
+      outcome_message = reserve_realtime_message();
       if (outcome_message == nullptr) {
         return;
       }
@@ -609,7 +662,7 @@ struct ControlBridge::Impl {
         outcome_message = nullptr;
       }
 
-      voice_message = reserve_message();
+      voice_message = reserve_realtime_message();
       if (voice_message == nullptr) {
         return;
       }
@@ -674,7 +727,7 @@ struct ControlBridge::Impl {
         voice_message = nullptr;
       }
 
-      boundary_message = reserve_message();
+      boundary_message = reserve_realtime_message();
       if (boundary_message == nullptr) {
         return;
       }
@@ -808,6 +861,23 @@ struct ControlBridge::Impl {
     return nullptr;
   }
 
+  MessageSlot* reserve_realtime_message() noexcept {
+    const auto free_messages = std::count_if(
+        messages.begin(), messages.end(), [](const auto& message) {
+          return message.state.load(std::memory_order_acquire) ==
+                 MessageState::free;
+        });
+    if (free_messages <= 1) {
+      return nullptr;
+    }
+    // Browser-main can only release slots while the Control FIFO owns this
+    // producer, so the free count cannot shrink before this reservation. Keep
+    // one fixed slot available for the next authoritative control response;
+    // realtime notification pressure must never turn a valid request into a
+    // terminal response-backpressure failure.
+    return reserve_message();
+  }
+
   bool publish_message(
       MessageSlot& message,
       const Json& value,
@@ -862,6 +932,14 @@ struct ControlBridge::Impl {
     realtime_service_enabled.store(false, std::memory_order_release);
     realtime_service_requested.store(false, std::memory_order_release);
     failed.store(true, std::memory_order_release);
+    if (dispatch_in_progress && foreign_task_depth > 0) {
+      // Sealing aborts imports and so reaches OPFS through Asyncify. A foreign
+      // task observing this failure is running while a dispatch is suspended
+      // (see process()); the flags above take effect now, the seal waits for
+      // that dispatch to return and runs from resume_deferred().
+      seal_deferred = true;
+      return;
+    }
     runtime.fail_and_seal("bridge_failure");
   }
 
@@ -886,7 +964,90 @@ struct ControlBridge::Impl {
     request.has_request_id = true;
   }
 
+  // runtime.dispatch() may suspend in Asyncify while the Facade waits on OPFS.
+  // The control thread then returns to its event loop, and the proxying
+  // mailbox runs whatever task is queued next -- including another request's
+  // process_thunk. Asyncify cannot be re-entered on one thread: a second
+  // suspension overwrites the first one's rewind data, and the first rewind
+  // then resumes into garbage ("memory access out of bounds"), after which the
+  // suspended Facade call fails and surfaces as INVALID_PROJECT. The Runtime
+  // Session serializes its own requests, so this was reachable only through
+  // a caller that submits to the transport directly (#443, #551).
+  //
+  // Dispatch is therefore strictly sequential on the control thread. A request
+  // whose thunk runs while a dispatch is in progress waits in FIFO order and
+  // is re-proxied once that dispatch has fully returned -- which, under
+  // Asyncify, is after its rewind. Its deadline keeps running while it waits,
+  // exactly as it would in the mailbox. Any other control-thread task that can
+  // reach an Asyncify import must go through this gate as well; today the
+  // only such path is sealing, handled in fail_control().
   void process(RequestSlot& request) noexcept {
+    if (dispatch_in_progress) {
+      defer_request(request);
+      return;
+    }
+    dispatch_in_progress = true;
+    process_now(request);
+    dispatch_in_progress = false;
+    resume_deferred();
+  }
+
+  void defer_request(RequestSlot& request) noexcept {
+    request.next_deferred = nullptr;
+    if (deferred_tail == nullptr) {
+      deferred_head = &request;
+    } else {
+      deferred_tail->next_deferred = &request;
+    }
+    deferred_tail = &request;
+  }
+
+  void resume_deferred() noexcept {
+    if (seal_deferred) {
+      seal_deferred = false;
+      runtime.fail_and_seal("bridge_failure");
+    }
+    for (std::size_t index = 0; index < deferred_task_count; ++index) {
+      const auto task = deferred_tasks[index];
+      if (hooks.schedule == nullptr ||
+          !hooks.schedule(hooks.context, task.function, task.argument)) {
+        fail_control();
+      }
+    }
+    deferred_task_count = 0;
+    if (realtime_service_deferred) {
+      realtime_service_deferred = false;
+      if (failed.load(std::memory_order_acquire)) {
+        // schedule_realtime_service() refuses a failed bridge; mirror it.
+        realtime_service_requested.store(false, std::memory_order_release);
+        realtime_service_scheduled.store(false, std::memory_order_release);
+      } else if (
+          hooks.schedule == nullptr ||
+          !hooks.schedule(hooks.context, &service_realtime_thunk, this)) {
+        realtime_service_requested.store(false, std::memory_order_release);
+        realtime_service_scheduled.store(false, std::memory_order_release);
+        failed.store(true, std::memory_order_release);
+      }
+    }
+    auto* next = deferred_head;
+    if (next == nullptr) {
+      return;
+    }
+    deferred_head = next->next_deferred;
+    if (deferred_head == nullptr) {
+      deferred_tail = nullptr;
+    }
+    next->next_deferred = nullptr;
+    // Re-proxy rather than dispatch inline so the mailbox keeps its turn
+    // order and the control thread's stack stays flat.
+    if (hooks.schedule == nullptr ||
+        !hooks.schedule(hooks.context, &Impl::process_thunk, next)) {
+      release_request(*next);
+      fail_control();
+    }
+  }
+
+  void process_now(RequestSlot& request) noexcept {
     ProcessReservations reservations;
     try {
       process_throwing(request, reservations);
@@ -1213,6 +1374,16 @@ struct ControlBridge::Impl {
   std::atomic<bool> realtime_service_requested{false};
   std::atomic<bool> realtime_service_scheduled{false};
   std::atomic<bool> failed{false};
+  // Control-thread-only dispatch gate; see process(). Not atomics on purpose:
+  // no other thread reads them.
+  bool dispatch_in_progress = false;
+  bool seal_deferred = false;
+  bool realtime_service_deferred = false;
+  int foreign_task_depth = 0;
+  RequestSlot* deferred_head = nullptr;
+  RequestSlot* deferred_tail = nullptr;
+  std::array<DeferredTask, 4> deferred_tasks{};
+  std::size_t deferred_task_count = 0;
 };
 
 ControlBridge::ControlBridge(ControlRuntime& runtime, BridgeHooks hooks)
@@ -1458,7 +1629,18 @@ int ControlBridge::deadline_proof_state(
   }
 }
 
+bool ControlBridge::defer_while_dispatching(
+    void (*function)(void*) noexcept, void* argument) noexcept {
+  return impl_->defer_foreign_task(function, argument);
+}
+
 bool ControlBridge::terminal_release_ready() const noexcept {
+  // Reached from lmdj_web_host_authorize_terminal_release after its own
+  // on_control check, so the gate's control-thread-only fields are safe here.
+  // A suspended dispatch or a parked request still owns the control thread.
+  if (impl_->dispatch_in_progress || impl_->deferred_head != nullptr) {
+    return false;
+  }
   for (const auto& request : impl_->requests) {
     if (request.state.load(std::memory_order_acquire) ==
         RequestState::processing) {
@@ -1623,7 +1805,12 @@ bool on_control(void*) noexcept {
   return pthread_equal(pthread_self(), web_control_thread) != 0;
 }
 
-void fail_manifest_on_control(void*) noexcept {
+void fail_manifest_on_control(void* argument) noexcept {
+  if (auto* bridge = web_bridge.load(std::memory_order_acquire);
+      bridge != nullptr &&
+      bridge->defer_while_dispatching(&fail_manifest_on_control, argument)) {
+    return;
+  }
   if (web_runtime != nullptr) {
     web_runtime->engine().stop();
     web_runtime->fail_and_seal("manifest_protocol_mismatch");
@@ -1677,7 +1864,12 @@ std::uint64_t acknowledged_audio_generation(void* context) noexcept {
 bool schedule_audio_control_failure(
     RealtimeAudioWorkletFatal fatal) noexcept;
 
-void install_audio_coordinator(void*) noexcept {
+void install_audio_coordinator(void* argument) noexcept {
+  if (auto* bridge = web_bridge.load(std::memory_order_acquire);
+      bridge != nullptr &&
+      bridge->defer_while_dispatching(&install_audio_coordinator, argument)) {
+    return;
+  }
   auto* adapter = web_audio.load(std::memory_order_acquire);
   if (adapter == nullptr || web_runtime == nullptr) {
     if (adapter != nullptr) {
@@ -1722,7 +1914,12 @@ const char* audio_failure_reason(RealtimeAudioWorkletFatal fatal) noexcept {
   }
 }
 
-void fail_audio_on_control(void*) noexcept {
+void fail_audio_on_control(void* argument) noexcept {
+  if (auto* bridge = web_bridge.load(std::memory_order_acquire);
+      bridge != nullptr &&
+      bridge->defer_while_dispatching(&fail_audio_on_control, argument)) {
+    return;
+  }
   const auto fatal =
       web_audio_control_failure_code.load(std::memory_order_acquire);
   if (web_runtime != nullptr) {
@@ -2593,6 +2790,11 @@ int main() {
           ProviderPolicy{},
           {},
           limits,
+          nullptr,
+          nullptr,
+          nullptr,
+          nullptr,
+          lmdj::facade::make_unavailable_performance_replay_controller(),
       }),
       limits);
   if (!created.has_value()) {

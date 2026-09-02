@@ -1,9 +1,15 @@
 #include <lmdj/domain/project.hpp>
 
 #include <algorithm>
+#include <array>
 #include <map>
+#include <set>
+#include <string>
+#include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <utility>
+#include <variant>
 
 namespace lmdj::domain {
 namespace {
@@ -11,6 +17,138 @@ namespace {
 bool is_lower_hex(char value) noexcept {
   return (value >= '0' && value <= '9') ||
          (value >= 'a' && value <= 'f');
+}
+
+foundation::Result<PerformanceEvent> invalid_performance_event(
+    std::string_view message) {
+  return foundation::Result<PerformanceEvent>::failure(
+      foundation::Error{
+          foundation::ErrorCode::invalid_argument,
+          std::string(message),
+      });
+}
+
+foundation::Result<void> invalid_performance(std::string_view message) {
+  return foundation::Result<void>::failure(
+      foundation::Error{
+          foundation::ErrorCode::invalid_argument,
+          std::string(message),
+      });
+}
+
+foundation::Result<void> invalid_asset_lineage(std::string_view message) {
+  return foundation::Result<void>::failure(
+      foundation::Error{
+          foundation::ErrorCode::invalid_argument,
+          std::string(message),
+      });
+}
+
+foundation::Result<AssetLineage> invalid_asset_lineage_value(
+    std::string_view message) {
+  return foundation::Result<AssetLineage>::failure(
+      foundation::Error{
+          foundation::ErrorCode::invalid_argument,
+          std::string(message),
+      });
+}
+
+bool exact_object_keys(
+    const nlohmann::json& input,
+    std::initializer_list<std::string_view> keys) {
+  if (!input.is_object() || input.size() != keys.size()) {
+    return false;
+  }
+  return std::ranges::all_of(
+      keys,
+      [&input](std::string_view key) {
+        return input.contains(key);
+      });
+}
+
+std::optional<std::uint64_t> unsigned_value(
+    const nlohmann::json& input) noexcept {
+  try {
+    if (input.is_number_unsigned()) {
+      return input.get<std::uint64_t>();
+    }
+    if (input.is_number_integer()) {
+      const auto value = input.get<std::int64_t>();
+      if (value >= 0) {
+        return static_cast<std::uint64_t>(value);
+      }
+    }
+  } catch (const std::exception&) {
+  }
+  return std::nullopt;
+}
+
+std::optional<std::uint64_t> bounded_unsigned(
+    const nlohmann::json& input,
+    std::uint64_t maximum) noexcept {
+  const auto value = unsigned_value(input);
+  if (!value.has_value() || *value > maximum) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+bool valid_fx(PerformanceFx fx) noexcept {
+  return static_cast<std::uint8_t>(fx) < kFxCount;
+}
+
+bool valid_sha256(std::string_view value) noexcept {
+  if (value.size() != 64) {
+    return false;
+  }
+  return std::ranges::all_of(value, is_lower_hex);
+}
+
+std::optional<std::size_t> utf8_code_point_count(
+    std::string_view value) noexcept {
+  std::size_t count = 0;
+  for (std::size_t index = 0; index < value.size();) {
+    const auto first = static_cast<unsigned char>(value[index]);
+    std::size_t length = 0;
+    std::uint32_t code_point = 0;
+    if (first <= 0x7fU) {
+      length = 1;
+      code_point = first;
+    } else if ((first & 0xe0U) == 0xc0U) {
+      length = 2;
+      code_point = first & 0x1fU;
+    } else if ((first & 0xf0U) == 0xe0U) {
+      length = 3;
+      code_point = first & 0x0fU;
+    } else if ((first & 0xf8U) == 0xf0U) {
+      length = 4;
+      code_point = first & 0x07U;
+    } else {
+      return std::nullopt;
+    }
+    if (index + length > value.size()) {
+      return std::nullopt;
+    }
+    for (std::size_t offset = 1; offset < length; ++offset) {
+      const auto continuation =
+          static_cast<unsigned char>(value[index + offset]);
+      if ((continuation & 0xc0U) != 0x80U) {
+        return std::nullopt;
+      }
+      code_point = (code_point << 6U) | (continuation & 0x3fU);
+    }
+    const bool overlong =
+        (length == 2 && code_point < 0x80U) ||
+        (length == 3 && code_point < 0x800U) ||
+        (length == 4 && code_point < 0x10000U);
+    if (overlong || code_point > 0x10ffffU ||
+        (code_point >= 0xd800U && code_point <= 0xdfffU)) {
+      return std::nullopt;
+    }
+    index += length;
+    ++count;
+  }
+  return count;
 }
 
 }  // namespace
@@ -41,6 +179,7 @@ foundation::Result<ProjectState> create_project(
       bpm,
       true,
       50,
+      {},
       {},
       {},
       {},
@@ -177,6 +316,432 @@ std::vector<PatternEvent> merge_pattern_events(
         };
       });
   return merged;
+}
+
+foundation::Result<void> validate_pattern_slots(
+    const ProjectState& state) {
+  std::set<foundation::PatternId> occupied;
+  for (const auto& pattern_id : state.pattern_slots) {
+    if (!pattern_id.has_value()) {
+      continue;
+    }
+    if (!is_valid_uuid(pattern_id->value()) ||
+        !state.patterns.contains(*pattern_id)) {
+      return foundation::Result<void>::failure(
+          foundation::Error{
+              foundation::ErrorCode::invalid_argument,
+              "Pattern slot references an invalid or missing Pattern",
+          });
+    }
+    if (!occupied.insert(*pattern_id).second) {
+      return foundation::Result<void>::failure(
+          foundation::Error{
+              foundation::ErrorCode::invalid_argument,
+              "Pattern occupies more than one Pattern slot",
+          });
+    }
+  }
+  return foundation::Result<void>::success();
+}
+
+PerformanceEventKind performance_event_kind(
+    const PerformanceEvent& event) noexcept {
+  return static_cast<PerformanceEventKind>(event.payload.index());
+}
+
+std::uint64_t performance_event_tick(
+    const PerformanceEvent& event) noexcept {
+  return std::visit(
+      [](const auto& payload) -> std::uint64_t {
+        using Event = std::decay_t<decltype(payload)>;
+        if constexpr (std::is_same_v<Event, PadHitPerformanceEvent>) {
+          return payload.onset_tick;
+        } else if constexpr (
+            std::is_same_v<Event, PatternLaunchPerformanceEvent>) {
+          return payload.effective_tick;
+        } else {
+          return payload.tick;
+        }
+      },
+      event.payload);
+}
+
+std::uint8_t performance_event_fx_or_slot(
+    const PerformanceEvent& event) noexcept {
+  return std::visit(
+      [](const auto& payload) -> std::uint8_t {
+        using Event = std::decay_t<decltype(payload)>;
+        if constexpr (std::is_same_v<Event, PadHitPerformanceEvent>) {
+          return payload.slot;
+        } else if constexpr (
+            std::is_same_v<Event, PatternLaunchPerformanceEvent>) {
+          return payload.pattern_slot;
+        } else if constexpr (
+            std::is_same_v<Event, FxEngagePerformanceEvent> ||
+            std::is_same_v<Event, FxMovePerformanceEvent> ||
+            std::is_same_v<Event, FxReleasePerformanceEvent>) {
+          return static_cast<std::uint8_t>(payload.fx);
+        } else {
+          return 0;
+        }
+      },
+      event.payload);
+}
+
+std::vector<PerformanceEvent> canonical_performance_events(
+    const std::vector<PerformanceEvent>& events) {
+  auto ordered = events;
+  std::ranges::stable_sort(
+      ordered,
+      {},
+      [](const PerformanceEvent& event) {
+        return std::tuple{
+            performance_event_tick(event),
+            static_cast<std::uint8_t>(performance_event_kind(event)),
+            performance_event_fx_or_slot(event),
+        };
+      });
+  return ordered;
+}
+
+foundation::Result<void> validate_performance_events(
+    const std::vector<PerformanceEvent>& events) {
+  std::array<bool, kFxCount> engaged{};
+  bool hold_enabled = false;
+  for (const auto& event : canonical_performance_events(events)) {
+    const auto valid = std::visit(
+        [&engaged, &hold_enabled](const auto& payload)
+            -> foundation::Result<void> {
+          using Event = std::decay_t<decltype(payload)>;
+          if constexpr (std::is_same_v<Event, PadHitPerformanceEvent>) {
+            if (payload.slot > kPerformancePadSlotMax ||
+                payload.duration_tick == 0 || payload.velocity == 0 ||
+                payload.velocity > 127) {
+              return invalid_performance("pad_hit event is invalid");
+            }
+          } else if constexpr (
+              std::is_same_v<Event, PatternLaunchPerformanceEvent>) {
+            if (payload.pattern_slot < kPatternSlotMin ||
+                payload.pattern_slot > kPatternSlotMax) {
+              return invalid_performance(
+                  "pattern_launch event is invalid");
+            }
+          } else if constexpr (
+              std::is_same_v<Event, FxEngagePerformanceEvent>) {
+            if (!valid_fx(payload.fx) || payload.value < kFxValueMin ||
+                payload.value > kFxValueMax) {
+              return invalid_performance("fx_engage event is invalid");
+            }
+            auto& active = engaged.at(static_cast<std::uint8_t>(payload.fx));
+            if (active) {
+              return invalid_performance(
+                  "fx_engage requires a disengaged effect");
+            }
+            active = true;
+          } else if constexpr (
+              std::is_same_v<Event, FxMovePerformanceEvent>) {
+            if (!valid_fx(payload.fx) || payload.value < kFxValueMin ||
+                payload.value > kFxValueMax) {
+              return invalid_performance("fx_move event is invalid");
+            }
+            if (!engaged.at(static_cast<std::uint8_t>(payload.fx))) {
+              return invalid_performance(
+                  "fx_move requires a matching open fx_engage");
+            }
+          } else if constexpr (
+              std::is_same_v<Event, FxReleasePerformanceEvent>) {
+            if (!valid_fx(payload.fx)) {
+              return invalid_performance("fx_release event is invalid");
+            }
+            auto& active = engaged.at(static_cast<std::uint8_t>(payload.fx));
+            if (!active) {
+              return invalid_performance(
+                  "fx_release requires a matching open fx_engage");
+            }
+            active = false;
+          } else if constexpr (
+              std::is_same_v<Event, HoldOnPerformanceEvent>) {
+            if (hold_enabled) {
+              return invalid_performance(
+                  "hold_on requires HOLD to be off");
+            }
+            hold_enabled = true;
+          } else {
+            if (!hold_enabled) {
+              return invalid_performance(
+                  "hold_off requires HOLD to be on");
+            }
+            hold_enabled = false;
+          }
+          return foundation::Result<void>::success();
+        },
+        event.payload);
+    if (!valid.has_value()) {
+      return valid;
+    }
+  }
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<void> validate_performance(
+    const Performance& performance) {
+  if (!is_valid_uuid(performance.id.value())) {
+    return invalid_performance(
+        "performance id must be a lowercase UUID");
+  }
+  const auto name_length = utf8_code_point_count(performance.name);
+  if (!name_length.has_value() || *name_length == 0 ||
+      *name_length > kPerformanceNameMax) {
+    return invalid_performance(
+        "performance name must contain 1 to 64 UTF-8 code points");
+  }
+  if (performance.created_bpm < 40 || performance.created_bpm > 240) {
+    return invalid_performance(
+        "performance created BPM must be between 40 and 240");
+  }
+  if (performance.recording_artifact.has_value() &&
+      (!valid_sha256(performance.recording_artifact->sha256) ||
+       performance.recording_artifact->media_type.empty())) {
+    return invalid_performance(
+        "performance recording artifact is invalid");
+  }
+  if (performance.events != canonical_performance_events(performance.events)) {
+    return invalid_performance(
+        "performance events must use canonical ordering");
+  }
+  return validate_performance_events(performance.events);
+}
+
+foundation::Result<void> validate_asset_lineage(
+    const AssetLineage& lineage) {
+  if (!valid_sha256(lineage.source.artifact_sha256)) {
+    return invalid_asset_lineage(
+        "asset Lineage source digest must be lowercase SHA-256");
+  }
+  if (!is_valid_uuid(lineage.derivation.performance_id.value())) {
+    return invalid_asset_lineage(
+        "asset Lineage Performance id must be a lowercase UUID");
+  }
+  if (lineage.derivation.range.start_frame >=
+      lineage.derivation.range.end_frame) {
+    return invalid_asset_lineage(
+        "asset Lineage frame range must be non-empty and increasing");
+  }
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<AssetLineage> asset_lineage_from_json(
+    const nlohmann::json& input) {
+  try {
+    if (!exact_object_keys(input, {"source", "derivation"})) {
+      return invalid_asset_lineage_value(
+          "asset Lineage must contain exact source and derivation objects");
+    }
+    const auto& source = input.at("source");
+    const auto& derivation = input.at("derivation");
+    if (!exact_object_keys(
+            source,
+            {"kind", "artifact_sha256", "project_revision"}) ||
+        !source.at("kind").is_string() ||
+        source.at("kind").get<std::string>() != "asset_artifact" ||
+        !source.at("artifact_sha256").is_string()) {
+      return invalid_asset_lineage_value(
+          "asset Lineage source shape or value is invalid");
+    }
+    if (!exact_object_keys(
+            derivation,
+            {"kind", "range", "performance_id"}) ||
+        !derivation.at("kind").is_string() ||
+        derivation.at("kind").get<std::string>() != "resample" ||
+        !derivation.at("performance_id").is_string()) {
+      return invalid_asset_lineage_value(
+          "asset Lineage derivation shape or value is invalid");
+    }
+    const auto& range = derivation.at("range");
+    if (!exact_object_keys(range, {"start_frame", "end_frame"})) {
+      return invalid_asset_lineage_value(
+          "asset Lineage range shape is invalid");
+    }
+    const auto project_revision = unsigned_value(source.at("project_revision"));
+    const auto start_frame = unsigned_value(range.at("start_frame"));
+    const auto end_frame = unsigned_value(range.at("end_frame"));
+    if (!project_revision.has_value() || !start_frame.has_value() ||
+        !end_frame.has_value()) {
+      return invalid_asset_lineage_value(
+          "asset Lineage integer value is invalid");
+    }
+    AssetLineage lineage{
+        {source.at("artifact_sha256").get<std::string>(), *project_revision},
+        {{*start_frame, *end_frame},
+         PerformanceId{derivation.at("performance_id").get<std::string>()}},
+    };
+    const auto valid = validate_asset_lineage(lineage);
+    if (!valid.has_value()) {
+      return foundation::Result<AssetLineage>::failure(valid.error());
+    }
+    return foundation::Result<AssetLineage>::success(std::move(lineage));
+  } catch (const std::exception&) {
+    return invalid_asset_lineage_value(
+        "asset Lineage shape or value is invalid");
+  }
+}
+
+nlohmann::json asset_lineage_json(const AssetLineage& lineage) {
+  return {
+      {"source",
+       {{"kind", "asset_artifact"},
+        {"artifact_sha256", lineage.source.artifact_sha256},
+        {"project_revision", lineage.source.project_revision}}},
+      {"derivation",
+       {{"kind", "resample"},
+        {"range",
+         {{"start_frame", lineage.derivation.range.start_frame},
+          {"end_frame", lineage.derivation.range.end_frame}}},
+        {"performance_id", lineage.derivation.performance_id.value()}}},
+  };
+}
+
+foundation::Result<PerformanceEvent> performance_event_from_json(
+    const nlohmann::json& input) {
+  try {
+    if (!input.is_object() || !input.contains("kind") ||
+        !input.at("kind").is_string()) {
+      return invalid_performance_event(
+          "performance event must declare a supported kind");
+    }
+    const auto kind = input.at("kind").get<std::string>();
+    if (kind == "pad_hit" &&
+        exact_object_keys(
+            input,
+            {"kind", "slot", "onset_tick", "duration_tick", "velocity"})) {
+      const auto slot = bounded_unsigned(
+          input.at("slot"), kPerformancePadSlotMax);
+      const auto onset_tick = unsigned_value(input.at("onset_tick"));
+      const auto duration_tick = unsigned_value(input.at("duration_tick"));
+      const auto velocity = bounded_unsigned(input.at("velocity"), 127);
+      if (slot.has_value() && onset_tick.has_value() &&
+          duration_tick.has_value() && *duration_tick > 0 &&
+          velocity.has_value() && *velocity > 0) {
+        return foundation::Result<PerformanceEvent>::success(
+            PerformanceEvent{PadHitPerformanceEvent{
+                static_cast<std::uint8_t>(*slot),
+                *onset_tick,
+                *duration_tick,
+                static_cast<std::uint8_t>(*velocity),
+            }});
+      }
+    } else if (
+        kind == "pattern_launch" &&
+        exact_object_keys(
+            input, {"kind", "pattern_slot", "effective_tick"})) {
+      const auto slot = bounded_unsigned(
+          input.at("pattern_slot"), kPatternSlotMax);
+      const auto tick = unsigned_value(input.at("effective_tick"));
+      if (slot.has_value() && tick.has_value()) {
+        return foundation::Result<PerformanceEvent>::success(
+            PerformanceEvent{PatternLaunchPerformanceEvent{
+                static_cast<std::uint8_t>(*slot), *tick}});
+      }
+    } else if (
+        (kind == "fx_engage" || kind == "fx_move") &&
+        exact_object_keys(input, {"kind", "fx", "value", "tick"})) {
+      const auto fx = bounded_unsigned(input.at("fx"), kFxCount - 1);
+      const auto value = bounded_unsigned(input.at("value"), kFxValueMax);
+      const auto tick = unsigned_value(input.at("tick"));
+      if (fx.has_value() && value.has_value() && tick.has_value()) {
+        const auto typed_fx = static_cast<PerformanceFx>(*fx);
+        if (kind == "fx_engage") {
+          return foundation::Result<PerformanceEvent>::success(
+              PerformanceEvent{FxEngagePerformanceEvent{
+                  typed_fx, static_cast<std::uint16_t>(*value), *tick}});
+        }
+        return foundation::Result<PerformanceEvent>::success(
+            PerformanceEvent{FxMovePerformanceEvent{
+                typed_fx, static_cast<std::uint16_t>(*value), *tick}});
+      }
+    } else if (
+        kind == "fx_release" &&
+        exact_object_keys(input, {"kind", "fx", "tick"})) {
+      const auto fx = bounded_unsigned(input.at("fx"), kFxCount - 1);
+      const auto tick = unsigned_value(input.at("tick"));
+      if (fx.has_value() && tick.has_value()) {
+        return foundation::Result<PerformanceEvent>::success(
+            PerformanceEvent{FxReleasePerformanceEvent{
+                static_cast<PerformanceFx>(*fx), *tick}});
+      }
+    } else if (
+        kind == "hold_on" &&
+        exact_object_keys(input, {"kind", "tick"})) {
+      const auto tick = unsigned_value(input.at("tick"));
+      if (tick.has_value()) {
+        return foundation::Result<PerformanceEvent>::success(
+            PerformanceEvent{HoldOnPerformanceEvent{*tick}});
+      }
+    } else if (
+        kind == "hold_off" &&
+        exact_object_keys(input, {"kind", "tick"})) {
+      const auto tick = unsigned_value(input.at("tick"));
+      if (tick.has_value()) {
+        return foundation::Result<PerformanceEvent>::success(
+            PerformanceEvent{HoldOffPerformanceEvent{*tick}});
+      }
+    }
+  } catch (const std::exception&) {
+  }
+  return invalid_performance_event(
+      "performance event shape or value is invalid");
+}
+
+nlohmann::json performance_event_json(const PerformanceEvent& event) {
+  return std::visit(
+      [](const auto& payload) -> nlohmann::json {
+        using Event = std::decay_t<decltype(payload)>;
+        if constexpr (std::is_same_v<Event, PadHitPerformanceEvent>) {
+          return {
+              {"duration_tick", payload.duration_tick},
+              {"kind", "pad_hit"},
+              {"onset_tick", payload.onset_tick},
+              {"slot", payload.slot},
+              {"velocity", payload.velocity},
+          };
+        } else if constexpr (
+            std::is_same_v<Event, PatternLaunchPerformanceEvent>) {
+          return {
+              {"effective_tick", payload.effective_tick},
+              {"kind", "pattern_launch"},
+              {"pattern_slot", payload.pattern_slot},
+          };
+        } else if constexpr (
+            std::is_same_v<Event, FxEngagePerformanceEvent>) {
+          return {
+              {"fx", static_cast<std::uint8_t>(payload.fx)},
+              {"kind", "fx_engage"},
+              {"tick", payload.tick},
+              {"value", payload.value},
+          };
+        } else if constexpr (
+            std::is_same_v<Event, FxMovePerformanceEvent>) {
+          return {
+              {"fx", static_cast<std::uint8_t>(payload.fx)},
+              {"kind", "fx_move"},
+              {"tick", payload.tick},
+              {"value", payload.value},
+          };
+        } else if constexpr (
+            std::is_same_v<Event, FxReleasePerformanceEvent>) {
+          return {
+              {"fx", static_cast<std::uint8_t>(payload.fx)},
+              {"kind", "fx_release"},
+              {"tick", payload.tick},
+          };
+        } else if constexpr (
+            std::is_same_v<Event, HoldOnPerformanceEvent>) {
+          return {{"kind", "hold_on"}, {"tick", payload.tick}};
+        } else {
+          return {{"kind", "hold_off"}, {"tick", payload.tick}};
+        }
+      },
+      event.payload);
 }
 
 }  // namespace lmdj::domain

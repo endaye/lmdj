@@ -30,11 +30,12 @@ These prevent shipping the current builds. They do not prevent starting Stage 9
 development, but they must be settled before any tag, publication or Channel
 promotion.
 
-### A1. Physical acceptance is unverified for every Build
+### A1. Several physical acceptance rows remain unverified
 
-No physical or manual acceptance row has ever been converted to a pass on the
-current builds. Automation proves wiring; it cannot prove sound, feel or
-latency. These block any physical-pass claim and promotion to Beta or Stable.
+Several physical or manual acceptance rows remain unverified on the current
+builds. Automation proves wiring; it cannot prove sound, feel or latency.
+Those open rows block any broader physical-pass claim and promotion to Beta or
+Stable.
 
 | Build | Row | Status |
 | --- | --- | --- |
@@ -42,15 +43,16 @@ latency. These block any physical-pass claim and promotion to Beta or Stable.
 | 1.0.23.0 | macOS Chrome — external audio interface input | `deferred / unverified` |
 | 1.0.23.0 | macOS Safari — `getUserMedia` and AudioWorklet capture | `deferred / unverified` |
 | 1.0.23.0 | iPadOS Safari — capture behaviour | `deferred / unverified` |
-| 1.0.22.0 | macOS Chrome — human hearing and subjective audio quality | `deferred / unverified` |
+| 1.0.40.0 | macOS Chrome — human hearing and subjective audio quality | **`PASS` 2026-09-01** — all eight checklist groups passed; exact replay corrected the initial interpretation of the 40 ms loop's rapid texture ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) |
 | 1.0.22.0 | macOS Chrome — physical MIDI controller | `deferred / unverified` |
 | 1.0.22.0 | macOS Safari — pointer plus physical hearing | `deferred / unverified` |
 | 1.0.22.0 | iPadOS Safari — physical touch ergonomics | `deferred / unverified` |
 | 1.0.22.0 | iPadOS Safari — background, lock-screen and recovery lifecycle | `deferred / unverified` |
 | Stage 6/7 inherited | macOS Safari pointer, macOS Chrome pointer, iPadOS Safari touch, iPadOS Safari lifecycle | `deferred / unverified` |
 
-Two rows have passed: macOS Chrome physical MIDI on `1.0.21.0`, and the
-macOS Chrome real-microphone round trip on `1.0.23.0`.
+Three rows have passed: macOS Chrome physical MIDI on `1.0.21.0`, the macOS
+Chrome real-microphone round trip on `1.0.23.0`, and macOS Chrome human hearing
+and subjective audio quality on `1.0.40.0`.
 
 **The cheapest high-value item was the real-microphone capture round trip, and
 it has now been done.** One session validated the whole capture chain end to
@@ -385,9 +387,14 @@ F1–F4 were found while performing A1's real-microphone row (M1); F5 and F6 cam
 from the first check of row M2, which stopped there. Each was reproduced or
 traced to source before being recorded; measurements for F1–F4 are in the
 [evidence file](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md).
-F1–F5 and F6 are combined into Product Build `1.0.36.0` (Creator `1.5.5`,
-audio-runtime `0.5.1`) — all six session defects are fixed in source, while
-their physical re-runs remain open.
+F1–F5 and the F6 attack/release ramp are combined into Product Build
+`1.0.36.0` (Creator `1.5.5`, audio-runtime `0.5.1`). The 2026-09-01 M2 run on
+`1.0.40.0` physically confirmed the strict non-zero trim boundary, stop ramp,
+and both loop modes. The approximately 40 ms loop's rapid repeated texture was
+initially described as a seam click, but exact replay produced no obvious
+independent transient and the operator corrected the final classification to
+normal short-loop playback. The resulting #511 report records that superseded
+interpretation, not a reproducible product defect.
 
 F1, F2, F3 and F5 are Creator front-end defects and are scoped together in
 [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
@@ -516,8 +523,9 @@ release ramp, no fade at the trim boundary, no crossfade at the loop seam and
 no zero-crossing snap. A trim edge on a non-zero sample is a step
 discontinuity, which is what the click is.
 
-The same absence predicts clicks at the loop seam and on releasing a held
-voice; neither has been tested yet.
+The same absence left loop seams and held release as physical-hearing risks.
+The later physical rerun found held release clean and, after exact replay and
+operator correction, found no obvious independent loop-seam click.
 
 Fixed 2026-08-24 in Product Build `1.0.36.0` (audio-runtime `0.5.1`),
 implementing the
@@ -529,12 +537,15 @@ zero across the last 96 frames before `end_frame`, and turns `stop_voice`
 into a 96-frame release tail with the `stopped` publication timing unchanged
 (published at stop initiation) — a second stop or a steal hard-kills a
 releasing voice. All ramp state is POD fields on the voice; the render path
-stays allocation-free and lock-free. The loop-seam crossfade remains
-**deferred** by the decision: M2 check 5 (loop seam) is EXPECTED to remain
-clicky until it lands — that expectation is recorded here, not hidden. The
-human re-run of M2 checks 1 and 5 stays open in
-`2026-08-17-manual-verification-todo.md` (the "F6 ramp policy lands" trigger
-row).
+stays allocation-free and lock-free. The loop-seam crossfade remained
+**deferred** by the decision. The 2026-09-01 physical M2 rerun on `1.0.40.0`
+confirmed a clean strict non-zero trim boundary, clean Gate release/Toggle
+stop, and both loop modes. Exact replay of the 40 ms loop produced no obvious
+independent seam transient; the operator corrected the initially reported
+rapid “clicking” to the normal texture of the short selection repeating about
+25 times per second. The exact run and correction are retained in the
+[hearing evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md).
+M2 therefore passes without an Audio Runtime change.
 
 ---
 

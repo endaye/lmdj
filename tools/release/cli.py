@@ -90,11 +90,11 @@ def build_context(
 ) -> PrepareContext:
     """Build the shipped prepare context from freshly fetched canonical state."""
     selected_git = git or GitRepository(root)
-    selected_github = github or GitHubClient()
+    runner = getattr(selected_git, "runner", CommandRunner())
+    selected_github = github or _authenticated_github_client(runner)
     selected_git.fetch_authority(CANONICAL_REPOSITORY, CANONICAL_BRANCH)
     with selected_git.detached_worktree(selected_git.main_revision()) as authority_tree:
         policy, ledger = (authority_reader or load_authority_documents)(authority_tree)
-    runner = getattr(selected_git, "runner", CommandRunner())
     home = Path(os.environ.get("GNUPGHOME", Path.home() / ".gnupg"))
     runtime = ProfileRuntime(
         runner=runner,
@@ -117,15 +117,27 @@ def build_context(
     )
 
 
-def build_audit_context(root: Path) -> AuditContext:
+def build_audit_context(root: Path, *, remote: bool = False) -> AuditContext:
     """Build an audit context without contacting remote state."""
     policy, ledger = load_authority_documents(root)
     selected_git = GitRepository(root)
-    selected_github = GitHubClient()
+    selected_github = (
+        _authenticated_github_client(selected_git.runner) if remote else GitHubClient()
+    )
     return _audit_context_for_authority(
         root, policy, ledger, selected_git, selected_github,
         authority_reader=load_authority_documents,
     )
+
+
+def _authenticated_github_client(runner: CommandRunner) -> GitHubClient:
+    """Use workflow credentials when present, otherwise the logged-in gh identity."""
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token:
+        token = runner.run(("gh", "auth", "token")).stdout.strip()
+    if not token:
+        raise GitHubApiError("GitHub authentication is unavailable")
+    return GitHubClient(token=token)
 
 
 def _audit_context_for_authority(
@@ -193,7 +205,9 @@ def main(argv: list[str] | None = None) -> int:
         root = options.repo_root.expanduser().resolve(strict=True)
         if options.command == "audit":
             report = audit(
-                build_audit_context(root), remote=options.remote, tag=options.tag,
+                build_audit_context(root, remote=options.remote),
+                remote=options.remote,
+                tag=options.tag,
             )
             if options.json is not None:
                 destination = options.json if options.json.is_absolute() else root / options.json

@@ -139,7 +139,9 @@ trigger/acknowledgement counts plus lost and duplicate counts.
 The lifecycle row contains all five actions (`background`, `foreground`,
 `lock`, `unlock`, and `route-interruption`), a non-empty
 `recoverySamplesMs` array, `maxExplicitActivations`, and post-recovery missed
-and duplicate onset counts. Evaluate the file with:
+and duplicate onset counts. `maxExplicitActivations` is the maximum explicit
+activation count required by any single recovery episode, not the sum across a
+session that may be interrupted multiple times. Evaluate the file with:
 
 ```bash
 scripts/web-runtime-lab.sh evaluate /absolute/path/to/evidence.json

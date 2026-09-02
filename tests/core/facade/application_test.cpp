@@ -344,6 +344,12 @@ ApplicationConfig config(
       [] {
         return std::string("2026-07-31T00:00:00.000Z");
       },
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
   };
 }
 
@@ -2031,6 +2037,12 @@ void test_provider_failures_are_errors_but_attempts_remain_queryable() {
           proof_registry(),
           ProviderPolicy{},
           [] { return std::string("2026-07-31T00:00:00.000Z"); },
+          std::nullopt,
+          nullptr,
+          nullptr,
+          nullptr,
+          nullptr,
+          lmdj::facade::make_unavailable_performance_replay_controller(),
       });
   check_success(
       deny_all.command(
@@ -2056,6 +2068,51 @@ void test_provider_failures_are_errors_but_attempts_remain_queryable() {
   check_error(denied, "PERMISSION_DENIED");
 }
 
+void test_project_inspect_projects_v4_lineage_and_recording_revision() {
+  TempDirectory temp;
+  Application application(config(temp.path()));
+  const auto project = temp.path() / "v4-inspect.lmdj";
+  check_success(application.command(create_request(project)), 0);
+  const auto source = temp.path() / "inspect.wav";
+  write_bytes(source, "RIFF-inspect");
+  check_success(
+      application.command(import_request(project, 701, uuid(702), source, 0)),
+      1);
+  const auto begun = application.command({
+      {"operation", "performance.record.begin"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(703)},
+      {"expected_revision", 1},
+      {"session_id", uuid(704)},
+      {"performance_id", uuid(705)},
+  });
+  check_success(begun, 2);
+
+  const auto inspected = application.query({
+      {"operation", "project.inspect"},
+      {"project_path", project.generic_string()},
+  });
+  check_success(inspected, 2);
+  const auto& projected = inspected.at("result").at("project");
+  check_exact_keys(
+      projected,
+      {"contract",
+       "project_id",
+       "revision",
+       "bpm",
+       "banks",
+       "assets",
+       "patterns",
+       "sequence_settings",
+       "pattern_slots",
+       "performances"});
+  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(projected.at("assets").at(uuid(702)).at("lineage").is_null());
+  LMDJ_CHECK(
+      projected.at("performances").at(uuid(705)).at("recording_revision") ==
+      1);
+}
+
 }  // namespace
 
 int main() {
@@ -2072,6 +2129,7 @@ int main() {
     test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
     test_asset_and_pad_replay_identity_is_enforced();
     test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation();
+    test_project_inspect_projects_v4_lineage_and_recording_revision();
     test_provider_failures_are_errors_but_attempts_remain_queryable();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

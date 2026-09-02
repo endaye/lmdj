@@ -158,6 +158,13 @@ class PrGateTest(unittest.TestCase):
             results[job] = "success"
         return results
 
+    def requested_manifest(self, lanes):
+        return self.module.change_scope.classify(
+            self.policy, (), base_sha=OTHER_HEAD_SHA, head_sha=HEAD_SHA,
+            event_name="workflow_dispatch", draft=False, labels=(),
+            requested_lanes=lanes, trusted_head=True,
+        )
+
     @staticmethod
     def results(**overrides):
         """Build a result set keyed by lane-style identifiers, all skipped."""
@@ -257,6 +264,145 @@ class PrGateTest(unittest.TestCase):
                 report = self.validate(results=results)
                 self.assertFalse(report.ok)
                 self.assertEqual(report.errors, (f"selected job portal is {result}, expected success",))
+
+    def test_primary_downstream_and_scope_categories_do_not_change_verdict(self):
+        manifest = self.manifest(tuple(self.policy["lanes"]))
+        results = self.matching_results(manifest)
+        results["creator-web"] = "failure"
+        for job in self.module.HEAVY_JOBS:
+            results[job] = "skipped"
+        report = self.module.validate_gate(
+            self.policy, manifest, results, HEAD_SHA,
+            expected_base_sha=OTHER_HEAD_SHA,
+            pre_heavy_gate_result="failure",
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("creator-web", report.primary_failures)
+        self.assertEqual(report.downstream_blocked, self.module.HEAVY_JOBS)
+        self.assertEqual(report.unexpected_skips, ())
+
+    def test_heavy_failure_blocks_only_later_selected_heavy_jobs(self):
+        manifest = self.requested_manifest((
+            "portal", "core_ubuntu", "core_coverage", "core_asan",
+        ))
+        results = self.matching_results(manifest)
+        results["core-ubuntu"] = "failure"
+        results["core-coverage"] = "skipped"
+        results["core-asan"] = "skipped"
+        report = self.module.validate_gate(
+            self.policy, manifest, results, HEAD_SHA,
+            expected_base_sha=OTHER_HEAD_SHA,
+            pre_heavy_gate_result="success",
+        )
+        self.assertEqual(report.primary_failures, ("core-ubuntu",))
+        self.assertEqual(
+            report.downstream_blocked, ("core-coverage", "core-asan")
+        )
+        self.assertIn("package", report.scope_skips)
+
+    def test_selected_heavy_skip_without_a_blocker_is_unexpected(self):
+        manifest = self.requested_manifest(("portal", "core_ubuntu"))
+        results = self.matching_results(manifest)
+        results["core-ubuntu"] = "skipped"
+        report = self.module.validate_gate(
+            self.policy, manifest, results, HEAD_SHA,
+            expected_base_sha=OTHER_HEAD_SHA,
+            pre_heavy_gate_result="success",
+        )
+        self.assertEqual(report.unexpected_skips, ("core-ubuntu",))
+        self.assertEqual(report.downstream_blocked, ())
+
+    def test_middle_unexpected_heavy_skip_blocks_later_selected_heavy_skip(self):
+        manifest = self.requested_manifest((
+            "portal", "core_ubuntu", "package",
+        ))
+        results = self.matching_results(manifest)
+        results["core-ubuntu"] = "skipped"
+        results["package"] = "skipped"
+        report = self.module.validate_gate(
+            self.policy, manifest, results, HEAD_SHA,
+            expected_base_sha=OTHER_HEAD_SHA,
+            pre_heavy_gate_result="success",
+        )
+        self.assertEqual(report.unexpected_skips, ("core-ubuntu",))
+        self.assertEqual(report.downstream_blocked, ("package",))
+
+    def test_middle_cancelled_heavy_job_blocks_later_selected_heavy_skip(self):
+        manifest = self.requested_manifest((
+            "portal", "core_ubuntu", "package",
+        ))
+        results = self.matching_results(manifest)
+        results["core-ubuntu"] = "cancelled"
+        results["package"] = "skipped"
+        report = self.module.validate_gate(
+            self.policy, manifest, results, HEAD_SHA,
+            expected_base_sha=OTHER_HEAD_SHA,
+            pre_heavy_gate_result="success",
+        )
+        self.assertEqual(report.primary_failures, ("core-ubuntu",))
+        self.assertEqual(report.downstream_blocked, ("package",))
+
+    def test_summary_categories_render_display_id_and_observed_result(self):
+        manifest = self.requested_manifest((
+            "portal", "core_ubuntu", "package", "creator",
+        ))
+        results = self.matching_results(manifest)
+        results["core-ubuntu"] = "cancelled"
+        results["package"] = "skipped"
+        results["creator-web"] = "skipped"
+        report = self.module.validate_gate(
+            self.policy, manifest, results, HEAD_SHA,
+            expected_base_sha=OTHER_HEAD_SHA,
+            pre_heavy_gate_result="success",
+        )
+        summary = self.module.render_summary(report, self.policy)
+        self.assertIn(
+            "| Primary failure | core (ubuntu-latest) (`core-ubuntu`)=cancelled |",
+            summary,
+        )
+        self.assertIn(
+            "| Unexpected skip | creator-web (`creator-web`)=skipped |", summary
+        )
+        self.assertIn(
+            "| Downstream blocked | Core package (`package`)=skipped |", summary
+        )
+        self.assertIn("CI contract (`ci-contract`)=skipped", summary)
+
+    def test_macos_failure_is_primary_but_does_not_block_heavy(self):
+        manifest = self.manifest(tuple(self.policy["lanes"]))
+        results = self.matching_results(manifest)
+        results["core-macos"] = "failure"
+        report = self.module.validate_gate(
+            self.policy, manifest, results, HEAD_SHA,
+            expected_base_sha=OTHER_HEAD_SHA,
+            pre_heavy_gate_result="success",
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("core-macos", report.primary_failures)
+        self.assertEqual(report.downstream_blocked, ())
+        self.assertTrue(all(
+            results[job] == "success" for job in self.module.HEAVY_JOBS
+        ))
+
+    def test_unselected_macos_skip_is_scope_skip(self):
+        report = self.validate()
+        self.assertTrue(report.ok)
+        self.assertIn("core-macos", report.scope_skips)
+        self.assertIn("core-asan-macos", report.scope_skips)
+
+    def test_pre_heavy_result_is_required_but_not_a_formal_result_key(self):
+        manifest = self.manifest(lanes={"docs_static"})
+        results = self.matching_results(manifest)
+        for result in ("failure", "cancelled", "skipped", "unknown"):
+            with self.subTest(result=result):
+                report = self.module.validate_gate(
+                    self.policy, manifest, results, HEAD_SHA,
+                    expected_base_sha=OTHER_HEAD_SHA,
+                    pre_heavy_gate_result=result,
+                )
+                self.assertFalse(report.ok)
+        self.assertEqual(set(results), set(VALID_RESULTS))
+        self.assertNotIn("pre-heavy-gate", results)
 
     def test_unrequired_success_failure_and_cancelled_fail(self):
         for result in ("success", "failure", "cancelled"):

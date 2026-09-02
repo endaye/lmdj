@@ -4,6 +4,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 
 import {projectionManifest} from './lib/snapshot-provenance.mjs';
+import {resolveChangedFiles} from './lib/changed-files.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -74,22 +75,20 @@ export async function checkSnapshotProjection({addedFiles, readMetadata, readPro
   return errors;
 }
 
-async function addedFilesFromGit(repoRoot, baseSha, headSha) {
-  const range = baseSha ? [baseSha, headSha] : ['HEAD^', headSha];
-  const {stdout} = await execFileAsync(
-    'git',
-    ['diff', '--name-only', '--diff-filter=A', ...range],
-    {cwd: repoRoot, maxBuffer: 16 * 1024 * 1024},
-  );
-  return stdout.split(/\r?\n/).filter(Boolean);
-}
-
 async function main() {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
   const baseSha = process.env.PORTAL_BASE_SHA ?? '';
   const headSha = process.env.PORTAL_HEAD_SHA || 'HEAD';
   let addedFiles = (process.env.PORTAL_ADDED_FILES ?? '').split(/\r?\n/).filter(Boolean);
-  if (!addedFiles.length) addedFiles = await addedFilesFromGit(repoRoot, baseSha, headSha);
+  if (!addedFiles.length) {
+    try {
+      addedFiles = await resolveChangedFiles(repoRoot, {baseSha, headSha, diffFilter: 'A'});
+    } catch (error) {
+      console.error(`the added-file range cannot be measured: ${error.message}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
 
   const errors = await checkSnapshotProjection({
     addedFiles,

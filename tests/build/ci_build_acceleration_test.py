@@ -39,6 +39,9 @@ WEB_HEAVY_LANES = {
 WEB_HEAVY_DIRECT_PROOFS = {
     "web-runtime-lab": "run: scripts/web-runtime-lab.sh test",
 }
+HEAVY_JOBS = (
+    "portal", "core-ubuntu", "package", "core-coverage", "core-asan",
+)
 
 
 class CiBuildAccelerationTest(unittest.TestCase):
@@ -87,24 +90,68 @@ class CiBuildAccelerationTest(unittest.TestCase):
         for job_name in ("core-ubuntu", "core-asan", "core-coverage"):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn("needs: change-scope", job)
+                self.assertIn("change-scope", job)
+                self.assertIn("pre-heavy-gate", job)
+
+    def test_linux_native_jobs_retain_every_host_capacity_lock_waiter(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(
+            source.count("group: lmdj-native-heavy"),
+            5,
+            "why: every job that can contend with native Core work on the shared "
+            "Contabo host must join one capacity queue; remedy: keep the "
+            "lmdj-native-heavy concurrency block on portal, core-ubuntu, package, "
+            "core-asan, and core-coverage",
+        )
+        capacity_jobs = (
+            "portal",
+            "core-ubuntu",
+            "package",
+            "core-asan",
+            "core-coverage",
+        )
+        for job_name in capacity_jobs:
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertRegex(
+                    job,
+                    r"(?m)^    concurrency:\n"
+                    r"      group: lmdj-native-heavy\n"
+                    r"      queue: max\n"
+                    r"      cancel-in-progress: false$",
+                    msg=(
+                        "why: GitHub's default concurrency queue replaces an older pending "
+                        f"{job_name} waiter and sibling native work can consume the shared "
+                        "host's test budgets; remedy: keep queue: max before "
+                        "cancel-in-progress: false on every admitted shared-host lane"
+                    ),
+                )
+
+        for job_name in ("core-ubuntu", "package", "core-asan", "core-coverage"):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
                 self.assertIn(CORE_ROLE, job)
                 self.assertNotIn("select-ubuntu-runner", job)
                 self.assertIn(
                     "uses: ./.github/actions/configure-build-acceleration", job
                 )
-                self.assertIn("use-ccache: true", job)
-                self.assertIn("ccache --show-log-stats", job)
-                self.assertIn(
-                    "if: ${{ always() }}\n"
-                    "        run: >-\n"
-                    "          ccache --show-log-stats",
-                    job,
-                )
+                if job_name == "package":
+                    self.assertIn("use-ccache: false", job)
+                    self.assertNotIn("ccache --show-log-stats", job)
+                else:
+                    self.assertIn("use-ccache: true", job)
+                    self.assertIn("ccache --show-log-stats", job)
+                    self.assertIn(
+                        "if: ${{ always() }}\n"
+                        "        run: >-\n"
+                        "          ccache --show-log-stats",
+                        job,
+                    )
 
     def test_package_uses_lfs_and_bounded_acceleration_without_ccache(self) -> None:
         job = self.workflow_job("package")
-        self.assertIn("needs: change-scope", job)
+        self.assertIn("change-scope", job)
+        self.assertIn("pre-heavy-gate", job)
         self.assertIn(CORE_ROLE, job)
         self.assertNotIn("select-ubuntu-runner", job)
         self.assertIn("lfs: true", job)
@@ -114,6 +161,19 @@ class CiBuildAccelerationTest(unittest.TestCase):
         )
         self.assertIn("use-ccache: false", job)
         self.assertIn("scripts/core.sh package", job)
+
+    def test_native_heavy_jobs_use_the_exact_sparse_sequence(self) -> None:
+        for index, job_name in enumerate(HEAVY_JOBS):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                for dependency in ("change-scope", "pre-heavy-gate", *HEAVY_JOBS[:index]):
+                    self.assertIn(dependency, job)
+                for later in HEAVY_JOBS[index + 1:]:
+                    self.assertNotIn(
+                        f"needs.{later}.result", job,
+                        "why: a native-heavy job must not wait for a later job; "
+                        "remedy: keep dependencies limited to earlier heavy jobs",
+                    )
 
     def test_web_builds_use_bounded_parallelism_without_ccache(self) -> None:
         action = WEB_PROOF_ACTION.read_text(encoding="utf-8")

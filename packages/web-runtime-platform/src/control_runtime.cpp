@@ -31,6 +31,8 @@ namespace testing {
 namespace {
 
 std::atomic<CancelPendingSwitchHook*> cancel_pending_switch_hook{nullptr};
+std::atomic<SequenceSwitchPublicationHook*> sequence_switch_publication_hook{
+    nullptr};
 
 }  // namespace
 
@@ -41,6 +43,19 @@ void set_cancel_pending_switch_hook(CancelPendingSwitchHook* hook) noexcept {
 void invoke_cancel_pending_switch_hook() noexcept {
   auto* hook =
       cancel_pending_switch_hook.exchange(nullptr, std::memory_order_acq_rel);
+  if (hook != nullptr && hook->invoke != nullptr) {
+    hook->invoke(hook->context);
+  }
+}
+
+void set_sequence_switch_publication_hook(
+    SequenceSwitchPublicationHook* hook) noexcept {
+  sequence_switch_publication_hook.store(hook, std::memory_order_release);
+}
+
+void invoke_sequence_switch_publication_hook() noexcept {
+  auto* hook = sequence_switch_publication_hook.exchange(
+      nullptr, std::memory_order_acq_rel);
   if (hook != nullptr && hook->invoke != nullptr) {
     hook->invoke(hook->context);
   }
@@ -2981,7 +2996,6 @@ Json ControlRuntime::dispatch(
         return normalized_error(pattern.error());
       }
       const auto runtime_frame = impl_->engine.telemetry().rendered_frames;
-      const auto replacement_authority = impl_->pending_pattern_authority();
       auto response = impl_->application.command({
           {"operation", "sequence.record.switch-request"},
           {"project_path", impl_->retained_project_path->generic_string()},
@@ -2992,9 +3006,31 @@ Json ControlRuntime::dispatch(
       if (!response.value("ok", false)) {
         return normalized_facade_error(response);
       }
-      const auto effective_runtime_frame =
+      auto effective_runtime_frame =
           response.at("result").at("effective_runtime_frame")
               .get<std::uint64_t>();
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+      testing::invoke_sequence_switch_publication_hook();
+#endif
+      const auto publication_frame =
+          impl_->engine.telemetry().rendered_frames;
+      if (publication_frame > effective_runtime_frame) {
+        response = impl_->application.command({
+            {"operation", "sequence.record.switch-request"},
+            {"project_path", impl_->retained_project_path->generic_string()},
+            {"session_id", session_id},
+            {"next_pattern_id", next_pattern_id},
+            {"runtime_frame", publication_frame},
+        });
+        if (!response.value("ok", false)) {
+          fail_and_seal("sequence_switch_rebase_failed");
+          return normalized_facade_error(response);
+        }
+        effective_runtime_frame =
+            response.at("result").at("effective_runtime_frame")
+                .get<std::uint64_t>();
+      }
+      const auto replacement_authority = impl_->pending_pattern_authority();
       auto published = impl_->publish_prepared_pattern(
           std::move(pattern.value()),
           effective_runtime_frame,

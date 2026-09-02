@@ -19,7 +19,7 @@
 namespace lmdj::project_io {
 
 inline constexpr std::string_view kProjectWriterContract =
-    "lmdj.project.v3";
+    "lmdj.project.v4";
 
 struct SequenceFlushIdentity {
   foundation::SequenceSessionId session_id;
@@ -37,9 +37,97 @@ struct SequenceFlushExecution {
   domain::AppliedCommand outcome;
 };
 
+struct PerformanceFlushIdentity {
+  foundation::SequenceSessionId session_id;
+  std::uint64_t flush_seq{};
+  foundation::CommandId command_id;
+  domain::PerformanceId performance_id;
+
+  bool operator==(const PerformanceFlushIdentity&) const = default;
+};
+
+struct PerformanceMutation {
+  domain::CommandMeta meta;
+  domain::PerformanceId performance_id;
+  std::vector<domain::PerformanceEvent> events;
+};
+
+struct CreatePerformance {
+  domain::CommandMeta meta;
+  domain::PerformanceId performance_id;
+  std::string name;
+};
+
+struct RenamePerformance {
+  domain::CommandMeta meta;
+  domain::PerformanceId performance_id;
+  std::string name;
+};
+
+struct DeletePerformance {
+  domain::CommandMeta meta;
+  domain::PerformanceId performance_id;
+};
+
+struct PerformanceMutationReceipt {
+  std::uint64_t committed_revision{};
+
+  bool operator==(const PerformanceMutationReceipt&) const = default;
+};
+
+struct PerformanceFlushExecution {
+  PerformanceFlushIdentity identity;
+  PerformanceMutation mutation;
+  PerformanceMutationReceipt receipt;
+  domain::ProjectState state;
+  bool replayed{};
+};
+
+struct BeginPerformanceDraftRequest {
+  domain::CommandMeta meta;
+  foundation::SequenceSessionId session_id;
+  domain::PerformanceId performance_id;
+};
+
+struct PerformanceLifecycleReceipt {
+  domain::PerformanceId performance_id;
+  std::uint64_t committed_revision{};
+  bool replayed{};
+
+  bool operator==(const PerformanceLifecycleReceipt&) const = default;
+};
+
+struct PerformanceStopReceipt {
+  foundation::CommandId request_id;
+  foundation::SequenceSessionId session_id;
+  domain::PerformanceId performance_id;
+  SequenceSessionState state{SequenceSessionState::stopped};
+  std::size_t pending_event_count{};
+  bool replayed{};
+
+  bool operator==(const PerformanceStopReceipt&) const = default;
+};
+
 struct CommandExecution {
   domain::Command command;
   domain::AppliedCommand outcome;
+};
+
+class PerformanceOwnerLock final {
+ public:
+  ~PerformanceOwnerLock();
+  PerformanceOwnerLock(PerformanceOwnerLock&&) noexcept;
+  PerformanceOwnerLock& operator=(PerformanceOwnerLock&&) noexcept;
+
+  PerformanceOwnerLock(const PerformanceOwnerLock&) = delete;
+  PerformanceOwnerLock& operator=(const PerformanceOwnerLock&) = delete;
+
+ private:
+  struct Impl;
+  explicit PerformanceOwnerLock(std::unique_ptr<Impl> impl);
+
+  std::unique_ptr<Impl> impl_;
+  friend class ProjectStore;
 };
 
 struct ImportArtifactExecution {
@@ -73,6 +161,7 @@ class ProjectStore {
     std::string media_type;
     std::span<const std::byte> bytes;
     std::optional<foundation::SequenceSessionId> sequence_session_id;
+    std::optional<domain::AssetLineage> lineage;
 
     ImportAssignSampleBytesRequest(
         domain::CommandMeta meta_value,
@@ -81,13 +170,15 @@ class ProjectStore {
         std::string media_type_value,
         std::span<const std::byte> bytes_value,
         std::optional<foundation::SequenceSessionId> sequence_session_id_value =
-            std::nullopt)
+            std::nullopt,
+        std::optional<domain::AssetLineage> lineage_value = std::nullopt)
         : meta(std::move(meta_value)),
           slot(slot_value),
           asset_id(std::move(asset_id_value)),
           media_type(std::move(media_type_value)),
           bytes(bytes_value),
-          sequence_session_id(std::move(sequence_session_id_value)) {}
+          sequence_session_id(std::move(sequence_session_id_value)),
+          lineage(std::move(lineage_value)) {}
   };
 
   foundation::Result<void> create(
@@ -134,6 +225,74 @@ class ProjectStore {
       const foundation::CommandId& command_id);
   foundation::Result<std::vector<SequenceRecoveryCandidate>>
   reconcile_sequence_recovery(const std::filesystem::path& bundle);
+  foundation::Result<PerformanceFlushExecution> execute_performance_flush(
+      const std::filesystem::path& bundle,
+      const PerformanceFlushIdentity& identity);
+  foundation::Result<std::optional<PerformanceFlushExecution>>
+  replay_performance_flush(
+      const std::filesystem::path& bundle,
+      const PerformanceFlushIdentity& identity);
+  foundation::Result<std::optional<PerformanceFlushExecution>>
+  replay_performance_flush(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      const foundation::CommandId& command_id);
+  foundation::Result<domain::AppliedCommand> create_performance(
+      const std::filesystem::path& bundle,
+      const CreatePerformance& command);
+  foundation::Result<domain::AppliedCommand> rename_performance(
+      const std::filesystem::path& bundle,
+      const RenamePerformance& command);
+  foundation::Result<domain::AppliedCommand> delete_performance(
+      const std::filesystem::path& bundle,
+      const DeletePerformance& command);
+  foundation::Result<PerformanceLifecycleReceipt> begin_performance_draft(
+      const std::filesystem::path& bundle,
+      const BeginPerformanceDraftRequest& request);
+  foundation::Result<PerformanceLifecycleReceipt> begin_performance_draft(
+      const std::filesystem::path& bundle,
+      const domain::CommandMeta& meta,
+      const foundation::SequenceSessionId& session_id,
+      const domain::PerformanceId& performance_id);
+  foundation::Result<std::unique_ptr<PerformanceOwnerLock>>
+  acquire_performance_owner_lock(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id);
+  foundation::Result<PerformanceStopReceipt> stop_performance_session(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      const foundation::CommandId& request_id);
+  foundation::Result<PerformanceLifecycleReceipt> save_performance_draft(
+      const std::filesystem::path& bundle,
+      const domain::CommandMeta& meta,
+      const domain::PerformanceId& performance_id,
+      std::string name,
+      std::optional<foundation::ArtifactRef> artifact);
+  foundation::Result<PerformanceLifecycleReceipt> discard_performance_draft(
+      const std::filesystem::path& bundle,
+      const domain::CommandMeta& meta,
+      const domain::PerformanceId& performance_id);
+  foundation::Result<PerformanceLifecycleReceipt> apply_performance_recovery(
+      const std::filesystem::path& bundle,
+      const domain::CommandMeta& meta,
+      const foundation::SequenceSessionId& session_id);
+  foundation::Result<PerformanceStopReceipt> discard_performance_recovery(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      const foundation::CommandId& request_id);
+  foundation::Result<PerformanceLifecycleReceipt> bind_performance_recording(
+      const std::filesystem::path& bundle,
+      const domain::CommandMeta& meta,
+      const domain::PerformanceId& performance_id,
+      const foundation::ArtifactRef& artifact);
+  foundation::Result<CommandExecution> execute_performance_rebase(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      const domain::UpdateSequenceSettings& command);
+  foundation::Result<std::vector<PerformanceRecoveryCandidate>>
+  reconcile_performance_recovery(const std::filesystem::path& bundle);
+  foundation::Result<std::vector<PerformanceRecoveryCandidate>>
+  list_performance_recovery(const std::filesystem::path& bundle) const;
   foundation::Result<SequenceCaptureDisarmResult> disarm_sequence_capture(
       const std::filesystem::path& bundle,
       const foundation::SequenceSessionId& session_id,
@@ -143,7 +302,16 @@ class ProjectStore {
       const foundation::ArtifactRef& artifact) const;
 
  private:
+  struct PerformanceOwnerLocks;
+
+  foundation::Result<void> hold_performance_owner_lock(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id);
+  void release_performance_owner_lock(
+      const std::filesystem::path& bundle) noexcept;
+
   std::shared_ptr<ProjectStoragePlatform> platform_;
+  std::shared_ptr<PerformanceOwnerLocks> performance_owner_locks_;
 };
 
 }  // namespace lmdj::project_io

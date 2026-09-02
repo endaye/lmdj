@@ -64,11 +64,11 @@ measured separately but never substitutes for a built-in or wired result.
 
 | ID | Platform | Browser | Input | Run | Status |
 | --- | --- | --- | --- | --- | --- |
-| L1 | macOS | Safari | Pointer | 500 triggers + 10-minute foreground run | `deferred / unverified` |
-| L2 | macOS | Chrome | Pointer | 500 triggers + 10-minute foreground run | `deferred / unverified` |
-| L3 | macOS | Chrome | Physical MIDI | 500 events + physical timing sample | `deferred / unverified` |
-| L4 | iPadOS | Safari | Touch | 500 triggers + 10-minute foreground run | `deferred / unverified` |
-| L5 | iPadOS | Safari | Touch | background, foreground, lock, unlock, route interruption | `deferred / unverified` |
+| L1 | macOS | Safari | Pointer | 500 triggers + 10-minute foreground run | **`PASS` 2026-08-27** — Product Build `1.0.36.0`, tested revision `703b339f`, [retained evidence](../release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md) |
+| L2 | macOS | Chrome | Pointer | 500 triggers + 10-minute foreground run | **`PASS` 2026-08-31** — Product Build `1.0.40.0`, tested revision `5c094c98`, [retained evidence](../release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md) |
+| L3 | macOS | Chrome | Physical MIDI | 500 events + physical timing sample | **`PASS` 2026-08-31** — Product Build `1.0.40.0`, tested revision `1869a925`, Akai MPD218, [retained evidence](../release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md) |
+| L4 | iPadOS | Safari | Touch | 500 triggers + 10-minute foreground run | **`PASS` 2026-09-01** — Product Build `1.0.40.0`, tested revision `e2cd0cf9`, iPad Air 13-inch (M3) model `A3268`, [retained evidence](../release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md) |
+| L5 | iPadOS | Safari | Touch | background, foreground, lock, unlock, route interruption | **`PASS` 2026-09-01** — Product Build `1.0.40.0`, tested revision `67a7ac03`, iPad Air 13-inch (M3) model `A3268`, Voice Memos route interruption, [retained evidence](../release-evidence/2026-09-01-web-runtime-l5-ipados-safari-lifecycle-1.0.40.0.md) |
 
 **Execution notes.** Reload the lab for a fresh session per row, select
 **Built-in** or **Wired** (Start is disabled otherwise), start audio once, and
@@ -78,6 +78,25 @@ window, a duplicate acknowledgement, a ring-full drop, a processor error, a
 501st dispatch, an AudioContext suspension, a hidden/frozen/pagehide
 transition, or a route-category change after start all produce
 `restart-required`: reload and repeat the whole row. Do not splice two sessions.
+
+L1 retains one explicit Product Owner exception rather than changing this
+generic rule: its only hidden transition occurred 37.129 seconds after the
+ten-minute target completed. Both L1 and L2 use the owner-accepted Force Touch
+press-to-click run's visible `pointerdown` counter marker with a conservative
+20.833333 ms calibration offset. L2 completed without any post-start hidden
+transition or lifecycle exception. L3 uses 500 physical MPD218 LED pulses and
+co-captured 880 Hz acoustic onsets, with a conservative signed 25 ms A/V
+calibration; it also completed without a post-start lifecycle interruption.
+L4 uses 500 visible Safari touch-counter transitions and 500 co-captured 880 Hz
+acoustic onsets, with the same conservative 20.833333 ms display/capture
+calibration; it completed 860820.620 ms visible/running with no post-start
+lifecycle interruption. L5 uses the same physical iPad and built-in route; it
+retains 55.932 seconds background, 70.351 seconds locked, a Voice Memos audio
+session interruption, at most one explicit activation per interruption,
+104.166667 ms recovery p95, and exactly one final onset. All decisions and
+derived frame observations are retained in the linked evidence. Family L is
+complete for the exact named local-source revisions; this does not promote a
+Channel or inherit one Build's result into another.
 
 **Then evaluate.** Per row:
 
@@ -106,8 +125,8 @@ run against the current Build.
 | ID | Journey | Origin | Status |
 | --- | --- | --- | --- |
 | M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) | **`PASS` 2026-08-17** ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
-| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **started 2026-08-17, stopped at check 1** — trimming produces audible clicks at the boundaries (F6); the trim handles could not be aimed (F5). Checks 2–8 not performed. The F6 ramp is combined into Product Build `1.0.36.0` (audio-runtime `0.5.1`), so checks 1 and 5 are ready to re-run — with check 5 (loop seam) EXPECTED to remain clicky until the deferred crossfade lands. Row stays `unverified`; a measured failure is not a pass and not a silent omission |
-| M3 | Pointer input | inherited from Stage 6/7 | not started |
+| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **`PASS` 2026-09-01 on `1.0.40.0`** ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) — the strict non-zero trim boundary, One Shot, Gate release, Loop Gate, Loop Toggle, Volume/Mute, 16 Pads, Replace and reload all passed. Exact replay produced no obvious seam transient; the operator corrected the initially reported rapid texture to normal 40 ms loop playback. The prior 2026-08-17 stopped run remains historical evidence: trim boundaries clicked and the F5 handles could not be aimed; checks 2–8 were not performed then |
+| M3 | Pointer input | inherited from Stage 6/7 | **`PASS` 2026-09-01 on `1.0.40.0`** ([evidence](../release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md)) — tested revision `3aeba5c5`, built-in MacBook trackpad; ordered A1–A16, Bank/corner targets, separated and double clicks, drag-off/mistake targets, mode navigation, audio recovery and report export passed with 115 admissions / 115 outcomes / 0 rejections |
 | M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today | open |
 
 ### Session M-B — macOS Chrome with external hardware
@@ -212,7 +231,7 @@ implementation detail. Record the outcome in `docs/prd/decision-log.md`, in
 | ~~F6~~ | ~~Amplitude ramp policy in the render path — ramp length, zero-crossing snap, crossfade, or a combination~~ | **settled 2026-08-24** — [decision](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md): 96-frame (2 ms) linear attack/release ramp; loop-seam crossfade deferred until M2 evaluation | — |
 | ~~A2~~ | ~~Is `native-test-host` a product component to be renamed, or does it leave the Assembly and every distribution?~~ **decided 2026-08-24**: product component, renamed `native-host 1.0.0`; rule written in `docs/governance/distribution-contents.md` ([decision](../prd/decisions/2026-08-24-native-test-host-classification.md)) | the Assembly cleanup; also needs a written rule for what may enter a distribution package | ~~short~~ done |
 | ~~A3~~ | ~~Build Manifest reproducibility — detached manifest, stripped archived copy, or drop the rebuild-and-compare claim~~ — **decided 2026-08-24**: detached sibling asset, payload-only archive, Contract and fields unchanged; [decision](../prd/decisions/2026-08-24-build-manifest-detached.md) ([#211](https://github.com/endaye/lmdj/issues/211)). The reshaping is now machine task A3 | first external distribution (`dev` Channel or above) | short |
-| ~~D1 + D2 product direction and D1 accounting amendment~~ / D1 physical acceptance | Bank-shared long-material model and Loop BPM semantics | **Direction and machine delivery complete 2026-08-29** — [#237](https://github.com/endaye/lmdj/issues/237), [#357](https://github.com/endaye/lmdj/issues/357), and their decisions settle no per-Pad cap, manifest-injected Bank/Project/residency limits, BPM-free Samples, Sequencer-only global BPM, and a separate future time-stretch question [#347](https://github.com/endaye/lmdj/issues/347). [#343](https://github.com/endaye/lmdj/issues/343)–[#346](https://github.com/endaye/lmdj/issues/346) delivered the implementation in Product Build `1.0.38.0`; the first physical macOS Safari attempt failed and exposed [#415](https://github.com/endaye/lmdj/issues/415), repaired by [PR #419](https://github.com/endaye/lmdj/pull/419) in Product Build `1.0.39.0`. **Still unverified:** [#359](https://github.com/endaye/lmdj/issues/359) must restart every normal, rejection, commit, cancel/replace/re-import, memory-release, and background/recovery leg on exact `1.0.39.0`, on both macOS Safari and a named physical iPadOS Safari device. No passing prefix from the failed `1.0.38.0` attempt carries forward | #359 full physical acceptance; then close umbrella #341 |
+| ~~D1 + D2 product direction and D1 accounting amendment~~ / D1 physical acceptance | Bank-shared long-material model and Loop BPM semantics | **Direction and machine delivery complete 2026-08-29** — [#237](https://github.com/endaye/lmdj/issues/237), [#357](https://github.com/endaye/lmdj/issues/357), and their decisions settle no per-Pad cap, manifest-injected Bank/Project/residency limits, BPM-free Samples, Sequencer-only global BPM, and a separate future time-stretch question [#347](https://github.com/endaye/lmdj/issues/347). [#343](https://github.com/endaye/lmdj/issues/343)–[#346](https://github.com/endaye/lmdj/issues/346) delivered the implementation in Product Build `1.0.38.0`; the [first physical macOS Safari attempt](../release-evidence/2026-08-29-long-material-safari-1.0.38.0.md) failed and exposed [#415](https://github.com/endaye/lmdj/issues/415), repaired by [PR #419](https://github.com/endaye/lmdj/pull/419) in Product Build `1.0.39.0`. **Still unverified:** [#359](https://github.com/endaye/lmdj/issues/359) must restart every normal, rejection, commit, cancel/replace/re-import, memory-release, and background/recovery leg on exact `1.0.39.0`, on both macOS Safari and a named physical iPadOS Safari device. No passing prefix from the failed `1.0.38.0` attempt carries forward | #359 full physical acceptance; then close umbrella #341 |
 | ~~D3~~ | ~~Provider SDK Artifact byte access, both directions~~ | **Decided 2026-08-24** ([#206](https://github.com/endaye/lmdj/issues/206), [decision](../prd/decisions/2026-08-24-provider-artifact-byte-access.md)): capability-gated `ArtifactSource` in provider-sdk, both directions in the SDK layer; implementation deferred to the first Capability that parses structured Artifact bytes; option C permanently rejected | ~~design review~~ |
 | ~~D4 + D5~~ | ~~Recording concurrency semantics, and Take scope — events only or audio bounce too~~ | **Decided 2026-08-23 and delivered 2026-08-27** ([#238](https://github.com/endaye/lmdj/issues/238), [decision](../prd/decisions/2026-08-23-sequence-recording-semantics.md), decision PR [#324](https://github.com/endaye/lmdj/pull/324), delivery [#334](https://github.com/endaye/lmdj/pull/334), exact-main evidence [#356](https://github.com/endaye/lmdj/pull/356)): events only, no Take object or audio bounce; the original Stage 9 Task map #266–#275 is closed. Physical/manual acceptance remains separate under [#360](https://github.com/endaye/lmdj/issues/360), and the pending post-delivery review [#367](https://github.com/endaye/lmdj/pull/367) must be dispositioned without treating Task closure as proof that its findings are resolved | ~~design review and original delivery map complete~~ |
 
@@ -239,7 +258,7 @@ untestable by hand.
 | Trigger | Rows to run | Why |
 | --- | --- | --- |
 | Creator UI remediation lands (F1, F2, F3, F5) | re-walk M1's capture journey far enough to confirm the panel, `Stop` and the recovery path are usable without prior knowledge; then run M2 and M3 | Task 5 of the remediation plan. All four fixes are combined into Product Build `1.0.36.0` / Creator `1.5.5`, so the re-walk is ready to run. This does **not** re-open M1's hearing result, which stands on its own |
-| F6 ramp policy lands | M2 checks 1 and 5 | both failed by construction before the fix. The ramp is combined into Product Build `1.0.36.0` / audio-runtime `0.5.1`, so the re-run is ready. Check 1 should now be clean; check 5 is expected to remain clicky because loop-seam crossfade is explicitly deferred |
+| F6 ramp policy lands | M2 checks 1 and 5 | rerun performed 2026-09-01 on `1.0.40.0`: check 1's strict non-zero trim boundary and both loop modes passed. The operator corrected an initial misclassification after exact replay distinguished the normal rapid texture of a 40 ms loop from an obvious seam transient; the complete M2 checklist passes |
 | F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated. The resolution is combined into Product Build `1.0.36.0` / Creator `1.5.5`, so the re-run is ready |
 | Any new Product Build allocated for team testing or release | every row whose trigger-set diff is non-empty since its last pass, derived per the [carry-forward rule](../prd/decisions/2026-08-24-physical-acceptance-carry-forward.md); the derivation is recorded in the Build's acceptance record | answered 2026-08-24 by P1 ([#236](https://github.com/endaye/lmdj/issues/236)) |
 
@@ -264,17 +283,20 @@ omitted and not called passed.
 
 ## Suggested order
 
-1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. **M2 stopped at its
-   first check**; both blockers are combined into `1.0.36.0`, so checks 1–2 can
-   be performed and checks 1 and 5 re-run, with check 5 expected to remain
-   clicky until the deferred crossfade lands. **M3** is independent and can run
-   at any time.
+1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. ~~**M2**~~ was rerun
+   on `1.0.40.0` and is `PASS`: all eight checklist groups passed. Exact replay
+   let the operator correct the initial description of the 40 ms loop's rapid
+   texture; no obvious independent seam click was heard. ~~**M3**~~ is also
+   `PASS` on the same Build: the built-in trackpad completed the full Creator
+   Pointer journey with 115 admissions / 115 outcomes / 0 rejections.
 2. ~~**P2**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md)). ~~P1~~ resolved
    2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)): rows re-run
    unless a recorded unchanged-tree derivation carries them, so M6 stays on
    the list and every future Build derives its own re-run set.
-3. ~~**F6**~~ — settled 2026-08-24 and combined into Product Build `1.0.36.0` /
-   audio-runtime `0.5.1`, so M2 checks 1 and 5 can be re-run. ~~**D4 + D5**~~
+3. ~~**F6 trim ramp**~~ — settled 2026-08-24, combined into Product Build
+   `1.0.36.0` / audio-runtime `0.5.1`, and physically confirmed on `1.0.40.0`;
+   exact replay also confirmed the separately deferred loop seam has no obvious
+   audible defect. #511 records the superseded initial interpretation. ~~**D4 + D5**~~
    were decided and their original Stage 9 delivery map merged in
    [#334](https://github.com/endaye/lmdj/pull/334); Stage 9 now waits on neither
    decision. Its unperformed physical/manual rows are tracked separately under
@@ -287,6 +309,6 @@ omitted and not called passed.
 6. **A2**, **A3**, ~~**D1 + D2**~~ (decided 2026-08-26), **D3** — schedule as the work they gate
    comes up; A2 and A3 are due before the first external distribution.
    (~~**F4**~~ — settled 2026-08-24, [decision](../prd/decisions/2026-08-24-capture-input-gate-and-identity.md).)
-7. **L1 through L5** — most expensive, needs instrumentation and five runs of
-   500 triggers plus ten minutes. Schedule when the Web/PWA launch-platform
-   conclusion actually has to land.
+7. ~~**L1 through L5**~~ — completed 2026-09-01 for the exact retained
+   local-source revisions. The five-row evaluator passes; release, deployment,
+   publication, and Channel promotion remain separate gates.

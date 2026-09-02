@@ -28,6 +28,7 @@ const deadlineFixtureSha256 = createHash("sha256")
 const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
 const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
+const ACKNOWLEDGED_GENERATION_TIMEOUT_MS = 10_000;
 const TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS = 15_000;
 const DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS = 300_000;
 const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = 90_000;
@@ -642,6 +643,32 @@ async function waitForRecoveryReadiness(page, responseMarker) {
       diagnostics.control_generation > 0 &&
       diagnostics.control_generation === diagnostics.acknowledged_generation;
   })).toBe(true);
+}
+
+
+async function waitForAcknowledgedGeneration(page, expectedGeneration) {
+  let lastStatus = null;
+  try {
+    await expect.poll(async () => {
+      const response = await hostRequest(page, "host.status", {});
+      lastStatus = response.ok === true ? response.result : null;
+      return lastStatus != null &&
+        lastStatus.control_generation === expectedGeneration &&
+        lastStatus.acknowledged_generation === expectedGeneration;
+    }, { timeout: ACKNOWLEDGED_GENERATION_TIMEOUT_MS }).toBe(true);
+  } catch (error) {
+    if (!(error instanceof Error) || !/timeout/i.test(error.message)) {
+      throw error;
+    }
+    throw new Error(
+      `Snapshot generation ${expectedGeneration} was never acknowledged ` +
+        `within ${ACKNOWLEDGED_GENERATION_TIMEOUT_MS}ms; last observed ` +
+        `control_generation=${lastStatus?.control_generation ?? "n/a"} ` +
+        `acknowledged_generation=${lastStatus?.acknowledged_generation ?? "n/a"}`,
+      { cause: error },
+    );
+  }
+  return lastStatus;
 }
 
 
@@ -1495,16 +1522,12 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   expect(accepted44100Snapshot.generation).toBeGreaterThan(
     priorStatus.control_generation,
   );
-  const accepted44100Status = success(await hostRequest(page, "host.status", {}),
-    "status after accepted 44.1 kHz Snapshot");
   expect(await page.evaluate((start) =>
     window.__lmdjTask11.notifications.slice(start)
       .filter(({ event }) => event === "snapshot.rejected"),
   accepted44100Marker.notifications)).toEqual([]);
-  expect(accepted44100Status.control_generation).toBe(
-    accepted44100Snapshot.generation,
-  );
-  expect(accepted44100Status.acknowledged_generation).toBe(
+  await waitForAcknowledgedGeneration(
+    page,
     accepted44100Snapshot.generation,
   );
   expect(success(await hostRequest(page, "project.inspect", {}),
@@ -1567,6 +1590,59 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     .toBe(true);
   await expect(page.locator("#host-state")).toHaveText("closed");
   expect(initialSnapshot.generation).toBeGreaterThan(0);
+});
+
+
+test("Chromium serializes concurrent Control requests across an OPFS suspension", async ({
+  browserName,
+  page,
+}) => {
+  // Facade requests suspend the control thread in Asyncify while they wait on
+  // OPFS. The Runtime Session serializes its own requests, so the bridge's
+  // dispatch order was only ever exercised one request at a time; a caller
+  // that submits to the transport directly could land a second request while
+  // the first was suspended, re-enter Asyncify, and trap the runtime with
+  // "memory access out of bounds" (#443, #551). The bridge now dispatches one
+  // request at a time; this proves it from the transport, where the Session's
+  // own lane cannot help.
+  test.skip(browserName !== "chromium");
+  test.setTimeout(360_000);
+  const pageErrors = [];
+  page.on("pageerror", (error) => {
+    pageErrors.push(String(error?.message ?? error));
+  });
+  const workerErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" && /worker sent an error|RuntimeError/.test(message.text())) {
+      workerErrors.push(message.text());
+    }
+  });
+
+  await openPackagedHost(page);
+  await page.locator("#diagnostic-project-load").click();
+  await waitForDiagnosticProjectReady(page);
+
+  const CONCURRENT_REQUESTS = 6;
+  const responses = await page.evaluate(async (count) => {
+    // Straight to the transport, on purpose: this is the path the Session's
+    // request lane does not cover.
+    const send = () => window.lmdjWebRuntimeHost.transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "project.inspect",
+      payload: {},
+    }, { deadlineMs: 30_000 });
+    return Promise.all(Array.from({ length: count }, send));
+  }, CONCURRENT_REQUESTS);
+
+  expect(pageErrors, "the Wasm runtime must not trap").toEqual([]);
+  expect(workerErrors, "no runtime worker may report an error").toEqual([]);
+  expect(responses).toHaveLength(CONCURRENT_REQUESTS);
+  for (const [index, response] of responses.entries()) {
+    expect(response, `project.inspect #${index}`).toMatchObject({ ok: true });
+  }
+  const revisions = new Set(responses.map(({ result }) => result.project_revision));
+  expect(revisions.size, "every read saw the same Project Truth").toBe(1);
 });
 
 

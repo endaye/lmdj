@@ -1,9 +1,9 @@
 #include <lmdj/facade/application.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
-#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -30,7 +30,9 @@
 #include <lmdj/audio/offline_renderer.hpp>
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/cooker/project_cooker.hpp>
+#include <lmdj/cooker/performance_replay.hpp>
 #include <lmdj/cooker/sample_analysis.hpp>
+#include <lmdj/cooker/wav_selection.hpp>
 #include <lmdj/cooker/wav_reader.hpp>
 #include <lmdj/domain/commands.hpp>
 #include <lmdj/domain/project.hpp>
@@ -135,7 +137,30 @@ const std::map<std::string, OperationKind>& operations() {
       {"asset.import", OperationKind::command},
       {"attempt.inspect", OperationKind::query},
       {"pad.assign", OperationKind::command},
+      {"pattern.slot.assign", OperationKind::command},
+      {"pattern.slot.clear", OperationKind::command},
+      {"pattern.slot.move", OperationKind::command},
       {"pattern.create", OperationKind::command},
+      {"performance.delete", OperationKind::command},
+      {"performance.discard", OperationKind::command},
+      {"performance.inspect", OperationKind::query},
+      {"performance.list", OperationKind::query},
+      {"performance.record.begin", OperationKind::command},
+      {"performance.record.event", OperationKind::command},
+      {"performance.record.flush", OperationKind::command},
+      {"performance.record.launch-request", OperationKind::command},
+      {"performance.record.status", OperationKind::query},
+      {"performance.record.stop", OperationKind::command},
+      {"performance.recording.bind", OperationKind::command},
+      {"performance.replay.begin", OperationKind::command},
+      {"performance.replay.status", OperationKind::query},
+      {"performance.replay.stop", OperationKind::command},
+      {"performance.resample.commit", OperationKind::command},
+      {"performance.recovery.apply", OperationKind::command},
+      {"performance.recovery.discard", OperationKind::command},
+      {"performance.recovery.list", OperationKind::query},
+      {"performance.rename", OperationKind::command},
+      {"performance.save", OperationKind::command},
       {"project.create", OperationKind::command},
       {"project.inspect", OperationKind::query},
       {"provider.list", OperationKind::query},
@@ -538,6 +563,32 @@ nlohmann::json pattern_event_json(const domain::PatternEvent& event) {
   };
 }
 
+nlohmann::json
+artifact_json(const std::optional<foundation::ArtifactRef> &artifact) {
+  if (!artifact.has_value()) {
+    return nullptr;
+  }
+  return {
+      {"sha256", artifact->sha256},
+      {"media_type", artifact->media_type},
+      {"byte_length", artifact->byte_length},
+  };
+}
+
+nlohmann::json performance_json(const domain::Performance &performance) {
+  auto events = nlohmann::json::array();
+  for (const auto &event : performance.events) {
+    events.push_back(domain::performance_event_json(event));
+  }
+  return {
+      {"id", performance.id.value()},
+      {"name", performance.name},
+      {"created_bpm", performance.created_bpm},
+      {"recording_artifact", artifact_json(performance.recording_artifact)},
+      {"events", std::move(events)},
+  };
+}
+
 nlohmann::json project_json(const domain::ProjectState& state) {
   auto banks = nlohmann::json::array();
   for (std::size_t bank = 0; bank < state.banks.size(); ++bank) {
@@ -556,7 +607,14 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   }
   auto assets = nlohmann::json::object();
   for (const auto& [id, asset] : state.assets) {
-    assets[id.value()] = {{"artifact", asset.artifact}};
+    auto encoded_asset = nlohmann::json{{"artifact", asset.artifact}};
+    if (state.contract == domain::ProjectContract::v4) {
+      encoded_asset["lineage"] =
+          asset.lineage.has_value()
+              ? domain::asset_lineage_json(*asset.lineage)
+              : nlohmann::json(nullptr);
+    }
+    assets[id.value()] = std::move(encoded_asset);
   }
   auto patterns = nlohmann::json::object();
   for (const auto& [id, pattern] : state.patterns) {
@@ -569,8 +627,11 @@ nlohmann::json project_json(const domain::ProjectState& state) {
         {"events", std::move(events)},
     };
   }
-  return {
-      {"contract", "lmdj.project.v3"},
+  nlohmann::json encoded{
+      {"contract",
+       state.contract == domain::ProjectContract::v4
+           ? "lmdj.project.v4"
+           : "lmdj.project.v3"},
       {"project_id", state.id.value()},
       {"revision", state.revision},
       {"bpm", state.bpm},
@@ -581,6 +642,24 @@ nlohmann::json project_json(const domain::ProjectState& state) {
       {"assets", std::move(assets)},
       {"patterns", std::move(patterns)},
   };
+  if (state.contract == domain::ProjectContract::v4) {
+    auto pattern_slots = nlohmann::json::array();
+    for (const auto& pattern_id : state.pattern_slots) {
+      pattern_slots.push_back(
+          pattern_id.has_value()
+              ? nlohmann::json(pattern_id->value())
+              : nlohmann::json(nullptr));
+    }
+    encoded["pattern_slots"] = std::move(pattern_slots);
+    auto performances = nlohmann::json::object();
+    for (const auto& [id, performance] : state.performances) {
+      auto value = performance_json(performance);
+      value["recording_revision"] = performance.recording_revision;
+      performances[id.value()] = std::move(value);
+    }
+    encoded["performances"] = std::move(performances);
+  }
+  return encoded;
 }
 
 nlohmann::json error_envelope(const Error& error) {
@@ -919,8 +998,8 @@ RenderDestination open_render_destination(
         component.c_str(),
         O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     require(
-        next >= 0,
-        "render output parent contains a symbolic, missing, or invalid directory");
+        next >= 0, "render output parent contains a symbolic, missing, or "
+                       "invalid directory");
     current = OwnedDescriptor(next);
   }
 
@@ -1693,6 +1772,17 @@ struct Application::Impl {
     std::unique_ptr<project_io::ProjectWriterLease> lease;
   };
 
+  struct ReplayIdentity {
+    std::filesystem::path project_path;
+    domain::PerformanceId performance_id;
+  };
+
+  struct ReplayStopReceipt {
+    std::filesystem::path project_path;
+    ReplayId replay_id;
+    ReplayRuntimeStatus status;
+  };
+
   struct PressedSequencePad {
     std::uint64_t raw_attack_tick{};
     std::uint32_t onset_tick{};
@@ -1723,6 +1813,49 @@ struct Application::Impl {
     std::optional<domain::PadSlotId> armed_capture_slot;
   };
 
+  struct OpenPerformancePad {
+    std::uint8_t slot{};
+    std::uint64_t onset_tick{};
+    std::uint8_t velocity{};
+  };
+
+  struct OpenPerformanceFx {
+    std::string gesture_id;
+    std::uint16_t effective_value{};
+    std::optional<std::uint64_t> pending_window;
+    std::optional<std::size_t> pending_event_index;
+  };
+
+  struct PerformanceEventReceipt {
+    std::string payload;
+    std::uint64_t accepted_tick{};
+    std::uint64_t input_sequence{};
+    bool coalesced{};
+  };
+
+  struct PendingPerformanceLaunch {
+    foundation::CommandId request_id;
+    std::uint8_t pattern_slot{};
+    std::uint64_t target_tick{};
+    bool claimed{};
+  };
+
+  struct PerformanceRuntime {
+    foundation::SequenceSessionId session_id;
+    domain::PerformanceId performance_id;
+    std::uint64_t expected_revision{};
+    std::uint64_t next_flush_seq{};
+    std::vector<domain::PerformanceEvent> pending_events;
+    std::map<std::string, OpenPerformancePad> open_pads;
+    std::map<domain::PerformanceFx, OpenPerformanceFx> open_fx;
+    bool hold{};
+    std::map<std::string, PerformanceEventReceipt> event_receipts;
+    std::map<std::string, std::pair<std::string, PendingPerformanceLaunch>>
+        launch_receipts;
+    std::optional<PendingPerformanceLaunch> pending_launch;
+    std::optional<PatternLaunchOutcome> last_launch_ack;
+  };
+
   explicit Impl(ApplicationConfig config)
       : workspace_root(std::move(config.workspace_root)),
         registry(
@@ -1733,6 +1866,13 @@ struct Application::Impl {
             config.storage_platform
                 ? std::move(config.storage_platform)
                 : project_io::make_default_project_storage_platform()),
+        performance_clock(std::move(config.performance_clock)),
+        performance_input_sequencer(
+            std::move(config.performance_input_sequencer)),
+        pattern_launch_acknowledger(
+            std::move(config.pattern_launch_acknowledger)),
+        performance_replay_controller(
+            std::move(config.performance_replay_controller)),
         sample_limits(
             config.runtime_preparation_limits.value_or(kDefaultSampleLimits)),
         projects(storage_platform),
@@ -1750,6 +1890,10 @@ struct Application::Impl {
     if (!workspace_root.is_absolute()) {
       throw std::invalid_argument("workspace_root must be absolute");
     }
+    if (!performance_replay_controller) {
+      throw std::invalid_argument(
+          "performance_replay_controller is required");
+    }
     const auto cleaned = bundle_transfers.cleanup_incomplete(workspace_root);
     if (!cleaned.has_value()) {
       throw std::runtime_error(
@@ -1761,7 +1905,8 @@ struct Application::Impl {
     }
   }
 
-  ~Impl() { abandon_sequence_sessions(); }
+  ~Impl() { abandon_sequence_sessions();
+    abandon_performance_sessions(); }
 
   foundation::Result<void> cleanup_sample_import_staging() {
     std::lock_guard lock(sample_mutex);
@@ -1920,6 +2065,17 @@ struct Application::Impl {
               {{"reason", "sequence_session_active"},
                {"session_id", found->second.session_id.value()},
                {"remedy", "stop the active Sequence session before retrying"}}));
+    }
+    const auto performance = performance_sessions.find(sequence_key(path));
+    if (performance != performance_sessions.end()) {
+      return foundation::Result<SequenceAuthoringAdmission>::failure(
+          sequence_error(
+              ErrorCode::invalid_argument,
+              "Project mutation is blocked by an active Performance session",
+              {{"reason", "performance_session_active"},
+               {"session_id", performance->second.session_id.value()},
+               {"remedy",
+                "stop the active Performance session before retrying"}}));
     }
     auto reconciled = projects.reconcile_sequence_recovery(path);
     if (!reconciled.has_value()) {
@@ -2615,27 +2771,6 @@ struct Application::Impl {
                          {{"reason", "sequence_owner_mismatch"}}));
     }
     auto& runtime = found->second;
-    if (runtime.pending_pattern_id.has_value()) {
-      return foundation::Result<SequenceMutationResult>::failure(
-          sequence_error(ErrorCode::invalid_argument,
-                         "a Sequence switch is already pending",
-                         {{"reason", "switch_pending"}}));
-    }
-    if (runtime.pattern_id == request.next_pattern_id) {
-      return foundation::Result<SequenceMutationResult>::failure(
-          sequence_error(ErrorCode::invalid_argument,
-                         "next Sequence Pattern is already active"));
-    }
-    auto loaded = projects.load(request.project_path);
-    if (!loaded.has_value()) {
-      return foundation::Result<SequenceMutationResult>::failure(
-          loaded.error());
-    }
-    if (!loaded.value().patterns.contains(request.next_pattern_id)) {
-      return foundation::Result<SequenceMutationResult>::failure(
-          sequence_error(ErrorCode::not_found,
-                         "next Sequence Pattern was not found"));
-    }
     const auto switch_runtime_frame =
         request.runtime_frame.value_or(runtime.last_runtime_frame);
     if (switch_runtime_frame < runtime.last_runtime_frame) {
@@ -2672,9 +2807,43 @@ struct Application::Impl {
           sequence_error(ErrorCode::invalid_argument,
                          "Sequence switch frame overflowed"));
     }
-    runtime.pending_pattern_id = request.next_pattern_id;
-    runtime.effective_runtime_frame =
+    const auto effective_runtime_frame =
         runtime.anchor.runtime_frame + frame_delta;
+    if (runtime.pending_pattern_id.has_value()) {
+      const auto can_rebase_missed_boundary =
+          runtime.pending_pattern_id == request.next_pattern_id &&
+          request.runtime_frame.has_value() &&
+          runtime.effective_runtime_frame.has_value() &&
+          switch_runtime_frame >= *runtime.effective_runtime_frame;
+      if (!can_rebase_missed_boundary) {
+        return foundation::Result<SequenceMutationResult>::failure(
+            sequence_error(ErrorCode::invalid_argument,
+                           "a Sequence switch is already pending",
+                           {{"reason", "switch_pending"}}));
+      }
+      runtime.effective_runtime_frame = effective_runtime_frame;
+      runtime.last_runtime_frame = switch_runtime_frame;
+      return foundation::Result<SequenceMutationResult>::success(
+          SequenceMutationResult{
+              runtime_status(runtime), std::nullopt, false, std::nullopt});
+    }
+    if (runtime.pattern_id == request.next_pattern_id) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(ErrorCode::invalid_argument,
+                         "next Sequence Pattern is already active"));
+    }
+    auto loaded = projects.load(request.project_path);
+    if (!loaded.has_value()) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          loaded.error());
+    }
+    if (!loaded.value().patterns.contains(request.next_pattern_id)) {
+      return foundation::Result<SequenceMutationResult>::failure(
+          sequence_error(ErrorCode::not_found,
+                         "next Sequence Pattern was not found"));
+    }
+    runtime.pending_pattern_id = request.next_pattern_id;
+    runtime.effective_runtime_frame = effective_runtime_frame;
     runtime.last_runtime_frame = switch_runtime_frame;
     auto switching = sequence_journals.set_state(
         request.project_path,
@@ -3030,6 +3199,23 @@ struct Application::Impl {
     }
   }
 
+  void abandon_performance_sessions() noexcept {
+    try {
+      std::lock_guard lock(sequence_mutex);
+      for (auto &[path_text, runtime] : performance_sessions) {
+        const std::filesystem::path path{path_text};
+        (void)close_performance_transients(path, runtime);
+        if (pattern_launch_acknowledger) {
+          pattern_launch_acknowledger->cancel(runtime.session_id);
+        }
+        (void)sequence_journals.seal_performance(path, runtime.session_id,
+                                                 "owner_lost");
+      }
+      performance_sessions.clear();
+    } catch (...) {
+    }
+  }
+
   static nlohmann::json sequence_status_json(const SequenceStatus& status) {
     return {
         {"state", state_name(status.state)},
@@ -3276,6 +3462,60 @@ struct Application::Impl {
     if (operation == "pattern.create") {
       return pattern_create(request);
     }
+    if (operation == "pattern.slot.assign") {
+      return pattern_slot_assign(request);
+    }
+    if (operation == "pattern.slot.clear") {
+      return pattern_slot_clear(request);
+    }
+    if (operation == "pattern.slot.move") {
+      return pattern_slot_move(request);
+    }
+    if (operation == "performance.record.begin") {
+      return performance_begin(request);
+    }
+    if (operation == "performance.record.event") {
+      return performance_event(request);
+    }
+    if (operation == "performance.record.launch-request") {
+      return performance_launch_request(request);
+    }
+    if (operation == "performance.record.flush") {
+      return performance_flush(request);
+    }
+    if (operation == "performance.record.stop") {
+      return performance_stop(request);
+    }
+    if (operation == "performance.save") {
+      return performance_save(request);
+    }
+    if (operation == "performance.discard") {
+      return performance_discard(request);
+    }
+    if (operation == "performance.recovery.apply") {
+      return performance_recovery_apply(request);
+    }
+    if (operation == "performance.recovery.discard") {
+      return performance_recovery_discard(request);
+    }
+    if (operation == "performance.rename") {
+      return performance_rename(request);
+    }
+    if (operation == "performance.delete") {
+      return performance_delete(request);
+    }
+    if (operation == "performance.recording.bind") {
+      return performance_recording_bind(request);
+    }
+    if (operation == "performance.replay.begin") {
+      return performance_replay_begin(request);
+    }
+    if (operation == "performance.replay.stop") {
+      return performance_replay_stop(request);
+    }
+    if (operation == "performance.resample.commit") {
+      return performance_resample_commit(request);
+    }
     if (operation == "sample.inspect") {
       return sample_inspect(request);
     }
@@ -3344,6 +3584,21 @@ struct Application::Impl {
     }
     if (operation == "project.inspect") {
       return project_inspect(request);
+    }
+    if (operation == "performance.list") {
+      return performance_list(request);
+    }
+    if (operation == "performance.inspect") {
+      return performance_inspect(request);
+    }
+    if (operation == "performance.record.status") {
+      return performance_status(request);
+    }
+    if (operation == "performance.replay.status") {
+      return performance_replay_status(request);
+    }
+    if (operation == "performance.recovery.list") {
+      return performance_recovery_list(request);
     }
     if (operation == "sequence.record.status") {
       return sequence_status(request);
@@ -4757,18 +5012,1443 @@ struct Application::Impl {
         created.value().outcome.state.revision);
   }
 
-  nlohmann::json sequence_settings_update(const nlohmann::json& request) {
+  nlohmann::json pattern_slot_assign(const nlohmann::json &request) {
+    require(exact_keys(request,
+                       {"operation", "project_path", "command_id",
+                        "expected_revision", "pattern_slot", "pattern_id"}),
+            "pattern.slot.assign request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto slot =
+        unsigned_field(request, "pattern_slot", domain::kPatternSlotCount - 1U);
+    const auto pattern_id = uuid_field(request, "pattern_id");
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    auto result = projects.execute_with_identity(
+        path, domain::Command{domain::AssignPatternSlot{
+                  {foundation::CommandId{uuid_field(request, "command_id")},
+                   unsigned_field(request, "expected_revision")},
+                  static_cast<std::uint8_t>(slot),
+                  foundation::PatternId{pattern_id}}});
+    if (!result.has_value()) {
+      return error_envelope(result.error());
+    }
+    const auto &outcome = result.value().outcome;
+    return success_envelope({{"pattern_slot", slot},
+                             {"pattern_id", pattern_id},
+                             {"committed_revision", outcome.state.revision},
+                             {"replayed", outcome.replayed}},
+                            outcome.state.revision);
+  }
+
+  nlohmann::json pattern_slot_clear(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "command_id",
+                                 "expected_revision", "pattern_slot"}),
+            "pattern.slot.clear request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto slot =
+        unsigned_field(request, "pattern_slot", domain::kPatternSlotCount - 1U);
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    auto result = projects.execute_with_identity(
+        path, domain::Command{domain::ClearPatternSlot{
+                  {foundation::CommandId{uuid_field(request, "command_id")},
+                   unsigned_field(request, "expected_revision")},
+                  static_cast<std::uint8_t>(slot)}});
+    if (!result.has_value()) {
+      return error_envelope(result.error());
+    }
+    const auto &outcome = result.value().outcome;
+    return success_envelope({{"pattern_slot", slot},
+                             {"pattern_id", nullptr},
+                             {"committed_revision", outcome.state.revision},
+                             {"replayed", outcome.replayed}},
+                            outcome.state.revision);
+  }
+
+  nlohmann::json pattern_slot_move(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "command_id",
+                                 "expected_revision", "from_slot", "to_slot"}),
+            "pattern.slot.move request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto from =
+        unsigned_field(request, "from_slot", domain::kPatternSlotCount - 1U);
+    const auto to =
+        unsigned_field(request, "to_slot", domain::kPatternSlotCount - 1U);
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    auto result = projects.execute_with_identity(
+        path, domain::Command{domain::MovePatternSlot{
+                  {foundation::CommandId{uuid_field(request, "command_id")},
+                   unsigned_field(request, "expected_revision")},
+                  static_cast<std::uint8_t>(from),
+                  static_cast<std::uint8_t>(to)}});
+    if (!result.has_value()) {
+      return error_envelope(result.error());
+    }
+    const auto &outcome = result.value().outcome;
+    const auto &moved = outcome.state.pattern_slots.at(to);
+    require(moved.has_value(), "moved Pattern slot is empty");
+    return success_envelope({{"from_slot", from},
+                             {"to_slot", to},
+                             {"pattern_id", moved->value()},
+                             {"committed_revision", outcome.state.revision},
+                             {"replayed", outcome.replayed}},
+                            outcome.state.revision);
+  }
+
+  static nlohmann::json performance_lifecycle_json(
+      const project_io::PerformanceLifecycleReceipt &receipt) {
+    return {
+        {"performance_id", receipt.performance_id.value()},
+        {"committed_revision", receipt.committed_revision},
+        {"replayed", receipt.replayed},
+    };
+  }
+
+  static nlohmann::json
+  performance_stop_json(const project_io::PerformanceStopReceipt &receipt) {
+    return {
+        {"request_id", receipt.request_id.value()},
+        {"session_id", receipt.session_id.value()},
+        {"performance_id", receipt.performance_id.value()},
+        {"state", "stopped"},
+        {"pending_event_count", receipt.pending_event_count},
+        {"replayed", receipt.replayed},
+    };
+  }
+
+  static std::string_view replay_state_name(ReplayState state) {
+    switch (state) {
+      case ReplayState::playing:
+        return "playing";
+      case ReplayState::stopped:
+        return "stopped";
+      case ReplayState::complete:
+        return "complete";
+    }
+    return "playing";
+  }
+
+  static nlohmann::json replay_status_json(
+      const ReplayId& replay_id,
+      const ReplayRuntimeStatus& status) {
+    return {
+        {"replay_id", replay_id.value()},
+        {"state", replay_state_name(status.state)},
+        {"resolved_revision", status.resolved_revision},
+        {"event_cursor", status.event_cursor},
+        {"event_count", status.event_count},
+    };
+  }
+
+  static foundation::ArtifactRef
+  performance_artifact(const nlohmann::json &encoded) {
+    require(exact_keys(encoded, {"sha256", "media_type", "byte_length"}),
+            "recording_artifact shape is invalid");
+    const auto sha256 = string_field(encoded, "sha256");
+    require(sha256.size() == 64U &&
+                std::ranges::all_of(
+                    sha256,
+                    [](unsigned char character) {
+                      return (character >= '0' && character <= '9') ||
+                             (character >= 'a' && character <= 'f');
+                    }),
+            "recording_artifact sha256 is invalid");
+    require(string_field(encoded, "media_type") == "audio/wav",
+            "recording_artifact media_type is invalid");
+    return {
+        sha256,
+        "audio/wav",
+        unsigned_field(encoded, "byte_length"),
+    };
+  }
+
+  nlohmann::json performance_list(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path"}),
+            "performance.list request shape is invalid");
+    const auto loaded =
+        projects.load(absolute_path_field(request, "project_path"));
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    auto values = nlohmann::json::array();
+    for (const auto &[id, performance] : loaded.value().performances) {
+      values.push_back({
+          {"performance_id", id.value()},
+          {"name", performance.name},
+          {"created_bpm", performance.created_bpm},
+          {"recording_artifact", artifact_json(performance.recording_artifact)},
+          {"event_count", performance.events.size()},
+      });
+    }
+    return success_envelope({{"performances", std::move(values)}},
+                            loaded.value().revision);
+  }
+
+  nlohmann::json performance_inspect(const nlohmann::json &request) {
+    require(
+        exact_keys(request, {"operation", "project_path", "performance_id"}),
+        "performance.inspect request shape is invalid");
+    const auto loaded =
+        projects.load(absolute_path_field(request, "project_path"));
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    const auto id =
+        domain::PerformanceId{uuid_field(request, "performance_id")};
+    const auto found = loaded.value().performances.find(id);
+    if (found == loaded.value().performances.end()) {
+      return error_envelope(
+          sequence_error(ErrorCode::not_found, "Performance does not exist"));
+    }
+    return success_envelope({{"performance", performance_json(found->second)}},
+                            loaded.value().revision);
+  }
+
+  nlohmann::json performance_begin(const nlohmann::json& request) {
     require(
         exact_keys(
             request,
             {"operation", "project_path", "command_id", "expected_revision",
-             "session_id", "runtime_frame", "bpm", "quantize_enabled",
+             "session_id", "performance_id"}),
+            "performance.record.begin request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto session_id =
+        foundation::SequenceSessionId{uuid_field(request, "session_id")};
+    const auto performance_id =
+        domain::PerformanceId{uuid_field(request, "performance_id")};
+    std::lock_guard lock(sequence_mutex);
+    const auto key = sequence_key(path);
+    if (sequence_sessions.contains(key)) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance recording conflicts with an active Sequence session",
+          {{"reason", "sequence_session_active"}}));
+    }
+    const auto existing = performance_sessions.find(key);
+    if (existing != performance_sessions.end() &&
+        (existing->second.session_id != session_id ||
+         existing->second.performance_id != performance_id)) {
+      return error_envelope(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance recording session is already active",
+                         {{"reason", "performance_session_active"}}));
+    }
+    std::optional<std::uint64_t> fresh_anchor_tick;
+    if (existing == performance_sessions.end() && performance_clock) {
+      auto active_before = sequence_journals.read_active_performance(path);
+      if (!active_before.has_value() &&
+          active_before.error().code == ErrorCode::not_found) {
+        auto tick = performance_clock->read_tick();
+        if (!tick.has_value()) {
+          return error_envelope(tick.error());
+        }
+        fresh_anchor_tick = tick.value();
+      }
+    }
+    auto begun = projects.begin_performance_draft(
+        path, {{foundation::CommandId{uuid_field(request, "command_id")},
+                unsigned_field(request, "expected_revision")},
+               session_id,
+               performance_id});
+    if (!begun.has_value()) {
+      return error_envelope(begun.error());
+    }
+    auto journal = sequence_journals.read_active_performance(path);
+    if (!journal.has_value()) {
+      return error_envelope(journal.error());
+    }
+    if (existing == performance_sessions.end()) {
+      auto loaded = projects.load(path);
+      if (!loaded.has_value()) {
+        return error_envelope(loaded.error());
+      }
+      const auto draft = loaded.value().performances.find(performance_id);
+      if (draft == loaded.value().performances.end()) {
+        return error_envelope(sequence_error(
+            ErrorCode::invalid_project,
+            "Performance draft is missing after begin"));
+      }
+      if (performance_clock) {
+        if (fresh_anchor_tick.has_value()) {
+          performance_clock->anchor(
+              draft->second.created_bpm, *fresh_anchor_tick);
+        } else {
+          std::uint64_t maximum_tick = 0;
+          for (const auto& event : journal.value().pending_events) {
+            maximum_tick = std::max(
+                maximum_tick, domain::performance_event_tick(event));
+          }
+          for (const auto& flush : journal.value().flushes) {
+            for (const auto& event : flush.canonical_events) {
+              maximum_tick = std::max(
+                  maximum_tick, domain::performance_event_tick(event));
+            }
+          }
+          performance_clock->anchor(
+              draft->second.created_bpm, maximum_tick);
+        }
+      }
+      if (performance_input_sequencer &&
+          journal.value().last_input_sequence.has_value()) {
+        performance_input_sequencer->seed(
+            *journal.value().last_input_sequence);
+      }
+      PerformanceRuntime runtime{
+          session_id,
+          performance_id,
+          journal.value().expected_revision,
+          journal.value().next_flush_seq,
+          journal.value().pending_events,
+          {},
+          {},
+          false,
+          {},
+          {},
+          std::nullopt,
+          std::nullopt,
+      };
+      performance_sessions.emplace(key, std::move(runtime));
+    }
+    return success_envelope(performance_lifecycle_json(begun.value()),
+                            begun.value().committed_revision);
+  }
+
+  nlohmann::json performance_flush(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "session_id",
+                                 "command_id"}),
+            "performance.record.flush request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto session_id =
+        foundation::SequenceSessionId{uuid_field(request, "session_id")};
+    const auto command_id =
+        foundation::CommandId{uuid_field(request, "command_id")};
+    std::lock_guard lock(sequence_mutex);
+    auto found = performance_sessions.find(sequence_key(path));
+    if (found == performance_sessions.end() ||
+        found->second.session_id != session_id) {
+      auto replayed =
+          projects.replay_performance_flush(path, session_id, command_id);
+      if (!replayed.has_value()) {
+        return error_envelope(replayed.error());
+      }
+      if (replayed.value().has_value()) {
+        return success_envelope(
+            {{"performance_id",
+              replayed.value()->identity.performance_id.value()},
+             {"committed_revision",
+              replayed.value()->receipt.committed_revision},
+             {"replayed", true}},
+            replayed.value()->receipt.committed_revision);
+      }
+      return error_envelope(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance flush owner does not match"));
+    }
+    auto acknowledged = drain_performance_launches(path, found->second);
+    if (!acknowledged.has_value()) {
+      return error_envelope(acknowledged.error());
+    }
+    if (found->second.pending_events.empty()) {
+      return error_envelope(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance flush has no pending events",
+                         {{"reason", "performance_flush_empty"}}));
+    }
+    auto appended = sequence_journals.append_performance_flush(
+        path, session_id, command_id, found->second.performance_id,
+        found->second.expected_revision, found->second.pending_events);
+    if (!appended.has_value()) {
+      return error_envelope(appended.error());
+    }
+    auto executed = projects.execute_performance_flush(
+        path, {session_id, appended.value().flush_seq, command_id,
+               found->second.performance_id});
+    if (!executed.has_value()) {
+      return error_envelope(executed.error());
+    }
+    found->second.expected_revision =
+        executed.value().receipt.committed_revision;
+    found->second.next_flush_seq = appended.value().flush_seq + 1U;
+    found->second.pending_events.clear();
+    for (auto &[fx, state] : found->second.open_fx) {
+      (void)fx;
+      state.pending_window.reset();
+      state.pending_event_index.reset();
+    }
+    return success_envelope(
+        {{"performance_id", found->second.performance_id.value()},
+         {"committed_revision", executed.value().receipt.committed_revision},
+         {"replayed", executed.value().replayed}},
+        executed.value().receipt.committed_revision);
+  }
+
+  nlohmann::json performance_stop(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "session_id",
+                                 "request_id"}),
+            "performance.record.stop request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto session_id =
+        foundation::SequenceSessionId{uuid_field(request, "session_id")};
+    const auto request_id =
+        foundation::CommandId{uuid_field(request, "request_id")};
+    std::lock_guard lock(sequence_mutex);
+    auto found = performance_sessions.find(sequence_key(path));
+    if (found != performance_sessions.end()) {
+      if (found->second.session_id != session_id) {
+        return error_envelope(
+            sequence_error(ErrorCode::invalid_argument,
+                           "Performance stop owner does not match"));
+      }
+      auto closed = close_performance_transients(path, found->second);
+      if (!closed.has_value()) {
+        return error_envelope(closed.error());
+      }
+      if (pattern_launch_acknowledger) {
+        pattern_launch_acknowledger->cancel(session_id);
+      }
+    }
+    auto stopped =
+        projects.stop_performance_session(path, session_id, request_id);
+    if (!stopped.has_value()) {
+      return error_envelope(stopped.error());
+    }
+    performance_sessions.erase(sequence_key(path));
+    return success_envelope(performance_stop_json(stopped.value()),
+                            std::nullopt);
+  }
+
+  nlohmann::json performance_save(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "command_id",
+                                 "expected_revision", "performance_id", "name",
+                                 "recording_artifact"}),
+            "performance.save request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto id =
+        domain::PerformanceId{uuid_field(request, "performance_id")};
+    std::optional<foundation::ArtifactRef> artifact;
+    if (!request.at("recording_artifact").is_null()) {
+      artifact = performance_artifact(request.at("recording_artifact"));
+    }
+    auto saved = projects.save_performance_draft(
+        path,
+        {foundation::CommandId{uuid_field(request, "command_id")},
+         unsigned_field(request, "expected_revision")},
+        id, string_field(request, "name"), std::move(artifact));
+    if (!saved.has_value()) {
+      return error_envelope(saved.error());
+    }
+    return success_envelope(performance_lifecycle_json(saved.value()),
+                            saved.value().committed_revision);
+  }
+
+  nlohmann::json performance_discard(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "command_id",
+                                 "expected_revision", "performance_id"}),
+            "performance.discard request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    auto discarded = projects.discard_performance_draft(
+        path,
+        {foundation::CommandId{uuid_field(request, "command_id")},
+         unsigned_field(request, "expected_revision")},
+        domain::PerformanceId{uuid_field(request, "performance_id")});
+    if (!discarded.has_value()) {
+      return error_envelope(discarded.error());
+    }
+    return success_envelope(performance_lifecycle_json(discarded.value()),
+                            discarded.value().committed_revision);
+  }
+
+  nlohmann::json performance_recovery_list(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path"}),
+            "performance.recovery.list request shape is invalid");
+    auto candidates = projects.list_performance_recovery(
+        absolute_path_field(request, "project_path"));
+    if (!candidates.has_value()) {
+      return error_envelope(candidates.error());
+    }
+    auto encoded = nlohmann::json::array();
+    for (const auto &candidate : candidates.value()) {
+      std::size_t durable = 0;
+      for (const auto &flush : candidate.journal.flushes) {
+        if (flush.completed) {
+          durable += flush.canonical_events.size();
+        }
+      }
+      encoded.push_back({
+          {"session_id", candidate.journal.session_id.value()},
+          {"performance_id", candidate.journal.performance_id.value()},
+          {"reason", candidate.reason},
+          {"durable_event_count", durable},
+          {"pending_event_count", candidate.journal.pending_events.size()},
+          {"fingerprint", candidate.journal.performance_fingerprint},
+      });
+    }
+    return success_envelope({{"candidates", std::move(encoded)}}, std::nullopt);
+  }
+
+  nlohmann::json performance_recovery_apply(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "command_id",
+                                 "expected_revision", "session_id"}),
+            "performance.recovery.apply request shape is invalid");
+    auto applied = projects.apply_performance_recovery(
+        absolute_path_field(request, "project_path"),
+        {foundation::CommandId{uuid_field(request, "command_id")},
+         unsigned_field(request, "expected_revision")},
+        foundation::SequenceSessionId{uuid_field(request, "session_id")});
+    if (!applied.has_value()) {
+      return error_envelope(applied.error());
+    }
+    return success_envelope(performance_lifecycle_json(applied.value()),
+                            applied.value().committed_revision);
+  }
+
+  nlohmann::json performance_recovery_discard(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "session_id",
+                                 "request_id"}),
+            "performance.recovery.discard request shape is invalid");
+    auto discarded = projects.discard_performance_recovery(
+        absolute_path_field(request, "project_path"),
+        foundation::SequenceSessionId{uuid_field(request, "session_id")},
+        foundation::CommandId{uuid_field(request, "request_id")});
+    if (!discarded.has_value()) {
+      return error_envelope(discarded.error());
+    }
+    return success_envelope(performance_stop_json(discarded.value()),
+                            std::nullopt);
+  }
+
+  nlohmann::json performance_rename(const nlohmann::json &request) {
+    require(
+        exact_keys(request, {"operation", "project_path", "command_id",
+                             "expected_revision", "performance_id", "name"}),
+        "performance.rename request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto id =
+        domain::PerformanceId{uuid_field(request, "performance_id")};
+    auto renamed = projects.rename_performance(
+        path, {{foundation::CommandId{uuid_field(request, "command_id")},
+                unsigned_field(request, "expected_revision")},
+               id,
+               string_field(request, "name")});
+    if (!renamed.has_value()) {
+      return error_envelope(renamed.error());
+    }
+    project_io::PerformanceLifecycleReceipt receipt{
+        id, renamed.value().state.revision, renamed.value().replayed};
+    return success_envelope(performance_lifecycle_json(receipt),
+                            receipt.committed_revision);
+  }
+
+  nlohmann::json performance_delete(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "command_id",
+                                 "expected_revision", "performance_id"}),
+            "performance.delete request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto id =
+        domain::PerformanceId{uuid_field(request, "performance_id")};
+    auto deleted = projects.delete_performance(
+        path, {{foundation::CommandId{uuid_field(request, "command_id")},
+                unsigned_field(request, "expected_revision")},
+               id});
+    if (!deleted.has_value()) {
+      return error_envelope(deleted.error());
+    }
+    project_io::PerformanceLifecycleReceipt receipt{
+        id, deleted.value().state.revision, deleted.value().replayed};
+    return success_envelope(performance_lifecycle_json(receipt),
+                            receipt.committed_revision);
+  }
+
+  nlohmann::json performance_recording_bind(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "command_id",
+                                 "expected_revision", "performance_id",
+                                 "recording_artifact"}),
+            "performance.recording.bind request shape is invalid");
+    require(!request.at("recording_artifact").is_null(),
+            "performance.recording.bind requires an Artifact");
+    auto bound = projects.bind_performance_recording(
+        absolute_path_field(request, "project_path"),
+        {foundation::CommandId{uuid_field(request, "command_id")},
+         unsigned_field(request, "expected_revision")},
+        domain::PerformanceId{uuid_field(request, "performance_id")},
+        performance_artifact(request.at("recording_artifact")));
+    if (!bound.has_value()) {
+      return error_envelope(bound.error());
+    }
+    return success_envelope(performance_lifecycle_json(bound.value()),
+                            bound.value().committed_revision);
+  }
+
+  nlohmann::json performance_replay_begin(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "replay_id", "performance_id"}),
+        "performance.replay.begin request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const ReplayId replay_id{uuid_field(request, "replay_id")};
+    const domain::PerformanceId performance_id{
+        uuid_field(request, "performance_id")};
+
+    std::lock_guard lock(replay_mutex);
+    const auto existing = replay_identities.find(replay_id.value());
+    if (existing != replay_identities.end()) {
+      if (existing->second.project_path != path ||
+          existing->second.performance_id != performance_id) {
+        return error_envelope(Error{
+            ErrorCode::duplicate_id,
+            "Performance replay id already exists with different payload",
+            {{"replay_id", replay_id.value()}},
+        });
+      }
+      const auto current = performance_replay_controller->status(replay_id);
+      if (!current.has_value()) {
+        return error_envelope(current.error());
+      }
+      if (current.value().state != ReplayState::playing &&
+          active_replay_id == replay_id.value()) {
+        active_replay_id.clear();
+      }
+      return success_envelope(
+          replay_status_json(replay_id, current.value()), std::nullopt);
+    }
+    if (!active_replay_id.empty()) {
+      const ReplayId active_id{active_replay_id};
+      const auto active_status =
+          performance_replay_controller->status(active_id);
+      if (!active_status.has_value()) {
+        return error_envelope(active_status.error());
+      }
+      if (active_status.value().state == ReplayState::playing) {
+        return error_envelope(Error{
+            ErrorCode::invalid_argument,
+            "a Performance replay is already playing",
+            {{"active_replay_id", active_replay_id}},
+        });
+      }
+      active_replay_id.clear();
+    }
+
+    const auto loaded = projects.load(path);
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    const auto projection = cooker::cook_performance_replay(
+        loaded.value(), performance_id,
+        [this, path](const foundation::ArtifactRef& artifact) {
+          return projects.read_artifact(path, artifact);
+        });
+    if (!projection.has_value()) {
+      return error_envelope(projection.error());
+    }
+    const auto begun =
+        performance_replay_controller->begin(replay_id, projection.value());
+    if (!begun.has_value()) {
+      return error_envelope(begun.error());
+    }
+    replay_identities.emplace(
+        replay_id.value(), ReplayIdentity{path, performance_id});
+    if (begun.value().state == ReplayState::playing) {
+      active_replay_id = replay_id.value();
+    }
+    return success_envelope(
+        replay_status_json(replay_id, begun.value()), std::nullopt);
+  }
+
+  foundation::Result<ReplayRuntimeStatus> checked_replay_status(
+      const std::filesystem::path& path,
+      const ReplayId& replay_id) {
+    const auto identity = replay_identities.find(replay_id.value());
+    if (identity == replay_identities.end()) {
+      return foundation::Result<ReplayRuntimeStatus>::failure(Error{
+          ErrorCode::not_found,
+          "Performance replay does not exist",
+      });
+    }
+    if (identity->second.project_path != path) {
+      return foundation::Result<ReplayRuntimeStatus>::failure(Error{
+          ErrorCode::duplicate_id,
+          "Performance replay id already exists for another Project",
+          {{"replay_id", replay_id.value()}},
+      });
+    }
+    auto status = performance_replay_controller->status(replay_id);
+    if (status.has_value() && status.value().state != ReplayState::playing &&
+        active_replay_id == replay_id.value()) {
+      active_replay_id.clear();
+    }
+    return status;
+  }
+
+  nlohmann::json performance_replay_status(const nlohmann::json& request) {
+    require(
+        exact_keys(request, {"operation", "project_path", "replay_id"}),
+        "performance.replay.status request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const ReplayId replay_id{uuid_field(request, "replay_id")};
+    std::lock_guard lock(replay_mutex);
+    const auto status = checked_replay_status(path, replay_id);
+    if (!status.has_value()) {
+      return error_envelope(status.error());
+    }
+    return success_envelope(
+        replay_status_json(replay_id, status.value()), std::nullopt);
+  }
+
+  nlohmann::json performance_replay_stop(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "replay_id", "request_id"}),
+        "performance.replay.stop request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const ReplayId replay_id{uuid_field(request, "replay_id")};
+    const auto request_id = uuid_field(request, "request_id");
+    std::lock_guard lock(replay_mutex);
+
+    const auto receipt = replay_stop_receipts.find(request_id);
+    if (receipt != replay_stop_receipts.end()) {
+      if (receipt->second.project_path != path ||
+          receipt->second.replay_id != replay_id) {
+        return error_envelope(Error{
+            ErrorCode::duplicate_id,
+            "Performance replay stop request id already exists",
+            {{"request_id", request_id}},
+        });
+      }
+      auto result = replay_status_json(replay_id, receipt->second.status);
+      result["request_id"] = request_id;
+      result["replayed"] = true;
+      return success_envelope(std::move(result), std::nullopt);
+    }
+
+    auto status = checked_replay_status(path, replay_id);
+    if (!status.has_value()) {
+      return error_envelope(status.error());
+    }
+    if (status.value().state == ReplayState::playing) {
+      status = performance_replay_controller->stop(replay_id);
+      if (!status.has_value()) {
+        return error_envelope(status.error());
+      }
+      if (status.value().state != ReplayState::playing &&
+          active_replay_id == replay_id.value()) {
+        active_replay_id.clear();
+      }
+    }
+    replay_stop_receipts.emplace(
+        request_id, ReplayStopReceipt{path, replay_id, status.value()});
+    auto result = replay_status_json(replay_id, status.value());
+    result["request_id"] = request_id;
+    result["replayed"] = false;
+    return success_envelope(std::move(result), std::nullopt);
+  }
+
+  nlohmann::json performance_resample_commit(
+      const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id",
+             "expected_revision", "performance_id", "source_start_frame",
+             "source_end_frame", "target_slot"}),
+        "performance.resample.commit request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const domain::CommandMeta meta{
+        foundation::CommandId{command_id},
+        unsigned_field(request, "expected_revision")};
+    const domain::PerformanceId performance_id{
+        uuid_field(request, "performance_id")};
+    const auto start_frame = unsigned_field(request, "source_start_frame");
+    const auto end_frame = unsigned_field(request, "source_end_frame");
+    const auto target = slot_value(request.at("target_slot"));
+
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto loaded = projects.load(path);
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    const auto found = loaded.value().performances.find(performance_id);
+    if (found == loaded.value().performances.end()) {
+      return error_envelope(Error{
+          ErrorCode::not_found,
+          "Performance does not exist",
+      });
+    }
+    const auto& performance = found->second;
+    if (!performance.recording_artifact.has_value() ||
+        performance.recording_artifact->media_type != "audio/wav") {
+      return error_envelope(Error{
+          ErrorCode::invalid_argument,
+          "Performance does not have a verified audio/wav recording Artifact",
+      });
+    }
+    const auto bytes = projects.read_artifact(
+        path, *performance.recording_artifact);
+    if (!bytes.has_value()) {
+      return error_envelope(bytes.error());
+    }
+    const auto selected = cooker::select_pcm16_stereo_wav(
+        bytes.value(), start_frame, end_frame);
+    if (!selected.has_value()) {
+      return error_envelope(selected.error());
+    }
+    if (loaded.value().revision == meta.expected_revision) {
+      const auto candidate = measure_prepared_quota(selected.value());
+      if (!candidate.has_value()) {
+        return error_envelope(candidate.error());
+      }
+      const auto quota = compute_sample_quota(path, loaded.value(), target);
+      if (!quota.has_value()) {
+        return error_envelope(quota.error());
+      }
+      const auto assessment = audio::assess_runtime_quota(
+          quota.value().result.bank_used_bytes,
+          quota.value().result.project_used_bytes,
+          candidate.value().bytes,
+          *sample_limits);
+      if (!assessment.has_value()) {
+        return error_envelope(Error{
+            ErrorCode::invalid_project,
+            "Sample quota ledger exceeds configured limits",
+        });
+      }
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::user_bank) {
+        std::vector<nlohmann::json> consumed;
+        consumed.reserve(quota.value().result.consumed.size());
+        for (const auto& entry : quota.value().result.consumed) {
+          consumed.push_back({
+              {"pad", entry.slot.pad},
+              {"prepared_bytes", entry.prepared_bytes},
+              {"prepared_frames", entry.prepared_frames},
+          });
+        }
+        return sample_error_envelope(runtime_bank_quota_error(
+            target,
+            candidate.value().bytes,
+            candidate.value().frames,
+            assessment->user_bank_remaining_bytes,
+            sample_limits->maximum_user_bank_bytes,
+            consumed));
+      }
+      if (assessment->constraint ==
+          audio::RuntimeQuotaConstraint::generation) {
+        return sample_error_envelope(runtime_project_quota_error(
+            candidate.value().bytes,
+            candidate.value().frames,
+            quota.value().result.project_used_bytes,
+            assessment->generation_remaining_bytes,
+            sample_limits->maximum_generation_bytes,
+            quota.value().bank_used_bytes));
+      }
+    }
+    const domain::AssetLineage lineage{
+        {performance.recording_artifact->sha256,
+         performance.recording_revision},
+        {{start_frame, end_frame}, performance.id},
+    };
+    const auto committed = projects.import_assign_sample_bytes(
+        path,
+        {meta,
+         target,
+         foundation::AssetId{command_id},
+         "audio/wav",
+         selected.value(),
+         std::nullopt,
+         lineage});
+    if (!committed.has_value()) {
+      return error_envelope(committed.error());
+    }
+    const auto revision =
+        committed.value().event.at("revision").get<std::uint64_t>();
+    return success_envelope(
+        {{"performance_id", performance_id.value()},
+         {"committed_revision", revision},
+         {"runtime_prepare_required", true}},
+        committed.value().state.revision);
+  }
+
+  static domain::PerformanceFx performance_fx(std::string_view value) {
+    static constexpr std::array<std::string_view, 8> names{
+        "filter", "delay",   "reverb", "stutter",
+        "gate",   "reverse", "crush",  "cutter"};
+    const auto found = std::ranges::find(names, value);
+    require(found != names.end(), "Performance FX is invalid");
+    return static_cast<domain::PerformanceFx>(
+        std::distance(names.begin(), found));
+  }
+
+  foundation::Result<void>
+  append_performance_runtime_tail(const std::filesystem::path &path,
+                                  PerformanceRuntime &runtime,
+                                  std::uint64_t input_sequence) {
+    if (runtime.pending_events.empty()) {
+      return foundation::Result<void>::success();
+    }
+    return sequence_journals.append_performance_tail(
+        path, runtime.session_id, runtime.performance_id,
+        runtime.expected_revision, input_sequence, runtime.pending_events);
+  }
+
+  static void canonicalize_performance_pending(PerformanceRuntime &runtime) {
+    runtime.pending_events =
+        domain::canonical_performance_events(std::move(runtime.pending_events));
+    for (auto &[fx, state] : runtime.open_fx) {
+      (void)fx;
+      state.pending_event_index.reset();
+    }
+    for (std::size_t index = 0; index < runtime.pending_events.size();
+         ++index) {
+      const auto *move = std::get_if<domain::FxMovePerformanceEvent>(
+          &runtime.pending_events[index].payload);
+      if (move == nullptr) {
+        continue;
+      }
+      auto found = runtime.open_fx.find(move->fx);
+      if (found != runtime.open_fx.end() &&
+          found->second.pending_window.has_value() &&
+          *found->second.pending_window == move->tick / 128U) {
+        found->second.pending_event_index = index;
+      }
+    }
+  }
+
+  foundation::Result<void>
+  drain_performance_launches(const std::filesystem::path &path,
+                             PerformanceRuntime &runtime) {
+    if (!pattern_launch_acknowledger) {
+      return foundation::Result<void>::success();
+    }
+    const auto outcomes =
+        pattern_launch_acknowledger->drain(runtime.session_id);
+    bool appended = false;
+    auto before = runtime;
+    for (const auto &outcome : outcomes) {
+      if (outcome.session_id != runtime.session_id) {
+        continue;
+      }
+      if (outcome.kind == PatternLaunchOutcomeKind::applied) {
+        runtime.pending_events.push_back(
+            domain::PerformanceEvent{domain::PatternLaunchPerformanceEvent{
+                outcome.pattern_slot, outcome.effective_tick}});
+        runtime.last_launch_ack = outcome;
+        appended = true;
+      }
+      if (runtime.pending_launch.has_value() &&
+          runtime.pending_launch->request_id == outcome.request_id) {
+        runtime.pending_launch.reset();
+      }
+    }
+    if (!appended) {
+      return foundation::Result<void>::success();
+    }
+    if (!performance_input_sequencer) {
+      runtime = std::move(before);
+      return foundation::Result<void>::failure(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance input sequencer is unavailable",
+          {{"reason", "performance_input_authority_unavailable"}}));
+    }
+    auto sequence = performance_input_sequencer->next();
+    if (!sequence.has_value()) {
+      runtime = std::move(before);
+      return foundation::Result<void>::failure(sequence.error());
+    }
+    canonicalize_performance_pending(runtime);
+    auto durable =
+        append_performance_runtime_tail(path, runtime, sequence.value());
+    if (!durable.has_value()) {
+      runtime = std::move(before);
+      return durable;
+    }
+    return foundation::Result<void>::success();
+  }
+
+  foundation::Result<void>
+  close_performance_transients(const std::filesystem::path &path,
+                               PerformanceRuntime &runtime) {
+    auto acknowledged = drain_performance_launches(path, runtime);
+    if (!acknowledged.has_value()) {
+      return acknowledged;
+    }
+    if (runtime.open_pads.empty() && runtime.open_fx.empty() && !runtime.hold) {
+      return foundation::Result<void>::success();
+    }
+    if (!performance_clock || !performance_input_sequencer) {
+      return foundation::Result<void>::failure(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance Core authorities are unavailable",
+                         {{"reason", "performance_authority_unavailable"}}));
+    }
+    auto tick = performance_clock->read_tick();
+    if (!tick.has_value()) {
+      return foundation::Result<void>::failure(tick.error());
+    }
+    auto sequence = performance_input_sequencer->next();
+    if (!sequence.has_value()) {
+      return foundation::Result<void>::failure(sequence.error());
+    }
+    auto before = runtime;
+    for (const auto &[gesture_id, pad] : runtime.open_pads) {
+      (void)gesture_id;
+      runtime.pending_events.push_back(
+          domain::PerformanceEvent{domain::PadHitPerformanceEvent{
+              pad.slot, pad.onset_tick,
+              std::max<std::uint64_t>(1U, tick.value() - pad.onset_tick),
+              pad.velocity}});
+    }
+    for (const auto &[fx, state] : runtime.open_fx) {
+      (void)state;
+      runtime.pending_events.push_back(domain::PerformanceEvent{
+          domain::FxReleasePerformanceEvent{fx, tick.value()}});
+    }
+    if (runtime.hold) {
+      runtime.pending_events.push_back(domain::PerformanceEvent{
+          domain::HoldOffPerformanceEvent{tick.value()}});
+    }
+    runtime.open_pads.clear();
+    runtime.open_fx.clear();
+    runtime.hold = false;
+    canonicalize_performance_pending(runtime);
+    auto durable =
+        append_performance_runtime_tail(path, runtime, sequence.value());
+    if (!durable.has_value()) {
+      runtime = std::move(before);
+      return durable;
+    }
+    return foundation::Result<void>::success();
+  }
+
+  nlohmann::json performance_event(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "session_id",
+                                 "event_id", "event"}),
+            "performance.record.event request shape is invalid");
+    require(request.at("event").is_object(), "Performance event is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto session_id =
+        foundation::SequenceSessionId{uuid_field(request, "session_id")};
+    const auto event_id = uuid_field(request, "event_id");
+    const auto payload = request.at("event").dump();
+    std::lock_guard lock(sequence_mutex);
+    auto found = performance_sessions.find(sequence_key(path));
+    if (found == performance_sessions.end() ||
+        found->second.session_id != session_id) {
+      return error_envelope(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance event owner does not match"));
+    }
+    auto &runtime = found->second;
+    const auto replay = runtime.event_receipts.find(event_id);
+    if (replay != runtime.event_receipts.end()) {
+      if (replay->second.payload != payload) {
+        return error_envelope(
+            sequence_error(ErrorCode::invalid_argument,
+                           "Performance event id is bound to another payload",
+                           {{"reason", "performance_event_id_collision"}}));
+      }
+      return success_envelope(
+          {{"event_id", event_id},
+           {"accepted_tick", replay->second.accepted_tick},
+           {"input_sequence", replay->second.input_sequence},
+           {"coalesced", replay->second.coalesced},
+           {"replayed", true}},
+          std::nullopt);
+    }
+    if (!performance_clock || !performance_input_sequencer) {
+      return error_envelope(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance Core authorities are unavailable",
+                         {{"reason", "performance_authority_unavailable"}}));
+    }
+    auto acknowledged = drain_performance_launches(path, runtime);
+    if (!acknowledged.has_value()) {
+      return error_envelope(acknowledged.error());
+    }
+    auto tick = performance_clock->read_tick();
+    if (!tick.has_value()) {
+      return error_envelope(tick.error());
+    }
+    auto input_sequence = performance_input_sequencer->next();
+    if (!input_sequence.has_value()) {
+      return error_envelope(input_sequence.error());
+    }
+    const auto &event = request.at("event");
+    require(event.contains("kind"), "Performance event kind is required");
+    const auto kind = string_field(event, "kind");
+    auto before = runtime;
+    bool coalesced = false;
+    if (kind == "pad_press") {
+      require(exact_keys(event, {"kind", "gesture_id", "slot", "velocity"}),
+              "pad_press event shape is invalid");
+      const auto gesture = uuid_field(event, "gesture_id");
+      require(!runtime.open_pads.contains(gesture),
+              "Pad gesture is already open");
+      const auto velocity = unsigned_field(event, "velocity", 127U);
+      require(velocity >= 1U, "velocity is out of range");
+      runtime.open_pads.emplace(
+          gesture,
+          OpenPerformancePad{
+              static_cast<std::uint8_t>(unsigned_field(event, "slot", 63U)),
+              tick.value(), static_cast<std::uint8_t>(velocity)});
+    } else if (kind == "pad_release") {
+      require(exact_keys(event, {"kind", "gesture_id", "slot"}),
+              "pad_release event shape is invalid");
+      const auto gesture = uuid_field(event, "gesture_id");
+      const auto pad = runtime.open_pads.find(gesture);
+      const auto slot = unsigned_field(event, "slot", 63U);
+      require(pad != runtime.open_pads.end() && pad->second.slot == slot,
+              "Pad release does not match an open gesture");
+      runtime.pending_events.push_back(
+          domain::PerformanceEvent{domain::PadHitPerformanceEvent{
+              pad->second.slot, pad->second.onset_tick,
+              std::max<std::uint64_t>(1U,
+                                      tick.value() - pad->second.onset_tick),
+              pad->second.velocity}});
+      runtime.open_pads.erase(pad);
+    } else if (kind == "fx_engage") {
+      require(exact_keys(event, {"kind", "gesture_id", "fx", "value"}),
+              "fx_engage event shape is invalid");
+      const auto fx = performance_fx(string_field(event, "fx"));
+      require(!runtime.open_fx.contains(fx),
+              "Performance FX is already engaged");
+      const auto gesture = uuid_field(event, "gesture_id");
+      const auto value = unsigned_field(event, "value", 1000U);
+      runtime.pending_events.push_back(
+          domain::PerformanceEvent{domain::FxEngagePerformanceEvent{
+              fx, static_cast<std::uint16_t>(value), tick.value()}});
+      runtime.open_fx.emplace(
+          fx, OpenPerformanceFx{gesture, static_cast<std::uint16_t>(value),
+                                std::nullopt, std::nullopt});
+    } else if (kind == "fx_move") {
+      require(exact_keys(event, {"kind", "gesture_id", "fx", "value"}),
+              "fx_move event shape is invalid");
+      const auto fx = performance_fx(string_field(event, "fx"));
+      const auto gesture = uuid_field(event, "gesture_id");
+      auto state = runtime.open_fx.find(fx);
+      require(state != runtime.open_fx.end() &&
+                  state->second.gesture_id == gesture,
+              "FX move does not match an engaged gesture");
+      const auto value =
+          static_cast<std::uint16_t>(unsigned_field(event, "value", 1000U));
+      const auto window = tick.value() / 128U;
+      if (state->second.pending_window == window &&
+          state->second.pending_event_index.has_value()) {
+        auto index = *state->second.pending_event_index;
+        auto *pending = std::get_if<domain::FxMovePerformanceEvent>(
+            &runtime.pending_events.at(index).payload);
+        require(pending != nullptr, "FX pending state is invalid");
+        if (value == state->second.effective_value) {
+          runtime.pending_events.erase(runtime.pending_events.begin() +
+                                       static_cast<std::ptrdiff_t>(index));
+          state->second.pending_window.reset();
+          state->second.pending_event_index.reset();
+        } else {
+          pending->value = value;
+          pending->tick = tick.value();
+        }
+        coalesced = true;
+      } else {
+        if (state->second.pending_event_index.has_value()) {
+          const auto *previous = std::get_if<domain::FxMovePerformanceEvent>(
+              &runtime.pending_events.at(*state->second.pending_event_index)
+                   .payload);
+          if (previous != nullptr) {
+            state->second.effective_value = previous->value;
+          }
+        }
+        state->second.pending_window.reset();
+        state->second.pending_event_index.reset();
+        if (value != state->second.effective_value) {
+          runtime.pending_events.push_back(domain::PerformanceEvent{
+              domain::FxMovePerformanceEvent{fx, value, tick.value()}});
+          state->second.pending_window = window;
+        } else {
+          coalesced = true;
+        }
+      }
+    } else if (kind == "fx_release") {
+      require(exact_keys(event, {"kind", "gesture_id", "fx"}),
+              "fx_release event shape is invalid");
+      const auto fx = performance_fx(string_field(event, "fx"));
+      const auto gesture = uuid_field(event, "gesture_id");
+      const auto state = runtime.open_fx.find(fx);
+      require(state != runtime.open_fx.end() &&
+                  state->second.gesture_id == gesture,
+              "FX release does not match an engaged gesture");
+      runtime.pending_events.push_back(domain::PerformanceEvent{
+          domain::FxReleasePerformanceEvent{fx, tick.value()}});
+      runtime.open_fx.erase(state);
+    } else if (kind == "hold_on") {
+      require(exact_keys(event, {"kind"}), "hold_on event shape is invalid");
+      require(!runtime.hold, "Performance HOLD is already on");
+      runtime.hold = true;
+      runtime.pending_events.push_back(domain::PerformanceEvent{
+          domain::HoldOnPerformanceEvent{tick.value()}});
+    } else if (kind == "hold_off") {
+      require(exact_keys(event, {"kind"}), "hold_off event shape is invalid");
+      require(runtime.hold, "Performance HOLD is already off");
+      runtime.hold = false;
+      runtime.pending_events.push_back(domain::PerformanceEvent{
+          domain::HoldOffPerformanceEvent{tick.value()}});
+    } else {
+      require(false, "Performance event kind is invalid");
+    }
+    canonicalize_performance_pending(runtime);
+    auto durable =
+        append_performance_runtime_tail(path, runtime, input_sequence.value());
+    if (!durable.has_value()) {
+      runtime = std::move(before);
+      return error_envelope(durable.error());
+    }
+    runtime.event_receipts.emplace(
+        event_id, PerformanceEventReceipt{payload, tick.value(),
+                                          input_sequence.value(), coalesced});
+    return success_envelope({{"event_id", event_id},
+                             {"accepted_tick", tick.value()},
+                             {"input_sequence", input_sequence.value()},
+                             {"coalesced", coalesced},
+                             {"replayed", false}},
+                            std::nullopt);
+  }
+
+  nlohmann::json performance_launch_request(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path", "session_id",
+                                 "request_id", "pattern_slot"}),
+            "performance.record.launch-request request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto session_id =
+        foundation::SequenceSessionId{uuid_field(request, "session_id")};
+    const auto request_id =
+        foundation::CommandId{uuid_field(request, "request_id")};
+    const auto slot =
+        unsigned_field(request, "pattern_slot", domain::kPatternSlotCount - 1U);
+    std::lock_guard lock(sequence_mutex);
+    auto found = performance_sessions.find(sequence_key(path));
+    if (found == performance_sessions.end() ||
+        found->second.session_id != session_id) {
+      return error_envelope(
+          sequence_error(ErrorCode::invalid_argument,
+                         "Performance launch owner does not match"));
+    }
+    auto &runtime = found->second;
+    const auto payload = std::to_string(slot);
+    const auto replay = runtime.launch_receipts.find(request_id.value());
+    if (replay != runtime.launch_receipts.end()) {
+      if (replay->second.first != payload) {
+        return error_envelope(sequence_error(
+            ErrorCode::invalid_argument,
+            "Performance launch request id is bound to another payload",
+            {{"reason", "performance_launch_request_collision"}}));
+      }
+      const auto &receipt = replay->second.second;
+      return success_envelope({{"request_id", request_id.value()},
+                               {"state", "pending"},
+                               {"target_tick", receipt.target_tick}},
+                              std::nullopt);
+    }
+    if (!performance_clock || !pattern_launch_acknowledger) {
+      return error_envelope(sequence_error(
+          ErrorCode::invalid_argument,
+          "Performance launch authorities are unavailable",
+          {{"reason", "performance_launch_authority_unavailable"}}));
+    }
+    auto drained = drain_performance_launches(path, runtime);
+    if (!drained.has_value()) {
+      return error_envelope(drained.error());
+    }
+    auto loaded = projects.load(path);
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    if (loaded.value().revision != runtime.expected_revision) {
+      return error_envelope(sequence_error(
+          ErrorCode::revision_conflict,
+          "Performance launch Project revision does not match the active session"));
+    }
+    std::shared_ptr<const cooker::RuntimeSnapshot> resolved_pattern;
+    const auto& occupying_pattern = loaded.value().pattern_slots.at(slot);
+    if (occupying_pattern.has_value()) {
+      auto cooked = cook_project(
+          path, loaded.value(), *occupying_pattern, sample_limits);
+      if (!cooked.has_value()) {
+        return error_envelope(cooked.error());
+      }
+      resolved_pattern = std::move(cooked.value());
+    }
+    auto tick = performance_clock->read_tick();
+    if (!tick.has_value()) {
+      return error_envelope(tick.error());
+    }
+    const auto earliest =
+        ((tick.value() / domain::kBarTicks4x4) + 1U) * domain::kBarTicks4x4;
+    auto reservation = pattern_launch_acknowledger->reserve(
+        session_id, request_id, static_cast<std::uint8_t>(slot), earliest,
+        std::move(resolved_pattern));
+    if (!reservation.has_value()) {
+      return error_envelope(reservation.error());
+    }
+    PendingPerformanceLaunch pending{
+        request_id, static_cast<std::uint8_t>(slot),
+        reservation.value().target_tick, reservation.value().claimed};
+    runtime.pending_launch = pending;
+    runtime.launch_receipts.emplace(request_id.value(),
+                                    std::pair{payload, pending});
+    return success_envelope({{"request_id", request_id.value()},
+                             {"state", "pending"},
+                             {"target_tick", pending.target_tick}},
+                            std::nullopt);
+  }
+
+  static nlohmann::json
+  pending_launch_json(const std::optional<PendingPerformanceLaunch> &pending) {
+    if (!pending.has_value()) {
+      return nullptr;
+    }
+    return {
+        {"request_id", pending->request_id.value()},
+        {"pattern_slot", pending->pattern_slot},
+        {"target_tick", pending->target_tick},
+        {"claimed", pending->claimed},
+    };
+  }
+
+  static nlohmann::json
+  launch_ack_json(const std::optional<PatternLaunchOutcome> &outcome) {
+    if (!outcome.has_value()) {
+      return nullptr;
+    }
+    return {
+        {"request_id", outcome->request_id.value()},
+        {"pattern_slot", outcome->pattern_slot},
+        {"effective_tick", outcome->effective_tick},
+    };
+  }
+
+  static nlohmann::json performance_status_json(
+      std::string_view state,
+      const std::optional<foundation::SequenceSessionId> &session_id,
+      const std::optional<domain::PerformanceId> &performance_id,
+      std::uint64_t journal_revision, std::uint64_t next_flush_seq,
+      std::size_t pending_event_count, std::size_t open_pad_gestures,
+      std::size_t open_fx_gestures, bool hold,
+      const std::optional<PendingPerformanceLaunch> &pending_launch,
+      const std::optional<PatternLaunchOutcome> &last_launch_ack) {
+    return {
+        {"state", state},
+        {"session_id", session_id.has_value()
+                           ? nlohmann::json(session_id->value())
+                           : nlohmann::json(nullptr)},
+        {"performance_id", performance_id.has_value()
+                               ? nlohmann::json(performance_id->value())
+                               : nlohmann::json(nullptr)},
+        {"journal_revision", journal_revision},
+        {"next_flush_seq", next_flush_seq},
+        {"pending_event_count", pending_event_count},
+        {"open_pad_gestures", open_pad_gestures},
+        {"open_fx_gestures", open_fx_gestures},
+        {"hold", hold},
+        {"pending_launch", pending_launch_json(pending_launch)},
+        {"last_launch_ack", launch_ack_json(last_launch_ack)},
+    };
+  }
+
+  nlohmann::json performance_status(const nlohmann::json &request) {
+    require(exact_keys(request, {"operation", "project_path"}),
+            "performance.record.status request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    std::lock_guard lock(sequence_mutex);
+    auto found = performance_sessions.find(sequence_key(path));
+    if (found != performance_sessions.end()) {
+      auto drained = drain_performance_launches(path, found->second);
+      if (!drained.has_value()) {
+        return error_envelope(drained.error());
+      }
+      const auto &runtime = found->second;
+      return success_envelope(
+          performance_status_json(
+              "active", runtime.session_id, runtime.performance_id,
+              runtime.expected_revision, runtime.next_flush_seq,
+              runtime.pending_events.size(), runtime.open_pads.size(),
+              runtime.open_fx.size(), runtime.hold, runtime.pending_launch,
+              runtime.last_launch_ack),
+          std::nullopt);
+    }
+    auto journal = sequence_journals.read_active_performance(path);
+    if (journal.has_value()) {
+      const auto state =
+          journal.value().state == project_io::SequenceSessionState::stopped
+              ? "stopped"
+          : journal.value().state ==
+                  project_io::SequenceSessionState::recovery_required
+              ? "recovery_required"
+              : "active";
+      return success_envelope(
+          performance_status_json(
+              state, journal.value().session_id, journal.value().performance_id,
+              journal.value().expected_revision, journal.value().next_flush_seq,
+              journal.value().pending_events.size(), 0, 0, false, std::nullopt,
+              std::nullopt),
+          std::nullopt);
+    }
+    if (journal.error().code != ErrorCode::not_found) {
+      return error_envelope(journal.error());
+    }
+    auto recovery = projects.list_performance_recovery(path);
+    if (!recovery.has_value()) {
+      return error_envelope(recovery.error());
+    }
+    if (!recovery.value().empty()) {
+      const auto &candidate = recovery.value().front().journal;
+      return success_envelope(
+          performance_status_json(
+              "recovery_required", candidate.session_id,
+              candidate.performance_id, candidate.expected_revision,
+              candidate.next_flush_seq, candidate.pending_events.size(), 0, 0,
+              false, std::nullopt, std::nullopt),
+          std::nullopt);
+    }
+    return success_envelope(
+        performance_status_json("idle", std::nullopt, std::nullopt, 0, 0, 0, 0,
+                                0, false, std::nullopt, std::nullopt),
+        std::nullopt);
+  }
+
+  nlohmann::json sequence_settings_update(const nlohmann::json &request) {
+    const bool has_runtime_frame = request.contains( "runtime_frame");
+    require(
+        exact_keys(request, {"operation", "project_path", "command_id",
+                             "expected_revision", "session_id", "runtime_frame",
+                             "bpm", "quantize_enabled", "swing_percent"}) ||
+            exact_keys(request, {"operation", "project_path", "command_id",
+                                 "expected_revision", "session_id", "bpm", "quantize_enabled",
              "swing_percent"}),
         "sequence.settings.update request shape is invalid");
     const auto path = absolute_path_field(request, "project_path");
     const auto command_id = uuid_field(request, "command_id");
     const auto revision = unsigned_field(request, "expected_revision");
-    const auto runtime_frame = unsigned_field(request, "runtime_frame");
+    const auto runtime_frame = has_runtime_frame
+                                   ? unsigned_field(request, "runtime_frame")
+                                   : std::uint64_t{0};
     std::optional<foundation::SequenceSessionId> session_id;
     if (!request.at("session_id").is_null()) {
       session_id = foundation::SequenceSessionId{
@@ -4797,6 +6477,40 @@ struct Application::Impl {
             "Sequence settings update is empty");
 
     std::lock_guard lock(sequence_mutex);
+    auto performance = performance_sessions.find(sequence_key(path));
+    if (performance != performance_sessions.end()) {
+      require(!has_runtime_frame && session_id.has_value() &&
+                  performance->second.session_id == *session_id &&
+                  performance->second.expected_revision == revision,
+              "Performance settings owner does not match");
+      auto updated = projects.execute_performance_rebase(
+          path, *session_id,
+          domain::UpdateSequenceSettings{
+              {foundation::CommandId{command_id}, revision},
+              bpm,
+              quantize_enabled,
+              swing_percent});
+      if (!updated.has_value()) {
+        return error_envelope(updated.error());
+      }
+      const auto &outcome = updated.value().outcome;
+      if (bpm.has_value() && !outcome.replayed && performance_clock) {
+        auto tick = performance_clock->read_tick();
+        if (!tick.has_value()) {
+          return error_envelope(tick.error());
+        }
+        performance_clock->anchor(outcome.state.bpm, tick.value());
+      }
+      performance->second.expected_revision = outcome.state.revision;
+      return success_envelope(
+          {{"committed_revision", outcome.state.revision},
+           {"bpm", outcome.state.bpm},
+           {"quantize_enabled", outcome.state.quantize_enabled},
+           {"swing_percent", outcome.state.swing_percent},
+           {"replayed", outcome.replayed}},
+          outcome.state.revision);
+    }
+    require(has_runtime_frame, "runtime_frame is required outside Performance");
     const auto found = sequence_sessions.find(sequence_key(path));
     if (found == sequence_sessions.end()) {
       require(!session_id.has_value(),
@@ -5389,6 +7103,10 @@ struct Application::Impl {
   std::filesystem::path workspace_root;
   std::shared_ptr<provider::Registry> registry;
   std::shared_ptr<project_io::ProjectStoragePlatform> storage_platform;
+  std::shared_ptr<PerformanceClock> performance_clock;
+  std::shared_ptr<PerformanceInputSequencer> performance_input_sequencer;
+  std::shared_ptr<PatternLaunchAcknowledger> pattern_launch_acknowledger;
+  std::shared_ptr<PerformanceReplayController> performance_replay_controller;
   std::optional<audio::RuntimePreparationLimits> sample_limits;
   project_io::ProjectStore projects;
   project_io::SequenceJournal sequence_journals;
@@ -5396,8 +7114,13 @@ struct Application::Impl {
   project_io::WorkspaceCacheStore waveform_cache;
   provider::AttemptStore attempts;
   mutable std::mutex sample_mutex;
+  mutable std::mutex replay_mutex;
   mutable std::mutex sequence_mutex;
   std::map<std::string, SequenceRuntime> sequence_sessions;
+  std::map<std::string, PerformanceRuntime> performance_sessions;
+  std::map<std::string, ReplayIdentity> replay_identities;
+  std::map<std::string, ReplayStopReceipt> replay_stop_receipts;
+  std::string active_replay_id;
   std::map<std::string, SampleImportState> sample_imports;
   std::set<std::string> used_sample_import_tokens;
   std::deque<std::string> remembered_sample_import_tokens;

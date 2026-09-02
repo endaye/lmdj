@@ -120,6 +120,12 @@ CASES = {
     "tests/platform/web/project_io/project_io_web_test.cpp": {"web_toolchain"},
     "tests/fixtures/long-material/make_fixtures.py": {"creator"},
     "tests/build/ci_runner_fallback_test.py": {"ci_contract"},
+    "tests/build/facade_surface_sharding_test.py": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/build/facade_surface_sharding_unit_test.py": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
     "tests/build/web_runtime_public_deployment_docs_test.py": {"deploy_contract"},
     "tests/conformance/version_lock_test.py": {"core_ubuntu", "package"},
     "scripts/chameleon-lab.sh": {"chameleon_lab"},
@@ -227,6 +233,13 @@ class TemporaryGitRepository:
         path.write_text(contents, encoding="utf-8")
         self.run("git", "add", "--", relative_path)
         self.run("git", "commit", "--quiet", "-m", message)
+        return self.run("git", "rev-parse", "HEAD").stdout.strip()
+
+    def checkout(self, ref, *, create=False):
+        args = ["git", "checkout", "--quiet"]
+        if create:
+            args.append("-b")
+        self.run(*args, ref)
         return self.run("git", "rev-parse", "HEAD").stdout.strip()
 
 
@@ -626,11 +639,16 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(plain["mode"], "focused")
         self.assertEqual(labeled["mode"], "full")
 
-    def test_merge_queue_label_upgrades_synchronized_pr_run_to_full(self):
-        manifest = self.classify(["docs/guide.md"], labels={"merge:queue"})
-        self.assertEqual(manifest["mode"], "full")
-        self.assertTrue(all(manifest["lanes"].values()))
-        self.assertIn("merge:queue label", manifest["reasons"])
+    def test_merge_queue_label_authorizes_without_changing_scope(self):
+        # The label authorizes a merge; it does not widen one. Merge evidence
+        # is the classification, so a docs-only change carries the same
+        # manifest whether or not it is queued.
+        plain = self.classify(["docs/guide.md"])
+        labelled = self.classify(["docs/guide.md"], labels={"merge:queue"})
+        self.assertEqual(labelled["mode"], "focused")
+        self.assertEqual(self.true_lanes(labelled), {"docs_static"})
+        self.assertEqual(labelled["lanes"], plain["lanes"])
+        self.assertEqual(labelled["reasons"], plain["reasons"])
 
     def test_docs_main_push_is_focused(self):
         manifest = self.classify(["docs/guide.md"], event_name="push")
@@ -699,6 +717,85 @@ class ChangeScopeTest(unittest.TestCase):
                 {path for record in inventory for path in record.paths},
                 {"apps/creator-web/src/editor.ts"},
             )
+
+    def behind_base_branch(self, repository):
+        """Cut a branch, then land an unrelated change on the base branch.
+
+        Returns the base branch tip a `pull_request` event would carry, which is
+        strictly ahead of the branch's merge base, and the branch head.
+        """
+        repository.write_and_commit("docs/guide.md", "one\n", "base")
+        repository.checkout("task", create=True)
+        head = repository.write_and_commit(
+            "docs/research/note.md", "branch work\n", "branch",
+        )
+        repository.checkout("-")
+        base = repository.write_and_commit(
+            "apps/creator-web/src/editor.ts", "landed elsewhere\n", "main moves on",
+        )
+        return base, head
+
+    def test_behind_base_branch_reports_only_its_own_inventory(self):
+        with TemporaryGitRepository() as repository:
+            base, head = self.behind_base_branch(repository)
+            inventory = self.module.read_git_inventory(
+                str(repository.path), base, head,
+            )
+            self.assertEqual(
+                {path for record in inventory for path in record.paths},
+                {"docs/research/note.md"},
+            )
+            # The two-dot range the classifier used before issue #539, for
+            # contrast: it blames the branch for the base branch's own commit.
+            two_dot = repository.run(
+                "git", "diff", "--name-only", base, head,
+            ).stdout.split()
+            self.assertIn("apps/creator-web/src/editor.ts", two_dot)
+
+    def test_behind_base_branch_does_not_over_select_lanes(self):
+        with TemporaryGitRepository() as repository:
+            base, head = self.behind_base_branch(repository)
+            manifest = self.module.classify(
+                self.policy,
+                self.module.read_git_inventory(str(repository.path), base, head),
+                base_sha=base, head_sha=head, event_name="pull_request",
+                draft=False, labels=(), trusted_head=True,
+            )
+            self.assertEqual(manifest["mode"], "focused")
+            self.assertEqual(
+                [entry["paths"] for entry in manifest["changed_files"]],
+                [["docs/research/note.md"]],
+            )
+            selected = {lane for lane, on in manifest["lanes"].items() if on}
+            self.assertEqual(selected, {"docs_static"})
+            self.assertNotIn("creator_web", selected)
+
+    def test_a_base_side_deletion_does_not_read_as_an_addition(self):
+        """The shape that would fail `docs-static`'s whitespace check.
+
+        `git diff --check` reads added lines. Two-dot reverses a base-side
+        deletion into an addition, so a trailing-whitespace line the base branch
+        removed after the branch was cut would be attributed to a branch that
+        never wrote it.
+        """
+        with TemporaryGitRepository() as repository:
+            repository.write_and_commit("docs/guide.md", "trailing \n", "base")
+            repository.checkout("task", create=True)
+            head = repository.write_and_commit(
+                "docs/research/note.md", "clean\n", "branch",
+            )
+            repository.checkout("-")
+            base = repository.write_and_commit(
+                "docs/guide.md", "clean\n", "main drops the whitespace",
+            )
+            two_dot = repository.run(
+                "git", "diff", "--check", base, head, check=False,
+            )
+            self.assertNotEqual(two_dot.returncode, 0, two_dot.stdout)
+            three_dot = repository.run(
+                "git", "diff", "--check", f"{base}...{head}", check=False,
+            )
+            self.assertEqual(three_dot.returncode, 0, three_dot.stdout)
 
     def test_unverifiable_push_base_never_carries_a_path_inventory(self):
         with self.assertRaises(ValueError):
@@ -1099,7 +1196,7 @@ class ChangeScopeTest(unittest.TestCase):
         )
         self.assertEqual(head_drift.classification, "queue-head-drift")
 
-    def test_valid_queue_context_forces_full_and_closes_manifest_metadata(self):
+    def test_valid_queue_context_classifies_and_closes_manifest_metadata(self):
         queue = self.module.parse_queue_inputs(
             "mq:123:1", "220", "a" * 40, "b" * 40
         )
@@ -1132,7 +1229,12 @@ class ChangeScopeTest(unittest.TestCase):
             trusted_head=True,
             queue=queue,
         )
-        self.assertEqual(manifest["mode"], "full")
+        # A queue dispatch is the controller validating one exact PR, not an
+        # operator asking for full CI, so it classifies. The operator's own
+        # empty dispatch keeps its unconditional full -- release evidence
+        # depends on it -- and that is asserted separately.
+        self.assertEqual(manifest["mode"], "focused")
+        self.assertEqual(self.true_lanes(manifest), {"docs_static"})
         self.assertEqual(
             manifest["queue"],
             {
@@ -1147,6 +1249,39 @@ class ChangeScopeTest(unittest.TestCase):
         invalid["queue"]["extra"] = True
         with self.assertRaises(ValueError):
             self.module.validate_manifest(invalid, self.policy)
+
+    def test_queue_manifest_may_be_focused_but_never_untrusted(self):
+        # Merge evidence is the classification; trust is not negotiable at any
+        # breadth. PR Gate proves each selected lane succeeded and each
+        # unselected one was skipped, which is what makes focused sufficient.
+        queue = self.module.parse_queue_inputs(
+            "mq:123:1", "220", "a" * 40, "b" * 40
+        )
+        manifest = self.module.classify(
+            self.policy,
+            changed(self.module, "docs/guide.md"),
+            base_sha="a" * 40, head_sha="b" * 40,
+            event_name="workflow_dispatch", draft=False,
+            labels=("merge:queue",), trusted_head=True, queue=queue,
+        )
+        self.assertEqual(manifest["mode"], "focused")
+        self.module.validate_manifest(manifest, self.policy)
+
+        untrusted = copy.deepcopy(manifest)
+        untrusted["trusted_head"] = False
+        with self.assertRaisesRegex(ValueError, "trusted"):
+            self.module.validate_manifest(untrusted, self.policy)
+
+    def test_operator_dispatch_keeps_unconditional_full_for_release_evidence(self):
+        # scripts/release.sh rejects focused and requested evidence, so the
+        # operator's empty dispatch must stay the one way to produce full
+        # evidence for an exact main SHA.
+        manifest = self.classify(
+            ["docs/guide.md"], event_name="workflow_dispatch"
+        )
+        self.assertEqual(manifest["mode"], "full")
+        self.assertEqual(self.true_lanes(manifest), LANES)
+        self.assertIn("full event: workflow_dispatch", manifest["reasons"])
 
     def test_queue_validation_document_is_closed_for_valid_and_drift(self):
         queue = self.module.parse_queue_inputs(

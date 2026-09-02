@@ -82,11 +82,15 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_foundation_json_tests
     lmdj_domain_project_tests
     lmdj_domain_command_handler_tests
+    lmdj_domain_performance_tests
+    lmdj_domain_migration_v4_tests
     lmdj_domain_model_sequence_tests
     lmdj_project_store_tests
     lmdj_project_storage_platform_tests
     lmdj_project_bundle_transfer_tests
     lmdj_project_cooker_sample_analysis_tests
+    lmdj_project_cooker_performance_replay_tests
+    lmdj_project_cooker_wav_selection_tests
     lmdj_project_cooker_tests
     lmdj_project_cooker_determinism_matrix_tests
     lmdj_audio_runtime_tests
@@ -94,6 +98,9 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_realtime_engine_tests
     lmdj_audio_realtime_queue_tests
     lmdj_snapshot_publication_invariant_tests
+    lmdj_master_fx_tests
+    lmdj_master_fx_determinism_tests
+    lmdj_master_fx_allocation_guard_tests
     lmdj_provider_durable_file_tests
     lmdj_provider_conformance_tests
     lmdj_provider_attempt_isolation_tests
@@ -103,6 +110,13 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_application_facade_tests
     lmdj_application_facade_failure_tests
     lmdj_facade_sequence_surface_tests
+    lmdj_facade_performance_operation_contract_tests
+    lmdj_facade_performance_replay_tests
+    lmdj_facade_performance_runtime_bridge_tests
+    lmdj_facade_resample_performance_tests
+    lmdj_facade_performance_session_tests
+    lmdj_facade_performance_gesture_admission_tests
+    lmdj_facade_performance_rebase_matrix_tests
     lmdj_facade_sample_surface_tests
     lmdj_facade_web_runtime_limit_tests
     lmdj_web_control_runtime_tests
@@ -115,6 +129,10 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_native_host
     lmdj_core_c
     lmdj_sequence_journal_tests
+    lmdj_performance_journal_tests
+    lmdj_performance_lifecycle_tests
+    lmdj_performance_rebase_tests
+    lmdj_session_mutual_exclusion_tests
     lmdj_project_io_fault_matrix_tests
     lmdj_application_c_api_stress_tests
   )
@@ -501,6 +519,26 @@ lmdj_add_test(
     tests/build/test_test_taxonomy.py
     "${CMAKE_BINARY_DIR}"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+lmdj_add_test(
+  NAME build.facade_surface_sharding
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/facade_surface_sharding_test.py
+    "${CMAKE_BINARY_DIR}"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+lmdj_add_test(
+  NAME build.facade_surface_sharding_unit
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/facade_surface_sharding_unit_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 10
 )
 
 lmdj_add_test(

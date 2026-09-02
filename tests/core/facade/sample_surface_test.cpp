@@ -345,6 +345,12 @@ ApplicationConfig config(
       [] {
         return std::string("2026-07-31T00:00:00.000Z");
       },
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
   };
 }
 
@@ -2153,25 +2159,82 @@ void test_sample_waveform_cache_uses_cooker_full_level_bucket_width() {
                  misaligned_bytes.end()));
 }
 
+using Scenario = void (*)();
+
+constexpr std::array<Scenario, 4> kMutationScenarios{
+    test_typed_sample_surface_is_atomic_bounded_and_cache_backed,
+    test_typed_sample_surface_rejects_invalid_boundary_values,
+    test_sample_import_abort_scavenge_replace_and_manifest_admission,
+    test_sample_cleanup_half_failures_leave_one_retryable_unit,
+};
+
+constexpr std::array<Scenario, 4> kQuotaReplayScenarios{
+    test_sample_source_frame_limit_is_not_reapplied_after_resampling,
+    test_sample_quota_reports_revision_bound_target_exclusive_headroom,
+    test_sample_delayed_replays_report_original_committed_revision,
+    test_sample_json_delayed_replays_report_current_project_revision,
+};
+
+constexpr std::array<Scenario, 3> kProjectionScenarios{
+    test_sample_artifact_busy_errors_remain_storage_errors,
+    test_sample_waveform_json_uses_one_authoritative_projection,
+    test_sample_waveform_cache_uses_cooker_full_level_bucket_width,
+};
+
+struct Shard {
+  std::string_view name;
+  std::span<const Scenario> scenarios;
+};
+
+constexpr std::array<Shard, 3> kShards{
+    Shard{"mutation", kMutationScenarios},
+    Shard{"quota-replay", kQuotaReplayScenarios},
+    Shard{"projection", kProjectionScenarios},
+};
+
+void run(std::span<const Scenario> scenarios) {
+  for (const auto scenario : scenarios) {
+    scenario();
+  }
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--list-shards") {
+    std::size_t total{};
+    for (const auto& shard : kShards) {
+      std::cout << shard.name << ' ' << shard.scenarios.size() << '\n';
+      total += shard.scenarios.size();
+    }
+    std::cout << "all " << total << '\n';
+    return 0;
+  }
+  const std::string_view prefix{"--shard="};
+  const auto selected =
+      argc == 2 ? std::string_view(argv[1]) : std::string_view{};
+  if (argc > 2 || (argc == 2 && !selected.starts_with(prefix))) {
+    std::cerr << "usage: lmdj_facade_sample_surface_tests "
+                 "[--list-shards|--shard=<name>]\n";
+    return 2;
+  }
   try {
-    test_typed_sample_surface_is_atomic_bounded_and_cache_backed();
-    test_typed_sample_surface_rejects_invalid_boundary_values();
-    test_sample_import_abort_scavenge_replace_and_manifest_admission();
-    test_sample_cleanup_half_failures_leave_one_retryable_unit();
-    test_sample_source_frame_limit_is_not_reapplied_after_resampling();
-    test_sample_quota_reports_revision_bound_target_exclusive_headroom();
-    test_sample_delayed_replays_report_original_committed_revision();
-    test_sample_json_delayed_replays_report_current_project_revision();
-    test_sample_artifact_busy_errors_remain_storage_errors();
-    test_sample_waveform_json_uses_one_authoritative_projection();
-    test_sample_waveform_cache_uses_cooker_full_level_bucket_width();
+    std::size_t executed{};
+    for (const auto& shard : kShards) {
+      if (argc == 1 || selected.substr(prefix.size()) == shard.name) {
+        run(shard.scenarios);
+        executed += shard.scenarios.size();
+      }
+    }
+    if (executed == 0) {
+      std::cerr << "unknown sample surface shard\n";
+      return 2;
+    }
+    std::cout << "application facade sample surface tests: PASS ("
+              << executed << " scenarios)\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
   }
-  std::cout << "application facade sample surface tests: PASS\n";
   return 0;
 }

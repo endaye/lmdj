@@ -130,7 +130,7 @@
       "configurePreset": "coverage",
       "filter": {
         "exclude": {
-          "name": "^audio\\.(realtime_spsc_stress|snapshot_publication_stress|long_sample_publication_stress)$"
+          "name": "^audio\\.(realtime_spsc_stress|snapshot_publication_stress|long_sample_publication_stress|master_fx_stress)$"
         }
       },
       "output": {

@@ -41,6 +41,8 @@ from tools.release.github_api import (  # noqa: E402
     CiScopeConflictError,
     CiScopeProjection,
     CiScopeUnavailableError,
+    GitHubClient,
+    HttpResponse,
     RunJobProjection,
     RunProjection,
 )
@@ -780,6 +782,43 @@ class ReleasePrepareTest(unittest.TestCase):
         self.assertEqual(context.policy.repository, "endaye/lmdj")
         self.assertIn("fetch:endaye/lmdj:main", self.git.calls)
         self.assertTrue(callable(context.profile_verifier))
+
+    def test_cli_context_uses_logged_in_gh_credentials_when_token_env_is_empty(self) -> None:
+        token = "ghp_LOCAL_CREDENTIAL_FIXTURE"
+        requests: list[tuple[str, str, dict[str, str]]] = []
+
+        def executor(arguments, **kwargs):
+            self.assertEqual(tuple(arguments), ("gh", "auth", "token"))
+            return subprocess.CompletedProcess(arguments, 0, stdout=token + "\n", stderr="")
+
+        def transport(method, url, headers, body):
+            requests.append((method, url, dict(headers)))
+            return HttpResponse(200, {}, json.dumps({
+                "name": "main",
+                "protected": True,
+                "commit": {"sha": self.target_sha},
+            }).encode("utf-8"))
+
+        def client_factory(*, token=None):
+            return GitHubClient(http_transport=transport, token=token)
+
+        self.git.runner = CommandRunner(executor=executor)
+        with (
+            mock.patch.dict(os.environ, {"GITHUB_TOKEN": "", "GH_TOKEN": ""}),
+            mock.patch.object(cli, "GitHubClient", side_effect=client_factory),
+        ):
+            context = cli.build_context(
+                self.root,
+                git=self.git,
+                authority_reader=lambda worktree: (self.policy, self.ledger),
+            )
+            branch = context.github.get_branch("endaye/lmdj", "main")
+
+        self.assertEqual(branch.commit_sha, self.target_sha)
+        self.assertEqual(
+            requests[0][2].get("Authorization"),
+            f"Bearer {token}",
+        )
 
     def test_cli_normalizes_usage_and_verification_failures(self) -> None:
         self.assertEqual(cli.main(["prepare"]), 64)

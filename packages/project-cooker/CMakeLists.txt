@@ -2,8 +2,10 @@ add_library(
   lmdj_project_cooker
   STATIC
     src/wav_reader.cpp
+    src/wav_selection.cpp
     src/sample_analysis.cpp
     src/project_cooker.cpp
+    src/performance_replay.cpp
 )
 add_library(lmdj::project_cooker ALIAS lmdj_project_cooker)
 
@@ -91,5 +93,53 @@ if(BUILD_TESTING)
     COMMAND lmdj_project_cooker_determinism_matrix_tests
     TIMEOUT 10
     LABELS audio generated
+  )
+
+  add_executable(
+    lmdj_project_cooker_performance_replay_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/cooker/performance_replay_projection_test.cpp"
+  )
+  target_include_directories(
+    lmdj_project_cooker_performance_replay_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_project_cooker_performance_replay_tests
+    PRIVATE
+      lmdj::project_cooker
+  )
+  lmdj_target_warnings(lmdj_project_cooker_performance_replay_tests)
+  lmdj_target_sanitizers(lmdj_project_cooker_performance_replay_tests)
+  lmdj_add_test(
+    NAME cooker.performance_replay
+    TIER component
+    COMMAND lmdj_project_cooker_performance_replay_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS audio
+  )
+
+  add_executable(
+    lmdj_project_cooker_wav_selection_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/cooker/wav_selection_test.cpp"
+  )
+  target_include_directories(
+    lmdj_project_cooker_wav_selection_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_project_cooker_wav_selection_tests
+    PRIVATE
+      lmdj::project_cooker
+  )
+  lmdj_target_warnings(lmdj_project_cooker_wav_selection_tests)
+  lmdj_target_sanitizers(lmdj_project_cooker_wav_selection_tests)
+  lmdj_add_test(
+    NAME cooker.wav_selection
+    TIER unit
+    COMMAND lmdj_project_cooker_wav_selection_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS audio
   )
 endif()

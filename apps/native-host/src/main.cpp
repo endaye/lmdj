@@ -1055,6 +1055,12 @@ int run(const RawInvocation& raw) {
       std::move(assembly.value().providers),
       std::move(assembly.value().provider_policy),
       {},
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
   });
   NativeHost host(std::move(invocation.value()), std::move(application));
   const auto started = host.startup();
