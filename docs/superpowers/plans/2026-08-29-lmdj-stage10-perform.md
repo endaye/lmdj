@@ -620,11 +620,13 @@ the #523 bridge or #525 adapter and adds no runtime semantics of its own.
 
 **Files:**
 
+- Modify: `CMakeLists.txt`
 - Modify: `apps/core-cli/src/main.cpp`
 - Modify: `apps/core-mcp/lmdj_core_mcp/server.py`
 - Modify: `apps/core-mcp/lmdj_core_mcp/c_api.py`
 - Modify: `apps/native-host/src/main.cpp`
 - Test: `tests/core/facade/c_api_test.cpp`
+- Modify: `tests/host/mcp_stdio_test.py`
 - Test: `tests/host/performance_cli_test.py`
 - Test: `tests/host/performance_mcp_test.py`
 - Test: `tests/host/cross_host_performance_idempotency_test.py`
@@ -642,6 +644,9 @@ the #523 bridge or #525 adapter and adds no runtime semantics of its own.
 - [ ] Register the operations in all three Hosts; add no Host-side time/order,
   gesture coalescing, replay resolution, Pattern-slot truth, Artifact digest
   trust or recovery fingerprint logic.
+- [ ] Register the three new Host suites with CTest so the full Core gate executes
+  them, and update the existing MCP stdio exact tool-schema inventory without
+  weakening it to a subset assertion.
 - [ ] GREEN: run `scripts/core.sh test dev full`; expect PASS.
 - [ ] Run `scripts/architecture-portal.sh check`; expect PASS.
 - [ ] Commit only the listed files with
