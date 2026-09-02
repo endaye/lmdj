@@ -835,7 +835,12 @@ class GitHubQueueClient:
         return max(events, key=lambda item: (item.created_at, item.event_id), default=None)
 
     def has_active_queue_run(self, number: int, since: float) -> bool:
-        for status in ("queued", "in_progress"):
+        # A run held back by the `lmdj-merge-main` concurrency group with
+        # `queue: max` reports GitHub status `pending`, not `queued`. It is a
+        # live worker waiting its turn, so the watchdog must count it or every
+        # item behind a long validation is declared stalled at the 20-minute
+        # mark and loses its authorization while still in line.
+        for status in ("queued", "in_progress", "pending", "waiting", "requested"):
             values = self._get_pages(
                 "/actions/workflows/merge-queue.yml/runs"
                 f"?event=pull_request_target&status={status}&per_page=100",
