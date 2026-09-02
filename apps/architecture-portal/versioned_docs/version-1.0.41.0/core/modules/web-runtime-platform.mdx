@@ -1,0 +1,40 @@
+---
+title: Web Runtime Platform
+area: core
+status: implemented
+owners: [core, web, audio]
+module: web-runtime-platform
+source_paths:
+  - packages/web-runtime-platform
+  - tests/platform/web
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity kind="modules" id="web-runtime-platform" />
+
+<DiagramFrame title="Web Runtime Platform Module" diagramId="web-runtime-platform" />
+
+## 1. 目的与非职责
+为浏览器 Host 提供共享 Runtime Session、输入 adapter、Control bridge、manifest gate 与 Web Audio 接线；不拥有 Creator UI、诊断 UI、Project Truth 或产品专属身份。
+## 2. 当前实现状态
+Creator Web 与诊断 Web Runtime Host 共用 Platform `2.0.1` 和同一 Wasm Runtime。Platform 除 Sample surface 外，还桥接 revision-bound `sample.quota`、Sequence begin/event/flush/stop/next-Bar switch/status/settings/recovery；当前 source 在 accepted event 后读取 Facade typed overlay projection，发布 committed snapshot + overlay；active-session BPM 更新保留同一 overlay/boundary，owner-loss seal 与 flush/Stop 发布 clean committed view，Stop publication failure 可由 exact replay 恢复。若 owner-loss clean publication 自身失败，Host 使用已安装 quiescence contract 停止并清空 Runtime Pattern 后才释放 owner。pointer、keyboard、MIDI admission 统一使用 Audio Runtime frame clock 与单调 `input_sequence`，JavaScript 不计算 musical time。
+## 3. 所有权与依赖
+只依赖 Application Facade `2.1.1` 与 Audio Runtime `2.0.1`。Product CMake 注入 Product Build、Platform 版本、完整资源上限及精确 Host allowlist。
+## 4. 架构与数据流
+Creator/Diagnostic Host → Runtime Session → Application Facade；Project/Sample/Sequence actions 共享有界 Host lane，Pointer、Keyboard、MIDI 汇入同一 frame-stamped admission。Control bridge 把 typed overlay projection 合成 immutable Prepared Pattern，AudioWorklet 在下一 Bar 消费并发布 Voice/Bar state；Project Truth 仍只在 flush/Stop commit 后变化。
+## 5. API 与 Contract 边界
+Platform 校验 canonical distribution manifest，但该同构建协议不是公开跨版本 Contract。Project Bundle 与 WAV sidecar 只通过 Facade 的 bounded streaming API 进入 Core，Browser 不解析 Project/WAV。
+## 6. 状态、错误与并发
+Manifest mismatch、生命周期失效和 terminal failure 均 fail closed；Main、Control、Worker 与 AudioWorklet 的职责和消息上限固定。Control bridge 在控制线程上严格逐个 dispatch 请求：Facade 经 Asyncify 等待 OPFS 期间到达的请求按 FIFO 等待，待前一次 dispatch 完整返回（含 rewind）后才重新代理，因此同一线程不会重入 Asyncify；该保证对直接提交到 transport 的调用方同样成立，而 OPFS 存储层在检测到重入时 fail closed 而非破坏内存。Control 侧将 generation quota rejection 与 publication residency rejection 分开：前者保留 Bank/Project 类型和安全筛选后的账本 payload，后者继续使用 transient Web Runtime resource failure，且任一拒绝都保留当前 live generation。启动时先以 release ordering 发布 ControlBridge，再发布 audio adapter；pre-JS 的 audio readiness 因而同时构成 ControlBridge publication barrier。`recovery_probe_ready` 仅在 Runtime 为 `recovering`、当前 epoch 的 probe window 已 armed 且没有已保留 Probe 时为真；Probe 被保留或 window 关闭后立即回到 false，Host 不得从 timer、Context 状态或页面可见性推断 readiness。
+
+Runtime Session 启动只运行一次真实 Control Worker/OPFS capability probe，默认等待预算为 15 秒。明确缺少 Worker/Blob、Worker 返回 negative 或 Worker error 继续 fail closed 为 `UNSUPPORTED_WEB_RUNTIME`；纯调度预算耗尽精确进入 `HOST_TIMEOUT`，不能伪造 `opfs`、`opfsSyncAccessHandle` 或 `opfsWritableReplace` 缺失。message、error 与 timeout 三条 settlement 路径都由同一 `finally` terminate Worker 并 revoke Blob URL。显式暂停期间 Project 操作保持禁用，Host suspend 响应与浏览器 Context suspend 严格串行。
+## 7. 产品使用方
+`creator-web 2.1.1` 与 `web-runtime-host 2.1.1`。Platform `2.0.1` 把 `MAX_ASSET_BYTES` 保持为 1 MiB sidecar/chunk 边界，并以 `MAX_SAMPLE_IMPORT_BYTES` 接受 manifest 锁定的完整选区 WAV 总量；协议创建失败不再被误当成 quota/snapshot truth。Sequence UI 只展示 Facade 返回的 authority state；pending switch 在 Bar acknowledgement 前保持旧 Pattern，recovery artifact、长素材解码缓冲与 CaptureBuffer 都不冒充 Project Truth。
+## 8. 测试与证据
+C++ manifest/control/realtime tests、Node Runtime Session tests、Chromium/WebKit browser proof 与分发验证覆盖共享边界；C++ 生产路径精确验证 live hit 后 pending event 从下一 Bar 重复、BPM rebuild 不丢 overlay、owner loss 清理 active overlay、cleanup publication failure 停止/清空 engine、Stop exact replay 恢复一次 clean-publication failure，且无重复/空洞/陈旧 overlay。failure hook 只编入 private testable target，production archive symbol/marker gate 阻止泄漏。Node 精确断言 Host suspend 未完成时 `AudioContext` 仍为 running，Creator packaged Proof 覆盖真实 Sample Cook split 后的 suspend→activate→Retry Prepare，并继续覆盖 recovery readiness 的 `false -> true -> false -> running` 序列。
+## 9. 限制与下一门禁
+自动化不替代物理 MIDI、Safari/iPad Touch、声学延迟或主观听感验收。
+## 10. 版本身份
+版本和依赖由 `module.json` 与 Product Assembly Lock 派生。

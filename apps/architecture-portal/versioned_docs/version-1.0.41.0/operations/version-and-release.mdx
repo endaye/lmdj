@@ -1,0 +1,153 @@
+---
+title: Version 与 Release
+area: operations
+status: implemented
+owners: [release, core]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md]
+---
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 四条版本轴
+Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 SemVer；Contract 使用稳定 ID + Contract SemVer。
+## Assembly Lock
+锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
+当前 source candidate 是 Product Build `1.0.41.0 · canary · g<short-sha>`，在 Build 40 的 Stage 9 remediation 上加入 `web-hosts` 六资产 Product Release 与 Creator/Runtime 独立部署控制面；Project I/O `1.0.1`、Audio Runtime `2.0.1`、Application Facade `2.1.1`、Web Runtime Platform `2.0.1`、Creator Web 与 Formal Web Runtime Host `2.1.1` 均保持不变。Project v3、bundle 1.1、Bank 共享配额及 Contract 身份不变。当前 source 可以没有 active Product intent；candidate、快照、tag、Release、部署与 Channel promotion 仍是独立状态。
+Product Build `1.0.26.0 · canary · g<short-sha>` 曾是 G3 Host settings crash-recovery/identity source candidate。
+Product Build `1.0.25.0 · canary · g<short-sha>` 曾是 G2 evidence-durability source candidate。
+Product Build `1.0.24.0 · canary · g<short-sha>` 曾是 source candidate。那次候选来自 provider-sdk G1/G4 缺陷修复级联：Attempt reservation 泄漏回收与 temp sibling 进程级唯一性修复已经进入 active manifests 与 Assembly Lock；历史 `1.0.21.0` 的 MPD218 复验和 `1.0.22.0` / `1.0.23.0` 的旧候选证据都不自动升级为 `1.0.24.0` 的候选结论。版本值由 active manifests 与 Assembly Lock 派生。
+
+## Release cut
+
+Product Build 从 `main` 切出，不在分支上组装。功能、Host、Provider、deploy workflow 与发布脚本先各自经 Integration Queue 合入 `main`；control-plane 改动（`ci.yml`、`scope_policy.json`、queue 与 gate 脚本）单独更早合入，因为它们不能进队列。切版 PR 只携带分配材料：`version.json` Build 分配、必要时的 `assembly.json` 与 `assembly.lock.json`、该 Build 的 immutable Portal snapshot 与 release-evidence 文档，因此可以进队列由控制器同步并 squash 合入。squash 产生的精确 `main` SHA 就是该 Build 唯一合法的 release target；之后的 `main` 提交不进入该 Build。发布后的修复走 PATCH：从已发布 tag 拉短命 `fix/<task>`，分配下一 PATCH，同一修复经普通 PR 回 `main`；仓库不设 `release/*` 或 `hotfix/*` 长期分支。规则全文见 `docs/governance/git-workflow.md` §6。
+
+## Product Build 权威与诊断
+
+`products/lmdj/version.json` 是当前 Product Build 的唯一源码权威。CMake、Runtime identity、
+Portal facts 与 current-repository tests 都从它派生；`assembly.json` 的 Product Build 仍是经过
+review 的 exact Assembly 声明，release intent、build-specific current prose 与 immutable
+snapshot 也继续保存各自的精确事实，不能由 mutable HEAD 自动重写。
+
+版本、Assembly、compiled assembly、lock 或 generated Runtime identity 漂移时，最早可判定的
+gate 会报告 authority、expected、found 与 consumer path；生成物 stale 还会给出稳定的
+`scripts/version.py lock` 或 `tools/web-runtime/generate_runtime_identity.py` remedy。修复命令只
+恢复派生物，不会自动修改 reviewed Assembly、release intent、snapshot 或分配新 Product Build。
+
+| Identity | 当前版本 | 变化边界 |
+| --- | --- | --- |
+| Foundation | `0.3.0` | Sequence session 与 commit receipt 强类型身份 |
+| Authoring Domain | `1.0.0` | Project v3、tick-native Pattern、整数 Quantize/Swing |
+| Project I/O | `1.0.0` | v3-only writer、Sequence journal/receipt/recovery、Bundle 1.1 |
+| Project Cooker | `1.0.0` | Project v3 确定性 Runtime Snapshot |
+| Audio Runtime | `1.0.0` | Pattern origin、整数 BPM anchor 与 Bar boundary |
+| Provider SDK | `1.1.4` | Provider/Attempt boundary 不变 |
+| Application Facade | `2.0.0` | Host-neutral Sequence recording/settings/recovery |
+| Web Runtime Platform | `1.0.0` | frame-stamped unified input 与 Sequence bridge |
+| Core CLI | `2.0.0` | Project v3 与 Sequence Facade surface |
+| Core MCP | `2.0.0` | 长生命周期 Sequence owner 与 CLI parity |
+| Native Host | `2.0.0` | Audio-frame CaptureWriter 与 Sequence lifecycle |
+| Web Runtime Host | `2.0.0` | Diagnostic Sequence/cross-window evidence |
+| Creator Web | `2.0.0` | Sequence Surface、next-Bar switch 与 recovery UI |
+| Project Contract | `lmdj.project.v3 · 3.0.0` | 唯一写入真相；v1/v2 仅迁移读取 |
+| Project Bundle | `lmdj.project-bundle.v1 · 1.1.0` | v3 writer；1.0/v1/v2 兼容读取 |
+
+这些版本变化按公开边界独立分配；历史身份及快照保持只读。已分配身份、branch-local Proof 或 immutable snapshot 都不等于 merged-main Proof、团队测试、Release 或 Channel promotion。
+## Git 与发布
+Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
+
+## 标准 Release 控制面
+
+源码 Product Build 与匹配的 immutable snapshot 可以先完成分配，此时允许没有 release intent；
+零 intent 不授予任何 release 权限。Release intent 是独立 reviewed authorization，必须等该 Task
+经 protected `main` squash merge、精确 squash SHA 已存在后才能绑定；branch-only 或 pre-squash SHA
+无效。当前 Product Build 只允许零或一个 intent，重复 intent 会被拒绝；一旦 intent 存在，原有的
+exact-target、merged-main Proof、完整 CI 与 protected-main ancestry 门禁仍全部适用。
+
+仓库已实现四段正常路径：`scripts/release.sh prepare TAG` 只准备并验证本地状态，
+`scripts/release.sh push-tag TAG` 只 push/reconcile 一个 exact tag，
+`scripts/release.sh create-draft TAG` 只创建或补全一个 Draft，最后由 dispatch-only
+`publish-release.yml` 发布同一个已验证 Draft。每段是独立授权；每次 mutation 后停止并重新运行
+`scripts/release.sh audit --remote --tag TAG`。Audit 从 policy、release intent ledger 与 live
+Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，不能满足新的 prospective gate。
+
+`audit --remote` 与 `prepare` 之前还有一道 CI 证据边界：release target 必须有一次 exact-main 的
+full 证据——该 SHA 上 completed、successful 的 `Core CI` run，同一 run 内 `Change Scope` 与
+`PR Gate` 均成功，且该 run 为同一 exact SHA 保留的 scope manifest 为 `lmdj.ci-scope` 的 v2、
+`mode=full`、`trusted_head=true`。
+其中 `Core CI` 由 run 的 `workflow_id` 和 path 绑定到 workflow metadata 的稳定 `name:`；动态
+`run-name:` 与 REST run/job display name 只用于显示，不参与 policy identity 判定。普通 `main`
+merge 现在按精确路径分类，可能只跑 focused CI，
+所以 focused target 必须由操作者对该 exact SHA 以空 `lanes` 显式 dispatch 一次 full run 并把 run
+ID 写入 release intent；`requested` 与 focused 都会被拒绝，而一次 full dispatch 本身也不授权任何
+mutation。该 manifest artifact 保留 14 天：过期后只能在 run 仍被保留时重跑其全部 job，或另行授权
+一次 exact-SHA full run 并更新 intent；证据不得推断或重建。已 published 的终态审计继续以不可变
+tag/Release/asset 证据判定。
+
+签名发生在可信本地边界；GitHub workflow 只持有 public trust anchors。公开 publication 必须由
+精确输入的 workflow dispatch 显式授权，并通过受保护的 `release` Environment。当前单人维护者
+模式要求零 required reviewer、不启用 prevent-self-review，并且只允许 exact `main` branch
+policy。Publish 以一次 PATCH 设置 Draft、
+prerelease 与 make-latest policy，前后重新验证 exact tag、numeric Release ID、plan digest 和闭合
+资产；这是并发漂移检测，不宣称 API 提供强条件更新。Runtime deployment 是另一个 manual-only
+exact-tag dispatch，之后的 Channel promotion 仍需第三份授权与证据。仓库中已有 release/deploy
+tooling 不表示当前 Product Build `1.0.21.0` 已经 released、deployed 或 promoted。
+
+## PATCH、Assembly 与证据链
+
+PATCH may not change Product Assembly identity or `assembly.lock`. Any module/provider/Host/dependency identity change allocates a new BUILD. Historical `1.0.16.x` events remain historical facts and are not rewritten；它们用于解释为什么规则被收紧，不构成再次偏离的先例。New Product tags require merged-main Proof first，且该 Proof 必须绑定未来 tag target 的精确 `main` revision、Product Build 与 lock hash。
+
+权威链必须逐环核验并分别记录：Product Build -> signed tag -> tag revision -> merged PR -> source revision -> snapshot provenance/witness -> merged-main Proof revision -> evidence-only documentation revision。branch-local Proof、快照、CI、tag 或后写的证据文档都不能替代链中其他一环。
+## 不可变性
+已发布 tag 不移动；交付测试或正式发布的文档快照按 Product Build 冻结，current 文档持续跟随 main。普通 PR Preview 不创建永久快照。
+schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资产、源提交与 source projection；后续 current 或 diagram 变化不能改写已冻结版本。生成前允许的脏路径仅限该 Product Build 的精确生成边界，提交后还必须验证 introducing commit、时间顺序以及 direct-parent 或获准的 squash-equivalent projection。
+## 发布门禁
+实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
+
+当前候选 Product tag 文本为 `lmdj-v1.0.41.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份不宣称远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 Portal 校验器判定；历史 Build 证据不自动升级。
+
+## 双 Web Host Product Release
+
+后续标准 profile `web-hosts` 为一个 Product Build/tag 创建一份精确六资产 Release：Creator 与
+Runtime 各自贡献 ZIP、checksum 和 detached checksum signature。Release assets 是签名输入，
+Creator 与 Runtime 仍是不同 Host/SemVer 和不同部署状态。Creator 生产目标是
+`https://lmdj-creator.netlify.app/`，Runtime 是 `https://lmdj-runtime.netlify.app/`；两条
+manual-only dispatch 的授权、Environment、Site credential、evidence 与 exact prior rollback
+独立，publish-release.yml 不 fan-out 到部署。
+
+历史 `1.0.40.0` tag、Release 与已记录部署保持不可变，不能补写 Creator 资产或重解释成
+`web-hosts`。新 profile 只约束后续已分配并经 protected main 合并的 Product Build。Creator
+Site 的外部 provisioning 尚须 live 证据；workflow 已存在不自动表示它已 deployed，Runtime
+成功也不自动表示 Creator deployed，任一部署都不表示 promoted。
+
+## Runtime Host 公共发布
+
+Runtime Host 的两阶段发布工具和 workflow 定义已经存在：不持有 Netlify credential 的
+preflight job 先从 canonical origin 验证 remote annotated signed Product tag、protected
+`main` ancestry，以及 Release 精确三资产 ZIP、checksum 和受信 Release checksum key 的
+detached armored signature，并完成资产下载与 staging；Product tag key 与 checksum key 的
+固定指纹和用途相互独立，不能替代，signature 验证先于 checksum 解析。只有它通过后才安装
+Node/Chromium，部署 job 在接触 Netlify 前对同一 Release 再验证一次。
+Core Release 的资产集自 2026-08-24 起为四资产（#286）：除 ZIP、checksum 和受信
+signature 外，`build-manifest.json` 不再打进归档，而是作为并列 detached 资产
+`<archive-stem>.build-manifest.json` 发布（决策
+`docs/prd/decisions/2026-08-24-build-manifest-detached.md`，#211）。归档自此只含
+payload，同一源码与工具链下字节可复现；Manifest 字段不变，仍含构建时间与构建平台。
+Web Runtime Host Release 保持上述精确三资产不变。
+发布前会发现真实 prior 身份，并先在 prior immutable/production 上运行完整
+HTTP/Chromium；draft smoke 通过后只发布同一个 ready Deploy ID。发布后任何失败、中断或
+API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact prior，首次无 prior 则
+以官方 reversible site disable 安全撤下。成功 evidence v2 与恢复 evidence v1 分别保存完整
+HTTP JSON、browser、publish/restore response 和时间。它定义可审计的操作路径；实际发布
+状态必须由与精确身份绑定的 evidence 独立报告。
+
+该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.41.0` 或任何历史 Product Build 已获得 remote verified
+tag、Release、Deploy ID、immutable URL、production alias、deployment evidence 或 Channel
+promotion。历史 `1.0.15.2` 的 tag、Release 或部署证据不自动升级为当前候选证据；只有与
+精确 Product/Host 身份绑定的实际 evidence record 才能让 Portal 报告公共部署。本地工具、
+Proof、PR Preview 或 workflow 定义都不能替代它。运营前置条件、恢复和凭据轮换见仓库运行手册
+`docs/deploy/web-runtime-host.md`；其验收真相记录见
+`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
+
+proof-only Python server 不属于生产面；Netlify 将静态服务经验证的 release `dist`。
+`lmdj-canary` 属于 Creator 交付边界，不能作为 Diagnostic Runtime Host 的项目、别名或 URL。
