@@ -40,6 +40,12 @@ from tools.release.rehearsal import (  # noqa: E402
     prepare_rehearsal,
     push_rehearsal_tag,
 )
+from tools.release.promotion import (  # noqa: E402
+    PromotionError,
+    apply_promotion,
+    parse_deployment_run_arguments,
+    plan_promotion,
+)
 from tools.release.transitions import (  # noqa: E402
     TransitionError,
     create_draft,
@@ -67,6 +73,17 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     published.add_argument("tag")
     published.add_argument("release_id", type=int)
     published.add_argument("plan_sha256")
+    promoted = commands.add_parser("promote")
+    promoted.add_argument("tag")
+    promoted.add_argument("channel")
+    promoted.add_argument(
+        "--deployment-run", action="append", default=[], metavar="HOST=RUN_ID",
+        help="one completed Host deployment run per profile host",
+    )
+    promoted.add_argument(
+        "--evidence", action="append", default=[], metavar="PATH",
+        help="tracked acceptance document under docs/release-evidence/ or docs/quality/",
+    )
     rehearsal = commands.add_parser("rehearsal")
     rehearsal_commands = rehearsal.add_subparsers(dest="rehearsal_command", required=True)
     for name in ("prepare", "push-tag", "create-draft", "cleanup"):
@@ -214,6 +231,25 @@ def main(argv: list[str] | None = None) -> int:
                 write_report(report, destination)
             print(format_report(report))
             return report.exit_code
+        if options.command == "promote":
+            report = audit(build_audit_context(root, remote=True), remote=True, tag=options.tag)
+            print(format_report(report))
+            if report.exit_code != 0:
+                raise PromotionError("exact-tag remote audit must pass before promotion")
+            context = build_context(root)
+            plan = plan_promotion(
+                context,
+                tag=options.tag,
+                channel=options.channel,
+                deployment_runs=parse_deployment_run_arguments(options.deployment_run),
+                evidence_paths=options.evidence,
+            )
+            written = apply_promotion(root, plan, context.policy)
+            print(f"promotion recorded: {plan.tag} {plan.from_channel} -> {plan.to_channel}")
+            print(f"ledger: {written.ledger_path}")
+            print(f"evidence document: {written.evidence_document}")
+            print("next step: commit both files as a docs Pull Request through the Integration Queue")
+            return 0
         context = build_context(root)
         if options.command == "prepare":
             prepared = prepare(options.tag, context)
@@ -242,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if error.code == 0 else 64
     except (
         CommandError, GitHubApiError, GitRepositoryError, OpenPgpError, PrepareError,
-        ProfileError, RehearsalError, ReleaseModelError, TransitionError, OSError,
+        ProfileError, PromotionError, RehearsalError, ReleaseModelError, TransitionError, OSError,
     ) as error:
         detail = error.detail if isinstance(error, CommandError) else ""
         suffix = f": {detail}" if detail else ""

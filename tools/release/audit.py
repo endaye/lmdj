@@ -167,6 +167,21 @@ def audit(
                 ("canonical-trust",),
             ),),
         )
+    except ReleaseModelError as error:
+        # The authority tree is protected main, but the parser is this checkout's.
+        # A branch that tightens the closed policy or ledger schema therefore
+        # cannot read main's documents, and that is a schema divergence between
+        # checkout and authority, not a remote outage. Naming it keeps an
+        # operator from chasing credentials or the network.
+        return _report(
+            observed, policy.repository, mode,
+            (AuditFinding(
+                "conflict", policy.repository,
+                "canonical release authority does not satisfy this checkout's closed "
+                f"policy or ledger schema; land the schema change on main first ({error})",
+                ("release-authority",),
+            ),),
+        )
     except Exception:
         return _report(
             observed, policy.repository, mode,
@@ -570,8 +585,55 @@ def _audit_remote_intent(
         proof_problem = _proof_problem(context, intent)
         if proof_problem is not None:
             return proof_problem
+        promotion_problem = _promotion_problem(context, intent)
+        if promotion_problem is not None:
+            return promotion_problem
     message = "remote tag, Release metadata, CI and asset profile match canonical intent"
+    if intent.promotions:
+        message += f"; promoted to {intent.current_channel}"
     return _exception_finding(exception, message) if exception is not None else AuditFinding("ok", intent.tag, message)
+
+
+def _promotion_problem(context: object, intent: ReleaseIntent) -> AuditFinding | None:
+    """Re-check that every recorded promotion still rests on a real, successful run.
+
+    Retained artifacts have a bounded life, so the recorded evidence digest is the
+    durable record and is not re-downloaded here; the run itself is retained far
+    longer and must still exist, belong to the Host workflow, and have succeeded.
+    """
+    policy = context.policy
+    for promotion in intent.promotions:
+        evidence_issue = _evidence_issue(context.repo_root, promotion.evidence_paths)
+        if evidence_issue is not None:
+            return AuditFinding("unverifiable", intent.tag, evidence_issue, promotion.evidence_paths)
+        for record in promotion.deployment_runs:
+            host_policy = policy.promotion.hosts[record.host]
+            try:
+                run = context.github.get_run(policy.repository, record.run_id)
+            except Exception as error:
+                text = str(error)
+                if "404" in text or "not found" in text.lower():
+                    return AuditFinding(
+                        "missing", intent.tag,
+                        f"{promotion.channel} promotion records an absent {record.host} deployment run {record.run_id}",
+                        ("github-actions-run",),
+                    )
+                return AuditFinding(
+                    "external-error", intent.tag,
+                    "GitHub Actions run projection for promotion evidence is unavailable",
+                    ("github-actions-run",),
+                )
+            if (
+                run.path != host_policy.workflow_path or run.event != "workflow_dispatch"
+                or run.head_branch != policy.branch or run.status != "completed"
+                or run.conclusion != "success"
+            ):
+                return AuditFinding(
+                    "conflict", intent.tag,
+                    f"{promotion.channel} promotion records a {record.host} deployment run that does not satisfy policy",
+                    ("github-actions-run",),
+                )
+    return None
 
 
 def _audit_remote_exception(

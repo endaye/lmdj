@@ -37,7 +37,7 @@ class ReleaseSkillTest(unittest.TestCase):
 
     def test_skill_is_navigation_not_policy(self) -> None:
         source = self.read(SKILL)
-        for command in ("audit", "prepare", "push-tag", "create-draft", "verify-draft"):
+        for command in ("audit", "prepare", "push-tag", "create-draft", "verify-draft", "promote"):
             self.assertIn(f"scripts/release.sh {command}", source)
 
         policy = json.loads(self.read(RELEASE_POLICY))
