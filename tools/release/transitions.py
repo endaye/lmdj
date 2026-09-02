@@ -615,10 +615,13 @@ def _download_and_verify_assets(
             path.write_bytes(payload)
             builds.append(AssetBuild(path, name, len(payload), sha256))
             remote_assets.append(asset)
+            # browser_download_url is not draft-invariant: publication rewrites
+            # the untagged draft path to the exact tag path on every genuine
+            # publish, exactly as it rewrites the Release html_url.
             snapshots.append((
                 asset.id, asset.name, asset.label, asset.content_type,
                 asset.state, asset.size, sha256,
-                asset.api_url, asset.browser_download_url, asset.release_id,
+                asset.api_url, asset.release_id,
             ))
         verified = _verify_profile(authority, tuple(builds), root)
         return verified, tuple(remote_assets), tuple(snapshots)
