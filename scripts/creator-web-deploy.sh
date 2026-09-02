@@ -67,9 +67,17 @@ with_gh_environment_removed() {
   local -a unset_arguments=()
   local name=''
   while IFS= read -r name; do
-    [[ "$name" == GH* ]] && unset_arguments+=(-u "$name")
+    # An `&&` list whose test fails returns non-zero, which set -e treats as a
+    # fatal statement, so the append must be a plain conditional.
+    if [[ "$name" == GH* ]]; then
+      unset_arguments+=(-u "$name")
+    fi
   done < <(compgen -e)
-  env "${unset_arguments[@]}" "$@"
+  # bash 3.2 treats "${array[@]}" on an empty array as an unbound variable
+  # under set -u, so an environment with no GH* variable must expand to
+  # nothing rather than to an error. GitHub runners always export GITHUB_*,
+  # which matches GH*, so only operator machines reach the empty case.
+  env ${unset_arguments[@]+"${unset_arguments[@]}"} "$@"
 }
 
 without_deploy_secrets() {
@@ -171,6 +179,19 @@ trap cleanup_all EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# A GnuPG home holds the agent socket, whose absolute path must fit the
+# platform sun_path limit. macOS per-user TMPDIR values are long enough that
+# "<parent>/lmdj-creator-web-deploy.XXXXXX/gnupg/S.gpg-agent" overflows it by a
+# single character, and gpg then exits non-zero on an otherwise successful
+# public-key import. Linux runners use a short TMPDIR and never reach it.
+_GNUPG_SOCKET_BUDGET=104
+
+owned_temp_parent_fits_gnupg_socket() {
+  local parent="$1"
+  local projected="$parent/lmdj-creator-web-deploy.XXXXXX/gnupg/S.gpg-agent"
+  (( ${#projected} <= _GNUPG_SOCKET_BUDGET ))
+}
+
 create_owned_temp() {
   local requested_parent="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
   [[ -d "$requested_parent" && ! -L "$requested_parent" ]] || {
@@ -178,6 +199,17 @@ create_owned_temp() {
     return
   }
   owned_temp_parent="$(cd "$requested_parent" && pwd -P)"
+  if ! owned_temp_parent_fits_gnupg_socket "$owned_temp_parent"; then
+    [[ -d /tmp ]] || {
+      fail "temporary parent exceeds the GnuPG socket budget"
+      return
+    }
+    owned_temp_parent="$(cd /tmp && pwd -P)"
+    owned_temp_parent_fits_gnupg_socket "$owned_temp_parent" || {
+      fail "temporary parent exceeds the GnuPG socket budget"
+      return
+    }
+  fi
   owned_temp="$(mktemp -d "$owned_temp_parent/lmdj-creator-web-deploy.XXXXXX")"
   [[ -d "$owned_temp" && ! -L "$owned_temp" ]] || {
     fail "owned temporary root was not created safely"
