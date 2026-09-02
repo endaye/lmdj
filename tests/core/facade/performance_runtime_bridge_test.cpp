@@ -1,9 +1,9 @@
 #include <cstdint>
 #include <iostream>
-#include <memory>
-#include <utility>
-
 #include <lmdj/facade/performance_runtime.hpp>
+#include <memory>
+
+#include <utility>
 
 #include "tests/core/support/test.hpp"
 
@@ -51,6 +51,22 @@ replay_projection() {
                   960, PerformanceEvent{HoldOffPerformanceEvent{960}}},
           },
           2,
+      });
+}
+
+std::shared_ptr<const lmdj::cooker::PerformanceReplayProjection>
+empty_replay_projection() {
+  return std::make_shared<const lmdj::cooker::PerformanceReplayProjection>(
+      lmdj::cooker::PerformanceReplayProjection{
+          lmdj::domain::PerformanceId{kPerformance},
+          10,
+          120,
+          false,
+          50,
+          {},
+          {},
+          {},
+          0,
       });
 }
 
@@ -169,6 +185,16 @@ void test_replay_progression_depends_on_elapsed_time_only() {
   LMDJ_CHECK(completed.value().state == lmdj::facade::ReplayState::complete);
 }
 
+void test_silent_headless_reset_completes_without_pending_cycle() {
+  auto bridge = lmdj::facade::make_headless_performance_runtime_bridge(
+      std::make_shared<ScriptedTimeSource>());
+  const auto completed = bridge.replay_controller->begin(
+      lmdj::facade::ReplayId{kReplay}, empty_replay_projection());
+  LMDJ_CHECK(completed.has_value());
+  LMDJ_CHECK(completed.value().state == lmdj::facade::ReplayState::complete);
+  LMDJ_CHECK(completed.value().event_cursor == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -177,6 +203,7 @@ int main() {
     test_sequencer_is_strictly_increasing();
     test_transport_latest_wins_exactly_once_and_cancel();
     test_replay_progression_depends_on_elapsed_time_only();
+    test_silent_headless_reset_completes_without_pending_cycle();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

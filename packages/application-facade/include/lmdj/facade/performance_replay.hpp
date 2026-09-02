@@ -27,6 +27,11 @@ struct ReplayRuntimeStatus {
   bool operator==(const ReplayRuntimeStatus&) const = default;
 };
 
+enum class NeutralResetProgress : std::uint8_t {
+  pending,
+  complete,
+};
+
 class PerformanceReplayController {
  public:
   virtual ~PerformanceReplayController() = default;
@@ -51,7 +56,7 @@ class PerformanceReplayRuntimeSink {
       std::shared_ptr<const cooker::RuntimeSnapshot> pattern) = 0;
   virtual foundation::Result<void> apply_fx_gesture(
       audio::FxGesture gesture) = 0;
-  virtual foundation::Result<void> reset_neutral() = 0;
+  virtual foundation::Result<NeutralResetProgress> reset_neutral() = 0;
 };
 
 class ReferencePerformanceReplayController final
