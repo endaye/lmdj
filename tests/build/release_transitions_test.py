@@ -459,6 +459,44 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertNotIn("--tags", runner.commands[-1])
         self.assertNotIn("--force", runner.commands[-1])
 
+    def test_local_tag_operations_force_openpgp_despite_global_git_signing_format(self) -> None:
+        class CreatingRepository(GitRepository):
+            def local_tag_state(self, tag: str) -> LocalTag:
+                return LocalTag("b" * 40, self.root.name, "C" * 40)
+
+        create_runner = RecordingRunner()
+        target = "a" * 40
+        repository = CreatingRepository(Path(target), runner=create_runner)
+        repository.create_local_tag("lmdj-v1.0.21.0", target, "C" * 40, "fixture")
+        self.assertEqual(create_runner.commands[0][:4], [
+            "git", "-c", "gpg.format=openpgp", "tag",
+        ])
+
+        class VerifyingRunner(RecordingRunner):
+            def run(self, arguments, *, cwd=None, environment=None) -> CommandResult:
+                vector = [str(item) for item in arguments]
+                self.commands.append(vector)
+                if vector[-3:] == ["rev-parse", "--verify", "refs/tags/fixture"]:
+                    return CommandResult(tuple(vector), 0, "b" * 40 + "\n", "")
+                if vector[-3:] == ["cat-file", "-t", "refs/tags/fixture"]:
+                    return CommandResult(tuple(vector), 0, "tag\n", "")
+                if vector[-3:] == ["rev-parse", "--verify", "refs/tags/fixture^{commit}"]:
+                    return CommandResult(tuple(vector), 0, target + "\n", "")
+                if vector[-3:] == ["verify-tag", "--raw", "refs/tags/fixture"]:
+                    status = "[GNUPG:] VALIDSIG " + "C" * 40 + "\n"
+                    return CommandResult(tuple(vector), 0, "", status)
+                raise AssertionError(vector)
+
+        verify_runner = VerifyingRunner()
+        verified = GitRepository(self.root, runner=verify_runner).local_tag_state("fixture")
+        self.assertEqual(verified.signer_fingerprint, "C" * 40)
+        verify_command = next(
+            command for command in verify_runner.commands if "verify-tag" in command
+        )
+        self.assertEqual(verify_command[:4], [
+            "git", "-c", "gpg.format=openpgp", "verify-tag",
+        ])
+
     def test_origin_guard_rejects_any_extra_fetch_or_push_url(self) -> None:
         class MultipleUrlRunner(RecordingRunner):
             def __init__(self, *, extra_fetch: bool) -> None:

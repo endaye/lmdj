@@ -925,6 +925,33 @@ class ReleasePrepareTest(unittest.TestCase):
         self.assertIn("fetch:endaye/lmdj:main", self.git.calls)
         self.assertTrue(callable(context.profile_verifier))
 
+    def test_cli_context_keeps_checksum_keyring_distinct_from_product_keyring(self) -> None:
+        captured: list[ProfileRuntime] = []
+
+        def capture_builder(runtime: ProfileRuntime):
+            captured.append(runtime)
+            return mock.Mock()
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"GNUPGHOME": "/operator/product-keyring"},
+            ),
+            mock.patch.object(cli, "default_profile_builder", side_effect=capture_builder),
+        ):
+            cli.build_context(
+                self.root,
+                git=self.git,
+                github=self.github,
+                authority_reader=lambda worktree: (self.policy, self.ledger),
+            )
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(
+            captured[0].checksum_home,
+            Path.home() / ".gnupg-lmdj-release",
+        )
+
     def test_cli_context_uses_logged_in_gh_credentials_when_token_env_is_empty(self) -> None:
         token = "ghp_LOCAL_CREDENTIAL_FIXTURE"
         requests: list[tuple[str, str, dict[str, str]]] = []

@@ -113,7 +113,8 @@ class GitRepository:
 
     def create_local_tag(self, tag: str, target: str, signer: str, message: str) -> LocalTag:
         self._run([
-            "git", "tag", "--sign", "--local-user", signer, "--message", message, tag, target,
+            "git", "-c", "gpg.format=openpgp", "tag", "--sign", "--local-user", signer,
+            "--message", message, tag, target,
         ])
         state = self.local_tag_state(tag)
         if state is None:
@@ -129,7 +130,8 @@ class GitRepository:
         _require_tag(tag)
         environment = {"GNUPGHOME": str(gpg_home)}
         self._run([
-            "git", "tag", "--sign", "--local-user", signer, "--message", message, tag, target,
+            "git", "-c", "gpg.format=openpgp", "tag", "--sign", "--local-user", signer,
+            "--message", message, tag, target,
         ], environment=environment)
         state = self._tag_state(f"refs/tags/{tag}", environment=environment)
         if state is None or state.target_revision != target or state.signer_fingerprint != signer:
@@ -197,7 +199,8 @@ class GitRepository:
                 signer = self._verify_canonical_tag(reference)
             else:
                 status = self._run(
-                    ["git", "verify-tag", "--raw", reference], environment=environment,
+                    ["git", "-c", "gpg.format=openpgp", "verify-tag", "--raw", reference],
+                    environment=environment,
                 ).stderr
                 signer = _signer_from_status(status)
         except GitRepositoryError:
