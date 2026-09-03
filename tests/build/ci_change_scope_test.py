@@ -148,6 +148,12 @@ CASES = {
     "tools/web-runtime/verify_emscripten.py": {
         "web_toolchain", "web_runtime_host", "creator"
     },
+    "tools/provider-benchmark/generate_sample_slice_smoke.py": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/fixtures/provider-benchmark/sample-slice/manifest.json": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
     "tools/release/model.py": {"deploy_contract", "ci_contract"},
     "packaging/core/CMakeLists.txt": {"core_ubuntu", "package"},
     "netlify.toml": {"portal", "ci_contract"},
