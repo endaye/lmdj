@@ -265,6 +265,28 @@ workflows, and scheduled TSan, which stays Hosted on its own recorded grounds.
 Each is a separate decision with its own reason; none of them is covered by the
 four-job exception, and none should be read as covered by it.
 
+`scripts/ci/hosted_runner_policy.json` is the authoritative list of those
+decisions, and `tests/build/ci_hosted_runner_policy_test.py` enforces it. The
+test enumerates every job in `.github/workflows` whose `runs-on` can resolve to
+a GitHub-hosted label — a `runs-on` built from an expression counts, because it
+may resolve to one — and requires each to carry an entry naming a category and a
+reason. Four categories admit a job: `control-plane` for scope, trust, admission
+or verdict evidence that must survive a self-hosted outage; `adjudicator` for a
+job that republishes an already produced result and executes no workload;
+`deploy-authority` for deployment, signing or publication authority the CI runner
+users are deliberately denied; and `platform` for a recorded incompatibility. A
+fifth, `temporary`, admits a job that is *not* justified on the merits and must
+name the Issue that removes it. The test also rejects entries whose job no longer
+exists or no longer runs hosted, so the list cannot outlive what it describes,
+and it separately requires every `ci-core` job to stay off hosted runners.
+
+This exists because prose drifts and a list does not. The watchdog is the
+evidence: the paragraph above was accurate about intent for months while a job
+outside its scope spent the entire included allowance. Adding a hosted job is now
+a reviewed act with a written reason rather than the path of least resistance.
+`tests/build/workflow_inventory.py` holds the shared scan both this test and the
+`ci-core` registration gate read, so the two cannot disagree about what a job is.
+
 The scope manifest is `lmdj.ci-scope.v2`. v2 adds exactly one closed boolean
 field, `trusted_head`, and `Change Scope` publishes the matching `trusted-head`
 job output. Trust is derived only from the event: a non-`pull_request` event,

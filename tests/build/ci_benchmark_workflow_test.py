@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 import unittest
 
+from workflow_inventory import WORKFLOW_DIR, jobs_in
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BENCHMARK = REPO_ROOT / ".github/workflows/ci-self-hosted-benchmark.yml"
@@ -16,52 +18,12 @@ FORMAL = REPO_ROOT / ".github/workflows/ci.yml"
 ACTION = REPO_ROOT / ".github/actions/web-ci-proof/action.yml"
 CONTABO = REPO_ROOT / "scripts/ci/elastic-runner/contabo.json"
 
-WORKFLOW_DIR = REPO_ROOT / ".github/workflows"
-
 CORE_ROLE = "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]"
 
 
 def core_role_job_names(workflow: Path) -> list[str]:
-    """Display names of every job in `workflow` that names the `ci-core` role.
-
-    A line scan rather than a YAML load: no test or script in this repository
-    depends on PyYAML, and the CI contract lane's interpreter is not guaranteed
-    to provide it.
-    """
-    lines = workflow.read_text(encoding="utf-8").splitlines()
-    names: list[str] = []
-    in_jobs = False
-    job_id: str | None = None
-    display: str | None = None
-    is_core = False
-
-    def flush() -> None:
-        if job_id is not None and is_core:
-            names.append(display or job_id)
-
-    for line in lines:
-        if re.match(r"^jobs:\s*$", line):
-            in_jobs = True
-            continue
-        if not in_jobs:
-            continue
-        if line and not line.startswith(" ") and not line.startswith("#"):
-            break  # a new top-level key ends the jobs mapping
-        start = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
-        if start:
-            flush()
-            job_id, display, is_core = start.group(1), None, False
-            continue
-        if job_id is None:
-            continue
-        name_match = re.match(r"^    name: (.+?)\s*$", line)
-        if name_match:
-            display = name_match.group(1)
-            continue
-        if re.match(r"^    runs-on: .*\bci-core\b", line):
-            is_core = True
-    flush()
-    return names
+    """Display names of every job in `workflow` that names the `ci-core` role."""
+    return [job.display_name for job in jobs_in(workflow) if job.has_role("ci-core")]
 
 
 # Lane -> the script commands the formal ci.yml job runs for it. The benchmark
