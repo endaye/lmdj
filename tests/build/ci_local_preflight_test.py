@@ -185,6 +185,103 @@ class LaneTableContractTest(unittest.TestCase):
             self.classifier._matches({"kind": "prefix", "value": "docs/"}, "docs/a.md")
         )
 
+    def test_preflight_applies_the_same_scope_policy_exemption_as_ci(self) -> None:
+        """A pre-flight that skipped it would report `full` where CI reports `focused`.
+
+        `change_scope.main` computes `policy_edit_preserving` before classifying,
+        so an edit to `scope_policy.json` that changes no existing path's routing
+        does not select the full manifest. The pre-flight calls `classify`
+        directly; omitting the same computation makes it disagree with CI about
+        the lane set, which is the one thing it exists to prevent.
+        """
+        source = (ROOT / "scripts/ci/local_preflight.py").read_text(encoding="utf-8")
+        message = (
+            "why: scripts/ci/local-ci.sh reuses the classifier so it cannot "
+            "select a different lane set than CI, and change_scope.main derives "
+            "policy_edit_preserving before classifying; a pre-flight that does "
+            "not would report full for a change CI classifies focused; remedy: "
+            "compute the same exemption here and pass it to classify"
+        )
+        self.assertIn("policy_edit_is_classification_preserving", source, message)
+        self.assertIn("read_merge_base_policy", source, message)
+        self.assertIn("read_merge_base_tracked_paths", source, message)
+        self.assertIn("policy_edit_preserving=policy_edit_preserving", source, message)
+
+    def test_a_preserving_policy_edit_classifies_focused_end_to_end(self) -> None:
+        """The wiring assertions above say the code is there; this says it works.
+
+        A throwaway repository whose only change is adding a routing rule for a
+        file the same branch introduces. CI classifies that `focused`; before
+        this fix the pre-flight classified it `full`.
+        """
+        repository = TemporaryRepository()
+        try:
+            policy_text = (ROOT / "scripts/ci/scope_policy.json").read_text(
+                encoding="utf-8"
+            )
+            repository.write("scripts/ci/scope_policy.json", policy_text)
+            repository.commit("baseline policy")
+            base_sha = git(repository.path, "rev-parse", "HEAD").strip()
+
+            head_policy = json.loads(policy_text)
+            head_policy["rules"].append(
+                {
+                    "match": {"kind": "exact", "value": "tests/build/ci_probe_helper.py"},
+                    "lanes": ["ci_contract"],
+                }
+            )
+            repository.write(
+                "scripts/ci/scope_policy.json",
+                json.dumps(head_policy, indent=2) + "\n",
+            )
+            repository.write("tests/build/ci_probe_helper.py", "# probe\n")
+            repository.commit("add a rule for a path this branch introduces")
+            head_sha = git(repository.path, "rev-parse", "HEAD").strip()
+
+            base_policy = self.classifier.read_merge_base_policy(
+                repository.path, base_sha, head_sha
+            )
+            self.assertIsNotNone(base_policy, "the merge-base policy must be readable")
+            preserving, reason = (
+                self.classifier.policy_edit_is_classification_preserving(
+                    base_policy,
+                    head_policy,
+                    self.classifier.read_merge_base_tracked_paths(
+                        repository.path, base_sha, head_sha
+                    ),
+                )
+            )
+            self.assertTrue(preserving, reason)
+
+            inventory = self.classifier.read_git_inventory(
+                repository.path, base_sha, head_sha
+            )
+            manifest = self.classifier.classify(
+                head_policy, inventory, base_sha=base_sha, head_sha=head_sha,
+                event_name="pull_request", draft=False, labels=(),
+                policy_edit_preserving=preserving,
+            )
+            self.assertEqual(manifest["mode"], "focused", manifest["reasons"])
+        finally:
+            repository.close()
+
+    def test_the_classifier_exports_what_the_preflight_needs(self) -> None:
+        for name in (
+            "SCOPE_POLICY_PATH",
+            "policy_edit_is_classification_preserving",
+            "read_merge_base_policy",
+            "read_merge_base_tracked_paths",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(
+                    hasattr(self.classifier, name),
+                    msg=(
+                        f"why: the pre-flight reads {name} from the classifier to "
+                        "reproduce CI's scope decision; remedy: keep it exported "
+                        "from scripts/ci/change_scope.py"
+                    ),
+                )
+
 
 class LaneCommandDriftTest(unittest.TestCase):
     """Lane-key equality is not enough: the commands must not drift either.

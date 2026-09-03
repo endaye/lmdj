@@ -153,6 +153,14 @@ filename reference, which is how such a dependency would be written; a path
 assembled at runtime would evade it, and that gap is accepted rather than
 closed by tracing file handles.
 
+`scripts/ci/local_preflight.py` computes the same differential before it
+classifies. The pre-flight exists so a local run cannot select a different lane
+set than CI, and CI derives the exemption in `change_scope.main` rather than
+inside `classify`, so a pre-flight that only called `classify` would report
+`full` for a change CI classifies `focused` — the one divergence it exists to
+prevent. `tests/build/ci_local_preflight_test.py` holds both the wiring and an
+end-to-end case built on a throwaway repository.
+
 The exemption fails closed and stays narrow. An unreadable, unparseable or
 absent base policy keeps the upgrade; it suppresses only the policy file's own
 contribution, so a classifier change or a `ci.yml` change in the same branch
@@ -306,6 +314,23 @@ the release audit, the Portal deployment smoke, the deployment and publication
 workflows, and scheduled TSan, which stays Hosted on its own recorded grounds.
 Each is a separate decision with its own reason; none of them is covered by the
 four-job exception, and none should be read as covered by it.
+
+The Merge Queue worker is the second worked example, and it separates two
+things the exception can conflate. `route` decides whether a Pull Request is
+admitted to the queue; that is admission evidence and it stays hosted.
+`queue-item` only carries the decision out, and it spends nearly all of its time
+inside `wait_validation`, polling for another GitHub run to finish -- about 33
+minutes per validation, and roughly 43% of the remaining hosted minutes once
+the watchdog moved. Waiting is not evidence, and the availability the exception
+buys does not exist here: when every self-hosted runner is down, the validation
+being waited for cannot run either. It therefore runs on `ci-general`, where the
+wait costs a role slot rather than money.
+
+GitHub's own merge queue would remove that wait entirely by moving it to
+GitHub's side. It is not available here: merge queues require a public
+repository or a private repository under GitHub Enterprise Cloud, and this is a
+private repository on a personal account. Recorded so the option is not
+re-proposed as though it were open.
 
 `scripts/ci/hosted_runner_policy.json` is the authoritative list of those
 decisions, and `tests/build/ci_hosted_runner_policy_test.py` enforces it. The
