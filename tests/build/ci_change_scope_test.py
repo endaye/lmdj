@@ -170,6 +170,8 @@ CASES = {
     },
     ".github/actions/web-ci-proof/action.yml": set(LANES),
     ".github/workflows/ci-self-hosted-benchmark.yml": {"ci_contract"},
+    ".github/workflows/grok-review.yml": {"ci_contract"},
+    ".github/scripts/grok_review.py": {"ci_contract"},
     ".gitattributes": set(LANES),
 }
 
@@ -609,6 +611,19 @@ class ChangeScopeTest(unittest.TestCase):
         unknown = self.classify([
             ".github/workflows/architecture-portal-new-control.yml"
         ])
+        self.assertEqual(unknown["mode"], "full")
+        self.assertEqual(self.true_lanes(unknown), LANES)
+
+    def test_grok_review_workflow_is_ci_contract_and_similar_unknown_name_is_full(self):
+        for path in (
+            ".github/workflows/grok-review.yml",
+            ".github/scripts/grok_review.py",
+        ):
+            with self.subTest(path=path):
+                manifest = self.classify([path])
+                self.assertEqual(manifest["mode"], "focused")
+                self.assertEqual(self.true_lanes(manifest), {"ci_contract"})
+        unknown = self.classify([".github/workflows/grok-review-control.yml"])
         self.assertEqual(unknown["mode"], "full")
         self.assertEqual(self.true_lanes(unknown), LANES)
 
