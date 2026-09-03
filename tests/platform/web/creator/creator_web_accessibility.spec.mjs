@@ -196,11 +196,15 @@ for (const viewport of [
     const focusOrder = [];
     for (let index = 0; index < 6; index += 1) {
       await page.keyboard.press("Tab");
-      focusOrder.push(await page.evaluate(() =>
-        document.activeElement?.textContent?.trim()));
+      // Mode buttons carry a decorative glyph before their label; read the
+      // label so the order does not depend on the glyph set.
+      focusOrder.push(await page.evaluate(() => {
+        const active = document.activeElement;
+        return (active?.querySelector(".mode-label") ?? active)?.textContent?.trim();
+      }));
     }
     expect(focusOrder).toEqual([
-      "Enable MIDI", "Export report", "PProject", "QSequence", "SSample", "Open local",
+      "Enable MIDI", "Export report", "Project", "Sequence", "Sample", "Open local",
     ]);
     await page.getByRole("button", {name: "Sample"}).click();
     await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();

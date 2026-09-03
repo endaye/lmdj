@@ -16,9 +16,12 @@ export function SequenceTransport({state, ready, onRecord, onStop, onRefresh}: S
       <button type="button" disabled={!ready || recording} onClick={onRecord}>Record</button>
       <button type="button" disabled={!recording || state.phase === "flushing"} onClick={onStop}>Stop</button>
       <button type="button" onClick={onRefresh}>Refresh authority</button>
+      {!ready && !recording ? (
+        <p className="transport-hint">Activate audio to record</p>
+      ) : null}
       {state.status?.effectiveRuntimeFrame !== null &&
         state.status?.effectiveRuntimeFrame !== undefined ? (
-          <p>Next Bar frame: {state.status.effectiveRuntimeFrame}</p>
+          <p className="transport-frame">Next Bar frame: {state.status.effectiveRuntimeFrame}</p>
         ) : null}
     </section>
   );

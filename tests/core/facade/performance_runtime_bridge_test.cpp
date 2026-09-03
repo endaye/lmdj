@@ -10,8 +10,10 @@
 namespace {
 
 constexpr auto kSession = "71000000-0000-4000-8000-000000000001";
+constexpr auto kOtherSession = "71000000-0000-4000-8000-000000000006";
 constexpr auto kFirstLaunch = "71000000-0000-4000-8000-000000000002";
 constexpr auto kSecondLaunch = "71000000-0000-4000-8000-000000000003";
+constexpr auto kThirdLaunch = "71000000-0000-4000-8000-000000000007";
 constexpr auto kReplay = "71000000-0000-4000-8000-000000000004";
 constexpr auto kPerformance = "71000000-0000-4000-8000-000000000005";
 
@@ -107,36 +109,83 @@ void test_transport_latest_wins_exactly_once_and_cancel() {
       session,
       lmdj::foundation::CommandId{kFirstLaunch},
       1,
-      3840,
+      0,
       nullptr);
   LMDJ_CHECK(first.has_value());
-  LMDJ_CHECK(first.value().target_tick == 3840);
+  LMDJ_CHECK(first.value().target_tick == 0);
   LMDJ_CHECK(!first.value().claimed);
+  bridge.service();
 
   const auto second = bridge.launch_acknowledger->reserve(
       session,
       lmdj::foundation::CommandId{kSecondLaunch},
       2,
-      3840,
+      0,
       nullptr);
   LMDJ_CHECK(second.has_value());
   LMDJ_CHECK(!second.value().claimed);
+  bridge.service();
 
-  time->set(1'999'000'000ULL);
+  const auto first_peek = bridge.launch_acknowledger->peek(session);
+  const auto repeated_peek = bridge.launch_acknowledger->peek(session);
+  LMDJ_CHECK(first_peek.size() == 2);
+  LMDJ_CHECK(repeated_peek.size() == first_peek.size());
+  for (std::size_t index = 0; index < first_peek.size(); ++index) {
+    LMDJ_CHECK(repeated_peek.at(index).request_id ==
+               first_peek.at(index).request_id);
+    LMDJ_CHECK(repeated_peek.at(index).pattern_slot ==
+               first_peek.at(index).pattern_slot);
+    LMDJ_CHECK(repeated_peek.at(index).effective_tick ==
+               first_peek.at(index).effective_tick);
+    LMDJ_CHECK(repeated_peek.at(index).kind == first_peek.at(index).kind);
+  }
+  LMDJ_CHECK(first_peek.at(0).request_id.value() == kFirstLaunch);
+  LMDJ_CHECK(first_peek.at(1).request_id.value() == kSecondLaunch);
+
+  const auto out_of_order = bridge.launch_acknowledger->commit(
+      session, lmdj::foundation::CommandId{kSecondLaunch});
+  LMDJ_CHECK(!out_of_order.has_value());
+  LMDJ_CHECK(out_of_order.error().code ==
+             lmdj::foundation::ErrorCode::invalid_argument);
+  LMDJ_CHECK(bridge.launch_acknowledger->peek(session).size() == 2);
+
+  const lmdj::foundation::SequenceSessionId other_session{kOtherSession};
+  const auto cross_session = bridge.launch_acknowledger->commit(
+      other_session, lmdj::foundation::CommandId{kFirstLaunch});
+  LMDJ_CHECK(!cross_session.has_value());
+  LMDJ_CHECK(bridge.launch_acknowledger->peek(session).size() == 2);
+  LMDJ_CHECK(bridge.launch_acknowledger->peek(other_session).empty());
+
+  LMDJ_CHECK(bridge.launch_acknowledger
+                 ->reserve(other_session,
+                           lmdj::foundation::CommandId{kThirdLaunch}, 3, 0,
+                           nullptr)
+                 .has_value());
   bridge.service();
-  LMDJ_CHECK(bridge.launch_acknowledger->drain(session).empty());
-  time->set(2'000'000'000ULL);
-  bridge.service();
-  const auto outcomes = bridge.launch_acknowledger->drain(session);
-  LMDJ_CHECK(outcomes.size() == 1);
-  LMDJ_CHECK(outcomes.front().request_id.value() == kSecondLaunch);
-  LMDJ_CHECK(outcomes.front().pattern_slot == 2);
-  LMDJ_CHECK(outcomes.front().effective_tick == 3840);
-  LMDJ_CHECK(
-      outcomes.front().kind ==
-      lmdj::facade::PatternLaunchOutcomeKind::applied);
-  bridge.service();
-  LMDJ_CHECK(bridge.launch_acknowledger->drain(session).empty());
+  LMDJ_CHECK(bridge.launch_acknowledger->peek(other_session).size() == 1);
+
+  LMDJ_CHECK(bridge.launch_acknowledger
+                 ->commit(session,
+                          lmdj::foundation::CommandId{kFirstLaunch})
+                 .has_value());
+  const auto remaining = bridge.launch_acknowledger->peek(session);
+  LMDJ_CHECK(remaining.size() == 1);
+  LMDJ_CHECK(remaining.front().request_id.value() == kSecondLaunch);
+  LMDJ_CHECK(!bridge.launch_acknowledger
+                  ->commit(session,
+                           lmdj::foundation::CommandId{kFirstLaunch})
+                  .has_value());
+  LMDJ_CHECK(bridge.launch_acknowledger
+                 ->commit(session,
+                          lmdj::foundation::CommandId{kSecondLaunch})
+                 .has_value());
+  LMDJ_CHECK(bridge.launch_acknowledger->peek(session).empty());
+  LMDJ_CHECK(bridge.launch_acknowledger->peek(other_session).size() == 1);
+  LMDJ_CHECK(bridge.launch_acknowledger
+                 ->commit(other_session,
+                          lmdj::foundation::CommandId{kThirdLaunch})
+                 .has_value());
+  LMDJ_CHECK(bridge.launch_acknowledger->peek(other_session).empty());
 
   LMDJ_CHECK(
       bridge.launch_acknowledger
@@ -150,7 +199,7 @@ void test_transport_latest_wins_exactly_once_and_cancel() {
   bridge.launch_acknowledger->cancel(session);
   time->set(5'000'000'000ULL);
   bridge.service();
-  LMDJ_CHECK(bridge.launch_acknowledger->drain(session).empty());
+  LMDJ_CHECK(bridge.launch_acknowledger->peek(session).empty());
 }
 
 void test_replay_progression_depends_on_elapsed_time_only() {

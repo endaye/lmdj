@@ -4,6 +4,7 @@ interface ErrorPanelProps {
   onRetryProject?: () => void;
   onRetryRuntime?: () => void;
   onOpenLocalProject?: () => void;
+  onDismiss?: () => void;
 }
 
 const STORAGE_CONDITIONS = new Set([
@@ -68,6 +69,7 @@ export function ErrorPanel({
   onRetryProject,
   onRetryRuntime,
   onOpenLocalProject,
+  onDismiss,
 }: ErrorPanelProps) {
   if (code === null) return null;
   return (
@@ -86,6 +88,9 @@ export function ErrorPanel({
       )}
       {onRetryRuntime && (
         <button type="button" onClick={onRetryRuntime}>Retry runtime</button>
+      )}
+      {onDismiss && (
+        <button type="button" onClick={onDismiss}>Dismiss</button>
       )}
     </aside>
   );

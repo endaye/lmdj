@@ -1,4 +1,4 @@
-import {useState} from "react";
+import {useEffect, useState} from "react";
 
 import type {ProjectView, SequenceRecoveryCandidate} from "../runtime/runtime_types";
 import type {SequenceState} from "../state/sequence_state";
@@ -29,11 +29,21 @@ export function SequenceSurface(props: SequenceSurfaceProps) {
   const [swing, setSwing] = useState(project.sequenceSettings.swingPercent);
   const [recoveryTargets, setRecoveryTargets] = useState<Readonly<Record<string, string>>>({});
   const disabled = state.phase === "flushing";
+  // Committed settings can change outside these forms (another form, a
+  // recovered Sequence, a reopened Project); the editable copies follow them
+  // so a stale draft is never applied by accident.
+  useEffect(() => { setBpm(project.bpm); }, [project.bpm]);
+  useEffect(() => {
+    setSwing(project.sequenceSettings.swingPercent);
+  }, [project.sequenceSettings.swingPercent]);
   return (
     <main className="sequence-surface" aria-label="Sequence">
       <header>
         <h1>Sequence</h1>
-        <p>Project revision {project.revision}</p>
+        <p>
+          Project revision {project.revision} · {project.patterns.length}{" "}
+          {project.patterns.length === 1 ? "Pattern" : "Patterns"}
+        </p>
       </header>
       <SequenceTransport state={state} ready={props.ready}
         onRecord={props.onRecord} onStop={props.onStop} onRefresh={props.onRefresh} />
@@ -44,7 +54,8 @@ export function SequenceSurface(props: SequenceSurfaceProps) {
             onChange={(event) => props.onSwitch(event.currentTarget.value)}>
             {project.patterns.map((pattern) => (
               <option value={pattern.patternId} key={pattern.patternId}>
-                {pattern.patternId.slice(0, 8)} · {pattern.bars} bar
+                {pattern.patternId.slice(0, 8)} · {pattern.bars}{" "}
+                {pattern.bars === 1 ? "bar" : "bars"}
               </option>
             ))}
           </select>
@@ -127,7 +138,9 @@ export function SequenceSurface(props: SequenceSurfaceProps) {
           ))}
         </section>
       ) : null}
-      {state.errorCode !== null ? <p role="alert">{state.errorCode}</p> : null}
+      {state.errorCode !== null ? (
+        <p role="alert" className="sequence-error">{state.errorCode}</p>
+      ) : null}
     </main>
   );
 }
