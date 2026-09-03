@@ -120,7 +120,23 @@ Commit the changes following repository governance rules:
    git diff --cached --check
    git diff --cached --stat
    ```
-3. **Create Conventional Commit**:
+3. **Re-run verification after staging, not only before it**:
+   ```bash
+   git add <file1> <file2> ...
+   # then run the Task's verification again
+   ```
+   Any check that reads `git ls-files`, the index, or the commit graph is blind
+   to an unstaged file, so a green run before `git add` proves nothing about a
+   file the Task adds. `test_every_tracked_path_has_explicit_ownership_or_full_rule`
+   is the one that bites: a new tracked file needs a rule in
+   `scripts/ci/scope_policy.json`, and the gate cannot see the file until it is
+   staged. Check whether an existing prefix rule covers the exact filename
+   rather than assuming its directory is covered — a helper module in a
+   directory routed by a `<dir>/<prefix>` rule is not covered unless its name
+   carries that prefix. See
+   [`untracked-file-passes-ownership-gate`](../../pitfalls/untracked-file-passes-ownership-gate.md).
+
+4. **Create Conventional Commit**:
    - Format: `<type>(<scope>): <short description> (fixes #<issue_id>)`
    - Example: `fix(core): handle provider timeout on empty buffer (fixes #142)`
    ```bash
