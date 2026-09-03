@@ -119,6 +119,35 @@ Selection has three modes:
   unknown or unclassified ownership, broad cross-family risk, every `main`
   push, and every manual dispatch.
 
+`scripts/ci/scope_policy.json` is the one central CI control path that can
+escape the full upgrade, and only against a proof. The upgrade exists because
+scoping a policy change by the policy it changes is circular. That circularity
+is real when an edit alters how an existing path routes, and absent when it
+only adds a rule for a path the same branch introduces — which is the common
+case, because the tracked-path ownership gate fails on any tracked path no rule
+classifies, so almost every Pull Request that adds a file must also edit the
+policy. Charging each of those a full run is the cost this exemption removes;
+one research spike spent three rounds of about 185 minutes across three days on
+exactly that shape.
+
+`policy_edit_is_classification_preserving` decides it by differential. It
+classifies every path tracked at the merge base under both the base policy and
+the head policy and requires the results to be identical; paths the branch
+introduces are absent from that set by construction, which is precisely the
+exemption being claimed. Because the per-path result carries lanes,
+`full_rules` matches and `known_top_levels` admission together, the comparison
+covers every routing key. `draft_lanes`, `expensive_families`, `lanes`,
+`lane_jobs` and `slo_seconds` never surface per path, so they are compared for
+equality instead and any change to them keeps the upgrade.
+
+The exemption fails closed and stays narrow. An unreadable, unparseable or
+absent base policy keeps the upgrade; it suppresses only the policy file's own
+contribution, so a classifier change or a `ci.yml` change in the same branch
+still selects `full`; and the policy routes itself to `ci_contract`, without
+which the exempted path would merely become unclassified, which is itself a
+full-upgrade reason. `tests/build/ci_scope_policy_differential_test.py` holds
+each of those cases.
+
 The closed lanes are `docs_static`, `portal`, `ci_contract`, `core_ubuntu`,
 `core_asan`, `core_coverage`, `core_macos`, `web_toolchain`,
 `web_runtime_host`, `creator`, `web_runtime_lab`, `deploy_contract`,
