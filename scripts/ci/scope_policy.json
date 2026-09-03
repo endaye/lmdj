@@ -160,6 +160,7 @@
     {"match": {"kind": "prefix", "value": "tests/build/ci_"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": "tests/build/workflow_inventory.py"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": "scripts/ci/scope_policy.json"}, "lanes": ["ci_contract"]},
+    {"match": {"kind": "exact", "value": "scripts/ci/hosted_runner_policy.json"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "prefix", "value": "tests/build/release_"}, "lanes": ["deploy_contract", "ci_contract"]},
     {"match": {"kind": "exact", "value": "tests/build/web_host_release_selection_test.py"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "prefix", "value": "tests/build/web_runtime_deploy_"}, "lanes": ["deploy_contract"]},
