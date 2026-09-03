@@ -49,11 +49,12 @@ Git LFS.
   benchmark host consume the recorded tolerance and must not invent their own.
 - Failure reasons follow the `details.reason` vocabulary of the #467 draft
   (`2026-08-31-lmdj-stage12-capability-artifactsource-design.md`, S12C-D4) and
-  are assigned at the layer that actually detects them. `input_artifact_too_large`
-  is an SDK staging decision made from the declared `byte_length` before any
-  bytes are read (S12C-D7), so it is represented manifest-only and never by a
-  committed WAV whose header lies about its size. WAV-header defects are
-  decoder-level `source_audio_unsupported`.
+  are assigned at the layer that actually detects them. WAV-header defects are
+  decoder-level `source_audio_unsupported`. The SDK staging reason
+  `input_artifact_too_large` depends on the resource limit #467 has not yet
+  locked, so that scenario belongs to #467 conformance after its Contract
+  review and is not represented by a lying WAV header or a provisional limit
+  in this Task.
 - Manifest paths are repository-relative POSIX paths. They contain no absolute
   host paths, symlinks, URLs to fixture bytes, secrets, model paths, or mutable
   timestamps.
@@ -106,15 +107,7 @@ must not close either parent.
   `byte_length`, `expected`, and generation parameters. Success scenarios record
   `expected.onset_frames` and `expected.tolerance_frames`. The missing-input
   scenario omits `path`, `sha256`, and `byte_length` and records
-  `expected.reason: input_artifact_unavailable`. The oversized-input scenario
-  omits `path` and `sha256`, records a declared `byte_length` of `4294967296`
-  (4 GiB) with `expected.reason: input_artifact_too_large` and
-  `expected.limit_bytes: 268435456` (256 MiB), and carries
-  `expected.limit_authority: "#467 sample.slice.v1 resources/Host input limit
-  (provisional)"`. The limit value is a plan-time placeholder that #467 must
-  confirm or replace when it locks `resources.memory_mib`; the test only
-  asserts `byte_length > limit_bytes`, so a later limit change is a manifest
-  edit, not a corpus regeneration.
+  `expected.reason: input_artifact_unavailable`.
 - The closed scenario IDs and meanings are:
 
   | Scenario | Class | Bytes | Required truth |
@@ -125,7 +118,6 @@ must not close either parent.
   | `missing_input` | `input_failure` | none | `input_artifact_unavailable` |
   | `truncated_data` | `input_failure` | WAV | `source_audio_unsupported` |
   | `bad_riff_header` | `input_failure` | WAV | `source_audio_unsupported` |
-  | `oversized_input` | `input_failure` | none, declared `byte_length` only | `input_artifact_too_large` |
 
   Tolerances are in frames at 48,000 Hz: `480` is 10 ms; `240` is 5 ms and is
   deliberately tighter than half the 960-frame spacing of the close pair so
@@ -165,7 +157,6 @@ must not close either parent.
                   "missing_input",
                   "truncated_data",
                   "bad_riff_header",
-                  "oversized_input",
               ],
           )
 
@@ -184,20 +175,6 @@ must not close either parent.
               if item["class"] == "success"
           }
           self.assertEqual(observed, expected)
-
-      def test_oversized_input_is_manifest_only_and_exceeds_limit(self):
-          scenario = next(
-              item for item in self.manifest["scenarios"]
-              if item["id"] == "oversized_input"
-          )
-          self.assertNotIn("path", scenario)
-          self.assertNotIn("sha256", scenario)
-          self.assertEqual(
-              scenario["expected"]["reason"], "input_artifact_too_large"
-          )
-          self.assertGreater(
-              scenario["byte_length"], scenario["expected"]["limit_bytes"]
-          )
 
       def test_generated_bytes_match_committed_bytes_and_hashes(self):
           generated, manifest = self.module.build_corpus()
@@ -223,10 +200,10 @@ must not close either parent.
   ```
 
   Add separate tests that open the three success WAVs with `wave` and assert
-  PCM16/mono/48 kHz, assert every `tolerance_frames` is a positive integer
-  smaller than the minimum onset spacing of its scenario, assert manifest
-  paths are normalized repository-relative paths, assert the four failure
-  reasons above, and exercise CLI `--check`
+  PCM16/mono/48 kHz, assert every `tolerance_frames` is a positive integer and
+  is smaller than the minimum onset spacing whenever a scenario has two or
+  more onsets, assert manifest paths are normalized repository-relative paths,
+  assert the three input-failure scenarios above, and exercise CLI `--check`
   against a temporary missing file, changed file, and undeclared extra file.
 
 - [ ] **Step 2: Run the test and verify RED**
@@ -248,10 +225,8 @@ must not close either parent.
   explicit little-endian RIFF chunks. The success fixtures use fixed envelopes
   mixed at the exact onset frames; silence contains 4,800 zero frames. The
   truncated fixture removes bytes from a valid data chunk and the bad-header
-  fixture replaces `RIFF`. The oversized-input scenario writes no file: the
-  generator emits only its manifest entry with the declared `byte_length`,
-  `limit_bytes`, and `limit_authority` above. Do not use random
-  module state, NumPy, ffmpeg, network access, wall-clock time, or host paths.
+  fixture replaces `RIFF`. Do not use random module state, NumPy, ffmpeg,
+  network access, wall-clock time, or host paths.
 
   `LICENSE.md` must state that Zhang Yuancheng applies CC0 1.0 Universal only to
   the generated WAV files and generated `manifest.json` in that directory,
@@ -346,16 +321,16 @@ impact when those active identities are introduced.
 
 ## Acceptance and Remaining #466 Work
 
-This plan is complete when the implementation Task produces the seven closed
+This plan is complete when the implementation Task produces the six closed
 scenarios, per-scenario match tolerance, byte-for-byte reproducibility,
 explicit CC0 provenance, Core-tier
 registration, and passing verification above. That result unlocks #467's
 consumer-driven Contract review but does not complete #466.
 
 Keep #466 open for separately planned and reviewed work: the benchmark report
-schema/validator; confirmation of the provisional `limit_bytes` once #467 locks
-the `sample.slice.v1` resource class; the production `AttemptStore` bench host
-after #467; the subprocess and remote execution-zone controllers; Stem and
-Pattern corpora after their own Contract/product decisions; retained reports;
-and blind-review package generation. None of those may be folded into this
-fixture Task.
+schema/validator; the `input_artifact_too_large` conformance scenario after #467
+locks the `sample.slice.v1` resource limit; the production `AttemptStore` bench
+host after #467; the subprocess and remote execution-zone controllers; Stem
+and Pattern corpora after their own Contract/product decisions; retained
+reports; and blind-review package generation. None of those may be folded into
+this fixture Task.
