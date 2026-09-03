@@ -1,0 +1,138 @@
+{
+  "capability": "sample.slice",
+  "generator": "tools/provider-benchmark/generate_sample_slice_smoke.py",
+  "license": {
+    "affirmer": "Zhang Yuancheng",
+    "canonical_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "scope": "generated WAV files and generated manifest.json in this directory only",
+    "spdx": "CC0-1.0"
+  },
+  "scenarios": [
+    {
+      "byte_length": 33644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          2400,
+          7200,
+          12000
+        ],
+        "tolerance_frames": 480
+      },
+      "generation": {
+        "carrier_half_period_frames": 24,
+        "frame_count": 16800,
+        "kind": "integer_decay_pulses",
+        "onset_frames": [
+          2400,
+          7200,
+          12000
+        ],
+        "peak_amplitude": 24000,
+        "tail_frames": 1440
+      },
+      "id": "basic_three_onsets",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice/slice-basic.wav",
+      "sample_rate": 48000,
+      "sha256": "098d33f84f35c3451b35b24fb4957414006e3af87eb4db969db2771cfe89d705",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 9644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [
+          480,
+          1440
+        ],
+        "tolerance_frames": 240
+      },
+      "generation": {
+        "carrier_half_period_frames": 16,
+        "frame_count": 4800,
+        "kind": "integer_decay_pulses",
+        "onset_frames": [
+          480,
+          1440
+        ],
+        "peak_amplitude": 16000,
+        "tail_frames": 1920
+      },
+      "id": "close_overlapping_tails",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice/slice-close-overlap.wav",
+      "sample_rate": 48000,
+      "sha256": "1395612844ca144ed97cef2df548e0fd12e44c6a7b0a585bc7f64b1f465151fc",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 9644,
+      "channels": 1,
+      "class": "success",
+      "expected": {
+        "onset_frames": [],
+        "tolerance_frames": 480
+      },
+      "generation": {
+        "frame_count": 4800,
+        "kind": "silence"
+      },
+      "id": "silence",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice/slice-silence.wav",
+      "sample_rate": 48000,
+      "sha256": "639dad0ac2923f5fe9e9ccfb99aa9b3084048e2e53317d1903e6e899a4f6296a",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "class": "input_failure",
+      "expected": {
+        "reason": "input_artifact_unavailable"
+      },
+      "generation": {
+        "kind": "absent_input"
+      },
+      "id": "missing_input"
+    },
+    {
+      "byte_length": 4780,
+      "channels": 1,
+      "class": "input_failure",
+      "expected": {
+        "reason": "source_audio_unsupported"
+      },
+      "generation": {
+        "base_frame_count": 2400,
+        "kind": "truncated_pcm16_wav",
+        "removed_tail_bytes": 64
+      },
+      "id": "truncated_data",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice/slice-truncated.wav",
+      "sample_rate": 48000,
+      "sha256": "bbbb089b939ea14999a727498235c0407fa0908f454a6aebeb8fec301a3ccd3f",
+      "spdx_license": "CC0-1.0"
+    },
+    {
+      "byte_length": 9644,
+      "class": "input_failure",
+      "expected": {
+        "reason": "source_audio_unsupported"
+      },
+      "generation": {
+        "base": "slice-silence.wav",
+        "kind": "invalid_riff_signature",
+        "replacement_ascii": "NOPE"
+      },
+      "id": "bad_riff_header",
+      "origin": "synthetic",
+      "path": "tests/fixtures/provider-benchmark/sample-slice/slice-bad-header.wav",
+      "sha256": "613fb2b5a8f1025444dc48d675a58afd2d0bdf8b31d48b3f8a388541fa525b6c",
+      "spdx_license": "CC0-1.0"
+    }
+  ],
+  "schema": "lmdj.provider-benchmark-fixtures.v1"
+}
