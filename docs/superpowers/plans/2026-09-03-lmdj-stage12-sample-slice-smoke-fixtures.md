@@ -6,9 +6,9 @@
 > checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver a deterministic, rights-cleared `sample.slice` smoke corpus
-with exact onset ground truth and fail-closed input scenarios so #467 can review
-the first formal Capability and later run Provider conformance against stable
-bytes.
+with exact onset ground truth, explicit match tolerance, and fail-closed input
+scenarios so #467 can review the first formal Capability and later run Provider
+conformance against stable bytes.
 
 **Architecture:** A proprietary Python generator under `tools/` creates a small
 set of mono PCM16 WAV inputs and one canonical JSON manifest under
@@ -43,7 +43,17 @@ Git LFS.
   instance, Contract schema, output JSON fixture, Provider, Candidate, Project,
   Facade, Assembly, or Product identity.
 - WAV success inputs are RIFF/WAVE PCM integer, mono, 16-bit, 48,000 Hz. Ground
-  truth uses zero-based integer frame indexes.
+  truth uses zero-based integer frame indexes plus an explicit per-scenario
+  `tolerance_frames`; a predicted onset matches a truth onset only when the
+  absolute frame distance is at most that value. #467 conformance and the later
+  benchmark host consume the recorded tolerance and must not invent their own.
+- Failure reasons follow the `details.reason` vocabulary of the #467 draft
+  (`2026-08-31-lmdj-stage12-capability-artifactsource-design.md`, S12C-D4) and
+  are assigned at the layer that actually detects them. `input_artifact_too_large`
+  is an SDK staging decision made from the declared `byte_length` before any
+  bytes are read (S12C-D7), so it is represented manifest-only and never by a
+  committed WAV whose header lies about its size. WAV-header defects are
+  decoder-level `source_audio_unsupported`.
 - Manifest paths are repository-relative POSIX paths. They contain no absolute
   host paths, symlinks, URLs to fixture bytes, secrets, model paths, or mutable
   timestamps.
@@ -73,7 +83,6 @@ must not close either parent.
 - Create: `tests/fixtures/provider-benchmark/sample-slice/slice-silence.wav`
 - Create: `tests/fixtures/provider-benchmark/sample-slice/slice-truncated.wav`
 - Create: `tests/fixtures/provider-benchmark/sample-slice/slice-bad-header.wav`
-- Create: `tests/fixtures/provider-benchmark/sample-slice/slice-oversized-declaration.wav`
 - Modify: `CMakeLists.txt`
 - Modify: `scripts/ci/scope_policy.json`
 - Modify: `tests/build/ci_change_scope_test.py`
@@ -82,32 +91,45 @@ must not close either parent.
 
 - `tools/provider-benchmark/generate_sample_slice_smoke.py` exposes
   `build_corpus() -> tuple[dict[str, bytes], dict[str, object]]`. The first item
-  maps the six WAV basenames to exact bytes; the second is the manifest object.
+  maps the five WAV basenames to exact bytes; the second is the manifest object.
 - Its CLI is
   `python3 tools/provider-benchmark/generate_sample_slice_smoke.py
   [--output-dir PATH] [--check]`. The default output directory is the committed
   fixture directory. Without `--check` it creates/replaces only its declared
-  six WAV files plus `manifest.json`; with `--check` it writes nothing and exits
+  five WAV files plus `manifest.json`; with `--check` it writes nothing and exits
   nonzero if a declared file is absent, has different bytes, or an undeclared
   file other than `LICENSE.md` exists.
 - `manifest.json` has the internal, non-Contract schema token
   `lmdj.provider-benchmark-fixtures.v1`, `capability: sample.slice`,
   `generator`, `license`, and a closed `scenarios` array. Each byte-bearing
   scenario records `id`, `class`, repository-relative `path`, `sha256`,
-  `byte_length`, `expected`, and generation parameters. The missing-input
+  `byte_length`, `expected`, and generation parameters. Success scenarios record
+  `expected.onset_frames` and `expected.tolerance_frames`. The missing-input
   scenario omits `path`, `sha256`, and `byte_length` and records
-  `expected.reason: input_artifact_unavailable`.
+  `expected.reason: input_artifact_unavailable`. The oversized-input scenario
+  omits `path` and `sha256`, records a declared `byte_length` of `4294967296`
+  (4 GiB) with `expected.reason: input_artifact_too_large` and
+  `expected.limit_bytes: 268435456` (256 MiB), and carries
+  `expected.limit_authority: "#467 sample.slice.v1 resources/Host input limit
+  (provisional)"`. The limit value is a plan-time placeholder that #467 must
+  confirm or replace when it locks `resources.memory_mib`; the test only
+  asserts `byte_length > limit_bytes`, so a later limit change is a manifest
+  edit, not a corpus regeneration.
 - The closed scenario IDs and meanings are:
 
-  | Scenario | Class | Required truth |
-  | --- | --- | --- |
-  | `basic_three_onsets` | `success` | onset frames `[2400, 7200, 12000]` |
-  | `close_overlapping_tails` | `success` | onset frames `[480, 1440]` |
-  | `silence` | `success` | onset frames `[]` |
-  | `missing_input` | `input_failure` | `input_artifact_unavailable` |
-  | `truncated_data` | `input_failure` | `source_audio_unsupported` |
-  | `bad_riff_header` | `input_failure` | `source_audio_unsupported` |
-  | `oversized_declaration` | `input_failure` | `input_artifact_too_large` |
+  | Scenario | Class | Bytes | Required truth |
+  | --- | --- | --- | --- |
+  | `basic_three_onsets` | `success` | WAV | onset frames `[2400, 7200, 12000]`, tolerance `480` |
+  | `close_overlapping_tails` | `success` | WAV | onset frames `[480, 1440]`, tolerance `240` |
+  | `silence` | `success` | WAV | onset frames `[]`, tolerance `480` |
+  | `missing_input` | `input_failure` | none | `input_artifact_unavailable` |
+  | `truncated_data` | `input_failure` | WAV | `source_audio_unsupported` |
+  | `bad_riff_header` | `input_failure` | WAV | `source_audio_unsupported` |
+  | `oversized_input` | `input_failure` | none, declared `byte_length` only | `input_artifact_too_large` |
+
+  Tolerances are in frames at 48,000 Hz: `480` is 10 ms; `240` is 5 ms and is
+  deliberately tighter than half the 960-frame spacing of the close pair so
+  that one detection cannot satisfy both onsets.
 
 - All byte-bearing scenarios carry `origin: synthetic`,
   `spdx_license: CC0-1.0`, `sample_rate: 48000`, and `channels: 1` where those
@@ -143,22 +165,39 @@ must not close either parent.
                   "missing_input",
                   "truncated_data",
                   "bad_riff_header",
-                  "oversized_declaration",
+                  "oversized_input",
               ],
           )
 
-      def test_success_ground_truth_uses_exact_frames(self):
+      def test_success_ground_truth_uses_exact_frames_and_tolerance(self):
           expected = {
-              "basic_three_onsets": [2400, 7200, 12000],
-              "close_overlapping_tails": [480, 1440],
-              "silence": [],
+              "basic_three_onsets": ([2400, 7200, 12000], 480),
+              "close_overlapping_tails": ([480, 1440], 240),
+              "silence": ([], 480),
           }
           observed = {
-              item["id"]: item["expected"]["onset_frames"]
+              item["id"]: (
+                  item["expected"]["onset_frames"],
+                  item["expected"]["tolerance_frames"],
+              )
               for item in self.manifest["scenarios"]
               if item["class"] == "success"
           }
           self.assertEqual(observed, expected)
+
+      def test_oversized_input_is_manifest_only_and_exceeds_limit(self):
+          scenario = next(
+              item for item in self.manifest["scenarios"]
+              if item["id"] == "oversized_input"
+          )
+          self.assertNotIn("path", scenario)
+          self.assertNotIn("sha256", scenario)
+          self.assertEqual(
+              scenario["expected"]["reason"], "input_artifact_too_large"
+          )
+          self.assertGreater(
+              scenario["byte_length"], scenario["expected"]["limit_bytes"]
+          )
 
       def test_generated_bytes_match_committed_bytes_and_hashes(self):
           generated, manifest = self.module.build_corpus()
@@ -184,8 +223,10 @@ must not close either parent.
   ```
 
   Add separate tests that open the three success WAVs with `wave` and assert
-  PCM16/mono/48 kHz, assert manifest paths are normalized repository-relative
-  paths, assert the four failure reasons above, and exercise CLI `--check`
+  PCM16/mono/48 kHz, assert every `tolerance_frames` is a positive integer
+  smaller than the minimum onset spacing of its scenario, assert manifest
+  paths are normalized repository-relative paths, assert the four failure
+  reasons above, and exercise CLI `--check`
   against a temporary missing file, changed file, and undeclared extra file.
 
 - [ ] **Step 2: Run the test and verify RED**
@@ -206,9 +247,10 @@ must not close either parent.
   Implement WAV construction with integer-only PCM sample generation and
   explicit little-endian RIFF chunks. The success fixtures use fixed envelopes
   mixed at the exact onset frames; silence contains 4,800 zero frames. The
-  truncated fixture removes bytes from a valid data chunk, the bad-header
-  fixture replaces `RIFF`, and the oversized-declaration fixture is physically
-  small but declares a data size beyond the input limit. Do not use random
+  truncated fixture removes bytes from a valid data chunk and the bad-header
+  fixture replaces `RIFF`. The oversized-input scenario writes no file: the
+  generator emits only its manifest entry with the declared `byte_length`,
+  `limit_bytes`, and `limit_authority` above. Do not use random
   module state, NumPy, ffmpeg, network access, wall-clock time, or host paths.
 
   `LICENSE.md` must state that Zhang Yuancheng applies CC0 1.0 Universal only to
@@ -305,12 +347,15 @@ impact when those active identities are introduced.
 ## Acceptance and Remaining #466 Work
 
 This plan is complete when the implementation Task produces the seven closed
-scenarios, byte-for-byte reproducibility, explicit CC0 provenance, Core-tier
+scenarios, per-scenario match tolerance, byte-for-byte reproducibility,
+explicit CC0 provenance, Core-tier
 registration, and passing verification above. That result unlocks #467's
 consumer-driven Contract review but does not complete #466.
 
 Keep #466 open for separately planned and reviewed work: the benchmark report
-schema/validator; the production `AttemptStore` bench host after #467; the
-subprocess and remote execution-zone controllers; Stem and Pattern corpora
-after their own Contract/product decisions; retained reports; and blind-review
-package generation. None of those may be folded into this fixture Task.
+schema/validator; confirmation of the provisional `limit_bytes` once #467 locks
+the `sample.slice.v1` resource class; the production `AttemptStore` bench host
+after #467; the subprocess and remote execution-zone controllers; Stem and
+Pattern corpora after their own Contract/product decisions; retained reports;
+and blind-review package generation. None of those may be folded into this
+fixture Task.
