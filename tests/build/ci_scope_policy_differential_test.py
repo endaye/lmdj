@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts/ci"))
 
 from change_scope import (  # noqa: E402
+    CLASSIFICATION_INERT_POLICY_PATHS,
     SCOPE_POLICY_PATH,
     ChangedFile,
     classify,
@@ -194,6 +195,50 @@ class ScopePolicyDifferentialTest(unittest.TestCase):
             "exemption silently does nothing; remedy: keep the exact rule "
             f"routing {SCOPE_POLICY_PATH} to ci_contract",
         )
+
+    # ---- the second, differently proved exemption --------------------------------
+
+    def test_a_classification_inert_policy_edit_does_not_force_full(self) -> None:
+        """No differential is needed: nothing that decides lanes reads the file.
+
+        Recording a hosted job used to cost a full manifest because the file
+        sits under the `scripts/ci/` prefix. It now selects the one lane that
+        actually validates it.
+        """
+        for relative in sorted(CLASSIFICATION_INERT_POLICY_PATHS):
+            with self.subTest(path=relative):
+                manifest = classify(
+                    self.policy, _changed(relative),
+                    base_sha=BASE_SHA, head_sha=HEAD_SHA, event_name="pull_request",
+                    draft=False, labels=set(),
+                )
+                self.assertEqual(manifest["mode"], "focused")
+                self.assertEqual(manifest["lanes"]["ci_contract"], True)
+                self.assertEqual(manifest["lanes"]["core_asan"], False)
+
+    def test_the_inert_exemption_does_not_cover_the_classifier(self) -> None:
+        for relative in sorted(CLASSIFICATION_INERT_POLICY_PATHS):
+            for companion in ("scripts/ci/change_scope.py", ".github/workflows/ci.yml"):
+                with self.subTest(path=relative, companion=companion):
+                    manifest = classify(
+                        self.policy, _changed(relative, companion),
+                        base_sha=BASE_SHA, head_sha=HEAD_SHA,
+                        event_name="pull_request", draft=False, labels=set(),
+                    )
+                    self.assertEqual(manifest["mode"], "full")
+
+    def test_every_inert_path_is_routed_so_the_exemption_leaves_a_lane(self) -> None:
+        """Same trap as the policy's own route: unclassified is itself a full upgrade."""
+        for relative in sorted(CLASSIFICATION_INERT_POLICY_PATHS):
+            lanes, _ = path_classification(self.policy, relative)
+            with self.subTest(path=relative):
+                self.assertTrue(
+                    lanes,
+                    "why: exempting {0} from its full rule leaves it with no lane, "
+                    "and an unclassified path is itself a full upgrade, so the "
+                    "exemption silently does nothing; remedy: add an exact rule "
+                    "routing {0} to ci_contract".format(relative),
+                )
 
 
 if __name__ == "__main__":

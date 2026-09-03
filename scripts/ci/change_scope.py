@@ -417,6 +417,19 @@ def _matches(match: Mapping[str, str], path: str) -> bool:
 
 SCOPE_POLICY_PATH = "scripts/ci/scope_policy.json"
 
+# Policy data under `scripts/ci/` that no classification module reads, so
+# editing it cannot change which lanes run. The exemption is unconditional
+# rather than proved per edit, because the claim is about each file's role and
+# not about any particular change to it: the entries below are read only by the
+# contract tests that enforce them. That role is what
+# `tests/build/ci_classification_inputs_test.py` pins, so the exemption fails
+# the moment a classification module starts reading one of these. Name the
+# paths only in the declaration below, never in prose here, or that gate
+# matches its own explanation.
+CLASSIFICATION_INERT_POLICY_PATHS = frozenset({
+    "scripts/ci/hosted_runner_policy.json",
+})
+
 
 def path_classification(
     policy: Mapping[str, object], path: str
@@ -489,19 +502,33 @@ def _evaluate_ready_paths(
 ) -> tuple[set[str], set[str]]:
     """Return the exact Ready lane union and any reasons that require full.
 
-    ``policy_edit_preserving`` suppresses the full-upgrade that
+    Two narrow exemptions from the `scripts/ci/` full rule apply here, proved
+    in different ways and deliberately kept apart.
+
+    ``policy_edit_preserving`` suppresses the upgrade that
     ``scripts/ci/scope_policy.json`` would otherwise contribute, and only that
     one. The caller establishes it with
-    :func:`policy_edit_is_classification_preserving`, which proves the edit
-    leaves every path that existed at the base classified exactly as before.
-    Every other path in the change, including the other control-plane files,
-    is evaluated unchanged.
+    :func:`policy_edit_is_classification_preserving`, which computes that the
+    edit leaves every path existing at the base classified exactly as before.
+    That proof is per edit, because a policy edit can change routing.
+
+    ``CLASSIFICATION_INERT_POLICY_PATHS`` suppresses it for policy data no
+    classification module reads. That proof is about the file's role rather
+    than any edit, so it needs no differential and applies unconditionally --
+    and correspondingly it needs a gate holding the role true, which
+    ``tests/build/ci_classification_inputs_test.py`` is.
+
+    Every other path in the change, including the other control-plane files, is
+    evaluated unchanged.
     """
     selected: set[str] = set()
     full_reasons: set[str] = set()
     for path in paths:
         _validate_path(path)
-        exempt = policy_edit_preserving and path == SCOPE_POLICY_PATH
+        exempt = (
+            (policy_edit_preserving and path == SCOPE_POLICY_PATH)
+            or path in CLASSIFICATION_INERT_POLICY_PATHS
+        )
         top_level = path.split("/", 1)[0]
         if top_level not in policy["known_top_levels"]:
             full_reasons.add(f"unknown top-level: {top_level}")

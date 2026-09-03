@@ -140,6 +140,19 @@ covers every routing key. `draft_lanes`, `expensive_families`, `lanes`,
 `lane_jobs` and `slo_seconds` never surface per path, so they are compared for
 equality instead and any change to them keeps the upgrade.
 
+A second exemption sits alongside it and is proved differently. Policy data that
+no classification module reads cannot change which lanes run whatever the edit
+does, so it needs no differential and applies unconditionally;
+`scripts/ci/hosted_runner_policy.json` is the case, read only by the contract
+test that enforces it. Recording a hosted job therefore selects `ci_contract`
+rather than the full manifest. Because that claim is about the file's role
+rather than about any edit, and because prose about a role goes stale silently,
+`tests/build/ci_classification_inputs_test.py` holds it: it fails the moment a
+classification module references one of these paths. It matches a literal
+filename reference, which is how such a dependency would be written; a path
+assembled at runtime would evade it, and that gap is accepted rather than
+closed by tracing file handles.
+
 The exemption fails closed and stays narrow. An unreadable, unparseable or
 absent base policy keeps the upgrade; it suppresses only the policy file's own
 contribution, so a classifier change or a `ci.yml` change in the same branch
