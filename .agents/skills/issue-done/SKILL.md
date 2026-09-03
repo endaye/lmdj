@@ -131,6 +131,41 @@ Commit the changes following repository governance rules:
 
 ## 4. Push & Create Pull Request
 
+### Split control-plane paths first
+
+Before opening the Pull Request, check whether the branch touches the
+control-plane set named in
+[`docs/governance/git-workflow.md`](../../../docs/governance/git-workflow.md) §5
+— `.github/workflows/merge-queue.yml`, `.github/workflows/ci.yml`,
+`.github/actionlint.yaml`, `scripts/ci/merge_queue.py`,
+`scripts/ci/github_queue_api.py`, `scripts/ci/merge_queue_watchdog.py`,
+`scripts/ci/change_scope.py`, `scripts/ci/pr_gate.py`, or
+`scripts/ci/scope_policy.json`:
+
+```bash
+git diff --name-only origin/main...HEAD | grep -E '^(\.github/workflows/(ci|merge-queue)\.yml|\.github/actionlint\.yaml|scripts/ci/(merge_queue|github_queue_api|merge_queue_watchdog|change_scope|pr_gate)\.py|scripts/ci/scope_policy\.json)$'
+```
+
+A Pull Request touching any of them **cannot use the Integration Queue** and
+must take the ordinary protected path, where `strict` branch protection
+requires the head to contain current `main`. If it also carries ordinary work,
+**split it**: land the control-plane change as its own Pull Request, then open
+the remainder, which is queue-eligible and usually selects far fewer lanes.
+
+Bundling loses a race rather than failing loudly. Full CI here runs about 185
+minutes, so an active `main` flips the Pull Request to `BEHIND` faster than a
+rerun can finish, and each cycle costs another full run. Merging past it needs
+a human to bypass `strict`, which discards the guarantee that requirement
+exists to provide.
+
+When the control-plane change is a routing rule for paths the same branch
+introduces — the common case, since
+`tests/build/ci_change_scope_test.py` fails on any tracked path no rule
+classifies — land the rule first and the paths second. A rule for a path that
+does not exist yet classifies nothing and breaks nothing.
+
+See [`release-cut-bundles-control-plane`](../../pitfalls/release-cut-bundles-control-plane.md).
+
 1. **Push branch to origin**:
    ```bash
    BRANCH=$(git branch --show-current)
