@@ -1536,6 +1536,7 @@ function createRuntimeSessionController(options = {}) {
     }
     const response = validateResponseEnvelope(
       await transport.send(request, transportOptions),
+      operation,
     );
     if (response.request_id !== request.request_id) {
       throw typedError(
@@ -2977,6 +2978,494 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  function performanceIdentity(value, name) {
+    if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
+      throw new TypeError(`Performance ${name} is invalid`);
+    }
+    return value;
+  }
+
+  function patternSlotIdentity(value, name = "patternSlot") {
+    if (!isUnsignedInteger(value, 15)) {
+      throw new TypeError(`Performance ${name} is invalid`);
+    }
+    return value;
+  }
+
+  function wireArtifact(value) {
+    if (value === null) return null;
+    if (
+      value === null || typeof value !== "object" ||
+      !exactKeys(value, ["sha256", "mediaType", "byteLength"])
+    ) {
+      throw new TypeError("Performance recording Artifact is invalid");
+    }
+    return {
+      sha256: value.sha256,
+      media_type: value.mediaType,
+      byte_length: value.byteLength,
+    };
+  }
+
+  function publicArtifact(value) {
+    return value === null ? null : Object.freeze({
+      sha256: value.sha256,
+      mediaType: value.media_type,
+      byteLength: value.byte_length,
+    });
+  }
+
+  function lifecycleResult(value) {
+    return Object.freeze({
+      performanceId: value.performance_id,
+      committedRevision: value.committed_revision,
+      replayed: value.replayed,
+      projectRevision: value.project_revision,
+    });
+  }
+
+  function replayResult(value) {
+    return Object.freeze({
+      replayId: value.replay_id,
+      state: value.state,
+      resolvedRevision: value.resolved_revision,
+      eventCursor: value.event_cursor,
+      eventCount: value.event_count,
+      ...(Object.hasOwn(value, "request_id")
+        ? {requestId: value.request_id, replayed: value.replayed}
+        : {}),
+      projectRevision: value.project_revision,
+    });
+  }
+
+  function assignPatternSlot(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["expectedRevision", "patternSlot", "patternId"]) ||
+        !isUnsignedInteger(request.expectedRevision)) {
+      return Promise.reject(new TypeError("Pattern-slot assignment is invalid"));
+    }
+    const patternSlot = patternSlotIdentity(request.patternSlot);
+    const patternId = performanceIdentity(request.patternId, "patternId");
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("pattern.slot.assign", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        pattern_slot: patternSlot,
+        pattern_id: patternId,
+      });
+      return Object.freeze({
+        patternSlot: value.pattern_slot,
+        patternId: value.pattern_id,
+        committedRevision: value.committed_revision,
+        replayed: value.replayed,
+        projectRevision: value.project_revision,
+      });
+    });
+  }
+
+  function clearPatternSlot(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["expectedRevision", "patternSlot"]) ||
+        !isUnsignedInteger(request.expectedRevision)) {
+      return Promise.reject(new TypeError("Pattern-slot clear is invalid"));
+    }
+    const patternSlot = patternSlotIdentity(request.patternSlot);
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("pattern.slot.clear", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        pattern_slot: patternSlot,
+      });
+      return Object.freeze({
+        patternSlot: value.pattern_slot,
+        patternId: value.pattern_id,
+        committedRevision: value.committed_revision,
+        replayed: value.replayed,
+        projectRevision: value.project_revision,
+      });
+    });
+  }
+
+  function movePatternSlot(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["expectedRevision", "fromSlot", "toSlot"]) ||
+        !isUnsignedInteger(request.expectedRevision)) {
+      return Promise.reject(new TypeError("Pattern-slot move is invalid"));
+    }
+    const fromSlot = patternSlotIdentity(request.fromSlot, "fromSlot");
+    const toSlot = patternSlotIdentity(request.toSlot, "toSlot");
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("pattern.slot.move", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        from_slot: fromSlot,
+        to_slot: toSlot,
+      });
+      return Object.freeze({
+        fromSlot: value.from_slot,
+        toSlot: value.to_slot,
+        patternId: value.pattern_id,
+        committedRevision: value.committed_revision,
+        replayed: value.replayed,
+        projectRevision: value.project_revision,
+      });
+    });
+  }
+
+  async function listPerformances() {
+    const value = await recoverableQuery("performance.list", {});
+    return Object.freeze(value.performances.map((performance) => Object.freeze({
+      performanceId: performance.performance_id,
+      name: performance.name,
+      createdBpm: performance.created_bpm,
+      recordingArtifact: publicArtifact(performance.recording_artifact),
+      eventCount: performance.event_count,
+    })));
+  }
+
+  async function inspectPerformance(performanceId) {
+    performanceIdentity(performanceId, "performanceId");
+    const value = await recoverableQuery("performance.inspect", {
+      performance_id: performanceId,
+    });
+    const performance = value.performance;
+    return Object.freeze({
+      id: performance.id,
+      name: performance.name,
+      createdBpm: performance.created_bpm,
+      recordingArtifact: publicArtifact(performance.recording_artifact),
+      events: Object.freeze(performance.events.map((event) =>
+        Object.freeze({...event}))),
+      projectRevision: value.project_revision,
+    });
+  }
+
+  function beginPerformanceRecording(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["sessionId", "performanceId", "expectedRevision"]) ||
+        !isUnsignedInteger(request.expectedRevision)) {
+      return Promise.reject(new TypeError("Performance begin request is invalid"));
+    }
+    const sessionId = performanceIdentity(request.sessionId, "sessionId");
+    const performanceId = performanceIdentity(request.performanceId, "performanceId");
+    return serializeRuntimeAction(async () => lifecycleResult(
+      await boundedRequest("performance.record.begin", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        session_id: sessionId,
+        performance_id: performanceId,
+      }),
+    ));
+  }
+
+  function wirePerformanceEvent(event) {
+    if (event === null || typeof event !== "object" || typeof event.kind !== "string") {
+      throw new TypeError("Performance raw event is invalid");
+    }
+    if (event.kind === "hold_on" || event.kind === "hold_off") {
+      if (!exactKeys(event, ["kind"])) throw new TypeError("Performance raw event is invalid");
+      return {kind: event.kind};
+    }
+    const gestureId = performanceIdentity(event.gestureId, "gestureId");
+    if (event.kind === "pad_press") {
+      if (!exactKeys(event, ["kind", "gestureId", "slot", "velocity"])) throw new TypeError("Performance raw event is invalid");
+      return {kind: event.kind, gesture_id: gestureId, slot: event.slot, velocity: event.velocity};
+    }
+    if (event.kind === "pad_release") {
+      if (!exactKeys(event, ["kind", "gestureId", "slot"])) throw new TypeError("Performance raw event is invalid");
+      return {kind: event.kind, gesture_id: gestureId, slot: event.slot};
+    }
+    if (event.kind === "fx_engage" || event.kind === "fx_move") {
+      if (!exactKeys(event, ["kind", "gestureId", "fx", "value"])) throw new TypeError("Performance raw event is invalid");
+      return {kind: event.kind, gesture_id: gestureId, fx: event.fx, value: event.value};
+    }
+    if (event.kind === "fx_release") {
+      if (!exactKeys(event, ["kind", "gestureId", "fx"])) throw new TypeError("Performance raw event is invalid");
+      return {kind: event.kind, gesture_id: gestureId, fx: event.fx};
+    }
+    throw new TypeError("Performance raw event is invalid");
+  }
+
+  function recordPerformanceEvent(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["sessionId", "eventId", "event"])) {
+      return Promise.reject(new TypeError("Performance event request is invalid"));
+    }
+    const sessionId = performanceIdentity(request.sessionId, "sessionId");
+    const eventId = performanceIdentity(request.eventId, "eventId");
+    const event = wirePerformanceEvent(request.event);
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest("performance.record.event", {
+        session_id: sessionId,
+        event_id: eventId,
+        event,
+      });
+      return Object.freeze({
+        eventId: value.event_id,
+        acceptedTick: value.accepted_tick,
+        inputSequence: value.input_sequence,
+        coalesced: value.coalesced,
+        replayed: value.replayed,
+        projectRevision: value.project_revision,
+      });
+    });
+  }
+
+  function requestPerformancePatternLaunch(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["sessionId", "requestId", "patternSlot"])) {
+      return Promise.reject(new TypeError("Performance launch request is invalid"));
+    }
+    const sessionId = performanceIdentity(request.sessionId, "sessionId");
+    const requestId = performanceIdentity(request.requestId, "requestId");
+    const patternSlot = patternSlotIdentity(request.patternSlot);
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest("performance.record.launch-request", {
+        session_id: sessionId,
+        request_id: requestId,
+        pattern_slot: patternSlot,
+      });
+      return Object.freeze({
+        requestId: value.request_id,
+        state: value.state,
+        targetTick: value.target_tick,
+        projectRevision: value.project_revision,
+      });
+    });
+  }
+
+  function flushPerformanceRecording(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["sessionId", "commandId"])) {
+      return Promise.reject(new TypeError("Performance flush request is invalid"));
+    }
+    const sessionId = performanceIdentity(request.sessionId, "sessionId");
+    const commandId = performanceIdentity(request.commandId, "commandId");
+    return serializeRuntimeAction(async () => lifecycleResult(
+      await boundedRequest("performance.record.flush", {
+        session_id: sessionId, command_id: commandId,
+      }),
+    ));
+  }
+
+  function stopPerformanceRecording(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["sessionId", "requestId"])) {
+      return Promise.reject(new TypeError("Performance stop request is invalid"));
+    }
+    const sessionId = performanceIdentity(request.sessionId, "sessionId");
+    const requestId = performanceIdentity(request.requestId, "requestId");
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest("performance.record.stop", {
+        session_id: sessionId, request_id: requestId,
+      });
+      return Object.freeze({
+        requestId: value.request_id,
+        sessionId: value.session_id,
+        performanceId: value.performance_id,
+        state: value.state,
+        pendingEventCount: value.pending_event_count,
+        replayed: value.replayed,
+        projectRevision: value.project_revision,
+      });
+    });
+  }
+
+  async function queryPerformanceRecordingStatus() {
+    const value = await recoverableQuery("performance.record.status", {});
+    return Object.freeze({
+      state: value.state,
+      sessionId: value.session_id,
+      performanceId: value.performance_id,
+      journalRevision: value.journal_revision,
+      nextFlushSequence: value.next_flush_seq,
+      pendingEventCount: value.pending_event_count,
+      openPadGestures: value.open_pad_gestures,
+      openFxGestures: value.open_fx_gestures,
+      hold: value.hold,
+      pendingLaunch: value.pending_launch === null ? null : Object.freeze({
+        requestId: value.pending_launch.request_id,
+        patternSlot: value.pending_launch.pattern_slot,
+        targetTick: value.pending_launch.target_tick,
+        claimed: value.pending_launch.claimed,
+      }),
+      lastLaunchAck: value.last_launch_ack === null ? null : Object.freeze({
+        requestId: value.last_launch_ack.request_id,
+        patternSlot: value.last_launch_ack.pattern_slot,
+        effectiveTick: value.last_launch_ack.effective_tick,
+      }),
+      projectRevision: value.project_revision,
+    });
+  }
+
+  function performanceProjectMutation(operation, request, extraKeys, payload) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["expectedRevision", ...extraKeys]) ||
+        !isUnsignedInteger(request.expectedRevision)) {
+      return Promise.reject(new TypeError(`Performance ${operation} request is invalid`));
+    }
+    return serializeProjectAction(async () => lifecycleResult(
+      await boundedRequest(operation, {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        ...payload(),
+      }),
+    ));
+  }
+
+  function savePerformance(request) {
+    return performanceProjectMutation(
+      "performance.save", request,
+      ["performanceId", "name", "recordingArtifact"],
+      () => ({
+        performance_id: performanceIdentity(request.performanceId, "performanceId"),
+        name: request.name,
+        recording_artifact: wireArtifact(request.recordingArtifact),
+      }),
+    );
+  }
+
+  function discardPerformance(request) {
+    return performanceProjectMutation(
+      "performance.discard", request, ["performanceId"],
+      () => ({performance_id: performanceIdentity(request.performanceId, "performanceId")}),
+    );
+  }
+
+  async function listPerformanceRecovery() {
+    const value = await recoverableQuery("performance.recovery.list", {});
+    return Object.freeze(value.candidates.map((candidate) => Object.freeze({
+      sessionId: candidate.session_id,
+      performanceId: candidate.performance_id,
+      reason: candidate.reason,
+      durableEventCount: candidate.durable_event_count,
+      pendingEventCount: candidate.pending_event_count,
+      fingerprint: candidate.fingerprint,
+    })));
+  }
+
+  function applyPerformanceRecovery(request) {
+    return performanceProjectMutation(
+      "performance.recovery.apply", request, ["sessionId"],
+      () => ({session_id: performanceIdentity(request.sessionId, "sessionId")}),
+    );
+  }
+
+  function discardPerformanceRecovery(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["sessionId", "requestId"])) {
+      return Promise.reject(new TypeError("Performance recovery discard is invalid"));
+    }
+    const sessionId = performanceIdentity(request.sessionId, "sessionId");
+    const requestId = performanceIdentity(request.requestId, "requestId");
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("performance.recovery.discard", {
+        session_id: sessionId, request_id: requestId,
+      });
+      return Object.freeze({
+        requestId: value.request_id,
+        sessionId: value.session_id,
+        performanceId: value.performance_id,
+        state: value.state,
+        pendingEventCount: value.pending_event_count,
+        replayed: value.replayed,
+        projectRevision: value.project_revision,
+      });
+    });
+  }
+
+  function renamePerformance(request) {
+    return performanceProjectMutation(
+      "performance.rename", request, ["performanceId", "name"],
+      () => ({
+        performance_id: performanceIdentity(request.performanceId, "performanceId"),
+        name: request.name,
+      }),
+    );
+  }
+
+  function deletePerformance(request) {
+    return performanceProjectMutation(
+      "performance.delete", request, ["performanceId"],
+      () => ({performance_id: performanceIdentity(request.performanceId, "performanceId")}),
+    );
+  }
+
+  function bindPerformanceRecording(request) {
+    return performanceProjectMutation(
+      "performance.recording.bind", request,
+      ["performanceId", "recordingArtifact"],
+      () => ({
+        performance_id: performanceIdentity(request.performanceId, "performanceId"),
+        recording_artifact: wireArtifact(request.recordingArtifact),
+      }),
+    );
+  }
+
+  function beginPerformanceReplay(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["replayId", "performanceId"])) {
+      return Promise.reject(new TypeError("Performance replay begin is invalid"));
+    }
+    const replayId = performanceIdentity(request.replayId, "replayId");
+    const performanceId = performanceIdentity(request.performanceId, "performanceId");
+    return serializeRuntimeAction(async () => replayResult(
+      await boundedRequest("performance.replay.begin", {
+        replay_id: replayId, performance_id: performanceId,
+      }),
+    ));
+  }
+
+  function stopPerformanceReplay(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, ["replayId", "requestId"])) {
+      return Promise.reject(new TypeError("Performance replay stop is invalid"));
+    }
+    const replayId = performanceIdentity(request.replayId, "replayId");
+    const requestId = performanceIdentity(request.requestId, "requestId");
+    return serializeRuntimeAction(async () => replayResult(
+      await boundedRequest("performance.replay.stop", {
+        replay_id: replayId, request_id: requestId,
+      }),
+    ));
+  }
+
+  async function queryPerformanceReplayStatus(replayId) {
+    performanceIdentity(replayId, "replayId");
+    return replayResult(await recoverableQuery(
+      "performance.replay.status", {replay_id: replayId},
+    ));
+  }
+
+  function commitPerformanceResample(request) {
+    if (request === null || typeof request !== "object" ||
+        !exactKeys(request, [
+          "expectedRevision", "performanceId", "sourceStartFrame",
+          "sourceEndFrame", "targetSlot",
+        ]) || !isUnsignedInteger(request.expectedRevision)) {
+      return Promise.reject(new TypeError("Performance resample commit is invalid"));
+    }
+    const performanceId = performanceIdentity(
+      request.performanceId, "performanceId");
+    const targetSlot = flatSlotAddress(request.targetSlot);
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("performance.resample.commit", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        performance_id: performanceId,
+        source_start_frame: request.sourceStartFrame,
+        source_end_frame: request.sourceEndFrame,
+        target_slot: targetSlot,
+      });
+      return Object.freeze({
+        performanceId: value.performance_id,
+        committedRevision: value.committed_revision,
+        runtimePrepareRequired: value.runtime_prepare_required,
+        projectRevision: value.project_revision,
+      });
+    });
+  }
+
   async function reloadSnapshot(patternId) {
     return boundedRequest("snapshot.reload", {pattern_id: patternId});
   }
@@ -3593,6 +4082,29 @@ function createRuntimeSessionController(options = {}) {
     importAssignSample,
     openProject,
     inspectProject,
+    assignPatternSlot,
+    clearPatternSlot,
+    movePatternSlot,
+    listPerformances,
+    inspectPerformance,
+    beginPerformanceRecording,
+    recordPerformanceEvent,
+    requestPerformancePatternLaunch,
+    flushPerformanceRecording,
+    stopPerformanceRecording,
+    queryPerformanceRecordingStatus,
+    savePerformance,
+    discardPerformance,
+    listPerformanceRecovery,
+    applyPerformanceRecovery,
+    discardPerformanceRecovery,
+    renamePerformance,
+    deletePerformance,
+    bindPerformanceRecording,
+    beginPerformanceReplay,
+    stopPerformanceReplay,
+    queryPerformanceReplayStatus,
+    commitPerformanceResample,
     beginSequence,
     disarmSequenceCapture,
     recordSequenceEvent,

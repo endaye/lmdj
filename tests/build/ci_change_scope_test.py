@@ -138,10 +138,17 @@ CASES = {
     "packages/web-runtime-platform/test/runtime_loader.test.mjs": {
         "portal", "web_toolchain", "web_runtime_host"
     },
+    "packages/web-runtime-platform/test/performance_protocol.test.mjs": {
+        "portal", "web_toolchain", "web_runtime_host"
+    },
     "packages/web-runtime-platform/test/source_boundary_test.py": {
         "portal", "web_toolchain", "web_runtime_host"
     },
     "packages/web-runtime-platform/test/control_runtime_test.cpp": {
+        "portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos",
+        "web_toolchain", "web_runtime_host"
+    },
+    "packages/web-runtime-platform/test/performance_bridge_test.cpp": {
         "portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos",
         "web_toolchain", "web_runtime_host"
     },

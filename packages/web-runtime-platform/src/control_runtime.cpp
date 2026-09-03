@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -21,7 +22,9 @@
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/domain/commands.hpp>
 #include <lmdj/domain/project.hpp>
+#include <lmdj/facade/performance_engine_adapter.hpp>
 #include <lmdj/foundation/artifact.hpp>
+#include <lmdj/foundation/json.hpp>
 
 #include "testing_hooks.hpp"
 
@@ -70,6 +73,7 @@ using foundation::Error;
 using foundation::ErrorCode;
 
 constexpr std::uint32_t kSampleRate = 48'000;
+constexpr std::uint64_t kMaximumSafeInteger = 9'007'199'254'740'991ULL;
 
 std::string generated_uuid() {
   std::array<std::uint8_t, 16> bytes{};
@@ -101,6 +105,11 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
       operation == "sequence.record.event" ||
       operation == "sequence.record.status" ||
       operation == "sequence.recovery.list" ||
+      operation == "performance.record.event" ||
+      operation == "performance.record.launch-request" ||
+      operation == "performance.record.status" ||
+      operation == "performance.recovery.list" ||
+      operation == "performance.replay.status" ||
       operation == "sample.preview.set" ||
       operation == "sample.preview.clear" || operation == "sample.stop") {
     return std::chrono::seconds(1);
@@ -261,6 +270,208 @@ domain::Pattern pattern_value(const Json& value) {
       static_cast<std::uint8_t>(bars),
       std::move(parsed),
   };
+}
+
+std::uint64_t safe_unsigned_field(
+    const Json& value,
+    std::string_view key,
+    std::uint64_t maximum = kMaximumSafeInteger) {
+  return unsigned_field(value, key, maximum);
+}
+
+void validate_performance_name(const Json& value, std::string_view key) {
+  const auto& name = string_field(value, key);
+  require(foundation::valid_utf8(name));
+  const auto code_points = std::count_if(
+      name.begin(), name.end(), [](unsigned char byte) {
+        return (byte & 0xc0U) != 0x80U;
+      });
+  require(code_points > 0 && code_points <= 64);
+}
+
+void validate_performance_artifact(const Json& value) {
+  require(exact_keys(value, {"sha256", "media_type", "byte_length"}));
+  const auto& sha256 = string_field(value, "sha256");
+  require(
+      sha256.size() == 64U &&
+      std::all_of(sha256.begin(), sha256.end(), [](char character) {
+        return (character >= '0' && character <= '9') ||
+            (character >= 'a' && character <= 'f');
+      }));
+  require(string_field(value, "media_type") == "audio/wav");
+  (void)safe_unsigned_field(value, "byte_length");
+}
+
+void validate_performance_gesture(const Json& event) {
+  require(event.is_object() && event.contains("kind"));
+  const auto& kind = string_field(event, "kind");
+  if (kind == "pad_press") {
+    require(exact_keys(
+        event, {"kind", "gesture_id", "slot", "velocity"}));
+    (void)uuid_field(event, "gesture_id");
+    (void)safe_unsigned_field(event, "slot", 63U);
+    const auto velocity = safe_unsigned_field(event, "velocity", 127U);
+    require(velocity != 0U);
+    return;
+  }
+  if (kind == "pad_release") {
+    require(exact_keys(event, {"kind", "gesture_id", "slot"}));
+    (void)uuid_field(event, "gesture_id");
+    (void)safe_unsigned_field(event, "slot", 63U);
+    return;
+  }
+  static constexpr std::array<std::string_view, 8> effects{
+      "filter", "delay", "reverb", "stutter",
+      "gate", "reverse", "crush", "cutter"};
+  if (kind == "fx_engage" || kind == "fx_move") {
+    require(exact_keys(
+        event, {"kind", "gesture_id", "fx", "value"}));
+    (void)uuid_field(event, "gesture_id");
+    const auto& effect = string_field(event, "fx");
+    require(std::find(effects.begin(), effects.end(), effect) != effects.end());
+    (void)safe_unsigned_field(event, "value", 1'000U);
+    return;
+  }
+  if (kind == "fx_release") {
+    require(exact_keys(event, {"kind", "gesture_id", "fx"}));
+    (void)uuid_field(event, "gesture_id");
+    const auto& effect = string_field(event, "fx");
+    require(std::find(effects.begin(), effects.end(), effect) != effects.end());
+    return;
+  }
+  require(
+      (kind == "hold_on" || kind == "hold_off") &&
+      exact_keys(event, {"kind"}));
+}
+
+void validate_performance_operation_payload(
+    std::string_view operation,
+    const Json& payload) {
+  const auto command_identity = [&payload]() {
+    (void)uuid_field(payload, "command_id");
+    (void)safe_unsigned_field(payload, "expected_revision");
+  };
+  const auto pattern_slot = [&payload](std::string_view key) {
+    (void)safe_unsigned_field(payload, key, 15U);
+  };
+  if (operation == "pattern.slot.assign") {
+    require(exact_keys(
+        payload,
+        {"command_id", "expected_revision", "pattern_slot", "pattern_id"}));
+    command_identity();
+    pattern_slot("pattern_slot");
+    (void)uuid_field(payload, "pattern_id");
+  } else if (operation == "pattern.slot.clear") {
+    require(exact_keys(
+        payload, {"command_id", "expected_revision", "pattern_slot"}));
+    command_identity();
+    pattern_slot("pattern_slot");
+  } else if (operation == "pattern.slot.move") {
+    require(exact_keys(
+        payload,
+        {"command_id", "expected_revision", "from_slot", "to_slot"}));
+    command_identity();
+    pattern_slot("from_slot");
+    pattern_slot("to_slot");
+  } else if (
+      operation == "performance.list" ||
+      operation == "performance.record.status" ||
+      operation == "performance.recovery.list") {
+    require(exact_keys(payload, {}));
+  } else if (operation == "performance.inspect") {
+    require(exact_keys(payload, {"performance_id"}));
+    (void)uuid_field(payload, "performance_id");
+  } else if (operation == "performance.record.begin") {
+    require(exact_keys(
+        payload,
+        {"command_id", "expected_revision", "session_id", "performance_id"}));
+    command_identity();
+    (void)uuid_field(payload, "session_id");
+    (void)uuid_field(payload, "performance_id");
+  } else if (operation == "performance.record.event") {
+    require(exact_keys(payload, {"session_id", "event_id", "event"}));
+    (void)uuid_field(payload, "session_id");
+    (void)uuid_field(payload, "event_id");
+    validate_performance_gesture(payload.at("event"));
+  } else if (operation == "performance.record.launch-request") {
+    require(exact_keys(
+        payload, {"session_id", "request_id", "pattern_slot"}));
+    (void)uuid_field(payload, "session_id");
+    (void)uuid_field(payload, "request_id");
+    pattern_slot("pattern_slot");
+  } else if (operation == "performance.record.flush") {
+    require(exact_keys(payload, {"session_id", "command_id"}));
+    (void)uuid_field(payload, "session_id");
+    (void)uuid_field(payload, "command_id");
+  } else if (
+      operation == "performance.record.stop" ||
+      operation == "performance.recovery.discard") {
+    require(exact_keys(payload, {"session_id", "request_id"}));
+    (void)uuid_field(payload, "session_id");
+    (void)uuid_field(payload, "request_id");
+  } else if (operation == "performance.save") {
+    require(exact_keys(
+        payload,
+        {"command_id", "expected_revision", "performance_id", "name",
+         "recording_artifact"}));
+    command_identity();
+    (void)uuid_field(payload, "performance_id");
+    validate_performance_name(payload, "name");
+    if (!payload.at("recording_artifact").is_null()) {
+      validate_performance_artifact(payload.at("recording_artifact"));
+    }
+  } else if (
+      operation == "performance.discard" ||
+      operation == "performance.delete") {
+    require(exact_keys(
+        payload, {"command_id", "expected_revision", "performance_id"}));
+    command_identity();
+    (void)uuid_field(payload, "performance_id");
+  } else if (operation == "performance.recovery.apply") {
+    require(exact_keys(
+        payload, {"command_id", "expected_revision", "session_id"}));
+    command_identity();
+    (void)uuid_field(payload, "session_id");
+  } else if (operation == "performance.rename") {
+    require(exact_keys(
+        payload,
+        {"command_id", "expected_revision", "performance_id", "name"}));
+    command_identity();
+    (void)uuid_field(payload, "performance_id");
+    validate_performance_name(payload, "name");
+  } else if (operation == "performance.recording.bind") {
+    require(exact_keys(
+        payload,
+        {"command_id", "expected_revision", "performance_id",
+         "recording_artifact"}));
+    command_identity();
+    (void)uuid_field(payload, "performance_id");
+    validate_performance_artifact(payload.at("recording_artifact"));
+  } else if (operation == "performance.replay.begin") {
+    require(exact_keys(payload, {"replay_id", "performance_id"}));
+    (void)uuid_field(payload, "replay_id");
+    (void)uuid_field(payload, "performance_id");
+  } else if (operation == "performance.replay.stop") {
+    require(exact_keys(payload, {"replay_id", "request_id"}));
+    (void)uuid_field(payload, "replay_id");
+    (void)uuid_field(payload, "request_id");
+  } else if (operation == "performance.replay.status") {
+    require(exact_keys(payload, {"replay_id"}));
+    (void)uuid_field(payload, "replay_id");
+  } else if (operation == "performance.resample.commit") {
+    require(exact_keys(
+        payload,
+        {"command_id", "expected_revision", "performance_id",
+         "source_start_frame", "source_end_frame", "target_slot"}));
+    command_identity();
+    (void)uuid_field(payload, "performance_id");
+    const auto start = safe_unsigned_field(payload, "source_start_frame");
+    const auto end = safe_unsigned_field(payload, "source_end_frame");
+    require(start < end);
+    (void)slot_value(payload.at("target_slot"));
+  } else {
+    protocol_failure();
+  }
 }
 
 Json success(Json result) {
@@ -704,13 +915,72 @@ struct ControlRuntime::Impl {
     bool notified = false;
   };
 
+  static facade::Application compose_application(
+      audio::RealtimeEngine& engine,
+      facade::ApplicationConfig config,
+      const std::shared_ptr<std::atomic<bool>>& publication_failure,
+      std::function<void()>& service) {
+    auto gateway = facade::make_engine_pattern_publication_gateway(engine);
+#if defined(LMDJ_WEB_RUNTIME_TESTING) && LMDJ_WEB_RUNTIME_TESTING
+    auto publish = std::move(gateway.publish);
+    gateway.publish =
+        [publication_failure, publish = std::move(publish)](
+            std::shared_ptr<const cooker::RuntimeSnapshot> snapshot,
+            std::optional<std::uint64_t> activation_frame,
+            std::optional<audio::PatternReplacementAuthority>
+                replacement_authority) {
+          if (publication_failure->exchange(false)) {
+            return foundation::Result<audio::PatternPublication>::failure(
+                Error{
+                    ErrorCode::invalid_argument,
+                    "injected Performance Pattern publication failure",
+                });
+          }
+          return publish(
+              std::move(snapshot),
+              activation_frame,
+              std::move(replacement_authority));
+        };
+#else
+    static_cast<void>(publication_failure);
+#endif
+    auto adapter = facade::make_engine_performance_adapter(
+        engine, std::move(gateway));
+    config.performance_clock = std::move(adapter.clock);
+    config.performance_input_sequencer = std::move(adapter.input_sequencer);
+    config.pattern_launch_acknowledger =
+        std::move(adapter.launch_acknowledger);
+    config.performance_replay_controller =
+        std::move(adapter.replay_controller);
+    service = std::move(adapter.service);
+    return facade::Application(std::move(config));
+  }
+
   Impl(
       std::filesystem::path root,
-      facade::Application owned_application,
+      facade::ApplicationConfig config,
       audio::RuntimePreparationLimits owned_limits)
       : workspace_root(std::move(root)),
-        application(std::move(owned_application)),
-        limits(owned_limits) {}
+        limits(owned_limits),
+        performance_publication_failure(
+            std::make_shared<std::atomic<bool>>(false)),
+        performance_service(),
+        application(compose_application(
+            engine,
+            std::move(config),
+            performance_publication_failure,
+            performance_service)) {}
+
+  void service_performance_adapter() {
+    if (performance_service) {
+      performance_service();
+    }
+  }
+
+  foundation::Result<void> service_performance() {
+    service_performance_adapter();
+    return application.service_performance();
+  }
 
   std::filesystem::path project_path(std::string_view project_id) const {
     return workspace_root / "projects" /
@@ -1600,9 +1870,11 @@ struct ControlRuntime::Impl {
   }
 
   std::filesystem::path workspace_root;
-  facade::Application application;
   audio::RuntimePreparationLimits limits;
   audio::RealtimeEngine engine;
+  std::shared_ptr<std::atomic<bool>> performance_publication_failure;
+  std::function<void()> performance_service;
+  facade::Application application;
   State state = State::core_ready;
   std::optional<facade::RuntimeProjectWriterLease> writer_lease;
   std::optional<std::filesystem::path> retained_project_path;
@@ -1637,10 +1909,11 @@ ControlRuntime::ControlRuntime(std::shared_ptr<Impl> impl) noexcept
 
 foundation::Result<std::unique_ptr<ControlRuntime>> ControlRuntime::create(
     std::filesystem::path workspace_root,
-    facade::Application application,
+    facade::ApplicationConfig application_config,
     audio::RuntimePreparationLimits limits) {
   if (!workspace_root.is_absolute() ||
-      workspace_root.lexically_normal() != workspace_root) {
+      workspace_root.lexically_normal() != workspace_root ||
+      application_config.workspace_root != workspace_root) {
     return foundation::Result<std::unique_ptr<ControlRuntime>>::failure(
         Error{ErrorCode::invalid_argument, "workspace root is invalid"});
   }
@@ -1649,7 +1922,7 @@ foundation::Result<std::unique_ptr<ControlRuntime>> ControlRuntime::create(
         std::unique_ptr<ControlRuntime>(new ControlRuntime(
             std::make_shared<Impl>(
                 std::move(workspace_root),
-                std::move(application),
+                std::move(application_config),
                 limits))));
   } catch (...) {
     return foundation::Result<std::unique_ptr<ControlRuntime>>::failure(
@@ -1712,9 +1985,63 @@ Json ControlRuntime::dispatch(
       require(exact_keys(payload, {}));
       require(sidecar.empty());
       impl_->fail_next_pattern_publication = true;
+      impl_->performance_publication_failure->store(true);
       return success({{"armed", true}});
     }
 #endif
+    static const std::map<std::string_view, bool> performance_operations{
+        {"pattern.slot.assign", false},
+        {"pattern.slot.clear", false},
+        {"pattern.slot.move", false},
+        {"performance.list", true},
+        {"performance.inspect", true},
+        {"performance.record.begin", false},
+        {"performance.record.event", false},
+        {"performance.record.launch-request", false},
+        {"performance.record.flush", false},
+        {"performance.record.stop", false},
+        {"performance.record.status", true},
+        {"performance.save", false},
+        {"performance.discard", false},
+        {"performance.recovery.list", true},
+        {"performance.recovery.apply", false},
+        {"performance.recovery.discard", false},
+        {"performance.rename", false},
+        {"performance.delete", false},
+        {"performance.recording.bind", false},
+        {"performance.replay.begin", false},
+        {"performance.replay.stop", false},
+        {"performance.replay.status", true},
+        {"performance.resample.commit", false},
+    };
+    if (const auto found = performance_operations.find(operation);
+        found != performance_operations.end()) {
+      require(sidecar.empty());
+      validate_performance_operation_payload(operation, payload);
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      // Runtime progress is observed before both command and query dispatch.
+      // Only commands cross Application's explicit durable-service boundary;
+      // queries remain disk-read-only.
+      impl_->service_performance_adapter();
+      auto request = payload;
+      require(request.is_object());
+      request["operation"] = operation;
+      request["project_path"] =
+          impl_->retained_project_path->generic_string();
+      const auto response = found->second
+          ? impl_->application.query(request)
+          : impl_->application.command(request);
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      if (response.at("project_revision").is_number_unsigned()) {
+        impl_->project_revision =
+            response.at("project_revision").get<std::uint64_t>();
+      }
+      return normalized_facade_success(response);
+    }
     if (operation == "host.status") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
@@ -3333,6 +3660,17 @@ foundation::Result<void> ControlRuntime::drain_capture() {
   while (impl_->engine.drain_capture(discarded) != 0) {
   }
   return foundation::Result<void>::success();
+}
+
+foundation::Result<void> ControlRuntime::service_performance() {
+  try {
+    return impl_->service_performance();
+  } catch (...) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::internal_error,
+        "Web Performance service failed unexpectedly",
+    });
+  }
 }
 
 bool ControlRuntime::validate_realtime_health() noexcept {

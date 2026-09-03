@@ -43,7 +43,7 @@ class ControlRuntime final {
 
   static foundation::Result<std::unique_ptr<ControlRuntime>> create(
       std::filesystem::path workspace_root,
-      facade::Application application,
+      facade::ApplicationConfig application_config,
       audio::RuntimePreparationLimits limits);
 
   nlohmann::json dispatch(
@@ -63,6 +63,7 @@ class ControlRuntime final {
   std::vector<audio::RuntimeTriggerOutcomeEvent> drain_outcomes();
   std::vector<audio::RuntimeVoiceStateEvent> drain_voice_states();
   foundation::Result<void> drain_capture();
+  foundation::Result<void> service_performance();
   std::optional<SequenceBarBoundaryEvent> drain_sequence_bar_boundary();
   bool validate_realtime_health() noexcept;
   void fail_and_seal(std::string_view cause) noexcept;
