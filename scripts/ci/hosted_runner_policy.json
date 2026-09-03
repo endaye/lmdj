@@ -1,0 +1,137 @@
+{
+  "schema": "lmdj.hosted-runner-policy.v1",
+  "rationale": [
+    "GitHub bills each job rounded up to a whole minute, so on hosted runners job count costs more than job duration. Self-hosted minutes cost nothing. A hosted job is therefore a spending decision, and this file is where that decision is recorded.",
+    "A job earns a hosted runner only by publishing scope, trust, admission or verdict evidence that must survive a self-hosted outage, by holding authority the CI runner users deliberately lack, or by a recorded platform incompatibility. Convenience is not a reason.",
+    "tests/build/ci_hosted_runner_policy_test.py enumerates every job whose runs-on can resolve to a GitHub-hosted label and requires an entry here, so adding a hosted job is a reviewed act rather than a default."
+  ],
+  "categories": {
+    "control-plane": "Publishes scope, trust, admission or verdict evidence that must remain available when every self-hosted runner is offline.",
+    "adjudicator": "Republishes an already produced result under a required check name and executes no workload.",
+    "deploy-authority": "Holds deployment, signing or publication authority that the self-hosted CI runner users are deliberately denied.",
+    "platform": "A recorded platform incompatibility makes the self-hosted host unusable for this job.",
+    "temporary": "Not justified on the merits; scheduled for removal by a named Issue."
+  },
+  "allowed": [
+    {
+      "workflow": "ci.yml",
+      "job": "change-scope",
+      "category": "control-plane",
+      "reason": "Publishes the exact diff, lane selection, trust and upgrade reasons. It must produce that evidence even when every self-hosted Linux runner is offline, because the rest of the run is adjudicated against it."
+    },
+    {
+      "workflow": "ci.yml",
+      "job": "pre-heavy-gate",
+      "category": "control-plane",
+      "reason": "Decides whether native-heavy work is admitted. A gate that depended on the hosts it admits work to could not report their unavailability."
+    },
+    {
+      "workflow": "ci.yml",
+      "job": "pr-gate",
+      "category": "control-plane",
+      "reason": "The single aggregate verdict. It must adjudicate a workload without depending on that workload's host."
+    },
+    {
+      "workflow": "ci.yml",
+      "job": "select-macos-runner",
+      "category": "control-plane",
+      "reason": "Decides macOS routing by querying runner status. It cannot run on the runner whose availability it is deciding."
+    },
+    {
+      "workflow": "ci.yml",
+      "job": "macos-primary",
+      "category": "platform",
+      "reason": "runs-on is resolved from the selector output. It lands on the trusted M1 whenever that runner is online and reaches GitHub-hosted macOS only when the selector reports the runner offline, missing, mislabeled, or the pull request is from a fork. Busy is deliberately not a fallback condition, because hosted macOS bills at 10.3 times the Linux rate."
+    },
+    {
+      "workflow": "ci.yml",
+      "job": "macos-fallback",
+      "category": "platform",
+      "reason": "Infrastructure recovery, not a test retry. It starts only when the selected self-hosted lane could not publish a terminal result; a published preparation, Proof or sanitizer failure is final and must not start it."
+    },
+    {
+      "workflow": "ci.yml",
+      "job": "core-macos",
+      "category": "adjudicator",
+      "reason": "Republishes the macOS Core Proof result under the required check name. Reads upstream job outputs and executes no workload."
+    },
+    {
+      "workflow": "ci.yml",
+      "job": "core-asan-macos",
+      "category": "adjudicator",
+      "reason": "Republishes the native macOS sanitizer result under the required check name. Reads upstream job outputs and executes no workload."
+    },
+    {
+      "workflow": "merge-queue.yml",
+      "job": "route",
+      "category": "control-plane",
+      "reason": "Routes the exact authorization event and decides admission to the queue. Like the other adjudicators it must not depend on the hosts running the work it authorizes."
+    },
+    {
+      "workflow": "merge-queue.yml",
+      "job": "queue-item",
+      "category": "temporary",
+      "reason": "NOT JUSTIFIED ON THE MERITS. This job holds a paid hosted runner while polling for another GitHub run to finish, measured at about 21.6 minutes per validation and very likely the largest single line on the Actions bill. It is scheduled for removal by endaye/lmdj#591 step 4, which replaces the self-hosted orchestrator with GitHub's native merge queue so the waiting is borne by GitHub rather than by billed minutes. Do not treat this entry as precedent."
+    },
+    {
+      "workflow": "merge-queue.yml",
+      "job": "finalize",
+      "category": "control-plane",
+      "reason": "Reconciles an aborted worker and publishes the closed queue report. It must be able to run when the worker's own host has died, which is the case it exists for."
+    },
+    {
+      "workflow": "release-audit.yml",
+      "job": "audit",
+      "category": "control-plane",
+      "reason": "Publishes release identity evidence. Release authority must be independent of the hosts that produced the artifacts it audits."
+    },
+    {
+      "workflow": "publish-release.yml",
+      "job": "preflight",
+      "category": "deploy-authority",
+      "reason": "Guards the protected publication workflow. The self-hosted runner users hold no release signing key, production token or publication authority, by design."
+    },
+    {
+      "workflow": "publish-release.yml",
+      "job": "publish",
+      "category": "deploy-authority",
+      "reason": "Performs the protected Release publication. Routing it to a CI host would put publication authority on a machine that deliberately has none."
+    },
+    {
+      "workflow": "deploy-web-runtime-host.yml",
+      "job": "preflight",
+      "category": "deploy-authority",
+      "reason": "Guards a deployment. CI runner users have no deployment tree, secret or credential access, and granting it to satisfy a routing preference would widen what CI can reach."
+    },
+    {
+      "workflow": "deploy-web-runtime-host.yml",
+      "job": "deploy",
+      "category": "deploy-authority",
+      "reason": "Performs the deployment and holds its credentials. Same boundary as the preflight above."
+    },
+    {
+      "workflow": "deploy-creator-web.yml",
+      "job": "preflight",
+      "category": "deploy-authority",
+      "reason": "Guards a deployment. CI runner users have no deployment tree, secret or credential access."
+    },
+    {
+      "workflow": "deploy-creator-web.yml",
+      "job": "deploy",
+      "category": "deploy-authority",
+      "reason": "Performs the deployment and holds its credentials. Same boundary as the preflight above."
+    },
+    {
+      "workflow": "architecture-portal-smoke.yml",
+      "job": "smoke",
+      "category": "deploy-authority",
+      "reason": "Exercises the published Portal deployment from outside. A smoke test of a public deployment should not run on a host that participates in producing it."
+    },
+    {
+      "workflow": "core-nightly.yml",
+      "job": "core-tsan",
+      "category": "platform",
+      "reason": "Scheduled TSan stays on the clean hosted authority because a historical Contabo execution built but the TSan runtime failed with an unexpected memory mapping. Changing this routing requires separately accepted same-revision runner-name and successful-job evidence; the manual probe job exists to gather it."
+    }
+  ]
+}

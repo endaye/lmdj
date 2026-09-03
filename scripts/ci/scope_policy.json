@@ -156,6 +156,7 @@
     {"match": {"kind": "prefix", "value": "tests/platform/web/deployment/"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "prefix", "value": "tests/quality/"}, "lanes": ["core_coverage"]},
     {"match": {"kind": "prefix", "value": "tests/build/ci_"}, "lanes": ["ci_contract"]},
+    {"match": {"kind": "exact", "value": "tests/build/workflow_inventory.py"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "prefix", "value": "tests/build/release_"}, "lanes": ["deploy_contract", "ci_contract"]},
     {"match": {"kind": "exact", "value": "tests/build/web_host_release_selection_test.py"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "prefix", "value": "tests/build/web_runtime_deploy_"}, "lanes": ["deploy_contract"]},
