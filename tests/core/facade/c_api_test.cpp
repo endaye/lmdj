@@ -1334,6 +1334,192 @@ void test_excessive_json_depth_is_rejected_without_crashing() {
   LMDJ_CHECK(all_children_rejected);
 }
 
+void test_locked_performance_surface_has_exact_kinds_and_request_shapes() {
+  TempDirectory temp;
+  const auto config = config_json(temp.path());
+  lmdj_engine* engine = nullptr;
+  char* error = nullptr;
+  LMDJ_CHECK(
+      lmdj_engine_create(config.c_str(), &engine, &error) ==
+      LMDJ_STATUS_OK);
+  LMDJ_CHECK(error == nullptr);
+
+  const auto missing = (temp.path() / "missing.lmdj").generic_string();
+  const auto id = uuid(900);
+  const auto artifact = nlohmann::json{
+      {"sha256", std::string(64U, '0')},
+      {"media_type", "audio/wav"},
+      {"byte_length", 44},
+  };
+  struct OperationCase {
+    bool is_command;
+    nlohmann::json request;
+  };
+  const std::vector<OperationCase> cases{
+      {true,
+       {{"operation", "pattern.slot.assign"},
+        {"project_path", missing},
+        {"command_id", uuid(901)},
+        {"expected_revision", 0},
+        {"pattern_slot", 0},
+        {"pattern_id", uuid(902)}}},
+      {true,
+       {{"operation", "pattern.slot.clear"},
+        {"project_path", missing},
+        {"command_id", uuid(903)},
+        {"expected_revision", 0},
+        {"pattern_slot", 0}}},
+      {true,
+       {{"operation", "pattern.slot.move"},
+        {"project_path", missing},
+        {"command_id", uuid(904)},
+        {"expected_revision", 0},
+        {"from_slot", 0},
+        {"to_slot", 1}}},
+      {false,
+       {{"operation", "performance.list"}, {"project_path", missing}}},
+      {false,
+       {{"operation", "performance.inspect"},
+        {"project_path", missing},
+        {"performance_id", id}}},
+      {true,
+       {{"operation", "performance.record.begin"},
+        {"project_path", missing},
+        {"command_id", uuid(905)},
+        {"expected_revision", 0},
+        {"session_id", uuid(906)},
+        {"performance_id", id}}},
+      {true,
+       {{"operation", "performance.record.event"},
+        {"project_path", missing},
+        {"session_id", uuid(906)},
+        {"event_id", uuid(907)},
+        {"event", {{"kind", "hold_on"}}}}},
+      {true,
+       {{"operation", "performance.record.launch-request"},
+        {"project_path", missing},
+        {"session_id", uuid(906)},
+        {"request_id", uuid(908)},
+        {"pattern_slot", 0}}},
+      {true,
+       {{"operation", "performance.record.flush"},
+        {"project_path", missing},
+        {"session_id", uuid(906)},
+        {"command_id", uuid(909)}}},
+      {true,
+       {{"operation", "performance.record.stop"},
+        {"project_path", missing},
+        {"session_id", uuid(906)},
+        {"request_id", uuid(910)}}},
+      {false,
+       {{"operation", "performance.record.status"},
+        {"project_path", missing}}},
+      {true,
+       {{"operation", "performance.save"},
+        {"project_path", missing},
+        {"command_id", uuid(911)},
+        {"expected_revision", 0},
+        {"performance_id", id},
+        {"name", "Take"},
+        {"recording_artifact", nullptr}}},
+      {true,
+       {{"operation", "performance.discard"},
+        {"project_path", missing},
+        {"command_id", uuid(912)},
+        {"expected_revision", 0},
+        {"performance_id", id}}},
+      {false,
+       {{"operation", "performance.recovery.list"},
+        {"project_path", missing}}},
+      {true,
+       {{"operation", "performance.recovery.apply"},
+        {"project_path", missing},
+        {"command_id", uuid(913)},
+        {"expected_revision", 0},
+        {"session_id", uuid(906)}}},
+      {true,
+       {{"operation", "performance.recovery.discard"},
+        {"project_path", missing},
+        {"session_id", uuid(906)},
+        {"request_id", uuid(914)}}},
+      {true,
+       {{"operation", "performance.rename"},
+        {"project_path", missing},
+        {"command_id", uuid(915)},
+        {"expected_revision", 0},
+        {"performance_id", id},
+        {"name", "Renamed"}}},
+      {true,
+       {{"operation", "performance.delete"},
+        {"project_path", missing},
+        {"command_id", uuid(916)},
+        {"expected_revision", 0},
+        {"performance_id", id}}},
+      {true,
+       {{"operation", "performance.recording.bind"},
+        {"project_path", missing},
+        {"command_id", uuid(917)},
+        {"expected_revision", 0},
+        {"performance_id", id},
+        {"recording_artifact", artifact}}},
+      {true,
+       {{"operation", "performance.replay.begin"},
+        {"project_path", missing},
+        {"replay_id", uuid(918)},
+        {"performance_id", id}}},
+      {true,
+       {{"operation", "performance.replay.stop"},
+        {"project_path", missing},
+        {"replay_id", uuid(918)},
+        {"request_id", uuid(919)}}},
+      {false,
+       {{"operation", "performance.replay.status"},
+        {"project_path", missing},
+        {"replay_id", uuid(918)}}},
+      {true,
+       {{"operation", "performance.resample.commit"},
+        {"project_path", missing},
+        {"command_id", uuid(920)},
+        {"expected_revision", 0},
+        {"performance_id", id},
+        {"source_start_frame", 0},
+        {"source_end_frame", 1},
+        {"target_slot", {{"bank", 0}, {"pad", 0}}}}},
+  };
+  LMDJ_CHECK(cases.size() == 23U);
+
+  for (const auto& entry : cases) {
+    const auto accepted = entry.is_command
+                              ? command(engine, entry.request)
+                              : query(engine, entry.request);
+    LMDJ_CHECK(accepted.at("ok") == false);
+    LMDJ_CHECK(
+        accepted.at("error").at("message") != "operation is unknown");
+    LMDJ_CHECK(
+        accepted.at("error").at("message").get<std::string>().find(
+            "request shape is invalid") == std::string::npos);
+
+    auto extra = entry.request;
+    extra["unexpected"] = true;
+    const auto rejected = entry.is_command
+                              ? command(engine, extra)
+                              : query(engine, extra);
+    LMDJ_CHECK(rejected.at("ok") == false);
+    LMDJ_CHECK(
+        rejected.at("error").at("message").get<std::string>().find(
+            "request shape is invalid") != std::string::npos);
+
+    const auto wrong = entry.is_command
+                           ? query(engine, entry.request)
+                           : command(engine, entry.request);
+    LMDJ_CHECK(wrong.at("ok") == false);
+    LMDJ_CHECK(
+        wrong.at("error").at("message") ==
+        "operation was sent to the wrong Application method");
+  }
+  lmdj_engine_free(engine);
+}
+
 }  // namespace
 
 int main() {
@@ -1350,6 +1536,7 @@ int main() {
     test_busy_project_fails_fast_without_serializing_engines();
     test_repeated_create_free_keeps_stale_handles_dead();
     test_excessive_json_depth_is_rejected_without_crashing();
+    test_locked_performance_surface_has_exact_kinds_and_request_shapes();
   } catch (const std::exception& exception) {
     std::cerr << exception.what() << '\n';
     return 1;
