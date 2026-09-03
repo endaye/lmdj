@@ -1,0 +1,4 @@
+# Pinned so a rerun measures the same engine rather than a moving target.
+# The wheel carries no weights: `needle` fetches a ~14 MB native engine with
+# the 45M-parameter model baked in on first use. See README for offline setup.
+cactus-needle==2.0.11
