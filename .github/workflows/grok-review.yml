@@ -1,0 +1,83 @@
+name: Grok Review
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: grok-review-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  grok-review:
+    # Advisory only: this job is not part of Core CI, PR Gate, or the merge
+    # queue. Findings post a sticky comment and never fail the workflow.
+    # Hosted ubuntu-24.04 is not justified under hosted_runner_policy.json:
+    # this job holds no control-plane evidence or deploy authority, and
+    # ci-general already has outbound HTTPS for the Grok CLI install.
+    name: Grok advisory review
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 15
+    env:
+      GROK_DISABLE_AUTOUPDATER: "1"
+      GROK_VERSION: "1.0.13"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned Grok CLI
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location https://x.ai/cli/install.sh \
+            | bash -s "$GROK_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+
+      - name: Confirm Grok CLI pin
+        run: |
+          set -euo pipefail
+          grok --version
+          grok --version | grep -F "$GROK_VERSION"
+
+      - name: Collect the pull request diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --find-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/pr.diff"
+
+      - name: Write the pull request body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+
+      - name: Run advisory Grok review
+        env:
+          GROK_AUTH_JSON: ${{ secrets.GROK_AUTH_JSON }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY_FILE: ${{ runner.temp }}/pr-body.md
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPOSITORY: ${{ github.repository }}
+          DIFF_FILE: ${{ runner.temp }}/pr.diff
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR_DRAFT: "false"
+          PR_SAME_REPOSITORY: "true"
+          POST_COMMENT: "true"
+        run: python3 .github/scripts/grok_review.py

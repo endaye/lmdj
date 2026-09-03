@@ -423,6 +423,30 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS audio concurrency
   )
+  add_executable(
+    lmdj_web_performance_bridge_tests
+    test/performance_bridge_test.cpp
+    src/bridge.cpp
+  )
+  target_include_directories(
+    lmdj_web_performance_bridge_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+      "${CMAKE_SOURCE_DIR}/packages/application-facade/internal"
+  )
+  target_link_libraries(
+    lmdj_web_performance_bridge_tests
+    PRIVATE lmdj_web_runtime_control_testable
+  )
+  lmdj_target_warnings(lmdj_web_performance_bridge_tests)
+  lmdj_target_sanitizers(lmdj_web_performance_bridge_tests)
+  lmdj_add_test(
+    NAME host.web_performance_bridge
+    TIER host
+    COMMAND lmdj_web_performance_bridge_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS audio concurrency
+  )
   lmdj_add_test(
     NAME host.web_source_boundary
     TIER contract

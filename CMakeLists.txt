@@ -133,6 +133,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_web_control_runtime_tests
     lmdj_web_manifest_gate_tests
     lmdj_web_realtime_session_tests
+    lmdj_web_performance_bridge_tests
     lmdj_assembly_loader_tests
     lmdj_application_c_api_tests
     lmdj_application_dynamic_load_tests
@@ -423,6 +424,54 @@ lmdj_add_test(
 )
 set_tests_properties(
   host.mcp_facade_parity
+  PROPERTIES
+    ENVIRONMENT "${lmdj_mcp_test_environment}"
+)
+
+lmdj_add_test(
+  NAME host.performance_cli
+  TIER host
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/host/performance_cli_test.py
+    "$<TARGET_FILE:lmdj_core_cli>"
+    "$<TARGET_FILE:lmdj_native_host>"
+    "${CMAKE_SOURCE_DIR}/products/lmdj/assembly.json"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 120
+)
+
+lmdj_add_test(
+  NAME host.performance_mcp
+  TIER host
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/host/performance_mcp_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+set_tests_properties(
+  host.performance_mcp
+  PROPERTIES
+    ENVIRONMENT "${lmdj_mcp_test_environment}"
+)
+
+lmdj_add_test(
+  NAME host.performance_cross_host
+  TIER host
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/host/cross_host_performance_idempotency_test.py
+    "$<TARGET_FILE:lmdj_core_cli>"
+    "$<TARGET_FILE:lmdj_core_c>"
+    "$<TARGET_FILE:lmdj_native_host>"
+    "${CMAKE_SOURCE_DIR}/products/lmdj/assembly.json"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS persistence
+  TIMEOUT 120
+)
+set_tests_properties(
+  host.performance_cross_host
   PROPERTIES
     ENVIRONMENT "${lmdj_mcp_test_environment}"
 )
