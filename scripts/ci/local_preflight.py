@@ -452,9 +452,29 @@ def build_plan(
     base_sha = resolve_base_sha(root, base_ref)
     head_sha = _git(root, "rev-parse", "HEAD").decode().strip()
     inventory = read_working_inventory(root, base_sha, classifier)
+    # The scope policy exemption has to be computed here too. CI derives it in
+    # `change_scope.main`, and a pre-flight that skipped it would report `full`
+    # for a change CI classifies `focused` -- the exact divergence this script
+    # exists to make impossible.
+    policy_edit_preserving = False
+    if any(
+        classifier.SCOPE_POLICY_PATH in record.paths for record in inventory
+    ):
+        base_policy = classifier.read_merge_base_policy(root, base_sha, head_sha)
+        if base_policy is not None:
+            policy_edit_preserving, _ = (
+                classifier.policy_edit_is_classification_preserving(
+                    base_policy,
+                    policy,
+                    classifier.read_merge_base_tracked_paths(
+                        root, base_sha, head_sha
+                    ),
+                )
+            )
     manifest = classifier.classify(
         policy, inventory, base_sha=base_sha, head_sha=head_sha,
         event_name="pull_request", draft=False, labels=(),
+        policy_edit_preserving=policy_edit_preserving,
     )
 
     selected = [lane for lane, on in sorted(manifest["lanes"].items()) if on]

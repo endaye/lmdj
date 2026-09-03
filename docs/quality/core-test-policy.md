@@ -153,6 +153,14 @@ filename reference, which is how such a dependency would be written; a path
 assembled at runtime would evade it, and that gap is accepted rather than
 closed by tracing file handles.
 
+`scripts/ci/local_preflight.py` computes the same differential before it
+classifies. The pre-flight exists so a local run cannot select a different lane
+set than CI, and CI derives the exemption in `change_scope.main` rather than
+inside `classify`, so a pre-flight that only called `classify` would report
+`full` for a change CI classifies `focused` — the one divergence it exists to
+prevent. `tests/build/ci_local_preflight_test.py` holds both the wiring and an
+end-to-end case built on a throwaway repository.
+
 The exemption fails closed and stays narrow. An unreadable, unparseable or
 absent base policy keeps the upgrade; it suppresses only the policy file's own
 contribution, so a classifier change or a `ci.yml` change in the same branch
