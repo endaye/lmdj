@@ -417,6 +417,32 @@ state both runner services share. Every job that can land on a role carries the
 closed trust condition itself, because no selector's fork branch is in its path
 any more.
 
+Two dispatch-only benchmarks measure the self-hosted roles and never contribute
+a formal result: `ci-self-hosted-benchmark.yml` for `ci-web-heavy` and
+`ci-self-hosted-core-benchmark.yml` for `ci-core`. Both require `inputs.revision`
+to be 40-hex and exactly equal to the dispatch's trusted `github.sha`, keep
+`permissions: contents: read`, target one role literally, and report
+`runner_name`, elapsed seconds and host capacity separately. Neither is release
+evidence and neither creates a required check. The Core benchmark carries two
+properties the Web benchmark does not need. It joins the repository-wide
+`lmdj-native-heavy` capacity queue, because separate runner services on the
+shared host are not independent CPU capacity and an unqueued measurement would
+both corrupt itself and consume a concurrent formal lane's test budgets. And its
+job name prefix is registered in `core_job_names`.
+
+That registration is an invariant of the role, not of the benchmark. The elastic
+controller prefix-matches the running job name against `core_job_names` to
+decide whether to suppress scale-out, and the config validator only requires the
+list to be non-empty, so an unregistered `ci-core` job classifies as non-core and
+the controller keeps admitting load under timing-sensitive Core work.
+`tests/build/ci_benchmark_workflow_test.py` therefore enumerates every job in
+`.github/workflows` that names the role and requires each to be registered;
+adding a `ci-core` job without registering its name now fails the CI contract
+lane rather than silently degrading the host. `lane-default` cache mode and
+parallelism 3 reproduce the formal lane; `cold` and any other parallelism
+measure a different workload and their timings must not be compared with formal
+lane runs.
+
 No CI job requires Docker. The CI-only host runs no daemon and the shared
 host's runner users are outside the `docker` group, so CI can never reach the
 socket that runs production. The CI contract lane accordingly validates

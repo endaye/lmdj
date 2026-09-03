@@ -183,6 +183,7 @@
     {"match": {"kind": "exact", "value": ".github/actionlint.yaml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/scripts/assert-macos-gate-result.sh"}, "lanes": ["core_macos", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-self-hosted-benchmark.yml"}, "lanes": ["ci_contract"]},
+    {"match": {"kind": "exact", "value": ".github/workflows/ci-self-hosted-core-benchmark.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/architecture-portal.yml"}, "lanes": ["portal", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/architecture-portal-smoke.yml"}, "lanes": ["portal", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/deploy-web-runtime-host.yml"}, "lanes": ["deploy_contract", "ci_contract"]},
