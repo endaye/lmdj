@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: write
 
 concurrency:
@@ -80,4 +81,5 @@ jobs:
           PR_DRAFT: "false"
           PR_SAME_REPOSITORY: "true"
           POST_COMMENT: "true"
+          POST_ISSUE: "true"
         run: python3 .github/scripts/grok_review.py

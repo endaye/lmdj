@@ -40,14 +40,18 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         prefix = self.source.split("jobs:", 1)[0]
         message = (
             "why: Grok review must stay off Core CI and the merge queue; "
-            "remedy: trigger only pull_request on main and keep contents: read "
-            "plus pull-requests: write"
+            "remedy: trigger only pull_request on main and keep contents: read, "
+            "issues: write, and pull-requests: write"
         )
         self.assertIn("pull_request:", prefix, message)
         self.assertNotIn("pull_request_target:", self.source, message)
         self.assertNotIn("push:", prefix, message)
         self.assertNotIn("merge_group:", prefix, message)
-        self.assertIn("permissions:\n  contents: read\n  pull-requests: write", prefix, message)
+        self.assertIn(
+            "permissions:\n  contents: read\n  issues: write\n  pull-requests: write",
+            prefix,
+            message,
+        )
         self.assertNotIn("contents: write", self.source, message)
         self.assertNotIn("id-token: write", self.source, message)
 
@@ -203,6 +207,132 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         self.assertIn("does not block merge", comment)
         self.assertIn("tokens: 12", comment)
         self.assertIn("models: grok-4.6", comment)
+
+    def test_actionable_findings_open_an_issue_and_nits_do_not(self) -> None:
+        sample = (
+            "## Verdict\n`issues`\n\n## Findings\n"
+            "### [critical] Grok can read job credentials\n"
+            "- Path: `.github/workflows/grok-review.yml:33`\n"
+            "### [important] Sticky comment publishes stdout\n"
+            "- Why: the child process inherits the environment\n"
+            "### [nit] Prefer a shorter heading\n"
+            "- Why: style\n"
+        )
+        findings = self.script.parse_findings(sample)
+        self.assertEqual(
+            [item["severity"] for item in findings],
+            ["critical", "important", "nit"],
+        )
+        self.assertEqual(self.script.parse_verdict(sample), "issues")
+        self.assertTrue(
+            self.script.should_open_issue(verdict="issues", findings=findings)
+        )
+        self.assertFalse(
+            self.script.should_open_issue(
+                verdict="issues",
+                findings=[item for item in findings if item["severity"] == "nit"],
+            )
+        )
+        self.assertFalse(
+            self.script.should_open_issue(verdict="clean", findings=[])
+        )
+        self.assertTrue(
+            self.script.should_open_issue(verdict="issues", findings=[])
+        )
+        self.assertEqual(self.script.issue_priority(findings), "priority:p1")
+        body = self.script.format_issue_body(
+            pr_number=12,
+            pr_url="https://github.com/endaye/lmdj/pull/12",
+            text=sample,
+            findings=findings,
+        )
+        self.assertIn("lmdj-grok-review-pr-12", body)
+        self.assertIn("https://github.com/endaye/lmdj/pull/12", body)
+        self.assertIn("[critical] Grok can read job credentials", body)
+        self.assertNotIn("Prefer a shorter heading", body)
+        self.assertIsNone(self.script.CLOSING_KEYWORD.search(body))
+
+    def test_upsert_tracking_issue_creates_updates_and_closes(self) -> None:
+        calls = []
+
+        def requester(method, url, token, payload=None):
+            calls.append((method, url, payload))
+            if method == "GET":
+                return {"items": []}
+            if method == "POST" and url.endswith("/issues"):
+                return {"number": 77}
+            return {"number": 77}
+
+        action = self.script.upsert_tracking_issue(
+            repository="endaye/lmdj",
+            pr_number=12,
+            pr_url="https://github.com/endaye/lmdj/pull/12",
+            token="token",
+            text="## Verdict\nissues\n\n### [important] Missing test\n- Why: no coverage\n",
+            findings=[{
+                "severity": "important",
+                "title": "Missing test",
+                "body": "- Why: no coverage",
+            }],
+            verdict="issues",
+            requester=requester,
+        )
+        self.assertEqual(action, "created #77")
+        self.assertEqual(calls[1][0], "POST")
+        self.assertEqual(
+            calls[1][2]["labels"],
+            ["type:bug", "area:ci-release", "priority:p2"],
+        )
+
+        calls.clear()
+
+        def updater(method, url, token, payload=None):
+            calls.append((method, url, payload))
+            if method == "GET":
+                return {"items": [{"number": 77, "state": "open"}]}
+            return {"number": 77}
+
+        updated = self.script.upsert_tracking_issue(
+            repository="endaye/lmdj",
+            pr_number=12,
+            pr_url="https://github.com/endaye/lmdj/pull/12",
+            token="token",
+            text="## Verdict\nissues\n\n### [critical] Leak\n- Why: token\n",
+            findings=[{
+                "severity": "critical",
+                "title": "Leak",
+                "body": "- Why: token",
+            }],
+            verdict="issues",
+            requester=updater,
+        )
+        self.assertEqual(updated, "updated #77")
+        self.assertEqual(calls[1][0], "PATCH")
+        self.assertEqual(calls[1][2]["state"], "open")
+
+        calls.clear()
+
+        def closer(method, url, token, payload=None):
+            calls.append((method, url, payload))
+            if method == "GET":
+                return {"items": [{"number": 77, "state": "open"}]}
+            return {"number": 77}
+
+        closed = self.script.upsert_tracking_issue(
+            repository="endaye/lmdj",
+            pr_number=12,
+            pr_url="https://github.com/endaye/lmdj/pull/12",
+            token="token",
+            text="## Verdict\nclean\n\n## Findings\nNo findings.\n",
+            findings=[],
+            verdict="clean",
+            requester=closer,
+        )
+        self.assertEqual(closed, "closed #77")
+        self.assertEqual(calls[1][0], "POST")
+        self.assertIn("/issues/77/comments", calls[1][1])
+        self.assertEqual(calls[2][2]["state"], "closed")
+        self.assertIsNone(self.script.CLOSING_KEYWORD.search(calls[1][2]["body"]))
 
     def test_upsert_updates_existing_sticky_comment(self) -> None:
         calls = []
