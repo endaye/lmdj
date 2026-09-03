@@ -64,15 +64,21 @@ class GrokReviewWorkflowTest(unittest.TestCase):
             message,
         )
 
-    def test_workflow_runs_hosted_ubuntu_not_self_hosted(self) -> None:
+    def test_workflow_runs_on_the_general_self_hosted_role(self) -> None:
         message = (
-            "why: advisory Grok review must not consume trusted self-hosted "
-            "roles; remedy: keep runs-on: ubuntu-24.04"
+            "why: a GitHub-hosted Grok review job is not in "
+            "hosted_runner_policy.json and does not earn a hosted category; "
+            "remedy: keep runs-on on the dual-node ci-general role, not "
+            "ubuntu-24.04 or ci-core"
         )
-        self.assertIn("runs-on: ubuntu-24.04", self.source, message)
-        self.assertNotIn("self-hosted", self.source, message)
+        self.assertIn(
+            "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]",
+            self.source,
+            message,
+        )
+        self.assertNotIn("runs-on: ubuntu-24.04", self.source, message)
         self.assertNotIn("ci-core", self.source, message)
-        self.assertNotIn("ci-general", self.source, message)
+        self.assertNotIn("ci-web-heavy", self.source, message)
 
     def test_workflow_pins_grok_cli_and_read_only_tools(self) -> None:
         message = (

@@ -17,11 +17,14 @@ jobs:
   grok-review:
     # Advisory only: this job is not part of Core CI, PR Gate, or the merge
     # queue. Findings post a sticky comment and never fail the workflow.
+    # Hosted ubuntu-24.04 is not justified under hosted_runner_policy.json:
+    # this job holds no control-plane evidence or deploy authority, and
+    # ci-general already has outbound HTTPS for the Grok CLI install.
     name: Grok advisory review
     if: >-
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 15
     env:
       GROK_DISABLE_AUTOUPDATER: "1"
