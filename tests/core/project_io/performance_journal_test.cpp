@@ -21,6 +21,7 @@
 namespace {
 
 using lmdj::domain::PadHitPerformanceEvent;
+using lmdj::domain::PatternLaunchPerformanceEvent;
 using lmdj::domain::Performance;
 using lmdj::domain::PerformanceEvent;
 using lmdj::domain::PerformanceId;
@@ -32,6 +33,7 @@ using lmdj::foundation::SequenceSessionId;
 using lmdj::project_io::CreatePerformance;
 using lmdj::project_io::DeletePerformance;
 using lmdj::project_io::PerformanceFlushIdentity;
+using lmdj::project_io::PerformanceLaunchAck;
 using lmdj::project_io::PerformanceOpenPadTransient;
 using lmdj::project_io::PerformanceTransientCheckpoint;
 using lmdj::project_io::ProjectStore;
@@ -186,6 +188,103 @@ class FaultGuard {
   FaultGuard(const FaultGuard&) = delete;
   FaultGuard& operator=(const FaultGuard&) = delete;
 };
+
+void test_performance_launch_ack_round_trips_and_is_strictly_validated() {
+  TempDirectory temp("launch-ack-roundtrip");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  const auto performance = empty_performance();
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  LMDJ_CHECK(
+      journal
+          .begin_performance(
+              bundle, session_id, performance.id,
+              lmdj::project_io::performance_fingerprint(performance), 0)
+          .has_value());
+  const std::vector<PerformanceEvent> events{
+      PerformanceEvent{PatternLaunchPerformanceEvent{3, 3'840}}};
+  const PerformanceLaunchAck ack{
+      CommandId{std::string{kCommandId}}, 3, 3'840};
+  LMDJ_CHECK(
+      journal
+          .append_performance_tail(
+              bundle, session_id, performance.id, 0, 1, events,
+              PerformanceTransientCheckpoint{{}, {}, false, 3'840}, ack)
+          .has_value());
+  const auto restored = journal.read_active_performance(bundle);
+  LMDJ_CHECK(restored.has_value());
+  LMDJ_CHECK(restored.value().last_launch_ack == ack);
+  LMDJ_CHECK(read_text(bundle / "recovery/active/performance.jsonl")
+                 .find(std::string{kCommandId}) != std::string::npos);
+
+  const PerformanceLaunchAck rebound_ack{
+      CommandId{std::string{kSecondCommandId}}, 3, 3'840};
+  const auto rebound = journal.append_performance_tail(
+      bundle, session_id, performance.id, 0, 2, events,
+      PerformanceTransientCheckpoint{{}, {}, false, 3'841}, rebound_ack);
+  LMDJ_CHECK(!rebound.has_value());
+  LMDJ_CHECK(rebound.error().details.at("reason") ==
+             "performance_launch_ack_invalid");
+  LMDJ_CHECK(journal.read_active_performance(bundle).value().last_launch_ack ==
+             ack);
+
+  const auto checkpoint = nlohmann::json{
+      {"hold", false},
+      {"last_accepted_tick", 3'840},
+      {"open_fx", nlohmann::json::array()},
+      {"open_pads", nlohmann::json::array()},
+  };
+  const auto encoded_events = nlohmann::json::array(
+      {lmdj::domain::performance_event_json(events.front())});
+  const std::vector<nlohmann::json> invalid_acks{
+      {{"effective_tick", 3'840},
+       {"pattern_slot", 3},
+       {"request_id", "not-a-uuid"}},
+      {{"effective_tick", 3'840},
+       {"pattern_slot", 16},
+       {"request_id", kCommandId}},
+      {{"effective_tick", 3'840},
+       {"pattern_slot", 4},
+       {"request_id", kCommandId}},
+      {{"effective_tick", 3'841},
+       {"pattern_slot", 3},
+       {"request_id", kCommandId}},
+      {{"effective_tick", 3'840},
+       {"extra", true},
+       {"pattern_slot", 3},
+       {"request_id", kCommandId}},
+  };
+  for (std::size_t index = 0; index < invalid_acks.size(); ++index) {
+    TempDirectory invalid_temp("launch-ack-invalid-" + std::to_string(index));
+    ProjectStore invalid_store;
+    const auto invalid_bundle = create_bundle(invalid_temp, invalid_store);
+    SequenceJournal invalid_journal;
+    LMDJ_CHECK(
+        invalid_journal
+            .begin_performance(
+                invalid_bundle, session_id, performance.id,
+                lmdj::project_io::performance_fingerprint(performance), 0)
+            .has_value());
+    append_text(
+        invalid_bundle / "recovery/active/performance.jsonl",
+        checked_line({
+            {"events", encoded_events},
+            {"expected_revision", 0},
+            {"input_sequence", 1},
+            {"kind", "tail"},
+            {"last_launch_ack", invalid_acks.at(index)},
+            {"performance_id", kPerformanceId},
+            {"tail_seq", 0},
+            {"transient_checkpoint", checkpoint},
+        }));
+    const auto rejected =
+        invalid_journal.read_active_performance(invalid_bundle);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+    LMDJ_CHECK(rejected.error().details.at("recovery_retained") == true);
+  }
+}
 
 void test_performance_transient_checkpoint_round_trips_empty_tail_transition() {
   TempDirectory temp("transient-checkpoint");
@@ -1362,6 +1461,7 @@ void test_repeated_performance_command_rejects_changed_identity_and_payload() {
 
 int main() {
   try {
+    test_performance_launch_ack_round_trips_and_is_strictly_validated();
     test_performance_transient_checkpoint_round_trips_empty_tail_transition();
     test_post_write_tail_failure_is_reported_as_ambiguous_and_retained();
     test_performance_seal_replays_stable_candidate_without_suffix();

@@ -155,6 +155,14 @@ struct PerformanceTransientCheckpoint {
   bool operator==(const PerformanceTransientCheckpoint&) const = default;
 };
 
+struct PerformanceLaunchAck {
+  foundation::CommandId request_id;
+  std::uint8_t pattern_slot{};
+  std::uint64_t effective_tick{};
+
+  bool operator==(const PerformanceLaunchAck&) const = default;
+};
+
 struct PerformanceTransientClosurePreview {
   std::vector<domain::PerformanceEvent> canonical_events;
   std::size_t appended_event_count{};
@@ -179,6 +187,7 @@ struct ActivePerformanceJournal {
   std::optional<foundation::CommandId> stop_request_id;
   std::vector<PerformanceRebaseRecord> rebases;
   std::optional<PerformanceTransientCheckpoint> transient_checkpoint;
+  std::optional<PerformanceLaunchAck> last_launch_ack;
 
   bool operator==(const ActivePerformanceJournal&) const = default;
 };
@@ -299,7 +308,8 @@ class SequenceJournal {
       std::uint64_t input_sequence,
       std::span<const domain::PerformanceEvent> events,
       std::optional<PerformanceTransientCheckpoint> transient_checkpoint =
-          std::nullopt);
+          std::nullopt,
+      std::optional<PerformanceLaunchAck> last_launch_ack = std::nullopt);
   foundation::Result<void> close_performance_transients_for_owner_loss(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id);
