@@ -33,6 +33,16 @@ add_subdirectory(packages/application-facade)
 find_program(BASH_EXECUTABLE bash REQUIRED)
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
+lmdj_add_test(
+  NAME provider.stage12_fixture_corpus
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/core/provider/stage12_fixture_corpus_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS provider fixtures
+)
+
 add_subdirectory(apps/web-runtime-host)
 add_subdirectory(packages/web-runtime-platform)
 
