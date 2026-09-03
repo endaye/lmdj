@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -127,6 +128,49 @@ struct PerformanceRebaseComplete {
   bool operator==(const PerformanceRebaseComplete&) const = default;
 };
 
+struct PerformanceOpenPadTransient {
+  std::string gesture_id;
+  std::uint8_t slot{};
+  std::uint64_t onset_tick{};
+  std::uint8_t velocity{};
+
+  bool operator==(const PerformanceOpenPadTransient&) const = default;
+};
+
+struct PerformanceOpenFxTransient {
+  domain::PerformanceFx fx{domain::PerformanceFx::filter};
+  std::string gesture_id;
+  std::uint16_t effective_value{};
+  std::optional<std::uint16_t> pending_value;
+
+  bool operator==(const PerformanceOpenFxTransient&) const = default;
+};
+
+struct PerformanceTransientCheckpoint {
+  std::vector<PerformanceOpenPadTransient> open_pads;
+  std::vector<PerformanceOpenFxTransient> open_fx;
+  bool hold{};
+  std::uint64_t last_accepted_tick{};
+
+  bool operator==(const PerformanceTransientCheckpoint&) const = default;
+};
+
+struct PerformanceLaunchAck {
+  foundation::CommandId request_id;
+  std::uint8_t pattern_slot{};
+  std::uint64_t effective_tick{};
+
+  bool operator==(const PerformanceLaunchAck&) const = default;
+};
+
+struct PerformanceTransientClosurePreview {
+  std::vector<domain::PerformanceEvent> canonical_events;
+  std::size_t appended_event_count{};
+  std::uint64_t closure_tick{};
+
+  bool operator==(const PerformanceTransientClosurePreview&) const = default;
+};
+
 struct ActivePerformanceJournal {
   foundation::SequenceSessionId session_id;
   domain::PerformanceId performance_id;
@@ -142,6 +186,8 @@ struct ActivePerformanceJournal {
   std::optional<foundation::CommandId> begin_command_id;
   std::optional<foundation::CommandId> stop_request_id;
   std::vector<PerformanceRebaseRecord> rebases;
+  std::optional<PerformanceTransientCheckpoint> transient_checkpoint;
+  std::optional<PerformanceLaunchAck> last_launch_ack;
 
   bool operator==(const ActivePerformanceJournal&) const = default;
 };
@@ -160,6 +206,8 @@ using SequenceCaptureTruthInspector = std::function<foundation::Result<
 // Returns lowercase SHA-256 of the exact SR-D22 canonical JSON preimage.
 std::string sequence_pattern_fingerprint(const domain::Pattern& pattern);
 std::string performance_fingerprint(const domain::Performance& performance);
+foundation::Result<PerformanceTransientClosurePreview>
+preview_performance_owner_loss(const ActivePerformanceJournal& journal);
 
 class SequenceJournal {
  public:
@@ -258,7 +306,13 @@ class SequenceJournal {
       domain::PerformanceId performance_id,
       std::uint64_t expected_revision,
       std::uint64_t input_sequence,
-      std::span<const domain::PerformanceEvent> events);
+      std::span<const domain::PerformanceEvent> events,
+      std::optional<PerformanceTransientCheckpoint> transient_checkpoint =
+          std::nullopt,
+      std::optional<PerformanceLaunchAck> last_launch_ack = std::nullopt);
+  foundation::Result<void> close_performance_transients_for_owner_loss(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id);
   foundation::Result<PerformanceFlushRecord> append_performance_flush(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,

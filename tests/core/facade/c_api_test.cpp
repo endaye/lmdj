@@ -139,6 +139,12 @@ std::string assembly_config_json(
   }.dump();
 }
 
+std::string read_file(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>{stream},
+          std::istreambuf_iterator<char>{}};
+}
+
 nlohmann::json command(
     lmdj_engine* engine,
     const nlohmann::json& request) {
@@ -581,13 +587,17 @@ void test_headless_performance_journey_through_c_abi() {
        {"pattern_slot", 3}}));
   const auto target_tick = launch.at("result").at("target_tick");
   std::this_thread::sleep_for(1050ms);
+  const auto journal_path =
+      project / "recovery/active/performance.jsonl";
+  const auto before_status = read_file(journal_path);
   const auto status = checked(query(
       engine,
       {{"operation", "performance.record.status"},
        {"project_path", project.generic_string()}}));
-  LMDJ_CHECK(
-      status.at("result").at("last_launch_ack").at("effective_tick") ==
-      target_tick);
+  LMDJ_CHECK(status.at("result").at("last_launch_ack").is_null());
+  LMDJ_CHECK(status.at("result").at("pending_launch").at("target_tick") ==
+             target_tick);
+  LMDJ_CHECK(read_file(journal_path) == before_status);
 
   const auto flushed = checked(command(
       engine,
@@ -596,6 +606,14 @@ void test_headless_performance_journey_through_c_abi() {
        {"session_id", session_id},
        {"command_id", uuid(137)}}));
   LMDJ_CHECK(flushed.at("result").at("committed_revision") == 4);
+  const auto serviced = checked(query(
+      engine,
+      {{"operation", "performance.record.status"},
+       {"project_path", project.generic_string()}}));
+  LMDJ_CHECK(
+      serviced.at("result").at("last_launch_ack").at("effective_tick") ==
+      target_tick);
+  LMDJ_CHECK(serviced.at("result").at("pending_launch").is_null());
   checked(command(
       engine,
       {{"operation", "performance.record.stop"},

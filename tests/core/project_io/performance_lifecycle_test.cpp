@@ -31,6 +31,8 @@ using lmdj::foundation::ErrorCode;
 using lmdj::foundation::ProjectId;
 using lmdj::foundation::SequenceSessionId;
 using lmdj::project_io::ProjectStore;
+using lmdj::project_io::PerformanceOpenPadTransient;
+using lmdj::project_io::PerformanceTransientCheckpoint;
 using lmdj::project_io::SequenceJournal;
 using lmdj::project_io::SequenceSessionState;
 using lmdj::project_io::testing::FaultPoint;
@@ -810,6 +812,88 @@ void test_orphan_reconciliation_requires_owner_lock_proof() {
   LMDJ_CHECK(!std::filesystem::exists(lock_path));
 }
 
+void test_owner_loss_previews_and_closes_durable_open_pad_once() {
+  TempDirectory temp("owner-loss-transient");
+  const auto bundle = temp.path() / "project.lmdj";
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto performance_id = PerformanceId{std::string{kPerformanceId}};
+  SequenceJournal journal;
+  {
+    ProjectStore owner;
+    LMDJ_CHECK(owner.create(bundle, empty_project()).has_value());
+    LMDJ_CHECK(
+        owner
+            .begin_performance_draft(
+                bundle,
+                {{CommandId{std::string{kBeginCommandId}}, 0},
+                 session_id,
+                 performance_id})
+            .has_value());
+    const std::vector<PerformanceEvent> no_events;
+    const PerformanceTransientCheckpoint pressed{
+        {PerformanceOpenPadTransient{
+            "50000000-0000-4000-8000-000000000002", 2, 42, 99}},
+        {},
+        false,
+        42,
+    };
+    LMDJ_CHECK(
+        journal
+            .append_performance_tail(
+                bundle,
+                session_id,
+                performance_id,
+                1,
+                1,
+                no_events,
+                pressed)
+            .has_value());
+
+    ProjectStore observer;
+    const auto before = file_inventory(bundle);
+    const auto preview = observer.list_performance_recovery(bundle);
+    LMDJ_CHECK(preview.has_value());
+    LMDJ_CHECK(preview.value().size() == 1);
+    LMDJ_CHECK(preview.value().front().journal.pending_events.size() == 1);
+    const auto &hit = std::get<PadHitPerformanceEvent>(
+        preview.value().front().journal.pending_events.front().payload);
+    LMDJ_CHECK(hit.slot == 2);
+    LMDJ_CHECK(hit.onset_tick == 42);
+    LMDJ_CHECK(hit.duration_tick == 1);
+    LMDJ_CHECK(hit.velocity == 99);
+    LMDJ_CHECK(file_inventory(bundle) == before);
+  }
+
+  ProjectStore recovery;
+  const auto reconciled = recovery.reconcile_performance_recovery(bundle);
+  LMDJ_CHECK(reconciled.has_value());
+  LMDJ_CHECK(reconciled.value().size() == 1);
+  LMDJ_CHECK(reconciled.value().front().journal.pending_events.size() == 1);
+  LMDJ_CHECK(
+      reconciled.value().front().journal.transient_checkpoint.has_value());
+  LMDJ_CHECK(
+      reconciled.value().front().journal.transient_checkpoint->open_pads
+          .empty());
+  LMDJ_CHECK(
+      reconciled.value().front().journal.last_input_sequence == 2);
+
+  const auto applied = recovery.apply_performance_recovery(
+      bundle,
+      {CommandId{std::string{kSaveCommandId}}, 1},
+      session_id);
+  LMDJ_CHECK(applied.has_value());
+  const auto loaded = recovery.load(bundle);
+  LMDJ_CHECK(loaded.has_value());
+  const auto &events = loaded.value().performances.at(performance_id).events;
+  LMDJ_CHECK(events.size() == 1);
+  const auto &hit = std::get<PadHitPerformanceEvent>(events.front().payload);
+  LMDJ_CHECK(hit.slot == 2);
+  LMDJ_CHECK(hit.onset_tick == 42);
+  LMDJ_CHECK(hit.duration_tick == 1);
+  LMDJ_CHECK(hit.velocity == 99);
+  LMDJ_CHECK(journal.list_performance_recoverable(bundle).value().empty());
+}
+
 void test_begin_stop_and_save_faults_are_retryable_without_orphans() {
   for (const auto fault : {
            FaultPoint::sequence_transaction_write,
@@ -1036,6 +1120,7 @@ int main() {
     test_completed_flush_identity_is_replayable_without_a_live_journal();
     test_every_orphan_sealing_command_boundary_requires_owner_death();
     test_orphan_reconciliation_requires_owner_lock_proof();
+    test_owner_loss_previews_and_closes_durable_open_pad_once();
     test_begin_stop_and_save_faults_are_retryable_without_orphans();
     test_recovery_cleanup_faults_reconcile_exactly_once();
   } catch (const std::exception& error) {

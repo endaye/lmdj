@@ -333,7 +333,14 @@ void test_authorities_attach_once_and_resume_from_durable_journal() {
                    .has_value());
     const std::vector<lmdj::domain::PerformanceEvent> durable_events{
         lmdj::domain::PerformanceEvent{
-            lmdj::domain::HoldOnPerformanceEvent{500}}};
+            lmdj::domain::PadHitPerformanceEvent{1, 600, 100, 80}}};
+    const lmdj::project_io::PerformanceTransientCheckpoint checkpoint{
+        {lmdj::project_io::PerformanceOpenPadTransient{
+            "40000000-0000-4000-8000-000000000017", 0, 500, 100}},
+        {},
+        false,
+        500,
+    };
     LMDJ_CHECK(journal
                    .append_performance_tail(
                        reattach_bundle,
@@ -341,7 +348,8 @@ void test_authorities_attach_once_and_resume_from_durable_journal() {
                        performance_id,
                        1,
                        7,
-                       durable_events)
+                       durable_events,
+                       checkpoint)
                    .has_value());
   }
 
@@ -359,9 +367,16 @@ void test_authorities_attach_once_and_resume_from_durable_journal() {
   }));
   LMDJ_CHECK((reattach_clock->anchors ==
               std::vector<std::pair<std::uint16_t, std::uint64_t>>{
-                  {130, 500}}));
+                  {130, 701}}));
   LMDJ_CHECK(reattach_clock->read_count == 0);
-  LMDJ_CHECK(reattach_sequencer->seeded_after == 7);
+  LMDJ_CHECK(reattach_sequencer->seeded_after == 8);
+  const auto closed = lmdj::project_io::SequenceJournal{}
+                          .read_active_performance(reattach_bundle);
+  LMDJ_CHECK(closed.has_value());
+  LMDJ_CHECK(closed.value().pending_events.size() == 2);
+  LMDJ_CHECK(closed.value().transient_checkpoint.has_value());
+  LMDJ_CHECK(closed.value().transient_checkpoint->open_pads.empty());
+  LMDJ_CHECK(closed.value().transient_checkpoint->last_accepted_tick == 701);
 
   const auto admitted = reattached.command({
       {"operation", "performance.record.event"},
@@ -375,8 +390,8 @@ void test_authorities_attach_once_and_resume_from_durable_journal() {
         {"velocity", 100}}},
   });
   check_ok(admitted);
-  LMDJ_CHECK(admitted.at("result").at("accepted_tick") >= 500);
-  LMDJ_CHECK(admitted.at("result").at("input_sequence") == 8);
+  LMDJ_CHECK(admitted.at("result").at("accepted_tick") >= 701);
+  LMDJ_CHECK(admitted.at("result").at("input_sequence") == 9);
 }
 
 void test_owner_loss_recovery_is_publicly_observable_and_applicable() {
@@ -571,12 +586,18 @@ void test_recovery_queries_are_read_only_while_owner_is_alive() {
   LMDJ_CHECK(listed.at("result").at("candidates").size() == 1);
   LMDJ_CHECK(listed.at("result").at("candidates").at(0).at("reason") ==
              "active");
+  LMDJ_CHECK(
+      listed.at("result").at("candidates").at(0).at("pending_event_count") ==
+      2);
   const auto status = observer.query({
       {"operation", "performance.record.status"},
       {"project_path", bundle.generic_string()},
   });
   check_ok(status);
   LMDJ_CHECK(status.at("result").at("state") == "active");
+  LMDJ_CHECK(status.at("result").at("open_pad_gestures") == 0);
+  LMDJ_CHECK(status.at("result").at("open_fx_gestures") == 0);
+  LMDJ_CHECK(status.at("result").at("hold") == true);
   std::ifstream after_stream(active_path, std::ios::binary);
   const std::string after(
       std::istreambuf_iterator<char>{after_stream},

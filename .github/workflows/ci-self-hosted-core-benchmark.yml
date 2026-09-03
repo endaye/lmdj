@@ -1,0 +1,208 @@
+name: Self-hosted Core Benchmark
+
+# Non-authoritative host measurement for the four native Core lanes, the
+# counterpart of `ci-self-hosted-benchmark.yml` for `ci-web-heavy`. It exists
+# because the native-heavy chain owns the longest phase wall clock in Core CI
+# and had no measurement of its own: any proposal to move `ci-core` off the
+# shared Contabo host needs same-revision timings from both hosts, and a
+# workflow is the only way to obtain them on a trusted runner.
+#
+# It never contributes a formal result. `PR Gate` does not read this workflow,
+# it carries no lane manifest, and a benchmark run is not release evidence.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Native Core lane to benchmark.
+        required: true
+        type: choice
+        options:
+          - core_ubuntu
+          - core_asan
+          - core_coverage
+          - package
+      revision:
+        description: Exact trusted SHA selected by this dispatch.
+        required: true
+        type: string
+      cache_mode:
+        description: >-
+          lane-default reproduces the formal lane's persistent ccache setting.
+          cold disables it, so two hosts can be compared from the same starting
+          state; a host that has never run Core work has no warm cache either.
+        required: false
+        default: lane-default
+        type: choice
+        options:
+          - lane-default
+          - cold
+      parallel_level:
+        description: >-
+          CMake build parallelism. The formal Core lanes are capped at 3; any
+          other value measures a different workload and must not be compared
+          with formal lane timings.
+        required: false
+        default: "3"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    # The job name prefix is registered in `core_job_names` of
+    # `scripts/ci/elastic-runner/contabo.json`. Without that registration the
+    # elastic controller classifies this job as non-core and keeps scaling out
+    # while a timing-sensitive Core measurement is running.
+    name: Core benchmark (${{ inputs.lane }})
+    # Same repository-wide capacity queue as the formal native-heavy chain.
+    # Separate runner services on the shared Contabo host do not provide
+    # independent CPU capacity, so a benchmark outside this queue would both
+    # corrupt its own measurement and blow a concurrent formal lane's test
+    # budgets.
+    concurrency:
+      group: lmdj-native-heavy
+      queue: max
+      cancel-in-progress: false
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
+    # Above the longest formal Core timeout (35 min) with headroom for a cold
+    # cache. A hang detector, not a performance budget.
+    timeout-minutes: 60
+    steps:
+      - name: Validate the dispatched trusted revision
+        shell: bash
+        env:
+          REVISION: ${{ inputs.revision }}
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$REVISION" == "$TRUSTED_SHA" ]]
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+          lfs: true
+
+      - name: Rehydrate deterministic audio fixtures
+        run: git lfs checkout -- tests/fixtures/audio
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      # `package` bypasses the persistent cache in the formal lane, so
+      # lane-default keeps it off there and on for the other three.
+      - name: Resolve the effective cache setting
+        id: cache
+        shell: bash
+        env:
+          LANE: ${{ inputs.lane }}
+          CACHE_MODE: ${{ inputs.cache_mode }}
+        run: |
+          set -euo pipefail
+          if [[ "$CACHE_MODE" == "cold" || "$LANE" == "package" ]]; then
+            use_ccache=false
+          else
+            use_ccache=true
+          fi
+          printf 'use-ccache=%s\n' "$use_ccache" >>"$GITHUB_OUTPUT"
+          printf 'resolved cache: mode=%s lane=%s use-ccache=%s\n' \
+            "$CACHE_MODE" "$LANE" "$use_ccache"
+
+      - name: Configure bounded build acceleration
+        uses: ./.github/actions/configure-build-acceleration
+        with:
+          use-ccache: ${{ steps.cache.outputs.use-ccache }}
+          parallel-level: ${{ inputs.parallel_level }}
+
+      - name: Record benchmark start
+        run: date +%s >"$RUNNER_TEMP/lmdj-benchmark-start"
+
+      # The three build-and-test lanes share the formal prelude. `package`
+      # deliberately skips it: it builds Release and runs only the unit and
+      # component tiers, which must stay satisfiable by the LFS fixtures.
+      - name: Generate deterministic fixtures
+        if: ${{ inputs.lane != 'package' }}
+        run: |
+          python3 tests/fixtures/audio/make_fixtures.py
+          python3 tests/fixtures/golden/reference_render.py
+
+      - name: Verify Core dependencies
+        if: ${{ inputs.lane != 'package' }}
+        run: bash scripts/verify-core-dependencies.sh
+
+      - name: Run the core_ubuntu workload
+        if: ${{ inputs.lane == 'core_ubuntu' }}
+        run: scripts/core.sh proof
+
+      - name: Run the package workload
+        if: ${{ inputs.lane == 'package' }}
+        run: scripts/core.sh package
+
+      - name: Verify the coverage toolchain
+        if: ${{ inputs.lane == 'core_coverage' }}
+        run: |
+          command -v clang-18
+          command -v clang++-18
+          command -v llvm-cov-18
+
+      - name: Run the core_coverage workload
+        if: ${{ inputs.lane == 'core_coverage' }}
+        run: |
+          env \
+            PATH="/usr/lib/llvm-18/bin:$PATH" \
+            CC=clang-18 \
+            CXX=clang++-18 \
+            scripts/core-coverage.sh check
+
+      - name: Run the core_asan workload
+        if: ${{ inputs.lane == 'core_asan' }}
+        run: |
+          scripts/core.sh configure asan
+          scripts/core.sh build asan
+          scripts/core.sh test asan full
+          scripts/core.sh test asan stress
+
+      - name: Report benchmark evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          SELECTED_RUNNER: ${{ runner.name }}
+          SELECTED_ARCH: ${{ runner.arch }}
+          LANE: ${{ inputs.lane }}
+          CACHE_MODE: ${{ inputs.cache_mode }}
+          USE_CCACHE: ${{ steps.cache.outputs.use-ccache }}
+          PARALLEL_LEVEL: ${{ inputs.parallel_level }}
+        run: |
+          set -euo pipefail
+          started="$(cat "$RUNNER_TEMP/lmdj-benchmark-start" 2>/dev/null || date +%s)"
+          now="$(date +%s)"
+          printf 'lane=%s\ncache_mode=%s\nuse_ccache=%s\nparallel_level=%s\n' \
+            "$LANE" "$CACHE_MODE" "$USE_CCACHE" "$PARALLEL_LEVEL"
+          printf 'runner_name=%s\nrunner_arch=%s\nelapsed_seconds=%s\n' \
+            "$SELECTED_RUNNER" "$SELECTED_ARCH" "$((now - started))"
+          printf 'cpu_count=%s\n' "$(nproc)"
+          uptime
+          free -h
+          df -h / /var/cache
+          ccache --show-stats || true
+
+      - name: Retain failed Core evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-hosted-core-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/core/coverage/coverage/report.txt
+            build/core/coverage/coverage/summary.json
+            build/core/coverage/coverage/ctest.log
+            build/core/*/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 7

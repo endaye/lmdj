@@ -145,16 +145,34 @@ class HeadlessPatternLaunchTransport final
         {earliest_target_tick, false});
   }
 
-  std::vector<PatternLaunchOutcome> drain(
+  std::vector<PatternLaunchOutcome> peek(
       const foundation::SequenceSessionId& session_id) override {
     std::lock_guard lock(mutex_);
-    auto found = outcomes_.find(session_id.value());
+    const auto found = outcomes_.find(session_id.value());
     if (found == outcomes_.end()) {
       return {};
     }
-    auto drained = std::move(found->second);
-    outcomes_.erase(found);
-    return drained;
+    return found->second;
+  }
+
+  foundation::Result<void> commit(
+      const foundation::SequenceSessionId& session_id,
+      const foundation::CommandId& request_id) override {
+    std::lock_guard lock(mutex_);
+    const auto found = outcomes_.find(session_id.value());
+    if (found == outcomes_.end() || found->second.empty() ||
+        found->second.front().request_id != request_id) {
+      return foundation::Result<void>::failure(foundation::Error{
+          foundation::ErrorCode::invalid_argument,
+          "Pattern launch outcome commit rejected: request is not the "
+          "ordered session front; peek and commit the front request",
+      });
+    }
+    found->second.erase(found->second.begin());
+    if (found->second.empty()) {
+      outcomes_.erase(found);
+    }
+    return foundation::Result<void>::success();
   }
 
   void cancel(
