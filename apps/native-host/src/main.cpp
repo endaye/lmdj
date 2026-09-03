@@ -90,6 +90,47 @@ struct Invocation {
   bool no_device;
 };
 
+enum class FacadeSurface {
+  command,
+  query,
+};
+
+constexpr std::array<std::pair<std::string_view, FacadeSurface>, 23>
+    kPerformanceOperations{{
+        {"pattern.slot.assign", FacadeSurface::command},
+        {"pattern.slot.clear", FacadeSurface::command},
+        {"pattern.slot.move", FacadeSurface::command},
+        {"performance.list", FacadeSurface::query},
+        {"performance.inspect", FacadeSurface::query},
+        {"performance.record.begin", FacadeSurface::command},
+        {"performance.record.event", FacadeSurface::command},
+        {"performance.record.launch-request", FacadeSurface::command},
+        {"performance.record.flush", FacadeSurface::command},
+        {"performance.record.stop", FacadeSurface::command},
+        {"performance.record.status", FacadeSurface::query},
+        {"performance.save", FacadeSurface::command},
+        {"performance.discard", FacadeSurface::command},
+        {"performance.recovery.list", FacadeSurface::query},
+        {"performance.recovery.apply", FacadeSurface::command},
+        {"performance.recovery.discard", FacadeSurface::command},
+        {"performance.rename", FacadeSurface::command},
+        {"performance.delete", FacadeSurface::command},
+        {"performance.recording.bind", FacadeSurface::command},
+        {"performance.replay.begin", FacadeSurface::command},
+        {"performance.replay.stop", FacadeSurface::command},
+        {"performance.replay.status", FacadeSurface::query},
+        {"performance.resample.commit", FacadeSurface::command},
+    }};
+
+std::optional<FacadeSurface> performance_surface(std::string_view operation) {
+  for (const auto& [name, surface] : kPerformanceOperations) {
+    if (name == operation) {
+      return surface;
+    }
+  }
+  return std::nullopt;
+}
+
 enum class LineStatus {
   line,
   end,
@@ -529,7 +570,11 @@ class NativeHost final {
     const bool has_operation =
         operation != request.end() && operation->is_string();
     const auto name = has_operation ? operation->get<std::string>() : "";
-    const bool query_operation = name == "sample.quota" || name == "status";
+    const auto performance =
+        has_operation ? performance_surface(name) : std::nullopt;
+    const bool query_operation =
+        name == "sample.quota" || name == "status" ||
+        (performance.has_value() && *performance == FacadeSurface::query);
     if (!has_operation || query_operation) {
       service_runtime_once();
     } else {
@@ -547,6 +592,9 @@ class NativeHost final {
       }
       if (name == "sample.quota") {
         return sample_quota(request);
+      }
+      if (performance.has_value()) {
+        return performance_operation(request, *performance);
       }
       if (name == "trigger") {
         return trigger(request);
@@ -599,6 +647,22 @@ class NativeHost final {
   }
 
  private:
+  Json performance_operation(
+      const Json& request,
+      FacadeSurface surface) {
+    const auto project = request.find("project_path");
+    if (project != request.end() &&
+        (!project->is_string() ||
+         project->get<std::string>() != invocation_.project.generic_string())) {
+      return invalid_request(
+          "Performance operation must target the Native Host Project");
+    }
+    std::lock_guard lock(facade_mutex_);
+    return surface == FacadeSurface::command
+               ? application_.command(request)
+               : application_.query(request);
+  }
+
   Json sample_quota(const Json& request) {
     if (!exact_keys(request, {"operation", "project_path", "slot"}) ||
         !request.at("project_path").is_string() ||

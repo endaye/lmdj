@@ -419,6 +419,54 @@ set_tests_properties(
 )
 
 lmdj_add_test(
+  NAME host.performance_cli
+  TIER host
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/host/performance_cli_test.py
+    "$<TARGET_FILE:lmdj_core_cli>"
+    "$<TARGET_FILE:lmdj_native_host>"
+    "${CMAKE_SOURCE_DIR}/products/lmdj/assembly.json"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 120
+)
+
+lmdj_add_test(
+  NAME host.performance_mcp
+  TIER host
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/host/performance_mcp_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+set_tests_properties(
+  host.performance_mcp
+  PROPERTIES
+    ENVIRONMENT "${lmdj_mcp_test_environment}"
+)
+
+lmdj_add_test(
+  NAME host.performance_cross_host
+  TIER host
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/host/cross_host_performance_idempotency_test.py
+    "$<TARGET_FILE:lmdj_core_cli>"
+    "$<TARGET_FILE:lmdj_core_c>"
+    "$<TARGET_FILE:lmdj_native_host>"
+    "${CMAKE_SOURCE_DIR}/products/lmdj/assembly.json"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS persistence
+  TIMEOUT 120
+)
+set_tests_properties(
+  host.performance_cross_host
+  PROPERTIES
+    ENVIRONMENT "${lmdj_mcp_test_environment}"
+)
+
+lmdj_add_test(
   NAME build.version
   TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/version_test.py

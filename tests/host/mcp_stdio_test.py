@@ -10,6 +10,10 @@ import tempfile
 import tomllib
 
 from lmdj_core_mcp import __version__, c_api, server
+from performance_mcp_test import (
+    expected_performance_output_schemas,
+    expected_performance_tools,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1215,6 +1219,14 @@ def tools_list(library: Path, temp_root: Path) -> None:
     assert set(response["result"]) == {"tools"}
     tools = response["result"]["tools"]
     schemas = expected_schemas()
+    performance_tools = expected_performance_tools()
+    schemas.update(
+        {
+            name: route[2]
+            for name, route in performance_tools.items()
+        }
+    )
+    performance_outputs = expected_performance_output_schemas()
     expected_routes = (
         ("lmdj.project.create", "project.create", "command"),
         ("lmdj.project.inspect", "project.inspect", "query"),
@@ -1230,6 +1242,10 @@ def tools_list(library: Path, temp_root: Path) -> None:
         ("lmdj.asset.import", "asset.import", "command"),
         ("lmdj.pad.assign", "pad.assign", "command"),
         ("lmdj.pattern.create", "pattern.create", "command"),
+        *(
+            (name, operation, surface)
+            for name, (operation, surface, _schema) in performance_tools.items()
+        ),
         ("lmdj.sequence.record.begin", "sequence.record.begin", "command"),
         ("lmdj.sequence.record.event", "sequence.record.event", "command"),
         ("lmdj.sequence.record.flush", "sequence.record.flush", "command"),
@@ -1254,12 +1270,16 @@ def tools_list(library: Path, temp_root: Path) -> None:
     assert tuple(
         (tool.name, tool.operation, tool.surface) for tool in server.TOOLS
     ) == expected_routes
-    assert [tool["name"] for tool in tools] == list(schemas)
+    assert [tool["name"] for tool in tools] == [
+        name for name, _operation, _surface in expected_routes
+    ]
     output_schema = expected_output_schema()
     for tool in tools:
         assert set(tool) == {"name", "inputSchema", "outputSchema"}
         assert tool["inputSchema"] == schemas[tool["name"]]
-        assert tool["outputSchema"] == output_schema
+        assert tool["outputSchema"] == performance_outputs.get(
+            tool["name"], output_schema
+        )
         assert "operation" not in canonical_json(tool["inputSchema"])
     assert host.close() == (0, b"", b"")
 
