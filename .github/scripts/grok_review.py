@@ -13,20 +13,37 @@ from collections.abc import Mapping, Sequence
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any
+from urllib.parse import quote
 import urllib.error
 import urllib.request
 
 
 COMMENT_MARKER = "<!-- lmdj-grok-review -->"
+ISSUE_TRACKING_ID = "lmdj-grok-review-pr-{pr_number}"
+ISSUE_MARKER = "<!-- {tracking_id} -->"
 SKIP_LABEL = "skip-grok-review"
 MAX_DIFF_BYTES = 400_000
 PINNED_GROK_VERSION = "1.0.13"
 READ_ONLY_TOOLS = "read_file,grep,list_dir"
 GROK_TIMEOUT_SECONDS = 720
 API_VERSION = "2022-11-28"
+ACTIONABLE_SEVERITIES = ("critical", "important")
+FINDING_HEADING = re.compile(
+    r"^###\s*\[(critical|important|nit)\]\s+(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+VERDICT_LINE = re.compile(
+    r"^##\s*Verdict\s*\n([\s\S]*?)(?=^##\s|\Z)",
+    re.IGNORECASE | re.MULTILINE,
+)
+CLOSING_KEYWORD = re.compile(
+    r"\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#\d+",
+    re.IGNORECASE,
+)
 
 REVIEW_INSTRUCTIONS = """\
 You are reviewing a pull request for LMDJ New Headless Core.
@@ -126,7 +143,92 @@ def build_prompt(
     )
 
 
-def format_comment(*, text: str, grok_payload: Mapping[str, Any] | None) -> str:
+def tracking_id(pr_number: int) -> str:
+    return ISSUE_TRACKING_ID.format(pr_number=pr_number)
+
+
+def parse_verdict(text: str) -> str:
+    match = VERDICT_LINE.search(text or "")
+    if match is None:
+        return ""
+    body = match.group(1)
+    if re.search(r"\bclean\b", body, re.IGNORECASE):
+        return "clean"
+    if re.search(r"\bissues\b", body, re.IGNORECASE):
+        return "issues"
+    return ""
+
+
+def parse_findings(text: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    matches = list(FINDING_HEADING.finditer(text or ""))
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        findings.append({
+            "severity": match.group(1).lower(),
+            "title": match.group(2).strip(),
+            "body": text[start:end].strip(),
+        })
+    return findings
+
+
+def actionable_findings(findings: Sequence[Mapping[str, str]]) -> list[Mapping[str, str]]:
+    return [item for item in findings if item.get("severity") in ACTIONABLE_SEVERITIES]
+
+
+def should_open_issue(*, verdict: str, findings: Sequence[Mapping[str, str]]) -> bool:
+    if actionable_findings(findings):
+        return True
+    return verdict == "issues" and not findings
+
+
+def issue_priority(findings: Sequence[Mapping[str, str]]) -> str:
+    if any(item.get("severity") == "critical" for item in findings):
+        return "priority:p1"
+    return "priority:p2"
+
+
+def format_issue_body(
+    *,
+    pr_number: int,
+    pr_url: str,
+    text: str,
+    findings: Sequence[Mapping[str, str]],
+) -> str:
+    marker = ISSUE_MARKER.format(tracking_id=tracking_id(pr_number))
+    source = pr_url.strip() or f"pull request {pr_number}"
+    actionable = actionable_findings(findings)
+    if actionable:
+        blocks = []
+        for item in actionable:
+            block = f"### [{item['severity']}] {item['title']}"
+            if item.get("body"):
+                block += f"\n{item['body']}"
+            blocks.append(block)
+        findings_md = "\n\n".join(blocks)
+    else:
+        findings_md = text.strip() or "_Grok reported issues but returned no structured findings._"
+    body = (
+        f"{marker}\n"
+        f"Tracking id: `{tracking_id(pr_number)}`\n\n"
+        "Opened by the advisory Grok review. Merge is not blocked.\n\n"
+        f"Source pull request: {source}\n\n"
+        "## Actionable findings\n\n"
+        f"{findings_md}\n\n"
+        "Nit findings stay on the pull request comment and are not copied here.\n"
+    )
+    if CLOSING_KEYWORD.search(body):
+        raise RuntimeError("issue body contains a GitHub closing keyword")
+    return body
+
+
+def format_comment(
+    *,
+    text: str,
+    grok_payload: Mapping[str, Any] | None,
+    tracking_issue: str = "",
+) -> str:
     body = text.strip() or "_Grok returned an empty review._"
     footer_parts = []
     if grok_payload:
@@ -141,12 +243,18 @@ def format_comment(*, text: str, grok_payload: Mapping[str, Any] | None) -> str:
     footer = ""
     if footer_parts:
         footer = "\n\n---\n" + " · ".join(footer_parts)
+    tracking = ""
+    if tracking_issue:
+        tracking = (
+            f"\nTracking Issue {tracking_issue}. Merge is still not blocked.\n"
+        )
     return (
         f"{COMMENT_MARKER}\n"
         "# Grok advisory review\n\n"
         "This comment is **advisory**. It is not a required check and does "
         "not block merge. Core CI and the merge queue are unchanged.\n\n"
         f"{body}"
+        f"{tracking}"
         f"{footer}\n"
     )
 
@@ -266,6 +374,89 @@ def upsert_sticky_comment(
     return "created"
 
 
+def find_tracking_issue(
+    *,
+    repository: str,
+    pr_number: int,
+    token: str,
+    requester: Any = github_request,
+) -> dict[str, Any] | None:
+    query = quote(f'repo:{repository} "{tracking_id(pr_number)}" in:body')
+    payload = requester("GET", f"https://api.github.com/search/issues?q={query}&per_page=5", token)
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list) or not items:
+        return None
+    return items[0] if isinstance(items[0], dict) else None
+
+
+def upsert_tracking_issue(
+    *,
+    repository: str,
+    pr_number: int,
+    pr_url: str,
+    token: str,
+    text: str,
+    findings: Sequence[Mapping[str, str]],
+    verdict: str,
+    requester: Any = github_request,
+) -> str:
+    owner, name = repository.split("/", 1)
+    existing = find_tracking_issue(
+        repository=repository,
+        pr_number=pr_number,
+        token=token,
+        requester=requester,
+    )
+    open_issue = should_open_issue(verdict=verdict, findings=findings)
+    if open_issue:
+        body = format_issue_body(
+            pr_number=pr_number,
+            pr_url=pr_url,
+            text=text,
+            findings=findings,
+        )
+        title = f"bug: Grok review findings on PR {pr_number}"
+        labels = ["type:bug", "area:ci-release", issue_priority(actionable_findings(findings) or findings)]
+        if existing and existing.get("number") is not None:
+            number = int(existing["number"])
+            requester(
+                "PATCH",
+                f"https://api.github.com/repos/{owner}/{name}/issues/{number}",
+                token,
+                {"title": title, "body": body, "state": "open", "labels": labels},
+            )
+            return f"updated #{number}"
+        created = requester(
+            "POST",
+            f"https://api.github.com/repos/{owner}/{name}/issues",
+            token,
+            {"title": title, "body": body, "labels": labels},
+        )
+        number = (created or {}).get("number")
+        return f"created #{number}" if number else "created"
+    if existing and existing.get("state") == "open" and existing.get("number") is not None:
+        number = int(existing["number"])
+        requester(
+            "POST",
+            f"https://api.github.com/repos/{owner}/{name}/issues/{number}/comments",
+            token,
+            {
+                "body": (
+                    "Later Grok review found no remaining critical or important "
+                    f"findings on pull request {pr_url.strip() or pr_number}."
+                )
+            },
+        )
+        requester(
+            "PATCH",
+            f"https://api.github.com/repos/{owner}/{name}/issues/{number}",
+            token,
+            {"state": "closed"},
+        )
+        return f"closed #{number}"
+    return "skipped"
+
+
 def notice(message: str) -> None:
     print(f"::notice::{message}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -295,6 +486,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", default=os.environ.get("REVIEW_OUTPUT", ""))
     parser.add_argument("--post-comment", action="store_true", default=os.environ.get("POST_COMMENT", "true") == "true")
     parser.add_argument("--no-post-comment", action="store_false", dest="post_comment")
+    parser.add_argument("--post-issue", action="store_true", default=os.environ.get("POST_ISSUE", "true") == "true")
+    parser.add_argument("--no-post-issue", action="store_false", dest="post_issue")
     return parser.parse_args(argv)
 
 
@@ -345,7 +538,28 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     payload = run_grok(grok_command(prompt_file, Path(args.cwd)), env)
     text = str(payload.get("text") or "")
-    comment = format_comment(text=text, grok_payload=payload)
+    findings = parse_findings(text)
+    verdict = parse_verdict(text)
+    token = os.environ.get("GITHUB_TOKEN", "")
+    issue_action = "skipped"
+    if args.post_issue and token and args.repository and args.pr_number:
+        issue_action = upsert_tracking_issue(
+            repository=args.repository,
+            pr_number=int(args.pr_number),
+            pr_url=args.pr_url,
+            token=token,
+            text=text,
+            findings=findings,
+            verdict=verdict,
+        )
+        notice(f"Grok advisory review issue {issue_action}")
+    elif args.post_issue:
+        notice("Grok advisory review issue skipped: missing GITHUB_TOKEN, repository, or PR number")
+
+    tracking = ""
+    if issue_action.startswith(("created", "updated")):
+        tracking = issue_action
+    comment = format_comment(text=text, grok_payload=payload, tracking_issue=tracking)
     notice("Grok advisory review completed")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
@@ -354,7 +568,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.output:
         Path(args.output).write_text(comment, encoding="utf-8")
 
-    token = os.environ.get("GITHUB_TOKEN", "")
     if args.post_comment and token and args.repository and args.pr_number:
         action = upsert_sticky_comment(
             repository=args.repository,
