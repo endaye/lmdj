@@ -7,7 +7,7 @@ import {PadSurface} from "./components/pad_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {SampleSurface} from "./components/sample_surface";
 import {SequenceSurface} from "./components/sequence_surface";
-import {StatusBar} from "./components/status_bar";
+import {StatusBar, type MidiStatus} from "./components/status_bar";
 import {
   createAcceptanceReport,
   serializeAcceptanceReport,
@@ -19,6 +19,7 @@ import {
   openProjectJourney,
   type ProjectActionToken,
 } from "./runtime/project_actions";
+import type {CreatorBuildIdentity} from "./runtime/build_identity";
 import {createCreatorInputController} from "./runtime/input_controller";
 import {retryPrepareJourney} from "./runtime/sample_actions";
 import {
@@ -56,10 +57,12 @@ import type {CapturePhase} from "./state/capture_state";
 interface AppProps {
   initialState?: CreatorState;
   runtimeFactory?: RuntimeSessionFactory;
+  buildIdentity?: CreatorBuildIdentity;
 }
 
 interface WorkspaceProps {
   initialState: CreatorState;
+  buildIdentity?: CreatorBuildIdentity;
   session?: CreatorRuntimeSession;
   runtimePhase?: RuntimeProviderPhase;
   runtimeErrorCode?: string | null;
@@ -120,6 +123,18 @@ function errorDetails(error: unknown): Readonly<Record<string, unknown>> {
     : {};
 }
 
+function midiStatusFrom(diagnostics: Readonly<Record<string, unknown>>): MidiStatus | null {
+  const permission = diagnostics.midi_permission;
+  const count = diagnostics.connected_input_count;
+  if (typeof permission !== "string") return null;
+  return {
+    permission,
+    connectedInputCount: Number.isSafeInteger(count) && (count as number) >= 0
+      ? (count as number)
+      : 0,
+  };
+}
+
 function isSampleSession(
   session: CreatorRuntimeSession | undefined,
 ): session is CreatorSampleRuntimeSession {
@@ -143,6 +158,7 @@ function isSampleSession(
 
 function Workspace({
   initialState,
+  buildIdentity,
   session,
   runtimePhase,
   runtimeErrorCode,
@@ -161,6 +177,7 @@ function Workspace({
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
   const [captureStopRequest, setCaptureStopRequest] = useState(0);
+  const [midi, setMidi] = useState<MidiStatus | null>(null);
   const importController = useRef<AbortController | null>(null);
   const projectActions = useRef(createProjectActionLane()).current;
   const sequenceAuthoringTail = useRef<Promise<void>>(Promise.resolve());
@@ -193,6 +210,23 @@ function Workspace({
     if (project === null || sequence.selectedPatternId !== null) return;
     dispatchSequence({type: "selected", patternId: project.patternId});
   }, [state.project.current, sequence.selectedPatternId]);
+
+  useEffect(() => {
+    setMidi(null);
+    if (!session || runtimePhase !== "ready") return;
+    // Diagnostics publish on every trigger outcome; only a MIDI change may
+    // re-render the shell.
+    const apply = (value: Readonly<Record<string, unknown>>) => {
+      const next = midiStatusFrom(value);
+      setMidi((current) =>
+        current?.permission === next?.permission &&
+        current?.connectedInputCount === next?.connectedInputCount
+          ? current
+          : next);
+    };
+    apply(session.diagnostics());
+    return session.subscribeDiagnostics(apply);
+  }, [session, runtimePhase]);
 
   useEffect(() => {
     if (!isSequenceSession(session)) return;
@@ -823,6 +857,8 @@ function Workspace({
     <div className="workspace">
       <StatusBar
         state={state}
+        midi={midi}
+        {...(buildIdentity ? {buildIdentity} : {})}
         {...(session && inputController.current
           ? {
               audioActivationReady: runtimeHostState === "audio-suspended",
@@ -859,6 +895,7 @@ function Workspace({
             canImport={canImportProject}
             showLocalProjects={showLocalProjects}
             onShowLocal={() => setShowLocalProjects(true)}
+            onHideLocal={() => setShowLocalProjects(false)}
             onOpen={(summary) => { void openProject(summary); }}
             onImport={(file) => { void importProject(file); }}
           />
@@ -996,16 +1033,23 @@ function Workspace({
           state.runtime.errorCode === "HOST_TIMEOUT") && onRetryRuntime
           ? {onRetryRuntime}
           : {}}
+        {...(state.runtime.phase === "ready"
+          ? {onDismiss: () => dispatch({type: "runtime-error-dismissed"})}
+          : {})}
       />
     </div>
   );
 }
 
-function ManagedWorkspace({initialState}: {initialState: CreatorState}) {
+function ManagedWorkspace({
+  initialState,
+  buildIdentity,
+}: {initialState: CreatorState; buildIdentity?: CreatorBuildIdentity}) {
   const runtime = useRuntime();
   return (
     <Workspace
       initialState={initialState}
+      {...(buildIdentity ? {buildIdentity} : {})}
       session={runtime.session}
       runtimePhase={runtime.phase}
       runtimeErrorCode={runtime.errorCode}
@@ -1020,13 +1064,15 @@ function ManagedWorkspace({initialState}: {initialState: CreatorState}) {
 export function App({
   initialState = initialCreatorState,
   runtimeFactory,
+  buildIdentity,
 }: AppProps) {
+  const identity = buildIdentity ? {buildIdentity} : {};
   if (runtimeFactory) {
     return (
       <RuntimeProvider factory={runtimeFactory}>
-        <ManagedWorkspace initialState={initialState} />
+        <ManagedWorkspace initialState={initialState} {...identity} />
       </RuntimeProvider>
     );
   }
-  return <Workspace initialState={initialState} />;
+  return <Workspace initialState={initialState} {...identity} />;
 }

@@ -1,4 +1,4 @@
-const futureModes = [{name: "Perform", stage: 10}] as const;
+const futureModes = [{name: "Perform", stage: 10, glyph: "▶"}] as const;
 
 export type CreatorMode = "project" | "sample" | "sequence";
 
@@ -17,7 +17,7 @@ export function ModeRail({activeMode, onSelect, sequenceEnabled = false}: ModeRa
         aria-current={activeMode === "project" ? "page" : undefined}
         onClick={() => onSelect("project")}
       >
-        <span aria-hidden="true">P</span>
+        <span className="mode-glyph" aria-hidden="true">▣</span>
         <span className="mode-label">Project</span>
       </button>
       <button
@@ -28,7 +28,7 @@ export function ModeRail({activeMode, onSelect, sequenceEnabled = false}: ModeRa
         aria-label={sequenceEnabled ? "Sequence" : "Sequence — open a playable Project first"}
         onClick={() => onSelect("sequence")}
       >
-        <span aria-hidden="true">Q</span>
+        <span className="mode-glyph" aria-hidden="true">▤</span>
         <span className="mode-label">Sequence</span>
       </button>
       <button
@@ -37,10 +37,10 @@ export function ModeRail({activeMode, onSelect, sequenceEnabled = false}: ModeRa
         aria-current={activeMode === "sample" ? "page" : undefined}
         onClick={() => onSelect("sample")}
       >
-        <span aria-hidden="true">S</span>
+        <span className="mode-glyph" aria-hidden="true">∿</span>
         <span className="mode-label">Sample</span>
       </button>
-      {futureModes.map(({name, stage}) => (
+      {futureModes.map(({name, stage, glyph}) => (
         <button
           className="mode-button"
           type="button"
@@ -49,7 +49,7 @@ export function ModeRail({activeMode, onSelect, sequenceEnabled = false}: ModeRa
           aria-label={`${name} — available in Stage ${stage}`}
           key={name}
         >
-          <span aria-hidden="true">{name.slice(0, 1)}</span>
+          <span className="mode-glyph" aria-hidden="true">{glyph}</span>
           <span className="mode-label">{name}</span>
           <small aria-hidden="true">S{stage}</small>
         </button>
