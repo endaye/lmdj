@@ -78,6 +78,40 @@ class MergeQueueWorkflowTest(unittest.TestCase):
         self.assertNotIn("concurrency:", watchdog)
         self.assertIn("- cron: '*/15 * * * *'", self.source)
 
+    def test_watchdog_reconciles_on_the_trusted_role_not_hosted_minutes(self):
+        """A 10-second job on a 15-minute cron is billed as a whole minute each run.
+
+        At roughly 2,880 runs a month that is the account's entire included
+        Actions allowance, spent on a reconciler that publishes no scope,
+        admission or verdict evidence and so does not qualify for the hosted
+        control-plane exception.
+        """
+        watchdog = self.job("watchdog")
+        self.assertIn(
+            "runs-on: [self-hosted, Linux, X64, lmdj-linux, "
+            "lmdj-linux-pool, ci-general]",
+            watchdog,
+            msg=(
+                "why: the watchdog runs every 15 minutes and GitHub rounds each "
+                "job up to a whole minute, so hosting it spends about 2,880 "
+                "billed minutes a month on roughly 14 minutes of work, and it "
+                "publishes none of the evidence the hosted control-plane "
+                "exception exists to protect; remedy: keep runs-on naming the "
+                "ci-general role"
+            ),
+        )
+        self.assertNotIn("runs-on: ubuntu-24.04", watchdog)
+        self.assertIn(
+            "- cron: '*/15 * * * *'",
+            self.source,
+            msg=(
+                "why: the cadence is what bounds how long a stalled queue label "
+                "goes unreconciled, and the 20-minute stall threshold in "
+                "merge_queue_watchdog.py assumes it; remedy: rehome the job "
+                "rather than reducing its frequency"
+            ),
+        )
+
     def test_manual_preflight_is_bounded_and_uses_the_same_queue(self):
         self.assertIn("hold_seconds:", self.source)
         queue = self.job("queue-item")
