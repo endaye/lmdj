@@ -84,6 +84,33 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         self.assertNotIn("ci-core", self.source, message)
         self.assertNotIn("ci-web-heavy", self.source, message)
 
+    def test_the_cli_is_fetched_by_digest_not_piped_from_an_installer(self) -> None:
+        """A version names a release; a digest names the bytes.
+
+        The upstream installer publishes no checksum and verifies nothing but
+        an HTTP status and a `--version` string, so a changed script would be
+        executed unchallenged. This job holds `pull-requests: write` and a
+        `GITHUB_TOKEN`, and since it moved to a self-hosted runner it executes
+        on our own machine, which raises the cost of that rather than lowering
+        it. The CI contract lane already answers the same question the same
+        way, with a checksum-verified actionlint release.
+        """
+        message = (
+            "why: the Grok CLI is installed on a self-hosted runner in a job "
+            "holding pull-requests: write, so its bytes must be named by a "
+            "digest rather than only by a version; remedy: fetch "
+            "https://x.ai/cli/grok-${GROK_VERSION}-linux-x86_64 directly and "
+            "verify it against GROK_SHA256, the way the CI contract lane pins "
+            "actionlint"
+        )
+        self.assertNotIn("install.sh", self.source, message)
+        self.assertNotIn("| bash", self.source, message)
+        self.assertRegex(self.source, r'GROK_SHA256: "[0-9a-f]{64}"', message)
+        self.assertIn(
+            'https://x.ai/cli/grok-${GROK_VERSION}-linux-x86_64', self.source, message
+        )
+        self.assertIn("sha256sum --check --strict -", self.source, message)
+
     def test_workflow_pins_grok_cli_and_read_only_tools(self) -> None:
         message = (
             "why: CI must not float the Grok CLI or grant write/shell tools; "
@@ -92,7 +119,6 @@ class GrokReviewWorkflowTest(unittest.TestCase):
             "Ubuntu cannot resolve Grok's runtime-socket deny path"
         )
         self.assertIn(f'GROK_VERSION: "{self.script.PINNED_GROK_VERSION}"', self.source, message)
-        self.assertIn("bash -s \"$GROK_VERSION\"", self.source, message)
         self.assertIn("python3 .github/scripts/grok_review.py", self.source, message)
         command = self.script.grok_command(Path("/tmp/prompt.md"), Path("/tmp/repo"))
         self.assertEqual(command[command.index("--tools") + 1], self.script.READ_ONLY_TOOLS)
