@@ -1,0 +1,128 @@
+name: Claude Review
+
+# Advisory review by the Claude Code agent, running on a substituted model
+# backend. It is not part of Core CI, the PR Gate, or the merge queue; findings
+# post as inline comments and never fail the workflow.
+#
+# The backend substitution is the point. `claude-code-action` reads
+# `ANTHROPIC_BASE_URL`, so pointing it at a vendor's Anthropic-compatible
+# endpoint runs the Claude Code tooling with **no Anthropic credential at all**.
+# The Claude subscription available here belongs to an employer and must not be
+# attached to this personal repository; this arrangement dissolves that
+# constraint rather than negotiating it. Two backends run in parallel so their
+# findings are comparable on the same Pull Request, and one is retired once
+# there is evidence for which earns its slot.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Claude review (${{ matrix.backend }})
+    # Fork Pull Requests are excluded. This job runs an agent with repository
+    # write scope on a self-hosted runner, so the trigger has to be trusted;
+    # the condition is the one `grok-review.yml` already uses rather than a
+    # second spelling of the same rule.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    # Self-hosted, or the entire cost argument for this lane collapses: a
+    # hosted runner bills at least one whole minute per Pull Request.
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 30
+    strategy:
+      # Independent opinions. One backend failing must not withhold the other's
+      # findings, which is the whole reason both are running.
+      fail-fast: false
+      matrix:
+        include:
+          - backend: glm
+            base_url: https://api.z.ai/api/anthropic
+            secret_name: ZAI_CODING_KEY
+          - backend: kimi
+            base_url: https://api.kimi.com/coding/
+            secret_name: KIMI_CODING_KEY
+    steps:
+      - name: Resolve the backend credential
+        id: backend
+        env:
+          BACKEND_KEY: ${{ secrets[matrix.secret_name] }}
+          BACKEND: ${{ matrix.backend }}
+          SECRET_NAME: ${{ matrix.secret_name }}
+          ENABLED: ${{ vars.CLAUDE_REVIEW_BACKENDS }}
+        run: |
+          set -euo pipefail
+          # An unset `CLAUDE_REVIEW_BACKENDS` runs every backend. Set it to a
+          # comma-separated list to narrow the set without editing this file,
+          # which is the exit if the comment volume proves too noisy.
+          if [[ -n "$ENABLED" && ",$ENABLED," != *",$BACKEND,"* ]]; then
+            echo "run=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::$BACKEND review skipped: not in CLAUDE_REVIEW_BACKENDS"
+            exit 0
+          fi
+          if [[ -z "$BACKEND_KEY" ]]; then
+            echo "run=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::$BACKEND review skipped: no $SECRET_NAME secret"
+            exit 0
+          fi
+          echo "run=true" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        if: ${{ steps.backend.outputs.run == 'true' }}
+        with:
+          fetch-depth: 1
+
+      # Pinned to the commit `v1` resolved to, not to `v1` itself. A moving tag
+      # names a release; a commit names the code that will run here, which is
+      # the same reasoning `grok-review.yml` applies to its CLI binary.
+      - name: Review
+        if: ${{ steps.backend.outputs.run == 'true' }}
+        uses: anthropics/claude-code-action@fa2b2666b747000bf42767d1f332065b375e3c8f
+        env:
+          # Both spellings are set deliberately. `claude-code-action` forwards
+          # its input as `ANTHROPIC_API_KEY`, while community reports of the
+          # Z.ai endpoint use `ANTHROPIC_AUTH_TOKEN`. Which one each vendor
+          # honours is not verified here; setting both avoids a first run that
+          # fails on a naming difference rather than on anything real. Narrow
+          # this once a run has shown which is used.
+          ANTHROPIC_BASE_URL: ${{ matrix.base_url }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets[matrix.secret_name] }}
+          # The default is far too low for an agentic review of a full diff.
+          API_TIMEOUT_MS: "3000000"
+        with:
+          # Passed explicitly so the action authenticates as this repository
+          # rather than falling back to the Claude GitHub App, which would
+          # attach an employer-owned Claude organisation to a personal
+          # repository. This job posts comments and pushes nothing, so the
+          # caveat about `GITHUB_TOKEN` not triggering downstream workflows
+          # does not apply.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_api_key: ${{ secrets[matrix.secret_name] }}
+          # KNOWN UNPINNED INPUT. This clones a marketplace at run time to
+          # fetch the review skill, and the ref is not pinned. `grok-review.yml`
+          # verifies its CLI against a digest on the argument that anything
+          # executing on our own runner beside repository credentials must name
+          # its bytes; this clone does not meet that bar. It is weaker than the
+          # Grok case -- the action itself is pinned to a commit, the source is
+          # Anthropic's own repository, and what arrives is Markdown
+          # instructions rather than an executable -- but it is an unpinned
+          # input and is recorded as one rather than argued away. The exit, if
+          # it is tightened, is vendoring the skill into `.claude/skills/`,
+          # which removes the clone at the cost of tracking upstream by hand.
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          prompt: >-
+            /code-review:code-review --comment
+            ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+          claude_args: >-
+            --allowedTools "mcp__github_inline_comment__create_inline_comment"

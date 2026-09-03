@@ -88,6 +88,25 @@ agent brand and every human reads; the contract is
    deterministic. Otherwise it exits to a skill section. Any gate you add must
    fail with a message naming both the violated invariant and its remedy.
 
+### Writing a contract test that scans source text
+
+When a contract test asserts a string is **absent** from a file, scan the
+directives rather than the raw source. Anything worth forbidding is worth
+explaining, the explanation lands in a comment in the same file, and the scan
+reads both:
+
+```python
+directives = "\n".join(
+    line for line in source.splitlines()
+    if not line.lstrip().startswith("#")
+)
+```
+
+Presence assertions can keep reading the raw source; only absence has the blind
+spot. Where the banned string is a path the file must also declare, constrain
+the declaration rather than loosening the gate. See
+[`gate-matches-its-own-prose`](../../pitfalls/gate-matches-its-own-prose.md).
+
 ### Pitfalls that bite at this step
 
 Read these before shipping; each is a real recurrence, not a hypothetical:

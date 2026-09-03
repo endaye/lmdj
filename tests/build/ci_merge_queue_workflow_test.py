@@ -47,9 +47,30 @@ class MergeQueueWorkflowTest(unittest.TestCase):
         self.assertIn("queue: max", queue)
         self.assertNotIn("cancel-in-progress", queue)
 
-    def test_worker_is_hosted_bounded_and_checks_out_canonical_control_code(self):
+    def test_worker_runs_on_the_trusted_role_bounded_and_from_canonical_code(self):
+        """The worker waits; it does not adjudicate, so it does not run hosted.
+
+        `wait_validation` polls for another run to finish, about 33 minutes per
+        validation and roughly 43% of the remaining hosted minutes. The hosted
+        control-plane exception protects scope, trust, admission and verdict
+        evidence; `route` makes the admission decision and keeps that role,
+        while this job only carries it out. When every self-hosted runner is
+        down the validation it waits for cannot run either, so hosting it buys
+        no availability.
+        """
         queue = self.job("queue-item")
-        self.assertIn("runs-on: ubuntu-24.04", queue)
+        self.assertIn(
+            "runs-on: [self-hosted, Linux, X64, lmdj-linux, "
+            "lmdj-linux-pool, ci-general]",
+            queue,
+            msg=(
+                "why: this job bills roughly 33 minutes of hosted time per "
+                "validation to wait for a GitHub run it does not adjudicate; "
+                "remedy: keep runs-on naming the ci-general role, and leave "
+                "route hosted because that is where the admission decision is"
+            ),
+        )
+        self.assertNotIn("runs-on: ubuntu-24.04", queue)
         self.assertIn("timeout-minutes: 360", queue)
         self.assertIn("uses: actions/checkout@v6", queue)
         self.assertIn("ref: ${{ github.event.repository.default_branch }}", queue)
