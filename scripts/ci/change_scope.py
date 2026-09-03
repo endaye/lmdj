@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import argparse
 import html
@@ -415,6 +415,67 @@ def _matches(match: Mapping[str, str], path: str) -> bool:
             (kind == "suffix" and path.endswith(value)))
 
 
+SCOPE_POLICY_PATH = "scripts/ci/scope_policy.json"
+
+
+def path_classification(
+    policy: Mapping[str, object], path: str
+) -> tuple[frozenset[str], frozenset[str]]:
+    """The lanes and full-upgrade reasons one policy assigns to one path.
+
+    Everything a policy edit can do to routing shows up here: `rules` give the
+    lanes, `full_rules` and `known_top_levels` give the reasons. Comparing this
+    across two policies for the same path is therefore a complete statement of
+    whether that path's routing changed.
+    """
+    lanes = {
+        lane
+        for rule in policy["rules"]
+        if _matches(rule["match"], path)
+        for lane in rule["lanes"]
+    }
+    reasons = {
+        f"full rule: {rule['reason']}"
+        for rule in policy["full_rules"]
+        if _matches(rule["match"], path)
+    }
+    if path.split("/", 1)[0] not in policy["known_top_levels"]:
+        reasons.add("unknown top-level")
+    if not lanes:
+        reasons.add("unclassified path")
+    return frozenset(lanes), frozenset(reasons)
+
+
+def policy_edit_is_classification_preserving(
+    base_policy: Mapping[str, object],
+    head_policy: Mapping[str, object],
+    base_tracked_paths: Iterable[str],
+) -> tuple[bool, str]:
+    """Whether a `scope_policy.json` edit changes how any existing path routes.
+
+    A routing rule added for a path the same branch introduces cannot change
+    how anything else is classified, so scoping that Pull Request by its own
+    policy is not circular and it does not need the full manifest. Rewriting a
+    prefix rule, or changing `known_top_levels`, does change existing paths and
+    stays circular, so it still does.
+
+    The comparison set is the base tree's tracked paths. Paths the branch
+    introduces are absent from it by construction, which is exactly the
+    exemption being claimed, so they need no separate accounting.
+
+    Non-routing keys are compared for equality instead: `draft_lanes`,
+    `expensive_families` and `slo_seconds` never surface in a per-path result,
+    so a differential over paths would silently pass a change to them.
+    """
+    for key in ("draft_lanes", "expensive_families", "slo_seconds", "lanes", "lane_jobs"):
+        if base_policy.get(key) != head_policy.get(key):
+            return False, f"policy key changed: {key}"
+    for path in sorted(base_tracked_paths):
+        if path_classification(base_policy, path) != path_classification(head_policy, path):
+            return False, f"classification changed for an existing path: {path}"
+    return True, "no existing path changes classification"
+
+
 def _changed_file_json(record: ChangedFile) -> dict[str, object]:
     result = _STATUS_RESULTS[record.status[0]]
     if result not in ALLOWED_RESULTS:
@@ -423,13 +484,24 @@ def _changed_file_json(record: ChangedFile) -> dict[str, object]:
 
 
 def _evaluate_ready_paths(
-    policy: Mapping[str, object], paths: Sequence[str]
+    policy: Mapping[str, object], paths: Sequence[str],
+    *, policy_edit_preserving: bool = False,
 ) -> tuple[set[str], set[str]]:
-    """Return the exact Ready lane union and any reasons that require full."""
+    """Return the exact Ready lane union and any reasons that require full.
+
+    ``policy_edit_preserving`` suppresses the full-upgrade that
+    ``scripts/ci/scope_policy.json`` would otherwise contribute, and only that
+    one. The caller establishes it with
+    :func:`policy_edit_is_classification_preserving`, which proves the edit
+    leaves every path that existed at the base classified exactly as before.
+    Every other path in the change, including the other control-plane files,
+    is evaluated unchanged.
+    """
     selected: set[str] = set()
     full_reasons: set[str] = set()
     for path in paths:
         _validate_path(path)
+        exempt = policy_edit_preserving and path == SCOPE_POLICY_PATH
         top_level = path.split("/", 1)[0]
         if top_level not in policy["known_top_levels"]:
             full_reasons.add(f"unknown top-level: {top_level}")
@@ -441,7 +513,7 @@ def _evaluate_ready_paths(
             full_reasons.add(f"unclassified path: {path}")
         selected.update(path_lanes)
         for rule in policy["full_rules"]:
-            if _matches(rule["match"], path):
+            if _matches(rule["match"], path) and not exempt:
                 full_reasons.add(f"full rule: {rule['reason']}")
 
     active_families = sorted(
@@ -473,7 +545,7 @@ def classify(
     head_sha: str, event_name: str, draft: bool, labels: Collection[str],
     force_full: bool = False, requested_lanes: Collection[str] | None = None,
     trusted_head: bool = True, unverifiable_base: str | None = None,
-    queue: QueueInputs | None = None,
+    queue: QueueInputs | None = None, policy_edit_preserving: bool = False,
 ) -> dict[str, object]:
     """Return a deterministic closed v2 scope manifest as a dictionary.
 
@@ -522,7 +594,9 @@ def classify(
             if path in all_paths:
                 raise ValueError(f"duplicate logical path: {path}")
             all_paths.add(path)
-    selected, full_reasons = _evaluate_ready_paths(policy, sorted(all_paths))
+    selected, full_reasons = _evaluate_ready_paths(
+        policy, sorted(all_paths), policy_edit_preserving=policy_edit_preserving,
+    )
     reasons = set(full_reasons)
     label_set = set(labels)
     if not all(isinstance(label, str) for label in label_set):
@@ -599,11 +673,14 @@ def classify(
             "base_sha": queue.base_sha,
             "head_sha": queue.head_sha,
         }
-    validate_manifest(manifest, policy)
+    validate_manifest(manifest, policy, policy_edit_preserving=policy_edit_preserving)
     return manifest
 
 
-def validate_manifest(manifest: Mapping[str, object], policy: Mapping[str, object]) -> None:
+def validate_manifest(
+    manifest: Mapping[str, object], policy: Mapping[str, object],
+    *, policy_edit_preserving: bool = False,
+) -> None:
     if frozenset(manifest) not in {frozenset(ALLOWED_MANIFEST_KEYS), frozenset(QUEUE_MANIFEST_KEYS)}:
         raise ValueError("manifest schema is not closed")
     if manifest["schema"] != policy["manifest_schema"]:
@@ -679,7 +756,7 @@ def validate_manifest(manifest: Mapping[str, object], policy: Mapping[str, objec
             changed_paths.append(path)
     if manifest["mode"] == "focused":
         expected_lanes, full_reasons = _evaluate_ready_paths(
-            policy, changed_paths
+            policy, changed_paths, policy_edit_preserving=policy_edit_preserving,
         )
         if full_reasons:
             raise ValueError(
@@ -708,6 +785,60 @@ def encode_manifest(manifest: Mapping[str, object]) -> str:
     if frozenset(manifest) not in {frozenset(ALLOWED_MANIFEST_KEYS), frozenset(QUEUE_MANIFEST_KEYS)}:
         raise ValueError("manifest schema is not closed")
     return json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def read_merge_base_policy(
+    repository: str | Path, base_sha: str, head_sha: str
+) -> dict[str, object] | None:
+    """The scope policy as it stands at this change's merge base, or None.
+
+    None every time the comparison cannot be made truthfully -- the file is
+    absent there, the range has no merge base, or the content does not parse or
+    validate. The caller treats None as "not preserving", so an unreadable base
+    keeps the full upgrade rather than quietly dropping it.
+    """
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", base_sha, head_sha],
+            cwd=str(repository), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        blob = subprocess.run(
+            ["git", "show", f"{merge_base}:{SCOPE_POLICY_PATH}"],
+            cwd=str(repository), capture_output=True, text=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    try:
+        policy = json.loads(blob, object_pairs_hook=reject_duplicates)
+        if not isinstance(policy, dict):
+            return None
+        _validate_policy(policy)
+    except (ValueError, KeyError, TypeError):
+        return None
+    return policy
+
+
+def read_merge_base_tracked_paths(
+    repository: str | Path, base_sha: str, head_sha: str
+) -> tuple[str, ...]:
+    """Every path tracked at the merge base, which is the comparison set.
+
+    Paths the branch introduces are absent here by construction, and that
+    absence is precisely the exemption being claimed, so they need no separate
+    accounting.
+    """
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", base_sha, head_sha],
+            cwd=str(repository), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        listing = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", merge_base],
+            cwd=str(repository), capture_output=True, text=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, OSError):
+        return ()
+    return tuple(line for line in listing.splitlines() if line)
 
 
 def read_git_inventory(repository: str | Path, base_sha: str, head_sha: str) -> tuple[ChangedFile, ...]:
@@ -1045,9 +1176,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if queue is not None:
             trusted_head = queue_evaluation is not None and queue_evaluation.classification == "valid"
+        policy_edit_preserving = False
+        policy_edit_note = ""
+        touches_policy = any(
+            SCOPE_POLICY_PATH in record.paths for record in inventory
+        )
+        if touches_policy:
+            base_policy = read_merge_base_policy(
+                Path.cwd(), args.base_sha, args.head_sha
+            )
+            if base_policy is None:
+                policy_edit_note = (
+                    "scope policy edit: base policy unreadable, keeping full"
+                )
+            else:
+                policy_edit_preserving, reason = (
+                    policy_edit_is_classification_preserving(
+                        base_policy,
+                        policy,
+                        read_merge_base_tracked_paths(
+                            Path.cwd(), args.base_sha, args.head_sha
+                        ),
+                    )
+                )
+                policy_edit_note = f"scope policy edit: {reason}"
+            print(policy_edit_note, file=sys.stderr)
         manifest = classify(
             policy, inventory, base_sha=args.base_sha, head_sha=args.head_sha,
             event_name=args.event, draft=draft, labels=labels,
+            policy_edit_preserving=policy_edit_preserving,
             requested_lanes=[
                 lane.strip() for lane in args.lanes.split(",") if lane.strip()
             ],
