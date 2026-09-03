@@ -1,3 +1,4 @@
+import {readFileSync} from "node:fs";
 import {useRef, useState} from "react";
 
 import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
@@ -19,13 +20,21 @@ import {CapturePanel} from "../src/components/capture_panel";
 // which is how Finding 1 (the paint effect must re-run once the canvas is
 // remounted, even when neither frameCount nor peak changed) is verified.
 const fillRectSpy = vi.fn();
+const creatorStyles = readFileSync("src/styles.css", "utf8");
+let styleElement: HTMLStyleElement;
 beforeAll(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
     clearRect: () => {},
     fillRect: fillRectSpy,
   } as unknown as CanvasRenderingContext2D);
+  styleElement = document.createElement("style");
+  styleElement.textContent = creatorStyles;
+  document.head.append(styleElement);
 });
-afterAll(() => vi.restoreAllMocks());
+afterAll(() => {
+  styleElement.remove();
+  vi.restoreAllMocks();
+});
 
 interface FakeController {
   start: ReturnType<typeof vi.fn>;
@@ -81,6 +90,29 @@ async function startRecording(instances: ControllerInstance[]) {
   return instances[0]!;
 }
 
+function mockTrimRect(container: HTMLElement, {left = 0, width = 400} = {}) {
+  const waveform = container.querySelector<HTMLElement>("[data-capture-trim-waveform]")!;
+  Object.defineProperty(waveform, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      left,
+      right: left + width,
+      width,
+      top: 0,
+      bottom: 96,
+      height: 96,
+      x: left,
+      y: 0,
+      toJSON: () => ({}),
+    }),
+  });
+  return waveform;
+}
+
+function captureGrip(container: HTMLElement, kind: "start" | "end") {
+  return container.querySelector<HTMLElement>(`[data-capture-grip-zone="${kind}"]`)!;
+}
+
 test("renders the idle Record button without ever building the real browser controller", () => {
   renderPanel();
   expect(screen.getByRole("button", {name: "Record into Pad A1"})).toBeTruthy();
@@ -103,9 +135,244 @@ test("a Sequence Pad stop request preserves the take in the trimming overlay", a
       onPhaseChange={(phase) => phases.push(phase)} />,
   );
   await screen.findByRole("button", {name: "Commit"});
-  expect(screen.getByRole("slider", {name: "Pad A1 Selection length"})
+  expect(screen.getByRole("slider", {name: /Pad A1 End/})
     .getAttribute("max")).toBe("240000");
   expect(phases).toContain("trimming");
+});
+
+test("a full-buffer selection exposes independently operable Start and End values", async () => {
+  const {makeController, instances} = createFactory();
+  renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(96_000).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+
+  const start = await screen.findByRole("slider", {name: "Pad A1 Start — 0.000 s"});
+  const end = screen.getByRole("slider", {name: "Pad A1 End — 2.000 s"});
+  expect((start as HTMLInputElement).value).toBe("0");
+  expect(start.getAttribute("max")).toBe("95999");
+  expect((end as HTMLInputElement).value).toBe("96000");
+  expect(end.getAttribute("min")).toBe("1");
+  expect(screen.getByLabelText("Pad A1 Duration").textContent).toBe("2.000 s");
+});
+
+test("Start and End grips shrink an initial full selection and commit exact frame values", async () => {
+  const {makeController, instances} = createFactory();
+  const onCommit = vi.fn(
+    async (_buffer: CaptureBuffer, _selection: {startFrame: number; frameCount: number}) =>
+      ({kind: "committed"}) as const,
+  );
+  const {container} = renderPanel({makeController, onCommit});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(8).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+  mockTrimRect(container);
+
+  const startGrip = captureGrip(container, "start");
+  fireEvent.pointerDown(startGrip, {pointerId: 1, clientX: 0, button: 0});
+  fireEvent.pointerMove(startGrip, {pointerId: 1, clientX: 100});
+  fireEvent.pointerUp(startGrip, {pointerId: 1});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("2");
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("8");
+
+  const endGrip = captureGrip(container, "end");
+  fireEvent.pointerDown(endGrip, {pointerId: 2, clientX: 400, button: 0});
+  fireEvent.pointerMove(endGrip, {pointerId: 2, clientX: 300});
+  fireEvent.pointerUp(endGrip, {pointerId: 2});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("2");
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("6");
+
+  await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
+  await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(1));
+  expect(onCommit.mock.calls[0]![1]).toEqual({startFrame: 2, frameCount: 4});
+});
+
+test("releasing outside a Capture grip ends the pointer drag", async () => {
+  const {makeController, instances} = createFactory();
+  const {container} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(8).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+  mockTrimRect(container);
+
+  const startGrip = captureGrip(container, "start");
+  fireEvent.pointerDown(startGrip, {pointerId: 3, clientX: 0, button: 0});
+  fireEvent.pointerMove(startGrip, {pointerId: 3, clientX: 100});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("2");
+
+  fireEvent.pointerUp(window, {pointerId: 3});
+  fireEvent.pointerMove(startGrip, {pointerId: 3, clientX: 200});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("2");
+});
+
+test("pointer cancellation restores the Capture selection from before the drag", async () => {
+  const {makeController, instances} = createFactory();
+  const {container} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(8).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+  mockTrimRect(container);
+
+  const startGrip = captureGrip(container, "start");
+  fireEvent.pointerDown(startGrip, {pointerId: 4, clientX: 0, button: 0});
+  fireEvent.pointerMove(startGrip, {pointerId: 4, clientX: 100});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("2");
+
+  fireEvent.pointerCancel(window, {pointerId: 4});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("0");
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("8");
+});
+
+test("keyboard Start and End move by one frame or 10 ms, cancel, and never cross", async () => {
+  const {makeController, instances} = createFactory();
+  const {onClose} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(48_000).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+
+  let start = await screen.findByRole("slider", {name: /Pad A1 Start/});
+  fireEvent.keyDown(start, {key: "ArrowRight"});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("1");
+  start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  fireEvent.keyDown(start, {key: "Escape"});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("0");
+  expect(onClose).not.toHaveBeenCalled();
+
+  const end = screen.getByRole("slider", {name: /Pad A1 End/});
+  fireEvent.keyDown(end, {key: "ArrowLeft", shiftKey: true});
+  fireEvent.keyUp(screen.getByRole("slider", {name: /Pad A1 End/}), {key: "ArrowLeft"});
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("47520");
+  expect(screen.getByLabelText("Pad A1 Duration").textContent).toBe("0.990 s");
+
+  start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  fireEvent.change(start, {target: {value: "47519"}});
+  start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  fireEvent.keyDown(start, {key: "ArrowRight"});
+  fireEvent.keyUp(start, {key: "ArrowRight"});
+  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A1 End/}), {key: "ArrowLeft"});
+  fireEvent.keyUp(screen.getByRole("slider", {name: /Pad A1 End/}), {key: "ArrowLeft"});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("47519");
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("47520");
+});
+
+test("Escape cancels an active pointer trim without closing the Capture panel", async () => {
+  const {makeController, instances} = createFactory();
+  const {container, onClose} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(8).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+  mockTrimRect(container);
+
+  const startGrip = captureGrip(container, "start");
+  fireEvent.pointerDown(startGrip, {pointerId: 9, clientX: 0, button: 0});
+  fireEvent.pointerMove(startGrip, {pointerId: 9, clientX: 100});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("2");
+
+  fireEvent.keyDown(screen.getByRole("button", {name: "Commit"}), {key: "Escape"});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("0");
+  expect(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeTruthy();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+test("Capture grip presses preserve grab offset and the waveform middle stays inert", async () => {
+  const {makeController, instances} = createFactory();
+  const {container} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(8).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+  mockTrimRect(container);
+
+  const startGrip = captureGrip(container, "start");
+  fireEvent.pointerDown(startGrip, {pointerId: 5, clientX: 12, button: 0});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("0");
+  fireEvent.pointerMove(startGrip, {pointerId: 5, clientX: 175});
+  fireEvent.pointerUp(startGrip, {pointerId: 5});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("3");
+
+  const waveform = screen.getByRole("img", {name: "Pad A1 capture waveform"});
+  fireEvent.pointerDown(waveform, {pointerId: 6, clientX: 250, button: 0});
+  fireEvent.pointerMove(waveform, {pointerId: 6, clientX: 300});
+  fireEvent.pointerUp(window, {pointerId: 6});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("3");
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("8");
+});
+
+test("adjacent Capture endpoints partition grip zones at their midpoint", async () => {
+  const {makeController, instances} = createFactory();
+  const {container} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(8).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+  mockTrimRect(container);
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}), {
+    target: {value: "4"},
+  });
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 Start/}), {
+    target: {value: "3"},
+  });
+
+  const startGrip = captureGrip(container, "start");
+  const endGrip = captureGrip(container, "end");
+  expect(startGrip.style.right).toContain("min(43.75%");
+  expect(endGrip.style.left).toContain("max(43.75%");
+
+  fireEvent.pointerDown(startGrip, {pointerId: 7, clientX: 155, button: 0});
+  fireEvent.pointerMove(startGrip, {pointerId: 7, clientX: 105});
+  fireEvent.pointerUp(startGrip, {pointerId: 7});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("2");
+
+  fireEvent.pointerDown(endGrip, {pointerId: 8, clientX: 195, button: 0});
+  fireEvent.pointerMove(endGrip, {pointerId: 8, clientX: 245});
+  fireEvent.pointerUp(endGrip, {pointerId: 8});
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("5");
+});
+
+test("Capture trim styles anchor visible grips and keep range inputs out of the pointer path", async () => {
+  const {makeController, instances} = createFactory();
+  const {container} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(8).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+
+  const waveform = container.querySelector<HTMLElement>("[data-capture-trim-waveform]")!;
+  const mask = container.querySelector<HTMLElement>("[data-capture-selection-mask=before]")!;
+  const grip = container.querySelector<HTMLElement>("[data-capture-grip=start]")!;
+  const slider = screen.getByRole("slider", {name: /Pad A1 Start/});
+  expect(getComputedStyle(waveform).position).toBe("relative");
+  expect(getComputedStyle(waveform).overflow).toBe("visible");
+  expect(getComputedStyle(mask).position).toBe("absolute");
+  expect(getComputedStyle(grip).width).toBe("14px");
+  expect(getComputedStyle(captureGrip(container, "start")).cursor).toBe("ew-resize");
+  expect(getComputedStyle(slider).pointerEvents).toBe("none");
 });
 
 test("opens as a modal dialog and moves focus to the phase's primary action (P2-D1/P2-D2)", () => {
@@ -365,42 +632,46 @@ test("controller onEnded maps to a device-lost stop (behavior 3)", async () => {
   )).toBeTruthy();
 });
 
-test("trimming clamps the selection sliders to the queried effective quota", async () => {
+test("trimming clamps the End handle to the queried effective quota", async () => {
   const {makeController, instances} = createFactory();
   renderPanel({makeController});
   const {listener} = await startRecording(instances);
   act(() => listener.onBatch([new Float32Array(480_000).fill(0.2)], 0.2));
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
 
-  const length = await screen.findByRole("slider", {name: "Pad A1 Selection length"});
-  expect((length as HTMLInputElement).value).toBe("240000");
-  expect(length.getAttribute("max")).toBe("240000");
+  const end = await screen.findByRole("slider", {name: /Pad A1 End/});
+  expect((end as HTMLInputElement).value).toBe("240000");
+  expect(end.getAttribute("max")).toBe("240000");
 
-  fireEvent.change(length, {target: {value: "300000"}});
-  expect((length as HTMLInputElement).value).toBe("240000");
+  fireEvent.change(end, {target: {value: "300000"}});
+  expect((end as HTMLInputElement).value).toBe("240000");
 });
 
-test("waveform paints the complete recording then zooms and repaints with the selection", async () => {
+test("trimming keeps the complete waveform visible and dims outside the selection", async () => {
   const envelopeSpy = vi.spyOn(CaptureBuffer.prototype, "envelope");
   const {makeController, instances} = createFactory();
-  renderPanel({makeController});
+  const {container} = renderPanel({makeController});
   const {listener} = await startRecording(instances);
 
   act(() => listener.onBatch([new Float32Array(480_000).fill(0.2)], 0.2));
   await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 480_000));
 
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
-  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 240_000));
+  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 480_000));
+  const before = container.querySelector<HTMLElement>("[data-capture-selection-mask=before]")!;
+  const after = container.querySelector<HTMLElement>("[data-capture-selection-mask=after]")!;
+  expect(before.style.width).toBe("0%");
+  expect(after.style.left).toBe("50%");
 
-  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection start"}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 Start/}), {
     target: {value: "120000"},
   });
-  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 120_000, 240_000));
-
-  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection length"}), {
-    target: {value: "96000"},
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}), {
+    target: {value: "192000"},
   });
-  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 120_000, 96_000));
+  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 480_000));
+  expect(before.style.width).toBe("25%");
+  expect(after.style.left).toBe("40%");
   envelopeSpy.mockRestore();
 });
 
@@ -422,17 +693,17 @@ test("Crop to selection mutates the same buffer, rebases PCM, and resets the vie
 
     const cropButton = await screen.findByRole("button", {name: "Crop to selection"});
     expect((cropButton as HTMLButtonElement).disabled).toBe(true);
-    const lengthSlider = screen.getByRole("slider", {name: "Pad A1 Selection length"});
-    const startSlider = screen.getByRole("slider", {name: "Pad A1 Selection start"});
-    fireEvent.change(lengthSlider, {target: {value: "4"}});
+    const startSlider = screen.getByRole("slider", {name: /Pad A1 Start/});
     fireEvent.change(startSlider, {target: {value: "2"}});
+    const endSlider = screen.getByRole("slider", {name: /Pad A1 End/});
+    fireEvent.change(endSlider, {target: {value: "6"}});
     expect((cropButton as HTMLButtonElement).disabled).toBe(false);
 
     await userEvent.setup().click(cropButton);
 
     await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 4));
     expect((startSlider as HTMLInputElement).value).toBe("0");
-    expect((lengthSlider as HTMLInputElement).value).toBe("4");
+    expect((endSlider as HTMLInputElement).value).toBe("4");
     expect((cropButton as HTMLButtonElement).disabled).toBe(true);
 
     await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
@@ -465,17 +736,17 @@ test("Crop clears a commit error and remains available for another edit", async 
   await userEvent.setup().click(await screen.findByRole("button", {name: "Commit"}));
   expect((await screen.findByRole("alert")).textContent).toBe("Pad slot changed");
 
-  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection length"}), {
-    target: {value: "4"},
-  });
-  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection start"}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 Start/}), {
     target: {value: "2"},
+  });
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}), {
+    target: {value: "6"},
   });
   await userEvent.setup().click(screen.getByRole("button", {name: "Crop to selection"}));
 
   expect(screen.queryByRole("alert")).toBeNull();
-  const lengthSlider = screen.getByRole("slider", {name: "Pad A1 Selection length"});
-  fireEvent.change(lengthSlider, {target: {value: "2"}});
+  const endSlider = screen.getByRole("slider", {name: /Pad A1 End/});
+  fireEvent.change(endSlider, {target: {value: "2"}});
   const secondCrop = screen.getByRole("button", {name: "Crop to selection"});
   expect((secondCrop as HTMLButtonElement).disabled).toBe(false);
   await userEvent.setup().click(secondCrop);
@@ -535,7 +806,7 @@ test("a conflict result renders a retry affordance with the buffer intact (behav
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toBe("Pad slot changed");
   expect(screen.getByRole("button", {name: "Commit"})).toBeTruthy();
-  expect(screen.getByRole("slider", {name: "Pad A1 Selection length"})).toBeTruthy();
+  expect(screen.getByRole("slider", {name: /Pad A1 End/})).toBeTruthy();
 
   // Retry keeps the same buffer instance — nothing was discarded.
   await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
@@ -567,7 +838,7 @@ test("a digitally silent take is refused at Commit with an explanation, and the 
   // Discard still clears the take so the operator can re-record.
   await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
   expect(onCommit).not.toHaveBeenCalled();
-  expect(screen.getByRole("slider", {name: "Pad A1 Selection length"})).toBeTruthy();
+  expect(screen.getByRole("slider", {name: /Pad A1 End/})).toBeTruthy();
   await userEvent.setup().click(screen.getByRole("button", {name: "Discard"}));
   expect(await screen.findByRole("button", {name: "Record into Pad A1"})).toBeTruthy();
 });
@@ -604,11 +875,11 @@ test("the silence gate reads the whole take, not the current selection (F4)", as
   act(() => listener.onBatch([new Float32Array(48_000)], 0));
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
 
-  fireEvent.change(await screen.findByRole("slider", {name: "Pad A1 Selection length"}), {
+  fireEvent.change(await screen.findByRole("slider", {name: /Pad A1 Start/}), {
     target: {value: "48000"},
   });
-  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection start"}), {
-    target: {value: "48000"},
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}), {
+    target: {value: "96000"},
   });
 
   await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
@@ -680,11 +951,11 @@ test("the waveform canvas repaints after remounting from committing into commit-
   act(() => listener.onBatch([new Float32Array(96_000).fill(0.4)], 0.4));
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
   await screen.findByRole("button", {name: "Commit"});
-  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection length"}), {
-    target: {value: "48000"},
-  });
-  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection start"}), {
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 Start/}), {
     target: {value: "24000"},
+  });
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}), {
+    target: {value: "72000"},
   });
 
   // Baseline: the trimming canvas has painted at least once already.
@@ -704,7 +975,7 @@ test("the waveform canvas repaints after remounting from committing into commit-
   await screen.findByRole("alert");
 
   expect(fillRectSpy).toHaveBeenCalled();
-  expect(envelopeSpy).toHaveBeenLastCalledWith(400, 24_000, 48_000);
+  expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 96_000);
   envelopeSpy.mockRestore();
 });
 

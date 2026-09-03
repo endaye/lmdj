@@ -39,7 +39,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host `2.1.1` 已进入 Product Build `1.0.41.0` Assembly，并只依赖 Web Runtime Platform `2.0.1`。Creator 支持 WAV、MP3、M4A/AAC 与 FLAC 的内容嗅探摄入，在 48 kHz `OfflineAudioContext` 中把长源解码到 Wasm 外的单一 Host 缓冲，随后提供波形、试听、revision-bound 配额显示和选区提交。提交选区时 1 MiB 只作为单 chunk 上限，选区 WAV 总量仍由已验证 manifest 上限约束；非 quota 协议诊断会在 operation boundary 被收敛为空 details，不再击穿 reducer，Bank/Project quota details 仍严格校验。既有 Sequence Surface、Sample Editor、Pad Capture、pre-commit Crop、输入电平门与可恢复 `DUPLICATE_ID` 行为继续保留。
+<StatusBadge status="implemented" /> Creator Web Host `2.1.1` 已进入 Product Build `1.0.41.0` Assembly，并只依赖 Web Runtime Platform `2.0.1`。Creator 支持 WAV、MP3、M4A/AAC 与 FLAC 的内容嗅探摄入，在 48 kHz `OfflineAudioContext` 中把长源解码到 Wasm 外的单一 Host 缓冲，随后提供波形、试听、revision-bound 配额显示和选区提交。Capture 在完整波形上直接显示可独立移动的 Start/End grips，遮暗选区外区域，并以秒显示只读 Duration；内部与提交边界仍使用 `selectionStart + selectionFrames`。提交选区时 1 MiB 只作为单 chunk 上限，选区 WAV 总量仍由已验证 manifest 上限约束；非 quota 协议诊断会在 operation boundary 被收敛为空 details，不再击穿 reducer，Bank/Project quota details 仍严格校验。既有 Sequence Surface、Sample Editor、Pad Capture、pre-commit Crop、输入电平门与可恢复 `DUPLICATE_ID` 行为继续保留。
 
 ## 创作边界
 
@@ -90,7 +90,7 @@ Creator workflow 源码使用 `creator-canary` Environment 与 `NETLIFY_CREATOR_
 
 ## 自动化证据
 
-Vitest 覆盖长素材容器嗅探、pre/post-decode boundary、单一缓冲、配额选区/拒绝保留，以及 Sequence stopped/recording/switch-pending/flushing/recovery/trim-overlay 状态、边界后的 active authority 校验、统一输入、Capture 互操作与 privacy-safe acceptance report；A9 的七个物理 fixture 由仓库脚本可复现并记录 SHA-256。packaged Playwright 使用真实 Facade 验证组合旅程；armed-Pad journey 在 Capture commit 前录 A2、以 armed A1 stop（不入 journal）、commit 后再录 A1，随后 Stop、reload/reopen 并检查 exact event delta/order/count、revision、Pad/Asset 以及 WAV media type/SHA-256/byte length Project Truth。Core fault journey另覆盖 pre-publication prepare failure 后的 Discard/disarm、continued flush/Stop 与 restart。自动化不替代 #359 的 macOS/iPadOS Safari 内存证据或物理 MIDI/Touch/音频验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
+Vitest 覆盖长素材容器嗅探、pre/post-decode boundary、单一缓冲、配额选区/拒绝保留，以及 Sequence stopped/recording/switch-pending/flushing/recovery/trim-overlay 状态、边界后的 active authority 校验、统一输入、Capture 互操作与 privacy-safe acceptance report；Capture 单测另固定 full-buffer 初态、两端点独立操作、midpoint 命中区、grab offset、middle inert、越界/交叉限制、键盘/辅助技术秒值、Escape/cancel 回滚和精确 commit frame range。A9 的七个物理 fixture 由仓库脚本可复现并记录 SHA-256。packaged Playwright 使用真实 Facade 验证组合旅程，并在完整 Capture 波形上移动 Start/End 后核对提交 artifact 的精确 byte length；armed-Pad journey 在 Capture commit 前录 A2、以 armed A1 stop（不入 journal）、commit 后再录 A1，随后 Stop、reload/reopen 并检查 exact event delta/order/count、revision、Pad/Asset 以及 WAV media type/SHA-256/byte length Project Truth。Core fault journey另覆盖 pre-publication prepare failure 后的 Discard/disarm、continued flush/Stop 与 restart。自动化不替代真实 Safari、物理 MIDI/Touch 或音频验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
 
 自动化结论本身不是物理验收；M3 的 Chrome Pointer 与 M8 的 Safari Pointer/听感 `PASS` 均来自上述实体记录。Safari capture M7 已在 `1.0.41.0` 实体测试中失败并由 #625 阻塞；其他通过项不替代其完整重跑、Stage 9 Safari Sequence、Chrome MIDI 或 iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 

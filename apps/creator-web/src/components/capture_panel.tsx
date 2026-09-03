@@ -31,6 +31,25 @@ const SILENT_TAKE_MESSAGE =
 const DEVICE_CHANGE_NOTICE =
   "The system's input devices changed during this recording.";
 
+interface CaptureGripDrag {
+  kind: "start" | "end";
+  pointerId: number;
+  grabOffset: number;
+  baseStart: number;
+  baseFrames: number;
+}
+
+function gripZoneStyle(handlePct: number, boundaryPct: number, isStart: boolean) {
+  return {
+    left: isStart
+      ? `max(0px, calc(${handlePct}% - 12px))`
+      : `max(${boundaryPct}%, calc(${handlePct}% - 12px))`,
+    right: isStart
+      ? `calc(100% - min(${boundaryPct}%, calc(${handlePct}% + 12px)))`
+      : `max(0px, calc(100% - ${handlePct}% - 12px))`,
+  };
+}
+
 export interface CapturePanelProps {
   padLabel: string;
   onCommit(
@@ -67,6 +86,10 @@ function secondsLabel(frames: number): string {
   return `${(frames / CAPTURE_SAMPLE_RATE).toFixed(1)} s`;
 }
 
+function trimSecondsLabel(frames: number): string {
+  return `${(frames / CAPTURE_SAMPLE_RATE).toFixed(3)} s`;
+}
+
 export function CapturePanel({
   padLabel,
   onCommit,
@@ -89,6 +112,9 @@ export function CapturePanel({
   const recordingRef = useRef(false);
   const controllerRef = useRef<CaptureController | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const trimWaveformRef = useRef<HTMLDivElement | null>(null);
+  const gripDragRef = useRef<CaptureGripDrag | null>(null);
+  const keyboardSelectionRef = useRef<{start: number; frames: number} | null>(null);
   // The current phase's primary action (idle/permission-error: Record;
   // recording: Stop; trimming/commit-error: Commit) and the dialog element
   // itself, which is the focus fallback for phases with no primary action
@@ -129,11 +155,50 @@ export function CapturePanel({
   // unmounts must be stopped exactly once, even if that happens mid-recording.
   useEffect(() => () => {
     recordingRef.current = false;
+    gripDragRef.current = null;
+    keyboardSelectionRef.current = null;
     const controller = controllerRef.current;
     controllerRef.current = null;
     if (controller !== null) {
       void controller.stop().catch(() => {});
     }
+  }, []);
+
+  useEffect(() => {
+    const finish = (event: PointerEvent) => {
+      if (gripDragRef.current?.pointerId === event.pointerId) {
+        gripDragRef.current = null;
+      }
+    };
+    const cancel = (event: PointerEvent) => {
+      const drag = gripDragRef.current;
+      if (drag?.pointerId !== event.pointerId) return;
+      gripDragRef.current = null;
+      dispatch({kind: "select", start: drag.baseStart, frames: drag.baseFrames});
+    };
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const keyboardBase = keyboardSelectionRef.current;
+      const pointerBase = gripDragRef.current;
+      if (keyboardBase === null && pointerBase === null) return;
+      const start = keyboardBase?.start ?? pointerBase!.baseStart;
+      const frames = keyboardBase?.frames ?? pointerBase!.baseFrames;
+      keyboardSelectionRef.current = null;
+      gripDragRef.current = null;
+      dispatch({kind: "select", start, frames});
+      // ModalDialog owns Escape only when no trim gesture is active. Capture
+      // here so gesture cancellation cannot bubble into closing the session.
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", cancelOnEscape, true);
+    return () => {
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", cancelOnEscape, true);
+    };
   }, []);
 
   // S8B-D5: blur/hidden only stop an in-progress recording, and the listeners
@@ -191,8 +256,9 @@ export function CapturePanel({
 
   // Paint the growing waveform straight from the capture buffer ref; the
   // buffer itself never lives in React state (S8B design note #4). Recording
-  // shows the complete take, while trimming and commit retry zoom the current
-  // selection at the same fixed canvas resolution (CR-D2).
+  // and trimming both show the complete take. The trim overlay below provides
+  // selection context by dimming the excluded interval; repainting a zoomed
+  // selection would hide the very endpoints the operator needs to move.
   //
   // The canvas element is unmounted during "committing" (which renders only a
   // status paragraph) and remounted in "commit-error" (and again on the
@@ -208,10 +274,7 @@ export function CapturePanel({
     if (canvas === null || buffer === null || buffer.frameCount === 0) return;
     const ctx = canvas.getContext("2d");
     if (ctx === null) return;
-    const selectionView = state.phase === "trimming" || state.phase === "commit-error";
-    const startFrame = selectionView ? state.selectionStart : 0;
-    const frameCount = selectionView ? state.selectionFrames : buffer.frameCount;
-    const bins = buffer.envelope(WAVEFORM_BINS, startFrame, frameCount);
+    const bins = buffer.envelope(WAVEFORM_BINS, 0, buffer.frameCount);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const mid = canvas.height / 2;
     for (let i = 0; i < bins.length; i += 1) {
@@ -223,8 +286,6 @@ export function CapturePanel({
     state.phase,
     state.frameCount,
     state.peak,
-    state.selectionStart,
-    state.selectionFrames,
   ]);
 
   const handleRecord = async () => {
@@ -291,17 +352,131 @@ export function CapturePanel({
     onClose();
   };
 
-  // The reducer is the single source of truth for what a selection may be
-  // (revision-bound effective quota, in-range); the sliders below only need correct
-  // min/max attributes so the browser's own range-input clamp never lets the
-  // user pick an out-of-range value in the first place (mirrors
-  // waveform_editor.tsx's start/end handle bounds).
+  const selectionEnd = state.selectionStart + state.selectionFrames;
+  const maximumSelectionEnd = Math.min(
+    state.frameCount,
+    state.selectionStart + state.selectionLimitFrames,
+  );
+
+  // Capture truth remains start + frame count. End exists only at this UI
+  // boundary: moving Start keeps End fixed, while moving End derives the new
+  // frame count. The reducer remains the final authority on the quota and
+  // captured-buffer bounds.
   const handleSelectStart = (start: number) => {
-    dispatch({kind: "select", start: Math.round(start), frames: state.selectionFrames});
+    const nextStart = Math.round(start);
+    dispatch({kind: "select", start: nextStart, frames: selectionEnd - nextStart});
   };
 
-  const handleSelectFrames = (frames: number) => {
-    dispatch({kind: "select", start: state.selectionStart, frames: Math.round(frames)});
+  const handleSelectEnd = (end: number) => {
+    dispatch({
+      kind: "select",
+      start: state.selectionStart,
+      frames: Math.round(end) - state.selectionStart,
+    });
+  };
+
+  const handleTrimKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>,
+    kind: "start" | "end",
+  ) => {
+    if (event.key === "Escape") {
+      const keyboardBase = keyboardSelectionRef.current;
+      const pointerBase = gripDragRef.current;
+      if (keyboardBase !== null) {
+        dispatch({kind: "select", start: keyboardBase.start, frames: keyboardBase.frames});
+      } else if (pointerBase !== null) {
+        dispatch({
+          kind: "select",
+          start: pointerBase.baseStart,
+          frames: pointerBase.baseFrames,
+        });
+      }
+      keyboardSelectionRef.current = null;
+      gripDragRef.current = null;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    if (keyboardSelectionRef.current === null) {
+      keyboardSelectionRef.current = {
+        start: state.selectionStart,
+        frames: state.selectionFrames,
+      };
+    }
+    const increment = event.shiftKey ? Math.round(CAPTURE_SAMPLE_RATE / 100) : 1;
+    const direction = event.key === "ArrowLeft" ? -1 : 1;
+    if (kind === "start") {
+      handleSelectStart(Math.min(
+        selectionEnd - 1,
+        Math.max(0, state.selectionStart + direction * increment),
+      ));
+    } else {
+      handleSelectEnd(Math.min(
+        maximumSelectionEnd,
+        Math.max(state.selectionStart + 1, selectionEnd + direction * increment),
+      ));
+    }
+  };
+
+  const handleTrimKeyUp = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      keyboardSelectionRef.current = null;
+    }
+  };
+
+  const frameAtClientX = (clientX: number): number => {
+    const rect = trimWaveformRef.current?.getBoundingClientRect();
+    if (rect === undefined || rect.width <= 0 || state.frameCount <= 0) {
+      return Number.NaN;
+    }
+    return (clientX - rect.left) / rect.width * state.frameCount;
+  };
+
+  const handleGripPointerDown = (
+    event: React.PointerEvent<HTMLElement>,
+    kind: "start" | "end",
+  ) => {
+    if (event.button !== 0) return;
+    const pointerFrame = frameAtClientX(event.clientX);
+    if (!Number.isFinite(pointerFrame)) return;
+    event.preventDefault();
+    const handleFrame = kind === "start" ? state.selectionStart : selectionEnd;
+    gripDragRef.current = {
+      kind,
+      pointerId: event.pointerId,
+      grabOffset: handleFrame - pointerFrame,
+      baseStart: state.selectionStart,
+      baseFrames: state.selectionFrames,
+    };
+    if (typeof event.currentTarget.setPointerCapture === "function") {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // A release on the grip remains available when pointer capture fails.
+      }
+    }
+  };
+
+  const handleGripPointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = gripDragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    const requestedFrame = Math.round(frameAtClientX(event.clientX) + drag.grabOffset);
+    if (drag.kind === "start") {
+      handleSelectStart(Math.min(selectionEnd - 1, Math.max(0, requestedFrame)));
+    } else {
+      handleSelectEnd(Math.min(
+        maximumSelectionEnd,
+        Math.max(state.selectionStart + 1, requestedFrame),
+      ));
+    }
+  };
+
+  const finishGripDrag = (event: React.PointerEvent<HTMLElement>) => {
+    if (gripDragRef.current?.pointerId === event.pointerId) {
+      gripDragRef.current = null;
+    }
   };
 
   const handleDiscard = () => {
@@ -350,7 +525,7 @@ export function CapturePanel({
   // Three fixed regions — header, a fixed-height waveform/meter view that is
   // always rendered, and a bottom action row — so entering "recording" only
   // swaps region contents and "Stop" sits exactly where "Record into Pad N"
-  // was. Phase details (messages, selection sliders) scroll inside the
+  // was. Phase details (messages, selection values) scroll inside the
   // content region under the view.
   const renderView = () => {
     switch (state.phase) {
@@ -375,20 +550,86 @@ export function CapturePanel({
           </>
         );
       case "trimming":
-      case "commit-error":
+      case "commit-error": {
+        const startPct = state.selectionStart / state.frameCount * 100;
+        const endPct = selectionEnd / state.frameCount * 100;
+        const midpointPct = (startPct + endPct) / 2;
         return (
           <>
             <p>{secondsLabel(state.frameCount)} captured</p>
-            <canvas
-              ref={canvasRef}
-              role="img"
-              aria-label={`${padLabel} capture waveform`}
-              data-frame-count={state.frameCount}
-              width={WAVEFORM_BINS}
-              height={WAVEFORM_HEIGHT}
-            />
+            <div
+              ref={trimWaveformRef}
+              className="capture-trim-waveform"
+              data-capture-trim-waveform
+            >
+              <canvas
+                ref={canvasRef}
+                role="img"
+                aria-label={`${padLabel} capture waveform`}
+                data-frame-count={state.frameCount}
+                width={WAVEFORM_BINS}
+                height={WAVEFORM_HEIGHT}
+              />
+              <span className="capture-selection-mask capture-selection-before"
+                data-capture-selection-mask="before"
+                aria-hidden="true" style={{width: `${startPct}%`}} />
+              <span className="capture-selection-mask capture-selection-after"
+                data-capture-selection-mask="after"
+                aria-hidden="true" style={{left: `${endPct}%`}} />
+              <span
+                className="waveform-grip-zone"
+                data-capture-grip-zone="start"
+                aria-hidden="true"
+                style={gripZoneStyle(startPct, midpointPct, true)}
+                onPointerDown={(event) => handleGripPointerDown(event, "start")}
+                onPointerMove={handleGripPointerMove}
+                onPointerUp={finishGripDrag}
+              />
+              <span className="waveform-grip-bar" data-capture-grip="start"
+                aria-hidden="true" style={{left: `calc(${startPct}% - 7px)`}} />
+              <span
+                className="waveform-grip-zone"
+                data-capture-grip-zone="end"
+                aria-hidden="true"
+                style={gripZoneStyle(endPct, midpointPct, false)}
+                onPointerDown={(event) => handleGripPointerDown(event, "end")}
+                onPointerMove={handleGripPointerMove}
+                onPointerUp={finishGripDrag}
+              />
+              <span className="waveform-grip-bar" data-capture-grip="end"
+                aria-hidden="true" style={{left: `calc(${endPct}% - 7px)`}} />
+              <input
+                className="waveform-handle"
+                type="range"
+                min={0}
+                max={Math.max(0, selectionEnd - 1)}
+                step={1}
+                value={state.selectionStart}
+                aria-label={`${padLabel} Start — ${trimSecondsLabel(state.selectionStart)}`}
+                style={{left: `calc(${startPct}% - 22px)`}}
+                onChange={(event) =>
+                  handleSelectStart(event.currentTarget.valueAsNumber)}
+                onKeyDown={(event) => handleTrimKeyDown(event, "start")}
+                onKeyUp={handleTrimKeyUp}
+              />
+              <input
+                className="waveform-handle"
+                type="range"
+                min={state.selectionStart + 1}
+                max={Math.max(state.selectionStart + 1, maximumSelectionEnd)}
+                step={1}
+                value={selectionEnd}
+                aria-label={`${padLabel} End — ${trimSecondsLabel(selectionEnd)}`}
+                style={{left: `calc(${endPct}% - 22px)`}}
+                onChange={(event) =>
+                  handleSelectEnd(event.currentTarget.valueAsNumber)}
+                onKeyDown={(event) => handleTrimKeyDown(event, "end")}
+                onKeyUp={handleTrimKeyUp}
+              />
+            </div>
           </>
         );
+      }
       case "requesting-permission":
         return <p role="status">Requesting microphone access…</p>;
       case "committing":
@@ -420,10 +661,6 @@ export function CapturePanel({
         );
       case "trimming":
       case "commit-error": {
-        const maxSelectionFrames = Math.min(
-          state.selectionLimitFrames,
-          state.frameCount - state.selectionStart,
-        );
         return (
           <>
             <p>Input: {inputLabelText}</p>
@@ -434,32 +671,17 @@ export function CapturePanel({
             {state.phase === "commit-error" && (
               <p role="alert">{state.errorMessage}</p>
             )}
-            <label>
-              <span>Selection start</span>
-              <input
-                type="range"
-                min={0}
-                max={Math.max(0, state.frameCount - state.selectionFrames)}
-                step={1}
-                value={state.selectionStart}
-                aria-label={`${padLabel} Selection start`}
-                onChange={(event) =>
-                  handleSelectStart(event.currentTarget.valueAsNumber)}
-              />
-            </label>
-            <label>
-              <span>Selection length</span>
-              <input
-                type="range"
-                min={1}
-                max={Math.max(1, maxSelectionFrames)}
-                step={1}
-                value={state.selectionFrames}
-                aria-label={`${padLabel} Selection length`}
-                onChange={(event) =>
-                  handleSelectFrames(event.currentTarget.valueAsNumber)}
-              />
-            </label>
+            <div className="capture-trim-values" aria-label={`${padLabel} selection times`}>
+              <span>Start<output aria-label={`${padLabel} Start value`}>
+                {trimSecondsLabel(state.selectionStart)}
+              </output></span>
+              <span>End<output aria-label={`${padLabel} End value`}>
+                {trimSecondsLabel(selectionEnd)}
+              </output></span>
+              <span>Duration<output aria-label={`${padLabel} Duration`}>
+                {trimSecondsLabel(state.selectionFrames)}
+              </output></span>
+            </div>
           </>
         );
       }

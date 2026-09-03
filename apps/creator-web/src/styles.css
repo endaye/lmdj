@@ -317,6 +317,36 @@ button:disabled { color: #737b87; }
 }
 .capture-panel-view p { margin: 0; }
 .capture-panel-view canvas { width: 100%; height: 6rem; }
+.capture-trim-waveform {
+  position: relative;
+  height: 6rem;
+  overflow: visible;
+  border-radius: .45rem;
+  background: #0b0d10;
+}
+.capture-trim-waveform canvas { display: block; height: 100%; border-radius: inherit; }
+.capture-selection-mask {
+  position: absolute;
+  inset-block: 0;
+  background: rgb(3 5 8 / 62%);
+  pointer-events: none;
+}
+.capture-selection-before { left: 0; }
+.capture-selection-after { right: 0; }
+.capture-trim-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .65rem;
+}
+.capture-trim-values > span {
+  display: grid;
+  gap: .2rem;
+  color: #9da6b4;
+}
+.capture-trim-values output {
+  color: #f4f5f7;
+  font-variant-numeric: tabular-nums;
+}
 .capture-panel-view-placeholder { color: #9da6b4; text-align: center; }
 .capture-panel-actions { flex: none; display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; justify-content: flex-end; }
 .long-source-content {
