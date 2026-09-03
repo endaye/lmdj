@@ -1,0 +1,30 @@
+{"utterance": "make a new project at 128 bpm", "expect_tool": "lmdj.project.create", "expect_args": {"bpm": 128}}
+{"utterance": "start a fresh project, tempo one hundred and forty", "expect_tool": "lmdj.project.create", "expect_args": {"bpm": 140}}
+{"utterance": "what's in the project right now?", "expect_tool": "lmdj.project.inspect"}
+{"utterance": "show me the current project state", "expect_tool": "lmdj.project.inspect"}
+{"utterance": "what sample is on bank 1 pad 4?", "expect_tool": "lmdj.sample.inspect", "expect_args": {"slot": {"bank": 1, "pad": 4}}}
+{"utterance": "tell me what's loaded on pad 9", "expect_tool": "lmdj.sample.inspect", "expect_args": {"slot": {"pad": 9}}}
+{"utterance": "mute pad 3", "expect_tool": "lmdj.sample.update_pad", "expect_args": {"slot": {"pad": 3}}}
+{"utterance": "set pad 2 to loop toggle", "expect_tool": "lmdj.sample.update_pad", "expect_args": {"slot": {"pad": 2}}}
+{"utterance": "put pad 12 back to its default settings", "expect_tool": "lmdj.sample.reset_pad", "expect_args": {"slot": {"pad": 12}}}
+{"utterance": "reset bank 2 pad 0", "expect_tool": "lmdj.sample.reset_pad", "expect_args": {"slot": {"bank": 2, "pad": 0}}}
+{"utterance": "make a four bar pattern", "expect_tool": "lmdj.pattern.create", "expect_args": {"bars": 4}}
+{"utterance": "create a new pattern, eight bars long", "expect_tool": "lmdj.pattern.create", "expect_args": {"bars": 8}}
+{"utterance": "start recording", "expect_tool": "lmdj.sequence.record.begin"}
+{"utterance": "begin a take", "expect_tool": "lmdj.sequence.record.begin"}
+{"utterance": "stop recording", "expect_tool": "lmdj.sequence.record.stop"}
+{"utterance": "that's enough, end the take", "expect_tool": "lmdj.sequence.record.stop"}
+{"utterance": "am I still recording?", "expect_tool": "lmdj.sequence.record.status"}
+{"utterance": "set the tempo to 96", "expect_tool": "lmdj.sequence.settings.update", "expect_args": {"bpm": 96}}
+{"utterance": "speed it up to 150 bpm", "expect_tool": "lmdj.sequence.settings.update", "expect_args": {"bpm": 150}}
+{"utterance": "turn quantize on", "expect_tool": "lmdj.sequence.settings.update", "expect_args": {"quantize_enabled": true}}
+{"utterance": "switch quantize off", "expect_tool": "lmdj.sequence.settings.update", "expect_args": {"quantize_enabled": false}}
+{"utterance": "give it 20 percent swing", "expect_tool": "lmdj.sequence.settings.update", "expect_args": {"swing_percent": 20}}
+{"utterance": "cook the snapshot", "expect_tool": "lmdj.snapshot.cook"}
+{"utterance": "bounce this pattern to a wav file", "expect_tool": "lmdj.render.offline"}
+{"utterance": "render it out to disk", "expect_tool": "lmdj.render.offline"}
+{"utterance": "which providers can I use?", "expect_tool": "lmdj.provider.list"}
+{"utterance": "list the available providers", "expect_tool": "lmdj.provider.list"}
+{"utterance": "who wrote this software?", "expect_tool": null}
+{"utterance": "what is the capital of Portugal?", "expect_tool": null}
+{"utterance": "thanks, that sounds great", "expect_tool": null}

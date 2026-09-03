@@ -22,5 +22,5 @@
   "system_memory_reserve_bytes": 4294967296,
   "cpu_load_max_ratio": 0.85,
   "io_pressure_max_pct": 40.0,
-  "core_job_names": ["core (ubuntu-latest)", "core-asan", "core-coverage", "Core package"]
+  "core_job_names": ["core (ubuntu-latest)", "core-asan", "core-coverage", "Core package", "Core benchmark", "core-stress", "core-tsan-self-hosted-probe"]
 }
