@@ -52,6 +52,8 @@ constexpr auto kPatternA = "72000000-0000-4000-8000-000000000002";
 constexpr auto kPatternB = "72000000-0000-4000-8000-000000000003";
 constexpr auto kPatternC = "72000000-0000-4000-8000-000000000004";
 constexpr auto kSession = "72000000-0000-4000-8000-000000000005";
+constexpr auto kFailedSession = "72000000-0000-4000-8000-000000000012";
+constexpr auto kAppliedSession = "72000000-0000-4000-8000-000000000013";
 constexpr auto kFirstRequest = "72000000-0000-4000-8000-000000000006";
 constexpr auto kSecondRequest = "72000000-0000-4000-8000-000000000007";
 constexpr auto kThirdRequest = "72000000-0000-4000-8000-000000000008";
@@ -103,7 +105,97 @@ void render(RealtimeEngine& engine, std::uint64_t frames) {
 
 std::vector<PatternLaunchOutcome> outcomes_for(
     lmdj::facade::EnginePerformanceAdapter& adapter) {
-  return adapter.launch_acknowledger->drain(SequenceSessionId{kSession});
+  const SequenceSessionId session{kSession};
+  const auto outcomes = adapter.launch_acknowledger->peek(session);
+  for (const auto& outcome : outcomes) {
+    LMDJ_CHECK(
+        adapter.launch_acknowledger->commit(session, outcome.request_id)
+            .has_value());
+  }
+  return outcomes;
+}
+
+void prepare_running_engine(RealtimeEngine& engine);
+
+void test_launch_outcomes_are_two_phase_ordered_and_session_isolated() {
+  RealtimeEngine engine;
+  prepare_running_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  adapter.clock->anchor(120, 0);
+  const SequenceSessionId cancelled_session{kSession};
+  const SequenceSessionId failed_session{kFailedSession};
+  const SequenceSessionId applied_session{kAppliedSession};
+
+  LMDJ_CHECK(adapter.launch_acknowledger
+                 ->reserve(cancelled_session, CommandId{kFirstRequest}, 1,
+                           kBarTick, snapshot(kPatternA))
+                 .has_value());
+  LMDJ_CHECK(adapter.launch_acknowledger
+                 ->reserve(cancelled_session, CommandId{kSecondRequest}, 2,
+                           kBarTick, snapshot(kPatternB))
+                 .has_value());
+  const auto failed = adapter.launch_acknowledger->reserve(
+      failed_session, CommandId{kThirdRequest}, 3,
+      std::numeric_limits<std::uint64_t>::max(), snapshot(kPatternC));
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK(adapter.launch_acknowledger
+                 ->reserve(applied_session, CommandId{kFourthRequest}, 4, 0,
+                           nullptr)
+                 .has_value());
+
+  render(engine, kBarFramesAt120Bpm + 1);
+  adapter.service();
+
+  const auto ordered = adapter.launch_acknowledger->peek(cancelled_session);
+  const auto repeated = adapter.launch_acknowledger->peek(cancelled_session);
+  LMDJ_CHECK(ordered.size() == 2);
+  LMDJ_CHECK(repeated.size() == ordered.size());
+  LMDJ_CHECK(ordered.at(0).request_id == CommandId{kFirstRequest});
+  LMDJ_CHECK(ordered.at(0).kind == PatternLaunchOutcomeKind::cancelled);
+  LMDJ_CHECK(ordered.at(1).request_id == CommandId{kSecondRequest});
+  LMDJ_CHECK(ordered.at(1).kind == PatternLaunchOutcomeKind::applied);
+  LMDJ_CHECK(repeated.at(0).request_id == ordered.at(0).request_id);
+  LMDJ_CHECK(repeated.at(1).request_id == ordered.at(1).request_id);
+
+  const auto failed_only = adapter.launch_acknowledger->peek(failed_session);
+  LMDJ_CHECK(failed_only.size() == 1);
+  LMDJ_CHECK(failed_only.front().request_id == CommandId{kThirdRequest});
+  LMDJ_CHECK(failed_only.front().kind == PatternLaunchOutcomeKind::failed);
+  const auto applied_only = adapter.launch_acknowledger->peek(applied_session);
+  LMDJ_CHECK(applied_only.size() == 1);
+  LMDJ_CHECK(applied_only.front().request_id == CommandId{kFourthRequest});
+  LMDJ_CHECK(applied_only.front().kind == PatternLaunchOutcomeKind::applied);
+
+  const auto out_of_order = adapter.launch_acknowledger->commit(
+      cancelled_session, CommandId{kSecondRequest});
+  LMDJ_CHECK(!out_of_order.has_value());
+  LMDJ_CHECK(out_of_order.error().code == ErrorCode::invalid_argument);
+  const auto cross_session = adapter.launch_acknowledger->commit(
+      failed_session, CommandId{kFourthRequest});
+  LMDJ_CHECK(!cross_session.has_value());
+  LMDJ_CHECK(adapter.launch_acknowledger->peek(cancelled_session).size() == 2);
+  LMDJ_CHECK(adapter.launch_acknowledger->peek(failed_session).size() == 1);
+  LMDJ_CHECK(adapter.launch_acknowledger->peek(applied_session).size() == 1);
+
+  LMDJ_CHECK(adapter.launch_acknowledger
+                 ->commit(cancelled_session, CommandId{kFirstRequest})
+                 .has_value());
+  LMDJ_CHECK(adapter.launch_acknowledger
+                 ->commit(cancelled_session, CommandId{kSecondRequest})
+                 .has_value());
+  LMDJ_CHECK(adapter.launch_acknowledger
+                 ->commit(failed_session, CommandId{kThirdRequest})
+                 .has_value());
+  LMDJ_CHECK(adapter.launch_acknowledger
+                 ->commit(applied_session, CommandId{kFourthRequest})
+                 .has_value());
+  LMDJ_CHECK(adapter.launch_acknowledger->peek(cancelled_session).empty());
+  LMDJ_CHECK(adapter.launch_acknowledger->peek(failed_session).empty());
+  LMDJ_CHECK(adapter.launch_acknowledger->peek(applied_session).empty());
+  LMDJ_CHECK(!adapter.launch_acknowledger
+                  ->commit(applied_session, CommandId{kFourthRequest})
+                  .has_value());
 }
 
 void prepare_running_engine(RealtimeEngine& engine) {
@@ -852,6 +944,7 @@ void test_explicit_stop_waits_for_neutral_reset_confirmation() {
 
 int main() {
   try {
+    test_launch_outcomes_are_two_phase_ordered_and_session_isolated();
     test_applied_boundary_and_clock_reanchor_are_exact();
     test_input_sequence_continues_after_the_seed();
     test_incomplete_pattern_gateway_is_rejected();

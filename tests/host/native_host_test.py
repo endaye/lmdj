@@ -376,6 +376,26 @@ def native_performance_adapter_wiring_contract() -> None:
     assert "make_engine_pattern_publication_gateway" in source
     assert "make_engine_performance_adapter" in source
     assert "performance_adapter_.service()" in source
+    assert "application_.service_performance()" in source
+    assert "performance_service_error_" in source
+    assert "service_command_boundary" in source
+    assert "service_periodic_control_tick" in source
+    runtime_service = source[
+        source.index("void service_runtime_locked()") : source.index(
+            "Result<void> service_application_locked()"
+        )
+    ]
+    assert "performance_adapter_.service()" in runtime_service
+    application_service = source[
+        source.index("Result<void> service_application_locked()") : source.index(
+            "Result<void> service_command_boundary()"
+        )
+    ]
+    assert "application_.service_performance()" in application_service
+    handle = source[source.index("Json handle(") : source.index("bool quitting()")]
+    assert "const bool query_operation" in handle
+    assert "if (!has_operation || query_operation)" in handle
+    assert "service_command_boundary()" in handle
     assert "bridge.performance_clock" not in source
     assert source.index("RealtimeEngine engine_;") < source.index(
         "EnginePerformanceAdapter performance_adapter_;"

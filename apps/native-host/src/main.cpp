@@ -525,16 +525,26 @@ class NativeHost final {
   }
 
   Json handle(const Json& request) {
-    drain_trigger_outcomes_once();
+    const auto operation = request.find("operation");
+    const bool has_operation =
+        operation != request.end() && operation->is_string();
+    const auto name = has_operation ? operation->get<std::string>() : "";
+    const bool query_operation = name == "sample.quota" || name == "status";
+    if (!has_operation || query_operation) {
+      service_runtime_once();
+    } else {
+      auto serviced = service_command_boundary();
+      if (!serviced.has_value()) {
+        return error_response(serviced.error());
+      }
+    }
     if (trigger_outcome_failed()) {
       return trigger_outcome_failure_response();
     }
     auto response = [&]() -> Json {
-      const auto operation = request.find("operation");
-      if (operation == request.end() || !operation->is_string()) {
+      if (!has_operation) {
         return invalid_request("operation must be a string");
       }
-      const auto name = operation->get<std::string>();
       if (name == "sample.quota") {
         return sample_quota(request);
       }
@@ -564,7 +574,7 @@ class NativeHost final {
       }
       return invalid_request("unknown Native Host operation");
     }();
-    drain_trigger_outcomes_once();
+    service_runtime_once();
     if (trigger_outcome_failed()) {
       return trigger_outcome_failure_response();
     }
@@ -575,7 +585,7 @@ class NativeHost final {
 
   void service_control_tick() {
     drive_no_device_once();
-    drain_trigger_outcomes_once();
+    service_periodic_control_tick();
   }
 
   bool terminal_audio_failure() const noexcept {
@@ -601,11 +611,39 @@ class NativeHost final {
     return application_.query(request);
   }
 
-  void drain_trigger_outcomes_once() {
-    std::lock_guard lock(facade_mutex_);
+  void service_runtime_locked() {
     performance_adapter_.service();
     std::array<RuntimeTriggerOutcomeEvent, 64> outcomes{};
     (void)engine_.drain_trigger_outcomes(outcomes);
+  }
+
+  Result<void> service_application_locked() {
+    auto serviced = application_.service_performance();
+    if (serviced.has_value()) {
+      performance_service_error_.reset();
+      return Result<void>::success();
+    }
+    if (!performance_service_error_.has_value()) {
+      performance_service_error_ = serviced.error();
+    }
+    return Result<void>::failure(*performance_service_error_);
+  }
+
+  Result<void> service_command_boundary() {
+    std::lock_guard lock(facade_mutex_);
+    service_runtime_locked();
+    return service_application_locked();
+  }
+
+  void service_periodic_control_tick() {
+    std::lock_guard lock(facade_mutex_);
+    service_runtime_locked();
+    static_cast<void>(service_application_locked());
+  }
+
+  void service_runtime_once() {
+    std::lock_guard lock(facade_mutex_);
+    service_runtime_locked();
   }
 
   bool trigger_outcome_failed() const noexcept {
@@ -1103,6 +1141,7 @@ class NativeHost final {
   lmdj::facade::EnginePerformanceAdapter performance_adapter_;
   Application application_;
   std::mutex facade_mutex_;
+  std::optional<Error> performance_service_error_;
   std::shared_ptr<const lmdj::cooker::RuntimeSnapshot> snapshot_;
   PatternId pattern_id_{"00000000-0000-4000-8000-000000000000"};
 #if defined(__APPLE__)

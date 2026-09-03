@@ -343,14 +343,17 @@ def complete_headless_journey(executable: Path, root: Path) -> None:
     responses.append(pending)
     assert check_success(pending)["pending_launch"]["target_tick"] == target_tick
     time.sleep(1.05)
+    journal_path = project / "recovery/active/performance.jsonl"
+    before_status = journal_path.read_bytes()
     acknowledged = request(
         "query",
         {"operation": "performance.record.status", "project_path": str(project)},
     )
     responses.append(acknowledged)
     status = check_success(acknowledged)
-    assert status["pending_launch"] is None
-    assert status["last_launch_ack"]["effective_tick"] == target_tick
+    assert status["pending_launch"]["target_tick"] == target_tick
+    assert status["last_launch_ack"] is None
+    assert journal_path.read_bytes() == before_status
 
     flushed = request(
         "command",
@@ -363,6 +366,14 @@ def complete_headless_journey(executable: Path, root: Path) -> None:
     )
     responses.append(flushed)
     assert check_success(flushed, 4)["committed_revision"] == 4
+    serviced = request(
+        "query",
+        {"operation": "performance.record.status", "project_path": str(project)},
+    )
+    responses.append(serviced)
+    serviced_status = check_success(serviced)
+    assert serviced_status["pending_launch"] is None
+    assert serviced_status["last_launch_ack"]["effective_tick"] == target_tick
     responses.append(
         request(
             "command",

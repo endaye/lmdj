@@ -76,7 +76,10 @@ public:
           std::uint64_t earliest_target_tick,
           std::shared_ptr<const cooker::RuntimeSnapshot> resolved_pattern) = 0;
   virtual std::vector<PatternLaunchOutcome>
-  drain(const foundation::SequenceSessionId &session_id) = 0;
+  peek(const foundation::SequenceSessionId &session_id) = 0;
+  virtual foundation::Result<void>
+  commit(const foundation::SequenceSessionId &session_id,
+         const foundation::CommandId &request_id) = 0;
   virtual void
   cancel(const foundation::SequenceSessionId &session_id) noexcept = 0;
 };
@@ -392,6 +395,7 @@ class Application {
   Application(Application&&) noexcept;
   Application& operator=(Application&&) noexcept;
 
+  foundation::Result<void> service_performance();
   nlohmann::json command(const nlohmann::json& request);
   nlohmann::json query(const nlohmann::json& request) const;
   foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>

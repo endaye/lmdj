@@ -5330,7 +5330,14 @@ struct Application::Impl {
           {},
           {},
           std::nullopt,
-          std::nullopt,
+          journal.value().last_launch_ack.has_value()
+              ? std::optional<PatternLaunchOutcome>{PatternLaunchOutcome{
+                    session_id,
+                    journal.value().last_launch_ack->request_id,
+                    journal.value().last_launch_ack->pattern_slot,
+                    journal.value().last_launch_ack->effective_tick,
+                    PatternLaunchOutcomeKind::applied}}
+              : std::nullopt,
           journal.value().transient_checkpoint.has_value()
               ? journal.value().transient_checkpoint->last_accepted_tick
               : 0,
@@ -5378,10 +5385,6 @@ struct Application::Impl {
           ErrorCode::invalid_argument,
           "Performance session requires recovery",
           {{"reason", "performance_tail_outcome_unknown"}}));
-    }
-    auto acknowledged = drain_performance_launches(path, found->second);
-    if (!acknowledged.has_value()) {
-      return error_envelope(acknowledged.error());
     }
     if (found->second.pending_events.empty()) {
       return error_envelope(
@@ -6018,7 +6021,14 @@ struct Application::Impl {
     return sequence_journals.append_performance_tail(
         path, runtime.session_id, runtime.performance_id,
         runtime.expected_revision, input_sequence, runtime.pending_events,
-        std::move(checkpoint));
+        std::move(checkpoint),
+        runtime.last_launch_ack.has_value()
+            ? std::optional<project_io::PerformanceLaunchAck>{
+                  project_io::PerformanceLaunchAck{
+                      runtime.last_launch_ack->request_id,
+                      runtime.last_launch_ack->pattern_slot,
+                      runtime.last_launch_ack->effective_tick}}
+            : std::nullopt);
   }
 
   static void canonicalize_performance_pending(PerformanceRuntime &runtime) {
@@ -6044,8 +6054,17 @@ struct Application::Impl {
     }
   }
 
+  static bool same_launch_ack(const PatternLaunchOutcome &left,
+                              const PatternLaunchOutcome &right) {
+    return left.session_id == right.session_id &&
+           left.request_id == right.request_id &&
+           left.pattern_slot == right.pattern_slot &&
+           left.effective_tick == right.effective_tick &&
+           left.kind == right.kind;
+  }
+
   foundation::Result<void>
-  drain_performance_launches(const std::filesystem::path &path,
+  service_performance_launch(const std::filesystem::path &path,
                              PerformanceRuntime &runtime) {
     if (runtime.recovery_required) {
       return foundation::Result<void>::failure(sequence_error(
@@ -6056,51 +6075,102 @@ struct Application::Impl {
     if (!pattern_launch_acknowledger) {
       return foundation::Result<void>::success();
     }
-    const auto outcomes =
-        pattern_launch_acknowledger->drain(runtime.session_id);
-    bool appended = false;
-    auto before = runtime;
-    for (const auto &outcome : outcomes) {
+    while (true) {
+      const auto outcomes =
+          pattern_launch_acknowledger->peek(runtime.session_id);
+      if (outcomes.empty()) {
+        return foundation::Result<void>::success();
+      }
+      const auto &outcome = outcomes.front();
       if (outcome.session_id != runtime.session_id) {
+        return foundation::Result<void>::failure(sequence_error(
+            ErrorCode::invalid_argument,
+            "Performance launch outcome belongs to another session",
+            {{"reason", "performance_launch_outcome_session_mismatch"},
+             {"remedy",
+              "retain the outcome and repair the acknowledger session queue before retrying service"}}));
+      }
+
+      if (outcome.kind != PatternLaunchOutcomeKind::applied) {
+        auto committed = pattern_launch_acknowledger->commit(
+            runtime.session_id, outcome.request_id);
+        if (!committed.has_value()) {
+          return committed;
+        }
+        if (runtime.pending_launch.has_value() &&
+            runtime.pending_launch->request_id == outcome.request_id) {
+          runtime.pending_launch.reset();
+        }
         continue;
       }
-      if (outcome.kind == PatternLaunchOutcomeKind::applied) {
-        runtime.pending_events.push_back(
-            domain::PerformanceEvent{domain::PatternLaunchPerformanceEvent{
-                outcome.pattern_slot, outcome.effective_tick}});
-        runtime.last_launch_ack = outcome;
-        appended = true;
+
+      if (runtime.last_launch_ack.has_value() &&
+          runtime.last_launch_ack->request_id == outcome.request_id) {
+        if (!same_launch_ack(*runtime.last_launch_ack, outcome)) {
+          return foundation::Result<void>::failure(sequence_error(
+              ErrorCode::invalid_argument,
+              "Performance launch acknowledgement conflicts with durable identity",
+              {{"reason", "performance_launch_ack_conflict"},
+               {"remedy",
+                "retain the journal and outcome; reconcile the exact request, slot and effective tick before retrying service"}}));
+        }
+        auto committed = pattern_launch_acknowledger->commit(
+            runtime.session_id, outcome.request_id);
+        if (!committed.has_value()) {
+          return committed;
+        }
+        if (runtime.pending_launch.has_value() &&
+            runtime.pending_launch->request_id == outcome.request_id) {
+          runtime.pending_launch.reset();
+        }
+        continue;
       }
+
+      if (!performance_input_sequencer) {
+        return foundation::Result<void>::failure(sequence_error(
+            ErrorCode::invalid_argument,
+            "Performance input sequencer is unavailable",
+            {{"reason", "performance_input_authority_unavailable"}}));
+      }
+      auto sequence = performance_input_sequencer->next();
+      if (!sequence.has_value()) {
+        return foundation::Result<void>::failure(sequence.error());
+      }
+      auto before = runtime;
+      runtime.pending_events.push_back(
+          domain::PerformanceEvent{domain::PatternLaunchPerformanceEvent{
+              outcome.pattern_slot, outcome.effective_tick}});
+      runtime.last_launch_ack = outcome;
       if (runtime.pending_launch.has_value() &&
           runtime.pending_launch->request_id == outcome.request_id) {
         runtime.pending_launch.reset();
       }
-    }
-    if (!appended) {
-      return foundation::Result<void>::success();
-    }
-    if (!performance_input_sequencer) {
-      runtime = std::move(before);
-      return foundation::Result<void>::failure(sequence_error(
-          ErrorCode::invalid_argument,
-          "Performance input sequencer is unavailable",
-          {{"reason", "performance_input_authority_unavailable"}}));
-    }
-    auto sequence = performance_input_sequencer->next();
-    if (!sequence.has_value()) {
-      runtime = std::move(before);
-      return foundation::Result<void>::failure(sequence.error());
-    }
-    canonicalize_performance_pending(runtime);
-    auto durable =
-        append_performance_runtime_tail(path, runtime, sequence.value());
-    if (!durable.has_value()) {
-      if (performance_tail_outcome_unknown(durable.error())) {
-        runtime.recovery_required = true;
-      } else {
+      canonicalize_performance_pending(runtime);
+      auto durable =
+          append_performance_runtime_tail(path, runtime, sequence.value());
+      if (!durable.has_value()) {
+        const auto outcome_unknown =
+            performance_tail_outcome_unknown(durable.error());
         runtime = std::move(before);
+        runtime.recovery_required = outcome_unknown;
+        return durable;
       }
-      return durable;
+      auto committed = pattern_launch_acknowledger->commit(
+          runtime.session_id, outcome.request_id);
+      if (!committed.has_value()) {
+        return committed;
+      }
+    }
+  }
+
+  foundation::Result<void> service_performance() {
+    std::lock_guard lock(sequence_mutex);
+    for (auto &[path, runtime] : performance_sessions) {
+      auto serviced = service_performance_launch(
+          std::filesystem::path{path}, runtime);
+      if (!serviced.has_value()) {
+        return serviced;
+      }
     }
     return foundation::Result<void>::success();
   }
@@ -6108,10 +6178,6 @@ struct Application::Impl {
   foundation::Result<void>
   close_performance_transients(const std::filesystem::path &path,
                                PerformanceRuntime &runtime) {
-    auto acknowledged = drain_performance_launches(path, runtime);
-    if (!acknowledged.has_value()) {
-      return acknowledged;
-    }
     if (runtime.open_pads.empty() && runtime.open_fx.empty() && !runtime.hold) {
       return foundation::Result<void>::success();
     }
@@ -6213,10 +6279,6 @@ struct Application::Impl {
           sequence_error(ErrorCode::invalid_argument,
                          "Performance Core authorities are unavailable",
                          {{"reason", "performance_authority_unavailable"}}));
-    }
-    auto acknowledged = drain_performance_launches(path, runtime);
-    if (!acknowledged.has_value()) {
-      return error_envelope(acknowledged.error());
     }
     auto tick = performance_clock->read_tick();
     if (!tick.has_value()) {
@@ -6418,10 +6480,6 @@ struct Application::Impl {
           "Performance launch authorities are unavailable",
           {{"reason", "performance_launch_authority_unavailable"}}));
     }
-    auto drained = drain_performance_launches(path, runtime);
-    if (!drained.has_value()) {
-      return error_envelope(drained.error());
-    }
     auto loaded = projects.load(path);
     if (!loaded.has_value()) {
       return error_envelope(loaded.error());
@@ -6490,6 +6548,17 @@ struct Application::Impl {
     };
   }
 
+  static std::optional<PatternLaunchOutcome> launch_ack_outcome(
+      const foundation::SequenceSessionId &session_id,
+      const std::optional<project_io::PerformanceLaunchAck> &ack) {
+    if (!ack.has_value()) {
+      return std::nullopt;
+    }
+    return PatternLaunchOutcome{
+        session_id, ack->request_id, ack->pattern_slot, ack->effective_tick,
+        PatternLaunchOutcomeKind::applied};
+  }
+
   static nlohmann::json performance_status_json(
       std::string_view state,
       const std::optional<foundation::SequenceSessionId> &session_id,
@@ -6525,12 +6594,6 @@ struct Application::Impl {
     std::lock_guard lock(sequence_mutex);
     auto found = performance_sessions.find(sequence_key(path));
     if (found != performance_sessions.end()) {
-      if (!found->second.recovery_required) {
-        auto drained = drain_performance_launches(path, found->second);
-        if (!drained.has_value()) {
-          return error_envelope(drained.error());
-        }
-      }
       const auto &runtime = found->second;
       return success_envelope(
           performance_status_json(
@@ -6560,7 +6623,8 @@ struct Application::Impl {
               checkpoint.has_value() ? checkpoint->open_pads.size() : 0,
               checkpoint.has_value() ? checkpoint->open_fx.size() : 0,
               checkpoint.has_value() && checkpoint->hold, std::nullopt,
-              std::nullopt),
+              launch_ack_outcome(journal.value().session_id,
+                                 journal.value().last_launch_ack)),
           std::nullopt);
     }
     if (journal.error().code != ErrorCode::not_found) {
@@ -6577,7 +6641,9 @@ struct Application::Impl {
               "recovery_required", candidate.session_id,
               candidate.performance_id, candidate.expected_revision,
               candidate.next_flush_seq, candidate.pending_events.size(), 0, 0,
-              false, std::nullopt, std::nullopt),
+              false, std::nullopt,
+              launch_ack_outcome(candidate.session_id,
+                                 candidate.last_launch_ack)),
           std::nullopt);
     }
     return success_envelope(
@@ -7296,9 +7362,24 @@ Application::~Application() = default;
 Application::Application(Application&&) noexcept = default;
 Application& Application::operator=(Application&&) noexcept = default;
 
+foundation::Result<void> Application::service_performance() {
+  try {
+    return impl_->service_performance();
+  } catch (...) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::internal_error,
+        "Performance service failed unexpectedly",
+    });
+  }
+}
+
 nlohmann::json Application::command(const nlohmann::json& request) {
   try {
     testing::invoke_api_entry_hook();
+    auto serviced = impl_->service_performance();
+    if (!serviced.has_value()) {
+      return error_envelope(serviced.error());
+    }
     return impl_->dispatch(request, OperationKind::command);
   } catch (const InvalidRequest& error) {
     const Error invalid_request{ErrorCode::invalid_argument, error.what()};
