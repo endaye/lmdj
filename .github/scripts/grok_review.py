@@ -158,6 +158,10 @@ def write_auth_json(contents: str, path: Path) -> None:
 
 
 def grok_command(prompt_file: Path, cwd: Path) -> list[str]:
+    # Do not pass --sandbox strict/read-only on GitHub-hosted Ubuntu: Grok's
+    # Linux deny list resolves /run/podman/podman.sock, the runner socket is
+    # unreadable, and bwrap refuses to start. Isolation is the read-only tool
+    # allowlist plus credential path denies.
     return [
         "grok",
         "--prompt-file",
@@ -167,8 +171,6 @@ def grok_command(prompt_file: Path, cwd: Path) -> list[str]:
         "--yolo",
         "--tools",
         READ_ONLY_TOOLS,
-        "--sandbox",
-        "strict",
         "--disable-web-search",
         "--no-subagents",
         "--max-turns",

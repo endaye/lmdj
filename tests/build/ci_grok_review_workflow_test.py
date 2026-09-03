@@ -78,14 +78,15 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         message = (
             "why: CI must not float the Grok CLI or grant write/shell tools; "
             "remedy: pin GROK_VERSION to the script constant and keep the "
-            "read-only tool allowlist plus strict sandbox"
+            "read-only tool allowlist without --sandbox, because GitHub-hosted "
+            "Ubuntu cannot resolve Grok's runtime-socket deny path"
         )
         self.assertIn(f'GROK_VERSION: "{self.script.PINNED_GROK_VERSION}"', self.source, message)
         self.assertIn("bash -s \"$GROK_VERSION\"", self.source, message)
         self.assertIn("python3 .github/scripts/grok_review.py", self.source, message)
         command = self.script.grok_command(Path("/tmp/prompt.md"), Path("/tmp/repo"))
         self.assertEqual(command[command.index("--tools") + 1], self.script.READ_ONLY_TOOLS)
-        self.assertEqual(command[command.index("--sandbox") + 1], "strict")
+        self.assertNotIn("--sandbox", command, message)
         self.assertIn("--disable-web-search", command)
         self.assertIn("--no-subagents", command)
         self.assertIn("Read(**/.grok/**)", command)
