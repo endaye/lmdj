@@ -244,6 +244,27 @@ as routine self-hosted workload. The two macOS adjudicators also run on
 `ubuntu-24.04`, but they republish an already produced result under the
 required check name and execute no workload.
 
+That exception is about evidence, not convenience. It exists so scope, trust,
+admission and verdict survive a self-hosted outage, and a job earns it only by
+publishing one of those. A job that publishes none of them belongs on the
+trusted role however small it looks, because GitHub bills each job rounded up
+to a whole minute: frequency, not duration, is what a hosted job costs. The
+Merge Queue watchdog is the worked example. It is an idempotent reconciler with
+a twenty-second runtime and a twenty-minute stall threshold, publishes no
+formal evidence, and ran hosted on a fifteen-minute cron — roughly 2,880 billed
+minutes a month, the account's entire included allowance, for about fourteen
+minutes of work. It now runs on `ci-general` at the same cadence; reducing the
+cadence instead would have saved only three quarters of that while adding up to
+an hour of latency before a stalled queue label is reconciled.
+
+The statement above is scoped to the formal Pull Request graph in `ci.yml`, and
+that implicit scope is what let the watchdog sit unexamined. Workflows outside
+that graph still place jobs on `ubuntu-24.04` — the remaining Merge Queue jobs,
+the release audit, the Portal deployment smoke, the deployment and publication
+workflows, and scheduled TSan, which stays Hosted on its own recorded grounds.
+Each is a separate decision with its own reason; none of them is covered by the
+four-job exception, and none should be read as covered by it.
+
 The scope manifest is `lmdj.ci-scope.v2`. v2 adds exactly one closed boolean
 field, `trusted_head`, and `Change Scope` publishes the matching `trusted-head`
 job output. Trust is derived only from the event: a non-`pull_request` event,

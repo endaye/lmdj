@@ -151,8 +151,24 @@ jobs:
           --summary "$GITHUB_STEP_SUMMARY"
 
   watchdog:
+    # On the dual-node trusted general role, not the hosted control plane. This
+    # job runs every 15 minutes, so at roughly 2,880 runs a month it consumed
+    # the account's entire 3,000-minute included Actions allowance on its own:
+    # GitHub bills each job rounded up to a whole minute, and the reconcile step
+    # takes about ten seconds.
+    #
+    # It does not qualify for the hosted-control-plane exception. That exception
+    # exists so scope, admission and verdict evidence survives a self-hosted
+    # outage; this job publishes no such evidence. It is an idempotent
+    # reconciler with a 20-minute stall threshold, so a missed run is caught by
+    # the next one, and when every self-hosted runner is down nothing can reach
+    # the queue for it to reconcile anyway.
+    #
+    # The cadence is deliberately unchanged: dropping to hourly would have saved
+    # only 75% while adding up to an hour of latency before a stalled queue
+    # label is cleared.
     if: ${{ github.event_name == 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 10
     permissions:
       actions: read
