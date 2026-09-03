@@ -21,7 +21,6 @@
 namespace {
 
 using lmdj::audio::RuntimePreparationLimits;
-using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
@@ -61,7 +60,7 @@ std::unique_ptr<ControlRuntime> make_runtime(
   };
   auto created = ControlRuntime::create(
       root,
-      Application(ApplicationConfig{
+      ApplicationConfig{
           root,
           std::make_shared<Registry>(),
           ProviderPolicy{},
@@ -72,7 +71,7 @@ std::unique_ptr<ControlRuntime> make_runtime(
           nullptr,
           nullptr,
           lmdj::facade::make_unavailable_performance_replay_controller(),
-      }),
+      },
       limits);
   LMDJ_CHECK(created.has_value());
   return std::move(created.value());

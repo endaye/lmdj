@@ -10,37 +10,59 @@ const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const API = [
   "activateAudio",
+  "applyPerformanceRecovery",
   "applySequenceRecovery",
+  "assignPatternSlot",
+  "beginPerformanceRecording",
+  "beginPerformanceReplay",
   "beginSequence",
+  "bindPerformanceRecording",
   "clearSamplePreview",
+  "clearPatternSlot",
   "close",
+  "commitPerformanceResample",
   "createPattern",
+  "deletePerformance",
   "diagnostics",
+  "discardPerformance",
+  "discardPerformanceRecovery",
   "discardSequenceRecovery",
   "disarmSequenceCapture",
   "flushSequence",
   "importProject",
   "importAssignSample",
   "inspectSample",
+  "inspectPerformance",
   "inspectProject",
+  "listPerformanceRecovery",
+  "listPerformances",
   "listLocalProjects",
   "listSequenceRecovery",
   "openProject",
+  "movePatternSlot",
+  "queryPerformanceRecordingStatus",
+  "queryPerformanceReplayStatus",
   "querySampleQuota",
   "queryWaveform",
   "querySequenceStatus",
   "recordSequenceEvent",
+  "recordPerformanceEvent",
+  "renamePerformance",
   "release",
   "reloadSnapshot",
   "requestMidi",
+  "requestPerformancePatternLaunch",
   "requestPatternSwitch",
   "resetPad",
   "retryPrepare",
   "setSamplePreview",
   "sampleIngestLimits",
   "start",
+  "savePerformance",
   "subscribeDiagnostics",
   "stopAll",
+  "stopPerformanceRecording",
+  "stopPerformanceReplay",
   "stopSequence",
   "stopPad",
   "subscribeHostState",
@@ -49,6 +71,7 @@ const API = [
   "subscribeVoiceState",
   "suspendAudio",
   "trigger",
+  "flushPerformanceRecording",
   "updatePad",
   "updateSequenceSettings",
 ].sort();
@@ -522,6 +545,138 @@ test("owns the exact Host-neutral surface and lifecycle", async () => {
     errorDetails: {},
   });
   assert.equal(terminated(), 1);
+});
+
+test("bridges raw Performance identities and values without Host timing authority", async () => {
+  const operations = [];
+  const sessionId = "00000000-0000-4000-8000-000000000101";
+  const performanceId = "00000000-0000-4000-8000-000000000102";
+  const eventId = "00000000-0000-4000-8000-000000000103";
+  const gestureId = "00000000-0000-4000-8000-000000000104";
+  const launchRequestId = "00000000-0000-4000-8000-000000000105";
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope);
+      switch (envelope.operation) {
+        case "performance.record.begin":
+          return success(envelope, {
+            performance_id: performanceId,
+            committed_revision: 1,
+            replayed: false,
+            project_revision: 1,
+          });
+        case "performance.record.event":
+          return success(envelope, {
+            event_id: eventId,
+            accepted_tick: 17,
+            input_sequence: 1,
+            coalesced: false,
+            replayed: false,
+            project_revision: null,
+          });
+        case "performance.record.launch-request":
+          return success(envelope, {
+            request_id: launchRequestId,
+            state: "pending",
+            target_tick: 3840,
+            project_revision: null,
+          });
+        case "performance.record.status":
+          return success(envelope, {
+            state: "active",
+            session_id: sessionId,
+            performance_id: performanceId,
+            journal_revision: 1,
+            next_flush_seq: 1,
+            pending_event_count: 1,
+            open_pad_gestures: 1,
+            open_fx_gestures: 0,
+            hold: false,
+            pending_launch: {
+              request_id: launchRequestId,
+              pattern_slot: 2,
+              target_tick: 3840,
+              claimed: false,
+            },
+            last_launch_ack: null,
+            project_revision: null,
+          });
+        case "performance.resample.commit":
+          return success(envelope, {
+            performance_id: performanceId,
+            committed_revision: 2,
+            runtime_prepare_required: true,
+            project_revision: 2,
+          });
+        default:
+          return success(envelope, defaultResult(envelope.operation));
+      }
+    },
+  });
+  await session.start();
+  await session.beginPerformanceRecording({
+    sessionId,
+    performanceId,
+    expectedRevision: 0,
+  });
+  assert.deepEqual(await session.recordPerformanceEvent({
+    sessionId,
+    eventId,
+    event: {kind: "pad_press", gestureId, slot: 7, velocity: 100},
+  }), {
+    eventId,
+    acceptedTick: 17,
+    inputSequence: 1,
+    coalesced: false,
+    replayed: false,
+    projectRevision: null,
+  });
+  assert.deepEqual(await session.requestPerformancePatternLaunch({
+    sessionId,
+    requestId: launchRequestId,
+    patternSlot: 2,
+  }), {
+    requestId: launchRequestId,
+    state: "pending",
+    targetTick: 3840,
+    projectRevision: null,
+  });
+  const projected = await session.queryPerformanceRecordingStatus();
+  assert.equal(projected.pendingLaunch.targetTick, 3840);
+  assert.equal(projected.lastLaunchAck, null);
+  assert.deepEqual(await session.commitPerformanceResample({
+    expectedRevision: 1,
+    performanceId,
+    sourceStartFrame: 0,
+    sourceEndFrame: 48_000,
+    targetSlot: 18,
+  }), {
+    performanceId,
+    committedRevision: 2,
+    runtimePrepareRequired: true,
+    projectRevision: 2,
+  });
+
+  const raw = operations.find(({operation}) =>
+    operation === "performance.record.event").payload;
+  assert.deepEqual(raw, {
+    session_id: sessionId,
+    event_id: eventId,
+    event: {kind: "pad_press", gesture_id: gestureId, slot: 7, velocity: 100},
+  });
+  for (const forbidden of ["tick", "runtime_frame", "input_sequence"]) {
+    assert.equal(JSON.stringify(raw).includes(forbidden), false);
+  }
+  const resample = operations.find(({operation}) =>
+    operation === "performance.resample.commit").payload;
+  assert.deepEqual(resample, {
+    command_id: resample.command_id,
+    expected_revision: 1,
+    performance_id: performanceId,
+    source_start_frame: 0,
+    source_end_frame: 48_000,
+    target_slot: {bank: 1, pad: 2},
+  });
 });
 
 test("activation waits for a resumed AudioWorklet callback within its original budget", async () => {

@@ -22,6 +22,29 @@ export const HOST_OPERATIONS = Object.freeze([
   "asset.import",
   "pad.assign",
   "pattern.create",
+  "pattern.slot.assign",
+  "pattern.slot.clear",
+  "pattern.slot.move",
+  "performance.list",
+  "performance.inspect",
+  "performance.record.begin",
+  "performance.record.event",
+  "performance.record.launch-request",
+  "performance.record.flush",
+  "performance.record.stop",
+  "performance.record.status",
+  "performance.save",
+  "performance.discard",
+  "performance.recovery.list",
+  "performance.recovery.apply",
+  "performance.recovery.discard",
+  "performance.rename",
+  "performance.delete",
+  "performance.recording.bind",
+  "performance.replay.begin",
+  "performance.replay.stop",
+  "performance.replay.status",
+  "performance.resample.commit",
   "snapshot.reload",
   "snapshot.retry",
   "sample.inspect",
@@ -81,6 +104,11 @@ const SHORT_OPERATIONS = new Set([
   "sequence.record.event",
   "sequence.record.status",
   "sequence.recovery.list",
+  "performance.record.event",
+  "performance.record.launch-request",
+  "performance.record.status",
+  "performance.recovery.list",
+  "performance.replay.status",
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -182,6 +210,168 @@ function validSidecarDeclaration(value) {
     typeof value.sidecar_sha256 === "string" &&
     SHA256_PATTERN.test(value.sidecar_sha256)
   );
+}
+
+function validUuid(value) {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
+function validPatternSlot(value) {
+  return isUnsignedInteger(value, 15);
+}
+
+function validPerformanceName(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const codePoints = Array.from(value).length;
+  return codePoints > 0 && codePoints <= 64;
+}
+
+function validArtifact(value) {
+  return (
+    hasExactKeys(value, ["sha256", "media_type", "byte_length"]) &&
+    typeof value.sha256 === "string" &&
+    SHA256_PATTERN.test(value.sha256) &&
+    value.media_type === "audio/wav" &&
+    isUnsignedInteger(value.byte_length)
+  );
+}
+
+function validPerformanceGesture(value) {
+  if (!isPlainObject(value) || typeof value.kind !== "string") {
+    return false;
+  }
+  switch (value.kind) {
+    case "pad_press":
+      return hasExactKeys(value, ["kind", "gesture_id", "slot", "velocity"]) &&
+        validUuid(value.gesture_id) && isUnsignedInteger(value.slot, 63) &&
+        isUnsignedInteger(value.velocity, 127) && value.velocity > 0;
+    case "pad_release":
+      return hasExactKeys(value, ["kind", "gesture_id", "slot"]) &&
+        validUuid(value.gesture_id) && isUnsignedInteger(value.slot, 63);
+    case "fx_engage":
+    case "fx_move":
+      return hasExactKeys(value, ["kind", "gesture_id", "fx", "value"]) &&
+        validUuid(value.gesture_id) &&
+        ["filter", "delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"].includes(value.fx) &&
+        isUnsignedInteger(value.value, 1000);
+    case "fx_release":
+      return hasExactKeys(value, ["kind", "gesture_id", "fx"]) &&
+        validUuid(value.gesture_id) &&
+        ["filter", "delay", "reverb", "stutter", "gate", "reverse", "crush", "cutter"].includes(value.fx);
+    case "hold_on":
+    case "hold_off":
+      return hasExactKeys(value, ["kind"]);
+    default:
+      return false;
+  }
+}
+
+function requirePerformanceOperationPayload(
+  operation,
+  payload,
+  transportRequestId,
+) {
+  let valid = true;
+  const commandIdentity = (keys) =>
+    hasExactKeys(payload, keys) && validUuid(payload.command_id) &&
+    isUnsignedInteger(payload.expected_revision);
+  switch (operation) {
+    case "pattern.slot.assign":
+      valid = commandIdentity(["command_id", "expected_revision", "pattern_slot", "pattern_id"]) &&
+        validPatternSlot(payload.pattern_slot) && validUuid(payload.pattern_id);
+      break;
+    case "pattern.slot.clear":
+      valid = commandIdentity(["command_id", "expected_revision", "pattern_slot"]) &&
+        validPatternSlot(payload.pattern_slot);
+      break;
+    case "pattern.slot.move":
+      valid = commandIdentity(["command_id", "expected_revision", "from_slot", "to_slot"]) &&
+        validPatternSlot(payload.from_slot) && validPatternSlot(payload.to_slot);
+      break;
+    case "performance.list":
+    case "performance.record.status":
+    case "performance.recovery.list":
+      valid = hasExactKeys(payload, []);
+      break;
+    case "performance.inspect":
+      valid = hasExactKeys(payload, ["performance_id"]) && validUuid(payload.performance_id);
+      break;
+    case "performance.record.begin":
+      valid = commandIdentity(["command_id", "expected_revision", "session_id", "performance_id"]) &&
+        validUuid(payload.session_id) && validUuid(payload.performance_id);
+      break;
+    case "performance.record.event":
+      valid = hasExactKeys(payload, ["session_id", "event_id", "event"]) &&
+        validUuid(payload.session_id) && validUuid(payload.event_id) &&
+        validPerformanceGesture(payload.event) &&
+        payload.event_id !== transportRequestId &&
+        (!Object.hasOwn(payload.event, "gesture_id") ||
+          (payload.event.gesture_id !== payload.event_id &&
+           payload.event.gesture_id !== transportRequestId));
+      break;
+    case "performance.record.launch-request":
+      valid = hasExactKeys(payload, ["session_id", "request_id", "pattern_slot"]) &&
+        validUuid(payload.session_id) && validUuid(payload.request_id) &&
+        payload.request_id !== transportRequestId && validPatternSlot(payload.pattern_slot);
+      break;
+    case "performance.record.flush":
+      valid = hasExactKeys(payload, ["session_id", "command_id"]) &&
+        validUuid(payload.session_id) && validUuid(payload.command_id);
+      break;
+    case "performance.record.stop":
+    case "performance.recovery.discard":
+      valid = hasExactKeys(payload, ["session_id", "request_id"]) &&
+        validUuid(payload.session_id) && validUuid(payload.request_id) &&
+        payload.request_id !== transportRequestId;
+      break;
+    case "performance.save":
+      valid = commandIdentity(["command_id", "expected_revision", "performance_id", "name", "recording_artifact"]) &&
+        validUuid(payload.performance_id) && validPerformanceName(payload.name) &&
+        (payload.recording_artifact === null || validArtifact(payload.recording_artifact));
+      break;
+    case "performance.discard":
+    case "performance.delete":
+      valid = commandIdentity(["command_id", "expected_revision", "performance_id"]) &&
+        validUuid(payload.performance_id);
+      break;
+    case "performance.recovery.apply":
+      valid = commandIdentity(["command_id", "expected_revision", "session_id"]) &&
+        validUuid(payload.session_id);
+      break;
+    case "performance.rename":
+      valid = commandIdentity(["command_id", "expected_revision", "performance_id", "name"]) &&
+        validUuid(payload.performance_id) && validPerformanceName(payload.name);
+      break;
+    case "performance.recording.bind":
+      valid = commandIdentity(["command_id", "expected_revision", "performance_id", "recording_artifact"]) &&
+        validUuid(payload.performance_id) && validArtifact(payload.recording_artifact);
+      break;
+    case "performance.replay.begin":
+      valid = hasExactKeys(payload, ["replay_id", "performance_id"]) &&
+        validUuid(payload.replay_id) && validUuid(payload.performance_id);
+      break;
+    case "performance.replay.stop":
+      valid = hasExactKeys(payload, ["replay_id", "request_id"]) &&
+        validUuid(payload.replay_id) && validUuid(payload.request_id) &&
+        payload.request_id !== transportRequestId;
+      break;
+    case "performance.replay.status":
+      valid = hasExactKeys(payload, ["replay_id"]) && validUuid(payload.replay_id);
+      break;
+    case "performance.resample.commit":
+      valid = commandIdentity(["command_id", "expected_revision", "performance_id", "source_start_frame", "source_end_frame", "target_slot"]) &&
+        validUuid(payload.performance_id) && isUnsignedInteger(payload.source_start_frame) &&
+        isUnsignedInteger(payload.source_end_frame) &&
+        payload.source_start_frame < payload.source_end_frame && validSlot(payload.target_slot);
+      break;
+    default:
+      return;
+  }
+  if (!valid) {
+    throw protocolError("Host Performance operation payload is invalid", {operation});
+  }
 }
 
 function requireSampleOperationPayload(operation, payload) {
@@ -468,6 +658,11 @@ function validateRequestObject(
     throw protocolError("Request payload must be an object");
   }
   requireSampleOperationPayload(envelope.operation, envelope.payload);
+  requirePerformanceOperationPayload(
+    envelope.operation,
+    envelope.payload,
+    envelope.request_id,
+  );
   if (seenRequestIds?.has(envelope.request_id)) {
     throw protocolError("Duplicate request_id", {
       request_id: envelope.request_id,
@@ -526,7 +721,157 @@ export function createRequestEnvelope({ operation, payload, crypto }) {
   return validateRequestObject(envelope);
 }
 
-export function validateResponseEnvelope(envelope) {
+function validNullableUuid(value) {
+  return value === null || validUuid(value);
+}
+
+function validCanonicalPerformanceEvent(value) {
+  if (!isPlainObject(value) || typeof value.kind !== "string") {
+    return false;
+  }
+  switch (value.kind) {
+    case "pad_hit":
+      return hasExactKeys(value, ["kind", "slot", "onset_tick", "duration_tick", "velocity"]) &&
+        isUnsignedInteger(value.slot, 63) && isUnsignedInteger(value.onset_tick) &&
+        isUnsignedInteger(value.duration_tick) && value.duration_tick > 0 &&
+        isUnsignedInteger(value.velocity, 127) && value.velocity > 0;
+    case "pattern_launch":
+      return hasExactKeys(value, ["kind", "pattern_slot", "effective_tick"]) &&
+        validPatternSlot(value.pattern_slot) && isUnsignedInteger(value.effective_tick);
+    case "fx_engage":
+    case "fx_move":
+      return hasExactKeys(value, ["kind", "fx", "value", "tick"]) &&
+        isUnsignedInteger(value.fx, 7) && isUnsignedInteger(value.value, 1000) &&
+        isUnsignedInteger(value.tick);
+    case "fx_release":
+      return hasExactKeys(value, ["kind", "fx", "tick"]) &&
+        isUnsignedInteger(value.fx, 7) && isUnsignedInteger(value.tick);
+    case "hold_on":
+    case "hold_off":
+      return hasExactKeys(value, ["kind", "tick"]) && isUnsignedInteger(value.tick);
+    default:
+      return false;
+  }
+}
+
+function validPerformanceSummary(value) {
+  return hasExactKeys(value, ["performance_id", "name", "created_bpm", "recording_artifact", "event_count"]) &&
+    validUuid(value.performance_id) && validPerformanceName(value.name) &&
+    isUnsignedInteger(value.created_bpm, 240) && value.created_bpm >= 40 &&
+    (value.recording_artifact === null || validArtifact(value.recording_artifact)) &&
+    isUnsignedInteger(value.event_count);
+}
+
+function validLifecycleResult(value) {
+  return hasExactKeys(value, ["performance_id", "committed_revision", "replayed", "project_revision"]) &&
+    validUuid(value.performance_id) && isUnsignedInteger(value.committed_revision) &&
+    typeof value.replayed === "boolean" && value.project_revision === value.committed_revision;
+}
+
+function validReplayResult(value, stopped = false) {
+  const keys = ["replay_id", "state", "resolved_revision", "event_cursor", "event_count", "project_revision"];
+  if (stopped) {
+    keys.push("request_id", "replayed");
+  }
+  return hasExactKeys(value, keys) && validUuid(value.replay_id) &&
+    ["playing", "stopped", "complete"].includes(value.state) &&
+    isUnsignedInteger(value.resolved_revision) && isUnsignedInteger(value.event_cursor) &&
+    isUnsignedInteger(value.event_count) && value.event_cursor <= value.event_count &&
+    value.project_revision === null &&
+    (!stopped || (validUuid(value.request_id) && typeof value.replayed === "boolean"));
+}
+
+function validPerformanceResult(operation, value) {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  switch (operation) {
+    case "pattern.slot.assign":
+    case "pattern.slot.clear":
+      return hasExactKeys(value, ["pattern_slot", "pattern_id", "committed_revision", "replayed", "project_revision"]) &&
+        validPatternSlot(value.pattern_slot) && validNullableUuid(value.pattern_id) &&
+        isUnsignedInteger(value.committed_revision) && typeof value.replayed === "boolean" &&
+        value.project_revision === value.committed_revision;
+    case "pattern.slot.move":
+      return hasExactKeys(value, ["from_slot", "to_slot", "pattern_id", "committed_revision", "replayed", "project_revision"]) &&
+        validPatternSlot(value.from_slot) && validPatternSlot(value.to_slot) && validUuid(value.pattern_id) &&
+        isUnsignedInteger(value.committed_revision) && typeof value.replayed === "boolean" &&
+        value.project_revision === value.committed_revision;
+    case "performance.list":
+      return hasExactKeys(value, ["performances", "project_revision"]) &&
+        Array.isArray(value.performances) && value.performances.every(validPerformanceSummary) &&
+        isUnsignedInteger(value.project_revision);
+    case "performance.inspect":
+      return hasExactKeys(value, ["performance", "project_revision"]) &&
+        isPlainObject(value.performance) &&
+        hasExactKeys(value.performance, ["id", "name", "created_bpm", "recording_artifact", "events"]) &&
+        validUuid(value.performance.id) && validPerformanceName(value.performance.name) &&
+        isUnsignedInteger(value.performance.created_bpm, 240) && value.performance.created_bpm >= 40 &&
+        (value.performance.recording_artifact === null || validArtifact(value.performance.recording_artifact)) &&
+        Array.isArray(value.performance.events) && value.performance.events.every(validCanonicalPerformanceEvent) &&
+        isUnsignedInteger(value.project_revision);
+    case "performance.record.begin":
+    case "performance.record.flush":
+    case "performance.save":
+    case "performance.discard":
+    case "performance.recovery.apply":
+    case "performance.rename":
+    case "performance.delete":
+    case "performance.recording.bind":
+      return validLifecycleResult(value);
+    case "performance.record.event":
+      return hasExactKeys(value, ["event_id", "accepted_tick", "input_sequence", "coalesced", "replayed", "project_revision"]) &&
+        validUuid(value.event_id) && isUnsignedInteger(value.accepted_tick) &&
+        isUnsignedInteger(value.input_sequence) && typeof value.coalesced === "boolean" &&
+        typeof value.replayed === "boolean" && value.project_revision === null;
+    case "performance.record.launch-request":
+      return hasExactKeys(value, ["request_id", "state", "target_tick", "project_revision"]) &&
+        validUuid(value.request_id) && value.state === "pending" &&
+        isUnsignedInteger(value.target_tick) && value.project_revision === null;
+    case "performance.record.stop":
+    case "performance.recovery.discard":
+      return hasExactKeys(value, ["request_id", "session_id", "performance_id", "state", "pending_event_count", "replayed", "project_revision"]) &&
+        validUuid(value.request_id) && validUuid(value.session_id) && validUuid(value.performance_id) &&
+        value.state === "stopped" && isUnsignedInteger(value.pending_event_count) &&
+        typeof value.replayed === "boolean" && value.project_revision === null;
+    case "performance.record.status": {
+      const pendingLaunch = value.pending_launch;
+      const lastLaunch = value.last_launch_ack;
+      return hasExactKeys(value, ["state", "session_id", "performance_id", "journal_revision", "next_flush_seq", "pending_event_count", "open_pad_gestures", "open_fx_gestures", "hold", "pending_launch", "last_launch_ack", "project_revision"]) &&
+        ["idle", "active", "stopped", "recovery_required"].includes(value.state) &&
+        validNullableUuid(value.session_id) && validNullableUuid(value.performance_id) &&
+        isUnsignedInteger(value.journal_revision) && isUnsignedInteger(value.next_flush_seq) &&
+        isUnsignedInteger(value.pending_event_count) && isUnsignedInteger(value.open_pad_gestures) &&
+        isUnsignedInteger(value.open_fx_gestures) && typeof value.hold === "boolean" &&
+        (pendingLaunch === null || (hasExactKeys(pendingLaunch, ["request_id", "pattern_slot", "target_tick", "claimed"]) &&
+          validUuid(pendingLaunch.request_id) && validPatternSlot(pendingLaunch.pattern_slot) &&
+          isUnsignedInteger(pendingLaunch.target_tick) && typeof pendingLaunch.claimed === "boolean")) &&
+        (lastLaunch === null || (hasExactKeys(lastLaunch, ["request_id", "pattern_slot", "effective_tick"]) &&
+          validUuid(lastLaunch.request_id) && validPatternSlot(lastLaunch.pattern_slot) &&
+          isUnsignedInteger(lastLaunch.effective_tick))) && value.project_revision === null;
+    }
+    case "performance.recovery.list":
+      return hasExactKeys(value, ["candidates", "project_revision"]) && Array.isArray(value.candidates) &&
+        value.candidates.every((candidate) => hasExactKeys(candidate, ["session_id", "performance_id", "reason", "durable_event_count", "pending_event_count", "fingerprint"]) &&
+          validUuid(candidate.session_id) && validUuid(candidate.performance_id) &&
+          typeof candidate.reason === "string" && isUnsignedInteger(candidate.durable_event_count) &&
+          isUnsignedInteger(candidate.pending_event_count) && typeof candidate.fingerprint === "string" &&
+          SHA256_PATTERN.test(candidate.fingerprint)) && value.project_revision === null;
+    case "performance.replay.begin":
+    case "performance.replay.status":
+      return validReplayResult(value);
+    case "performance.replay.stop":
+      return validReplayResult(value, true);
+    case "performance.resample.commit":
+      return hasExactKeys(value, ["performance_id", "committed_revision", "runtime_prepare_required", "project_revision"]) &&
+        validUuid(value.performance_id) && isUnsignedInteger(value.committed_revision) &&
+        value.runtime_prepare_required === true && value.project_revision === value.committed_revision;
+    default:
+      return true;
+  }
+}
+
+export function validateResponseEnvelope(envelope, operation = undefined) {
   enforceEnvelopeByteLimit(envelope);
   if (!isPlainObject(envelope) || typeof envelope.ok !== "boolean") {
     throw protocolError("Response envelope is invalid");
@@ -550,6 +895,13 @@ export function validateResponseEnvelope(envelope) {
     ) {
       throw protocolError("Response error fields are invalid");
     }
+  } else if (!isPlainObject(envelope.result)) {
+    throw protocolError("Response result must be an object");
+  } else if (
+    operation !== undefined &&
+    !validPerformanceResult(operation, envelope.result)
+  ) {
+    throw protocolError("Host Performance result is invalid", {operation});
   }
   return envelope;
 }
@@ -698,6 +1050,7 @@ export function createProtocolTransport({
     const entry = {
       resolve: resolveRequest,
       reject: rejectRequest,
+      operation: validated.operation,
       deadlineAt,
       timer: null,
     };
@@ -735,6 +1088,16 @@ export function createProtocolTransport({
         protocolError("Response request_id does not match a pending request", {
           request_id: validated.request_id,
         }),
+      );
+      return false;
+    }
+    try {
+      validated = validateResponseEnvelope(envelope, entry.operation);
+    } catch (error) {
+      failClosed(
+        error instanceof HostProtocolError
+          ? error
+          : protocolError("Host response validation failed"),
       );
       return false;
     }
