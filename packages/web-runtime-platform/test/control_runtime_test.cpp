@@ -116,10 +116,10 @@ std::string uuid(std::uint32_t suffix) {
          std::string(12 - tail.size(), '0') + tail;
 }
 
-Application make_application(
+ApplicationConfig make_application_config(
     const std::filesystem::path& root,
     RuntimePreparationLimits limits = kWebLimits) {
-  return Application(ApplicationConfig{
+  return ApplicationConfig{
       root,
       std::make_shared<Registry>(),
       ProviderPolicy{},
@@ -130,14 +130,20 @@ Application make_application(
       nullptr,
       nullptr,
       lmdj::facade::make_unavailable_performance_replay_controller(),
-  });
+  };
+}
+
+Application make_application(
+    const std::filesystem::path& root,
+    RuntimePreparationLimits limits = kWebLimits) {
+  return Application(make_application_config(root, limits));
 }
 
 std::unique_ptr<ControlRuntime> make_runtime(
     const std::filesystem::path& root,
     RuntimePreparationLimits limits = kWebLimits) {
   auto created = ControlRuntime::create(
-      root, make_application(root, limits), limits);
+      root, make_application_config(root, limits), limits);
   LMDJ_CHECK(created.has_value());
   return std::move(created.value());
 }

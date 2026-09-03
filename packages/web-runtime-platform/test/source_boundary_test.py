@@ -109,6 +109,39 @@ def main() -> int:
             if re.search(r"diagnostic[_-]client\.mjs", source, re.IGNORECASE):
                 fail(f"Creator imports diagnostic-only client: {path}")
 
+    formal_host_main = (
+        REPO_ROOT / "apps" / "web-runtime-host" / "src" / "main.mjs"
+    )
+    formal_host_source = formal_host_main.read_text(encoding="utf-8")
+    for required in (
+        "recordPerformanceEvent: session.recordPerformanceEvent",
+        "requestPerformancePatternLaunch: session.requestPerformancePatternLaunch",
+    ):
+        if required not in formal_host_source:
+            fail("formal Host lacks thin Performance bridge: " + required)
+    forbidden_performance_authority = {
+        r"\b(?:Date\.now|performance\.now)\s*\(": "wall-clock authority",
+        r"\b(?:runtime_frame|target_tick|effective_tick|input_sequence)\b": (
+            "Performance time or sequence authority"
+        ),
+        r"\b(?:coalesc|last[-_ ]write[-_ ]wins?|deduplicat)": (
+            "semantic gesture coalescing"
+        ),
+        r"\b(?:fx_chain|effect_order|reorder_effect)\b": "FX order authority",
+        r"\b(?:pattern_slots|project_truth|resolve_pattern)\b": (
+            "Pattern-slot truth authority"
+        ),
+        r"\b(?:resolve_replay|replay_cursor|replay_tick)\b": (
+            "replay progression authority"
+        ),
+        r"\b(?:artifact_digest|recovery_fingerprint)\b": (
+            "Artifact or recovery identity authority"
+        ),
+    }
+    for pattern, label in forbidden_performance_authority.items():
+        if re.search(pattern, formal_host_source, re.IGNORECASE):
+            fail(f"{label} entered formal Host JavaScript: {formal_host_main}")
+
     direct_project_io = re.compile(
         r"(?:lmdj/project_io/|\blmdj::project_io\b|\blmdj_project_io\b|"
         r"\b(?:ProjectStore|TakeJournal|ProjectStoragePlatform)\b)"

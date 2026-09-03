@@ -128,7 +128,7 @@ def main() -> int:
             "Project bundle layout knowledge"
         ),
         r"lmdj\.patch\.v1|lmdj\.materials\.v1": "retired Contract",
-        r"(?<!sequence\.)\brecord\.(?:begin|stop|commit)": (
+        r"(?<![\w.])record\.(?:begin|stop|commit)\b": (
             "retired Capture operation spelling"
         ),
         r"lmdj/providers/|providers/local-|\blocal_proof_": (

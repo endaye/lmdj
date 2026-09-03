@@ -594,6 +594,10 @@ struct ControlBridge::Impl {
         fail_control();
         return;
       }
+      // Launch acknowledgement and replay follow rendered time on this
+      // serialized control cadence even when the Host sends no request. A
+      // durable service error remains retryable and is not render-fatal.
+      static_cast<void>(runtime.service_performance());
       outcome_message = reserve_realtime_message();
       if (outcome_message == nullptr) {
         return;
@@ -1714,7 +1718,6 @@ using lmdj::audio::web::RealtimeAudioWorkletGate;
 using lmdj::audio::web::RealtimeAudioWorkletHooks;
 using lmdj::audio::web::RealtimeAudioWorkletStart;
 using lmdj::audio::web::RealtimeAudioWorkletState;
-using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
@@ -2784,7 +2787,7 @@ int main() {
   };
   auto created = ControlRuntime::create(
       workspace,
-      Application(ApplicationConfig{
+      ApplicationConfig{
           workspace,
           std::make_shared<Registry>(),
           ProviderPolicy{},
@@ -2795,7 +2798,7 @@ int main() {
           nullptr,
           nullptr,
           lmdj::facade::make_unavailable_performance_replay_controller(),
-      }),
+      },
       limits);
   if (!created.has_value()) {
     return 1;
