@@ -69,12 +69,6 @@
     },
     {
       "workflow": "merge-queue.yml",
-      "job": "queue-item",
-      "category": "temporary",
-      "reason": "NOT JUSTIFIED ON THE MERITS. This job holds a paid hosted runner while polling for another GitHub run to finish, measured at about 21.6 minutes per validation and very likely the largest single line on the Actions bill. It is scheduled for removal by endaye/lmdj#591 step 4, which replaces the self-hosted orchestrator with GitHub's native merge queue so the waiting is borne by GitHub rather than by billed minutes. Do not treat this entry as precedent."
-    },
-    {
-      "workflow": "merge-queue.yml",
       "job": "finalize",
       "category": "control-plane",
       "reason": "Reconciles an aborted worker and publishes the closed queue report. It must be able to run when the worker's own host has died, which is the case it exists for."

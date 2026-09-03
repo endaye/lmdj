@@ -59,12 +59,30 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
   queue-item:
+    # On the dual-node trusted general role. This job spends nearly all of its
+    # time inside `wait_validation`, polling for another GitHub run to finish:
+    # measured at about 33 minutes per validation and roughly 43% of the
+    # account's remaining hosted Actions minutes. Hosted, that wait is billed;
+    # self-hosted it costs a role slot and no money.
+    #
+    # It does not qualify for the hosted-control-plane exception. That
+    # exception protects scope, trust, admission and verdict evidence, and this
+    # job publishes none of it -- `route` above makes the admission decision
+    # and stays hosted, which is the half that is evidence. And the failure
+    # mode it would guard against does not exist here: when every self-hosted
+    # runner is down, the validation this job waits for cannot run either, so
+    # there is nothing for it to wait on.
+    #
+    # GitHub's native merge queue would remove the wait entirely by moving it
+    # to GitHub's side, but it is unavailable for a private repository on a
+    # personal account: it requires a public repository or GitHub Enterprise
+    # Cloud.
     needs: route
     if: ${{ needs.route.outputs.accepted == 'true' }}
     concurrency:
       group: lmdj-merge-main
       queue: max
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 360
     permissions:
       actions: write
