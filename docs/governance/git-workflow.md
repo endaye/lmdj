@@ -370,7 +370,12 @@ each transition independently authorized and verified:
    required reviewer);
 6. rerun the exact-tag remote audit and report the observed published state;
 7. separately authorize manual Runtime deployment and then any Channel
-   promotion, each with its own evidence.
+   promotion, each with its own evidence. Promotion is
+   `scripts/release.sh promote TAG CHANNEL --deployment-run HOST=RUN_ID ...`:
+   it audits, verifies each Host deployment run's retained evidence, and
+   writes one ledger record plus one evidence document locally, which then
+   ship as a docs Pull Request through the Integration Queue. It never edits
+   the GitHub Release; `stable` is refused pending an open question.
 
 `prepare` does not authorize a tag push. A tag push does not authorize a Draft.
 A verified Draft does not authorize publication. A published Release neither
@@ -422,6 +427,12 @@ allocation of that Build:
    `fix/<task>` from the released tag, allocate the next PATCH, release it
    through the same path, and land the same fix on `main` through an ordinary
    Pull Request. No `release/*` or `hotfix/*` branch outlives that fix.
+
+This rule governs every Product Build allocated after `1.0.41.0`. `1.0.41.0`
+itself was already built, reviewed, and verified under the previous practice,
+so it was merged as the last Build cut under it; splitting a finished
+control-plane Pull Request would have multiplied the chasing it describes
+rather than removed it.
 
 A Pull Request that mixes Assembly allocation with feature or control-plane
 changes is split before it is labelled, not chased. This rule is motivated by

@@ -2,10 +2,16 @@
 
 日期：2026-08-31
 
-状态：**草案，待评审**——本文是
+状态：**已评审，待实施**——本文是
 [#466](https://github.com/endaye/lmdj/issues/466) 的设计半部：定义 Stem /
 Slice / Pattern Intelligence 的评估问题、fixture 语料策略、指标与硬拒绝
 阈值、复现身份与报告格式。不选定任何生产 checkpoint，不实现 Provider。
+
+评审结论（2026-09-03）：S12B-D1–D9 获准进入分阶段实施。首个实施切片是
+[`2026-09-03-lmdj-stage12-sample-slice-smoke-fixtures.md`](../plans/2026-09-03-lmdj-stage12-sample-slice-smoke-fixtures.md)，
+只交付 `sample.slice` 的合成 smoke 输入、ground truth 与失败场景，先解锁
+#467；benchmark host、报告、Stem/Pattern 语料与盲听包继续作为 #466 后续
+独立 Task，不得被首个切片的完成状态代替。
 
 评审修正（2026-08-31）：硬 timeout、进程树 RSS 与 GPU 归因必须按执行区
 分别定义。直接 in-process 执行只提供确定性、Schema 与 elapsed observation，

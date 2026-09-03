@@ -1,17 +1,17 @@
-#include <cstddef>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <lmdj/facade/application.hpp>
+#include <lmdj/facade/performance_replay.hpp>
+#include <lmdj/project_io/project_store.hpp>
+
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <lmdj/facade/performance_replay.hpp>
-#include <lmdj/facade/application.hpp>
-#include <lmdj/project_io/project_store.hpp>
 
 #include "tests/core/support/test.hpp"
 
@@ -24,13 +24,14 @@ using lmdj::cooker::ResolvedPad;
 using lmdj::domain::FxEngagePerformanceEvent;
 using lmdj::domain::FxMovePerformanceEvent;
 using lmdj::domain::FxReleasePerformanceEvent;
-using lmdj::domain::HoldOnPerformanceEvent;
 using lmdj::domain::HoldOffPerformanceEvent;
+using lmdj::domain::HoldOnPerformanceEvent;
 using lmdj::domain::PadHitPerformanceEvent;
 using lmdj::domain::PatternLaunchPerformanceEvent;
 using lmdj::domain::PerformanceEvent;
 using lmdj::domain::PerformanceFx;
 using lmdj::domain::PerformanceId;
+using lmdj::facade::NeutralResetProgress;
 using lmdj::facade::PerformanceReplayRuntimeSink;
 using lmdj::facade::ReplayId;
 using lmdj::facade::ReplayState;
@@ -77,6 +78,11 @@ class CapturingController final
     status_value = {ReplayState::playing, 0,
                     projections.back()->event_count,
                     projections.back()->resolved_revision};
+    if (begin_failures > 0) {
+      --begin_failures;
+      return Result<lmdj::facade::ReplayRuntimeStatus>::failure(
+          Error{ErrorCode::internal_error, "runtime reset failed"});
+    }
     return Result<lmdj::facade::ReplayRuntimeStatus>::success(status_value);
   }
 
@@ -94,6 +100,10 @@ class CapturingController final
       return Result<lmdj::facade::ReplayRuntimeStatus>::failure(
           Error{ErrorCode::internal_error, "runtime reset failed"});
     }
+    if (stop_pending > 0) {
+      --stop_pending;
+      return Result<lmdj::facade::ReplayRuntimeStatus>::success(status_value);
+    }
     status_value.state = ReplayState::stopped;
     return Result<lmdj::facade::ReplayRuntimeStatus>::success(status_value);
   }
@@ -103,7 +113,9 @@ class CapturingController final
   mutable std::uint32_t status_calls{};
   std::uint32_t begin_calls{};
   std::uint32_t stop_calls{};
+  std::uint32_t begin_failures{};
   std::uint32_t stop_failures{};
+  std::uint32_t stop_pending{};
   mutable lmdj::facade::ReplayRuntimeStatus status_value;
 };
 
@@ -163,15 +175,21 @@ class RecordingSink final : public PerformanceReplayRuntimeSink {
     return apply_result();
   }
 
-  Result<void> reset_neutral() override {
+  Result<NeutralResetProgress> reset_neutral() override {
     calls.push_back("reset");
     ++reset_attempts;
     if (reset_failures > 0) {
       --reset_failures;
-      return Result<void>::failure(
+      return Result<NeutralResetProgress>::failure(
           Error{ErrorCode::internal_error, "runtime reset failed"});
     }
-    return Result<void>::success();
+    if (reset_pending > 0) {
+      --reset_pending;
+      return Result<NeutralResetProgress>::success(
+          NeutralResetProgress::pending);
+  }
+    return Result<NeutralResetProgress>::success(
+        NeutralResetProgress::complete);
   }
 
   Result<void> apply_result() {
@@ -186,6 +204,7 @@ class RecordingSink final : public PerformanceReplayRuntimeSink {
   std::vector<std::string> calls;
   std::uint32_t apply_failures{};
   std::uint32_t reset_failures{};
+  std::uint32_t reset_pending{};
   std::uint32_t reset_attempts{};
 };
 
@@ -298,6 +317,82 @@ void test_empty_projection_resets_before_complete() {
   LMDJ_CHECK(completed.value().state == ReplayState::complete);
   LMDJ_CHECK(completed.value().event_cursor == 0);
   LMDJ_CHECK((sink->calls == std::vector<std::string>{"reset"}));
+}
+
+void test_pending_reset_keeps_playing_until_progress_is_confirmed() {
+  auto sink = std::make_shared<RecordingSink>();
+  sink->reset_pending = 1;
+  lmdj::facade::ReferencePerformanceReplayController controller(sink);
+  LMDJ_CHECK(controller.begin(ReplayId{kReplayId}, projection()).has_value());
+  const auto pending = controller.advance_to(20);
+  LMDJ_CHECK(pending.has_value());
+  LMDJ_CHECK(pending.value().state == ReplayState::playing);
+  LMDJ_CHECK(pending.value().event_cursor == 4);
+  LMDJ_CHECK(sink->reset_attempts == 1);
+
+  const auto observed = controller.status(ReplayId{kReplayId});
+  LMDJ_CHECK(observed.has_value());
+  LMDJ_CHECK(observed.value().state == ReplayState::playing);
+  LMDJ_CHECK(sink->reset_attempts == 1);
+
+  const auto completed = controller.advance_to(20);
+  LMDJ_CHECK(completed.has_value());
+  LMDJ_CHECK(completed.value().state == ReplayState::complete);
+  LMDJ_CHECK(sink->reset_attempts == 2);
+}
+
+void test_pending_explicit_stop_is_polled_by_each_stop_request() {
+  auto sink = std::make_shared<RecordingSink>();
+  sink->reset_pending = 1;
+  lmdj::facade::ReferencePerformanceReplayController controller(sink);
+  LMDJ_CHECK(controller.begin(ReplayId{kReplayId}, projection()).has_value());
+  const auto pending = controller.stop(ReplayId{kReplayId});
+  LMDJ_CHECK(pending.has_value());
+  LMDJ_CHECK(pending.value().state == ReplayState::playing);
+  LMDJ_CHECK(sink->reset_attempts == 1);
+  LMDJ_CHECK(controller.status(ReplayId{kReplayId}).value().state ==
+             ReplayState::playing);
+  LMDJ_CHECK(sink->reset_attempts == 1);
+  const auto stopped = controller.stop(ReplayId{kReplayId});
+  LMDJ_CHECK(stopped.has_value());
+  LMDJ_CHECK(stopped.value().state == ReplayState::stopped);
+  LMDJ_CHECK(sink->reset_attempts == 2);
+}
+
+void test_empty_projection_retains_identity_while_pending_or_failed() {
+  auto pending_sink = std::make_shared<RecordingSink>();
+  pending_sink->reset_pending = 1;
+  lmdj::facade::ReferencePerformanceReplayController pending_controller(
+      pending_sink);
+  const auto pending =
+      pending_controller.begin(ReplayId{kReplayId}, empty_projection());
+  LMDJ_CHECK(pending.has_value());
+  LMDJ_CHECK(pending.value().state == ReplayState::playing);
+  LMDJ_CHECK(pending_controller.status(ReplayId{kReplayId}).has_value());
+  LMDJ_CHECK(
+      !pending_controller.begin(ReplayId{kSecondReplayId}, empty_projection())
+           .has_value());
+  const auto completed = pending_controller.advance_to(0);
+  LMDJ_CHECK(completed.has_value());
+  LMDJ_CHECK(completed.value().state == ReplayState::complete);
+
+  auto failed_sink = std::make_shared<RecordingSink>();
+  failed_sink->reset_failures = 1;
+  lmdj::facade::ReferencePerformanceReplayController failed_controller(
+      failed_sink);
+  const auto failed =
+      failed_controller.begin(ReplayId{kReplayId}, empty_projection());
+  LMDJ_CHECK(!failed.has_value());
+  const auto retained = failed_controller.status(ReplayId{kReplayId});
+  LMDJ_CHECK(retained.has_value());
+  LMDJ_CHECK(retained.value().state == ReplayState::playing);
+  LMDJ_CHECK(failed_sink->reset_attempts == 1);
+  LMDJ_CHECK(failed_controller.advance_to(0).has_value());
+  LMDJ_CHECK(failed_sink->reset_attempts == 1);
+  const auto retry = failed_controller.stop(ReplayId{kReplayId});
+  LMDJ_CHECK(retry.has_value());
+  LMDJ_CHECK(retry.value().state == ReplayState::complete);
+  LMDJ_CHECK(failed_sink->reset_attempts == 2);
 }
 
 void test_apply_failure_freezes_cursor_and_stop_retries_reset() {
@@ -470,7 +565,7 @@ void test_reference_controller_covers_all_runtime_actions_and_failures() {
       empty_reset_sink);
   LMDJ_CHECK(!empty_reset_controller.begin(
       ReplayId{kReplayId}, empty_projection()).has_value());
-  LMDJ_CHECK(!empty_reset_controller.status(ReplayId{kReplayId}).has_value());
+  LMDJ_CHECK(empty_reset_controller.status(ReplayId{kReplayId}).has_value());
 }
 
 void test_facade_identity_exclusion_and_fixed_revision() {
@@ -625,6 +720,77 @@ void test_failed_stop_does_not_consume_request_identity() {
   LMDJ_CHECK(controller->stop_calls == 2);
 }
 
+void test_pending_stop_does_not_consume_request_identity() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "project.lmdj";
+  lmdj::project_io::ProjectStore writer;
+  LMDJ_CHECK(writer.create(bundle, replay_facade_project()).has_value());
+  auto controller = std::make_shared<CapturingController>();
+  controller->stop_pending = 1;
+  auto application = make_replay_application(temp.path(), controller);
+  LMDJ_CHECK(application
+                 .command({
+                     {"operation", "performance.replay.begin"},
+                     {"project_path", bundle.generic_string()},
+                     {"replay_id", kReplayId},
+                     {"performance_id", kPerformanceId},
+                 })
+                 .at("ok") == true);
+  const auto stop_request = nlohmann::json{
+      {"operation", "performance.replay.stop"},
+      {"project_path", bundle.generic_string()},
+      {"replay_id", kReplayId},
+      {"request_id", kStopRequestId},
+  };
+  const auto pending = application.command(stop_request);
+  LMDJ_CHECK(pending.at("ok") == true);
+  LMDJ_CHECK(pending.at("result").at("state") == "playing");
+  LMDJ_CHECK(pending.at("result").at("replayed") == false);
+  LMDJ_CHECK(controller->stop_calls == 1);
+  const auto terminal = application.command(stop_request);
+  LMDJ_CHECK(terminal.at("ok") == true);
+  LMDJ_CHECK(terminal.at("result").at("state") == "stopped");
+  LMDJ_CHECK(terminal.at("result").at("replayed") == false);
+  LMDJ_CHECK(controller->stop_calls == 2);
+  const auto receipt = application.command(stop_request);
+  LMDJ_CHECK(receipt.at("ok") == true);
+  LMDJ_CHECK(receipt.at("result").at("replayed") == true);
+  LMDJ_CHECK(controller->stop_calls == 2);
+}
+
+void test_failed_empty_begin_retains_facade_identity_and_exclusion() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "project.lmdj";
+  lmdj::project_io::ProjectStore writer;
+  LMDJ_CHECK(writer.create(bundle, replay_facade_project()).has_value());
+  auto controller = std::make_shared<CapturingController>();
+  controller->begin_failures = 1;
+  auto application = make_replay_application(temp.path(), controller);
+  const auto begin_request = nlohmann::json{
+      {"operation", "performance.replay.begin"},
+      {"project_path", bundle.generic_string()},
+      {"replay_id", kReplayId},
+      {"performance_id", kPerformanceId},
+  };
+  const auto failed = application.command(begin_request);
+  LMDJ_CHECK(failed.at("ok") == false);
+  LMDJ_CHECK(controller->begin_calls == 1);
+
+  const auto retry = application.command(begin_request);
+  LMDJ_CHECK(retry.at("ok") == true);
+  LMDJ_CHECK(retry.at("result").at("state") == "playing");
+  LMDJ_CHECK(controller->begin_calls == 1);
+  const auto excluded = application.command({
+      {"operation", "performance.replay.begin"},
+      {"project_path", bundle.generic_string()},
+      {"replay_id", kSecondReplayId},
+      {"performance_id", kSecondPerformanceId},
+  });
+  LMDJ_CHECK(excluded.at("ok") == false);
+  LMDJ_CHECK((excluded.at("error").at("details") ==
+              nlohmann::json{{"active_replay_id", kReplayId}}));
+}
+
 }  // namespace
 
 int main() {
@@ -633,6 +799,9 @@ int main() {
     test_stop_is_the_only_reset_retry_driver();
     test_explicit_stop_resets_and_publishes_stopped();
     test_empty_projection_resets_before_complete();
+    test_pending_reset_keeps_playing_until_progress_is_confirmed();
+    test_pending_explicit_stop_is_polled_by_each_stop_request();
+    test_empty_projection_retains_identity_while_pending_or_failed();
     test_apply_failure_freezes_cursor_and_stop_retries_reset();
     test_application_requires_explicit_replay_controller();
     test_unavailable_controller_contract();
@@ -641,6 +810,8 @@ int main() {
     test_facade_identity_exclusion_and_fixed_revision();
     test_replay_exclusion_is_per_facade_instance();
     test_failed_stop_does_not_consume_request_identity();
+    test_pending_stop_does_not_consume_request_identity();
+    test_failed_empty_begin_retains_facade_identity_and_exclusion();
     std::cout << "performance replay controller tests passed\n";
     return 0;
   } catch (const std::exception& error) {

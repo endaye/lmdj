@@ -2,12 +2,15 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
 #include <lmdj/facade/application.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 
 #include "tests/core/support/test.hpp"
 
@@ -118,6 +121,94 @@ private:
   std::vector<lmdj::facade::PatternLaunchOutcome> outcomes_;
 };
 
+class PostWriteFailingStorage final
+    : public lmdj::project_io::ProjectStoragePlatform {
+public:
+  PostWriteFailingStorage()
+      : delegate_(lmdj::project_io::make_default_project_storage_platform()) {}
+
+  void fail_next_tail_retry_pair() { post_write_failures_ = 2; }
+
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path &path) override {
+    return delegate_->acquire_writer(path);
+  }
+  lmdj::foundation::Result<void>
+  ensure_directory(const std::filesystem::path &path) override {
+    return delegate_->ensure_directory(path);
+  }
+  lmdj::foundation::Result<bool>
+  exists(const std::filesystem::path &path) const override {
+    return delegate_->exists(path);
+  }
+  lmdj::foundation::Result<std::uint64_t>
+  byte_length(const std::filesystem::path &path) const override {
+    return delegate_->byte_length(path);
+  }
+  lmdj::foundation::Result<std::vector<std::byte>>
+  read_complete(const std::filesystem::path &path) const override {
+    return delegate_->read_complete(path);
+  }
+  lmdj::foundation::Result<void>
+  create_immutable(const std::filesystem::path &path,
+                   std::span<const std::byte> bytes) override {
+    return delegate_->create_immutable(path, bytes);
+  }
+  lmdj::foundation::Result<void>
+  replace_complete(const std::filesystem::path &path,
+                   std::span<const std::byte> bytes) override {
+    return delegate_->replace_complete(path, bytes);
+  }
+  lmdj::foundation::Result<void>
+  append_durable(const std::filesystem::path &path,
+                 std::uint64_t valid_prefix_length,
+                 std::span<const std::byte> bytes) override {
+    auto appended =
+        delegate_->append_durable(path, valid_prefix_length, bytes);
+    if (appended.has_value() && post_write_failures_ != 0) {
+      --post_write_failures_;
+      return lmdj::foundation::Result<void>::failure({
+          lmdj::foundation::ErrorCode::io_error,
+          "injected post-write append failure",
+      });
+    }
+    return appended;
+  }
+  lmdj::foundation::Result<void>
+  remove(const std::filesystem::path &path) override {
+    return delegate_->remove(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>>
+  list_names(const std::filesystem::path &path) const override {
+    return delegate_->list_names(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>>
+  list_directories(const std::filesystem::path &path) const override {
+    return delegate_->list_directories(path);
+  }
+  lmdj::foundation::Result<void>
+  remove_tree(const std::filesystem::path &path) override {
+    return delegate_->remove_tree(path);
+  }
+  lmdj::foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path &staging,
+      const std::filesystem::path &destination) override {
+    return delegate_->publish_directory_if_absent(staging, destination);
+  }
+  lmdj::foundation::Result<bool>
+  directory_exists(const std::filesystem::path &path) const override {
+    return delegate_->directory_exists(path);
+  }
+  lmdj::foundation::Result<void>
+  validate_managed_tree(const std::filesystem::path &path) const override {
+    return delegate_->validate_managed_tree(path);
+  }
+
+private:
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> delegate_;
+  std::size_t post_write_failures_{};
+};
+
 void check_ok(const nlohmann::json &response) {
   if (!response.at("ok").get<bool>()) {
     throw std::runtime_error(response.dump());
@@ -168,6 +259,19 @@ void test_raw_gesture_admission_and_launch_ack() {
                                       {"velocity", 100}}}};
   const auto accepted = application.command(press);
   check_ok(accepted);
+  lmdj::project_io::SequenceJournal journal;
+  const auto pressed = journal.read_active_performance(bundle);
+  LMDJ_CHECK(pressed.has_value());
+  LMDJ_CHECK(pressed.value().pending_events.empty());
+  LMDJ_CHECK(pressed.value().last_input_sequence == 1);
+  LMDJ_CHECK(pressed.value().transient_checkpoint.has_value());
+  LMDJ_CHECK(
+      pressed.value().transient_checkpoint->open_pads.size() == 1);
+  LMDJ_CHECK(
+      pressed.value().transient_checkpoint->open_pads.front().gesture_id ==
+      kGesture);
+  LMDJ_CHECK(
+      pressed.value().transient_checkpoint->last_accepted_tick == 10);
   const auto replayed = application.command(press);
   check_ok(replayed);
   LMDJ_CHECK(replayed.at("result").at("replayed") == true);
@@ -284,6 +388,15 @@ void test_raw_gesture_admission_and_launch_ack() {
                            {"session_id", kSession},
                            {"event_id", "10000000-0000-4000-8000-000000000020"},
                            {"event", {{"kind", "hold_on"}}}}));
+
+  const auto open = journal.read_active_performance(bundle);
+  LMDJ_CHECK(open.has_value());
+  LMDJ_CHECK(open.value().last_input_sequence == 10);
+  LMDJ_CHECK(open.value().transient_checkpoint.has_value());
+  LMDJ_CHECK(open.value().transient_checkpoint->open_pads.size() == 1);
+  LMDJ_CHECK(open.value().transient_checkpoint->open_fx.size() == 1);
+  LMDJ_CHECK(open.value().transient_checkpoint->hold);
+  LMDJ_CHECK(open.value().transient_checkpoint->last_accepted_tick == 230);
   check_ok(
       application.command({{"operation", "performance.record.event"},
                            {"project_path", bundle.generic_string()},
@@ -383,12 +496,99 @@ void test_launch_receives_core_resolved_immutable_pattern_material() {
   LMDJ_CHECK(acknowledger->resolved_pattern()->project_revision == 3);
 }
 
+void test_ambiguous_tail_append_freezes_runtime_without_overwrite() {
+  TempDirectory temp;
+  auto storage = std::make_shared<PostWriteFailingStorage>();
+  lmdj::facade::ApplicationConfig config{
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      storage,
+      std::make_shared<Clock>(),
+      std::make_shared<Sequencer>(),
+      nullptr,
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+  };
+  lmdj::facade::Application application(std::move(config));
+  const auto bundle = temp.path() / "ambiguous-project.lmdj";
+  check_ok(application.command({{"operation", "project.create"},
+                                {"project_path", bundle.generic_string()},
+                                {"project_id", "70000000-0000-4000-8000-000000000001"},
+                                {"bpm", 120}}));
+  check_ok(application.command({{"operation", "performance.record.begin"},
+                                {"project_path", bundle.generic_string()},
+                                {"command_id", "70000000-0000-4000-8000-000000000002"},
+                                {"expected_revision", 0},
+                                {"session_id", "70000000-0000-4000-8000-000000000003"},
+                                {"performance_id", "70000000-0000-4000-8000-000000000004"}}));
+
+  storage->fail_next_tail_retry_pair();
+  const auto ambiguous = application.command({
+      {"operation", "performance.record.event"},
+      {"project_path", bundle.generic_string()},
+      {"session_id", "70000000-0000-4000-8000-000000000003"},
+      {"event_id", "70000000-0000-4000-8000-000000000005"},
+      {"event",
+       {{"kind", "pad_press"},
+        {"gesture_id", "70000000-0000-4000-8000-000000000006"},
+        {"slot", 4},
+        {"velocity", 91}}},
+  });
+  LMDJ_CHECK(!ambiguous.at("ok").get<bool>());
+  LMDJ_CHECK(
+      ambiguous.at("error").at("details").at("reason") ==
+      "performance_tail_outcome_unknown");
+
+  const auto journal_path = bundle / "recovery/active/performance.jsonl";
+  const auto retained_before = storage->read_complete(journal_path);
+  LMDJ_CHECK(retained_before.has_value());
+  const auto durable =
+      lmdj::project_io::SequenceJournal{storage}.read_active_performance(bundle);
+  LMDJ_CHECK(durable.has_value());
+  LMDJ_CHECK(durable.value().last_input_sequence == 1);
+  LMDJ_CHECK(durable.value().transient_checkpoint.has_value());
+  LMDJ_CHECK(durable.value().transient_checkpoint->open_pads.size() == 1);
+
+  const auto status = application.query({
+      {"operation", "performance.record.status"},
+      {"project_path", bundle.generic_string()},
+  });
+  check_ok(status);
+  LMDJ_CHECK(status.at("result").at("state") == "recovery_required");
+  LMDJ_CHECK(status.at("result").at("open_pad_gestures") == 1);
+
+  const auto rejected = application.command({
+      {"operation", "performance.record.event"},
+      {"project_path", bundle.generic_string()},
+      {"session_id", "70000000-0000-4000-8000-000000000003"},
+      {"event_id", "70000000-0000-4000-8000-000000000007"},
+      {"event", {{"kind", "hold_on"}}},
+  });
+  LMDJ_CHECK(!rejected.at("ok").get<bool>());
+  LMDJ_CHECK(
+      rejected.at("error").at("details").at("reason") ==
+      "performance_tail_outcome_unknown");
+  const auto stopped = application.command({
+      {"operation", "performance.record.stop"},
+      {"project_path", bundle.generic_string()},
+      {"session_id", "70000000-0000-4000-8000-000000000003"},
+      {"request_id", "70000000-0000-4000-8000-000000000008"},
+  });
+  LMDJ_CHECK(!stopped.at("ok").get<bool>());
+  const auto retained_after = storage->read_complete(journal_path);
+  LMDJ_CHECK(retained_after.has_value());
+  LMDJ_CHECK(retained_after.value() == retained_before.value());
+}
+
 } // namespace
 
 int main() {
   try {
     test_raw_gesture_admission_and_launch_ack();
     test_launch_receives_core_resolved_immutable_pattern_material();
+    test_ambiguous_tail_append_freezes_runtime_without_overwrite();
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;

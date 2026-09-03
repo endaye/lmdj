@@ -56,6 +56,7 @@ struct ReferencePerformanceReplayController::Impl {
     std::shared_ptr<const cooker::PerformanceReplayProjection> projection;
     ReplayRuntimeStatus status;
     std::optional<ReplayState> reset_target;
+    bool reset_pollable{};
   };
 
   explicit Impl(std::shared_ptr<PerformanceReplayRuntimeSink> sink_value)
@@ -135,10 +136,16 @@ struct ReferencePerformanceReplayController::Impl {
       ReplayEntry& entry) {
     const auto reset = sink->reset_neutral();
     if (!reset.has_value()) {
+      entry.reset_pollable = false;
       return foundation::Result<ReplayRuntimeStatus>::failure(reset.error());
+    }
+    if (reset.value() == NeutralResetProgress::pending) {
+      entry.reset_pollable = true;
+      return foundation::Result<ReplayRuntimeStatus>::success(entry.status);
     }
     entry.status.state = *entry.reset_target;
     entry.reset_target.reset();
+    entry.reset_pollable = false;
     if (active_replay_id == replay_key) {
       active_replay_id.clear();
     }
@@ -205,6 +212,7 @@ ReferencePerformanceReplayController::begin(
           std::move(projection),
           initial_status,
           std::nullopt,
+          false,
       });
   if (!created) {
     return foundation::Result<ReplayRuntimeStatus>::failure(replay_error(
@@ -215,12 +223,7 @@ ReferencePerformanceReplayController::begin(
   impl_->active_replay_id = key;
   if (entry.status.event_count == 0) {
     entry.reset_target = ReplayState::complete;
-    const auto completed = impl_->finish_reset(key, entry);
-    if (!completed.has_value()) {
-      impl_->active_replay_id.clear();
-      impl_->replays.erase(inserted);
-    }
-    return completed;
+    return impl_->finish_reset(key, entry);
   }
   return foundation::Result<ReplayRuntimeStatus>::success(entry.status);
 }
@@ -270,6 +273,9 @@ ReferencePerformanceReplayController::advance_to(
   const auto key = impl_->active_replay_id;
   auto& entry = impl_->replays.at(key);
   if (entry.reset_target.has_value()) {
+    if (entry.reset_pollable) {
+      return impl_->finish_reset(key, entry);
+    }
     return foundation::Result<ReplayRuntimeStatus>::success(entry.status);
   }
   while (entry.status.event_cursor < entry.status.event_count) {

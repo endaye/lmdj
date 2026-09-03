@@ -316,6 +316,22 @@ class FakeGitHub:
                 **self.release.__dict__,
                 "assets": (changed,) + self.release.assets[1:],
             })
+        elif self.publish_mutation == "asset-download-url":
+            # GitHub rewrites every asset download path from the untagged draft
+            # form to the exact tag form on a genuine publish.
+            rewritten = tuple(
+                GitHubAsset(**{
+                    **original.__dict__,
+                    "browser_download_url": (
+                        "https://github.com/endaye/lmdj/releases/download/"
+                        f"{self.release.tag_name}/{original.name}"
+                    ),
+                })
+                for original in self.release.assets
+            )
+            self.release = GitHubRelease(**{
+                **self.release.__dict__, "assets": rewritten,
+            })
         elif self.publish_mutation == "html-url":
             self.release = GitHubRelease(**{
                 **self.release.__dict__, "html_url": _DRAFT_HTML_URL,
@@ -458,6 +474,44 @@ class ReleaseTransitionsTest(unittest.TestCase):
         ])
         self.assertNotIn("--tags", runner.commands[-1])
         self.assertNotIn("--force", runner.commands[-1])
+
+    def test_local_tag_operations_force_openpgp_despite_global_git_signing_format(self) -> None:
+        class CreatingRepository(GitRepository):
+            def local_tag_state(self, tag: str) -> LocalTag:
+                return LocalTag("b" * 40, self.root.name, "C" * 40)
+
+        create_runner = RecordingRunner()
+        target = "a" * 40
+        repository = CreatingRepository(Path(target), runner=create_runner)
+        repository.create_local_tag("lmdj-v1.0.21.0", target, "C" * 40, "fixture")
+        self.assertEqual(create_runner.commands[0][:4], [
+            "git", "-c", "gpg.format=openpgp", "tag",
+        ])
+
+        class VerifyingRunner(RecordingRunner):
+            def run(self, arguments, *, cwd=None, environment=None) -> CommandResult:
+                vector = [str(item) for item in arguments]
+                self.commands.append(vector)
+                if vector[-3:] == ["rev-parse", "--verify", "refs/tags/fixture"]:
+                    return CommandResult(tuple(vector), 0, "b" * 40 + "\n", "")
+                if vector[-3:] == ["cat-file", "-t", "refs/tags/fixture"]:
+                    return CommandResult(tuple(vector), 0, "tag\n", "")
+                if vector[-3:] == ["rev-parse", "--verify", "refs/tags/fixture^{commit}"]:
+                    return CommandResult(tuple(vector), 0, target + "\n", "")
+                if vector[-3:] == ["verify-tag", "--raw", "refs/tags/fixture"]:
+                    status = "[GNUPG:] VALIDSIG " + "C" * 40 + "\n"
+                    return CommandResult(tuple(vector), 0, "", status)
+                raise AssertionError(vector)
+
+        verify_runner = VerifyingRunner()
+        verified = GitRepository(self.root, runner=verify_runner).local_tag_state("fixture")
+        self.assertEqual(verified.signer_fingerprint, "C" * 40)
+        verify_command = next(
+            command for command in verify_runner.commands if "verify-tag" in command
+        )
+        self.assertEqual(verify_command[:4], [
+            "git", "-c", "gpg.format=openpgp", "verify-tag",
+        ])
 
     def test_origin_guard_rejects_any_extra_fetch_or_push_url(self) -> None:
         class MultipleUrlRunner(RecordingRunner):
@@ -858,6 +912,31 @@ class ReleaseTransitionsTest(unittest.TestCase):
         assert self.github.release is not None
         self.assertFalse(self.github.release.draft)
         self.assertEqual(self.github.release.html_url, _DRAFT_HTML_URL)
+
+    def test_publish_tolerates_the_asset_download_url_rewrite(self) -> None:
+        # Publication rewrites each asset download path exactly as it rewrites
+        # the Release html_url, so that path is not a draft-invariant field. A
+        # comparison that treats it as one fails 100% of genuine publications
+        # after GitHub has already accepted the mutation.
+        created = self._push_and_create()
+        assert created.release_id is not None
+        self.github.publish_mutation = "asset-download-url"
+        result = publish_draft(
+            self.tag, created.release_id, created.plan_sha256, self.context(),
+            actions_environment={
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_EVENT_NAME": "workflow_dispatch",
+            },
+        )
+        self.assertEqual(result.status, "published")
+        assert self.github.release is not None
+        self.assertFalse(self.github.release.draft)
+        for asset in self.github.release.assets:
+            self.assertEqual(
+                asset.browser_download_url,
+                "https://github.com/endaye/lmdj/releases/download/"
+                f"{self.tag}/{asset.name}",
+            )
 
     def test_publish_reconciles_an_accepted_patch_by_numeric_id(self) -> None:
         created = self._push_and_create()

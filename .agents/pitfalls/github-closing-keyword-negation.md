@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-08-31
     occurrence: https://github.com/endaye/lmdj/pull/493
     observed_by: Codex
+  - date: 2026-09-03
+    occurrence: https://github.com/endaye/lmdj/pull/477
+    observed_by: Codex GPT-5
 exit: none
 ---
 
@@ -31,3 +34,8 @@ place `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`,
 `resolves`, or `resolved` immediately before an Issue reference, even inside a
 negated sentence. After every merge that intentionally preserves an Issue,
 query that Issue's live state; if it was closed, reopen it and record why.
+
+The second recurrence is escalated in
+[#578](https://github.com/endaye/lmdj/issues/578). Until that Issue lands a
+durable skill or gate exit, every partial-delivery merge still requires the
+live post-merge Issue-state audit above.

@@ -3611,27 +3611,6 @@ ProjectStore::acquire_performance_owner_lock(
     return foundation::Result<
         std::unique_ptr<PerformanceOwnerLock>>::failure(tree.error());
   }
-  auto lease = platform_->acquire_writer(bundle);
-  if (!lease.has_value()) {
-    return foundation::Result<
-        std::unique_ptr<PerformanceOwnerLock>>::failure(lease.error());
-  }
-  auto operation = std::move(lease.value());
-  (void)operation;
-  SequenceJournal journal{platform_};
-  auto active = journal.read_active_performance(bundle);
-  if (!active.has_value()) {
-    return foundation::Result<
-        std::unique_ptr<PerformanceOwnerLock>>::failure(active.error());
-  }
-  if (active.value().session_id != session_id) {
-    return foundation::Result<
-        std::unique_ptr<PerformanceOwnerLock>>::failure(Error{
-        ErrorCode::invalid_argument,
-        "Performance owner lock session does not match the active Journal",
-    });
-  }
-
   int flags = O_CREAT | O_RDWR | O_CLOEXEC;
 #if defined(O_NOFOLLOW)
   flags |= O_NOFOLLOW;
@@ -3673,9 +3652,31 @@ ProjectStore::acquire_performance_owner_lock(
         {{"path", path.generic_string()}, {"errno", failure}},
     });
   }
+  auto owner_lock = std::unique_ptr<PerformanceOwnerLock>{
+      new PerformanceOwnerLock(
+          std::make_unique<PerformanceOwnerLock::Impl>(descriptor))};
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<
+        std::unique_ptr<PerformanceOwnerLock>>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active_performance(bundle);
+  if (!active.has_value()) {
+    return foundation::Result<
+        std::unique_ptr<PerformanceOwnerLock>>::failure(active.error());
+  }
+  if (active.value().session_id != session_id) {
+    return foundation::Result<
+        std::unique_ptr<PerformanceOwnerLock>>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Performance owner lock session does not match the active Journal",
+    });
+  }
   return foundation::Result<std::unique_ptr<PerformanceOwnerLock>>::success(
-      std::unique_ptr<PerformanceOwnerLock>{new PerformanceOwnerLock(
-          std::make_unique<PerformanceOwnerLock::Impl>(descriptor))});
+      std::move(owner_lock));
 }
 
 foundation::Result<void> ProjectStore::create(
@@ -4032,6 +4033,8 @@ ProjectStore::begin_performance_draft(
         "Performance draft begin identity is invalid",
     });
   }
+  std::unique_ptr<PerformanceOwnerLock> reattach_owner_lock;
+  bool already_attached = false;
   {
     SequenceJournal journal{platform_};
     auto active = journal.read_active_performance(bundle);
@@ -4041,7 +4044,36 @@ ProjectStore::begin_performance_draft(
           *active.value().begin_command_id == request.meta.command_id &&
           active.value().session_id == request.session_id &&
           active.value().performance_id == request.performance_id;
-      if (!exact_reattach) {
+      if (exact_reattach) {
+        const auto key = bundle.lexically_normal().generic_string();
+        {
+          std::lock_guard lock(performance_owner_locks_->mutex);
+          const auto existing = performance_owner_locks_->entries.find(key);
+          if (existing != performance_owner_locks_->entries.end()) {
+            if (existing->second.session_id != request.session_id) {
+              return foundation::Result<PerformanceLifecycleReceipt>::failure(
+                  recording_session_active_error(
+                      existing->second.session_id));
+            }
+            already_attached = true;
+          }
+        }
+        if (!already_attached) {
+          auto acquired = acquire_performance_owner_lock(
+              bundle, request.session_id);
+          if (!acquired.has_value()) {
+            return foundation::Result<PerformanceLifecycleReceipt>::failure(
+                acquired.error());
+          }
+          reattach_owner_lock = std::move(acquired.value());
+          auto closed = journal.close_performance_transients_for_owner_loss(
+              bundle, request.session_id);
+          if (!closed.has_value()) {
+            return foundation::Result<PerformanceLifecycleReceipt>::failure(
+                closed.error());
+          }
+        }
+      } else {
         auto reconciled = reconcile_performance_recovery(bundle);
         if (!reconciled.has_value()) {
           return foundation::Result<PerformanceLifecycleReceipt>::failure(
@@ -4164,10 +4196,24 @@ ProjectStore::begin_performance_draft(
       outcome.value().replayed,
   };
   operation.reset();
-  auto held = hold_performance_owner_lock(bundle, request.session_id);
-  if (!held.has_value()) {
-    return foundation::Result<PerformanceLifecycleReceipt>::failure(
-        held.error());
+  if (reattach_owner_lock != nullptr) {
+    const auto key = bundle.lexically_normal().generic_string();
+    std::lock_guard lock(performance_owner_locks_->mutex);
+    const auto [existing, inserted] =
+        performance_owner_locks_->entries.emplace(
+            key,
+            PerformanceOwnerLocks::Entry{
+                request.session_id, std::move(reattach_owner_lock)});
+    if (!inserted && existing->second.session_id != request.session_id) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          recording_session_active_error(existing->second.session_id));
+    }
+  } else if (!already_attached) {
+    auto held = hold_performance_owner_lock(bundle, request.session_id);
+    if (!held.has_value()) {
+      return foundation::Result<PerformanceLifecycleReceipt>::failure(
+          held.error());
+    }
   }
   return foundation::Result<PerformanceLifecycleReceipt>::success(receipt);
 }
@@ -5610,6 +5656,14 @@ ProjectStore::list_performance_recovery(
   }
   auto active = journal.read_active_performance(bundle);
   if (active.has_value()) {
+    auto preview = preview_performance_owner_loss(active.value());
+    if (!preview.has_value()) {
+      return foundation::Result<
+          std::vector<PerformanceRecoveryCandidate>>::failure(
+          preview.error());
+    }
+    active.value().pending_events =
+        std::move(preview.value().canonical_events);
     std::string reason;
     switch (active.value().state) {
       case SequenceSessionState::active:
@@ -5665,6 +5719,11 @@ ProjectStore::reconcile_performance_recovery(
         std::vector<PerformanceRecoveryCandidate>>::failure(
         owner_lock.error());
   }
+  active = journal.read_active_performance(bundle);
+  if (!active.has_value()) {
+    return foundation::Result<
+        std::vector<PerformanceRecoveryCandidate>>::failure(active.error());
+  }
   for (const auto& flush : active.value().flushes) {
     if (flush.completed) {
       continue;
@@ -5705,6 +5764,17 @@ ProjectStore::reconcile_performance_recovery(
           std::vector<PerformanceRecoveryCandidate>>::failure(
           completed.error());
     }
+  }
+  active = journal.read_active_performance(bundle);
+  if (!active.has_value()) {
+    return foundation::Result<
+        std::vector<PerformanceRecoveryCandidate>>::failure(active.error());
+  }
+  auto closed = journal.close_performance_transients_for_owner_loss(
+      bundle, active.value().session_id);
+  if (!closed.has_value()) {
+    return foundation::Result<
+        std::vector<PerformanceRecoveryCandidate>>::failure(closed.error());
   }
   active = journal.read_active_performance(bundle);
   if (!active.has_value()) {

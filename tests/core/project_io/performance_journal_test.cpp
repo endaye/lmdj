@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +32,8 @@ using lmdj::foundation::SequenceSessionId;
 using lmdj::project_io::CreatePerformance;
 using lmdj::project_io::DeletePerformance;
 using lmdj::project_io::PerformanceFlushIdentity;
+using lmdj::project_io::PerformanceOpenPadTransient;
+using lmdj::project_io::PerformanceTransientCheckpoint;
 using lmdj::project_io::ProjectStore;
 using lmdj::project_io::RenamePerformance;
 using lmdj::project_io::SequenceJournal;
@@ -183,6 +186,377 @@ class FaultGuard {
   FaultGuard(const FaultGuard&) = delete;
   FaultGuard& operator=(const FaultGuard&) = delete;
 };
+
+void test_performance_transient_checkpoint_round_trips_empty_tail_transition() {
+  TempDirectory temp("transient-checkpoint");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  const auto performance = empty_performance();
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+
+  LMDJ_CHECK(
+      journal
+          .begin_performance(
+              bundle,
+              session_id,
+              performance.id,
+              lmdj::project_io::performance_fingerprint(performance),
+              0)
+          .has_value());
+  const auto begun = journal.read_active_performance(bundle);
+  LMDJ_CHECK(begun.has_value());
+  LMDJ_CHECK(begun.value().transient_checkpoint.has_value());
+  LMDJ_CHECK(
+      begun.value().transient_checkpoint == PerformanceTransientCheckpoint{});
+
+  const PerformanceTransientCheckpoint pressed{
+      {PerformanceOpenPadTransient{
+          std::string{kCommandId}, 5, 42, 100}},
+      {},
+      false,
+      42,
+  };
+  const std::vector<PerformanceEvent> no_canonical_events;
+  LMDJ_CHECK(
+      journal
+          .append_performance_tail(
+              bundle,
+              session_id,
+              performance.id,
+              0,
+              1,
+              no_canonical_events,
+              pressed)
+          .has_value());
+  const auto restored = journal.read_active_performance(bundle);
+  LMDJ_CHECK(restored.has_value());
+  LMDJ_CHECK(restored.value().pending_events.empty());
+  LMDJ_CHECK(restored.value().last_input_sequence == 1);
+  LMDJ_CHECK(restored.value().transient_checkpoint == pressed);
+}
+
+void test_post_write_tail_failure_is_reported_as_ambiguous_and_retained() {
+  TempDirectory temp("transient-ambiguous");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  const auto performance = empty_performance();
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  LMDJ_CHECK(
+      journal
+          .begin_performance(
+              bundle,
+              session_id,
+              performance.id,
+              lmdj::project_io::performance_fingerprint(performance),
+              0)
+          .has_value());
+  const std::vector events{pad_hit(2, 42)};
+  lmdj::foundation::Result<void> appended =
+      lmdj::foundation::Result<void>::success();
+  {
+    FaultGuard fault(FaultPoint::active_journal_sync);
+    appended = journal.append_performance_tail(
+        bundle,
+        session_id,
+        performance.id,
+        0,
+        1,
+        events,
+        PerformanceTransientCheckpoint{{}, {}, false, 42});
+  }
+  LMDJ_CHECK(!appended.has_value());
+  LMDJ_CHECK(
+      appended.error().details.at("reason") ==
+      "performance_tail_outcome_unknown");
+  const auto retained = journal.read_active_performance(bundle);
+  LMDJ_CHECK(retained.has_value());
+  LMDJ_CHECK(retained.value().pending_events == events);
+  LMDJ_CHECK(retained.value().last_input_sequence == 1);
+  LMDJ_CHECK(retained.value().transient_checkpoint.has_value());
+  LMDJ_CHECK(
+      retained.value().transient_checkpoint->last_accepted_tick == 42);
+}
+
+void test_performance_seal_replays_stable_candidate_without_suffix() {
+  TempDirectory temp("stable-seal");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  const auto performance = empty_performance();
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  LMDJ_CHECK(
+      journal
+          .begin_performance(
+              bundle,
+              session_id,
+              performance.id,
+              lmdj::project_io::performance_fingerprint(performance),
+              0)
+          .has_value());
+  const std::vector events{pad_hit(2, 42)};
+  LMDJ_CHECK(
+      journal
+          .append_performance_tail(
+              bundle,
+              session_id,
+              performance.id,
+              0,
+              1,
+              events,
+              PerformanceTransientCheckpoint{{}, {}, false, 42})
+          .has_value());
+  const auto active_path = bundle / "recovery/active/performance.jsonl";
+  const auto active_bytes = read_text(active_path);
+  const auto sealed = journal.seal_performance(
+      bundle, session_id, "owner_lost");
+  LMDJ_CHECK(sealed.has_value());
+  LMDJ_CHECK(
+      sealed.value().filename() ==
+      std::string{kSessionId} + "-performance-owner_lost.json");
+
+  write_text(active_path, active_bytes);
+  const auto replayed = journal.seal_performance(
+      bundle, session_id, "owner_lost");
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value() == sealed.value());
+  LMDJ_CHECK(!std::filesystem::exists(active_path));
+  LMDJ_CHECK(journal.list_performance_recoverable(bundle).value().size() == 1);
+
+  write_text(active_path, active_bytes);
+  const auto conflict = journal.seal_performance(
+      bundle, session_id, "different_reason");
+  LMDJ_CHECK(!conflict.has_value());
+  LMDJ_CHECK(
+      conflict.error().details.at("reason") ==
+      "performance_recovery_candidate_conflict");
+  LMDJ_CHECK(std::filesystem::exists(active_path));
+  LMDJ_CHECK(std::filesystem::exists(sealed.value()));
+  LMDJ_CHECK(journal.list_performance_recoverable(bundle).value().size() == 1);
+}
+
+void test_owner_loss_closes_fx_chain_then_hold_at_one_tick() {
+  TempDirectory temp("transient-fx-hold");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  const auto performance = empty_performance();
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  LMDJ_CHECK(
+      journal
+          .begin_performance(
+              bundle,
+              session_id,
+              performance.id,
+              lmdj::project_io::performance_fingerprint(performance),
+              0)
+          .has_value());
+  const std::vector<PerformanceEvent> events{
+      PerformanceEvent{lmdj::domain::FxEngagePerformanceEvent{
+          lmdj::domain::PerformanceFx::filter, 500, 10}},
+      PerformanceEvent{lmdj::domain::FxMovePerformanceEvent{
+          lmdj::domain::PerformanceFx::filter, 600, 20}},
+      PerformanceEvent{lmdj::domain::FxEngagePerformanceEvent{
+          lmdj::domain::PerformanceFx::reverse, 800, 30}},
+      PerformanceEvent{lmdj::domain::HoldOnPerformanceEvent{40}},
+  };
+  const PerformanceTransientCheckpoint checkpoint{
+      {},
+      {lmdj::project_io::PerformanceOpenFxTransient{
+           lmdj::domain::PerformanceFx::filter,
+           "50000000-0000-4000-8000-000000000001",
+           500,
+           600},
+       lmdj::project_io::PerformanceOpenFxTransient{
+           lmdj::domain::PerformanceFx::reverse,
+           "50000000-0000-4000-8000-000000000002",
+           800,
+           std::nullopt}},
+      true,
+      40,
+  };
+  LMDJ_CHECK(
+      journal
+          .append_performance_tail(
+              bundle,
+              session_id,
+              performance.id,
+              0,
+              1,
+              events,
+              checkpoint)
+          .has_value());
+  const auto preview = lmdj::project_io::preview_performance_owner_loss(
+      journal.read_active_performance(bundle).value());
+  LMDJ_CHECK(preview.has_value());
+  LMDJ_CHECK(preview.value().appended_event_count == 3);
+  LMDJ_CHECK(preview.value().closure_tick == 41);
+  LMDJ_CHECK(preview.value().canonical_events.size() == 7);
+  const auto &filter_release =
+      std::get<lmdj::domain::FxReleasePerformanceEvent>(
+          preview.value().canonical_events.at(4).payload);
+  const auto &reverse_release =
+      std::get<lmdj::domain::FxReleasePerformanceEvent>(
+          preview.value().canonical_events.at(5).payload);
+  LMDJ_CHECK(filter_release.fx == lmdj::domain::PerformanceFx::filter);
+  LMDJ_CHECK(reverse_release.fx == lmdj::domain::PerformanceFx::reverse);
+  LMDJ_CHECK(
+      std::get<lmdj::domain::HoldOffPerformanceEvent>(
+          preview.value().canonical_events.at(6).payload)
+          .tick == 41);
+
+  LMDJ_CHECK(
+      journal
+          .close_performance_transients_for_owner_loss(bundle, session_id)
+          .has_value());
+  const auto closed = journal.read_active_performance(bundle);
+  LMDJ_CHECK(closed.has_value());
+  LMDJ_CHECK(closed.value().pending_events ==
+             preview.value().canonical_events);
+  LMDJ_CHECK(closed.value().last_input_sequence == 2);
+  LMDJ_CHECK(closed.value().transient_checkpoint.has_value());
+  LMDJ_CHECK((closed.value().transient_checkpoint ==
+              PerformanceTransientCheckpoint{{}, {}, false, 41}));
+  LMDJ_CHECK(
+      journal
+          .close_performance_transients_for_owner_loss(bundle, session_id)
+          .has_value());
+  LMDJ_CHECK(
+      journal.read_active_performance(bundle).value().next_tail_seq == 2);
+}
+
+void test_legacy_and_malformed_checkpoint_streams_fail_closed() {
+  TempDirectory temp("checkpoint-validation");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  const auto active_path = bundle / "recovery/active/performance.jsonl";
+  const auto performance = empty_performance();
+  const auto legacy_begin = nlohmann::json{
+      {"contract", "lmdj.performance.journal.v1"},
+      {"expected_revision", 0},
+      {"kind", "begin"},
+      {"performance_fingerprint",
+       lmdj::project_io::performance_fingerprint(performance)},
+      {"performance_id", kPerformanceId},
+      {"session_id", kSessionId},
+  };
+  write_text(active_path, checked_line(legacy_begin));
+  const auto active_legacy = journal.read_active_performance(bundle);
+  LMDJ_CHECK(!active_legacy.has_value());
+  LMDJ_CHECK(active_legacy.error().code == ErrorCode::invalid_project);
+  append_text(
+      active_path,
+      checked_line({
+          {"kind", "stop"},
+          {"request_id", kCommandId},
+      }));
+  const auto stopped_legacy = journal.read_active_performance(bundle);
+  LMDJ_CHECK(stopped_legacy.has_value());
+  LMDJ_CHECK(stopped_legacy.value().transient_checkpoint.has_value());
+  LMDJ_CHECK(
+      stopped_legacy.value().transient_checkpoint->open_pads.empty());
+
+  auto malformed_begin = legacy_begin;
+  malformed_begin["transient_checkpoint"] = {
+      {"hold", false},
+      {"last_accepted_tick", 0},
+      {"open_fx", nlohmann::json::array()},
+      {"open_pads",
+       nlohmann::json::array({
+           {{"gesture_id", kCommandId},
+            {"onset_tick", 0},
+            {"slot", 300},
+            {"velocity", 1}},
+       })},
+  };
+  write_text(active_path, checked_line(std::move(malformed_begin)));
+  const auto malformed = journal.read_active_performance(bundle);
+  LMDJ_CHECK(!malformed.has_value());
+  LMDJ_CHECK(
+      malformed.error().details.at("reason") ==
+      "performance_transient_checkpoint_invalid");
+}
+
+void test_owner_loss_refuses_tick_and_input_sequence_overflow() {
+  {
+    TempDirectory temp("closure-tick-overflow");
+    ProjectStore store;
+    const auto bundle = create_bundle(temp, store);
+    SequenceJournal journal;
+    const auto performance = empty_performance();
+    const auto session_id = SequenceSessionId{std::string{kSessionId}};
+    LMDJ_CHECK(
+        journal
+            .begin_performance(
+                bundle,
+                session_id,
+                performance.id,
+                lmdj::project_io::performance_fingerprint(performance),
+                0)
+            .has_value());
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    const std::vector<PerformanceEvent> events{
+        PerformanceEvent{lmdj::domain::HoldOnPerformanceEvent{maximum}}};
+    LMDJ_CHECK(
+        journal
+            .append_performance_tail(
+                bundle,
+                session_id,
+                performance.id,
+                0,
+                1,
+                events,
+                PerformanceTransientCheckpoint{{}, {}, true, maximum})
+            .has_value());
+    const auto preview = lmdj::project_io::preview_performance_owner_loss(
+        journal.read_active_performance(bundle).value());
+    LMDJ_CHECK(!preview.has_value());
+    LMDJ_CHECK(preview.error().details.at("reason") ==
+               "performance_tick_overflow");
+  }
+  {
+    TempDirectory temp("closure-sequence-overflow");
+    ProjectStore store;
+    const auto bundle = create_bundle(temp, store);
+    SequenceJournal journal;
+    const auto performance = empty_performance();
+    const auto session_id = SequenceSessionId{std::string{kSessionId}};
+    LMDJ_CHECK(
+        journal
+            .begin_performance(
+                bundle,
+                session_id,
+                performance.id,
+                lmdj::project_io::performance_fingerprint(performance),
+                0)
+            .has_value());
+    const std::vector<PerformanceEvent> no_events;
+    LMDJ_CHECK(
+        journal
+            .append_performance_tail(
+                bundle,
+                session_id,
+                performance.id,
+                0,
+                std::numeric_limits<std::uint64_t>::max(),
+                no_events,
+                PerformanceTransientCheckpoint{
+                    {PerformanceOpenPadTransient{
+                        std::string{kCommandId}, 0, 0, 100}},
+                    {},
+                    false,
+                    0})
+            .has_value());
+    const auto closed =
+        journal.close_performance_transients_for_owner_loss(
+            bundle, session_id);
+    LMDJ_CHECK(!closed.has_value());
+    LMDJ_CHECK(closed.error().details.at("reason") ==
+               "performance_input_sequence_overflow");
+  }
+}
 
 void test_performance_flush_is_durable_before_mutation_and_replays() {
   TempDirectory temp("flush");
@@ -988,6 +1362,12 @@ void test_repeated_performance_command_rejects_changed_identity_and_payload() {
 
 int main() {
   try {
+    test_performance_transient_checkpoint_round_trips_empty_tail_transition();
+    test_post_write_tail_failure_is_reported_as_ambiguous_and_retained();
+    test_performance_seal_replays_stable_candidate_without_suffix();
+    test_owner_loss_closes_fx_chain_then_hold_at_one_tick();
+    test_legacy_and_malformed_checkpoint_streams_fail_closed();
+    test_owner_loss_refuses_tick_and_input_sequence_overflow();
     test_performance_flush_is_durable_before_mutation_and_replays();
     test_performance_begin_append_complete_seal_and_recover_listing();
     test_outstanding_performance_flush_blocks_tail_and_remains_recoverable();
