@@ -18,9 +18,9 @@ the file picker uses.
 This record claims automated acceptance for the gates listed below. The local
 Proof results were produced at `cd182361baf1`; the full CI matrix passed on the
 merged head, which additionally carries #177 and the current `main`. It claimed
-no physical or manual acceptance when written; one row has since been converted
-by a physical session and is marked in the ledger below. Every other row stays
-`deferred / unverified`.
+no physical or manual acceptance when written; one row has since passed a
+physical session and one Safari row has failed an attempted session, as marked
+in the ledger below. All unattempted rows stay `deferred / unverified`.
 
 ## Automated acceptance contract
 
@@ -150,17 +150,20 @@ layer below it:
 | --- | --- | --- | --- |
 | macOS | Chrome | Real microphone capture, commit and playback hearing | `PASS — 1.0.23.0, confirmed by endaye on 2026-08-17; all five hearing criteria including a deliberately hot take; see` [`evidence`](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md) |
 | macOS | Chrome | External audio interface input | `deferred / unverified` |
-| macOS | Safari | `getUserMedia` and AudioWorklet capture behaviour | `deferred / unverified` |
+| macOS | Safari | `getUserMedia` and AudioWorklet capture behaviour | **`FAIL` 2026-09-04 on deployed `1.0.41.0`** — normal capture/commit/playback passed, but focus loss hid the retained trim dialog and all recovery controls; [evidence](../release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md), [#625](https://github.com/endaye/lmdj/issues/625); full M7 rerun required |
 | iPadOS | Safari | Capture behaviour | `deferred / unverified` |
 
 S8B-D8 makes these deferred by design and counted only once actually
 performed. The Chromium fake device proves the pipeline, never the sound. The
-macOS Chrome real-microphone row was performed on 2026-08-17 and is the only
-one converted; that session also produced four findings, recorded in its
-evidence file, and none is fixed by this record. Every other row here, and
-every physical row inherited from Stage 6 and Stage 8, remains
-`deferred / unverified`; automation converts none of them, and they continue to
-block any full physical-pass claim and promotion to Beta or Stable.
+macOS Chrome real-microphone row was performed on 2026-08-17 and passed; that
+session also produced four findings, recorded in its evidence file, and none is
+fixed by this record. The macOS Safari row was attempted on 2026-09-04 and
+failed at the focus-loss recovery leg; #625 tracks the defect and no passing
+prefix carries into the required rerun. Every unattempted row here, and every
+unattempted physical row inherited from Stage 6 and Stage 8, remains
+`deferred / unverified`; automation converts none of them. The failed and
+unverified rows continue to block any full physical-pass claim and promotion to
+Beta or Stable.
 
 ## External state
 
