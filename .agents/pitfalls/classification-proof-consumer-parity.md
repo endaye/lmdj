@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-04
     occurrence: https://github.com/endaye/lmdj/pull/622
     observed_by: Codex (GPT-5)
+  - date: 2026-09-04
+    occurrence: https://github.com/endaye/lmdj/pull/628
+    observed_by: Kimi Code Review
 exit: gate:tests/build/ci_scope_policy_consumer_parity_test.py
 ---
 
@@ -34,3 +37,13 @@ Consumers without repository authority, including queue and release readers,
 must remain fail closed. The exit gate exercises every repository-backed
 consumer against a preserving transition, a forged non-preserving transition,
 and a caller attempt to replace the Git head policy.
+
+The advisory local pre-flight is deliberately different: it classifies the
+working tree, including uncommitted policy edits and untracked paths, and emits
+no reusable authority. It must compare the working policy with the merge-base
+policy through the pure classification differential. Calling the
+revision-bound repository helper there makes every uncommitted policy edit
+look non-preserving because the working policy cannot equal the committed HEAD
+blob. Keep paired local tests: an uncommitted rule for a newly introduced path
+stays focused, while an uncommitted change to an existing path's routing stays
+full.

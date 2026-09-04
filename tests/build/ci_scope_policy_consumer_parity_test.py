@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
@@ -15,6 +17,7 @@ sys.path.insert(0, str(ROOT / "scripts/ci"))
 sys.path.insert(0, str(ROOT / "tests/build"))
 
 import change_scope  # noqa: E402
+import local_preflight  # noqa: E402
 import phase_gate  # noqa: E402
 import pr_gate  # noqa: E402
 from ci_scope_policy_test_support import policy_transition  # noqa: E402
@@ -24,6 +27,12 @@ PARITY_MESSAGE = (
     "why: a focused scope-policy proof must be independently revalidated by "
     "the summary, Phase Gate, and PR Gate consumers; remedy: pass the complete "
     "repository checkout to the shared manifest validator at every consumer"
+)
+LOCAL_PARITY_MESSAGE = (
+    "why: the advisory local pre-flight must evaluate uncommitted policy edits "
+    "against the merge-base without weakening revision-bound consumers; remedy: "
+    "use the pure classification differential for the working tree and keep the "
+    "repository proof for committed manifest consumers"
 )
 
 
@@ -180,6 +189,64 @@ class ScopePolicyConsumerParityTest(unittest.TestCase):
                             manifest,
                             transition.head_policy,
                             repository=transition.root,
+                        )
+
+    def test_local_preflight_separates_working_tree_and_revision_authority(self):
+        for preserving in (True, False):
+            with self.subTest(preserving=preserving):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    git(root, "init", "--quiet")
+                    git(root, "config", "user.email", "ci@example.invalid")
+                    git(root, "config", "user.name", "CI Test")
+
+                    existing = root / "docs/existing.md"
+                    existing.parent.mkdir(parents=True)
+                    existing.write_text("existing\n", encoding="utf-8")
+                    policy_path = root / change_scope.SCOPE_POLICY_PATH
+                    policy_path.parent.mkdir(parents=True)
+                    policy_path.write_text(
+                        json.dumps(self.policy, indent=2) + "\n", encoding="utf-8"
+                    )
+                    git(root, "add", "--all")
+                    git(root, "commit", "--quiet", "-m", "base policy")
+                    base_sha = git(root, "rev-parse", "HEAD")
+
+                    working_policy = copy.deepcopy(self.policy)
+                    if preserving:
+                        probe = "tests/build/scope_policy_probe.py"
+                        working_policy["rules"].append({
+                            "match": {"kind": "exact", "value": probe},
+                            "lanes": ["ci_contract"],
+                        })
+                        probe_path = root / probe
+                        probe_path.parent.mkdir(parents=True)
+                        probe_path.write_text("# uncommitted probe\n", encoding="utf-8")
+                    else:
+                        markdown_rule = next(
+                            rule for rule in working_policy["rules"]
+                            if rule["match"] == {"kind": "suffix", "value": ".md"}
+                        )
+                        markdown_rule["lanes"].append("portal")
+                    policy_path.write_text(
+                        json.dumps(working_policy, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+
+                    original_policy_path = local_preflight.POLICY_PATH
+                    try:
+                        local_preflight.POLICY_PATH = policy_path
+                        plan = local_preflight.build_plan(root, base_sha)
+                    finally:
+                        local_preflight.POLICY_PATH = original_policy_path
+
+                    expected_mode = "focused" if preserving else "full"
+                    self.assertEqual(
+                        plan["mode"], expected_mode, LOCAL_PARITY_MESSAGE
+                    )
+                    if preserving:
+                        self.assertEqual(
+                            plan["selected"], ["ci_contract"], LOCAL_PARITY_MESSAGE
                         )
 
 

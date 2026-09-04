@@ -190,9 +190,9 @@ class LaneTableContractTest(unittest.TestCase):
 
         `change_scope.main` computes `policy_edit_preserving` before classifying,
         so an edit to `scope_policy.json` that changes no existing path's routing
-        does not select the full manifest. The pre-flight calls `classify`
-        directly; omitting the same computation makes it disagree with CI about
-        the lane set, which is the one thing it exists to prevent.
+        does not select the full manifest. The pre-flight classifies the working
+        tree, so it must compare the working policy to the merge-base policy;
+        binding it to the committed HEAD would reject every uncommitted edit.
         """
         source = (ROOT / "scripts/ci/local_preflight.py").read_text(encoding="utf-8")
         message = (
@@ -200,9 +200,12 @@ class LaneTableContractTest(unittest.TestCase):
             "select a different lane set than CI, and change_scope.main derives "
             "policy_edit_preserving before classifying; a pre-flight that does "
             "not would report full for a change CI classifies focused; remedy: "
-            "compute the same exemption here and pass it to classify"
+            "compute the working-tree exemption here and pass it to classify"
         )
-        self.assertIn(
+        self.assertIn("read_merge_base_policy", source, message)
+        self.assertIn("read_merge_base_tracked_paths", source, message)
+        self.assertIn("policy_edit_is_classification_preserving", source, message)
+        self.assertNotIn(
             "repository_policy_edit_is_classification_preserving", source, message
         )
         self.assertIn("policy_edit_preserving=policy_edit_preserving", source, message)
@@ -432,6 +435,82 @@ class ManifestReuseTest(unittest.TestCase):
     def test_uncommitted_edits_are_classified_like_committed_ones(self) -> None:
         self.repository.write("docs/guide.md", "text\n")
         self.assertEqual(self.plan()["selected"], ["docs_static"])
+
+    def test_uncommitted_preserving_policy_edit_classifies_focused(self) -> None:
+        policy_text = POLICY_PATH.read_text(encoding="utf-8")
+        self.repository.write("scripts/ci/scope_policy.json", policy_text)
+        self.repository.commit("baseline policy")
+        base_sha = git(self.repository.path, "rev-parse", "HEAD").strip()
+
+        working_policy = json.loads(policy_text)
+        working_policy["rules"].append(
+            {
+                "match": {
+                    "kind": "exact",
+                    "value": "tests/build/scope_policy_probe.py",
+                },
+                "lanes": ["ci_contract"],
+            }
+        )
+        self.repository.write(
+            "scripts/ci/scope_policy.json",
+            json.dumps(working_policy, indent=2) + "\n",
+        )
+        self.repository.write(
+            "tests/build/scope_policy_probe.py", "# uncommitted probe\n"
+        )
+
+        original_policy_path = self.preflight.POLICY_PATH
+        self.addCleanup(
+            setattr, self.preflight, "POLICY_PATH", original_policy_path
+        )
+        self.preflight.POLICY_PATH = (
+            self.repository.path / "scripts/ci/scope_policy.json"
+        )
+        plan = self.preflight.build_plan(self.repository.path, base_sha)
+        message = (
+            "why: local pre-flight must classify an uncommitted preserving "
+            "policy edit with the working policy; remedy: compare that policy "
+            "to the merge-base policy with the pure classification differential"
+        )
+        self.assertEqual(plan["mode"], "focused", message)
+        self.assertEqual(plan["selected"], ["ci_contract"], message)
+
+    def test_uncommitted_policy_edit_that_changes_existing_routing_is_full(
+        self,
+    ) -> None:
+        policy_text = POLICY_PATH.read_text(encoding="utf-8")
+        self.repository.write("scripts/ci/scope_policy.json", policy_text)
+        self.repository.commit("baseline policy")
+        base_sha = git(self.repository.path, "rev-parse", "HEAD").strip()
+
+        working_policy = json.loads(policy_text)
+        markdown_rule = next(
+            rule
+            for rule in working_policy["rules"]
+            if rule["match"] == {"kind": "suffix", "value": ".md"}
+        )
+        markdown_rule["lanes"].append("portal")
+        self.repository.write(
+            "scripts/ci/scope_policy.json",
+            json.dumps(working_policy, indent=2) + "\n",
+        )
+
+        original_policy_path = self.preflight.POLICY_PATH
+        self.addCleanup(
+            setattr, self.preflight, "POLICY_PATH", original_policy_path
+        )
+        self.preflight.POLICY_PATH = (
+            self.repository.path / "scripts/ci/scope_policy.json"
+        )
+        plan = self.preflight.build_plan(self.repository.path, base_sha)
+        message = (
+            "why: an uncommitted policy edit that changes existing routing "
+            "must fail closed; remedy: grant the exemption only when the pure "
+            "merge-base-to-working-policy differential is preserving"
+        )
+        self.assertEqual(plan["mode"], "full", message)
+        self.assertIn("full rule: central CI control plane", plan["reasons"], message)
 
     def test_untracked_new_file_is_not_silently_ignored(self) -> None:
         self.repository.write("apps/chameleon-lab/src/main.js", "// new\n")
