@@ -332,9 +332,20 @@ The returned controller must provide `destinationNode`, `start(sink)`, `failProc
 Add the complete locked declarations from this plan to `runtime_types.d.ts`. In `runtime_session.mjs`, derive config only from the two positive safe-integer limits plus `manifestSource.performanceMasterTapUrl`, freeze every status value, and publish status transitions through a subscriber set:
 
 ```js
+function sameOriginUrl(value, baseUrl) {
+  if (typeof value !== "string" || typeof baseUrl !== "string") return null;
+  try {
+    const url = new URL(value, baseUrl);
+    return url.origin === new URL(baseUrl).origin ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+const tapUrl = sameOriginUrl(manifestSource?.performanceMasterTapUrl, document.baseURI);
 const captureConfig = isPositiveInteger(limits?.perform_recording_frames) &&
   isPositiveInteger(limits?.perform_recording_queue_batches) &&
-  typeof manifestSource?.performanceMasterTapUrl === "string"
+  tapUrl !== null
   ? Object.freeze({
       performRecordingFrames: limits.perform_recording_frames,
       performRecordingQueueBatches: limits.perform_recording_queue_batches,
@@ -687,12 +698,11 @@ Run:
 ```bash
 npm --prefix apps/creator-web test -- --run
 git add -N tests/platform/web/creator/creator_web_perform.spec.mjs
-scripts/creator-web.sh proof
 scripts/core.sh test dev full
 scripts/architecture-portal.sh check
 ```
 
-Expected: all commands PASS with the routed Stage 10 candidate; an unmodified `1.0.41.0` source/package remains disabled and creates no draft or WAV.
+Expected: all pre-commit commands PASS; an unmodified `1.0.41.0` source remains disabled and creates no draft or WAV. The formal Creator package/browser proof runs after the single commit because `apps/creator-web/tools/package.py` intentionally rejects a dirty source tree.
 
 - [ ] **Step 11: Commit revised Task 9 atomically**
 
@@ -714,7 +724,25 @@ git diff --cached --check
 git commit -m "feat(creator): build the Perform surface (fixes #435)"
 ```
 
-Inspect the commit and clean worktree, then ship through `issue-done`.
+Inspect the commit and clean worktree, but do not push until the clean-tree proof below passes.
+
+- [ ] **Step 12: Run the clean-tree candidate package/browser proof**
+
+Run:
+
+```bash
+scripts/creator-web.sh proof
+```
+
+Expected: PASS with the routed Stage 10 candidate journeys, while the packaged
+`1.0.41.0` identity itself remains `unconfigured`. If this proof fails, fix the
+declared Task files, rerun the affected focused test plus `scripts/core.sh test
+dev full` and `scripts/architecture-portal.sh check`, amend the same Task commit
+with `git commit --amend --no-edit`, and rerun `scripts/creator-web.sh proof`
+before push.
+
+After the proof passes, inspect `git show --name-status --oneline HEAD` and the
+clean worktree again, then ship through `issue-done`.
 
 ---
 
@@ -854,11 +882,12 @@ bash tests/build/test_active_tree.sh
 python3 apps/creator-web/test/package_test.py
 python3 apps/creator-web/test/deployment_smoke_test.py
 python3 apps/creator-web/test/server_test.py
-scripts/creator-web.sh proof
 scripts/architecture-portal.sh check
 ```
 
-Expected: all commands PASS against Product Build `1.0.42.0` and the package manifest contains exactly one hashed Perform tap asset.
+Expected: all pre-commit commands PASS against Product Build `1.0.42.0`. The
+formal reproducible package/browser proof runs after the single commit because
+the package builder rejects a dirty source tree.
 
 - [ ] **Step 9: Commit Task 10 atomically**
 
@@ -911,7 +940,24 @@ git diff --cached --check
 git commit -m "feat(product): integrate Stage 10 Perform versions and current truth (fixes #436)"
 ```
 
-Inspect the commit and clean worktree, then ship through `issue-done`. Task 11 remains the separate post-merge immutable Portal snapshot boundary.
+Inspect the commit and clean worktree, but do not push until the clean-tree proof below passes. Task 11 remains the separate post-merge immutable Portal snapshot boundary.
+
+- [ ] **Step 10: Run the clean-tree formal package/browser proof**
+
+Run:
+
+```bash
+scripts/creator-web.sh proof
+```
+
+Expected: PASS without candidate identity routing; the manifest contains
+exactly one hashed `perform_master_tap_worklet` asset. If it fails, fix only the
+declared Task files, rerun the affected pre-commit gates, amend the same Task
+commit with `git commit --amend --no-edit`, and repeat the clean-tree proof
+before push.
+
+After the proof passes, inspect `git show --name-status --oneline HEAD` and the
+clean worktree again, then ship through `issue-done`.
 
 ## Version Management
 
