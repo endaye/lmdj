@@ -106,11 +106,14 @@ def validate_gate(
     change_scope_result: str = "success",
     expected_queue: change_scope.QueueInputs | None = None,
     pre_heavy_gate_result: str = "success",
+    repository: str | Path | None = None,
 ) -> GateReport:
     """Return the exact selected-success/unselected-skipped gate decision."""
     try:
         change_scope._validate_policy(policy)
-        change_scope.validate_manifest(manifest, policy)
+        change_scope.validate_manifest(
+            manifest, policy, repository=repository
+        )
         expected_head = change_scope._validate_sha(expected_head_sha)
         expected_base = change_scope._validate_sha(expected_base_sha)
     except (KeyError, TypeError, ValueError) as error:
@@ -414,6 +417,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             change_scope_result=args.change_scope_result,
             expected_queue=expected_queue,
             pre_heavy_gate_result=args.pre_heavy_gate_result,
+            repository=Path.cwd(),
         )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         report = GateReport(False, (f"PR gate failed closed: {error}",), (), ())

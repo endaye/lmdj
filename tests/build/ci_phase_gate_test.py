@@ -10,8 +10,11 @@ import sys
 import tempfile
 import unittest
 
-
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tests/build"))
+from ci_scope_policy_test_support import policy_transition
+
+
 POLICY_PATH = ROOT / "scripts/ci/scope_policy.json"
 PHASE_GATE_PATH = ROOT / "scripts/ci/phase_gate.py"
 
@@ -73,6 +76,62 @@ class PhaseGateTest(unittest.TestCase):
         self.assertEqual(report.scope_skips, tuple(sorted(
             set(self.module.GATING_JOBS) - {"docs-static"}
         )))
+
+    def policy_manifest(self, transition):
+        inventory = self.module.change_scope.read_git_inventory(
+            transition.root, transition.base_sha, transition.head_sha
+        )
+        return self.module.change_scope.classify(
+            transition.head_policy,
+            inventory,
+            base_sha=transition.base_sha,
+            head_sha=transition.head_sha,
+            event_name="push",
+            draft=False,
+            labels=(),
+            policy_edit_preserving=True,
+        )
+
+    def test_preserving_policy_manifest_requires_repository_proof(self):
+        with policy_transition(self.policy, preserving=True) as transition:
+            manifest = self.policy_manifest(transition)
+            results = expected_results(self.module, manifest)
+            without_repository = self.module.validate_phase_gate(
+                transition.head_policy, manifest, results
+            )
+            with_repository = self.module.validate_phase_gate(
+                transition.head_policy,
+                manifest,
+                results,
+                repository=transition.root,
+            )
+        self.assertFalse(without_repository.ok)
+        self.assertTrue(with_repository.ok, with_repository.errors)
+
+    def test_nonpreserving_policy_manifest_fails_repository_proof(self):
+        with policy_transition(self.policy, preserving=False) as transition:
+            manifest = self.policy_manifest(transition)
+            report = self.module.validate_phase_gate(
+                transition.head_policy,
+                manifest,
+                expected_results(self.module, manifest),
+                repository=transition.root,
+            )
+        self.assertFalse(report.ok)
+        self.assertTrue(any(
+            "why:" in error and "remedy:" in error for error in report.errors
+        ))
+
+    def test_unreadable_policy_history_fails_repository_proof(self):
+        with policy_transition(self.policy, preserving=True) as transition:
+            manifest = self.policy_manifest(transition)
+            report = self.module.validate_phase_gate(
+                transition.head_policy,
+                manifest,
+                expected_results(self.module, manifest),
+                repository=transition.root / "missing",
+            )
+        self.assertFalse(report.ok)
 
     def test_selected_failure_cancel_and_skip_fail_closed(self):
         manifest = requested_manifest(

@@ -476,6 +476,8 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Admit native-heavy work after selected preflight success
         env:
           PREFLIGHT_RESULTS_JSON: >-
@@ -572,6 +574,8 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Adjudicate the same-run formal lane results
         env:
           FORMAL_RESULTS_JSON: >-

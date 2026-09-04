@@ -96,11 +96,14 @@ def _topology_contradiction(job: str, result: object) -> str:
 def validate_phase_gate(
     policy: Mapping[str, object], manifest: Mapping[str, object],
     results: Mapping[str, str], *, change_scope_result: str = "success",
+    repository: str | Path | None = None,
 ) -> PhaseGateReport:
     """Validate selected-success/unselected-skipped preflight results."""
     try:
         change_scope._validate_policy(policy)
-        change_scope.validate_manifest(manifest, policy)
+        change_scope.validate_manifest(
+            manifest, policy, repository=repository
+        )
     except (KeyError, TypeError, ValueError) as error:
         return _invalid(error)
 
@@ -220,6 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = validate_phase_gate(
             policy, manifest, normalize_needs(needs),
             change_scope_result=args.change_scope_result,
+            repository=Path.cwd(),
         )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         report = _invalid(error)

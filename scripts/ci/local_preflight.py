@@ -452,23 +452,23 @@ def build_plan(
     base_sha = resolve_base_sha(root, base_ref)
     head_sha = _git(root, "rev-parse", "HEAD").decode().strip()
     inventory = read_working_inventory(root, base_sha, classifier)
-    # The scope policy exemption has to be computed here too. CI derives it in
-    # `change_scope.main`, and a pre-flight that skipped it would report `full`
-    # for a change CI classifies `focused` -- the exact divergence this script
-    # exists to make impossible.
+    # The scope policy exemption has to be computed here too. Unlike CI, this
+    # advisory pre-flight deliberately classifies the working tree, so compare
+    # its policy with the merge-base policy instead of requiring it to match
+    # the committed HEAD blob. Revision-bound consumers keep using the stricter
+    # repository helper in `change_scope.py`.
     policy_edit_preserving = False
     if any(
         classifier.SCOPE_POLICY_PATH in record.paths for record in inventory
     ):
         base_policy = classifier.read_merge_base_policy(root, base_sha, head_sha)
-        if base_policy is not None:
+        tracked_paths = classifier.read_merge_base_tracked_paths(
+            root, base_sha, head_sha
+        )
+        if base_policy is not None and tracked_paths:
             policy_edit_preserving, _ = (
                 classifier.policy_edit_is_classification_preserving(
-                    base_policy,
-                    policy,
-                    classifier.read_merge_base_tracked_paths(
-                        root, base_sha, head_sha
-                    ),
+                    base_policy, policy, tracked_paths
                 )
             )
     manifest = classifier.classify(

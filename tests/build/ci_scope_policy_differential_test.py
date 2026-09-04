@@ -125,6 +125,13 @@ class ScopePolicyDifferentialTest(unittest.TestCase):
         )
         self.assertTrue(preserving)
 
+    def test_an_empty_tracked_path_inventory_fails_closed(self) -> None:
+        preserving, reason = policy_edit_is_classification_preserving(
+            self.policy, copy.deepcopy(self.policy), []
+        )
+        self.assertFalse(preserving)
+        self.assertIn("tracked path inventory", reason)
+
     def test_path_classification_reports_lanes_and_reasons(self) -> None:
         lanes, reasons = path_classification(self.policy, SCOPE_POLICY_PATH)
         self.assertIn("ci_contract", lanes)
