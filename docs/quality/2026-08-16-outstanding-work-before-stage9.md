@@ -41,7 +41,7 @@ Stable.
 | --- | --- | --- |
 | 1.0.23.0 | macOS Chrome — real microphone capture, commit, playback hearing | `PASS` 2026-08-17 ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
 | 1.0.23.0 | macOS Chrome — external audio interface input | `deferred / unverified` |
-| 1.0.23.0 | macOS Safari — `getUserMedia` and AudioWorklet capture | `deferred / unverified` |
+| 1.0.41.0 | macOS Safari — `getUserMedia` and AudioWorklet capture | **`FAIL` 2026-09-04** — normal capture/commit/playback passed; focus loss hid the retained trim dialog and recovery controls; [evidence](../release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md), [#625](https://github.com/endaye/lmdj/issues/625); full rerun required |
 | 1.0.23.0 | iPadOS Safari — capture behaviour | `deferred / unverified` |
 | 1.0.40.0 | macOS Chrome — human hearing and subjective audio quality | **`PASS` 2026-09-01** — all eight checklist groups passed; exact replay corrected the initial interpretation of the 40 ms loop's rapid texture ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) |
 | 1.0.22.0 | macOS Chrome — physical MIDI controller | `deferred / unverified` |
@@ -51,8 +51,9 @@ Stable.
 | Stage 6/7 inherited | iPadOS Safari touch, iPadOS Safari lifecycle | `deferred / unverified` |
 
 The macOS Safari M8 Pointer plus physical-hearing row has now joined the
-retained passes on deployed `1.0.41.0`; its result does not upgrade the still
-open Safari capture, iPadOS, external-interface or Stage 9 rows.
+retained passes on deployed `1.0.41.0`. The separate M7 Safari capture attempt
+failed at focus-loss recovery and is blocked by #625; M8 does not upgrade it,
+the iPadOS, external-interface, or Stage 9 rows.
 
 **The cheapest high-value item was the real-microphone capture round trip, and
 it has now been done.** One session validated the whole capture chain end to

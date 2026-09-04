@@ -149,7 +149,7 @@ not satisfy it.
 
 | ID | Journey | Origin | Status |
 | --- | --- | --- | --- |
-| M7 | `getUserMedia` and AudioWorklet capture behaviour | 1.0.23.0 | open |
+| M7 | `getUserMedia` and AudioWorklet capture behaviour | 1.0.23.0 | **`FAIL` 2026-09-04 on deployed `1.0.41.0`** ([evidence](../release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md)) — normal capture/commit/playback passed; Command-Tab focus loss retained about two seconds of frames but hid the trim dialog and every recovery control; [#625](https://github.com/endaye/lmdj/issues/625); restart the full journey after a fixed Build is deployed |
 | M8 | Pointer plus physical hearing | 1.0.22.0 + inherited Stage 6/7 pointer row | **`PASS` 2026-09-04 on deployed `1.0.41.0`** ([evidence](../release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md)) — MacBook Pro `Mac16,8`, Safari `26.6.2`, built-in trackpad and speakers; complete Pointer, Sample/hearing, focus/explicit recovery and reload/reopen journey passed; clean report revision 83, 2 admitted / 2 outcomes / 0 rejected |
 
 ### Session M-D — iPadOS Safari
@@ -303,9 +303,11 @@ omitted and not called passed.
    [#360](https://github.com/endaye/lmdj/issues/360), while pending review
    [#367](https://github.com/endaye/lmdj/pull/367) records follow-up findings
    that require their own disposition.
-4. **M7**, then **M9 + M10 + M11** — one session each, before any external
-   distribution. M8 completed on deployed `1.0.41.0`; its exact-Build evidence
-   does not satisfy the remaining Safari or iPadOS rows.
+4. **M7** is blocked by #625 after the failed `1.0.41.0` Safari focus-loss leg;
+   restart it from the beginning on a fixed deployed Build, then run
+   **M9 + M10 + M11** — one session each, before any external distribution. M8
+   completed on deployed `1.0.41.0`; its exact-Build evidence does not satisfy
+   the failed capture row or the remaining iPadOS rows.
 5. **M5 + M6** — when the external interface and controller are on hand.
 6. **A2**, **A3**, ~~**D1 + D2**~~ (decided 2026-08-26), **D3** — schedule as the work they gate
    comes up; A2 and A3 are due before the first external distribution.
