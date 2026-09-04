@@ -38,6 +38,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        git lfs checkout -- tests/fixtures
         python3 tests/fixtures/audio/make_fixtures.py
         python3 tests/fixtures/golden/reference_render.py
         bash scripts/verify-core-dependencies.sh

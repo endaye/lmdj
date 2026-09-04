@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import unittest
@@ -18,6 +19,23 @@ MACOS_ACTION = REPO_ROOT / ".github/actions/macos-core-gates/action.yml"
 WEB_TOOLCHAIN = REPO_ROOT / "scripts/web-toolchain-conformance.sh"
 WEB_HOST = REPO_ROOT / "scripts/web-runtime-host.sh"
 GITIGNORE = REPO_ROOT / ".gitignore"
+LOCAL_LANES = REPO_ROOT / "scripts/ci/local_lanes.json"
+WORKFLOW_ROOT = REPO_ROOT / ".github/workflows"
+ACTION_ROOT = REPO_ROOT / ".github/actions"
+REFERENCE_RENDER = "python3 tests/fixtures/golden/reference_render.py"
+CORE_PACKAGE = "scripts/core.sh package"
+CORE_FIXTURE_CONSUMERS = (
+    REFERENCE_RENDER,
+    CORE_PACKAGE,
+    "scripts/core.sh proof",
+    "scripts/core.sh test ",
+    "scripts/core-coverage.sh check",
+    "python3 tests/core/provider/stage12_fixture_corpus_test.py",
+)
+FIXTURE_REHYDRATION = "git lfs checkout -- tests/fixtures"
+FIXTURE_REHYDRATION_NOTE = (
+    f"{FIXTURE_REHYDRATION} rehydrates the complete Core test fixture corpus"
+)
 WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
 )
@@ -55,6 +73,104 @@ class CiBuildAccelerationTest(unittest.TestCase):
         self.assertIsNotNone(match, f"workflow job is missing: {job_name}")
         assert match is not None
         return match.group("body")
+
+    def core_fixture_execution_blocks(self) -> list[tuple[Path, str, str]]:
+        blocks: list[tuple[Path, str, str]] = []
+        for path in sorted(WORKFLOW_ROOT.glob("*.yml")):
+            source = path.read_text(encoding="utf-8")
+            if not any(command in source for command in CORE_FIXTURE_CONSUMERS):
+                continue
+            jobs = source.split("\njobs:\n", 1)
+            self.assertEqual(
+                len(jobs),
+                2,
+                f"workflow containing {REFERENCE_RENDER} has no jobs block: {path}",
+            )
+            matches = list(re.finditer(
+                r"^  (?P<name>[a-z0-9-]+):\n",
+                jobs[1],
+                flags=re.MULTILINE,
+            ))
+            for index, match in enumerate(matches):
+                end = matches[index + 1].start() if index + 1 < len(matches) else len(jobs[1])
+                body = jobs[1][match.end():end]
+                if any(command in body for command in CORE_FIXTURE_CONSUMERS):
+                    blocks.append((path, match.group("name"), body))
+
+        for path in sorted(ACTION_ROOT.glob("*/action.yml")):
+            source = path.read_text(encoding="utf-8")
+            if any(command in source for command in CORE_FIXTURE_CONSUMERS):
+                blocks.append((path, "composite action", source))
+        return blocks
+
+    def test_core_fixture_consumers_rehydrate_the_complete_corpus_first(self) -> None:
+        blocks = self.core_fixture_execution_blocks()
+        self.assertTrue(blocks, "Core fixture workflow consumers are missing")
+        for path, name, block in blocks:
+            with self.subTest(path=path.relative_to(REPO_ROOT), consumer=name):
+                consumer_index = min(
+                    block.index(command)
+                    for command in CORE_FIXTURE_CONSUMERS
+                    if command in block
+                )
+                hydration = re.search(
+                    rf"(?m)^\s*(?:-\s*)?(?:run:\s*)?"
+                    rf"{re.escape(FIXTURE_REHYDRATION)}\s*$",
+                    block,
+                )
+                message = (
+                    "why: Core proof, package, and fixture commands require the "
+                    "complete LFS-backed test fixture corpus, not pointers; remedy: run "
+                    f"`{FIXTURE_REHYDRATION}` in "
+                    f"{path.relative_to(REPO_ROOT)}:{name} before the consumer"
+                )
+                self.assertIsNotNone(hydration, message)
+                assert hydration is not None
+                self.assertLess(
+                    hydration.start(),
+                    consumer_index,
+                    message,
+                )
+
+    def test_core_lanes_declare_and_run_complete_fixture_rehydration(self) -> None:
+        lanes = json.loads(LOCAL_LANES.read_text(encoding="utf-8"))["lanes"]
+        contracts = {
+            "core_ubuntu": (
+                self.workflow_job("core-ubuntu"),
+                "scripts/core.sh proof",
+            ),
+            "core_asan": (
+                self.workflow_job("core-asan"),
+                "scripts/core.sh test asan full",
+            ),
+            "core_coverage": (
+                self.workflow_job("core-coverage"),
+                "scripts/core-coverage.sh check",
+            ),
+            "core_macos": (
+                MACOS_ACTION.read_text(encoding="utf-8"),
+                "scripts/core.sh proof",
+            ),
+        }
+        message = (
+            "why: local Core commands rely on the checkout's existing LFS "
+            "fixture bytes while CI rehydrates them explicitly; remedy: record "
+            f"the exact CI-only step `{FIXTURE_REHYDRATION_NOTE}`"
+        )
+        for lane, (consumer_block, consumer) in contracts.items():
+            with self.subTest(lane=lane, contract="local declaration"):
+                self.assertIn(
+                    FIXTURE_REHYDRATION_NOTE,
+                    lanes[lane]["ci_only"],
+                    message,
+                )
+            with self.subTest(lane=lane, contract="workflow ordering"):
+                hydration_index = consumer_block.index(FIXTURE_REHYDRATION)
+                self.assertLess(
+                    hydration_index,
+                    consumer_block.index(consumer),
+                    message,
+                )
 
     def test_acceleration_action_bounds_parallelism_and_scopes_ccache(self) -> None:
         self.assertTrue(
@@ -155,7 +271,26 @@ class CiBuildAccelerationTest(unittest.TestCase):
         self.assertIn(CORE_ROLE, job)
         self.assertNotIn("select-ubuntu-runner", job)
         self.assertIn("lfs: true", job)
-        self.assertIn("git lfs checkout -- tests/fixtures/audio", job)
+        message = (
+            "why: scripts/core.sh package runs audio.offline_renderer in the "
+            "component tier, which reads the LFS-tracked golden WAV; remedy: "
+            f"run `{FIXTURE_REHYDRATION}` before scripts/core.sh package"
+        )
+        with self.subTest(source="workflow"):
+            self.assertIn(FIXTURE_REHYDRATION, job, message)
+            self.assertLess(
+                job.index(FIXTURE_REHYDRATION),
+                job.index("scripts/core.sh package"),
+                message,
+            )
+        with self.subTest(source="local lane declaration"):
+            lanes = json.loads(LOCAL_LANES.read_text(encoding="utf-8"))
+            package_ci_only = lanes["lanes"]["package"]["ci_only"]
+            self.assertIn(
+                FIXTURE_REHYDRATION_NOTE,
+                package_ci_only,
+                message,
+            )
         self.assertIn(
             "uses: ./.github/actions/configure-build-acceleration", job
         )

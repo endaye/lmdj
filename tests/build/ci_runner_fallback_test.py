@@ -446,16 +446,27 @@ class CiRunnerFallbackTest(unittest.TestCase):
 
     def test_linux_fixture_consumers_rehydrate_lfs_before_generation(self) -> None:
         consumers = {
-            "web-runtime-host": "uses: ./.github/actions/web-ci-proof",
-            "core-ubuntu": "python3 tests/fixtures/audio/make_fixtures.py",
-            "core-asan": "python3 tests/fixtures/audio/make_fixtures.py",
-            "core-coverage": "python3 tests/fixtures/audio/make_fixtures.py",
+            "web-runtime-host": (
+                "git lfs checkout -- tests/fixtures/audio",
+                "uses: ./.github/actions/web-ci-proof",
+            ),
+            "core-ubuntu": (
+                "git lfs checkout -- tests/fixtures",
+                "python3 tests/fixtures/audio/make_fixtures.py",
+            ),
+            "core-asan": (
+                "git lfs checkout -- tests/fixtures",
+                "python3 tests/fixtures/audio/make_fixtures.py",
+            ),
+            "core-coverage": (
+                "git lfs checkout -- tests/fixtures",
+                "python3 tests/fixtures/audio/make_fixtures.py",
+            ),
         }
 
-        for job_name, consumer in consumers.items():
+        for job_name, (hydration, consumer) in consumers.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                hydration = "git lfs checkout -- tests/fixtures/audio"
                 self.assertIn(hydration, job)
                 self.assertLess(job.index(hydration), job.index(consumer))
 
