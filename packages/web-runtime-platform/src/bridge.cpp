@@ -220,7 +220,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 42> operations{
+  static constexpr std::array<std::string_view, 65> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -262,6 +262,29 @@ bool supported_operation(std::string_view operation) {
       "sequence.recovery.list",
       "sequence.recovery.apply",
       "sequence.recovery.discard",
+      "pattern.slot.assign",
+      "pattern.slot.clear",
+      "pattern.slot.move",
+      "performance.list",
+      "performance.inspect",
+      "performance.record.begin",
+      "performance.record.event",
+      "performance.record.launch-request",
+      "performance.record.flush",
+      "performance.record.stop",
+      "performance.record.status",
+      "performance.save",
+      "performance.discard",
+      "performance.recovery.list",
+      "performance.recovery.apply",
+      "performance.recovery.discard",
+      "performance.rename",
+      "performance.delete",
+      "performance.recording.bind",
+      "performance.replay.begin",
+      "performance.replay.stop",
+      "performance.replay.status",
+      "performance.resample.commit",
       "host.close",
   };
   return std::find(operations.begin(), operations.end(), operation) !=

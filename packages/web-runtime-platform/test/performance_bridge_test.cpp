@@ -429,6 +429,118 @@ void test_constructs_application_with_engine_authorities_and_services_launches()
   runtime->engine().stop();
 }
 
+void test_bridge_admits_every_stage10_performance_operation() {
+  TempDirectory temporary;
+  auto created = ControlRuntime::create(
+      temporary.path(), config(temporary.path()), kLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+  ControlBridge bridge(
+      *runtime,
+      BridgeHooks{
+          nullptr,
+          &ImmediateControl::schedule,
+          &ImmediateControl::on_control,
+          nullptr,
+          nullptr,
+          nullptr});
+
+  const auto command = uuid(200);
+  const auto request = uuid(201);
+  const auto artifact = Json{
+      {"sha256", std::string(64, 'a')},
+      {"media_type", "audio/wav"},
+      {"byte_length", 1},
+  };
+  const auto valid_requests = std::vector<std::pair<std::string, Json>>{
+      {"pattern.slot.assign",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"pattern_slot", 1},
+        {"pattern_id", kPatternId}}},
+      {"pattern.slot.clear",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"pattern_slot", 1}}},
+      {"pattern.slot.move",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"from_slot", 1},
+        {"to_slot", 2}}},
+      {"performance.list", Json::object()},
+      {"performance.inspect", {{"performance_id", kPerformanceId}}},
+      {"performance.record.begin",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"session_id", kSessionId},
+        {"performance_id", kPerformanceId}}},
+      {"performance.record.event",
+       {{"session_id", kSessionId},
+        {"event_id", request},
+        {"event", {{"kind", "hold_on"}}}}},
+      {"performance.record.launch-request",
+       {{"session_id", kSessionId},
+        {"request_id", request},
+        {"pattern_slot", 1}}},
+      {"performance.record.flush",
+       {{"session_id", kSessionId}, {"command_id", command}}},
+      {"performance.record.stop",
+       {{"session_id", kSessionId}, {"request_id", request}}},
+      {"performance.record.status", Json::object()},
+      {"performance.save",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"performance_id", kPerformanceId},
+        {"name", "Performance"},
+        {"recording_artifact", artifact}}},
+      {"performance.discard",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"performance_id", kPerformanceId}}},
+      {"performance.recovery.list", Json::object()},
+      {"performance.recovery.apply",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"session_id", kSessionId}}},
+      {"performance.recovery.discard",
+       {{"session_id", kSessionId}, {"request_id", request}}},
+      {"performance.rename",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"performance_id", kPerformanceId},
+        {"name", "Renamed"}}},
+      {"performance.delete",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"performance_id", kPerformanceId}}},
+      {"performance.recording.bind",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"performance_id", kPerformanceId},
+        {"recording_artifact", artifact}}},
+      {"performance.replay.begin",
+       {{"replay_id", kReplayId}, {"performance_id", kPerformanceId}}},
+      {"performance.replay.stop",
+       {{"replay_id", kReplayId}, {"request_id", request}}},
+      {"performance.replay.status", {{"replay_id", kReplayId}}},
+      {"performance.resample.commit",
+       {{"command_id", command},
+        {"expected_revision", 0},
+        {"performance_id", kPerformanceId},
+        {"source_start_frame", 0},
+        {"source_end_frame", 1},
+        {"target_slot", {{"bank", 0}, {"pad", 1}}}}},
+  };
+  LMDJ_CHECK(valid_requests.size() == 23U);
+  std::uint32_t suffix = 210;
+  for (const auto& [operation, payload] : valid_requests) {
+    const auto response = bridge_request(bridge, operation, payload, suffix++);
+    LMDJ_CHECK(
+        response.value("ok", false) ||
+        response.at("error").at("code") != "HOST_PROTOCOL_MISMATCH");
+  }
+}
+
 void test_rejects_invalid_values_at_the_cpp_host_boundary() {
   TempDirectory temporary;
   auto created = ControlRuntime::create(
@@ -736,6 +848,7 @@ int main() {
   try {
     test_web_audio_bridge_carries_one_opaque_destination_and_direct_fallback();
     test_constructs_application_with_engine_authorities_and_services_launches();
+    test_bridge_admits_every_stage10_performance_operation();
     test_rejects_invalid_values_at_the_cpp_host_boundary();
     test_owner_loss_never_materializes_an_unacknowledged_launch();
     return 0;
