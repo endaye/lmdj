@@ -176,8 +176,10 @@ that Build, and Safari import was checked separately without reproducing the
 importing stall. Product `1.0.21.0` automated Proof, immutable snapshot, Chrome
 MPD218 physical retest, protected merge, and exact merged-main Proof are
 complete. Creator macOS Chrome Pointer later passed on the exact packaged
-`1.0.40.0` surface; Safari Pointer and iPadOS remain unverified. Every physical
-row stays authoritative only for its individual platform, so the remaining
-rows continue to block broader physical-device, `beta`, and `stable` claims.
+`1.0.40.0` surface; macOS Safari Pointer later passed on the deployed
+`1.0.41.0` surface ([evidence](../release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md));
+the two iPadOS rows remain unverified. Every physical row stays authoritative
+only for its individual platform, so the remaining rows continue to block
+broader physical-device, `beta`, and `stable` claims.
 No Product tag, Release, deployment, publication, or Channel promotion is
 implied.
