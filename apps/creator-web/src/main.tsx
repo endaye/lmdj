@@ -1,6 +1,10 @@
 import {createRoot} from "react-dom/client";
 import {createRuntimeSession} from
   "@lmdj/web-runtime-platform/runtime_session.mjs";
+import {createPerformanceMasterTap} from
+  "@lmdj/web-runtime-platform/performance_master_capture.mjs";
+import performanceMasterTapUrl from
+  "@lmdj/web-runtime-platform/performance_master_tap_worklet.js?url&no-inline";
 import {WEB_RUNTIME_IDENTITY} from
   "../../../products/lmdj/generated/web-runtime-identity.mjs";
 
@@ -45,6 +49,7 @@ function createCreatorRuntimeSession(): CreatorRuntimeSession {
     manifestSource: {
       heapBytes: WEB_RUNTIME_IDENTITY.heap_bytes,
       resourceLimits: WEB_RUNTIME_IDENTITY.resource_limits,
+      performanceMasterTapUrl,
       emscripten: {
         emcc_version: WEB_RUNTIME_IDENTITY.emscripten.emcc_version,
         emscripten_releases_revision:
@@ -56,7 +61,10 @@ function createCreatorRuntimeSession(): CreatorRuntimeSession {
       expectedAssets: host.expected_assets,
     },
     inputOwnership: "host",
-    seams,
+    seams: {
+      createPerformanceMasterTap,
+      ...seams,
+    },
   });
 }
 

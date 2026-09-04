@@ -230,7 +230,10 @@ struct RealtimeAudioWorklet::Impl {
           RealtimeAudioWorkletFatal::node_create_failed);
       return;
     }
-    emscripten_audio_node_connect(node, context, 0, 0);
+    emscripten_audio_node_connect(
+        node, self.output_destination_handle, 0, 0);
+    self.direct_output_connected =
+        self.output_destination_handle == self.audio_context_handle;
     self.node.store(node, std::memory_order_release);
     self.worklet_state.store(
         RealtimeAudioWorkletState::node_ready,
@@ -321,11 +324,14 @@ struct RealtimeAudioWorklet::Impl {
   std::atomic<std::int32_t> sample_rate{0};
   std::atomic<std::int32_t> render_quantum{0};
   std::int32_t audio_context_handle = 0;
+  std::int32_t output_destination_handle = 0;
+  bool direct_output_connected = false;
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
   std::atomic<std::uint32_t> observed_quantum{0};
   std::atomic<std::uint32_t> render_count{0};
   std::atomic<std::uint32_t> energy_microunits{0};
   std::atomic<std::uint32_t> accepted_start_calls{0};
+  std::atomic<std::uint32_t> direct_output_connect_calls{0};
 #endif
 };
 
@@ -351,24 +357,27 @@ RealtimeAudioWorklet::~RealtimeAudioWorklet() {
 }
 
 RealtimeAudioWorkletStart RealtimeAudioWorklet::start_on_browser_main(
-    std::int32_t audio_context_handle) noexcept {
+    std::int32_t audio_context_handle,
+    std::int32_t output_destination_handle) noexcept {
   if (!emscripten_is_main_browser_thread()) {
     impl_->latch_bootstrap_fatal(
         RealtimeAudioWorkletFatal::wrong_browser_thread);
     return RealtimeAudioWorkletStart::wrong_browser_thread;
   }
-  if (audio_context_handle <= 0) {
+  if (audio_context_handle <= 0 || output_destination_handle <= 0) {
     return RealtimeAudioWorkletStart::invalid_handle;
   }
   const auto state = impl_->worklet_state.load(std::memory_order_acquire);
   if (state == RealtimeAudioWorkletState::starting ||
       state == RealtimeAudioWorkletState::node_ready) {
-    return impl_->audio_context_handle == audio_context_handle
+    return impl_->audio_context_handle == audio_context_handle &&
+                   impl_->output_destination_handle == output_destination_handle
                ? RealtimeAudioWorkletStart::already_starting
                : RealtimeAudioWorkletStart::duplicate_handle;
   }
   if (state == RealtimeAudioWorkletState::ready) {
-    return impl_->audio_context_handle == audio_context_handle
+    return impl_->audio_context_handle == audio_context_handle &&
+                   impl_->output_destination_handle == output_destination_handle
                ? RealtimeAudioWorkletStart::already_ready
                : RealtimeAudioWorkletStart::duplicate_handle;
   }
@@ -376,6 +385,7 @@ RealtimeAudioWorkletStart RealtimeAudioWorklet::start_on_browser_main(
     return RealtimeAudioWorkletStart::fatal;
   }
   impl_->audio_context_handle = audio_context_handle;
+  impl_->output_destination_handle = output_destination_handle;
   const auto sample_rate =
       emscripten_audio_context_sample_rate(audio_context_handle);
   const auto quantum =
@@ -397,6 +407,32 @@ RealtimeAudioWorkletStart RealtimeAudioWorklet::start_on_browser_main(
   impl_->accepted_start_calls.fetch_add(1, std::memory_order_relaxed);
 #endif
   return RealtimeAudioWorkletStart::accepted;
+}
+
+bool RealtimeAudioWorklet::connect_direct_output_on_browser_main(
+    std::int32_t audio_context_handle) noexcept {
+  if (!emscripten_is_main_browser_thread() || audio_context_handle <= 0 ||
+      impl_->audio_context_handle != audio_context_handle) {
+    return false;
+  }
+  const auto state = impl_->worklet_state.load(std::memory_order_acquire);
+  if (state != RealtimeAudioWorkletState::node_ready &&
+      state != RealtimeAudioWorkletState::ready) {
+    return false;
+  }
+  if (impl_->direct_output_connected) {
+    return true;
+  }
+  const auto node = impl_->node.load(std::memory_order_acquire);
+  if (node <= 0) {
+    return false;
+  }
+  emscripten_audio_node_connect(node, audio_context_handle, 0, 0);
+  impl_->direct_output_connected = true;
+#if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+  impl_->direct_output_connect_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
+  return true;
 }
 
 void RealtimeAudioWorklet::complete_control_install(bool installed) noexcept {
@@ -580,6 +616,16 @@ std::uint32_t RealtimeAudioWorklet::render_calls() const noexcept {
 
 std::uint32_t RealtimeAudioWorklet::output_energy_microunits() const noexcept {
   return impl_->energy_microunits.load(std::memory_order_acquire);
+}
+
+void RealtimeAudioWorklet::reset_output_energy_for_conformance() noexcept {
+  impl_->energy_microunits.store(0, std::memory_order_release);
+}
+
+std::uint32_t
+RealtimeAudioWorklet::direct_output_connections_for_conformance()
+    const noexcept {
+  return impl_->direct_output_connect_calls.load(std::memory_order_acquire);
 }
 
 bool RealtimeAudioWorklet::callback_gate_closed() const noexcept {

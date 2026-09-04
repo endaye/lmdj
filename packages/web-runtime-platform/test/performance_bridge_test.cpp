@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <set>
@@ -107,6 +108,41 @@ Json require_success(
   }
   LMDJ_CHECK(response.contains("result"));
   return response.at("result");
+}
+
+std::string source_file(std::string_view relative_path) {
+  std::ifstream input(
+      std::filesystem::path{LMDJ_SOURCE_DIR} / relative_path,
+      std::ios::binary);
+  LMDJ_CHECK(input.good());
+  return {std::istreambuf_iterator<char>(input),
+          std::istreambuf_iterator<char>()};
+}
+
+void test_web_audio_bridge_carries_one_opaque_destination_and_direct_fallback() {
+  const auto header = source_file(
+      "packages/audio-runtime/include/lmdj/audio/web/"
+      "realtime_audio_worklet.hpp");
+  const auto implementation = source_file(
+      "packages/audio-runtime/src/web/realtime_audio_worklet.cpp");
+  const auto bridge = source_file(
+      "packages/web-runtime-platform/src/bridge.cpp");
+  const auto pre_js = source_file(
+      "packages/web-runtime-platform/src/web-runtime-pre.js");
+
+  const auto has = [](const std::string& source, std::string_view token) {
+    return source.find(token) != std::string::npos;
+  };
+  LMDJ_CHECK(has(header, "std::int32_t output_destination_handle"));
+  LMDJ_CHECK(has(header, "connect_direct_output_on_browser_main"));
+  LMDJ_CHECK(has(
+      implementation,
+      "node, self.output_destination_handle, 0, 0"));
+  LMDJ_CHECK(has(bridge, "lmdj_web_audio_connect_direct"));
+  LMDJ_CHECK(has(pre_js, "function registerAudioNode(node)"));
+  LMDJ_CHECK(has(pre_js, "function startAudioWorklet("));
+  LMDJ_CHECK(has(pre_js, "outputDestinationHandle"));
+  LMDJ_CHECK(has(pre_js, "function connectAudioWorkletDirect("));
 }
 
 void render_frames(ControlRuntime& runtime, std::uint64_t frames) {
@@ -698,6 +734,7 @@ void test_owner_loss_never_materializes_an_unacknowledged_launch() {
 
 int main() {
   try {
+    test_web_audio_bridge_carries_one_opaque_destination_and_direct_fallback();
     test_constructs_application_with_engine_authorities_and_services_launches();
     test_rejects_invalid_values_at_the_cpp_host_boundary();
     test_owner_loss_never_materializes_an_unacknowledged_launch();
