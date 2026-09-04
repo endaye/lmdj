@@ -796,12 +796,14 @@ Assembly remain unchanged and therefore report `unconfigured`.
 - Create: `apps/creator-web/src/state/perform_state.ts`
 - Modify: `apps/creator-web/src/components/mode_rail.tsx`
 - Modify: `apps/creator-web/src/app.tsx`
+- Modify: `apps/creator-web/src/runtime/input_controller.ts`
 - Modify: `apps/creator-web/src/runtime/runtime_types.ts`
 - Modify: `apps/creator-web/src/runtime/project_actions.ts`
 - Modify: `apps/creator-web/src/state/creator_state.ts`
 - Modify: `apps/creator-web/src/state/view_model.ts`
 - Modify: `apps/creator-web/src/styles.css`
 - Test: `apps/creator-web/test/project_actions.test.ts`
+- Test: `apps/creator-web/test/input_controller.test.ts`
 - Test: `apps/creator-web/test/perform_surface.test.tsx`
 - Test: `tests/platform/web/creator/creator_web_perform.spec.mjs`
 
@@ -831,9 +833,15 @@ Assembly remain unchanged and therefore report `unconfigured`.
   OPFS/writer preflight and capture status `ready`. `unconfigured` stays silent,
   `configured` remains waiting, and `unavailable` displays its actionable error.
 - [ ] Implement pointer, touch and MIDI paths through one raw gesture encoder.
-  Each input supplies event/gesture identity but never time/order; JavaScript
-  sends every raw value and never coalesces. Render pending Pattern state from
-  Core target/ack results, not a Host timer.
+  Extend the existing Creator input controller with an optional Perform raw
+  input observer so the already-owned pointer/keyboard/MIDI adapters remain the
+  single listeners and preserve Sample trigger-mode semantics. Do not add a
+  second adapter stack in the Perform surface. The controller gives each
+  adapter-accepted press a fresh stable gesture identity and forwards its
+  matching release/cancel/adverse-lifecycle close exactly once. Each raw event
+  supplies event/gesture identity but never time/order; JavaScript sends every
+  raw value and never coalesces. Render pending Pattern state from Core
+  target/ack results, not a Host timer.
 - [ ] GREEN: run the Creator unit and Playwright suites; expect PASS.
 - [ ] Run `scripts/architecture-portal.sh check`; expect PASS.
 - [ ] Commit only the listed files with

@@ -517,12 +517,14 @@ Inspect `git show --name-status --oneline HEAD` and require a clean Task worktre
 - Create: `apps/creator-web/src/state/perform_state.ts`
 - Modify: `apps/creator-web/src/components/mode_rail.tsx`
 - Modify: `apps/creator-web/src/app.tsx`
+- Modify: `apps/creator-web/src/runtime/input_controller.ts`
 - Modify: `apps/creator-web/src/runtime/runtime_types.ts`
 - Modify: `apps/creator-web/src/runtime/project_actions.ts`
 - Modify: `apps/creator-web/src/state/creator_state.ts`
 - Modify: `apps/creator-web/src/state/view_model.ts`
 - Modify: `apps/creator-web/src/styles.css`
 - Test: `apps/creator-web/test/project_actions.test.ts`
+- Test: `apps/creator-web/test/input_controller.test.ts`
 - Test: `apps/creator-web/test/perform_surface.test.tsx`
 - Test: `tests/platform/web/creator/creator_web_perform.spec.mjs`
 
@@ -618,15 +620,24 @@ startPerformanceMasterCapture: vi.fn(async (sink) => ({
 
 Assert P10-D17 order, eight FX sliders in fixed order, one HOLD, instant Bank view changes with zero runtime request, raw input with identities but no Host clock/order, Pattern pending/ack state, and these gates: `unconfigured` is silently disabled, `configured` is waiting, `unavailable` renders its actionable message, and only `ready` plus playable Project/running audio/OPFS enables Record.
 
-- [ ] **Step 5: Run the Perform unit RED test**
+Add `input_controller.test.ts` RED witnesses proving the existing pointer/touch,
+keyboard, and MIDI paths each emit one stable Perform press/release gesture to an
+optional observer, adverse lifecycle cleanup emits the matching release exactly
+once, two sequential gestures on the same source/slot receive different gesture
+identities, and no observer means the existing Project/Sample/Sequence behavior
+is unchanged.
+
+- [ ] **Step 5: Run the Perform input and surface RED tests**
 
 Run:
 
 ```bash
-npm --prefix apps/creator-web test -- --run test/perform_surface.test.tsx
+npm --prefix apps/creator-web test -- --run \
+  test/input_controller.test.ts test/perform_surface.test.tsx
 ```
 
-Expected: FAIL because the Perform components/state and capture-status integration do not exist.
+Expected: FAIL because the shared input controller has no Perform observer and
+the Perform components/state and capture-status integration do not exist.
 
 - [ ] **Step 6: Implement the typed Creator session and Perform state**
 
@@ -656,7 +667,17 @@ Build the surface in exact DOM order and keep all controls wired through the con
 </main>
 ```
 
-Pointer, touch, keyboard, and MIDI paths generate stable event/gesture IDs and forward every raw value without tick, runtime frame, input sequence, semantic deduplication, or Host timer.
+Extend the existing Creator input controller with an optional Perform raw-input
+observer. The existing pointer, keyboard, and MIDI adapters remain the only
+listeners and keep their established Sample trigger-mode behavior; the Perform
+surface must not create a second adapter stack. The controller gives each
+adapter-accepted press a fresh stable gesture identity; the observer receives
+that press and its matching release/cancel/adverse-lifecycle close exactly once
+with the input source. It forwards every raw value without tick, runtime frame,
+input sequence, semantic deduplication, or Host timer. Add focused
+`input_controller.test.ts` witnesses for pointer/touch, keyboard, MIDI,
+sequential identity uniqueness, adverse-lifecycle release, and the non-recording
+no-op path.
 
 - [ ] **Step 8: Replace the Browser RED test’s prohibited hooks**
 
@@ -714,9 +735,11 @@ git add apps/creator-web/src/components/perform_surface.tsx \
   apps/creator-web/src/components/pattern_launch_strip.tsx \
   apps/creator-web/src/state/perform_state.ts \
   apps/creator-web/src/components/mode_rail.tsx apps/creator-web/src/app.tsx \
+  apps/creator-web/src/runtime/input_controller.ts \
   apps/creator-web/src/runtime/runtime_types.ts apps/creator-web/src/runtime/project_actions.ts \
   apps/creator-web/src/state/creator_state.ts apps/creator-web/src/state/view_model.ts \
   apps/creator-web/src/styles.css apps/creator-web/test/project_actions.test.ts \
+  apps/creator-web/test/input_controller.test.ts \
   apps/creator-web/test/perform_surface.test.tsx \
   tests/platform/web/creator/creator_web_perform.spec.mjs
 git diff --cached --name-status
