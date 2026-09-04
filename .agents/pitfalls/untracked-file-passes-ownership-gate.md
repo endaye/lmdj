@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-09-04
     occurrence: https://github.com/endaye/lmdj/pull/621
     observed_by: Codex GPT-5.6
+  - date: 2026-09-04
+    occurrence: https://github.com/endaye/lmdj/pull/631
+    observed_by: Codex GPT-5
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -47,6 +50,11 @@ was not run after staging and their missing lane ownership reached Pull Request
 CI. The generic instruction to re-run "the Task's verification" still allowed
 Task-specific tests to substitute for the ownership gate.
 
+Issue #630 repaired the exit itself after its first wording treated every
+`unclassified path` diagnostic as missing ownership. Full-only paths already
+have canonical ownership through `full_rules`; they intentionally select every
+lane even when the diagnostic also says they have no partial lane rule.
+
 Directories with per-file ownership and no catch-all are where this bites:
 `.github/workflows/`, `.github/scripts/`, and `tests/build/` for any file whose
 name does not match an existing prefix rule.
@@ -63,6 +71,9 @@ name does not match an existing prefix rule.
   a directory routed by a `<dir>/<prefix>` rule is not covered unless its name
   carries that prefix.
 - Before push, run `scripts/local-ci.sh --base-ref origin/main --list --json`
-  and confirm the complete branch range has no `unclassified path` reason.
-  The absorbed exit is the mandatory staged ownership and range preflight in
+  and apply the same canonical predicate as the staged gate: a path is missing
+  ownership only when it matches neither `rules` nor `full_rules`. A full-only
+  path may retain an `unclassified path` diagnostic alongside its named
+  full-rule reason because it safely selects every lane. The absorbed exit is
+  the mandatory staged ownership and range preflight in
   `.agents/skills/issue-done/SKILL.md`; repair or replace it if this recurs.
