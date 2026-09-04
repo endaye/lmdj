@@ -139,7 +139,7 @@ not Safari product acceptance.
 
 | Platform | Browser | Input / journey | Status |
 | --- | --- | --- | --- |
-| macOS | Safari | Pointer | `deferred / unverified`; separate Bundle import check did not reproduce >20 s `importing` |
+| macOS | Safari | Pointer | **`PASS` 2026-09-04 on deployed `1.0.41.0`** — built-in MacBook trackpad completed ordered Pads/Banks, separated and double clicks, drag/mistake targets, mode navigation, focus and explicit audio recovery, Sample controls, reload/reopen and report export; final clean suffix recorded 2 admitted / 2 outcomes / 0 rejected ([evidence](../release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md)) |
 | macOS | Chrome | Pointer | `PASS — 1.0.40.0 exact packaged Creator at tested revision 3aeba5c5; built-in MacBook trackpad completed A1–A16, all Banks/corners, repeat/double-click, drag/mistake, modes, audio recovery and report export; 115 admitted / 115 outcomes / 0 rejected` — [evidence](../release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md) |
 | macOS | Chrome | Physical keyboard + hearing | `PASS — 1.0.20.0 ten-step Canary confirmed by endaye; report SHA-256 7e2a2b…333a` |
 | macOS | Chrome | Physical MIDI | `PASS — 1.0.21.0 accepted MPD218 Channel 10 across all 16 Bank-A Pads, Creator B/C/D samples, reconnect, suspend/re-authorize, and reload/reopen; final report SHA-256 b0491e…603` |

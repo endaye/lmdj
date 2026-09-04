@@ -142,15 +142,15 @@ source inventory was re-inspected on merged `main` at
 | --- | --- | --- | --- |
 | macOS | Chrome | Human hearing and subjective audio quality | **`PASS` 2026-09-01 on `1.0.40.0`** — all eight checklist groups passed; the operator corrected the initial interpretation of the 40 ms loop's rapid texture after exact replay ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) |
 | macOS | Chrome | Physical MIDI controller | `deferred / unverified` |
-| macOS | Safari | Pointer plus physical hearing | `deferred / unverified` |
+| macOS | Safari | Pointer plus physical hearing | **`PASS` 2026-09-04 on deployed `1.0.41.0`** — built-in trackpad covered all Pads/Banks and mistake targets, focus plus explicit audio recovery, strict `0.505–0.545 s` trim, four playback modes, Volume/Mute and reload persistence; the clean report recorded revision 83 and 2 admitted / 2 outcomes / 0 rejected ([evidence](../release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md)) |
 | iPadOS | Safari | Physical touch ergonomics | `deferred / unverified` |
 | iPadOS | Safari | Background, lock-screen, and recovery lifecycle | `deferred / unverified` |
 
-The five inherited Stage 6 physical rows also remain `deferred / unverified`:
-macOS Safari pointer, macOS Chrome pointer, macOS Chrome physical MIDI, iPadOS
-Safari touch, and iPadOS Safari lifecycle. Automation does not convert any of
-these rows into a pass. They do not block a canary implementation merge, but
-they block any physical-pass claim and promotion to Beta or Stable.
+The macOS Safari Creator Pointer/hearing row now has its own exact-Build human
+evidence. Remaining rows in this matrix stay `deferred / unverified` until
+their named operators and devices produce equivalent evidence. Separate Web
+Runtime Lab, Chrome, MIDI and iPadOS records are not inferred from this pass;
+automation also cannot convert another physical row into a pass.
 
 The 2026-09-01 M2 run preserves rather than overwrites the 2026-08-17 stopped
 run. On the exact `1.0.40.0` package, a strict non-zero trim boundary, One
@@ -160,6 +160,15 @@ texture was initially described as a click; exact replay produced no obvious
 independent seam transient, and the operator explicitly corrected the sound
 to normal short-loop playback. The evidence retains both the superseded
 description and the final authoritative classification.
+
+The 2026-09-04 M8 run exercised the deployed `1.0.41.0` Creator on macOS
+Safari with a built-in trackpad and physical hearing. It covered all Pads and
+Banks, repeated/double/drag/mistake targeting, mode navigation, focus and
+explicit lifecycle recovery, strict non-zero trim, all four trigger modes,
+Volume/Mute, reload/reopen persistence and a clean final report. The retained
+report binds Project/Runtime revision 83, state `running`, 2 admissions / 2
+outcomes / 0 rejections and no error. This upgrades only M8; macOS Safari
+capture M7 and Stage 9 Safari Sequence acceptance remain separate.
 
 ## External state
 

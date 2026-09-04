@@ -45,14 +45,14 @@ Stable.
 | 1.0.23.0 | iPadOS Safari — capture behaviour | `deferred / unverified` |
 | 1.0.40.0 | macOS Chrome — human hearing and subjective audio quality | **`PASS` 2026-09-01** — all eight checklist groups passed; exact replay corrected the initial interpretation of the 40 ms loop's rapid texture ([evidence](../release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md)) |
 | 1.0.22.0 | macOS Chrome — physical MIDI controller | `deferred / unverified` |
-| 1.0.22.0 | macOS Safari — pointer plus physical hearing | `deferred / unverified` |
+| 1.0.41.0 | macOS Safari — pointer plus physical hearing | **`PASS` 2026-09-04** — deployed Creator, built-in trackpad, full Pointer/Sample/hearing/recovery/reload journey; final report revision 83 with 2 admitted / 2 outcomes / 0 rejected ([evidence](../release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md)) |
 | 1.0.22.0 | iPadOS Safari — physical touch ergonomics | `deferred / unverified` |
 | 1.0.22.0 | iPadOS Safari — background, lock-screen and recovery lifecycle | `deferred / unverified` |
-| Stage 6/7 inherited | macOS Safari pointer, macOS Chrome pointer, iPadOS Safari touch, iPadOS Safari lifecycle | `deferred / unverified` |
+| Stage 6/7 inherited | iPadOS Safari touch, iPadOS Safari lifecycle | `deferred / unverified` |
 
-Three rows have passed: macOS Chrome physical MIDI on `1.0.21.0`, the macOS
-Chrome real-microphone round trip on `1.0.23.0`, and macOS Chrome human hearing
-and subjective audio quality on `1.0.40.0`.
+The macOS Safari M8 Pointer plus physical-hearing row has now joined the
+retained passes on deployed `1.0.41.0`; its result does not upgrade the still
+open Safari capture, iPadOS, external-interface or Stage 9 rows.
 
 **The cheapest high-value item was the real-microphone capture round trip, and
 it has now been done.** One session validated the whole capture chain end to
