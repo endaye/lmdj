@@ -10,7 +10,10 @@
 [`2026-09-01-lmdj-stage10-replay-lineage-contract-design.md`](../specs/2026-09-01-lmdj-stage10-replay-lineage-contract-design.md),
 and the approved
 [`2026-09-01-lmdj-stage10-host-runtime-session-design.md`](../specs/2026-09-01-lmdj-stage10-host-runtime-session-design.md)
-(HRS-D1–D11).
+(HRS-D1–D11), plus the confirmed
+[`2026-09-04-lmdj-stage10-creator-master-tap-projection-repair-design.md`](../specs/2026-09-04-lmdj-stage10-creator-master-tap-projection-repair-design.md)
+(CMTP-D1–D5). Task 8A and the revised Task 9/10 steps are executable from
+[`2026-09-04-lmdj-stage10-creator-master-tap-projection-repair.md`](2026-09-04-lmdj-stage10-creator-master-tap-projection-repair.md).
 Tasks 1–5 (including Contract prerequisite #516, executed per
 [`2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md`](2026-09-01-lmdj-stage10-replay-lineage-contract-repair.md))
 and repair Tasks 3A/3B are merged. Task 6 is gated by the host runtime/
@@ -30,7 +33,8 @@ time/order admission, FX quantum coalescing, Pattern boundary acknowledgement,
 the exact Performance operation surface, replay resolution against one fixed
 current revision, and D1 resample commit. Audio Runtime supplies the delivered
 fixed-order, pre-allocated FX chain and authoritative boundary acknowledgements;
-the Host-layer WAV tap remains outside the engine. Tasks 1–4 and repair Tasks
+the Host-layer WAV tap remains outside the engine and its processor/port remain
+owned by Web Runtime platform. Tasks 1–4 and repair Tasks
 3A/3B are delivered; prerequisite #516 and Tasks 5–12 remain separately
 reviewable, with one Issue, Conventional Commit and Pull Request per Task.
 
@@ -46,6 +50,7 @@ reviewable, with one Issue, Conventional Commit and Pull Request per Task.
   release-intent document is one PR, while later audited tag/Draft/publication
   transitions do not create repository commits.
 - Functional Tasks keep active manifests and Product Build at their current values until Task 10. Task 10 is the version/current-truth integration boundary; Task 11 is the separate clean-commit immutable Portal snapshot boundary.
+- Task 8A creates the platform-owned tap graph/API without changing active manifests. The revised Task 9 consumes its structured capture status and strict v3/v4 `ProjectView`; Task 10 alone adds the Perform limits and `perform_master_tap_worklet` distribution role.
 - Project Truth is authoritative. Runtime Snapshot, the FX chain state and the WAV tap are derived or transient and are never persisted as Project Truth.
 - Hosts use only Application Facade. They must not parse a Project bundle, read a journal directly, or reproduce gesture coalescing, replay resolution, fingerprint or flush rules.
 - Exactly one recording session may be active per Project bundle. Perform and Sequence recording are mutually exclusive; the second `begin` is `INVALID_ARGUMENT`. Admission and `expected_revision` validation occur under the same existing Project writer lease.
@@ -238,7 +243,8 @@ Tasks 2, 3, 3A, 3B ── Task 4 #430 authoritative recording/management Facade
                          ├─ (#524 + #525 + #570 + #571) ── Task 6 #432 CLI/MCP/Native parity
                          └─ (#525 + #571) ── Task 7 #433 Web Runtime raw-input + launch bridge
                               └─ Task 8 #434 Host WAV tap/OPFS writer
-Tasks 5, 7, 8 ───────────── Task 9 #435 Creator Perform surface
+Tasks 7, 8 ─────────────────── Task 8A Web Runtime master-tap graph
+Tasks 5, 7, 8, 8A ─────────── Task 9 #435 Creator Perform surface
 Tasks 1-9 + 3A/3B ─── Task 10 #436 versions/Assembly/current Portal/automation
                          └─ Task 11 #438 immutable snapshot/final evidence
                                 └─ Task 12 #468 release intent + canary Release
@@ -253,7 +259,8 @@ owner-loss transient closure plus the read-only status/service split. #524,
 Task 7 starts after #525/#571 so Web
 Runtime reuses the same Core `EnginePerformanceAdapter` instead of owning a
 second frame→tick, launch-ack or replay progression implementation. Task 8
-starts after Task 7; Task 9 waits for Tasks 5, 7 and 8. Integration,
+starts after Task 7; Task 8A follows Tasks 7 and 8 and must merge before #435.
+Task 9 waits for Tasks 5, 7, 8 and 8A. Integration,
 snapshotting and release stay serial through Tasks 10–12.
 
 ## Design Traceability
@@ -270,7 +277,7 @@ snapshotting and release stay serial through Tasks 10–12.
 | P10-D9: generalized session and mutual exclusion | 2, 4, 6 | second-begin `INVALID_ARGUMENT`; fault matrix |
 | P10-D10: replay against the current Project | 5, 9 | changed-sample, moved-slot and empty-slot replay tests |
 | P10-D11: live-capture resample over the D1 commit path | #516, 5, 8 | durable Lineage assertions; `BANK_QUOTA_EXHAUSTED` non-destructive test |
-| P10-D12: Host-layer streamed WAV with sealing | 8 | long-record OPFS test; sealed-prefix validity; render glitch-free stress |
+| P10-D12: Host-layer streamed WAV with sealing | 8, 8A | long-record OPFS test; real engine→tap Browser witness; sealed-prefix validity; render glitch-free stress |
 | P10-D13: one Facade surface across Hosts | 4, 6, 7 | CLI/MCP black-box journey parity |
 | P10-D14: FX roster with Cutter | 3 | per-effect audible-change and division-ladder tests |
 | P10-D16: Perform rebase whitelist | 3B, 4 | durable rebase fault matrix; armed-capture rejection test |
@@ -282,6 +289,7 @@ snapshotting and release stay serial through Tasks 10–12.
 | P10-D23: Core FX/owner-loss rules | 4, 7 | quantum last-write-wins and deterministic closure vectors |
 | P10-D24: two-phase durable rebase | 3B, 4 | every prepare/receipt/complete crash point and exact retry |
 | HRS-D1–D11: Core runtime authorities, session continuity, hard-owner-loss closure and read-only status (2026-09-01/02 repair) | #523, #524, #525, #570, #571, 6, 7 | bridge/adapter suites; cross-process flush replay; durable transient closure; two-phase launch service; CLI session journey; request-free Web progression |
+| CMTP-D1–D5: platform-owned master tap, structured capture status, strict test seams and v3/v4 Creator projection | 8A, 9, 10 | opaque destination conformance; capture status transitions; real Browser WAV; duplicate/dangling slot rejection; formal asset-role gate |
 
 ## Task 1: Add Project v4 and the Performance Authoring Domain — delivered
 
@@ -762,9 +770,23 @@ consumes Task 5 replay.
 - [ ] Commit only the listed files with
   `feat(creator): stream the Perform stereo WAV to OPFS (fixes #434)`.
 
+## Task 8A: Connect the Platform-Owned Web Runtime Master Tap
+
+**Issue:** Allocate the prerequisite issue named in the 2026-09-04 repair plan;
+hard dependencies are merged #433 and #434. This Task must merge before #435.
+
+Execute Task 1 of
+[`2026-09-04-lmdj-stage10-creator-master-tap-projection-repair.md`](2026-09-04-lmdj-stage10-creator-master-tap-projection-repair.md)
+without abbreviating its RED/GREEN sequence. It moves the processor and private
+port protocol into `web-runtime-platform`, adds the opaque engine destination
+and direct-output fallback, exposes the exact structured capture status/lifecycle
+from `runtime_types.d.ts`, refactors Creator's queue into a port-free sink, and
+proves graph order/lifecycle in real WebAudio. Active `1.0.41.0` identity and
+Assembly remain unchanged and therefore report `unconfigured`.
+
 ## Task 9: Build the Creator Perform Surface
 
-**Issue:** #435. Hard dependencies: #431, #433 and #434.
+**Issue:** #435. Hard dependencies: #431, #433, #434 and merged Task 8A.
 
 **Files:**
 
@@ -774,12 +796,22 @@ consumes Task 5 replay.
 - Create: `apps/creator-web/src/state/perform_state.ts`
 - Modify: `apps/creator-web/src/components/mode_rail.tsx`
 - Modify: `apps/creator-web/src/app.tsx`
+- Modify: `apps/creator-web/src/runtime/runtime_types.ts`
+- Modify: `apps/creator-web/src/runtime/project_actions.ts`
 - Modify: `apps/creator-web/src/state/creator_state.ts`
 - Modify: `apps/creator-web/src/state/view_model.ts`
 - Modify: `apps/creator-web/src/styles.css`
+- Test: `apps/creator-web/test/project_actions.test.ts`
 - Test: `apps/creator-web/test/perform_surface.test.tsx`
 - Test: `tests/platform/web/creator/creator_web_perform.spec.mjs`
 
+- [ ] Execute every RED/GREEN step in Task 2 of the 2026-09-04 repair plan.
+  Replace the two existing untracked RED files rather than accepting their old
+  API/hook assumptions.
+- [ ] RED: prove v3 projects expose 16 frozen null `patternSlots`; valid v4
+  projects preserve 16 ordered slots; wrong-length, duplicate and dangling v4
+  slots fail with `HOST_PROTOCOL_MISMATCH`. Mutation receipts never become a
+  second slot truth.
 - [ ] RED: add `perform_surface.test.tsx` asserting the P10-D17 layout order, that the eight sliders render in `FX_CHAIN_ORDER`, that HOLD is a single global control, that Bank switching is instant with no Core round-trip, and that Sample/Sequence surfaces are unchanged.
 - [ ] RED: add `creator_web_perform.spec.mjs` walking the **complete** designed
   journey sentence by sentence — assign/move a Pattern slot, begin a durable
@@ -791,6 +823,13 @@ consumes Task 5 replay.
   recovery apply/discard, writer-backpressure sealed prefix, bind retry, empty
   Pattern slot gap and Replay stop neutral reset. Do not trim journeys to the
   implemented prefix.
+- [ ] Route-substitute the candidate identity/module/manifest through the same
+  production session construction. Inject deterministic writer/store/tap
+  faults only through `window.__LMDJ_WEB_HOST_SEAMS__` dependency factories;
+  remove the Perform-only global hook and transport wrapper from the old RED.
+- [ ] Gate recording on playable Project, running Audio Runtime, Host
+  OPFS/writer preflight and capture status `ready`. `unconfigured` stays silent,
+  `configured` remains waiting, and `unavailable` displays its actionable error.
 - [ ] Implement pointer, touch and MIDI paths through one raw gesture encoder.
   Each input supplies event/gesture identity but never time/order; JavaScript
   sends every raw value and never coalesces. Render pending Pattern state from
@@ -828,6 +867,9 @@ consumes Task 5 replay.
 - Modify: `apps/web-runtime-host/test/package_test.py`
 - Modify: `apps/web-runtime-host/test/distribution_test.py`
 - Modify: `apps/creator-web/tools/package.py`
+- Modify: `apps/creator-web/test/package_test.py`
+- Modify: `apps/creator-web/test/deployment_smoke_test.py`
+- Modify: `apps/creator-web/test/server_test.py`
 - Modify: `products/lmdj/generated/web-runtime-identity.json`
 - Modify: `products/lmdj/generated/web-runtime-identity.mjs`
 - Modify: `apps/architecture-portal/docs/assembly/lmdj.mdx`
@@ -858,7 +900,12 @@ consumes Task 5 replay.
 - Create: `docs/quality/2026-08-30-stage10-perform-acceptance.md`
 
 - [ ] Re-read every active manifest before applying versions. If another merged Build or module release has consumed an exact target, **stop and amend this plan through design review**; do not silently choose new identities (Stage 9 `1.0.31.0` lesson).
-- [ ] Apply the module, Host, Contract and Product Build versions; lock Assembly to v4-only output; add `perform_recording_frames: 86400000` and `perform_recording_queue_batches: 32` to the exact-key `resource_limits`; regenerate and validate every identity/distribution consumer listed above.
+- [ ] Apply the module, Host, Contract and Product Build versions; lock Assembly to v4-only output; add `perform_recording_frames: 86400000` and `perform_recording_queue_batches: 32` to the exact-key `resource_limits`; add exactly one Creator expected asset `{prefix: "assets/perform-master-tap.", role: "perform_master_tap_worklet", suffix: ".js"}`; regenerate and validate every identity/distribution consumer listed above.
+- [ ] Package the platform processor as the exact hashed asset named by that
+  role, rewrite the one Creator main-bundle reference, and reject missing,
+  duplicate, wrong-shape or digest-mismatched entries in package and manifest
+  gates. Run the unchanged #435 Browser journeys against the formal package
+  without candidate identity routing.
 - [ ] Update current-truth Portal pages and source diagrams for the listed routes.
 - [ ] Record the acceptance ledger with commands, counts, revisions, CI run IDs
   and digests. Enumerate the complete Facade/CLI/MCP/Native/Browser journeys
@@ -993,7 +1040,9 @@ The Stage 10 umbrella is #425. #426 created the original map; #488 repaired its
 Contract before Task 4, creating #498/#499 and incorporating the already-open
 release boundary #468. The 2026-09-01 Replay/Lineage repair created #516 before
 Task 5; the 2026-09-01 host runtime/session repair created #523/#524/#525
-before Task 6, and its 2026-09-02 cross-Host RED/review created #570/#571.
+before Task 6, and its 2026-09-02 cross-Host RED/review created #570/#571. The
+2026-09-04 Creator master-tap repair adds one Task 8A prerequisite Issue before
+#435; allocation is the first execution action in the repair plan.
 
 | Plan Task | GitHub Issue | Priority | Primary Project area | Hard dependencies |
 |---|---|---|---|---|
@@ -1015,7 +1064,8 @@ before Task 6, and its 2026-09-02 cross-Host RED/review created #570/#571.
 | 6 | #432 | P2 | Native Host | #430, #431, #523, #524, #525, #570, #571 |
 | 7 | #433 | P1 | Web Host | #430, #525, #571 |
 | 8 | #434 | P1 | Creator | #433 |
-| 9 | #435 | P1 | Creator | #431, #433, #434 |
+| 8A | allocate at execution start | P1 | Web Runtime Platform | #433, #434 |
+| 9 | #435 | P1 | Creator | #431, #433, #434, Task 8A |
 | 10 | #436 | P1 | Product | #427, #428, #429, #430, #431, #432, #433, #434, #435, #498, #499 |
 | 11 | #438 | P2 | Docs/Governance | #436 |
 | 12 | #468 | P2 | CI/Release | #438 |
@@ -1023,7 +1073,7 @@ before Task 6, and its 2026-09-02 cross-Host RED/review created #570/#571.
 ## Final Acceptance Boundary
 
 Stage 10 is **implementation-complete** only when Tasks 1–11 plus repair Tasks
-3A/3B are merged and individually accepted, `lmdj.project.v4` is the sole
+3A/3B and 8A are merged and individually accepted, `lmdj.project.v4` is the sole
 active writer Contract, full/stress/coverage/proof and complete cross-Host
 journeys pass on the integrated head, Browser and Native evidence is attached,
 the OPFS physical fixture has real evidence or an honest `deferred`, and Product
