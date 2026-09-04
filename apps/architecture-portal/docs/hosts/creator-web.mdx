@@ -13,6 +13,7 @@ source_paths:
   - docs/quality/2026-08-09-stage8-sample-editor-acceptance.md
   - docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md
   - docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md
+  - docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md
   - docs/quality/2026-08-16-stage8b-pad-capture-acceptance.md
   - docs/quality/2026-08-24-creator-capture-precommit-crop.md
   - docs/superpowers/specs/2026-08-23-creator-capture-precommit-crop-design.md
@@ -55,6 +56,8 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 同一 Build 的 macOS Chrome M3 Pointer 实体旅程也已通过：内置 MacBook 触控板逐一完成 A1–A16、B/C/D Bank 两端 Pad、十次分离点击与一次双击、drag-off/空隙/禁用控件、模式切换、Suspend→Activate→recovery probe 和报告导出。精确 packaged Creator revision `3aeba5c5` 的报告记录 115 admissions / 115 outcomes / 0 rejections，SHA-256 为 `80895963d297f304d85db5d2e8726bea1d85726e40231f473872c4acd1f4dc41`。该 `PASS` 只升级 Creator 的 M3 macOS Chrome Pointer 行，不替代其他浏览器、设备或输入方式。
 
+`1.0.41.0` 的 macOS Safari M8 Pointer + 实体听感旅程已在部署地址通过：MacBook Pro `Mac16,8` 的内置触控板逐项覆盖全部 Pad/Bank、分离与双击、drag-off/错误目标、模式导航、focus interruption 与显式 Suspend/Activate recovery probe；A1 的严格 `0.505–0.545 s` 非零选区、四种 trigger mode、`0.0 dB` / `-11.7 dB`、Mute 及 A15/A16 reload 持久化均由操作者实听确认。刷新后的最终报告绑定 Project/Runtime revision 83、Audio `running`、2 admissions / 2 outcomes / 0 rejections、无错误，SHA-256 为 `fb87f54f31196cc01211b9c7da8aec34f5f7659b7f7392bdeffd3f5ba1fcc340`。该 [M8 evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md) 只升级 Creator macOS Safari M8，不替代 Safari capture M7、Web Runtime Lab 或 Stage 9 Safari Sequence 行。
+
 ## 分发与身份
 
 `scripts/creator-web.sh package` 生成内容哈希资产和 canonical Creator distribution manifest；manifest 绑定 Product Build、Host、Platform、协议、固定 Emscripten 身份、heap 与资源上限，并显式声明兼容的诊断 Host 身份。共享 native manifest gate 只接受 Product Assembly 注入的精确 Host/contract/version 组合。该同构建 manifest ownership 协议不是公开跨版本 Contract。
@@ -78,7 +81,7 @@ Creator workflow 源码使用 `creator-canary` Environment 与 `NETLIFY_CREATOR_
 
 Vitest 覆盖长素材容器嗅探、pre/post-decode boundary、单一缓冲、配额选区/拒绝保留，以及 Sequence stopped/recording/switch-pending/flushing/recovery/trim-overlay 状态、边界后的 active authority 校验、统一输入、Capture 互操作与 privacy-safe acceptance report；A9 的七个物理 fixture 由仓库脚本可复现并记录 SHA-256。packaged Playwright 使用真实 Facade 验证组合旅程；armed-Pad journey 在 Capture commit 前录 A2、以 armed A1 stop（不入 journal）、commit 后再录 A1，随后 Stop、reload/reopen 并检查 exact event delta/order/count、revision、Pad/Asset 以及 WAV media type/SHA-256/byte length Project Truth。Core fault journey另覆盖 pre-publication prepare failure 后的 Discard/disarm、continued flush/Stop 与 restart。自动化不替代 #359 的 macOS/iPadOS Safari 内存证据或物理 MIDI/Touch/音频验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
 
-自动化结论本身不是物理验收；M3 的 Chrome Pointer `PASS` 来自上述实体记录。它不替代 Safari Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
+自动化结论本身不是物理验收；M3 的 Chrome Pointer 与 M8 的 Safari Pointer/听感 `PASS` 均来自上述实体记录。它们不替代 Safari capture、Stage 9 Safari Sequence、Chrome MIDI 或 iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 
 ## 非能力
 
