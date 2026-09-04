@@ -790,6 +790,8 @@ Assembly remain unchanged and therefore report `unconfigured`.
 
 **Files:**
 
+- Modify: `packages/web-runtime-platform/web/input_adapters.mjs`
+- Test: `packages/web-runtime-platform/test/input_adapters.test.mjs`
 - Create: `apps/creator-web/src/components/perform_surface.tsx`
 - Create: `apps/creator-web/src/components/fx_slider_bank.tsx`
 - Create: `apps/creator-web/src/components/pattern_launch_strip.tsx`
@@ -837,19 +839,39 @@ Assembly remain unchanged and therefore report `unconfigured`.
 - [ ] Gate recording on playable Project, running Audio Runtime, Host
   OPFS/writer preflight and capture status `ready`. `unconfigured` stays silent,
   `configured` remains waiting, and `unavailable` displays its actionable error.
+- [ ] RED: extend `packages/web-runtime-platform/test/input_adapters.test.mjs`
+  so two MIDI inputs press the same mapped slot, the second input releases
+  first (reverse order), and the callbacks prove that each release carries the
+  same distinct opaque gesture key as its originating accepted press. Cover
+  pointer cancel and clear, keyboard release and clear, and MIDI release,
+  disconnect, clear, and dispose with the same identity assertion; a
+  slot/source-only callback or Creator-side FIFO/LIFO must fail this witness.
 - [ ] Implement pointer, touch and MIDI paths through one raw gesture encoder.
   Extend the existing Creator input controller with an optional Perform raw
   input observer so the already-owned pointer/keyboard/MIDI adapters remain the
   single listeners and preserve Sample trigger-mode semantics. Do not add a
-  second adapter stack in the Perform surface. The controller gives each
-  adapter-accepted press a fresh stable gesture identity and forwards its
-  matching release/cancel/adverse-lifecycle close exactly once. Each raw event
-  supplies event/gesture identity but never time/order; input source remains
-  local observer metadata and is not a `PerformanceRawEvent` field. Cancel and
-  adverse lifecycle closure emit the strict `pad_release` shape rather than a
-  new event kind. JavaScript sends every raw value and never coalesces. Render
-  pending Pattern state from Core target/ack results, not a Host timer.
-- [ ] GREEN: run the Creator unit and Playwright suites; expect PASS.
+  second adapter stack in the Perform surface. For every accepted pointer,
+  keyboard, or MIDI press, the shared adapter creates one fresh local opaque
+  key, retains it with that native gesture, passes it as the trailing argument
+  to `trigger(slot, velocity, source, gestureKey)`, then passes the same object
+  identity to `onRelease(slot, source, gestureKey)` or
+  `onCancel(slot, source, gestureKey)` from normal release, cancel, clear,
+  disconnect, or dispose. The opaque object carries no native device identity
+  or hardware metadata and is compared only by reference. It is local callback
+  metadata: it is never a `PerformanceRawEvent` field and never crosses Application Facade or Core.
+  Creator maps that opaque key, not a source/slot queue, to a fresh stable Core
+  `gestureId` and forwards its matching release/cancel/adverse-lifecycle close
+  exactly once. Add the same two-MIDI-input/same-slot/reverse-release journey to
+  `input_controller.test.ts`; it must retain each original Core gesture ID.
+  Each raw event supplies event/gesture identity but never time/order; input
+  source remains local observer metadata and is not a `PerformanceRawEvent`
+  field. Cancel and adverse lifecycle closure emit the strict `pad_release`
+  shape rather than a new event kind. JavaScript sends every raw value and never
+  coalesces. Render pending Pattern state from Core target/ack results, not a
+  Host timer.
+- [ ] GREEN: run
+  `node --test packages/web-runtime-platform/test/input_adapters.test.mjs`, the
+  Creator unit suite, and the Playwright suite; expect PASS.
 - [ ] Run `scripts/architecture-portal.sh check`; expect PASS.
 - [ ] Commit only the listed files with
   `feat(creator): build the Perform surface (fixes #435)`.

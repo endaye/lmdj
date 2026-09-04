@@ -511,6 +511,8 @@ Inspect `git show --name-status --oneline HEAD` and require a clean Task worktre
 
 **Files:**
 
+- Modify: `packages/web-runtime-platform/web/input_adapters.mjs`
+- Test: `packages/web-runtime-platform/test/input_adapters.test.mjs`
 - Create: `apps/creator-web/src/components/perform_surface.tsx`
 - Create: `apps/creator-web/src/components/fx_slider_bank.tsx`
 - Create: `apps/creator-web/src/components/pattern_launch_strip.tsx`
@@ -535,7 +537,7 @@ Inspect `git show --name-status --oneline HEAD` and require a clean Task worktre
 
 **Interfaces:**
 
-- Consumes: Task 8A `WebPerformanceCaptureSession`, `MasterTapBatchQueue`, #434 `WavStreamWriter`/`PerformanceRecordingStore`, #433 Performance runtime operations, and one `ProjectView.patternSlots` projection.
+- Consumes: Task 8A `WebPerformanceCaptureSession`, `MasterTapBatchQueue`, #434 `WavStreamWriter`/`PerformanceRecordingStore`, #433 Performance runtime operations, one `ProjectView.patternSlots` projection, and the shared adapters' local opaque gesture-key callback contract.
 - Produces: the complete P10-D17 Creator surface and production Browser journeys that Task 10 reruns unchanged against the formal `1.0.42.0` package.
 
 - [ ] **Step 1: Rewrite the Project projection RED tests**
@@ -631,28 +633,39 @@ startPerformanceMasterCapture: vi.fn(async (sink) => ({
 
 Assert P10-D17 order, eight FX sliders in fixed order, one HOLD, instant Bank view changes with zero runtime request, raw input with identities but no Host clock/order, Pattern pending/ack state, and these gates: `unconfigured` is silently disabled, `configured` is waiting, `unavailable` renders its actionable message, and only `ready` plus playable Project/running audio/OPFS enables Record.
 
+Add shared-adapter RED witnesses proving that every accepted pointer, keyboard,
+and MIDI press receives a fresh local opaque gesture key and that the same
+object identity reaches the matching normal release, cancel, clear, disconnect,
+or dispose callback. The decisive case uses two MIDI inputs pressing the same
+mapped slot and releasing in reverse order; assertions bind each release key to
+its originating input's press key, so a slot/source FIFO or LIFO cannot pass.
+
 Add `input_controller.test.ts` RED witnesses proving the existing pointer/touch,
 keyboard, and MIDI paths each emit one stable Perform press/release gesture to an
 optional observer, adverse lifecycle cleanup emits the matching release exactly
 once, two sequential gestures on the same source/slot receive different gesture
 identities, and no observer means the existing Project/Sample/Sequence behavior
-is unchanged. The observer may carry source as local metadata, but exact-key
-assertions must prove the Core-facing press event contains only
-`kind`, `gestureId`, `slot`, and `velocity`, while release contains only
-`kind`, `gestureId`, and `slot`; no `source` field or `pad_cancel` kind may cross
-the Facade request boundary.
+is unchanged. Repeat the two-MIDI-input/same-slot/reverse-release case here and
+assert that Creator retains the Core gesture ID belonging to each originating
+press. The observer may carry source and the adapter's opaque key as local
+metadata, but exact-key assertions must prove the Core-facing press event
+contains only `kind`, `gestureId`, `slot`, and `velocity`, while release contains
+only `kind`, `gestureId`, and `slot`; neither `source`, the opaque adapter key,
+nor a `pad_cancel` kind may cross the Facade request boundary.
 
 - [ ] **Step 5: Run the Perform input and surface RED tests**
 
 Run:
 
 ```bash
+node --test packages/web-runtime-platform/test/input_adapters.test.mjs
 npm --prefix apps/creator-web test -- --run \
   test/input_controller.test.ts test/perform_surface.test.tsx
 ```
 
-Expected: FAIL because the shared input controller has no Perform observer and
-the Perform components/state and capture-status integration do not exist.
+Expected: FAIL because the adapters do not yet create or pair local opaque
+gesture keys, the shared input controller has no Perform observer/key mapping,
+and the Perform components/state and capture-status integration do not exist.
 
 - [ ] **Step 6: Implement the typed Creator session and Perform state**
 
@@ -685,18 +698,26 @@ Build the surface in exact DOM order and keep all controls wired through the con
 Extend the existing Creator input controller with an optional Perform raw-input
 observer. The existing pointer, keyboard, and MIDI adapters remain the only
 listeners and keep their established Sample trigger-mode behavior; the Perform
-surface must not create a second adapter stack. The controller gives each
-adapter-accepted press a fresh stable gesture identity; the observer receives
-that press and its matching release/cancel/adverse-lifecycle close exactly once
-with the input source as local, out-of-band metadata. The Perform controller maps
-cancel, blur, visibility loss, pagehide, and dispose to the strict
-`pad_release` event with the original gesture ID and never forwards source or a
-new cancel kind to Core. It forwards every raw value without tick, runtime
-frame, input sequence, semantic deduplication, or Host timer. Add focused
-`input_controller.test.ts` witnesses for pointer/touch, keyboard, MIDI,
-sequential identity uniqueness, adverse-lifecycle release, and the non-recording
-no-op path, plus Core-request exact-key assertions in
-`perform_surface.test.tsx`.
+surface must not create a second adapter stack. Each adapter creates one fresh
+local opaque key for every accepted gesture, stores it with that native pointer,
+keyboard code, or MIDI input/note owner, supplies it as the trailing argument to
+`trigger(slot, velocity, source, gestureKey)`, and supplies the same object to
+`onRelease(slot, source, gestureKey)` or
+`onCancel(slot, source, gestureKey)` during normal release, cancel, clear,
+disconnect, or dispose. The opaque object contains no native device identity or
+hardware metadata and is compared only by reference. Creator maps it, never a
+source/slot FIFO/LIFO, to a fresh Core gesture ID; the observer receives that
+press and its matching release/cancel/adverse-lifecycle close exactly once with
+source and the opaque key as local, out-of-band metadata. The opaque key never crosses Application Facade or Core and must not enter any Facade request or
+Core raw event. The Perform controller maps cancel, blur,
+visibility loss, pagehide, and dispose to the strict `pad_release` event with
+the original Core gesture ID and never forwards source, the opaque key, or a new
+cancel kind to Core. It forwards every raw value without tick, runtime frame,
+input sequence, semantic deduplication, or Host timer. Add focused shared-adapter
+and `input_controller.test.ts` witnesses for pointer/touch, keyboard, MIDI,
+sequential identity uniqueness, two MIDI devices releasing the same slot in
+reverse order, adverse-lifecycle release, and the non-recording no-op path, plus
+Core-request exact-key assertions in `perform_surface.test.tsx`.
 
 - [ ] **Step 8: Replace the Browser RED test’s prohibited hooks**
 
@@ -736,6 +757,7 @@ The main journey must perform and verify, in order: v3 open with 16 null slots; 
 Run:
 
 ```bash
+node --test packages/web-runtime-platform/test/input_adapters.test.mjs
 npm --prefix apps/creator-web test -- --run
 git add -N tests/platform/web/creator/creator_web_perform.spec.mjs
 scripts/core.sh test dev full
@@ -753,6 +775,8 @@ git add apps/creator-web/src/components/perform_surface.tsx \
   apps/creator-web/src/components/fx_slider_bank.tsx \
   apps/creator-web/src/components/pattern_launch_strip.tsx \
   apps/creator-web/src/state/perform_state.ts \
+  packages/web-runtime-platform/web/input_adapters.mjs \
+  packages/web-runtime-platform/test/input_adapters.test.mjs \
   apps/creator-web/src/components/mode_rail.tsx apps/creator-web/src/app.tsx \
   apps/creator-web/src/runtime/input_controller.ts \
   apps/creator-web/src/runtime/runtime_types.ts apps/creator-web/src/runtime/project_actions.ts \
