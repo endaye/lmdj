@@ -2357,7 +2357,8 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_failed() {
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_start(
-    std::int32_t audio_context_handle) {
+    std::int32_t audio_context_handle,
+    std::int32_t output_destination_handle) {
   if (!emscripten_is_main_browser_thread()) {
     return -1;
   }
@@ -2368,7 +2369,8 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_start(
   if (adapter == nullptr) {
     return static_cast<int>(RealtimeAudioWorkletStart::unpublished);
   }
-  const auto result = adapter->start_on_browser_main(audio_context_handle);
+  const auto result = adapter->start_on_browser_main(
+      audio_context_handle, output_destination_handle);
   if (result == RealtimeAudioWorkletStart::unsupported_sample_rate ||
       result == RealtimeAudioWorkletStart::unsupported_render_quantum) {
     if (!schedule_audio_control_failure(adapter->fatal())) {
@@ -2376,6 +2378,20 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_start(
     }
   }
   return static_cast<int>(result);
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_connect_direct(
+    std::int32_t audio_context_handle) {
+  if (!emscripten_is_main_browser_thread() ||
+      web_manifest_terminal_failure.load(std::memory_order_acquire)) {
+    return 0;
+  }
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter != nullptr &&
+                 adapter->connect_direct_output_on_browser_main(
+                     audio_context_handle)
+             ? 1
+             : 0;
 }
 
 EMSCRIPTEN_KEEPALIVE std::int32_t lmdj_web_audio_state() {
@@ -2477,6 +2493,21 @@ EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_test_render_calls() {
 EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_test_output_energy() {
   auto* adapter = web_audio.load(std::memory_order_acquire);
   return adapter == nullptr ? 0 : adapter->output_energy_microunits();
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_reset_output_energy() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr) return 0;
+  adapter->reset_output_energy_for_conformance();
+  return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t
+lmdj_web_audio_test_direct_output_connections() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter == nullptr
+             ? 0
+             : adapter->direct_output_connections_for_conformance();
 }
 
 EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_test_ack_generation() {

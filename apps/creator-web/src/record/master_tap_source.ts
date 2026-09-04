@@ -1,17 +1,12 @@
-import masterTapSource from "./master_tap_worklet.js?raw";
-import masterTapUrl from "./master_tap_worklet.js?url&no-inline";
-
+import type {PerformanceMasterCaptureSink} from
+  "@lmdj/web-runtime-platform/runtime_types";
 import type {
   WavSealReason,
   WavStreamWriter,
   WavWriterSnapshot,
 } from "./wav_stream_writer";
 
-export const PERFORM_WORKLET_NAME = "lmdj-perform-master-tap";
 export const PERFORM_BATCH_FRAMES = 4_800;
-export const PERFORM_QUEUE_BATCHES = 32;
-export const PERFORM_WORKLET_SOURCE: string = masterTapSource;
-export const PERFORM_WORKLET_URL: string = masterTapUrl;
 
 export const PERFORM_BACKPRESSURE_MESSAGE =
   "Recording stopped because storage could not keep up. The durable WAV prefix is still available.";
@@ -31,25 +26,20 @@ export interface MasterTapFailure {
 
 export interface MasterTapListener {
   onFailure(failure: MasterTapFailure): void;
+  requestCaptureStop(): void;
 }
 
 type BatchWriter = Pick<WavStreamWriter,
   "appendChannels" | "queueBatchLimit" | "seal">;
 
-export interface MasterTapPort {
-  onmessage: ((event: MessageEvent<unknown>) => void) | null;
-  postMessage(message: Readonly<{type: "stop"}>): void;
-}
-
 type TerminalReason = Exclude<WavSealReason, "stopped">;
 
-export class MasterTapBatchQueue {
+export class MasterTapBatchQueue implements PerformanceMasterCaptureSink {
   readonly #writer: BatchWriter;
   readonly #listener: MasterTapListener;
   readonly #queue: Array<readonly Float32Array[]> = [];
   readonly #settledPromise: Promise<WavWriterSnapshot>;
   #resolveSettled: ((snapshot: WavWriterSnapshot) => void) | null = null;
-  #port: MasterTapPort | null = null;
   #draining = false;
   #outstanding = 0;
   #sealed = false;
@@ -70,20 +60,22 @@ export class MasterTapBatchQueue {
   get sealed(): boolean { return this.#sealed; }
   get settled(): Promise<WavWriterSnapshot> { return this.#settledPromise; }
 
-  connect(port: MasterTapPort): void {
-    if (this.#port !== null) throw new Error("Perform tap port is already connected");
-    this.#port = port;
-    port.onmessage = (event) => this.#acceptMessage(event.data);
+  onBatch(channels: readonly [Float32Array, Float32Array]): void {
+    this.acceptBatch(channels);
   }
 
-  stop(): Promise<WavWriterSnapshot> {
-    if (this.#stopRequested || this.#sealed) return this.#settledPromise;
-    if (this.#port === null) throw new Error("Perform tap port is not connected");
-    this.#requestWorkletStop();
-    return this.#settledPromise;
+  onStopped(): void {
+    if (this.#workletStopped) return;
+    this.#workletStopped = true;
+    if (this.#sealed) this.#maybeFinishTerminal();
+    else this.#maybeFinishNormalStop();
   }
 
-  acceptBatch(channels: readonly Float32Array[]): void {
+  onFailure(_reason: "tap-failure", droppedFrames: number): void {
+    this.#requestTerminal("tap-failure", droppedFrames);
+  }
+
+  private acceptBatch(channels: readonly Float32Array[]): void {
     if (this.#sealed) {
       this.#droppedFrames += channels[0]?.length ?? 0;
       return;
@@ -108,30 +100,6 @@ export class MasterTapBatchQueue {
       throw new TypeError("Perform tap batch is invalid");
     }
     return channels[0]!.length;
-  }
-
-  #acceptMessage(value: unknown): void {
-    if (value === null || typeof value !== "object") return;
-    const message = value as Record<string, unknown>;
-    if (message.type === "batch" && Array.isArray(message.channels)) {
-      this.acceptBatch(message.channels as Float32Array[]);
-      return;
-    }
-    if (message.type === "stopped") {
-      this.#workletStopped = true;
-      if (this.#sealed) this.#maybeFinishTerminal();
-      else this.#maybeFinishNormalStop();
-      return;
-    }
-    if (message.type === "failed" &&
-        message.reason === "post-message-failed") {
-      const dropped = Number.isSafeInteger(message.droppedFrames) &&
-        (message.droppedFrames as number) >= 0
-        ? message.droppedFrames as number
-        : 0;
-      this.#workletStopped = true;
-      this.#requestTerminal("tap-failure", dropped);
-    }
   }
 
   async #drain(): Promise<void> {
@@ -179,26 +147,24 @@ export class MasterTapBatchQueue {
     for (const queued of this.#queue) this.#droppedFrames += queued[0]?.length ?? 0;
     this.#outstanding -= this.#queue.length;
     this.#queue.splice(0);
-    this.#requestWorkletStop();
+    this.#requestCaptureStop();
     this.#maybeFinishTerminal();
   }
 
-  #requestWorkletStop(): void {
+  #requestCaptureStop(): void {
     if (this.#stopRequested) return;
-    const port = this.#port;
-    if (port === null) return;
     this.#stopRequested = true;
     try {
-      port.postMessage({type: "stop"});
+      this.#listener.requestCaptureStop();
     } catch {
-      this.#workletStopped = true;
-      this.#requestTerminal("tap-failure", 0);
+      // The recording remains sealed and waits for the platform lifecycle
+      // callback even if the owner cannot initiate another stop request.
     }
   }
 
   #maybeFinishTerminal(): void {
     if (!this.#sealed || this.#sealReason === null || this.#draining ||
-        this.#finishing || (this.#port !== null && !this.#workletStopped)) return;
+        this.#finishing || !this.#workletStopped) return;
     void this.#finishSeal();
   }
 

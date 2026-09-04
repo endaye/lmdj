@@ -71,6 +71,9 @@ class RealtimeAudioWorklet final {
   RealtimeAudioWorklet& operator=(const RealtimeAudioWorklet&) = delete;
 
   RealtimeAudioWorkletStart start_on_browser_main(
+      std::int32_t audio_context_handle,
+      std::int32_t output_destination_handle) noexcept;
+  bool connect_direct_output_on_browser_main(
       std::int32_t audio_context_handle) noexcept;
   void complete_control_install(bool installed) noexcept;
   foundation::Result<void> begin_rendering() noexcept;
@@ -93,6 +96,8 @@ class RealtimeAudioWorklet final {
   std::uint32_t observed_frames() const noexcept;
   std::uint32_t render_calls() const noexcept;
   std::uint32_t output_energy_microunits() const noexcept;
+  void reset_output_energy_for_conformance() noexcept;
+  std::uint32_t direct_output_connections_for_conformance() const noexcept;
   bool callback_gate_closed() const noexcept;
   std::uint32_t start_calls() const noexcept;
   RealtimeAudioWorkletStart validate_configuration_for_conformance(

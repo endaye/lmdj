@@ -58,6 +58,7 @@ if (typeof globalThis.window !== "undefined") {
       : [manifestPreRun];
 
   const contexts = new Map();
+  const audioNodes = new Map();
   const fatalNames = Object.freeze({
     0: "none",
     1: "wrong_browser_thread",
@@ -125,30 +126,70 @@ if (typeof globalThis.window !== "undefined") {
     return handle;
   }
 
+  function registerAudioNode(node) {
+    if (!(node instanceof AudioNode)) {
+      throw new TypeError("an AudioNode is required");
+    }
+    const contextHandle = [...contexts.entries()]
+      .find(([, context]) => context === node.context)?.[0];
+    if (!Number.isInteger(contextHandle) || contextHandle <= 0) {
+      throw new TypeError("the AudioNode context must be registered");
+    }
+    const handle = emscriptenRegisterAudioObject(node);
+    if (!Number.isInteger(handle) || handle <= 0) {
+      throw new Error("AudioNode registration failed");
+    }
+    audioNodes.set(handle, {node, contextHandle});
+    return handle;
+  }
+
   function audioCallbackHeartbeat() {
     return Module["_lmdj_web_audio_callback_heartbeat"]();
   }
 
   let startRecord = null;
-  function startAudioWorklet(handle) {
-    if (!Number.isInteger(handle) || handle <= 0 || !contexts.has(handle)) {
+  function startAudioWorklet(
+    contextHandle,
+    outputDestinationHandle = contextHandle,
+  ) {
+    if (
+      !Number.isInteger(contextHandle) ||
+      contextHandle <= 0 ||
+      !contexts.has(contextHandle)
+    ) {
       return Promise.reject(
         new TypeError("a registered AudioContext handle is required"));
     }
+    const destination = audioNodes.get(outputDestinationHandle);
+    if (
+      !Number.isInteger(outputDestinationHandle) ||
+      outputDestinationHandle <= 0 ||
+      (
+        outputDestinationHandle !== contextHandle &&
+        destination?.contextHandle !== contextHandle
+      )
+    ) {
+      return Promise.reject(
+        new TypeError("a registered output destination handle is required"));
+    }
     if (startRecord !== null) {
-      if (startRecord.handle !== handle) {
+      if (
+        startRecord.contextHandle !== contextHandle ||
+        startRecord.outputDestinationHandle !== outputDestinationHandle
+      ) {
         return Promise.reject(
-          new TypeError("the AudioWorklet is bound to another context"));
+          new TypeError("the AudioWorklet is bound to another output graph"));
       }
       return startRecord.promise;
     }
-    const context = contexts.get(handle);
+    const context = contexts.get(contextHandle);
     const promise = (async () => {
       const deadline = performance.now() + 30_000;
       while (!host.runtimeInitialized && performance.now() < deadline) {
         await delay(2);
       }
-      const result = Module["_lmdj_web_audio_start"](handle);
+      const result = Module["_lmdj_web_audio_start"](
+        contextHandle, outputDestinationHandle);
       if (result === -4 || result === -5) {
         return waitForUnsupportedFailure();
       }
@@ -189,8 +230,20 @@ if (typeof globalThis.window !== "undefined") {
       Module["_lmdj_web_audio_bootstrap_timeout"]();
       return committedFatalResult();
     })();
-    startRecord = {handle, promise};
+    startRecord = {contextHandle, outputDestinationHandle, promise};
     return promise;
+  }
+
+  function connectAudioWorkletDirect(contextHandle) {
+    if (
+      !Number.isInteger(contextHandle) ||
+      contextHandle <= 0 ||
+      !contexts.has(contextHandle) ||
+      startRecord?.contextHandle !== contextHandle
+    ) {
+      return false;
+    }
+    return Module["_lmdj_web_audio_connect_direct"](contextHandle) === 1;
   }
 
   const transportEncoder = new TextEncoder();
@@ -725,8 +778,10 @@ if (typeof globalThis.window !== "undefined") {
     runtimeInitialized: false,
     manifestReady: false,
     registerAudioContext,
+    registerAudioNode,
     audioCallbackHeartbeat,
     startAudioWorklet,
+    connectAudioWorkletDirect,
     transport,
     ...(deadlineProof === undefined ? {} : {deadlineProof}),
   };
@@ -1196,6 +1251,32 @@ if (typeof globalThis.window !== "undefined") {
         return Module["_lmdj_web_audio_test_start_calls"]();
       },
 
+      directOutputConnections() {
+        return Module[
+          "_lmdj_web_audio_test_direct_output_connections"
+        ]();
+      },
+
+      async runDirectOutputContinuationProof() {
+        if (Module["_lmdj_web_audio_test_reset_output_energy"]() !== 1) {
+          throw new Error("output energy reset failed");
+        }
+        const renderCallsBefore =
+          Module["_lmdj_web_audio_test_render_calls"]();
+        const trigger = await submit("trigger", {slot: 0, velocity: 127});
+        if (!trigger.ok) throw new Error(JSON.stringify(trigger));
+        const deadline = performance.now() + 3_000;
+        let renderCallsAfter = renderCallsBefore;
+        let outputEnergy = 0;
+        while (performance.now() < deadline) {
+          renderCallsAfter = Module["_lmdj_web_audio_test_render_calls"]();
+          outputEnergy = Module["_lmdj_web_audio_test_output_energy"]();
+          if (renderCallsAfter > renderCallsBefore && outputEnergy > 0) break;
+          await delay(2);
+        }
+        return {renderCallsBefore, renderCallsAfter, outputEnergy};
+      },
+
       hostStatus() {
         return submit("host.status", {});
       },
@@ -1354,7 +1435,7 @@ if (typeof globalThis.window !== "undefined") {
 
       async runSuspendReactivateProof() {
         const prepared = await prepareProject();
-        const context = contexts.get(startRecord?.handle);
+        const context = contexts.get(startRecord?.contextHandle);
         if (!(context instanceof AudioContext)) {
           throw new Error("registered AudioContext is unavailable");
         }

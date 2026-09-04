@@ -13,7 +13,11 @@ async function waitForFormalHost(page) {
   );
   return page.evaluate(() => ({
     registrationHelpers: Object.keys(window.lmdjWebRuntimeHost)
-      .filter((name) => name === "registerAudioContext"),
+      .filter((name) => [
+        "registerAudioContext",
+        "registerAudioNode",
+        "connectAudioWorkletDirect",
+      ].includes(name)).sort(),
     sharedMemory:
       window.Module.wasmMemory?.buffer instanceof SharedArrayBuffer,
     memoryBytes: window.Module.wasmMemory?.buffer.byteLength ?? 0,
@@ -30,8 +34,15 @@ async function activateFromClick(page, sampleRate) {
         const context = new AudioContext({sampleRate: requestedSampleRate});
         await context.resume();
         const handle = window.lmdjWebRuntimeHost.registerAudioContext(context);
+        const tapNode = context.createGain();
+        tapNode.gain.value = 1;
+        const analyser = context.createAnalyser();
+        tapNode.connect(analyser);
+        analyser.connect(context.destination);
+        const tapHandle = window.lmdjWebRuntimeHost.registerAudioNode(tapNode);
+        window.__lmdjFormalAudioGraph = {context, tapNode, analyser, handle};
         window.__lmdjFormalActivation = await window.lmdjWebRuntimeHost
-          .startAudioWorklet(handle);
+          .startAudioWorklet(handle, tapHandle);
       } catch (error) {
         window.__lmdjFormalActivation = {
           ok: false,
@@ -50,7 +61,11 @@ async function activateFromClick(page, sampleRate) {
 test("compatibility press renders the published Bank through the Wasm AudioWorklet", async ({page}) => {
   test.setTimeout(120_000);
   const module = await waitForFormalHost(page);
-  expect(module.registrationHelpers).toEqual(["registerAudioContext"]);
+  expect(module.registrationHelpers).toEqual([
+    "connectAudioWorkletDirect",
+    "registerAudioContext",
+    "registerAudioNode",
+  ]);
   expect(module.sharedMemory).toBe(true);
   expect(module.memoryBytes).toBe(536_870_912);
 
@@ -84,6 +99,40 @@ test("compatibility press renders the published Bank through the Wasm AudioWorkl
   });
   expect(proof.outcome.runtime_frame).toBeGreaterThanOrEqual(0);
   expect(proof.outputEnergy).toBeGreaterThan(0);
+  const graph = await page.evaluate(() => {
+    const {analyser, context, tapNode, handle} = window.__lmdjFormalAudioGraph;
+    const values = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(values);
+    const tapEnergy = values.reduce((sum, value) => sum + value * value, 0);
+    const connectionsBefore = window.lmdjWebRuntimeHostTest
+      .directOutputConnections();
+    tapNode.disconnect();
+    const direct = window.lmdjWebRuntimeHost.connectAudioWorkletDirect(handle);
+    const connectionsAfterDirect = window.lmdjWebRuntimeHostTest
+      .directOutputConnections();
+    const repeated = window.lmdjWebRuntimeHost.connectAudioWorkletDirect(handle);
+    return {
+      tapEnergy, direct, repeated,
+      connectionsBefore,
+      connectionsAfterDirect,
+      connectionsAfterRepeated: window.lmdjWebRuntimeHostTest
+        .directOutputConnections(),
+      contextState: context.state,
+    };
+  });
+  expect(graph.tapEnergy).toBeGreaterThan(0);
+  expect(graph.direct).toBe(true);
+  expect(graph.repeated).toBe(true);
+  expect(graph.connectionsBefore).toBe(0);
+  expect(graph.connectionsAfterDirect).toBe(1);
+  expect(graph.connectionsAfterRepeated).toBe(1);
+  expect(graph.contextState).toBe("running");
+  const continuation = await page.evaluate(() =>
+    window.lmdjWebRuntimeHostTest.runDirectOutputContinuationProof());
+  expect(continuation.renderCallsAfter).toBeGreaterThan(
+    continuation.renderCallsBefore,
+  );
+  expect(continuation.outputEnergy).toBeGreaterThan(0);
   expect(proof.memory.bufferShared).toBe(true);
   expect(proof.memory.allowGrowth).toBe(false);
   expect(proof.memory.initialBytes).toBe(536_870_912);
@@ -285,24 +334,35 @@ test("start is exactly-once and suspend can reactivate the same processor", asyn
     const context = new AudioContext({sampleRate: 48_000});
     await context.resume();
     const handle = window.lmdjWebRuntimeHost.registerAudioContext(context);
-    const first = window.lmdjWebRuntimeHost.startAudioWorklet(handle);
-    const second = window.lmdjWebRuntimeHost.startAudioWorklet(handle);
+    const destination = context.createGain();
+    destination.connect(context.destination);
+    const destinationHandle = window.lmdjWebRuntimeHost
+      .registerAudioNode(destination);
+    const first = window.lmdjWebRuntimeHost.startAudioWorklet(
+      handle, destinationHandle);
+    const second = window.lmdjWebRuntimeHost.startAudioWorklet(
+      handle, destinationHandle);
     const otherContext = new AudioContext({sampleRate: 48_000});
     const otherHandle = window.lmdjWebRuntimeHost
       .registerAudioContext(otherContext);
     const differentHandleRejected = await window.lmdjWebRuntimeHost
-      .startAudioWorklet(otherHandle)
+      .startAudioWorklet(otherHandle, destinationHandle)
+      .then(() => false, () => true);
+    const invalidDestinationRejected = await window.lmdjWebRuntimeHost
+      .startAudioWorklet(handle, 999_999)
       .then(() => false, () => true);
     return {
       samePromise: first === second,
       activation: await first,
       differentHandleRejected,
+      invalidDestinationRejected,
       startCalls: window.lmdjWebRuntimeHostTest.startCalls(),
     };
   });
   expect(start.samePromise).toBe(true);
   expect(start.activation.ok).toBe(true);
   expect(start.differentHandleRejected).toBe(true);
+  expect(start.invalidDestinationRejected).toBe(true);
   expect(start.startCalls).toBe(1);
 
   const proof = await page.evaluate(async () =>
