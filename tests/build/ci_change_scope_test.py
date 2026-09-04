@@ -1097,6 +1097,52 @@ class ChangeScopeTest(unittest.TestCase):
             )
             self.assertEqual(document["required_jobs"], ["docs-static"])
 
+    def test_preserving_policy_push_publishes_focused_manifest_and_summary(self):
+        """The producer proof must survive the CLI's summary validation."""
+        target = (
+            "packages/web-runtime-platform/test/"
+            "performance_master_capture.test.mjs"
+        )
+        with TemporaryGitRepository() as repository:
+            base_policy = copy.deepcopy(self.policy)
+            base_policy["rules"] = [
+                rule for rule in base_policy["rules"]
+                if rule["match"] != {"kind": "exact", "value": target}
+            ]
+            base = repository.write_and_commit(
+                "scripts/ci/scope_policy.json",
+                json.dumps(base_policy, indent=2) + "\n",
+                "base policy",
+            )
+            policy_path = repository.path / "scripts/ci/scope_policy.json"
+            policy_path.write_text(
+                json.dumps(self.policy, indent=2) + "\n", encoding="utf-8"
+            )
+            introduced = repository.path / target
+            introduced.parent.mkdir(parents=True, exist_ok=True)
+            introduced.write_text("// routed by the head policy\n", encoding="utf-8")
+            repository.run("git", "add", "--", "scripts/ci/scope_policy.json", target)
+            repository.run(
+                "git", "commit", "--quiet", "-m", "add routed path"
+            )
+            head = repository.run("git", "rev-parse", "HEAD").stdout.strip()
+            manifest = repository.path / "focused-policy.json"
+            result = subprocess.run([
+                sys.executable, str(CLASSIFIER_PATH),
+                "--policy", str(policy_path),
+                "--event", "push", "--base-sha", base, "--head-sha", head,
+                "--repository", "owner/repo", "--head-repository", "",
+                "--pr-number", "0", "--manifest-out", str(manifest),
+                "--github-output", str(repository.path / "output"),
+                "--summary", str(repository.path / "summary.md"),
+            ], cwd=repository.path, capture_output=True, text=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            document = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(document["mode"], "focused")
+            self.assertEqual(document["schema"], "lmdj.ci-scope.v2")
+            self.assertTrue((repository.path / "summary.md").is_file())
+
     def test_cli_publishes_the_trusted_head_output_and_summary_line(self):
         with TemporaryGitRepository() as repository:
             base = repository.write_and_commit("docs/guide.md", "one\n", "base")

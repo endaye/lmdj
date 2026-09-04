@@ -202,9 +202,9 @@ class LaneTableContractTest(unittest.TestCase):
             "not would report full for a change CI classifies focused; remedy: "
             "compute the same exemption here and pass it to classify"
         )
-        self.assertIn("policy_edit_is_classification_preserving", source, message)
-        self.assertIn("read_merge_base_policy", source, message)
-        self.assertIn("read_merge_base_tracked_paths", source, message)
+        self.assertIn(
+            "repository_policy_edit_is_classification_preserving", source, message
+        )
         self.assertIn("policy_edit_preserving=policy_edit_preserving", source, message)
 
     def test_a_preserving_policy_edit_classifies_focused_end_to_end(self) -> None:

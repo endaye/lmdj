@@ -649,6 +649,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
 
     def test_pr_gate_has_every_formal_lane_in_static_needs_and_runs_with_always(self) -> None:
         job = self.workflow_job("pr-gate")
+        self.assertIn("fetch-depth: 0", job)
         self.assertEqual(
             self.job_needs("pr-gate"),
             {"change-scope", "pre-heavy-gate", *FORMAL_RESULTS},
@@ -682,6 +683,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
 
     def test_pre_heavy_gate_is_closed_hosted_preflight_admission(self) -> None:
         job = self.workflow_job("pre-heavy-gate")
+        self.assertIn("fetch-depth: 0", job)
         self.assertEqual(
             self.job_needs("pre-heavy-gate"),
             {"change-scope", *GATING_PREFLIGHT_JOBS},

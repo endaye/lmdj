@@ -480,10 +480,13 @@ def policy_edit_is_classification_preserving(
     `expensive_families` and `slo_seconds` never surface in a per-path result,
     so a differential over paths would silently pass a change to them.
     """
+    tracked_paths = tuple(base_tracked_paths)
+    if not tracked_paths:
+        return False, "merge-base tracked path inventory is missing or empty"
     for key in ("draft_lanes", "expensive_families", "slo_seconds", "lanes", "lane_jobs"):
         if base_policy.get(key) != head_policy.get(key):
             return False, f"policy key changed: {key}"
-    for path in sorted(base_tracked_paths):
+    for path in sorted(tracked_paths):
         if path_classification(base_policy, path) != path_classification(head_policy, path):
             return False, f"classification changed for an existing path: {path}"
     return True, "no existing path changes classification"
@@ -700,11 +703,11 @@ def classify(
             "base_sha": queue.base_sha,
             "head_sha": queue.head_sha,
         }
-    validate_manifest(manifest, policy, policy_edit_preserving=policy_edit_preserving)
+    _validate_manifest(manifest, policy, policy_edit_preserving=policy_edit_preserving)
     return manifest
 
 
-def validate_manifest(
+def _validate_manifest(
     manifest: Mapping[str, object], policy: Mapping[str, object],
     *, policy_edit_preserving: bool = False,
 ) -> None:
@@ -814,6 +817,27 @@ def encode_manifest(manifest: Mapping[str, object]) -> str:
     return json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def _read_policy_at_revision(
+    repository: str | Path, revision: str
+) -> dict[str, object] | None:
+    """Read and validate the scope policy stored at one exact Git revision."""
+    try:
+        blob = subprocess.run(
+            ["git", "show", f"{revision}:{SCOPE_POLICY_PATH}"],
+            cwd=str(repository), capture_output=True, text=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    try:
+        policy = json.loads(blob, object_pairs_hook=reject_duplicates)
+        if not isinstance(policy, dict):
+            return None
+        _validate_policy(policy)
+    except (ValueError, KeyError, TypeError):
+        return None
+    return policy
+
+
 def read_merge_base_policy(
     repository: str | Path, base_sha: str, head_sha: str
 ) -> dict[str, object] | None:
@@ -829,25 +853,14 @@ def read_merge_base_policy(
             ["git", "merge-base", base_sha, head_sha],
             cwd=str(repository), capture_output=True, text=True, check=True,
         ).stdout.strip()
-        blob = subprocess.run(
-            ["git", "show", f"{merge_base}:{SCOPE_POLICY_PATH}"],
-            cwd=str(repository), capture_output=True, text=True, check=True,
-        ).stdout
     except (subprocess.CalledProcessError, OSError):
         return None
-    try:
-        policy = json.loads(blob, object_pairs_hook=reject_duplicates)
-        if not isinstance(policy, dict):
-            return None
-        _validate_policy(policy)
-    except (ValueError, KeyError, TypeError):
-        return None
-    return policy
+    return _read_policy_at_revision(repository, merge_base)
 
 
 def read_merge_base_tracked_paths(
     repository: str | Path, base_sha: str, head_sha: str
-) -> tuple[str, ...]:
+) -> tuple[str, ...] | None:
     """Every path tracked at the merge base, which is the comparison set.
 
     Paths the branch introduces are absent here by construction, and that
@@ -864,8 +877,85 @@ def read_merge_base_tracked_paths(
             cwd=str(repository), capture_output=True, text=True, check=True,
         ).stdout
     except (subprocess.CalledProcessError, OSError):
-        return ()
+        return None
     return tuple(line for line in listing.splitlines() if line)
+
+
+def repository_policy_edit_is_classification_preserving(
+    repository: str | Path,
+    head_policy: Mapping[str, object],
+    base_sha: str,
+    head_sha: str,
+) -> tuple[bool, str]:
+    """Recompute the scope-policy exemption from one complete Git checkout."""
+    base_sha = _validate_sha(base_sha)
+    head_sha = _validate_sha(head_sha)
+    revision_head_policy = _read_policy_at_revision(repository, head_sha)
+    if revision_head_policy is None:
+        return False, "head scope policy is unavailable"
+    if revision_head_policy != head_policy:
+        return False, "consumer scope policy does not match the head revision"
+    base_policy = read_merge_base_policy(repository, base_sha, head_sha)
+    if base_policy is None:
+        return False, "merge-base scope policy is unavailable"
+    tracked_paths = read_merge_base_tracked_paths(repository, base_sha, head_sha)
+    if not tracked_paths:
+        return False, "merge-base tracked path inventory is missing or empty"
+    return policy_edit_is_classification_preserving(
+        base_policy, revision_head_policy, tracked_paths
+    )
+
+
+def _manifest_touches_scope_policy(manifest: Mapping[str, object]) -> bool:
+    changed_files = manifest.get("changed_files")
+    if not isinstance(changed_files, list):
+        return False
+    return any(
+        isinstance(entry, Mapping)
+        and isinstance(entry.get("paths"), list)
+        and SCOPE_POLICY_PATH in entry["paths"]
+        for entry in changed_files
+    )
+
+
+def validate_manifest(
+    manifest: Mapping[str, object],
+    policy: Mapping[str, object],
+    *, repository: str | Path | None = None,
+) -> None:
+    """Validate a manifest, independently reproving any focused policy edit."""
+    _validate_policy(policy)
+    if not isinstance(manifest, Mapping):
+        raise ValueError("manifest must be an object")
+    # Keep the public queue-evidence boundary visibly routed through the one
+    # shared predicate even though the private structural validator repeats
+    # the closed queue-shape check below.
+    if "queue" in manifest and not is_merge_evidence_mode(manifest.get("mode")):
+        raise ValueError("queue manifest mode is not merge evidence")
+    preserving = False
+    if manifest.get("mode") == "focused" and _manifest_touches_scope_policy(manifest):
+        # Prove schema, SHA and ordinary path closure before any Git process is
+        # allowed to consume values from the document. This private exemption
+        # cannot be selected by an external caller.
+        _validate_manifest(manifest, policy, policy_edit_preserving=True)
+        if repository is None:
+            reason = "complete Git checkout was not provided"
+        else:
+            preserving, reason = repository_policy_edit_is_classification_preserving(
+                repository,
+                policy,
+                manifest.get("base_sha"),
+                manifest.get("head_sha"),
+            )
+        if not preserving:
+            raise ValueError(
+                "why: focused scope-policy manifest lacks an independently "
+                f"verified preserving proof ({reason}); remedy: checkout the "
+                "complete base/head history and rerun Change Scope"
+            )
+    _validate_manifest(
+        manifest, policy, policy_edit_preserving=preserving
+    )
 
 
 def read_git_inventory(repository: str | Path, base_sha: str, head_sha: str) -> tuple[ChangedFile, ...]:
@@ -1027,9 +1117,10 @@ def _summary_text(value: object) -> str:
 
 
 def _summary(
-    manifest: Mapping[str, object], policy: Mapping[str, object]
+    manifest: Mapping[str, object], policy: Mapping[str, object],
+    *, repository: str | Path | None = None,
 ) -> str:
-    validate_manifest(manifest, policy)
+    validate_manifest(manifest, policy, repository=repository)
     enabled = [lane for lane, selected in manifest["lanes"].items() if selected]
     rows = ["| Field | Value |", "| --- | --- |"]
     rows.extend([
@@ -1209,24 +1300,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             SCOPE_POLICY_PATH in record.paths for record in inventory
         )
         if touches_policy:
-            base_policy = read_merge_base_policy(
-                Path.cwd(), args.base_sha, args.head_sha
+            policy_edit_preserving, reason = (
+                repository_policy_edit_is_classification_preserving(
+                    Path.cwd(), policy, args.base_sha, args.head_sha
+                )
             )
-            if base_policy is None:
-                policy_edit_note = (
-                    "scope policy edit: base policy unreadable, keeping full"
-                )
-            else:
-                policy_edit_preserving, reason = (
-                    policy_edit_is_classification_preserving(
-                        base_policy,
-                        policy,
-                        read_merge_base_tracked_paths(
-                            Path.cwd(), args.base_sha, args.head_sha
-                        ),
-                    )
-                )
-                policy_edit_note = f"scope policy edit: {reason}"
+            policy_edit_note = f"scope policy edit: {reason}"
             print(policy_edit_note, file=sys.stderr)
         manifest = classify(
             policy, inventory, base_sha=args.base_sha, head_sha=args.head_sha,
@@ -1266,7 +1345,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     separators=(",", ":"),
                 ),
             )
-        _write(args.summary, _summary(manifest, policy))
+        _write(
+            args.summary,
+            _summary(manifest, policy, repository=Path.cwd()),
+        )
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         if queue is not None and args.queue_validation_out and not Path(args.queue_validation_out).is_file():
             fallback = QueueEvaluation(

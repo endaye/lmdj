@@ -14,8 +14,11 @@ import re
 import sys
 import unittest
 
-
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tests/build"))
+from ci_scope_policy_test_support import policy_transition
+
+
 POLICY_PATH = ROOT / "scripts/ci/scope_policy.json"
 GATE_PATH = ROOT / "scripts/ci/pr_gate.py"
 MAIN_WORKFLOW_PATH = ROOT / ".github/workflows/ci.yml"
@@ -190,6 +193,31 @@ class PrGateTest(unittest.TestCase):
         report = self.validate()
         self.assertTrue(report.ok)
         self.assertEqual(report.errors, ())
+
+    def test_preserving_policy_manifest_passes_with_repository_proof(self):
+        with policy_transition(self.policy, preserving=True) as transition:
+            inventory = self.module.change_scope.read_git_inventory(
+                transition.root, transition.base_sha, transition.head_sha
+            )
+            manifest = self.module.change_scope.classify(
+                transition.head_policy,
+                inventory,
+                base_sha=transition.base_sha,
+                head_sha=transition.head_sha,
+                event_name="push",
+                draft=False,
+                labels=(),
+                policy_edit_preserving=True,
+            )
+            report = self.module.validate_gate(
+                transition.head_policy,
+                manifest,
+                self.matching_results(manifest),
+                transition.head_sha,
+                expected_base_sha=transition.base_sha,
+                repository=transition.root,
+            )
+        self.assertTrue(report.ok, report.errors)
 
     def test_untrusted_selected_self_hosted_lane_fails_gate(self):
         manifest = self.manifest(lanes={"core_ubuntu"}, trusted_head=False)

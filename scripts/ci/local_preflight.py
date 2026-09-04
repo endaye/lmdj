@@ -460,17 +460,11 @@ def build_plan(
     if any(
         classifier.SCOPE_POLICY_PATH in record.paths for record in inventory
     ):
-        base_policy = classifier.read_merge_base_policy(root, base_sha, head_sha)
-        if base_policy is not None:
-            policy_edit_preserving, _ = (
-                classifier.policy_edit_is_classification_preserving(
-                    base_policy,
-                    policy,
-                    classifier.read_merge_base_tracked_paths(
-                        root, base_sha, head_sha
-                    ),
-                )
+        policy_edit_preserving, _ = (
+            classifier.repository_policy_edit_is_classification_preserving(
+                root, policy, base_sha, head_sha
             )
+        )
     manifest = classifier.classify(
         policy, inventory, base_sha=base_sha, head_sha=head_sha,
         event_name="pull_request", draft=False, labels=(),
