@@ -139,20 +139,24 @@ Commit the changes following repository governance rules:
    git diff --cached --check
    git diff --cached --stat
    ```
-3. **Re-run verification after staging, not only before it**:
+3. **Mandatory new-file ownership preflight after staging**:
    ```bash
    git add <file1> <file2> ...
-   # then run the Task's verification again
+   git diff --cached --diff-filter=A --name-only
+   python3 tests/build/ci_change_scope_test.py
    ```
-   Any check that reads `git ls-files`, the index, or the commit graph is blind
-   to an unstaged file, so a green run before `git add` proves nothing about a
-   file the Task adds. `test_every_tracked_path_has_explicit_ownership_or_full_rule`
-   is the one that bites: a new tracked file needs a rule in
-   `scripts/ci/scope_policy.json`, and the gate cannot see the file until it is
-   staged. Check whether an existing prefix rule covers the exact filename
-   rather than assuming its directory is covered — a helper module in a
-   directory routed by a `<dir>/<prefix>` rule is not covered unless its name
-   carries that prefix. See
+   Whenever `git diff --cached --diff-filter=A --name-only` lists any path, the
+   ownership suite (or an equivalent gate that reads the staged index) is
+   mandatory before commit.
+   Confirm `test_every_tracked_path_has_explicit_ownership_or_full_rule` passes
+   with no `unclassified tracked paths`. Task-specific tests do not substitute
+   for this ownership check.
+
+   A check that reads `git ls-files`, the index, or the commit graph is blind to
+   an unstaged file, so a green run before `git add` proves nothing about a file
+   the Task adds. A new tracked file needs a rule in
+   `scripts/ci/scope_policy.json`; check whether an existing prefix rule covers
+   the exact filename rather than assuming its directory is covered. See
    [`untracked-file-passes-ownership-gate`](../../pitfalls/untracked-file-passes-ownership-gate.md).
 
 4. **Create Conventional Commit**:
@@ -165,6 +169,17 @@ Commit the changes following repository governance rules:
 ---
 
 ## 4. Push & Create Pull Request
+
+Before any push, classify the final committed Task range:
+
+```bash
+git status --short
+scripts/local-ci.sh --base-ref origin/main --list --json
+```
+
+Run this after the Conventional Commit against the clean final `HEAD`. Confirm
+the JSON classifies the complete `origin/main...HEAD` range with no
+`unclassified path` reason; resolve any such path before pushing.
 
 ### Split control-plane paths first
 
