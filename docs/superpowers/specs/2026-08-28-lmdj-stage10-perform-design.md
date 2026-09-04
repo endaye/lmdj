@@ -193,10 +193,13 @@ record.stop
      或 discard：删除 draft + Journal
 
 并行（WAV 录制开启时，Host 层）：
-Web Runtime 在同一 suspended `AudioContext` 内建立并拥有
+Web Runtime 在同一当前 `AudioContext` 内建立并拥有
 render stereo output → transparent Worklet tap → destination；tap 将 4,800-frame
 Float32 stereo 批次单向交给 Creator 有界队列 → OPFS 流式写手。Creator 只持有
-CMTP-D2 类型化 capture lifecycle，不获得裸 engine node 或 AudioContext。
+CMTP-D2 类型化 capture lifecycle，不获得裸 engine node、port 或 AudioContext。
+platform 必须先加载 tap module/创建 node，再启动 engine worklet；不得假定用户手势内
+context 必然仍为 suspended。processor 与内部 port 协议归 web-runtime-platform 所有，
+Creator 只注入同源 URL 并消费结构化 capture status/sink API。
 ```
 
 Host 不提供 `tick`、`runtime_frame` 或 `input_sequence`。raw event 通过稳定

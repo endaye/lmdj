@@ -2,7 +2,7 @@
 
 日期：2026-09-04
 
-状态：**已确认（2026-09-04）**——Stage 10 的产品决策不重判；本修复补齐
+状态：**审阅修订稿（2026-09-04）**——Stage 10 的产品决策不重判；本修复补齐
 Task 9 开工 RED 证明缺失的 Web Runtime master-bus 接线与 Creator Project v4
 投影边界。修复必须作为 #435 的前置交付，之后才可恢复 Creator Perform
 surface。
@@ -47,8 +47,7 @@ Core 权威等既有产品决策。
 ### CMTP-D1：Web Runtime 拥有实际音频图，Creator 只持有类型化 capture lifecycle
 
 Web Runtime platform 是 `AudioContext`、engine node 与 destination 的唯一图所有者。
-当 Host 提供合法的 Perform tap 配置时，它必须在同一个、仍处于 suspended 状态的
-context 中建立：
+当 Host 提供合法的 Perform tap 配置时，它必须在同一个当前 `AudioContext` 中建立：
 
 ```text
 lmdj-realtime-engine stereo output
@@ -59,12 +58,60 @@ lmdj-realtime-engine stereo output
 engine node、Emscripten audio-object handle 与 `AudioContext` 不暴露给 Creator。
 底层 Web bridge 可以在内部传递 opaque destination handle，使 C++ engine node 接到
 tap node；这个 handle 不是 Application Facade、Project Truth 或公共 Host 输入。
+`RealtimeAudioWorklet::start_on_browser_main` 及对应 C/JS bridge 的公开签名必须增加
+该 output destination handle；未配置 tap 时传入 context destination 的既有 handle。
 没有合法 tap 配置的 Build 保持现有 `engine → destination` 路径。
+
+tap processor 源码与 port 协议归 `web-runtime-platform` 所有；现有
+`apps/creator-web/src/record/master_tap_worklet.js` 必须迁入 platform 模块。Creator
+只向 session construction 注入同源 processor URL，不拥有 processor 实现，也不接触
+`AudioWorkletNode.port`。platform 内部协议锁定为：
+
+```ts
+// browser-main -> processor
+type MasterTapControlMessage =
+  | { readonly type: "start"; readonly generation: number }
+  | { readonly type: "stop"; readonly generation: number };
+
+// processor -> browser-main
+type MasterTapEventMessage =
+  | {
+      readonly type: "batch";
+      readonly generation: number;
+      readonly sequence: number;
+      readonly channels: readonly [Float32Array, Float32Array];
+    }
+  | {
+      readonly type: "stopped";
+      readonly generation: number;
+      readonly finalSequence: number;
+    }
+  | {
+      readonly type: "failed";
+      readonly generation: number;
+      readonly reason: "post-message-failed";
+      readonly droppedFrames: number;
+    };
+```
+
+`generation` 与 `sequence` 是 platform 私有的串行 capture/去陈旧消息元数据，只允许
+非负安全整数；它们不是 Performance tick、runtime frame、input sequence 或 Project
+Truth。processor 初始为 idle，每个 `start` 重置该 generation 的 buffer/sequence，
+只接受当前 generation 的 `stop`。platform 把当前 generation 的消息翻译为下述 sink
+调用并丢弃陈旧消息。现有 `MasterTapBatchQueue.connect(port)` / `MasterTapPort` 因而不再
+是 Host API；`master_tap_source.ts` 改成不持有 port 的 sink/有界队列组合，并纳入
+Task 8A 及其 focused tests。
 
 tap node 在 Audio 激活时一次建立，录制 start/stop 不重接图。它在 idle、recording、
 stopped、writer/backpressure failure 各状态都继续逐 quantum 原样复制左右声道；
 录制状态只决定是否把 4,800-frame 批次送往 Host。这样 start/stop 不产生双路增益、
 静音窗口或音乐边界语义。
+
+tap module 加载与 tap node 创建必须先于 `startAudioWorklet`，使 engine node 创建时直接
+连接 tap；不得依赖 `AudioContext` 在该用户手势内仍为 `suspended`，因为浏览器也可已
+将其推进到 `running`。tap 随每个 `AudioContext` 实例/recovery epoch 建立一次；任一
+interruption、recovery 或 close 都先让当前 capture 经 stop/failure 收口。新 context
+只能建立新的 tap node/port，不复用旧 generation、listener 或 buffer。
 
 Worklet module/node 初始化失败时，图所有者回退到直接输出并把 capture 标记为不可用；
 live audio activation 不被伪装成成功录音。运行中的 `processorerror` 由 browser-main/
@@ -77,10 +124,36 @@ engine render 生命周期。
 Web Runtime session 增加 Web-only 能力，锁定语义如下：
 
 ```ts
-interface PerformanceMasterCaptureLimits {
+interface PerformanceMasterCaptureConfig {
   readonly performRecordingFrames: number;
   readonly performRecordingQueueBatches: number;
 }
+
+interface PerformanceMasterCaptureError {
+  readonly code:
+    | "capture-unsupported"
+    | "tap-initialization-failed"
+    | "tap-processor-failed";
+  readonly message: string;
+}
+
+type PerformanceMasterCaptureStatus =
+  | { readonly state: "unconfigured"; readonly config: null; readonly error: null }
+  | {
+      readonly state: "configured";
+      readonly config: PerformanceMasterCaptureConfig;
+      readonly error: null;
+    }
+  | {
+      readonly state: "ready";
+      readonly config: PerformanceMasterCaptureConfig;
+      readonly error: null;
+    }
+  | {
+      readonly state: "unavailable";
+      readonly config: PerformanceMasterCaptureConfig;
+      readonly error: PerformanceMasterCaptureError;
+    };
 
 interface PerformanceMasterCaptureSink {
   onBatch(channels: readonly [Float32Array, Float32Array]): void;
@@ -93,7 +166,10 @@ interface PerformanceMasterCapture {
 }
 
 interface WebPerformanceCaptureSession {
-  performanceMasterCaptureLimits(): PerformanceMasterCaptureLimits | null;
+  performanceMasterCaptureStatus(): PerformanceMasterCaptureStatus;
+  subscribePerformanceMasterCaptureStatus(
+    listener: (status: PerformanceMasterCaptureStatus) => void,
+  ): () => void;
   startPerformanceMasterCapture(
     sink: PerformanceMasterCaptureSink,
   ): Promise<PerformanceMasterCapture>;
@@ -104,9 +180,23 @@ interface WebPerformanceCaptureSession {
 删改或扩大。这些方法不发 transport request、不进入 Application Facade、不推进
 Project revision，也不携带 tick、runtime frame 或 input sequence。
 
+这些声明落在 `packages/web-runtime-platform/web/runtime_types.d.ts`。
+`CreatorRuntimeSession` 通过继承/组合 `WebPerformanceCaptureSession` 暴露同一能力，
+不得在 Creator 再定义一份形状不同的 capture Contract。
+
+status 将静态 Build 配置与动态图状态明确分离：缺 resource key 或 processor URL 是
+`unconfigured`；配置已验证但当前 context/tap 尚未建立是 `configured`；当前 epoch 图
+已建立是 `ready`；配置有效但 capability preflight、module/node 初始化或运行中
+processor 失败是带可执行错误的 `unavailable`。状态订阅在注册时先同步发出当前值，
+之后只在判别联合值变化时通知；unsubscribe 幂等。`1.0.41.0` 因未配置而静默 disabled，
+不能与初始化失败共用 `null`。
+
 `startPerformanceMasterCapture` 只在 Audio Runtime running、tap ready、无另一 capture
 时成功；它先安装 sink，再让 worklet 从下一 render quantum 开始录制。`onBatch` 是
-单向、同步投递入口，返回值和异常永不反馈给 render。`stop()` 幂等，等待 worklet
+单向、同步投递入口。platform 必须在 browser-main/control 边界捕获并吞掉 sink callback
+异常，使返回值和异常永不反馈给 processor/render；platform 不因 sink 返回或抛错自动
+停止。Host sink 在自己的 queue/writer 操作失败时记录原因并在 Host control path 调用
+`capture.stop()`。`stop()` 幂等，等待 worklet
 发布最后一个不足 4,800 frames 的批次与 stopped acknowledgement；随后由 Host queue
 排空并封存 WAV。session close、audio interruption、visibility lifecycle 或 owner loss
 也必须经同一 stop/failure 收口，不能遗留第二个 listener 或活跃 capture。
@@ -116,22 +206,30 @@ worklet 的上一批 buffer、failure 与 stopped acknowledgement 不得泄漏�
 
 ### CMTP-D3：配额与 asset availability 只来自注入的 Product identity
 
-`performanceMasterCaptureLimits()` 只有在以下条件同时满足时返回非 null：
+`performanceMasterCaptureStatus().config` 只有在以下静态配置同时成立时才为非 null：
 
 - session 构造时注入的 `resource_limits` 同时含正整数
   `perform_recording_frames` 与 `perform_recording_queue_batches`；
 - 注入了同源 `lmdj-perform-master-tap` distribution URL/processor 配置；
-- AudioWorklet、OPFS 与既有 Web capability preflight 均满足；
-- tap graph 已成功建立。
 
-缺键、错型、额外默认、从 UI 常量回填或运行时猜测一律 fail closed。Task 8A 与 Task 9
-的自动化使用显式 Stage 10 candidate identity/manifest fixture，通过与 production 相同的
-session construction 路径注入锁定值 `86400000` 与 `32`；不得用
-`window.__LMDJ_*` 后门、替换 transport 或伪造 sealed 状态。
+AudioWorklet、OPFS 与既有 Web capability preflight 以及 tap graph readiness 属于动态
+状态/Host surface gate，不得反过来抹掉静态 config。缺键、错型、额外默认、从 UI
+常量回填或运行时猜测一律 fail closed。
+
+Task 8A 与 Task 9 自动化使用显式 Stage 10 candidate identity/manifest fixture。测试
+通过 `page.route` 替换 identity/module/manifest 响应，再进入与 production 相同的
+`main.tsx → createRuntimeSession({ seams })` construction 路径注入锁定值 `86400000`
+与 `32`；不得绕过 session construction 直接改 status。确定性 writer/store/tap fault 与
+第 33 批 backpressure 只允许注入到生产已读取的 `window.__LMDJ_WEB_HOST_SEAMS__`
+依赖工厂表面，并仍调用真实 session、queue、writer 与 lifecycle。禁止的是新增
+`window.__LMDJ_PERFORM_TEST__` 一类 Perform 专用控制后门、替换 Core transport/伪造
+Facade receipt，以及伪造 sealed Project/draft 状态；既有 Host dependency seam 本身
+不是被禁测试后门。
 
 当前 `1.0.41.0` identity 缺少这些键，因此 main 上尚未集成的 Perform mode 必须
-保持 disabled；只有 playable Project、running Audio Runtime 与非 null capture limits
-同时成立才启用，不暴露一个只能生成静音/假 WAV 的半成品。Task 10 将两项配额、
+保持 disabled；只有 playable Project、running Audio Runtime、`ready` capture status
+与 Host OPFS/writer preflight 同时成立才启用，不暴露一个只能生成静音/假 WAV 的
+半成品。Task 10 将两项配额、
 master-tap asset role、Host/module identities 与 Product Build `1.0.42.0` 一次性写入
 active Assembly/generated identity/distribution manifest；同一套 Browser journey 必须
 在正式 package 上重跑后才算集成完成。
@@ -154,6 +252,11 @@ settle。mutation response 只证明该 command receipt，不作为本地槽位�
 Launch strip 只读 `ProjectView.patternSlots`；`perform_state.ts` 不解析 Project bundle
 或 raw inspection。
 
+该严格度必须与 Core validator 保持同向：当前 Core
+`validate_pattern_slots` 已拒绝同一 Pattern 重复占位及悬空 Pattern 引用，Project
+Store 在接受 v4 后调用该 validator。Task 9 focused tests 必须同时证明 Creator 拒绝
+重复/悬空槽，不能形成“Core 接受而 Creator 拒绝”或相反的两套有效集合。
+
 ### CMTP-D5：Task 9 只在前置接线合入后恢复，Task 10 才激活 Product Build
 
 交付顺序固定为：
@@ -161,6 +264,12 @@ Launch strip 只读 `ProjectView.patternSlots`；`perform_state.ts` 不解析 Pr
 1. **Task 8A：Web Runtime master-tap graph prerequisite。** 交付 CMTP-D1–D3 的
    opaque graph wiring、Web-only typed lifecycle、可重复 start/stop、失败回退以及真实
    AudioWorklet Browser witness；不改 active Assembly、版本或 current Portal truth。
+   声明文件范围至少包含 audio-runtime 的 Web worklet header/source、platform
+   `bridge.cpp`/`web-runtime-pre.js`/`runtime_session.mjs`/`runtime_types.d.ts`、迁入
+   platform 的 processor、`performance_bridge_test.cpp`、`runtime_session.test.mjs` 与
+   Web Audio browser tests，以及 Creator `main.tsx`、`record/master_tap_source.ts`、
+   `master_tap.test.ts` 和所需 capture tests。旧 Creator processor 路径在同一 Task
+   删除；不得把移动后的 asset role 提前写入 active Assembly。
 2. **Revised Task 9 / #435。** 扩大声明文件范围，交付 CMTP-D4、Perform surface、
    Host writer/store 组合与使用 Stage 10 candidate fixture 的完整 Browser journeys。
 3. **Task 10 / #436。** 写入正式 resource keys、asset role、版本与 generated identity，
@@ -176,9 +285,10 @@ Task 10 才首次运行的测试。
   Record 不可用并展示可执行错误；不得创建 draft 或临时 WAV 后才发现无输入。
 - 重复 start：返回既有 Host state 类 typed refusal，既有 capture、sink、writer 与图
   不变。重复 stop：返回同一完成结果，不发送第二个尾批或 stopped acknowledgement。
-- sink callback 抛错、队列第 33 批、writer/OPFS failure：worklet 不等待；Host 停止
-  capture，WAV 只保留最后耐久合法 prefix，Project 与 draft 按既有 save/discard 语义
-  处理。
+- sink callback 抛错：platform 捕获且不反馈 processor/render，也不自动停止；Host sink
+  记录本地失败并在 control path 调用 `capture.stop()`。队列第 33 批、writer/OPFS
+  failure 同样由 Host 停止 capture；WAV 只保留最后耐久合法 prefix，Project 与 draft
+  按既有 save/discard 语义处理。
 - Project v4 投影失败：不局部应用 slot receipt，不让 Pattern Launch 继续使用旧 Host
   cache；用户可重试完整 refresh 或重新打开 Project。
 - capability-gated 的 1.0.41.0 不写新 manifest key、不宣称 Stage 10 Build 已集成；
@@ -196,14 +306,17 @@ Task 10 才首次运行的测试。
    live audio 仍继续。
 3. 连续两次 capture 无 listener/buffer/failure 串线；normal stop、backpressure、
    writer fault、tap fault、audio interruption 与 session close 都收口且 render 不等待。
-4. 缺少或破坏任一 resource key/tap asset 的 candidate 启动 fail closed；注入正确
-   Stage 10 candidate identity 后走同一生产 session construction 并开放能力。
+4. 缺少任一 resource key/tap asset 的 candidate 得到 `unconfigured`；配置存在但
+   capability/module/node/processor 失败得到带稳定 code 与可执行 message 的
+   `unavailable`；注入正确 Stage 10 candidate identity 后走同一生产 session
+   construction，并从 `configured` 转为 `ready`。
 5. v3 Project 打开后得到 16 空槽；第一次 assign 后 refresh 为 v4；move、Sample replace、
    reload 与重新打开后仍读取同一权威槽位。错长、重复与悬空 v4 全部拒绝且零 UI
    本地提交。
-6. #435 的完整 main journey 与所有独立异常 journey 使用真实 Web Runtime、真实
-   OPFS、真实 Project inspection/status/replay witness；没有 transport stub、Host timer、
-   本地 slot reducer 或 `__LMDJ_*` production/test hook。
+6. #435 的完整 main journey 使用真实 Web Runtime、真实 OPFS、真实 Project
+   inspection/status/replay witness；异常 journey 只经既有
+   `__LMDJ_WEB_HOST_SEAMS__` dependency factory 注入确定性失败。没有 Perform 专用
+   control hook、transport stub、Host timer、本地 slot reducer 或 fake sealed state。
 7. Task 8A 和 Revised Task 9 各自的 focused、Creator unit/accessibility、Web Runtime、
    Playwright、full Core 与 Architecture Portal gates 通过；Task 10 再以正式 package/
    identity 重跑并记录 run IDs、revision 与 artifact digest。
