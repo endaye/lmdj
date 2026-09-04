@@ -3,6 +3,8 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -12,6 +14,7 @@
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 #include <signal.h>
 #include <sys/file.h>
 #include <sys/wait.h>
@@ -33,8 +36,10 @@ using lmdj::foundation::SequenceSessionId;
 using lmdj::project_io::ProjectStore;
 using lmdj::project_io::PerformanceOpenPadTransient;
 using lmdj::project_io::PerformanceTransientCheckpoint;
+using lmdj::project_io::ProjectStoragePlatform;
 using lmdj::project_io::SequenceJournal;
 using lmdj::project_io::SequenceSessionState;
+using lmdj::project_io::kStorageConditionProjectBusy;
 using lmdj::project_io::testing::FaultPoint;
 
 constexpr std::string_view kProjectId =
@@ -151,6 +156,92 @@ class OwnerLockHolder final {
 
  private:
   pid_t process_{-1};
+};
+
+class BusyLockRemovalPlatform final : public ProjectStoragePlatform {
+ public:
+  explicit BusyLockRemovalPlatform(
+      std::shared_ptr<ProjectStoragePlatform> delegate)
+      : delegate_(std::move(delegate)) {}
+
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    return delegate_->acquire_writer(path);
+  }
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    return delegate_->ensure_directory(path);
+  }
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return delegate_->exists(path);
+  }
+  lmdj::foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const override {
+    return delegate_->directory_exists(path);
+  }
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return delegate_->byte_length(path);
+  }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    return delegate_->read_complete(path);
+  }
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return delegate_->create_immutable(path, bytes);
+  }
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return delegate_->replace_complete(path, bytes);
+  }
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
+      std::span<const std::byte> bytes) override {
+    return delegate_->append_durable(path, valid_prefix_length, bytes);
+  }
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    if (path.filename() == "performance.lock") {
+      ++busy_lock_removals;
+      return lmdj::foundation::Result<void>::failure({
+          ErrorCode::io_error,
+          "open runtime lock cannot be removed",
+          {{"storage_condition", std::string{kStorageConditionProjectBusy}}},
+      });
+    }
+    return delegate_->remove(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return delegate_->list_names(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path& path) const override {
+    return delegate_->list_directories(path);
+  }
+  lmdj::foundation::Result<void> remove_tree(
+      const std::filesystem::path& path) override {
+    return delegate_->remove_tree(path);
+  }
+  lmdj::foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path& source,
+      const std::filesystem::path& destination) override {
+    return delegate_->publish_directory_if_absent(source, destination);
+  }
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& path) const override {
+    return delegate_->validate_managed_tree(path);
+  }
+
+  int busy_lock_removals{};
+
+ private:
+  std::shared_ptr<ProjectStoragePlatform> delegate_;
 };
 
 lmdj::domain::ProjectState empty_project() {
@@ -393,6 +484,62 @@ void test_stopped_draft_can_be_discarded() {
   LMDJ_CHECK(discarded.value().committed_revision == 2);
   LMDJ_CHECK(store.load(bundle).value().performances.empty());
   LMDJ_CHECK(!SequenceJournal{}.read_active_performance(bundle).has_value());
+}
+
+void test_open_owner_lock_cleanup_is_nonfatal_after_terminal_commit() {
+  enum class Terminal { save, discard };
+  for (const auto terminal : {Terminal::save, Terminal::discard}) {
+    TempDirectory temp(terminal == Terminal::save ? "busy-lock-save"
+                                                  : "busy-lock-discard");
+    const auto platform = std::make_shared<BusyLockRemovalPlatform>(
+        lmdj::project_io::make_default_project_storage_platform());
+    ProjectStore store{platform};
+    const auto bundle = temp.path() / "project.lmdj";
+    const auto session_id = SequenceSessionId{std::string{kSessionId}};
+    const auto performance_id = PerformanceId{std::string{kPerformanceId}};
+    LMDJ_CHECK(store.create(bundle, empty_project()).has_value());
+    LMDJ_CHECK(
+        store
+            .begin_performance_draft(
+                bundle,
+                {{CommandId{std::string{kBeginCommandId}}, 0},
+                 session_id,
+                 performance_id})
+            .has_value());
+    LMDJ_CHECK(
+        store
+            .stop_performance_session(
+                bundle, session_id,
+                CommandId{std::string{kStopRequestId}})
+            .has_value());
+
+    const auto committed = terminal == Terminal::save
+                               ? store.save_performance_draft(
+                                     bundle,
+                                     {CommandId{std::string{kSaveCommandId}}, 1},
+                                     performance_id,
+                                     "Saved",
+                                     std::nullopt)
+                               : store.discard_performance_draft(
+                                     bundle,
+                                     {CommandId{std::string{kDiscardCommandId}},
+                                      1},
+                                     performance_id);
+    LMDJ_CHECK(committed.has_value());
+    LMDJ_CHECK(committed.value().committed_revision == 2);
+    LMDJ_CHECK(platform->busy_lock_removals == 1);
+    LMDJ_CHECK(
+        std::filesystem::exists(bundle / "recovery/active/performance.lock"));
+    LMDJ_CHECK(!SequenceJournal{}.read_active_performance(bundle).has_value());
+
+    const auto next = store.begin_performance_draft(
+        bundle,
+        {{CommandId{"30000000-0000-4000-8000-000000000020"}, 2},
+         SequenceSessionId{"20000000-0000-4000-8000-000000000020"},
+         PerformanceId{"10000000-0000-4000-8000-000000000020"}});
+    LMDJ_CHECK(next.has_value());
+    LMDJ_CHECK(next.value().committed_revision == 3);
+  }
 }
 
 void test_recovery_apply_and_discard_return_stopped_drafts() {
@@ -1115,6 +1262,7 @@ int main() {
     test_begin_stop_save_is_one_durable_draft_lifecycle();
     test_recording_revision_is_fixed_at_nonzero_begin_revision();
     test_stopped_draft_can_be_discarded();
+    test_open_owner_lock_cleanup_is_nonfatal_after_terminal_commit();
     test_recovery_apply_and_discard_return_stopped_drafts();
     test_recording_bind_verifies_managed_wav_and_is_null_only();
     test_completed_flush_identity_is_replayable_without_a_live_journal();
