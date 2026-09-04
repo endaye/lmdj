@@ -144,6 +144,7 @@ if(EMSCRIPTEN)
     _lmdj_web_host_failed
     _lmdj_web_host_initialize_manifest
     _lmdj_web_audio_start
+    _lmdj_web_audio_connect_direct
     _lmdj_web_audio_state
     _lmdj_web_audio_fatal
     _lmdj_web_audio_observed_sample_rate
@@ -159,6 +160,8 @@ if(EMSCRIPTEN)
       _lmdj_web_audio_test_poll
       _lmdj_web_audio_test_render_calls
       _lmdj_web_audio_test_output_energy
+      _lmdj_web_audio_test_reset_output_energy
+      _lmdj_web_audio_test_direct_output_connections
       _lmdj_web_audio_test_ack_generation
       _lmdj_web_audio_test_observed_frames
       _lmdj_web_audio_test_gate_closed
@@ -437,6 +440,10 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
   target_link_libraries(
     lmdj_web_performance_bridge_tests
     PRIVATE lmdj_web_runtime_control_testable
+  )
+  target_compile_definitions(
+    lmdj_web_performance_bridge_tests
+    PRIVATE LMDJ_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
   )
   lmdj_target_warnings(lmdj_web_performance_bridge_tests)
   lmdj_target_sanitizers(lmdj_web_performance_bridge_tests)

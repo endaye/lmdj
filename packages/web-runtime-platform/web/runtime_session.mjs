@@ -27,6 +27,13 @@ import {
 import {canonicalJson, exactKeys, sha256Hex} from "./integrity.mjs";
 import { createHostStateMachine } from "./state_machine.mjs";
 
+async function defaultCreatePerformanceMasterTap(options) {
+  const {createPerformanceMasterTap} = await import(
+    "./performance_master_capture.mjs"
+  );
+  return createPerformanceMasterTap(options);
+}
+
 const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
 const CONTROL_WORKER_CAPABILITY_PROBE_TIMEOUT_MS = 15_000;
 const TRIGGER_LEDGER_LIMIT = 4_096;
@@ -81,6 +88,19 @@ function typedError(code, message = code, details = {}) {
   return new HostProtocolError(code, message, details);
 }
 
+function requirePerformanceMasterCaptureSink(sink) {
+  if (
+    sink === null ||
+    typeof sink !== "object" ||
+    typeof sink.onBatch !== "function" ||
+    typeof sink.onStopped !== "function" ||
+    typeof sink.onFailure !== "function"
+  ) {
+    throw new TypeError("A Performance master capture sink is required");
+  }
+  return sink;
+}
+
 function validatedErrorCode(value, fallback = "HOST_STATE_INVALID") {
   if (ALLOWED_TYPED_ERROR_CODES.has(value)) {
     return value;
@@ -122,6 +142,16 @@ function requireFunction(value, name) {
 
 function isPositiveInteger(value) {
   return Number.isSafeInteger(value) && value > 0;
+}
+
+function sameOriginUrl(value, baseUrl) {
+  if (typeof value !== "string" || typeof baseUrl !== "string") return null;
+  try {
+    const url = new URL(value, baseUrl);
+    return url.origin === new URL(baseUrl).origin ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function generationsMatch(status) {
@@ -1114,6 +1144,22 @@ function createRuntimeSessionController(options = {}) {
   const crypto = options.crypto ?? window?.crypto;
   const assemblyIdentity = options.assemblyIdentity;
   const manifestSource = options.manifestSource;
+  const limits = manifestSource?.resourceLimits;
+  const tapUrl = sameOriginUrl(
+    manifestSource?.performanceMasterTapUrl,
+    document?.baseURI,
+  );
+  const captureConfig = isPositiveInteger(limits?.perform_recording_frames) &&
+    isPositiveInteger(limits?.perform_recording_queue_batches) &&
+    tapUrl !== null
+    ? Object.freeze({
+      performRecordingFrames: limits.perform_recording_frames,
+      performRecordingQueueBatches: limits.perform_recording_queue_batches,
+    })
+    : null;
+  let captureStatus = captureConfig === null
+    ? Object.freeze({state: "unconfigured", config: null, error: null})
+    : Object.freeze({state: "configured", config: captureConfig, error: null});
   const inputOwnership = options.inputOwnership ?? "session";
   const capabilityProbeTimeoutMs =
     options.capabilityProbeTimeoutMs === undefined
@@ -1146,6 +1192,8 @@ function createRuntimeSessionController(options = {}) {
   const createAudioContext =
     options.createAudioContext ??
     ((audioOptions) => new window.AudioContext(audioOptions));
+  const createPerformanceMasterTap =
+    options.createPerformanceMasterTap ?? defaultCreatePerformanceMasterTap;
   const transport =
     options.transport ??
     Object.freeze({
@@ -1188,6 +1236,10 @@ function createRuntimeSessionController(options = {}) {
   requireFunction(preflight, "Runtime preflight");
   requireFunction(loadRuntime, "Runtime loader");
   requireFunction(createAudioContext, "AudioContext factory");
+  requireFunction(
+    createPerformanceMasterTap,
+    "Performance master tap factory",
+  );
   requireFunction(runtimeTerminator, "Runtime terminator");
   requireFunction(transport?.send, "Transport send");
   requireFunction(crypto?.randomUUID, "Request UUID source");
@@ -1214,6 +1266,11 @@ function createRuntimeSessionController(options = {}) {
   let runtime = null;
   let audioContext = null;
   let contextHandle = null;
+  let performanceMasterTap = null;
+  let activePerformanceMasterCapture = null;
+  let tapProcessorFailed = false;
+  let audioWorkletStartPromise = null;
+  let tapFallbackPromise = null;
   let started = false;
   let closing = false;
   let terminalCleanupStarted = false;
@@ -1223,6 +1280,7 @@ function createRuntimeSessionController(options = {}) {
   let expectedContextSuspend = false;
   let visibilityHidden = false;
   let pageHidden = false;
+  let foregroundLossEpoch = 0;
   const activeAdverseConditions = new Set();
   let lastContextState = null;
   let recoveryEpoch = null;
@@ -1261,6 +1319,7 @@ function createRuntimeSessionController(options = {}) {
   const admittedSequences = new Map();
   const listenerDisposers = [];
   const hostStateListeners = new Set();
+  const performanceMasterCaptureStatusListeners = new Set();
   const runtimeOutcomeListeners = new Set();
   const sequenceBoundaryListeners = new Set();
   const diagnosticsListeners = new Set();
@@ -1326,6 +1385,175 @@ function createRuntimeSessionController(options = {}) {
     }
   }
 
+  function performanceMasterCaptureStatus() {
+    return captureStatus;
+  }
+
+  function publishPerformanceMasterCaptureStatus(next) {
+    if (captureStatus.state === next.state &&
+        captureStatus.config === next.config &&
+        captureStatus.error === next.error) {
+      return;
+    }
+    captureStatus = Object.freeze(next);
+    for (const listener of [...performanceMasterCaptureStatusListeners]) {
+      try {
+        listener(captureStatus);
+      } catch {
+        // A status observer cannot corrupt capture lifecycle ownership.
+      }
+    }
+  }
+
+  function publishCaptureUnavailable(code, message) {
+    if (captureConfig === null) return;
+    publishPerformanceMasterCaptureStatus({
+      state: "unavailable",
+      config: captureConfig,
+      error: Object.freeze({code, message}),
+    });
+  }
+
+  function subscribePerformanceMasterCaptureStatus(listener) {
+    requireFunction(listener, "Performance master capture status listener");
+    performanceMasterCaptureStatusListeners.add(listener);
+    try {
+      listener(captureStatus);
+    } catch {
+      // Status observers cannot interrupt capture lifecycle ownership.
+    }
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      performanceMasterCaptureStatusListeners.delete(listener);
+    };
+  }
+
+  async function startPerformanceMasterCapture(sink) {
+    requirePerformanceMasterCaptureSink(sink);
+    if (
+      closing ||
+      machine.state !== "running" ||
+      captureStatus.state !== "ready" ||
+      performanceMasterTap === null
+    ) {
+      throw typedError(
+        "HOST_STATE_INVALID",
+        "Performance master capture is unavailable; activate audio or reload before retrying",
+      );
+    }
+    if (activePerformanceMasterCapture !== null) {
+      throw typedError(
+        "HOST_STATE_INVALID",
+        "Performance master capture is already active; stop the current capture before starting another",
+      );
+    }
+    let capture = null;
+    let settled = false;
+    function releaseOwnership() {
+      settled = true;
+      if (activePerformanceMasterCapture === capture) {
+        activePerformanceMasterCapture = null;
+      }
+    }
+    const platformSink = Object.freeze({
+      onBatch(channels) {
+        sink.onBatch(channels);
+      },
+      onFailure(code, droppedFrames) {
+        sink.onFailure(code, droppedFrames);
+      },
+      onStopped() {
+        try {
+          sink.onStopped();
+        } finally {
+          releaseOwnership();
+        }
+      },
+    });
+    let platformCapture;
+    try {
+      platformCapture = await performanceMasterTap.start(platformSink);
+    } catch {
+      throw typedError(
+        "HOST_STATE_INVALID",
+        "Performance master capture state changed; retry after the current capture settles or reload",
+      );
+    }
+    let stopping = null;
+    capture = Object.freeze({
+      stop() {
+        if (stopping === null) {
+          stopping = Promise.resolve(platformCapture.stop())
+            .finally(releaseOwnership);
+        }
+        return stopping;
+      },
+    });
+    if (!settled) activePerformanceMasterCapture = capture;
+    return capture;
+  }
+
+  function stopActivePerformanceMasterCapture() {
+    return activePerformanceMasterCapture?.stop() ?? Promise.resolve();
+  }
+
+  async function closePerformanceMasterTap() {
+    const tap = performanceMasterTap;
+    performanceMasterTap = null;
+    if (tap === null) return;
+    await tap.close();
+    activePerformanceMasterCapture = null;
+  }
+
+  function handleTapProcessorFailure() {
+    if (tapFallbackPromise !== null) return tapFallbackPromise;
+    if (tapProcessorFailed || performanceMasterTap === null) {
+      return Promise.resolve(false);
+    }
+    tapProcessorFailed = true;
+    const tap = performanceMasterTap;
+    tap.failProcessor();
+    publishCaptureUnavailable(
+      "tap-processor-failed",
+      "Live audio recovery was required; reload the page and activate audio again before retrying Perform capture",
+    );
+    tapFallbackPromise = (async () => {
+      await stopActivePerformanceMasterCapture();
+      let connected = false;
+      try {
+        connected = runtime.connectAudioWorkletDirect(contextHandle) === true;
+      } catch {}
+      if (!connected) {
+        const pendingStart = audioWorkletStartPromise;
+        if (pendingStart !== null) {
+          try {
+            const result = await pendingStart;
+            if (result?.ok !== false) {
+              connected =
+                runtime.connectAudioWorkletDirect(contextHandle) === true;
+            }
+          } catch {}
+        }
+      }
+      if (connected) {
+        try {
+          tap.destinationNode.disconnect(audioContext.destination);
+        } catch {}
+        return true;
+      }
+      if (machine.state !== "failed" && machine.state !== "closed") {
+        fail(typedError(
+          "HOST_STATE_INVALID",
+          "Live audio could not be restored after master tap failure; reload the page and activate audio again",
+        ));
+      }
+      return false;
+    })();
+    return tapFallbackPromise;
+  }
+
   function clearPressed() {
     suppressInputRelease = true;
     try {
@@ -1388,10 +1616,11 @@ function createRuntimeSessionController(options = {}) {
     activeHostQueryAbort?.abort();
     const reservation = {reason, promise: null};
     safetyReservation = reservation;
-    reservation.promise = serializeRuntimeAction(async () => {
-      await clearOwnedPreviews(null, true);
-      return stopAllInRuntimeLane(true);
-    });
+    reservation.promise = stopActivePerformanceMasterCapture()
+      .then(() => serializeRuntimeAction(async () => {
+        await clearOwnedPreviews(null, true);
+        return stopAllInRuntimeLane(true);
+      }));
     Object.freeze(reservation);
     clearPressed();
     return reservation;
@@ -1451,11 +1680,12 @@ function createRuntimeSessionController(options = {}) {
     sequenceBoundaryFlush = null;
     sequenceBoundaryListeners.clear();
     voiceStateListeners.clear();
+    performanceMasterCaptureStatusListeners.clear();
     for (const dispose of listenerDisposers.splice(0)) {
       dispose();
     }
     midiAdapter?.dispose();
-    terminalCleanupPromise = Promise.resolve()
+    terminalCleanupPromise = closePerformanceMasterTap()
       .then(() => {
         diagnosticsListeners.clear();
         return runtimeTerminator({ runtime, audioContext });
@@ -1977,6 +2207,7 @@ function createRuntimeSessionController(options = {}) {
         clearPressed();
         return false;
       }
+      foregroundLossEpoch += 1;
       visibilityHidden = true;
       if (markAdverseCondition("visibilitychange")) {
         beginInterruption("visibilitychange");
@@ -2019,6 +2250,7 @@ function createRuntimeSessionController(options = {}) {
         clearPressed();
         return Promise.resolve(false);
       }
+      foregroundLossEpoch += 1;
       pageHidden = true;
       if (markAdverseCondition("pagehide")) {
         beginInterruption("pagehide");
@@ -2296,10 +2528,29 @@ function createRuntimeSessionController(options = {}) {
 
   function activationIsCurrent(reservation, expectedState) {
     return (
+      graphBootstrapIsCurrent(reservation, expectedState) &&
+      !visibilityHidden &&
+      !pageHidden &&
+      foregroundLossEpoch === reservation.foregroundLossEpoch
+    );
+  }
+
+  function recoveryActivationIsCurrent(reservation) {
+    return (
       activationReservation === reservation &&
       !closing &&
       !visibilityHidden &&
       !pageHidden &&
+      recoveryEpoch === reservation.recoveryEpoch &&
+      foregroundLossEpoch === reservation.foregroundLossEpoch &&
+      machine.state === "recovering"
+    );
+  }
+
+  function graphBootstrapIsCurrent(reservation, expectedState) {
+    return (
+      activationReservation === reservation &&
+      !closing &&
       recoveryEpoch === reservation.recoveryEpoch &&
       machine.state === expectedState
     );
@@ -2357,7 +2608,7 @@ function createRuntimeSessionController(options = {}) {
     ) {
       return false;
     }
-    const reservation = Object.freeze({ recoveryEpoch });
+    const reservation = Object.freeze({recoveryEpoch, foregroundLossEpoch});
     activationReservation = reservation;
     try {
       if (audioContext === null) {
@@ -2365,13 +2616,75 @@ function createRuntimeSessionController(options = {}) {
         lastContextState = audioContext.state;
         listen(audioContext, "statechange", observeContextState);
         contextHandle = runtime.registerAudioContext(audioContext);
-        const workletResult = await runtime.startAudioWorklet(contextHandle);
+        let outputDestinationHandle = contextHandle;
+        if (captureConfig !== null) {
+          let localTap = null;
+          try {
+            localTap = await createPerformanceMasterTap({
+              context: audioContext,
+              processorUrl: tapUrl,
+            });
+            if (!graphBootstrapIsCurrent(reservation, "audio-suspended")) {
+              try {
+                await localTap.close();
+              } catch {}
+              return false;
+            }
+            outputDestinationHandle = runtime.registerAudioNode(
+              localTap.destinationNode,
+            );
+            if (!isPositiveInteger(outputDestinationHandle)) {
+              throw new TypeError(
+                "Performance master tap registration failed",
+              );
+            }
+            performanceMasterTap = localTap;
+            localTap = null;
+            listen(
+              performanceMasterTap.destinationNode,
+              "processorerror",
+              () => { void handleTapProcessorFailure(); },
+            );
+          } catch {
+            if (localTap !== null) {
+              try {
+                await localTap.close();
+              } catch {}
+            } else {
+              await closePerformanceMasterTap();
+            }
+            if (!graphBootstrapIsCurrent(reservation, "audio-suspended")) {
+              return false;
+            }
+            outputDestinationHandle = contextHandle;
+            publishCaptureUnavailable(
+              "tap-initialization-failed",
+              "Reload the page and activate audio again before retrying Perform capture",
+            );
+          }
+        }
+        audioWorkletStartPromise = Promise.resolve(runtime.startAudioWorklet(
+          contextHandle, outputDestinationHandle));
+        const workletResult = await audioWorkletStartPromise;
         if (workletResult?.ok === false) {
           throw typedError("HOST_STATE_INVALID", "AudioWorklet start failed");
         }
-        if (!activationIsCurrent(reservation, "audio-suspended")) {
+        if (tapFallbackPromise !== null && !await tapFallbackPromise) {
           return false;
         }
+        if (!graphBootstrapIsCurrent(reservation, "audio-suspended")) {
+          return false;
+        }
+        if (performanceMasterTap !== null && !tapProcessorFailed) {
+          publishPerformanceMasterCaptureStatus({
+            state: "ready",
+            config: captureConfig,
+            error: null,
+          });
+        }
+      }
+      if (!activationIsCurrent(reservation, "audio-suspended")) {
+        return false;
       }
       const activationDeadline =
         monotonicNow() + deadlineForOperation("audio.activate");
@@ -2382,6 +2695,9 @@ function createRuntimeSessionController(options = {}) {
       }
       await awaitAudioCallbackAfterResume(
         callbackBaseline, activationDeadline);
+      if (!activationIsCurrent(reservation, "audio-suspended")) {
+        return false;
+      }
       if (recoveryEpoch !== null) {
         machine.transition("recovering", {
           reason: "recovery_activation",
@@ -2391,15 +2707,10 @@ function createRuntimeSessionController(options = {}) {
         recoveryEpoch.suspendComplete = true;
         await activateRuntimeForRecovery(
           recoveryEpoch, activationDeadline, true);
-        if (
-          closing ||
-          visibilityHidden ||
-          pageHidden ||
-          recoveryEpoch !== reservation.recoveryEpoch
-        ) {
+        if (!recoveryActivationIsCurrent(reservation)) {
           return false;
         }
-        return machine.state === "recovering";
+        return true;
       }
       await boundedRequest("audio.activate", {}, {
         deadlineMs: remainingActivationBudget(activationDeadline),
@@ -3860,6 +4171,7 @@ function createRuntimeSessionController(options = {}) {
     }
     closing = true;
     invalidateProbe();
+    await closePerformanceMasterTap();
     const safety = beginSafetyCleanup("host.close");
     try {
       await safety.promise;
@@ -4059,7 +4371,15 @@ function createRuntimeSessionController(options = {}) {
         ...resolvedCapabilities,
         webMidi: typeof navigator?.requestMIDIAccess === "function",
       });
-      await preflight(resolvedCapabilities);
+      try {
+        await preflight(resolvedCapabilities);
+      } catch (error) {
+        publishCaptureUnavailable(
+          "capture-unsupported",
+          "Use a browser with the required secure audio and storage capabilities.",
+        );
+        throw error;
+      }
       runtime = await loadRuntime(manifest);
       machine.transition("storage-ready", { reason: "runtime_loaded" });
       machine.transition("core-ready", { reason: "runtime_ready" });
@@ -4133,6 +4453,9 @@ function createRuntimeSessionController(options = {}) {
     stopPad,
     stopAll,
     requestMidi: enableMidi,
+    performanceMasterCaptureStatus,
+    subscribePerformanceMasterCaptureStatus,
+    startPerformanceMasterCapture,
     close,
     subscribeDiagnostics,
     subscribeHostState,

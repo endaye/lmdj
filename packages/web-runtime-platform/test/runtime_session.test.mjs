@@ -39,6 +39,7 @@ const API = [
   "listLocalProjects",
   "listSequenceRecovery",
   "openProject",
+  "performanceMasterCaptureStatus",
   "movePatternSlot",
   "queryPerformanceRecordingStatus",
   "queryPerformanceReplayStatus",
@@ -59,6 +60,7 @@ const API = [
   "sampleIngestLimits",
   "start",
   "savePerformance",
+  "startPerformanceMasterCapture",
   "subscribeDiagnostics",
   "stopAll",
   "stopPerformanceRecording",
@@ -66,6 +68,7 @@ const API = [
   "stopSequence",
   "stopPad",
   "subscribeHostState",
+  "subscribePerformanceMasterCaptureStatus",
   "subscribeRuntimeOutcome",
   "subscribeSequenceBarBoundary",
   "subscribeVoiceState",
@@ -161,6 +164,10 @@ function fixture({
   runtimeTerminator,
   audioCallbackHeartbeat,
   startAudioWorklet,
+  registerAudioNode,
+  createPerformanceMasterTap,
+  connectAudioWorkletDirect,
+  preflight,
   now,
   inputOwnership,
   manifestSource = {
@@ -233,17 +240,23 @@ function fixture({
       createAudioContext: () => context,
       loadRuntime: async () => ({
         registerAudioContext: () => 1,
+        registerAudioNode: registerAudioNode ?? (() => 2),
         audioCallbackHeartbeat:
           audioCallbackHeartbeat ??
           (() => ++defaultAudioCallbackHeartbeat),
         startAudioWorklet:
           startAudioWorklet ?? (async () => ({ok: true})),
+        connectAudioWorkletDirect:
+          connectAudioWorkletDirect ?? (() => true),
         workers: [],
         ...(runtimeTransport === undefined
           ? {}
           : {transport: runtimeTransport}),
       }),
-      preflight: async () => {},
+      preflight: preflight ?? (async () => {}),
+      ...(createPerformanceMasterTap === undefined
+        ? {}
+        : {createPerformanceMasterTap}),
       runtimeTerminator: async (...arguments_) => {
         terminated += 1;
         await runtimeTerminator?.(...arguments_);
@@ -547,6 +560,841 @@ test("owns the exact Host-neutral surface and lifecycle", async () => {
   assert.equal(terminated(), 1);
 });
 
+test("derives immutable Perform capture configuration only from exact injected limits and URL", () => {
+  const unconfigured = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+  }).session;
+  assert.deepEqual(unconfigured.performanceMasterCaptureStatus(), {
+    state: "unconfigured", config: null, error: null,
+  });
+
+  for (const invalid of [0, -1, 1.5, "32", Number.MAX_SAFE_INTEGER + 1]) {
+    const candidate = fixture({
+      browserDocument: {baseURI: "https://example.test/creator/"},
+      manifestSource: {
+        resourceLimits: {
+          perform_recording_frames: 86_400_000,
+          perform_recording_queue_batches: invalid,
+        },
+        performanceMasterTapUrl: "./assets/perform-master-tap.js",
+      },
+    }).session;
+    assert.equal(candidate.performanceMasterCaptureStatus().state, "unconfigured");
+  }
+
+  const configured = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+  }).session;
+  assert.deepEqual(configured.performanceMasterCaptureStatus(), {
+    state: "configured",
+    config: {
+      performRecordingFrames: 86_400_000,
+      performRecordingQueueBatches: 32,
+    },
+    error: null,
+  });
+  assert.equal(Object.isFrozen(configured.performanceMasterCaptureStatus()), true);
+  assert.equal(Object.isFrozen(configured.performanceMasterCaptureStatus().config), true);
+
+  const crossOrigin = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "https://cdn.example/perform-master-tap.js",
+    },
+  }).session;
+  assert.equal(crossOrigin.performanceMasterCaptureStatus().state, "unconfigured");
+});
+
+test("publishes capture unsupported before configured capability preflight failure", async () => {
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    preflight: async () => { throw new Error("capability missing"); },
+  });
+  const seen = [];
+  const unsubscribe = session.subscribePerformanceMasterCaptureStatus(
+    (status) => seen.push(status),
+  );
+
+  assert.equal(await session.start(), false);
+  assert.deepEqual(seen, [
+    {
+      state: "configured",
+      config: {
+        performRecordingFrames: 86_400_000,
+        performRecordingQueueBatches: 32,
+      },
+      error: null,
+    },
+    {
+      state: "unavailable",
+      config: {
+        performRecordingFrames: 86_400_000,
+        performRecordingQueueBatches: 32,
+      },
+      error: {
+        code: "capture-unsupported",
+        message: "Use a browser with the required secure audio and storage capabilities.",
+      },
+    },
+  ]);
+  assert.equal(session.performanceMasterCaptureStatus(), seen[1]);
+  unsubscribe();
+});
+
+test("contains an initial capture status listener failure and returns idempotent unsubscribe", () => {
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+  });
+  let calls = 0;
+  let unsubscribe;
+  assert.doesNotThrow(() => {
+    unsubscribe = session.subscribePerformanceMasterCaptureStatus(() => {
+      calls += 1;
+      throw new Error("observer failed");
+    });
+  });
+  assert.equal(calls, 1);
+  assert.equal(typeof unsubscribe, "function");
+  assert.doesNotThrow(() => {
+    unsubscribe();
+    unsubscribe();
+  });
+});
+
+test("constructs and registers the tap before starting the engine", async () => {
+  const order = [];
+  const destinationNode = new EventTarget();
+  destinationNode.disconnect = () => {};
+  const tapController = {
+    destinationNode,
+    async start() { return {stop: async () => {}}; },
+    failProcessor() {},
+    async close() {},
+  };
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "https://example.test/assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => {
+      order.push("tap");
+      return tapController;
+    },
+    startAudioWorklet: async (_context, destination) => {
+      order.push(["engine", destination]);
+      return {ok: true};
+    },
+  });
+  const seen = [];
+  const unsubscribe = session.subscribePerformanceMasterCaptureStatus(
+    (status) => seen.push(status.state),
+  );
+  await session.start();
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(order, ["tap", ["engine", 2]]);
+  assert.equal(session.performanceMasterCaptureStatus().state, "ready");
+  assert.deepEqual(seen, ["configured", "ready"]);
+  unsubscribe();
+});
+
+test("tap initialization failure preserves direct live audio and publishes unavailable", async () => {
+  const destinations = [];
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => {
+      throw new Error("module missing");
+    },
+    startAudioWorklet: async (_context, destination) => {
+      destinations.push(destination);
+      return {ok: true};
+    },
+  });
+  await session.start();
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.deepEqual(destinations, [1]);
+  assert.deepEqual(session.performanceMasterCaptureStatus(), {
+    state: "unavailable",
+    config: {
+      performRecordingFrames: 86_400_000,
+      performRecordingQueueBatches: 32,
+    },
+    error: {
+      code: "tap-initialization-failed",
+      message: "Reload the page and activate audio again before retrying Perform capture",
+    },
+  });
+  await assert.rejects(
+    session.startPerformanceMasterCapture({
+      onBatch() {}, onStopped() {}, onFailure() {},
+    }),
+    /capture is unavailable/,
+  );
+});
+
+test("capture state refusals are typed while invalid sinks remain argument errors", async () => {
+  const invalid = fixture().session;
+  await assert.rejects(
+    invalid.startPerformanceMasterCapture({}),
+    {
+      name: "TypeError",
+      message: "A Performance master capture sink is required",
+    },
+  );
+  const validSink = {onBatch() {}, onStopped() {}, onFailure() {}};
+  await assert.rejects(
+    invalid.startPerformanceMasterCapture(validSink),
+    (error) => {
+      assert.equal(error.code, "HOST_STATE_INVALID");
+      assert.equal(
+        error.message,
+        "Performance master capture is unavailable; activate audio or reload before retrying",
+      );
+      return true;
+    },
+  );
+
+  const tapController = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    async start() { return {stop: async () => {}}; },
+    failProcessor() {},
+    async close() {},
+  };
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  await session.startPerformanceMasterCapture(validSink);
+  await assert.rejects(
+    session.startPerformanceMasterCapture(validSink),
+    (error) => {
+      assert.equal(error.code, "HOST_STATE_INVALID");
+      assert.equal(
+        error.message,
+        "Performance master capture is already active; stop the current capture before starting another",
+      );
+      return true;
+    },
+  );
+});
+
+test("normalizes an underlying capture start race to a stable state error", async () => {
+  const tapController = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    async start() { throw new Error("Performance master capture is already active"); },
+    failProcessor() {},
+    async close() {},
+  };
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  await assert.rejects(
+    session.startPerformanceMasterCapture({
+      onBatch() {}, onStopped() {}, onFailure() {},
+    }),
+    (error) => {
+      assert.equal(error.code, "HOST_STATE_INVALID");
+      assert.equal(
+        error.message,
+        "Performance master capture state changed; retry after the current capture settles or reload",
+      );
+      return true;
+    },
+  );
+});
+
+test("closes a late tap factory result without publishing or starting the engine", async () => {
+  let resolveFactory;
+  let factoryStarted;
+  const factoryStartedPromise = new Promise((resolve) => {
+    factoryStarted = resolve;
+  });
+  const factoryResult = new Promise((resolve) => {
+    resolveFactory = resolve;
+  });
+  const destinationNode = Object.assign(trackedEventTarget(), {
+    disconnect() {},
+  });
+  let closes = 0;
+  let registrations = 0;
+  let engineStarts = 0;
+  const tapController = {
+    destinationNode,
+    async start() { return {stop: async () => {}}; },
+    failProcessor() {},
+    async close() { closes += 1; },
+  };
+  const {session} = fixture({
+    browserDocument: Object.assign(new EventTarget(), {
+      baseURI: "https://example.test/creator/",
+      visibilityState: "visible",
+    }),
+    browserWindow: Object.assign(new EventTarget(), {
+      performance: globalThis.performance,
+    }),
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => {
+      factoryStarted();
+      return factoryResult;
+    },
+    registerAudioNode: () => { registrations += 1; return 2; },
+    startAudioWorklet: async () => { engineStarts += 1; return {ok: true}; },
+  });
+  const seen = [];
+  session.subscribePerformanceMasterCaptureStatus(
+    (status) => seen.push(status.state),
+  );
+  await session.start();
+  const activation = session.activateAudio(
+    createUserGestureToken({isTrusted: true}),
+  );
+  await factoryStartedPromise;
+  const closing = session.close();
+  resolveFactory(tapController);
+
+  assert.equal(await activation, false);
+  await closing;
+  assert.equal(closes, 1);
+  assert.equal(registrations, 0);
+  assert.equal(engineStarts, 0);
+  assert.equal(destinationNode.count("processorerror"), 0);
+  assert.deepEqual(seen, ["configured"]);
+  assert.equal(session.performanceMasterCaptureStatus().state, "configured");
+});
+
+test("finishes tap bootstrap while hidden and resumes on the next foreground gesture", async () => {
+  let resolveFactory;
+  let markFactoryStarted;
+  const factoryStarted = new Promise((resolve) => {
+    markFactoryStarted = resolve;
+  });
+  const factoryResult = new Promise((resolve) => { resolveFactory = resolve; });
+  const browserDocument = Object.assign(new EventTarget(), {
+    baseURI: "https://example.test/creator/",
+    visibilityState: "visible",
+  });
+  const browserWindow = Object.assign(new EventTarget(), {
+    performance: globalThis.performance,
+  });
+  const destinationNode = Object.assign(new EventTarget(), {disconnect() {}});
+  const tapController = {
+    destinationNode,
+    async start() { return {stop: async () => {}}; },
+    failProcessor() {},
+    async close() {},
+  };
+  let engineStarts = 0;
+  const {session} = fixture({
+    browserDocument,
+    browserWindow,
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => {
+      markFactoryStarted();
+      return factoryResult;
+    },
+    startAudioWorklet: async () => { engineStarts += 1; return {ok: true}; },
+  });
+  await session.start();
+  const firstActivation = session.activateAudio(
+    createUserGestureToken({isTrusted: true}),
+  );
+  await factoryStarted;
+  browserDocument.visibilityState = "hidden";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  resolveFactory(tapController);
+
+  assert.equal(await firstActivation, false);
+  assert.equal(engineStarts, 1);
+  assert.equal(session.performanceMasterCaptureStatus().state, "ready");
+
+  browserDocument.visibilityState = "visible";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.equal(engineStarts, 1);
+  assert.equal(session.performanceMasterCaptureStatus().state, "ready");
+});
+
+test("finishes engine bootstrap while hidden and resumes on the next foreground gesture", async () => {
+  let resolveEngine;
+  let markEngineStarted;
+  const engineStarted = new Promise((resolve) => { markEngineStarted = resolve; });
+  const engineResult = new Promise((resolve) => { resolveEngine = resolve; });
+  const browserDocument = Object.assign(new EventTarget(), {
+    baseURI: "https://example.test/creator/",
+    visibilityState: "visible",
+  });
+  const browserWindow = Object.assign(new EventTarget(), {
+    performance: globalThis.performance,
+  });
+  const tapController = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    async start() { return {stop: async () => {}}; },
+    failProcessor() {},
+    async close() {},
+  };
+  let engineStarts = 0;
+  const {session} = fixture({
+    browserDocument,
+    browserWindow,
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+    startAudioWorklet: () => {
+      engineStarts += 1;
+      markEngineStarted();
+      return engineResult;
+    },
+  });
+  await session.start();
+  const firstActivation = session.activateAudio(
+    createUserGestureToken({isTrusted: true}),
+  );
+  await engineStarted;
+  browserWindow.dispatchEvent(browserEvent("pagehide", {persisted: true}));
+  resolveEngine({ok: true});
+
+  assert.equal(await firstActivation, false);
+  assert.equal(engineStarts, 1);
+  assert.equal(session.performanceMasterCaptureStatus().state, "ready");
+
+  browserWindow.dispatchEvent(new Event("pageshow"));
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.equal(engineStarts, 1);
+  assert.equal(session.performanceMasterCaptureStatus().state, "ready");
+});
+
+test("hide-show during deferred tap bootstrap cannot revive the old gesture", async () => {
+  let resolveFactory;
+  let markFactoryStarted;
+  const factoryStarted = new Promise((resolve) => {
+    markFactoryStarted = resolve;
+  });
+  const factoryResult = new Promise((resolve) => { resolveFactory = resolve; });
+  const browserDocument = Object.assign(new EventTarget(), {
+    baseURI: "https://example.test/creator/",
+    visibilityState: "visible",
+  });
+  const browserWindow = Object.assign(new EventTarget(), {
+    performance: globalThis.performance,
+  });
+  const tapController = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    async start() { return {stop: async () => {}}; },
+    failProcessor() {},
+    async close() {},
+  };
+  let engineStarts = 0;
+  const {session, context} = fixture({
+    browserDocument,
+    browserWindow,
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => {
+      markFactoryStarted();
+      return factoryResult;
+    },
+    startAudioWorklet: async () => { engineStarts += 1; return {ok: true}; },
+  });
+  let resumeCalls = 0;
+  const resume = context.resume.bind(context);
+  context.resume = async () => { resumeCalls += 1; await resume(); };
+  await session.start();
+  const firstActivation = session.activateAudio(
+    createUserGestureToken({isTrusted: true}),
+  );
+  await factoryStarted;
+  browserDocument.visibilityState = "hidden";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  browserDocument.visibilityState = "visible";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  resolveFactory(tapController);
+
+  assert.equal(await firstActivation, false);
+  assert.equal(resumeCalls, 0);
+  assert.equal(engineStarts, 1);
+  assert.equal(session.performanceMasterCaptureStatus().state, "ready");
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.equal(resumeCalls, 1);
+  assert.equal(engineStarts, 1);
+});
+
+test("pagehide-show during deferred engine bootstrap cannot revive the old gesture", async () => {
+  let resolveEngine;
+  let markEngineStarted;
+  const engineStarted = new Promise((resolve) => { markEngineStarted = resolve; });
+  const engineResult = new Promise((resolve) => { resolveEngine = resolve; });
+  const browserDocument = Object.assign(new EventTarget(), {
+    baseURI: "https://example.test/creator/",
+    visibilityState: "visible",
+  });
+  const browserWindow = Object.assign(new EventTarget(), {
+    performance: globalThis.performance,
+  });
+  const tapController = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    async start() { return {stop: async () => {}}; },
+    failProcessor() {},
+    async close() {},
+  };
+  let engineStarts = 0;
+  const {session, context} = fixture({
+    browserDocument,
+    browserWindow,
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+    startAudioWorklet: () => {
+      engineStarts += 1;
+      markEngineStarted();
+      return engineResult;
+    },
+  });
+  let resumeCalls = 0;
+  const resume = context.resume.bind(context);
+  context.resume = async () => { resumeCalls += 1; await resume(); };
+  await session.start();
+  const firstActivation = session.activateAudio(
+    createUserGestureToken({isTrusted: true}),
+  );
+  await engineStarted;
+  browserWindow.dispatchEvent(browserEvent("pagehide", {persisted: true}));
+  browserWindow.dispatchEvent(new Event("pageshow"));
+  resolveEngine({ok: true});
+
+  assert.equal(await firstActivation, false);
+  assert.equal(resumeCalls, 0);
+  assert.equal(engineStarts, 1);
+  assert.equal(session.performanceMasterCaptureStatus().state, "ready");
+  assert.equal(await session.activateAudio(
+    createUserGestureToken({isTrusted: true})), true);
+  assert.equal(resumeCalls, 1);
+  assert.equal(engineStarts, 1);
+});
+
+test("processor failure settles capture, detaches the tap, and connects direct output once", async () => {
+  const destinationNode = new EventTarget();
+  const disconnected = [];
+  destinationNode.disconnect = (value) => disconnected.push(value);
+  let failed = 0;
+  let stopped = 0;
+  let direct = 0;
+  const tapController = {
+    destinationNode,
+    async start(sink) {
+      return {
+        async stop() {
+          stopped += 1;
+          sink.onFailure("tap-failure", 0);
+        },
+      };
+    },
+    failProcessor() { failed += 1; },
+    async close() {},
+  };
+  const {session, context} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+    connectAudioWorkletDirect: () => { direct += 1; return true; },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  await session.startPerformanceMasterCapture({
+    onBatch() {}, onStopped() {}, onFailure() {},
+  });
+
+  destinationNode.dispatchEvent(new Event("processorerror"));
+  destinationNode.dispatchEvent(new Event("processorerror"));
+  await drainTasks();
+  assert.equal(failed, 1);
+  assert.equal(stopped, 1);
+  assert.deepEqual(disconnected, [context.destination]);
+  assert.equal(direct, 1);
+  assert.equal(session.performanceMasterCaptureStatus().state, "unavailable");
+  assert.equal(
+    session.performanceMasterCaptureStatus().error.code,
+    "tap-processor-failed",
+  );
+  assert.equal(
+    session.performanceMasterCaptureStatus().error.message,
+    "Live audio recovery was required; reload the page and activate audio again before retrying Perform capture",
+  );
+});
+
+test("early processor failure retries direct output after engine readiness before detaching the tap", async () => {
+  let resolveEngineStart;
+  let markEngineStarted;
+  const engineStarted = new Promise((resolve) => { markEngineStarted = resolve; });
+  const engineStart = new Promise((resolve) => { resolveEngineStart = resolve; });
+  const order = [];
+  const destinationNode = new EventTarget();
+  destinationNode.disconnect = () => order.push("disconnect");
+  const tapController = {
+    destinationNode,
+    async start() { return {stop: async () => {}}; },
+    failProcessor() {},
+    async close() {},
+  };
+  let directAttempts = 0;
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+    startAudioWorklet: () => {
+      markEngineStarted();
+      return engineStart;
+    },
+    connectAudioWorkletDirect: () => {
+      directAttempts += 1;
+      const connected = directAttempts === 2;
+      order.push(`direct:${connected}`);
+      return connected;
+    },
+  });
+  await session.start();
+  const activation = session.activateAudio(
+    createUserGestureToken({isTrusted: true}),
+  );
+  await engineStarted;
+  destinationNode.dispatchEvent(new Event("processorerror"));
+  await drainTasks();
+  assert.deepEqual(order, ["direct:false"]);
+
+  resolveEngineStart({ok: true});
+  assert.equal(await activation, true);
+  assert.deepEqual(order, ["direct:false", "direct:true", "disconnect"]);
+  assert.equal(session.performanceMasterCaptureStatus().state, "unavailable");
+});
+
+test("processor failure fails closed when direct output remains unavailable after readiness", async () => {
+  let resolveEngineStart;
+  let markEngineStarted;
+  const engineStarted = new Promise((resolve) => { markEngineStarted = resolve; });
+  const engineStart = new Promise((resolve) => { resolveEngineStart = resolve; });
+  const destinationNode = Object.assign(new EventTarget(), {
+    disconnect() { assert.fail("failed recovery must preserve the tap edge"); },
+  });
+  const tapController = {
+    destinationNode,
+    async start() { return {stop: async () => {}}; },
+    failProcessor() {},
+    async close() {},
+  };
+  let directAttempts = 0;
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+    startAudioWorklet: () => {
+      markEngineStarted();
+      return engineStart;
+    },
+    connectAudioWorkletDirect: () => { directAttempts += 1; return false; },
+  });
+  await session.start();
+  const activation = session.activateAudio(
+    createUserGestureToken({isTrusted: true}),
+  );
+  await engineStarted;
+  destinationNode.dispatchEvent(new Event("processorerror"));
+  await drainTasks();
+  resolveEngineStart({ok: true});
+
+  assert.equal(await activation, false);
+  assert.equal(directAttempts, 2);
+  assert.equal(session.diagnostics().error_code, "HOST_STATE_INVALID");
+  await drainTasks();
+  assert.equal(session.diagnostics().state, "failed");
+});
+
+test("underlying terminal acknowledgement releases session capture ownership", async () => {
+  const underlyingSinks = [];
+  const tapController = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    async start(sink) {
+      underlyingSinks.push(sink);
+      return {stop: async () => { sink.onStopped(); }};
+    },
+    failProcessor() {},
+    async close() {},
+  };
+  const {session} = fixture({
+    browserDocument: {baseURI: "https://example.test/creator/"},
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  const terminals = [];
+  await session.startPerformanceMasterCapture({
+    onBatch() {},
+    onFailure(...arguments_) { terminals.push(["failure", ...arguments_]); },
+    onStopped() { terminals.push(["stopped"]); },
+  });
+  underlyingSinks[0].onFailure("tap-failure", 0);
+  underlyingSinks[0].onStopped();
+
+  const second = await session.startPerformanceMasterCapture({
+    onBatch() {}, onFailure() {}, onStopped() {},
+  });
+  assert.equal(underlyingSinks.length, 2);
+  assert.deepEqual(terminals, [
+    ["failure", "tap-failure", 0],
+    ["stopped"],
+  ]);
+  await second.stop();
+});
+
+test("interruption and close each settle the active capture once", async () => {
+  const browserWindow = Object.assign(new EventTarget(), {
+    performance: globalThis.performance,
+  });
+  let stops = 0;
+  const tapController = {
+    destinationNode: Object.assign(new EventTarget(), {disconnect() {}}),
+    async start() {
+      return {stop: async () => { stops += 1; }};
+    },
+    failProcessor() {},
+    async close() {},
+  };
+  const {session} = fixture({
+    browserWindow,
+    browserDocument: Object.assign(new EventTarget(), {
+      baseURI: "https://example.test/creator/",
+      visibilityState: "visible",
+    }),
+    manifestSource: {
+      resourceLimits: {
+        perform_recording_frames: 86_400_000,
+        perform_recording_queue_batches: 32,
+      },
+      performanceMasterTapUrl: "./assets/perform-master-tap.js",
+    },
+    createPerformanceMasterTap: async () => tapController,
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  await session.startPerformanceMasterCapture({
+    onBatch() {}, onStopped() {}, onFailure() {},
+  });
+  browserWindow.dispatchEvent(new Event("blur"));
+  await drainTasks();
+  assert.equal(stops, 1);
+  await session.close();
+  assert.equal(stops, 1);
+});
+
 test("bridges raw Performance identities and values without Host timing authority", async () => {
   const operations = [];
   const sessionId = "00000000-0000-4000-8000-000000000101";
@@ -721,6 +1569,60 @@ test("activation waits for a resumed AudioWorklet callback within its original b
   heartbeat = 0;
   assert.equal(await wrapped, true);
   assert.equal(activations.length, 3);
+});
+
+test("foreground loss while recovery waits for heartbeat invalidates the old gesture", async () => {
+  const browserDocument = new EventTarget();
+  browserDocument.visibilityState = "visible";
+  let heartbeat = 0;
+  const activations = [];
+  const {context, session} = fixture({
+    browserDocument,
+    audioCallbackHeartbeat: () => heartbeat,
+    send: async (envelope) => {
+      if (envelope.operation === "audio.activate") {
+        activations.push(envelope.request_id);
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  const initial = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  heartbeat = 1;
+  assert.equal(await initial, true);
+  assert.equal(session.diagnostics().state, "running");
+
+  context.dispatchEvent(new Event("statechange"));
+  context.state = "suspended";
+  context.dispatchEvent(new Event("statechange"));
+  await drainTasks();
+  await drainTasks();
+  assert.equal(session.diagnostics().state, "audio-suspended");
+  activations.length = 0;
+
+  const stale = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  browserDocument.visibilityState = "hidden";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  browserDocument.visibilityState = "visible";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  heartbeat = 2;
+
+  assert.equal(await stale, false);
+  assert.equal(session.diagnostics().state, "audio-suspended");
+  assert.deepEqual(activations, []);
+
+  const current = session.activateAudio(
+    createUserGestureToken({isTrusted: true}));
+  await drainTasks();
+  heartbeat = 3;
+  assert.equal(await current, true);
+  assert.equal(session.diagnostics().state, "recovering");
+  assert.equal(activations.length, 1);
 });
 
 test("initial AudioWorklet bootstrap does not consume the activation budget", async () => {

@@ -132,6 +132,45 @@ export interface SequenceRuntimeSession {
   discardSequenceRecovery(sessionId: string): Promise<boolean>;
 }
 
+export interface PerformanceMasterCaptureConfig {
+  readonly performRecordingFrames: number;
+  readonly performRecordingQueueBatches: number;
+}
+
+export interface PerformanceMasterCaptureError {
+  readonly code:
+    | "capture-unsupported"
+    | "tap-initialization-failed"
+    | "tap-processor-failed";
+  readonly message: string;
+}
+
+export type PerformanceMasterCaptureStatus =
+  | {readonly state: "unconfigured"; readonly config: null; readonly error: null}
+  | {readonly state: "configured"; readonly config: PerformanceMasterCaptureConfig; readonly error: null}
+  | {readonly state: "ready"; readonly config: PerformanceMasterCaptureConfig; readonly error: null}
+  | {readonly state: "unavailable"; readonly config: PerformanceMasterCaptureConfig; readonly error: PerformanceMasterCaptureError};
+
+export interface PerformanceMasterCaptureSink {
+  onBatch(channels: readonly [Float32Array, Float32Array]): void;
+  onStopped(): void;
+  onFailure(reason: "tap-failure", droppedFrames: number): void;
+}
+
+export interface PerformanceMasterCapture {
+  stop(): Promise<void>;
+}
+
+export interface WebPerformanceCaptureSession {
+  performanceMasterCaptureStatus(): PerformanceMasterCaptureStatus;
+  subscribePerformanceMasterCaptureStatus(
+    listener: (status: PerformanceMasterCaptureStatus) => void,
+  ): () => void;
+  startPerformanceMasterCapture(
+    sink: PerformanceMasterCaptureSink,
+  ): Promise<PerformanceMasterCapture>;
+}
+
 export type PerformanceFx =
   | "filter"
   | "delay"
