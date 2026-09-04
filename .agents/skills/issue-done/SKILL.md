@@ -178,8 +178,14 @@ scripts/local-ci.sh --base-ref origin/main --list --json
 ```
 
 Run this after the Conventional Commit against the clean final `HEAD`. Confirm
-the JSON classifies the complete `origin/main...HEAD` range with no
-`unclassified path` reason; resolve any such path before pushing.
+the JSON classifies the complete `origin/main...HEAD` range using the canonical
+ownership rule in `scripts/ci/scope_policy.json`.
+
+A changed path is safe to push when it matches `rules`, or when it matches
+`full_rules` and the JSON selects `full` with every lane. A full-only path
+may retain both an `unclassified path` diagnostic and its named `full rule`
+reason; that diagnostic alone is not a push blocker. Stop before pushing
+only when a path matches neither `rules` nor `full_rules`.
 
 ### Split control-plane paths first
 
