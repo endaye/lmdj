@@ -40,7 +40,8 @@
         "scripts/core.sh proof"
       ],
       "ci_only": [
-        "the Apple-only audio target absence check, which asserts a property of the Ubuntu build itself"
+        "the Apple-only audio target absence check, which asserts a property of the Ubuntu build itself",
+        "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     },
     "core_asan": {
@@ -56,7 +57,9 @@
         "scripts/core.sh test asan full",
         "scripts/core.sh test asan stress"
       ],
-      "ci_only": []
+      "ci_only": [
+        "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
+      ]
     },
     "core_coverage": {
       "requires": {
@@ -70,7 +73,8 @@
         "scripts/core-coverage.sh check"
       ],
       "ci_only": [
-        "apt-get installs clang-18 and llvm-18 and pins CC/CXX with /usr/lib/llvm-18/bin on PATH"
+        "apt-get installs clang-18 and llvm-18 and pins CC/CXX with /usr/lib/llvm-18/bin on PATH",
+        "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     },
     "core_macos": {
@@ -87,7 +91,8 @@
         "ctest --preset asan -L '^native$' --output-on-failure"
       ],
       "ci_only": [
-        "the Apple-only sanitizer target presence check"
+        "the Apple-only sanitizer target presence check",
+        "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     },
     "web_toolchain": {
@@ -179,7 +184,7 @@
         "scripts/core.sh package"
       ],
       "ci_only": [
-        "git lfs checkout -- tests/fixtures/audio rehydrates the deterministic audio fixtures"
+        "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     }
   }
