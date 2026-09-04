@@ -1,14 +1,18 @@
-const futureModes = [{name: "Perform", stage: 10, glyph: "▶"}] as const;
-
-export type CreatorMode = "project" | "sample" | "sequence";
+export type CreatorMode = "project" | "sample" | "sequence" | "perform";
 
 interface ModeRailProps {
   activeMode: CreatorMode;
   onSelect: (mode: CreatorMode) => void;
   sequenceEnabled?: boolean;
+  performEnabled?: boolean;
 }
 
-export function ModeRail({activeMode, onSelect, sequenceEnabled = false}: ModeRailProps) {
+export function ModeRail({
+  activeMode,
+  onSelect,
+  sequenceEnabled = false,
+  performEnabled = false,
+}: ModeRailProps) {
   return (
     <nav className="mode-rail" aria-label="Creator modes">
       <button
@@ -40,20 +44,21 @@ export function ModeRail({activeMode, onSelect, sequenceEnabled = false}: ModeRa
         <span className="mode-glyph" aria-hidden="true">∿</span>
         <span className="mode-label">Sample</span>
       </button>
-      {futureModes.map(({name, stage, glyph}) => (
-        <button
-          className="mode-button"
-          type="button"
-          disabled
-          tabIndex={-1}
-          aria-label={`${name} — available in Stage ${stage}`}
-          key={name}
-        >
-          <span className="mode-glyph" aria-hidden="true">{glyph}</span>
-          <span className="mode-label">{name}</span>
-          <small aria-hidden="true">S{stage}</small>
-        </button>
-      ))}
+      <button
+        className={`mode-button${activeMode === "perform" ? " is-active" : ""}`}
+        type="button"
+        disabled={!performEnabled}
+        tabIndex={performEnabled ? undefined : -1}
+        aria-current={activeMode === "perform" ? "page" : undefined}
+        aria-label={performEnabled
+          ? "Perform"
+          : "Perform — requires a playable Project, running audio, and capture storage"}
+        onClick={() => onSelect("perform")}
+      >
+        <span className="mode-glyph" aria-hidden="true">▶</span>
+        <span className="mode-label">Perform</span>
+        {!performEnabled ? <small aria-hidden="true">S10</small> : null}
+      </button>
     </nav>
   );
 }

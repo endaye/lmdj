@@ -13,6 +13,8 @@ import type {
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const PATTERN_ID = "22222222-2222-4222-8222-222222222222";
+const SECOND_PATTERN_ID = "44444444-4444-4444-8444-444444444444";
+const UNKNOWN_PATTERN_ID = "55555555-5555-4555-8555-555555555555";
 const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const summary: LocalProjectSummary = {
@@ -25,7 +27,10 @@ const summary: LocalProjectSummary = {
   bundleDigest: "a".repeat(64),
 };
 
-function inspectResult(projectId = PROJECT_ID) {
+function inspectV3(projectId = PROJECT_ID): {
+  project_revision: number;
+  project: Record<string, unknown>;
+} {
   return {
     project_revision: 3,
     project: {
@@ -49,6 +54,22 @@ function inspectResult(projectId = PROJECT_ID) {
   };
 }
 
+function inspectV4(patternSlots: readonly (string | null)[]) {
+  const inspected = inspectV3();
+  inspected.project.contract = "lmdj.project.v4";
+  inspected.project.patterns = {
+    [PATTERN_ID]: {bars: 1, events: []},
+    [SECOND_PATTERN_ID]: {bars: 4, events: []},
+  };
+  inspected.project.pattern_slots = [...patternSlots];
+  inspected.project.performances = {};
+  return inspected;
+}
+
+function sessionFor(inspected: ReturnType<typeof inspectV3>) {
+  return sessionFixture({inspectProject: async () => inspected}).session;
+}
+
 function sessionFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
   const calls: string[] = [];
   const session: CreatorRuntimeSession = {
@@ -65,7 +86,7 @@ function sessionFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
     },
     inspectProject: async () => {
       calls.push("inspectProject");
-      return inspectResult();
+      return inspectV3();
     },
     reloadSnapshot: async () => {
       calls.push("reloadSnapshot");
@@ -141,6 +162,60 @@ describe("Project journeys", () => {
     expect(view.pads[35]?.assetId).toBe(
       "33333333-3333-4333-8333-333333333333",
     );
+  });
+
+  test("projects v3 to sixteen immutable empty Pattern slots", async () => {
+    const inspected = inspectV3();
+    const view = await openProjectJourney(sessionFor(inspected), summary);
+    expect(view.patternSlots).toEqual(Array(16).fill(null));
+    expect(Object.isFrozen(view.patternSlots)).toBe(true);
+    expect(view.patternSlots).not.toBe(inspected.project.pattern_slots);
+  });
+
+  test.each([
+    {field: "pattern_slots", shape: "undefined", value: undefined},
+    {field: "pattern_slots", shape: "an empty array", value: []},
+    {field: "performances", shape: "undefined", value: undefined},
+    {field: "performances", shape: "an empty object", value: {}},
+  ])("rejects v3 when $field is present as $shape", async ({field, value}) => {
+    const inspected = inspectV3();
+    inspected.project[field] = value;
+    await expect(openProjectJourney(sessionFor(inspected), summary))
+      .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
+  });
+
+  test("preserves sixteen ordered v4 Pattern slots in a new immutable projection", async () => {
+    const slots = Array<string | null>(16).fill(null);
+    slots[1] = SECOND_PATTERN_ID;
+    slots[7] = PATTERN_ID;
+    const inspected = inspectV4(slots);
+    const transportedSlots = inspected.project.pattern_slots;
+    const view = await openProjectJourney(sessionFor(inspected), summary);
+    expect(view.patternSlots).toEqual(slots);
+    expect(Object.isFrozen(view.patternSlots)).toBe(true);
+    expect(view.patternSlots).not.toBe(transportedSlots);
+  });
+
+  test.each([
+    {name: "wrong length", slots: Array<string | null>(15).fill(null)},
+    {
+      name: "duplicate Pattern",
+      slots: [PATTERN_ID, PATTERN_ID, ...Array<string | null>(14).fill(null)],
+    },
+    {
+      name: "dangling Pattern",
+      slots: [UNKNOWN_PATTERN_ID, ...Array<string | null>(15).fill(null)],
+    },
+  ])("rejects v4 $name without returning stale slot truth", async ({slots}) => {
+    await expect(openProjectJourney(sessionFor(inspectV4(slots)), summary))
+      .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
+  });
+
+  test("rejects an unknown Project contract", async () => {
+    const inspected = inspectV3();
+    inspected.project.contract = "lmdj.project.v5";
+    await expect(openProjectJourney(sessionFor(inspected), summary))
+      .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
   });
 
   test("imports then uses the same open journey and forwards progress", async () => {

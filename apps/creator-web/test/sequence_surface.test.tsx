@@ -14,6 +14,7 @@ const project = {
     {patternId: "22222222-2222-4222-8222-222222222222", bars: 1 as const},
     {patternId: "33333333-3333-4333-8333-333333333333", bars: 4 as const},
   ],
+  patternSlots: Object.freeze(Array<string | null>(16).fill(null)),
   sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
 };
 

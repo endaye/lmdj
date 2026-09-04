@@ -67,6 +67,35 @@ function integer(value: unknown, minimum = 0): value is number {
   return Number.isSafeInteger(value) && (value as number) >= minimum;
 }
 
+function patternSlotsFor(
+  project: Record<string, unknown>,
+): readonly (string | null)[] {
+  if (project.contract === "lmdj.project.v3") {
+    if ("pattern_slots" in project || "performances" in project) {
+      throw protocolMismatch("Project v3 contains v4 fields");
+    }
+    return Object.freeze(Array<string | null>(16).fill(null));
+  }
+  const patterns = project.patterns;
+  if (project.contract !== "lmdj.project.v4" ||
+      !Array.isArray(project.pattern_slots) ||
+      project.pattern_slots.length !== 16 ||
+      !record(patterns)) {
+    throw protocolMismatch("Project Pattern slots are invalid");
+  }
+  const occupied = new Set<string>();
+  const slots = Array.from(project.pattern_slots, (value) => {
+    if (value === null) return null;
+    if (typeof value !== "string" || !UUID_PATTERN.test(value) ||
+        occupied.has(value) || !Object.hasOwn(patterns, value)) {
+      throw protocolMismatch("Project Pattern slot reference is invalid");
+    }
+    occupied.add(value);
+    return value;
+  });
+  return Object.freeze(slots);
+}
+
 function projectView(
   summary: LocalProjectSummary,
   inspected: unknown,
@@ -76,8 +105,7 @@ function projectView(
     throw protocolMismatch("Project inspection response is invalid");
   }
   const project = inspected.project;
-  if (project.contract !== "lmdj.project.v3" ||
-      project.project_id !== summary.projectId ||
+  if (project.project_id !== summary.projectId ||
       !integer(project.revision) ||
       project.revision !== inspected.project_revision ||
       !integer(project.bpm, 40) || project.bpm > 240 ||
@@ -90,6 +118,7 @@ function projectView(
       project.banks.length !== 4) {
     throw protocolMismatch("Project inspection truth is invalid");
   }
+  const patternSlots = patternSlotsFor(project);
 
   const pads: ProjectPadView[] = [];
   for (let bankIndex = 0; bankIndex < 4; ++bankIndex) {
@@ -140,6 +169,7 @@ function projectView(
     key: "—",
     pads: Object.freeze(pads),
     patterns: Object.freeze(patterns),
+    patternSlots,
     sequenceSettings: Object.freeze({
       quantizeEnabled: project.sequence_settings.quantize_enabled,
       swingPercent: project.sequence_settings.swing_percent,
