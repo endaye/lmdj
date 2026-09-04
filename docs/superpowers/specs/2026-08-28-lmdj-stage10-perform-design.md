@@ -16,13 +16,20 @@ Facade 操作面、Core 时间/合并/边界权威、owner-loss 闭合与两阶�
 projection/controller 及 reset-pending 协议；prerequisite #516 先于 #431。
 2026-09-01 Host Runtime/Session 修复评审——
 [`2026-09-01-lmdj-stage10-host-runtime-session-design.md`](2026-09-01-lmdj-stage10-host-runtime-session-design.md)
-以 HRS-D1–D9 锁定 Core runtime 权威实现、headless transport 边界泛化、
+以 HRS-D1–D11 锁定 Core runtime 权威实现、headless transport 边界泛化、
 跨进程 flush 身份、`recovery.list` 只读化、CLI session 模式与 Native
 adapter；prerequisites #523/#524/#525 先于 Task 6（#432）。
+2026-09-04 Creator master-tap/Project projection 修复评审——
+[`2026-09-04-lmdj-stage10-creator-master-tap-projection-repair-design.md`](2026-09-04-lmdj-stage10-creator-master-tap-projection-repair-design.md)
+以 CMTP-D1–D5 锁定 Web Runtime 对实际 master-bus tap 音频图的所有权、
+Web-only typed capture lifecycle、future-candidate identity gate，以及 Creator 对
+v3/v4 `pattern_slots` 的唯一严格 ProjectView 投影。该修复是 #435 的实现前置；
+禁止用静音 tap、本地 slot cache 或测试后门替代。
 
-状态：**已批准，2026-09-01 修复后重新确认**——2026-08-28/29 brainstorming
+状态：**已批准，2026-09-04 修复后重新确认**——2026-08-28/29 brainstorming
 评审逐节批准，P10-D18–D25 由 2026-08-31 #488 逐项确认并固化到第六个决策文件，
 Replay/Lineage 与 Host runtime/session 边界由 2026-09-01 两份修复 spec 确认。
+Creator master-tap/Project projection 边界由 2026-09-04 CMTP 修复 spec 确认。
 本文定义 Stage 10 Perform 的产品与 Contract 边界，不分配 Product Build，
 不改产品代码。
 
@@ -186,7 +193,10 @@ record.stop
      或 discard：删除 draft + Journal
 
 并行（WAV 录制开启时，Host 层）：
-render 输出 → Worklet tap（批量 Float32，JS 堆）→ 有界队列 → OPFS 流式写手
+Web Runtime 在同一 suspended `AudioContext` 内建立并拥有
+render stereo output → transparent Worklet tap → destination；tap 将 4,800-frame
+Float32 stereo 批次单向交给 Creator 有界队列 → OPFS 流式写手。Creator 只持有
+CMTP-D2 类型化 capture lifecycle，不获得裸 engine node 或 AudioContext。
 ```
 
 Host 不提供 `tick`、`runtime_frame` 或 `input_sequence`。raw event 通过稳定
@@ -387,3 +397,7 @@ mapping，Host 就会成为第二份 Pattern 真相，迁移、移动槽与无 U
    一致；实施计划采用 A1 定死的 `RuntimePreparationLimits` 字段名）。
 6. ~~#488 Contract 修复逐项批准~~——已于 2026-08-31 完成产品裁决；以本
    文档、实施计划和第六个决策文件合入为实现恢复 gate。
+7. **Task 9 新前置（2026-09-04）**：CMTP Task 8A 先交付 Web Runtime
+   master-tap graph 与 typed capture lifecycle；#435 同时扩大 Project projection
+   文件边界并只从严格 v3/v4 `ProjectView.patternSlots` 读取槽位。Task 10 才把
+   resource keys、tap asset role 与 `1.0.42.0` active identity 一次性集成。
