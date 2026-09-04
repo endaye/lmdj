@@ -327,8 +327,8 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-      - name: Rehydrate deterministic audio fixtures
-        run: git lfs checkout -- tests/fixtures/audio
+      - name: Rehydrate Core test fixtures
+        run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -520,8 +520,8 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-      - name: Rehydrate deterministic audio fixtures
-        run: git lfs checkout -- tests/fixtures/audio
+      - name: Rehydrate Core test fixtures
+        run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -869,8 +869,8 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-      - name: Rehydrate deterministic audio fixtures
-        run: git lfs checkout -- tests/fixtures/audio
+      - name: Rehydrate Core test fixtures
+        run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -920,8 +920,8 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-      - name: Rehydrate deterministic audio fixtures
-        run: git lfs checkout -- tests/fixtures/audio
+      - name: Rehydrate Core test fixtures
+        run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
