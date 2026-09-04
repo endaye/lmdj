@@ -82,7 +82,15 @@ jobs:
           set -euo pipefail
           printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
 
+      # `continue-on-error` because this lane is advisory in name and must be
+      # advisory in effect. It failed red on #610 with `max turns reached`,
+      # which is a review that did not finish rather than a change that is
+      # wrong. A lane that cannot block a merge but can redden every Pull
+      # Request only teaches people to ignore red, which costs more than the
+      # lane is worth. Failures stay visible in the job log and in the absence
+      # of a review comment.
       - name: Run advisory Grok review
+        continue-on-error: true
         env:
           GROK_AUTH_JSON: ${{ secrets.GROK_AUTH_JSON }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}

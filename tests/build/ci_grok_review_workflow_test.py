@@ -84,6 +84,24 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         self.assertNotIn("ci-core", self.source, message)
         self.assertNotIn("ci-web-heavy", self.source, message)
 
+    def test_an_advisory_lane_does_not_paint_the_pull_request_red(self) -> None:
+        """Advisory in name has to mean advisory in effect.
+
+        This lane failed red on #610 with `max turns reached` -- a review that
+        did not finish, not a change that is wrong. A lane that cannot block a
+        merge but can redden every Pull Request devalues every other red check.
+        """
+        self.assertIn(
+            "continue-on-error: true",
+            self.source,
+            msg=(
+                "why: this lane cannot block a merge, so a failure here is a "
+                "missing review rather than a defect, and a red check for it "
+                "devalues every other red check; remedy: keep continue-on-error "
+                "on the review step"
+            ),
+        )
+
     def test_the_cli_is_fetched_by_digest_not_piped_from_an_installer(self) -> None:
         """A version names a release; a digest names the bytes.
 

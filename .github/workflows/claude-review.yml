@@ -85,10 +85,20 @@ jobs:
       # Pinned to the commit `v1` resolved to, not to `v1` itself. A moving tag
       # names a release; a commit names the code that will run here, which is
       # the same reasoning `grok-review.yml` applies to its CLI binary.
+      # `continue-on-error` because this lane is advisory in name and must be
+      # advisory in effect. A failed run here posts no findings, which is a
+      # degraded review rather than a broken change, and a red check on every
+      # Pull Request from a lane that cannot block one only teaches people to
+      # ignore red. Failures stay visible in the job log and in the absence of
+      # review comments.
       - name: Review
         if: ${{ steps.backend.outputs.run == 'true' }}
+        continue-on-error: true
         uses: anthropics/claude-code-action@fa2b2666b747000bf42767d1f332065b375e3c8f
         env:
+          # The vendored command drives `gh pr diff`, `gh pr view` and
+          # `gh pr comment`, which need a token of their own.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Both spellings are set deliberately. `claude-code-action` forwards
           # its input as `ANTHROPIC_API_KEY`, while community reports of the
           # Z.ai endpoint use `ANTHROPIC_AUTH_TOKEN`. Which one each vendor
@@ -108,21 +118,14 @@ jobs:
           # does not apply.
           github_token: ${{ secrets.GITHUB_TOKEN }}
           anthropic_api_key: ${{ secrets[matrix.secret_name] }}
-          # KNOWN UNPINNED INPUT. This clones a marketplace at run time to
-          # fetch the review skill, and the ref is not pinned. `grok-review.yml`
-          # verifies its CLI against a digest on the argument that anything
-          # executing on our own runner beside repository credentials must name
-          # its bytes; this clone does not meet that bar. It is weaker than the
-          # Grok case -- the action itself is pinned to a commit, the source is
-          # Anthropic's own repository, and what arrives is Markdown
-          # instructions rather than an executable -- but it is an unpinned
-          # input and is recorded as one rather than argued away. The exit, if
-          # it is tightened, is vendoring the skill into `.claude/skills/`,
-          # which removes the clone at the cost of tracking upstream by hand.
-          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
-          plugins: "code-review@claude-code-plugins"
+          # The review procedure is vendored at `.claude/commands/pr-review.md`
+          # rather than cloned from a plugin marketplace at run time. That
+          # clone is unauthenticated, happens on every invocation, and GitHub
+          # rate-limited it on the self-hosted runner, failing both backends
+          # before either reached a model. A checked-out copy has no runtime
+          # dependency to be rate-limited or tampered with.
           prompt: >-
-            /code-review:code-review --comment
+            /pr-review --comment
             ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
           claude_args: >-
             --allowedTools "mcp__github_inline_comment__create_inline_comment"

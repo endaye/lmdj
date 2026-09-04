@@ -24,6 +24,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github/workflows/claude-review.yml"
 GROK = REPO_ROOT / ".github/workflows/grok-review.yml"
+VENDORED_COMMAND = REPO_ROOT / ".claude/commands/pr-review.md"
 SELF_HOSTED_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]"
 )
@@ -146,28 +147,79 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertIn("vars.CLAUDE_REVIEW_BACKENDS", self.source)
         self.assertIn("not in CLAUDE_REVIEW_BACKENDS", self.source)
 
-    def test_the_unpinned_marketplace_clone_stays_declared_as_a_gap(self) -> None:
-        """The one input this lane does not pin, kept visible rather than tidy.
+    def test_the_review_procedure_is_vendored_not_cloned_at_run_time(self) -> None:
+        """The marketplace clone failed in production, so it is gone.
 
-        `grok-review.yml` verifies its CLI against a digest on the argument that
-        anything executing on our own runner beside repository credentials must
-        name its bytes. This clone does not meet that bar. It is weaker than the
-        Grok case, but it is still an unpinned input, and an accepted gap that
-        nobody can see is indistinguishable from one nobody noticed. This test
-        exists so removing the note requires deciding to, rather than tidying.
+        `claude-code-action` clones a plugin marketplace on every invocation.
+        Unauthenticated, repeated per Pull Request, from a self-hosted runner,
+        GitHub rate-limited it and both backends failed before either reached a
+        model. A checked-out copy has no runtime dependency to be rate-limited
+        or tampered with, and it meets the bar `grok-review.yml` already sets
+        for anything executing beside repository credentials.
         """
-        self.assertIn("plugin_marketplaces", self.source)
-        self.assertIn(
-            "KNOWN UNPINNED INPUT",
-            self.source,
+        message = (
+            "why: cloning the plugin marketplace at run time is unauthenticated "
+            "and rate-limited by GitHub on a self-hosted runner, which failed "
+            "every review before it reached a model; remedy: keep the procedure "
+            "vendored at .claude/commands/pr-review.md and invoke it as "
+            "/pr-review"
+        )
+        self.assertNotIn("plugin_marketplaces", self.directives, message)
+        self.assertNotIn("plugins:", self.directives, message)
+        self.assertIn("/pr-review", self.source, message)
+        self.assertTrue(
+            VENDORED_COMMAND.is_file(),
             msg=(
-                "why: the marketplace clone is the one runtime input this lane "
-                "does not pin, and the note recording that is the only thing "
-                "keeping it visible; remedy: either keep the note, or close the "
-                "gap by vendoring the skill into .claude/skills/ and removing "
-                "plugin_marketplaces along with this assertion"
+                "why: the workflow invokes /pr-review, which resolves to "
+                ".claude/commands/pr-review.md in the checked-out tree; without "
+                "the file the review cannot start; remedy: keep the vendored "
+                "command in the repository"
             ),
         )
+
+    def test_the_vendored_command_records_where_it_came_from(self) -> None:
+        """A copy with no provenance cannot be synced or audited."""
+        body = VENDORED_COMMAND.read_text(encoding="utf-8")
+        for marker in ("VENDORED", "Blob:", "Repo HEAD at retrieval:", "Retrieved:"):
+            with self.subTest(marker=marker):
+                self.assertIn(
+                    marker,
+                    body,
+                    msg=(
+                        "why: a vendored file without its source and revision "
+                        "cannot be compared against upstream, so it silently "
+                        "diverges; remedy: keep the provenance header, and "
+                        "update it whenever the body is refreshed"
+                    ),
+                )
+        self.assertTrue(
+            body.startswith("---\n"),
+            "the command's frontmatter must stay first or it stops being a command",
+        )
+
+    def test_an_advisory_lane_does_not_paint_the_pull_request_red(self) -> None:
+        """Advisory in name has to mean advisory in effect.
+
+        A failed run posts no findings, which is a degraded review rather than a
+        broken change. A red check on every Pull Request from a lane that cannot
+        block one teaches people to ignore red.
+        """
+        self.assertIn(
+            "continue-on-error: true",
+            self.source,
+            msg=(
+                "why: this lane cannot block a merge, so a failure here is a "
+                "missing review rather than a defect, and a red check for it "
+                "devalues every other red check; remedy: keep "
+                "continue-on-error on the review step"
+            ),
+        )
+
+    def test_the_vendored_command_has_a_token_for_its_gh_calls(self) -> None:
+        """It drives `gh pr diff`, `gh pr view` and `gh pr comment`."""
+        self.assertIn("GH_TOKEN:", self.source)
+        allowed = VENDORED_COMMAND.read_text(encoding="utf-8").split("---", 2)[1]
+        self.assertIn("Bash(gh pr diff:*)", allowed)
 
     def test_the_review_posts_findings_rather_than_only_logging_them(self) -> None:
         self.assertIn("--comment", self.source)
