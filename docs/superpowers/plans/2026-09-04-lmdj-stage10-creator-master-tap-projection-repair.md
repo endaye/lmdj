@@ -525,6 +525,11 @@ Inspect `git show --name-status --oneline HEAD` and require a clean Task worktre
 - Modify: `apps/creator-web/src/styles.css`
 - Test: `apps/creator-web/test/project_actions.test.ts`
 - Test: `apps/creator-web/test/input_controller.test.ts`
+- Test: `apps/creator-web/test/creator_state.test.ts`
+- Test: `apps/creator-web/test/sample_state.test.ts`
+- Test: `apps/creator-web/test/sequence_surface.test.tsx`
+- Test: `apps/creator-web/test/shell_polish.test.tsx`
+- Test: `apps/creator-web/test/workspace_shell.test.tsx`
 - Test: `apps/creator-web/test/perform_surface.test.tsx`
 - Test: `tests/platform/web/creator/creator_web_perform.spec.mjs`
 
@@ -599,6 +604,12 @@ function patternSlotsFor(project: Record<string, unknown>): readonly (string | n
 
 Every open/import/mutation/reload path must call the existing projection refresh; no reducer may edit `patternSlots` from a mutation receipt.
 
+Update the listed existing Creator test fixtures to provide the required
+`ProjectView.patternSlots` field. This is a typed projection-contract migration,
+not permission to change their Sample, Sequence, shell, or accessibility
+expectations; use 16 frozen null slots unless that test explicitly needs v4
+slot truth.
+
 - [ ] **Step 4: Rewrite the Perform unit RED tests against capture status**
 
 Replace the current untracked #435 RED fixture with a session implementing the canonical status methods:
@@ -625,7 +636,11 @@ keyboard, and MIDI paths each emit one stable Perform press/release gesture to a
 optional observer, adverse lifecycle cleanup emits the matching release exactly
 once, two sequential gestures on the same source/slot receive different gesture
 identities, and no observer means the existing Project/Sample/Sequence behavior
-is unchanged.
+is unchanged. The observer may carry source as local metadata, but exact-key
+assertions must prove the Core-facing press event contains only
+`kind`, `gestureId`, `slot`, and `velocity`, while release contains only
+`kind`, `gestureId`, and `slot`; no `source` field or `pad_cancel` kind may cross
+the Facade request boundary.
 
 - [ ] **Step 5: Run the Perform input and surface RED tests**
 
@@ -673,11 +688,15 @@ listeners and keep their established Sample trigger-mode behavior; the Perform
 surface must not create a second adapter stack. The controller gives each
 adapter-accepted press a fresh stable gesture identity; the observer receives
 that press and its matching release/cancel/adverse-lifecycle close exactly once
-with the input source. It forwards every raw value without tick, runtime frame,
-input sequence, semantic deduplication, or Host timer. Add focused
+with the input source as local, out-of-band metadata. The Perform controller maps
+cancel, blur, visibility loss, pagehide, and dispose to the strict
+`pad_release` event with the original gesture ID and never forwards source or a
+new cancel kind to Core. It forwards every raw value without tick, runtime
+frame, input sequence, semantic deduplication, or Host timer. Add focused
 `input_controller.test.ts` witnesses for pointer/touch, keyboard, MIDI,
 sequential identity uniqueness, adverse-lifecycle release, and the non-recording
-no-op path.
+no-op path, plus Core-request exact-key assertions in
+`perform_surface.test.tsx`.
 
 - [ ] **Step 8: Replace the Browser RED test’s prohibited hooks**
 
@@ -740,6 +759,11 @@ git add apps/creator-web/src/components/perform_surface.tsx \
   apps/creator-web/src/state/creator_state.ts apps/creator-web/src/state/view_model.ts \
   apps/creator-web/src/styles.css apps/creator-web/test/project_actions.test.ts \
   apps/creator-web/test/input_controller.test.ts \
+  apps/creator-web/test/creator_state.test.ts \
+  apps/creator-web/test/sample_state.test.ts \
+  apps/creator-web/test/sequence_surface.test.tsx \
+  apps/creator-web/test/shell_polish.test.tsx \
+  apps/creator-web/test/workspace_shell.test.tsx \
   apps/creator-web/test/perform_surface.test.tsx \
   tests/platform/web/creator/creator_web_perform.spec.mjs
 git diff --cached --name-status

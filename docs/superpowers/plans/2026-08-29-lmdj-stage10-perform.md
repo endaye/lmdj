@@ -804,6 +804,11 @@ Assembly remain unchanged and therefore report `unconfigured`.
 - Modify: `apps/creator-web/src/styles.css`
 - Test: `apps/creator-web/test/project_actions.test.ts`
 - Test: `apps/creator-web/test/input_controller.test.ts`
+- Test: `apps/creator-web/test/creator_state.test.ts`
+- Test: `apps/creator-web/test/sample_state.test.ts`
+- Test: `apps/creator-web/test/sequence_surface.test.tsx`
+- Test: `apps/creator-web/test/shell_polish.test.tsx`
+- Test: `apps/creator-web/test/workspace_shell.test.tsx`
 - Test: `apps/creator-web/test/perform_surface.test.tsx`
 - Test: `tests/platform/web/creator/creator_web_perform.spec.mjs`
 
@@ -839,9 +844,11 @@ Assembly remain unchanged and therefore report `unconfigured`.
   second adapter stack in the Perform surface. The controller gives each
   adapter-accepted press a fresh stable gesture identity and forwards its
   matching release/cancel/adverse-lifecycle close exactly once. Each raw event
-  supplies event/gesture identity but never time/order; JavaScript sends every
-  raw value and never coalesces. Render pending Pattern state from Core
-  target/ack results, not a Host timer.
+  supplies event/gesture identity but never time/order; input source remains
+  local observer metadata and is not a `PerformanceRawEvent` field. Cancel and
+  adverse lifecycle closure emit the strict `pad_release` shape rather than a
+  new event kind. JavaScript sends every raw value and never coalesces. Render
+  pending Pattern state from Core target/ack results, not a Host timer.
 - [ ] GREEN: run the Creator unit and Playwright suites; expect PASS.
 - [ ] Run `scripts/architecture-portal.sh check`; expect PASS.
 - [ ] Commit only the listed files with
