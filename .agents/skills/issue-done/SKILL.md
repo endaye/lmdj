@@ -145,8 +145,9 @@ Commit the changes following repository governance rules:
    git diff --cached --diff-filter=A --name-only
    python3 tests/build/ci_change_scope_test.py
    ```
-   Whenever the first command lists any path, the ownership suite (or an
-   equivalent gate that reads the staged index) is mandatory before commit.
+   Whenever `git diff --cached --diff-filter=A --name-only` lists any path, the
+   ownership suite (or an equivalent gate that reads the staged index) is
+   mandatory before commit.
    Confirm `test_every_tracked_path_has_explicit_ownership_or_full_rule` passes
    with no `unclassified tracked paths`. Task-specific tests do not substitute
    for this ownership check.
