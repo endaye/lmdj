@@ -18,9 +18,15 @@ async function expectProjectRevision(page, expectedRevision) {
   expect(report.sample.project_revision).toBe(expectedRevision);
 }
 
-async function report(page) {
+async function report(page, options = {}) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  if (options.force === true) {
+    await page.locator(".status-actions button")
+      .filter({hasText: "Export report"})
+      .evaluate((element) => element.click());
+  } else {
+    await page.getByRole("button", {name: "Export report"}).click();
+  }
   return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
 }
 
@@ -221,6 +227,33 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
+});
+
+test("ordinary Sample focus loss keeps the retained trim dialog visible", async ({page}, testInfo) => {
+  test.skip(testInfo.project.name !== GRANTED);
+  test.setTimeout(600_000);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  await enterSampleEditor(page);
+  await selectPadWithoutPress(page, "Pad A1 — empty");
+  const panel = await recordAtLeast(page, "Pad A1", 1);
+
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+
+  await expect(panel).toContainText("Recording stopped: the window lost focus.");
+  await expect(panel.getByRole("img", {name: "Pad A1 capture waveform"})).toBeVisible();
+  await expect(panel.getByRole("slider", {name: "Pad A1 Selection length"})).toBeVisible();
+  await expect(panel.getByRole("button", {name: "Commit"})).toBeVisible();
+  await expect(panel.getByRole("button", {name: "Discard"})).toBeVisible();
+  await expect(panel.getByRole("button", {name: "Close"})).toBeVisible();
+  await expect(page.locator(".sample-overlay-host")).toHaveCount(0);
+
+  const evidence = await report(page, {force: true});
+  expect(evidence.sequence.semantic_state).toBe("stopped");
+  expect(evidence.sequence.session_id).toBeNull();
+
+  await panel.getByRole("button", {name: "Discard"}).click();
+  await expect(panel.getByRole("button", {name: "Record into Pad A1"})).toBeVisible();
 });
 
 test("armed Pad capture commits without stopping the active Sequence", async ({page}, testInfo) => {
