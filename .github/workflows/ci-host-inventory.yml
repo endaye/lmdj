@@ -1,0 +1,108 @@
+name: CI Host Inventory
+
+# Reports what a self-hosted role actually provides. Dispatch-only, read-only,
+# and never a formal result.
+#
+# It was written while #591 step 6 -- moving native Core work to netcup -- was
+# still open and blocked on a host-readiness question nobody had actually
+# checked. Step 6 has since been closed on other evidence: queue time stopped
+# dominating execution time, so the move buys headroom rather than fixing a
+# standing problem.
+#
+# This is kept anyway, and the honest reason is narrower than the original one.
+# The question "what does this host actually provide" recurs whenever a role is
+# moved, a lane is added, or a build fails in a way that smells like a missing
+# tool, and answering it by reasoning from provisioning scripts is how the
+# step 6 estimate went unchecked for as long as it did. A dispatch-only probe
+# costs nothing until someone runs it and replaces an assumption with a
+# reading. If step 6 is ever reopened, this is the measurement it needs.
+#
+# Reports rather than asserts. A missing tool is the answer, not a failure, so
+# the job stays green and the summary carries the finding. A red job here would
+# say "this host is not ready" in a way indistinguishable from "this workflow
+# is broken".
+
+on:
+  workflow_dispatch:
+    inputs:
+      role:
+        description: Which self-hosted role to inventory.
+        required: true
+        type: choice
+        options:
+          - ci-web-heavy
+          - ci-general
+          - ci-core
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: Host inventory (${{ inputs.role }})
+    # The role is selected by the dispatch input. `ci-web-heavy` is netcup-only,
+    # so it is the way to inventory netcup specifically; `ci-core` is
+    # Contabo-only and gives the baseline to compare against.
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - lmdj-linux
+      - lmdj-linux-pool
+      - ${{ inputs.role }}
+    timeout-minutes: 10
+    steps:
+      - name: Report host capacity and toolchain
+        shell: bash
+        env:
+          SELECTED_ROLE: ${{ inputs.role }}
+          RUNNER_LABEL: ${{ runner.name }}
+        run: |
+          set -uo pipefail
+
+          emit() { printf '%s\n' "$1" >>"$GITHUB_STEP_SUMMARY"; printf '%s\n' "$1"; }
+
+          emit "## Host inventory: \`$SELECTED_ROLE\` on \`$RUNNER_LABEL\`"
+          emit ""
+          emit "| Property | Value |"
+          emit "| --- | --- |"
+          emit "| runner | \`$RUNNER_LABEL\` |"
+          emit "| cores | $(nproc) |"
+          emit "| memory | $(free -h | awk '/^Mem:/{print $2}') |"
+          emit "| kernel | $(uname -r) |"
+          emit "| distribution | $(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME") |"
+          emit "| workspace free | $(df -h . | awk 'NR==2{print $4}') |"
+          emit ""
+          emit "### Native Core toolchain"
+          emit ""
+          emit "These are what \`core-coverage\` verifies before it will run, and"
+          emit "what the \`ci-core\` role needs before it can span this host."
+          emit ""
+          emit "| Tool | Present | Version | Path |"
+          emit "| --- | --- | --- | --- |"
+          # A missing tool is a finding, so `command -v` failing must not end the
+          # step; `set -e` is deliberately not in force above.
+          #
+          # The path is reported alongside the version because the two answer
+          # different questions. A version alone cannot distinguish a real
+          # toolchain from a wrapper on the PATH that forwards to a different
+          # compiler, and that distinction is exactly what deciding whether this
+          # host can carry native Core work turns on.
+          for tool in clang-18 clang++-18 llvm-cov-18 ccache cmake ninja python3 git-lfs; do
+            if tool_path="$(command -v "$tool" 2>/dev/null)"; then
+              version="$("$tool" --version 2>&1 | head -n1 | cut -c1-60)"
+              emit "| \`$tool\` | yes | $version | \`$tool_path\` |"
+            else
+              emit "| \`$tool\` | **no** | — | — |"
+            fi
+          done
+          emit ""
+          emit "### Persistent ccache"
+          emit ""
+          if command -v ccache >/dev/null 2>&1; then
+            emit '```'
+            ccache --show-stats 2>&1 | head -n 12 >>"$GITHUB_STEP_SUMMARY" || true
+            emit '```'
+          else
+            emit "ccache is absent, so native Core work here would start cold."
+          fi
