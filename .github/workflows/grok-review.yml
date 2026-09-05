@@ -5,9 +5,11 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
 
+# `pull-requests: write` covers both the inline review and the summary
+# comment. `issues: write` was here for the tracking Issue this lane used to
+# open per Pull Request; that sink is gone and so is the grant.
 permissions:
   contents: read
-  issues: write
   pull-requests: write
 
 concurrency:
@@ -17,7 +19,12 @@ concurrency:
 jobs:
   grok-review:
     # Advisory only: this job is not part of Core CI, PR Gate, or the merge
-    # queue. Findings post a sticky comment and never fail the workflow.
+    # queue, and it never fails the workflow. Findings post the way the other
+    # advisory reviewers' do -- critical and important ones as inline review
+    # threads, the whole review as a sticky summary comment. Threads are held
+    # by main's conversation-resolution rule until a human resolves each one,
+    # which is what made the other lanes' findings get read; the tracking
+    # Issue this lane used to open instead was not.
     # Hosted ubuntu-24.04 is not justified under hosted_runner_policy.json:
     # this job holds no control-plane evidence or deploy authority, and
     # ci-general already has outbound HTTPS for the Grok CLI install.
@@ -101,11 +108,15 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          # The review is attached to a commit, so an inline thread lands on
+          # the revision that was reviewed rather than on whatever the branch
+          # points at by the time the API call arrives.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPOSITORY: ${{ github.repository }}
           DIFF_FILE: ${{ runner.temp }}/pr.diff
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
           PR_DRAFT: "false"
           PR_SAME_REPOSITORY: "true"
           POST_COMMENT: "true"
-          POST_ISSUE: "true"
+          POST_REVIEW: "true"
         run: python3 .github/scripts/grok_review.py
