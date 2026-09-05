@@ -108,6 +108,55 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
                 self.assertIn(command, hosted, message)
                 self.assertIn(command, probe, message)
 
+    def test_both_native_jobs_share_the_repository_capacity_queue(self) -> None:
+        """Naming the `ci-core` role is not enough to make them run one at a time.
+
+        The role spans two runner services on one physical host, so without the
+        capacity queue a dispatched probe and the release stress suite start in
+        the same second and run beside each other. Both are timing-sensitive,
+        and twenty consecutive stress repetitions are the least tolerant
+        workload in the repository.
+
+        Observed: run 33838737018 started `core-tsan-self-hosted-probe` and
+        `core-stress` at 04:58:05Z on `contabo-lmdj-linux` and
+        `contabo-lmdj-linux-02`, and both failed. The probe's failure said
+        nothing about whether the host can execute the TSan runtime, which is
+        the only question it exists to answer.
+        """
+        for job_name in ("core-tsan-self-hosted-probe", "core-stress"):
+            with self.subTest(job=job_name):
+                self.assertRegex(
+                    self.job(job_name),
+                    r"(?m)^    concurrency:\n"
+                    r"      group: lmdj-native-heavy\n"
+                    r"      queue: max\n"
+                    r"      cancel-in-progress: false$",
+                    msg=(
+                        f"why: {job_name} names the ci-core role, which spans two "
+                        "runner services on one host, so a sibling native job "
+                        "runs beside it rather than after it and consumes the "
+                        "CPU its timing-sensitive tests were budgeted for; "
+                        "remedy: keep the lmdj-native-heavy block with queue: "
+                        "max before cancel-in-progress: false, the same one "
+                        "ci.yml puts on every admitted shared-host lane"
+                    ),
+                )
+
+    def test_the_hosted_tsan_lane_does_not_join_the_queue(self) -> None:
+        """It runs on a different machine, so it contends for nothing."""
+        self.assertNotIn(
+            "lmdj-native-heavy",
+            self.job("core-tsan"),
+            msg=(
+                "why: core-tsan runs on GitHub-hosted Ubuntu, a different "
+                "machine from the shared Contabo host, so joining the "
+                "lmdj-native-heavy queue would only make it wait behind "
+                "native lanes it cannot contend with; remedy: keep the "
+                "core-tsan job body free of the lmdj-native-heavy "
+                "concurrency block"
+            ),
+        )
+
     def test_nightly_keeps_read_only_repository_permission(self) -> None:
         prefix = self.source.split("jobs:", 1)[0]
         message = (
