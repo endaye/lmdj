@@ -195,6 +195,7 @@
     {"match": {"kind": "exact", "value": ".github/scripts/grok_review.py"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/grok-review.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/claude-review.yml"}, "lanes": ["ci_contract"]},
+    {"match": {"kind": "exact", "value": ".github/workflows/ci-host-inventory.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-self-hosted-benchmark.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-self-hosted-core-benchmark.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/architecture-portal.yml"}, "lanes": ["portal", "ci_contract"]},
