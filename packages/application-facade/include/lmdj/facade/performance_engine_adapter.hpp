@@ -40,6 +40,7 @@ struct EnginePerformanceAdapter {
   std::shared_ptr<PerformanceInputSequencer> input_sequencer;
   std::shared_ptr<PatternLaunchAcknowledger> launch_acknowledger;
   std::shared_ptr<PerformanceReplayController> replay_controller;
+  std::shared_ptr<PerformanceGestureSink> gesture_sink;
   std::function<void()> service;
 };
 
