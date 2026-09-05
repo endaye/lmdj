@@ -1875,6 +1875,7 @@ struct Application::Impl {
             std::move(config.pattern_launch_acknowledger)),
         performance_replay_controller(
             std::move(config.performance_replay_controller)),
+        performance_gesture_sink(std::move(config.performance_gesture_sink)),
         sample_limits(
             config.runtime_preparation_limits.value_or(kDefaultSampleLimits)),
         projects(storage_platform),
@@ -6293,6 +6294,10 @@ struct Application::Impl {
     const auto kind = string_field(event, "kind");
     auto before = runtime;
     bool coalesced = false;
+    // Live master-bus application mirrors the Replay translation exactly
+    // (P10-D7). Journal coalescing is a recording-density rule (P10-D15) and
+    // never silences an admitted gesture.
+    std::optional<audio::FxGesture> live_gesture;
     if (kind == "pad_press") {
       require(exact_keys(event, {"kind", "gesture_id", "slot", "velocity"}),
               "pad_press event shape is invalid");
@@ -6336,6 +6341,8 @@ struct Application::Impl {
       runtime.open_fx.emplace(
           fx, OpenPerformanceFx{gesture, static_cast<std::uint16_t>(value),
                                 std::nullopt, std::nullopt});
+      live_gesture = audio::FxGesture{audio::FxGestureKind::engage, fx,
+                                      static_cast<std::uint16_t>(value)};
     } else if (kind == "fx_move") {
       require(exact_keys(event, {"kind", "gesture_id", "fx", "value"}),
               "fx_move event shape is invalid");
@@ -6347,6 +6354,7 @@ struct Application::Impl {
               "FX move does not match an engaged gesture");
       const auto value =
           static_cast<std::uint16_t>(unsigned_field(event, "value", 1000U));
+      live_gesture = audio::FxGesture{audio::FxGestureKind::move, fx, value};
       const auto window = tick.value() / 128U;
       if (state->second.pending_window == window &&
           state->second.pending_event_index.has_value()) {
@@ -6395,20 +6403,37 @@ struct Application::Impl {
       runtime.pending_events.push_back(domain::PerformanceEvent{
           domain::FxReleasePerformanceEvent{fx, tick.value()}});
       runtime.open_fx.erase(state);
+      live_gesture =
+          audio::FxGesture{audio::FxGestureKind::release, fx, 0};
     } else if (kind == "hold_on") {
       require(exact_keys(event, {"kind"}), "hold_on event shape is invalid");
       require(!runtime.hold, "Performance HOLD is already on");
       runtime.hold = true;
       runtime.pending_events.push_back(domain::PerformanceEvent{
           domain::HoldOnPerformanceEvent{tick.value()}});
+      live_gesture = audio::FxGesture{audio::FxGestureKind::hold_on,
+                                      domain::PerformanceFx::filter, 0};
     } else if (kind == "hold_off") {
       require(exact_keys(event, {"kind"}), "hold_off event shape is invalid");
       require(runtime.hold, "Performance HOLD is already off");
       runtime.hold = false;
       runtime.pending_events.push_back(domain::PerformanceEvent{
           domain::HoldOffPerformanceEvent{tick.value()}});
+      live_gesture = audio::FxGesture{audio::FxGestureKind::hold_off,
+                                      domain::PerformanceFx::filter, 0};
     } else {
       require(false, "Performance event kind is invalid");
+    }
+    if (live_gesture.has_value() && performance_gesture_sink) {
+      // Fail closed before the durable append: a gesture the master bus
+      // refused is not admitted, so the journal never claims audio that was
+      // never produced. The Host may retry the same event id.
+      const auto applied =
+          performance_gesture_sink->apply_gesture(*live_gesture);
+      if (!applied.has_value()) {
+        runtime = std::move(before);
+        return error_envelope(applied.error());
+      }
     }
     runtime.last_accepted_tick = tick.value();
     canonicalize_performance_pending(runtime);
@@ -7326,6 +7351,7 @@ struct Application::Impl {
   std::shared_ptr<PerformanceInputSequencer> performance_input_sequencer;
   std::shared_ptr<PatternLaunchAcknowledger> pattern_launch_acknowledger;
   std::shared_ptr<PerformanceReplayController> performance_replay_controller;
+  std::shared_ptr<PerformanceGestureSink> performance_gesture_sink;
   std::optional<audio::RuntimePreparationLimits> sample_limits;
   project_io::ProjectStore projects;
   project_io::SequenceJournal sequence_journals;

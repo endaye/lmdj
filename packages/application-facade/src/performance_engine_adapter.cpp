@@ -7,6 +7,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -27,6 +28,26 @@ foundation::Error adapter_error(foundation::ErrorCode code,
 foundation::Error enqueue_error(std::string message) {
   return adapter_error(foundation::ErrorCode::internal_error,
                        std::move(message));
+}
+
+std::string_view fx_enqueue_reason(audio::FxEnqueueResult result) noexcept {
+  switch (result) {
+    case audio::FxEnqueueResult::accepted:
+      return "accepted";
+    case audio::FxEnqueueResult::invalid_fx:
+      return "the effect is outside the Contract chain";
+    case audio::FxEnqueueResult::invalid_value:
+      return "the value is outside the 0-1000 scale";
+    case audio::FxEnqueueResult::invalid_bpm:
+      return "the prepared tempo is invalid";
+    case audio::FxEnqueueResult::not_prepared:
+      return "the master FX chain is not prepared for the current tempo";
+    case audio::FxEnqueueResult::not_running:
+      return "the engine is not running";
+    case audio::FxEnqueueResult::queue_full:
+      return "the master FX gesture queue is full";
+  }
+  return "the master bus refused the gesture";
 }
 
 bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
@@ -799,6 +820,31 @@ PatternPublicationGateway make_engine_pattern_publication_gateway(
   };
 }
 
+// Live counterpart of EnginePerformanceReplaySink::apply_fx_gesture: the same
+// gesture reaches the same DSP whether Core admits it live or replays it
+// (P10-D7).
+class EnginePerformanceGestureSink final : public PerformanceGestureSink {
+ public:
+  explicit EnginePerformanceGestureSink(audio::RealtimeEngine& engine)
+      : engine_(engine) {}
+
+  foundation::Result<void> apply_gesture(audio::FxGesture gesture) override {
+    const auto enqueued = engine_.enqueue_fx_gesture(gesture);
+    if (enqueued != audio::FxEnqueueResult::accepted) {
+      return foundation::Result<void>::failure(enqueue_error(
+          std::string(
+              "Live Performance FX gesture was refused by the master bus: ") +
+          std::string(fx_enqueue_reason(enqueued)) +
+          "; prepare the master FX chain for the current Project tempo and "
+          "start the engine before admitting the gesture"));
+    }
+    return foundation::Result<void>::success();
+  }
+
+ private:
+  audio::RealtimeEngine& engine_;
+};
+
 EnginePerformanceAdapter make_engine_performance_adapter(
     audio::RealtimeEngine& engine, PatternPublicationGateway gateway) {
   if (!gateway.publish || !gateway.publish_immediate || !gateway.cancel) {
@@ -818,6 +864,7 @@ EnginePerformanceAdapter make_engine_performance_adapter(
       std::make_shared<EnginePerformanceInputSequencer>(),
       launches,
       replay,
+      std::make_shared<EnginePerformanceGestureSink>(engine),
       [clock, launches = std::move(launches), replay = std::move(replay)]() {
         clock->service();
         launches->service();

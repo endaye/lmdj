@@ -59,6 +59,24 @@ CANDIDATE_INDEX_SHA256 = hashlib.sha256(b"fixture index").hexdigest()
 PRIOR_INDEX_SHA256 = "c" * 64
 PRIOR_MANIFEST_SHA256 = "d" * 64
 
+# Readiness budgets for a spawned deploy subprocess, in seconds. A signal test
+# must wait for the deploy to reach its blocking sentinel, and that wait covers
+# real interpreter startup plus every stubbed pipeline stage before the block,
+# so the budget scales with the stage count instead of guessing one wall-clock
+# number. A fixed budget that passes locally becomes a deterministic CI failure
+# once normal runner variance consumes its missing headroom; see
+# `.agents/pitfalls/facade-surface-test-budget-headroom.md`. Four shards of this
+# suite share one self-hosted host, so the allowance is deliberately generous:
+# an over-long budget only delays a genuine hang, never a healthy run.
+READINESS_STARTUP_SECONDS = 15.0
+READINESS_PER_STAGE_SECONDS = 3.0
+# Stages of `test_deploy_orders_real_stage_api_smoke_restore_and_production_smoke`
+# the subprocess completes before each blocking sentinel is written.
+GH_DOWNLOAD_READY_STAGES = 7
+POST_PUBLISH_READY_STAGES = 21
+# Budget for the signalled subprocess to unwind, reconcile and exit.
+SHUTDOWN_BUDGET_SECONDS = 60.0
+
 
 def fixture_manifest(product_build: str) -> str:
     assets = [
@@ -1070,6 +1088,40 @@ def verify_distribution(dist_root, repo_root):
         shutil.rmtree(self.deploy_root, ignore_errors=True)
         self.reset_server()
 
+    def wait_for_block_ready(
+        self,
+        process: "subprocess.Popen[str]",
+        stages: int,
+        stage_label: str,
+    ) -> None:
+        """Wait for a spawned deploy to reach its blocking sentinel.
+
+        The budget is proportional to the pipeline stages the wait covers, and
+        the failure names the elapsed time, the budget, the sentinel path and
+        the stages actually reached, so a recurrence is diagnosable from the
+        run log alone without reading this harness.
+        """
+        budget = READINESS_STARTUP_SECONDS + READINESS_PER_STAGE_SECONDS * stages
+        started = time.monotonic()
+        while not self.block_ready.exists() and process.poll() is None:
+            elapsed = time.monotonic() - started
+            if elapsed >= budget:
+                reached = self.command_log()
+                process.kill()
+                self.fail(
+                    f"{stage_label} did not become ready after {elapsed:.1f}s "
+                    f"(budget {budget:.1f}s = {READINESS_STARTUP_SECONDS:.1f}s "
+                    f"startup + {stages} stages x "
+                    f"{READINESS_PER_STAGE_SECONDS:.1f}s); why: the sentinel "
+                    f"{self.block_ready} was never written; the deploy reached "
+                    f"{len(reached)} stages: {reached}. Remedy: if the last "
+                    "stage shows the deploy still progressing, the host was "
+                    "slower than this budget - raise "
+                    "READINESS_PER_STAGE_SECONDS; otherwise the deploy stalled "
+                    "at the stage after the last one listed."
+                )
+            time.sleep(0.02)
+
     def assert_no_owned_temp(self) -> None:
         self.assertEqual(list(self.runner_temp.glob("lmdj-creator-web-deploy.*")), [])
 
@@ -1824,14 +1876,11 @@ def verify_distribution(dist_root, repo_root):
                     text=True,
                     start_new_session=True,
                 )
-                deadline = time.monotonic() + 10
-                while not self.block_ready.exists() and process.poll() is None:
-                    if time.monotonic() >= deadline:
-                        process.kill()
-                        self.fail("blocked gh download did not become ready")
-                    time.sleep(0.02)
+                self.wait_for_block_ready(
+                    process, GH_DOWNLOAD_READY_STAGES, "blocked gh download"
+                )
                 os.killpg(process.pid, selected_signal)
-                stdout, stderr = process.communicate(timeout=10)
+                stdout, stderr = process.communicate(timeout=SHUTDOWN_BUDGET_SECONDS)
                 self.assertIn(process.returncode, {expected, -selected_signal})
                 completed = subprocess.CompletedProcess(
                     process.args, process.returncode, stdout, stderr
@@ -1856,14 +1905,11 @@ def verify_distribution(dist_root, repo_root):
                     text=True,
                     start_new_session=True,
                 )
-                deadline = time.monotonic() + 15
-                while not self.block_ready.exists() and process.poll() is None:
-                    if time.monotonic() >= deadline:
-                        process.kill()
-                        self.fail("post-publish Playwright did not become ready")
-                    time.sleep(0.02)
+                self.wait_for_block_ready(
+                    process, POST_PUBLISH_READY_STAGES, "post-publish Playwright"
+                )
                 os.killpg(process.pid, selected_signal)
-                stdout, stderr = process.communicate(timeout=15)
+                stdout, stderr = process.communicate(timeout=SHUTDOWN_BUDGET_SECONDS)
                 self.assertIn(process.returncode, {expected, -selected_signal})
                 completed = subprocess.CompletedProcess(
                     process.args, process.returncode, stdout, stderr
