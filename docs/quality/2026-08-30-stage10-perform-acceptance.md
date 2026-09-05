@@ -14,10 +14,13 @@ Bundle, error, module and product-version Contract identities are unchanged.
 
 This ledger records automated source evidence for the integration boundary
 only. **Every Stage 10 physical row is `deferred`.** No Perform physical
-hearing, MIDI, Touch or device-lifecycle acceptance has been performed, and no
-tag, Release, immutable Portal snapshot, deployment, publication or Channel
-promotion is claimed here. The immutable `1.0.42.0` snapshot is #438; the
-canary Release is #468. Each is a separate authorization boundary.
+hearing, MIDI, Touch or device-lifecycle acceptance has been performed. No
+tag, Release, deployment, publication or Channel promotion is claimed here.
+Product Build `1.0.42.0` landed on protected `main` as squash
+`0ffa77c0c4f786dc5d9b285f272abe1725250b8d` (PR #664). The immutable
+`1.0.42.0 · canary` snapshot was frozen in that squash from source revision
+`94ba5938aea123f3305217976429ccdd8af76c40`. This Task records the post-squash
+source-tree witness. The canary Release is #468.
 
 ## Allocation audit
 
@@ -197,13 +200,46 @@ one Pull Request. Per `.agents/pitfalls/squash-witness-provenance.md`, the
 snapshot then names a pre-squash revision, so #438 retains the post-squash
 source-tree witness and the final evidence.
 
+## Post-squash provenance
+
+Protected `main` squash: `0ffa77c0c4f786dc5d9b285f272abe1725250b8d`
+(PR #664, merged 2026-09-05T22:15:31Z). GitHub #436 is closed.
+
+`scripts/architecture-portal.sh witness 1.0.42.0
+0ffa77c0c4f786dc5d9b285f272abe1725250b8d` wrote
+`apps/architecture-portal/versioned_provenance/version-1.0.42.0-squash-witness.json`:
+
+| Field | Value |
+| --- | --- |
+| `product_build` | `1.0.42.0` |
+| `source_revision` | `94ba5938aea123f3305217976429ccdd8af76c40` |
+| `introducing_revision` | `0ffa77c0c4f786dc5d9b285f272abe1725250b8d` |
+| `source_tree` | `278f3cf26a97a91654367d4e6406975d28f8b14c` |
+
+`scripts/architecture-portal.sh check` PASS: 65 tests, 37 current pages, 10
+diagram sources / 20 outputs, 42 routes and internal links,
+`Product Build 1.0.42.0 snapshot matches repository truth`, and schema-2
+provenance authenticates the divergent squash through this source-tree
+witness.
+
+Remote CI that authorized the squash (not exact-main release evidence):
+
+| Run | Role |
+| --- | --- |
+| [33987194165](https://github.com/endaye/lmdj/actions/runs/33987194165) | Merge queue `queue-item` for PR #664, conclusion `success` |
+| [33991083518](https://github.com/endaye/lmdj/actions/runs/33991083518) | Synchronized `Core CI / 664/merge` (`pull_request`, head `d16e687e33147a8284faac4159c91e7549782ea6`), `PR Gate` success |
+
+An exact-main `Core CI` push run whose retained scope manifest is `full` for
+`0ffa77c0c4f786dc5d9b285f272abe1725250b8d` is #468's release-evidence
+obligation. This Task does not treat the queue validation run as that
+evidence.
+
 ## Verification commands and results
 
 Every command below was run on a clean worktree at the Task 10 integration
-commit. This ledger lives inside that commit, so it does not restate the
-commit's own SHA: a squash merge rewrites it in any case. #438 records the
-exact merged revision, the post-squash source-tree witness and the remote CI
-run IDs once they exist.
+commit. This ledger now also records the protected-main squash SHA, the
+post-squash source-tree witness, and the remote CI runs that authorized that
+squash, in the Post-squash provenance section above.
 
 | Boundary | Command | Result |
 | --- | --- | --- |
@@ -239,8 +275,8 @@ snapshot is frozen from that same integration commit.
 
 ## Evidence separation
 
-This ledger records local automated evidence at one source revision. It does
-not claim remote CI, Pull Request approval, merge, an immutable Portal
-snapshot, a tag, a Release, a deployment, a publication, a Channel promotion,
-or any physical device acceptance. Those remain separate boundaries with their
-own evidence, tracked by #436, #438 and #468 respectively.
+This ledger records local automated evidence plus the post-squash provenance
+in the section above. It does not claim a tag, a Release, a deployment, a
+publication, a Channel promotion, retained full exact-main Core CI, or any
+physical device acceptance. Those remain separate boundaries with their own
+evidence, tracked by #468.
