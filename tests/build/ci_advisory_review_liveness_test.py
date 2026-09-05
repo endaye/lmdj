@@ -37,7 +37,7 @@ from advisory_review_liveness import (  # noqa: E402
 SCRIPT = REPO_ROOT / ".github/scripts/advisory_review_liveness.py"
 SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
 WORKFLOW = REPO_ROOT / ".github/workflows/advisory-review-liveness.yml"
-CLAUDE = REPO_ROOT / ".github/workflows/claude-review.yml"
+CLAUDE = REPO_ROOT / ".github/workflows/ci.yml"  # the review job lives here since #659
 GROK = REPO_ROOT / ".github/workflows/grok-review.yml"
 GROK_SCRIPT = REPO_ROOT / ".github/scripts/grok_review.py"
 
@@ -297,6 +297,40 @@ class PagingTest(unittest.TestCase):
         )
         self.assertTrue(evaluate(GROK_LANE.name, obs, window=5).down)
 
+    def test_runs_that_skip_the_review_do_not_spend_the_budget(self) -> None:
+        """ci.yml runs on push, dispatch and drafts; those skip the review.
+
+        They complete, are not cancelled, and carry no observation. Budgeting
+        the pager on run count let twenty of them fill the budget before a
+        single review attempt was reached, so `evaluate` saw too few to judge
+        and the check exited 0 -- green while blind. Only a judged attempt
+        spends the budget now. (The listing is also filtered to pull_request
+        events; drafts still arrive that way and are dropped as skipped.)
+        """
+        padding = [run(i, None, created="2026-09-09T10:00:00Z") for i in range(1, 21)]
+        real = [run(100 + i, 700 + i, created="2026-09-09T11:00:00Z") for i in range(1, 6)]
+        jobs = {i: [{"name": GLM.job, "conclusion": "skipped", "steps": []}] for i in range(1, 21)}
+        jobs.update({100 + i: attempted(lane=GLM) for i in range(1, 6)})
+        api = fake_api(runs=padding + real, jobs_by_run=jobs, review_comments_by_pr={})
+        obs = collect_observations("o/r", GLM, limit=5, api=api)
+        self.assertEqual(
+            obs, ["failure"] * 5,
+            "why: skipped runs are silence and must not exhaust the paging budget "
+            "before an attempt is reached; remedy: page until limit observations "
+            "exist, not until limit runs have been seen",
+        )
+        self.assertTrue(evaluate(GLM.name, obs, window=5).down)
+
+    def test_the_listing_asks_only_for_pull_request_runs(self) -> None:
+        seen = []
+        inner = fake_api(runs=[], jobs_by_run={})
+        def api(path, context):
+            seen.append(path); return inner(path, context)
+        collect_observations("o/r", GLM, limit=5, api=api)
+        self.assertTrue(seen and all("event=pull_request" in p for p in seen if "/workflows/" in p),
+                        "why: push and dispatch runs of ci.yml never run the review and only pad "
+                        "the pages; remedy: filter the run listing to event=pull_request")
+
     def test_paging_stops_once_the_window_is_filled(self) -> None:
         calls = []
         inner = fake_api(
@@ -447,14 +481,14 @@ class SignatureContractTest(unittest.TestCase):
                       "REVIEW_LANES and grok_review.COMMENT_MARKER in step")
 
     def test_every_lane_names_a_job_and_step_that_exist(self) -> None:
-        sources = {"claude-review.yml": CLAUDE.read_text(encoding="utf-8"),
+        sources = {"ci.yml": CLAUDE.read_text(encoding="utf-8"),
                    "grok-review.yml": GROK.read_text(encoding="utf-8")}
         for lane in REVIEW_LANES:
             with self.subTest(lane=lane.name):
                 self.assertIn(f"- name: {lane.step}", sources[lane.workflow])
 
     def test_it_watches_exactly_the_lanes_that_fail_quietly(self) -> None:
-        for workflow, path in (("claude-review.yml", CLAUDE), ("grok-review.yml", GROK)):
+        for workflow, path in (("ci.yml", CLAUDE), ("grok-review.yml", GROK)):
             with self.subTest(workflow=workflow):
                 self.assertIn("continue-on-error: true", path.read_text(encoding="utf-8"))
                 self.assertIn(workflow, {l.workflow for l in REVIEW_LANES})

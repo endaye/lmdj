@@ -73,9 +73,11 @@ class Lane:
 CLAUDE_SIGNS_SINCE = "2026-09-06"
 
 REVIEW_LANES = (
-    Lane("claude-review.yml", "Claude review (glm)", "Review",
+    # The Claude backends run inside ci.yml since #659, so Pre-heavy Gate can
+    # order itself after them. Job and step names are unchanged.
+    Lane("ci.yml", "Claude review (glm)", "Review",
          "<!-- lmdj-review: glm -->", CLAUDE_SIGNS_SINCE),
-    Lane("claude-review.yml", "Claude review (kimi)", "Review",
+    Lane("ci.yml", "Claude review (kimi)", "Review",
          "<!-- lmdj-review: kimi -->", CLAUDE_SIGNS_SINCE),
     Lane("grok-review.yml", "Grok advisory review", "Run advisory Grok review",
          "<!-- lmdj-grok-review -->"),
@@ -217,61 +219,61 @@ def collect_observations(
     repository: str, lane: Lane, *, limit: int, api: Request = _api,
 ) -> list[str]:
     """One `success` or `failure` per attempted run for `lane`, newest first."""
-    # Paged until `limit` attempts are kept, not a single page of `limit` runs.
-    # Cancelled runs are dropped and both review workflows set
-    # `cancel-in-progress`, so on an actively-pushed day most of a page is
-    # cancellations; a fixed page starves the window, `evaluate` reports "too
-    # few to judge", and the check exits 0 -- green while blind, on exactly the
-    # busy day a lane is most likely to have broken.
-    runs: list[dict] = []
+    # Paged until `limit` *observations* exist, not until `limit` runs have
+    # been seen. The Claude lanes live in ci.yml, which also runs on push,
+    # dispatch and draft events -- completed, non-cancelled runs that skip the
+    # review job entirely. Budgeting on run count let those pad the pages,
+    # stop the pager early, and hand `evaluate` too few observations to judge:
+    # exit 0, green while blind, the case this loop exists to prevent. Only a
+    # judged attempt spends the budget now. The event filter removes the
+    # push and dispatch runs before they are fetched; drafts still arrive as
+    # pull_request runs and are dropped below when their job is skipped.
+    observations: list[str] = []
     for page in range(1, MAX_RUN_PAGES + 1):
         payload = api(
             f"/repos/{repository}/actions/workflows/{lane.workflow}/runs"
-            f"?status=completed&per_page={RUNS_PER_PAGE}&page={page}",
+            f"?status=completed&event=pull_request"
+            f"&per_page={RUNS_PER_PAGE}&page={page}",
             f"listing runs of {lane.workflow}",
         ) or {}
         batch = payload.get("workflow_runs") or []
-        runs.extend(batch)
-        kept = sum(1 for r in runs if r.get("conclusion") not in SILENT)
-        if kept >= limit or len(batch) < RUNS_PER_PAGE:
-            break
-
-    observations: list[str] = []
-    for run in runs:
-        if run.get("conclusion") in SILENT:
-            continue
-        # A run that predates the signing instruction posted unsigned comments.
-        # It is not evidence of failure; it is evidence of nothing.
-        if lane.signs_since and (run.get("created_at") or "") < lane.signs_since:
-            continue
-        payload = api(
-            f"/repos/{repository}/actions/runs/{run['id']}/jobs",
-            f"reading jobs of run {run['id']}",
-        ) or {}
-        jobs = [j for j in (payload.get("jobs") or []) if j.get("name") == lane.job]
-        if not jobs:
-            continue
-        job = jobs[0]
-        step = next(
-            (s.get("conclusion") for s in (job.get("steps") or [])
-             if s.get("name") == lane.step),
-            None,
-        )
-        # A skipped job or step made no attempt. Every other conclusion --
-        # including `timed_out`, the way a hung vendor endpoint dies, and a
-        # null step the run never reached -- is an attempt, and is judged by
-        # its effect rather than by a conclusion `continue-on-error` rewrites.
-        if job.get("conclusion") in SILENT or step in SILENT:
-            continue
-        pulls = run.get("pull_requests") or []
-        if not pulls:
-            continue
-        posted = evidence_posted(
-            repository, int(pulls[0]["number"]), run["created_at"], lane.marker,
-            api=api,
-        )
-        observations.append("success" if posted else "failure")
-        if len(observations) >= limit:
+        for run in batch:
+            if run.get("conclusion") in SILENT:
+                continue
+            # A run that predates the signing instruction posted unsigned
+            # comments. It is not evidence of failure; it is evidence of nothing.
+            if lane.signs_since and (run.get("created_at") or "") < lane.signs_since:
+                continue
+            payload = api(
+                f"/repos/{repository}/actions/runs/{run['id']}/jobs",
+                f"reading jobs of run {run['id']}",
+            ) or {}
+            jobs = [j for j in (payload.get("jobs") or []) if j.get("name") == lane.job]
+            if not jobs:
+                continue
+            job = jobs[0]
+            step = next(
+                (s.get("conclusion") for s in (job.get("steps") or [])
+                 if s.get("name") == lane.step),
+                None,
+            )
+            # A skipped job or step made no attempt. Every other conclusion --
+            # including `timed_out`, the way a hung vendor endpoint dies, and a
+            # null step the run never reached -- is an attempt, and is judged by
+            # its effect rather than by a conclusion `continue-on-error` rewrites.
+            if job.get("conclusion") in SILENT or step in SILENT:
+                continue
+            pulls = run.get("pull_requests") or []
+            if not pulls:
+                continue
+            posted = evidence_posted(
+                repository, int(pulls[0]["number"]), run["created_at"], lane.marker,
+                api=api,
+            )
+            observations.append("success" if posted else "failure")
+            if len(observations) >= limit:
+                return observations
+        if len(batch) < RUNS_PER_PAGE:
             break
     return observations
 

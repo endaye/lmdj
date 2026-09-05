@@ -22,7 +22,18 @@ import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = REPO_ROOT / ".github/workflows/claude-review.yml"
+WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+JOB_ID = "advisory-review"
+
+
+def job_block(source: str, job_id: str) -> str:
+    """The text of one top-level job in a workflow, header to next job."""
+    lines = source.splitlines(keepends=True)
+    start = next(i for i, l in enumerate(lines) if l == f"  {job_id}:\n")
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i][:2] == "  " and lines[i][2:3] not in (" ", "#", "\n") and lines[i].rstrip().endswith(":")),
+               len(lines))
+    return "".join(lines[start:end])
 GROK = REPO_ROOT / ".github/workflows/grok-review.yml"
 VENDORED_COMMAND = REPO_ROOT / ".claude/commands/pr-review.md"
 SELF_HOSTED_ROLE = (
@@ -36,7 +47,9 @@ BACKENDS = {
 
 class ClaudeReviewWorkflowTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.source = WORKFLOW.read_text(encoding="utf-8")
+        # Since #659 the review is a job inside ci.yml, so every assertion is
+        # scoped to that job's block rather than to a whole workflow file.
+        self.source = job_block(WORKFLOW.read_text(encoding="utf-8"), JOB_ID)
         # Absence assertions read the directives only. A rationale comment is
         # free to name what the lane is *not* -- and this scan matching its own
         # explanation is a recurring way to write a gate that is wrong about
@@ -50,7 +63,12 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertNotIn("PR Gate", self.directives)
         self.assertNotIn("pr_gate.py", self.directives)
         self.assertNotIn("merge:queue", self.directives)
-        self.assertIn("permissions:\n  contents: read\n  pull-requests: write", self.source)
+        self.assertIn(
+            "    permissions:\n      contents: read\n      pull-requests: write", self.source,
+            msg=("why: posting review threads needs pull-requests: write and nothing "
+                 "else in ci.yml does, so the grant is job-level to keep every other "
+                 "job's token posture; remedy: keep the job-level permissions block"),
+        )
 
     def test_the_lane_runs_self_hosted(self) -> None:
         self.assertIn(
@@ -204,6 +222,17 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         broken change. A red check on every Pull Request from a lane that cannot
         block one teaches people to ignore red.
         """
+        job = self.source.split("\n    steps:\n", 1)[0]  # job header, before its steps
+        self.assertIn(
+            "\n    continue-on-error: true\n",
+            "\n" + job + "\n",
+            msg=(
+                "why: inside ci.yml a failed job fails the workflow and skips "
+                "Pre-heavy Gate, which needs this job, and the step-level flag "
+                "does not cover a job timeout or a failed checkout; remedy: keep "
+                "continue-on-error at job level on advisory-review, as macos-primary does"
+            ),
+        )
         self.assertIn(
             "continue-on-error: true",
             self.source,
