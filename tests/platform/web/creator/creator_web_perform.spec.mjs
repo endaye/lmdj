@@ -902,7 +902,10 @@ async function replacePadSample(page) {
     .toBeEnabled({timeout: PROJECT_TRANSITION_TIMEOUT_MS});
 }
 
-async function recordShortPerformance(page, {name = "Night Set", withFx = false} = {}) {
+async function recordShortPerformance(
+  page,
+  {name = "Night Set", withFx = false, tailMs = 0} = {},
+) {
   await beginRecording(page);
   const pad = page.getByRole("button", {name: /^Pad A1\b/});
   await pad.dispatchEvent("pointerdown", {
@@ -922,6 +925,24 @@ async function recordShortPerformance(page, {name = "Night Set", withFx = false}
     await filter.fill("630");
     await filter.dispatchEvent("pointerup", {pointerId: 72});
     await page.getByRole("button", {name: "HOLD"}).click();
+  }
+  if (tailMs > 0) {
+    // Give the Performance a real musical span so a later replay is still
+    // playing when the test acts on it. A trailing wait alone would not
+    // extend replay, because the projection ends at the last event tick, so
+    // close the span with a second Pad hit.
+    await page.waitForTimeout(tailMs);
+    await pad.dispatchEvent("pointerdown", {
+      button: 0,
+      isPrimary: true,
+      pointerId: 73,
+    });
+    await page.waitForTimeout(120);
+    await pad.dispatchEvent("pointerup", {
+      button: 0,
+      isPrimary: true,
+      pointerId: 73,
+    });
   }
   await stopRecording(page);
   await savePerformanceWithBusyRetry(page, name);
@@ -1286,7 +1307,14 @@ test("stopping a saved Performance replay restores neutral FX, HOLD and Pattern 
   test.setTimeout(300_000);
   await importActivateAndPerform(page);
   await assignThenMovePattern(page);
-  await recordShortPerformance(page, {name: "Neutral Reset", withFx: true});
+  // The replay must still be playing when Stop Replay is clicked, otherwise
+  // the run races natural completion and observes "complete · neutral"
+  // instead of the abort path this test owns.
+  await recordShortPerformance(page, {
+    name: "Neutral Reset",
+    withFx: true,
+    tailMs: 6_000,
+  });
 
   await page.getByRole("button", {name: "Replay Neutral Reset"}).click();
   const replayStatus = page.getByRole("status", {name: "Replay status"});
