@@ -100,12 +100,6 @@ export default defineConfig({
         },
       },
     },
-    {
-      name: "creator-capture-webkit",
-      testMatch: captureSpec,
-      grep: /ordinary Sample focus loss keeps the retained trim dialog visible/,
-      use: { ...devices["Desktop Safari"] },
-    },
     // No --use-fake-ui-for-media-stream and no granted permission, so the
     // headless prompt auto-dismisses into a deterministic NotAllowedError.
     {

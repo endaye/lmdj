@@ -7,45 +7,6 @@ import {CAPTURE_FIXTURE_SECONDS} from "./fixtures/make_capture_fixture.mjs";
 const sampleBundle = process.env.LMDJ_CREATOR_WEB_SAMPLE_BUNDLE;
 const GRANTED = "creator-capture-chromium";
 const DENIED = "creator-capture-denied-chromium";
-const WEBKIT_GRANTED = "creator-capture-webkit";
-
-async function installSyntheticWebKitCapture(page) {
-  await page.addInitScript(() => {
-    const resources = new Set();
-    Object.defineProperty(window, "__LMDJ_CAPTURE_TEST_RESOURCES__", {
-      configurable: false,
-      enumerable: false,
-      value: resources,
-      writable: false,
-    });
-    Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
-      configurable: true,
-      value: async () => {
-        const context = new AudioContext({sampleRate: 48_000});
-        const oscillator = context.createOscillator();
-        const destination = context.createMediaStreamDestination();
-        oscillator.frequency.value = 440;
-        oscillator.connect(destination);
-        oscillator.start();
-        await context.resume();
-        const track = destination.stream.getAudioTracks()[0];
-        const nativeStop = track.stop.bind(track);
-        const resource = {context, oscillator};
-        resources.add(resource);
-        Object.defineProperty(track, "stop", {
-          configurable: true,
-          value: () => {
-            nativeStop();
-            try { oscillator.stop(); } catch { /* already stopped */ }
-            void context.close();
-            resources.delete(resource);
-          },
-        });
-        return destination.stream;
-      },
-    });
-  });
-}
 
 // Read the revision from the exported report, the same way the Sample Editor
 // spec does: .project-summary renders only in Project mode, so a DOM probe
@@ -59,11 +20,12 @@ async function expectProjectRevision(page, expectedRevision) {
 
 async function report(page, options = {}) {
   const downloadPromise = page.waitForEvent("download");
-  const button = page.getByRole("button", {name: "Export report"});
   if (options.force === true) {
-    await button.evaluate((element) => element.click());
+    await page.locator(".status-actions button")
+      .filter({hasText: "Export report"})
+      .evaluate((element) => element.click());
   } else {
-    await button.click();
+    await page.getByRole("button", {name: "Export report"}).click();
   }
   return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
 }
@@ -268,11 +230,8 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
 });
 
 test("ordinary Sample focus loss keeps the retained trim dialog visible", async ({page}, testInfo) => {
-  test.skip(![GRANTED, WEBKIT_GRANTED].includes(testInfo.project.name));
+  test.skip(testInfo.project.name !== GRANTED);
   test.setTimeout(600_000);
-  if (testInfo.project.name === WEBKIT_GRANTED) {
-    await installSyntheticWebKitCapture(page);
-  }
   await page.goto("/index.html");
   await importV1SampleProject(page);
   await enterSampleEditor(page);

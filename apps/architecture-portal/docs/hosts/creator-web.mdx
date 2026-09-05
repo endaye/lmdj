@@ -62,10 +62,12 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 同一部署 Build 的 macOS Safari M7 Capture 旅程未通过：正常录音、提交和实听成功，但 Command-Tab focus loss 后，约两秒的录音帧仍被保留，trim dialog 与全部恢复控件却一起消失，Sample 区域只剩空白；导出的报告同时记录 `recovering`、Project/Runtime revision 84，以及没有 Sequence session 的 `trim-overlay`。该 [M7 failure evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md) 绑定 [#625](https://github.com/endaye/lmdj/issues/625)，修复部署后必须从头重跑 #244，当前没有可继承的通过前缀。
 
 #625 的 current-source 修复门要求 Sequence reducer 拒绝没有 active session 的
-`trim-overlay`，并由 Chromium 与 Playwright WebKit 的确定性非零 Capture journey
-验证 focus loss 后 retained waveform、stop reason、selection、Commit/Discard/Close
-仍可见。该自动化只证明状态与渲染边界；在修复进入已部署 Product Build 并从头
-重跑 #244 前，M7 仍为 `FAIL`，不能升级为物理 Safari `PASS`。
+`trim-overlay`，并由 packaged Chromium 的确定性非零 Capture journey 验证
+focus loss 后 retained waveform、stop reason、selection、Commit/Discard/Close
+仍可见，导出报告保持 Sequence `stopped` / `session_id: null`。Playwright WebKit
+仍只证明既有 packaged `UNSUPPORTED_WEB_RUNTIME` capability boundary，不能作为
+Capture 渲染证据。该自动化只证明状态与渲染边界；在修复进入已部署 Product Build
+并从头重跑 #244 前，M7 仍为 `FAIL`，不能升级为物理 Safari `PASS`。
 
 ## 分发与身份
 

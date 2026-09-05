@@ -141,11 +141,12 @@ exact prior rollback；Release publication 不 fan-out。历史 `1.0.40.0` 证�
 
 [#244](https://github.com/endaye/lmdj/issues/244) 在同一部署 Build 上尝试了 macOS Safari M7 Capture：正常录音、提交和实听成功，但 Command-Tab focus loss 后，约两秒的录音帧仍被保留，trim dialog 与全部恢复控件却被隐藏，无法提交或丢弃。下载报告记录 `recovering`、Project/Runtime revision 84，并出现 `session_id: null` 的 Sequence `trim-overlay`；报告 SHA-256 为 `dcda976fa6de325eac2c18c203db75fd93e1643edb784453530a649af913bd6e`。精确设备、步骤、截图哈希和报告副本由 [M7 failure evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md) 保留；[#625](https://github.com/endaye/lmdj/issues/625) 跟踪缺陷，修复部署后必须从头重跑完整 M7，正常轮次不构成可继承的通过前缀。
 
-#625 增加 ownerless Sequence-overlay 回归门：普通 Sample Capture 在 Chromium 与
-Playwright WebKit 收到非零帧后触发 focus loss，必须继续显示 retained waveform、
-明确 stop reason、selection 与 Commit/Discard/Close，导出报告保持 Sequence
+#625 增加 ownerless Sequence-overlay 回归门：普通 Sample Capture 在 packaged
+Chromium 收到非零帧后触发 focus loss，必须继续显示 retained waveform、明确
+stop reason、selection 与 Commit/Discard/Close，导出报告保持 Sequence
 `stopped` / `session_id: null`；active armed-Pad Sequence overlay 的既有 gate 保持
-不变。此门不使用真实 Safari 麦克风，也不替代修复部署后 #244 的完整 M7 重跑。
+不变。Playwright WebKit 仍走既有 unsupported capability boundary，不运行真实
+麦克风 Capture。此门不替代修复部署后 #244 的完整 M7 重跑。
 
 #374 的当前 source gate 另覆盖 armed-Pad Capture：Facade component 证明失败、取消和成功提交均不丢 pending events，成功提交 rebase 后可继续录制；Project I/O fault matrix 同时覆盖 manifest 已发布而 journal completion 未执行、以及 prepare 已持久化但 manifest 尚未发布的精确窗口。前者验证 changed-bytes fail-closed、fresh-command receipt replay 与 restart completion；后者验证 exact unchanged Project Truth 才允许 durable abort/disarm，并验证 marker pending 时 settings 在 publication 前拒绝、Project/journal 均停在 `N`，显式 Discard 后仍可继续 flush/Stop，restart 前也完成同一检查。Creator reducer/session 与 packaged Chromium journey 证明 trim overlay 不先 Stop Sequence，并在 A2→armed A1 stop→commit→A1→Stop→reload 后检查 exact persisted event order/count、Pad/Asset、WAV media type/SHA-256/byte length 与 revision。该证据的 Module/Product identity 已由 Build 40 集成，immutable snapshot 仍由 #380 处理，因此不会反写 `1.0.37.0` 历史快照。共享 running-audio BPM-update→immediate switch full-Proof failure 继续归 #375，不通过重排或弱化 #374 journey 消除。
 
