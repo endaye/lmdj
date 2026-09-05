@@ -63,6 +63,7 @@ ALLOWED_ASSET_ROLES = frozenset(
         "host_module",
         "host_style",
         "capture_worklet",
+        "perform_master_tap_worklet",
         "platform_module",
         "product_identity",
         "runtime_script",
@@ -524,6 +525,7 @@ def _validate_manifest(
                 "capture_worklet",
                 "host_main",
                 "host_style",
+                "perform_master_tap_worklet",
                 "runtime_script",
                 "runtime_wasm",
             )
@@ -534,7 +536,7 @@ def _validate_manifest(
     if any(role_counts[role] != 1 for role in required_singletons):
         raise SmokeError("manifest required asset role inventory is invalid")
     if expected_host_id == "creator-web":
-        if len(validated) != 5 or any(
+        if len(validated) != 6 or any(
             role_counts[role] != 0
             for role in ALLOWED_ASSET_ROLES - required_singletons
         ):

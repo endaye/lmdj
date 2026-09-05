@@ -33,6 +33,7 @@ ASSETS = (
     ("runtime", ".wasm", "runtime_wasm"),
     ("styles", ".css", "host_style"),
     ("capture-worklet", ".js", "capture_worklet"),
+    ("perform-master-tap", ".js", "perform_master_tap_worklet"),
 )
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -65,13 +66,13 @@ class Fixture:
         self.manifest = {
             "assets": entries,
             "compatible_hosts": [
-                {"host_id": "web-runtime-host", "host_version": "2.1.1"}
+                {"host_id": "web-runtime-host", "host_version": "3.0.0"}
             ],
             "distribution_contract": "lmdj.creator-web.distribution.v1",
             "emscripten": {},
             "heap_bytes": 536_870_912,
             "host_id": "creator-web",
-            "host_version": "2.1.1",
+            "host_version": "3.0.0",
             "manifest_version": 1,
             "platform_version": "0.3.6",
             "product_build": "1.0.41.0",
@@ -94,7 +95,7 @@ class Fixture:
             '<meta name="lmdj-host-manifest-path" content="./host-manifest.json">'
             '<meta name="lmdj-product-build" content="1.0.41.0">'
             '<meta name="lmdj-host-id" content="creator-web">'
-            '<meta name="lmdj-host-version" content="2.1.1">'
+            '<meta name="lmdj-host-version" content="3.0.0">'
             f'<link rel="stylesheet" href="./{style["path"]}">'
             f'<script type="module" src="./{main["path"]}"></script>'
             "</head><body>Creator</body></html>"
@@ -174,7 +175,7 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
         arguments: dict[str, object] = {
             "base_url": self.server.base_url,
             "expected_product": "1.0.41.0",
-            "expected_host": "2.1.1",
+            "expected_host": "3.0.0",
             "expected_host_id": "creator-web",
             "require_https": False,
         }
@@ -185,8 +186,8 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
         result = self.run_smoke()
         self.assertEqual(result["host_id"], "creator-web")
         self.assertEqual(result["product_build"], "1.0.41.0")
-        self.assertEqual(result["host_version"], "2.1.1")
-        self.assertEqual(result["asset_count"], 5)
+        self.assertEqual(result["host_version"], "3.0.0")
+        self.assertEqual(result["asset_count"], 6)
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["url"], self.server.base_url + "/")
         self.assertEqual(
@@ -251,7 +252,7 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
             smoke(
                 base_url="http://creator.example/",
                 expected_product="1.0.41.0",
-                expected_host="2.1.1",
+                expected_host="3.0.0",
                 expected_host_id="creator-web",
                 require_https=False,
             )
@@ -271,7 +272,7 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
                 str(TOOLS_ROOT / "deployment_smoke.py"),
                 self.server.base_url,
                 "1.0.41.0",
-                "2.1.1",
+                "3.0.0",
                 "--allow-http",
             ],
             env=environment,

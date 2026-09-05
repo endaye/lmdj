@@ -1,25 +1,29 @@
 {
   "schema_version": 1,
-  "meta": {"title": "Project I/O Module", "summary": "Project Store、portable Bundle 与 journaled atomic publication"},
+  "meta": {"title": "Project I/O Module", "summary": "Project Store、portable Bundle、session-kind journal 与 journaled atomic publication"},
   "boundaries": [],
   "components": [
-    {"id": "project", "label": "Project Truth", "detail": "v1/v2 read · v3 write", "kind": "host", "x": 50, "y": 150, "width": 220, "height": 96},
+    {"id": "project", "label": "Project Truth", "detail": "v1/v2/v3 read · v4 write", "kind": "host", "x": 50, "y": 150, "width": 220, "height": 96},
     {"id": "bundle-in", "label": "Project Bundle", "detail": "transfer-only input", "kind": "host", "x": 50, "y": 390, "width": 220, "height": 96},
     {"id": "io", "label": "Project I/O", "detail": "validate · pack · publish", "kind": "core", "x": 390, "y": 270, "width": 250,"height": 96},
-    {"id": "stage", "label": "Journal Overlay", "detail": "durable tail · receipt · recovery", "kind": "core", "x": 770, "y": 270, "width": 240, "height": 96},
+    {"id": "stage", "label": "Journal Overlay", "detail": "session kind · tail · receipt", "kind": "core", "x": 770, "y": 270, "width": 240, "height": 96},
     {"id": "store", "label": "Project Store", "detail": "committed truth", "kind": "host", "x": 1140, "y": 150, "width": 220, "height": 96},
-    {"id": "bundle-out", "label": "Project Bundle", "detail": "canonical export", "kind": "host", "x": 1140, "y": 390, "width": 220, "height": 96}
+    {"id": "bundle-out", "label": "Project Bundle", "detail": "canonical export", "kind": "host", "x": 1140, "y": 390, "width": 220, "height": 96},
+    {"id": "draft", "label": "Performance Draft", "detail": "begin · flush · save | discard", "kind": "core", "x": 770, "y": 430, "width": 240, "height": 96}
   ],
   "connections": [
     {"from": "project", "to": "io", "label": "save/export"},
     {"from": "bundle-in", "to": "io", "label": "stream import"},
     {"from": "io", "to": "stage", "label": "verify first"},
     {"from": "stage", "to": "store", "label": "atomic publish"},
-    {"from": "stage", "to": "bundle-out", "label": "canonical pack"}
+    {"from": "stage", "to": "bundle-out", "label": "canonical pack"},
+    {"from": "io", "to": "draft", "label": "performance session"},
+    {"from": "draft", "to": "store", "label": "save or discard"}
   ],
   "cards": [
     {"title": "Dependencies", "body": "Foundation + Authoring Domain."},
     {"title": "Failure model", "body": "Writer-lease admission closes mutation races; immutable command payload enables replay, while tail-last residual merge preserves only uncommitted owner-loss work."},
-    {"title": "Forbidden boundary", "body": "Bundle is transfer-only; Runtime Snapshot is never persisted as Project Truth."}
+    {"title": "Session kinds", "body": "The journal separates sequence and performance sessions; a Performance draft begins under the writer lease and resolves to save or discard."},
+    {"title": "Forbidden boundary", "body": "Bundle is transfer-only; Runtime Snapshot is never persisted as Project Truth. Asset Lineage requires v4."}
   ]
 }

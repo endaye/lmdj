@@ -89,7 +89,8 @@ class CreatorServerTest(unittest.TestCase):
             "const sampleEditorProof = "
             + json.dumps(SAMPLE_EDITOR_MARKERS)
             + "; console.log(sampleEditorProof);\n"
-            + 'const captureWorklet = "/assets/capture_worklet-fixture.js";\n',
+            + 'const captureWorklet = "/assets/capture_worklet-fixture.js";\n'
+            + 'const performTap = "/assets/performance_master_tap_worklet-fixture.js";\n',
             encoding="utf-8",
             newline="\n",
         )
@@ -97,6 +98,12 @@ class CreatorServerTest(unittest.TestCase):
         # 'self'); the packaging tool rebinds this reference to its hashed name.
         self.ui.joinpath("assets/capture_worklet-fixture.js").write_text(
             "registerProcessor('lmdj-capture-recorder', class {});\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        # Stage 10: the Perform master-tap processor is the sixth asset.
+        self.ui.joinpath("assets/performance_master_tap_worklet-fixture.js").write_text(
+            "registerProcessor('lmdj-perform-master-tap', class {});\n",
             encoding="utf-8",
             newline="\n",
         )
