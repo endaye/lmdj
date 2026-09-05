@@ -310,7 +310,8 @@ test("ordinary Sample focus loss keeps the retained trim dialog visible", async 
 
   await expect(panel).toContainText("Recording stopped: the window lost focus.");
   await expect(panel.getByRole("img", {name: "Pad A1 capture waveform"})).toBeVisible();
-  await expect(panel.getByRole("slider", {name: "Pad A1 Selection length"})).toBeVisible();
+  await expect(panel.getByRole("slider", {name: /^Pad A1 Start —/})).toBeVisible();
+  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/})).toBeVisible();
   await expect(panel.getByRole("button", {name: "Commit"})).toBeVisible();
   await expect(panel.getByRole("button", {name: "Discard"})).toBeVisible();
   await expect(panel.getByRole("button", {name: "Close"})).toBeVisible();
