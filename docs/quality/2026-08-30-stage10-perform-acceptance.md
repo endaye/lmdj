@@ -237,10 +237,42 @@ The hashed master-tap asset name embeds its own SHA-256, and the Creator
 manifest carries exactly six assets. The immutable `1.0.42.0 · canary` Portal
 snapshot is frozen from that same integration commit.
 
+## Merged evidence
+
+Pull Request [#664](https://github.com/endaye/lmdj/pull/664) squash-merged into
+protected `main` on 2026-09-05 as
+`0ffa77c0c4f786dc5d9b285f272abe1725250b8d`, which is a verified `main`
+ancestor. It carried the Task 10 integration commit and the immutable
+`1.0.42.0 · canary` Portal snapshot as two separate commits.
+
+| Boundary | Evidence |
+| --- | --- |
+| Gating Core CI run | [`33991083518`](https://github.com/endaye/lmdj/actions/runs/33991083518) — success on Integration Queue head `d16e687e` |
+| Prior queue Core CI run | [`33987221291`](https://github.com/endaye/lmdj/actions/runs/33987221291) — success on head `904c377c` |
+| Squash revision | `0ffa77c0c4f786dc5d9b285f272abe1725250b8d` |
+| Post-merge Portal gate | `scripts/architecture-portal.sh check` on merged `main` — PASS, 65 tests, 37 pages, 42 routes, `Product Build 1.0.42.0 snapshot matches repository truth` |
+
+### Snapshot provenance after the squash
+
+`.agents/pitfalls/squash-witness-provenance.md` requires a source-tree witness
+when the introducing squash tree cannot equal the frozen source projection —
+specifically when the squash additionally carries mutable current-page updates
+made *after* the freeze. That condition did not occur here.
+
+Every current Portal page edit landed in the integration commit, and the
+snapshot was frozen from that commit afterwards, so the squash tree matches the
+recorded source projection exactly. `check-release-docs.mjs` re-ran
+`verifySnapshotProvenance` against merged `main` and reported
+`Product Build 1.0.42.0 snapshot matches repository truth`, so the schema-2
+provenance validates on `main` with no witness. A witness is a conditional
+remedy, not an unconditional artifact, so none was written: fabricating one
+where provenance already validates would add an immutable provenance record
+that documents nothing.
+
 ## Evidence separation
 
-This ledger records local automated evidence at one source revision. It does
-not claim remote CI, Pull Request approval, merge, an immutable Portal
-snapshot, a tag, a Release, a deployment, a publication, a Channel promotion,
-or any physical device acceptance. Those remain separate boundaries with their
-own evidence, tracked by #436, #438 and #468 respectively.
+This ledger records local automated evidence, the merged Pull Request and its
+gating remote CI run. It does not claim a tag, a Release, a deployment, a
+publication, a Channel promotion, or any physical device acceptance. Those
+remain separate boundaries with their own evidence; the release boundary is
+tracked by #468.
