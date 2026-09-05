@@ -1,10 +1,10 @@
 {
   "contract": "lmdj.module.v1",
   "module": "project-cooker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "api_version": 1,
   "dependencies": {
     "foundation": "0.3.0",
-    "authoring-domain": "1.0.0"
+    "authoring-domain": "2.0.0"
   }
 }

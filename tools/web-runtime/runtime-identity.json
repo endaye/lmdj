@@ -31,6 +31,11 @@
           "prefix": "assets/capture-worklet.",
           "role": "capture_worklet",
           "suffix": ".js"
+        },
+        {
+          "prefix": "assets/perform-master-tap.",
+          "role": "perform_master_tap_worklet",
+          "suffix": ".js"
         }
       ]
     },
@@ -124,6 +129,8 @@
     "ingest_source_bytes": 104857600,
     "ingest_decoded_frames": 43200000,
     "ingest_channels": 2,
-    "imported_wav_bytes": 68157440
+    "imported_wav_bytes": 68157440,
+    "perform_recording_frames": 86400000,
+    "perform_recording_queue_batches": 32
   }
 }
