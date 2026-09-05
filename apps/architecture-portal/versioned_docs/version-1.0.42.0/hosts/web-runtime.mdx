@@ -1,0 +1,134 @@
+---
+title: Web Runtime Host
+area: hosts
+status: implemented
+host: web-runtime-host
+owners: [hosts, web, audio]
+source_paths:
+  - docs/superpowers/specs/2026-08-03-lmdj-formal-web-runtime-host-design.md
+  - docs/superpowers/plans/2026-08-03-lmdj-formal-web-runtime-host.md
+  - docs/superpowers/plans/2026-08-29-lmdj-stage9-switch-boundary-flush.md
+  - apps/web-runtime-host
+  - apps/web-runtime-host/module.json
+  - packages/web-runtime-platform
+  - products/lmdj/assembly.json
+  - scripts/web-runtime-host.sh
+  - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
+  - docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md
+  - docs/quality/2026-08-27-stage9-sequence-recording-review.md
+  - docs/deploy/web-runtime-host.md
+  - docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md
+  - docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md
+  - docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md
+  - docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md
+  - docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md
+  - docs/release-evidence/release-intents.json
+  - scripts/release.sh
+  - .github/workflows/publish-release.yml
+  - .github/workflows/deploy-web-runtime-host.yml
+  - .github/workflows/deploy-creator-web.yml
+  - docs/deploy/creator-web.md
+  - tests/platform/web/host/web_runtime_host_manifest_gate.spec.mjs
+  - tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs
+  - tests/platform/web/host/web_runtime_host_browser.spec.mjs
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 状态
+
+<StatusBadge status="implemented" /> Formal Web Runtime Host `3.0.0` 已进入 Product Build `1.0.42.0` Assembly。Host 只依赖 Web Runtime Platform `3.0.0`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。`sample.import.begin.byte_length` 接受 manifest 约束内的完整选区 WAV，`sample.import.chunk` 继续把每个 sidecar 限制为 1 MiB。Diagnostic flow 继续覆盖 revision-bound `sample.quota`、Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。
+Formal Web Runtime Host `1.2.10` 已进入 Product Build `1.0.24.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.3.1`。
+
+ControlBridge 先于 audio readiness 发布；Host 只转发 Runtime Session authority state。它不解析 Project/bundle/journal、不执行 quantization/fingerprint，也没有 JavaScript fallback sequencer。
+
+## 目标边界
+
+Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用户手势、生命周期观察与终止清理；共享 Web Runtime Platform 负责 DOM/MIDI 输入、有界 transport、Dedicated Worker OPFS 能力、Control/Facade 与 AudioWorklet 路径。Pointer、Keyboard、MIDI 汇入唯一 `trigger(flatSlot, velocity)` 路由。
+
+## 分发与身份门禁
+
+`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：内容哈希资产与 canonical manifest 绑定 Product Build `1.0.42.0`、Host `3.0.0`、Platform `3.0.0`、私有协议 `1`、固定 heap 与九项资源上限、Emscripten 身份及精确 inventory。资源上限在既有七项（`decoded_float_pcm_bytes_per_bank` 64 MiB、`decoded_float_pcm_bytes_total` 128 MiB、`decoded_float_pcm_bytes_resident` 256 MiB、`imported_wav_bytes` 65 MiB、`ingest_channels` 2、`ingest_decoded_frames` 43,200,000、`ingest_source_bytes` 100 MiB）之外新增 Stage 10 的 `perform_recording_frames` 86,400,000 与 `perform_recording_queue_batches` 32，两项都按正 safe integer 校验，多余默认值被拒绝。诊断 Host 的 distribution manifest 仍声明十五个 expected asset，并且明确不含 `perform_master_tap_worklet`：共享 native manifest gate 要求声明 `compatible_hosts` 的 Creator manifest 恰好带一个 tap 资产，诊断 Host manifest 带零个，重复或多余条目按 inventory 缺陷 fail closed。Browser Main 与 shared native gate 在创建 runtime owner 前双重校验这些身份，漂移、重复或迟到初始化均 fail closed。
+
+proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
+
+## Release 输入边界
+
+Runtime Host Release 使用同一个四段控制面：`scripts/release.sh prepare TAG` 生成并验证本地
+候选，`scripts/release.sh push-tag TAG` 只推一个 exact tag，
+`scripts/release.sh create-draft TAG` 只创建或 reconcile Draft，dispatch-only
+`publish-release.yml` 再发布同一个已验证 Draft。每次 mutation 后运行
+`scripts/release.sh audit --remote --tag TAG`；historical exception 只能解释旧控制面事实，不能
+代替当前 tag、资产、签名或 profile 验证。
+
+公开 publication 的写权限只在显式 dispatch 进入受保护的 `release` Environment 后生效；当前
+单人维护者模式不设置 reviewer，但 Environment 仍只允许 exact `main`。它不触发下方
+Runtime deployment：该部署仍是 manual-only exact-tag dispatch，使用独立 Environment、凭据、
+smoke/recovery 与 evidence；Channel promotion 继续是后续独立边界。因此 release/deploy tooling
+已经 implemented 也不表示当前 Product Build `1.0.42.0` 已经 released、deployed 或 promoted。
+
+## 公共发布边界
+
+后续标准 Web Release profile 是 `web-hosts`：Creator 与 Runtime 各自提供 archive、checksum、
+detached checksum signature，同一 Product Release 精确六资产。Runtime 与 Creator verifier 都先
+验证闭合 inventory，再各自只 staging 所属 triplet。Runtime 生产 URL 是
+`https://lmdj-runtime.netlify.app/`，Creator 是 `https://lmdj-creator.netlify.app/`；两条部署
+manual-only 且具有独立 Site、Environment、授权、evidence 与 exact prior rollback。Release
+publication 不 fan-out。历史 `1.0.40.0` Release 与部署保持不可变，不能按新 profile 改写。
+
+两阶段 Netlify release/deploy 工具已进入仓库源码：部署 workflow 先运行不加入
+`runtime-canary` environment、因而读不到 Netlify credential 的 preflight job，它只用 Python
+和 scoped `github.token` 执行 `scripts/web-runtime-deploy.sh verify TAG`——从 canonical
+origin 获取受保护 `main` 和 remote annotated signed Product tag，验证 tag commit 是该
+`main` 的 ancestor；GitHub Release 必须精确包含 ZIP、checksum 和由专用 Release checksum
+key 签名的 armored detached checksum signature；Product tag key 与 checksum key 角色分离，
+工具在解析 checksum 前先验证角色专属 signature，并完成资产下载与 staging。只有该 job 通过
+后，持有 Netlify credential 的 deploy job 才会安装 Node/Chromium 并在任何 Netlify mutation
+之前对同一 Release 重新执行同一次验证。组装层只为 manifest 中的
+九个精确 hash asset 添加 immutable header，未知 asset 和 source map 继续 `no-store`。
+部署前以 current site/file inventory/current site 双读确认站点身份稳定；只有同一 ready
+current Deploy 的 validated file count 精确为零时，才按“无可回滚 prior”的首次发布继续，
+非空 current Deploy 仍须验证真实 prior immutable/production 身份和 HTTP/Chromium。发布后失败或中断时
+reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior，首次无 prior 时
+使用官方 reversible site disable。成功写 deployment evidence v2，失败恢复原子写 recovery
+evidence v1。official site response 的 `disabled: true` 被规范化为 `state: disabled` 并在
+smoke/Draft 前拒绝自动 enable；publication projection 接受并保留 Netlify UTC `Z`
+时间戳中的可选小数秒。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
+自动证明当前 Product Build `1.0.42.0` 或任何历史 Product Build 已获得 remote verified tag、Release、Deploy ID、
+immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
+工具测试或 PR Preview 上升为当前候选的公开部署结论。
+
+Netlify 生产面将静态服务已验证的 release `dist`，与 Python proof-only server 完全分离。
+`lmdj-canary` 属于 Creator 交付边界，不绑定给 Diagnostic Runtime Host，亦不作为其 Runtime URL。
+操作前置条件、失败处置、精确 Deploy-ID 回滚和轮换在仓库运行手册
+`docs/deploy/web-runtime-host.md`；当前 acceptance 记录在
+`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
+
+## 生命周期门禁
+
+Trigger 与 `sequence.record.begin` 只在 `running` 接收。Sequence pad admission 使用 Audio Runtime frame clock 和单调 `input_sequence`；accepted pending event 由共享 Control bridge 组合成 immutable overlay view，在下一 Bar 可听，flush/Stop 后由 clean committed view 替换。next-Bar boundary、BPM anchor、overlay generation 与 receipt 全部来自 Core；JavaScript 不持有 fallback sequencer。共享 Runtime Session 保留 switch-request 返回的 session、目标 Pattern、activation frame 与 generation，只接受完全匹配的 Runtime boundary；ControlRuntime 仅用匹配 pending generation、源 Pattern 与 boundary 的 authority 让目标 Pattern 取代 overlay，普通不同 Pattern overlap 仍拒绝。它在同一 Runtime action lane 内发出一个生成 command identity 的 Facade flush，确认目标 Pattern 已 active 后才通知 Host observer；authority 保留到该 flush 完成。switch-pending Stop 会取消目标并发布旧 Pattern 的 clean committed view；若 cancellation 的两次查询之间 target 已 apply 并清空 pending，ControlRuntime 必须重读 current generation 并 fail closed，不能把 target 已激活误报为已取消。若第一次 clean publication 失败，同一 durable Stop receipt 在任何已流逝 boundary 之后重放时都从当前 transport 派生新的 next Bar，而不重做 Project mutation 或让已取消目标复活。若匹配的 boundary notification 已排队，而 Stop 返回 `INVALID_ARGUMENT` 的提交后歧义，共享 Runtime Session 会在同一 action lane 内以同一 `command_id` 做一次有界重放，再允许 boundary flush 运行；重放成功即取消 stale boundary，连续两次真实拒绝则仍向调用方暴露并允许合法 boundary 赢得顺序。第一条歧义不再触发 terminal cleanup，真实重复拒绝也不会被吞掉。switch-pending BPM 在 Facade mutation 前拒绝。乱序、重复或已被 stop/new begin 取代的 boundary 不会重复 flush，第一条已确认边界后的 Pad event 排在 flush 之后。pagehide/terminal 会先封闭新 admission，再有界释放 Worker、transport、AudioWorklet、writer lease 与 session owner；owner 丢失留下显式 recovery artifact。
+
+中断同步关闭 runtime admission、清除 pressed state，并按 epoch 只发一次 Control suspend/seal。恢复必须同时具备 Context `running`、正整数 current/ack generation 相等，以及一个真实用户 recovery probe 的唯一 `voice_started`；visibility 或 pageshow 本身不能完成恢复。
+
+## 自动化证据
+
+`scripts/web-runtime-host.sh proof` 覆盖可复现 build、distribution gates 与 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 旅程，包括 Project（写出契约现为 `lmdj.project.v4`）、500-trigger 压力、Sequence recording/status/recovery、跨窗口 observer/busy、失败和 lifecycle；switch journey 从 pending overlay 越过已确认边界录入新 Pattern，并经 stop、Project inspection 与新 Pattern reload 验证两侧提交，还覆盖 switch-pending BPM pre-mutation rejection 与 Stop target cancellation。共享 C++ ControlRuntime journey 另验证 Facade pending overlay 到 Audio Runtime next-Bar publication、apply-point 精确 switch authority、target 在 cancellation 查询间 apply 的 fail-closed interleaving、延迟越过旧 boundary 的 durable Stop replay，以及 clean replacement 无重复/空洞/陈旧 overlay。WebKit 只在 mandatory primitive 可用时执行完整 smoke；结构化 limitation 不会被写成物理证据。
+
+## 非能力
+
+当前不能宣称离线安装/PWA、生产部署、任意未命名设备上的一致体验或 `beta`/`stable` 已获准；自动化 Sequence evidence 不替代这些独立边界。诊断 Host 不承载 Stage 10 的 Perform surface：它不声明 `perform_master_tap_worklet` 资产，也不提供 Performance 录制、master tap 采集或 WAV 导出；这些属于 Creator Web 的交付边界。也不能把 WebKit automation 当作物理 Safari，或由已经通过的五行 local-source 物理矩阵推导 tag、Release、部署、publication 或 Channel promotion 已获准。
+
+## 剩余验收边界
+
+Formal Web Runtime Host 已进入 Assembly；自动化结果不升级物理体验结论。L1–L5 分别由独立物理证据升级，完整 retained physical matrix 已通过：
+
+| 物理行 | 状态 |
+| --- | --- |
+| macOS Safari Pointer | `passed on 1.0.36.0 local source`；tested revision `703b339f`，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md) |
+| macOS Chrome Pointer | `passed on 1.0.40.0 local source`；tested revision `5c094c98`，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md) |
+| macOS Chrome physical MIDI | `passed on 1.0.40.0 local source`；tested revision `1869a925`，Akai MPD218，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md) |
+| iPadOS Safari Touch | `passed on 1.0.40.0 local source`；tested revision `e2cd0cf9`，iPad Air 13-inch (M3) model `A3268`，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md) |
+| iPadOS Safari lifecycle | `passed on 1.0.40.0 local source`；tested revision `67a7ac03`，iPad Air 13-inch (M3) model `A3268`，Voice Memos route interruption，[lifecycle evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l5-ipados-safari-lifecycle-1.0.40.0.md) |
