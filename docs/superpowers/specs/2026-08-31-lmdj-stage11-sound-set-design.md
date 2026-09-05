@@ -2,10 +2,11 @@
 
 日期：2026-08-31
 
-状态：**草案，待评审**——本文是 [#464](https://github.com/endaye/lmdj/issues/464)
+状态：**已批准**——本文是 [#464](https://github.com/endaye/lmdj/issues/464)
 的设计半部：定义 Sound Set v1 的包身份、Catalog 边界、安装事务与派生规则。
-逐 Task 实施计划按 #464 的验收另行落笔，不在本文。S11-Q1–Q3 已由
-[#465](https://github.com/endaye/lmdj/issues/465) 的决策
+逐 Task 实施计划见
+[`2026-09-06-lmdj-stage11-sound-set.md`](../plans/2026-09-06-lmdj-stage11-sound-set.md)。
+S11-Q1–Q3 已由 [#465](https://github.com/endaye/lmdj/issues/465) 的决策
 [`2026-09-06-sound-set-rights-and-mapping.md`](../../prd/decisions/2026-09-06-sound-set-rights-and-mapping.md)
 裁决；本节绑定表与 S11-D2 / D8 / D10–D12 按该决策回填。
 
@@ -208,7 +209,8 @@ Catalog；archive 会新增路径穿越、symlink、压缩炸弹与双重身份�
 1. #465 决策文件与本文绑定表回填（S11-Q1/Q2/Q3 裁决，S11-D2 / D8 /
    D10–D12 已对齐）。
 2. #471 的 Lineage 通用记录定稿（S11-D9 依赖其 `derivation.kind` 词表）。
-3. 本文评审通过后，按 #464 验收落笔逐 Task 实施计划（含 Version
-   Management 与 Documentation impact 逐 Task 声明）。
+3. 逐 Task 实施计划已落笔为
+   [`2026-09-06-lmdj-stage11-sound-set.md`](../plans/2026-09-06-lmdj-stage11-sound-set.md)
+   （含 Version Management 与 Documentation impact 逐 Task 声明）。
 4. Project/Facade/Creator 实施与 Product 身份整合串行在 Stage 10 v4
    （#427）与 Task 10（#436）之后。
