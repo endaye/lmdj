@@ -1,4 +1,5 @@
 import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
+import {useEffect} from "react";
 import {expect, test, vi} from "vitest";
 
 import {
@@ -21,6 +22,17 @@ function Probe() {
     <output aria-label="recovery-probe">{String(runtime.recoveryProbeReady)}</output>
     <button type="button" onClick={runtime.retryRuntime}>Retry runtime</button>
   </>;
+}
+
+function ShutdownBarrierProbe({barrier}: {
+  readonly barrier: () => Promise<void>;
+}) {
+  const runtime = useRuntime();
+  useEffect(
+    () => runtime.registerShutdownBarrier(barrier),
+    [runtime.registerShutdownBarrier, barrier],
+  );
+  return <Probe />;
 }
 
 function defaultDiagnostics(): RuntimeDiagnostics {
@@ -146,6 +158,91 @@ test("creates and starts one Runtime Session and closes it once", async () => {
   rendered.unmount();
   await Promise.resolve();
   expect(fixture.closes()).toBe(1);
+});
+
+test("pagehide awaits a registered shutdown barrier before closing the Session", async () => {
+  const fixture = sessionFixture();
+  const order: string[] = [];
+  let finishBarrier: (() => void) | undefined;
+  const barrierGate = new Promise<void>((resolve) => { finishBarrier = resolve; });
+  fixture.session.close = async () => {
+    order.push("session:close");
+    return true;
+  };
+  const barrier = vi.fn(async () => {
+    order.push("barrier:start");
+    await barrierGate;
+    order.push("barrier:end");
+  });
+  const rendered = render(
+    <RuntimeProvider factory={() => fixture.session}>
+      <ShutdownBarrierProbe barrier={barrier} />
+    </RuntimeProvider>,
+  );
+  await screen.findByText("ready");
+
+  window.dispatchEvent(new Event("pagehide"));
+  await waitFor(() => expect(barrier).toHaveBeenCalledTimes(1));
+  expect(order).toEqual(["barrier:start"]);
+
+  finishBarrier?.();
+  await waitFor(() => expect(order).toEqual([
+    "barrier:start", "barrier:end", "session:close",
+  ]));
+  rendered.unmount();
+  await Promise.resolve();
+  expect(barrier).toHaveBeenCalledTimes(1);
+});
+
+test("automatic replacement awaits shutdown work before closing and creating", async () => {
+  const first = sessionFixture();
+  const second = sessionFixture();
+  const order: string[] = [];
+  let finishBarrier: (() => void) | undefined;
+  const barrierGate = new Promise<void>((resolve) => { finishBarrier = resolve; });
+  first.session.close = async () => {
+    order.push("first:close");
+    return true;
+  };
+  second.session.start = async () => {
+    order.push("second:start");
+    return true;
+  };
+  const barrier = vi.fn(async () => {
+    order.push("barrier:start");
+    await barrierGate;
+    order.push("barrier:end");
+  });
+  const sessions = [first.session, second.session];
+  let creations = 0;
+  const rendered = render(
+    <RuntimeProvider factory={() => {
+      order.push(`create:${creations + 1}`);
+      return sessions[creations++]!;
+    }}>
+      <ShutdownBarrierProbe barrier={barrier} />
+    </RuntimeProvider>,
+  );
+  await screen.findByText("ready");
+  order.splice(0);
+
+  act(() => first.emitHost({
+    state: "restart-required",
+    errorCode: "HOST_RESTART_REQUIRED",
+    errorDetails: {},
+  }));
+  await waitFor(() => expect(barrier).toHaveBeenCalledTimes(1));
+  expect(order).toEqual(["barrier:start"]);
+  expect(creations).toBe(1);
+
+  finishBarrier?.();
+  await waitFor(() => expect(creations).toBe(2));
+  await screen.findByText("ready");
+  expect(order).toEqual([
+    "barrier:start", "barrier:end", "first:close", "create:2", "second:start",
+  ]);
+  rendered.unmount();
+  await waitFor(() => expect(second.closes()).toBe(1));
 });
 
 test("keeps the Runtime Session alive across persisted page lifecycle", async () => {

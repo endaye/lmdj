@@ -35,6 +35,7 @@ interface RuntimeContextValue {
   hostState: string;
   recoveryProbeReady: boolean;
   retryRuntime: () => void;
+  registerShutdownBarrier: (barrier: () => Promise<unknown>) => () => void;
 }
 
 const RuntimeContext = createContext<RuntimeContextValue | null>(null);
@@ -79,17 +80,46 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
   const [hostState, setHostState] = useState("cold");
   const [recoveryProbeReady, setRecoveryProbeReady] = useState(false);
   const closePromises = useRef(new WeakMap<CreatorRuntimeSession, Promise<unknown>>());
+  const shutdownBarriers = useRef(new WeakMap<
+    CreatorRuntimeSession,
+    Set<() => Promise<unknown>>
+  >());
   const generation = useRef(0);
   const automaticRestartAvailable = useRef(true);
   const manualRetryInFlight = useRef(false);
   const closeOnce = useCallback((target: CreatorRuntimeSession) => {
     let pending = closePromises.current.get(target);
     if (!pending) {
-      pending = Promise.resolve().then(() => target.close()).catch(() => {});
+      pending = Promise.resolve().then(async () => {
+        const barriers = shutdownBarriers.current.get(target);
+        if (barriers !== undefined) {
+          await Promise.all([...barriers].map((barrier) => barrier()));
+          shutdownBarriers.current.delete(target);
+        }
+        await target.close();
+      }).catch(() => {});
       closePromises.current.set(target, pending);
     }
     return pending;
   }, []);
+  const registerShutdownBarrier = useCallback((
+    barrier: () => Promise<unknown>,
+  ) => {
+    let barriers = shutdownBarriers.current.get(session);
+    if (barriers === undefined) {
+      barriers = new Set();
+      shutdownBarriers.current.set(session, barriers);
+    }
+    let pending: Promise<unknown> | null = null;
+    const runOnce = () => {
+      pending ??= Promise.resolve().then(barrier).catch(() => {});
+      return pending;
+    };
+    barriers.add(runOnce);
+    return () => {
+      void runOnce().finally(() => barriers?.delete(runOnce));
+    };
+  }, [session]);
 
   const retryRuntime = useCallback(() => {
     if (manualRetryInFlight.current) return;
@@ -254,6 +284,7 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
       hostState,
       recoveryProbeReady,
       retryRuntime,
+      registerShutdownBarrier,
     }),
     [
       session,
@@ -263,6 +294,7 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
       hostState,
       recoveryProbeReady,
       retryRuntime,
+      registerShutdownBarrier,
     ],
   );
   return <RuntimeContext value={value}>{children}</RuntimeContext>;
