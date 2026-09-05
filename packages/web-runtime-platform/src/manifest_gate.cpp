@@ -163,7 +163,13 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
               "ingest_channels",
               "ingest_decoded_frames",
               "ingest_source_bytes",
+              "perform_recording_frames",
+              "perform_recording_queue_batches",
           }) ||
+      !limits.at("perform_recording_frames").is_number_unsigned() ||
+      limits.at("perform_recording_frames") != 86'400'000 ||
+      !limits.at("perform_recording_queue_batches").is_number_unsigned() ||
+      limits.at("perform_recording_queue_batches") != 32 ||
       !limits.at("imported_wav_bytes").is_number_unsigned() ||
       limits.at("imported_wav_bytes") != 68'157'440 ||
       !limits.at("decoded_float_pcm_bytes_per_bank").is_number_unsigned() ||
@@ -208,6 +214,7 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
   std::set<std::string> paths;
   std::size_t runtime_scripts = 0;
   std::size_t runtime_wasm = 0;
+  std::size_t perform_master_taps = 0;
   for (const auto& asset : assets) {
     if (!exact_keys(asset, {"bytes", "path", "role", "sha256"}) ||
         !asset.at("path").is_string() ||
@@ -228,8 +235,15 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
     }
     runtime_scripts += role == "runtime_script" ? 1U : 0U;
     runtime_wasm += role == "runtime_wasm" ? 1U : 0U;
+    perform_master_taps += role == "perform_master_tap_worklet" ? 1U : 0U;
   }
-  return runtime_scripts == 1U && runtime_wasm == 1U;
+  // Stage 10: the Creator distribution (the manifest that declares
+  // compatible_hosts) ships exactly one platform-owned Perform master-tap
+  // processor; the Web Runtime Host distribution ships none. A duplicate or a
+  // stray entry is an inventory defect, not a tolerated default.
+  const auto expected_taps = has_compatible_hosts ? 1U : 0U;
+  return runtime_scripts == 1U && runtime_wasm == 1U &&
+         perform_master_taps == expected_taps;
 }
 
 }  // namespace

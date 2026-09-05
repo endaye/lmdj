@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="c97407055453bcd5302791270711cc79a12983ade768ba11bcceadc6bfbd4a5b">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="38e8a2abed51c3dc7a6c938d6f7b6f09bcfd360cddb776dfe3ab615826418abe">
   <title id="title">Web Runtime Platform Module</title><desc id="description">Creator 与诊断 Host 共用一个受 Product Assembly 约束的浏览器 Runtime</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -18,12 +18,15 @@
 <g class="connection"><path class="edge-mask" d="M 880 301 H 915 V 196 H 950"/><path class="edge" d="M 880 301 H 915 V 196 H 950" marker-end="url(#arrow)"/><text x="915" y="240">immutable view</text></g>
 <g class="connection"><path class="edge-mask" d="M 880 301 H 1090 V 301 H 1300"/><path class="edge" d="M 880 301 H 1090 V 301 H 1300" marker-end="url(#arrow)"/><text x="1090" y="292">typed overlay API</text></g>
 <g class="connection"><path class="edge-mask" d="M 1170 456 H 1235 V 301 H 1300"/><path class="edge" d="M 1170 456 H 1235 V 301 H 1300" marker-end="url(#arrow)"/><text x="1235" y="370">import/export</text></g>
+<g class="connection"><path class="edge-mask" d="M 1170 196 H 1204 V 510 H 616 V 456 H 650"/><path class="edge" d="M 1170 196 H 1204 V 510 H 616 V 456 H 650" marker-end="url(#arrow)"/><text x="910" y="317">master bus</text></g>
+<g class="connection"><path class="edge-mask" d="M 880 456 H 915 V 301 H 950"/><path class="edge" d="M 880 456 H 915 V 301 H 950" marker-end="url(#arrow)"/><text x="915" y="370">batch · stopped · failed</text></g>
+<g class="connection"><path class="edge-mask" d="M 880 301 H 915 V 301 H 950"/><path class="edge" d="M 880 301 H 915 V 301 H 950" marker-end="url(#arrow)"/><text x="915" y="292">capture status</text></g>
 
     <g class="component kind-host">
       <rect class="node-mask" x="36" y="146" width="218" height="100" rx="18"/>
       <rect class="node" x="40" y="150" width="210" height="92" rx="14"/>
       <text class="node-title" x="56" y="182">Creator Web</text>
-      <text class="node-detail" x="56" y="208">Sample · Sequence UI</text>
+      <text class="node-detail" x="56" y="208">Sample · Sequence · Perform UI</text>
     </g>
     <g class="component kind-host">
       <rect class="node-mask" x="36" y="356" width="218" height="100" rx="18"/>
@@ -61,7 +64,20 @@
       <text class="node-title" x="966" y="442">Project Bundle</text>
       <text class="node-detail" x="966" y="468">transfer-only bytes</text>
     </g>
-  <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Product identity</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Product CMake 注入 Product Build、Platform version 与精确 Host triple。</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Shared runtime</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">两个 Host 共用 frame-stamped input、BPM-safe overlay、exact boundary flush、bounded Stop replay 与 fail-closed owner-loss cleanup。</div></foreignObject></g>
-<g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Forbidden boundary</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。</div></foreignObject></g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="646" y="406" width="238" height="100" rx="18"/>
+      <rect class="node" x="650" y="410" width="230" height="92" rx="14"/>
+      <text class="node-title" x="666" y="442">Master Tap Worklet</text>
+      <text class="node-detail" x="666" y="468">platform-owned processor</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="946" y="251" width="228" height="100" rx="18"/>
+      <rect class="node" x="950" y="255" width="220" height="92" rx="14"/>
+      <text class="node-title" x="966" y="287">Master Capture</text>
+      <text class="node-detail" x="966" y="313">bounded batch queue</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Product identity</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Product CMake 注入 Product Build、Platform version 与精确 Host triple。</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Shared runtime</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">两个 Host 共用 frame-stamped input、BPM-safe overlay、exact boundary flush、bounded Stop replay 与 fail-closed owner-loss cleanup。</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Master tap</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Platform 自有 master tap worklet；capture 状态沿 unconfigured → configured → ready 前进，失败为 unavailable，capture 只能从 ready 启动，每条消息逐键校验。</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Forbidden boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。</div></foreignObject></g>
 </svg>

@@ -13,7 +13,8 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 SemVer；Contract 使用稳定 ID + Contract SemVer。
 ## Assembly Lock
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
-当前 source candidate 是 Product Build `1.0.41.0 · canary · g<short-sha>`，在 Build 40 的 Stage 9 remediation 上加入 `web-hosts` 六资产 Product Release 与 Creator/Runtime 独立部署控制面；Project I/O `1.0.1`、Audio Runtime `2.0.1`、Application Facade `2.1.1`、Web Runtime Platform `2.0.1`、Creator Web 与 Formal Web Runtime Host `2.1.1` 均保持不变。Project v3、bundle 1.1、Bank 共享配额及 Contract 身份不变。当前 source 可以没有 active Product intent；candidate、快照、tag、Release、部署与 Channel promotion 仍是独立状态。
+当前 source candidate 是 Product Build `1.0.42.0 · canary · g<short-sha>`，在 Build 41 之上集成 Stage 10 Perform 能力：新增 Contract `lmdj.project.v4 · 4.0.0` 作为唯一当前写入真相（v3 与 v1/v2 一并降为只读迁移输入）；Authoring Domain `2.0.0`、Project I/O `2.0.0`、Project Cooker `1.1.0`、Audio Runtime `3.0.0`、Application Facade `3.0.0`、Web Runtime Platform `3.0.0`，CLI、MCP、Native Host、Formal Web Runtime Host 与 Creator Web Host 同为 `3.0.0`；foundation `0.3.0` 与 provider-sdk `1.1.4` 不变。`resource_limits` 新增 `perform_recording_frames` 与 `perform_recording_queue_batches` 两个键，Creator 分发新增唯一的 `perform_master_tap_worklet` 资产。bundle 1.1、Bank 共享配额、Provider 与其余 Contract 身份不变。当前 source 可以没有 active Product intent；candidate、快照、tag、Release、部署与 Channel promotion 仍是独立状态。
+Product Build `1.0.41.0 · canary · g<short-sha>` 曾是双 Web Host 六资产 Release 与独立部署控制面的 source candidate。
 Product Build `1.0.26.0 · canary · g<short-sha>` 曾是 G3 Host settings crash-recovery/identity source candidate。
 Product Build `1.0.25.0 · canary · g<short-sha>` 曾是 G2 evidence-durability source candidate。
 Product Build `1.0.24.0 · canary · g<short-sha>` 曾是 source candidate。那次候选来自 provider-sdk G1/G4 缺陷修复级联：Attempt reservation 泄漏回收与 temp sibling 进程级唯一性修复已经进入 active manifests 与 Assembly Lock；历史 `1.0.21.0` 的 MPD218 复验和 `1.0.22.0` / `1.0.23.0` 的旧候选证据都不自动升级为 `1.0.24.0` 的候选结论。版本值由 active manifests 与 Assembly Lock 派生。
@@ -108,7 +109,7 @@ schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资�
 ## 发布门禁
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
-当前候选 Product tag 文本为 `lmdj-v1.0.41.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份不宣称远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 Portal 校验器判定；历史 Build 证据不自动升级。
+当前候选 Product tag 文本为 `lmdj-v1.0.42.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份不宣称远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 Portal 校验器判定；历史 Build 证据不自动升级。
 
 ## 双 Web Host Product Release
 
@@ -145,7 +146,7 @@ API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact pri
 HTTP JSON、browser、publish/restore response 和时间。它定义可审计的操作路径；实际发布
 状态必须由与精确身份绑定的 evidence 独立报告。
 
-该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.41.0` 或任何历史 Product Build 已获得 remote verified
+该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.42.0` 或任何历史 Product Build 已获得 remote verified
 tag、Release、Deploy ID、immutable URL、production alias、deployment evidence 或 Channel
 promotion。历史 `1.0.15.2` 的 tag、Release 或部署证据不自动升级为当前候选证据；只有与
 精确 Product/Host 身份绑定的实际 evidence record 才能让 Portal 报告公共部署。本地工具、

@@ -17,20 +17,20 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 把 Project Truth 和 Artifact 确定性派生为 Runtime Snapshot；不保存 Project 或执行实时输出。
 ## 2. 当前实现状态
-Project Cooker `1.0.0` 可从 Project v3 tick-native Pattern、Pad playback 与 PCM16 Artifact 确定性生成 Runtime Snapshot；WAV inspect/decode、真实 peak waveform、44.1→48 kHz resample 与确定性矩阵已实现。
+Project Cooker `1.1.0` 可从 Project v4 tick-native Pattern、Pad playback 与 PCM16 Artifact 确定性生成 Runtime Snapshot；WAV inspect/decode、真实 peak waveform、44.1→48 kHz resample 与确定性矩阵已实现。本版新增一条纯附加的 Performance replay 投影：`cook_performance_replay(project, performance_id, resolve)` 返回不可变的 `PerformanceReplayProjection`，字段恰为 `performance_id`、`resolved_revision`、`bpm`、`quantize_enabled`、`swing_percent`、`pads[64]`（resolved Pad）、`patterns[16]`（每个 Pattern Slot 一份 Runtime Snapshot）、`boundaries`（`offset_tick` + `PerformanceEvent`）与 `event_count`。既有 Cook surface 的形状与语义不变。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Authoring Domain，不依赖 Host 或 Product Assembly。
 ## 4. 架构与数据流
-验证 Slot/Asset/playback 引用和 source-frame admission，读取不可变 WAV Artifact，生成多层 peak envelope 与 48 kHz PCM，输出不可变 prepared snapshot。
+验证 Slot/Asset/playback 引用和 source-frame admission，读取不可变 WAV Artifact，生成多层 peak envelope 与 48 kHz PCM，输出不可变 prepared snapshot。replay 投影走同一条确定性路径：以 Project Truth 中的 Performance 与 `pattern_slots` 为输入，逐 Pad Slot 解析 playback、逐 Pattern Slot 生成 Runtime Snapshot，并把 Performance event 展开为带 `offset_tick` 的 boundary 序列。
 ## 5. API 与 Artifact 边界
 Artifact 输入显式传入；inspect/waveform 不修改 Project，Cook 输出 resolved playback、Runtime Snapshot 或 privacy-safe typed error。
 ## 6. 状态、错误与生命周期
-相同输入必须产生相同结果；快照与 Project 生命周期分离。
+相同输入必须产生相同结果；快照与 Project 生命周期分离。`PerformanceReplayProjection` 同样只是派生状态：它由 Cook 现算、随消费者生命周期释放，绝不是 Project Truth，也绝不被持久化或回写创作真相。
 ## 7. 产品使用方
 Audio Runtime 与 Application Facade 消费 Cook 结果。
 ## 8. 测试与证据
-`project_cooker_test.cpp`、`sample_analysis_test.cpp` 和 `determinism_matrix_test.cpp` 覆盖格式、边界、waveform cache identity、resample 与相同输入相同输出。
+`project_cooker_test.cpp`、`sample_analysis_test.cpp` 和 `determinism_matrix_test.cpp` 覆盖格式、边界、waveform cache identity、resample 与相同输入相同输出；`performance_replay_projection_test.cpp` 覆盖 replay 投影的字段解析、Pattern Slot 解析与 boundary 展开，`wav_selection_test.cpp` 覆盖选区语义。
 ## 9. 限制与下一门禁
-增量 Cook 和分布式 Cook 不属于当前能力。
+增量 Cook 和分布式 Cook 不属于当前能力。replay 投影只提供确定性派生素材，不承担实时调度、听感或物理演奏验收。
 ## 10. 版本身份
 版本和 source hash 来自 Assembly Lock。

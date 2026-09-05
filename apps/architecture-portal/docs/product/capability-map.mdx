@@ -15,11 +15,11 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 创作能力
 
-Project v3 Truth、命令处理、项目存取、portable Bundle 1.1、确定性 Cook 与 Sequence recording 已实现。Creator Web 提供 Pattern create/select、Record/Stop、overdub、Quantize/Swing/BPM/bars、next-Bar switch、owner-loss recovery，以及既有 Sample Editor、Pad Capture 与 64-Pad Runtime surface。Crop 只修改未提交 capture；多素材浏览、自动 slicing、Undo 与非破坏音频处理仍待后续 Stage。
+Project v4 Truth、命令处理、项目存取、portable Bundle 1.1、确定性 Cook 与 Sequence recording 已实现。Project v4 在 v3 之上新增 16 个 Pattern Slot 地址、Performance 与 Asset Lineage，并成为唯一当前写入真相；v3 与 v1/v2 一起只作为迁移输入被读取，writer 永远只发出 v4。Facade 相应提供 Pattern Slot 的 assign/clear/move。Creator Web 提供 Pattern create/select、Record/Stop、overdub、Quantize/Swing/BPM/bars、next-Bar switch、owner-loss recovery，以及既有 Sample Editor、Pad Capture 与 64-Pad Runtime surface。Crop 只修改未提交 capture；多素材浏览、自动 slicing、Undo 与非破坏音频处理仍待后续 Stage。
 
 ## 演奏能力
 
-Runtime Snapshot、样本准备、离线渲染、实时引擎、Voice 状态与 Sample preview 具有自动化覆盖。低延迟手感、MIDI/触控输入和设备生命周期需要独立物理验收。
+Runtime Snapshot、样本准备、离线渲染、实时引擎、Voice 状态与 Sample preview 具有自动化覆盖。Stage 10 加入固定八级 master FX 链（filter、delay、reverb、stutter、gate、reverse、crush、cutter，取值域 0..1000、周期由 Bar 推导）、master tap 采集、Performance 录制与保存、Cooker replay projection、resample 提交与 Performance recovery，同样只有自动化覆盖。实时不变量未变：实时线程不分配、不加锁、不修改 Project、不做 journal I/O。低延迟手感、MIDI/触控输入、设备生命周期与 Perform 演奏体验需要独立物理验收；Stage 10 的物理行仍是 deferred。
 
 ## 智能能力
 
@@ -27,7 +27,7 @@ Capability Contract、Registry、Attempt Store 与本地成功/失败 Proof Prov
 
 ## Host 与交付能力
 
-当前 source 是 Product Build `1.0.41.0`：Creator Web Host `2.1.1` 与 Formal Web Runtime Host `2.1.1` 已装配，并由 `web-hosts` 六资产 Release profile 分别交付；Native Host、CLI 与 MCP 同为 `2.0.0`，Web Hosts 共享 Web Runtime Platform `2.0.1` 和 Application Facade `2.1.1`。Project I/O `1.0.1`、Audio Runtime `2.0.1` 与 Facade 身份不变；Project v3、Sequence journal/receipt/recovery、整数音频 transport、统一输入 admission，以及 manifest 总量与 1 MiB chunk 解耦的有界长素材摄入继续构成同一能力闭环；Provider 与 Contract 身份不变。
+当前 source 是 Product Build `1.0.42.0`：Creator Web Host `3.0.0` 与 Formal Web Runtime Host `3.0.0` 已装配，交付边界仍由 `web-hosts` 六资产 Release profile 定义；Native Host、CLI 与 MCP 同为 `3.0.0`，Web Hosts 共享 Web Runtime Platform `3.0.0` 和 Application Facade `3.0.0`。Authoring Domain 升至 `2.0.0`、Project I/O 升至 `2.0.0`、Project Cooker 升至 `1.1.0`、Audio Runtime 升至 `3.0.0`；Foundation 保持 `0.3.0`，Provider SDK 保持 `1.1.4`。Contract 侧只新增 `lmdj.project.v4 · 4.0.0`，其余 Contract、两个本地 Proof Provider `1.0.5` 与 Provider policy 身份不变。Project v4、Sequence journal/receipt/recovery、performance 会话与 draft 生命周期、整数音频 transport、统一输入 admission，以及 manifest 总量与 1 MiB chunk 解耦的有界长素材摄入继续构成同一能力闭环；Creator 分发清单新增 `perform_master_tap_worklet` 一项资产共六项，Diagnostic Host 保持十五项且不声明它。
 Product Build `1.0.25.0` 曾分配 G2 evidence-durability 级联，同样不新增公开产品能力。
 Product Build `1.0.24.0` 曾分配 provider-sdk 修复级联：CLI `1.0.13`、MCP `1.1.10` 与 Native Test Host `1.0.11` 已装配；Creator Web Host `1.3.1` 与 Formal Web Runtime Host `1.2.10` 已装配，并共用 Web Runtime Platform `0.3.1`；本地成功/失败 Proof Provider 也同步升至 `1.0.3`。那次分配修复的是 Attempt reservation 回收与 temp sibling 命名冲突，不新增公开产品能力。
 

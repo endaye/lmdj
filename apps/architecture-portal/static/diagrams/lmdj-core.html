@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LMDJ Headless Core</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="1ad78869a7c149a7d79e9e721ca5f72287baae80de4a361a2a0673a2e6915b0d">
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LMDJ Headless Core</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="54f9ebfbad552df8f0365032a0d07b899d3ae0d25d3f87ea4ef4dac19c2d22db">
   <title id="title">LMDJ Headless Core</title><desc id="description">八个产品中立 Module、Host/Provider 隔离及不可变 Runtime Snapshot 数据流</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -40,7 +40,7 @@
       <rect class="node-mask" x="301" y="386" width="218" height="100" rx="18"/>
       <rect class="node" x="305" y="390" width="210" height="92" rx="14"/>
       <text class="node-title" x="321" y="422">Web Runtime Platform</text>
-      <text class="node-detail" x="321" y="448">browser adapter</text>
+      <text class="node-detail" x="321" y="448">browser adapter · master tap</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="301" y="146" width="218" height="100" rx="18"/>
@@ -52,13 +52,13 @@
       <rect class="node-mask" x="561" y="146" width="198" height="100" rx="18"/>
       <rect class="node" x="565" y="150" width="190" height="92" rx="14"/>
       <text class="node-title" x="581" y="182">Authoring Domain</text>
-      <text class="node-detail" x="581" y="208">Project v3 · Pattern</text>
+      <text class="node-detail" x="581" y="208">Project v4 · Pattern Slot</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="801" y="146" width="188" height="100" rx="18"/>
       <rect class="node" x="805" y="150" width="180" height="92" rx="14"/>
       <text class="node-title" x="821" y="182">Project Cooker</text>
-      <text class="node-detail" x="821" y="208">WAV · waveform · derive</text>
+      <text class="node-detail" x="821" y="208">WAV · waveform · replay</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="1031" y="146" width="198" height="100" rx="18"/>
@@ -70,7 +70,7 @@
       <rect class="node-mask" x="1271" y="146" width="188" height="100" rx="18"/>
       <rect class="node" x="1275" y="150" width="180" height="92" rx="14"/>
       <text class="node-title" x="1291" y="182">Audio Runtime</text>
-      <text class="node-detail" x="1291" y="208">modes · preview · Voice</text>
+      <text class="node-detail" x="1291" y="208">modes · Voice · master FX</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="561" y="386" width="198" height="100" rx="18"/>
@@ -90,8 +90,9 @@
       <text class="node-title" x="1051" y="422">Provider</text>
       <text class="node-detail" x="1051" y="448">Artifact sink</text>
     </g>
-  <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Foundation</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Artifact、JSON、typed error 为所有路径提供共同底座。</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Contracts</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project v1/v2 只读迁移、v3 写入；Bundle 只负责 transfer，Runtime Snapshot 仍是不可变派生。</div></foreignObject></g>
-<g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">禁止路径</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Host 不解析 Bundle；Provider 不接收 Project；Snapshot 不反写 Project Truth。</div></foreignObject></g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Foundation</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Artifact、JSON、typed error 为所有路径提供共同底座。</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Contracts</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project v1/v2/v3 只读迁移、v4 唯一写入；Bundle 只负责 transfer，Runtime Snapshot 与 replay projection 仍是不可变派生。</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Perform 组合</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Perform 只叠加在既有八个 Module 上：Pattern Slot 启动、master FX 链、Performance 录制/replay 与 master tap 采集，Host 仍只经 Facade。</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">禁止路径</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Host 不解析 Bundle；Provider 不接收 Project；Snapshot 不反写 Project Truth。</div></foreignObject></g>
 </svg>
 </main><script>const diagram=document.querySelector('svg');function applyTheme(theme){diagram.setAttribute('data-theme',theme);document.body.setAttribute('data-theme',theme)}const requested=new URLSearchParams(location.search).get('theme');if(requested==='light'||requested==='dark')applyTheme(requested);window.addEventListener('message',(event)=>{const data=event.data;if(data&&data.type==='lmdj-diagram-theme'&&(data.theme==='light'||data.theme==='dark'))applyTheme(data.theme)});</script></body></html>

@@ -6,20 +6,25 @@
     {"id": "native-hosts", "label": "Native Hosts", "detail": "CLI · MCP · Native", "kind": "host", "x": 40, "y": 140, "width": 220, "height": 96},
     {"id": "web-hosts", "label": "Web Hosts", "detail": "Creator · Diagnostic", "kind": "host", "x": 40, "y": 380, "width": 220, "height": 96},
     {"id": "platform", "label": "Web Runtime Platform", "detail": "shared browser adapter", "kind": "core", "x": 340, "y": 380, "width": 250, "height": 96},
-    {"id": "facade", "label": "Application Facade", "detail": "Project · Sample · Sequence", "kind": "core", "x": 680, "y": 250, "width": 250, "height": 96},
+    {"id": "facade", "label": "Application Facade", "detail": "Project · Sample · Sequence · Performance", "kind": "core", "x": 680, "y": 250, "width": 250, "height": 96},
     {"id": "modules", "label": "Core Modules", "detail": "domain · I/O · cook · audio", "kind": "core", "x": 1010, "y": 250, "width": 220, "height": 96},
-    {"id": "result", "label": "Typed Response", "detail": "receipt · Pattern identity · overlay", "kind": "host", "x": 1310, "y": 250, "width": 210, "height": 96}
+    {"id": "result", "label": "Typed Response", "detail": "receipt · Pattern identity · overlay", "kind": "host", "x": 1310, "y": 250, "width": 210, "height": 96},
+    {"id": "performance", "label": "Performance Ops", "detail": "record · replay · recovery · resample", "kind": "core", "x": 1010, "y": 430, "width": 250, "height": 96},
+    {"id": "collaborators", "label": "Collaborators", "detail": "clock · sequencer · replay · engine", "kind": "core", "x": 1310, "y": 430, "width": 210, "height": 96}
   ],
   "connections": [
     {"from": "native-hosts", "to": "facade", "label": "Facade API"},
     {"from": "web-hosts", "to": "platform", "label": "Platform API"},
     {"from": "platform", "to": "facade", "label": "Facade API"},
     {"from": "facade", "to": "modules", "label": "orchestrate"},
-    {"from": "modules", "to": "result"}
+    {"from": "modules", "to": "result"},
+    {"from": "facade", "to": "performance", "label": "20 operations"},
+    {"from": "performance", "to": "collaborators", "label": "Facade-owned"}
   ],
   "cards": [
     {"title": "Dependencies", "body": "Six lower Core Modules at locked versions."},
     {"title": "Sequence authority", "body": "Project-scoped admission, armed-Pad selective rebase and session-owned pending overlay share one authority; exact receipt replay never repeats Project mutation."},
+    {"title": "Performance authority", "body": "Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction."},
     {"title": "Forbidden boundary", "body": "No Host UI, Web protocol or product-specific wiring in the Facade."}
   ]
 }

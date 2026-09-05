@@ -237,6 +237,17 @@ def build_distribution(
     if len(worklet_candidates) != 1:
         raise PackageError("Vite output must contain exactly one capture worklet")
     source_worklet = require_file(worklet_candidates[0], "Vite capture worklet")
+    # Stage 10: the platform-owned Perform master-tap processor is likewise a
+    # same-origin AudioWorklet module referenced from main; exactly one match is
+    # the only acceptable Vite output.
+    tap_candidates = sorted(
+        (ui_root / "assets").glob("performance_master_tap_worklet-*.js")
+    )
+    if len(tap_candidates) != 1:
+        raise PackageError(
+            "Vite output must contain exactly one Perform master-tap worklet"
+        )
+    source_tap = require_file(tap_candidates[0], "Vite Perform master-tap worklet")
     runtime_js = require_file(runtime_root / "lmdj-web-runtime.js", "Runtime JavaScript")
     runtime_wasm = require_file(runtime_root / "lmdj-web-runtime.wasm", "Runtime Wasm")
 
@@ -263,6 +274,19 @@ def build_distribution(
         main_text = main_text.replace(
             worklet_reference, f"/{worklet_entry['path']}", 1
         )
+        tap_entry = write_hashed_asset(
+            assets_root,
+            "perform-master-tap",
+            ".js",
+            source_tap.read_bytes(),
+            "perform_master_tap_worklet",
+        )
+        tap_reference = f"/assets/{source_tap.name}"
+        if main_text.count(tap_reference) != 1:
+            raise PackageError(
+                "Perform master-tap worklet binding must occur exactly once"
+            )
+        main_text = main_text.replace(tap_reference, f"/{tap_entry['path']}", 1)
         main_entry = write_hashed_asset(
             assets_root, "main", ".js", main_text.encode("utf-8"), "host_main"
         )
@@ -288,7 +312,7 @@ def build_distribution(
             runtime_text.encode("utf-8"),
             "runtime_script",
         )
-        entries = [main_entry, runtime_entry, wasm_entry, style_entry, worklet_entry]
+        entries = [main_entry, runtime_entry, wasm_entry, style_entry, worklet_entry, tap_entry]
         manifest = {
             "assets": entries,
             "compatible_hosts": host_identity["compatible_hosts"],

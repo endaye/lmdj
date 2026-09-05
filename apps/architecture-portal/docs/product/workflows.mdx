@@ -7,8 +7,10 @@ source_paths:
   - docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md
   - docs/superpowers/plans/2026-08-29-lmdj-stage9-switch-boundary-flush.md
   - docs/quality/2026-08-27-stage9-sequence-recording-review.md
+  - docs/superpowers/plans/2026-08-29-lmdj-stage10-perform.md
   - packages/application-facade
   - packages/project-cooker
+  - packages/project-io
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -34,6 +36,20 @@ Creator 按内容嗅探 WAV、MP3、M4A/AAC、FLAC，在浏览器 Host 堆中以
 ## Cook 与演奏
 
 Project Cooker 校验 Project Truth 和 Artifact，产生不可变 Runtime Snapshot；Audio Runtime 从快照准备样本并在实时路径消费事件。快照不会反写为 Project Truth。
+
+## Perform 演奏与录制
+
+演奏面运行在共享 Runtime Session 之上。录制前先看 master tap 的 capture 状态：`unconfigured` 表示当前 manifest 或同源 tap URL 不足以配置采集，`configured` 表示配置成立，`ready` 表示 tap 与 AudioWorklet 都已启动；只有 `ready` 允许开始一次音频采集；capture 不可用时实时音频不受影响，Platform 只把采集入口 fail closed。
+
+Creator 的录制面板按一台阶段机推进：`idle → starting → recording → flushing → stopping → stopped`，随后按用户选择进入 `saving` 或 `discarding`。被记录的事件词汇是封闭的七种：Pad hit、Pattern launch、FX 的 engage/move/release，以及 HOLD 的 on 与 off。Pad hit 指向 64 个 Pad Slot 之一，Pattern launch 只指向 16 个 Pattern Slot 之一，FX 固定为 filter、delay、reverb、stutter、gate、reverse、crush、cutter 八级链路、取值域 0..1000；FX 的 Bar 相对周期由整数 BPM transport anchor 推导，不跟墙钟。演奏期的权威状态属于 Facade：未闭合的 Pad 手势、未闭合的 FX 手势、HOLD 开关与最后一次被确认的 Pattern launch 都从 `performance.record.status` 读取，Host 不做本地预测。事件先进入 performance 类型的 journal 会话并 durable append canonical tail，flush 以 command 与 flush identity 记录不可变 canonical payload 并按 receipt 幂等完成；实时线程仍不分配、不加锁、不修改 Project、不做 journal I/O，FX 手势只经由有界控制通道进入引擎。
+
+save 才让一个 Performance 成为 Project Truth：它连同 `recording_artifact` 一起写入 `performances`，在此之前 draft 只存在于 journal；discard 在同一纪律下丢弃 draft。master tap 采到的批次由 Creator Host 的流式 WAV writer 落成录音 Artifact，并通过 `performance.recording.bind` 绑定到该会话。
+
+重放不产生新的 Project Truth：Cooker 的 `cook_performance_replay` 从 Project Truth 与指定 Performance 推出不可变的 replay projection——resolved revision、BPM、Quantize/Swing、64 个 Pad 的解析结果、16 个 Pattern Slot 各自的 Runtime Snapshot、事件边界与事件计数——它是派生状态，既不回写也不持久化。
+
+resample 提交把一段录音变回素材：给定 Performance、起止帧与目标 Pad Slot，Facade 先要求该 Performance 具备已验证的 `audio/wav` 录音 Artifact，再按帧区间选出 PCM16 立体声片段并提交；新 Asset 携带指向来源 Artifact、来源 Project revision、帧区间与来源 Performance 的 Asset Lineage，而 Asset Lineage 要求 `lmdj.project.v4` Project Truth。
+
+Performance recovery 与 Sequence 同构：owner 丢失或中断留下的 performance 会话候选可以被列出，再由用户明确 apply 或 discard；未经确认不会自行提交，也不会自行丢弃。
 
 ## Provider 尝试
 

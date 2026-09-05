@@ -40,7 +40,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Formal Web Runtime Host `2.1.1` 已进入 Product Build `1.0.41.0` Assembly。Host 只依赖 Web Runtime Platform `2.0.1`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。`sample.import.begin.byte_length` 接受 manifest 约束内的完整选区 WAV，`sample.import.chunk` 继续把每个 sidecar 限制为 1 MiB。Diagnostic flow 继续覆盖 revision-bound `sample.quota`、Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。
+<StatusBadge status="implemented" /> Formal Web Runtime Host `3.0.0` 已进入 Product Build `1.0.42.0` Assembly。Host 只依赖 Web Runtime Platform `3.0.0`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。`sample.import.begin.byte_length` 接受 manifest 约束内的完整选区 WAV，`sample.import.chunk` 继续把每个 sidecar 限制为 1 MiB。Diagnostic flow 继续覆盖 revision-bound `sample.quota`、Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。
 Formal Web Runtime Host `1.2.10` 已进入 Product Build `1.0.24.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.3.1`。
 
 ControlBridge 先于 audio readiness 发布；Host 只转发 Runtime Session authority state。它不解析 Project/bundle/journal、不执行 quantization/fingerprint，也没有 JavaScript fallback sequencer。
@@ -51,7 +51,7 @@ Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用�
 
 ## 分发与身份门禁
 
-`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：内容哈希资产与 canonical manifest 绑定 Product Build `1.0.41.0`、Host `2.1.1`、Platform `2.0.1`、私有协议 `1`、固定 heap/七项资源上限、Emscripten 身份及精确 inventory。Browser Main 与 shared native gate 在创建 runtime owner 前双重校验这些身份，漂移、重复或迟到初始化均 fail closed。
+`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：内容哈希资产与 canonical manifest 绑定 Product Build `1.0.42.0`、Host `3.0.0`、Platform `3.0.0`、私有协议 `1`、固定 heap 与九项资源上限、Emscripten 身份及精确 inventory。资源上限在既有七项（`decoded_float_pcm_bytes_per_bank` 64 MiB、`decoded_float_pcm_bytes_total` 128 MiB、`decoded_float_pcm_bytes_resident` 256 MiB、`imported_wav_bytes` 65 MiB、`ingest_channels` 2、`ingest_decoded_frames` 43,200,000、`ingest_source_bytes` 100 MiB）之外新增 Stage 10 的 `perform_recording_frames` 86,400,000 与 `perform_recording_queue_batches` 32，两项都按正 safe integer 校验，多余默认值被拒绝。诊断 Host 的 distribution manifest 仍声明十五个 expected asset，并且明确不含 `perform_master_tap_worklet`：共享 native manifest gate 要求声明 `compatible_hosts` 的 Creator manifest 恰好带一个 tap 资产，诊断 Host manifest 带零个，重复或多余条目按 inventory 缺陷 fail closed。Browser Main 与 shared native gate 在创建 runtime owner 前双重校验这些身份，漂移、重复或迟到初始化均 fail closed。
 
 proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
 
@@ -68,7 +68,7 @@ Runtime Host Release 使用同一个四段控制面：`scripts/release.sh prepar
 单人维护者模式不设置 reviewer，但 Environment 仍只允许 exact `main`。它不触发下方
 Runtime deployment：该部署仍是 manual-only exact-tag dispatch，使用独立 Environment、凭据、
 smoke/recovery 与 evidence；Channel promotion 继续是后续独立边界。因此 release/deploy tooling
-已经 implemented 也不表示当前 Product Build `1.0.21.0` 已经 released、deployed 或 promoted。
+已经 implemented 也不表示当前 Product Build `1.0.42.0` 已经 released、deployed 或 promoted。
 
 ## 公共发布边界
 
@@ -97,7 +97,7 @@ reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior�
 evidence v1。official site response 的 `disabled: true` 被规范化为 `state: disabled` 并在
 smoke/Draft 前拒绝自动 enable；publication projection 接受并保留 Netlify UTC `Z`
 时间戳中的可选小数秒。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
-自动证明当前 Product Build `1.0.41.0` 或任何历史 Product Build 已获得 remote verified tag、Release、Deploy ID、
+自动证明当前 Product Build `1.0.42.0` 或任何历史 Product Build 已获得 remote verified tag、Release、Deploy ID、
 immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
 工具测试或 PR Preview 上升为当前候选的公开部署结论。
 
@@ -115,11 +115,11 @@ Trigger 与 `sequence.record.begin` 只在 `running` 接收。Sequence pad admis
 
 ## 自动化证据
 
-`scripts/web-runtime-host.sh proof` 覆盖可复现 build、distribution gates 与 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 旅程，包括 Project v3、500-trigger 压力、Sequence recording/status/recovery、跨窗口 observer/busy、失败和 lifecycle；switch journey 从 pending overlay 越过已确认边界录入新 Pattern，并经 stop、Project inspection 与新 Pattern reload 验证两侧提交，还覆盖 switch-pending BPM pre-mutation rejection 与 Stop target cancellation。共享 C++ ControlRuntime journey 另验证 Facade pending overlay 到 Audio Runtime next-Bar publication、apply-point 精确 switch authority、target 在 cancellation 查询间 apply 的 fail-closed interleaving、延迟越过旧 boundary 的 durable Stop replay，以及 clean replacement 无重复/空洞/陈旧 overlay。WebKit 只在 mandatory primitive 可用时执行完整 smoke；结构化 limitation 不会被写成物理证据。
+`scripts/web-runtime-host.sh proof` 覆盖可复现 build、distribution gates 与 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 旅程，包括 Project（写出契约现为 `lmdj.project.v4`）、500-trigger 压力、Sequence recording/status/recovery、跨窗口 observer/busy、失败和 lifecycle；switch journey 从 pending overlay 越过已确认边界录入新 Pattern，并经 stop、Project inspection 与新 Pattern reload 验证两侧提交，还覆盖 switch-pending BPM pre-mutation rejection 与 Stop target cancellation。共享 C++ ControlRuntime journey 另验证 Facade pending overlay 到 Audio Runtime next-Bar publication、apply-point 精确 switch authority、target 在 cancellation 查询间 apply 的 fail-closed interleaving、延迟越过旧 boundary 的 durable Stop replay，以及 clean replacement 无重复/空洞/陈旧 overlay。WebKit 只在 mandatory primitive 可用时执行完整 smoke；结构化 limitation 不会被写成物理证据。
 
 ## 非能力
 
-当前不能宣称离线安装/PWA、生产部署、任意未命名设备上的一致体验或 `beta`/`stable` 已获准；自动化 Sequence evidence 不替代这些独立边界。也不能把 WebKit automation 当作物理 Safari，或由已经通过的五行 local-source 物理矩阵推导 tag、Release、部署、publication 或 Channel promotion 已获准。
+当前不能宣称离线安装/PWA、生产部署、任意未命名设备上的一致体验或 `beta`/`stable` 已获准；自动化 Sequence evidence 不替代这些独立边界。诊断 Host 不承载 Stage 10 的 Perform surface：它不声明 `perform_master_tap_worklet` 资产，也不提供 Performance 录制、master tap 采集或 WAV 导出；这些属于 Creator Web 的交付边界。也不能把 WebKit automation 当作物理 Safari，或由已经通过的五行 local-source 物理矩阵推导 tag、Release、部署、publication 或 Channel promotion 已获准。
 
 ## 剩余验收边界
 

@@ -130,12 +130,15 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   expect(manifest.distribution_contract).toBe("lmdj.creator-web.distribution.v1");
   expect(manifest.compatible_hosts).toEqual([
-    {host_id: "web-runtime-host", host_version: "2.1.1"},
+    {host_id: "web-runtime-host", host_version: "3.0.0"},
   ]);
   // capture_worklet ships as its own same-origin asset because the CSP below
   // (script-src 'self') rejects blob:/data: AudioWorklet module URLs.
+  // perform_master_tap_worklet joins the inventory at Product Build 1.0.42.0 and
+  // ships same-origin for the same reason as capture_worklet.
   expect(manifest.assets.map(({role}) => role)).toEqual([
     "host_main", "runtime_script", "runtime_wasm", "host_style", "capture_worklet",
+    "perform_master_tap_worklet",
   ]);
   const index = await (await request.get(`${baseURL}/index.html`)).text();
   expect(index).toContain(createHash("sha256").update(manifestBytes).digest("hex"));
@@ -191,7 +194,7 @@ for (const viewport of [
     }
     await expect(page.getByRole("button", {name: "Sample"})).toBeEnabled();
     await expect(page.getByRole("button", {name: "Sequence"})).toBeEnabled();
-    await expect(page.getByRole("button", {name: /^Perform/})).toBeDisabled();
+    await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
     await page.getByRole("button", {name: "Activate audio"}).focus();
     const focusOrder = [];
     for (let index = 0; index < 6; index += 1) {
@@ -203,8 +206,10 @@ for (const viewport of [
         return (active?.querySelector(".mode-label") ?? active)?.textContent?.trim();
       }));
     }
+    // Product Build 1.0.42.0 activates Perform, so the mode button leaves
+    // tabIndex -1 and joins the rail's tab order after Sample.
     expect(focusOrder).toEqual([
-      "Enable MIDI", "Export report", "Project", "Sequence", "Sample", "Open local",
+      "Enable MIDI", "Export report", "Project", "Sequence", "Sample", "Perform",
     ]);
     await page.getByRole("button", {name: "Sample"}).click();
     await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();

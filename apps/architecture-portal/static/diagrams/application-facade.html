@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Application Facade Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="8bd20f32e007d2936f6bc6165f71632cee8ab306f6d8b104ac2bf080d41226ff">
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Application Facade Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="36c6168fca5823893826c792e5f544372faa5764b4ee1eed82fa0d54a06e3a61">
   <title id="title">Application Facade Module</title><desc id="description">Native Host 与共享 Web Runtime Platform 的唯一 Core 入口</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -17,6 +17,8 @@
 <g class="connection"><path class="edge-mask" d="M 590 428 H 635 V 298 H 680"/><path class="edge" d="M 590 428 H 635 V 298 H 680" marker-end="url(#arrow)"/><text x="635" y="354">Facade API</text></g>
 <g class="connection"><path class="edge-mask" d="M 930 298 H 970 V 298 H 1010"/><path class="edge" d="M 930 298 H 970 V 298 H 1010" marker-end="url(#arrow)"/><text x="970" y="289">orchestrate</text></g>
 <g class="connection"><path class="edge-mask" d="M 1230 298 H 1270 V 298 H 1310"/><path class="edge" d="M 1230 298 H 1270 V 298 H 1310" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 930 298 H 970 V 478 H 1010"/><path class="edge" d="M 930 298 H 970 V 478 H 1010" marker-end="url(#arrow)"/><text x="970" y="379">20 operations</text></g>
+<g class="connection"><path class="edge-mask" d="M 1260 478 H 1285 V 478 H 1310"/><path class="edge" d="M 1260 478 H 1285 V 478 H 1310" marker-end="url(#arrow)"/><text x="1285" y="469">Facade-owned</text></g>
 
     <g class="component kind-host">
       <rect class="node-mask" x="36" y="136" width="228" height="104" rx="18"/>
@@ -40,7 +42,7 @@
       <rect class="node-mask" x="676" y="246" width="258" height="104" rx="18"/>
       <rect class="node" x="680" y="250" width="250" height="96" rx="14"/>
       <text class="node-title" x="696" y="282">Application Facade</text>
-      <text class="node-detail" x="696" y="308">Project · Sample · Sequence</text>
+      <text class="node-detail" x="696" y="308">Project · Sample · Sequence · Performance</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="1006" y="246" width="228" height="104" rx="18"/>
@@ -54,8 +56,21 @@
       <text class="node-title" x="1326" y="282">Typed Response</text>
       <text class="node-detail" x="1326" y="308">receipt · Pattern identity · overlay</text>
     </g>
-  <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Six lower Core Modules at locked versions.</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Sequence authority</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project-scoped admission, armed-Pad selective rebase and session-owned pending overlay share one authority; exact receipt replay never repeats Project mutation.</div></foreignObject></g>
-<g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Forbidden boundary</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No Host UI, Web protocol or product-specific wiring in the Facade.</div></foreignObject></g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1006" y="426" width="258" height="104" rx="18"/>
+      <rect class="node" x="1010" y="430" width="250" height="96" rx="14"/>
+      <text class="node-title" x="1026" y="462">Performance Ops</text>
+      <text class="node-detail" x="1026" y="488">record · replay · recovery · resample</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1306" y="426" width="218" height="104" rx="18"/>
+      <rect class="node" x="1310" y="430" width="210" height="96" rx="14"/>
+      <text class="node-title" x="1326" y="462">Collaborators</text>
+      <text class="node-detail" x="1326" y="488">clock · sequencer · replay · engine</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Six lower Core Modules at locked versions.</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Sequence authority</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project-scoped admission, armed-Pad selective rebase and session-owned pending overlay share one authority; exact receipt replay never repeats Project mutation.</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Performance authority</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction.</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Forbidden boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No Host UI, Web protocol or product-specific wiring in the Facade.</div></foreignObject></g>
 </svg>
 </main><script>const diagram=document.querySelector('svg');function applyTheme(theme){diagram.setAttribute('data-theme',theme);document.body.setAttribute('data-theme',theme)}const requested=new URLSearchParams(location.search).get('theme');if(requested==='light'||requested==='dark')applyTheme(requested);window.addEventListener('message',(event)=>{const data=event.data;if(data&&data.type==='lmdj-diagram-theme'&&(data.theme==='light'||data.theme==='dark'))applyTheme(data.theme)});</script></body></html>
