@@ -27,6 +27,7 @@ const project: ProjectView = {
     assetId: slot === 0 || slot === 32 ? `asset-${slot}` : null,
   })),
   patterns: [{patternId: "22222222-2222-4222-8222-222222222222", bars: 1}],
+  patternSlots: Object.freeze(Array<string | null>(16).fill(null)),
   sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
 };
 
@@ -110,6 +111,118 @@ describe("Creator state", () => {
       ...running,
       transfer: {phase: "importing", completedBytes: 0, totalBytes: 1},
     })).toBe(false);
+  });
+
+  test("atomically replaces the complete Project projection without resetting audio", () => {
+    const current = {
+      ...readyState(),
+      audio: {phase: "running"} as const,
+      project: {
+        phase: "ready" as const,
+        projects: [{
+          projectId: project.projectId,
+          patternId: project.patternId,
+          revision: project.revision,
+          bpm: project.bpm,
+          assetCount: project.assetCount,
+          assignedPadCount: project.assignedPadCount,
+          bundleDigest: project.bundleDigest,
+        }],
+        current: project,
+      },
+    };
+    const patternId = "33333333-3333-4333-8333-333333333333";
+    const refreshed: ProjectView = {
+      ...project,
+      revision: 5,
+      patternSlots: Object.freeze([
+        patternId,
+        ...Array<string | null>(15).fill(null),
+      ]),
+      patterns: [...project.patterns, {patternId, bars: 4}],
+    };
+
+    const token = Object.freeze({
+      id: "refresh-1",
+      projectId: project.projectId,
+      patternId: project.patternId,
+      baseRevision: project.revision,
+    });
+    const refreshing = creatorReducer(current, {
+      type: "project-projection-refresh-started",
+      token,
+    });
+    const next = creatorReducer(refreshing, {
+      type: "project-projection-refreshed",
+      project: refreshed,
+      token,
+    });
+
+    expect(next.project.current).toBe(refreshed);
+    expect(next.project.projects).toContainEqual(expect.objectContaining({revision: 5}));
+    expect(next.audio.phase).toBe("running");
+    expect(next.sample).toBe(current.sample);
+    expect(next.projectProjectionRefresh).toBeNull();
+  });
+
+  test("drops stale Project truth when a projection refresh fails", () => {
+    const current = {
+      ...readyState(),
+      audio: {phase: "running"} as const,
+      pressed: new Map([[0, "started" as const]]),
+    };
+    const token = Object.freeze({
+      id: "refresh-2",
+      projectId: project.projectId,
+      patternId: project.patternId,
+      baseRevision: project.revision,
+    });
+    const refreshing = creatorReducer(current, {
+      type: "project-projection-refresh-started",
+      token,
+    });
+    const next = creatorReducer(refreshing, {
+      type: "project-projection-refresh-failed",
+      errorCode: "HOST_PROTOCOL_MISMATCH",
+      token,
+    });
+
+    expect(next.project).toEqual({phase: "error", projects: [], current: null});
+    expect(next.pressed.size).toBe(0);
+    expect(selectCanTrigger(next)).toBe(false);
+  });
+
+  test("ignores a stale projection refresh after Project or Runtime ownership changes", () => {
+    const token = Object.freeze({
+      id: "refresh-stale",
+      projectId: project.projectId,
+      patternId: project.patternId,
+      baseRevision: project.revision,
+    });
+    const refreshing = creatorReducer(readyState(), {
+      type: "project-projection-refresh-started",
+      token,
+    });
+    const nextProject = {...project, projectId: "44444444-4444-4444-8444-444444444444"};
+    const opening = {...refreshing, project: {...refreshing.project, phase: "opening" as const}};
+    const replaced = creatorReducer(opening, {type: "project-ready", project: nextProject});
+
+    expect(creatorReducer(replaced, {
+      type: "project-projection-refresh-failed",
+      errorCode: "HOST_PROTOCOL_MISMATCH",
+      token,
+    })).toBe(replaced);
+
+    const terminal = creatorReducer(refreshing, {
+      type: "runtime-changed",
+      phase: "closed",
+      errorCode: null,
+    });
+    expect(creatorReducer(terminal, {
+      type: "project-projection-refreshed",
+      project: {...project, revision: project.revision + 1},
+      token,
+    })).toBe(terminal);
   });
 
   test("restores a failed activation only while the attempt still owns the phase", () => {

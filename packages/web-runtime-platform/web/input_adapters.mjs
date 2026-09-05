@@ -1,9 +1,13 @@
 const userGestureTokens = new WeakSet();
 const acceptAnySlot = (_slot) => true;
-const ignoreRelease = (_slot, _source) => {};
-const ignoreCancel = (_slot, _source) => {};
+const ignoreRelease = (_slot, _source, _gestureKey) => {};
+const ignoreCancel = (_slot, _source, _gestureKey) => {};
 /** @type {number | null} */
 const allMidiChannels = null;
+
+function createGestureKey() {
+  return Object.freeze({});
+}
 
 export const DEFAULT_KEYBOARD_MAPPING = Object.freeze({
   KeyQ: 0,
@@ -124,7 +128,9 @@ export function createPointerAdapter({
   let compatibilityMarker = null;
   const pressed = new Set();
   const pointerSlots = new Map();
-  let mouseSlot = null;
+  const legacyPointers = [];
+  const mouseGestures = [];
+  const activeGestures = new Set();
 
   function publishPressed() {
     onPressedChange(Object.freeze([...pressed]));
@@ -138,6 +144,51 @@ export function createPointerAdapter({
     );
   }
 
+  function beginGesture(kind, flatSlot, pointerId) {
+    const gesture = Object.freeze({
+      kind,
+      flatSlot,
+      gestureKey: createGestureKey(),
+      pointerId,
+    });
+    activeGestures.add(gesture);
+    pressed.add(flatSlot);
+    if (kind === "pointer") {
+      if (pointerId === undefined) legacyPointers.push(gesture);
+      else pointerSlots.set(pointerId, gesture);
+    } else {
+      mouseGestures.push(gesture);
+    }
+    return gesture;
+  }
+
+  function removeGesture(gesture) {
+    if (!activeGestures.delete(gesture)) return false;
+    if (gesture.kind === "pointer") {
+      if (gesture.pointerId === undefined) {
+        const index = legacyPointers.indexOf(gesture);
+        if (index !== -1) legacyPointers.splice(index, 1);
+      } else if (pointerSlots.get(gesture.pointerId) === gesture) {
+        pointerSlots.delete(gesture.pointerId);
+      }
+    } else {
+      const index = mouseGestures.indexOf(gesture);
+      if (index !== -1) mouseGestures.splice(index, 1);
+    }
+    if (![...activeGestures].some((candidate) =>
+      candidate.flatSlot === gesture.flatSlot)) {
+      pressed.delete(gesture.flatSlot);
+    }
+    return true;
+  }
+
+  function closeGesture(gesture, callback) {
+    if (gesture === undefined || !removeGesture(gesture)) return false;
+    callback(gesture.flatSlot, "pointer", gesture.gestureKey);
+    publishPressed();
+    return true;
+  }
+
   function pointerDown(event, flatSlot, options = {}) {
     if (
       event?.isPrimary !== true ||
@@ -146,20 +197,22 @@ export function createPointerAdapter({
     ) {
       return false;
     }
+    const repeatedGesture = pointerSlots.get(event.pointerId);
+    if (repeatedGesture !== undefined) {
+      closeGesture(repeatedGesture, onCancel);
+    }
+    const gesture = beginGesture("pointer", flatSlot, event.pointerId);
     compatibilityMarker = Object.freeze({
       pointerId: event.pointerId,
       flatSlot,
+      gesture,
       target: event.target,
       clientX: event.clientX,
       clientY: event.clientY,
       expiresAt: now() + compatibilityWindowMs,
     });
-    pressed.add(flatSlot);
-    if (event.pointerId !== undefined) {
-      pointerSlots.set(event.pointerId, flatSlot);
-    }
     publishPressed();
-    trigger(flatSlot, velocity, "pointer");
+    trigger(flatSlot, velocity, "pointer", gesture.gestureKey);
     return true;
   }
 
@@ -185,61 +238,39 @@ export function createPointerAdapter({
     if (!canTrigger(flatSlot, options)) {
       return false;
     }
-    pressed.add(flatSlot);
-    mouseSlot = flatSlot;
+    const gesture = beginGesture("mouse", flatSlot);
     publishPressed();
-    trigger(flatSlot, velocity, "pointer");
+    trigger(flatSlot, velocity, "pointer", gesture.gestureKey);
     return true;
   }
 
-  function pointerUp(_event, flatSlot) {
-    for (const [pointerId, slot] of pointerSlots) {
-      if (slot === flatSlot) {
-        pointerSlots.delete(pointerId);
-      }
-    }
-    if (mouseSlot === flatSlot) {
-      mouseSlot = null;
-    }
-    const changed = pressed.delete(flatSlot);
-    if (changed) {
-      onRelease(flatSlot, "pointer");
-      publishPressed();
-    }
-    return changed;
+  function pointerUp(event, flatSlot) {
+    const gesture = event?.pointerId === undefined
+      ? legacyPointers.find((candidate) => candidate.flatSlot === flatSlot)
+      : pointerSlots.get(event.pointerId);
+    if (gesture?.flatSlot !== flatSlot) return false;
+    if (compatibilityMarker?.gesture === gesture) compatibilityMarker = null;
+    return closeGesture(gesture, onRelease);
   }
 
   function releasePointer(event) {
-    const flatSlot = pointerSlots.get(event?.pointerId);
-    if (flatSlot === undefined) {
-      return false;
-    }
-    pointerSlots.delete(event.pointerId);
-    if (compatibilityMarker?.pointerId === event.pointerId) {
-      compatibilityMarker = null;
-    }
-    return pointerUp(event, flatSlot);
+    const gesture = pointerSlots.get(event?.pointerId);
+    if (gesture === undefined) return false;
+    if (compatibilityMarker?.gesture === gesture) compatibilityMarker = null;
+    return closeGesture(gesture, onRelease);
   }
 
   function releaseMouse(event) {
     if (event?.button !== undefined && event.button !== 0) {
       return false;
     }
-    if (mouseSlot === null) {
-      return false;
-    }
-    const flatSlot = mouseSlot;
-    mouseSlot = null;
-    return pointerUp(event, flatSlot);
+    return closeGesture(mouseGestures[0], onRelease);
   }
 
   function pointerCancel(event) {
-    let flatSlot = pointerSlots.get(event?.pointerId);
-    if (flatSlot !== undefined) {
-      pointerSlots.delete(event.pointerId);
-      if (compatibilityMarker?.pointerId === event.pointerId) {
-        compatibilityMarker = null;
-      }
+    let gesture = pointerSlots.get(event?.pointerId);
+    if (gesture !== undefined) {
+      if (compatibilityMarker?.gesture === gesture) compatibilityMarker = null;
     } else {
       if (
         compatibilityMarker === null ||
@@ -248,17 +279,10 @@ export function createPointerAdapter({
       ) {
         return false;
       }
-      flatSlot = compatibilityMarker.flatSlot;
+      gesture = compatibilityMarker.gesture;
       compatibilityMarker = null;
     }
-    if (mouseSlot === flatSlot) {
-      mouseSlot = null;
-    }
-    if (pressed.delete(flatSlot)) {
-      onCancel(flatSlot, "pointer");
-      publishPressed();
-    }
-    return true;
+    return closeGesture(gesture, onCancel);
   }
 
   return Object.freeze({
@@ -271,11 +295,14 @@ export function createPointerAdapter({
     clearPressed() {
       compatibilityMarker = null;
       pointerSlots.clear();
-      mouseSlot = null;
+      legacyPointers.length = 0;
+      mouseGestures.length = 0;
+      const gestures = [...activeGestures];
       const count = pressed.size;
-      for (const flatSlot of pressed) {
-        onRelease(flatSlot, "pointer");
+      for (const gesture of gestures) {
+        onRelease(gesture.flatSlot, "pointer", gesture.gestureKey);
       }
+      activeGestures.clear();
       pressed.clear();
       publishPressed();
       return count;
@@ -332,17 +359,18 @@ export function createKeyboardAdapter({
     if (!isFlatSlot(flatSlot) || isAvailable(flatSlot) !== true) {
       return false;
     }
-    pressed.set(code, flatSlot);
+    const gesture = Object.freeze({flatSlot, gestureKey: createGestureKey()});
+    pressed.set(code, gesture);
     onPressedChange(pressed.size);
-    trigger(flatSlot, velocity, "keyboard");
+    trigger(flatSlot, velocity, "keyboard", gesture.gestureKey);
     return true;
   }
 
   function keyUp(event) {
-    const flatSlot = pressed.get(event?.code);
-    if (flatSlot !== undefined) {
+    const gesture = pressed.get(event?.code);
+    if (gesture !== undefined) {
       pressed.delete(event?.code);
-      onRelease(flatSlot, "keyboard");
+      onRelease(gesture.flatSlot, "keyboard", gesture.gestureKey);
       onPressedChange(pressed.size);
       return true;
     }
@@ -351,8 +379,8 @@ export function createKeyboardAdapter({
 
   function clearPressed() {
     const count = pressed.size;
-    for (const flatSlot of pressed.values()) {
-      onRelease(flatSlot, "keyboard");
+    for (const gesture of pressed.values()) {
+      onRelease(gesture.flatSlot, "keyboard", gesture.gestureKey);
     }
     pressed.clear();
     onPressedChange(0);
@@ -465,10 +493,10 @@ export function createMidiAdapter({
       return false;
     }
     if (status === 0x80 || (status === 0x90 && velocity === 0)) {
-      const flatSlot = pressed.get(note);
+      const gesture = pressed.get(note);
       pressed.delete(note);
-      if (flatSlot !== undefined) {
-        onRelease(flatSlot, "midi");
+      if (gesture !== undefined) {
+        onRelease(gesture.flatSlot, "midi", gesture.gestureKey);
       }
       publishPressed();
       return false;
@@ -487,9 +515,10 @@ export function createMidiAdapter({
     if (!isFlatSlot(flatSlot) || isAvailable(flatSlot) !== true) {
       return false;
     }
-    pressed.set(note, flatSlot);
+    const gesture = Object.freeze({flatSlot, gestureKey: createGestureKey()});
+    pressed.set(note, gesture);
     publishPressed();
-    trigger(flatSlot, velocity, "midi");
+    trigger(flatSlot, velocity, "midi", gesture.gestureKey);
     return true;
   }
 
@@ -525,8 +554,8 @@ export function createMidiAdapter({
     connectedInputs.delete(input);
     const pressed = pressedByInput.get(input);
     const lostPressedNotes = pressed?.size ?? 0;
-    for (const flatSlot of pressed?.values() ?? []) {
-      onRelease(flatSlot, "midi");
+    for (const gesture of pressed?.values() ?? []) {
+      onRelease(gesture.flatSlot, "midi", gesture.gestureKey);
     }
     pressedByInput.delete(input);
     publishPressed();
@@ -576,8 +605,8 @@ export function createMidiAdapter({
     }
     connectedInputs.clear();
     for (const pressed of pressedByInput.values()) {
-      for (const flatSlot of pressed.values()) {
-        onRelease(flatSlot, "midi");
+      for (const gesture of pressed.values()) {
+        onRelease(gesture.flatSlot, "midi", gesture.gestureKey);
       }
     }
     pressedByInput.clear();
@@ -595,8 +624,8 @@ export function createMidiAdapter({
       let count = 0;
       for (const notes of pressedByInput.values()) {
         count += notes.size;
-        for (const flatSlot of notes.values()) {
-          onRelease(flatSlot, "midi");
+        for (const gesture of notes.values()) {
+          onRelease(gesture.flatSlot, "midi", gesture.gestureKey);
         }
         notes.clear();
       }

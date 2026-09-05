@@ -4,6 +4,8 @@ import {
   createMidiAdapter,
   createPointerAdapter,
 } from "@lmdj/web-runtime-platform/input_adapters.mjs";
+import type {PerformanceRawEvent} from
+  "@lmdj/web-runtime-platform/runtime_types";
 
 import type {CreatorAction, Bank} from "../state/creator_state";
 import type {
@@ -48,6 +50,11 @@ interface MidiAccessLike {
   removeEventListener?(type: string, listener: (event: unknown) => void): void;
 }
 
+export type PerformancePadInputEvent = Extract<
+  PerformanceRawEvent,
+  Readonly<{kind: "pad_press" | "pad_release"}>
+>;
+
 interface CreatorInputControllerCommonOptions {
   getActiveBank: () => Bank;
   dispatch: (action: CreatorAction) => void;
@@ -57,6 +64,12 @@ interface CreatorInputControllerCommonOptions {
   documentTarget?: Document;
   getArmedCaptureSlot?: () => number | null;
   onArmedCaptureStop?: (slot: number, source: RuntimeTriggerSource) => void;
+  createPerformanceGestureId?: () => string;
+  onPerformancePadEvent?: (
+    event: PerformancePadInputEvent,
+    source: RuntimeTriggerSource,
+    gestureKey: object,
+  ) => void;
 }
 
 interface CreatorLegacyInputControllerOptions
@@ -125,6 +138,8 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     documentTarget = document,
     getArmedCaptureSlot = () => null,
     onArmedCaptureStop,
+    createPerformanceGestureId = () => crypto.randomUUID(),
+    onPerformancePadEvent,
   } = options;
   const sampleOptions = typeof options.onFilePickIntent === "function"
     ? options as CreatorSampleInputControllerOptions
@@ -141,10 +156,51 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   const stoppingLoopSlots = new Set<number>();
   const admissions = new Map<number, AdmissionRecord>();
   const earlyOutcomes = new Map<number, RuntimeOutcome>();
+  const performanceGestureIds = new Map<object, string>();
   let sampleTriggerTail: Promise<void> | null = null;
   let disposed = false;
 
   const gesture = (source: RuntimeTriggerSource, slot: number) => `${source}:${slot}`;
+
+  function observePerformancePress(
+    gestureKey: object,
+    slot: number,
+    velocity: number,
+    source: RuntimeTriggerSource,
+  ) {
+    if (onPerformancePadEvent === undefined) return;
+    try {
+      const gestureId = createPerformanceGestureId();
+      performanceGestureIds.set(gestureKey, gestureId);
+      onPerformancePadEvent(Object.freeze({
+        kind: "pad_press",
+        gestureId,
+        slot,
+        velocity,
+      }), source, gestureKey);
+    } catch {
+      // An optional UI observer cannot alter the established input path.
+    }
+  }
+
+  function observePerformanceRelease(
+    gestureKey: object,
+    slot: number,
+    source: RuntimeTriggerSource,
+  ) {
+    const gestureId = performanceGestureIds.get(gestureKey);
+    if (gestureId === undefined || onPerformancePadEvent === undefined) return;
+    performanceGestureIds.delete(gestureKey);
+    try {
+      onPerformancePadEvent(Object.freeze({
+        kind: "pad_release",
+        gestureId,
+        slot,
+      }), source, gestureKey);
+    } catch {
+      // An optional UI observer cannot alter release or lifecycle cleanup.
+    }
+  }
 
   function currentSampleToken(currentGesture: string) {
     return sampleGestureTokens.get(currentGesture)?.at(-1);
@@ -274,8 +330,13 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     );
   }
 
-  function release(slot: number, source: RuntimeTriggerSource) {
+  function release(
+    slot: number,
+    source: RuntimeTriggerSource,
+    gestureKey: object,
+  ) {
     const currentGesture = gesture(source, slot);
+    observePerformanceRelease(gestureKey, slot, source);
     const mode = gestureModes.get(currentGesture);
     const sampleToken = currentSampleToken(currentGesture);
     if (sampleOptions !== null) {
@@ -312,8 +373,13 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     }
   }
 
-  function cancelGesture(slot: number, source: RuntimeTriggerSource) {
+  function cancelGesture(
+    slot: number,
+    source: RuntimeTriggerSource,
+    gestureKey: object,
+  ) {
     const currentGesture = gesture(source, slot);
+    observePerformanceRelease(gestureKey, slot, source);
     const mode = gestureModes.get(currentGesture);
     const shouldRelease = activeGestures.has(currentGesture) &&
       (runtimeAgnosticGestures.has(currentGesture) ||
@@ -513,13 +579,19 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     );
   }
 
-  function trigger(slot: number, velocity: number, source: RuntimeTriggerSource) {
+  function trigger(
+    slot: number,
+    velocity: number,
+    source: RuntimeTriggerSource,
+    gestureKey: object,
+  ) {
+    const currentGesture = gesture(source, slot);
+    observePerformancePress(gestureKey, slot, velocity, source);
     const armedCaptureSlot = getArmedCaptureSlot();
     if (armedCaptureSlot === slot && onArmedCaptureStop !== undefined) {
       onArmedCaptureStop(slot, source);
       return;
     }
-    const currentGesture = gesture(source, slot);
     if (sampleOptions === null) {
       activeGestures.add(currentGesture);
       sessionTrigger(slot, velocity, source, currentGesture, null);
@@ -594,7 +666,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
             null,
             sampleToken,
           );
-          if (sampleToken.released) release(slot, source);
+          if (sampleToken.released) release(slot, source, gestureKey);
           return;
         }
         let effectivePlayback = inspect.playback;
@@ -780,6 +852,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     unsubscribeVoice();
     clearAdversePressed();
     midi.dispose();
+    performanceGestureIds.clear();
     gestureModes.clear();
     sampleGestureTokens.clear();
     runtimeAgnosticGestures.clear();
@@ -803,7 +876,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     },
     pointerCancel(event: PointerInput, slot?: number) {
       const released = pointer.pointerCancel(event);
-      return slot === undefined ? released : pointer.pointerUp(event, slot) || released;
+      return slot === undefined ? released : released || pointer.pointerUp(event, slot);
     },
     keyDown(event: KeyboardInput) {
       return keyboard.keyDown(event);

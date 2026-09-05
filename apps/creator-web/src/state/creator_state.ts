@@ -52,6 +52,13 @@ export type CreatorPhase =
 export type Bank = 0 | 1 | 2 | 3;
 export type PressOutcome = "admitted" | "started" | "capacity";
 
+export interface ProjectProjectionRefreshToken {
+  readonly id: string;
+  readonly projectId: string;
+  readonly patternId: string;
+  readonly baseRevision: number;
+}
+
 export interface CreatorState {
   project: {
     phase: "listing" | "empty" | "opening" | "ready" | "error";
@@ -87,6 +94,7 @@ export interface CreatorState {
   pressed: ReadonlyMap<number, PressOutcome>;
   sample: SampleState;
   sampleProjectionRefresh: SampleProjectionRefresh | null;
+  projectProjectionRefresh: ProjectProjectionRefreshToken | null;
 }
 
 export type CreatorAction =
@@ -100,6 +108,17 @@ export type CreatorAction =
   | {type: "projects-loaded"; projects: LocalProjectSummary[]}
   | {type: "project-opening"}
   | {type: "project-ready"; project: ProjectView}
+  | {type: "project-projection-refresh-started"; token: ProjectProjectionRefreshToken}
+  | {
+      type: "project-projection-refreshed";
+      project: ProjectView;
+      token: ProjectProjectionRefreshToken;
+    }
+  | {
+      type: "project-projection-refresh-failed";
+      errorCode: string;
+      token: ProjectProjectionRefreshToken;
+    }
   | {type: "project-revision-updated"; revision: number}
   | {
       type: "project-sequence-settings-updated";
@@ -163,6 +182,7 @@ export const initialCreatorState: CreatorState = {
   pressed: new Map(),
   sample: initialSampleState,
   sampleProjectionRefresh: null,
+  projectProjectionRefresh: null,
 };
 
 function hasReadyProject(state: CreatorState): boolean {
@@ -189,6 +209,27 @@ export function isCreatorActionAllowed(
     case "project-ready":
       return state.runtime.phase === "ready" &&
         (state.project.phase === "opening" || state.transfer.phase === "importing");
+    case "project-projection-refresh-started":
+      return hasReadyProject(state) && state.projectProjectionRefresh === null &&
+        action.token.projectId === state.project.current?.projectId &&
+        action.token.patternId === state.project.current?.patternId &&
+        action.token.baseRevision === state.project.current?.revision;
+    case "project-projection-refreshed":
+      return state.runtime.phase === "ready" && hasReadyProject(state) &&
+        state.projectProjectionRefresh === action.token &&
+        action.token.projectId === state.project.current?.projectId &&
+        action.token.patternId === state.project.current?.patternId &&
+        action.token.baseRevision === state.project.current?.revision &&
+        action.project.projectId === state.project.current?.projectId &&
+        action.project.patternId === state.project.current?.patternId &&
+        action.project.revision >= action.token.baseRevision;
+    case "project-projection-refresh-failed":
+      return state.runtime.phase === "ready" && hasReadyProject(state) &&
+        state.projectProjectionRefresh === action.token &&
+        action.token.projectId === state.project.current?.projectId &&
+        action.token.patternId === state.project.current?.patternId &&
+        action.token.baseRevision === state.project.current?.revision &&
+        action.errorCode.length > 0;
     case "project-revision-updated":
       return hasReadyProject(state) && Number.isSafeInteger(action.revision) &&
         action.revision >= (state.project.current?.revision ?? 0);
@@ -296,6 +337,34 @@ function samePendingMutation(
       (right.type === "mutation-committed" && left.commit === right.commit));
 }
 
+function projectSummary(project: ProjectView): LocalProjectSummary {
+  return {
+    projectId: project.projectId,
+    patternId: project.patternId,
+    revision: project.revision,
+    bpm: project.bpm,
+    assetCount: project.assetCount,
+    assignedPadCount: project.assignedPadCount,
+    bundleDigest: project.bundleDigest,
+  };
+}
+
+function replaceProjectSummary(
+  projects: readonly LocalProjectSummary[],
+  project: ProjectView,
+): LocalProjectSummary[] {
+  const summary = projectSummary(project);
+  let replaced = false;
+  const next = projects.map((candidate) => {
+    if (candidate.projectId !== summary.projectId ||
+        candidate.patternId !== summary.patternId) return candidate;
+    replaced = true;
+    return summary;
+  });
+  if (!replaced) next.push(summary);
+  return next;
+}
+
 export function creatorReducer(
   state: CreatorState,
   action: CreatorAction,
@@ -310,12 +379,16 @@ export function creatorReducer(
           errorCode: action.errorCode,
           errorDetails: action.errorDetails ?? {},
         },
+        projectProjectionRefresh: action.phase === "ready"
+          ? state.projectProjectionRefresh
+          : null,
       };
     case "projects-listing":
       return {
         ...state,
         project: {...state.project, phase: "listing"},
         runtime: {...state.runtime, errorCode: null, errorDetails: {}},
+        projectProjectionRefresh: null,
       };
     case "projects-loaded":
       return {
@@ -332,6 +405,7 @@ export function creatorReducer(
         ...state,
         project: {...state.project, phase: "opening"},
         runtime: {...state.runtime, errorCode: null, errorDetails: {}},
+        projectProjectionRefresh: null,
       };
     case "project-ready":
       return {
@@ -341,6 +415,32 @@ export function creatorReducer(
         audio: {phase: "inactive"},
         sample: preparedSampleState(action.project.revision),
         sampleProjectionRefresh: null,
+        projectProjectionRefresh: null,
+      };
+    case "project-projection-refresh-started":
+      return {...state, projectProjectionRefresh: action.token};
+    case "project-projection-refreshed":
+      return {
+        ...state,
+        project: {
+          phase: "ready",
+          projects: replaceProjectSummary(state.project.projects, action.project),
+          current: action.project,
+        },
+        runtime: {...state.runtime, errorCode: null, errorDetails: {}},
+        projectProjectionRefresh: null,
+      };
+    case "project-projection-refresh-failed":
+      return {
+        ...state,
+        project: {phase: "error", projects: [], current: null},
+        runtime: {
+          ...state.runtime,
+          errorCode: action.errorCode,
+          errorDetails: {},
+        },
+        pressed: new Map(),
+        projectProjectionRefresh: null,
       };
     case "project-revision-updated":
       return state.project.current === null ? state : {
@@ -388,6 +488,7 @@ export function creatorReducer(
           errorCode: action.errorCode,
           errorDetails: action.errorDetails ?? {},
         },
+        projectProjectionRefresh: null,
       };
     case "transfer-started":
       return {
@@ -502,28 +603,11 @@ export function creatorReducer(
           sample.inspect.projectRevision !== action.project.revision)) {
         throw new TypeError("Sample Project refresh revision does not match");
       }
-      const summary: LocalProjectSummary = {
-        projectId: action.project.projectId,
-        patternId: action.project.patternId,
-        revision: action.project.revision,
-        bpm: action.project.bpm,
-        assetCount: action.project.assetCount,
-        assignedPadCount: action.project.assignedPadCount,
-        bundleDigest: action.project.bundleDigest,
-      };
-      let replaced = false;
-      const projects = state.project.projects.map((project) => {
-        if (project.projectId !== summary.projectId ||
-          project.patternId !== summary.patternId) return project;
-        replaced = true;
-        return summary;
-      });
-      if (!replaced) projects.push(summary);
       return {
         ...state,
         project: {
           phase: "ready",
-          projects,
+          projects: replaceProjectSummary(state.project.projects, action.project),
           current: action.project,
         },
         sample,

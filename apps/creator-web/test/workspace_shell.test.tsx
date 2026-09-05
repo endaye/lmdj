@@ -83,6 +83,7 @@ const ready: CreatorState = {
         patternId: "22222222-2222-4222-8222-222222222222",
         bars: 1,
       }],
+      patternSlots: Object.freeze(Array<string | null>(16).fill(null)),
       sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
     },
   },
@@ -109,7 +110,7 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   });
   expect(sequenceMode.hasAttribute("disabled")).toBe(true);
   const performMode = screen.getByRole("button", {
-    name: "Perform — available in Stage 10",
+    name: "Perform — requires a playable Project, running audio, and capture storage",
   });
   expect(performMode.hasAttribute("disabled")).toBe(true);
   expect(performMode.tabIndex).toBe(-1);

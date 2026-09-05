@@ -95,7 +95,9 @@ test("Pointer primary activation emits exactly one flat Trigger", () => {
     false,
   );
   assert.equal(pointer.pointerDown({ isPrimary: true, button: 1 }, 17), false);
-  assert.deepEqual(calls, [[17, 96, "pointer"]]);
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
+    [17, 96, "pointer"],
+  ]);
 });
 
 test("Pointer suppresses the compatibility mouse activation for a pointer sequence", () => {
@@ -114,7 +116,7 @@ test("Pointer suppresses the compatibility mouse activation for a pointer sequen
   );
   assert.equal(pointer.mouseDown(correlated, 4), false);
   assert.equal(pointer.mouseDown(correlated, 4), true);
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
     [4, 100, "pointer"],
     [4, 100, "pointer"],
   ]);
@@ -144,7 +146,9 @@ test("Pointer suppresses Chromium rounded compatibility mouse coordinates", () =
     clientY: 309,
     target,
   }, 4), false);
-  assert.deepEqual(calls, [[4, 100, "pointer"]]);
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
+    [4, 100, "pointer"],
+  ]);
 });
 
 test("Pointer cancellation and marker expiry never suppress a later genuine mouse", () => {
@@ -177,7 +181,7 @@ test("Pointer cancellation and marker expiry never suppress a later genuine mous
   pointer.pointerDown(activation, 4);
   pointer.clearPressed();
   assert.equal(pointer.mouseDown(activation, 4), true);
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
     [4, 100, "pointer"],
     [4, 100, "pointer"],
     [4, 100, "pointer"],
@@ -188,10 +192,11 @@ test("Pointer cancellation and marker expiry never suppress a later genuine mous
 });
 
 test("Pointer up releases while pointer cancellation reports a distinct cancellation", () => {
+  const triggers = [];
   const releases = [];
   const cancellations = [];
   const pointer = createPointerAdapter({
-    trigger: () => {},
+    trigger: (...arguments_) => triggers.push(arguments_),
     velocity: 100,
     now: () => 0,
     onRelease: (...arguments_) => releases.push(arguments_),
@@ -209,8 +214,25 @@ test("Pointer up releases while pointer cancellation reports a distinct cancella
     pointerId: 2,
   }, 5);
   assert.equal(pointer.pointerCancel({pointerId: 2}), true);
-  assert.deepEqual(releases, [[4, "pointer"]]);
-  assert.deepEqual(cancellations, [[5, "pointer"]]);
+  pointer.pointerDown({
+    isPrimary: true,
+    button: 0,
+    pointerId: 3,
+  }, 6);
+  assert.equal(pointer.clearPressed(), 1);
+  const firstKey = triggers[0][3];
+  const secondKey = triggers[1][3];
+  const thirdKey = triggers[2][3];
+  assert.equal(typeof firstKey, "object");
+  assert.notEqual(firstKey, secondKey);
+  assert.notEqual(secondKey, thirdKey);
+  assert.equal(Object.isFrozen(firstKey), true);
+  assert.deepEqual(Object.keys(firstKey), []);
+  assert.deepEqual(releases, [
+    [4, "pointer", firstKey],
+    [6, "pointer", thirdKey],
+  ]);
+  assert.deepEqual(cancellations, [[5, "pointer", secondKey]]);
 });
 
 test("Pointer retains the legacy slot fallback when an event has no identity", () => {
@@ -227,8 +249,27 @@ test("Pointer retains the legacy slot fallback when an event has no identity", (
   assert.equal(pointer.pointerUp({}, 6), true);
   pointer.pointerDown({isPrimary: true, button: 0}, 7);
   assert.equal(pointer.pointerCancel({}), true);
-  assert.deepEqual(releases, [[6, "pointer"]]);
-  assert.deepEqual(cancellations, [[7, "pointer"]]);
+  assert.deepEqual(releases.map((arguments_) => arguments_.slice(0, 2)), [
+    [6, "pointer"],
+  ]);
+  assert.deepEqual(cancellations.map((arguments_) => arguments_.slice(0, 2)), [
+    [7, "pointer"],
+  ]);
+});
+
+test("Mouse clear preserves the accepted gesture key", () => {
+  const triggers = [];
+  const releases = [];
+  const pointer = createPointerAdapter({
+    trigger: (...arguments_) => triggers.push(arguments_),
+    velocity: 100,
+    now: () => 0,
+    onRelease: (...arguments_) => releases.push(arguments_),
+  });
+
+  assert.equal(pointer.mouseDown({button: 0}, 6), true);
+  assert.equal(pointer.clearPressed(), 1);
+  assert.deepEqual(releases, [[6, "pointer", triggers[0][3]]]);
 });
 
 test("Pointer marker mismatch does not suppress an independent mouse activation", () => {
@@ -259,7 +300,7 @@ test("Pointer marker mismatch does not suppress an independent mouse activation"
     ),
     true,
   );
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
     [4, 100, "pointer"],
     [5, 100, "pointer"],
   ]);
@@ -297,8 +338,12 @@ test("Keyboard maps physical code, ignores repeat, and preserves fixed velocity"
     false,
   );
   assert.equal(keyboard.keyUp({code: "KeyA"}), true);
-  assert.deepEqual(calls, [[3, 91, "keyboard"]]);
-  assert.deepEqual(releases, [[3, "keyboard"]]);
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
+    [3, 91, "keyboard"],
+  ]);
+  assert.deepEqual(releases.map((arguments_) => arguments_.slice(0, 2)), [
+    [3, "keyboard"],
+  ]);
 });
 
 test("Keyboard disables shortcuts in editable focus", () => {
@@ -324,10 +369,12 @@ test("Keyboard disables shortcuts in editable focus", () => {
 
 test("Keyboard keyup and lifecycle cleanup clear pressed state", () => {
   const calls = [];
+  const releases = [];
   const keyboard = createKeyboardAdapter({
     trigger: (...args) => calls.push(args),
     mapping: { KeyA: 3 },
     velocity: 91,
+    onRelease: (...args) => releases.push(args),
   });
   keyboard.keyDown({ code: "KeyA", repeat: false });
   assert.equal(keyboard.keyDown({ code: "KeyA", repeat: false }), false);
@@ -335,10 +382,79 @@ test("Keyboard keyup and lifecycle cleanup clear pressed state", () => {
   assert.equal(keyboard.keyDown({ code: "KeyA", repeat: false }), true);
   keyboard.clearPressed();
   assert.equal(keyboard.keyDown({ code: "KeyA", repeat: false }), true);
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
     [3, 91, "keyboard"],
     [3, 91, "keyboard"],
     [3, 91, "keyboard"],
+  ]);
+  assert.notEqual(calls[0][3], calls[1][3]);
+  assert.deepEqual(releases, [
+    [3, "keyboard", calls[0][3]],
+    [3, "keyboard", calls[1][3]],
+  ]);
+});
+
+test("Web MIDI keys distinguish two devices on one note released in reverse order", async () => {
+  const triggers = [];
+  const releases = [];
+  const firstInput = fakeMidiInput();
+  const secondInput = fakeMidiInput();
+  const access = fakeMidiAccess([firstInput, secondInput]);
+  const midi = createMidiAdapter({
+    trigger: (...args) => triggers.push(args),
+    requestMIDIAccess: async () => access,
+    notify: () => {},
+    noteStart: 36,
+    slotStart: 0,
+    slotCount: 16,
+    onRelease: (...args) => releases.push(args),
+  });
+
+  await midi.requestPermission();
+  firstInput.emit("midimessage", {data: Uint8Array.from([0x90, 36, 80])});
+  secondInput.emit("midimessage", {data: Uint8Array.from([0x90, 36, 90])});
+  secondInput.emit("midimessage", {data: Uint8Array.from([0x80, 36, 0])});
+  firstInput.emit("midimessage", {data: Uint8Array.from([0x80, 36, 0])});
+
+  const firstKey = triggers[0][3];
+  const secondKey = triggers[1][3];
+  assert.notEqual(firstKey, secondKey);
+  assert.deepEqual(releases, [
+    [0, "midi", secondKey],
+    [0, "midi", firstKey],
+  ]);
+});
+
+test("Web MIDI preserves opaque keys through disconnect, clear, and dispose", async () => {
+  const triggers = [];
+  const releases = [];
+  const firstInput = fakeMidiInput();
+  const secondInput = fakeMidiInput();
+  const access = fakeMidiAccess([firstInput, secondInput]);
+  const midi = createMidiAdapter({
+    trigger: (...args) => triggers.push(args),
+    requestMIDIAccess: async () => access,
+    notify: () => {},
+    noteStart: 36,
+    slotStart: 0,
+    slotCount: 16,
+    onRelease: (...args) => releases.push(args),
+  });
+
+  await midi.requestPermission();
+  firstInput.emit("midimessage", {data: Uint8Array.from([0x90, 36, 80])});
+  access.emit("statechange", {
+    port: Object.assign(firstInput, {state: "disconnected"}),
+  });
+  secondInput.emit("midimessage", {data: Uint8Array.from([0x90, 37, 81])});
+  midi.clearPressed();
+  secondInput.emit("midimessage", {data: Uint8Array.from([0x90, 38, 82])});
+  midi.dispose();
+
+  assert.deepEqual(releases, [
+    [0, "midi", triggers[0][3]],
+    [1, "midi", triggers[1][3]],
+    [2, "midi", triggers[2][3]],
   ]);
 });
 
@@ -356,8 +472,12 @@ test("Keyboard resolves a local mapping at keydown and releases the resolved slo
   keyboard.keyDown({ code: "KeyA", repeat: false });
   bank = 3;
   keyboard.keyUp({ code: "KeyA" });
-  assert.deepEqual(calls, [[32, 100, "keyboard"]]);
-  assert.deepEqual(releases, [[32, "keyboard"]]);
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
+    [32, 100, "keyboard"],
+  ]);
+  assert.deepEqual(releases.map((arguments_) => arguments_.slice(0, 2)), [
+    [32, "keyboard"],
+  ]);
 });
 
 test("Web MIDI permission is explicit and always requests sysex false", async () => {
@@ -397,7 +517,9 @@ test("Web MIDI treats velocity-zero Note On as Note Off", async () => {
   assert.equal(midi.message({ data: Uint8Array.from([0x90, 36, 81]) }, input), true);
   assert.equal(midi.diagnostics().pressed_note_count, 1);
   assert.equal(midi.message({ data: Uint8Array.from([0x90, 36, 0]) }, input), false);
-  assert.deepEqual(calls, [[0, 81, "midi"]]);
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
+    [0, 81, "midi"],
+  ]);
   assert.equal(midi.diagnostics().pressed_note_count, 0);
 });
 
@@ -415,7 +537,9 @@ test("Web MIDI preserves Note On velocity in exactly one flat Trigger", async ()
   });
   await midi.requestPermission();
   assert.equal(midi.message({ data: Uint8Array.from([0x90, 40, 73]) }, input), true);
-  assert.deepEqual(calls, [[12, 73, "midi"]]);
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
+    [12, 73, "midi"],
+  ]);
 });
 
 test("Web MIDI resolves the current Bank, filters channel, and releases the admitted slot", async () => {
@@ -440,8 +564,12 @@ test("Web MIDI resolves the current Bank, filters channel, and releases the admi
   input.emit("midimessage", { data: Uint8Array.from([0x91, 36, 72]) });
   bank = 3;
   input.emit("midimessage", { data: Uint8Array.from([0x90, 36, 0]) });
-  assert.deepEqual(calls, [[16, 72, "midi"]]);
-  assert.deepEqual(releases, [[16, "midi"]]);
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
+    [16, 72, "midi"],
+  ]);
+  assert.deepEqual(releases.map((arguments_) => arguments_.slice(0, 2)), [
+    [16, "midi"],
+  ]);
 });
 
 test("Web MIDI ignores messages before permission, from unknown inputs, and after disconnect", async () => {
@@ -467,7 +595,9 @@ test("Web MIDI ignores messages before permission, from unknown inputs, and afte
     port: Object.assign(input, { state: "disconnected" }),
   });
   assert.equal(midi.message(noteOn, input), false);
-  assert.deepEqual(calls, [[0, 90, "midi"]]);
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
+    [0, 90, "midi"],
+  ]);
   assert.equal(midi.diagnostics().pressed_note_count, 0);
 });
 
@@ -491,7 +621,9 @@ test("Web MIDI disconnect clears pressed state without synthesizing triggers", a
     port: Object.assign(input, { state: "disconnected" }),
   });
   assert.equal(midi.diagnostics().pressed_note_count, 0);
-  assert.deepEqual(calls, [[0, 64, "midi"]]);
+  assert.deepEqual(calls.map((arguments_) => arguments_.slice(0, 3)), [
+    [0, 64, "midi"],
+  ]);
   assert.deepEqual(
     notifications.map(({ event }) => event),
     ["midi.connected", "midi.disconnected"],

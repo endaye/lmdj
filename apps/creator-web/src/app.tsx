@@ -4,6 +4,7 @@ import {BankSelector} from "./components/bank_selector";
 import {ErrorPanel} from "./components/error_panel";
 import {ModeRail, type CreatorMode} from "./components/mode_rail";
 import {PadSurface} from "./components/pad_surface";
+import {PerformSurface} from "./components/perform_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {SampleSurface} from "./components/sample_surface";
 import {SequenceSurface} from "./components/sequence_surface";
@@ -17,10 +18,14 @@ import {
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
+  refreshProjectProjectionJourney,
   type ProjectActionToken,
 } from "./runtime/project_actions";
 import type {CreatorBuildIdentity} from "./runtime/build_identity";
-import {createCreatorInputController} from "./runtime/input_controller";
+import {
+  createCreatorInputController,
+  type PerformancePadInputEvent,
+} from "./runtime/input_controller";
 import {retryPrepareJourney} from "./runtime/sample_actions";
 import {
   beginSequenceJourney,
@@ -38,6 +43,7 @@ import {
 } from "./runtime/runtime_context";
 import type {
   CreatorRuntimeSession,
+  CreatorPerformanceRuntimeSession,
   CreatorSampleRuntimeSession,
   LocalProjectSummary,
   RuntimeSessionFactory,
@@ -52,6 +58,10 @@ import {
   type CreatorState,
 } from "./state/creator_state";
 import {initialSequenceState, reduceSequence} from "./state/sequence_state";
+import {
+  createPerformController,
+  type PerformController,
+} from "./state/perform_state";
 import type {CapturePhase} from "./state/capture_state";
 
 interface AppProps {
@@ -70,6 +80,9 @@ interface WorkspaceProps {
   runtimeHostState?: string;
   runtimeRecoveryProbeReady?: boolean;
   onRetryRuntime?: () => void;
+  registerRuntimeShutdownBarrier?: (
+    barrier: () => Promise<unknown>,
+  ) => () => void;
 }
 
 type BusyRetry =
@@ -156,6 +169,39 @@ function isSampleSession(
     typeof candidate.subscribeVoiceState === "function";
 }
 
+function isPerformanceSession(
+  session: CreatorRuntimeSession | undefined,
+): session is CreatorPerformanceRuntimeSession {
+  const candidate = session as Partial<CreatorPerformanceRuntimeSession> | undefined;
+  return isSampleSession(session) && candidate !== undefined &&
+    typeof candidate.performanceMasterCaptureStatus === "function" &&
+    typeof candidate.subscribePerformanceMasterCaptureStatus === "function" &&
+    typeof candidate.startPerformanceMasterCapture === "function" &&
+    typeof candidate.beginPerformanceRecording === "function" &&
+    typeof candidate.recordPerformanceEvent === "function" &&
+    typeof candidate.requestPerformancePatternLaunch === "function" &&
+    typeof candidate.flushPerformanceRecording === "function" &&
+    typeof candidate.stopPerformanceRecording === "function" &&
+    typeof candidate.queryPerformanceRecordingStatus === "function" &&
+    typeof candidate.assignPatternSlot === "function" &&
+    typeof candidate.clearPatternSlot === "function" &&
+    typeof candidate.movePatternSlot === "function" &&
+    typeof candidate.listPerformances === "function" &&
+    typeof candidate.inspectPerformance === "function" &&
+    typeof candidate.savePerformance === "function" &&
+    typeof candidate.discardPerformance === "function" &&
+    typeof candidate.renamePerformance === "function" &&
+    typeof candidate.deletePerformance === "function" &&
+    typeof candidate.listPerformanceRecovery === "function" &&
+    typeof candidate.applyPerformanceRecovery === "function" &&
+    typeof candidate.discardPerformanceRecovery === "function" &&
+    typeof candidate.bindPerformanceRecording === "function" &&
+    typeof candidate.beginPerformanceReplay === "function" &&
+    typeof candidate.stopPerformanceReplay === "function" &&
+    typeof candidate.queryPerformanceReplayStatus === "function" &&
+    typeof candidate.commitPerformanceResample === "function";
+}
+
 function Workspace({
   initialState,
   buildIdentity,
@@ -166,6 +212,7 @@ function Workspace({
   runtimeHostState,
   runtimeRecoveryProbeReady,
   onRetryRuntime,
+  registerRuntimeShutdownBarrier,
 }: WorkspaceProps) {
   const [state, dispatch] = useReducer(creatorReducer, initialState);
   const [sequence, dispatchSequence] = useReducer(reduceSequence, initialSequenceState);
@@ -178,6 +225,9 @@ function Workspace({
   const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
   const [captureStopRequest, setCaptureStopRequest] = useState(0);
   const [midi, setMidi] = useState<MidiStatus | null>(null);
+  const [performController, setPerformController] =
+    useState<PerformController | null>(null);
+  const [performCaptureConfigured, setPerformCaptureConfigured] = useState(false);
   const importController = useRef<AbortController | null>(null);
   const projectActions = useRef(createProjectActionLane()).current;
   const sequenceAuthoringTail = useRef<Promise<void>>(Promise.resolve());
@@ -186,6 +236,14 @@ function Workspace({
   const sampleRetryAction = useRef<SampleRetryToken | null>(null);
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
   const inputAdverseState = useRef<string | null>(null);
+  const activeModeRef = useRef(activeMode);
+  const performControllerRef = useRef<PerformController | null>(null);
+  const projectProjectionRefreshRef = useRef<Readonly<{
+    id: string;
+    projectId: string;
+    patternId: string;
+    baseRevision: number;
+  }> | null>(null);
   const sampleFilePickIntent = useRef<(slot: number) => void>(() => {});
   const armedCaptureStopIntent = useRef<() => void>(() => {});
   const stateRef = useRef(state);
@@ -194,6 +252,7 @@ function Workspace({
   stateRef.current = state;
   sequenceRef.current = sequence;
   armedCaptureSlotRef.current = armedCaptureSlot;
+  activeModeRef.current = activeMode;
   if (sequenceAuthoringProjectId.current !== (state.project.current?.projectId ?? null)) {
     sequenceAuthoringProjectId.current = state.project.current?.projectId ?? null;
     sequenceAuthoringRevision.current = state.project.current?.revision ?? 0;
@@ -226,6 +285,14 @@ function Workspace({
     };
     apply(session.diagnostics());
     return session.subscribeDiagnostics(apply);
+  }, [session, runtimePhase]);
+
+  useEffect(() => {
+    setPerformCaptureConfigured(false);
+    if (!isPerformanceSession(session) || runtimePhase !== "ready") return;
+    return session.subscribePerformanceMasterCaptureStatus((status) => {
+      setPerformCaptureConfigured(status.state !== "unconfigured");
+    });
   }, [session, runtimePhase]);
 
   useEffect(() => {
@@ -275,6 +342,10 @@ function Workspace({
       dispatch,
       getArmedCaptureSlot: () => armedCaptureSlotRef.current,
       onArmedCaptureStop: () => armedCaptureStopIntent.current(),
+      onPerformancePadEvent: (event: PerformancePadInputEvent) => {
+        if (activeModeRef.current !== "perform") return;
+        void performControllerRef.current?.recordRawEvent(event).catch(() => {});
+      },
     };
     const controller = isSampleSession(session)
       ? createCreatorInputController({
@@ -331,6 +402,7 @@ function Workspace({
       if (inputAdverseState.current !== runtimeHostState) {
         inputAdverseState.current = runtimeHostState;
         resetInputForAdverseLifecycle();
+        void performControllerRef.current?.leave().catch(() => {});
         if (stateRef.current.audio.phase !== "suspending") {
           dispatch({type: "audio-changed", phase: "suspended"});
         }
@@ -439,6 +511,75 @@ function Workspace({
     }
     dispatch({type: "project-error", errorCode: code, errorDetails: details});
   };
+
+  const refreshPerformProject = async () => {
+    if (!session) throw new Error("Runtime session is unavailable");
+    const current = stateRef.current.project.current;
+    if (current === null) throw new Error("Current Project is unavailable");
+    if (projectProjectionRefreshRef.current !== null) {
+      throw new Error("Project projection refresh is already active");
+    }
+    const token = Object.freeze({
+      id: crypto.randomUUID(),
+      projectId: current.projectId,
+      patternId: current.patternId,
+      baseRevision: current.revision,
+    });
+    projectProjectionRefreshRef.current = token;
+    dispatch({type: "project-projection-refresh-started", token});
+    try {
+      const project = await refreshProjectProjectionJourney(session, current);
+      if (project === null) {
+        throw Object.assign(new Error("Project truth did not settle"), {
+          code: "HOST_PROTOCOL_MISMATCH",
+        });
+      }
+      dispatch({type: "project-projection-refreshed", token, project});
+      return project;
+    } catch (error) {
+      dispatch({
+        type: "project-projection-refresh-failed",
+        token,
+        errorCode: errorCode(error),
+      });
+      throw error;
+    } finally {
+      if (projectProjectionRefreshRef.current === token) {
+        projectProjectionRefreshRef.current = null;
+      }
+    }
+  };
+
+  useEffect(() => {
+    const project = state.project.current;
+    if (!isPerformanceSession(session) || runtimePhase !== "ready" ||
+      project === null) {
+      performControllerRef.current = null;
+      setPerformController(null);
+      return;
+    }
+    const controller = createPerformController({
+      session,
+      getCreatorState: () => stateRef.current,
+      refreshProject: refreshPerformProject,
+      opfsAvailable: () => session.diagnostics().capabilities.opfs === true &&
+        session.diagnostics().capabilities.opfsWritableReplace === true,
+    });
+    performControllerRef.current = controller;
+    setPerformController(controller);
+    const unregisterShutdownBarrier = registerRuntimeShutdownBarrier?.(
+      () => controller.close(),
+    );
+    return () => {
+      unregisterShutdownBarrier?.();
+      void controller.close().catch(() => {});
+      if (performControllerRef.current === controller) {
+        performControllerRef.current = null;
+      }
+      setPerformController((current) => current === controller ? null : current);
+    };
+  }, [session, runtimePhase, state.project.current?.projectId,
+    state.project.current?.patternId, registerRuntimeShutdownBarrier]);
 
   const beginProjectAction = (
     kind: "open" | "import",
@@ -559,6 +700,12 @@ function Workspace({
   const suspendAudio = async () => {
     if (!session || stateRef.current.audio.phase !== "running") return;
     dispatch({type: "audio-changed", phase: "suspending"});
+    try {
+      await performControllerRef.current?.leave();
+    } catch {
+      dispatch({type: "audio-changed", phase: "running"});
+      return;
+    }
     if (!(await session.suspendAudio())) {
       if (selectCreatorPhase(stateRef.current) === "suspending" &&
         session.diagnostics().state === "running") {
@@ -873,8 +1020,18 @@ function Workspace({
         activeMode={activeMode}
         sequenceEnabled={isSequenceSession(session) &&
           state.project.phase === "ready" && state.project.current !== null}
+        performEnabled={performController !== null && performCaptureConfigured &&
+          state.project.phase === "ready" && state.project.current !== null}
         onSelect={(mode) => {
           inputController.current?.clearPressed();
+          if (activeModeRef.current === "perform" && mode !== "perform" &&
+            performControllerRef.current !== null) {
+            void performControllerRef.current.leave().then(
+              () => setActiveMode(mode),
+              () => {},
+            );
+            return;
+          }
           if (mode === "sample" && ["recording", "switch-pending", "flushing"]
             .includes(sequenceRef.current.phase)) {
             if (sequenceRef.current.phase !== "flushing") {
@@ -939,7 +1096,7 @@ function Workspace({
             </section>
           ) : null}
         </>
-      ) : state.project.current !== null ? (
+      ) : activeMode === "sequence" && state.project.current !== null ? (
         <>
           <SequenceSurface
             project={state.project.current}
@@ -978,6 +1135,19 @@ function Workspace({
               {...(inputController.current ? {controller: inputController.current} : {})} />
           </section>
         </>
+      ) : activeMode === "perform" && state.project.current !== null &&
+        performController !== null ? (
+        <PerformSurface
+          controller={performController}
+          creatorState={state}
+          project={state.project.current}
+          bank={state.activeBank}
+          onBankChange={(bank) => {
+            inputController.current?.clearPressed();
+            dispatch({type: "bank-selected", bank});
+          }}
+          {...(inputController.current ? {padController: inputController.current} : {})}
+        />
       ) : null}
       {activeMode === "sample" || armedCaptureSlot !== null ||
       sequence.phase === "trim-overlay" ||
@@ -1057,6 +1227,7 @@ function ManagedWorkspace({
       runtimeHostState={runtime.hostState}
       runtimeRecoveryProbeReady={runtime.recoveryProbeReady}
       onRetryRuntime={runtime.retryRuntime}
+      registerRuntimeShutdownBarrier={runtime.registerShutdownBarrier}
     />
   );
 }
