@@ -218,8 +218,20 @@ foundation::Result<void> remove_performance_owner_lock(
   if (!exists.has_value()) {
     return foundation::Result<void>::failure(exists.error());
   }
-  return exists.value() ? platform->remove(path)
-                        : foundation::Result<void>::success();
+  if (!exists.value()) {
+    return foundation::Result<void>::success();
+  }
+  auto removed = platform->remove(path);
+  if (!removed.has_value() && removed.error().details.is_object() &&
+      removed.error().details.value("storage_condition", std::string{}) ==
+          kStorageConditionProjectBusy) {
+    // OPFS cannot unlink a lock file while the current process still has its
+    // access handle open. The path is reusable runtime metadata: after the
+    // terminal Journal transition, its advisory lock remains the authority
+    // until the owning ProjectStore releases that handle.
+    return foundation::Result<void>::success();
+  }
+  return removed;
 }
 
 foundation::Result<void> validate_journal_tree(
