@@ -59,9 +59,10 @@ describe("Sequence state machine", () => {
         reason: "interrupted", eventCount: 2}],
     });
     expect(recovery.phase).toBe("recovery");
-    const overlay = reduceSequence(initialSequenceState, {type: "trim-overlay"});
-    expect(overlay.phase).toBe("trim-overlay");
-    expect(reduceSequence(overlay, {type: "trim-closed"}).phase).toBe("stopped");
+    const ownerlessOverlay = reduceSequence(initialSequenceState, {type: "trim-overlay"});
+    expect(ownerlessOverlay).toBe(initialSequenceState);
+    expect(reduceSequence(ownerlessOverlay, {type: "trim-closed"}))
+      .toBe(initialSequenceState);
   });
 
   test("keeps an active Sequence session beneath the armed-Pad trim overlay", () => {
