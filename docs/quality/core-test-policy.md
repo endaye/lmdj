@@ -159,7 +159,10 @@ set than CI, and CI derives the exemption in `change_scope.main` rather than
 inside `classify`, so a pre-flight that only called `classify` would report
 `full` for a change CI classifies `focused` — the one divergence it exists to
 prevent. `tests/build/ci_local_preflight_test.py` holds both the wiring and an
-end-to-end case built on a throwaway repository.
+end-to-end case built on a throwaway repository, and the end-to-end case drives
+`build_plan` itself: a version that computed the exemption in the test and
+passed it to `classify` stayed green with the pre-flight's derivation removed,
+which is the miss it exists to catch (#609).
 
 The exemption fails closed and stays narrow. An unreadable, unparseable or
 absent base policy keeps the upgrade; it suppresses only the policy file's own
