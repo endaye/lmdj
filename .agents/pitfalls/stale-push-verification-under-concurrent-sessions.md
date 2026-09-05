@@ -119,8 +119,9 @@ have to encode session ownership the Git model does not carry.
 
 The second recurrence is escalated in
 [#654](https://github.com/endaye/lmdj/issues/654). That reasoning holds for the
-push half, but is weaker for the diagnosis half: "is `HEAD` an ancestor of
-`origin/main`" is decidable without knowing who moved the ref, so a pre-flight
-staleness conclusion in `scripts/local-ci.sh` is the strongest candidate exit.
+push half, but is weaker for the diagnosis half: "is `origin/main` an
+ancestor of `HEAD`" is decidable without knowing who moved the ref, so a
+pre-flight staleness conclusion in `scripts/local-ci.sh` is the strongest
+candidate exit.
 Until that Issue lands a durable skill or gate exit, the guidance above is the
 only thing standing between a session and a third occurrence.
