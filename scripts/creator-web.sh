@@ -444,6 +444,13 @@ PY
     LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
     npm --prefix "$web_test_root" test -- \
       --project=creator-capture-chromium "$capture_relative" || status=$?
+  LMDJ_WEB_RESULTS_SLOT=capture-webkit \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=creator-capture-webkit "$capture_relative" || status=$?
   LMDJ_WEB_RESULTS_SLOT=capture-denied-chromium \
     LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \

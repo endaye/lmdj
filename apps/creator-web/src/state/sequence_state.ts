@@ -101,7 +101,8 @@ export function reduceSequence(
       return {...state, phase: action.candidates.length === 0 ? "stopped" : "recovery",
         recovery: Object.freeze([...action.candidates])};
     case "trim-overlay":
-      return ["stopped", "recording", "switch-pending"].includes(state.phase)
+      return ["recording", "switch-pending"].includes(state.phase) &&
+        state.sessionId !== null
         ? {...state, phase: "trim-overlay"}
         : state;
     case "trim-closed":

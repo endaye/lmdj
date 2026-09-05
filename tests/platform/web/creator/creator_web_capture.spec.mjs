@@ -7,6 +7,45 @@ import {CAPTURE_FIXTURE_SECONDS} from "./fixtures/make_capture_fixture.mjs";
 const sampleBundle = process.env.LMDJ_CREATOR_WEB_SAMPLE_BUNDLE;
 const GRANTED = "creator-capture-chromium";
 const DENIED = "creator-capture-denied-chromium";
+const WEBKIT_GRANTED = "creator-capture-webkit";
+
+async function installSyntheticWebKitCapture(page) {
+  await page.addInitScript(() => {
+    const resources = new Set();
+    Object.defineProperty(window, "__LMDJ_CAPTURE_TEST_RESOURCES__", {
+      configurable: false,
+      enumerable: false,
+      value: resources,
+      writable: false,
+    });
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+      configurable: true,
+      value: async () => {
+        const context = new AudioContext({sampleRate: 48_000});
+        const oscillator = context.createOscillator();
+        const destination = context.createMediaStreamDestination();
+        oscillator.frequency.value = 440;
+        oscillator.connect(destination);
+        oscillator.start();
+        await context.resume();
+        const track = destination.stream.getAudioTracks()[0];
+        const nativeStop = track.stop.bind(track);
+        const resource = {context, oscillator};
+        resources.add(resource);
+        Object.defineProperty(track, "stop", {
+          configurable: true,
+          value: () => {
+            nativeStop();
+            try { oscillator.stop(); } catch { /* already stopped */ }
+            void context.close();
+            resources.delete(resource);
+          },
+        });
+        return destination.stream;
+      },
+    });
+  });
+}
 
 // Read the revision from the exported report, the same way the Sample Editor
 // spec does: .project-summary renders only in Project mode, so a DOM probe
@@ -18,9 +57,14 @@ async function expectProjectRevision(page, expectedRevision) {
   expect(report.sample.project_revision).toBe(expectedRevision);
 }
 
-async function report(page) {
+async function report(page, options = {}) {
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", {name: "Export report"}).click();
+  const button = page.getByRole("button", {name: "Export report"});
+  if (options.force === true) {
+    await button.evaluate((element) => element.click());
+  } else {
+    await button.click();
+  }
   return JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
 }
 
@@ -221,6 +265,36 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
+});
+
+test("ordinary Sample focus loss keeps the retained trim dialog visible", async ({page}, testInfo) => {
+  test.skip(![GRANTED, WEBKIT_GRANTED].includes(testInfo.project.name));
+  test.setTimeout(600_000);
+  if (testInfo.project.name === WEBKIT_GRANTED) {
+    await installSyntheticWebKitCapture(page);
+  }
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  await enterSampleEditor(page);
+  await selectPadWithoutPress(page, "Pad A1 — empty");
+  const panel = await recordAtLeast(page, "Pad A1", 1);
+
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+
+  await expect(panel).toContainText("Recording stopped: the window lost focus.");
+  await expect(panel.getByRole("img", {name: "Pad A1 capture waveform"})).toBeVisible();
+  await expect(panel.getByRole("slider", {name: "Pad A1 Selection length"})).toBeVisible();
+  await expect(panel.getByRole("button", {name: "Commit"})).toBeVisible();
+  await expect(panel.getByRole("button", {name: "Discard"})).toBeVisible();
+  await expect(panel.getByRole("button", {name: "Close"})).toBeVisible();
+  await expect(page.locator(".sample-overlay-host")).toHaveCount(0);
+
+  const evidence = await report(page, {force: true});
+  expect(evidence.sequence.semantic_state).toBe("stopped");
+  expect(evidence.sequence.session_id).toBeNull();
+
+  await panel.getByRole("button", {name: "Discard"}).click();
+  await expect(panel.getByRole("button", {name: "Record into Pad A1"})).toBeVisible();
 });
 
 test("armed Pad capture commits without stopping the active Sequence", async ({page}, testInfo) => {
