@@ -17,6 +17,7 @@ export interface ProjectView extends LocalProjectSummary {
   key: "—";
   pads: readonly ProjectPadView[];
   patterns: readonly Readonly<{patternId: string; bars: 1 | 2 | 4 | 8}>[];
+  readonly patternSlots: readonly (string | null)[];
   sequenceSettings: Readonly<{
     quantizeEnabled: boolean;
     swingPercent: number;
@@ -267,6 +268,11 @@ export interface CreatorSampleRuntimeSession extends CreatorRuntimeSession {
   subscribeVoiceState(listener: (event: RuntimeVoiceState) => void): () => void;
 }
 
+export interface CreatorPerformanceRuntimeSession
+  extends CreatorSampleRuntimeSession,
+    PerformanceRuntimeSession,
+    WebPerformanceCaptureSession {}
+
 export type SequenceRecordState = "inactive" | "active" | "switching" | "recoverable";
 
 export interface SequenceStatus {
@@ -369,3 +375,7 @@ export interface TypedRuntimeError extends Error {
   code?: string;
   details?: Readonly<Record<string, unknown>>;
 }
+import type {
+  PerformanceRuntimeSession,
+  WebPerformanceCaptureSession,
+} from "@lmdj/web-runtime-platform/runtime_types";

@@ -119,7 +119,8 @@ Notes:
 - Use gh CLI to interact with GitHub (e.g., fetch pull requests, create comments). Do not use web fetch.
 - Create a todo list before starting.
 - You must cite and link each issue in inline comments (e.g., if referring to a CLAUDE.md, include a link to it).
-- If no issues are found and `--comment` argument is provided, post a comment with the following format:
+- If your instructions specify a signature line, it is the **first line of every comment you post**, inline or summary, before any format given below. It is machine-read; reproduce it exactly and never omit it.
+- If no issues are found and `--comment` argument is provided, post a comment with the following format (after the signature line, if one was specified):
 
 ---
 

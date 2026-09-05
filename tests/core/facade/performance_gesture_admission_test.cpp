@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -61,6 +62,32 @@ private:
   std::vector<std::uint64_t> ticks_{0,   10,  30,  40,  100, 110, 120, 200,
                                     210, 220, 230, 240, 245, 250};
   std::size_t cursor_{};
+};
+
+class GestureSink final : public lmdj::facade::PerformanceGestureSink {
+public:
+  lmdj::foundation::Result<void>
+  apply_gesture(lmdj::audio::FxGesture gesture) override {
+    if (refusals_ != 0) {
+      --refusals_;
+      return lmdj::foundation::Result<void>::failure({
+          lmdj::foundation::ErrorCode::internal_error,
+          "test master bus refused the gesture",
+      });
+    }
+    applied_.push_back(gesture);
+    return lmdj::foundation::Result<void>::success();
+  }
+
+  void refuse_next(std::size_t count) { refusals_ = count; }
+
+  const std::vector<lmdj::audio::FxGesture> &applied() const {
+    return applied_;
+  }
+
+private:
+  std::vector<lmdj::audio::FxGesture> applied_;
+  std::size_t refusals_{};
 };
 
 class Sequencer final : public lmdj::facade::PerformanceInputSequencer {
@@ -982,6 +1009,169 @@ void test_ambiguous_tail_append_freezes_runtime_without_overwrite() {
   LMDJ_CHECK(retained_after.value() == retained_before.value());
 }
 
+
+// P10-D7 and Stage 10 acceptance item 8: every admitted FX and HOLD gesture is
+// audible live through the same DSP Replay drives. Before this witness the
+// Facade journalled gestures and applied none, so a live Performance recorded
+// a master bus that never changed.
+void test_admitted_fx_and_hold_gestures_reach_the_master_bus() {
+  TempDirectory temp;
+  auto sink = std::make_shared<GestureSink>();
+  lmdj::facade::ApplicationConfig config{
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      std::make_shared<Clock>(),
+      std::make_shared<Sequencer>(),
+      std::make_shared<LaunchAcknowledger>(),
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+      sink,
+  };
+  lmdj::facade::Application application(std::move(config));
+  const auto bundle = temp.path() / "project.lmdj";
+  check_ok(application.command({{"operation", "project.create"},
+                                {"project_path", bundle.generic_string()},
+                                {"project_id", kProject},
+                                {"bpm", 120}}));
+  check_ok(application.command({{"operation", "performance.record.begin"},
+                                {"project_path", bundle.generic_string()},
+                                {"command_id", kBegin},
+                                {"expected_revision", 0},
+                                {"session_id", kSession},
+                                {"performance_id", kPerformance}}));
+
+  const auto event = [&bundle](std::string_view event_id,
+                               nlohmann::json payload) {
+    return nlohmann::json{{"operation", "performance.record.event"},
+                          {"project_path", bundle.generic_string()},
+                          {"session_id", kSession},
+                          {"event_id", event_id},
+                          {"event", std::move(payload)}};
+  };
+
+  // A Pad gesture is audible through the existing trigger path and must not
+  // reach the master bus as an FX gesture.
+  check_ok(application.command(
+      event("10000000-0000-4000-8000-000000000020",
+            {{"kind", "pad_press"},
+             {"gesture_id", kGesture},
+             {"slot", 5},
+             {"velocity", 100}})));
+  LMDJ_CHECK(sink->applied().empty());
+  check_ok(application.command(
+      event("10000000-0000-4000-8000-000000000021",
+            {{"kind", "pad_release"}, {"gesture_id", kGesture}, {"slot", 5}})));
+  LMDJ_CHECK(sink->applied().empty());
+
+  check_ok(application.command(
+      event("10000000-0000-4000-8000-000000000022",
+            {{"kind", "fx_engage"},
+             {"gesture_id", kFxGesture},
+             {"fx", "filter"},
+             {"value", 500}})));
+  check_ok(application.command(
+      event("10000000-0000-4000-8000-000000000023",
+            {{"kind", "fx_move"},
+             {"gesture_id", kFxGesture},
+             {"fx", "filter"},
+             {"value", 630}})));
+  check_ok(application.command(
+      event("10000000-0000-4000-8000-000000000024", {{"kind", "hold_on"}})));
+  check_ok(application.command(
+      event("10000000-0000-4000-8000-000000000025", {{"kind", "hold_off"}})));
+  check_ok(application.command(
+      event("10000000-0000-4000-8000-000000000026",
+            {{"kind", "fx_release"},
+             {"gesture_id", kFxGesture},
+             {"fx", "filter"}})));
+
+  const auto &applied = sink->applied();
+  LMDJ_CHECK(applied.size() == 5);
+  LMDJ_CHECK(applied.at(0).kind == lmdj::audio::FxGestureKind::engage);
+  LMDJ_CHECK(applied.at(0).fx == lmdj::domain::PerformanceFx::filter);
+  LMDJ_CHECK(applied.at(0).value == 500);
+  LMDJ_CHECK(applied.at(1).kind == lmdj::audio::FxGestureKind::move);
+  LMDJ_CHECK(applied.at(1).value == 630);
+  LMDJ_CHECK(applied.at(2).kind == lmdj::audio::FxGestureKind::hold_on);
+  LMDJ_CHECK(applied.at(3).kind == lmdj::audio::FxGestureKind::hold_off);
+  LMDJ_CHECK(applied.at(4).kind == lmdj::audio::FxGestureKind::release);
+  LMDJ_CHECK(applied.at(4).fx == lmdj::domain::PerformanceFx::filter);
+
+  // A replayed receipt is not a second audible gesture.
+  check_ok(application.command(
+      event("10000000-0000-4000-8000-000000000022",
+            {{"kind", "fx_engage"},
+             {"gesture_id", kFxGesture},
+             {"fx", "filter"},
+             {"value", 500}})));
+  LMDJ_CHECK(sink->applied().size() == 5);
+}
+
+// A refused gesture is not admitted: the master bus and the journal never
+// disagree about what the Performance sounded like.
+void test_refused_live_gesture_leaves_no_journalled_event() {
+  TempDirectory temp;
+  auto sink = std::make_shared<GestureSink>();
+  lmdj::facade::ApplicationConfig config{
+      temp.path(),
+      nullptr,
+      {},
+      {},
+      std::nullopt,
+      nullptr,
+      std::make_shared<Clock>(),
+      std::make_shared<Sequencer>(),
+      std::make_shared<LaunchAcknowledger>(),
+      lmdj::facade::make_unavailable_performance_replay_controller(),
+      sink,
+  };
+  lmdj::facade::Application application(std::move(config));
+  const auto bundle = temp.path() / "project.lmdj";
+  check_ok(application.command({{"operation", "project.create"},
+                                {"project_path", bundle.generic_string()},
+                                {"project_id", kProject},
+                                {"bpm", 120}}));
+  check_ok(application.command({{"operation", "performance.record.begin"},
+                                {"project_path", bundle.generic_string()},
+                                {"command_id", kBegin},
+                                {"expected_revision", 0},
+                                {"session_id", kSession},
+                                {"performance_id", kPerformance}}));
+
+  sink->refuse_next(1);
+  const auto refused =
+      application.command({{"operation", "performance.record.event"},
+                           {"project_path", bundle.generic_string()},
+                           {"session_id", kSession},
+                           {"event_id", "10000000-0000-4000-8000-000000000030"},
+                           {"event",
+                            {{"kind", "fx_engage"},
+                             {"gesture_id", kFxGesture},
+                             {"fx", "filter"},
+                             {"value", 500}}}});
+  LMDJ_CHECK(!refused.at("ok").get<bool>());
+  lmdj::project_io::SequenceJournal journal;
+  const auto after = journal.read_active_performance(bundle);
+  LMDJ_CHECK(after.has_value());
+  LMDJ_CHECK(after.value().pending_events.empty());
+
+  // The same event id is still admissible once the master bus accepts it.
+  check_ok(application.command(
+      {{"operation", "performance.record.event"},
+       {"project_path", bundle.generic_string()},
+       {"session_id", kSession},
+       {"event_id", "10000000-0000-4000-8000-000000000030"},
+       {"event",
+        {{"kind", "fx_engage"},
+         {"gesture_id", kFxGesture},
+         {"fx", "filter"},
+         {"value", 500}}}}));
+  LMDJ_CHECK(sink->applied().size() == 1);
+}
+
 } // namespace
 
 int main() {
@@ -992,6 +1182,8 @@ int main() {
     test_raw_gesture_admission_and_launch_ack();
     test_launch_receives_core_resolved_immutable_pattern_material();
     test_ambiguous_tail_append_freezes_runtime_without_overwrite();
+    test_admitted_fx_and_hold_gestures_reach_the_master_bus();
+    test_refused_live_gesture_leaves_no_journalled_event();
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;

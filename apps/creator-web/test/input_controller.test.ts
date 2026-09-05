@@ -1,7 +1,10 @@
 import {describe, expect, test} from "vitest";
 import {DEFAULT_KEYBOARD_MAPPING} from "@lmdj/web-runtime-platform/input_adapters.mjs";
 
-import {createCreatorInputController} from "../src/runtime/input_controller";
+import {
+  createCreatorInputController,
+  type PerformancePadInputEvent,
+} from "../src/runtime/input_controller";
 import type {
   CreatorSampleRuntimeSession,
   CreatorRuntimeSession,
@@ -84,6 +87,7 @@ function fixture() {
           patternId: "22222222-2222-4222-8222-222222222222",
           bars: 1,
         }],
+        patternSlots: Object.freeze(Array<string | null>(16).fill(null)),
         sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
       },
     },
@@ -285,6 +289,328 @@ async function settle() {
 }
 
 describe("Creator input controller", () => {
+  test("observes touch press, cancel, and a later press with exact raw shapes and fresh identities", async () => {
+    const value = fixture();
+    const gestureIds = [
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ];
+    const observed: Array<{
+      event: PerformancePadInputEvent;
+      source: string;
+    }> = [];
+    const controller = createCreatorInputController({
+      session: value.session,
+      getActiveBank: () => 0,
+      isAssigned: (slot) => slot === 0,
+      dispatch: value.dispatch,
+      createPerformanceGestureId: () => gestureIds.shift()!,
+      onPerformancePadEvent: (event, source) => observed.push({event, source}),
+    });
+    const touch = {
+      type: "pointerdown",
+      pointerType: "touch",
+      isPrimary: true,
+      button: 0,
+      pointerId: 7,
+      target: document.body,
+    };
+
+    expect(controller.pointerDown(touch, 0)).toBe(true);
+    expect(controller.pointerCancel({type: "pointercancel", pointerId: 7}, 0))
+      .toBe(true);
+    expect(controller.pointerDown({...touch, pointerId: 8}, 0)).toBe(true);
+    expect(controller.pointerUp({type: "pointerup", pointerId: 8}, 0)).toBe(true);
+    await settle();
+
+    expect(observed).toEqual([
+      {
+        event: {
+          kind: "pad_press",
+          gestureId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          slot: 0,
+          velocity: 100,
+        },
+        source: "pointer",
+      },
+      {
+        event: {
+          kind: "pad_release",
+          gestureId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          slot: 0,
+        },
+        source: "pointer",
+      },
+      {
+        event: {
+          kind: "pad_press",
+          gestureId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          slot: 0,
+          velocity: 100,
+        },
+        source: "pointer",
+      },
+      {
+        event: {
+          kind: "pad_release",
+          gestureId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          slot: 0,
+        },
+        source: "pointer",
+      },
+    ]);
+    expect(Object.keys(observed[0]!.event).sort()).toEqual([
+      "gestureId", "kind", "slot", "velocity",
+    ]);
+    expect(Object.keys(observed[1]!.event).sort()).toEqual([
+      "gestureId", "kind", "slot",
+    ]);
+    expect(observed.every(({event}) =>
+      !("source" in event) && event.kind !== ("pad_cancel" as string)))
+      .toBe(true);
+    controller.dispose();
+  });
+
+  test("observes keyboard release exactly once across adverse cleanup", async () => {
+    const value = fixture();
+    const observed: Array<{
+      event: PerformancePadInputEvent;
+      source: string;
+    }> = [];
+    const controller = createCreatorInputController({
+      session: value.session,
+      getActiveBank: () => 0,
+      isAssigned: (slot) => slot === 0,
+      dispatch: value.dispatch,
+      createPerformanceGestureId: () =>
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      onPerformancePadEvent: (event, source) => observed.push({event, source}),
+    });
+
+    window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyQ"}));
+    window.dispatchEvent(new Event("blur"));
+    window.dispatchEvent(new Event("blur"));
+    window.dispatchEvent(new KeyboardEvent("keyup", {code: "KeyQ"}));
+    controller.clearPressed();
+    controller.dispose();
+
+    expect(observed).toEqual([
+      {
+        event: {
+          kind: "pad_press",
+          gestureId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          slot: 0,
+          velocity: 100,
+        },
+        source: "keyboard",
+      },
+      {
+        event: {
+          kind: "pad_release",
+          gestureId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          slot: 0,
+        },
+        source: "keyboard",
+      },
+    ]);
+  });
+
+  test("closes Perform gestures once on visibility, pagehide, and dispose", () => {
+    const originalVisibility = Object.getOwnPropertyDescriptor(
+      document,
+      "visibilityState",
+    );
+    const cases: Array<{
+      name: string;
+      close: (controller: ReturnType<typeof createCreatorInputController>) => void;
+    }> = [
+      {
+        name: "visibility",
+        close: () => {
+          Object.defineProperty(document, "visibilityState", {
+            configurable: true,
+            value: "hidden",
+          });
+          document.dispatchEvent(new Event("visibilitychange"));
+        },
+      },
+      {
+        name: "persisted-pagehide",
+        close: () => window.dispatchEvent(
+          new PageTransitionEvent("pagehide", {persisted: true}),
+        ),
+      },
+      {
+        name: "terminal-pagehide",
+        close: () => window.dispatchEvent(
+          new PageTransitionEvent("pagehide", {persisted: false}),
+        ),
+      },
+      {name: "dispose", close: (controller) => controller.dispose()},
+    ];
+
+    try {
+      for (const [index, value] of cases.entries()) {
+        const observed: PerformancePadInputEvent[] = [];
+        const input = fixture();
+        const gestureId = `gesture-${index}`;
+        const controller = createCreatorInputController({
+          session: input.session,
+          getActiveBank: () => 0,
+          isAssigned: (slot) => slot === 0,
+          dispatch: input.dispatch,
+          createPerformanceGestureId: () => gestureId,
+          onPerformancePadEvent: (event) => observed.push(event),
+        });
+
+        expect(controller.keyDown({
+          code: "KeyQ",
+          repeat: false,
+          target: document.body,
+        }), value.name).toBe(true);
+        value.close(controller);
+        controller.keyUp({code: "KeyQ", target: document.body});
+        controller.clearPressed();
+        controller.dispose();
+        controller.dispose();
+
+        expect(observed, value.name).toEqual([
+          {kind: "pad_press", gestureId, slot: 0, velocity: 100},
+          {kind: "pad_release", gestureId, slot: 0},
+        ]);
+      }
+    } finally {
+      if (originalVisibility === undefined) {
+        Reflect.deleteProperty(document, "visibilityState");
+      } else {
+        Object.defineProperty(document, "visibilityState", originalVisibility);
+      }
+    }
+  });
+
+  test("observes MIDI press and release with velocity while keeping source out of the event", async () => {
+    const value = fixture();
+    const midiInput = fakeMidiInput();
+    const observed: Array<{
+      event: PerformancePadInputEvent;
+      source: string;
+    }> = [];
+    const controller = createCreatorInputController({
+      session: value.session,
+      getActiveBank: () => 1,
+      isAssigned: (slot) => slot === 16,
+      dispatch: value.dispatch,
+      requestMIDIAccess: async () => fakeMidiAccess(midiInput),
+      createPerformanceGestureId: () =>
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      onPerformancePadEvent: (event, source) => observed.push({event, source}),
+    });
+
+    expect(await controller.enableMidi()).toBe(true);
+    midiInput.emit([0x90, 36, 73]);
+    midiInput.emit([0x80, 36, 64]);
+    await settle();
+
+    expect(observed).toEqual([
+      {
+        event: {
+          kind: "pad_press",
+          gestureId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          slot: 16,
+          velocity: 73,
+        },
+        source: "midi",
+      },
+      {
+        event: {
+          kind: "pad_release",
+          gestureId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          slot: 16,
+        },
+        source: "midi",
+      },
+    ]);
+    expect(observed.some(({event}) => "source" in event)).toBe(false);
+    controller.dispose();
+  });
+
+  test("retains every accepted Perform identity across concurrent MIDI inputs", async () => {
+    const value = fixture();
+    const firstInput = fakeMidiInput();
+    const secondInput = fakeMidiInput();
+    const access = fakeMidiAccess(firstInput);
+    access.inputs.set("second-input", secondInput);
+    const gestureIds = ["first-midi-gesture", "second-midi-gesture"];
+    const observed: PerformancePadInputEvent[] = [];
+    const observedKeys: object[] = [];
+    const controller = createCreatorInputController({
+      session: value.session,
+      getActiveBank: () => 0,
+      isAssigned: (slot) => slot === 0,
+      dispatch: value.dispatch,
+      requestMIDIAccess: async () => access,
+      createPerformanceGestureId: () => gestureIds.shift()!,
+      onPerformancePadEvent: (event, _source, gestureKey) => {
+        observed.push(event);
+        observedKeys.push(gestureKey);
+      },
+    });
+
+    expect(await controller.enableMidi()).toBe(true);
+    firstInput.emit([0x90, 36, 80]);
+    secondInput.emit([0x90, 36, 90]);
+    secondInput.emit([0x80, 36, 0]);
+    firstInput.emit([0x80, 36, 0]);
+
+    expect(observed).toEqual([
+      {
+        kind: "pad_press",
+        gestureId: "first-midi-gesture",
+        slot: 0,
+        velocity: 80,
+      },
+      {
+        kind: "pad_press",
+        gestureId: "second-midi-gesture",
+        slot: 0,
+        velocity: 90,
+      },
+      {kind: "pad_release", gestureId: "second-midi-gesture", slot: 0},
+      {kind: "pad_release", gestureId: "first-midi-gesture", slot: 0},
+    ]);
+    expect(observedKeys[2]).toBe(observedKeys[1]);
+    expect(observedKeys[3]).toBe(observedKeys[0]);
+    expect(observedKeys[0]).not.toBe(observedKeys[1]);
+    expect(observed.every((event) => !("gestureKey" in event))).toBe(true);
+    controller.dispose();
+  });
+
+  test("does not create Perform identities when the optional observer is absent", async () => {
+    const value = fixture();
+    let identityCalls = 0;
+    const controller = createCreatorInputController({
+      session: value.session,
+      getActiveBank: () => 0,
+      isAssigned: (slot) => slot === 0,
+      dispatch: value.dispatch,
+      createPerformanceGestureId: () => {
+        identityCalls += 1;
+        return "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+      },
+    });
+
+    expect(controller.keyDown({code: "KeyQ", repeat: false, target: document.body}))
+      .toBe(true);
+    expect(controller.keyUp({code: "KeyQ", target: document.body})).toBe(true);
+    await settle();
+
+    expect(identityCalls).toBe(0);
+    expect(value.triggers).toEqual([
+      {slot: 0, velocity: 100, source: "keyboard"},
+    ]);
+    controller.dispose();
+  });
+
   test("keeps the armed Capture Pad selected while another Pad plays", async () => {
     const value = sampleFixture({getArmedCaptureSlot: () => 0});
     value.dispatch({

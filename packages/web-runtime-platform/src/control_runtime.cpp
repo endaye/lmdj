@@ -952,6 +952,7 @@ struct ControlRuntime::Impl {
         std::move(adapter.launch_acknowledger);
     config.performance_replay_controller =
         std::move(adapter.replay_controller);
+    config.performance_gesture_sink = std::move(adapter.gesture_sink);
     service = std::move(adapter.service);
     return facade::Application(std::move(config));
   }

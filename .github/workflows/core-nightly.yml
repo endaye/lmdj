@@ -40,7 +40,18 @@ jobs:
       - run: scripts/core.sh test tsan stress
 
   core-tsan-self-hosted-probe:
+    # Same repository-wide capacity queue as every other native-heavy job.
+    # Separate runner services on the shared Contabo host are not independent
+    # CPU: without this, a dispatch of this probe starts in the same second as
+    # `core-stress` below and the two timing-sensitive suites destroy each
+    # other's budgets. The first dispatch did exactly that, and its failure said
+    # nothing about whether the host can execute the TSan runtime -- which is
+    # the only question the probe exists to answer.
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.probe_self_hosted_tsan }}
+    concurrency:
+      group: lmdj-native-heavy
+      queue: max
+      cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 30
     steps:
@@ -61,6 +72,15 @@ jobs:
   core-stress:
     # Release stress is trusted native Core workload. The literal role queues
     # behind other native lanes instead of consuming Hosted Ubuntu minutes.
+    #
+    # Naming the role was not enough. The role spans two runner services on one
+    # physical host, so a sibling job runs beside this one rather than after it,
+    # and twenty consecutive stress repetitions are the least tolerant workload
+    # in the repository. The capacity queue is what makes "queues behind" true.
+    concurrency:
+      group: lmdj-native-heavy
+      queue: max
+      cancel-in-progress: false
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 60
     steps:

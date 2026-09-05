@@ -103,6 +103,8 @@ const RESOURCE_LIMITS = Object.freeze({
   ingest_decoded_frames: 43_200_000,
   ingest_channels: 2,
   imported_wav_bytes: 68_157_440,
+  perform_recording_frames: 86_400_000,
+  perform_recording_queue_batches: 32,
 });
 
 function success(envelope, result = {}) {

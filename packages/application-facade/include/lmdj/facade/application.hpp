@@ -84,6 +84,17 @@ public:
   cancel(const foundation::SequenceSessionId &session_id) noexcept = 0;
 };
 
+// Live application of an admitted Performance FX or HOLD gesture to the
+// running master bus (P10-D7: live and Replay drive the same DSP). Core owns
+// the translation, so no Host decides FX chain order, value scale or
+// coalescing. The sink is absent when no engine is attached; admission then
+// journals the event and changes no audio.
+class PerformanceGestureSink {
+public:
+  virtual ~PerformanceGestureSink() = default;
+  virtual foundation::Result<void> apply_gesture(audio::FxGesture gesture) = 0;
+};
+
 struct ApplicationConfig {
   std::filesystem::path workspace_root;
   std::shared_ptr<provider::Registry> providers;
@@ -99,6 +110,7 @@ struct ApplicationConfig {
   std::shared_ptr<PatternLaunchAcknowledger> pattern_launch_acknowledger =
       nullptr;
   std::shared_ptr<PerformanceReplayController> performance_replay_controller;
+  std::shared_ptr<PerformanceGestureSink> performance_gesture_sink = nullptr;
 };
 
 struct RuntimeSnapshotRequest {

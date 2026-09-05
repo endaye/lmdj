@@ -39,7 +39,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host `2.1.1` 已进入 Product Build `1.0.41.0` Assembly，并只依赖 Web Runtime Platform `2.0.1`。Creator 支持 WAV、MP3、M4A/AAC 与 FLAC 的内容嗅探摄入，在 48 kHz `OfflineAudioContext` 中把长源解码到 Wasm 外的单一 Host 缓冲，随后提供波形、试听、revision-bound 配额显示和选区提交。Capture 在完整波形上直接显示可独立移动的 Start/End grips，遮暗选区外区域，并以秒显示只读 Duration；内部与提交边界仍使用 `selectionStart + selectionFrames`。提交选区时 1 MiB 只作为单 chunk 上限，选区 WAV 总量仍由已验证 manifest 上限约束；非 quota 协议诊断会在 operation boundary 被收敛为空 details，不再击穿 reducer，Bank/Project quota details 仍严格校验。既有 Sequence Surface、Sample Editor、Pad Capture、pre-commit Crop、输入电平门与可恢复 `DUPLICATE_ID` 行为继续保留。
+<StatusBadge status="implemented" /> Creator Web Host `3.0.0` 已进入 Product Build `1.0.42.0` Assembly，并只依赖 Web Runtime Platform `3.0.0`。Project Truth 的当前写出契约是 `lmdj.project.v4`（含 16 个 Pattern Slot 与 `performances`），v1/v2/v3 仅作为只读迁移输入。Creator 支持 WAV、MP3、M4A/AAC 与 FLAC 的内容嗅探摄入，在 48 kHz `OfflineAudioContext` 中把长源解码到 Wasm 外的单一 Host 缓冲，随后提供波形、试听、revision-bound 配额显示和选区提交。Capture 在完整波形上直接显示可独立移动的 Start/End grips，遮暗选区外区域，并以秒显示只读 Duration；内部与提交边界仍使用 `selectionStart + selectionFrames`。提交选区时 1 MiB 只作为单 chunk 上限，选区 WAV 总量仍由已验证 manifest 上限约束；非 quota 协议诊断会在 operation boundary 被收敛为空 details，不再击穿 reducer，Bank/Project quota details 仍严格校验。既有 Sequence Surface、Sample Editor、Pad Capture、pre-commit Crop、输入电平门与可恢复 `DUPLICATE_ID` 行为继续保留。
 
 ## 创作边界
 
@@ -52,6 +52,18 @@ Open local 在已有 Project 时仍保持可达；list/import/open/reopen 属于
 ## 演奏边界
 
 Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
+
+Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform surface 由 Pattern launch strip、FX slider bank、HOLD、Pad surface、录制面板与回放面板组成。
+
+FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。滑杆按 engage/move/release 手势成对记录，disabled 或卸载时强制释放未闭合手势。HOLD 是链路级开关，只在 `recording` 或 `flushing` 阶段可操作。
+
+Pattern launch strip 呈现 16 个 Pattern Slot（v4 的可发射地址空间），槽位状态为 `idle` / `pending` / `acknowledged`：Creator 发出 `requestPerformancePatternLaunch` 后进入 pending，然后轮询 `performance.record.status`，直到该 `requestId` 出现在 authority 的 `lastLaunchAck` 才标记为已确认；空槽被确认时显式显示 silent gap。Pattern 的 assign/clear/move 只在录制 `idle` 时开放。状态输出中的 open Pad 手势数、open FX 手势数、HOLD 与最后一次 acknowledged launch 全部取自 Facade authority，不做本地预测。
+
+录制阶段机为 `idle → starting → recording → flushing → stopping → stopped → saving | discarding`。录制面板提供 Record / Flush / Stop / Performance 名称 / Save / Discard / Export Performance WAV，并在 `bindingStatus === "retry"` 时额外提供 Retry WAV bind。WAV 绑定词汇是 `unbound | binding | retry | bound`；bind 或随后的 Project truth 刷新失败会回到 `stopped` 并保留 retry，不丢弃已落盘的 WAV 前缀。master tap 以每批最多 4,800 帧喂入流式 WAV writer，背压、写入失败、tap 投递失败与 30 分钟上限都以明确原因封存，durable WAV 前缀仍可保存。
+
+回放面板列出已保存的 Performance，可对其一发起 replay，并显示 `replay.state`、解析出的 revision 与 `neutral` 标记；同一面板提供 start frame / end frame / 目标 Pad Slot（`0..63`）的 resample commit，以及 Performance recovery 候选的 Apply recovery / Discard recovery。
+
+Host 只渲染 Facade 返回的 authority：录制状态、pending/acknowledged launch、replay 状态与 recovery 候选都来自 Core 查询结果。演奏输入本身不改写 Project Truth；只有显式的 Save、Discard 与 WAV bind 会带 `expected_revision` 经 Facade 提交 Project mutation，Creator 随后重读 Project truth，不自行推断 revision。
 
 `1.0.40.0` 的 macOS Chrome M2 实体听感 8 个检查组全部通过：非零裁剪、One Shot、Gate release、Loop Gate、Loop Toggle、Volume/Mute、16 Pads 与 Replace/reload 均无可闻异常。约 40 ms 选区的快速重复纹理一度被描述为接缝咔哒；同一候选复听后，操作者明确修正为短片段高速循环的正常声音、没有明显独立接缝爆音。该 `PASS` 只适用于已记录的 Chrome 实体听感行，不表示其他浏览器或设备通过。
 
@@ -73,7 +85,7 @@ Capture 渲染证据。该自动化只证明状态与渲染边界；在修复进
 
 `scripts/creator-web.sh package` 生成内容哈希资产和 canonical Creator distribution manifest；manifest 绑定 Product Build、Host、Platform、协议、固定 Emscripten 身份、heap 与资源上限，并显式声明兼容的诊断 Host 身份。共享 native manifest gate 只接受 Product Assembly 注入的精确 Host/contract/version 组合。该同构建 manifest ownership 协议不是公开跨版本 Contract。
 
-## 自动化证据
+`1.0.42.0` 的 Creator 同构建 distribution manifest 声明六个 expected asset：`host_main`（`assets/main.*.js`）、`runtime_script`（`assets/runtime.*.js`）、`runtime_wasm`（`assets/runtime.*.wasm`）、`host_style`（`assets/styles.*.css`）、`capture_worklet`（`assets/capture-worklet.*.js`），以及新增的 `perform_master_tap_worklet`（`assets/perform-master-tap.*.js`）；兼容的诊断 Host 身份为 `web-runtime-host 3.0.0`。`apps/creator-web/tools/package.py` 定位 Vite 产出的 master tap processor，按内容哈希为 `assets/perform-master-tap.<sha256>.js`，改写主 bundle 中唯一一处引用，并在匹配为零或多于一个时拒绝打包。共享 native manifest gate 对声明 `compatible_hosts` 的 Creator manifest 要求恰好一个 tap 资产（诊断 Host 为零个），并校验九项资源上限——既有七项之外新增 `perform_recording_frames` 86,400,000 与 `perform_recording_queue_batches` 32，两项都必须是正 safe integer。多余默认值、重复 role、缺失或错误的前后缀、digest 不匹配，以及无法解析到精确哈希资产的主 bundle URL 都 fail closed。更早的不可变包保持各自的精确身份，不被追溯要求携带 Stage 10 字段。私有协议版本仍为 `1`。
 
 ## 公共部署边界
 
@@ -90,10 +102,10 @@ Creator workflow 源码使用 `creator-canary` Environment 与 `NETLIFY_CREATOR_
 
 ## 自动化证据
 
-Vitest 覆盖长素材容器嗅探、pre/post-decode boundary、单一缓冲、配额选区/拒绝保留，以及 Sequence stopped/recording/switch-pending/flushing/recovery/trim-overlay 状态、边界后的 active authority 校验、统一输入、Capture 互操作与 privacy-safe acceptance report；Capture 单测另固定 full-buffer 初态、两端点独立操作、midpoint 命中区、grab offset、middle inert、越界/交叉限制、键盘/辅助技术秒值、Escape/cancel 回滚和精确 commit frame range。A9 的七个物理 fixture 由仓库脚本可复现并记录 SHA-256。packaged Playwright 使用真实 Facade 验证组合旅程，并在完整 Capture 波形上移动 Start/End 后核对提交 artifact 的精确 byte length；armed-Pad journey 在 Capture commit 前录 A2、以 armed A1 stop（不入 journal）、commit 后再录 A1，随后 Stop、reload/reopen 并检查 exact event delta/order/count、revision、Pad/Asset 以及 WAV media type/SHA-256/byte length Project Truth。Core fault journey另覆盖 pre-publication prepare failure 后的 Discard/disarm、continued flush/Stop 与 restart。自动化不替代真实 Safari、物理 MIDI/Touch 或音频验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
+Vitest 覆盖长素材容器嗅探、pre/post-decode boundary、单一缓冲、配额选区/拒绝保留，以及 Sequence stopped/recording/switch-pending/flushing/recovery/trim-overlay 状态、边界后的 active authority 校验、统一输入、Capture 互操作与 privacy-safe acceptance report；Capture 单测另固定 full-buffer 初态、两端点独立操作、midpoint 命中区、grab offset、middle inert、越界/交叉限制、键盘/辅助技术秒值、Escape/cancel 回滚和精确 commit frame range。A9 的七个物理 fixture 由仓库脚本可复现并记录 SHA-256。packaged Playwright 使用真实 Facade 验证组合旅程，并在完整 Capture 波形上移动 Start/End 后核对提交 artifact 的精确 byte length；armed-Pad journey 在 Capture commit 前录 A2、以 armed A1 stop（不入 journal）、commit 后再录 A1，随后 Stop、reload/reopen 并检查 exact event delta/order/count、revision、Pad/Asset 以及 WAV media type/SHA-256/byte length Project Truth。Core fault journey另覆盖 pre-publication prepare failure 后的 Discard/disarm、continued flush/Stop 与 restart。自动化不替代 #359 的 macOS/iPadOS Safari 内存证据或物理 MIDI/Touch/音频验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
 
 自动化结论本身不是物理验收；M3 的 Chrome Pointer 与 M8 的 Safari Pointer/听感 `PASS` 均来自上述实体记录。Safari capture M7 已在 `1.0.41.0` 实体测试中失败并由 #625 阻塞；其他通过项不替代其完整重跑、Stage 9 Safari Sequence、Chrome MIDI 或 iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 
 ## 非能力
 
-当前不宣称离线安装/PWA、云同步、协作、素材智能、生产部署已执行、`beta`/`stable` 或未执行的物理设备体验已完成。Sequence recording 已交付，但通用 Sequence event editor、Undo/redo、持久化 Asset DSP 与自动 slicing 仍不在当前能力内。
+当前不宣称离线安装/PWA、云同步、协作、素材智能、生产部署已执行、`beta`/`stable` 或未执行的物理设备体验已完成。Sequence recording 已交付，但通用 Sequence event editor、Undo/redo、持久化 Asset DSP 与自动 slicing 仍不在当前能力内。Perform surface 已进入 `1.0.42.0` 源码，但 Stage 10 尚无任何物理验收：没有 Perform 的实体听感、实体输入或延迟结论，自动化只证明状态机、authority 归属与分发身份边界。同样不宣称本 Build 已获得 tag、Release、不可变 snapshot、部署或 Channel promotion——不可变 snapshot 与 canary Release 各自是独立的后续授权与验证边界。

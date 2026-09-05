@@ -942,6 +942,45 @@ void test_explicit_stop_waits_for_neutral_reset_confirmation() {
 
 }  // namespace
 
+// The live gesture sink is the audible half of P10-D7: the same FxGesture the
+// Replay sink enqueues must reach the engine when Core admits it live.
+void test_live_gesture_sink_reaches_the_running_master_bus() {
+  RealtimeEngine engine;
+  prepare_running_engine(engine);
+  auto adapter = lmdj::facade::make_engine_performance_adapter(
+      engine, lmdj::facade::make_engine_pattern_publication_gateway(engine));
+  LMDJ_CHECK(adapter.gesture_sink != nullptr);
+
+  const auto before = engine.master_fx_telemetry().enqueued_gestures;
+  LMDJ_CHECK(adapter.gesture_sink
+                 ->apply_gesture(lmdj::audio::FxGesture{
+                     lmdj::audio::FxGestureKind::engage,
+                     lmdj::domain::PerformanceFx::filter, 500})
+                 .has_value());
+  LMDJ_CHECK(adapter.gesture_sink
+                 ->apply_gesture(lmdj::audio::FxGesture{
+                     lmdj::audio::FxGestureKind::move,
+                     lmdj::domain::PerformanceFx::filter, 630})
+                 .has_value());
+  LMDJ_CHECK(engine.master_fx_telemetry().enqueued_gestures == before + 2);
+  render(engine, 4'800);
+  LMDJ_CHECK(engine.master_fx_telemetry().dequeued_gestures >= 2);
+
+  // A stopped engine refuses the gesture with a message naming the cause and
+  // the remedy rather than silently dropping audible state.
+  RealtimeEngine stopped;
+  auto refusing = lmdj::facade::make_engine_performance_adapter(
+      stopped, lmdj::facade::make_engine_pattern_publication_gateway(stopped));
+  const auto refused = refusing.gesture_sink->apply_gesture(
+      lmdj::audio::FxGesture{lmdj::audio::FxGestureKind::engage,
+                             lmdj::domain::PerformanceFx::filter, 500});
+  LMDJ_CHECK(!refused.has_value());
+  LMDJ_CHECK(refused.error().message.find("the engine is not running") !=
+             std::string::npos);
+  LMDJ_CHECK(refused.error().message.find("prepare the master FX chain") !=
+             std::string::npos);
+}
+
 int main() {
   try {
     test_launch_outcomes_are_two_phase_ordered_and_session_isolated();
@@ -965,6 +1004,7 @@ int main() {
     test_replay_progresses_from_rendering_and_periodic_service_only();
     test_reset_queue_pressure_continues_without_duplicate_gestures();
     test_explicit_stop_waits_for_neutral_reset_confirmation();
+    test_live_gesture_sink_reaches_the_running_master_bus();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

@@ -497,6 +497,7 @@ class NativeHost final {
             performance_adapter_.input_sequencer,
             performance_adapter_.launch_acknowledger,
             performance_adapter_.replay_controller,
+            performance_adapter_.gesture_sink,
         }) {
 #if defined(__APPLE__)
     if (!invocation_.no_device) {

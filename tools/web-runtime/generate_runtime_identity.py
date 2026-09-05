@@ -282,6 +282,8 @@ def read_policy(repo_root: Path, components: dict[str, dict], toolchain: dict) -
         "ingest_decoded_frames",
         "ingest_channels",
         "imported_wav_bytes",
+        "perform_recording_frames",
+        "perform_recording_queue_batches",
     }
     if not isinstance(limits, dict) or set(limits) != expected_limit_keys or any(
         type(value) is not int or value < 1 for value in limits.values()

@@ -666,7 +666,7 @@ test("re-importing a diverged Project Bundle recovers through Open local Project
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,
   });
-  await page.getByRole("button", {name: "Project"}).click();
+  await page.getByRole("button", {name: "Project", exact: true}).click();
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooserPromise).setFiles(sampleBundle);

@@ -3949,6 +3949,13 @@ struct FakeProxy final {
   static void after_capture_drain(void* context) {
     auto& self = *static_cast<FakeProxy*>(context);
     ++self.capture_drains;
+    // Runs inside the realtime service: the point at which, in the browser,
+    // service_performance() may have suspended in OPFS and the mailbox may run
+    // the next task.
+    if (self.during_realtime_service) {
+      auto during = std::exchange(self.during_realtime_service, nullptr);
+      during();
+    }
     if (!std::exchange(self.inject_capture_drop, false)) {
       return;
     }
@@ -3989,6 +3996,7 @@ struct FakeProxy final {
   std::uint32_t response_delay_ms = 0;
   RealtimeEngine* capture_engine = nullptr;
   std::function<void()> during_dispatch;
+  std::function<void()> during_realtime_service;
   std::size_t capture_drains = 0;
   std::vector<Task> tasks;
 };
@@ -4799,6 +4807,76 @@ void test_bridge_defers_a_request_whose_thunk_runs_during_a_dispatch() {
   LMDJ_CHECK(!runtime->failed());
 }
 
+// The realtime service reaches OPFS through Asyncify when a launch
+// acknowledgement applies (service_performance appends the durable tail). A
+// request the mailbox delivers while that service is suspended must park
+// behind it exactly as it parks behind a suspended dispatch; dispatching it
+// inline would suspend Asyncify a second time and the worker would never
+// answer again (#656).
+void test_bridge_parks_requests_during_the_realtime_service() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  LMDJ_CHECK(runtime->engine().start().has_value());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+
+  // Realtime service arms only after a dispatch observes the running engine.
+  LMDJ_CHECK(
+      bridge->submit(encode(request(uuid(809), "host.status", Json::object())), {}) ==
+      BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  LMDJ_CHECK(poll_message(*bridge).at("ok") == true);
+  while (!proxy.tasks.empty()) proxy.pump_one();
+
+  // An empty poll asks for realtime service; the proxy now holds its thunk.
+  check_no_bridge_message(*bridge);
+  LMDJ_CHECK(proxy.tasks.size() == 1);
+
+  const auto request_id = uuid(810);
+  bool parked_during_service = false;
+  proxy.during_realtime_service = [&] {
+    LMDJ_CHECK(
+        bridge->submit(encode(request(request_id, "host.status", Json::object())), {}) ==
+        BridgeSubmitStatus::accepted);
+    const auto queued_before = proxy.tasks.size();
+    // The mailbox runs the request thunk while the service owns the thread.
+    proxy.pump_last();
+    parked_during_service = true;
+    // Parked, not dispatched: no response exists, nothing failed, and the
+    // request was not re-proxied while the service still owns the thread.
+    check_no_bridge_message(*bridge);
+    LMDJ_CHECK(!bridge->failed());
+    LMDJ_CHECK(proxy.tasks.size() == queued_before - 1);
+  };
+  proxy.pump_one();
+  LMDJ_CHECK(parked_during_service);
+  LMDJ_CHECK(!bridge->failed());
+  LMDJ_CHECK(!runtime->failed());
+
+  // The service returned and handed the parked request back to the mailbox;
+  // it answers only once its own thunk runs again.
+  LMDJ_CHECK(!proxy.tasks.empty());
+  std::optional<Json> response;
+  for (std::size_t budget = proxy.tasks.size() + 2; budget > 0 && !response; --budget) {
+    if (proxy.tasks.empty()) break;
+    proxy.pump_one();
+    std::array<std::byte, kBridgeMaximumEnvelopeBytes> output{};
+    std::size_t required = 0;
+    if (bridge->poll(output, required) == BridgePollStatus::message) {
+      const auto* text = reinterpret_cast<const char*>(output.data());
+      response = Json::parse(text, text + required);
+    }
+  }
+  LMDJ_CHECK(response.has_value());
+  LMDJ_CHECK(response->at("request_id") == request_id);
+  LMDJ_CHECK(response->at("ok") == true);
+  LMDJ_CHECK(!bridge->failed());
+  LMDJ_CHECK(!runtime->failed());
+}
+
 // Sealing the runtime aborts imports and so reaches OPFS through Asyncify. A
 // failure observed by a foreign mailbox task while a dispatch is suspended must
 // set the failure flags at once but seal only after that dispatch returns.
@@ -5292,6 +5370,7 @@ int main() {
     test_bridge_defers_a_request_whose_thunk_runs_during_a_dispatch();
     test_bridge_defers_the_seal_when_a_failure_lands_during_a_dispatch();
     test_bridge_parks_foreign_control_tasks_during_a_dispatch();
+    test_bridge_parks_requests_during_the_realtime_service();
     test_bridge_parks_the_realtime_service_during_a_dispatch();
     test_bridge_benign_query_cancel_does_not_fail_the_runtime();
     test_bridge_rechecks_deadline_before_success_publication();

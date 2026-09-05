@@ -39,19 +39,28 @@ class GrokReviewWorkflowTest(unittest.TestCase):
     def test_workflow_is_advisory_pull_request_only(self) -> None:
         prefix = self.source.split("jobs:", 1)[0]
         message = (
-            "why: Grok review must stay off Core CI and the merge queue; "
-            "remedy: trigger only pull_request on main and keep contents: read, "
-            "issues: write, and pull-requests: write"
+            "why: Grok review must stay off Core CI and the merge queue, and "
+            "holds no grant its sink does not need; remedy: trigger only "
+            "pull_request on main and keep exactly contents: read and "
+            "pull-requests: write -- issues: write went with the tracking Issue"
         )
         self.assertIn("pull_request:", prefix, message)
         self.assertNotIn("pull_request_target:", self.source, message)
         self.assertNotIn("push:", prefix, message)
         self.assertNotIn("merge_group:", prefix, message)
         self.assertIn(
-            "permissions:\n  contents: read\n  issues: write\n  pull-requests: write",
+            "permissions:\n  contents: read\n  pull-requests: write",
             prefix,
             message,
         )
+        # Scan directives, not the raw source: the workflow explains in a
+        # comment why `issues: write` is gone, and a raw-text absence check
+        # would fail on its own explanation. See gate-matches-its-own-prose.
+        directives = "\n".join(
+            line for line in self.source.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        self.assertNotIn("issues: write", directives, message)
         self.assertNotIn("contents: write", self.source, message)
         self.assertNotIn("id-token: write", self.source, message)
 
@@ -248,135 +257,139 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         )
         self.assertIn(self.script.COMMENT_MARKER, comment)
         self.assertIn("advisory", comment.lower())
-        self.assertIn("does not block merge", comment)
+        self.assertIn("review threads", comment)
+        self.assertIn("conversation-resolution", comment)
         self.assertIn("tokens: 12", comment)
         self.assertIn("models: grok-4.6", comment)
 
-    def test_actionable_findings_open_an_issue_and_nits_do_not(self) -> None:
-        sample = (
-            "## Verdict\n`issues`\n\n## Findings\n"
-            "### [critical] Grok can read job credentials\n"
-            "- Path: `.github/workflows/grok-review.yml:33`\n"
-            "### [important] Sticky comment publishes stdout\n"
-            "- Why: the child process inherits the environment\n"
-            "### [nit] Prefer a shorter heading\n"
-            "- Why: style\n"
-        )
-        findings = self.script.parse_findings(sample)
+    SAMPLE = (
+        "## Verdict\n`issues`\n\n## Findings\n"
+        "### [critical] Grok can read job credentials\n"
+        "- Path: `.github/workflows/grok-review.yml:33`\n"
+        "- Why: the child inherits the environment\n"
+        "### [important] Range finding\n"
+        "- Path: `scripts/ci/change_scope.py:10-14`\n"
+        "### [important] No location given\n"
+        "- Why: the child process inherits the environment\n"
+        "### [nit] Prefer a shorter heading\n"
+        "- Why: style\n"
+    )
+
+    def test_parse_location_handles_lines_ranges_and_bare_paths(self) -> None:
+        parse = self.script.parse_location
+        self.assertEqual(parse("- Path: `a/b.py:7`"), ("a/b.py", 7, 7))
+        self.assertEqual(parse("- Path: `a/b.py:10-14`"), ("a/b.py", 10, 14))
+        self.assertEqual(parse("- Path: `a/b.py`"), ("a/b.py", None, None))
+        self.assertIsNone(parse("- Why: no path here"))
+
+    def test_actionable_findings_become_threads_and_nits_do_not(self) -> None:
+        """Same severity rule as before; the sink moved from an Issue to threads.
+
+        A thread must be resolved before merge, so a nit is not worth one and
+        stays on the summary comment. An Issue per Pull Request was tried
+        first: four of them stayed open and unread while the thread-posting
+        lanes' findings were acted on the same day.
+        """
+        findings = self.script.parse_findings(self.SAMPLE)
         self.assertEqual(
             [item["severity"] for item in findings],
-            ["critical", "important", "nit"],
+            ["critical", "important", "important", "nit"],
         )
-        self.assertEqual(self.script.parse_verdict(sample), "issues")
-        self.assertTrue(
-            self.script.should_open_issue(verdict="issues", findings=findings)
-        )
-        self.assertFalse(
-            self.script.should_open_issue(
-                verdict="issues",
-                findings=[item for item in findings if item["severity"] == "nit"],
-            )
-        )
-        self.assertFalse(
-            self.script.should_open_issue(verdict="clean", findings=[])
-        )
-        self.assertTrue(
-            self.script.should_open_issue(verdict="issues", findings=[])
-        )
-        self.assertEqual(self.script.issue_priority(findings), "priority:p1")
-        body = self.script.format_issue_body(
-            pr_number=12,
-            pr_url="https://github.com/endaye/lmdj/pull/12",
-            text=sample,
-            findings=findings,
-        )
-        self.assertIn("lmdj-grok-review-pr-12", body)
-        self.assertIn("https://github.com/endaye/lmdj/pull/12", body)
-        self.assertIn("[critical] Grok can read job credentials", body)
-        self.assertNotIn("Prefer a shorter heading", body)
-        self.assertIsNone(self.script.CLOSING_KEYWORD.search(body))
-
-    def test_upsert_tracking_issue_creates_updates_and_closes(self) -> None:
         calls = []
 
         def requester(method, url, token, payload=None):
             calls.append((method, url, payload))
-            if method == "GET":
-                return {"items": []}
-            if method == "POST" and url.endswith("/issues"):
-                return {"number": 77}
-            return {"number": 77}
+            return {"id": 1}
 
-        action = self.script.upsert_tracking_issue(
-            repository="endaye/lmdj",
-            pr_number=12,
-            pr_url="https://github.com/endaye/lmdj/pull/12",
-            token="token",
-            text="## Verdict\nissues\n\n### [important] Missing test\n- Why: no coverage\n",
-            findings=[{
-                "severity": "important",
-                "title": "Missing test",
-                "body": "- Why: no coverage",
-            }],
-            verdict="issues",
-            requester=requester,
+        action = self.script.post_review(
+            repository="endaye/lmdj", pr_number=12, head_sha="abcdef0123456789",
+            token="token", findings=findings, verdict="issues", requester=requester,
         )
-        self.assertEqual(action, "created #77")
-        self.assertEqual(calls[1][0], "POST")
-        self.assertEqual(
-            calls[1][2]["labels"],
-            ["type:bug", "area:ci-release", "priority:p2"],
+        self.assertEqual(action, "posted 2 inline, 1 in body")
+        self.assertEqual(len(calls), 1)
+        method, url, payload = calls[0]
+        self.assertEqual(method, "POST")
+        self.assertTrue(url.endswith("/pulls/12/reviews"), url)
+        self.assertEqual(payload["event"], "COMMENT",
+                         "why: a REQUEST_CHANGES verdict would make the lane a "
+                         "reviewer with veto rather than an advisor; remedy: keep "
+                         "event COMMENT and let conversation resolution do the holding")
+        self.assertEqual(payload["commit_id"], "abcdef0123456789")
+        inline = {c["path"]: c for c in payload["comments"]}
+        self.assertEqual(set(inline), {".github/workflows/grok-review.yml", "scripts/ci/change_scope.py"})
+        self.assertEqual(inline[".github/workflows/grok-review.yml"]["line"], 33)
+        ranged = inline["scripts/ci/change_scope.py"]
+        self.assertEqual((ranged["start_line"], ranged["line"]), (10, 14))
+        for comment in payload["comments"]:
+            self.assertIn(self.script.THREAD_MARKER, comment["body"])
+            self.assertIn("abcdef012", comment["body"])
+        self.assertIn("No location given", payload["body"])
+        self.assertNotIn("Prefer a shorter heading", payload["body"],
+                         "why: a nit thread would have to be resolved before merge; "
+                         "remedy: keep nits on the summary comment only")
+
+    def test_post_review_skips_when_only_nits_and_posts_one_thread_when_unstructured(self) -> None:
+        calls = []
+        requester = lambda m, u, t, p=None: calls.append((m, u, p)) or {"id": 1}  # noqa: E731
+        nits = [{"severity": "nit", "title": "style", "body": "- Why: style"}]
+        self.assertTrue(self.script.post_review(
+            repository="endaye/lmdj", pr_number=1, head_sha="0" * 40, token="t",
+            findings=nits, verdict="issues", requester=requester,
+        ).startswith("skipped"))
+        self.assertEqual(calls, [])
+        action = self.script.post_review(
+            repository="endaye/lmdj", pr_number=1, head_sha="0" * 40, token="t",
+            findings=[], verdict="issues", requester=requester,
         )
+        self.assertEqual(action, "posted 0 inline, 1 in body")
+        self.assertIn("without structured", calls[0][2]["body"])
 
-        calls.clear()
+    def test_post_review_folds_inline_comments_into_the_body_on_422(self) -> None:
+        """A line the diff does not touch is rejected; the finding is still real."""
+        findings = self.script.parse_findings(self.SAMPLE)
+        calls = []
 
-        def updater(method, url, token, payload=None):
-            calls.append((method, url, payload))
-            if method == "GET":
-                return {"items": [{"number": 77, "state": "open"}]}
-            return {"number": 77}
+        def requester(method, url, token, payload=None):
+            calls.append(payload)
+            if len(calls) == 1:
+                raise RuntimeError("GitHub POST ... failed: 422 line not in diff")
+            return {"id": 2}
 
-        updated = self.script.upsert_tracking_issue(
-            repository="endaye/lmdj",
-            pr_number=12,
-            pr_url="https://github.com/endaye/lmdj/pull/12",
-            token="token",
-            text="## Verdict\nissues\n\n### [critical] Leak\n- Why: token\n",
-            findings=[{
-                "severity": "critical",
-                "title": "Leak",
-                "body": "- Why: token",
-            }],
-            verdict="issues",
-            requester=updater,
+        action = self.script.post_review(
+            repository="endaye/lmdj", pr_number=12, head_sha="f" * 40,
+            token="token", findings=findings, verdict="issues", requester=requester,
         )
-        self.assertEqual(updated, "updated #77")
-        self.assertEqual(calls[1][0], "PATCH")
-        self.assertEqual(calls[1][2]["state"], "open")
+        self.assertEqual(action, "posted 0 inline, 3 in body after 422")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1]["comments"], [])
+        self.assertIn("`.github/workflows/grok-review.yml:33`", calls[1]["body"])
+        self.assertIn("`scripts/ci/change_scope.py:10`", calls[1]["body"])
+        self.assertIn("No location given", calls[1]["body"])
 
-        calls.clear()
+    def test_a_non_422_failure_is_not_swallowed(self) -> None:
+        def requester(method, url, token, payload=None):
+            raise RuntimeError("GitHub POST ... failed: 403 forbidden")
+        with self.assertRaises(RuntimeError):
+            self.script.post_review(
+                repository="endaye/lmdj", pr_number=12, head_sha="f" * 40, token="t",
+                findings=self.script.parse_findings(self.SAMPLE), verdict="issues",
+                requester=requester,
+            )
 
-        def closer(method, url, token, payload=None):
-            calls.append((method, url, payload))
-            if method == "GET":
-                return {"items": [{"number": 77, "state": "open"}]}
-            return {"number": 77}
-
-        closed = self.script.upsert_tracking_issue(
-            repository="endaye/lmdj",
-            pr_number=12,
-            pr_url="https://github.com/endaye/lmdj/pull/12",
-            token="token",
-            text="## Verdict\nclean\n\n## Findings\nNo findings.\n",
-            findings=[],
-            verdict="clean",
-            requester=closer,
+    def test_the_lane_no_longer_opens_issues(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        directives = "\n".join(
+            line for line in source.splitlines() if not line.lstrip().startswith("#")
         )
-        self.assertEqual(closed, "closed #77")
-        self.assertEqual(calls[1][0], "POST")
-        self.assertIn("/issues/77/comments", calls[1][1])
-        self.assertEqual(calls[2][2]["state"], "closed")
-        self.assertIsNone(self.script.CLOSING_KEYWORD.search(calls[1][2]["body"]))
+        for symbol in ("upsert_tracking_issue", "format_issue_body", "should_open_issue",
+                       "find_tracking_issue", "ISSUE_MARKER", "POST_ISSUE"):
+            self.assertNotIn(
+                symbol, directives,
+                msg=(f"why: the tracking-Issue sink produced findings nobody read, and "
+                     f"a surviving {symbol} would be the path back to it; remedy: post "
+                     f"findings as review threads through post_review only"),
+            )
+        self.assertNotIn("POST_ISSUE", self.source)
 
     def test_upsert_updates_existing_sticky_comment(self) -> None:
         calls = []

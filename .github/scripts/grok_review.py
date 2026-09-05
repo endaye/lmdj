@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """Advisory Grok pull-request review for GitHub Actions.
 
-The workflow posts a sticky comment. Findings never fail the job. Missing
-credentials, an empty diff, an oversized diff, or the skip label exit 0.
-Infra failures after credentials are present exit non-zero.
+Findings post the way the other advisory reviewers' do: `critical` and
+`important` findings become inline review threads on the Pull Request, and a
+sticky summary comment carries the whole review including nits. Threads are
+what make a finding get read -- `main` requires conversations to be resolved,
+so each one is acknowledged by a human, by fixing or by replying. The earlier
+sink, a tracking Issue per Pull Request, produced four open Issues nobody had
+read while the thread-posting lanes were producing findings that were acted on
+the same day. An advisory finding that does not block also does not get seen.
+
+Findings never fail the job. Missing credentials, an empty diff, an oversized
+diff, or the skip label exit 0. Infra failures after credentials are present
+exit non-zero.
 """
 
 from __future__ import annotations
@@ -17,14 +26,12 @@ import re
 import subprocess
 import sys
 from typing import Any
-from urllib.parse import quote
 import urllib.error
 import urllib.request
 
 
 COMMENT_MARKER = "<!-- lmdj-grok-review -->"
-ISSUE_TRACKING_ID = "lmdj-grok-review-pr-{pr_number}"
-ISSUE_MARKER = "<!-- {tracking_id} -->"
+THREAD_MARKER = "<!-- lmdj-grok-review-thread -->"
 SKIP_LABEL = "skip-grok-review"
 MAX_DIFF_BYTES = 400_000
 PINNED_GROK_VERSION = "1.0.13"
@@ -40,9 +47,11 @@ VERDICT_LINE = re.compile(
     r"^##\s*Verdict\s*\n([\s\S]*?)(?=^##\s|\Z)",
     re.IGNORECASE | re.MULTILINE,
 )
-CLOSING_KEYWORD = re.compile(
-    r"\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#\d+",
-    re.IGNORECASE,
+# `- Path: `file:line`` or `file:start-end` or a bare `file`, as the prompt
+# asks for. The location decides whether a finding can be an inline thread.
+PATH_LINE = re.compile(
+    r"^-\s*Path:\s*`([^`:\s]+)(?::(\d+)(?:-(\d+))?)?`",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 REVIEW_INSTRUCTIONS = """\
@@ -143,10 +152,6 @@ def build_prompt(
     )
 
 
-def tracking_id(pr_number: int) -> str:
-    return ISSUE_TRACKING_ID.format(pr_number=pr_number)
-
-
 def parse_verdict(text: str) -> str:
     match = VERDICT_LINE.search(text or "")
     if match is None:
@@ -177,57 +182,30 @@ def actionable_findings(findings: Sequence[Mapping[str, str]]) -> list[Mapping[s
     return [item for item in findings if item.get("severity") in ACTIONABLE_SEVERITIES]
 
 
-def should_open_issue(*, verdict: str, findings: Sequence[Mapping[str, str]]) -> bool:
-    if actionable_findings(findings):
-        return True
-    return verdict == "issues" and not findings
+def parse_location(body: str) -> tuple[str, int | None, int | None] | None:
+    """(path, start_line, end_line) from a finding's `- Path:` line, if any."""
+    match = PATH_LINE.search(body or "")
+    if not match:
+        return None
+    path, start, end = match.group(1), match.group(2), match.group(3)
+    start_line = int(start) if start else None
+    end_line = int(end) if end else start_line
+    return path, start_line, end_line
 
 
-def issue_priority(findings: Sequence[Mapping[str, str]]) -> str:
-    if any(item.get("severity") == "critical" for item in findings):
-        return "priority:p1"
-    return "priority:p2"
-
-
-def format_issue_body(
-    *,
-    pr_number: int,
-    pr_url: str,
-    text: str,
-    findings: Sequence[Mapping[str, str]],
-) -> str:
-    marker = ISSUE_MARKER.format(tracking_id=tracking_id(pr_number))
-    source = pr_url.strip() or f"pull request {pr_number}"
-    actionable = actionable_findings(findings)
-    if actionable:
-        blocks = []
-        for item in actionable:
-            block = f"### [{item['severity']}] {item['title']}"
-            if item.get("body"):
-                block += f"\n{item['body']}"
-            blocks.append(block)
-        findings_md = "\n\n".join(blocks)
-    else:
-        findings_md = text.strip() or "_Grok reported issues but returned no structured findings._"
-    body = (
-        f"{marker}\n"
-        f"Tracking id: `{tracking_id(pr_number)}`\n\n"
-        "Opened by the advisory Grok review. Merge is not blocked.\n\n"
-        f"Source pull request: {source}\n\n"
-        "## Actionable findings\n\n"
-        f"{findings_md}\n\n"
-        "Nit findings stay on the pull request comment and are not copied here.\n"
-    )
-    if CLOSING_KEYWORD.search(body):
-        raise RuntimeError("issue body contains a GitHub closing keyword")
-    return body
+def format_thread_body(finding: Mapping[str, str], *, head_sha: str) -> str:
+    lines = [THREAD_MARKER, f"**[{finding['severity']}] {finding['title']}**"]
+    body = (finding.get("body") or "").strip()
+    if body:
+        lines += ["", body]
+    lines += ["", f"_Grok advisory review · `{head_sha[:9]}`_"]
+    return "\n".join(lines)
 
 
 def format_comment(
     *,
     text: str,
     grok_payload: Mapping[str, Any] | None,
-    tracking_issue: str = "",
 ) -> str:
     body = text.strip() or "_Grok returned an empty review._"
     footer_parts = []
@@ -243,18 +221,15 @@ def format_comment(
     footer = ""
     if footer_parts:
         footer = "\n\n---\n" + " · ".join(footer_parts)
-    tracking = ""
-    if tracking_issue:
-        tracking = (
-            f"\nTracking Issue {tracking_issue}. Merge is still not blocked.\n"
-        )
     return (
         f"{COMMENT_MARKER}\n"
         "# Grok advisory review\n\n"
-        "This comment is **advisory**. It is not a required check and does "
-        "not block merge. Core CI and the merge queue are unchanged.\n\n"
+        "This lane is **advisory**: it is not a required check and Core CI and "
+        "the merge queue are unchanged. `critical` and `important` findings are "
+        "also posted as inline review threads, which `main`'s "
+        "conversation-resolution rule holds until a human resolves each one -- "
+        "by fixing it or by replying with the disagreement.\n\n"
         f"{body}"
-        f"{tracking}"
         f"{footer}\n"
     )
 
@@ -374,87 +349,81 @@ def upsert_sticky_comment(
     return "created"
 
 
-def find_tracking_issue(
+def post_review(
     *,
     repository: str,
     pr_number: int,
+    head_sha: str,
     token: str,
-    requester: Any = github_request,
-) -> dict[str, Any] | None:
-    query = quote(f'repo:{repository} "{tracking_id(pr_number)}" in:body')
-    payload = requester("GET", f"https://api.github.com/search/issues?q={query}&per_page=5", token)
-    items = payload.get("items") if isinstance(payload, dict) else None
-    if not isinstance(items, list) or not items:
-        return None
-    return items[0] if isinstance(items[0], dict) else None
-
-
-def upsert_tracking_issue(
-    *,
-    repository: str,
-    pr_number: int,
-    pr_url: str,
-    token: str,
-    text: str,
     findings: Sequence[Mapping[str, str]],
     verdict: str,
     requester: Any = github_request,
 ) -> str:
+    """Post actionable findings as one review of inline threads.
+
+    Nits stay on the summary comment: a thread has to be resolved before merge,
+    and a style remark is not worth that. A verdict of `issues` with no
+    structured findings still gets one thread, because the model saw something
+    and the summary is where it said what.
+    """
     owner, name = repository.split("/", 1)
-    existing = find_tracking_issue(
-        repository=repository,
-        pr_number=pr_number,
-        token=token,
-        requester=requester,
-    )
-    open_issue = should_open_issue(verdict=verdict, findings=findings)
-    if open_issue:
-        body = format_issue_body(
-            pr_number=pr_number,
-            pr_url=pr_url,
-            text=text,
-            findings=findings,
+    actionable = actionable_findings(findings)
+    unstructured = verdict == "issues" and not findings
+    if not actionable and not unstructured:
+        return "skipped: no critical or important findings"
+
+    inline: list[dict[str, Any]] = []
+    loose: list[str] = []
+    for item in actionable:
+        text = format_thread_body(item, head_sha=head_sha)
+        location = parse_location(item.get("body") or "")
+        if location and location[1] is not None:
+            path, start_line, end_line = location
+            comment: dict[str, Any] = {
+                "path": path, "line": end_line or start_line, "side": "RIGHT", "body": text,
+            }
+            if end_line and start_line and end_line != start_line:
+                comment["start_line"] = start_line
+                comment["start_side"] = "RIGHT"
+            inline.append(comment)
+        else:
+            loose.append(text)
+    if unstructured:
+        loose.append(
+            f"{THREAD_MARKER}\n**Grok reported `issues` without structured "
+            f"findings.** The summary comment carries what it said.\n\n"
+            f"_Grok advisory review · `{head_sha[:9]}`_"
         )
-        title = f"bug: Grok review findings on PR {pr_number}"
-        labels = ["type:bug", "area:ci-release", issue_priority(actionable_findings(findings) or findings)]
-        if existing and existing.get("number") is not None:
-            number = int(existing["number"])
-            requester(
-                "PATCH",
-                f"https://api.github.com/repos/{owner}/{name}/issues/{number}",
-                token,
-                {"title": title, "body": body, "state": "open", "labels": labels},
-            )
-            return f"updated #{number}"
-        created = requester(
-            "POST",
-            f"https://api.github.com/repos/{owner}/{name}/issues",
-            token,
-            {"title": title, "body": body, "labels": labels},
-        )
-        number = (created or {}).get("number")
-        return f"created #{number}" if number else "created"
-    if existing and existing.get("state") == "open" and existing.get("number") is not None:
-        number = int(existing["number"])
-        requester(
-            "POST",
-            f"https://api.github.com/repos/{owner}/{name}/issues/{number}/comments",
-            token,
-            {
-                "body": (
-                    "Later Grok review found no remaining critical or important "
-                    f"findings on pull request {pr_url.strip() or pr_number}."
-                )
-            },
-        )
-        requester(
-            "PATCH",
-            f"https://api.github.com/repos/{owner}/{name}/issues/{number}",
-            token,
-            {"state": "closed"},
-        )
-        return f"closed #{number}"
-    return "skipped"
+
+    url = f"https://api.github.com/repos/{owner}/{name}/pulls/{pr_number}/reviews"
+    separator = "\n\n---\n\n"
+    payload = {
+        "commit_id": head_sha,
+        "event": "COMMENT",
+        "body": separator.join(loose),
+        "comments": inline,
+    }
+    try:
+        requester("POST", url, token, payload)
+        return f"posted {len(inline)} inline, {len(loose)} in body"
+    except RuntimeError as error:
+        # An inline comment on a line the diff does not touch is rejected as
+        # 422. The finding is still worth reading, so fold every inline
+        # comment into the review body with its location and post once more.
+        if "422" not in str(error) or not inline:
+            raise
+        folded = [
+            f"`{comment['path']}:{comment.get('start_line', comment['line'])}`"
+            f"\n\n{comment['body']}"
+            for comment in inline
+        ]
+        requester("POST", url, token, {
+            "commit_id": head_sha,
+            "event": "COMMENT",
+            "body": separator.join(folded + loose),
+            "comments": [],
+        })
+        return f"posted 0 inline, {len(folded) + len(loose)} in body after 422"
 
 
 def notice(message: str) -> None:
@@ -474,6 +443,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pr-url", default=os.environ.get("PR_URL", ""))
     parser.add_argument("--base-ref", default=os.environ.get("BASE_REF", ""))
     parser.add_argument("--head-ref", default=os.environ.get("HEAD_REF", ""))
+    parser.add_argument("--head-sha", default=os.environ.get("HEAD_SHA", ""))
     parser.add_argument("--repository", default=os.environ.get("REPOSITORY", ""))
     parser.add_argument("--cwd", default=os.environ.get("GITHUB_WORKSPACE", os.getcwd()))
     parser.add_argument("--labels", default=os.environ.get("PR_LABELS", ""))
@@ -486,8 +456,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", default=os.environ.get("REVIEW_OUTPUT", ""))
     parser.add_argument("--post-comment", action="store_true", default=os.environ.get("POST_COMMENT", "true") == "true")
     parser.add_argument("--no-post-comment", action="store_false", dest="post_comment")
-    parser.add_argument("--post-issue", action="store_true", default=os.environ.get("POST_ISSUE", "true") == "true")
-    parser.add_argument("--no-post-issue", action="store_false", dest="post_issue")
+    parser.add_argument("--post-review", action="store_true", default=os.environ.get("POST_REVIEW", "true") == "true")
+    parser.add_argument("--no-post-review", action="store_false", dest="post_review")
     return parser.parse_args(argv)
 
 
@@ -541,25 +511,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     findings = parse_findings(text)
     verdict = parse_verdict(text)
     token = os.environ.get("GITHUB_TOKEN", "")
-    issue_action = "skipped"
-    if args.post_issue and token and args.repository and args.pr_number:
-        issue_action = upsert_tracking_issue(
+    if args.post_review and token and args.repository and args.pr_number and args.head_sha:
+        review_action = post_review(
             repository=args.repository,
             pr_number=int(args.pr_number),
-            pr_url=args.pr_url,
+            head_sha=args.head_sha,
             token=token,
-            text=text,
             findings=findings,
             verdict=verdict,
         )
-        notice(f"Grok advisory review issue {issue_action}")
-    elif args.post_issue:
-        notice("Grok advisory review issue skipped: missing GITHUB_TOKEN, repository, or PR number")
+        notice(f"Grok advisory review threads {review_action}")
+    elif args.post_review:
+        notice(
+            "Grok advisory review threads skipped: missing GITHUB_TOKEN, "
+            "repository, PR number, or head SHA"
+        )
 
-    tracking = ""
-    if issue_action.startswith(("created", "updated")):
-        tracking = issue_action
-    comment = format_comment(text=text, grok_payload=payload, tracking_issue=tracking)
+    comment = format_comment(text=text, grok_payload=payload)
     notice("Grok advisory review completed")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

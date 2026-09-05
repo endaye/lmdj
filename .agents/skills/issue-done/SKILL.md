@@ -266,14 +266,16 @@ lint reads the text you give it and cannot see a directive added afterwards.
    git push -u origin "$BRANCH"
    ```
 
-2. **Open Pull Request via `gh` CLI**:
-   Ensure PR body contains issue reference (`Closes #<id>`) and documentation impact declaration:
+2. **Write the Pull Request body to a file, gate it, then open the Pull Request**:
+   The body goes to a file first so the declaration can be checked *before* the
+   `pull_request` event exists. It goes to `/tmp`, not the worktree: an untracked
+   file in the worktree makes §6's `git worktree remove` refuse, so cleanup would
+   fail on every Task that followed this step. Creating the Pull Request first is what makes a
+   bad declaration expensive: the portal lane is already queued against it, and
+   correcting the body afterwards needs a fresh event, because a rerun replays
+   the stale payload.
    ```bash
-   gh pr create \
-     --base main \
-     --head "$BRANCH" \
-     --title "<Conventional Commit Title>" \
-     --body "$(cat <<'PR_BODY'
+   cat > /tmp/pr-body.md <<'PR_BODY'
    ## Summary
    Closes #<ISSUE_ID>
 
@@ -287,8 +289,37 @@ lint reads the text you give it and cannot see a directive added afterwards.
    Pitfall impact: none — reason: no process invariant was learned that the code does not already state.
    <!-- Use exactly one: `new <id>` | `recurrence <id>` | `none — reason: ...` -->
    PR_BODY
-   )"
+
+   bash scripts/local-ci.sh --pr-body /tmp/pr-body.md   # gate the declaration first
+
+   gh pr create --base main --head "$BRANCH" \
+     --title "<Conventional Commit Title>" --body-file /tmp/pr-body.md
    ```
+   The declaration verdict is printed before any lane output, so a malformed
+   declaration is visible almost immediately — but `--pr-body` has no
+   declaration-only mode: it goes on to execute every selected lane afterwards,
+   and a failed declaration changes only the final exit code. Read the verdict
+   and interrupt if you only need that answer; do not describe this as a
+   milliseconds-only check.
+
+   `Documentation impact` means **Architecture Portal pages**, not any file
+   under `docs/`. Declare `required` when this change edits a page under
+   `apps/architecture-portal/docs/`, and list routes on a line reading exactly
+   `Affected portal pages:` with each entry starting with `/`. One case admits
+   no `none` at all: a Product Build or Assembly change — `products/lmdj/`
+   `version.json`, `assembly(.lock).json`, `CMakeLists.txt` or `src/` — must
+   declare `required` and update the portal pages and snapshot obligation in
+   the same Task, whether or not a portal page is in the diff.
+   `check-doc-impact.mjs` enforces this independently of any page edit. Editing
+   `docs/quality/`, `docs/governance/`, `docs/prd/` or `docs/superpowers/` is
+   `Documentation impact: none` with a reason. See
+   [`documentation-impact-means-portal-pages`](../../pitfalls/documentation-impact-means-portal-pages.md),
+   which repeated seven times because six of those Pull Requests were merged by
+   hand while the gate that would have said so was queued or red.
+
+   After correcting a body, the gate needs a fresh `pull_request` event: a
+   rerun replays the stale payload and fails again on text you already fixed.
+   Close and reopen, or push.
 
 ---
 

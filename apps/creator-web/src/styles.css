@@ -382,6 +382,97 @@ button:disabled { color: #737b87; }
 .pad[data-outcome="started"] { border-color: #b7ffc5; box-shadow: inset 0 0 0 1px #b7ffc5; }
 .pad[data-outcome="capacity"] { border-color: #ffb36b; }
 
+.perform-surface {
+  grid-area: surface;
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  overflow: auto;
+  padding: clamp(1rem, 2.5vw, 2.25rem);
+}
+.perform-patterns,
+.perform-fx,
+.perform-recording,
+.perform-replay,
+.perform-surface > [aria-label="Perform instrument"] {
+  border: 1px solid #353b45;
+  border-radius: .85rem;
+  background: rgb(23 27 33 / 92%);
+}
+.perform-patterns { display: grid; gap: .75rem; padding: .85rem; }
+.perform-bank,
+.perform-pattern-editor,
+.perform-pattern-slots,
+.perform-recording,
+.perform-replay {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .65rem;
+  align-items: end;
+}
+.perform-bank button { min-width: 3rem; }
+.perform-bank button[aria-pressed="true"] {
+  color: #101216;
+  border-color: #b7ffc5;
+  background: #b7ffc5;
+}
+.perform-pattern-editor label,
+.perform-recording label,
+.perform-replay label { display: grid; gap: .3rem; }
+.perform-pattern-editor select,
+.perform-recording input,
+.perform-replay input {
+  min-height: 44px;
+  border: 1px solid #4a5260;
+  border-radius: .55rem;
+  padding: .5rem .65rem;
+  color: inherit;
+  background: #101216;
+}
+.perform-pattern-slots { display: grid; grid-template-columns: repeat(8, minmax(4.5rem, 1fr)); }
+.perform-pattern-slots button { min-height: 3.75rem; padding: .5rem; }
+.perform-pattern-slots button[data-launch="pending"] { border-color: #ffb36b; }
+.perform-pattern-slots button[data-launch="acknowledged"] {
+  border-color: #b7ffc5;
+  box-shadow: inset 0 0 0 1px #b7ffc5;
+}
+.perform-project-summary { margin: 0; }
+.perform-project-summary div { max-width: 12rem; }
+.perform-fx {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(3.5rem, 1fr));
+  min-height: 15rem;
+  padding: 1rem;
+}
+.perform-fx label { display: grid; justify-items: center; gap: .5rem; }
+.perform-fx input[type="range"] {
+  block-size: 10rem;
+  inline-size: 2.5rem;
+  accent-color: #b7ffc5;
+  writing-mode: vertical-lr;
+  direction: rtl;
+}
+.perform-hold {
+  justify-self: center;
+  min-width: min(18rem, 100%);
+}
+.perform-hold[aria-pressed="true"] {
+  color: #101216;
+  border-color: #b7ffc5;
+  background: #b7ffc5;
+}
+.perform-surface > [aria-label="Perform instrument"] { padding: .85rem; }
+.perform-recording,
+.perform-replay { padding: 1rem; }
+.perform-recording output,
+.perform-replay output,
+.perform-patterns output {
+  color: #b7ffc5;
+  font-variant-numeric: tabular-nums;
+}
+.perform-replay article { display: flex; gap: .65rem; align-items: center; }
+
 .error-panel { position: fixed; z-index: 12; inset: auto 1rem 1rem auto; display: grid; gap: .5rem; max-width: min(28rem, calc(100vw - 2rem)); padding: 1rem; border: 1px solid #ff7777; border-radius: .75rem; background: #2a1719; box-shadow: 0 1rem 3rem rgb(0 0 0 / 55%); }
 .error-panel button { justify-self: start; }
 
@@ -397,4 +488,6 @@ button:disabled { color: #737b87; }
   .sample-controls { grid-template-columns: 1fr; }
   .volume-control, .reset-sample { grid-column: 1; }
   .sample-pads .pad-grid { grid-template-columns: repeat(4, minmax(44px, 1fr)); }
+  .perform-pattern-slots { grid-template-columns: repeat(4, minmax(4.5rem, 1fr)); }
+  .perform-fx { grid-template-columns: repeat(4, minmax(3.5rem, 1fr)); }
 }

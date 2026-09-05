@@ -409,8 +409,18 @@ struct ControlBridge::Impl {
       self.realtime_service_deferred = true;
       return;
     }
+    // The service itself can reach an Asyncify import: service_performance()
+    // appends the durable journal tail when a launch acknowledgement applies.
+    // While it is suspended there, a request thunk arriving from the mailbox
+    // must park exactly as it does behind a suspended dispatch; otherwise the
+    // second suspension corrupts the first rewind and the worker never answers
+    // again. So the service owns the dispatch gate for its whole duration and
+    // hands parked work back through resume_deferred() (#656).
     ForeignTaskScope scope(self);
+    self.dispatch_in_progress = true;
     self.service_realtime();
+    self.dispatch_in_progress = false;
+    self.resume_deferred();
   }
 
   // Control-thread tasks proxied from outside the bridge (audio and manifest
