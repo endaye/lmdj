@@ -268,12 +268,14 @@ lint reads the text you give it and cannot see a directive added afterwards.
 
 2. **Write the Pull Request body to a file, gate it, then open the Pull Request**:
    The body goes to a file first so the declaration can be checked *before* the
-   `pull_request` event exists. Creating the Pull Request first is what makes a
+   `pull_request` event exists. It goes to `/tmp`, not the worktree: an untracked
+   file in the worktree makes §6's `git worktree remove` refuse, so cleanup would
+   fail on every Task that followed this step. Creating the Pull Request first is what makes a
    bad declaration expensive: the portal lane is already queued against it, and
    correcting the body afterwards needs a fresh event, because a rerun replays
    the stale payload.
    ```bash
-   cat > body.md <<'PR_BODY'
+   cat > /tmp/pr-body.md <<'PR_BODY'
    ## Summary
    Closes #<ISSUE_ID>
 
@@ -288,10 +290,10 @@ lint reads the text you give it and cannot see a directive added afterwards.
    <!-- Use exactly one: `new <id>` | `recurrence <id>` | `none — reason: ...` -->
    PR_BODY
 
-   bash scripts/local-ci.sh --pr-body body.md     # gate the declaration first
+   bash scripts/local-ci.sh --pr-body /tmp/pr-body.md   # gate the declaration first
 
    gh pr create --base main --head "$BRANCH" \
-     --title "<Conventional Commit Title>" --body-file body.md
+     --title "<Conventional Commit Title>" --body-file /tmp/pr-body.md
    ```
    The declaration verdict is printed before any lane output, so a malformed
    declaration is visible almost immediately — but `--pr-body` has no
