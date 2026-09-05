@@ -222,6 +222,44 @@ does not exist yet classifies nothing and breaks nothing.
 
 See [`release-cut-bundles-control-plane`](../../pitfalls/release-cut-bundles-control-plane.md).
 
+### Related-Issue vocabulary and the closing-directive check
+
+GitHub reads `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`,
+`resolves` and `resolved` immediately before an Issue reference as a closing
+directive, and its parser has no notion of the sentence around them. "This
+Pull Request does not close #466" closes #466 on merge. Four Issues lost their
+open state that way; see
+[`github-closing-keyword-negation`](../../pitfalls/github-closing-keyword-negation.md).
+
+Choose exactly one form per Issue the Pull Request references:
+
+- **Final delivery** — this Pull Request completes every acceptance item of the
+  Issue: `Closes #<issue_id>`. Keep it; nothing here weakens it.
+- **Partial delivery** — this Pull Request intentionally delivers only part of
+  the Issue and the Issue must stay open: `Relates to #<number>`, the exact
+  positive form. `Part of #<number>` and `Refs #<number>` are accepted
+  synonyms for an umbrella reference.
+
+Never write a closing keyword in front of an Issue reference in order to deny
+it. Do not write "does not close #<number>", "will not fix #<number>", or any
+other negated form: state what is still outstanding instead, in a sentence that
+contains no closing keyword before a reference. Never pair `Relates to
+#<number>` with `Closes #<number>` for the same Issue in one body — the closing
+directive wins on merge and the retained relation is prose.
+
+Write the body to a file and check it before `gh pr create`:
+
+```bash
+gh pr view <number> --json body -q .body > /tmp/pr-body.md   # or write the file directly
+python3 tests/build/ci_pr_body_lint.py --body-file /tmp/pr-body.md
+```
+
+The lint is deterministic and fails closed, naming the violated invariant and
+the exact safe replacement. Its regression coverage over the four real
+recurrences is `tests/build/ci_pr_body_lint_test.py`. Run it again after any
+later edit to the body, including an edit made in the GitHub web editor: the
+lint reads the text you give it and cannot see a directive added afterwards.
+
 1. **Push branch to origin**:
    ```bash
    BRANCH=$(git branch --show-current)
@@ -272,6 +310,16 @@ See [`release-cut-bundles-control-plane`](../../pitfalls/release-cut-bundles-con
    ```bash
    gh pr view --json state,mergedAt,mergeCommit
    ```
+
+4. **Audit the live state of every Issue the Pull Request meant to keep open**:
+   ```bash
+   gh issue view <number> --json number,state
+   ```
+   Run this for each `Relates to #<number>` reference. The closing-directive
+   lint reads the body, not GitHub's parser, so a merge that closed a retained
+   Issue anyway is still a finding: reopen the Issue, say why in a comment, and
+   record the occurrence on
+   [`github-closing-keyword-negation`](../../pitfalls/github-closing-keyword-negation.md).
 
 ---
 
