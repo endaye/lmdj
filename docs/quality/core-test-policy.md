@@ -591,6 +591,32 @@ sanitizer failure is final and must not start the fallback lane.
 Local Mac preflight may run additional focused, Proof, or browser checks before
 push, but local results do not replace the commit-bound GitHub required checks.
 
+Scheduled TSan stays Hosted, and that is now settled by same-revision evidence
+rather than by one historical observation. Run 33905688022 dispatched the probe
+from the branch carrying the capacity queue, so the two native jobs serialised
+fourteen minutes apart on one service instead of starting together, and the
+probe still failed. Every test died in 0.03 to 0.12 seconds with
+`FATAL: ThreadSanitizer: unexpected memory mapping`, which is the runtime
+refusing to initialise rather than a test failing: the same failure the original
+Contabo observation recorded. The 2026-09-04 contended run had shown nine stress
+tests failing with no TSan diagnostic at all, which was starvation and said
+nothing about compatibility. Do not re-run this probe expecting a different
+answer without first changing something about the host.
+
+The same run also settles a related question in the other direction.
+`core-stress` failed uncontended on that run, so the suggestion that recent
+nightly stress failures were sibling contention is not supported: the capacity
+queue was in force and the suite still failed. That is a separate matter from CI
+routing and needs its own investigation.
+
+Both native Nightly jobs also join the repository-wide `lmdj-native-heavy`
+queue. Naming the `ci-core` role is not enough to serialise them: the role spans
+two runner services on one physical host, so a dispatched TSan probe and the
+release stress suite start in the same second and run beside each other. Run
+33838737018 did exactly that on 2026-09-04 and both failed, which made the
+probe's result unusable -- it measured contention rather than whether the host
+can execute the TSan runtime. A TSan probe is only evidence when it runs alone.
+
 The nightly Release stress lane is trusted native workload on `ci-core`: it
 runs at most 20 consecutive successful repetitions and stops on the first
 failure. It does not retry a failed execution. Scheduled TSan remains on the
