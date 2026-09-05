@@ -2853,6 +2853,7 @@ Json ControlRuntime::dispatch(
       require(exact_keys(payload, {}));
       require(sidecar.empty());
       if (!impl_->session_available() || !impl_->runtime_ready ||
+          !impl_->project_bpm.has_value() ||
           !impl_->runtime_bank_project_id.has_value() ||
           *impl_->runtime_bank_project_id != *impl_->project_id) {
         return state_error();
@@ -2889,6 +2890,11 @@ Json ControlRuntime::dispatch(
       };
       if (impl_->cancel_if_expired()) {
         return timeout_error();
+      }
+      const auto prepared_fx =
+          impl_->engine.prepare_master_fx(*impl_->project_bpm);
+      if (!prepared_fx.has_value()) {
+        return rollback();
       }
       const auto started = impl_->engine.start();
       if (!started.has_value()) {
