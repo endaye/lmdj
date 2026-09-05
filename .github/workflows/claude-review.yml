@@ -108,7 +108,11 @@ jobs:
           ANTHROPIC_BASE_URL: ${{ matrix.base_url }}
           ANTHROPIC_AUTH_TOKEN: ${{ secrets[matrix.secret_name] }}
           # The default is far too low for an agentic review of a full diff.
-          API_TIMEOUT_MS: "3000000"
+          # Kept under the job's own `timeout-minutes: 30` so the API timeout
+          # is the one that fires: a hung vendor endpoint then ends the step
+          # with an error the log names, rather than the job timer killing the
+          # run and recording `timed_out` with nothing to read.
+          API_TIMEOUT_MS: "1500000"
         with:
           # Passed explicitly so the action authenticates as this repository
           # rather than falling back to the Claude GitHub App, which would
@@ -124,8 +128,18 @@ jobs:
           # rate-limited it on the self-hosted runner, failing both backends
           # before either reached a model. A checked-out copy has no runtime
           # dependency to be rate-limited or tampered with.
-          prompt: >-
-            /pr-review --comment
-            ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+          # The signature line is machine-read. The two backends run as matrix
+          # legs of one job and post under one identity, so nothing else
+          # distinguishes a GLM comment from a Kimi one -- and the liveness
+          # check has to, or a dead backend hides behind a live one. The step
+          # conclusion cannot be the signal: `continue-on-error` reports a
+          # failed step as `success` in the API, so the check reads the
+          # effect, and this line is the effect it reads.
+          prompt: |
+            /pr-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+
+            Sign every comment you post -- each inline comment and any summary comment -- by making its very first line exactly:
+            <!-- lmdj-review: ${{ matrix.backend }} -->
+            That line is read by the advisory review liveness check to tell the two backends apart. Do not omit, alter, or move it.
           claude_args: >-
             --allowedTools "mcp__github_inline_comment__create_inline_comment"

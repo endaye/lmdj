@@ -1,0 +1,62 @@
+name: Advisory Review Liveness
+
+# Both advisory review lanes carry `continue-on-error`, so a failed review no
+# longer reddens a Pull Request. That trade was deliberate -- a lane which
+# cannot block a merge should not be able to redden every Pull Request -- and it
+# creates a blind spot: a lane can now fail for weeks with nothing to show for
+# it. This is the mechanism that closes it, rather than a note saying somebody
+# should look.
+#
+# The alert is this job failing. A scheduled workflow that goes red notifies the
+# repository owner on its own, which is enough, and it avoids the Issue
+# creation and deduplication logic a bespoke alert would need.
+
+on:
+  schedule:
+    # Two hours after Core Nightly, so a failure here is not competing with one
+    # there for attention.
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+# `actions: read` lists the runs and jobs; the other two read the surfaces the
+# check actually judges by. `evidence_posted` asks whether a lane signed an
+# issue comment, a review comment or a review body, and an explicit
+# `permissions:` block makes everything it omits `none` -- so without these the
+# three reads 403, `_gh` raises, and the job is permanently red while observing
+# nothing. All read-only: this workflow publishes no evidence and mutates
+# nothing.
+permissions:
+  contents: read
+  actions: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: advisory-review-liveness
+  cancel-in-progress: true
+
+jobs:
+  liveness:
+    name: Advisory review liveness
+    # Self-hosted, like everything else that does not publish scope, trust,
+    # admission or verdict evidence. A daily job billed by the minute is how
+    # the Merge Queue watchdog consumed an entire included allowance.
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Report advisory review liveness
+        env:
+          # Read by urllib in the script, not by a CLI. The name matches what
+          # scripts/ci/github_queue_api.py and grok_review.py already read.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 .github/scripts/advisory_review_liveness.py
+          --repository "${{ github.repository }}"
+          --window 5
+          --summary "$GITHUB_STEP_SUMMARY"
