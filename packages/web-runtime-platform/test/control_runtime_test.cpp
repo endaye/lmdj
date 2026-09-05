@@ -2906,6 +2906,26 @@ void test_source_frames_are_admitted_by_prepared_pcm_quota() {
   }
 }
 
+void test_audio_activation_prepares_master_fx_for_perform() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+
+  LMDJ_CHECK(runtime->engine().master_fx_telemetry().current_bpm == 120);
+  LMDJ_CHECK(
+      runtime->engine().enqueue_fx_gesture(lmdj::audio::FxGesture{
+          lmdj::audio::FxGestureKind::hold_off,
+          lmdj::domain::PerformanceFx::filter,
+          0}) == lmdj::audio::FxEnqueueResult::accepted);
+}
+
 void test_trigger_queue_full_is_admission_failure() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -3621,7 +3641,10 @@ void test_audio_activation_rollback_rechecks_the_original_deadline() {
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
   coordinator.begin_succeed = false;
-  coordinator.await_delay_ms = 100;
+  // Leave enough of the original request budget for ASan-instrumented master
+  // FX preparation to reach rollback, then cross that same deadline while
+  // the coordinator is quiescing audio.
+  coordinator.await_delay_ms = 300;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -3632,11 +3655,11 @@ void test_audio_activation_rollback_rechecks_the_original_deadline() {
           Json::object(),
           {},
           std::chrono::steady_clock::now() -
-              std::chrono::milliseconds(950)),
+              std::chrono::milliseconds(750)),
       "HOST_TIMEOUT");
   LMDJ_CHECK(coordinator.called);
   LMDJ_CHECK(coordinator.timeout_ms >= 1);
-  LMDJ_CHECK(coordinator.timeout_ms <= 100);
+  LMDJ_CHECK(coordinator.timeout_ms <= 250);
   LMDJ_CHECK(coordinator.acknowledgement_calls == 0);
   LMDJ_CHECK(
       runtime->engine().telemetry().state ==
@@ -5235,6 +5258,7 @@ int main() {
     test_sample_commit_quota_failure_keeps_truth_and_runtime_unchanged();
     test_sample_post_claim_deadline_preserves_saved_truth();
     test_source_frames_are_admitted_by_prepared_pcm_quota();
+    test_audio_activation_prepares_master_fx_for_perform();
     test_trigger_queue_full_is_admission_failure();
     test_voice_capacity_is_sequence_addressed_execution_outcome();
     test_audio_activation_requires_ready_and_reports_explicit_ack();
