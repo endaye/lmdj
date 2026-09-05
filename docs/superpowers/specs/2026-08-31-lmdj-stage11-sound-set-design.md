@@ -54,7 +54,7 @@ Stage 11 的成功命题是：
 
 | ID | 问题 | 归属 | 本文的承载位 |
 | --- | --- | --- | --- |
-| S11-Q1 | 权利与 License 溯源：哪些字段是权威、缺失/矛盾/吊销时 listing/preview/download/install 各自在哪一步 fail closed。 | #465 已裁决 | S11-D2 的 `license` 四键（`spdx_id`、`rights_holder`、`copyright`、`attribution`）；v1 允许清单 `CC0-1.0` / `CC-BY-4.0`；listing/preview/download/install 同一资格；无在线吊销。Schema 失败走 `soundset_manifest_invalid`，资格失败走 `soundset_license_ineligible`。 |
+| S11-Q1 | 权利与 License 溯源：哪些字段是权威、缺失/矛盾/吊销时 listing/preview/download/install 各自在哪一步 fail closed。 | #465 已裁决 | S11-D2 的 `license` 四键是 Schema（缺块/缺键/空 `rights_holder`/`copyright` → `soundset_manifest_invalid`）。v1 允许清单 `CC0-1.0` / `CC-BY-4.0`、BY 署名义务、`license_summary` 相等是资格检查（→ `soundset_license_ineligible`），不是 Schema enum。listing/preview/download/install 同一资格；无在线吊销。 |
 | S11-Q2 | 确定性映射：把 Set 套用到已有 Pattern 时 role/BPM/Key/音域映射的权威输入、占用槽冲突与空槽行为、何时必须显式用户选择。 | #465 已裁决 | S11-D11 的纯函数；v1 映射表是槽位下标恒等。冲突必须带 `occupied_pad_policy`=`keep`\|`replace`，否则 `soundset_occupied_conflict`。empty Set slot 不写入、不清空目标 Pad。Pattern 事件引用不改写。 |
 | S11-Q3 | 映射若要求安装或套用时改变素材时长（BPM 对齐），离线 time-stretch 是否成为 Stage 11 前置。 | #465 已裁决 | S11-D11 排除 v1 安装/套用路径任何 DSP；#347 保持 Later，不升为 Stage 11 前置。 |
 
@@ -66,7 +66,7 @@ Stage 11 的成功命题是：
 | ID | 决策 | 依据 |
 | --- | --- | --- |
 | S11-D1 | Sound Set 的身份是 `set_id`（UUID）+ SemVer `version` + canonical manifest 的 SHA-256。接收端先要求原始 object 是无 BOM 的有效 UTF-8 bounded JSON、通过 `lmdj.soundset.v1` Schema，再生成 `foundation::canonical_json(parsed_manifest)`；canonical bytes 精确定义为该 UTF-8 输出、无尾随换行。原始 object 必须与 canonical bytes byte-for-byte 相等（因此重复 key、非规范 key 顺序/空白/数字表示均拒绝），哈希覆盖这组 bytes。同一 `(set_id, version)` 永远指向同一 manifest 哈希；任何 manifest 或被引用内容变更都是新 `version`。不存在就地更新。 | 规格 §5.4「原始 Set 不可变」与仓库既有 bounded parse/canonical JSON 实现 |
-| S11-D2 | 新 Contract `lmdj.soundset.v1`（`contracts/soundset/`，Contract SemVer 独立）。manifest 声明：Set 身份、`name`、`publisher`、可选 `description`、可选 set 级 `bpm`/`key`、`license` 块（四键全必填：`spdx_id`、`rights_holder`、`copyright`、`attribution`；v1 `spdx_id` 允许清单为 `CC0-1.0`、`CC-BY-4.0`，见 #465）、恰好 16 个 `slots`。每个 slot 是 `occupied`（引用一个 Artifact：sha256 + media_type + byte_length，外加 `role`、`name`、可选 `bpm`/`key`）或 `empty`。允许空槽：Set 作者的留白是内容的一部分，安装时不写入对应目标 Pad。 | 规格 §5.4、§17.4 Artifact Ref 惯例、#465 |
+| S11-D2 | 新 Contract `lmdj.soundset.v1`（`contracts/soundset/`，Contract SemVer 独立）。manifest 声明：Set 身份、`name`、`publisher`、可选 `description`、可选 set 级 `bpm`/`key`、`license` 块、恰好 16 个 `slots`。`license` Schema 只要求四键存在且类型正确：`spdx_id`（非空 string）、`rights_holder`（非空）、`copyright`（非空）、`attribution`（string，允许空串）。v1 SPDX 允许清单 `CC0-1.0` / `CC-BY-4.0`、`CC-BY-4.0` 的非空署名义务、以及 catalog `license_summary` 与 manifest 逐字相等，都是 Schema 之后的资格检查，走 `PERMISSION_DENIED` + `soundset_license_ineligible`，不得收成 JSON Schema enum。每个 slot 是 `occupied`（引用一个 Artifact：sha256 + media_type + byte_length，外加 `role`、`name`、可选 `bpm`/`key`）或 `empty`。允许空槽：Set 作者的留白是内容的一部分，安装时不写入对应目标 Pad。 | 规格 §5.4、§17.4 Artifact Ref 惯例、#465 |
 | S11-D3 | Set 内音频 Artifact 复用 S8-D6 约束：PCM16 WAV、mono/stereo、44.1/48 kHz。不为 Sound Set 引入新格式；压缩分发格式是具名后续能力，届时也在下载层解包为 WAV 后走同一校验。 | S8-D6 |
 | S11-D4 | Role 词表 v1 钉死为封闭枚举：`kick`、`snare`、`clap`、`hat_closed`、`hat_open`、`perc`、`cymbal`、`bass`、`melody`、`chord`、`vocal`、`fx`、`other`。manifest 中 role 必填；未知值是校验错误，不是自由文本。词表扩展走 Contract SemVer。 | S11-Q2 的映射需要确定性输入 |
 | S11-D5 | 试听分两层：set 级可选 `demo` Artifact（同 S8-D6 约束的一段演示混音）；单音色试听直接以该 slot 的 Artifact 字节经普通 Runtime 试听路径播放。不建第二套预览引擎，不做低码率预览变体。试听不产生 Project 变更。 | 规格 §5.4「整套与单个音色试听」 |
@@ -128,20 +128,26 @@ Project 持久化位置随 #471/#431 对齐，串行在 v4 之后）。
 
 ## 7. 测试清单（实施计划再展开为逐条 RED-GREEN）
 
-1. manifest 校验：canonical bytes golden vectors；BOM/尾随换行/空白、key
+1. manifest Schema：canonical bytes golden vectors；BOM/尾随换行/空白、key
    重排、重复 key、非规范数字、过深 JSON；16 槽不足或超出/未知 role/坏哈希/坏 media_type/
-   License 块缺键/空 `rights_holder`/`copyright`、`spdx_id` 不在
+   License 缺块/缺键/类型不对/空 `rights_holder`/`copyright` →
+   `INVALID_ARGUMENT` + `soundset_manifest_invalid`。`spdx_id` 不在
    `CC0-1.0`/`CC-BY-4.0`、`CC-BY-4.0` 而 `attribution` 为空、catalog
-   `license_summary` 与 manifest 不一致逐条拒绝。
+   `license_summary` 与 manifest 不一致是资格检查，→ `PERMISSION_DENIED` +
+   `soundset_license_ineligible`，不得收成 Schema enum。
 2. 完整性：篡改任一 Artifact 字节 → `IO_ERROR` +
    `details.reason = soundset_content_mismatch`，缓存不可见；重复 hash 只计费和
    下载一次；声明总量与唯一 blob 总量不符 fail closed。
 3. 安装原子性：按每 Pad prepared bytes 预演 Bank/generation ledger（重复
-   Artifact 占多个 Pad 分别计量）；两种配额超限、目标 Bank 冲突未确认、
-   中途失败均零变更；成功恰好一次 revision，Lineage 齐全。
+   Artifact 占多个 Pad 分别计量）；两种配额超限、中途失败均零变更；成功
+   恰好一次 revision，Lineage 齐全。占用冲突三条写集：缺省政策 →
+   `soundset_occupied_conflict` 且 revision 不变；`keep` → 只写入非冲突
+   `proposed` pad；`replace` → 写入全部 `proposed`（含冲突 pad），empty
+   Set slot 仍不清空占用 Pad。
 4. 不可变性：安装后编辑 Pad 产生 Derived Asset，Set Store 字节不变。
-5. 套用映射：同输入同输出的纯函数性；冲突必须显式确认；empty Set slot
-   不清空占用 Pad；结果为空的 pad 上事件落空静默。
+5. 套用映射：同输入同输出的纯函数性；冲突走与第 3 条相同的
+   `occupied_pad_policy` 三条写集；empty Set slot 不清空占用 Pad；结果为
+   空的 pad 上事件落空静默。
 6. Catalog：不可达非致命；缓存 Set 可试听可安装；本地 adapter 拒绝 symlink、
    非 lowercase-sha256 key、路径分隔/`..`、非 regular file 与越界对象；四个
    Host 上限逐条 exact/+1；网络 adapter 不能引入 archive 解包。
