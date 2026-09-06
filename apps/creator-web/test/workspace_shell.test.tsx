@@ -315,6 +315,65 @@ test("Record on an empty Pad opens the capture panel with no replacement prompt"
   expect(screen.queryByRole("dialog", {name: "Pad A2 Pad Capture"})).toBeNull();
 });
 
+test("audio recovery keeps an open capture panel instead of discarding it", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
+  // Two independent subscribers exist (the shell status bar and the Runtime
+  // context that owns recovery readiness), so the fixture must fan out to all
+  // of them; keeping only the last one silently starves the recovery path.
+  const diagnosticsListeners:
+    ((value: ReturnType<CreatorRuntimeSession["diagnostics"]>) => void)[] = [];
+  fixture.session.subscribeHostState = (listener) => {
+    hostListener = listener;
+    return () => {};
+  };
+  fixture.session.subscribeDiagnostics = (listener) => {
+    diagnosticsListeners.push(listener);
+    return () => {};
+  };
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await act(async () => hostListener?.({
+    state: "running", errorCode: null, errorDetails: {},
+  }));
+  await screen.findByText("Audio running");
+
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty"}));
+  await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
+  const dialog = screen.getByRole("dialog", {name: "Pad A2 Pad Capture"});
+
+  // A real macOS Safari focus loss interrupts the AudioContext, so the Runtime
+  // reports recovery in the same moment the panel's own blur listener stops
+  // the recording and retains the take. Tearing the panel down here discards
+  // that take with no way to commit or discard it (#738); releasing decoded
+  // long-source memory is the only thing recovery owns here.
+  await act(async () => hostListener?.({
+    state: "interrupted", errorCode: null, errorDetails: {},
+  }));
+  await screen.findByText("Audio suspended");
+  await act(async () => hostListener?.({
+    state: "recovering", errorCode: null, errorDetails: {},
+  }));
+  await act(async () => {
+    const probeReady = {
+      ...fixture.session.diagnostics(),
+      state: "recovering" as const,
+      recovery_probe_ready: true,
+    };
+    for (const listener of diagnosticsListeners) listener(probeReady);
+  });
+  await screen.findByText("Audio recovering");
+
+  // Identity, not just presence: a remounted panel would be a fresh element
+  // with fresh state, which is the same loss of the take by another route.
+  // Keeping the node keeps whatever phase the blur listener left it in, and
+  // `capture_panel.test.tsx` owns the proof that a blur stop retains the take
+  // behind CAPTURE_BLUR_STOP_MESSAGE with Commit and Discard reachable.
+  expect(screen.getByRole("dialog", {name: "Pad A2 Pad Capture"})).toBe(dialog);
+  expect(dialog.isConnected).toBe(true);
+});
+
 const listedSummary: LocalProjectSummary = {
   projectId: "11111111-1111-4111-8111-111111111111",
   patternId: "22222222-2222-4222-8222-222222222222",

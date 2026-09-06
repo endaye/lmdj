@@ -123,6 +123,16 @@ Read these before shipping; each is a real recurrence, not a hypothetical:
 - [`acceptance-journey-truncation`](../../pitfalls/acceptance-journey-truncation.md)
   — map every specified transition to a far-side observable; do not shorten a
   journey to the last state the current implementation already reaches.
+- [`synthetic-event-omits-platform-side-effects`](../../pitfalls/synthetic-event-omits-platform-side-effects.md)
+  — where a test fires a synthetic event, stubs a device, or forces a state
+  transition in place of something the platform does, enumerate the real
+  thing's side effects and either reproduce all of them or record the
+  unreproduced ones as an explicit gap beside the test. A `blur` dispatched
+  into a page that owns an AudioContext is the worked example: the window
+  event is the easy half, the context interruption is the half that hides
+  defects. When a side effect needs a seam the packaged product must not
+  carry, gate it in a component test and name that companion gate in a comment
+  on the packaged journey.
 
 ---
 

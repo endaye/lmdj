@@ -78,8 +78,24 @@ Host 只渲染 Facade 返回的 authority：录制状态、pending/acknowledged 
 focus loss 后 retained waveform、stop reason、selection、Commit/Discard/Close
 仍可见，导出报告保持 Sequence `stopped` / `session_id: null`。Playwright WebKit
 仍只证明既有 packaged `UNSUPPORTED_WEB_RUNTIME` capability boundary，不能作为
-Capture 渲染证据。该自动化只证明状态与渲染边界；在修复进入已部署 Product Build
-并从头重跑 #244 前，M7 仍为 `FAIL`，不能升级为物理 Safari `PASS`。
+Capture 渲染证据。
+
+在已部署 `1.0.42.0` 上重跑 M7 证实该 reducer 门生效：Sample 区域完整可见，导出
+报告读到 Sequence `stopped` / `session_id: null`。同一次重跑暴露出第二个、机制
+不同的缺陷 [#738](https://github.com/endaye/lmdj/issues/738)：真实 focus loss
+同时中断 AudioContext，Runtime 进入 audio recovery，而 Sample 区域此前会在
+recovery 时清空 capture target，把面板连同保留的录音一起卸载。修复后 audio
+recovery 只释放 decoded long-source 内存，capture 面板仅由自身的
+Close/Commit/Discard 关闭，与 Runtime session 替换时的既有行为一致。
+
+两个门覆盖各自的一半：packaged Chromium journey 用合成 `blur` 证明面板自身的
+stop 与 retained take，`apps/creator-web/test/workspace_shell.test.tsx` 的
+"audio recovery keeps an open capture panel instead of discarding it" 证明
+audio recovery 不会重建或卸载该面板。合成 `blur` 不会中断 AudioContext，而驱动
+recovery 需要 packaged app 不应存在的 Runtime 状态 seam，这正是 #738 能在
+journey 全绿的情况下逃逸的原因。该自动化只证明状态与渲染边界；在 #738 的修复
+进入已部署 Product Build 并从头重跑 #244 前，M7 仍为 `FAIL`，不能升级为物理
+Safari `PASS`。
 
 ## 分发与身份
 
