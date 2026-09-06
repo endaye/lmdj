@@ -602,6 +602,26 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME fixtures.soundset_corpus
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tools/soundset-fixtures/tests/fixture_corpus_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME fixtures.soundset_catalog_fixture_server
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tools/soundset-fixtures/tests/catalog_fixture_server_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
   NAME build.core_script
   TIER contract
   COMMAND

@@ -1,0 +1,7 @@
+# Content-addressed objects. Any newline or encoding rewrite would change the
+# SHA-256 that names the file, so Git must never touch these bytes. The
+# canonical manifests and the catalog index also carry no trailing newline by
+# design (S11-D1); that is identity, not an omission.
+blob/** binary -text -diff
+manifest/** binary -text -diff
+catalog/index.json -text
