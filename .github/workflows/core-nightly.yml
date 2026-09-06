@@ -37,7 +37,18 @@ jobs:
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
-      - run: scripts/core.sh configure tsan
+      - name: Install the pinned Core toolchain
+        # The Hosted image ships Ubuntu's clang-18 and GCC 13. The Core pin is
+        # Clang/LLVM 22 (#693) and is installed here through the same script
+        # that provisioned the self-hosted hosts, so both TSan lanes compile
+        # with one compiler and the probe below measures the runtime, not a
+        # compiler difference.
+        run: sudo bash scripts/ci/host/install-llvm-toolchain.sh 22
+      - name: Verify the TSan toolchain
+        run: |
+          command -v clang-22
+          command -v clang++-22
+      - run: env CC=clang-22 CXX=clang++-22 scripts/core.sh configure tsan
       - run: scripts/core.sh build tsan
       - run: scripts/core.sh test tsan stress
 
@@ -67,7 +78,14 @@ jobs:
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
-      - run: scripts/core.sh configure tsan
+      - name: Verify the TSan toolchain
+        # Host state, provisioned once by the operator with
+        # scripts/ci/host/install-llvm-toolchain.sh; the lane installs nothing
+        # on a machine two runner services share.
+        run: |
+          command -v clang-22
+          command -v clang++-22
+      - run: env CC=clang-22 CXX=clang++-22 scripts/core.sh configure tsan
       - run: scripts/core.sh build tsan
       - run: scripts/core.sh test tsan stress
 

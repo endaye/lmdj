@@ -61,9 +61,12 @@ The long-term first-party C++ coverage targets are:
 | Provider SDK | 85% | 75% |
 
 The enforced first ratchet is deliberately separate from those targets. It was
-measured on both the reference Mac and the pinned CI-equivalent Ubuntu 24.04,
-Clang 18, and LLVM 18 toolchain after the deterministic, persistence-fault, and
-C ABI concurrency suites landed:
+measured on both the reference Mac and the then-pinned CI-equivalent Ubuntu
+24.04 Clang/LLVM 18 toolchain after the deterministic, persistence-fault, and
+C ABI concurrency suites landed. The Linux pin moved to Clang/LLVM 22 on
+2026-09-06 (#693); the same tree was re-measured on 22 before any floor was
+touched, see
+[`2026-09-06-llvm-22-coverage-measurement.md`](2026-09-06-llvm-22-coverage-measurement.md):
 
 | Scope | Line floor | Branch floor |
 | --- | ---: | ---: |
@@ -546,11 +549,18 @@ hosts, not a defect. Routing splits two ways:
   Hosted until that probe supplies accepted same-revision runtime evidence.
 
 `ci-core` deliberately does not span both hosts: the persistent native `ccache`
-and the preinstalled clang-18/llvm-18 coverage toolchain are shared-host state,
-not pool state. Both hosts carry the same 18.1.3 toolchain, so the role can be
-placed on either, but it is registered on exactly one at a time — today netcup. Coverage accordingly no longer installs that toolchain; the
-`apt-get` step existed only for the hosted fallback and would otherwise mutate
-state both runner services share. Every job that can land on a role carries the
+and the preinstalled clang-22/llvm-22 coverage toolchain are shared-host state,
+not pool state. Both hosts carry the same Clang/LLVM 22 toolchain, so the role
+can be placed on either, but it is registered on exactly one at a time — today
+netcup. Ubuntu's own archive stops at LLVM 18.1.3 for noble, so the pinned
+major comes from apt.llvm.org's exact-major `llvm-toolchain-noble-22` suite,
+installed by `scripts/ci/host/install-llvm-toolchain.sh`: that script verifies
+the repository key against a fixed fingerprint, names the suite rather than
+the rolling one, and gives the origin apt priority 100 so it can only supply
+packages the distribution lacks. Coverage accordingly installs nothing on the
+role; an `apt-get` step there would mutate state both runner services share.
+The hosted `core-tsan` lane runs the same script per job so the two TSan lanes
+compile with one compiler. Every job that can land on a role carries the
 closed trust condition itself, because no selector's fork branch is in its path
 any more.
 
@@ -665,6 +675,24 @@ Product Proof, but never host a TSan-instrumented library in their own process.
 ASan registrations receive twice the normal tier timeout and TSan
 registrations receive four times the normal tier timeout to account for
 instrumentation overhead; the underlying tier and workload remain unchanged.
+
+The two sanitizer presets do not choose a compiler; the lane does. `asan`
+inherits the platform default — GCC 13's shared `libasan` on Linux, AppleClang
+on macOS — because that runtime has not regressed and the MCP Host tests locate
+it by its `libasan.so` name. `tsan` is configured with the pinned Clang on
+every Linux lane (`CC=clang-22 CXX=clang++-22` on the configure step of both
+`core-tsan` and `core-tsan-self-hosted-probe`), because the TSan runtime is the
+reason the pin exists: GCC 13.3's `libtsan` refuses to initialise under the
+6.8 kernel's 32-bit `vm.mmap_rnd_bits` with `FATAL: ThreadSanitizer:
+unexpected memory mapping`, on both self-hosted hosts (#676, #693). Switching
+the compiler is not a pure environment change. Clang on Linux links its
+sanitizer runtimes static and whole-archive, and the C++ half defines global
+`operator new`/`delete`, which collides with the replacements
+`tests/core/audio/realtime_engine_test.cpp` installs to count allocations on
+the realtime path. `lmdj_target_sanitizers` therefore links the runtime shared
+under Clang on Linux (`-shared-libsan -frtlib-add-rpath`), which resolves the
+operators by interposition exactly as GCC's shared runtimes already do and
+records the runtime's location so tests run without `LD_LIBRARY_PATH`.
 
 ## Proof-Scoped C ABI Concurrency Baseline
 

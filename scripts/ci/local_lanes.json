@@ -64,7 +64,7 @@
     "core_coverage": {
       "requires": {
         "os": ["linux"],
-        "commands": ["clang-18"]
+        "commands": ["clang-22"]
       },
       "commands": [
         "python3 tests/fixtures/audio/make_fixtures.py",
@@ -73,7 +73,7 @@
         "scripts/core-coverage.sh check"
       ],
       "ci_only": [
-        "apt-get installs clang-18 and llvm-18 and pins CC/CXX with /usr/lib/llvm-18/bin on PATH",
+        "apt-get installs clang-22 and llvm-22 and pins CC/CXX with /usr/lib/llvm-22/bin on PATH",
         "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     },

@@ -56,9 +56,22 @@ function(lmdj_target_sanitizers target)
       "${lmdj_sanitizer_flags}"
       -fno-omit-frame-pointer
   )
+  set(lmdj_sanitizer_link_flags "${lmdj_sanitizer_flags}")
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Clang on Linux links its sanitizer runtimes static and whole-archive by
+    # default, and the C++ half (libclang_rt.tsan_cxx, libclang_rt.asan_cxx)
+    # defines global operator new/delete. tests/core/audio/realtime_engine_test.cpp
+    # replaces those operators to count allocations on the realtime path, so
+    # the static link fails with `multiple definition` (#676 probe B). The
+    # shared runtime resolves the operators by interposition the same way
+    # GCC's shared libtsan/libasan already do, and -frtlib-add-rpath records
+    # where the runtime lives so the tests run without LD_LIBRARY_PATH. Apple
+    # Clang links its sanitizer runtimes shared unconditionally.
+    list(APPEND lmdj_sanitizer_link_flags -shared-libsan -frtlib-add-rpath)
+  endif()
   target_link_options(
     "${target}"
     PRIVATE
-      "${lmdj_sanitizer_flags}"
+      "${lmdj_sanitizer_link_flags}"
   )
 endfunction()
