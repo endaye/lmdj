@@ -37,6 +37,23 @@ Ableton Push 3、NI Maschine）的 pad 是怎么做出来的：分层机构、�
 标为"示意"的数值没有一手出处，是行业常见值或本页的重建假设。所有 3D 几何
 都是示意性重建，不是任何厂商的官方 CAD。
 
+## 研究笔记
+
+`RESEARCH.md` 记录了这个 demo 背后的研究：打击垫感知按压的完整链路
+（力 → 接触面积 → 电阻 → 电压 → 数字 → 速度 / 压力）、七类传感方案、
+各机型的传感与备件、每个数值的出处、研究过程中的纠正，以及仍属示意或
+推断的内容。
+
+## 单文件版本
+
+`dist/launchpad-pad-exploded.html` 是把五个源文件打包成的单个 HTML，
+可以直接双击打开或发到任何静态托管（仍需联网加载 Three.js）。
+改动源文件后用下面的命令重新生成：
+
+```bash
+python3 tools/bundle.py
+```
+
 ## 运行
 
 ```bash
@@ -56,5 +73,8 @@ Three.js 0.160，需要联网；其余全部为本地文件，无构建步骤。
 | `main.js` | Three.js 场景、两种装配体、交互、标注、敲击模拟、文档渲染 |
 | `data.js` | 机型、分层、传感方案、单 pad 参数、算法参数、参考资料 |
 | `diagrams.js` | 七张传感横截面 SVG 与信号链 SVG |
+| `RESEARCH.md` | 研究笔记与资料出处 |
+| `tools/bundle.py` | 生成单文件版本 |
+| `dist/launchpad-pad-exploded.html` | 单文件版本（生成物） |
 
 调试句柄：`window.lmdjPadDemo`（`orbit`、`setMode`、`switchMachine`、`assembly`）。
