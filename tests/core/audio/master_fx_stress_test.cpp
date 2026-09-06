@@ -40,6 +40,10 @@ void all_eight_effects_sustain_maximum_gesture_rate_without_underruns() {
   constexpr std::uint32_t kSimulatedSeconds = 10;
   constexpr std::uint32_t kQuanta =
       (48'000U * kSimulatedSeconds) / kFramesPerQuantum;
+  // One source of truth: the render loop enforces this and the failure message
+  // reports it, so the two can never disagree.
+  constexpr auto kCallbackDeadline = std::chrono::nanoseconds{
+      1'000'000'000ULL * kFramesPerQuantum / 48'000U};
   RealtimeEngine engine;
   std::vector<float> sample(
       static_cast<std::size_t>(kQuanta) * kFramesPerQuantum, 0.0F);
@@ -55,6 +59,12 @@ void all_eight_effects_sustain_maximum_gesture_rate_without_underruns() {
   std::atomic<bool> render_failed{false};
   std::atomic<bool> heard_processed_voice{false};
   std::atomic<std::uint64_t> callback_overruns{0};
+  // Retained so a failure reports how far past the deadline the callback went.
+  // The assertion below stays exactly zero overruns; these only make the
+  // failure legible, because "!= 0" alone cannot separate a real-time defect
+  // from a degraded host.
+  std::atomic<std::uint64_t> callback_total_ns{0};
+  std::atomic<std::uint64_t> callback_max_ns{0};
   std::atomic<std::uint32_t> control_ready_quanta{0};
   std::atomic<std::uint32_t> rendered_quanta{0};
   std::atomic<std::uint32_t> active_voice_quanta{0};
@@ -73,8 +83,6 @@ void all_eight_effects_sustain_maximum_gesture_rate_without_underruns() {
   std::thread renderer([&] {
     std::array<float, kFramesPerQuantum> left{};
     std::array<float, kFramesPerQuantum> right{};
-    constexpr auto kCallbackDeadline = std::chrono::nanoseconds{
-        1'000'000'000ULL * kFramesPerQuantum / 48'000U};
     for (std::uint32_t quantum = 0; quantum < kQuanta; ++quantum) {
       while (control_ready_quanta.load(std::memory_order_acquire) <= quantum) {
         std::this_thread::yield();
@@ -91,8 +99,17 @@ void all_eight_effects_sustain_maximum_gesture_rate_without_underruns() {
       const auto elapsed = kVerifyRealtimeDeadline
                                ? current_thread_cpu_time() - started
                                : std::chrono::nanoseconds::zero();
-      if (kVerifyRealtimeDeadline && elapsed > kCallbackDeadline) {
-        callback_overruns.fetch_add(1, std::memory_order_relaxed);
+      if (kVerifyRealtimeDeadline) {
+        const auto observed_ns = static_cast<std::uint64_t>(elapsed.count());
+        if (elapsed > kCallbackDeadline) {
+          callback_overruns.fetch_add(1, std::memory_order_relaxed);
+        }
+        callback_total_ns.fetch_add(observed_ns, std::memory_order_relaxed);
+        auto previous = callback_max_ns.load(std::memory_order_relaxed);
+        while (observed_ns > previous &&
+               !callback_max_ns.compare_exchange_weak(
+                   previous, observed_ns, std::memory_order_relaxed)) {
+        }
       }
       for (std::size_t frame = 0; frame < left.size(); ++frame) {
         if (!std::isfinite(left[frame]) || !std::isfinite(right[frame])) {
@@ -145,6 +162,27 @@ void all_eight_effects_sustain_maximum_gesture_rate_without_underruns() {
   const auto realtime = engine.telemetry();
   LMDJ_CHECK(!render_failed.load(std::memory_order_acquire));
   LMDJ_CHECK(heard_processed_voice.load(std::memory_order_relaxed));
+  if (kVerifyRealtimeDeadline &&
+      callback_overruns.load(std::memory_order_relaxed) != 0) {
+    const auto kDeadlineNs =
+        static_cast<std::uint64_t>(kCallbackDeadline.count());
+    const auto overruns = callback_overruns.load(std::memory_order_relaxed);
+    const auto max_ns = callback_max_ns.load(std::memory_order_relaxed);
+    const auto mean_ns =
+        callback_total_ns.load(std::memory_order_relaxed) / kQuanta;
+    std::cerr
+        << "why: the master FX render thread missed its real-time deadline. "
+        << overruns << " of " << kQuanta << " callbacks exceeded "
+        << kDeadlineNs << " ns of thread CPU time; mean " << mean_ns
+        << " ns, worst " << max_ns << " ns (" << (max_ns / (kDeadlineNs / 100))
+        << "% of the deadline).\n"
+        << "remedy: this budget is not marginal — a healthy host renders this "
+           "quantum in tens of microseconds, so a worst case near or past the "
+           "deadline means either the FX callback path regressed or the host "
+           "degraded by more than an order of magnitude. Compare the mean "
+           "above against a run on an uncontended host before changing the "
+           "test; never raise the deadline to make this pass.\n";
+  }
   LMDJ_CHECK(callback_overruns.load(std::memory_order_relaxed) == 0);
   LMDJ_CHECK(active_voice_quanta.load(std::memory_order_relaxed) == kQuanta);
   LMDJ_CHECK(fx.enqueued_gestures == accepted);

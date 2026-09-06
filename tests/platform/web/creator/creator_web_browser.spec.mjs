@@ -66,9 +66,29 @@ async function armPadOutcomeObservation(pad) {
   });
 }
 
+// A Pad press reaches the Runtime through an asynchronous journey serialized
+// behind the presses before it, so a burst of unacknowledged clicks cannot tell
+// a dispatch that was lost from one that has not landed yet: the report simply
+// reads short. Holding each press until that Pad reports its own outcome makes a
+// lost admission fail at the Pad that lost it.
+async function pressAdmittedPad(page, pad) {
+  await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
+  await armPadOutcomeObservation(pad);
+  await pad.hover();
+  await page.mouse.down();
+  await expect(pad).toHaveAttribute("data-proof-outcome-observed", /.+/, {
+    timeout: 30_000,
+  });
+  await page.mouse.up();
+  await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
+}
+
 test("visible Creator journey imports, activates, and admits all 64 unique Pad addresses", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(180_000);
+  // Sixty-four acknowledged presses cost more wall clock than sixty-four
+  // unobserved clicks did, and this journey shares a loaded host with the rest
+  // of the Chromium group.
+  test.setTimeout(240_000);
   await page.goto("/index.html");
   await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
     timeout: 30_000,
@@ -88,7 +108,7 @@ test("visible Creator journey imports, activates, and admits all 64 unique Pad a
       const name = await pad.getAttribute("aria-label");
       expect(visited.has(name)).toBe(false);
       visited.add(name);
-      await pad.click();
+      await pressAdmittedPad(page, pad);
     }
   }
   expect(visited.size).toBe(64);
