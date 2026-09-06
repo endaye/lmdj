@@ -417,8 +417,8 @@ class ChangeScopeTest(unittest.TestCase):
         # this test exits (#685). A captured path that is a directory is given
         # its trailing slash so prefix rules classify it.
         read_sites = re.compile(
-            r"""(?:readRepo|readFile)\s*\(\s*["'`]((?:docs|\.agents)/[A-Za-z0-9_./-]+)"""
-            r"""|(?:REPO_ROOT|ROOT)\s*/\s*["']((?:docs|\.agents)/[A-Za-z0-9_./-]+)["']"""
+            r"""(?:readRepo|readFile)\s*\(\s*["'`]((?:docs|\.agents|\.claude)/[A-Za-z0-9_./-]+)"""
+            r"""|(?:REPO_ROOT|ROOT)\s*/\s*["']((?:docs|\.agents|\.claude)/[A-Za-z0-9_./-]+)["']"""
         )
         inventory = subprocess.run(
             ["git", "ls-files", "tests", "apps", "-z"],
