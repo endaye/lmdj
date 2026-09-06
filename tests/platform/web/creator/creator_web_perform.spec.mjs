@@ -24,6 +24,11 @@ const RECORDING_FRAMES = 86_400_000;
 const RECORDING_QUEUE_BATCHES = 32;
 const AUDIO_TRANSITION_TIMEOUT_MS = 35_000;
 const PROJECT_TRANSITION_TIMEOUT_MS = 125_000;
+// A Pattern launch is one bounded 30-second Runtime request, and the pending
+// value it renders is visible only while that request is outstanding. Both
+// halves of the transition are held to the same budget, because Playwright's
+// 5-second default expects the Core to answer faster than the Core promises.
+const LAUNCH_TRANSITION_TIMEOUT_MS = 30_000;
 const PATTERN_ID = "00000000-0000-4000-8000-000000000010";
 const pageErrors = new WeakMap();
 const candidateOriginServers = new Map();
@@ -999,9 +1004,10 @@ test("complete Perform journey persists projection, gestures, WAV, save, replay 
   const launch = page.getByRole("button", {name: "Launch Pattern 2"});
   await armAttributeObservation(launch, "data-launch", "pending");
   await launch.click();
-  await expect(launch).toHaveAttribute("data-proof-saw-launch", "pending");
+  await expect(launch).toHaveAttribute("data-proof-saw-launch", "pending",
+    {timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
   await expect(launch).toHaveAttribute("data-launch", "acknowledged", {
-    timeout: 30_000,
+    timeout: LAUNCH_TRANSITION_TIMEOUT_MS,
   });
   await expect(recordingStatus).toContainText(/last launch.*2.*acknowledged/i);
 
@@ -1250,8 +1256,13 @@ test("an active recording receives an empty-slot acknowledgement and interruptio
   await expect(emptySlot).not.toHaveAttribute("data-pattern-id", /.+/);
   await armAttributeObservation(emptySlot, "data-launch", "pending");
   await emptySlot.click();
-  await expect(emptySlot).toHaveAttribute("data-proof-saw-launch", "pending");
-  await emptySlot.evaluate((element) => new Promise((resolve, reject) => {
+  await expect(emptySlot).toHaveAttribute("data-proof-saw-launch", "pending",
+    {timeout: LAUNCH_TRANSITION_TIMEOUT_MS});
+  // The budget crosses into the page as an argument: this callback is
+  // stringified and run in the browser, where a Node-side module constant is
+  // an unresolvable identifier. `armAttributeObservation` above passes its
+  // arguments the same way for the same reason.
+  await emptySlot.evaluate((element, timeoutMs) => new Promise((resolve, reject) => {
     const finish = () => {
       observer.disconnect();
       window.clearTimeout(timeout);
@@ -1263,10 +1274,10 @@ test("an active recording receives an empty-slot acknowledgement and interruptio
     const timeout = window.setTimeout(() => {
       observer.disconnect();
       reject(new Error("empty-slot acknowledgement timed out"));
-    }, 30_000);
+    }, timeoutMs);
     observer.observe(element, {attributes: true, attributeFilter: ["data-launch"]});
     if (element.getAttribute("data-launch") === "acknowledged") finish();
-  }));
+  }), LAUNCH_TRANSITION_TIMEOUT_MS);
   await expect(emptySlot).toHaveAttribute("data-launch", "acknowledged");
   await expect(page.getByRole("status", {name: "Pattern launch status"}))
     .toContainText("silent gap");
