@@ -90,6 +90,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_coverage_targets
     lmdj_foundation_tests
     lmdj_foundation_json_tests
+    lmdj_foundation_soundset_manifest_tests
     lmdj_domain_project_tests
     lmdj_domain_command_handler_tests
     lmdj_domain_performance_tests
