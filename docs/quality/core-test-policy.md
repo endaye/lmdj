@@ -61,9 +61,15 @@ The long-term first-party C++ coverage targets are:
 | Provider SDK | 85% | 75% |
 
 The enforced first ratchet is deliberately separate from those targets. It was
-measured on both the reference Mac and the pinned CI-equivalent Ubuntu 24.04,
-Clang 18, and LLVM 18 toolchain after the deterministic, persistence-fault, and
-C ABI concurrency suites landed:
+measured on both the reference Mac and the then-pinned CI-equivalent Ubuntu
+24.04 Clang/LLVM 18 toolchain after the deterministic, persistence-fault, and
+C ABI concurrency suites landed. The Linux pin moved to Clang/LLVM 22 on
+2026-09-06 (#693); the same tree was re-measured on 22 against 18 before the
+pin moved, see
+[`2026-09-06-llvm-22-coverage-measurement.md`](2026-09-06-llvm-22-coverage-measurement.md).
+Line denominators are identical on both, 22 counts about 40 fewer covered
+lines and fewer branch regions, and every floor below still holds with the
+Project Cooker line floor the tightest at three lines. No floor changed:
 
 | Scope | Line floor | Branch floor |
 | --- | ---: | ---: |
@@ -332,10 +338,11 @@ an hour of latency before a stalled queue label is reconciled.
 The statement above is scoped to the formal Pull Request graph in `ci.yml`, and
 that implicit scope is what let the watchdog sit unexamined. Workflows outside
 that graph still place jobs on `ubuntu-24.04` — the remaining Merge Queue jobs,
-the release audit, the Portal deployment smoke, the deployment and publication
-workflows, and scheduled TSan, which stays Hosted on its own recorded grounds.
-Each is a separate decision with its own reason; none of them is covered by the
-four-job exception, and none should be read as covered by it.
+the release audit, the Portal deployment smoke, and the deployment and
+publication workflows. Each is a separate decision with its own reason; none of
+them is covered by the four-job exception, and none should be read as covered
+by it. Scheduled TSan left this list on 2026-09-06 (#693) once the `ci-core`
+host capped its mmap ASLR entropy; see Sanitizer Selection.
 
 The Merge Queue worker is the second worked example, and it separates two
 things the exception can conflate. `route` decides whether a Pull Request is
@@ -541,16 +548,26 @@ hosts, not a defect. Routing splits two ways:
   Coverage and Core package — name `ci-core` literally. Architecture Portal
   declares its role inside the called `architecture-portal.yml`, because GitHub
   does not allow a `uses:` job to carry `runs-on`. Outside the formal PR graph,
-  Nightly Release stress also names `ci-core`; an explicit manual TSan
-  compatibility probe may name the same role, but scheduled TSan remains
-  Hosted until that probe supplies accepted same-revision runtime evidence.
+  Nightly Release stress and, since #693, scheduled TSan also name `ci-core`;
+  both join the `lmdj-native-heavy` queue so they never run beside each other.
 
 `ci-core` deliberately does not span both hosts: the persistent native `ccache`
-and the preinstalled clang-18/llvm-18 coverage toolchain are shared-host state,
-not pool state. Both hosts carry the same 18.1.3 toolchain, so the role can be
-placed on either, but it is registered on exactly one at a time — today netcup. Coverage accordingly no longer installs that toolchain; the
-`apt-get` step existed only for the hosted fallback and would otherwise mutate
-state both runner services share. Every job that can land on a role carries the
+and the preinstalled clang-22/llvm-22 coverage toolchain are shared-host state,
+not pool state. Both hosts carry the same Clang/LLVM 22 toolchain, so the role
+can be placed on either, but it is registered on exactly one at a time — today
+netcup. Two pieces of host state travel with the role rather than with the
+machine: the Clang/LLVM 22 pin, which both hosts carry, and the mmap ASLR cap
+TSan needs, which is applied only where the role lives. Moving `ci-core` means
+running `scripts/ci/host/configure-sanitizer-aslr.sh` on the new host first;
+the Nightly lane verifies the cap before it builds, so the omission fails
+there with the remedy named rather than silently. Ubuntu's own archive stops at LLVM 18.1.3 for noble, so the pinned
+major comes from apt.llvm.org's exact-major `llvm-toolchain-noble-22` suite,
+installed by `scripts/ci/host/install-llvm-toolchain.sh`: that script verifies
+the repository key against a fixed fingerprint, names the suite rather than
+the rolling one, and gives the origin apt priority 100 so it can only supply
+packages the distribution lacks. No lane installs anything on the role; an
+`apt-get` step there would mutate state the runner services share, so every
+Core lane only verifies with `command -v` that the pin is present. Every job that can land on a role carries the
 closed trust condition itself, because no selector's fork branch is in its path
 any more.
 
@@ -618,42 +635,45 @@ sanitizer failure is final and must not start the fallback lane.
 Local Mac preflight may run additional focused, Proof, or browser checks before
 push, but local results do not replace the commit-bound GitHub required checks.
 
-Scheduled TSan stays Hosted, and that is now settled by same-revision evidence
-rather than by one historical observation. Run 33905688022 dispatched the probe
-from the branch carrying the capacity queue, so the two native jobs serialised
-fourteen minutes apart on one service instead of starting together, and the
-probe still failed. Every test died in 0.03 to 0.12 seconds with
-`FATAL: ThreadSanitizer: unexpected memory mapping`, which is the runtime
-refusing to initialise rather than a test failing: the same failure the original
-Contabo observation recorded. The 2026-09-04 contended run had shown nine stress
-tests failing with no TSan diagnostic at all, which was starvation and said
-nothing about compatibility. Do not re-run this probe expecting a different
-answer without first changing something about the host.
+Scheduled TSan runs on `ci-core` since 2026-09-06 (#693), and the route was
+accepted on same-revision evidence, not on the compiler move. The history that
+kept it Hosted is worth keeping because it is what the evidence had to
+overturn. Run 33905688022 dispatched the probe from the branch carrying the
+capacity queue, so the two native jobs serialised fourteen minutes apart on
+one service instead of starting together, and the probe still failed: every
+test died in 0.03 to 0.12 seconds with `FATAL: ThreadSanitizer: unexpected
+memory mapping`, the runtime refusing to initialise rather than a test
+failing. The 2026-09-04 contended run had shown nine stress tests failing with
+no TSan diagnostic at all, which was starvation and said nothing about
+compatibility. The cause was the host, not the runner or the compiler: the
+6.8 kernel's 32-bit `vm.mmap_rnd_bits`, which no TSan runtime can start under
+without re-exec'ing with ASLR off, and which `LockPersonality=true` forbids.
+With the host capped at 28 bits by `scripts/ci/host/configure-sanitizer-aslr.sh`
+the probe passed on `netcup-lmdj-linux-04` at this Task's revision (run
+34030066433, 11/11 stress tests in 52 s against the Hosted lane's 157 s), see
+[`2026-09-06-llvm-22-coverage-measurement.md`](2026-09-06-llvm-22-coverage-measurement.md).
+The lane now verifies that prerequisite before it builds, so a host that loses
+the setting fails naming the remedy instead of with a runtime FATAL or, on some
+runtimes, an empty log. The probe job and its dispatch input are gone; a second
+TSan lane would only measure a different kernel and drift.
 
-The same run also settles a related question in the other direction.
+The same run also settled a related question in the other direction.
 `core-stress` failed uncontended on that run, so the suggestion that recent
 nightly stress failures were sibling contention is not supported: the capacity
 queue was in force and the suite still failed. That is a separate matter from CI
 routing and needs its own investigation.
 
-Both native Nightly jobs also join the repository-wide `lmdj-native-heavy`
-queue. Naming the `ci-core` role is not enough to serialise them: the role spans
-two runner services on one physical host, so a dispatched TSan probe and the
-release stress suite start in the same second and run beside each other. Run
+Both native Nightly jobs join the repository-wide `lmdj-native-heavy` queue.
+Naming the `ci-core` role is not enough to serialise them: the role spans
+several runner services on one physical host, so a TSan job and the release
+stress suite would start in the same second and run beside each other. Run
 33838737018 did exactly that on 2026-09-04 and both failed, which made the
 probe's result unusable -- it measured contention rather than whether the host
-can execute the TSan runtime. A TSan probe is only evidence when it runs alone.
+can execute the TSan runtime. A TSan result is only evidence when it runs alone.
 
 The nightly Release stress lane is trusted native workload on `ci-core`: it
 runs at most 20 consecutive successful repetitions and stops on the first
-failure. It does not retry a failed execution. Scheduled TSan remains on the
-clean `ubuntu-24.04` authority because a historical Contabo execution built but
-the TSan runtime failed with an unexpected memory mapping. A manual dispatch
-may set `probe_self_hosted_tsan` to run an additional `ci-core` job with the
-same fixture, dependency, configure, build and test commands as Hosted TSan.
-That probe is compatibility evidence only: it does not replace or skip the
-Hosted job, and changing scheduled TSan routing requires separately accepted
-same-revision runner-name and successful-job evidence.
+failure. It does not retry a failed execution.
 
 ## Sanitizer Selection
 
@@ -665,6 +685,37 @@ Product Proof, but never host a TSan-instrumented library in their own process.
 ASan registrations receive twice the normal tier timeout and TSan
 registrations receive four times the normal tier timeout to account for
 instrumentation overhead; the underlying tier and workload remain unchanged.
+
+The two sanitizer presets do not choose a compiler; the lane does. `asan`
+inherits the platform default — GCC 13's shared `libasan` on Linux, AppleClang
+on macOS — because that runtime has not regressed and the MCP Host tests locate
+it by its `libasan.so` name. `tsan` is configured with the pinned Clang on
+the Linux lane (`CC=clang-22 CXX=clang++-22` on the configure step of
+`core-tsan`), because the TSan runtime is the
+reason the pin exists: GCC 13.3's `libtsan` refuses to initialise under the
+6.8 kernel's 32-bit `vm.mmap_rnd_bits` with `FATAL: ThreadSanitizer:
+unexpected memory mapping`, on both self-hosted hosts (#676, #693). Switching
+the compiler is not a pure environment change. Clang on Linux links its
+sanitizer runtimes static and whole-archive, and the C++ half defines global
+`operator new`/`delete`, which collides with the replacements
+`tests/core/audio/realtime_engine_test.cpp` installs to count allocations on
+the realtime path. `lmdj_target_sanitizers` therefore links the runtime shared
+under Clang on Linux (`-shared-libsan` plus an explicit rpath to the
+compiler's `-print-runtime-dir`), which resolves the operators by interposition
+exactly as GCC's shared runtimes already do and records the runtime's location
+so tests run without `LD_LIBRARY_PATH`.
+
+Moving the compiler does not by itself make TSan run on a self-hosted host.
+LLVM 22's runtime handles an incompatible layout the same way LLVM 18's does:
+it re-execs itself with `ADDR_NO_RANDOMIZE`, and under the runner units'
+`LockPersonality=true` that fails closed with `unable to disable ASLR
+(perhaps sandboxing is enabled?)`. The fix is therefore the host, not the
+compiler: `scripts/ci/host/configure-sanitizer-aslr.sh` caps
+`vm.mmap_rnd_bits` at 28 on the `ci-core` host, the value GitHub's hosted
+Ubuntu images carry and the pre-6.6 default, so TSan starts without re-exec
+and ASLR stays on. The Owner chose that over `LockPersonality=false` on
+2026-09-06 (#693), because the latter would disable ASLR for every CI process
+and remove a hardening line to solve one runtime's problem.
 
 ## Proof-Scoped C ABI Concurrency Baseline
 

@@ -21,9 +21,15 @@ on the named runner can do so.
 
 ## How to apply
 
-Keep scheduled TSan on its accepted Hosted runner while a manual dispatch runs
-the same fixture, dependency, configure, build and stress commands on
-`ci-core`. Accept a routing change only from same-revision evidence containing
-the expected `runner_name` and a successful probe job. The exit gate fixes both
-routes and their command parity so the probe cannot silently become an easier
-test.
+Accept a TSan routing change only from same-revision evidence: the expected
+`runner_name` and a successful job running the fixture, dependency, configure,
+build and stress commands on the target role. That evidence arrived on
+2026-09-06 (#693) once the host prerequisite was understood — the 6.8 kernel's
+32-bit `vm.mmap_rnd_bits`, capped to 28 by
+`scripts/ci/host/configure-sanitizer-aslr.sh` — and scheduled TSan moved to
+`ci-core`. The exit gate now fixes that route, requires the lane to verify the
+sysctl before it builds, and forbids a second TSan lane, so a host that
+regresses fails naming its remedy rather than reproducing the original
+mystery. See also
+[`sanitizer-runtime-silent-start-failure`](sanitizer-runtime-silent-start-failure.md)
+for how to tell a runtime that cannot start from a test that failed.

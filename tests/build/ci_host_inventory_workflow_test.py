@@ -51,7 +51,7 @@ class HostInventoryWorkflowTest(unittest.TestCase):
         coverage_gate = (REPO_ROOT / ".github/workflows/ci.yml").read_text(
             encoding="utf-8"
         )
-        for tool in ("clang-18", "clang++-18", "llvm-cov-18"):
+        for tool in ("clang-22", "clang++-22", "llvm-cov-22"):
             with self.subTest(tool=tool):
                 self.assertIn(f"command -v {tool}", coverage_gate)
                 self.assertIn(tool, self.source)
