@@ -541,6 +541,26 @@ async function openProjectSuccessor(context, url) {
   return successor;
 }
 
+async function removeCrashableProfile(userDataDir) {
+  // SIGKILL reaches the Chromium browser process, not the renderer, GPU and
+  // network-service children it spawned. Those briefly outlive it still holding
+  // descriptors under the profile, so a file can reappear between this call's
+  // readdir and its rmdir and surface as ENOTEMPTY. The retained trace for
+  // issue #684 carries no pageerror event, so the race is in teardown alone.
+  // Retry on that exact contention rather than leaving a full-CI Pull Request
+  // to lose a lottery.
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    try {
+      await rm(userDataDir, {recursive: true, force: true});
+      return;
+    } catch (error) {
+      if (error?.code !== "ENOTEMPTY" && error?.code !== "EBUSY") throw error;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    }
+  }
+  await rm(userDataDir, {recursive: true, force: true});
+}
+
 async function launchCrashableCreatorContext(userDataDir) {
   const activePortPath = join(userDataDir, "DevToolsActivePort");
   await rm(activePortPath, {force: true});
@@ -1128,7 +1148,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   } finally {
     await ownerProcess?.kill().catch(() => {});
     await applyingProcess?.kill().catch(() => {});
-    await rm(applyProfile, {recursive: true, force: true});
+    await removeCrashableProfile(applyProfile);
   }
 
   const discardProfile = await mkdtemp(join(tmpdir(), "lmdj-perform-owner-loss-discard-"));
@@ -1165,7 +1185,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   } finally {
     await discardOwnerProcess?.kill().catch(() => {});
     await discardingProcess?.kill().catch(() => {});
-    await rm(discardProfile, {recursive: true, force: true});
+    await removeCrashableProfile(discardProfile);
   }
 });
 
@@ -1303,7 +1323,7 @@ test("owner process loss leaves one recoverable recording and no second capture 
   } finally {
     await ownerProcess?.kill().catch(() => {});
     await successorProcess?.kill().catch(() => {});
-    await rm(profile, {recursive: true, force: true});
+    await removeCrashableProfile(profile);
   }
 });
 
