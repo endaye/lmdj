@@ -424,6 +424,12 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
                     or proof.snapshot_revision is None
                 ):
                     raise ValueError(f"Proof projection does not bind {active_intent.tag} to {identity}")
+        # Probe only. The audit is read-only by contract (standard release
+        # pipeline design section 12: it creates, pushes, edits and deletes no
+        # Git/GitHub state), and `git fetch` writes objects, so a missing
+        # target is reported with its remedy instead of being fetched here.
+        # `scripts/release.sh hydrate` owns that write. Pitfall:
+        # .agents/pitfalls/release-intent-target-reachability.md
         with _static_projection(root, "release intent target objects", "active-manifests"):
             if (root / ".git").exists():
                 for entry in entries:
@@ -433,7 +439,12 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
                         ["git", "-C", str(root), "cat-file", "-e", f"{entry.target_revision}^{{commit}}"],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
                     ).returncode != 0:
-                        raise ValueError(f"target commit of {entry.tag} is absent from the local object store")
+                        raise ValueError(
+                            f"target commit {entry.target_revision} of {entry.tag} is absent "
+                            "from the local object store, so this audit cannot bind the intent "
+                            "to the commit it records and must not fetch it itself; remedy: run "
+                            "scripts/release.sh hydrate, then rerun this audit"
+                        )
     except _StaticProjectionError as failure:
         return AuditFinding(
             "unverifiable", policy.repository,
