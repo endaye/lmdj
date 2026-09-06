@@ -312,6 +312,68 @@ test("Escape on a focused trim handle with no gesture still closes the Capture p
   expect(onClose).toHaveBeenCalledTimes(2);
 });
 
+test("focus leaving a trim handle ends the keyboard gesture that Escape would abort", async () => {
+  const {makeController, instances} = createFactory();
+  const {onClose} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(48_000).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+
+  // An arrow nudge whose keyup never reaches the handle: the browser sends it
+  // to whatever took focus, so a window switch mid-nudge leaves the gesture
+  // base behind unless focus loss also ends the gesture.
+  const start = await screen.findByRole("slider", {name: /Pad A1 Start/});
+  start.focus();
+  fireEvent.keyDown(start, {key: "ArrowRight"});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("1");
+
+  screen.getByRole("button", {name: "Commit"}).focus();
+  fireEvent.keyDown(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"}), {
+    key: "Escape",
+  });
+  // A stale base would both revert the nudge and swallow the dismissal.
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("1");
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+test("a stale keyboard base never shadows the abort base of a live grip drag", async () => {
+  const {makeController, instances} = createFactory();
+  const {container} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(48_000).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+  mockTrimRect(container);
+
+  const start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  start.focus();
+  fireEvent.keyDown(start, {key: "ArrowRight"});
+  fireEvent.keyDown(start, {key: "ArrowRight"});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("2");
+
+  // Pressing a grip takes focus off the handle, which is what ends the
+  // keyboard gesture; jsdom does not move focus for a synthetic pointer event.
+  screen.getByRole("button", {name: "Commit"}).focus();
+
+  // 400 px over 48 000 frames: End sits at clientX 400, drag it to 300.
+  const endGrip = captureGrip(container, "end");
+  fireEvent.pointerDown(endGrip, {pointerId: 21, clientX: 400, button: 0});
+  fireEvent.pointerMove(endGrip, {pointerId: 21, clientX: 300});
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("36000");
+
+  // Escape must abort the drag back to its own base, not to whatever the
+  // earlier keyboard nudge recorded.
+  fireEvent.keyDown(window, {key: "Escape"});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("2");
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("48000");
+});
+
 test("keyboard Start moves clamp to the remaining Bank quota instead of dead-zoning", async () => {
   const {makeController, instances} = createFactory();
   renderPanel({makeController, maxCommitFrames: 2_400});

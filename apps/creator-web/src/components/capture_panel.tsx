@@ -437,6 +437,15 @@ export function CapturePanel({
     }
   };
 
+  // The keyup that ends an arrow nudge goes to whatever holds focus, so a
+  // window switch mid-nudge never delivers it here. Focus leaving the handle
+  // ends the gesture too: a base left behind would make the next Escape
+  // restore stale frames instead of reaching ModalDialog, and would shadow a
+  // live grip drag's own abort base in cancelOnEscape.
+  const handleTrimBlur = () => {
+    keyboardSelectionRef.current = null;
+  };
+
   const frameAtClientX = (clientX: number): number => {
     const rect = trimWaveformRef.current?.getBoundingClientRect();
     if (rect === undefined || rect.width <= 0 || state.frameCount <= 0) {
@@ -625,6 +634,7 @@ export function CapturePanel({
                   handleSelectStart(event.currentTarget.valueAsNumber)}
                 onKeyDown={(event) => handleTrimKeyDown(event, "start")}
                 onKeyUp={handleTrimKeyUp}
+                onBlur={handleTrimBlur}
               />
               <input
                 className="waveform-handle"
@@ -639,6 +649,7 @@ export function CapturePanel({
                   handleSelectEnd(event.currentTarget.valueAsNumber)}
                 onKeyDown={(event) => handleTrimKeyDown(event, "end")}
                 onKeyUp={handleTrimKeyUp}
+                onBlur={handleTrimBlur}
               />
             </div>
           </>
