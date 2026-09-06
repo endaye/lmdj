@@ -97,8 +97,19 @@ def validate_phase_gate(
     policy: Mapping[str, object], manifest: Mapping[str, object],
     results: Mapping[str, str], *, change_scope_result: str = "success",
     repository: str | Path | None = None,
+    unresolved_review_threads: int = 0,
 ) -> PhaseGateReport:
-    """Validate selected-success/unselected-skipped preflight results."""
+    """Validate selected-success/unselected-skipped preflight results.
+
+    `unresolved_review_threads` is the count of advisory review threads a
+    human has not yet resolved. It is an admission condition, not a verdict:
+    the reviewer's own result is never read here. A finding costs one reply
+    to resolve; a native-heavy run costs about 185 minutes; so the threads
+    are held here, before the expensive work, rather than at merge where
+    `required_conversation_resolution` held the same threads after it. A
+    dead reviewer posts no threads and admits -- `advisory-review-liveness`
+    is what notices that.
+    """
     try:
         change_scope._validate_policy(policy)
         change_scope.validate_manifest(
@@ -140,6 +151,17 @@ def validate_phase_gate(
                 f"{_display(job)} has unknown result {results[job]!r}",
                 "pass one of success, failure, cancelled, or skipped",
             ))
+
+    if not isinstance(unresolved_review_threads, int) or unresolved_review_threads < 0:
+        return _invalid("unresolved review thread count must be a non-negative integer")
+    if unresolved_review_threads:
+        noun = "thread" if unresolved_review_threads == 1 else "threads"
+        errors.append(_diagnostic(
+            f"{unresolved_review_threads} advisory review {noun} unresolved",
+            "resolve each thread on the Pull Request -- by fixing it or by "
+            "replying with the disagreement -- then rerun; native-heavy work "
+            "is admitted once no thread is open",
+        ))
 
     selected = set(manifest["required_jobs"]) & set(GATING_JOBS)
     primary_failures: list[str] = []
@@ -212,6 +234,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--manifest-json", required=True)
     parser.add_argument("--results-json", required=True)
     parser.add_argument("--change-scope-result", required=True)
+    parser.add_argument(
+        "--unresolved-review-threads", type=int, default=0,
+        help="advisory review threads a human has not resolved; >0 blocks admission",
+    )
     parser.add_argument("--summary", required=True)
     args = parser.parse_args(argv)
     try:
@@ -224,6 +250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             policy, manifest, normalize_needs(needs),
             change_scope_result=args.change_scope_result,
             repository=Path.cwd(),
+            unresolved_review_threads=args.unresolved_review_threads,
         )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         report = _invalid(error)
