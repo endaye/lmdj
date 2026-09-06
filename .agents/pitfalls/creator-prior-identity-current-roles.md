@@ -6,7 +6,7 @@ recurrences:
   - date: 2026-09-06
     occurrence: https://github.com/endaye/lmdj/actions/runs/34017836312
     observed_by: grok-4.6
-exit: gate:apps/creator-web/test/deployment_smoke_test.py
+exit: skill:.agents/skills/lmdj-release/SKILL.md
 ---
 
 # Creator exact-tag deploy discovers the live prior with the deploying Host's required asset roles, so a 3.0.0 cut cannot read a published 2.1.1 five-asset inventory as rollback identity.
