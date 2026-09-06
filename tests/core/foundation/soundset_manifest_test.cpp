@@ -1,0 +1,233 @@
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <nlohmann/json.hpp>
+
+#include <lmdj/foundation/error.hpp>
+#include <lmdj/foundation/json.hpp>
+#include <lmdj/foundation/soundset_manifest.hpp>
+
+#include "tests/core/support/test.hpp"
+
+namespace {
+
+using lmdj::foundation::canonical_json;
+using lmdj::foundation::CatalogLicenseSummary;
+using lmdj::foundation::check_soundset_eligibility;
+using lmdj::foundation::ErrorCode;
+using lmdj::foundation::parse_soundset_manifest;
+using lmdj::foundation::SoundSetManifest;
+using Json = nlohmann::json;
+
+std::string read_bytes(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  LMDJ_CHECK(stream.good());
+  return {
+      std::istreambuf_iterator<char>(stream),
+      std::istreambuf_iterator<char>(),
+  };
+}
+
+std::string valid_fixture_bytes() {
+  return read_bytes(
+      std::filesystem::path{LMDJ_SOURCE_DIR} / "tests" / "fixtures" /
+      "contracts" / "soundset-v1-valid.json");
+}
+
+Json valid_object() {
+  return Json::parse(valid_fixture_bytes());
+}
+
+std::string dump(const Json& value) {
+  return canonical_json(value);
+}
+
+void expect_parse_fail(
+    std::string_view bytes,
+    ErrorCode code,
+    std::string_view reason) {
+  const auto parsed = parse_soundset_manifest(bytes);
+  LMDJ_CHECK(!parsed.has_value());
+  LMDJ_CHECK(parsed.error().code == code);
+  LMDJ_CHECK(parsed.error().details.at("reason") == reason);
+}
+
+void expect_eligibility_fail(
+    const SoundSetManifest& manifest,
+    const std::optional<CatalogLicenseSummary>& summary,
+    std::string_view reason) {
+  const auto checked = check_soundset_eligibility(manifest, summary);
+  LMDJ_CHECK(!checked.has_value());
+  LMDJ_CHECK(checked.error().code == ErrorCode::permission_denied);
+  LMDJ_CHECK(checked.error().details.at("reason") == reason);
+}
+
+void test_valid_fixture_is_canonical_and_parses() {
+  const auto bytes = valid_fixture_bytes();
+  LMDJ_CHECK(!bytes.empty());
+  LMDJ_CHECK(bytes.back() != '\n');
+  const auto parsed = parse_soundset_manifest(bytes);
+  LMDJ_CHECK(parsed.has_value());
+  LMDJ_CHECK(parsed.value().canonical_bytes == bytes);
+  LMDJ_CHECK(parsed.value().canonical_bytes == dump(valid_object()));
+  LMDJ_CHECK(parsed.value().set_id == "10000000-0000-4000-8000-000000000001");
+  LMDJ_CHECK(parsed.value().license.spdx_id == "CC-BY-4.0");
+  LMDJ_CHECK(parsed.value().slots[0].occupied.has_value());
+  LMDJ_CHECK(parsed.value().slots[0].occupied->role == "kick");
+  LMDJ_CHECK(!parsed.value().slots[1].occupied.has_value());
+  LMDJ_CHECK(check_soundset_eligibility(parsed.value()).has_value());
+}
+
+void test_non_canonical_json_is_rejected() {
+  const auto bytes = valid_fixture_bytes();
+  expect_parse_fail(
+      std::string("\xef\xbb\xbf") + bytes,
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+  expect_parse_fail(
+      bytes + "\n",
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto reordered = bytes;
+  const auto name = std::string(R"("name":"Kit A")");
+  const auto publisher = std::string(R"("publisher":"LMDJ")");
+  const auto name_at = reordered.find(name);
+  const auto publisher_at = reordered.find(publisher);
+  LMDJ_CHECK(name_at != std::string::npos);
+  LMDJ_CHECK(publisher_at != std::string::npos);
+  LMDJ_CHECK(name_at < publisher_at);
+  reordered.replace(name_at, name.size(), publisher);
+  reordered.replace(
+      publisher_at - name.size() + publisher.size(),
+      publisher.size(),
+      name);
+  LMDJ_CHECK(reordered != bytes);
+  LMDJ_CHECK(Json::parse(reordered) == valid_object());
+  expect_parse_fail(
+      reordered, ErrorCode::invalid_argument, "soundset_manifest_invalid");
+
+  auto duplicate_key = bytes;
+  duplicate_key.insert(
+      duplicate_key.find(name), R"("name":"Other",)");
+  expect_parse_fail(
+      duplicate_key, ErrorCode::invalid_argument, "soundset_manifest_invalid");
+
+  auto non_canonical_number = bytes;
+  const auto length = std::string(R"("byte_length":44)");
+  const auto length_at = non_canonical_number.find(length);
+  LMDJ_CHECK(length_at != std::string::npos);
+  non_canonical_number.replace(length_at, length.size(), R"("byte_length":4.4e1)");
+  expect_parse_fail(
+      non_canonical_number,
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+}
+
+void test_slot_layout_faults_use_slot_invalid() {
+  auto fifteen = valid_object();
+  fifteen["slots"].erase(fifteen["slots"].begin() + 15);
+  expect_parse_fail(
+      dump(fifteen), ErrorCode::invalid_argument, "soundset_slot_invalid");
+
+  auto seventeen = valid_object();
+  seventeen["slots"].push_back(Json{{"slot", 0}});
+  expect_parse_fail(
+      dump(seventeen), ErrorCode::invalid_argument, "soundset_slot_invalid");
+
+  auto duplicate = valid_object();
+  duplicate["slots"][1] = Json{{"slot", 0}};
+  expect_parse_fail(
+      dump(duplicate), ErrorCode::invalid_argument, "soundset_slot_invalid");
+
+  auto unknown_role = valid_object();
+  unknown_role["slots"][0]["role"] = "cowbell";
+  expect_parse_fail(
+      dump(unknown_role), ErrorCode::invalid_argument, "soundset_slot_invalid");
+}
+
+void test_artifact_and_unknown_key_faults_use_manifest_invalid() {
+  auto uppercase = valid_object();
+  uppercase["slots"][0]["artifact"]["sha256"] = std::string(64, 'A');
+  expect_parse_fail(
+      dump(uppercase), ErrorCode::invalid_argument, "soundset_manifest_invalid");
+
+  auto unknown_key = valid_object();
+  unknown_key["unexpected"] = true;
+  expect_parse_fail(
+      dump(unknown_key),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto missing_license = valid_object();
+  missing_license.erase("license");
+  expect_parse_fail(
+      dump(missing_license),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto empty_holder = valid_object();
+  empty_holder["license"]["rights_holder"] = "";
+  expect_parse_fail(
+      dump(empty_holder),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+}
+
+void test_eligibility_is_not_schema() {
+  auto unknown_spdx = valid_object();
+  unknown_spdx["license"]["spdx_id"] = "MIT";
+  const auto parsed_unknown =
+      parse_soundset_manifest(dump(unknown_spdx));
+  LMDJ_CHECK(parsed_unknown.has_value());
+  expect_eligibility_fail(
+      parsed_unknown.value(), std::nullopt, "soundset_license_ineligible");
+
+  auto empty_by = valid_object();
+  empty_by["license"]["attribution"] = "";
+  const auto parsed_empty_by = parse_soundset_manifest(dump(empty_by));
+  LMDJ_CHECK(parsed_empty_by.has_value());
+  expect_eligibility_fail(
+      parsed_empty_by.value(), std::nullopt, "soundset_license_ineligible");
+
+  auto cc0 = valid_object();
+  cc0["license"]["spdx_id"] = "CC0-1.0";
+  cc0["license"]["attribution"] = "";
+  const auto parsed_cc0 = parse_soundset_manifest(dump(cc0));
+  LMDJ_CHECK(parsed_cc0.has_value());
+  LMDJ_CHECK(check_soundset_eligibility(parsed_cc0.value()).has_value());
+
+  const auto parsed = parse_soundset_manifest(valid_fixture_bytes());
+  LMDJ_CHECK(parsed.has_value());
+  expect_eligibility_fail(
+      parsed.value(),
+      CatalogLicenseSummary{"CC0-1.0", "Alice"},
+      "soundset_license_ineligible");
+  LMDJ_CHECK(
+      check_soundset_eligibility(
+          parsed.value(), CatalogLicenseSummary{"CC-BY-4.0", "Alice"})
+          .has_value());
+}
+
+}  // namespace
+
+int main() {
+  try {
+    test_valid_fixture_is_canonical_and_parses();
+    test_non_canonical_json_is_rejected();
+    test_slot_layout_faults_use_slot_invalid();
+    test_artifact_and_unknown_key_faults_use_manifest_invalid();
+    test_eligibility_is_not_schema();
+  } catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return 1;
+  }
+  std::cout << "foundation soundset manifest tests: PASS\n";
+  return 0;
+}

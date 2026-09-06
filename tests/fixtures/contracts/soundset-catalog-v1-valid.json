@@ -1,0 +1,20 @@
+{
+  "contract": "lmdj.soundset-catalog.v1",
+  "entries": [
+    {
+      "license_summary": {
+        "rights_holder": "Alice",
+        "spdx_id": "CC-BY-4.0"
+      },
+      "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "Kit A",
+      "publisher": "LMDJ",
+      "roles_summary": [
+        "kick"
+      ],
+      "set_id": "10000000-0000-4000-8000-000000000001",
+      "total_bytes": 641,
+      "version": "1.0.0"
+    }
+  ]
+}
