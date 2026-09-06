@@ -109,6 +109,15 @@ inputs `tag`, `release_id`, and `plan_sha256`. Do not approve the protected
 Deployment and Channel promotion separate; report only independently verified
 status and never infer either from Release publication.
 
+If `publish-release.yml` exits non-zero after the `publish-draft` step printed
+`release status: published`, read the live Release by numeric ID before
+concluding publication failed. Canonical `audit --remote` loads the still-
+`releasable` ledger from protected `main`, so
+`non-published intent identifies an already published GitHub Release` is the
+expected post-PATCH finding until a docs Pull Request records
+`disposition: published`. Do not retry the workflow. See
+[`post-publish-audit-releasable-ledger`](../../pitfalls/post-publish-audit-releasable-ledger.md).
+
 ## Pitfalls
 
 Open the entries below before the step each one names. They are recorded
@@ -127,6 +136,10 @@ contract is [`docs/governance/pitfall-ledger.md`](../../../docs/governance/pitfa
   Allocation needs no intent. Bind the intent only after the exact
   protected-main squash SHA exists; a pre-squash or branch SHA is not a
   protected-main ancestor and fails closed.
+- Before treating a red `publish-release.yml` job as an unpublished Release —
+  [`post-publish-audit-releasable-ledger`](../../pitfalls/post-publish-audit-releasable-ledger.md).
+  After `publish-draft` succeeds, the in-workflow `audit --remote` still reads
+  canonical `main`'s `releasable` row. Read the live Release; do not retry.
 
 When a release operation exposes a new process invariant, record it through the
 Pitfall Ledger step in
