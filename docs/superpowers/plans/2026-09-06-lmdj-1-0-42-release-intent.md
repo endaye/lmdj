@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Work only on `docs/468-stage10-release-intent` in the isolated `.worktrees/issue-438-snapshot-witness` worktree already checked out for the Stage 10 close-out.
-- Bind `lmdj-v1.0.42.0` to exact protected-`main` revision `0ffa77c0c4f786dc5d9b285f272abe1725250b8d` and to successful full run `33995729112`, whose retained scope manifest and aggregate gate match that exact revision.
+- Bind `lmdj-v1.0.42.0` to exact protected-`main` revision `59cc202b3f4d772814c8de8c1d0c0e6203485a11` (Task 11 squash / PR #682, the first main commit that contains the `1.0.42.0` squash witness) and to successful full run `33996811880`, whose retained scope manifest and aggregate gate match that exact revision.
 - The Integration Queue merges with `GITHUB_TOKEN`, so the squash produced no `push` event `Core CI` run. The full run was dispatched with an empty `lanes` input while `main` HEAD was still exactly the target SHA; a lane selection would produce a rejected `requested` manifest.
 - Keep the intent at Product Channel `canary`. Every Stage 10 Perform physical row remains `deferred` and does not become automated Proof.
 - This Task may push its branch and create a reviewable PR. It must not merge, create or push a tag, create or publish a GitHub Release, deploy Runtime assets, or promote a Channel.

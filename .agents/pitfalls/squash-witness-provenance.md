@@ -24,6 +24,9 @@ recurrences:
   - date: 2026-09-06
     occurrence: https://github.com/endaye/lmdj/pull/681
     observed_by: claude-opus-5
+  - date: 2026-09-06
+    occurrence: https://github.com/endaye/lmdj/pull/689
+    observed_by: grok-4.6-build
 exit: skill:.agents/skills/lmdj-release/SKILL.md
 ---
 

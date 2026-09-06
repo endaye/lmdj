@@ -402,6 +402,65 @@ class ScopePolicyEntryPointTest(unittest.TestCase):
         self.assertEqual(reasons, set())
 
 
+class StaleBaseNoticeTest(unittest.TestCase):
+    """The entry point says when the base it classifies against is stale.
+
+    `resolve_base_sha` merge-bases against the local `origin/main` and never
+    fetches. A ref that has fallen behind classifies against an old base
+    silently -- the shape of the second occurrence in
+    `stale-push-verification-under-concurrent-sessions`, where a control-plane
+    defect was reproduced against a checkout that upstream had already fixed.
+    The notice is the mechanism that exits that entry's diagnosis half.
+    """
+
+    def setUp(self) -> None:
+        self.source = ENTRY_POINT_PATH.read_text(encoding="utf-8")
+        self.directives = "\n".join(
+            line for line in self.source.splitlines() if not line.lstrip().startswith("#")
+        )
+
+    def test_the_entry_point_compares_local_and_remote_main(self) -> None:
+        for needle in ("rev-parse --verify --quiet origin/main",
+                       # fully qualified: a bare `main` pattern also matches
+                       # refs/heads/<x>/main, and ls-remote sorts those first
+                       '"ls-remote", "--heads", "origin", "refs/heads/main"',
+                       "timeout=5",
+                       'pre-flight: stale-base'):
+            with self.subTest(needle=needle):
+                self.assertIn(
+                    needle, self.directives,
+                    msg=("why: the classifier never fetches, so a stale local "
+                         "origin/main classifies against a stale base with nothing "
+                         "said; remedy: keep the ls-remote comparison and the "
+                         "stale-base notice in scripts/local-ci.sh before exec"),
+                )
+
+    def test_the_notice_cannot_fail_the_run_or_stall_it(self) -> None:
+        self.assertNotIn("timeout 5 git", self.directives,
+                         "why: GNU timeout is absent on stock macOS, so the notice would "
+                         "fail open on exactly the developer machines this repository treats "
+                         "as normal; remedy: bound ls-remote through python_bin's subprocess "
+                         "timeout, which is already resolved above the check")
+        self.assertIn("|| true", self.directives,
+                      "why: under set -e a failed ls-remote would abort the pre-flight, "
+                      "turning a notice into a gate; remedy: keep every failure path "
+                      "falling through")
+        self.assertIn('>&2', self.directives,
+                      "why: the notice must not pollute --list --json stdout; "
+                      "remedy: write it to stderr")
+
+    def test_the_notice_precedes_the_exec(self) -> None:
+        notice = self.directives.index("pre-flight: stale-base")
+        run = self.directives.index('exec "$python_bin"')
+        self.assertLess(notice, run, "why: a notice after exec never prints; "
+                        "remedy: keep it before the exec line")
+
+    def test_the_header_no_longer_claims_milliseconds(self) -> None:
+        self.assertNotIn("milliseconds", self.source.lower(),
+                         "why: --pr-body prints the verdict first but then runs every "
+                         "selected lane; remedy: describe what it does, not a speed it lacks")
+
+
 class ManifestReuseTest(unittest.TestCase):
     """Lane selection must come from the classifier, not a second opinion."""
 
