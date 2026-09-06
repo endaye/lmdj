@@ -690,9 +690,10 @@ sanitizer runtimes static and whole-archive, and the C++ half defines global
 `operator new`/`delete`, which collides with the replacements
 `tests/core/audio/realtime_engine_test.cpp` installs to count allocations on
 the realtime path. `lmdj_target_sanitizers` therefore links the runtime shared
-under Clang on Linux (`-shared-libsan -frtlib-add-rpath`), which resolves the
-operators by interposition exactly as GCC's shared runtimes already do and
-records the runtime's location so tests run without `LD_LIBRARY_PATH`.
+under Clang on Linux (`-shared-libsan` plus an explicit rpath to the
+compiler's `-print-runtime-dir`), which resolves the operators by interposition
+exactly as GCC's shared runtimes already do and records the runtime's location
+so tests run without `LD_LIBRARY_PATH`.
 
 ## Proof-Scoped C ABI Concurrency Baseline
 
