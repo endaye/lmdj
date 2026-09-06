@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <regex>
 #include <string_view>
 
@@ -97,19 +99,33 @@ bool is_string(const nlohmann::json& value) {
   return value.is_string();
 }
 
+// nlohmann narrows an out-of-`int` integer by wraparound rather than throwing,
+// so `get<int>()` on a JSON number 2^32 away from a legal one lands back inside
+// any range check placed after it. Read the widest integer the value actually
+// holds and range-check that, before anything narrows.
+std::optional<std::int64_t> integer_value(const nlohmann::json& value) {
+  if (!value.is_number_integer()) {
+    return std::nullopt;
+  }
+  if (value.is_number_unsigned()) {
+    const auto raw = value.get<std::uint64_t>();
+    if (raw > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+      return std::nullopt;
+    }
+    return static_cast<std::int64_t>(raw);
+  }
+  return value.get<std::int64_t>();
+}
+
 std::optional<int> optional_bpm(const nlohmann::json& object, const char* key) {
   if (!object.contains(key)) {
     return std::nullopt;
   }
-  const auto& value = object[key];
-  if (!value.is_number_integer()) {
+  const auto bpm = integer_value(object[key]);
+  if (!bpm.has_value() || *bpm < 40 || *bpm > 240) {
     return std::nullopt;
   }
-  const auto bpm = value.get<int>();
-  if (bpm < 40 || bpm > 240) {
-    return std::nullopt;
-  }
-  return bpm;
+  return static_cast<int>(*bpm);
 }
 
 bool known_role(std::string_view role) {
@@ -177,11 +193,13 @@ Result<SoundSetSlot> parse_slot(const nlohmann::json& input) {
     return Result<SoundSetSlot>::failure(
         slot_invalid("each slot object must contain an integer slot index"));
   }
-  const auto index = input["slot"].get<int>();
-  if (index < 0 || index >= kSoundSetSlotCount) {
+  const auto raw_index = integer_value(input["slot"]);
+  if (!raw_index.has_value() || *raw_index < 0 ||
+      *raw_index >= kSoundSetSlotCount) {
     return Result<SoundSetSlot>::failure(
         slot_invalid("slot index must be in 0..15"));
   }
+  const auto index = static_cast<int>(*raw_index);
   if (exact_object_keys(input, {"slot"})) {
     return Result<SoundSetSlot>::success(SoundSetSlot{index, std::nullopt});
   }

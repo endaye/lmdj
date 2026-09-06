@@ -152,6 +152,57 @@ void test_slot_layout_faults_use_slot_invalid() {
       dump(unknown_role), ErrorCode::invalid_argument, "soundset_slot_invalid");
 }
 
+void test_out_of_range_integers_are_rejected_not_narrowed() {
+  // nlohmann stores an integer that exceeds `int` as `number_unsigned` or
+  // `number_integer` and `get<int>()` narrows it by wraparound instead of
+  // throwing, so a value 2^32 away from a legal one lands back inside the
+  // guarded range: 4294967296 reads as slot 0 and 4294967311 as slot 15.
+  // Canonical bytes keep the original digits, so such a manifest also passes
+  // the byte-equality gate — two distinct manifests would claim one layout.
+  auto wrapped_to_zero = valid_object();
+  wrapped_to_zero["slots"][0]["slot"] = 4294967296LL;
+  expect_parse_fail(
+      dump(wrapped_to_zero),
+      ErrorCode::invalid_argument,
+      "soundset_slot_invalid");
+
+  auto wrapped_to_fifteen = valid_object();
+  wrapped_to_fifteen["slots"][15]["slot"] = 4294967311LL;
+  expect_parse_fail(
+      dump(wrapped_to_fifteen),
+      ErrorCode::invalid_argument,
+      "soundset_slot_invalid");
+
+  auto negative_wrapped = valid_object();
+  negative_wrapped["slots"][0]["slot"] = -4294967296LL;
+  expect_parse_fail(
+      dump(negative_wrapped),
+      ErrorCode::invalid_argument,
+      "soundset_slot_invalid");
+
+  auto above_int_max = valid_object();
+  above_int_max["slots"][0]["slot"] = 3000000000LL;
+  expect_parse_fail(
+      dump(above_int_max),
+      ErrorCode::invalid_argument,
+      "soundset_slot_invalid");
+
+  // 4294967416 narrows to 120, which sits inside the 40..240 tempo range.
+  auto slot_bpm = valid_object();
+  slot_bpm["slots"][0]["bpm"] = 4294967416LL;
+  expect_parse_fail(
+      dump(slot_bpm),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto set_bpm = valid_object();
+  set_bpm["bpm"] = 4294967416LL;
+  expect_parse_fail(
+      dump(set_bpm),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+}
+
 void test_artifact_and_unknown_key_faults_use_manifest_invalid() {
   auto uppercase = valid_object();
   uppercase["slots"][0]["artifact"]["sha256"] = std::string(64, 'A');
@@ -222,6 +273,7 @@ int main() {
     test_valid_fixture_is_canonical_and_parses();
     test_non_canonical_json_is_rejected();
     test_slot_layout_faults_use_slot_invalid();
+    test_out_of_range_integers_are_rejected_not_narrowed();
     test_artifact_and_unknown_key_faults_use_manifest_invalid();
     test_eligibility_is_not_schema();
   } catch (const std::exception& error) {
