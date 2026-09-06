@@ -695,6 +695,18 @@ compiler's `-print-runtime-dir`), which resolves the operators by interposition
 exactly as GCC's shared runtimes already do and records the runtime's location
 so tests run without `LD_LIBRARY_PATH`.
 
+Moving the compiler does not by itself make TSan run on a self-hosted host.
+LLVM 22's runtime handles an incompatible layout the same way LLVM 18's does:
+it re-execs itself with `ADDR_NO_RANDOMIZE`, and under the runner units'
+`LockPersonality=true` that fails closed with `unable to disable ASLR
+(perhaps sandboxing is enabled?)`. The fix is therefore the host, not the
+compiler: `scripts/ci/host/configure-sanitizer-aslr.sh` caps
+`vm.mmap_rnd_bits` at 28 on the `ci-core` host, the value GitHub's hosted
+Ubuntu images carry and the pre-6.6 default, so TSan starts without re-exec
+and ASLR stays on. The Owner chose that over `LockPersonality=false` on
+2026-09-06 (#693), because the latter would disable ASLR for every CI process
+and remove a hardening line to solve one runtime's problem.
+
 ## Proof-Scoped C ABI Concurrency Baseline
 
 The C ABI stress suite verifies the behavior already approved and implemented
