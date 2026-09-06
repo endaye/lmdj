@@ -2,6 +2,8 @@
 
 > 日期：2026-09-06
 >
+> 更新：2026-09-06 增补第 3.3 节公开零售成本估算
+>
 > 对象：Maks Surguy（[@msurguy](https://x.com/msurguy)）2026-09-04 发布的多块
 > ESP32 彩屏「触摸同步无限画布」演示
 >
@@ -124,6 +126,50 @@ T-QT Pro 的显示区约 15.2×15.2 mm，262K 色，SPI。128×128 整帧 RGB565
 32 KiB，即便选无 PSRAM 的 FN8 变体，只画当前视口也够用。
 
 后续复刻或采购时以 Amazon 链接和 128×128 正方形为准，不要再写成 T-Dongle-S3。
+
+### 3.3 成本估算（2026-09-06 公开零售价）
+
+这是按公开标价做的 BOM 估算，不是询价单、不是含税落地价，也不是批量折扣。
+汇率按约 7.2 CNY/USD 换算，只为对照渠道。视频里的装置是 USB 供电，电池是可选项。
+
+单价来源：
+
+| 物料 | 国内公开价 | 国际公开价 |
+| --- | --- | --- |
+| Waveshare 1.75 裸板 | 微雪官网约 ¥200；淘宝约 ¥179 | [waveshare.com](https://www.waveshare.com/esp32-s3-touch-amoled-1.75.htm) $29.99–$39.99 三档 |
+| Waveshare 1.75-B 带壳（视频里的圆屏） | 淘宝微雪约 ¥195 | 官网带壳档约 **$35**；欧盟零售常见 €40–€48 |
+| LILYGO T-QT Pro（视频里的小屏） | 官网 [$9.05](https://lilygo.cc/products/t-qt-pro)；阿里巴巴工厂 $9.31–$10.86 | Amazon US [$13.50](https://www.amazon.com/LILYGO-ESP32-S3-GC9107-Display-Development/dp/B0BG7YHTJL)；AliExpress 约 $15 |
+| USB-C 线 / USB-A 转接头 | 线约 ¥8–15，转接头约 ¥5–10 | 线约 $2–4，转接头约 $2–4 |
+
+复刻视频配置（1 块圆屏 + 4 块 T-QT，不含电池、不含已有充电器）：
+
+| 项 | 数量 | 国内估算 | 国际估算 |
+| --- | --- | --- | --- |
+| Waveshare 1.75-B | 1 | ¥195 | $35 |
+| T-QT Pro（建议 FN4R2，带 2 MB PSRAM） | 4 | ¥70 × 4 = ¥280 | $13.50 × 4 = $54 |
+| **板卡小计** | | **约 ¥475** | **约 $89** |
+| USB-C 线 5 根 + 转接头 2 个 | | ¥40–60 | $12–20 |
+| **演示套件合计** | | **约 ¥520–540** | **约 $100–110** |
+| 国际运费 / 税 | | 国内通常包邮 | 再加 $10–25 |
+
+最小 spike（验证同步，不是复刻四从机）：
+
+| 项 | 国内 | 国际 |
+| --- | --- | --- |
+| 1 × 1.75-B + 1 × T-QT Pro | 约 ¥265 | 约 $48 |
+| 加两根 USB-C 线 | 约 ¥285 | 约 $55 |
+
+可选，视频里没用上：
+
+- T-QT 小 LiPo（100–300 mAh）：约 ¥5–15 / $2–4
+- 圆屏 MX1.25 3.7 V 电池（约 300–500 mAh）：约 ¥15–25 / $4–8
+- 四从机全上电池：再加约 ¥50–80 / $15–25
+
+成本结构：圆屏大约占板卡预算的 40%，四块 T-QT 占 60%。从机数量线性加钱；
+同步协议本身不增加物料。T-QT 官网 $9 和 Amazon $13.50 差的是渠道与运费，
+不是不同硬件。
+
+这不是采购授权，也不构成 LMDJ 硬件选型。
 
 ## 4. 画面与无限画布
 
@@ -263,6 +309,9 @@ Embedded 从机，对应 Spec / PR 再声明受影响的门户路由。
 - [LILYGO T-QT GitHub](https://github.com/Xinyuan-LilyGO/T-QT)
 - [Amazon ASIN B0BG7YHTJL（T-QT Pro）](https://www.amazon.com/LILYGO-ESP32-S3-GC9107-Display-Development/dp/B0BG7YHTJL)
 - [T-Dongle-S3 wiki（对照，未使用）](https://wiki.lilygo.cc/products/t-dongle-series/t-dongle-s3/)
+- [Waveshare 国际店 1.75](https://www.waveshare.com/esp32-s3-touch-amoled-1.75.htm)（$29.99–$39.99）
+- [微雪国内店 1.75](https://www.waveshare.net/shop/ESP32-S3-Touch-AMOLED-1.75.htm)
+- [Alibaba T-QT Pro 工厂价](https://www.alibaba.com/product-detail/LILYGO-T-QT-Pro-ESP32-S3_1600756034142.html)（$9.31–$10.86）
 
 ### 仓库内相关评估
 
