@@ -555,7 +555,12 @@ hosts, not a defect. Routing splits two ways:
 and the preinstalled clang-22/llvm-22 coverage toolchain are shared-host state,
 not pool state. Both hosts carry the same Clang/LLVM 22 toolchain, so the role
 can be placed on either, but it is registered on exactly one at a time — today
-netcup. Ubuntu's own archive stops at LLVM 18.1.3 for noble, so the pinned
+netcup. Two pieces of host state travel with the role rather than with the
+machine: the Clang/LLVM 22 pin, which both hosts carry, and the mmap ASLR cap
+TSan needs, which is applied only where the role lives. Moving `ci-core` means
+running `scripts/ci/host/configure-sanitizer-aslr.sh` on the new host first;
+the Nightly lane verifies the cap before it builds, so the omission fails
+there with the remedy named rather than silently. Ubuntu's own archive stops at LLVM 18.1.3 for noble, so the pinned
 major comes from apt.llvm.org's exact-major `llvm-toolchain-noble-22` suite,
 installed by `scripts/ci/host/install-llvm-toolchain.sh`: that script verifies
 the repository key against a fixed fingerprint, names the suite rather than
