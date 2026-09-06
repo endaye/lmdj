@@ -1,7 +1,7 @@
 ---
 id: manifest-role-validator-sync
 area: ci-release
-status: absorbed
+status: open
 recurrences:
   - date: 2026-08-27
     occurrence: https://github.com/endaye/lmdj/issues/354
@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-09-06
     occurrence: https://github.com/endaye/lmdj/actions/runs/34017836312
     observed_by: grok-4.6
-exit: skill:.agents/skills/lmdj-release/SKILL.md
+exit: none
 ---
 
 # A manifest producer gaining a new asset role must update the deployment validator in the same change
@@ -25,6 +25,14 @@ all suites — then failed the deployment smoke on the staged draft (#354,
 lmdj-v1.0.36.0). The suites missed it because the smoke test fixture's
 ASSET_LAYOUT is a third copy of the vocabulary, which also lacked the role.
 
+The second occurrence kept all three copies in sync and still failed. PR #664
+made the new Creator `perform_master_tap_worklet` role a required singleton
+for every Creator manifest, but the deploy run validates the previously
+published deployment with the same validator as its rollback anchor. The live
+`1.0.41.0` Creator (Host `2.1.1`, five assets) failed `prior published deploy
+identity discovery` with `manifest required asset role inventory is invalid`,
+so `1.0.42.0` never reached production (Actions run 34017836312).
+
 ## How to apply
 
 - When package.py starts emitting a new manifest asset role (or drops one),
@@ -39,7 +47,13 @@ ASSET_LAYOUT is a third copy of the vocabulary, which also lacked the role.
   on 3.x and the five-role inventory on 2.x priors. Preflight already verified
   the signed candidate; a failed prior-identity discovery is not a failed
   Release.
-- Recurrence 2 absorbed that Creator split into the shared smoke validator
-  and the release skill. A mechanical producer-vs-validator comparison still
-  needs a shared constant; that remains a later refactor, not a reason to
-  leave this entry open.
+- When a new role is required for the Build that introduces it, key the
+  requirement on the Host version (or manifest schema) that introduced it, and
+  add the last published Build's inventory as a passing fixture in the same
+  commit. A validator on `main` must accept every manifest it will be asked
+  to validate: the candidate and the currently published rollback anchor.
+- No gate exit yet: the version split above covers this exact recurrence, not
+  the class, and a mechanical producer-vs-validator comparison still needs a
+  shared constant. Recurrence 2 escalated that refactor to
+  [#711](https://github.com/endaye/lmdj/issues/711), which owns the shared
+  vocabulary and retained-prior-manifest gate candidates.

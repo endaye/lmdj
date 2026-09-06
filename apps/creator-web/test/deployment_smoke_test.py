@@ -94,9 +94,9 @@ class Fixture:
             "<!doctype html><html><head>"
             f'<meta name="lmdj-host-manifest-sha256" content="{digest}">'
             '<meta name="lmdj-host-manifest-path" content="./host-manifest.json">'
-            '<meta name="lmdj-product-build" content="1.0.41.0">'
+            f'<meta name="lmdj-product-build" content="{self.manifest["product_build"]}">'
             '<meta name="lmdj-host-id" content="creator-web">'
-            '<meta name="lmdj-host-version" content="3.0.0">'
+            f'<meta name="lmdj-host-version" content="{self.manifest["host_version"]}">'
             f'<link rel="stylesheet" href="./{style["path"]}">'
             f'<script type="module" src="./{main["path"]}"></script>'
             "</head><body>Creator</body></html>"
@@ -313,6 +313,17 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
         self.fixture.update()
         with self.assertRaisesRegex(SmokeError, "manifest required asset role inventory is invalid"):
             self.run_smoke()
+
+    def test_rejects_creator_2_carrying_perform_master_tap_worklet(self) -> None:
+        # The role did not exist before Creator Host 3.0.0, so a 2.x manifest
+        # that claims one is a producer/validator disagreement, not a prior.
+        self.fixture.manifest["host_version"] = "2.1.1"
+        self.fixture.manifest["compatible_hosts"] = [
+            {"host_id": "web-runtime-host", "host_version": "2.1.1"}
+        ]
+        self.fixture.update()
+        with self.assertRaisesRegex(SmokeError, "manifest required asset role inventory is invalid"):
+            self.run_smoke(expected_host="2.1.1")
 
     def test_cli_scrubs_credentials_and_prints_only_canonical_json(self) -> None:
         environment = os.environ.copy()

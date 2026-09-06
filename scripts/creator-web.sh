@@ -181,6 +181,7 @@ test_creator() {
   npm --prefix "$creator_root" test -- --run
   python3 "$creator_root/test/package_test.py"
   python3 "$creator_root/test/server_test.py"
+  python3 "$creator_root/test/deployment_smoke_test.py"
   node --test "$repo_root"/packages/web-runtime-platform/test/*.test.mjs
   echo "Creator Web tests: PASS"
 }
