@@ -250,7 +250,7 @@ class PhaseGateTest(unittest.TestCase):
             "reviewThreads(first:100,after:$c)",
             "pageInfo{hasNextPage endCursor}",
             '[[ "$has_next" == "true" ]] || break',
-            "advisory-review]",
+            "advisory-review, grok-review]",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(

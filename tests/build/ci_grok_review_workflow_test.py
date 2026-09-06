@@ -13,7 +13,9 @@ from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = REPO_ROOT / ".github/workflows/grok-review.yml"
+# The lane moved into ci.yml (#659): a reviewer in its own workflow is not
+# ordered before Pre-heavy Gate, which needs its reviewers.
+WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 SCRIPT = REPO_ROOT / ".github/scripts/grok_review.py"
 MERGE_QUEUE = REPO_ROOT / "scripts/ci/merge_queue.py"
 SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
@@ -33,36 +35,55 @@ class GrokReviewWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = WORKFLOW.read_text(encoding="utf-8")
+        # The lane is one job inside Core CI now, so every contract that used
+        # to be about the whole file is about this block.
+        cls.job = cls.source.split("\n  grok-review:\n", 1)[1].split("\n  pre-heavy-gate:", 1)[0]
         cls.script = load_script()
         cls.policy = json.loads(SCOPE_POLICY.read_text(encoding="utf-8"))
 
-    def test_workflow_is_advisory_pull_request_only(self) -> None:
-        prefix = self.source.split("jobs:", 1)[0]
+    def test_the_job_is_advisory_pull_request_only(self) -> None:
         message = (
-            "why: Grok review must stay off Core CI and the merge queue, and "
-            "holds no grant its sink does not need; remedy: trigger only "
-            "pull_request on main and keep exactly contents: read and "
-            "pull-requests: write -- issues: write went with the tracking Issue"
+            "why: Grok review holds no grant its sink does not need, and Core "
+            "CI also runs on push and dispatch, where there is no Pull Request "
+            "to review; remedy: keep the job's pull_request-only condition and "
+            "exactly contents: read plus pull-requests: write -- issues: write "
+            "went with the tracking Issue"
         )
-        self.assertIn("pull_request:", prefix, message)
-        self.assertNotIn("pull_request_target:", self.source, message)
-        self.assertNotIn("push:", prefix, message)
-        self.assertNotIn("merge_group:", prefix, message)
+        self.assertIn("github.event_name == 'pull_request' &&", self.job, message)
+        self.assertIn("github.event.pull_request.draft == false", self.job, message)
         self.assertIn(
-            "permissions:\n  contents: read\n  pull-requests: write",
-            prefix,
+            "github.event.pull_request.head.repo.full_name == github.repository",
+            self.job,
             message,
         )
-        # Scan directives, not the raw source: the workflow explains in a
-        # comment why `issues: write` is gone, and a raw-text absence check
-        # would fail on its own explanation. See gate-matches-its-own-prose.
+        self.assertNotIn("pull_request_target:", self.source, message)
+        self.assertIn(
+            "    permissions:\n      contents: read\n      pull-requests: write",
+            self.job,
+            message,
+        )
+        # Scan directives, not the raw source: the job explains in a comment
+        # why `issues: write` is gone, and a raw-text absence check would fail
+        # on its own explanation. See gate-matches-its-own-prose.
         directives = "\n".join(
-            line for line in self.source.splitlines()
+            line for line in self.job.splitlines()
             if not line.lstrip().startswith("#")
         )
         self.assertNotIn("issues: write", directives, message)
-        self.assertNotIn("contents: write", self.source, message)
-        self.assertNotIn("id-token: write", self.source, message)
+        self.assertNotIn("contents: write", directives, message)
+        self.assertNotIn("id-token: write", directives, message)
+
+    def test_the_job_cannot_redden_core_ci(self) -> None:
+        """Advisory in name has to mean advisory in effect, and it is in ci.yml now."""
+        header = self.job.split("\n    steps:", 1)[0]
+        self.assertIn(
+            "continue-on-error: true",
+            header,
+            msg=("why: inside ci.yml a failed job fails the workflow and skips "
+                 "Pre-heavy Gate, which needs this one; the step-level flag "
+                 "covers neither a job timeout nor a failed install; remedy: "
+                 "keep continue-on-error at job level"),
+        )
 
     def test_workflow_skips_drafts_and_forks(self) -> None:
         message = (
@@ -86,12 +107,14 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         )
         self.assertIn(
             "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]",
-            self.source,
+            self.job,
             message,
         )
-        self.assertNotIn("runs-on: ubuntu-24.04", self.source, message)
-        self.assertNotIn("ci-core", self.source, message)
-        self.assertNotIn("ci-web-heavy", self.source, message)
+        # Job-scoped: Core CI's control plane is deliberately hosted, so the
+        # file as a whole says ubuntu-24.04 several times.
+        self.assertNotIn("runs-on: ubuntu-24.04", self.job, message)
+        self.assertNotIn("ci-core", self.job, message)
+        self.assertNotIn("ci-web-heavy", self.job, message)
 
     def test_an_advisory_lane_does_not_paint_the_pull_request_red(self) -> None:
         """Advisory in name has to mean advisory in effect.
@@ -155,23 +178,38 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         self.assertIn("Read(**/.grok/**)", command)
         self.assertIn("Read(**/auth.json)", command)
 
-    def test_core_ci_and_merge_queue_do_not_reference_grok_review(self) -> None:
+    def test_grok_is_ordered_before_the_gate_without_becoming_merge_evidence(self) -> None:
+        """It moved into ci.yml (#659) for ordering, and for nothing else.
+
+        A reviewer in its own workflow is not ordered before Pre-heavy Gate,
+        so its findings could arrive after the gate had already admitted the
+        native-heavy set -- worst in the case this lane exists for, when both
+        Claude backends are down and Grok is the only reviewer posting. Being
+        in ci.yml must not make it a verdict: the gate reads the threads it
+        leaves, never its result.
+        """
         core = CORE_CI.read_text(encoding="utf-8")
         queue = MERGE_QUEUE.read_text(encoding="utf-8")
-        message = (
-            "why: Grok review is not merge evidence; remedy: do not add it to "
-            "ci.yml, PR Gate, or the merge-queue control-plane path list"
+        self.assertIn("  grok-review:\n", core)
+        self.assertIn(
+            "advisory-review, grok-review]",
+            core,
+            msg=("why: a reviewer outside the gate's needs can post after "
+                 "admission; remedy: keep grok-review in pre-heavy-gate's needs"),
         )
-        self.assertNotIn("grok-review", core, message)
-        self.assertNotIn("grok_review", core, message)
-        self.assertNotIn("grok-review.yml", queue, message)
-        self.assertNotIn(".github/scripts/grok_review.py", queue, message)
+        not_evidence = (
+            "why: Grok review is advisory; remedy: keep it out of lane_jobs, "
+            "self_hosted_jobs, PR Gate's results and the merge-queue path list"
+        )
+        self.assertNotIn("grok", str(self.policy["lane_jobs"]), not_evidence)
+        self.assertNotIn("grok-review", self.policy["self_hosted_jobs"], not_evidence)
+        pr_gate = core.split("\n  pr-gate:\n", 1)[1].split("\n  select-macos-runner:", 1)[0]
+        self.assertNotIn("grok", pr_gate, not_evidence)
+        self.assertNotIn("grok-review.yml", queue, not_evidence)
+        self.assertNotIn(".github/scripts/grok_review.py", queue, not_evidence)
 
     def test_scope_policy_classifies_review_files_as_ci_contract_only(self) -> None:
-        paths = {
-            ".github/workflows/grok-review.yml",
-            ".github/scripts/grok_review.py",
-        }
+        paths = {".github/scripts/grok_review.py"}
         matched = {
             rule["match"]["value"]: set(rule["lanes"])
             for rule in self.policy["rules"]

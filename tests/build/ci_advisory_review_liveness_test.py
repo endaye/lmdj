@@ -19,15 +19,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+import contextlib
+import io
 import unittest
+from datetime import datetime, timezone
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / ".github/scripts"))
 
+import advisory_review_liveness as liveness  # noqa: E402
 from advisory_review_liveness import (  # noqa: E402
+    CLAUDE_BACKENDS,
     REVIEW_LANES,
     LivenessUnavailable,
+    Observation,
+    select_backends,
     collect_observations,
     evaluate,
     evidence_posted,
@@ -38,12 +45,11 @@ SCRIPT = REPO_ROOT / ".github/scripts/advisory_review_liveness.py"
 SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
 WORKFLOW = REPO_ROOT / ".github/workflows/advisory-review-liveness.yml"
 CLAUDE = REPO_ROOT / ".github/workflows/ci.yml"  # the review job lives here since #659
-GROK = REPO_ROOT / ".github/workflows/grok-review.yml"
 GROK_SCRIPT = REPO_ROOT / ".github/scripts/grok_review.py"
 
 GLM = next(l for l in REVIEW_LANES if l.job.endswith("(glm)"))
 KIMI = next(l for l in REVIEW_LANES if l.job.endswith("(kimi)"))
-GROK_LANE = next(l for l in REVIEW_LANES if l.workflow == "grok-review.yml")
+GROK_LANE = next(l for l in REVIEW_LANES if l.job.startswith("Grok"))
 
 
 def fake_api(*, runs, jobs_by_run, comments_by_pr=None, review_comments_by_pr=None,
@@ -74,6 +80,11 @@ def fake_api(*, runs, jobs_by_run, comments_by_pr=None, review_comments_by_pr=No
     return api
 
 
+def seen(outcome, at="2026-09-05T10:00:00Z"):
+    """One observation, timestamped like `run()`'s default."""
+    return Observation(outcome, at)
+
+
 def run(run_id, pr, conclusion="success", created="2026-09-05T10:00:00Z"):
     return {"id": run_id, "conclusion": conclusion, "created_at": created,
             "pull_requests": ([{"number": pr}] if pr is not None else [])}
@@ -88,20 +99,20 @@ def attempted(step="success", job="success", lane=None):
 
 class LivenessLogicTest(unittest.TestCase):
     def test_a_lane_failing_every_attempt_in_the_window_is_down(self) -> None:
-        verdict = evaluate("lane", ["failure"] * 5, window=5)
+        verdict = evaluate("lane", [seen("failure")] * 5, window=5)
         self.assertTrue(verdict.down)
 
     def test_one_success_in_the_window_is_not_down(self) -> None:
-        verdict = evaluate("lane", ["failure", "failure", "success", "failure", "failure"], window=5)
+        verdict = evaluate("lane", [seen("failure"), seen("failure"), seen("success"), seen("failure"), seen("failure")], window=5)
         self.assertFalse(verdict.down)
 
     def test_too_few_observations_withholds_judgement(self) -> None:
-        verdict = evaluate("lane", ["failure", "failure"], window=5)
+        verdict = evaluate("lane", [seen("failure"), seen("failure")], window=5)
         self.assertFalse(verdict.down)
         self.assertIn("too few to judge", verdict.detail)
 
     def test_only_the_window_is_considered(self) -> None:
-        verdict = evaluate("lane", ["failure"] * 5 + ["success"] * 20, window=5)
+        verdict = evaluate("lane", [seen("failure")] * 5 + [seen("success")] * 20, window=5)
         self.assertTrue(verdict.down, "why: newest-first, so older successes are history; "
                         "remedy: slice to the window before counting")
 
@@ -117,7 +128,7 @@ class EffectDetectionTest(unittest.TestCase):
             comments_by_pr={},                                              # the truth
         )
         obs = collect_observations("o/r", GROK_LANE, limit=5, api=api)
-        self.assertEqual(obs, ["failure"] * 5,
+        self.assertEqual(obs, [seen("failure")] * 5,
                          "why: the step conclusion read success while the CLI exited 1 and "
                          "posted nothing, so a conclusion-reading check called this lane "
                          "healthy all day; remedy: judge an attempt by its effect on the PR")
@@ -126,7 +137,7 @@ class EffectDetectionTest(unittest.TestCase):
     def test_a_signed_comment_after_the_run_began_is_success(self) -> None:
         api = fake_api(runs=[run(1, 10)], jobs_by_run={1: attempted()},
                      comments_by_pr={10: [f"{GROK_LANE.marker}\n# Grok advisory review"]})
-        self.assertEqual(collect_observations("o/r", GROK_LANE, limit=5, api=api), ["success"])
+        self.assertEqual(collect_observations("o/r", GROK_LANE, limit=5, api=api), [seen("success")])
 
     def test_evidence_is_found_on_all_three_surfaces(self) -> None:
         since = "2026-09-05T10:00:00Z"
@@ -162,7 +173,7 @@ class SilenceHandlingTest(unittest.TestCase):
         api = fake_api(runs=[run(1, 10, conclusion="cancelled"), run(2, 11)],
                      jobs_by_run={1: attempted(), 2: attempted()},
                      comments_by_pr={11: [GROK_LANE.marker]})
-        self.assertEqual(collect_observations("o/r", GROK_LANE, limit=5, api=api), ["success"],
+        self.assertEqual(collect_observations("o/r", GROK_LANE, limit=5, api=api), [seen("success")],
                          "why: cancel-in-progress fires on every push and reached no verdict; "
                          "remedy: drop cancelled runs before judging")
 
@@ -174,14 +185,14 @@ class SilenceHandlingTest(unittest.TestCase):
                          3: attempted()},
             comments_by_pr={},
         )
-        self.assertEqual(collect_observations("o/r", GROK_LANE, limit=5, api=api), ["failure"],
+        self.assertEqual(collect_observations("o/r", GROK_LANE, limit=5, api=api), [seen("failure")],
                          "why: a draft or a missing secret skips the job or step and made no "
                          "attempt; remedy: drop both before judging, keep only real attempts")
 
     def test_a_null_step_is_an_attempt_the_lane_failed_to_make(self) -> None:
         """Upstream hard failure leaves the review step null. That lane is broken."""
         api = fake_api(runs=[run(1, 10)], jobs_by_run={1: attempted(None)}, comments_by_pr={})
-        self.assertEqual(collect_observations("o/r", GROK_LANE, limit=5, api=api), ["failure"],
+        self.assertEqual(collect_observations("o/r", GROK_LANE, limit=5, api=api), [seen("failure")],
                          "why: a step the run never reached is not skipped -- the lane broke "
                          "before reviewing -- and posted nothing; remedy: judge it by effect "
                          "like any attempt rather than dropping it as silence")
@@ -198,7 +209,7 @@ class SilenceHandlingTest(unittest.TestCase):
         api = fake_api(runs=[run(1, 10)], jobs_by_run={1: attempted("timed_out")},
                        comments_by_pr={})
         self.assertEqual(
-            collect_observations("o/r", GROK_LANE, limit=5, api=api), ["failure"],
+            collect_observations("o/r", GROK_LANE, limit=5, api=api), [seen("failure")],
             "why: timed_out is how a hung reviewer dies and it is not silence — "
             "the lane attempted a review and posted nothing; remedy: keep SILENT "
             "to skipped/cancelled and judge every other conclusion by effect",
@@ -209,7 +220,7 @@ class SilenceHandlingTest(unittest.TestCase):
         api = fake_api(runs=[run(1, 10)], jobs_by_run={1: attempted("timed_out")},
                        comments_by_pr={10: [GROK_LANE.marker]})
         self.assertEqual(collect_observations("o/r", GROK_LANE, limit=5, api=api),
-                         ["success"])
+                         [seen("success")])
 
     def test_a_run_without_a_pull_request_is_dropped(self) -> None:
         api = fake_api(runs=[run(1, None)], jobs_by_run={1: attempted()})
@@ -290,7 +301,7 @@ class PagingTest(unittest.TestCase):
         )
         obs = collect_observations("o/r", GROK_LANE, limit=5, api=api)
         self.assertEqual(
-            obs, ["failure"] * 5,
+            obs, [seen("failure")] * 5,
             "why: 59 cancelled runs precede the real ones, so one page keeps "
             "nothing and the lane reads as too-young instead of down; remedy: "
             "page until the window is filled",
@@ -314,7 +325,7 @@ class PagingTest(unittest.TestCase):
         api = fake_api(runs=padding + real, jobs_by_run=jobs, review_comments_by_pr={})
         obs = collect_observations("o/r", GLM, limit=5, api=api)
         self.assertEqual(
-            obs, ["failure"] * 5,
+            obs, [seen("failure", "2026-09-09T11:00:00Z")] * 5,
             "why: skipped runs are silence and must not exhaust the paging budget "
             "before an attempt is reached; remedy: page until limit observations "
             "exist, not until limit runs have been seen",
@@ -345,7 +356,7 @@ class PagingTest(unittest.TestCase):
             return inner(path, context)
 
         obs = collect_observations("o/r", GROK_LANE, limit=5, api=counting)
-        self.assertEqual(obs, ["success"] * 5)
+        self.assertEqual(obs, [seen("success")] * 5)
         self.assertEqual(len(calls), 1, "why: a filled window needs no second "
                          "page; remedy: stop paging once enough attempts are kept")
 
@@ -410,7 +421,7 @@ class BootstrapTest(unittest.TestCase):
                        jobs_by_run={i: attempted(lane=GLM) for i in range(1, 6)},
                        review_comments_by_pr={})
         self.assertEqual(collect_observations("o/r", GLM, limit=5, api=api),
-                         ["failure"] * 5)
+                         [seen("failure", "2026-09-09T10:00:00Z")] * 5)
 
     def test_grok_needs_no_cutoff(self) -> None:
         """Its sticky-comment marker predates this check."""
@@ -481,17 +492,180 @@ class SignatureContractTest(unittest.TestCase):
                       "REVIEW_LANES and grok_review.COMMENT_MARKER in step")
 
     def test_every_lane_names_a_job_and_step_that_exist(self) -> None:
-        sources = {"ci.yml": CLAUDE.read_text(encoding="utf-8"),
-                   "grok-review.yml": GROK.read_text(encoding="utf-8")}
+        sources = {"ci.yml": CLAUDE.read_text(encoding="utf-8")}
         for lane in REVIEW_LANES:
             with self.subTest(lane=lane.name):
                 self.assertIn(f"- name: {lane.step}", sources[lane.workflow])
 
     def test_it_watches_exactly_the_lanes_that_fail_quietly(self) -> None:
-        for workflow, path in (("ci.yml", CLAUDE), ("grok-review.yml", GROK)):
+        for workflow, path in (("ci.yml", CLAUDE),):
             with self.subTest(workflow=workflow):
                 self.assertIn("continue-on-error: true", path.read_text(encoding="utf-8"))
                 self.assertIn(workflow, {l.workflow for l in REVIEW_LANES})
+
+
+class StalenessTest(unittest.TestCase):
+    """A window that stopped growing stops describing the lane."""
+
+    NOW = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+
+    def test_a_fresh_all_failed_window_is_down(self) -> None:
+        verdict = evaluate("lane", [seen("failure", "2026-09-10T09:00:00Z")] * 5,
+                           window=5, now=self.NOW)
+        self.assertTrue(verdict.down)
+
+    def test_an_old_all_failed_window_is_not_down(self) -> None:
+        """Otherwise the first backend `--select` demotes could never return.
+
+        Its last attempts stay in the window forever, so `down` would be
+        permanent and a vendor outage would cost the backend its slot for
+        good rather than for as long as it was broken.
+        """
+        verdict = evaluate("lane", [seen("failure", "2026-09-01T09:00:00Z")] * 5,
+                           window=5, now=self.NOW)
+        self.assertFalse(verdict.down)
+        self.assertIn("not being exercised", verdict.detail)
+
+    def test_without_a_clock_the_window_is_judged_on_content_alone(self) -> None:
+        """The report keeps its old behaviour when no `now` is supplied."""
+        self.assertTrue(evaluate("lane", [seen("failure", "2020-01-01T00:00:00Z")] * 5,
+                                 window=5).down)
+
+    def test_an_unparseable_timestamp_is_not_treated_as_old(self) -> None:
+        """Guessing "old" from a bad parse would promote a dead backend."""
+        self.assertTrue(evaluate("lane", [seen("failure", "not-a-date")] * 5,
+                                 window=5, now=self.NOW).down)
+
+
+class SelectBackendTest(unittest.TestCase):
+    """One backend per Pull Request, and which one is evidence-driven (#659)."""
+
+    NOW = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+
+    def api_for(self, glm_outcomes, kimi_outcomes, created="2026-09-06T09:00:00Z"):
+        """A fake API where each backend posted, or did not, on its own runs."""
+        runs, jobs, comments = [], {}, {}
+        run_id = 1
+        for lane, outcomes in ((GLM, glm_outcomes), (KIMI, kimi_outcomes)):
+            for outcome in outcomes:
+                pr = 100 + run_id
+                runs.append(run(run_id, pr, created=created))
+                jobs[run_id] = attempted(lane=lane)
+                comments[pr] = [lane.marker] if outcome == "success" else []
+                run_id += 1
+        return fake_api(runs=runs, jobs_by_run=jobs, review_comments_by_pr=comments)
+
+    def test_a_healthy_primary_runs_alone(self) -> None:
+        api = self.api_for(["success"] * 5, ["success"] * 5)
+        chosen, reason = select_backends(
+            "o/r", ["glm", "kimi"], window=5, now=self.NOW, api=api)
+        self.assertEqual(chosen, ["glm"])
+        self.assertIn("primary", reason)
+
+    def test_a_down_primary_hands_over_to_the_fallback(self) -> None:
+        api = self.api_for(["failure"] * 5, ["success"] * 5)
+        chosen, reason = select_backends(
+            "o/r", ["glm", "kimi"], window=5, now=self.NOW, api=api)
+        self.assertEqual(
+            chosen, ["kimi"],
+            msg=("why: the acceptance is that the fallback switches on the "
+                 "liveness signal rather than by hand; remedy: pick the first "
+                 "candidate that is not DOWN"),
+        )
+        self.assertIn("fallback", reason)
+
+    def test_both_down_still_reviews_with_the_primary(self) -> None:
+        """A correct alert must not also cost the Pull Request its reviewer."""
+        api = self.api_for(["failure"] * 5, ["failure"] * 5)
+        chosen, reason = select_backends(
+            "o/r", ["glm", "kimi"], window=5, now=self.NOW, api=api)
+        self.assertEqual(chosen, ["glm"])
+        self.assertIn("every candidate is DOWN", reason)
+
+    def test_thin_evidence_is_not_a_reason_to_withhold_the_primary(self) -> None:
+        api = self.api_for(["failure"], ["success"] * 5)
+        chosen, _ = select_backends(
+            "o/r", ["glm", "kimi"], window=5, now=self.NOW, api=api)
+        self.assertEqual(chosen, ["glm"])
+
+    def test_a_demoted_primary_is_tried_again_once_its_window_goes_stale(self) -> None:
+        """The recovery path: without it the first handover is permanent."""
+        api = self.api_for(["failure"] * 5, ["success"] * 5,
+                           created="2026-09-01T09:00:00Z")
+        chosen, _ = select_backends(
+            "o/r", ["glm", "kimi"], window=5, now=self.NOW, api=api)
+        self.assertEqual(chosen, ["glm"])
+
+    def test_a_single_candidate_is_answered_without_reading_the_api(self) -> None:
+        """Off the Pull Request path there is nothing to choose between.
+
+        `ci.yml` runs the selector unconditionally so a push run never has to
+        evaluate `fromJSON` on a skipped job's output; that run must not also
+        spend API calls weighing evidence it will not use.
+        """
+        def refuse(path, context):
+            raise AssertionError(f"the API was read for a single candidate: {path}")
+
+        chosen, reason = select_backends(
+            "o/r", ["glm"], window=5, now=self.NOW, api=refuse)
+        self.assertEqual(chosen, ["glm"])
+        self.assertIn("only candidate", reason)
+
+    def test_the_order_is_a_preference_not_a_fixed_pair(self) -> None:
+        api = self.api_for(["failure"] * 5, ["success"] * 5)
+        chosen, _ = select_backends(
+            "o/r", ["kimi", "glm"], window=5, now=self.NOW, api=api)
+        self.assertEqual(chosen, ["kimi"])
+
+
+class SelectCliTest(unittest.TestCase):
+    """`--select` must always print a matrix, whatever it was handed."""
+
+    def run_select(self, order):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(io.StringIO()):
+            code = liveness.main(["--repository", "o/r", "--select", order])
+        return code, buffer.getvalue().strip().splitlines()
+
+    def backends_in(self, lines):
+        return [entry["backend"] for entry in json.loads(lines[-1])["include"]]
+
+    def test_a_mistyped_name_falls_back_to_what_is_left_of_the_order(self) -> None:
+        code, lines = self.run_select("glm,kimmi")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.backends_in(lines), ["glm"])
+
+    def test_a_wholly_unknown_order_still_prints_a_matrix(self) -> None:
+        """`set -euo pipefail` plus a nonzero exit here empties strategy.matrix.
+
+        `CLAUDE_REVIEW_ORDER` is an operator knob, so a typo in it must not
+        cost the Pull Request its review.
+        """
+        code, lines = self.run_select("nonsense")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.backends_in(lines), [CLAUDE_BACKENDS[0]["backend"]])
+
+    def test_an_empty_order_still_prints_a_matrix(self) -> None:
+        code, lines = self.run_select(",,")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.backends_in(lines), [CLAUDE_BACKENDS[0]["backend"]])
+
+
+class SelectionMatrixTest(unittest.TestCase):
+    def test_the_matrix_names_one_backend_with_its_url_and_secret(self) -> None:
+        matrix = liveness._selection_matrix(["kimi"])
+        self.assertEqual(len(matrix["include"]), 1)
+        entry = matrix["include"][0]
+        self.assertEqual(entry["backend"], "kimi")
+        self.assertIn("base_url", entry)
+        self.assertIn("secret_name", entry)
+
+    def test_every_declared_backend_has_a_lane_that_can_judge_it(self) -> None:
+        """A backend the workflow can run and the check cannot see is invisible."""
+        lanes = {lane.job for lane in REVIEW_LANES}
+        for entry in CLAUDE_BACKENDS:
+            with self.subTest(backend=entry["backend"]):
+                self.assertIn(f"Claude review ({entry['backend']})", lanes)
 
 
 class LivenessWorkflowTest(unittest.TestCase):
@@ -505,14 +679,14 @@ class LivenessWorkflowTest(unittest.TestCase):
 
 class ReportTest(unittest.TestCase):
     def test_the_report_names_a_down_lane_and_the_masking(self) -> None:
-        report = render([evaluate(GROK_LANE.name, ["failure"] * 5, window=5)])
+        report = render([evaluate(GROK_LANE.name, [seen("failure")] * 5, window=5)])
         self.assertIn("DOWN", report)
-        self.assertIn("grok-review.yml", report)
+        self.assertIn("Grok advisory review", report)
         self.assertIn("continue-on-error", report)
         self.assertIn("`success`", report)
 
     def test_the_report_separates_the_two_claude_backends(self) -> None:
-        report = render([evaluate(l.name, ["failure"] * 5, window=5) for l in (GLM, KIMI)])
+        report = render([evaluate(l.name, [seen("failure")] * 5, window=5) for l in (GLM, KIMI)])
         self.assertIn("glm", report)
         self.assertIn("kimi", report)
 

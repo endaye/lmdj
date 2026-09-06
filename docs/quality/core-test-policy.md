@@ -254,14 +254,21 @@ unselected-skipped results before native-heavy work is admitted. macOS stays
 parallel and outside this gate: a selected macOS failure remains a PR Gate
 primary failure, but does not block Linux heavy work.
 
-The advisory Claude review also runs in preflight, as a `needs:` of
-`Pre-heavy Gate`, and contributes one admission condition that is not a
-verdict: the gate reads how many review threads on the Pull Request a human
+The advisory reviewers also run in preflight, as `needs:` of `Pre-heavy Gate`,
+and contribute one admission condition that is not a verdict: the gate reads how many review threads on the Pull Request a human
 has not yet resolved, and holds native-heavy work while any is open. The
 review's own result is never consulted — it is `continue-on-error`, appears in
 neither `lane_jobs` nor `self_hosted_jobs`, and a reviewer that has died
 posts no threads and admits; `advisory-review-liveness.yml` is what notices
-that. The placement is the point. A finding costs one reply to resolve and a
+that. Two reviewers run, not three: one Claude backend, chosen per Pull
+Request by `--select` from the same posted evidence the liveness check reads,
+with the other as the fallback it switches to when the first is DOWN; and
+Grok, which keeps its own pinned CLI and credential because that independent
+failure domain is the point of the slot — one action outage took both Claude
+backends down together, and Grok kept working. Only the ordering is shared:
+Grok's job moved into `ci.yml` so the gate can `needs:` it, because a reviewer
+in its own workflow can post after admission has already happened. The
+placement is the point. A finding costs one reply to resolve and a
 native-heavy set costs about 185 minutes, so the threads are held before the
 expensive work rather than at merge, where `required_conversation_resolution`
 held the same threads after it had already run (#659).
