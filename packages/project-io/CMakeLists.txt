@@ -419,4 +419,34 @@ if(BUILD_TESTING)
     LABELS persistence
     TIMEOUT 30
   )
+  add_executable(
+    lmdj_project_io_soundset_install_commit_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/project_io/soundset_install_commit_test.cpp"
+  )
+  target_include_directories(
+    lmdj_project_io_soundset_install_commit_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_project_io_soundset_install_commit_tests
+    PRIVATE
+      lmdj_project_io_testable
+      lmdj_picosha2
+      nlohmann_json::nlohmann_json
+  )
+  target_compile_definitions(
+    lmdj_project_io_soundset_install_commit_tests
+    PRIVATE
+      LMDJ_PROJECT_IO_TESTING=1
+  )
+  lmdj_target_warnings(lmdj_project_io_soundset_install_commit_tests)
+  lmdj_target_sanitizers(lmdj_project_io_soundset_install_commit_tests)
+  lmdj_add_test(
+    NAME project_io.soundset_install_commit
+    TIER component
+    COMMAND lmdj_project_io_soundset_install_commit_tests
+    LABELS persistence
+    TIMEOUT 30
+  )
 endif()

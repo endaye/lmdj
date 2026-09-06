@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -1393,9 +1394,10 @@ void test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly() 
 
   auto v3_lineage = request;
   v3_lineage.lineage = AssetLineage{
-      {std::string(64, 'a'), 0},
-      {{0, 1},
-       PerformanceId{"40000000-0000-4000-8000-000000000001"}},
+      lmdj::domain::AssetArtifactLineageSource{std::string(64, 'a'), 0},
+      lmdj::domain::ResampleLineageDerivation{
+          {0, 1},
+          PerformanceId{"40000000-0000-4000-8000-000000000001"}},
   };
   const auto rejected_v3_lineage =
       store.import_assign_sample_bytes(bundle, v3_lineage);
@@ -1472,9 +1474,10 @@ void test_import_assign_sample_bytes_persists_lineage_and_collides_on_change() {
       std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44},
   };
   const AssetLineage lineage{
-      {std::string(64, 'a'), 7},
-      {{10, 20},
-       PerformanceId{"40000000-0000-4000-8000-000000000001"}},
+      lmdj::domain::AssetArtifactLineageSource{std::string(64, 'a'), 7},
+      lmdj::domain::ResampleLineageDerivation{
+          {10, 20},
+          PerformanceId{"40000000-0000-4000-8000-000000000001"}},
   };
   const auto request = ProjectStore::ImportAssignSampleBytesRequest{
       meta("derived-sample-import", 0),
@@ -1509,7 +1512,9 @@ void test_import_assign_sample_bytes_persists_lineage_and_collides_on_change() {
   LMDJ_CHECK(replayed.value().state.revision == 1);
 
   auto changed = request;
-  changed.lineage->source.project_revision = 8;
+  std::get<lmdj::domain::AssetArtifactLineageSource>(
+      changed.lineage->source)
+      .project_revision = 8;
   const auto collision = store.import_assign_sample_bytes(bundle, changed);
   LMDJ_CHECK(!collision.has_value());
   LMDJ_CHECK(collision.error().code == ErrorCode::invalid_argument);

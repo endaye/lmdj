@@ -4,6 +4,7 @@
 #include <limits>
 #include <string>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -22,6 +23,7 @@ using lmdj::domain::PerformanceEventKind;
 using lmdj::domain::PerformanceFx;
 
 constexpr auto kPerformanceId = "00000000-0000-4000-8000-000000000010";
+constexpr auto kSoundSetId = "30000000-0000-4000-8000-000000000009";
 
 Performance valid_performance() {
   return Performance{
@@ -36,9 +38,38 @@ Performance valid_performance() {
 
 AssetLineage valid_lineage() {
   return AssetLineage{
-      {std::string(64, 'a'), 7},
-      {{10, 20}, lmdj::domain::PerformanceId{kPerformanceId}},
+      lmdj::domain::AssetArtifactLineageSource{std::string(64, 'a'), 7},
+      lmdj::domain::ResampleLineageDerivation{
+          {10, 20},
+          lmdj::domain::PerformanceId{kPerformanceId}},
   };
+}
+
+AssetLineage valid_soundset_lineage() {
+  return AssetLineage{
+      lmdj::domain::SoundSetLineageSource{
+          kSoundSetId,
+          "1.2.0",
+          std::string(64, 'b'),
+          5,
+          std::string(64, 'c'),
+      },
+      lmdj::domain::SoundSetInstallLineageDerivation{},
+  };
+}
+
+lmdj::domain::AssetArtifactLineageSource& artifact_source(
+    AssetLineage& lineage) {
+  return std::get<lmdj::domain::AssetArtifactLineageSource>(lineage.source);
+}
+
+lmdj::domain::SoundSetLineageSource& soundset_source(AssetLineage& lineage) {
+  return std::get<lmdj::domain::SoundSetLineageSource>(lineage.source);
+}
+
+lmdj::domain::ResampleLineageDerivation& resample_derivation(
+    AssetLineage& lineage) {
+  return std::get<lmdj::domain::ResampleLineageDerivation>(lineage.derivation);
 }
 
 PerformanceEvent parse_event(const Json& input) {
@@ -220,20 +251,22 @@ void test_asset_lineage_round_trips_exactly() {
 
 void test_asset_lineage_rejects_invalid_values_and_shapes() {
   auto lineage = valid_lineage();
-  lineage.source.artifact_sha256 = std::string(64, 'A');
+  artifact_source(lineage).artifact_sha256 = std::string(64, 'A');
   LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
   lineage = valid_lineage();
-  lineage.source.artifact_sha256 = std::string(63, 'a');
+  artifact_source(lineage).artifact_sha256 = std::string(63, 'a');
   LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
   lineage = valid_lineage();
-  lineage.derivation.performance_id =
+  resample_derivation(lineage).performance_id =
       lmdj::domain::PerformanceId{"not-a-uuid"};
   LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
   lineage = valid_lineage();
-  lineage.derivation.range.end_frame = lineage.derivation.range.start_frame;
+  resample_derivation(lineage).range.end_frame =
+      resample_derivation(lineage).range.start_frame;
   LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
   lineage = valid_lineage();
-  lineage.derivation.range.end_frame = lineage.derivation.range.start_frame - 1;
+  resample_derivation(lineage).range.end_frame =
+      resample_derivation(lineage).range.start_frame - 1;
   LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
 
   const std::vector<Json> malformed{
@@ -262,6 +295,120 @@ void test_asset_lineage_rejects_invalid_values_and_shapes() {
   for (const auto& value : malformed) {
     LMDJ_CHECK(!lmdj::domain::asset_lineage_from_json(value).has_value());
   }
+}
+
+// S11-D9: Contract 4.1.0 adds the soundset variant beside asset_artifact on
+// the same carrier. Both must round-trip exactly, and every typed field of the
+// soundset source is required.
+void test_soundset_asset_lineage_round_trips_exactly() {
+  const auto lineage = valid_soundset_lineage();
+  const Json expected{
+      {"source",
+       {{"kind", "soundset"},
+        {"set_id", kSoundSetId},
+        {"set_version", "1.2.0"},
+        {"manifest_sha256", std::string(64, 'b')},
+        {"slot_index", 5},
+        {"artifact_sha256", std::string(64, 'c')}}},
+      {"derivation", {{"kind", "soundset_install"}}},
+  };
+  LMDJ_CHECK(lmdj::domain::validate_asset_lineage(lineage).has_value());
+  LMDJ_CHECK(lmdj::domain::asset_lineage_json(lineage) == expected);
+  const auto decoded = lmdj::domain::asset_lineage_from_json(expected);
+  LMDJ_CHECK(decoded.has_value());
+  LMDJ_CHECK(decoded.value() == lineage);
+  LMDJ_CHECK(
+      lmdj::domain::asset_lineage_source_kind(lineage) ==
+      lmdj::domain::AssetLineageSourceKind::soundset);
+  LMDJ_CHECK(
+      lmdj::domain::asset_lineage_derivation_kind(lineage) ==
+      lmdj::domain::AssetLineageDerivationKind::soundset_install);
+  // The existing variant keeps its own kinds, so a 4.0.0 shape is unchanged.
+  const auto resample = valid_lineage();
+  LMDJ_CHECK(
+      lmdj::domain::asset_lineage_source_kind(resample) ==
+      lmdj::domain::AssetLineageSourceKind::asset_artifact);
+  LMDJ_CHECK(
+      lmdj::domain::asset_lineage_derivation_kind(resample) ==
+      lmdj::domain::AssetLineageDerivationKind::resample);
+}
+
+void test_soundset_asset_lineage_rejects_invalid_values_and_shapes() {
+  auto lineage = valid_soundset_lineage();
+  soundset_source(lineage).set_id = "not-a-uuid";
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+  lineage = valid_soundset_lineage();
+  soundset_source(lineage).set_version = "1.2";
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+  lineage = valid_soundset_lineage();
+  soundset_source(lineage).set_version = "01.2.0";
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+  lineage = valid_soundset_lineage();
+  soundset_source(lineage).manifest_sha256 = std::string(64, 'B');
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+  lineage = valid_soundset_lineage();
+  soundset_source(lineage).artifact_sha256 = std::string(63, 'c');
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+  lineage = valid_soundset_lineage();
+  soundset_source(lineage).slot_index = 16;
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(lineage).has_value());
+
+  const Json valid_source{
+      {"kind", "soundset"},
+      {"set_id", kSoundSetId},
+      {"set_version", "1.2.0"},
+      {"manifest_sha256", std::string(64, 'b')},
+      {"slot_index", 5},
+      {"artifact_sha256", std::string(64, 'c')}};
+  std::vector<Json> malformed{
+      // Every typed field is required, so dropping any one fails closed.
+      {{"source", valid_source}, {"derivation", {{"kind", "soundset_apply"}}}},
+      {{"source", {{"kind", "soundset_v2"}}},
+       {"derivation", {{"kind", "soundset_install"}}}},
+      {{"source", valid_source},
+       {"derivation", {{"kind", "soundset_install"}, {"extra", true}}}},
+      {{"source", {{"kind", "soundset"}}},
+       {"derivation", {{"kind", "soundset_install"}}}},
+      {{"source", {{"kind", "soundset"}, {"slot_index", 5}}},
+       {"derivation", {{"kind", "soundset_install"}}}},
+  };
+  for (const auto& key :
+       {"set_id", "set_version", "manifest_sha256", "slot_index",
+        "artifact_sha256"}) {
+    auto source = valid_source;
+    source.erase(key);
+    malformed.push_back(
+        Json{{"source", source},
+             {"derivation", {{"kind", "soundset_install"}}}});
+  }
+  auto extra_source = valid_source;
+  extra_source["extra"] = true;
+  malformed.push_back(
+      Json{{"source", extra_source},
+           {"derivation", {{"kind", "soundset_install"}}}});
+  auto negative_slot = valid_source;
+  negative_slot["slot_index"] = -1;
+  malformed.push_back(
+      Json{{"source", negative_slot},
+           {"derivation", {{"kind", "soundset_install"}}}});
+  auto out_of_range_slot = valid_source;
+  out_of_range_slot["slot_index"] = 16;
+  malformed.push_back(
+      Json{{"source", out_of_range_slot},
+           {"derivation", {{"kind", "soundset_install"}}}});
+  for (const auto& value : malformed) {
+    LMDJ_CHECK(!lmdj::domain::asset_lineage_from_json(value).has_value());
+  }
+
+  // The two variants are independent, so a mixed pairing still parses: the
+  // Schema keeps source and derivation as two separate closed unions.
+  const Json mixed{
+      {"source", valid_source},
+      {"derivation",
+       {{"kind", "resample"},
+        {"range", {{"start_frame", 10}, {"end_frame", 20}}},
+        {"performance_id", kPerformanceId}}}};
+  LMDJ_CHECK(lmdj::domain::asset_lineage_from_json(mixed).has_value());
 }
 
 void test_recording_revision_accepts_any_unsigned_64_bit_value() {
@@ -514,6 +661,8 @@ int main() {
     test_valid_stream_and_performance_are_accepted();
     test_asset_lineage_round_trips_exactly();
     test_asset_lineage_rejects_invalid_values_and_shapes();
+    test_soundset_asset_lineage_round_trips_exactly();
+    test_soundset_asset_lineage_rejects_invalid_values_and_shapes();
     test_recording_revision_accepts_any_unsigned_64_bit_value();
     test_unmatched_release_and_move_are_rejected();
     test_double_engage_is_rejected();

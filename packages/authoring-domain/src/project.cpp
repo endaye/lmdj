@@ -11,6 +11,8 @@
 #include <utility>
 #include <variant>
 
+#include <lmdj/foundation/soundset_manifest.hpp>
+
 namespace lmdj::domain {
 namespace {
 
@@ -102,6 +104,30 @@ bool valid_sha256(std::string_view value) noexcept {
     return false;
   }
   return std::ranges::all_of(value, is_lower_hex);
+}
+
+// The Sound Set Contract pins `set_version` to the same three-part SemVer
+// pattern the Project Schema uses, so a Lineage that survives the Schema also
+// survives the domain and vice versa.
+bool valid_soundset_semver(std::string_view value) noexcept {
+  std::size_t index = 0;
+  for (int part = 0; part < 3; ++part) {
+    if (part > 0) {
+      if (index >= value.size() || value[index] != '.') {
+        return false;
+      }
+      ++index;
+    }
+    const std::size_t start = index;
+    while (index < value.size() && value[index] >= '0' && value[index] <= '9') {
+      ++index;
+    }
+    const std::size_t digits = index - start;
+    if (digits == 0 || (digits > 1 && value[start] == '0')) {
+      return false;
+    }
+  }
+  return index == value.size();
 }
 
 std::optional<std::size_t> utf8_code_point_count(
@@ -512,20 +538,61 @@ foundation::Result<void> validate_performance(
   return validate_performance_events(performance.events);
 }
 
+AssetLineageSourceKind asset_lineage_source_kind(
+    const AssetLineage& lineage) noexcept {
+  return std::holds_alternative<SoundSetLineageSource>(lineage.source)
+             ? AssetLineageSourceKind::soundset
+             : AssetLineageSourceKind::asset_artifact;
+}
+
+AssetLineageDerivationKind asset_lineage_derivation_kind(
+    const AssetLineage& lineage) noexcept {
+  return std::holds_alternative<SoundSetInstallLineageDerivation>(
+             lineage.derivation)
+             ? AssetLineageDerivationKind::soundset_install
+             : AssetLineageDerivationKind::resample;
+}
+
 foundation::Result<void> validate_asset_lineage(
     const AssetLineage& lineage) {
-  if (!valid_sha256(lineage.source.artifact_sha256)) {
-    return invalid_asset_lineage(
-        "asset Lineage source digest must be lowercase SHA-256");
+  if (const auto* artifact_source =
+          std::get_if<AssetArtifactLineageSource>(&lineage.source);
+      artifact_source != nullptr) {
+    if (!valid_sha256(artifact_source->artifact_sha256)) {
+      return invalid_asset_lineage(
+          "asset Lineage source digest must be lowercase SHA-256");
+    }
+  } else {
+    const auto& soundset = std::get<SoundSetLineageSource>(lineage.source);
+    if (!is_valid_uuid(soundset.set_id)) {
+      return invalid_asset_lineage(
+          "asset Lineage Sound Set id must be a lowercase UUID");
+    }
+    if (!valid_soundset_semver(soundset.set_version)) {
+      return invalid_asset_lineage(
+          "asset Lineage Sound Set version must be SemVer");
+    }
+    if (!valid_sha256(soundset.manifest_sha256) ||
+        !valid_sha256(soundset.artifact_sha256)) {
+      return invalid_asset_lineage(
+          "asset Lineage source digest must be lowercase SHA-256");
+    }
+    if (soundset.slot_index >= foundation::kSoundSetSlotCount) {
+      return invalid_asset_lineage(
+          "asset Lineage Sound Set slot index is out of range");
+    }
   }
-  if (!is_valid_uuid(lineage.derivation.performance_id.value())) {
-    return invalid_asset_lineage(
-        "asset Lineage Performance id must be a lowercase UUID");
-  }
-  if (lineage.derivation.range.start_frame >=
-      lineage.derivation.range.end_frame) {
-    return invalid_asset_lineage(
-        "asset Lineage frame range must be non-empty and increasing");
+  if (const auto* resample =
+          std::get_if<ResampleLineageDerivation>(&lineage.derivation);
+      resample != nullptr) {
+    if (!is_valid_uuid(resample->performance_id.value())) {
+      return invalid_asset_lineage(
+          "asset Lineage Performance id must be a lowercase UUID");
+    }
+    if (resample->range.start_frame >= resample->range.end_frame) {
+      return invalid_asset_lineage(
+          "asset Lineage frame range must be non-empty and increasing");
+    }
   }
   return foundation::Result<void>::success();
 }
@@ -539,41 +606,105 @@ foundation::Result<AssetLineage> asset_lineage_from_json(
     }
     const auto& source = input.at("source");
     const auto& derivation = input.at("derivation");
-    if (!exact_object_keys(
-            source,
-            {"kind", "artifact_sha256", "project_revision"}) ||
-        !source.at("kind").is_string() ||
-        source.at("kind").get<std::string>() != "asset_artifact" ||
-        !source.at("artifact_sha256").is_string()) {
+    if (!source.is_object() || !source.contains("kind") ||
+        !source.at("kind").is_string() || !derivation.is_object() ||
+        !derivation.contains("kind") || !derivation.at("kind").is_string()) {
+      return invalid_asset_lineage_value(
+          "asset Lineage must declare a supported source and derivation kind");
+    }
+    const auto source_kind = source.at("kind").get<std::string>();
+    const auto derivation_kind = derivation.at("kind").get<std::string>();
+    AssetLineageSource parsed_source;
+    if (source_kind == "asset_artifact") {
+      if (!exact_object_keys(
+              source,
+              {"kind", "artifact_sha256", "project_revision"}) ||
+          !source.at("artifact_sha256").is_string()) {
+        return invalid_asset_lineage_value(
+            "asset Lineage source shape or value is invalid");
+      }
+      const auto project_revision =
+          unsigned_value(source.at("project_revision"));
+      if (!project_revision.has_value()) {
+        return invalid_asset_lineage_value(
+            "asset Lineage integer value is invalid");
+      }
+      parsed_source = AssetArtifactLineageSource{
+          source.at("artifact_sha256").get<std::string>(),
+          *project_revision,
+      };
+    } else if (source_kind == "soundset") {
+      if (!exact_object_keys(
+              source,
+              {"kind",
+               "set_id",
+               "set_version",
+               "manifest_sha256",
+               "slot_index",
+               "artifact_sha256"}) ||
+          !source.at("set_id").is_string() ||
+          !source.at("set_version").is_string() ||
+          !source.at("manifest_sha256").is_string() ||
+          !source.at("artifact_sha256").is_string()) {
+        return invalid_asset_lineage_value(
+            "asset Lineage source shape or value is invalid");
+      }
+      const auto slot_index = bounded_unsigned(
+          source.at("slot_index"),
+          static_cast<std::uint64_t>(foundation::kSoundSetSlotCount) - 1);
+      if (!slot_index.has_value()) {
+        return invalid_asset_lineage_value(
+            "asset Lineage integer value is invalid");
+      }
+      parsed_source = SoundSetLineageSource{
+          source.at("set_id").get<std::string>(),
+          source.at("set_version").get<std::string>(),
+          source.at("manifest_sha256").get<std::string>(),
+          static_cast<std::uint8_t>(*slot_index),
+          source.at("artifact_sha256").get<std::string>(),
+      };
+    } else {
       return invalid_asset_lineage_value(
           "asset Lineage source shape or value is invalid");
     }
-    if (!exact_object_keys(
-            derivation,
-            {"kind", "range", "performance_id"}) ||
-        !derivation.at("kind").is_string() ||
-        derivation.at("kind").get<std::string>() != "resample" ||
-        !derivation.at("performance_id").is_string()) {
+    AssetLineageDerivation parsed_derivation{
+        SoundSetInstallLineageDerivation{}};
+    if (derivation_kind == "resample") {
+      if (!exact_object_keys(
+              derivation,
+              {"kind", "range", "performance_id"}) ||
+          !derivation.at("performance_id").is_string()) {
+        return invalid_asset_lineage_value(
+            "asset Lineage derivation shape or value is invalid");
+      }
+      const auto& range = derivation.at("range");
+      if (!exact_object_keys(range, {"start_frame", "end_frame"})) {
+        return invalid_asset_lineage_value(
+            "asset Lineage range shape is invalid");
+      }
+      const auto start_frame = unsigned_value(range.at("start_frame"));
+      const auto end_frame = unsigned_value(range.at("end_frame"));
+      if (!start_frame.has_value() || !end_frame.has_value()) {
+        return invalid_asset_lineage_value(
+            "asset Lineage integer value is invalid");
+      }
+      parsed_derivation = ResampleLineageDerivation{
+          {*start_frame, *end_frame},
+          PerformanceId{derivation.at("performance_id").get<std::string>()},
+      };
+    } else if (derivation_kind == "soundset_install") {
+      if (!exact_object_keys(derivation, {"kind"})) {
+        return invalid_asset_lineage_value(
+            "asset Lineage derivation shape or value is invalid");
+      }
+      parsed_derivation = SoundSetInstallLineageDerivation{};
+    } else {
       return invalid_asset_lineage_value(
           "asset Lineage derivation shape or value is invalid");
     }
-    const auto& range = derivation.at("range");
-    if (!exact_object_keys(range, {"start_frame", "end_frame"})) {
-      return invalid_asset_lineage_value(
-          "asset Lineage range shape is invalid");
-    }
-    const auto project_revision = unsigned_value(source.at("project_revision"));
-    const auto start_frame = unsigned_value(range.at("start_frame"));
-    const auto end_frame = unsigned_value(range.at("end_frame"));
-    if (!project_revision.has_value() || !start_frame.has_value() ||
-        !end_frame.has_value()) {
-      return invalid_asset_lineage_value(
-          "asset Lineage integer value is invalid");
-    }
     AssetLineage lineage{
-        {source.at("artifact_sha256").get<std::string>(), *project_revision},
-        {{*start_frame, *end_frame},
-         PerformanceId{derivation.at("performance_id").get<std::string>()}},
+        std::move(parsed_source),
+        std::move(parsed_derivation),
     };
     const auto valid = validate_asset_lineage(lineage);
     if (!valid.has_value()) {
@@ -587,17 +718,43 @@ foundation::Result<AssetLineage> asset_lineage_from_json(
 }
 
 nlohmann::json asset_lineage_json(const AssetLineage& lineage) {
-  return {
-      {"source",
-       {{"kind", "asset_artifact"},
-        {"artifact_sha256", lineage.source.artifact_sha256},
-        {"project_revision", lineage.source.project_revision}}},
-      {"derivation",
-       {{"kind", "resample"},
+  nlohmann::json source;
+  if (const auto* artifact_source =
+          std::get_if<AssetArtifactLineageSource>(&lineage.source);
+      artifact_source != nullptr) {
+    source = {
+        {"kind", "asset_artifact"},
+        {"artifact_sha256", artifact_source->artifact_sha256},
+        {"project_revision", artifact_source->project_revision},
+    };
+  } else {
+    const auto& soundset = std::get<SoundSetLineageSource>(lineage.source);
+    source = {
+        {"kind", "soundset"},
+        {"set_id", soundset.set_id},
+        {"set_version", soundset.set_version},
+        {"manifest_sha256", soundset.manifest_sha256},
+        {"slot_index", soundset.slot_index},
+        {"artifact_sha256", soundset.artifact_sha256},
+    };
+  }
+  nlohmann::json derivation;
+  if (const auto* resample =
+          std::get_if<ResampleLineageDerivation>(&lineage.derivation);
+      resample != nullptr) {
+    derivation = {
+        {"kind", "resample"},
         {"range",
-         {{"start_frame", lineage.derivation.range.start_frame},
-          {"end_frame", lineage.derivation.range.end_frame}}},
-        {"performance_id", lineage.derivation.performance_id.value()}}},
+         {{"start_frame", resample->range.start_frame},
+          {"end_frame", resample->range.end_frame}}},
+        {"performance_id", resample->performance_id.value()},
+    };
+  } else {
+    derivation = nlohmann::json::object({{"kind", "soundset_install"}});
+  }
+  return {
+      {"source", std::move(source)},
+      {"derivation", std::move(derivation)},
   };
 }
 

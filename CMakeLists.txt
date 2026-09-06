@@ -95,6 +95,8 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_domain_command_handler_tests
     lmdj_domain_performance_tests
     lmdj_domain_migration_v4_tests
+    lmdj_domain_soundset_map_tests
+    lmdj_domain_soundset_install_tests
     lmdj_domain_model_sequence_tests
     lmdj_project_store_tests
     lmdj_project_storage_platform_tests
@@ -149,6 +151,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_project_io_fault_matrix_tests
     lmdj_soundset_store_tests
     lmdj_soundset_local_adapter_tests
+    lmdj_project_io_soundset_install_commit_tests
     lmdj_application_c_api_stress_tests
   )
   if(APPLE)

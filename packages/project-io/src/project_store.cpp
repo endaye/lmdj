@@ -98,6 +98,7 @@ using PersistedCommand = std::variant<
     domain::MergePatternEvents,
     domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
+    domain::InstallSoundSet,
     domain::UpdatePadPlayback,
     domain::ResetPadPlayback,
     PerformanceMutation,
@@ -1374,6 +1375,29 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"type", "ImportAssignSample"},
           };
         } else if constexpr (
+            std::is_same_v<Type, domain::InstallSoundSet>) {
+          auto assignments = nlohmann::json::array();
+          for (const auto& assignment : value.assignments) {
+            assignments.push_back({
+                {"asset",
+                 {
+                     {"artifact", assignment.asset.artifact},
+                     {"id", assignment.asset.id.value()},
+                     {"lineage",
+                      assignment.asset.lineage.has_value()
+                          ? domain::asset_lineage_json(
+                                *assignment.asset.lineage)
+                          : nlohmann::json(nullptr)},
+                 }},
+                {"slot", slot_json(assignment.slot)},
+            });
+          }
+          return {
+              {"assignments", std::move(assignments)},
+              {"meta", meta_json(value.meta)},
+              {"type", "InstallSoundSet"},
+          };
+        } else if constexpr (
             std::is_same_v<Type, domain::UpdatePadPlayback>) {
           return {
               {"meta", meta_json(value.meta)},
@@ -1734,6 +1758,41 @@ foundation::Result<PersistedCommand> parse_command(
               std::move(meta.value()),
               std::move(asset.value()),
               slot.value(),
+          }});
+    }
+    if (type == "InstallSoundSet") {
+      if (!exact_object_keys(input, {"assignments", "meta", "type"}) ||
+          !input.at("assignments").is_array() ||
+          input.at("assignments").empty()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "InstallSoundSet transaction shape is invalid", path));
+      }
+      std::vector<domain::SoundSetInstallAssignment> assignments;
+      for (const auto& encoded : input.at("assignments")) {
+        if (!exact_object_keys(encoded, {"asset", "slot"})) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "InstallSoundSet assignment shape is invalid", path));
+        }
+        auto slot = parse_slot(encoded.at("slot"), path);
+        if (!slot.has_value()) {
+          return foundation::Result<PersistedCommand>::failure(slot.error());
+        }
+        auto asset = parse_transaction_asset(encoded.at("asset"));
+        if (!asset.has_value()) {
+          return foundation::Result<PersistedCommand>::failure(asset.error());
+        }
+        assignments.push_back(
+            domain::SoundSetInstallAssignment{
+                slot.value(),
+                std::move(asset.value()),
+            });
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::InstallSoundSet{
+              std::move(meta.value()),
+              std::move(assignments),
           }});
     }
     if (type == "UpdatePadPlayback") {
@@ -2127,6 +2186,7 @@ foundation::Result<domain::AppliedCommand> apply_command(
                   std::move(next), std::move(event), false});
         } else if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample> ||
+            std::is_same_v<Type, domain::InstallSoundSet> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
             std::is_same_v<Type, domain::ResetPadPlayback>) {
           return domain::apply(state, value, receipts);
@@ -2162,6 +2222,7 @@ foundation::Result<domain::Command> legacy_command(
         using Type = std::decay_t<decltype(value)>;
         if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample> ||
+            std::is_same_v<Type, domain::InstallSoundSet> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
             std::is_same_v<Type, domain::ResetPadPlayback> ||
             std::is_same_v<Type, PerformanceMutation> ||
@@ -2965,7 +3026,11 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     const std::optional<SequenceFlushIdentity>& sequence_flush_identity =
         std::nullopt,
     const std::optional<PerformanceFlushIdentity>&
-        performance_flush_identity = std::nullopt) {
+        performance_flush_identity = std::nullopt,
+    // A Sound Set install publishes N content-addressed blobs under one
+    // revision, so the rollback ledger below is a vector: a partial multi-blob
+    // publish must be undone completely or the commit is not atomic.
+    const std::vector<ArtifactStage>& artifact_stages = {}) {
   const auto& meta = command_meta(command);
   if (!domain::is_valid_uuid(meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -3010,7 +3075,13 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
 
   const bool sample_import =
       std::holds_alternative<domain::ImportAssignSample>(command);
-  if (sample_import) {
+  const bool soundset_install =
+      std::holds_alternative<domain::InstallSoundSet>(command);
+  // Both families stage bytes and publish blobs before the manifest settles,
+  // so they share the same injected fault points; without this a Sound Set
+  // install would have no atomicity coverage at all.
+  const bool staged_artifact_commit = sample_import || soundset_install;
+  if (staged_artifact_commit) {
     const auto fault = sample_after_event_preparation_fault(bundle);
     if (!fault.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
@@ -3031,61 +3102,88 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
         });
   }
 
-  std::optional<std::filesystem::path> newly_published_artifact;
+  std::vector<ArtifactStage> stages;
   if (artifact_stage.has_value()) {
-    const auto published = publish_artifact(*platform, bundle, *artifact_stage);
-    if (!published.has_value()) {
-      return foundation::Result<domain::AppliedCommand>::failure(
-          published.error());
+    stages.push_back(*artifact_stage);
+  }
+  stages.insert(
+      stages.end(), artifact_stages.begin(), artifact_stages.end());
+  std::vector<std::filesystem::path> newly_published_artifacts;
+  // Every blob this command published must be attempted, so one stubborn
+  // removal cannot strand the rest; the first error is still what surfaces.
+  const auto remove_newly_published = [&]() -> foundation::Result<void> {
+    auto outcome = foundation::Result<void>::success();
+    for (const auto& path : newly_published_artifacts) {
+      const auto removed = platform->remove(path);
+      if (!removed.has_value() && outcome.has_value()) {
+        outcome = foundation::Result<void>::failure(removed.error());
+      }
     }
-    if (published.value()) {
-      newly_published_artifact =
-          bundle / "assets" / (artifact_stage->artifact.sha256 + ".wav");
+    return outcome;
+  };
+  if (!stages.empty()) {
+    for (const auto& stage : stages) {
+      const auto published = publish_artifact(*platform, bundle, stage);
+      if (!published.has_value()) {
+        (void)remove_newly_published();
+        return foundation::Result<domain::AppliedCommand>::failure(
+            published.error());
+      }
+      if (published.value()) {
+        newly_published_artifacts.push_back(
+            bundle / "assets" / (stage.artifact.sha256 + ".wav"));
+      }
     }
   } else if (
       std::holds_alternative<domain::ImportAsset>(command) ||
-      sample_import) {
-    const domain::Asset* asset = nullptr;
+      sample_import || soundset_install) {
+    std::vector<const domain::Asset*> assets;
     if (const auto* import = std::get_if<domain::ImportAsset>(&command)) {
-      asset = &import->asset;
+      assets.push_back(&import->asset);
+    } else if (
+        const auto* sample =
+            std::get_if<domain::ImportAssignSample>(&command)) {
+      assets.push_back(&sample->asset);
     } else {
-      asset = &std::get<domain::ImportAssignSample>(command).asset;
+      for (const auto& assignment :
+           std::get<domain::InstallSoundSet>(command).assignments) {
+        assets.push_back(&assignment.asset);
+      }
     }
-    if (!valid_sha256(asset->artifact.sha256)) {
-      return foundation::Result<domain::AppliedCommand>::failure(
-          Error{
-              ErrorCode::invalid_argument,
-              "imported Asset SHA-256 is invalid",
-          });
-    }
-    const auto blob =
-        bundle / "assets" /
-        (asset->artifact.sha256 + ".wav");
-    const auto described = describe_artifact(
-        *platform, blob, asset->artifact.media_type);
-    if (!described.has_value() ||
-        described.value() != asset->artifact) {
-      return foundation::Result<domain::AppliedCommand>::failure(
-          Error{
-              ErrorCode::missing_asset,
-              "import command must reference an existing bundle artifact",
-              {{"path", blob.generic_string()}},
-          });
+    for (const auto* asset : assets) {
+      if (!valid_sha256(asset->artifact.sha256)) {
+        return foundation::Result<domain::AppliedCommand>::failure(
+            Error{
+                ErrorCode::invalid_argument,
+                "imported Asset SHA-256 is invalid",
+            });
+      }
+      const auto blob =
+          bundle / "assets" /
+          (asset->artifact.sha256 + ".wav");
+      const auto described = describe_artifact(
+          *platform, blob, asset->artifact.media_type);
+      if (!described.has_value() ||
+          described.value() != asset->artifact) {
+        return foundation::Result<domain::AppliedCommand>::failure(
+            Error{
+                ErrorCode::missing_asset,
+                "import command must reference an existing bundle artifact",
+                {{"path", blob.generic_string()}},
+            });
+      }
     }
   }
-  if (sample_import) {
+  if (staged_artifact_commit) {
     const auto fault = sample_after_artifact_creation_fault(
-        artifact_stage.has_value()
-            ? bundle / "assets" /
-                  (artifact_stage->artifact.sha256 + ".wav")
-            : bundle / "assets");
+        stages.empty()
+            ? bundle / "assets"
+            : bundle / "assets" / (stages.front().artifact.sha256 + ".wav"));
     if (!fault.has_value()) {
-      if (newly_published_artifact.has_value()) {
-        const auto removed = platform->remove(*newly_published_artifact);
-        if (!removed.has_value()) {
-          return foundation::Result<domain::AppliedCommand>::failure(
-              removed.error());
-        }
+      const auto removed = remove_newly_published();
+      if (!removed.has_value()) {
+        return foundation::Result<domain::AppliedCommand>::failure(
+            removed.error());
       }
       return foundation::Result<domain::AppliedCommand>::failure(
           fault.error());
@@ -3147,9 +3245,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   auto written = platform->create_immutable(
       transaction_final, byte_span(transaction_bytes));
   if (!written.has_value()) {
-    if (newly_published_artifact.has_value()) {
-      (void)platform->remove(*newly_published_artifact);
-    }
+    (void)remove_newly_published();
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
   }
@@ -3172,9 +3268,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
       checkpoint_final, byte_span(checkpoint_bytes));
   if (!written.has_value()) {
     (void)platform->remove(transaction_final);
-    if (newly_published_artifact.has_value()) {
-      (void)platform->remove(*newly_published_artifact);
-    }
+    (void)remove_newly_published();
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
   }
@@ -3190,15 +3284,9 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
         return removed;
       }
     }
-    if (newly_published_artifact.has_value()) {
-      const auto removed = platform->remove(*newly_published_artifact);
-      if (!removed.has_value()) {
-        return removed;
-      }
-    }
-    return foundation::Result<void>::success();
+    return remove_newly_published();
   };
-  if (sample_import) {
+  if (staged_artifact_commit) {
     const auto fault = sample_after_manifest_preparation_fault(
         bundle / "manifest.json");
     if (!fault.has_value()) {
@@ -3259,7 +3347,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   }
   detail::commit_publish();
 
-  if (sample_import) {
+  if (staged_artifact_commit) {
     const auto fault = sample_after_manifest_publication_fault(
         bundle / "manifest.json");
     if (!fault.has_value()) {
@@ -6282,6 +6370,145 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
         outcome.error());
   }
   return outcome;
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
+    const std::filesystem::path& bundle,
+    const SoundSetInstallRequest& request) {
+  if (!domain::is_valid_uuid(request.meta.command_id.value())) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "command id must be a lowercase UUID",
+        });
+  }
+  if (request.slots.empty()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "installing a Sound Set needs at least one assignment",
+        });
+  }
+  for (const auto& slot : request.slots) {
+    if (!domain::is_valid_slot(slot.slot)) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "pad slot is invalid",
+          });
+    }
+    if (!domain::is_valid_uuid(slot.asset_id.value())) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "asset id must be a lowercase UUID",
+          });
+    }
+    if (slot.media_type.empty()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "artifact media type must not be empty",
+          });
+    }
+    // The generic artifact safety boundary is checked before the writer lease
+    // so an oversized install never contends for it.
+    if (slot.bytes.size() > kMaximumArtifactBytes) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "artifact exceeds the Project import limit",
+              {{"maximum_byte_length", kMaximumArtifactBytes}},
+          });
+    }
+    const auto valid_lineage = domain::validate_asset_lineage(slot.lineage);
+    if (!valid_lineage.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          valid_lineage.error());
+    }
+  }
+  // Same ordering point as the byte imports: the cheap bundle check precedes
+  // the full-artifact hashes, so a missing bundle costs no hashing at all.
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  std::vector<domain::SoundSetInstallAssignment> assignments;
+  std::vector<ArtifactStage> stages;
+  assignments.reserve(request.slots.size());
+  stages.reserve(request.slots.size());
+  for (const auto& slot : request.slots) {
+    const auto artifact = describe_bytes(slot.bytes, slot.media_type);
+    assignments.push_back(
+        domain::SoundSetInstallAssignment{
+            slot.slot,
+            domain::Asset{slot.asset_id, artifact, slot.lineage},
+        });
+    stages.push_back(ArtifactStage{{}, artifact, slot.bytes, true});
+  }
+  const PersistedCommand command = domain::InstallSoundSet{
+      request.meta,
+      std::move(assignments),
+  };
+  auto lock_result = platform_->acquire_writer(bundle);
+  if (!lock_result.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        lock_result.error());
+  }
+  auto lock = std::move(lock_result.value());
+  (void)lock;
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        loaded.error());
+  }
+  if (loaded.value().state.contract != domain::ProjectContract::v4) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "installing a Sound Set requires lmdj.project.v4 Project Truth",
+        });
+  }
+  const auto recovered = recover_uncommitted(
+      *platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        recovered.error());
+  }
+  auto performance_admitted =
+      admit_performance_sample_class(platform_, bundle);
+  if (!performance_admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        performance_admitted.error());
+  }
+  auto admitted = admit_sequence_authoring(platform_, bundle);
+  if (!admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        admitted.error());
+  }
+  auto scavenged = scavenge_sample_staging(*platform_, bundle);
+  if (!scavenged.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        scavenged.error());
+  }
+  // A replayed command id publishes nothing: commit_loaded serves the stored
+  // receipt after the identity cross-check.
+  const bool replayed =
+      loaded.value().receipts.contains(request.meta.command_id);
+  return commit_loaded(
+      platform_,
+      bundle,
+      std::move(loaded.value()),
+      command,
+      std::nullopt,
+      nullptr,
+      std::nullopt,
+      std::nullopt,
+      replayed ? std::vector<ArtifactStage>{} : std::move(stages));
 }
 
 foundation::Result<domain::AppliedCommand>

@@ -115,6 +115,50 @@ if(BUILD_TESTING)
   )
 
   add_executable(
+    lmdj_domain_soundset_map_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/domain/soundset_map_test.cpp"
+  )
+  target_include_directories(
+    lmdj_domain_soundset_map_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_domain_soundset_map_tests
+    PRIVATE
+      lmdj::authoring_domain
+  )
+  lmdj_target_warnings(lmdj_domain_soundset_map_tests)
+  lmdj_target_sanitizers(lmdj_domain_soundset_map_tests)
+  lmdj_add_test(
+    NAME domain.soundset_map
+    TIER unit
+    COMMAND lmdj_domain_soundset_map_tests
+  )
+
+  add_executable(
+    lmdj_domain_soundset_install_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/domain/soundset_install_test.cpp"
+  )
+  target_include_directories(
+    lmdj_domain_soundset_install_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_domain_soundset_install_tests
+    PRIVATE
+      lmdj::authoring_domain
+  )
+  lmdj_target_warnings(lmdj_domain_soundset_install_tests)
+  lmdj_target_sanitizers(lmdj_domain_soundset_install_tests)
+  lmdj_add_test(
+    NAME domain.soundset_install
+    TIER unit
+    COMMAND lmdj_domain_soundset_install_tests
+  )
+
+  add_executable(
     lmdj_domain_model_sequence_tests
     "${CMAKE_SOURCE_DIR}/tests/core/domain/model_sequence_test.cpp"
   )

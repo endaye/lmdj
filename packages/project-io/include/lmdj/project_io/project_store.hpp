@@ -181,6 +181,23 @@ class ProjectStore {
           lineage(std::move(lineage_value)) {}
   };
 
+  // S11-D8: one atomic install. Every slot's bytes are already validated by
+  // the caller; the store publishes the blobs, writes the Assets and the Pad
+  // assignments, and settles one manifest, so the whole set lands or none of
+  // it does.
+  struct SoundSetInstallSlotRequest {
+    domain::PadSlotId slot;
+    foundation::AssetId asset_id;
+    std::string media_type;
+    std::span<const std::byte> bytes;
+    domain::AssetLineage lineage;
+  };
+
+  struct SoundSetInstallRequest {
+    domain::CommandMeta meta;
+    std::vector<SoundSetInstallSlotRequest> slots;
+  };
+
   foundation::Result<void> create(
       const std::filesystem::path& bundle,
       const domain::ProjectState& initial);
@@ -207,6 +224,9 @@ class ProjectStore {
   foundation::Result<domain::AppliedCommand> import_assign_sample_bytes(
       const std::filesystem::path& bundle,
       const ImportAssignSampleBytesRequest& request);
+  foundation::Result<domain::AppliedCommand> install_soundset(
+      const std::filesystem::path& bundle,
+      const SoundSetInstallRequest& request);
   foundation::Result<ImportArtifactExecution>
   import_artifact_with_identity(
       const std::filesystem::path& bundle,

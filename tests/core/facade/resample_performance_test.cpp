@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -206,13 +207,17 @@ void test_commit_persists_exact_selection_lineage_and_receipt() {
   LMDJ_CHECK(assigned.asset_id == asset_id);
   const auto& asset = loaded.value().assets.at(asset_id);
   LMDJ_CHECK(asset.lineage.has_value());
-  LMDJ_CHECK(asset.lineage->source.artifact_sha256 ==
-             fixture.recording.sha256);
-  LMDJ_CHECK(asset.lineage->source.project_revision == 42);
-  LMDJ_CHECK(asset.lineage->derivation.performance_id ==
-             PerformanceId{kPerformanceId});
-  LMDJ_CHECK(asset.lineage->derivation.range.start_frame == 1);
-  LMDJ_CHECK(asset.lineage->derivation.range.end_frame == 3);
+  const auto& lineage_source =
+      std::get<lmdj::domain::AssetArtifactLineageSource>(
+          asset.lineage->source);
+  const auto& lineage_derivation =
+      std::get<lmdj::domain::ResampleLineageDerivation>(
+          asset.lineage->derivation);
+  LMDJ_CHECK(lineage_source.artifact_sha256 == fixture.recording.sha256);
+  LMDJ_CHECK(lineage_source.project_revision == 42);
+  LMDJ_CHECK(lineage_derivation.performance_id == PerformanceId{kPerformanceId});
+  LMDJ_CHECK(lineage_derivation.range.start_frame == 1);
+  LMDJ_CHECK(lineage_derivation.range.end_frame == 3);
   const auto stored = store.read_artifact(fixture.bundle, asset.artifact);
   const auto expected =
       lmdj::cooker::select_pcm16_stereo_wav(fixture.source, 1, 3);

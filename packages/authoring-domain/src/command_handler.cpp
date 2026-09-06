@@ -1,6 +1,8 @@
 #include <lmdj/domain/command_handler.hpp>
 
 #include <algorithm>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -297,6 +299,94 @@ foundation::Result<AppliedCommand> apply_new_command(
 
 foundation::Result<AppliedCommand> apply_new_command(
     const ProjectState& state,
+    const InstallSoundSet& command) {
+  if (state.contract != ProjectContract::v4) {
+    return invalid(
+        "installing a Sound Set requires lmdj.project.v4 Project Truth");
+  }
+  if (command.assignments.empty()) {
+    return invalid("installing a Sound Set needs at least one assignment");
+  }
+  const auto bank = command.assignments.front().slot.bank;
+  std::set<std::uint8_t> pads;
+  std::set<foundation::AssetId> asset_ids;
+  std::optional<SoundSetLineageSource> set_identity;
+  for (const auto& assignment : command.assignments) {
+    if (!is_valid_slot(assignment.slot)) {
+      return invalid("pad slot is invalid");
+    }
+    if (assignment.slot.bank != bank) {
+      return invalid("a Sound Set install targets exactly one Bank");
+    }
+    if (!pads.insert(assignment.slot.pad).second) {
+      return invalid("a Sound Set install assigns each Pad at most once");
+    }
+    if (!is_valid_uuid(assignment.asset.id.value())) {
+      return invalid("asset id must be a lowercase UUID");
+    }
+    if (!asset_ids.insert(assignment.asset.id).second) {
+      return invalid("a Sound Set install introduces each asset id once");
+    }
+    if (!valid_artifact(assignment.asset.artifact)) {
+      return invalid("artifact reference is invalid");
+    }
+    if (state.assets.contains(assignment.asset.id)) {
+      return foundation::Result<AppliedCommand>::failure(
+          foundation::Error{
+              foundation::ErrorCode::duplicate_id,
+              "asset id already exists",
+          });
+    }
+    if (!assignment.asset.lineage.has_value()) {
+      return invalid("an installed Sound Set slot must carry soundset Lineage");
+    }
+    const auto& lineage = *assignment.asset.lineage;
+    const auto* source = std::get_if<SoundSetLineageSource>(&lineage.source);
+    if (source == nullptr ||
+        !std::holds_alternative<SoundSetInstallLineageDerivation>(
+            lineage.derivation)) {
+      return invalid("an installed Sound Set slot must carry soundset Lineage");
+    }
+    const auto valid_lineage = validate_asset_lineage(lineage);
+    if (!valid_lineage.has_value()) {
+      return invalid(valid_lineage.error().message);
+    }
+    // S11-D11: the map is slot-index identity, so the recorded Set slot is the
+    // target Pad, and S11-D9 pins the Lineage digest to the Asset it describes.
+    if (source->slot_index != assignment.slot.pad) {
+      return invalid(
+          "soundset Lineage slot index must match the installed Pad Slot");
+    }
+    if (source->artifact_sha256 != assignment.asset.artifact.sha256) {
+      return invalid(
+          "soundset Lineage artifact digest must match the installed Asset");
+    }
+    if (!set_identity.has_value()) {
+      set_identity = *source;
+    } else if (
+        set_identity->set_id != source->set_id ||
+        set_identity->set_version != source->set_version ||
+        set_identity->manifest_sha256 != source->manifest_sha256) {
+      return invalid("a Sound Set install carries exactly one Set identity");
+    }
+  }
+  auto copy = state;
+  for (const auto& assignment : command.assignments) {
+    copy.assets.emplace(assignment.asset.id, assignment.asset);
+    auto& pad = copy.banks.at(assignment.slot.bank).at(assignment.slot.pad);
+    pad.asset_id = assignment.asset.id;
+    pad.playback = PadPlayback{};
+  }
+  return foundation::Result<AppliedCommand>::success(
+      applied(
+          std::move(copy),
+          "soundset.installed",
+          command.meta,
+          ProjectContract::v4));
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
     const UpdatePadPlayback& command) {
   if (!is_valid_slot(command.slot)) {
     return invalid("pad slot is invalid");
@@ -431,6 +521,57 @@ foundation::Result<AppliedCommand> apply_checked(
 
 }  // namespace
 
+SoundSetMapping map_soundset(
+    const foundation::SoundSetManifest& manifest,
+    const BankPadSlots& pads) {
+  SoundSetMapping mapping;
+  for (std::size_t index = 0; index < pads.size(); ++index) {
+    const auto pad = static_cast<std::uint8_t>(index);
+    const auto& slot = manifest.slots.at(index);
+    if (!slot.occupied.has_value()) {
+      // S11-D12: an empty Set slot proposes nothing and clears nothing.
+      mapping.kept.push_back(pad);
+      continue;
+    }
+    mapping.proposed.push_back(
+        SoundSetProposedPad{pad, pad, slot.occupied->artifact});
+    if (pads.at(index).asset_id.has_value()) {
+      mapping.collisions.push_back(pad);
+    }
+  }
+  return mapping;
+}
+
+foundation::Result<std::vector<SoundSetProposedPad>>
+resolve_soundset_write_set(
+    const SoundSetMapping& mapping,
+    const std::optional<OccupiedPadPolicy>& policy) {
+  using WriteSet = std::vector<SoundSetProposedPad>;
+  if (!mapping.collisions.empty() && !policy.has_value()) {
+    return foundation::Result<WriteSet>::failure(
+        foundation::Error{
+            foundation::ErrorCode::invalid_argument,
+            "installing this Sound Set needs an occupied Pad policy",
+            {
+                {"collisions", mapping.collisions},
+                {"reason", "soundset_occupied_conflict"},
+            },
+        });
+  }
+  if (policy.value_or(OccupiedPadPolicy::replace) ==
+      OccupiedPadPolicy::replace) {
+    return foundation::Result<WriteSet>::success(mapping.proposed);
+  }
+  WriteSet kept;
+  for (const auto& proposed : mapping.proposed) {
+    if (std::ranges::find(mapping.collisions, proposed.pad) ==
+        mapping.collisions.end()) {
+      kept.push_back(proposed);
+    }
+  }
+  return foundation::Result<WriteSet>::success(std::move(kept));
+}
+
 foundation::Result<AppliedCommand> apply(
     const ProjectState& state,
     const Command& command,
@@ -445,6 +586,13 @@ foundation::Result<AppliedCommand> apply(
 foundation::Result<AppliedCommand> apply(
     const ProjectState& state,
     const ImportAssignSample& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  return apply_checked(state, command, receipts);
+}
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state,
+    const InstallSoundSet& command,
     const std::map<foundation::CommandId, CommandReceipt>& receipts) {
   return apply_checked(state, command, receipts);
 }

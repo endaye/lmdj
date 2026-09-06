@@ -32,6 +32,7 @@ inline constexpr std::uint8_t kSwingPercentMin = 50;
 inline constexpr std::uint8_t kSwingPercentMax = 75;
 inline constexpr std::size_t kPerformanceNameMax = 64;
 inline constexpr std::uint8_t kPerformancePadSlotMax = 63;
+inline constexpr std::size_t kBankPadCount = 16;
 inline constexpr std::size_t kPatternSlotCount = 16;
 inline constexpr std::uint8_t kPatternSlotMin = 0;
 inline constexpr std::uint8_t kPatternSlotMax = 15;
@@ -95,9 +96,42 @@ struct ResampleLineageDerivation {
   bool operator==(const ResampleLineageDerivation&) const = default;
 };
 
+// S11-D9: an installed Sound Set slot records the Set it came from on the
+// existing Asset Lineage carrier. The Set Store bytes stay unchanged and the
+// slot index is the Set slot, never the target Pad Slot of a later edit.
+struct SoundSetLineageSource {
+  std::string set_id;
+  std::string set_version;
+  std::string manifest_sha256;
+  std::uint8_t slot_index{};
+  std::string artifact_sha256;
+
+  bool operator==(const SoundSetLineageSource&) const = default;
+};
+
+struct SoundSetInstallLineageDerivation {
+  bool operator==(const SoundSetInstallLineageDerivation&) const = default;
+};
+
+enum class AssetLineageSourceKind : std::uint8_t {
+  asset_artifact,
+  soundset,
+};
+
+enum class AssetLineageDerivationKind : std::uint8_t {
+  resample,
+  soundset_install,
+};
+
+using AssetLineageSource =
+    std::variant<AssetArtifactLineageSource, SoundSetLineageSource>;
+
+using AssetLineageDerivation =
+    std::variant<ResampleLineageDerivation, SoundSetInstallLineageDerivation>;
+
 struct AssetLineage {
-  AssetArtifactLineageSource source;
-  ResampleLineageDerivation derivation;
+  AssetLineageSource source;
+  AssetLineageDerivation derivation;
 
   bool operator==(const AssetLineage&) const = default;
 };
@@ -292,6 +326,10 @@ foundation::Result<void> validate_performance_events(
     const std::vector<PerformanceEvent>& events);
 foundation::Result<void> validate_performance(
     const Performance& performance);
+AssetLineageSourceKind asset_lineage_source_kind(
+    const AssetLineage& lineage) noexcept;
+AssetLineageDerivationKind asset_lineage_derivation_kind(
+    const AssetLineage& lineage) noexcept;
 foundation::Result<void> validate_asset_lineage(
     const AssetLineage& lineage);
 foundation::Result<AssetLineage> asset_lineage_from_json(
