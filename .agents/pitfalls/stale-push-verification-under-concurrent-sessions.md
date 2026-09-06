@@ -1,7 +1,7 @@
 ---
 id: stale-push-verification-under-concurrent-sessions
 area: docs-governance
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-03
     occurrence: https://github.com/endaye/lmdj/pull/584
@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-09-05
     occurrence: https://github.com/endaye/lmdj/issues/591
     observed_by: claude-code/opus-5
-exit: none
+exit: gate:tests/build/ci_local_preflight_test.py
 ---
 
 # A concurrent session can move a ref between one session's reading of it and that session's use of it, so both pushes and diagnoses can act confidently on a state that no longer exists.
@@ -113,15 +113,18 @@ checkout accepted. Reproducing a defect against a stale checkout proves only
 that the defect once existed; when a fix may plausibly have landed upstream,
 report the fresh-worktree result, not the local one.
 
-No deterministic gate exists yet: the repository cannot tell an authorized
-concurrent collaborator from an unexpected branch mutation, so any check would
-have to encode session ownership the Git model does not carry.
+The diagnosis half has a mechanism, and it is this entry's exit.
+`scripts/local-ci.sh` compares the local `origin/main` ref to the remote's
+`main` before it classifies anything and prints a `stale-base` notice naming
+both SHAs when they differ. The classifier never fetches, so without the notice
+a stale ref classified against a stale base with nothing said -- which is how
+the second occurrence reproduced a defect upstream had already fixed.
+`tests/build/ci_local_preflight_test.py` pins the comparison, its timeout, and
+that it can only notify, never fail. Escalated and resolved in
+[#654](https://github.com/endaye/lmdj/issues/654).
 
-The second recurrence is escalated in
-[#654](https://github.com/endaye/lmdj/issues/654). That reasoning holds for the
-push half, but is weaker for the diagnosis half: "is `origin/main` an
-ancestor of `HEAD`" is decidable without knowing who moved the ref, so a
-pre-flight staleness conclusion in `scripts/local-ci.sh` is the strongest
-candidate exit.
-Until that Issue lands a durable skill or gate exit, the guidance above is the
-only thing standing between a session and a third occurrence.
+The push half stays guidance. The repository cannot tell an authorized
+concurrent collaborator from an unexpected branch mutation, so a push-time
+check could detect that the tip moved but not whether that was legitimate; it
+would have to warn, and a warning that fires on every legitimate concurrent
+rebase is one that gets ignored. Re-read the tip before pushing, as above.
