@@ -134,7 +134,39 @@ clang-18 objects, so every Core lane compiles from scratch. The next is warm.
 
 | Run | Head | Outcome | Core lanes |
 | --- | --- | --- | --- |
-| `34029534657` | `a0556523` (merge of main) | `PR Gate` failure | not executed |
+| `34029534657` | `a0556523` | `PR Gate` failure | not executed |
+| `34039919843` | `c55fb33c` | **success** | all four green |
+| `34050917752` | `b4f2e9c1` | **success** | all four green |
+
+Two full runs green on the new toolchain, per lane:
+
+| Lane | `34039919843` | `34050917752` | ccache hits |
+| --- | ---: | ---: | --- |
+| `core (ubuntu-latest)` | 69 s | 65 s | 120/120 both runs |
+| `Core package` | 298 s | 299 s | disabled by design |
+| `core-coverage` | 504 s | 475 s | 4/117 then 6/117 |
+| `core-asan` | 368 s | 362 s | 117/117 then 116/117 |
+
+The Issue expected a wholesale cache miss on the first run after the pin
+moved. That did not happen, for a reason worth recording: **only
+`core-coverage` pins the compiler.** `core (ubuntu-latest)`, `core-asan` and
+the Nightly `core-stress` lane use the platform default, still GCC 13, so
+their persistent `ccache` entries were never invalidated and they report full
+hits on both runs. There was no cold run to compare against.
+
+`core-coverage` misses almost everything, but it did so before this Task too
+and keeps doing so on the second run: 3.4% then 5.1% hits. That lane is not
+warmed by the persistent cache at all, so its cost is a standing property of
+the lane rather than a cold-start effect of the pin. Its runtime is dominated
+by test execution in any case: a dispatched `ci-self-hosted-core-benchmark` of
+`core_coverage` at `b4f2e9c1` (run `34050980331`, `netcup-lmdj-linux-02`)
+reported `elapsed_seconds=547` beside the two gate runs' 504 s and 475 s. No
+`ccache` warm-up window needs planning for.
+
+That benchmark also reproduced the coverage numbers on CI hardware
+independently of the gate: overall 82.66% lines (34374/41587) and 69.03%
+branches (10089/14616), against 82.66%/68.97% measured by hand on the same
+host in Finding 3, and the gate reported PASS.
 
 Run `34029534657` never reached the Core lanes: `creator-web` failed on
 `creator_web_lifecycle.spec.mjs:424` ("suspend, restart, and reopen clear an
