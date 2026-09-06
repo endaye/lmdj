@@ -330,10 +330,16 @@ export function SampleSurface({
     setCaptureTarget(null);
   }, [projectIdentity, releaseLongSource]);
 
+  // Audio recovery owns decoded long-source memory only. It must not close an
+  // open capture panel: a real focus loss on macOS Safari interrupts the
+  // AudioContext, so recovery arrives in the same moment the panel's own blur
+  // listener stops the recording and retains the take. Clearing the target
+  // here unmounted the panel and discarded that take with no way to commit or
+  // discard it (#738). The panel closes through its own Close/Commit/Discard
+  // controls, exactly as it already does across a Runtime session replacement.
   useEffect(() => {
     if (state.audio.phase !== "recovering") return;
     releaseLongSource();
-    setCaptureTarget(null);
   }, [releaseLongSource, state.audio.phase]);
 
   useEffect(() => {

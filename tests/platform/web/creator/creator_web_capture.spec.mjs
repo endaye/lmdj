@@ -297,6 +297,16 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   await expectProjectRevision(page, 47);
 });
 
+// Boundary: this journey dispatches a synthetic `blur`, which exercises the
+// panel's own stop path but leaves the AudioContext running. A real macOS
+// Safari focus loss also interrupts the context, so the Runtime reports audio
+// recovery in the same moment — and that second half is what discarded the
+// take in #738 while this journey stayed green on `1.0.41.0` and `1.0.42.0`.
+// Driving recovery needs a Runtime state seam that must not exist in the
+// packaged app, so the recovery half is gated by
+// `apps/creator-web/test/workspace_shell.test.tsx`, "audio recovery keeps an
+// open capture panel instead of discarding it". Neither gate replaces the
+// physical #244 rerun.
 test("ordinary Sample focus loss keeps the retained trim dialog visible", async ({page}, testInfo) => {
   test.skip(testInfo.project.name !== GRANTED);
   test.setTimeout(600_000);
