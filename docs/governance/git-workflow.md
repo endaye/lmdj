@@ -180,6 +180,26 @@ authorizes no release mutation. That operator dispatch is the one
 ticket and classifies, so the two never collapse into each other. See
 [`../prd/decisions/2026-08-29-focused-merge-evidence.md`](../prd/decisions/2026-08-29-focused-merge-evidence.md).
 
+Focused `main` has one known blind spot: a lane can stay red across several
+`main` commits when every push in between is docs-only and never selects it,
+and nothing in the Pull Request path sweeps for that. `ci.yml` therefore also
+runs on a daily `schedule` (16:00 UTC), and Change Scope classifies that event
+as unconditionally full, exactly like an empty operator dispatch: the complete
+manifest-selected lane set runs on `main`'s tip once a day, so a red lane is
+seen within a day rather than on the next full-classifying merge (#543). A red
+`Core CI / sweep main` run is the alert; nothing files an Issue for it.
+
+The sweep is a visibility signal and **not** release evidence. Release
+authority still accepts only a `push` or an explicit operator
+`workflow_dispatch` — `tools/release/ci_evidence.py` allows those two events
+and nothing else, so a sweep run recorded in a release intent is refused as a
+policy conflict. That is deliberate rather than an oversight to tidy up here:
+release evidence is tied to an operator action taken for an exact SHA, and
+widening the allow-list to a run nobody asked for is a release-authority
+decision with its own boundary, not a side effect of a CI visibility change.
+The focused-`main` decision itself stands; the sweep covers its cost, it does
+not reverse it.
+
 To upgrade the current head to full CI, apply `ci:full`, then wait for the
 in-progress run to finish or explicitly cancel it. Because label changes do not
 start a separate workflow event, use GitHub's **Re-run all jobs** on the current

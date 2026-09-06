@@ -530,6 +530,49 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             "GENERAL_ROLE_NON_LANE_JOBS deliberately",
         )
 
+    def test_main_is_swept_daily_and_the_sweep_names_itself(self) -> None:
+        """#543: focused main's blind spot is covered once a day, visibly."""
+        source = MAIN_WORKFLOW.read_text(encoding="utf-8")
+        self.assertRegex(
+            source, r'(?m)^  schedule:\n    - cron: "0 16 \* \* \*"',
+            "why: without a scheduled full run a lane can stay red across "
+            "docs-only pushes that never select it; remedy: keep the daily "
+            "schedule trigger on ci.yml",
+        )
+        self.assertIn(
+            "(github.event_name == 'schedule' && 'sweep main')", source,
+            "why: a red sweep must be its own signal in the Actions list and in "
+            "the failure notification; remedy: keep the sweep's run-name",
+        )
+
+    def test_the_sweep_is_not_claimed_as_release_evidence(self) -> None:
+        """The documents and the verifier must tell one story.
+
+        `tools/release/ci_evidence.py` allows `push` and `workflow_dispatch`
+        and nothing else, so a `schedule` run recorded in a release intent is
+        refused as a policy conflict. Widening that allow-list is a
+        release-authority decision; until one is taken, no document may
+        promise otherwise.
+        """
+        evidence = (REPO_ROOT / "tools/release/ci_evidence.py").read_text(encoding="utf-8")
+        self.assertIn('_ALLOWED_EVENTS = frozenset(("push", "workflow_dispatch"))', evidence)
+        workflow_doc = (REPO_ROOT / "docs/governance/git-workflow.md").read_text(encoding="utf-8")
+        self.assertIn("The sweep is a visibility signal and **not** release evidence.", workflow_doc)
+
+    def test_the_policy_does_not_claim_main_always_runs_full(self) -> None:
+        """The sweep's premise and the policy must not contradict each other.
+
+        A docs-only push classifies focused (1 of 14 lanes); the sentence that
+        said `main` always runs the full manifest predates the focused-`main`
+        decision and, left alone, would have this file asserting both.
+        """
+        policy = (REPO_ROOT / "docs/quality/core-test-policy.md").read_text(encoding="utf-8")
+        self.assertNotIn(
+            "`main` and manual dispatch always run the full manifest", policy,
+            "why: a docs-only push classifies focused, which is what #543 exists "
+            "for; remedy: describe push classification as exact-range",
+        )
+
     def test_portal_role_is_declared_on_the_called_workflow(self) -> None:
         """Portal routes where a reusable workflow can actually be routed.
 
