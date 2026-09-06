@@ -296,8 +296,13 @@ passes the remaining budget to every REST transport timeout. It requires
 PR/main/merge SHA/tree equality to converge and never repeats the merge mutation.
 
 An open PR whose latest `merge:queue` event is at least 20 minutes old, with no
-associated queued or in-progress queue run since that event, has the
-`queue-stalled` signature. Inspect the workflow run, pending capacity, manual
+live queue run since that event, has the `queue-stalled` signature. A run is
+live in any of GitHub's `queued`, `in_progress`, `pending`, `waiting` or
+`requested` statuses; `pending` is what a worker held behind the head of the
+`lmdj-merge-main` group under `queue: max` reports, and it is a worker waiting
+its turn, not a stall. Listing only `queued` and `in_progress` was the defect in
+#311 — every item behind a long validation lost its authorization at the
+20-minute mark while still in line. Inspect the workflow run, pending capacity, manual
 cancellation/platform timeout, and controller report in that order. The
 scheduled watchdog re-reads the head, removes the stale label, and emits one
 idempotent `queue-stalled` review marker. Reconcile live state before re-adding
