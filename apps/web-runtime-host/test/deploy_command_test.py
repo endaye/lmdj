@@ -1828,7 +1828,14 @@ def verify_distribution(dist_root, repo_root):
                 deadline = time.monotonic() + 10
                 while not self.block_ready.exists() and process.poll() is None:
                     if time.monotonic() >= deadline:
-                        process.kill()
+                        # The whole group, not the leader. `start_new_session`
+                        # made the command a session leader; killing only it
+                        # leaves the deploy script's children -- the blocked gh
+                        # stub, the fake Playwright -- alive into the next
+                        # subcase, which then inherits their load and their
+                        # temp state (#454).
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait(timeout=5)
                         self.fail("blocked gh download did not become ready")
                     time.sleep(0.02)
                 os.killpg(process.pid, selected_signal)
@@ -1860,7 +1867,14 @@ def verify_distribution(dist_root, repo_root):
                 deadline = time.monotonic() + 15
                 while not self.block_ready.exists() and process.poll() is None:
                     if time.monotonic() >= deadline:
-                        process.kill()
+                        # The whole group, not the leader. `start_new_session`
+                        # made the command a session leader; killing only it
+                        # leaves the deploy script's children -- the blocked gh
+                        # stub, the fake Playwright -- alive into the next
+                        # subcase, which then inherits their load and their
+                        # temp state (#454).
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait(timeout=5)
                         self.fail("post-publish Playwright did not become ready")
                     time.sleep(0.02)
                 os.killpg(process.pid, selected_signal)
@@ -2125,6 +2139,40 @@ def main(argv: list[str]) -> int:
     if shards == 1:
         unittest.main(argv=[argv[0]])
     return run_sharded(shards)
+
+
+class HarnessIsolationTest(unittest.TestCase):
+    """The harness must not be able to contaminate its own next subcase (#454).
+
+    Lives in this file rather than in tests/build so it runs in the same lane
+    as the harness it pins: a change here reaches the Deploy contract lane,
+    and a contract elsewhere would not run on that change.
+    """
+
+    def test_every_session_leader_is_reaped_as_a_group(self) -> None:
+        source = Path(__file__).read_text(encoding="utf-8")
+        self.assertIn("start_new_session=True", source)
+        # Match the call as a statement, so this test's own prose about the
+        # call does not trip it (see gate-matches-its-own-prose in the ledger).
+        self.assertIsNone(
+            re.search(r"^\s*process\.kill\(\)\s*$", source, re.MULTILINE),
+            msg=("why: the command is a session leader, so killing only it leaves "
+                 "the deploy script's children -- blocked gh stub, fake Playwright "
+                 "-- alive into the next subcase, where they consume its readiness "
+                 "budget and its temp state; remedy: os.killpg(process.pid, ...) "
+                 "followed by process.wait(), never process.kill()"),
+        )
+        # Statements only, again: this test's own text would otherwise count
+        # as a third occurrence and hide the loss of one branch.
+        group_kills = re.findall(
+            r"^\s*os\.killpg\(process\.pid, signal\.SIGKILL\)\s*$", source, re.MULTILINE
+        )
+        self.assertEqual(
+            len(group_kills), 2,
+            "why: exactly two readiness-timeout branches spawn a session leader, "
+            "and each must kill its group on timeout; remedy: keep one "
+            "os.killpg(...SIGKILL) statement per branch, no more and no fewer",
+        )
 
 
 if __name__ == "__main__":
