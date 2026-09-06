@@ -40,9 +40,10 @@ permissions:
 jobs:
   inventory:
     name: Host inventory (${{ inputs.role }})
-    # The role is selected by the dispatch input. `ci-web-heavy` is netcup-only,
-    # so it is the way to inventory netcup specifically; `ci-core` is
-    # Contabo-only and gives the baseline to compare against.
+    # The role is selected by the dispatch input. `ci-web-heavy` and `ci-core`
+    # are both netcup-only since the 2026-09-06 move (#676); `ci-general` spans
+    # both hosts, so a `ci-general` dispatch that lands on `shared-with-staging`
+    # is the way to read Contabo. Repeat a dispatch if it lands elsewhere.
     runs-on:
       - self-hosted
       - Linux
