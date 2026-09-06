@@ -73,7 +73,7 @@
         "scripts/core-coverage.sh check"
       ],
       "ci_only": [
-        "apt-get installs clang-22 and llvm-22 and pins CC/CXX with /usr/lib/llvm-22/bin on PATH",
+        "pins CC/CXX to clang-22 with /usr/lib/llvm-22/bin on PATH after verifying the preinstalled toolchain with command -v",
         "git lfs checkout -- tests/fixtures rehydrates the complete Core test fixture corpus"
       ]
     },
