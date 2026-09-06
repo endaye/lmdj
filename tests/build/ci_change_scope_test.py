@@ -411,9 +411,14 @@ class ChangeScopeTest(unittest.TestCase):
         # it. The scan reads literal paths only: a dynamically built path is
         # invisible to it, so this gate closes the common case rather than
         # proving the general one.
+        # `.agents/` joins `docs/`: the Pitfall Ledger lint reads
+        # `.agents/pitfalls`, and a ledger-only Pull Request routed to
+        # `docs_static` never ran it -- the third occurrence of the pitfall
+        # this test exits (#685). A captured path that is a directory is given
+        # its trailing slash so prefix rules classify it.
         read_sites = re.compile(
-            r"""(?:readRepo|readFile)\s*\(\s*["'`](docs/[A-Za-z0-9_./-]+)"""
-            r"""|(?:REPO_ROOT|ROOT)\s*/\s*["'](docs/[A-Za-z0-9_./-]+)["']"""
+            r"""(?:readRepo|readFile)\s*\(\s*["'`]((?:docs|\.agents)/[A-Za-z0-9_./-]+)"""
+            r"""|(?:REPO_ROOT|ROOT)\s*/\s*["']((?:docs|\.agents)/[A-Za-z0-9_./-]+)["']"""
         )
         inventory = subprocess.run(
             ["git", "ls-files", "tests", "apps", "-z"],
@@ -435,6 +440,8 @@ class ChangeScopeTest(unittest.TestCase):
             for document in sorted(documents):
                 if not (ROOT / document).exists():
                     continue
+                if (ROOT / document).is_dir():
+                    document = document.rstrip("/") + "/"
                 missing = source_lanes - self.lanes_for_path(document)
                 if missing:
                     gaps.append(
