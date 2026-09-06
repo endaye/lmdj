@@ -262,20 +262,21 @@ class ReleaseModelTest(unittest.TestCase):
         )
         stage10 = ledger.intent_for_tag("lmdj-v1.0.42.0")
         self.assertIsNotNone(stage10)
-        # Its target is the squash merge of #664, which carries both the Task 10
-        # version integration and the Task 11 immutable snapshot, exactly as
-        # 1.0.40.0 above records #420. The Integration Queue merges with
-        # GITHUB_TOKEN, so the squash produced no push-event Core CI run and the
-        # exact-main full run was dispatched on that same SHA.
+        # Task 12 binds TARGET to the Task 11 squash on protected main, which
+        # is the first main commit that contains the 1.0.42.0 squash witness.
+        # The Task 10 squash (0ffa77c0) froze the snapshot but does not carry
+        # that witness file. The Integration Queue merges with GITHUB_TOKEN, so
+        # the squash produced no push-event Core CI run and the exact-main full
+        # run was dispatched on that same SHA.
         self.assertEqual(stage10.disposition.value, "releasable")  # type: ignore[union-attr]
         self.assertEqual(stage10.channel, "canary")  # type: ignore[union-attr]
         self.assertEqual(stage10.profile, "web-hosts")  # type: ignore[union-attr]
         self.assertEqual(  # type: ignore[union-attr]
             stage10.target_revision,
-            "0ffa77c0c4f786dc5d9b285f272abe1725250b8d",
+            "59cc202b3f4d772814c8de8c1d0c0e6203485a11",
         )
         self.assertEqual(stage10.snapshot, "1.0.42.0")  # type: ignore[union-attr]
-        self.assertEqual(stage10.merged_main_run_id, 33995729112)  # type: ignore[union-attr]
+        self.assertEqual(stage10.merged_main_run_id, 33996811880)  # type: ignore[union-attr]
         self.assertEqual(  # type: ignore[union-attr]
             stage10.evidence_paths,
             ("docs/release-evidence/2026-09-06-lmdj-1.0.42.0-canary-release-intent.md",),
