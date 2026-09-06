@@ -254,6 +254,18 @@ unselected-skipped results before native-heavy work is admitted. macOS stays
 parallel and outside this gate: a selected macOS failure remains a PR Gate
 primary failure, but does not block Linux heavy work.
 
+The advisory Claude review also runs in preflight, as a `needs:` of
+`Pre-heavy Gate`, and contributes one admission condition that is not a
+verdict: the gate reads how many review threads on the Pull Request a human
+has not yet resolved, and holds native-heavy work while any is open. The
+review's own result is never consulted — it is `continue-on-error`, appears in
+neither `lane_jobs` nor `self_hosted_jobs`, and a reviewer that has died
+posts no threads and admits; `advisory-review-liveness.yml` is what notices
+that. The placement is the point. A finding costs one reply to resolve and a
+native-heavy set costs about 185 minutes, so the threads are held before the
+expensive work rather than at merge, where `required_conversation_resolution`
+held the same threads after it had already run (#659).
+
 The five jobs sharing the repository-wide `lmdj-native-heavy` `queue: max`
 capacity group run in sparse order: Portal, Core Ubuntu, Package, Coverage,
 then ASan. Each later job waits only for selected earlier jobs; an unselected

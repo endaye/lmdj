@@ -29,7 +29,7 @@ entry. Every entry has YAML frontmatter with:
   prefix;
 - `status`: `open` or `absorbed`;
 - `recurrences`: a YAML list where every occurrence contains an ISO date, a
-  GitHub PR or commit link, and `observed_by` naming the agent/model that hit it
+  GitHub PR, Issue, commit or Actions run link, and `observed_by` naming the agent/model that hit it
   (use `unknown` only when surviving evidence cannot attribute it);
 - `exit`: `none`, `skill:<path>`, or `gate:<test path>`.
 

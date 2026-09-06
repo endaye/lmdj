@@ -141,6 +141,11 @@ RELEASE_NODE_CONSUMERS = (
     "macos-fallback",
 )
 FORMAL_RESULTS = FORMAL_LANE_JOBS + SUPPORT_JOBS
+# On the general role, guards no lane, contributes no result (#659). Counted in
+# the literal-role scan so the closed set stays closed without calling the
+# reviewer a lane; ordered before Pre-heavy Gate so the gate can read the
+# threads it left, never its result.
+GENERAL_ROLE_NON_LANE_JOBS = ("advisory-review",)
 GATING_PREFLIGHT_JOBS = (
     "docs-static", "ci-contract", "deploy-contract", "chameleon-lab",
     "web-toolchain-conformance", "web-runtime-host", "creator-web",
@@ -512,7 +517,11 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                     set(re.findall(r"lanes\.([a-z_]+)", job)), {lane}
                 )
         self.assertEqual(
-            self.main_source.count("ci-general"), len(GENERAL_JOBS)
+            self.main_source.count("ci-general"),
+            len(GENERAL_JOBS) + len(GENERAL_ROLE_NON_LANE_JOBS),
+            "why: every literal ci-general must be a reviewed lane or a named "
+            "non-lane job; remedy: extend GENERAL_JOBS or "
+            "GENERAL_ROLE_NON_LANE_JOBS deliberately",
         )
 
     def test_portal_role_is_declared_on_the_called_workflow(self) -> None:
@@ -684,9 +693,13 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_pre_heavy_gate_is_closed_hosted_preflight_admission(self) -> None:
         job = self.workflow_job("pre-heavy-gate")
         self.assertIn("fetch-depth: 0", job)
+        # The reviewer is a needs: for ordering only. It is absent from
+        # PREFLIGHT_RESULTS_JSON (asserted below against GATING_PREFLIGHT_JOBS
+        # alone), so the gate can read the threads it left without ever
+        # reading its result.
         self.assertEqual(
             self.job_needs("pre-heavy-gate"),
-            {"change-scope", *GATING_PREFLIGHT_JOBS},
+            {"change-scope", *GATING_PREFLIGHT_JOBS, *GENERAL_ROLE_NON_LANE_JOBS},
         )
         self.assertIn("if: ${{ !cancelled() }}", job)
         self.assertIn("runs-on: ubuntu-24.04", job)

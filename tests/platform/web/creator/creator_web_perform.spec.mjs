@@ -541,9 +541,27 @@ async function openProjectSuccessor(context, url) {
   return successor;
 }
 
+function killProcessGroup(child) {
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
+async function removeProfile(userDataDir) {
+  // Second line of defence for the same race: Node retries ENOTEMPTY/EBUSY
+  // with linear backoff instead of failing the test in its `finally`.
+  await rm(userDataDir, {recursive: true, force: true, maxRetries: 10, retryDelay: 200});
+}
+
 async function launchCrashableCreatorContext(userDataDir) {
   const activePortPath = join(userDataDir, "DevToolsActivePort");
   await rm(activePortPath, {force: true});
+  // Own process group: Chromium's renderer, GPU and utility children are
+  // separate processes that keep writing `<profile>/Default/` for a moment
+  // after the browser process dies. Killing only the parent races the
+  // fixture's `rm` against them (#684); killing the group does not.
   const child = spawn(chromium.executablePath(), [
     "--headless",
     "--no-sandbox",
@@ -551,7 +569,7 @@ async function launchCrashableCreatorContext(userDataDir) {
     `--user-data-dir=${userDataDir}`,
     "--remote-debugging-port=0",
     "about:blank",
-  ], {stdio: "ignore"});
+  ], {stdio: "ignore", detached: true});
   let endpoint = null;
   for (let attempt = 0; attempt < 100 && endpoint === null; attempt += 1) {
     try {
@@ -562,7 +580,7 @@ async function launchCrashableCreatorContext(userDataDir) {
     }
   }
   if (endpoint === null) {
-    child.kill("SIGKILL");
+    killProcessGroup(child);
     throw new Error("Crashable Chromium did not publish its DevTools endpoint");
   }
   let browser = null;
@@ -574,12 +592,12 @@ async function launchCrashableCreatorContext(userDataDir) {
     }
   }
   if (browser === null) {
-    child.kill("SIGKILL");
+    killProcessGroup(child);
     throw new Error("Crashable Chromium DevTools endpoint was unreachable");
   }
   const context = browser.contexts()[0];
   if (context === undefined) {
-    child.kill("SIGKILL");
+    killProcessGroup(child);
     throw new Error("Crashable Chromium default context is unavailable");
   }
   const page = context.pages()[0] ?? await context.newPage();
@@ -590,7 +608,7 @@ async function launchCrashableCreatorContext(userDataDir) {
     async kill() {
       if (child.exitCode === null) {
         const exited = once(child, "exit");
-        child.kill("SIGKILL");
+        killProcessGroup(child);
         await exited;
       }
       await browser.close().catch(() => {});
@@ -1128,7 +1146,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   } finally {
     await ownerProcess?.kill().catch(() => {});
     await applyingProcess?.kill().catch(() => {});
-    await rm(applyProfile, {recursive: true, force: true});
+    await removeProfile(applyProfile);
   }
 
   const discardProfile = await mkdtemp(join(tmpdir(), "lmdj-perform-owner-loss-discard-"));
@@ -1165,7 +1183,7 @@ test("discard deletes its temporary WAV and owner-loss recovery applies or disca
   } finally {
     await discardOwnerProcess?.kill().catch(() => {});
     await discardingProcess?.kill().catch(() => {});
-    await rm(discardProfile, {recursive: true, force: true});
+    await removeProfile(discardProfile);
   }
 });
 
@@ -1303,7 +1321,7 @@ test("owner process loss leaves one recoverable recording and no second capture 
   } finally {
     await ownerProcess?.kill().catch(() => {});
     await successorProcess?.kill().catch(() => {});
-    await rm(profile, {recursive: true, force: true});
+    await removeProfile(profile);
   }
 });
 
