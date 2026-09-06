@@ -17,6 +17,25 @@ cd references/demos/ascii-matrix-camera
 python3 -m http.server 4173
 ```
 
+### launchpad-pad-exploded
+
+主流 pad 控制器（Akai MPC、Novation Launchpad、Ableton Push 3、NI Maschine）
+pad 机构的 3D 爆炸图与传感技术方案。当前价值是参考：
+
+- 整机与单 pad 两种比例的分层爆炸视图。
+- 胶粒 / FSR 薄膜 / 压电 / 双触点 / 电容 / 霍尔 / 电感七类传感方案的取舍。
+- 带出处的单 pad 工程参数（FSR 数据手册、硅胶键垫设计指南、备件目录、专利）。
+- FSR 分压 → ADC → Δt 速度的敲击模拟。
+
+使用时先进入：
+
+```bash
+cd references/demos/launchpad-pad-exploded
+python3 -m http.server 4173
+```
+
+注意：3D 几何为示意性重建，标为"示意"的数值没有一手出处。
+
 ### lmdj-song-pipeline
 
 高嘉丰提供的音频 pipeline 参考项目。当前价值是参考：
