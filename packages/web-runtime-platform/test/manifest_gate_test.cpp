@@ -227,11 +227,26 @@ void test_creator_contract_and_compatibility_inventory_are_bound() {
       {{"host_id", runtime_host.at("id")},
        {"host_version", runtime_host.at("version")}},
   });
+  // Stage 10: the Creator inventory ships exactly one Perform master-tap
+  // processor; without it the Creator manifest is incomplete.
+  check_rejected(creator);
+  creator["assets"].push_back(
+      asset("perform-master-tap", '9', ".js", "perform_master_tap_worklet"));
   auto encoded = lmdj::foundation::canonical_json(creator);
   ManifestGate accepted;
   LMDJ_CHECK(
       accepted.initialize(as_bytes(encoded), sha256(encoded), expected()) ==
       ManifestGateStatus::accepted);
+
+  auto duplicate_tap = creator;
+  duplicate_tap["assets"].push_back(
+      asset("perform-master-tap", 'a', ".js", "perform_master_tap_worklet"));
+  check_rejected(duplicate_tap);
+  // The Web Runtime Host distribution ships no tap; a stray entry is a defect.
+  auto runtime_with_tap = manifest_json();
+  runtime_with_tap["assets"].push_back(
+      asset("perform-master-tap", '9', ".js", "perform_master_tap_worklet"));
+  check_rejected(runtime_with_tap);
 
   creator["distribution_contract"] = runtime_host.at("distribution_contract");
   check_rejected(creator);

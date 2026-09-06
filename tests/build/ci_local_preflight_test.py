@@ -214,8 +214,16 @@ class LaneTableContractTest(unittest.TestCase):
         """The wiring assertions above say the code is there; this says it works.
 
         A throwaway repository whose only change is adding a routing rule for a
-        file the same branch introduces. CI classifies that `focused`; before
-        this fix the pre-flight classified it `full`.
+        file the same branch introduces, committed. CI classifies that
+        `focused`; before #608 the pre-flight classified it `full`.
+
+        This drives `local_preflight.build_plan`, not the classifier. An
+        earlier revision computed `policy_edit_preserving` itself and passed it
+        to `classify()`, which is the path `ci_scope_policy_differential_test`
+        already covers -- so it would have stayed green if `build_plan` stopped
+        deriving the exemption, the exact miss #608 fixed. Found by advisory
+        review on #608 (#609). The uncommitted case is
+        `ManifestReuseTest.test_uncommitted_preserving_policy_edit_classifies_focused`.
         """
         repository = TemporaryRepository()
         try:
@@ -239,32 +247,23 @@ class LaneTableContractTest(unittest.TestCase):
             )
             repository.write("tests/build/ci_probe_helper.py", "# probe\n")
             repository.commit("add a rule for a path this branch introduces")
-            head_sha = git(repository.path, "rev-parse", "HEAD").strip()
 
-            base_policy = self.classifier.read_merge_base_policy(
-                repository.path, base_sha, head_sha
+            preflight = load_module("local_preflight_e2e", PREFLIGHT_PATH)
+            original_policy_path = preflight.POLICY_PATH
+            try:
+                preflight.POLICY_PATH = repository.path / "scripts/ci/scope_policy.json"
+                plan = preflight.build_plan(repository.path, base_sha)
+            finally:
+                preflight.POLICY_PATH = original_policy_path
+            self.assertEqual(
+                plan["mode"], "focused",
+                msg=(
+                    "why: the pre-flight must derive policy_edit_preserving "
+                    "itself before classifying, as change_scope.main does, or it "
+                    "reports full for a change CI classifies focused; remedy: "
+                    f"keep the differential in build_plan (reasons: {plan.get('reasons')})"
+                ),
             )
-            self.assertIsNotNone(base_policy, "the merge-base policy must be readable")
-            preserving, reason = (
-                self.classifier.policy_edit_is_classification_preserving(
-                    base_policy,
-                    head_policy,
-                    self.classifier.read_merge_base_tracked_paths(
-                        repository.path, base_sha, head_sha
-                    ),
-                )
-            )
-            self.assertTrue(preserving, reason)
-
-            inventory = self.classifier.read_git_inventory(
-                repository.path, base_sha, head_sha
-            )
-            manifest = self.classifier.classify(
-                head_policy, inventory, base_sha=base_sha, head_sha=head_sha,
-                event_name="pull_request", draft=False, labels=(),
-                policy_edit_preserving=preserving,
-            )
-            self.assertEqual(manifest["mode"], "focused", manifest["reasons"])
         finally:
             repository.close()
 

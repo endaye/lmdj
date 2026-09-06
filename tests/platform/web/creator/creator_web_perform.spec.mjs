@@ -444,7 +444,12 @@ async function installDependencyScenario(page, scenario = "none") {
 async function openCandidate(page, scenario = "none") {
   await installDependencyScenario(page, scenario);
   const candidate = await routeCandidateIdentity(page);
-  await page.goto(candidate.routed ? `${candidate.origin}/index.html` : "/index.html");
+  // Resolve the formal (non-routed) entry against the proof server explicitly.
+  // Crash-recovery journeys drive pages from connectOverCDP contexts, which
+  // carry no Playwright baseURL, so a relative path cannot be navigated there.
+  await page.goto(candidate.routed
+    ? `${candidate.origin}/index.html`
+    : new URL("/index.html", process.env.LMDJ_CREATOR_WEB_BASE_URL).href);
   await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
     timeout: 30_000,
   });

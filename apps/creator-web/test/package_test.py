@@ -106,7 +106,8 @@ class CreatorPackageTest(unittest.TestCase):
             "const sampleEditorProof = "
             + json.dumps(SAMPLE_EDITOR_MARKERS)
             + "; console.log(sampleEditorProof);\n"
-            + 'const captureWorklet = "/assets/capture_worklet-fixture.js";\n',
+            + 'const captureWorklet = "/assets/capture_worklet-fixture.js";\n'
+            + 'const performTap = "/assets/performance_master_tap_worklet-fixture.js";\n',
             encoding="utf-8",
             newline="\n",
         )
@@ -114,6 +115,13 @@ class CreatorPackageTest(unittest.TestCase):
         # the packaging tool rebinds main's reference to its hashed name.
         (self.ui / "assets/capture_worklet-fixture.js").write_text(
             "registerProcessor('lmdj-capture-recorder', class {});\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        # Stage 10: the platform Perform master-tap processor is the sixth
+        # same-origin asset, bound from main the same way.
+        (self.ui / "assets/performance_master_tap_worklet-fixture.js").write_text(
+            "registerProcessor('lmdj-perform-master-tap', class {});\n",
             encoding="utf-8",
             newline="\n",
         )
@@ -191,8 +199,48 @@ class CreatorPackageTest(unittest.TestCase):
                 "runtime_wasm",
                 "host_style",
                 "capture_worklet",
+                "perform_master_tap_worklet",
             ],
         )
+        tap = [entry for entry in manifest["assets"] if entry["role"] == "perform_master_tap_worklet"]
+        self.assertEqual(len(tap), 1)
+        self.assertTrue(tap[0]["path"].startswith("assets/perform-master-tap."))
+        self.assertTrue(tap[0]["path"].endswith(".js"))
+        main = [entry for entry in manifest["assets"] if entry["role"] == "host_main"][0]
+        main_text = (first / main["path"]).read_text(encoding="utf-8")
+        self.assertIn(f'"/{tap[0]["path"]}"', main_text)
+        self.assertNotIn("performance_master_tap_worklet-fixture", main_text)
+
+    def test_requires_exactly_one_perform_master_tap_worklet(self) -> None:
+        destination = self.root / "dist"
+        tap = self.ui / "assets/performance_master_tap_worklet-fixture.js"
+        payload = tap.read_bytes()
+        tap.unlink()
+        with self.assertRaisesRegex(
+            self.module.PackageError, "exactly one Perform master-tap worklet"
+        ):
+            self.build(destination)
+        tap.write_bytes(payload)
+        (self.ui / "assets/performance_master_tap_worklet-second.js").write_bytes(payload)
+        with self.assertRaisesRegex(
+            self.module.PackageError, "exactly one Perform master-tap worklet"
+        ):
+            self.build(destination)
+        (self.ui / "assets/performance_master_tap_worklet-second.js").unlink()
+        main = self.ui / "assets/index-source.js"
+        source = main.read_text(encoding="utf-8")
+        main.write_text(
+            source.replace("performance_master_tap_worklet-fixture", "other-fixture"),
+            encoding="utf-8",
+            newline="\n",
+        )
+        with self.assertRaisesRegex(
+            self.module.PackageError, "master-tap worklet binding must occur exactly once"
+        ):
+            self.build(destination)
+        main.write_text(source, encoding="utf-8", newline="\n")
+        self.build(destination)
+        self.module.verify_distribution(destination, self.repo)
 
     def test_dirty_source_fails_before_distribution_mutation(self) -> None:
         destination = self.root / "dist"

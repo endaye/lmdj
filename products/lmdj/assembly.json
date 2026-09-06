@@ -2,7 +2,7 @@
   "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
-    "version": "1.0.41.0"
+    "version": "1.0.42.0"
   },
   "provider_policy": {
     "allowed_regions": [
@@ -22,19 +22,19 @@
     },
     {
       "id": "authoring-domain",
-      "version": "1.0.0"
+      "version": "2.0.0"
     },
     {
       "id": "project-io",
-      "version": "1.0.1"
+      "version": "2.0.0"
     },
     {
       "id": "project-cooker",
-      "version": "1.0.0"
+      "version": "1.1.0"
     },
     {
       "id": "audio-runtime",
-      "version": "2.0.1"
+      "version": "3.0.0"
     },
     {
       "id": "provider-sdk",
@@ -42,33 +42,33 @@
     },
     {
       "id": "application-facade",
-      "version": "2.1.1"
+      "version": "3.0.0"
     },
     {
       "id": "web-runtime-platform",
-      "version": "2.0.1"
+      "version": "3.0.0"
     }
   ],
   "hosts": [
     {
       "id": "core-cli",
-      "version": "2.0.0"
+      "version": "3.0.0"
     },
     {
       "id": "core-mcp",
-      "version": "2.0.0"
+      "version": "3.0.0"
     },
     {
       "id": "native-host",
-      "version": "2.0.0"
+      "version": "3.0.0"
     },
     {
       "id": "web-runtime-host",
-      "version": "2.1.1"
+      "version": "3.0.0"
     },
     {
       "id": "creator-web",
-      "version": "2.1.1"
+      "version": "3.0.0"
     }
   ],
   "providers": [
@@ -99,6 +99,10 @@
     {
       "id": "lmdj.project.v3",
       "version": "3.0.0"
+    },
+    {
+      "id": "lmdj.project.v4",
+      "version": "4.0.0"
     },
     {
       "id": "lmdj.project-bundle.v1",
