@@ -73,6 +73,19 @@ ALLOWED_ASSET_ROLES = frozenset(
 SINGLETON_ASSET_ROLES = frozenset(
     ("host_main", "host_style", "runtime_script", "runtime_wasm")
 )
+CREATOR_CURRENT_ASSET_ROLES = frozenset(
+    (
+        "capture_worklet",
+        "host_main",
+        "host_style",
+        "perform_master_tap_worklet",
+        "runtime_script",
+        "runtime_wasm",
+    )
+)
+CREATOR_LEGACY_ASSET_ROLES = CREATOR_CURRENT_ASSET_ROLES - {
+    "perform_master_tap_worklet",
+}
 DEPLOY_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 MAX_INDEX_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -462,6 +475,16 @@ def _manifest_identity(
     return product_build, host_version
 
 
+def _creator_required_roles(host_version: str) -> frozenset[str]:
+    """Creator 3.0.0 added perform_master_tap_worklet; 2.x priors keep five roles."""
+    major, _, _ = host_version.partition(".")
+    if not major.isdigit():
+        raise SmokeError("Host version is invalid")
+    if int(major) >= 3:
+        return CREATOR_CURRENT_ASSET_ROLES
+    return CREATOR_LEGACY_ASSET_ROLES
+
+
 def _validate_manifest(
     manifest: object,
     *,
@@ -520,23 +543,14 @@ def _validate_manifest(
         role_counts[role] += 1
         validated.append(entry)
     required_singletons = (
-        frozenset(
-            (
-                "capture_worklet",
-                "host_main",
-                "host_style",
-                "perform_master_tap_worklet",
-                "runtime_script",
-                "runtime_wasm",
-            )
-        )
+        _creator_required_roles(expected_host_version)
         if expected_host_id == "creator-web"
         else SINGLETON_ASSET_ROLES
     )
     if any(role_counts[role] != 1 for role in required_singletons):
         raise SmokeError("manifest required asset role inventory is invalid")
     if expected_host_id == "creator-web":
-        if len(validated) != 6 or any(
+        if len(validated) != len(required_singletons) or any(
             role_counts[role] != 0
             for role in ALLOWED_ASSET_ROLES - required_singletons
         ):
