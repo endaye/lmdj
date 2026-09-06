@@ -231,6 +231,246 @@ void test_artifact_and_unknown_key_faults_use_manifest_invalid() {
       "soundset_manifest_invalid");
 }
 
+void test_every_root_refusal_is_reachable() {
+  expect_parse_fail(
+      "[]", ErrorCode::invalid_argument, "soundset_manifest_invalid");
+  expect_parse_fail(
+      "{", ErrorCode::invalid_argument, "soundset_manifest_invalid");
+  expect_parse_fail(
+      std::string("{\"contract\":\"\xff\"}"),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto wrong_contract = valid_object();
+  wrong_contract["contract"] = "lmdj.soundset.v2";
+  expect_parse_fail(
+      dump(wrong_contract),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto contract_not_string = valid_object();
+  contract_not_string["contract"] = 1;
+  expect_parse_fail(
+      dump(contract_not_string),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto uppercase_set_id = valid_object();
+  uppercase_set_id["set_id"] =
+      uppercase_set_id["set_id"].get<std::string>().substr(0, 8) +
+      "-AAAA-4aaa-8aaa-aaaaaaaaaaaa";
+  expect_parse_fail(
+      dump(uppercase_set_id),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto set_id_not_string = valid_object();
+  set_id_not_string["set_id"] = 1;
+  expect_parse_fail(
+      dump(set_id_not_string),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto version_not_semver = valid_object();
+  version_not_semver["version"] = "1.0";
+  expect_parse_fail(
+      dump(version_not_semver),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto version_not_string = valid_object();
+  version_not_string["version"] = 1;
+  expect_parse_fail(
+      dump(version_not_string),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto empty_name = valid_object();
+  empty_name["name"] = "";
+  expect_parse_fail(
+      dump(empty_name), ErrorCode::invalid_argument, "soundset_manifest_invalid");
+
+  auto empty_publisher = valid_object();
+  empty_publisher["publisher"] = "";
+  expect_parse_fail(
+      dump(empty_publisher),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto empty_description = valid_object();
+  empty_description["description"] = "";
+  expect_parse_fail(
+      dump(empty_description),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto description_not_string = valid_object();
+  description_not_string["description"] = 1;
+  expect_parse_fail(
+      dump(description_not_string),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto empty_key = valid_object();
+  empty_key["key"] = "";
+  expect_parse_fail(
+      dump(empty_key), ErrorCode::invalid_argument, "soundset_manifest_invalid");
+
+  auto bpm_not_integer = valid_object();
+  bpm_not_integer["bpm"] = "120";
+  expect_parse_fail(
+      dump(bpm_not_integer),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto bpm_below_range = valid_object();
+  bpm_below_range["bpm"] = 39;
+  expect_parse_fail(
+      dump(bpm_below_range),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto slots_not_array = valid_object();
+  slots_not_array["slots"] = "sixteen";
+  expect_parse_fail(
+      dump(slots_not_array),
+      ErrorCode::invalid_argument,
+      "soundset_slot_invalid");
+}
+
+void test_optional_root_and_slot_fields_round_trip() {
+  auto complete = valid_object();
+  complete["description"] = "Night kit";
+  complete["bpm"] = 120;
+  complete["key"] = "Am";
+  complete["slots"][0]["bpm"] = 90;
+  complete["slots"][0]["key"] = "C";
+  const auto bytes = dump(complete);
+  const auto parsed = parse_soundset_manifest(bytes);
+  LMDJ_CHECK(parsed.has_value());
+  const auto& manifest = parsed.value();
+  LMDJ_CHECK(manifest.description.value() == "Night kit");
+  LMDJ_CHECK(manifest.bpm.value() == 120);
+  LMDJ_CHECK(manifest.key.value() == "Am");
+  LMDJ_CHECK(manifest.canonical_bytes == bytes);
+  const auto& occupied = manifest.slots.at(0).occupied;
+  LMDJ_CHECK(occupied.has_value());
+  LMDJ_CHECK(occupied->bpm.value() == 90);
+  LMDJ_CHECK(occupied->key.value() == "C");
+}
+
+void test_every_license_artifact_and_slot_refusal_is_reachable() {
+  auto license_extra_key = valid_object();
+  license_extra_key["license"]["extra"] = true;
+  expect_parse_fail(
+      dump(license_extra_key),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto empty_spdx = valid_object();
+  empty_spdx["license"]["spdx_id"] = "";
+  expect_parse_fail(
+      dump(empty_spdx), ErrorCode::invalid_argument, "soundset_manifest_invalid");
+
+  auto empty_copyright = valid_object();
+  empty_copyright["license"]["copyright"] = "";
+  expect_parse_fail(
+      dump(empty_copyright),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto attribution_not_string = valid_object();
+  attribution_not_string["license"]["attribution"] = 1;
+  expect_parse_fail(
+      dump(attribution_not_string),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto artifact_extra_key = valid_object();
+  artifact_extra_key["slots"][0]["artifact"]["extra"] = true;
+  expect_parse_fail(
+      dump(artifact_extra_key),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto sha_not_string = valid_object();
+  sha_not_string["slots"][0]["artifact"]["sha256"] = 1;
+  expect_parse_fail(
+      dump(sha_not_string),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto empty_media_type = valid_object();
+  empty_media_type["slots"][0]["artifact"]["media_type"] = "";
+  expect_parse_fail(
+      dump(empty_media_type),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto zero_byte_length = valid_object();
+  zero_byte_length["slots"][0]["artifact"]["byte_length"] = 0;
+  expect_parse_fail(
+      dump(zero_byte_length),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto negative_byte_length = valid_object();
+  negative_byte_length["slots"][0]["artifact"]["byte_length"] = -1;
+  expect_parse_fail(
+      dump(negative_byte_length),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto slot_not_object = valid_object();
+  slot_not_object["slots"][0] = 0;
+  expect_parse_fail(
+      dump(slot_not_object),
+      ErrorCode::invalid_argument,
+      "soundset_slot_invalid");
+
+  auto slot_missing_index = valid_object();
+  slot_missing_index["slots"][0].erase("slot");
+  expect_parse_fail(
+      dump(slot_missing_index),
+      ErrorCode::invalid_argument,
+      "soundset_slot_invalid");
+
+  auto slot_unknown_key = valid_object();
+  slot_unknown_key["slots"][0]["extra"] = true;
+  expect_parse_fail(
+      dump(slot_unknown_key),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto empty_slot_name = valid_object();
+  empty_slot_name["slots"][0]["name"] = "";
+  expect_parse_fail(
+      dump(empty_slot_name),
+      ErrorCode::invalid_argument,
+      "soundset_slot_invalid");
+
+  auto slot_role_not_string = valid_object();
+  slot_role_not_string["slots"][0]["role"] = 1;
+  expect_parse_fail(
+      dump(slot_role_not_string),
+      ErrorCode::invalid_argument,
+      "soundset_slot_invalid");
+
+  auto empty_slot_key = valid_object();
+  empty_slot_key["slots"][0]["key"] = "";
+  expect_parse_fail(
+      dump(empty_slot_key),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto slot_bpm_above_range = valid_object();
+  slot_bpm_above_range["slots"][0]["bpm"] = 241;
+  expect_parse_fail(
+      dump(slot_bpm_above_range),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+}
+
 void test_eligibility_is_not_schema() {
   auto unknown_spdx = valid_object();
   unknown_spdx["license"]["spdx_id"] = "MIT";
@@ -275,6 +515,9 @@ int main() {
     test_slot_layout_faults_use_slot_invalid();
     test_out_of_range_integers_are_rejected_not_narrowed();
     test_artifact_and_unknown_key_faults_use_manifest_invalid();
+    test_every_root_refusal_is_reachable();
+    test_optional_root_and_slot_fields_round_trip();
+    test_every_license_artifact_and_slot_refusal_is_reachable();
     test_eligibility_is_not_schema();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
