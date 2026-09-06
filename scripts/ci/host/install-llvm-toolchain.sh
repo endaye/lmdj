@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Install the pinned Core Clang/LLVM major from apt.llvm.org on Ubuntu 24.04.
 #
-# One script serves both consumers of the pin so they cannot drift apart: the
-# operator runs it once on each self-hosted Linux host (netcup, Contabo), and
-# the hosted `core-tsan` lane runs it per job on `ubuntu-24.04`. Ubuntu's own
-# archive stops at LLVM 18 for noble, so the pinned major has to come from the
-# LLVM project's repository. That is a third-party apt source on a trusted CI
+# The operator runs it once on each self-hosted Linux host (netcup, Contabo);
+# every Core lane then only verifies the tools exist. Ubuntu's own archive
+# stops at LLVM 18 for noble, so the pinned major has to come from the LLVM
+# project's repository. That is a third-party apt source on a trusted CI
 # host, and this script exists so that source is byte-pinned rather than
 # pasted: the signing key is verified against a fixed fingerprint before it is
 # trusted, the suite is the exact-major `llvm-toolchain-noble-<MAJOR>` (never
@@ -17,8 +16,9 @@
 # nothing needs installing.
 #
 # Usage: sudo scripts/ci/host/install-llvm-toolchain.sh [MAJOR]
-# MAJOR defaults to 22, the Core pin. It must match the `CC=clang-<MAJOR>`
-# pins in .github/workflows and the tool list ci-host-inventory.yml probes.
+# MAJOR defaults to 22, the Core pin. tests/build/ci_toolchain_pin_test.py
+# reads that default and fails any workflow, lane manifest or policy page that
+# names a different major.
 set -euo pipefail
 
 major="${1:-22}"

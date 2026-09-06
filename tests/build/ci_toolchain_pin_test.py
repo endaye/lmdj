@@ -110,15 +110,7 @@ class ToolchainPinTest(unittest.TestCase):
         self.assertIn(f"CC=clang-{self.pin}", ci)
         self.assertIn(f"command -v llvm-cov-{self.pin}", ci)
         self.assertIn(f"CC=clang-{self.pin}", nightly)
-        self.assertIn(
-            f"install-llvm-toolchain.sh {self.pin}",
-            nightly,
-            msg=(
-                "why: the hosted TSan lane must install the same major the "
-                "script defaults to, or the hosted and self-hosted TSan lanes "
-                "drift apart; remedy: pass the pinned major to the install step"
-            ),
-        )
+        self.assertIn(f"command -v clang++-{self.pin}", nightly)
 
 
 if __name__ == "__main__":

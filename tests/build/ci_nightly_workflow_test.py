@@ -53,118 +53,95 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         self.assertNotIn("runs-on: ubuntu-24.04", stress, message)
         self.assertIn("--repeat until-fail:20", stress, message)
 
-    def test_scheduled_tsan_stays_hosted_until_probe_acceptance(self) -> None:
+    def test_scheduled_tsan_runs_on_the_core_role(self) -> None:
+        """Routing was accepted on same-revision evidence, and stays pinned.
+
+        #693: the host caps `vm.mmap_rnd_bits` at 28, and the probe on
+        netcup passed at that state. Without the cap no TSan runtime starts
+        there, so the routing and the prerequisite check travel together.
+        """
         tsan = self.job("core-tsan")
         message = (
-            "why: scheduled TSan has no accepted Contabo runtime evidence; "
-            "remedy: keep core-tsan on ubuntu-24.04 until the explicit "
-            "same-revision ci-core probe succeeds"
+            "why: scheduled TSan is trusted native Core workload since #693 "
+            "and Hosted Ubuntu would bill 25-35 minutes a day for it; remedy: "
+            f"route core-tsan with {CORE_ROLE} and keep the stress command"
         )
-        self.assertIn("runs-on: ubuntu-24.04", tsan, message)
-        self.assertNotIn("ci-core", tsan, message)
+        self.assertIn(CORE_ROLE, tsan, message)
+        self.assertNotIn("runs-on: ubuntu-24.04", tsan, message)
         for command in TSAN_COMMANDS:
             self.assertIn(command, tsan, message)
 
-    def test_manual_tsan_probe_is_explicit_and_uses_the_core_role(self) -> None:
-        probe_input = re.search(
-            r"^  workflow_dispatch:\n(?P<body>.*?)(?=^  schedule:)",
-            self.source,
-            flags=re.MULTILINE | re.DOTALL,
-        )
-        self.assertIsNotNone(
-            probe_input,
-            "why: TSan compatibility must require an explicit manual dispatch; "
-            "remedy: declare workflow_dispatch inputs before the schedule",
-        )
-        assert probe_input is not None
-        message = (
-            "why: an implicit TSan probe would spend ci-core capacity on every "
-            "schedule; remedy: add a false-by-default boolean "
-            "probe_self_hosted_tsan dispatch input"
-        )
-        self.assertIn("probe_self_hosted_tsan:", probe_input.group("body"), message)
-        self.assertIn("type: boolean", probe_input.group("body"), message)
-        self.assertIn("default: false", probe_input.group("body"), message)
+    def test_scheduled_tsan_verifies_the_host_prerequisite_first(self) -> None:
+        """A host that loses the ASLR cap must fail naming the remedy.
 
-        probe = self.job("core-tsan-self-hosted-probe")
-        self.assertIn(
-            "github.event_name == 'workflow_dispatch' && inputs.probe_self_hosted_tsan",
-            probe,
-            message,
-        )
-        self.assertIn(CORE_ROLE, probe, message)
-        self.assertIn("timeout-minutes: 30", probe, message)
-
-    def test_hosted_and_self_hosted_tsan_run_the_same_commands(self) -> None:
-        hosted = self.job("core-tsan")
-        probe = self.job("core-tsan-self-hosted-probe")
-        message = (
-            "why: a probe with different commands cannot establish runner "
-            "compatibility for scheduled TSan; remedy: keep the fixture, "
-            "dependency, configure, build and stress commands identical"
-        )
-        for command in TSAN_COMMANDS:
-            with self.subTest(command=command):
-                self.assertIn(command, hosted, message)
-                self.assertIn(command, probe, message)
-
-    def test_both_tsan_lanes_compile_with_the_pinned_clang(self) -> None:
-        """TSan is the reason the Core pin exists, so both lanes must use it.
-
-        GCC 13.3's libtsan refuses to initialise under the 6.8 kernel's 32-bit
-        `vm.mmap_rnd_bits` (`FATAL: ThreadSanitizer: unexpected memory
-        mapping`, #676). A TSan lane that inherits the platform default
-        compiler therefore measures GCC's runtime, not the pinned one, and a
-        probe compiled differently from the scheduled lane proves nothing
-        about it. The pin is set at configure time; build and test inherit the
-        cached compiler.
+        Under 32-bit entropy GCC's libtsan and LLVM 22's runtime die with a
+        FATAL and clang-18's shared runtime dies with no output at all
+        (`sanitizer-runtime-silent-start-failure`). The preflight turns all
+        three into one readable failure before a TSan binary runs.
         """
-        for job_name in ("core-tsan", "core-tsan-self-hosted-probe"):
-            with self.subTest(job=job_name):
-                body = self.job(job_name)
-                self.assertIn(
-                    "env CC=clang-22 CXX=clang++-22 scripts/core.sh configure tsan",
-                    body,
-                    msg=(
-                        f"why: {job_name} would otherwise configure TSan with "
-                        "GCC's libtsan, whose runtime cannot start under "
-                        "32-bit mmap_rnd_bits; remedy: keep the CC/CXX pin on "
-                        "the configure step of both TSan lanes"
-                    ),
-                )
-                self.assertIn("command -v clang-22", body)
-                self.assertIn("command -v clang++-22", body)
-
-    def test_only_the_hosted_tsan_lane_installs_the_toolchain(self) -> None:
-        """The Hosted image lacks the pin; the self-hosted host already has it.
-
-        Installing on the role would mutate state that two runner services
-        share, the same reason Coverage installs nothing there.
-        """
-        hosted = self.job("core-tsan")
-        probe = self.job("core-tsan-self-hosted-probe")
-        install = "sudo bash scripts/ci/host/install-llvm-toolchain.sh 22"
-        self.assertIn(
-            install,
-            hosted,
+        tsan = self.job("core-tsan")
+        self.assertIn("name: Verify the TSan host prerequisite", tsan)
+        self.assertIn('bits="$(sysctl -n vm.mmap_rnd_bits)"', tsan)
+        self.assertIn('if [ "$bits" -gt 28 ]; then', tsan)
+        self.assertIn("configure-sanitizer-aslr.sh", tsan)
+        self.assertIn("why:", tsan)
+        self.assertIn("remedy:", tsan)
+        prerequisite = tsan.index("Verify the TSan host prerequisite")
+        configure = tsan.index("scripts/core.sh configure tsan")
+        self.assertLess(
+            prerequisite,
+            configure,
             msg=(
-                "why: ubuntu-24.04 ships clang-18 and GCC 13, so without the "
-                "install step the hosted TSan lane cannot honour the clang-22 "
-                "pin; remedy: keep the install-llvm-toolchain.sh step before "
-                "the toolchain verification"
+                "why: a prerequisite checked after the TSan build would let a "
+                "runtime FATAL or a silent death report first; remedy: keep the "
+                "sysctl check before the configure step"
             ),
         )
+
+    def test_no_hosted_tsan_lane_or_probe_remains(self) -> None:
+        """The probe answered its question; a second TSan lane would only drift."""
+        self.assertNotIn("core-tsan-self-hosted-probe", self.source)
+        self.assertNotIn("probe_self_hosted_tsan", self.source)
         self.assertNotIn(
-            install,
-            probe,
+            "runs-on: ubuntu-24.04",
+            self.job("core-tsan"),
+            msg=(
+                "why: a Hosted TSan lane beside the ci-core one would measure "
+                "a different kernel and bill Hosted minutes for a question the "
+                "role already answers; remedy: keep core-tsan on ci-core only"
+            ),
+        )
+
+    def test_tsan_compiles_with_the_pinned_clang(self) -> None:
+        """TSan is the reason the Core pin exists, so the lane must use it.
+
+        GCC 13.3's libtsan gives a less useful failure than LLVM 22's when
+        the host regresses, and the pin is what the coverage lane and the
+        host inventory verify. The pin is set at configure time; build and
+        test inherit the cached compiler.
+        """
+        body = self.job("core-tsan")
+        self.assertIn(
+            "env CC=clang-22 CXX=clang++-22 scripts/core.sh configure tsan",
+            body,
+            msg=(
+                "why: core-tsan would otherwise configure TSan with the "
+                "platform default GCC rather than the pinned toolchain; "
+                "remedy: keep the CC/CXX pin on the configure step"
+            ),
+        )
+        self.assertIn("command -v clang-22", body)
+        self.assertIn("command -v clang++-22", body)
+        self.assertNotIn(
+            "apt-get",
+            body,
             msg=(
                 "why: the ci-core host is provisioned once by the operator and "
-                "shared by two runner services, so a per-job install would "
-                "mutate shared machine state; remedy: verify the toolchain "
-                "with command -v and install nothing in the probe"
+                "shared by several runner services, so a per-job install would "
+                "mutate shared machine state; remedy: verify with command -v "
+                "and install nothing"
             ),
         )
-        self.assertNotIn("apt-get", probe)
 
     def test_both_native_jobs_share_the_repository_capacity_queue(self) -> None:
         """Naming the `ci-core` role is not enough to make them run one at a time.
@@ -175,13 +152,14 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         and twenty consecutive stress repetitions are the least tolerant
         workload in the repository.
 
-        Observed: run 33838737018 started `core-tsan-self-hosted-probe` and
+        Observed: run 33838737018 started the TSan probe (then
+        `core-tsan-self-hosted-probe`) and
         `core-stress` at 04:58:05Z on `contabo-lmdj-linux` and
         `contabo-lmdj-linux-02`, and both failed. The probe's failure said
         nothing about whether the host can execute the TSan runtime, which is
         the only question it exists to answer.
         """
-        for job_name in ("core-tsan-self-hosted-probe", "core-stress"):
+        for job_name in ("core-tsan", "core-stress"):
             with self.subTest(job=job_name):
                 self.assertRegex(
                     self.job(job_name),
@@ -199,21 +177,6 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
                         "ci.yml puts on every admitted shared-host lane"
                     ),
                 )
-
-    def test_the_hosted_tsan_lane_does_not_join_the_queue(self) -> None:
-        """It runs on a different machine, so it contends for nothing."""
-        self.assertNotIn(
-            "lmdj-native-heavy",
-            self.job("core-tsan"),
-            msg=(
-                "why: core-tsan runs on GitHub-hosted Ubuntu, a different "
-                "machine from the shared Contabo host, so joining the "
-                "lmdj-native-heavy queue would only make it wait behind "
-                "native lanes it cannot contend with; remedy: keep the "
-                "core-tsan job body free of the lmdj-native-heavy "
-                "concurrency block"
-            ),
-        )
 
     def test_nightly_keeps_read_only_repository_permission(self) -> None:
         prefix = self.source.split("jobs:", 1)[0]
