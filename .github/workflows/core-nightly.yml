@@ -21,7 +21,9 @@ concurrency:
 jobs:
   core-tsan:
     # Keep the scheduled authority on a clean Hosted image until an explicit
-    # same-revision probe proves that Contabo can execute the TSan runtime.
+    # same-revision probe proves that the self-hosted Core host can execute the
+    # TSan runtime. Both self-hosted hosts fail `unexpected memory mapping`
+    # under the 6.8 kernel's 32-bit `vm.mmap_rnd_bits` (#676, #693).
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -41,7 +43,7 @@ jobs:
 
   core-tsan-self-hosted-probe:
     # Same repository-wide capacity queue as every other native-heavy job.
-    # Separate runner services on the shared Contabo host are not independent
+    # Separate runner services on the `ci-core` host are not independent
     # CPU: without this, a dispatch of this probe starts in the same second as
     # `core-stress` below and the two timing-sensitive suites destroy each
     # other's budgets. The first dispatch did exactly that, and its failure said

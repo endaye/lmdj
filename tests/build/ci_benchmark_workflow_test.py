@@ -16,7 +16,7 @@ BENCHMARK = REPO_ROOT / ".github/workflows/ci-self-hosted-benchmark.yml"
 CORE_BENCHMARK = REPO_ROOT / ".github/workflows/ci-self-hosted-core-benchmark.yml"
 FORMAL = REPO_ROOT / ".github/workflows/ci.yml"
 ACTION = REPO_ROOT / ".github/actions/web-ci-proof/action.yml"
-CONTABO = REPO_ROOT / "scripts/ci/elastic-runner/contabo.json"
+NETCUP = REPO_ROOT / "scripts/ci/elastic-runner/netcup.json"
 
 CORE_ROLE = "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]"
 
@@ -175,12 +175,12 @@ class CiCoreBenchmarkWorkflowTest(unittest.TestCase):
             job_name.startswith("Core benchmark"),
             f"unexpected benchmark job name: {job_name}",
         )
-        registered = json.loads(CONTABO.read_text(encoding="utf-8"))["core_job_names"]
+        registered = json.loads(NETCUP.read_text(encoding="utf-8"))["core_job_names"]
         self.assertTrue(
             any(job_name.startswith(entry) for entry in registered),
             "why: the elastic controller prefix-matches the running job name "
             f"against core_job_names; remedy: register a prefix of {job_name!r} "
-            f"in scripts/ci/elastic-runner/contabo.json, which currently has "
+            f"in scripts/ci/elastic-runner/netcup.json, which currently has "
             f"{registered}",
         )
 
@@ -193,7 +193,7 @@ class CiCoreBenchmarkWorkflowTest(unittest.TestCase):
         This enumerates the role's real job set instead of trusting a
         hand-maintained list to stay complete.
         """
-        registered = json.loads(CONTABO.read_text(encoding="utf-8"))["core_job_names"]
+        registered = json.loads(NETCUP.read_text(encoding="utf-8"))["core_job_names"]
         found = {
             workflow.name: core_role_job_names(workflow)
             for workflow in sorted(WORKFLOW_DIR.glob("*.yml"))
@@ -211,7 +211,7 @@ class CiCoreBenchmarkWorkflowTest(unittest.TestCase):
                         f"{workflow_name} classifies as non-core and scale-out "
                         "continues under timing-sensitive Core work; remedy: add "
                         "a prefix of it to core_job_names in "
-                        f"scripts/ci/elastic-runner/contabo.json, which has "
+                        f"scripts/ci/elastic-runner/netcup.json, which has "
                         f"{registered}",
                     )
 
