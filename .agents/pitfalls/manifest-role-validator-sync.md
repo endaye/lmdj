@@ -1,12 +1,15 @@
 ---
 id: manifest-role-validator-sync
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-08-27
     occurrence: https://github.com/endaye/lmdj/issues/354
     observed_by: claude-code/fable-5
-exit: none
+  - date: 2026-09-06
+    occurrence: https://github.com/endaye/lmdj/actions/runs/34017836312
+    observed_by: grok-4.6
+exit: skill:.agents/skills/lmdj-release/SKILL.md
 ---
 
 # A manifest producer gaining a new asset role must update the deployment validator in the same change
@@ -31,7 +34,12 @@ ASSET_LAYOUT is a third copy of the vocabulary, which also lacked the role.
 - Do not add a new role to SINGLETON_ASSET_ROLES unless every prior published
   build also satisfies it: the deploy run baselines the previous published
   deployment with the same validator, so an exactly-one rule on a new role
-  fails the rollback anchor.
-- No gate exit yet: the producer's roles are inline literals, so a mechanical
-  producer-vs-validator comparison needs a shared constant first; extracting
-  one is a refactor for a dedicated Task. Escalate if this recurs.
+  fails the rollback anchor. Creator 3.0.0's `perform_master_tap_worklet`
+  is the recurrence: `_creator_required_roles()` keeps the six-role inventory
+  on 3.x and the five-role inventory on 2.x priors. Preflight already verified
+  the signed candidate; a failed prior-identity discovery is not a failed
+  Release.
+- Recurrence 2 absorbed that Creator split into the shared smoke validator
+  and the release skill. A mechanical producer-vs-validator comparison still
+  needs a shared constant; that remains a later refactor, not a reason to
+  leave this entry open.

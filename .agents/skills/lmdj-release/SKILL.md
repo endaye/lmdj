@@ -141,7 +141,7 @@ contract is [`docs/governance/pitfall-ledger.md`](../../../docs/governance/pitfa
   After `publish-draft` succeeds, the in-workflow `audit --remote` still reads
   canonical `main`'s `releasable` row. Read the live Release; do not retry.
 - Before treating a failed Creator deploy as a failed signed-archive verify —
-  [`creator-prior-identity-current-roles`](../../pitfalls/creator-prior-identity-current-roles.md).
+  [`manifest-role-validator-sync`](../../pitfalls/manifest-role-validator-sync.md).
   Prior identity discovery must accept the live Host's inventory. Creator 3.x
   smoke still requires `perform_master_tap_worklet`; Creator 2.x priors have
   five roles. Preflight already verified the candidate Release.
