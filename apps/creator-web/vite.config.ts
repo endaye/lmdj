@@ -18,5 +18,9 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./test/setup.ts"],
+    // Must stay clearly above the Testing Library `asyncUtilTimeout` set in
+    // test/setup.ts, so a missing element reports "unable to find role" rather
+    // than being cut short by the per-test timeout.
+    testTimeout: 20_000,
   },
 });
