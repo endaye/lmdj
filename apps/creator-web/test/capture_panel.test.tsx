@@ -354,10 +354,10 @@ test("a stale keyboard base never shadows the abort base of a live grip drag", a
   expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
     .toBe("2");
 
-  // Pressing a grip takes focus off the handle, which is what ends the
-  // keyboard gesture; jsdom does not move focus for a synthetic pointer event.
-  screen.getByRole("button", {name: "Commit"}).focus();
-
+  // Focus deliberately stays on the handle: handleGripPointerDown calls
+  // preventDefault(), which suppresses the compatibility mouse event, so a real
+  // grip press does not blur the slider either. The pointer gesture itself has
+  // to retire the keyboard base.
   // 400 px over 48 000 frames: End sits at clientX 400, drag it to 300.
   const endGrip = captureGrip(container, "end");
   fireEvent.pointerDown(endGrip, {pointerId: 21, clientX: 400, button: 0});

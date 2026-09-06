@@ -463,6 +463,12 @@ export function CapturePanel({
     if (!Number.isFinite(pointerFrame)) return;
     event.preventDefault();
     const handleFrame = kind === "start" ? state.selectionStart : selectionEnd;
+    // preventDefault above suppresses the compatibility mouse event, so the
+    // focused handle does not blur and handleTrimBlur does not run. A pointer
+    // gesture replaces the keyboard one outright: without this, a nudge whose
+    // keyup was lost would keep a base that cancelOnEscape prefers over this
+    // drag's own, and Escape would roll back the nudge instead of the drag.
+    keyboardSelectionRef.current = null;
     gripDragRef.current = {
       kind,
       pointerId: event.pointerId,
