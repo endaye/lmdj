@@ -33,6 +33,9 @@ recurrences:
   - date: 2026-08-28
     occurrence: https://github.com/endaye/lmdj/pull/398
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-06
+    occurrence: https://github.com/endaye/lmdj/pull/697
+    observed_by: Claude Code (Opus 5)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -62,6 +65,15 @@ but `AssertionError: 1 != 0`. Establishing that the cause was a fresh clone
 lacking a pre-squash intent target -- not the change under review -- took a
 separate local checkout of the exact validated commit and a full rerun. A
 sanitized `format_report(report)` was already available at that call site.
+
+The eleventh occurrence (PR #697) is the same shape one directory over.
+`tests/build/version_test.py` asserted
+`actual_contract_sources == sorted(expected_contract_sources)` over every
+`contracts/<family>/*.schema.json` file; adding two Sound Set Schemas printed
+nothing but `AssertionError` on the macOS `core` gate, naming neither the two
+unregistered paths nor the list that had to learn them. The two sequences were
+already in hand at the call site, so the message now reports both directions --
+unregistered on disk and listed but absent -- with the remedy.
 
 The invariant is not mechanically decidable — no test can judge whether prose
 is actionable — so it exits to guidance at the point where a gate is authored
