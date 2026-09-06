@@ -120,7 +120,16 @@ function sessionFixture(initialStatus = status("ready")) {
     assignPatternSlot: vi.fn(), clearPatternSlot: vi.fn(), movePatternSlot: vi.fn(),
     renamePerformance: vi.fn(), deletePerformance: vi.fn(),
     bindPerformanceRecording: vi.fn(), beginPerformanceReplay: vi.fn(),
-    stopPerformanceReplay: vi.fn(), queryPerformanceReplayStatus: vi.fn(),
+    stopPerformanceReplay: vi.fn(),
+    // A rendered surface polls replay status every 250 ms for as long as the
+    // replay is playing, so any test whose body outlives one tick reaches this
+    // mock. `queryPerformanceReplayStatus` is declared to resolve a
+    // `PerformanceReplayStatus`, and a bare `vi.fn()` resolves `undefined`,
+    // which the controller stores as the replay and `ReplayPanel` then
+    // dereferences — the whole surface unmounts mid-test (#713). A poll the
+    // Core has not answered yet is the one reply that cannot overwrite state a
+    // test staged; a test that wants the poll answered stages it itself.
+    queryPerformanceReplayStatus: vi.fn(() => new Promise(() => {})),
     commitPerformanceResample: vi.fn(),
   } as unknown as CreatorPerformanceRuntimeSession;
   return {
