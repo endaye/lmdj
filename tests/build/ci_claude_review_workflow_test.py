@@ -250,6 +250,63 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         allowed = VENDORED_COMMAND.read_text(encoding="utf-8").split("---", 2)[1]
         self.assertIn("Bash(gh pr diff:*)", allowed)
 
+    def test_a_clean_review_is_an_issue_comment_and_never_a_thread(self) -> None:
+        """A thread is an unanswered question; a clean review is not one.
+
+        `main` requires every review thread to be resolved, and Pre-heavy Gate
+        counts unresolved threads (#659). A reviewer that files "no issues
+        found" as a thread therefore blocks the merge it just approved -- five
+        such threads were resolved by hand on 2026-09-06.
+        """
+        body = VENDORED_COMMAND.read_text(encoding="utf-8")
+        self.assertIn(
+            "Never post a clean review as a review comment or review thread.",
+            body,
+            msg=("why: without the prohibition the model files the clean summary "
+                 "wherever the available tools allow, and a thread blocks the merge; "
+                 "remedy: keep the rule in the vendored command's step 7"),
+        )
+        self.assertIn(
+            "/repos/{owner}/{repo}/issues/{number}/comments",
+            body,
+            msg=("why: `gh` is absent on ci-general, so without a named REST "
+                 "fallback the instruction to post an issue comment is not "
+                 "followable; remedy: keep the endpoint in the command"),
+        )
+        allowed = body.split("---", 2)[1]
+        self.assertIn(
+            "Bash(curl:*)",
+            allowed,
+            msg=("why: the REST fallback cannot run unless the tool is allowed; "
+                 "remedy: keep Bash(curl:*) in allowed-tools"),
+        )
+        self.assertIn(
+            "Bash(curl:*)",
+            self.source,
+            msg=("why: claude_args --allowedTools is what the action enforces at "
+                 "run time; the command frontmatter alone does not grant it; "
+                 "remedy: name the tool in claude_args too"),
+        )
+
+    def test_a_clean_thread_is_retired_deterministically_after_the_review(self) -> None:
+        """The prompt rule is prevention; this step is the guarantee."""
+        self.assertIn("retire_clean_review_threads.py", self.source)
+        self.assertIn(
+            "<!-- lmdj-review: ${{ matrix.backend }} -->",
+            self.source.split("retire_clean_review_threads.py", 1)[1],
+            msg=("why: the script may only resolve what this backend signed, so "
+                 "the marker has to be passed per backend; remedy: keep the "
+                 "signature argument on the step"),
+        )
+        self.assertIn(
+            "if: ${{ always() && steps.backend.outputs.run == 'true' }}",
+            self.source,
+            msg=("why: the Review step is continue-on-error, so a failed review "
+                 "still leaves the step's own outcome behind; the tidy-up must "
+                 "run anyway and only for a backend that actually ran; remedy: "
+                 "keep always() with the backend condition"),
+        )
+
     def test_the_review_posts_findings_rather_than_only_logging_them(self) -> None:
         self.assertIn("--comment", self.source)
         self.assertIn(
