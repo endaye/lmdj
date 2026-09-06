@@ -55,7 +55,11 @@ GENERAL_JOBS = {
 # advisory reviewer (#659). It is counted so a literal `ci-general` scan still
 # closes over exactly the jobs reviewed onto the role, without pretending the
 # reviewer is a lane.
-GENERAL_ROLE_NON_LANE_JOBS = ("advisory-review",)
+GENERAL_ROLE_NON_LANE_JOBS = (
+    "select-review-backend",  # decides which backend reviews; no lane, no verdict
+    "advisory-review",
+    "grok-review",  # independent runtime, moved in from grok-review.yml for ordering
+)
 GENERAL_PROOFS = {
     "docs-static": 'run: git diff --check "$BASE_SHA...$HEAD_SHA"',
     "ci-contract": "run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'",

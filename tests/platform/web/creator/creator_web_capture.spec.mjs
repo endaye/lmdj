@@ -196,6 +196,7 @@ test("the capture panel and its primary actions stay within the viewport (F1/F2)
 test("records, trims and commits a capture onto an empty Pad", async ({page}, testInfo) => {
   test.skip(testInfo.project.name !== GRANTED);
   test.setTimeout(600_000);
+  await installProjectInspectProbe(page);
   await page.goto("/index.html");
   await importV1SampleProject(page);
   await enterSampleEditor(page);
@@ -209,8 +210,65 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   // rather than the fake device yielding silence.
   await expect(panel.getByRole("img", {name: "Pad A1 capture waveform"}))
     .toBeVisible();
-  await expect(panel.getByRole("slider", {name: "Pad A1 Selection length"}))
-    .toBeVisible();
+  const start = panel.getByRole("slider", {name: /^Pad A1 Start —/});
+  const end = panel.getByRole("slider", {name: /^Pad A1 End —/});
+  await expect(start).toBeEnabled();
+  await expect(end).toBeEnabled();
+  const initialStart = Number(await start.inputValue());
+  const initialEnd = Number(await end.inputValue());
+  expect(initialStart).toBe(0);
+  expect(initialEnd).toBeGreaterThan(1);
+
+  const waveform = panel.locator("[data-capture-trim-waveform]");
+  const waveformBox = await waveform.boundingBox();
+  expect(waveformBox).not.toBeNull();
+  const startGrip = panel.locator("[data-capture-grip-zone=start]");
+  const endGrip = panel.locator("[data-capture-grip-zone=end]");
+  await expect(panel.locator("[data-capture-grip=start]")).toBeVisible();
+  await expect(panel.locator("[data-capture-grip=end]")).toBeVisible();
+
+  const startGripBox = await startGrip.boundingBox();
+  expect(startGripBox).not.toBeNull();
+  await page.mouse.move(
+    startGripBox.x + startGripBox.width / 2,
+    startGripBox.y + startGripBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    waveformBox.x + waveformBox.width * 0.25,
+    waveformBox.y + waveformBox.height / 2,
+  );
+  await page.mouse.up();
+  const movedStart = Number(await start.inputValue());
+  expect(movedStart).toBeGreaterThan(initialStart);
+  expect(Number(await end.inputValue())).toBe(initialEnd);
+
+  const endGripBox = await endGrip.boundingBox();
+  expect(endGripBox).not.toBeNull();
+  await page.mouse.move(
+    endGripBox.x + endGripBox.width / 2,
+    endGripBox.y + endGripBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    waveformBox.x + waveformBox.width * 0.75,
+    waveformBox.y + waveformBox.height / 2,
+  );
+  await page.mouse.up();
+  const movedEnd = Number(await end.inputValue());
+  expect(movedEnd).toBeLessThan(initialEnd);
+  expect(movedEnd).toBeGreaterThan(movedStart);
+
+  // The middle is deliberately inert: it must not jump either endpoint.
+  await waveform.click({position: {
+    x: waveformBox.width / 2,
+    y: waveformBox.height / 2,
+  }});
+  expect(Number(await start.inputValue())).toBe(movedStart);
+  expect(Number(await end.inputValue())).toBe(movedEnd);
+  await expect(panel.getByLabel("Pad A1 Start value")).toBeVisible();
+  await expect(panel.getByLabel("Pad A1 End value")).toBeVisible();
+  await expect(panel.getByLabel("Pad A1 Duration")).toBeVisible();
 
   await panel.getByRole("button", {name: "Commit"}).click();
   // Commit returns the modal panel to idle. Close it before asserting the
@@ -226,6 +284,16 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
   // the Pad reads assigned and the Sample Editor renders its waveform.
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
+  const truth = await inspectProjectTruth(page);
+  const assignedAsset = truth.project.banks[0].pads[0].asset_id;
+  const selectedFrames = movedEnd - movedStart;
+  // Chromium exposes the deterministic mono fake-capture file to the
+  // AudioWorklet as a stereo MediaStream. Assert that far-side observation
+  // before using the resulting two-channel PCM width in the artifact check.
+  await expect(page.locator(".selected-sample"))
+    .toContainText(`48 kHz · Stereo · ${selectedFrames.toLocaleString("en-US")} frames`);
+  expect(truth.project.assets[assignedAsset].artifact.byte_length)
+    .toBe(44 + selectedFrames * 2 * 2);
   await expectProjectRevision(page, 47);
 });
 
@@ -242,7 +310,8 @@ test("ordinary Sample focus loss keeps the retained trim dialog visible", async 
 
   await expect(panel).toContainText("Recording stopped: the window lost focus.");
   await expect(panel.getByRole("img", {name: "Pad A1 capture waveform"})).toBeVisible();
-  await expect(panel.getByRole("slider", {name: "Pad A1 Selection length"})).toBeVisible();
+  await expect(panel.getByRole("slider", {name: /^Pad A1 Start —/})).toBeVisible();
+  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/})).toBeVisible();
   await expect(panel.getByRole("button", {name: "Commit"})).toBeVisible();
   await expect(panel.getByRole("button", {name: "Discard"})).toBeVisible();
   await expect(panel.getByRole("button", {name: "Close"})).toBeVisible();
@@ -290,7 +359,7 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
   // The armed Pad stops only its capture. The Sequence session stays beneath
   // the trim overlay and the armed hit itself is not recorded.
   await page.keyboard.press("KeyQ");
-  await expect(panel.getByRole("slider", {name: "Pad A1 Selection length"}))
+  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/}))
     .toBeVisible({timeout: 30_000});
   await panel.getByRole("button", {name: "Commit"}).click();
   await expect(panel).toBeHidden({timeout: 180_000});
@@ -393,10 +462,10 @@ test("uses queried Bank quota instead of the retired per-Pad capture cap", async
   const panel = await recordAtLeast(page, "Pad A1", CAPTURE_FIXTURE_SECONDS * 3);
   await panel.getByRole("button", {name: "Stop"}).click();
 
-  const length = panel.getByRole("slider", {name: "Pad A1 Selection length"});
-  const maximum = Number(await length.getAttribute("max"));
+  const end = panel.getByRole("slider", {name: /^Pad A1 End —/});
+  const maximum = Number(await end.getAttribute("max"));
   expect(maximum).toBeGreaterThan(240_000);
-  expect(Number(await length.inputValue())).toBe(maximum);
+  expect(Number(await end.inputValue())).toBe(maximum);
 });
 
 test("blur during recording stops capture and keeps the buffer", async ({page}, testInfo) => {
@@ -413,7 +482,7 @@ test("blur during recording stops capture and keeps the buffer", async ({page}, 
   // S8B-D5: the interruption stops capture, states its reason, and the take
   // is still there to trim rather than being silently discarded.
   await expect(panel).toContainText("Recording stopped: the window lost focus.");
-  await expect(panel.getByRole("slider", {name: "Pad A1 Selection length"}))
+  await expect(panel.getByRole("slider", {name: /^Pad A1 End —/}))
     .toBeVisible();
   await expect(panel.getByRole("button", {name: "Commit"})).toBeVisible();
 });
