@@ -20,6 +20,7 @@ TOOLS_ROOT = REPO_ROOT / "apps/creator-web/tools"
 sys.path.insert(0, str(TOOLS_ROOT))
 
 from deployment_smoke import (  # noqa: E402
+    ASSET_ROLES as ROLES,
     CSP,
     REQUIRED_SECURITY_HEADERS,
     SmokeError,
@@ -29,12 +30,12 @@ from deployment_smoke import (  # noqa: E402
 
 
 ASSETS = (
-    ("main", ".js", "host_main"),
-    ("runtime", ".js", "runtime_script"),
-    ("runtime", ".wasm", "runtime_wasm"),
-    ("styles", ".css", "host_style"),
-    ("capture-worklet", ".js", "capture_worklet"),
-    ("perform-master-tap", ".js", "perform_master_tap_worklet"),
+    ("main", ".js", ROLES.HOST_MAIN),
+    ("runtime", ".js", ROLES.RUNTIME_SCRIPT),
+    ("runtime", ".wasm", ROLES.RUNTIME_WASM),
+    ("styles", ".css", ROLES.HOST_STYLE),
+    ("capture-worklet", ".js", ROLES.CAPTURE_WORKLET),
+    ("perform-master-tap", ".js", ROLES.PERFORM_MASTER_TAP_WORKLET),
 )
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -88,8 +89,8 @@ class Fixture:
         if not update_index and "/index.html" in self.payloads:
             return
         digest = hashlib.sha256(manifest).hexdigest()
-        main = next(entry for entry in self.manifest["assets"] if entry["role"] == "host_main")
-        style = next(entry for entry in self.manifest["assets"] if entry["role"] == "host_style")
+        main = next(entry for entry in self.manifest["assets"] if entry["role"] == ROLES.HOST_MAIN)
+        style = next(entry for entry in self.manifest["assets"] if entry["role"] == ROLES.HOST_STYLE)
         index = (
             "<!doctype html><html><head>"
             f'<meta name="lmdj-host-manifest-sha256" content="{digest}">'
@@ -212,7 +213,7 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
         main = next(
             "/" + entry["path"]
             for entry in self.fixture.manifest["assets"]
-            if entry["role"] == "host_main"
+            if entry["role"] == ROLES.HOST_MAIN
         )
         self.fixture.cache_overrides[main] = "no-store"
         with self.assertRaisesRegex(SmokeError, "cache-control"):
@@ -262,7 +263,7 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
         self.fixture.manifest["assets"] = [
             entry
             for entry in self.fixture.manifest["assets"]
-            if entry["role"] != "perform_master_tap_worklet"
+            if entry["role"] != ROLES.PERFORM_MASTER_TAP_WORKLET
         ]
         self.fixture.manifest["host_version"] = "2.1.1"
         self.fixture.manifest["compatible_hosts"] = [
@@ -271,10 +272,10 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
         self.fixture.manifest["platform_version"] = "2.0.1"
         digest = hashlib.sha256(canonical_json(self.fixture.manifest)).hexdigest()
         main = next(
-            entry for entry in self.fixture.manifest["assets"] if entry["role"] == "host_main"
+            entry for entry in self.fixture.manifest["assets"] if entry["role"] == ROLES.HOST_MAIN
         )
         style = next(
-            entry for entry in self.fixture.manifest["assets"] if entry["role"] == "host_style"
+            entry for entry in self.fixture.manifest["assets"] if entry["role"] == ROLES.HOST_STYLE
         )
         self.fixture.payloads["/host-manifest.json"] = canonical_json(self.fixture.manifest)
         index = (
@@ -308,7 +309,7 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
         self.fixture.manifest["assets"] = [
             entry
             for entry in self.fixture.manifest["assets"]
-            if entry["role"] != "perform_master_tap_worklet"
+            if entry["role"] != ROLES.PERFORM_MASTER_TAP_WORKLET
         ]
         self.fixture.update()
         with self.assertRaisesRegex(SmokeError, "manifest required asset role inventory is invalid"):

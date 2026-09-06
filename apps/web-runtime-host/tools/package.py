@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -12,6 +13,20 @@ import stat
 import sys
 import tempfile
 from pathlib import Path
+
+
+ASSET_ROLES_PATH = Path(__file__).resolve().parent / "asset_roles.py"
+_ASSET_ROLES_SPEC = importlib.util.spec_from_file_location(
+    "_lmdj_manifest_asset_roles", ASSET_ROLES_PATH
+)
+if _ASSET_ROLES_SPEC is None or _ASSET_ROLES_SPEC.loader is None:
+    raise RuntimeError(
+        "shared manifest asset-role vocabulary is unavailable: "
+        f"{ASSET_ROLES_PATH} could not be loaded"
+    )
+ROLES = importlib.util.module_from_spec(_ASSET_ROLES_SPEC)
+_ASSET_ROLES_SPEC.loader.exec_module(ROLES)
+EMITTED_ASSET_ROLES = ROLES.WEB_RUNTIME_HOST_EMITTED_ASSET_ROLES
 
 
 MANIFEST_TOOLCHAIN_KEYS = (
@@ -142,6 +157,22 @@ def write_hashed_asset(
     payload: bytes,
     role: str,
 ) -> dict:
+    if role not in EMITTED_ASSET_ROLES:
+        raise PackageError(
+            "why: this packager emitted the manifest asset role "
+            f"{role!r}, which is not in the Runtime Host inventory "
+            f"{sorted(EMITTED_ASSET_ROLES)} declared by "
+            "apps/web-runtime-host/tools/asset_roles.py, so the shared "
+            "deployment validator would reject the published manifest at the "
+            "deployment boundary, after packaging, signing and release have "
+            "all passed. remedy: add the role to ALLOWED_ASSET_ROLES and to "
+            "WEB_RUNTIME_HOST_EMITTED_ASSET_ROLES in "
+            "apps/web-runtime-host/tools/asset_roles.py, add its entry to "
+            "hosts.web-runtime-host.expected_assets in "
+            "tools/web-runtime/runtime-identity.json, and rerun "
+            "apps/web-runtime-host/test/manifest_asset_role_parity_test.py, "
+            "all in this same change."
+        )
     digest = sha256(payload)
     filename = f"{stem}.{digest}{suffix}"
     path = assets_root / filename
@@ -244,38 +275,38 @@ def build_distribution(
         diagnostic_client_entry = write_module(
             platform_root / "diagnostic_client.mjs",
             "diagnostic-client",
-            "platform_module",
+            ROLES.PLATFORM_MODULE,
         )
         diagnostic_project_entry = write_module(
             host_root / "src/diagnostic_project.mjs",
             "diagnostic-project",
-            "host_module",
+            ROLES.HOST_MODULE,
         )
         input_adapters_entry = write_module(
             platform_root / "input_adapters.mjs",
             "input-adapters",
-            "platform_module",
+            ROLES.PLATFORM_MODULE,
         )
         preflight_entry = write_module(
             platform_root / "preflight.mjs",
             "preflight",
-            "platform_module",
+            ROLES.PLATFORM_MODULE,
         )
         protocol_entry = write_module(
             platform_root / "protocol.mjs",
             "protocol",
-            "platform_module",
+            ROLES.PLATFORM_MODULE,
         )
         integrity_entry = write_module(
             platform_root / "integrity.mjs",
             "integrity",
-            "platform_module",
+            ROLES.PLATFORM_MODULE,
             (("./protocol.mjs", protocol_entry),),
         )
         project_bundle_reader_entry = write_module(
             platform_root / "project_bundle_reader.mjs",
             "project-bundle-reader",
-            "platform_module",
+            ROLES.PLATFORM_MODULE,
             (
                 ("./protocol.mjs", protocol_entry),
                 ("./integrity.mjs", integrity_entry),
@@ -284,18 +315,18 @@ def build_distribution(
         state_machine_entry = write_module(
             platform_root / "state_machine.mjs",
             "state-machine",
-            "platform_module",
+            ROLES.PLATFORM_MODULE,
         )
         runtime_loader_entry = write_module(
             platform_root / "runtime_loader.mjs",
             "runtime-loader",
-            "platform_module",
+            ROLES.PLATFORM_MODULE,
             (("./protocol.mjs", protocol_entry),),
         )
         runtime_session_entry = write_module(
             platform_root / "runtime_session.mjs",
             "runtime-session",
-            "platform_module",
+            ROLES.PLATFORM_MODULE,
             (
                 ("./input_adapters.mjs", input_adapters_entry),
                 ("./diagnostic_client.mjs", diagnostic_client_entry),
@@ -310,7 +341,7 @@ def build_distribution(
         runtime_identity_entry = write_module(
             product_root / "web-runtime-identity.mjs",
             "web-runtime-identity",
-            "product_identity",
+            ROLES.PRODUCT_IDENTITY,
         )
 
         main_text = require_file(host_root / "src/main.mjs").read_text(
@@ -346,7 +377,7 @@ def build_distribution(
             "main",
             ".mjs",
             main_text.encode("utf-8"),
-            "host_main",
+            ROLES.HOST_MAIN,
         )
         assets.append(main_entry)
 
@@ -355,7 +386,7 @@ def build_distribution(
             "styles",
             ".css",
             require_file(host_root / "styles.css").read_bytes(),
-            "host_style",
+            ROLES.HOST_STYLE,
         )
         assets.append(style_entry)
 
@@ -365,7 +396,7 @@ def build_distribution(
             "runtime",
             ".wasm",
             wasm_payload,
-            "runtime_wasm",
+            ROLES.RUNTIME_WASM,
         )
         assets.append(wasm_entry)
         runtime_payload = runtime_js_path.read_bytes()
@@ -385,7 +416,7 @@ def build_distribution(
             "runtime",
             ".js",
             runtime_text.encode("utf-8"),
-            "runtime_script",
+            ROLES.RUNTIME_SCRIPT,
         )
         assets.append(runtime_entry)
 
@@ -658,8 +689,8 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
     ):
         if index.count(exact_meta) != 1:
             raise DistributionError("index identity metadata mismatch")
-    main_asset = next(asset for asset in assets if asset["role"] == "host_main")
-    style_asset = next(asset for asset in assets if asset["role"] == "host_style")
+    main_asset = next(asset for asset in assets if asset["role"] == ROLES.HOST_MAIN)
+    style_asset = next(asset for asset in assets if asset["role"] == ROLES.HOST_STYLE)
     if (
         index.count(f'src="./{main_asset["path"]}"') != 1
         or index.count(f'href="./{style_asset["path"]}"') != 1

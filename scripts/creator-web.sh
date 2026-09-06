@@ -182,6 +182,11 @@ test_creator() {
   python3 "$creator_root/test/package_test.py"
   python3 "$creator_root/test/server_test.py"
   python3 "$creator_root/test/deployment_smoke_test.py"
+  # The Creator packager is one of the two producers the manifest asset-role
+  # parity gate compares against the shared vocabulary, so the Creator lane
+  # runs it too: a Creator-only change selects this lane and not the Runtime
+  # Host lane.
+  python3 "$repo_root/apps/web-runtime-host/test/manifest_asset_role_parity_test.py"
   node --test "$repo_root"/packages/web-runtime-platform/test/*.test.mjs
   echo "Creator Web tests: PASS"
 }
