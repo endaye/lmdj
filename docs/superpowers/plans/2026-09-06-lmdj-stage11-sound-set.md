@@ -34,15 +34,37 @@ satisfies [#464](https://github.com/endaye/lmdj/issues/464).
 
 - Execute each Task on `feat/<task>` in an isolated worktree. Never implement
   on `main`.
-- Tasks 3–7 are serial after Stage 10 Task 10 ([#436](https://github.com/endaye/lmdj/issues/436))
-  and after [#471](https://github.com/endaye/lmdj/issues/471) freezes the
-  `Asset.lineage` `soundset` / `soundset_install` vocabulary. Task 1 may start
-  after this plan merges. Task 2 starts after Task 1.
+- Stage 10 Task 10 ([#436](https://github.com/endaye/lmdj/issues/436)) is
+  merged and Product Build `1.0.42.0` is consumed, so no Task waits on Stage
+  10. Task 1 may start after this plan merges. Task 2 starts after Task 1.
+  Tasks 3, 4, 5 are serial on each other.
 - Hosts use only Application Facade. Catalog endpoints never enter Project
-  Truth.
-- `lmdj.project.v4` stays the writer Contract. Install creates ordinary Assets
-  and Pad assignments; Lineage uses the existing `Asset.lineage` carrier.
-  Extending that closed union is #471's Contract SemVer, not a second field.
+  Truth. Facade requests never carry a Workspace path: the Set Store and the
+  Catalog cache live under the configured `ApplicationConfig.workspace_root`,
+  exactly like the Provider selection store behind `provider.list` /
+  `provider.select`.
+- `lmdj.project.v4` stays the writer Contract ID. Install creates ordinary
+  Assets and Pad assignments; Lineage uses the existing `Asset.lineage`
+  carrier. That carrier is a closed typed variant today (`source.kind` is the
+  constant `asset_artifact`, `derivation.kind` is the constant `resample`; the
+  Schema and `packages/authoring-domain/src/project.cpp` reject anything
+  else), so Task 3 pays one Project Contract MINOR (`4.0.0` → `4.1.0`) that
+  adds exactly the S11-D9 `soundset` source variant and the
+  `soundset_install` derivation kind. Never add a second Lineage field.
+  [#471](https://github.com/endaye/lmdj/issues/471) is a draft Stage 12
+  design whose S12L-D6 already lists the same two tokens; if #471 later
+  approves different tokens, that is a design conflict that returns to
+  review, never a reason for Task 3 to invent a third vocabulary.
+- Core gains no network dependency. `scripts/verify-core-dependencies.sh`
+  stays unchanged. Task 2 defines an injected `CatalogTransport` interface
+  and ships only the local directory adapter plus a test fake; network
+  transports are Host-side implementations of that interface (Web Host in
+  Task 5). No HTTP client enters `packages/`.
+- S8-D6 audio validation (`soundset_audio_unsupported`) is raised by the
+  Facade in Task 4 through the existing project-cooker WAV reader, on
+  inspect, preview, and install. Task 1 (foundation) and Task 2 (project-io)
+  validate manifests, hashes, and byte lengths only; neither module gains a
+  project-cooker dependency.
 - Do not add public `lmdj.error.v1` codes. Stable `details.reason` tokens are
   locked below.
 - v1 install/apply does no time-stretch or pitch DSP.
@@ -93,7 +115,12 @@ Public codes stay on `lmdj.error.v1`. Reasons:
 | Artifact hash or length mismatch | `IO_ERROR` | `soundset_content_mismatch` |
 | Catalog unreachable | `IO_ERROR` | `catalog_unavailable` |
 | Audio not S8-D6 | `UNSUPPORTED_AUDIO` | `soundset_audio_unsupported` |
-| Bank/generation quota | existing | `BANK_QUOTA_EXHAUSTED` / `PROJECT_QUOTA_EXHAUSTED` |
+| Bank/generation quota | `BANK_QUOTA_EXHAUSTED` / `PROJECT_QUOTA_EXHAUSTED` (existing) | existing quota details; no Sound Set reason token |
+
+Slot **layout** faults (slot count ≠ 16, duplicate or missing slot index,
+unknown role) are `soundset_slot_invalid`. Every other manifest shape fault
+(License block, artifact ref with malformed `sha256` / `media_type` /
+`byte_length`, unknown top-level key) is `soundset_manifest_invalid`.
 
 ## Locked Facade Surface
 
@@ -102,10 +129,17 @@ fields are invalid. `uuid` is a lowercase canonical UUID.
 
 | Operation | Kind | Exact fields after `operation` |
 | --- | --- | --- |
-| `soundset.catalog.list` | query | `workspace_path` |
-| `soundset.inspect` | query | `workspace_path, set_id, version, manifest_sha256` |
+| `soundset.catalog.list` | query | (none) |
+| `soundset.inspect` | query | `set_id, version, manifest_sha256` |
 | `soundset.map.preview` | query | `project_path, bank_id, set_id, version, manifest_sha256` |
 | `soundset.install` | command | `project_path, command_id, expected_revision, bank_id, set_id, version, manifest_sha256, occupied_pad_policy?` |
+
+Workspace-level operations resolve the Set Store and Catalog cache from
+`ApplicationConfig.workspace_root`, following the `provider.list` /
+`provider.select` precedent; a request carrying `workspace_path` fails the
+`exact_keys` check like any other extra field. `soundset.catalog.list` is a
+query with respect to Project Truth: it may refresh the Host-side Catalog
+cache, and that side effect never touches a Project, Asset, Pad, or revision.
 
 `soundset.map.preview` is the pure function
 `map(manifest, bank occupancy) → {proposed, collisions, kept}` and mutates
@@ -118,19 +152,20 @@ and zero Project change.
 ```text
 This plan #464
   └─ Task 1 Contract/package validation
-       └─ Task 2 Catalog transport / cache / Set Store
-            └─ (#436 merged) + (#471 lineage vocabulary frozen)
-                 ├─ Task 3 Project adoption
-                 │    └─ Task 4 Facade
-                 │         └─ Task 5 Creator
-                 └─ Tasks 1–5 ── Task 6 Assembly / current Portal
-                                    └─ Task 7 acceptance
+       └─ Task 2 CatalogTransport interface / local adapter / Set Store
+            └─ Task 3 Project adoption (+ lmdj.project.v4 Contract MINOR 4.1.0)
+                 └─ Task 4 Facade (+ quota rehearsal, S8-D6 audio, Host op tables)
+                      └─ Task 5 Creator (+ Web Host fetch transport)
+                           └─ Task 6 Assembly / current Portal
+                                └─ Task 7 acceptance
 ```
 
-[#436](https://github.com/endaye/lmdj/issues/436) is still OPEN. Do not start
-Tasks 3–7 while it is open. #471 may proceed in parallel as a Stage 12 design
-Task; Stage 11 Task 3 consumes its frozen `derivation.kind` / `source.kind`
-tokens and must not invent a second Lineage model.
+[#436](https://github.com/endaye/lmdj/issues/436) is CLOSED and `1.0.42.0` is
+the current Product Build; it gates nothing here. #471 is an open Stage 12
+design Task and is **not** a hard dependency: Task 3 consumes the `soundset`
+source and `soundset_install` derivation tokens from the approved Stage 11
+design (S11-D9), and #471's S12L-D6 must stay consistent with them. Task 3
+must not invent a second Lineage model.
 
 ## Design Traceability
 
@@ -138,17 +173,17 @@ tokens and must not invent a second Lineage model.
 | --- | --- | --- |
 | S11-D1 canonical identity | 1 | canonical-bytes golden vectors; non-canonical JSON rejected |
 | S11-D2 schema + license keys | 1 | four keys required; allowlist not a Schema enum |
-| S11-D3 S8-D6 audio | 1, 2 | `soundset_audio_unsupported` |
+| S11-D3 S8-D6 audio | 4 | `soundset_audio_unsupported` on inspect/preview/install via project-cooker |
 | S11-D4 role enum | 1 | unknown role → `soundset_slot_invalid` |
 | S11-D5 preview, no Project change | 4, 5 | inspect/preview leave revision unchanged |
-| S11-D6 catalog adapters, no archive | 2 | local adapter rejects symlink/`..`/non-regular file |
+| S11-D6 catalog adapters, no archive | 2 | `CatalogTransport` interface; local adapter rejects symlink/`..`/non-regular file |
 | S11-D7 download, unique bytes, Host limits | 2 | exact/+1 of four limits; hash mismatch invisible |
-| S11-D8 InstallSoundSet, quota, policy | 3, 4 | three write-sets; quota zero-change |
-| S11-D9 soundset Lineage | 3 | typed source fields all present |
+| S11-D8 InstallSoundSet, quota, policy | 3, 4 | three write-sets (Task 3); per-Pad decoded-PCM quota zero-change (Task 4) |
+| S11-D9 soundset Lineage | 3 | typed source fields all present; Project Contract `4.1.0` fixture + conformance |
 | S11-D10 error tokens | 1–4 | no new public error code |
 | S11-D11 index-identity map, no DSP | 3, 4 | slot `i` → pad `i`; no stretch |
 | S11-D12 empty slot is not wipe | 3, 4 | empty Set slot leaves occupied pad |
-| #465 Q1 eligibility | 1, 2 | `soundset_license_ineligible` vs Schema |
+| #465 Q1 eligibility | 1, 2, 4 | `soundset_license_ineligible` vs Schema; catalog `license_summary` equality at inspect |
 | #465 Q2 keep/replace | 3, 4 | three write-sets |
 | #465 Q3 no stretch | 3–5 | no DSP on install/apply |
 
@@ -172,19 +207,35 @@ tokens and must not invent a second Lineage model.
 - Test: `tests/core/foundation/soundset_manifest_test.cpp`
 
 - [ ] RED: Schema fixtures — valid 16-slot manifest; missing `license` key;
-      empty `rights_holder`; unknown `role`. Run
+      empty `rights_holder`; unknown `role`; 15 and 17 slots; duplicate slot
+      index; artifact ref with uppercase `sha256`. Run
       `python3 tests/conformance/schema_contract_test.py`; expect failure
       naming the new contracts.
 - [ ] Author both Schemas. `license.spdx_id` is a non-empty string, **not** an
-      enum of the allowlist. Role **is** the closed enum. Catalog
-      `license_summary` requires `spdx_id` and `rights_holder`.
+      enum of the allowlist. Role **is** the closed enum. `slots` uses the
+      same `allOf` / `contains` / `minContains` / `maxContains` pattern as the
+      Project Schema's 16 pads so each index 0–15 appears exactly once (the
+      conformance test's `contained_constants` helper already checks that
+      shape). Catalog `license_summary` requires `spdx_id` and
+      `rights_holder`.
 - [ ] RED: `soundset_manifest_test.cpp` — canonical byte equality; BOM/trailing
-      newline/key reorder/duplicate key/non-canonical number rejected;
-      allowlisted SPDX with empty BY attribution → eligibility
-      `soundset_license_ineligible`; unknown SPDX → same; missing license key
-      → `soundset_manifest_invalid`. Expect failure before implementation.
-- [ ] Implement bounded parse → Schema → `canonical_json` byte equality →
-      eligibility. Eligibility is not Schema.
+      newline/key reorder/duplicate key/non-canonical number rejected; slot
+      layout faults → `soundset_slot_invalid`; artifact ref / unknown key
+      faults → `soundset_manifest_invalid`; allowlisted SPDX with empty BY
+      attribution → eligibility `soundset_license_ineligible`; unknown SPDX →
+      same; missing license key → `soundset_manifest_invalid`. Expect failure
+      before implementation.
+- [ ] Implement bounded parse → structural validation → `canonical_json` byte
+      equality → eligibility. "Schema" in C++ means hand-written exact-keys
+      validation mirroring the JSON Schema, the way
+      `packages/authoring-domain/src/project.cpp` does with
+      `exact_object_keys`; the repository has no C++ JSON Schema validator and
+      this Task must not add one. Eligibility is a pure function over the
+      parsed manifest plus an optional catalog `license_summary`; it is not
+      Schema. The parser lives in `foundation` because it needs only
+      `canonical_json`, `valid_utf8`, `parse_bounded_json`, and the
+      foundation-private SHA-256, and must know nothing about Projects,
+      Workspaces, or Hosts; it decodes no audio.
 - [ ] GREEN: `scripts/core.sh test dev fast` and
       `python3 tests/conformance/schema_contract_test.py`.
 - [ ] `scripts/architecture-portal.sh check`.
@@ -207,27 +258,42 @@ Sound Set Contract identity until Task 6.
 
 **Files:**
 
+- Create: `packages/project-io/include/lmdj/project_io/soundset_catalog_transport.hpp`
+  (the injected `CatalogTransport` interface: two reads, canonical manifest
+  object and content-addressed blob, both addressed by `{object_kind, sha256}`)
 - Create: `packages/project-io/include/lmdj/project_io/soundset_store.hpp`
-- Create: `packages/project-io/src/soundset_store.cpp`
+- Create: `packages/project-io/src/soundset_store.cpp` (Set Store, staging,
+  limits, and the local directory adapter)
 - Modify: `packages/project-io/CMakeLists.txt`
-- Test: `tests/core/project_io/soundset_store_test.cpp`
-- Test: `tests/core/project_io/soundset_local_adapter_test.cpp`
+- Test: `tests/core/project_io/soundset_store_test.cpp` (uses an in-memory
+  fake `CatalogTransport` defined in the test)
+- Test: `tests/core/project_io/soundset_local_adapter_test.cpp` (native label:
+  symlink and non-regular-file cases need a POSIX filesystem; the Web OPFS
+  platform has neither)
 
 - [ ] RED: local adapter rejects `/`, `..`, non-lowercase sha256 basename,
       symlink, and non-regular file; opened bytes must match the requested
       hash. Expect failure.
-- [ ] RED: unique blob hash is downloaded once; declared `total_bytes` must
+- [ ] RED: unique blob hash is fetched once; declared `total_bytes` must
       equal canonical manifest bytes plus unique blob lengths; any mismatch
       leaves staging invisible. Tampered blob → `soundset_content_mismatch`.
+      A transport failure maps to `catalog_unavailable` and leaves every
+      already-published Set readable.
 - [ ] RED: four Host limits, each exact allowed and +1 fail-closed, using
       fixture-sized limits injected like other resource_limits tests.
-- [ ] Implement root-relative open with no symlink follow, atomic publish into
-      a Workspace read-only Set Store, and a network adapter that only fetches
-      `{object_kind, sha256}` (no archive unpack). Catalog unreachable is
-      `catalog_unavailable` and is non-fatal for already-published Sets.
-- [ ] GREEN: `scripts/core.sh test dev fast`.
+- [ ] Implement the `CatalogTransport` interface, the local directory adapter
+      (root-relative open with no symlink follow, `fstat` regular-file check,
+      bounded read, hash check), and atomic publish into a Workspace read-only
+      Set Store. Every adapter, local or Host-side network, resolves only
+      `{object_kind, sha256}`; there is no archive unpack. This Task ships **no** network code: the network
+      adapter is a Host-side `CatalogTransport` (Web Host in Task 5) and Core
+      keeps its offline vendored dependency set.
+- [ ] Do not validate audio format here. Set Store bytes are content-addressed
+      blobs; S8-D6 validation is the Facade's job in Task 4.
+- [ ] GREEN: `scripts/core.sh test dev fast` and
+      `bash scripts/verify-core-dependencies.sh` (unchanged dependency set).
 - [ ] `scripts/architecture-portal.sh check`.
-- [ ] Commit `feat(project-io): add Sound Set catalog adapters and Set Store`.
+- [ ] Commit `feat(project-io): add Sound Set catalog transport and Set Store`.
 
 **Version Management:** none in this Task's manifests. `project-io` SemVer is
 paid at Task 6.
@@ -238,37 +304,76 @@ paid at Task 6.
 
 **Issue:** [#670](https://github.com/endaye/lmdj/issues/670)
 
-**Serial after:** Task 2, #436, #471 lineage vocabulary freeze.
+**Serial after:** Task 2. (#436 is closed; #471 is not a dependency, see
+Dependency Order.)
 
 **Files:**
 
+- Modify: `contracts/project/lmdj.project.v4.schema.json` (Contract MINOR
+  `4.0.0` → `4.1.0`: `asset_lineage.source` becomes a `oneOf` of the existing
+  `asset_artifact` variant and the new `soundset` variant;
+  `asset_lineage.derivation` becomes a `oneOf` of the existing `resample`
+  variant and the new `soundset_install` variant; every variant keeps
+  `additionalProperties: false` and a constant `kind`)
+- Create: `tests/fixtures/contracts/project-v4-soundset-lineage-valid.json`
+- Create: `tests/fixtures/contracts/project-v4-soundset-lineage-invalid.json`
+  (missing `manifest_sha256`)
+- Modify: `tests/conformance/schema_contract_test.py` (`project_v4` version
+  `4.1.0`; both lineage variants asserted)
+- Modify: `packages/authoring-domain/include/lmdj/domain/project.hpp`
+  (`AssetLineage` source/derivation become typed variants)
+- Modify: `packages/authoring-domain/src/project.cpp` (parse and emit both
+  variants with exact keys; anything else still fails closed)
 - Modify: `packages/authoring-domain/include/lmdj/domain/commands.hpp`
+  (`MapSoundSet` pure function, `InstallSoundSet` command)
 - Modify: `packages/authoring-domain/src/command_handler.cpp`
-- Test: `tests/core/domain/soundset_install_test.cpp`
+- Modify: `packages/project-io/include/lmdj/project_io/project_store.hpp`
+  and `packages/project-io/src/project_store.cpp` (a multi-Asset,
+  multi-Pad commit request beside `ImportAssignSampleBytesRequest`; one
+  revision, one receipt)
 - Test: `tests/core/domain/soundset_map_test.cpp`
+- Test: `tests/core/domain/soundset_install_test.cpp`
+- Test: `tests/core/domain/project_test.cpp` (lineage round-trip for both
+  variants; existing `asset_artifact` / `resample` fixtures unchanged)
+- Test: `tests/core/project_io/soundset_install_commit_test.cpp`
 
+- [ ] RED: Schema fixtures — `soundset` lineage valid; missing typed field
+      invalid; existing v4 fixtures still valid. Run
+      `python3 tests/conformance/schema_contract_test.py`; expect failure.
 - [ ] RED: mapping function is slot-index identity; duplicate roles do not
-      permute; empty Set slots are `kept`.
+      permute; empty Set slots are `kept`; same input gives same output.
 - [ ] RED: three write-sets on an occupied target Bank — omitted policy →
-      `soundset_occupied_conflict` and unchanged revision; `keep` writes only
-      non-colliding `proposed` pads; `replace` writes every `proposed` pad;
-      empty Set slots never clear occupied pads.
-- [ ] RED: Bank and generation quota rehearsals count decoded float PCM per
-      Pad (duplicate Artifact on two Pads counts twice); either quota fails
-      with zero change.
-- [ ] Implement `InstallSoundSet` as one revision through the existing import
-      commit path. Each new Asset Lineage is
+      `soundset_occupied_conflict` with the full `collisions` list in details
+      and unchanged revision; `keep` writes only non-colliding `proposed`
+      pads; `replace` writes every `proposed` pad; empty Set slots never
+      clear occupied pads. Replaced Assets are not deleted (S8-D5).
+- [ ] RED: the store commit is atomic — N Assets plus N Pad assignments land
+      as exactly one revision with one receipt; a failure after staging
+      leaves Project, Assets, Pads, and revision unchanged; a replayed
+      `command_id` returns the stored receipt.
+- [ ] Implement `InstallSoundSet` as one revision through the same
+      writer-lease and receipt path the sample import commit uses. Each new
+      Asset Lineage is
       `source = {kind: soundset, set_id, set_version, manifest_sha256, slot_index, artifact_sha256}`,
-      `derivation.kind = soundset_install`. Editing a Pad afterwards is
+      `derivation = {kind: soundset_install}`. Editing a Pad afterwards is
       ordinary §5.2 derivation; Set Store bytes stay unchanged.
-- [ ] GREEN: `scripts/core.sh test dev fast`.
+- [ ] Quota rehearsal is **not** in this Task: decoded-PCM accounting and
+      `assess_runtime_quota` live in the Facade, so Task 4 owns that RED.
+      This Task's command takes already-validated Assets and never decodes
+      audio.
+- [ ] GREEN: `scripts/core.sh test dev fast` and
+      `python3 tests/conformance/schema_contract_test.py`.
 - [ ] `scripts/architecture-portal.sh check`.
-- [ ] Commit `feat(domain): install Sound Set slots as ordinary Assets`.
+- [ ] Commit `feat(domain): install Sound Set slots as ordinary Assets with soundset Lineage`.
 
-**Version Management:** none in this Task's manifests. `authoring-domain`
-SemVer is paid at Task 6. Do not add a Project Contract version unless #471
-has already allocated one for the Lineage union; never add a second Lineage
-field.
+**Version Management:** `lmdj.project.v4` Contract version `4.0.0` → `4.1.0`
+in the Schema `x-lmdj-contract-version` and the conformance test. The Contract
+ID does not change; a `4.0.0` reader rejects a `soundset` lineage by design,
+which is the backward-compatible-addition rule of
+`docs/governance/version-management.md` §7. The Assembly lock records the new
+Contract version at Task 6, not here. `authoring-domain` and `project-io`
+SemVer are paid at Task 6. Never add a second Lineage field or a Project
+Contract with a new ID.
 
 **Documentation impact:** none in this Task.
 
@@ -281,17 +386,37 @@ field.
 **Files:**
 
 - Modify: `packages/application-facade/include/lmdj/facade/application.hpp`
+  (`ApplicationConfig` gains an optional `std::shared_ptr<project_io::CatalogTransport>`
+  and the four Sound Set limits beside `runtime_preparation_limits`)
 - Modify: `packages/application-facade/src/application.cpp`
 - Test: `tests/core/facade/soundset_facade_test.cpp`
-- Host wiring (CLI/MCP/Native/Web operation tables) only as required for the
-  locked operation names to round-trip; no Creator UI.
+- Test: `tests/core/facade/soundset_install_quota_test.cpp`
+- Host operation tables, only as required for the locked names to round-trip
+  and for the `OperationKind` table to classify them: `apps/core-cli/`,
+  `apps/core-mcp/`, `apps/native-host/src/main.cpp`,
+  `packages/web-runtime-platform/src/control_runtime.cpp` and
+  `packages/web-runtime-platform/src/bridge.cpp` (operation deadline and
+  payload validation tables). No Creator UI, and no Web fetch transport yet;
+  Task 4 wires the Web Host with the local adapter only.
 
-- [ ] RED: locked operations reject extra fields; `map.preview` is zero
-      revision; `install` without policy on collisions returns
-      `soundset_occupied_conflict`; catalog list of a cached Set succeeds when
-      the network adapter is down.
+- [ ] RED: locked operations reject extra fields, including a stray
+      `workspace_path`; `map.preview` is zero revision; `install` without
+      policy on collisions returns `soundset_occupied_conflict`; catalog list
+      of a cached Set succeeds when the injected `CatalogTransport` fails
+      with `catalog_unavailable`; a catalog `license_summary` that differs
+      from the published manifest → `soundset_license_ineligible` at inspect.
+- [ ] RED: S8-D6 — a published Set whose blob is not PCM16 44.1/48 kHz
+      mono/stereo WAV → `UNSUPPORTED_AUDIO` + `soundset_audio_unsupported`
+      on inspect, slot preview, and install, with zero Project change.
+- [ ] RED: Bank and generation quota rehearsals count decoded float PCM per
+      Pad (duplicate Artifact on two Pads counts twice) through the existing
+      `assess_runtime_quota` binding-constraint rule; either quota fails with
+      `BANK_QUOTA_EXHAUSTED` / `PROJECT_QUOTA_EXHAUSTED` and zero change;
+      `occupied_pad_policy` never bypasses quota.
 - [ ] Implement the four operations. Preview of set/slot audio uses the
-      ordinary Runtime preview path and does not create Assets.
+      ordinary Runtime preview path and does not create Assets. Install
+      decodes each occupied slot once through the project-cooker WAV reader,
+      rehearses quota, then calls Task 3's store commit.
 - [ ] GREEN: `scripts/core.sh test dev fast`.
 - [ ] `scripts/architecture-portal.sh check`.
 - [ ] Commit `feat(facade): add Sound Set catalog, preview, and install operations`.
@@ -312,17 +437,31 @@ MAJOR is paid at Task 6.
 - Modify: `apps/creator-web/` catalog/install surfaces (exact files chosen at
   execution from the current Creator Mode Rail; do not invent a second Pad
   matrix).
+- Modify: `packages/web-runtime-platform/web/` and
+  `packages/web-runtime-platform/src/bridge.cpp` as required to supply the Web
+  Host's network `CatalogTransport`: browser `fetch` of exactly two object
+  kinds addressed by `{object_kind, sha256}` from the Host-configured Catalog
+  endpoint, bytes handed to Core through the bridge, Core keeps hash/length
+  verification. No archive, no redirect to other object kinds, no endpoint in
+  Project Truth.
 - Test: Creator unit/component tests for list, inspect, collision confirm
-  (`keep`/`replace`), and install receipt.
+  (`keep`/`replace`), and install receipt; a web-runtime-platform test that
+  the fetch transport refuses non-`{object_kind, sha256}` requests.
 
 - [ ] RED: listing a cached Set with Catalog unreachable still offers inspect
       and install; collision UI cannot submit without `keep` or `replace`;
-      empty Set slots are not presented as a clear-pad action.
+      empty Set slots are not presented as a clear-pad action; the `CC-BY-4.0`
+      `attribution` string is shown on listing and inspect.
 - [ ] Implement Catalog browse, set/slot preview, target-Bank picker, and
       install confirmation. No Marketplace chrome.
 - [ ] GREEN: Creator unit tests; Browser journey if the existing Creator proof
-      harness can host a local Catalog fixture, otherwise record the gap for
-      Task 7.
+      harness can host a local Catalog fixture server, otherwise record the
+      gap for Task 7.
+
+Native Hosts (`core-cli`, `core-mcp`, `native-host`) use the local directory
+adapter in v1. A native network `CatalogTransport` is a named follow-up with
+its own dependency decision; it is outside Tasks 1–7 and does not block the
+Stage 11 acceptance boundary.
 - [ ] `scripts/architecture-portal.sh check`.
 - [ ] Commit `feat(creator): add Sound Set catalog and install surface`.
 
@@ -335,8 +474,8 @@ paid at Task 6.
 
 **Issue:** [#673](https://github.com/endaye/lmdj/issues/673)
 
-**Serial after:** Tasks 1–5 and #436 (so Stage 10's `1.0.42.0` identity is
-consumed and current).
+**Serial after:** Tasks 1–5. (#436 is closed; `1.0.42.0` is consumed and
+current.)
 
 **Files:** active module/Host/Contract/Assembly manifests, `products/lmdj/`,
 current Architecture Portal pages and source diagrams named below.
@@ -346,9 +485,17 @@ current Architecture Portal pages and source diagrams named below.
       `release-intents.json`). Allocate the next unoccupied Product Build.
       If that target has been consumed, stop and refresh this table.
 - [ ] Write Contract identities `lmdj.soundset.v1` / `1.0.0` and
-      `lmdj.soundset-catalog.v1` / `1.0.0` into Assembly. Pay SemVer for
-      modules/Hosts whose public surface actually changed in Tasks 1–5.
-      Write the four Sound Set resource_limits into Host manifests.
+      `lmdj.soundset-catalog.v1` / `1.0.0` into Assembly, and record
+      `lmdj.project.v4` at `4.1.0` in Assembly and the Assembly lock. Pay
+      SemVer for modules/Hosts whose public surface actually changed in Tasks
+      1–5 (`authoring-domain` and `project-io` gained public types,
+      `application-facade` gained operations and config, `web-runtime-platform`
+      gained the fetch transport). Write the four Sound Set resource_limits
+      where each Host's limits actually live today: the Web Host reads them
+      from `tools/web-runtime/runtime-identity.json` through the generated
+      runtime identity; native Hosts currently pass
+      `runtime_preparation_limits` in code, so decide and record their
+      injection site in the same commit rather than guessing a manifest.
 - [ ] Update current Portal pages listed under Documentation Impact.
 - [ ] Automated acceptance: schema conformance, core fast/full, Facade
       install write-sets, local Catalog adapter, Creator unit tests.
@@ -356,8 +503,9 @@ current Architecture Portal pages and source diagrams named below.
 - [ ] Commit `feat(product): integrate Stage 11 Sound Set versions and current truth`.
 
 **Version Management:** required. Repeat the audit at execution; do not
-substitute a guessed Product Build. Baseline at plan authoring is Product
-`1.0.41.0` with Stage 10 Task 10 still targeting `1.0.42.0`.
+substitute a guessed Product Build. Baseline at this revision of the plan is
+Product `1.0.42.0`, consumed by #436; the next unoccupied Build is decided by
+the audit, not by this document.
 
 **Documentation impact:** required at this Task:
 
@@ -382,9 +530,10 @@ promotion.
 
 **Serial after:** Task 6.
 
-- [ ] Cross-Host black-box: list → inspect → map.preview → install keep →
-      install replace, each with far-side revision/Lineage/Set Store
-      assertions.
+- [ ] Cross-Host black-box against the local Catalog fixture: list → inspect →
+      map.preview → install keep → install replace, each with far-side
+      revision/Lineage/Set Store assertions. The Browser journey additionally
+      drives the Web fetch transport against a local fixture server.
 - [ ] Catalog unreachable: cached Set still inspectable and installable.
 - [ ] Physical/manual Safari/iPadOS catalog browse is listed as remaining
       human verification if no Browser fixture covers it; do not claim it
@@ -407,9 +556,9 @@ Module, Host, Provider, Contract, Assembly, Channel, or snapshot identity.
 | --- | --- | --- |
 | `lmdj.soundset.v1` | Task 1 schema, Task 6 Assembly | initial `1.0.0` |
 | `lmdj.soundset-catalog.v1` | Task 1 schema, Task 6 Assembly | initial `1.0.0` |
-| `foundation` / `project-io` / `authoring-domain` / `application-facade` / Hosts | Task 6 | pay SemVer only for surfaces Tasks 1–5 actually changed |
-| Product Build | Task 6 | next unoccupied after #436; audit immediately before mutation |
-| `lmdj.project` | only if #471 allocated a Lineage union revision | never a second Lineage field |
+| `lmdj.project.v4` | Task 3 schema + conformance, Task 6 Assembly/lock | Contract MINOR `4.0.0` → `4.1.0` for exactly the S11-D9 `soundset` source and `soundset_install` derivation variants; same Contract ID; never a second Lineage field |
+| `foundation` / `project-io` / `authoring-domain` / `application-facade` / `web-runtime-platform` / Hosts | Task 6 | pay SemVer only for surfaces Tasks 1–5 actually changed |
+| Product Build | Task 6 | next unoccupied after `1.0.42.0`; audit immediately before mutation |
 
 ## Documentation Impact
 
@@ -430,20 +579,22 @@ decision.
 | Plan | #464 | P2 | Docs/Governance | #465 |
 | 1 Contract/package validation | #668 | P2 | Contracts | #464 |
 | 2 Catalog transport/cache | #669 | P2 | Core | Task 1 |
-| 3 Project adoption | #670 | P2 | Core | Task 2, #436, #471 vocabulary |
-| 4 Facade | #671 | P2 | Core | Task 3 |
-| 5 Creator | #672 | P2 | Creator | Task 4 |
-| 6 Assembly / Portal | #673 | P2 | Product | Tasks 1–5, #436 |
+| 3 Project adoption (+ `lmdj.project.v4` 4.1.0) | #670 | P2 | Core / Contracts | Task 2 |
+| 4 Facade (+ quota, S8-D6, Host op tables) | #671 | P2 | Core | Task 3 |
+| 5 Creator (+ Web fetch transport) | #672 | P2 | Creator | Task 4 |
+| 6 Assembly / Portal | #673 | P2 | Product | Tasks 1–5 |
 | 7 Acceptance | #674 | P2 | Product | Task 6 |
 
 ## Final Acceptance Boundary
 
 Stage 11 is **implementation-complete** only when Tasks 1–7 are merged, a
 local Catalog Set can be inspected and installed into a user-chosen Bank as
-ordinary Assets with typed Lineage, collisions require `keep` or `replace`,
-empty Set slots do not wipe occupied pads, Catalog unreachable does not hide
-cached Sets, and the Product Build from Task 6 has current Portal truth plus
-an immutable snapshot.
+ordinary Assets with typed `soundset` Lineage under `lmdj.project.v4` `4.1.0`,
+the Web Host can do the same through its fetch transport, collisions require
+`keep` or `replace`, empty Set slots do not wipe occupied pads, Catalog
+unreachable does not hide cached Sets, Core's vendored dependency set is
+unchanged, and the Product Build from Task 6 has current Portal truth plus an
+immutable snapshot. A native network transport is not part of this boundary.
 
 Stage 11 is **not** Marketplace-complete. Umbrella #470 stays open until
 Tasks 1–7 plus that snapshot exist. This plan does not close #470.
