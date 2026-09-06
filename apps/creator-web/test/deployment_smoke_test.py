@@ -23,6 +23,7 @@ from deployment_smoke import (  # noqa: E402
     CSP,
     REQUIRED_SECURITY_HEADERS,
     SmokeError,
+    discover_http_identity,
     smoke,
 )
 
@@ -256,6 +257,62 @@ class CreatorDeploymentSmokeTest(unittest.TestCase):
                 expected_host_id="creator-web",
                 require_https=False,
             )
+
+    def _rewrite_as_legacy_creator_2(self) -> None:
+        self.fixture.manifest["assets"] = [
+            entry
+            for entry in self.fixture.manifest["assets"]
+            if entry["role"] != "perform_master_tap_worklet"
+        ]
+        self.fixture.manifest["host_version"] = "2.1.1"
+        self.fixture.manifest["compatible_hosts"] = [
+            {"host_id": "web-runtime-host", "host_version": "2.1.1"}
+        ]
+        self.fixture.manifest["platform_version"] = "2.0.1"
+        digest = hashlib.sha256(canonical_json(self.fixture.manifest)).hexdigest()
+        main = next(
+            entry for entry in self.fixture.manifest["assets"] if entry["role"] == "host_main"
+        )
+        style = next(
+            entry for entry in self.fixture.manifest["assets"] if entry["role"] == "host_style"
+        )
+        self.fixture.payloads["/host-manifest.json"] = canonical_json(self.fixture.manifest)
+        index = (
+            "<!doctype html><html><head>"
+            f'<meta name="lmdj-host-manifest-sha256" content="{digest}">'
+            '<meta name="lmdj-host-manifest-path" content="./host-manifest.json">'
+            '<meta name="lmdj-product-build" content="1.0.41.0">'
+            '<meta name="lmdj-host-id" content="creator-web">'
+            '<meta name="lmdj-host-version" content="2.1.1">'
+            f'<link rel="stylesheet" href="./{style["path"]}">'
+            f'<script type="module" src="./{main["path"]}"></script>'
+            "</head><body>Creator</body></html>"
+        ).encode()
+        self.fixture.payloads["/index.html"] = index
+        self.fixture.payloads["/"] = index
+
+    def test_accepts_creator_2_prior_five_asset_inventory(self) -> None:
+        self._rewrite_as_legacy_creator_2()
+        result = self.run_smoke(expected_host="2.1.1")
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["host_version"], "2.1.1")
+        self.assertEqual(result["asset_count"], 5)
+        identity = discover_http_identity(
+            base_url=self.server.base_url,
+            require_https=False,
+        )
+        self.assertEqual(identity["product_build"], "1.0.41.0")
+        self.assertEqual(identity["host_version"], "2.1.1")
+
+    def test_rejects_creator_3_without_perform_master_tap_worklet(self) -> None:
+        self.fixture.manifest["assets"] = [
+            entry
+            for entry in self.fixture.manifest["assets"]
+            if entry["role"] != "perform_master_tap_worklet"
+        ]
+        self.fixture.update()
+        with self.assertRaisesRegex(SmokeError, "manifest required asset role inventory is invalid"):
+            self.run_smoke()
 
     def test_cli_scrubs_credentials_and_prints_only_canonical_json(self) -> None:
         environment = os.environ.copy()
