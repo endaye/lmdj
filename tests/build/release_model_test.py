@@ -262,13 +262,14 @@ class ReleaseModelTest(unittest.TestCase):
         )
         stage10 = ledger.intent_for_tag("lmdj-v1.0.42.0")
         self.assertIsNotNone(stage10)
-        # Task 12 binds TARGET to the Task 11 squash on protected main, which
+        # Published 2026-09-06 through publish-release.yml run 34017371873.
+        # Task 12 bound TARGET to the Task 11 squash on protected main, which
         # is the first main commit that contains the 1.0.42.0 squash witness.
         # The Task 10 squash (0ffa77c0) froze the snapshot but does not carry
         # that witness file. The Integration Queue merges with GITHUB_TOKEN, so
         # the squash produced no push-event Core CI run and the exact-main full
         # run was dispatched on that same SHA.
-        self.assertEqual(stage10.disposition.value, "releasable")  # type: ignore[union-attr]
+        self.assertEqual(stage10.disposition.value, "published")  # type: ignore[union-attr]
         self.assertEqual(stage10.channel, "canary")  # type: ignore[union-attr]
         self.assertEqual(stage10.profile, "web-hosts")  # type: ignore[union-attr]
         self.assertEqual(  # type: ignore[union-attr]
