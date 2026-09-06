@@ -138,6 +138,31 @@ class CheckedInTopologyTest(unittest.TestCase):
 
 
 class DeploymentContractTest(unittest.TestCase):
+    def test_deploy_finds_the_controller_from_a_repository_checkout(self):
+        """A clone must be a valid staging directory.
+
+        `elastic_runner.py` lives in `scripts/ci/` because the contract tests
+        import it there; the deploy script, the unit files and the host
+        configs live one directory down. The script used to install
+        `$here/elastic_runner.py`, which exists in neither layout a clone
+        produces, so the documented redeploy failed with `install: cannot
+        stat` on the first host that needed it.
+        """
+        script = (ROOT / "scripts/ci/elastic-runner/deploy-controller.sh").read_text()
+        self.assertIn('controller="$here/../elastic_runner.py"', script)
+        self.assertIn('install -o root -g root -m 0755 "$controller"', script)
+        self.assertNotIn(
+            'install -o root -g root -m 0755 "$here/elastic_runner.py"',
+            script,
+            msg=("why: the controller is not beside this script in the repository, "
+                 "so installing from $here fails on a clone; remedy: resolve it "
+                 "from $here/../ with a fallback"),
+        )
+        self.assertTrue(
+            (ROOT / "scripts/ci/elastic_runner.py").is_file(),
+            "the path the script resolves must be where the controller actually is",
+        )
+
     def test_deploy_enables_declared_baselines_after_daemon_reload(self):
         script = (
             ROOT / "scripts/ci/elastic-runner/deploy-controller.sh"

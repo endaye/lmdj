@@ -290,13 +290,29 @@ expected_contract_sources = {
     "contracts/project/lmdj.project.v3.schema.json": "3.0.0",
     "contracts/project/lmdj.project.v4.schema.json": "4.0.0",
     "contracts/project/lmdj.project-bundle.v1.schema.json": "1.1.0",
+    "contracts/soundset/lmdj.soundset.v1.schema.json": "1.0.0",
+    "contracts/soundset-catalog/lmdj.soundset-catalog.v1.schema.json": "1.0.0",
     "contracts/version/lmdj.product-version.v1.schema.json": "1.0.0",
 }
 actual_contract_sources = sorted(
     path.relative_to(repo_root).as_posix()
     for path in (repo_root / "contracts").glob("*/*.schema.json")
 )
-assert actual_contract_sources == sorted(expected_contract_sources)
+unregistered_contracts = [
+    path for path in actual_contract_sources if path not in expected_contract_sources
+]
+retired_contracts = [
+    path for path in sorted(expected_contract_sources)
+    if path not in actual_contract_sources
+]
+assert not unregistered_contracts and not retired_contracts, (
+    "contract source inventory is stale: every contracts/<family>/*.schema.json "
+    "file is Contract identity this gate must know; "
+    f"unregistered on disk={unregistered_contracts}, "
+    f"listed but absent={retired_contracts}. "
+    "Remedy: add or remove the path in expected_contract_sources above, mapped "
+    "to the file's x-lmdj-contract-version."
+)
 for relative, contract_version in expected_contract_sources.items():
     contract = json.loads((repo_root / relative).read_text(encoding="utf-8"))
     assert contract["x-lmdj-contract-version"] == contract_version

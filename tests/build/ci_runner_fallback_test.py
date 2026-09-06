@@ -360,8 +360,8 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertNotIn("apt-get", coverage)
         self.assertNotIn("GitHub-hosted runner", coverage)
         self.assertIn("name: Verify coverage toolchain", coverage)
-        self.assertIn("command -v clang-18", coverage)
-        self.assertIn("command -v llvm-cov-18", coverage)
+        self.assertIn("command -v clang-22", coverage)
+        self.assertIn("command -v llvm-cov-22", coverage)
 
     def test_cut_over_web_gates_record_why_the_hosted_pin_was_lifted(self) -> None:
         """The routing reason must survive, or a later pass will churn it back.

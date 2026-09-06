@@ -31,6 +31,10 @@ schema_paths = {
     "product_version": (
         contract_root / "version" / "lmdj.product-version.v1.schema.json"
     ),
+    "soundset": contract_root / "soundset" / "lmdj.soundset.v1.schema.json",
+    "soundset_catalog": (
+        contract_root / "soundset-catalog" / "lmdj.soundset-catalog.v1.schema.json"
+    ),
 }
 
 
@@ -606,6 +610,70 @@ zero_build_rule = product_version["allOf"][0]
 assert zero_build_rule["if"]["properties"]["build"]["const"] == 0
 assert zero_build_rule["then"]["properties"]["patch"]["const"] == 0
 
+soundset = schemas["soundset"]
+assert soundset["properties"]["contract"]["const"] == "lmdj.soundset.v1"
+assert set(soundset["required"]) == {
+    "contract",
+    "set_id",
+    "version",
+    "name",
+    "publisher",
+    "license",
+    "slots",
+}
+soundset_slots = soundset["properties"]["slots"]
+assert soundset_slots["minItems"] == 16
+assert soundset_slots["maxItems"] == 16
+assert contained_constants(soundset_slots["allOf"], "slot") == set(range(16))
+soundset_roles = [
+    "kick",
+    "snare",
+    "clap",
+    "hat_closed",
+    "hat_open",
+    "perc",
+    "cymbal",
+    "bass",
+    "melody",
+    "chord",
+    "vocal",
+    "fx",
+    "other",
+]
+occupied_slot = soundset["$defs"]["slot"]["oneOf"][1]
+assert occupied_slot["properties"]["role"]["enum"] == soundset_roles
+license_schema = soundset["$defs"]["license"]
+assert set(license_schema["required"]) == {
+    "spdx_id",
+    "rights_holder",
+    "copyright",
+    "attribution",
+}
+assert license_schema["properties"]["spdx_id"] == {
+    "type": "string",
+    "minLength": 1,
+}
+assert "enum" not in license_schema["properties"]["spdx_id"], (
+    "why: SPDX allowlist is eligibility, not Schema; "
+    "remedy: keep license.spdx_id a non-empty string"
+)
+
+soundset_catalog = schemas["soundset_catalog"]
+assert soundset_catalog["properties"]["contract"]["const"] == (
+    "lmdj.soundset-catalog.v1"
+)
+catalog_license = soundset_catalog["$defs"]["license_summary"]
+assert set(catalog_license["required"]) == {"spdx_id", "rights_holder"}
+assert catalog_license["additionalProperties"] is False
+assert catalog_license["properties"]["spdx_id"] == {
+    "type": "string",
+    "minLength": 1,
+}
+assert "enum" not in catalog_license["properties"]["spdx_id"]
+assert soundset_catalog["$defs"]["entry"]["properties"]["roles_summary"][
+    "items"
+]["enum"] == soundset_roles
+
 foundation_manifest = load_json(
     repo_root / "packages" / "foundation" / "module.json"
 )
@@ -685,6 +753,70 @@ json_schema.check(
 json_schema.check(valid_project_v2, project_v2, "project-v2-valid")
 json_schema.check(valid_project_v3, project_v3, "project-v3-valid")
 json_schema.check(valid_project_v4, project_v4, "project-v4-valid")
+
+valid_soundset = load_json(fixture_root / "soundset-v1-valid.json")
+json_schema.check(valid_soundset, soundset, "soundset-v1-valid")
+json_schema.check(
+    load_json(fixture_root / "soundset-catalog-v1-valid.json"),
+    soundset_catalog,
+    "soundset-catalog-v1-valid",
+)
+invalid_soundset_license = load_json(
+    fixture_root / "soundset-v1-invalid-license-schema.json"
+)
+assert json_schema.validate(invalid_soundset_license, soundset), (
+    "why: a Sound Set object missing license must fail Schema; "
+    "remedy: keep license required"
+)
+assert "license" not in invalid_soundset_license
+empty_rights_holder = mutated(
+    valid_soundset, ["license", "rights_holder"], ""
+)
+assert json_schema.validate(empty_rights_holder, soundset), (
+    "why: empty rights_holder is a Schema fault; "
+    "remedy: keep license.rights_holder minLength 1"
+)
+unknown_role = mutated(valid_soundset, ["slots", 0, "role"], "cowbell")
+assert json_schema.validate(unknown_role, soundset), (
+    "why: role is a closed Schema enum; "
+    "remedy: keep occupied slot role on the v1 enum"
+)
+fifteen_slots = mutated(valid_soundset, ["slots"], valid_soundset["slots"][:15])
+seventeen_slots = mutated(
+    valid_soundset, ["slots"], valid_soundset["slots"] + [{"slot": 0}]
+)
+assert json_schema.validate(fifteen_slots, soundset), (
+    "why: slots must contain exactly 16 entries; remedy: keep minItems/maxItems 16"
+)
+assert json_schema.validate(seventeen_slots, soundset), (
+    "why: slots must contain exactly 16 entries; remedy: keep minItems/maxItems 16"
+)
+duplicate_slot = json.loads(json.dumps(valid_soundset))
+duplicate_slot["slots"][1] = {"slot": 0}
+assert json_schema.validate(duplicate_slot, soundset), (
+    "why: each slot index 0-15 must appear exactly once; "
+    "remedy: keep the allOf contains minContains/maxContains 1 pattern"
+)
+uppercase_sha256 = mutated(
+    valid_soundset,
+    ["slots", 0, "artifact", "sha256"],
+    "A" * 64,
+)
+assert json_schema.validate(uppercase_sha256, soundset), (
+    "why: artifact sha256 is lowercase hex; remedy: keep the sha256 pattern"
+)
+unknown_spdx = mutated(valid_soundset, ["license", "spdx_id"], "MIT")
+json_schema.check(
+    unknown_spdx,
+    soundset,
+    "soundset SPDX allowlist is not a Schema enum",
+)
+empty_by_attribution = mutated(valid_soundset, ["license", "attribution"], "")
+json_schema.check(
+    empty_by_attribution,
+    soundset,
+    "empty CC-BY attribution is eligibility, not Schema",
+)
 json_schema.check(
     migration_project_v4,
     project_v4,

@@ -47,6 +47,7 @@
     {"match": {"kind": "prefix", "value": "docs/governance/"}, "lanes": ["portal"]},
     {"match": {"kind": "exact", "value": "docs/governance/github-work-management.md"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "prefix", "value": "docs/quality/"}, "lanes": ["portal"]},
+    {"match": {"kind": "exact", "value": "docs/quality/core-test-policy.md"}, "lanes": ["ci_contract"], "note": "tests/build/ci_toolchain_pin_test.py asserts the policy names the pinned Clang/LLVM major"},
     {"match": {"kind": "exact", "value": "docs/deploy/architecture-portal.md"}, "lanes": ["portal"]},
     {"match": {"kind": "exact", "value": "docs/deploy/web-runtime-host.md"}, "lanes": ["portal", "deploy_contract"]},
     {"match": {"kind": "exact", "value": "docs/deploy/creator-web.md"}, "lanes": ["portal", "deploy_contract"]},

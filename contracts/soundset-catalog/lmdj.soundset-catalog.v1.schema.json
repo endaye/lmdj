@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/soundset-catalog/lmdj.soundset-catalog.v1.schema.json",
+  "x-lmdj-contract-version": "1.0.0",
+  "title": "LMDJ Sound Set Catalog Contract v1",
+  "type": "object",
+  "required": [
+    "contract",
+    "entries"
+  ],
+  "properties": {
+    "contract": {
+      "const": "lmdj.soundset-catalog.v1"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      },
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "license_summary": {
+      "type": "object",
+      "required": [
+        "spdx_id",
+        "rights_holder"
+      ],
+      "properties": {
+        "spdx_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rights_holder": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "entry": {
+      "type": "object",
+      "required": [
+        "set_id",
+        "version",
+        "manifest_sha256",
+        "total_bytes",
+        "name",
+        "publisher",
+        "roles_summary",
+        "license_summary"
+      ],
+      "properties": {
+        "set_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "version": {
+          "$ref": "#/$defs/semver"
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publisher": {
+          "type": "string",
+          "minLength": 1
+        },
+        "roles_summary": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "kick",
+              "snare",
+              "clap",
+              "hat_closed",
+              "hat_open",
+              "perc",
+              "cymbal",
+              "bass",
+              "melody",
+              "chord",
+              "vocal",
+              "fx",
+              "other"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "bpm": {
+          "type": "integer",
+          "minimum": 40,
+          "maximum": 240
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license_summary": {
+          "$ref": "#/$defs/license_summary"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
