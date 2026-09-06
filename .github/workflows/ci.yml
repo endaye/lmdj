@@ -573,8 +573,26 @@ jobs:
             Sign every comment you post -- each inline comment and any summary comment -- by making its very first line exactly:
             <!-- lmdj-review: ${{ matrix.backend }} -->
             That line is read by the advisory review liveness check to tell the two backends apart. Do not omit, alter, or move it.
+          # `curl` because a clean review must land as an issue comment and
+          # `gh` is not installed on this role's runners; without the tool the
+          # model improvises and files the clean summary as a blocking thread.
           claude_args: >-
-            --allowedTools "mcp__github_inline_comment__create_inline_comment"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(curl:*)"
+
+      # Deterministic counterpart to the prompt rule above. A prompt is an
+      # instruction, not a guarantee, and five clean "No issues found" threads
+      # were resolved by hand on 2026-09-06 purely to unblock merges. This
+      # resolves one only when it is unresolved, unanswered, signed by this
+      # backend and carries no finding marker.
+      - name: Retire a clean review posted as a thread
+        if: ${{ always() && steps.backend.outputs.run == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/retire_clean_review_threads.py \
+            "${{ github.repository }}" \
+            "${{ github.event.pull_request.number }}" \
+            "<!-- lmdj-review: ${{ matrix.backend }} -->"
 
   pre-heavy-gate:
     name: Pre-heavy Gate

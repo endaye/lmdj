@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-09-06
     occurrence: https://github.com/endaye/lmdj/pull/685
     observed_by: claude-code/opus-5
+  - date: 2026-09-06
+    occurrence: https://github.com/endaye/lmdj/pull/707
+    observed_by: claude-code/opus-5
 exit: gate:tests/build/ci_change_scope_test.py
 ---
 
@@ -58,7 +61,13 @@ asserting on a ledger entry, three tests asserting on
 `deploy_contract` lane, not `ci_contract` -- asserting on
 `.agents/skills/lmdj-release/SKILL.md`. None ran when those documents were
 edited. `.agents/` as a whole now also selects `ci_contract`, and the release
-skill additionally selects `deploy_contract`.
+skill additionally selects `deploy_contract`. The fourth occurrence was
+`.claude/commands/pr-review.md`: two `ci_contract` tests assert on the vendored
+review prompt, while the prompt routed to `docs_static` alone, so amending it
+ran neither. The gate's own scan was the reason it stayed invisible -- it read
+`docs/` and `.agents/` and had never looked at `.claude/`. Both are widened
+here: a document tree that a test reads is in scope for this gate wherever it
+lives, and the exit is only as good as the paths it scans.
 
 ## How to apply
 
