@@ -3,9 +3,10 @@ name: Self-hosted Core Benchmark
 # Non-authoritative host measurement for the four native Core lanes, the
 # counterpart of `ci-self-hosted-benchmark.yml` for `ci-web-heavy`. It exists
 # because the native-heavy chain owns the longest phase wall clock in Core CI
-# and had no measurement of its own: any proposal to move `ci-core` off the
-# shared Contabo host needs same-revision timings from both hosts, and a
-# workflow is the only way to obtain them on a trusted runner.
+# and had no measurement of its own: any proposal to move `ci-core` between
+# hosts needs same-revision timings from both, and a workflow is the only way
+# to obtain them on a trusted runner. The 2026-09-06 move from Contabo to
+# netcup (#676, decided on #298) was measured with it.
 #
 # It never contributes a formal result. `PR Gate` does not read this workflow,
 # it carries no lane manifest, and a benchmark run is not release evidence.
@@ -51,14 +52,15 @@ permissions:
 
 jobs:
   benchmark:
-    # The job name prefix is registered in `core_job_names` of
-    # `scripts/ci/elastic-runner/contabo.json`. Without that registration the
+    # The job name prefix is registered in `core_job_names` of the host JSON
+    # that carries `ci-core` -- `scripts/ci/elastic-runner/netcup.json` since
+    # the 2026-09-06 move (#676). Without that registration the
     # elastic controller classifies this job as non-core and keeps scaling out
     # while a timing-sensitive Core measurement is running.
     name: Core benchmark (${{ inputs.lane }})
     # Same repository-wide capacity queue as the formal native-heavy chain.
-    # Separate runner services on the shared Contabo host do not provide
-    # independent CPU capacity, so a benchmark outside this queue would both
+    # Separate runner services on one host do not provide independent CPU
+    # capacity, so a benchmark outside this queue would both
     # corrupt its own measurement and blow a concurrent formal lane's test
     # budgets.
     concurrency:
