@@ -244,6 +244,8 @@ class GitHubClient:
         if total_count != len(raw_runs):
             raise GitHubApiError("GitHub run pagination is incomplete")
         for run in raw_runs:
+            if not _is_workflow_file_run(run):
+                continue
             workflow_id, workflow_path = _run_workflow_reference(run)
             cached = workflows.get(workflow_id)
             if cached is None:
@@ -822,6 +824,25 @@ def _run_workflow_reference(run: object) -> tuple[int, str]:
     ):
         raise GitHubApiError("GitHub run workflow identity is invalid")
     return workflow_id, workflow_path
+
+
+def _is_workflow_file_run(run: object) -> bool:
+    """Report whether a run was produced by a workflow file in this repository.
+
+    GitHub also reports runs that name no workflow file at all — Dependabot's
+    dependency-graph runs carry paths like `dynamic/dependabot/update-graph`.
+    They can never be release evidence, and they are immutable history on any
+    SHA they touch, so treating them as malformed would permanently void the
+    run projection for that release target.
+    """
+    if not isinstance(run, dict):
+        return False
+    workflow_path = run.get("path")
+    return (
+        isinstance(workflow_path, str)
+        and workflow_path.startswith(".github/workflows/")
+        and not workflow_path.endswith("/")
+    )
 
 
 def _parse_run(run: object, stable_workflow_name: str) -> RunProjection:

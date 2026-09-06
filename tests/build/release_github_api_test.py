@@ -279,6 +279,39 @@ class ReleaseGitHubApiTest(unittest.TestCase):
             [self.workflow_url()],
         )
 
+    def test_runs_outside_the_workflow_directory_are_skipped(self) -> None:
+        """A Dependabot dependency-graph run must not void the whole projection.
+
+        Such runs carry `path` values like `dynamic/dependabot/update-graph`,
+        which name no workflow file. They can never be release evidence, and
+        failing the enumeration on them makes the canonical audit report a
+        misleading `external-error` for every release target Dependabot
+        touches.
+        """
+        dynamic_run = run_document(
+            SECOND_RUN_ID,
+            event="dynamic",
+            name="Graph Update: pip in /apps/core-mcp",
+            path="dynamic/dependabot/update-graph",
+        )
+        self.transport.json_route(
+            self.runs_url(),
+            {"total_count": 2, "workflow_runs": [run_document(), dynamic_run]},
+        )
+        self.transport.json_route(self.workflow_url(), workflow_document())
+
+        runs = self.client.list_runs_for_sha(REPOSITORY, TARGET)
+
+        self.assertEqual(
+            runs,
+            [
+                RunProjection(
+                    RUN_ID, "workflow_dispatch", TARGET, "main", "Core CI",
+                    "completed", "success",
+                ),
+            ],
+        )
+
     def test_run_and_workflow_metadata_identity_must_match(self) -> None:
         for name, run, workflow in (
             ("workflow id", run_document(), workflow_document(id=WORKFLOW_ID + 1)),
