@@ -89,7 +89,7 @@ jobs:
           # toolchain from a wrapper on the PATH that forwards to a different
           # compiler, and that distinction is exactly what deciding whether this
           # host can carry native Core work turns on.
-          for tool in clang-18 clang++-18 llvm-cov-18 ccache cmake ninja python3 git-lfs; do
+          for tool in clang-22 clang++-22 llvm-cov-22 ccache cmake ninja python3 git-lfs; do
             if tool_path="$(command -v "$tool" 2>/dev/null)"; then
               version="$("$tool" --version 2>&1 | head -n1 | cut -c1-60)"
               emit "| \`$tool\` | yes | $version | \`$tool_path\` |"

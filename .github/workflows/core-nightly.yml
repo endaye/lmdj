@@ -2,12 +2,6 @@ name: Core Nightly
 
 on:
   workflow_dispatch:
-    inputs:
-      probe_self_hosted_tsan:
-        description: Run the matching TSan lane on ci-core for compatibility evidence.
-        required: false
-        type: boolean
-        default: false
   schedule:
     - cron: "0 19 * * *"
 
@@ -20,36 +14,18 @@ concurrency:
 
 jobs:
   core-tsan:
-    # Keep the scheduled authority on a clean Hosted image until an explicit
-    # same-revision probe proves that the self-hosted Core host can execute the
-    # TSan runtime. Both self-hosted hosts fail `unexpected memory mapping`
-    # under the 6.8 kernel's 32-bit `vm.mmap_rnd_bits` (#676, #693).
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          lfs: true
-      - run: git lfs checkout -- tests/fixtures
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - run: python3 tests/fixtures/audio/make_fixtures.py
-      - run: python3 tests/fixtures/golden/reference_render.py
-      - run: bash scripts/verify-core-dependencies.sh
-      - run: scripts/core.sh configure tsan
-      - run: scripts/core.sh build tsan
-      - run: scripts/core.sh test tsan stress
-
-  core-tsan-self-hosted-probe:
-    # Same repository-wide capacity queue as every other native-heavy job.
-    # Separate runner services on the `ci-core` host are not independent
-    # CPU: without this, a dispatch of this probe starts in the same second as
-    # `core-stress` below and the two timing-sensitive suites destroy each
-    # other's budgets. The first dispatch did exactly that, and its failure said
-    # nothing about whether the host can execute the TSan runtime -- which is
-    # the only question the probe exists to answer.
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.probe_self_hosted_tsan }}
+    # Trusted native Core workload on the `ci-core` role since #693. TSan was
+    # Hosted from 2026-08-05 because the self-hosted hosts' 6.8 kernel hands
+    # out 32-bit `vm.mmap_rnd_bits` and no TSan runtime -- GCC 13, LLVM 18 or
+    # LLVM 22 -- can start under that layout without re-exec'ing with ASLR
+    # off, which `LockPersonality=true` forbids. The host now caps the entropy
+    # at 28 (scripts/ci/host/configure-sanitizer-aslr.sh), and the same-
+    # revision probe passed with that state: run 34030066433 on
+    # netcup-lmdj-linux-04, 11/11 stress tests, 52 s, beside the Hosted lane's
+    # 11/11 in 157 s (docs/quality/2026-09-06-llvm-22-coverage-measurement.md). The
+    # prerequisite is verified below before any TSan binary runs, so a host
+    # that loses the setting fails with the remedy named instead of with a
+    # runtime FATAL or, on some runtimes, no output at all.
     concurrency:
       group: lmdj-native-heavy
       queue: max
@@ -67,7 +43,22 @@ jobs:
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
-      - run: scripts/core.sh configure tsan
+      - name: Verify the TSan host prerequisite
+        run: |
+          bits="$(sysctl -n vm.mmap_rnd_bits)"
+          if [ "$bits" -gt 28 ]; then
+            echo "why: vm.mmap_rnd_bits is $bits on $(hostname); ThreadSanitizer cannot start under more than 28 bits of mmap ASLR entropy and the runner unit forbids the re-exec it would use to cope; remedy: an operator runs sudo scripts/ci/host/configure-sanitizer-aslr.sh on this host" >&2
+            exit 1
+          fi
+          echo "vm.mmap_rnd_bits=$bits on $(hostname)"
+      - name: Verify the TSan toolchain
+        # Host state, provisioned once by the operator with
+        # scripts/ci/host/install-llvm-toolchain.sh; the lane installs nothing
+        # on a machine several runner services share.
+        run: |
+          command -v clang-22
+          command -v clang++-22
+      - run: env CC=clang-22 CXX=clang++-22 scripts/core.sh configure tsan
       - run: scripts/core.sh build tsan
       - run: scripts/core.sh test tsan stress
 
