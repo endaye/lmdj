@@ -1,5 +1,5 @@
 ---
-allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), mcp__github_inline_comment__create_inline_comment
+allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(curl:*), mcp__github_inline_comment__create_inline_comment
 description: Code review a pull request
 ---
 
@@ -26,9 +26,19 @@ runner beside repository credentials names its bytes.
 Renamed to `pr-review` because Claude Code ships its own `/code-review`, and two
 commands under one name is a collision waiting to be diagnosed.
 
+Local amendments to the body, to be re-applied after any sync:
+
+  1. the signature-line rule (step 7 notes) -- the liveness check reads it to
+     tell two backends apart, which post under one GitHub identity;
+  2. a clean review is a Pull Request issue comment, never a review thread,
+     with a REST fallback when `gh` is absent -- a thread is held open by this
+     repository's conversation-resolution rule, so a clean review filed as a
+     thread blocks the merge it just approved (#659). `Bash(curl:*)` is in
+     allowed-tools for that fallback.
+
 To sync: refetch the source path above, replace the body below this comment,
-and update Blob, Repo HEAD and Retrieved. `tests/build/ci_claude_review_workflow_test.py`
-requires this header to stay.
+re-apply the amendments listed here, and update Blob, Repo HEAD and Retrieved.
+`tests/build/ci_claude_review_workflow_test.py` requires this header to stay.
 -->
 
 
@@ -91,7 +101,7 @@ Note: Still review Claude generated PR's.
 
    If `--comment` argument was NOT provided, stop here. Do not post any GitHub comments.
 
-   If `--comment` argument IS provided and NO issues were found, post a summary comment using `gh pr comment` and stop.
+   If `--comment` argument IS provided and NO issues were found, post the summary as a **Pull Request issue comment** and stop. Use `gh pr comment` when the `gh` CLI is available; when it is not, POST to `/repos/{owner}/{repo}/issues/{number}/comments` with `$GITHUB_TOKEN` (for example with `curl`). **Never post a clean review as a review comment or review thread.** A thread is held open by this repository's conversation-resolution rule until a human clicks resolve, so filing "no issues found" as a thread turns a clean review into a merge blocker.
 
    If `--comment` argument IS provided and issues were found, continue to step 8.
 
@@ -116,11 +126,11 @@ Use this list when evaluating issues in Steps 4 and 5 (these are false positives
 
 Notes:
 
-- Use gh CLI to interact with GitHub (e.g., fetch pull requests, create comments). Do not use web fetch.
+- Use gh CLI to interact with GitHub (e.g., fetch pull requests, create comments). Do not use web fetch. If `gh` is absent on the runner, call the REST API directly with `$GITHUB_TOKEN` instead; do not silently change *where* a comment lands because of a missing tool.
 - Create a todo list before starting.
 - You must cite and link each issue in inline comments (e.g., if referring to a CLAUDE.md, include a link to it).
 - If your instructions specify a signature line, it is the **first line of every comment you post**, inline or summary, before any format given below. It is machine-read; reproduce it exactly and never omit it.
-- If no issues are found and `--comment` argument is provided, post a comment with the following format (after the signature line, if one was specified):
+- If no issues are found and `--comment` argument is provided, post an **issue comment** (never a review thread — see step 7) with the following format (after the signature line, if one was specified):
 
 ---
 

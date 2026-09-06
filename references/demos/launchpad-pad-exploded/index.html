@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Launchpad Pad 爆炸机构图</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">LMDJ</span>
+        <span class="brand-title">Pad 爆炸机构图</span>
+        <span class="brand-sub">主流 Launchpad / MPC 类 pad 的分层结构与传感方案</span>
+      </div>
+      <nav class="machines" id="machineTabs" aria-label="机型"></nav>
+    </header>
+
+    <section class="stage" id="stage">
+      <canvas id="gl" aria-label="3D 爆炸图"></canvas>
+      <canvas id="overlay" aria-hidden="true"></canvas>
+      <div id="labels" class="labels" aria-hidden="true"></div>
+
+      <aside class="panel">
+        <div class="panel-block">
+          <div class="mode" role="tablist" aria-label="视图">
+            <button id="modeMachine" type="button" class="active">整机爆炸</button>
+            <button id="modeSingle" type="button">单 pad 细节</button>
+          </div>
+          <label class="slider">
+            <span>爆炸展开 <output id="explodeOut">60%</output></span>
+            <input id="explode" type="range" min="0" max="100" value="60" />
+          </label>
+          <div class="toggles">
+            <label><input id="clip" type="checkbox" /> 剖切</label>
+            <label><input id="spin" type="checkbox" checked /> 自动旋转</label>
+            <label><input id="showLabels" type="checkbox" checked /> 标注</label>
+            <button id="resetView" type="button">复位视角</button>
+          </div>
+        </div>
+
+        <div class="panel-block">
+          <h2>分层（自上而下）</h2>
+          <ol id="layerList" class="layer-list"></ol>
+        </div>
+
+        <div class="panel-block" id="layerInfo">
+          <p class="muted">悬停或点击任一层查看说明。</p>
+        </div>
+
+        <div class="panel-block">
+          <h2>敲击模拟 <span class="muted">（点击任意 pad）</span></h2>
+          <canvas id="scope" width="300" height="120"></canvas>
+          <div id="scopeOut" class="scope-out muted">等待敲击…</div>
+        </div>
+      </aside>
+
+      <div class="hint">拖动旋转 · 滚轮缩放 · 点击 pad 模拟敲击 · 点击层查看说明</div>
+    </section>
+
+    <main class="doc">
+      <section id="machineNotes" class="doc-section"></section>
+
+      <section class="doc-section">
+        <h2>分层结构：每一层在做什么</h2>
+        <p class="lead">
+          一块 pad 从手指到底壳大约只有 10–15 mm，却要同时解决四件事：把力可靠地传到传感器、
+          让 RGB 光均匀透出、在几十万次敲击后保持手感、以及让 16 或 64 个 pad 的灵敏度一致。
+          下面按爆炸图的顺序逐层说明。
+        </p>
+        <div id="layerTable" class="layer-table"></div>
+      </section>
+
+      <section class="doc-section" id="tech">
+        <h2>传感技术方案</h2>
+        <p class="lead">
+          pad 的核心问题是把"敲了多重、按了多紧、按在哪"变成电信号。七类方案的横截面与取舍如下；
+          市售 pad 控制器绝大多数落在 A、B 两类电阻式方案里，MPE 类产品开始走向 E（电容）与 G（电感，Push 3）。
+        </p>
+        <div id="techCards" class="tech-grid"></div>
+      </section>
+
+      <section class="doc-section" id="params">
+        <h2>单 pad 工程参数总表</h2>
+        <p class="lead">
+          "单 pad 细节"视图里每一层的参数汇总。数值来自数据手册、设计指南、备件目录与专利（角标为出处，见页末参考资料）；
+          没有角标、标注"示意"的数值是没有一手出处的行业常见值或本页的重建假设。
+        </p>
+        <div id="paramTables" class="param-grid"></div>
+        <h3>固件 / 算法参数</h3>
+        <div class="table-wrap" id="algoTable"></div>
+      </section>
+
+      <section class="doc-section">
+        <h2>主流机型对比</h2>
+        <div class="table-wrap" id="compareTable"></div>
+      </section>
+
+      <section class="doc-section">
+        <h2>信号链与速度算法</h2>
+        <div class="signal-wrap" id="signalChain"></div>
+        <div class="two-col">
+          <div>
+            <h3>速度（Velocity）</h3>
+            <ul>
+              <li><strong>Δt 法：</strong>ADC 值先过低阈值 T₁、再过高阈值 T₂，Δt 越短速度越大。硬件要求最低，几乎所有电阻式 pad 都用它，再叠一条速度曲线（linear / log / exp）。</li>
+              <li><strong>斜率峰值法：</strong>在触发后 2–5 ms 窗口内取 d(ADC)/dt 的最大值。对轻敲更灵敏，但对采样率与噪声更敏感。</li>
+              <li><strong>峰值法（压电）：</strong>直接取脉冲峰值电压，需要峰值保持或高速 ADC。</li>
+            </ul>
+          </div>
+          <div>
+            <h3>压力（Aftertouch / Poly AT）</h3>
+            <ul>
+              <li>Note On 之后持续读稳态 ADC，经一阶低通（fc ≈ 20–50 Hz）后映射成 0–127。</li>
+              <li>电阻式方案的迟滞意味着"放松一点"比"按紧一点"反应慢，固件通常加下降补偿。</li>
+              <li>MPE 需要每 pad 独立 channel；X/Y 需要一个 pad 下有多个采样点（多区 FSR 或电容阵列）。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="doc-section">
+        <h2>工程要点（做一块好 pad 的清单）</h2>
+        <div class="two-col">
+          <ul>
+            <li><strong>行程：</strong>0.6–1.5 mm。短行程手感像"按键"，长行程像"鼓"；行程越长速度分辨率越高。</li>
+            <li><strong>硅胶硬度：</strong>键垫级硅胶 Shore A 40–80 可选，pad 取偏软一端。太软 → 边缘敲击塌陷、串击；太硬 → 轻敲不出声。</li>
+            <li><strong>预压：</strong>装配夹紧力决定 pad 的"零点"，产线要做逐 pad 阈值校准并写入 EEPROM。</li>
+            <li><strong>加强板：</strong>PCB 弯曲 0.1 mm 就足以让 FSR 读数偏移，重型机把加强板与底壳合一。</li>
+            <li><strong>边缘敲击：</strong>胶粒做圆弧底面 + 框孔限位，避免"敲角上没反应"。</li>
+          </ul>
+          <ul>
+            <li><strong>匀光：</strong>硅胶加白色母粒、LED 居中、pad 下留 1–2 mm 混光腔；8×8 密排时侧发光 + 导光柱更均匀。</li>
+            <li><strong>扫描率：</strong>每 pad ≥1 kHz 才能让 Δt 法有 7 bit 以上速度分辨率；64 pad 常用多片 MUX 并行。</li>
+            <li><strong>串扰：</strong>相邻 pad 通过 keymat 与 PCB 传力，要在框体下加隔离肋并在固件里做邻 pad 抑制。</li>
+            <li><strong>寿命：</strong>电阻式 ≥100 万次；胶粒氧化是主要失效模式，电极镀金或印碳膜可延长寿命。</li>
+            <li><strong>可维修性：</strong>keymat 与传感薄膜做成独立备件（Akai pad sensor 即此思路）。</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="doc-section">
+        <h2>与 LMDJ 的关系</h2>
+        <p>
+          LMDJ Core 的 Pattern 事件引用 Pad Slot 而不是 Asset，正是为了让同一套演奏数据在不同硬件（4×4 厚垫、
+          8×8 薄垫、MPE 表面）之间可移植。本页梳理的"速度曲线、压力平滑、逐 pad 校准"都属于 Host / Provider 层要处理的
+          硬件差异，不应渗入 Project Truth。这个 demo 是理解这些差异来源的参考材料，不是产品代码。
+        </p>
+      </section>
+
+      <section class="doc-section" id="references">
+        <h2>参考资料</h2>
+        <ol id="refList" class="ref-list"></ol>
+      </section>
+
+      <footer class="doc-footer">
+        <p>
+          本页所有几何与分层为基于公开拆解、维修配件目录与厂商公开规格的<strong>示意性重建</strong>，尺寸为近似值，
+          不代表任何厂商的官方结构。标注为"示意 / 推测"的内容未经官方资料证实。
+        </p>
+        <p>位置：<code>references/demos/launchpad-pad-exploded/</code> · 冻结参考材料，不属于产品源码边界。</p>
+      </footer>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

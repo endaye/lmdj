@@ -254,6 +254,25 @@ unselected-skipped results before native-heavy work is admitted. macOS stays
 parallel and outside this gate: a selected macOS failure remains a PR Gate
 primary failure, but does not block Linux heavy work.
 
+The advisory reviewers also run in preflight, as `needs:` of `Pre-heavy Gate`,
+and contribute one admission condition that is not a verdict: the gate reads how many review threads on the Pull Request a human
+has not yet resolved, and holds native-heavy work while any is open. The
+review's own result is never consulted — it is `continue-on-error`, appears in
+neither `lane_jobs` nor `self_hosted_jobs`, and a reviewer that has died
+posts no threads and admits; `advisory-review-liveness.yml` is what notices
+that. Two reviewers run, not three: one Claude backend, chosen per Pull
+Request by `--select` from the same posted evidence the liveness check reads,
+with the other as the fallback it switches to when the first is DOWN; and
+Grok, which keeps its own pinned CLI and credential because that independent
+failure domain is the point of the slot — one action outage took both Claude
+backends down together, and Grok kept working. Only the ordering is shared:
+Grok's job moved into `ci.yml` so the gate can `needs:` it, because a reviewer
+in its own workflow can post after admission has already happened. The
+placement is the point. A finding costs one reply to resolve and a
+native-heavy set costs about 185 minutes, so the threads are held before the
+expensive work rather than at merge, where `required_conversation_resolution`
+held the same threads after it had already run (#659).
+
 The five jobs sharing the repository-wide `lmdj-native-heavy` `queue: max`
 capacity group run in sparse order: Portal, Core Ubuntu, Package, Coverage,
 then ASan. Each later job waits only for selected earlier jobs; an unselected
@@ -488,13 +507,17 @@ budget.
 Linux CI routes by role label rather than by the shared `contabo` origin label,
 which is no longer a selection condition anywhere. The Contabo Singapore host,
 which also runs LMDJ staging, keeps `shared-with-staging` and carries the
-`ci-general` and `ci-core` roles under a resource slice that reserves at least
-about 2 vCPU and 8 GiB for the application and the OS; its elastic services
-carry `ci-general` only, so burst capacity can never broaden `ci-core` or
-reach deploy, release, production, sudo, or Docker authority. The CI-only
-netcup node carries `ci-only-host` and the `ci-general` and `ci-web-heavy`
-roles, with all runner services bounded by the `lmdj-ci.slice` at roughly 14
-vCore and 48 GB and the rest left for the OS and cache maintenance. Both hosts
+`ci-general` role only, under a resource slice that reserves at least about
+2 vCPU and 8 GiB for the application and the OS. The CI-only netcup node
+carries `ci-only-host` and the `ci-general`, `ci-web-heavy` and `ci-core`
+roles — `ci-core` on its four baseline services only; elastic services on
+either host carry no `ci-core`, so burst capacity can never broaden that role
+or reach deploy, release, production, sudo, or Docker authority — with all
+runner services bounded by the `lmdj-ci.slice` at roughly 14 vCore and 48 GB
+and the rest left for the OS and cache maintenance. `ci-core` moved from
+Contabo to netcup on 2026-09-06 on a same-revision measurement (#676, decision
+on #298): every native Core lane ran faster on netcup, cold cache included, and
+the host has no staging co-tenant to protect. Both hosts
 also serve as Tailscale exit nodes: that is a documented co-tenant workload
 covered by the headroom outside the CI slices, capacity math must never assume
 the runners own the host, and degraded exit-node latency during full elastic
@@ -524,7 +547,8 @@ hosts, not a defect. Routing splits two ways:
 
 `ci-core` deliberately does not span both hosts: the persistent native `ccache`
 and the preinstalled clang-18/llvm-18 coverage toolchain are shared-host state,
-not pool state. Coverage accordingly no longer installs that toolchain; the
+not pool state. Both hosts carry the same 18.1.3 toolchain, so the role can be
+placed on either, but it is registered on exactly one at a time — today netcup. Coverage accordingly no longer installs that toolchain; the
 `apt-get` step existed only for the hosted fallback and would otherwise mutate
 state both runner services share. Every job that can land on a role carries the
 closed trust condition itself, because no selector's fork branch is in its path

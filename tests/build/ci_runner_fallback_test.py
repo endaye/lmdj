@@ -51,6 +51,15 @@ GENERAL_JOBS = {
 # None of these jobs shares a composite action, so each keeps its own proof
 # path verbatim. Pinning the command per job keeps the cutover a change of
 # where they run and not of what they run.
+# Runs on the general role but guards no lane and contributes no result: the
+# advisory reviewer (#659). It is counted so a literal `ci-general` scan still
+# closes over exactly the jobs reviewed onto the role, without pretending the
+# reviewer is a lane.
+GENERAL_ROLE_NON_LANE_JOBS = (
+    "select-review-backend",  # decides which backend reviews; no lane, no verdict
+    "advisory-review",
+    "grok-review",  # independent runtime, moved in from grok-review.yml for ordering
+)
 GENERAL_PROOFS = {
     "docs-static": 'run: git diff --check "$BASE_SHA...$HEAD_SHA"',
     "ci-contract": "run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'",
@@ -248,7 +257,14 @@ class CiRunnerFallbackTest(unittest.TestCase):
                 self.assertIn(f"lanes.{lane}", job)
                 self.assertIn(GENERAL_PROOFS[job_name], job)
         source = WORKFLOW.read_text(encoding="utf-8")
-        self.assertEqual(source.count("ci-general"), len(GENERAL_JOBS))
+        self.assertEqual(
+            source.count("ci-general"),
+            len(GENERAL_JOBS) + len(GENERAL_ROLE_NON_LANE_JOBS),
+            "why: every literal ci-general in ci.yml must be a reviewed lane or a "
+            "named non-lane job, or a later lane inherits the route unreviewed; "
+            "remedy: add the job to GENERAL_JOBS with its lane, or to "
+            "GENERAL_ROLE_NON_LANE_JOBS with its reason",
+        )
 
     def test_portal_role_is_declared_where_a_called_workflow_can_carry_it(self) -> None:
         """A `uses:` job has no `runs-on` to route, so the callee owns it.

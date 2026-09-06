@@ -1,6 +1,6 @@
 ---
 id: acceptance-journey-truncation
-area: quality-acceptance
+area: product
 status: absorbed
 recurrences:
   - date: 2026-08-27

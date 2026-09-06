@@ -37,6 +37,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import NamedTuple
 import argparse
 import json
 import os
@@ -72,12 +74,30 @@ class Lane:
 # sticky-comment marker predates this check, so it needs no cutoff.
 CLAUDE_SIGNS_SINCE = "2026-09-06"
 
+# The reviewer set, declared once. `ci.yml` builds its matrix from `--select`
+# below rather than listing these again, so a backend cannot exist for the
+# workflow and not for the check that judges it.
+CLAUDE_BACKENDS = (
+    {"backend": "glm",
+     "base_url": "https://api.z.ai/api/anthropic",
+     "secret_name": "ZAI_CODING_KEY"},
+    {"backend": "kimi",
+     "base_url": "https://api.kimi.com/coding/",
+     "secret_name": "KIMI_CODING_KEY"},
+)
+
+
+def claude_lane(backend: str) -> "Lane":
+    """The lane one Claude backend occupies inside `ci.yml`."""
+    return Lane("ci.yml", f"Claude review ({backend})", "Review",
+                f"<!-- lmdj-review: {backend} -->", CLAUDE_SIGNS_SINCE)
+
+
 REVIEW_LANES = (
-    Lane("claude-review.yml", "Claude review (glm)", "Review",
-         "<!-- lmdj-review: glm -->", CLAUDE_SIGNS_SINCE),
-    Lane("claude-review.yml", "Claude review (kimi)", "Review",
-         "<!-- lmdj-review: kimi -->", CLAUDE_SIGNS_SINCE),
-    Lane("grok-review.yml", "Grok advisory review", "Run advisory Grok review",
+    # The Claude backends run inside ci.yml since #659, so Pre-heavy Gate can
+    # order itself after them. Job and step names are unchanged.
+    *(claude_lane(entry["backend"]) for entry in CLAUDE_BACKENDS),
+    Lane("ci.yml", "Grok advisory review", "Run advisory Grok review",
          "<!-- lmdj-grok-review -->"),
 )
 
@@ -109,15 +129,67 @@ class LaneVerdict:
     detail: str
 
 
-def evaluate(lane: str, observations: Sequence[str], *, window: int) -> LaneVerdict:
+class Observation(NamedTuple):
+    """One judged attempt: what it produced, and when the run started."""
+
+    outcome: str
+    at: str
+
+
+# A lane that stopped being scheduled stops producing observations, and its
+# last ones stay in the window forever. Without an age limit the first backend
+# demoted by `--select` could never be promoted back: its final failures would
+# read as DOWN for the life of the repository, and a vendor outage would become
+# permanent. Past this many days the window is treated as no longer describing
+# the lane -- unknown, not down -- so the selector tries it again and gathers
+# fresh evidence. Three days is short enough that a recovery is picked up
+# quickly and long enough that a quiet weekend does not churn the choice.
+STALE_AFTER_DAYS = 3
+
+
+def _age_days(when: str, now: datetime) -> float:
+    """Days between an ISO-8601 API timestamp and `now`, or 0.0 if unparseable.
+
+    Unparseable means "do not claim it is old": the risk of a bad parse is
+    silently promoting a dead backend, and treating the reading as fresh keeps
+    the existing verdict rather than inventing a new one.
+    """
+    try:
+        moment = datetime.fromisoformat(when.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return 0.0
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (now - moment).total_seconds() / 86400.0
+
+
+def evaluate(
+    lane: str,
+    observations: Sequence[Observation],
+    *,
+    window: int,
+    now: datetime | None = None,
+) -> LaneVerdict:
     """Decide whether a lane is down from its recent observations.
 
     `observations` is newest first and holds exactly one `success` or
     `failure` per run in which this lane attempted a review. Runs that made
     no attempt have already been dropped by the collector.
+
+    `now` enables the staleness rule; without it the window is judged on
+    content alone, which is what the scheduled report did before backends
+    could be taken out of rotation.
     """
     considered = list(observations)[:window]
-    failed = sum(1 for outcome in considered if outcome == "failure")
+    failed = sum(1 for observation in considered if observation.outcome == "failure")
+    if considered and now is not None:
+        age = _age_days(considered[0].at, now)
+        if age > STALE_AFTER_DAYS:
+            return LaneVerdict(
+                lane, len(considered), failed, False,
+                f"newest attempt is {age:.1f} days old; the lane is not being "
+                f"exercised, so the window no longer describes it",
+            )
     if len(considered) < window:
         return LaneVerdict(
             lane, len(considered), failed, False,
@@ -215,63 +287,65 @@ def evidence_posted(
 
 def collect_observations(
     repository: str, lane: Lane, *, limit: int, api: Request = _api,
-) -> list[str]:
+) -> list[Observation]:
     """One `success` or `failure` per attempted run for `lane`, newest first."""
-    # Paged until `limit` attempts are kept, not a single page of `limit` runs.
-    # Cancelled runs are dropped and both review workflows set
-    # `cancel-in-progress`, so on an actively-pushed day most of a page is
-    # cancellations; a fixed page starves the window, `evaluate` reports "too
-    # few to judge", and the check exits 0 -- green while blind, on exactly the
-    # busy day a lane is most likely to have broken.
-    runs: list[dict] = []
+    # Paged until `limit` *observations* exist, not until `limit` runs have
+    # been seen. The Claude lanes live in ci.yml, which also runs on push,
+    # dispatch and draft events -- completed, non-cancelled runs that skip the
+    # review job entirely. Budgeting on run count let those pad the pages,
+    # stop the pager early, and hand `evaluate` too few observations to judge:
+    # exit 0, green while blind, the case this loop exists to prevent. Only a
+    # judged attempt spends the budget now. The event filter removes the
+    # push and dispatch runs before they are fetched; drafts still arrive as
+    # pull_request runs and are dropped below when their job is skipped.
+    observations: list[Observation] = []
     for page in range(1, MAX_RUN_PAGES + 1):
         payload = api(
             f"/repos/{repository}/actions/workflows/{lane.workflow}/runs"
-            f"?status=completed&per_page={RUNS_PER_PAGE}&page={page}",
+            f"?status=completed&event=pull_request"
+            f"&per_page={RUNS_PER_PAGE}&page={page}",
             f"listing runs of {lane.workflow}",
         ) or {}
         batch = payload.get("workflow_runs") or []
-        runs.extend(batch)
-        kept = sum(1 for r in runs if r.get("conclusion") not in SILENT)
-        if kept >= limit or len(batch) < RUNS_PER_PAGE:
-            break
-
-    observations: list[str] = []
-    for run in runs:
-        if run.get("conclusion") in SILENT:
-            continue
-        # A run that predates the signing instruction posted unsigned comments.
-        # It is not evidence of failure; it is evidence of nothing.
-        if lane.signs_since and (run.get("created_at") or "") < lane.signs_since:
-            continue
-        payload = api(
-            f"/repos/{repository}/actions/runs/{run['id']}/jobs",
-            f"reading jobs of run {run['id']}",
-        ) or {}
-        jobs = [j for j in (payload.get("jobs") or []) if j.get("name") == lane.job]
-        if not jobs:
-            continue
-        job = jobs[0]
-        step = next(
-            (s.get("conclusion") for s in (job.get("steps") or [])
-             if s.get("name") == lane.step),
-            None,
-        )
-        # A skipped job or step made no attempt. Every other conclusion --
-        # including `timed_out`, the way a hung vendor endpoint dies, and a
-        # null step the run never reached -- is an attempt, and is judged by
-        # its effect rather than by a conclusion `continue-on-error` rewrites.
-        if job.get("conclusion") in SILENT or step in SILENT:
-            continue
-        pulls = run.get("pull_requests") or []
-        if not pulls:
-            continue
-        posted = evidence_posted(
-            repository, int(pulls[0]["number"]), run["created_at"], lane.marker,
-            api=api,
-        )
-        observations.append("success" if posted else "failure")
-        if len(observations) >= limit:
+        for run in batch:
+            if run.get("conclusion") in SILENT:
+                continue
+            # A run that predates the signing instruction posted unsigned
+            # comments. It is not evidence of failure; it is evidence of nothing.
+            if lane.signs_since and (run.get("created_at") or "") < lane.signs_since:
+                continue
+            payload = api(
+                f"/repos/{repository}/actions/runs/{run['id']}/jobs",
+                f"reading jobs of run {run['id']}",
+            ) or {}
+            jobs = [j for j in (payload.get("jobs") or []) if j.get("name") == lane.job]
+            if not jobs:
+                continue
+            job = jobs[0]
+            step = next(
+                (s.get("conclusion") for s in (job.get("steps") or [])
+                 if s.get("name") == lane.step),
+                None,
+            )
+            # A skipped job or step made no attempt. Every other conclusion --
+            # including `timed_out`, the way a hung vendor endpoint dies, and a
+            # null step the run never reached -- is an attempt, and is judged by
+            # its effect rather than by a conclusion `continue-on-error` rewrites.
+            if job.get("conclusion") in SILENT or step in SILENT:
+                continue
+            pulls = run.get("pull_requests") or []
+            if not pulls:
+                continue
+            posted = evidence_posted(
+                repository, int(pulls[0]["number"]), run["created_at"], lane.marker,
+                api=api,
+            )
+            observations.append(
+                Observation("success" if posted else "failure", run["created_at"])
+            )
+            if len(observations) >= limit:
+                return observations
+        if len(batch) < RUNS_PER_PAGE:
             break
     return observations
 
@@ -296,12 +370,108 @@ def render(verdicts: Sequence[LaneVerdict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def select_backends(
+    repository: str,
+    candidates: Sequence[str],
+    *,
+    window: int,
+    now: datetime,
+    api: Request = _api,
+) -> tuple[list[str], str]:
+    """The Claude backends to run on one Pull Request, and why (#659 item 3).
+
+    Exactly one runs. `candidates` is the preference order: the first entry is
+    the primary, and a later one is used only when everything before it is
+    DOWN. The choice is made from the same evidence the scheduled report uses
+    -- what each backend actually posted -- never from a step conclusion,
+    which `continue-on-error` rewrites to `success`.
+
+    Fail open in both directions that matter. A backend whose window is too
+    short, or too old to describe it, is *not* DOWN and is used: running it is
+    how evidence accrues, and withholding review because the evidence is thin
+    would make silence self-perpetuating. If every candidate is DOWN the
+    primary runs anyway -- the scheduled check is already alerting, and a
+    Pull Request should not lose its reviewer because the alert is correct.
+    """
+    if len(candidates) == 1:
+        # Nothing to choose between, so nothing to read the API for. `ci.yml`
+        # takes this path on push and dispatch runs, where there is no Pull
+        # Request to review and the job will be skipped anyway.
+        return list(candidates), f"{candidates[0]} is the only candidate"
+    reasons = []
+    for backend in candidates:
+        verdict = evaluate(
+            backend,
+            collect_observations(repository, claude_lane(backend), limit=window, api=api),
+            window=window,
+            now=now,
+        )
+        reasons.append(f"{backend}: {verdict.detail}")
+        if not verdict.down:
+            note = "primary" if backend == candidates[0] else "fallback for a DOWN primary"
+            return [backend], f"{backend} ({note}) — " + "; ".join(reasons)
+    return (
+        [candidates[0]],
+        f"every candidate is DOWN, running {candidates[0]} anyway — " + "; ".join(reasons),
+    )
+
+
+def _selection_matrix(backends: Sequence[str]) -> dict:
+    """The `strategy.matrix` value for the chosen backends."""
+    chosen = set(backends)
+    return {"include": [dict(e) for e in CLAUDE_BACKENDS if e["backend"] in chosen]}
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True)
     parser.add_argument("--window", type=int, default=5)
     parser.add_argument("--summary", default="")
+    parser.add_argument(
+        "--select",
+        default="",
+        help=(
+            "comma-separated backend preference order; prints the matrix for the "
+            "one to run instead of the liveness report"
+        ),
+    )
     args = parser.parse_args(argv)
+    now = datetime.now(timezone.utc)
+
+    if args.select:
+        named = [name.strip() for name in args.select.split(",") if name.strip()]
+        known = {entry["backend"] for entry in CLAUDE_BACKENDS}
+        unknown = [name for name in named if name not in known]
+        candidates = [name for name in named if name in known]
+        if unknown or not candidates:
+            # Say so loudly, then continue anyway. `CLAUDE_REVIEW_ORDER` is an
+            # operator knob, `ci.yml` runs this under `set -euo pipefail`, and
+            # a nonzero exit here would leave `strategy.matrix` empty -- so a
+            # typo in the knob would cost the Pull Request its review entirely.
+            # Whatever is left of the order stands; if nothing is, the first
+            # declared backend does.
+            print(
+                f"why: --select names {unknown or 'nothing'}, which is not a declared "
+                f"backend; remedy: use a comma-separated subset of {sorted(known)}",
+                file=sys.stderr,
+            )
+            if not candidates:
+                candidates = [CLAUDE_BACKENDS[0]["backend"]]
+        try:
+            chosen, reason = select_backends(
+                args.repository, candidates, window=args.window, now=now
+            )
+        except Exception as error:  # noqa: BLE001
+            # Deliberately total. `ci.yml` builds `strategy.matrix` from this
+            # output, so anything that leaves it empty costs the Pull Request
+            # its review -- and a broken selector is a worse reason to lose a
+            # reviewer than a broken backend. Unreadable evidence, an API
+            # shape change, a bug here: all mean "run the primary and say so".
+            chosen = [candidates[0]]
+            reason = f"selection failed ({type(error).__name__}: {error}); using {chosen[0]}"
+        print(f"::notice::advisory review backend — {reason}")
+        print(json.dumps(_selection_matrix(chosen)))
+        return 0
 
     try:
         verdicts = [
@@ -309,6 +479,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 lane.name,
                 collect_observations(args.repository, lane, limit=args.window * 3),
                 window=args.window,
+                now=now,
             )
             for lane in REVIEW_LANES
         ]

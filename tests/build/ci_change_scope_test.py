@@ -183,7 +183,6 @@ CASES = {
     },
     ".github/actions/web-ci-proof/action.yml": set(LANES),
     ".github/workflows/ci-self-hosted-benchmark.yml": {"ci_contract"},
-    ".github/workflows/grok-review.yml": {"ci_contract"},
     ".github/scripts/grok_review.py": {"ci_contract"},
     ".gitattributes": set(LANES),
 }
@@ -411,9 +410,14 @@ class ChangeScopeTest(unittest.TestCase):
         # it. The scan reads literal paths only: a dynamically built path is
         # invisible to it, so this gate closes the common case rather than
         # proving the general one.
+        # `.agents/` joins `docs/`: the Pitfall Ledger lint reads
+        # `.agents/pitfalls`, and a ledger-only Pull Request routed to
+        # `docs_static` never ran it -- the third occurrence of the pitfall
+        # this test exits (#685). A captured path that is a directory is given
+        # its trailing slash so prefix rules classify it.
         read_sites = re.compile(
-            r"""(?:readRepo|readFile)\s*\(\s*["'`](docs/[A-Za-z0-9_./-]+)"""
-            r"""|(?:REPO_ROOT|ROOT)\s*/\s*["'](docs/[A-Za-z0-9_./-]+)["']"""
+            r"""(?:readRepo|readFile)\s*\(\s*["'`]((?:docs|\.agents|\.claude)/[A-Za-z0-9_./-]+)"""
+            r"""|(?:REPO_ROOT|ROOT)\s*/\s*["']((?:docs|\.agents|\.claude)/[A-Za-z0-9_./-]+)["']"""
         )
         inventory = subprocess.run(
             ["git", "ls-files", "tests", "apps", "-z"],
@@ -435,6 +439,8 @@ class ChangeScopeTest(unittest.TestCase):
             for document in sorted(documents):
                 if not (ROOT / document).exists():
                     continue
+                if (ROOT / document).is_dir():
+                    document = document.rstrip("/") + "/"
                 missing = source_lanes - self.lanes_for_path(document)
                 if missing:
                     gaps.append(
@@ -627,15 +633,13 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(unknown["mode"], "full")
         self.assertEqual(self.true_lanes(unknown), LANES)
 
-    def test_grok_review_workflow_is_ci_contract_and_similar_unknown_name_is_full(self):
-        for path in (
-            ".github/workflows/grok-review.yml",
-            ".github/scripts/grok_review.py",
-        ):
-            with self.subTest(path=path):
-                manifest = self.classify([path])
-                self.assertEqual(manifest["mode"], "focused")
-                self.assertEqual(self.true_lanes(manifest), {"ci_contract"})
+    def test_grok_review_script_is_ci_contract_and_similar_unknown_name_is_full(self):
+        # The workflow half of this rule went with grok-review.yml when the
+        # lane moved into ci.yml (#659); ci.yml is a full-CI control-plane
+        # path, so the job it now holds is covered by that rule instead.
+        manifest = self.classify([".github/scripts/grok_review.py"])
+        self.assertEqual(manifest["mode"], "focused")
+        self.assertEqual(self.true_lanes(manifest), {"ci_contract"})
         unknown = self.classify([".github/workflows/grok-review-control.yml"])
         self.assertEqual(unknown["mode"], "full")
         self.assertEqual(self.true_lanes(unknown), LANES)

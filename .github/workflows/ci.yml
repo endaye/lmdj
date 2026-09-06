@@ -468,9 +468,343 @@ jobs:
           node-version: "22"
       - run: scripts/web-runtime-lab.sh test
 
+  select-review-backend:
+    # One Claude backend reviews each Pull Request, not two (#659 item 3).
+    # Which one is decided here from the same evidence the scheduled liveness
+    # check uses -- what each backend actually posted on recent Pull Requests
+    # -- so the fallback takes over on the signal rather than by hand. The
+    # decision is a job rather than a step because `strategy.matrix` is
+    # evaluated before any step of the job it belongs to runs.
+    #
+    # The two backends duplicated each other: over the six Pull Requests of
+    # the #591 closeout they collided or both posted nothing, while Grok --
+    # a different runtime with a different prompt -- shared no finding with
+    # either. So the saving is here and not in dropping Grok.
+    name: Select review backend
+    # Deliberately unconditional. `advisory-review` builds `strategy.matrix`
+    # from this job's output, and a matrix expression is not obviously
+    # evaluated after that job's own `if:` -- on a push run, where there is no
+    # Pull Request to review, a skipped selector would leave `fromJSON('')`
+    # to be evaluated on the protected branch's own CI. So this always runs
+    # and always prints a valid matrix; the review job's own condition is what
+    # keeps it to Pull Requests. Off the Pull Request path it answers without
+    # reading the API at all.
+    if: ${{ !cancelled() }}
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 5
+    # A selector that cannot decide must not withhold the review: the script
+    # already falls back to the primary when the API is unreadable, and this
+    # keeps a crash from skipping the job that `needs:` this one.
+    continue-on-error: true
+    # Job-level `permissions:` replaces the workflow block outright, so every
+    # scope omitted here is `none`. The script lists workflow runs and reads
+    # three comment surfaces; without these it would 403, raise, and be caught
+    # by the fail-open path above -- which always returns the primary. The
+    # handover would then never happen and nothing would say so, the failure
+    # this whole check exists to avoid. Same set as
+    # advisory-review-liveness.yml, all read.
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      # The base revision, never the Pull Request's merge ref. This job is
+      # unconditional, so it also runs for forks, and checking out the head
+      # would execute a fork's copy of the script below on a trusted runner --
+      # the other two review jobs refuse fork heads outright and this one
+      # cannot, because `advisory-review` needs its matrix either way. A
+      # read-only token would not help: the failure domain is the machine.
+      # Reading history with the base's script is also the right semantics --
+      # a Pull Request should not get to choose its own reviewer.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+      - name: Choose the backend from the liveness evidence
+        id: select
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Preference order, primary first. A repository variable moves the
+          # primary without editing this file; the fallback is whatever
+          # remains after it.
+          ORDER: ${{ vars.CLAUDE_REVIEW_ORDER || 'glm,kimi' }}
+          EVENT_NAME: ${{ github.event_name }}
+          PRIMARY_MATRIX: '{"include":[{"backend":"glm","base_url":"https://api.z.ai/api/anthropic","secret_name":"ZAI_CODING_KEY"}]}'
+        # `-e` is deliberately absent. `advisory-review` evaluates
+        # `fromJSON` on this output, so a step that dies without writing one
+        # withholds the review -- exactly what the job-level
+        # `continue-on-error` above cannot prevent, because it governs the job
+        # and not the output. Every path below therefore ends in a matrix, and
+        # PRIMARY_MATRIX is the last resort when even the script cannot run
+        # (a checkout from before `--select` existed, a broken interpreter, a
+        # timeout). Its literal is pinned against the script's own table by
+        # tests/build/ci_claude_review_workflow_test.py.
+        run: |
+          set -uo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            select_args=(--select "$ORDER")
+          else
+            # No Pull Request to review, so no evidence to weigh: name the
+            # primary and spend no API calls on a run that will skip the job.
+            select_args=(--select "${ORDER%%,*}")
+          fi
+          matrix="$(python3 .github/scripts/advisory_review_liveness.py \
+            --repository "$GITHUB_REPOSITORY" "${select_args[@]}" | tail -1 || true)"
+          case "$matrix" in
+            '{"include":'*) ;;
+            *)
+              echo "::notice::selector produced no matrix; using the primary"
+              matrix="$PRIMARY_MATRIX"
+              ;;
+          esac
+          printf 'matrix=%s\n' "$matrix" >>"$GITHUB_OUTPUT"
+          printf 'selected: %s\n' "$matrix"
+
+  advisory-review:
+    # Moved here from claude-review.yml so Pre-heavy Gate can `needs:` it.
+    # It is NOT merge evidence: its result is never read, it is
+    # continue-on-error, and it appears in neither lane_jobs nor
+    # self_hosted_jobs. Pre-heavy Gate reads one thing about it -- whether a
+    # human has resolved every review thread on the Pull Request -- and that
+    # is an admission condition for native-heavy work, not a verdict. The
+    # alternative, a hosted gate polling for a separate workflow to finish,
+    # would multiply that gate's billed minutes; `needs:` orders it for free.
+    #
+    # `continue-on-error` reports a failed review as `success` in the API,
+    # so a dead reviewer posts nothing and admits: a dead reviewer must not
+    # halt the repository. advisory-review-liveness.yml is what notices.
+    name: Claude review (${{ matrix.backend }})
+    needs: [select-review-backend]
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 30
+    # Job-level as well as on the Review step: inside ci.yml a failed job
+    # fails the workflow and skips everything that `needs:` it, and the step
+    # flag does not cover a job timeout, a failed checkout, or a failed
+    # credential step. Pre-heavy Gate needs this job; a dead reviewer must
+    # admit, not halt (same shape as macos-primary).
+    continue-on-error: true
+    # Job-level, so the workflow token for every other job keeps its current
+    # posture. Posting review threads needs write; nothing else here does.
+    permissions:
+      contents: read
+      pull-requests: write
+    strategy:
+      # One entry, chosen by select-review-backend. The backends, their base
+      # URLs and their secret names are declared once in
+      # advisory_review_liveness.py, so a backend cannot exist for this
+      # workflow and not for the check that judges it.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select-review-backend.outputs.matrix) }}
+    steps:
+      - name: Resolve the backend credential
+        id: backend
+        env:
+          BACKEND_KEY: ${{ secrets[matrix.secret_name] }}
+          BACKEND: ${{ matrix.backend }}
+          SECRET_NAME: ${{ matrix.secret_name }}
+        run: |
+          set -euo pipefail
+          # There is no enabled-set check here any more. It predates the
+          # selector and now contradicts it: with one matrix leg, a
+          # CLAUDE_REVIEW_BACKENDS that does not name the chosen backend
+          # skips the entire Claude review -- and the case it would bite is
+          # the one that matters, where the primary is DOWN and `--select`
+          # correctly reached for the other one. CLAUDE_REVIEW_ORDER is the
+          # single operator knob: name one backend to pin it, two to set the
+          # preference order.
+          if [[ -z "$BACKEND_KEY" ]]; then
+            echo "run=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::$BACKEND review skipped: no $SECRET_NAME secret"
+            exit 0
+          fi
+          echo "run=true" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        if: ${{ steps.backend.outputs.run == 'true' }}
+        with:
+          fetch-depth: 1
+
+      # Pinned to the commit `v1` resolved to. `continue-on-error` because a
+      # failed review is a missing review, not a broken change; a red check
+      # from a lane that cannot block a merge only teaches people to ignore
+      # red. The liveness workflow reads the effect (the signed comment), not
+      # this step's conclusion, which continue-on-error rewrites to success.
+      - name: Review
+        if: ${{ steps.backend.outputs.run == 'true' }}
+        continue-on-error: true
+        uses: anthropics/claude-code-action@fa2b2666b747000bf42767d1f332065b375e3c8f
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_BASE_URL: ${{ matrix.base_url }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets[matrix.secret_name] }}
+          # Under the job's 30-minute timeout so the API timeout fires first
+          # and the log names the error, rather than the job timer recording
+          # `timed_out` with nothing to read.
+          API_TIMEOUT_MS: "1500000"
+        with:
+          # Explicit, or the action falls back to the Claude GitHub App and
+          # attaches an employer-owned Claude organisation to a personal repo.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_api_key: ${{ secrets[matrix.secret_name] }}
+          # Vendored at .claude/commands/pr-review.md; a runtime marketplace
+          # clone was rate-limited on the self-hosted runner. The signature
+          # line is machine-read by the liveness check to tell the backends
+          # apart -- they post under one identity.
+          prompt: |
+            /pr-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+
+            Sign every comment you post -- each inline comment and any summary comment -- by making its very first line exactly:
+            <!-- lmdj-review: ${{ matrix.backend }} -->
+            That line is read by the advisory review liveness check to tell the two backends apart. Do not omit, alter, or move it.
+          # `curl` because a clean review must land as an issue comment and
+          # `gh` is not installed on this role's runners; without the tool the
+          # model improvises and files the clean summary as a blocking thread.
+          claude_args: >-
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(curl:*)"
+
+      # Deterministic counterpart to the prompt rule above. A prompt is an
+      # instruction, not a guarantee, and five clean "No issues found" threads
+      # were resolved by hand on 2026-09-06 purely to unblock merges. This
+      # resolves one only when it is unresolved, unanswered, signed by this
+      # backend and carries no finding marker.
+      - name: Retire a clean review posted as a thread
+        if: ${{ always() && steps.backend.outputs.run == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/retire_clean_review_threads.py \
+            "${{ github.repository }}" \
+            "${{ github.event.pull_request.number }}" \
+            "<!-- lmdj-review: ${{ matrix.backend }} -->"
+
+  grok-review:
+    # Moved here from grok-review.yml for the same reason the Claude lanes
+    # were: Pre-heavy Gate `needs:` its reviewers, and a reviewer in its own
+    # workflow is not ordered before the gate. That gap mattered most in the
+    # case this lane exists for -- when both Claude backends are down, Grok is
+    # the only reviewer producing findings, and those were exactly the runs
+    # whose findings could arrive after the gate had already admitted the
+    # native-heavy set.
+    #
+    # What does NOT move is the runtime. Grok runs its own pinned CLI with its
+    # own credential, not `claude-code-action`, and that independent failure
+    # domain is the whole value of the slot: on #610 one action outage took
+    # both Claude backends down together and this lane kept working. Only the
+    # ordering is shared.
+    name: Grok advisory review
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 15
+    # Job level, not only on the review step: inside ci.yml a failed job fails
+    # the workflow and skips everything that `needs:` it, and the step flag
+    # covers neither a job timeout nor a failed install.
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      GROK_DISABLE_AUTOUPDATER: "1"
+      GROK_VERSION: "1.0.13"
+      # The digest names the exact bytes; the version alone names only a
+      # release. Recomputed by downloading the artifact whenever the version
+      # moves. The upstream install script publishes no checksum and verifies
+      # nothing but an HTTP status and a `--version` string, so pinning has to
+      # happen here.
+      GROK_SHA256: "edf79521581bb5e6b95abef848491a6a742e860da3e237ebe86a280d30dce4c1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # Fetch the versioned artifact directly and verify it, rather than
+      # piping the upstream installer to a shell. This job holds
+      # `pull-requests: write` and a `GITHUB_TOKEN` on a self-hosted runner,
+      # so an altered installer would execute on our own machine with those
+      # credentials in reach.
+      - name: Install the pinned Grok CLI
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/grok"
+          curl --fail --silent --show-error --location \
+            --output "$binary" \
+            "https://x.ai/cli/grok-${GROK_VERSION}-linux-x86_64"
+          printf '%s  %s\n' "$GROK_SHA256" "$binary" | sha256sum --check --strict -
+          chmod +x "$binary"
+          mkdir -p "$HOME/.local/bin"
+          mv "$binary" "$HOME/.local/bin/grok"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Confirm Grok CLI pin
+        run: |
+          set -euo pipefail
+          grok --version
+          grok --version | grep -F "$GROK_VERSION"
+
+      - name: Collect the pull request diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --find-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/pr.diff"
+
+      - name: Write the pull request body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+
+      # `continue-on-error` because this lane is advisory in name and must be
+      # advisory in effect. It failed red on #610 with `max turns reached`,
+      # which is a review that did not finish rather than a change that is
+      # wrong. Failures stay visible in the job log and in the absence of a
+      # review comment; advisory-review-liveness.yml is what notices a lane
+      # that has stopped posting.
+      - name: Run advisory Grok review
+        continue-on-error: true
+        env:
+          GROK_AUTH_JSON: ${{ secrets.GROK_AUTH_JSON }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY_FILE: ${{ runner.temp }}/pr-body.md
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          # The review is attached to a commit, so an inline thread lands on
+          # the revision that was reviewed rather than on whatever the branch
+          # points at by the time the API call arrives.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+          DIFF_FILE: ${{ runner.temp }}/pr.diff
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR_DRAFT: "false"
+          PR_SAME_REPOSITORY: "true"
+          POST_COMMENT: "true"
+          POST_REVIEW: "true"
+        run: python3 .github/scripts/grok_review.py
+
   pre-heavy-gate:
     name: Pre-heavy Gate
-    needs: [change-scope, docs-static, ci-contract, deploy-contract, chameleon-lab, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab]
+    # advisory-review is a needs: for ordering only -- its result is not in
+    # PREFLIGHT_RESULTS_JSON and is never consulted. What is consulted is the
+    # count of unresolved review threads on the Pull Request once the review
+    # has had its turn. Blocking here is cheap: it is before the ~185-minute
+    # native-heavy set. Blocking at merge, where required_conversation_resolution
+    # used to catch the same threads, was after it.
+    needs: [change-scope, docs-static, ci-contract, deploy-contract, chameleon-lab, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, advisory-review, grok-review]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -478,8 +812,42 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      # Reads review threads with the workflow token, which already carries
+      # pull-requests: read at the top of this file; the gate itself grants
+      # nothing extra.
+      - name: Count unresolved review threads
+        id: threads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Only a pull_request event has threads to count. A push to main or a
+          # dispatch admits on the preflight results alone.
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "count=0" >>"$GITHUB_OUTPUT"; exit 0
+          fi
+          # Paged to exhaustion. Threads accumulate across review rounds, and
+          # reading one page of 100 would let an unresolved thread on page two
+          # admit native-heavy work -- fail-open on exactly the condition this
+          # step exists to hold. $o $r $n $c below are GraphQL variables, not
+          # shell; single quotes are correct.
+          count=0; cursor=""
+          while :; do
+            args=(-f o="${GITHUB_REPOSITORY_OWNER}" -f r="${GITHUB_REPOSITORY#*/}" -F n="$PR_NUMBER")
+            [[ -n "$cursor" ]] && args+=(-f c="$cursor")
+            # shellcheck disable=SC2016
+            read -r page_unresolved has_next cursor < <(gh api graphql \
+              -f query='query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){nodes{isResolved} pageInfo{hasNextPage endCursor}}}}}' \
+              "${args[@]}" \
+              --jq '.data.repository.pullRequest.reviewThreads | [([.nodes[]|select(.isResolved==false)]|length), .pageInfo.hasNextPage, (.pageInfo.endCursor // "")] | @tsv')
+            count=$((count + page_unresolved))
+            [[ "$has_next" == "true" ]] || break
+          done
+          echo "count=$count" >>"$GITHUB_OUTPUT"
       - name: Admit native-heavy work after selected preflight success
         env:
+          UNRESOLVED_REVIEW_THREADS: ${{ steps.threads.outputs.count }}
           PREFLIGHT_RESULTS_JSON: >-
             {"docs-static":{"result":"${{ needs.docs-static.result }}"},"ci-contract":{"result":"${{ needs.ci-contract.result }}"},"deploy-contract":{"result":"${{ needs.deploy-contract.result }}"},"chameleon-lab":{"result":"${{ needs.chameleon-lab.result }}"},"web-toolchain-conformance":{"result":"${{ needs.web-toolchain-conformance.result }}"},"web-runtime-host":{"result":"${{ needs.web-runtime-host.result }}"},"creator-web":{"result":"${{ needs.creator-web.result }}"},"web-runtime-lab":{"result":"${{ needs.web-runtime-lab.result }}"}}
           SCOPE_MANIFEST: ${{ needs.change-scope.outputs.manifest }}
@@ -490,6 +858,7 @@ jobs:
           --manifest-json "$SCOPE_MANIFEST"
           --results-json "$PREFLIGHT_RESULTS_JSON"
           --change-scope-result "$CHANGE_SCOPE_RESULT"
+          --unresolved-review-threads "$UNRESOLVED_REVIEW_THREADS"
           --summary "$GITHUB_STEP_SUMMARY"
 
   core-ubuntu:

@@ -22,12 +22,25 @@ import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = REPO_ROOT / ".github/workflows/claude-review.yml"
-GROK = REPO_ROOT / ".github/workflows/grok-review.yml"
+WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+JOB_ID = "advisory-review"
+
+
+def job_block(source: str, job_id: str) -> str:
+    """The text of one top-level job in a workflow, header to next job."""
+    lines = source.splitlines(keepends=True)
+    start = next(i for i, l in enumerate(lines) if l == f"  {job_id}:\n")
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i][:2] == "  " and lines[i][2:3] not in (" ", "#", "\n") and lines[i].rstrip().endswith(":")),
+               len(lines))
+    return "".join(lines[start:end])
+WORKFLOW_SOURCE = REPO_ROOT / ".github/workflows/ci.yml"  # both lanes live here
 VENDORED_COMMAND = REPO_ROOT / ".claude/commands/pr-review.md"
 SELF_HOSTED_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]"
 )
+LIVENESS_SCRIPT = REPO_ROOT / ".github/scripts/advisory_review_liveness.py"
+
 BACKENDS = {
     "glm": ("https://api.z.ai/api/anthropic", "ZAI_CODING_KEY"),
     "kimi": ("https://api.kimi.com/coding/", "KIMI_CODING_KEY"),
@@ -36,7 +49,9 @@ BACKENDS = {
 
 class ClaudeReviewWorkflowTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.source = WORKFLOW.read_text(encoding="utf-8")
+        # Since #659 the review is a job inside ci.yml, so every assertion is
+        # scoped to that job's block rather than to a whole workflow file.
+        self.source = job_block(WORKFLOW.read_text(encoding="utf-8"), JOB_ID)
         # Absence assertions read the directives only. A rationale comment is
         # free to name what the lane is *not* -- and this scan matching its own
         # explanation is a recurring way to write a gate that is wrong about
@@ -50,7 +65,12 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertNotIn("PR Gate", self.directives)
         self.assertNotIn("pr_gate.py", self.directives)
         self.assertNotIn("merge:queue", self.directives)
-        self.assertIn("permissions:\n  contents: read\n  pull-requests: write", self.source)
+        self.assertIn(
+            "    permissions:\n      contents: read\n      pull-requests: write", self.source,
+            msg=("why: posting review threads needs pull-requests: write and nothing "
+                 "else in ci.yml does, so the grant is job-level to keep every other "
+                 "job's token posture; remedy: keep the job-level permissions block"),
+        )
 
     def test_the_lane_runs_self_hosted(self) -> None:
         self.assertIn(
@@ -78,14 +98,16 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
                 "why: this lane runs an agent with repository write scope on a "
                 "self-hosted runner, so an untrusted trigger would execute fork "
                 "code beside our credentials; remedy: keep the head-repository "
-                "condition, and keep it identical to grok-review.yml rather than "
+                "condition, and keep it identical to the Grok lane's rather "
                 "writing a second spelling of the same rule"
             ),
         )
         self.assertIn("github.event.pull_request.draft == false", self.source)
+        grok = WORKFLOW_SOURCE.read_text(encoding="utf-8").split(
+            "\n  grok-review:\n", 1)[1].split("\n  pre-heavy-gate:", 1)[0]
         self.assertIn(
             condition,
-            GROK.read_text(encoding="utf-8"),
+            grok,
             msg="the two advisory lanes must share one trust condition",
         )
 
@@ -132,20 +154,141 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", self.directives)
         self.assertNotIn("claude_code_oauth_token", self.directives)
         self.assertNotIn("ANTHROPIC_API_KEY:", self.directives)
+        # The base URLs and secret names moved into
+        # `.github/scripts/advisory_review_liveness.py` when the matrix became
+        # a selection (#659): one declaration for the workflow that runs a
+        # backend and the check that judges it. The job still names the secret
+        # indirectly, through `secrets[matrix.secret_name]`.
+        declared = LIVENESS_SCRIPT.read_text(encoding="utf-8")
         for backend, (base_url, secret_name) in BACKENDS.items():
             with self.subTest(backend=backend):
-                self.assertIn(base_url, self.source)
-                self.assertIn(secret_name, self.source)
+                self.assertIn(base_url, declared)
+                self.assertIn(secret_name, declared)
+        self.assertIn("secrets[matrix.secret_name]", self.source)
+
+    def test_one_backend_reviews_a_pull_request_not_two(self) -> None:
+        """#659 item 3. Two backends duplicated each other; Grok did not.
+
+        The matrix is computed rather than listed, so the workflow cannot
+        drift back to running both by an edit that looks like a formatting
+        change.
+        """
+        self.assertIn(
+            "matrix: ${{ fromJSON(needs.select-review-backend.outputs.matrix) }}",
+            self.source,
+            msg=("why: a literal two-entry matrix is what this replaces; remedy: "
+                 "keep the matrix coming from the selector job"),
+        )
+        self.assertNotIn(
+            "- backend: glm",
+            self.source,
+            msg=("why: a hardcoded backend list beside a computed one is two "
+                 "sources of truth; remedy: declare backends in "
+                 ".github/scripts/advisory_review_liveness.py only"),
+        )
+
+    def test_the_workflows_last_resort_matrix_matches_the_declared_primary(self) -> None:
+        """The one literal duplicate of the backend table, pinned to its source."""
+        import json as _json
+        import sys as _sys
+
+        _sys.path.insert(0, str(REPO_ROOT / ".github/scripts"))
+        import advisory_review_liveness as liveness  # noqa: PLC0415
+
+        selector = WORKFLOW_SOURCE.read_text(encoding="utf-8").split(
+            "\n  select-review-backend:\n", 1)[1].split("\n  advisory-review:", 1)[0]
+        literal = selector.split("PRIMARY_MATRIX: '", 1)[1].split("'", 1)[0]
+        self.assertEqual(
+            _json.loads(literal),
+            liveness._selection_matrix([liveness.CLAUDE_BACKENDS[0]["backend"]]),
+            msg=("why: the workflow cannot import the script it may be unable to "
+                 "run, so this literal is a deliberate second copy; remedy: keep "
+                 "it equal to the script's own primary entry"),
+        )
+
+    def test_the_selector_decides_from_posted_evidence(self) -> None:
+        source = WORKFLOW_SOURCE.read_text(encoding="utf-8")
+        selector = source.split("\n  select-review-backend:\n", 1)[1].split(
+            "\n  advisory-review:", 1)[0]
+        self.assertIn("advisory_review_liveness.py", selector)
+        self.assertIn("--select", selector)
+        self.assertIn(
+            "vars.CLAUDE_REVIEW_ORDER",
+            selector,
+            msg=("why: the primary must be movable without editing a workflow "
+                 "on the protected path; remedy: keep the repository variable"),
+        )
+        self.assertIn(
+            "continue-on-error: true",
+            selector.split("\n    steps:", 1)[0],
+            msg=("why: advisory-review needs this job, so a crashed selector "
+                 "would skip the review and, with it, the gate's ordering; "
+                 "remedy: keep continue-on-error at job level"),
+        )
+        self.assertIn(
+            "permissions:\n      contents: read\n      actions: read\n"
+            "      issues: read\n      pull-requests: read",
+            selector,
+            msg=("why: a job-level permissions block makes every omitted scope "
+                 "none, so without these the script 403s, the fail-open path "
+                 "returns the primary every time, and the handover silently "
+                 "never happens; remedy: keep the same read scopes as "
+                 "advisory-review-liveness.yml"),
+        )
+        self.assertIn(
+            "ref: ${{ github.event_name == 'pull_request' && "
+            "github.event.pull_request.base.sha || github.sha }}",
+            selector,
+            msg=("why: this job is unconditional, so it runs for forks too, and "
+                 "checking out the merge ref would execute a fork's copy of the "
+                 "selector script on a trusted runner; remedy: check out the "
+                 "base revision -- a Pull Request does not choose its reviewer"),
+        )
+        self.assertIn(
+            "PRIMARY_MATRIX:",
+            selector,
+            msg=("why: job-level continue-on-error governs the job, not the "
+                 "output, so a step that dies without writing a matrix leaves "
+                 "fromJSON('') to the review job; remedy: every path in the "
+                 "step ends in a matrix"),
+        )
+        self.assertIn(
+            "if: ${{ !cancelled() }}",
+            selector,
+            msg=("why: advisory-review's strategy.matrix reads this job's "
+                 "output, and a skipped selector would leave fromJSON('') to "
+                 "be evaluated on push runs of the protected branch; remedy: "
+                 "keep the selector unconditional and let the review job's own "
+                 "condition keep it to Pull Requests"),
+        )
 
     def test_a_missing_secret_skips_rather_than_fails(self) -> None:
         """A backend nobody has configured must not turn the lane red."""
         self.assertIn("review skipped: no $SECRET_NAME secret", self.source)
         self.assertIn("fail-fast: false", self.source)
 
-    def test_the_backend_set_is_narrowable_without_editing_the_workflow(self) -> None:
-        """The exit if two reviewers prove too noisy."""
-        self.assertIn("vars.CLAUDE_REVIEW_BACKENDS", self.source)
-        self.assertIn("not in CLAUDE_REVIEW_BACKENDS", self.source)
+    def test_one_operator_knob_chooses_the_backend(self) -> None:
+        """Two knobs could disagree, and the disagreement would be silent.
+
+        `CLAUDE_REVIEW_BACKENDS` used to turn one of two matrix legs off. With
+        one leg chosen by evidence, a set that does not name the chosen
+        backend would skip the whole Claude review -- in exactly the case the
+        selector exists for, where the primary is DOWN and it reached for the
+        other one.
+        """
+        whole = WORKFLOW_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("vars.CLAUDE_REVIEW_ORDER", whole)
+        directives = "\n".join(
+            line for line in whole.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        self.assertNotIn(
+            "CLAUDE_REVIEW_BACKENDS",
+            directives,
+            msg=("why: an enabled-set that can discard the selected backend "
+                 "silently withholds the review; remedy: CLAUDE_REVIEW_ORDER "
+                 "is the only knob -- one name pins a backend"),
+        )
 
     def test_the_review_procedure_is_vendored_not_cloned_at_run_time(self) -> None:
         """The marketplace clone failed in production, so it is gone.
@@ -204,6 +347,17 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         broken change. A red check on every Pull Request from a lane that cannot
         block one teaches people to ignore red.
         """
+        job = self.source.split("\n    steps:\n", 1)[0]  # job header, before its steps
+        self.assertIn(
+            "\n    continue-on-error: true\n",
+            "\n" + job + "\n",
+            msg=(
+                "why: inside ci.yml a failed job fails the workflow and skips "
+                "Pre-heavy Gate, which needs this job, and the step-level flag "
+                "does not cover a job timeout or a failed checkout; remedy: keep "
+                "continue-on-error at job level on advisory-review, as macos-primary does"
+            ),
+        )
         self.assertIn(
             "continue-on-error: true",
             self.source,
@@ -220,6 +374,63 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertIn("GH_TOKEN:", self.source)
         allowed = VENDORED_COMMAND.read_text(encoding="utf-8").split("---", 2)[1]
         self.assertIn("Bash(gh pr diff:*)", allowed)
+
+    def test_a_clean_review_is_an_issue_comment_and_never_a_thread(self) -> None:
+        """A thread is an unanswered question; a clean review is not one.
+
+        `main` requires every review thread to be resolved, and Pre-heavy Gate
+        counts unresolved threads (#659). A reviewer that files "no issues
+        found" as a thread therefore blocks the merge it just approved -- five
+        such threads were resolved by hand on 2026-09-06.
+        """
+        body = VENDORED_COMMAND.read_text(encoding="utf-8")
+        self.assertIn(
+            "Never post a clean review as a review comment or review thread.",
+            body,
+            msg=("why: without the prohibition the model files the clean summary "
+                 "wherever the available tools allow, and a thread blocks the merge; "
+                 "remedy: keep the rule in the vendored command's step 7"),
+        )
+        self.assertIn(
+            "/repos/{owner}/{repo}/issues/{number}/comments",
+            body,
+            msg=("why: `gh` is absent on ci-general, so without a named REST "
+                 "fallback the instruction to post an issue comment is not "
+                 "followable; remedy: keep the endpoint in the command"),
+        )
+        allowed = body.split("---", 2)[1]
+        self.assertIn(
+            "Bash(curl:*)",
+            allowed,
+            msg=("why: the REST fallback cannot run unless the tool is allowed; "
+                 "remedy: keep Bash(curl:*) in allowed-tools"),
+        )
+        self.assertIn(
+            "Bash(curl:*)",
+            self.source,
+            msg=("why: claude_args --allowedTools is what the action enforces at "
+                 "run time; the command frontmatter alone does not grant it; "
+                 "remedy: name the tool in claude_args too"),
+        )
+
+    def test_a_clean_thread_is_retired_deterministically_after_the_review(self) -> None:
+        """The prompt rule is prevention; this step is the guarantee."""
+        self.assertIn("retire_clean_review_threads.py", self.source)
+        self.assertIn(
+            "<!-- lmdj-review: ${{ matrix.backend }} -->",
+            self.source.split("retire_clean_review_threads.py", 1)[1],
+            msg=("why: the script may only resolve what this backend signed, so "
+                 "the marker has to be passed per backend; remedy: keep the "
+                 "signature argument on the step"),
+        )
+        self.assertIn(
+            "if: ${{ always() && steps.backend.outputs.run == 'true' }}",
+            self.source,
+            msg=("why: the Review step is continue-on-error, so a failed review "
+                 "still leaves the step's own outcome behind; the tidy-up must "
+                 "run anyway and only for a backend that actually ran; remedy: "
+                 "keep always() with the backend condition"),
+        )
 
     def test_the_review_posts_findings_rather_than_only_logging_them(self) -> None:
         self.assertIn("--comment", self.source)

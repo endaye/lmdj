@@ -186,6 +186,82 @@ class PhaseGateTest(unittest.TestCase):
         self.assertEqual(report.unexpected_skips, ("docs-static",))
         self.assertNotIn("docs-static", report.scope_skips)
 
+    def test_unresolved_review_threads_hold_admission(self):
+        """An open review thread is an admission condition, not a verdict.
+
+        The reviewer's own result is never read. What is read is whether a
+        human has resolved every finding -- by fixing or by replying -- and
+        the hold sits here, before ~185 minutes of native-heavy work, rather
+        than at merge where required_conversation_resolution held the same
+        threads after that work had already run.
+        """
+        manifest = requested_manifest(self.module, self.policy, ("docs_static",))
+        results = expected_results(self.module, manifest)
+        clean = self.module.validate_phase_gate(
+            self.policy, manifest, results, unresolved_review_threads=0,
+        )
+        self.assertTrue(clean.ok, clean.errors)
+
+        held = self.module.validate_phase_gate(
+            self.policy, manifest, results, unresolved_review_threads=3,
+        )
+        self.assertFalse(held.ok)
+        message = " ".join(held.errors)
+        self.assertIn("3 advisory review threads unresolved", message)
+        self.assertIn("why:", message)
+        self.assertIn("remedy:", message)
+        self.assertIn("resolve each thread", message)
+
+        one = self.module.validate_phase_gate(
+            self.policy, manifest, results, unresolved_review_threads=1,
+        )
+        self.assertIn("1 advisory review thread unresolved", " ".join(one.errors))
+
+    def test_a_dead_reviewer_posts_no_threads_and_admits(self):
+        """Zero threads admits, whatever the reviewer did.
+
+        A reviewer that failed, timed out, or never ran leaves nothing to
+        resolve, and this gate must not hold the repository for it;
+        advisory-review-liveness.yml is the mechanism that notices a lane
+        that has gone quiet. The default is 0 so a caller that predates the
+        argument admits exactly as before.
+        """
+        manifest = requested_manifest(self.module, self.policy, ("docs_static",))
+        results = expected_results(self.module, manifest)
+        report = self.module.validate_phase_gate(self.policy, manifest, results)
+        self.assertTrue(report.ok, report.errors)
+
+    def test_a_negative_or_non_integer_thread_count_fails_closed(self):
+        manifest = requested_manifest(self.module, self.policy, ("docs_static",))
+        results = expected_results(self.module, manifest)
+        for bad in (-1, "3", None):
+            with self.subTest(bad=bad):
+                report = self.module.validate_phase_gate(
+                    self.policy, manifest, results, unresolved_review_threads=bad,
+                )
+                self.assertFalse(report.ok)
+                self.assertIn("non-negative integer", " ".join(report.errors))
+
+    def test_the_gate_workflow_passes_the_thread_count(self):
+        """The argument exists for one caller; that caller must use it."""
+        source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for needle in (
+            "--unresolved-review-threads",
+            "reviewThreads(first:100,after:$c)",
+            "pageInfo{hasNextPage endCursor}",
+            '[[ "$has_next" == "true" ]] || break',
+            "advisory-review, grok-review]",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(
+                    needle, source,
+                    msg=("why: Pre-heavy Gate must order itself after the review and "
+                         "pass a thread count that reads every page -- one page of 100 "
+                         "is fail-open once threads accumulate across rounds; remedy: "
+                         "keep advisory-review in needs and the paginated GraphQL count "
+                         "wired to --unresolved-review-threads"),
+                )
+
     def test_change_scope_result_and_closed_json_shape_fail_closed(self):
         manifest = requested_manifest(
             self.module, self.policy, ("docs_static",)
