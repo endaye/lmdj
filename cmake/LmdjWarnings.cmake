@@ -88,8 +88,12 @@ function(lmdj_target_sanitizers target)
       set(LMDJ_CLANG_RUNTIME_DIR "${lmdj_runtime_dir}" CACHE INTERNAL
         "Clang compiler-rt runtime directory used for the shared sanitizer rpath")
     endif()
+    # -Wl, rather than CMake's LINKER: abstraction: this branch is already
+    # narrowed to Clang on Linux, whose driver always takes -Wl, so the
+    # abstraction buys no portability here, and writing it directly keeps the
+    # flag independent of which CMake version interprets the prefix.
     list(APPEND lmdj_sanitizer_link_flags
-      -shared-libsan "LINKER:-rpath,${LMDJ_CLANG_RUNTIME_DIR}")
+      -shared-libsan "-Wl,-rpath,${LMDJ_CLANG_RUNTIME_DIR}")
   endif()
   target_link_options(
     "${target}"
