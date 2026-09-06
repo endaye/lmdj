@@ -500,13 +500,17 @@ budget.
 Linux CI routes by role label rather than by the shared `contabo` origin label,
 which is no longer a selection condition anywhere. The Contabo Singapore host,
 which also runs LMDJ staging, keeps `shared-with-staging` and carries the
-`ci-general` and `ci-core` roles under a resource slice that reserves at least
-about 2 vCPU and 8 GiB for the application and the OS; its elastic services
-carry `ci-general` only, so burst capacity can never broaden `ci-core` or
-reach deploy, release, production, sudo, or Docker authority. The CI-only
-netcup node carries `ci-only-host` and the `ci-general` and `ci-web-heavy`
-roles, with all runner services bounded by the `lmdj-ci.slice` at roughly 14
-vCore and 48 GB and the rest left for the OS and cache maintenance. Both hosts
+`ci-general` role only, under a resource slice that reserves at least about
+2 vCPU and 8 GiB for the application and the OS. The CI-only netcup node
+carries `ci-only-host` and the `ci-general`, `ci-web-heavy` and `ci-core`
+roles — `ci-core` on its four baseline services only; elastic services on
+either host carry no `ci-core`, so burst capacity can never broaden that role
+or reach deploy, release, production, sudo, or Docker authority — with all
+runner services bounded by the `lmdj-ci.slice` at roughly 14 vCore and 48 GB
+and the rest left for the OS and cache maintenance. `ci-core` moved from
+Contabo to netcup on 2026-09-06 on a same-revision measurement (#676, decision
+on #298): every native Core lane ran faster on netcup, cold cache included, and
+the host has no staging co-tenant to protect. Both hosts
 also serve as Tailscale exit nodes: that is a documented co-tenant workload
 covered by the headroom outside the CI slices, capacity math must never assume
 the runners own the host, and degraded exit-node latency during full elastic
@@ -536,7 +540,8 @@ hosts, not a defect. Routing splits two ways:
 
 `ci-core` deliberately does not span both hosts: the persistent native `ccache`
 and the preinstalled clang-18/llvm-18 coverage toolchain are shared-host state,
-not pool state. Coverage accordingly no longer installs that toolchain; the
+not pool state. Both hosts carry the same 18.1.3 toolchain, so the role can be
+placed on either, but it is registered on exactly one at a time — today netcup. Coverage accordingly no longer installs that toolchain; the
 `apt-get` step existed only for the hosted fallback and would otherwise mutate
 state both runner services share. Every job that can land on a role carries the
 closed trust condition itself, because no selector's fork branch is in its path
