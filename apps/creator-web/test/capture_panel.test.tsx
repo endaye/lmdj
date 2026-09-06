@@ -294,6 +294,81 @@ test("Escape cancels an active pointer trim without closing the Capture panel", 
   expect(onClose).not.toHaveBeenCalled();
 });
 
+test("Escape on a focused trim handle with no gesture still closes the Capture panel", async () => {
+  const {makeController, instances} = createFactory();
+  const {onClose} = renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(48_000).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+
+  // A focused handle owns Escape only while a trim gesture is in flight; with
+  // nothing to abort it must reach ModalDialog and dismiss the session.
+  fireEvent.keyDown(await screen.findByRole("slider", {name: /Pad A1 Start/}), {
+    key: "Escape",
+  });
+  expect(onClose).toHaveBeenCalledTimes(1);
+
+  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A1 End/}), {key: "Escape"});
+  expect(onClose).toHaveBeenCalledTimes(2);
+});
+
+test("keyboard Start moves clamp to the remaining Bank quota instead of dead-zoning", async () => {
+  const {makeController, instances} = createFactory();
+  renderPanel({makeController, maxCommitFrames: 2_400});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(48_000).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+
+  // Walk the 2 400-frame window off zero so the quota, not frame 0, is what
+  // bounds Start from below: start 1 200, end 3 000, 1 800 frames selected.
+  fireEvent.change(await screen.findByRole("slider", {name: /Pad A1 Start/}),
+    {target: {value: "1200"}});
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}),
+    {target: {value: "3000"}});
+  expect(screen.getByRole("slider", {name: /Pad A1 Start/}).getAttribute("min"))
+    .toBe("600");
+
+  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A1 Start/}),
+    {key: "ArrowLeft", shiftKey: true});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("720");
+
+  // 720 - 480 = 240 would ask for 2 760 frames, over the 2 400 quota. The
+  // handle must land on the quota bound rather than refuse to move at all.
+  fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A1 Start/}),
+    {key: "ArrowLeft", shiftKey: true});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("600");
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("3000");
+  expect(screen.getByLabelText("Pad A1 Duration").textContent).toBe("0.050 s");
+});
+
+test("dragging the Start grip past the Bank quota clamps to the quota bound", async () => {
+  const {makeController, instances} = createFactory();
+  const {container} = renderPanel({makeController, maxCommitFrames: 2_400});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(48_000).fill(0.25)], 0.25));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+  mockTrimRect(container);
+
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 Start/}),
+    {target: {value: "1200"}});
+  fireEvent.change(screen.getByRole("slider", {name: /Pad A1 End/}),
+    {target: {value: "3000"}});
+
+  // 400 px over 48 000 frames: Start sits at 1 200 frames, i.e. clientX 10.
+  const startGrip = captureGrip(container, "start");
+  fireEvent.pointerDown(startGrip, {pointerId: 11, clientX: 10, button: 0});
+  fireEvent.pointerMove(startGrip, {pointerId: 11, clientX: 0});
+  fireEvent.pointerUp(startGrip, {pointerId: 11});
+  expect((screen.getByRole("slider", {name: /Pad A1 Start/}) as HTMLInputElement).value)
+    .toBe("600");
+  expect((screen.getByRole("slider", {name: /Pad A1 End/}) as HTMLInputElement).value)
+    .toBe("3000");
+});
+
 test("Capture grip presses preserve grab offset and the waveform middle stays inert", async () => {
   const {makeController, instances} = createFactory();
   const {container} = renderPanel({makeController});

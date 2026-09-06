@@ -357,6 +357,13 @@ export function CapturePanel({
     state.frameCount,
     state.selectionStart + state.selectionLimitFrames,
   );
+  // Moving Start keeps End fixed, so the quota bounds Start from below exactly
+  // as it bounds End from above. Without this the handle has a dead zone: the
+  // reducer rejects the over-quota selection and the handle snaps back.
+  const minimumSelectionStart = Math.max(
+    0,
+    selectionEnd - state.selectionLimitFrames,
+  );
 
   // Capture truth remains start + frame count. End exists only at this UI
   // boundary: moving Start keeps End fixed, while moving End derives the new
@@ -382,6 +389,10 @@ export function CapturePanel({
     if (event.key === "Escape") {
       const keyboardBase = keyboardSelectionRef.current;
       const pointerBase = gripDragRef.current;
+      // Escape only belongs to the handle while a trim gesture is in flight.
+      // With nothing to abort the event must keep bubbling, or a focused
+      // handle would swallow the ModalDialog dismissal.
+      if (keyboardBase === null && pointerBase === null) return;
       if (keyboardBase !== null) {
         dispatch({kind: "select", start: keyboardBase.start, frames: keyboardBase.frames});
       } else if (pointerBase !== null) {
@@ -410,7 +421,7 @@ export function CapturePanel({
     if (kind === "start") {
       handleSelectStart(Math.min(
         selectionEnd - 1,
-        Math.max(0, state.selectionStart + direction * increment),
+        Math.max(minimumSelectionStart, state.selectionStart + direction * increment),
       ));
     } else {
       handleSelectEnd(Math.min(
@@ -464,7 +475,10 @@ export function CapturePanel({
     if (drag === null || drag.pointerId !== event.pointerId) return;
     const requestedFrame = Math.round(frameAtClientX(event.clientX) + drag.grabOffset);
     if (drag.kind === "start") {
-      handleSelectStart(Math.min(selectionEnd - 1, Math.max(0, requestedFrame)));
+      handleSelectStart(Math.min(
+        selectionEnd - 1,
+        Math.max(minimumSelectionStart, requestedFrame),
+      ));
     } else {
       handleSelectEnd(Math.min(
         maximumSelectionEnd,
@@ -601,8 +615,8 @@ export function CapturePanel({
               <input
                 className="waveform-handle"
                 type="range"
-                min={0}
-                max={Math.max(0, selectionEnd - 1)}
+                min={minimumSelectionStart}
+                max={Math.max(minimumSelectionStart, selectionEnd - 1)}
                 step={1}
                 value={state.selectionStart}
                 aria-label={`${padLabel} Start — ${trimSecondsLabel(state.selectionStart)}`}
