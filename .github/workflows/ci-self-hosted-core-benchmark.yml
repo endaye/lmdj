@@ -151,17 +151,17 @@ jobs:
       - name: Verify the coverage toolchain
         if: ${{ inputs.lane == 'core_coverage' }}
         run: |
-          command -v clang-18
-          command -v clang++-18
-          command -v llvm-cov-18
+          command -v clang-22
+          command -v clang++-22
+          command -v llvm-cov-22
 
       - name: Run the core_coverage workload
         if: ${{ inputs.lane == 'core_coverage' }}
         run: |
           env \
-            PATH="/usr/lib/llvm-18/bin:$PATH" \
-            CC=clang-18 \
-            CXX=clang++-18 \
+            PATH="/usr/lib/llvm-22/bin:$PATH" \
+            CC=clang-22 \
+            CXX=clang++-22 \
             scripts/core-coverage.sh check
 
       - name: Run the core_asan workload

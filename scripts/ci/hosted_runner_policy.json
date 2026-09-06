@@ -120,12 +120,6 @@
       "job": "smoke",
       "category": "deploy-authority",
       "reason": "Exercises the published Portal deployment from outside. A smoke test of a public deployment should not run on a host that participates in producing it."
-    },
-    {
-      "workflow": "core-nightly.yml",
-      "job": "core-tsan",
-      "category": "platform",
-      "reason": "Scheduled TSan stays on the clean hosted authority because a historical Contabo execution built but the TSan runtime failed with an unexpected memory mapping. Changing this routing requires separately accepted same-revision runner-name and successful-job evidence; the manual probe job exists to gather it."
     }
   ]
 }
