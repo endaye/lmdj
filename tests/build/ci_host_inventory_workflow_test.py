@@ -19,6 +19,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github/workflows/ci-host-inventory.yml"
+CONTABO = REPO_ROOT / "scripts/ci/elastic-runner/contabo.json"
 
 
 class HostInventoryWorkflowTest(unittest.TestCase):
@@ -72,6 +73,29 @@ class HostInventoryWorkflowTest(unittest.TestCase):
             ),
         )
         self.assertNotIn("set -euo pipefail", self.source)
+
+    def test_its_ci_core_dispatch_is_registered_with_the_elastic_controller(self) -> None:
+        """The role-scan gate cannot see this job; this test stands in for it.
+
+        `runs-on` takes the role from a dispatch input, so the generic scan
+        over workflows for literal `ci-core` never finds this one. Dispatched
+        with `ci-core` it lands on a Contabo service under the name
+        `Host inventory (ci-core)`, and `_current_job_is_core` prefix-matches
+        that against `core_job_names`. Unregistered, the controller classifies
+        it as non-core and keeps admitting elastic load beside it.
+        """
+        import json as _json
+        name = next(l.split("name:", 1)[1].strip()
+                    for l in self.source.splitlines() if l.strip().startswith("name: Host inventory"))
+        prefix = name.split(" (")[0]
+        registered = _json.loads(CONTABO.read_text(encoding="utf-8"))["core_job_names"]
+        self.assertIn(
+            prefix, registered,
+            msg=(f"why: the elastic controller prefix-matches the running job name "
+                 f"against core_job_names and cannot see this job's role from the "
+                 f"workflow text; remedy: keep {prefix!r} in "
+                 f"scripts/ci/elastic-runner/contabo.json core_job_names"),
+        )
 
     def test_it_cannot_change_the_host(self) -> None:
         for forbidden in ("apt-get", "sudo", "npm install", "pip install", "systemctl"):
