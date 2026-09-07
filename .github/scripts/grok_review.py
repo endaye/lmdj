@@ -178,6 +178,31 @@ def parse_findings(text: str) -> list[dict[str, str]]:
     return findings
 
 
+def validate_structured_response(text: str, findings: Sequence[Mapping[str, str]]) -> None:
+    """Require the promised review format before minting publishable model data.
+
+    This is completion validation, not a clean/failed merge verdict: both
+    valid `clean` and valid `issues` responses continue to the same publisher.
+    The legacy advisory entry deliberately keeps its permissive parser.
+    """
+    verdicts = list(VERDICT_LINE.finditer(text))
+    sections = list(re.finditer(r"^##\s*Findings[ \t]*\n([\s\S]*?)(?=^##\s|\Z)",
+                                text, re.MULTILINE | re.IGNORECASE))
+    conclusion = (re.fullmatch(r"(?:`(clean|issues)`|(clean|issues))",
+                              verdicts[0].group(1).strip(), re.IGNORECASE)
+                  if len(verdicts) == 1 else None)
+    if conclusion is None or len(sections) != 1:
+        raise RuntimeError("why: Grok returned an incomplete or malformed review format; "
+                           "remedy: require one explicit clean/issues Verdict and Findings section, or review manually")
+    verdict = (conclusion.group(1) or conclusion.group(2)).lower()
+    section = sections[0].group(1).strip()
+    clean_line = section.splitlines()[0].strip().strip("`").lower() if section else ""
+    if ((verdict == "clean" and (findings or clean_line not in {"no findings.", "no findings"}))
+            or (verdict == "issues" and not findings)):
+        raise RuntimeError("why: Grok verdict and findings are missing or inconsistent; "
+                           "remedy: rerun for a complete review or inspect the current head manually")
+
+
 def actionable_findings(findings: Sequence[Mapping[str, str]]) -> list[Mapping[str, str]]:
     return [item for item in findings if item.get("severity") in ACTIONABLE_SEVERITIES]
 
@@ -454,6 +479,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("PR_SAME_REPOSITORY", "true") == "true",
     )
     parser.add_argument("--output", default=os.environ.get("REVIEW_OUTPUT", ""))
+    parser.add_argument("--structured-output", default="",
+                        help="Read-only standalone mode: write model data and never post to GitHub")
     parser.add_argument("--post-comment", action="store_true", default=os.environ.get("POST_COMMENT", "true") == "true")
     parser.add_argument("--no-post-comment", action="store_false", dest="post_comment")
     parser.add_argument("--post-review", action="store_true", default=os.environ.get("POST_REVIEW", "true") == "true")
@@ -476,6 +503,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         same_repository=bool(args.same_repository),
     )
     if reason:
+        if args.structured_output:
+            raise RuntimeError(f"why: Grok did not review ({reason}); remedy: fix the cause or review manually")
         notice(f"Grok advisory review skipped: {reason}")
         return 0
 
@@ -510,6 +539,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     text = str(payload.get("text") or "")
     findings = parse_findings(text)
     verdict = parse_verdict(text)
+    if args.structured_output:
+        # The standalone model job has no PR write permission. A separate
+        # trusted publisher validates these data and the current head.
+        from pr_review_target import TargetUnavailable, validate_review
+        validate_structured_response(text, findings)
+        inline = []
+        for item in actionable_findings(findings):
+            location = parse_location(item.get("body") or "")
+            if not location or not location[1]:
+                raise TargetUnavailable("why: Grok finding has no exact inline location; remedy: review manually")
+            inline.append({"path": location[0], "line": location[2] or location[1],
+                           "body": f"**[{item['severity']}] {item['title']}**\n\n{item['body']}"})
+        data = validate_review({"summary": text, "findings": inline})
+        Path(args.structured_output).write_text(json.dumps(data), encoding="utf-8")
+        return 0
     token = os.environ.get("GITHUB_TOKEN", "")
     if args.post_review and token and args.repository and args.pr_number and args.head_sha:
         review_action = post_review(

@@ -289,11 +289,16 @@ Affected portal pages: /operations/testing-and-proof/
 `feat(ci): prepare independent PR review feedback`
 
 **新增：** `.github/workflows/pr-review.yml`、
+`.github/scripts/pr_review_target.py`、
 `tests/build/ci_pr_review_workflow_test.py`。
-**修改：** `scripts/ci/scope_policy.json`（登记新 workflow 为控制面路径）。
-**按实际接口修改：** `.github/scripts/advisory_review_liveness.py`、
-`.github/scripts/grok_review.py`、`.github/scripts/retire_clean_review_threads.py`
-及各自 `ci_*_test.py`；测试门户页面。
+新 workflow 与辅助脚本的路径登记先由独立
+[路由 PR #760](https://github.com/endaye/lmdj/pull/760) 交付；本功能 PR 不再携带
+`scripts/ci/scope_policy.json` 控制面改动。
+**修改：** `.github/scripts/advisory_review_liveness.py`、`.github/scripts/grok_review.py`、
+`tests/build/ci_advisory_review_liveness_test.py`、
+`apps/architecture-portal/docs/operations/testing-and-proof.mdx`、本计划的 T4 范围与验证说明。
+旧 `.github/scripts/retire_clean_review_threads.py` 与 Claude command 不改；
+现存 Claude／Grok／thread 测试作为兼容性回归运行。
 
 - [ ] 提取现有后端选择、Claude/Grok review 与线程处理所需能力，
   新入口先仅手动验证；不得与旧入口对同一 PR head 长期双写审查。
@@ -303,14 +308,37 @@ Affected portal pages: /operations/testing-and-proof/
   不增加不可接管的“解析模型自由文本为通过／拒绝”的硬门禁。
 - [ ] 限制审查凭证与 agent 工具能力；仓库文本、PR 描述不能授权 push/merge，
   不让带高权限的 AI 任意执行 PR 提供的代码。
+  实现采用可信控制 checkout＋只读模型生成＋独立可信 publisher：Claude 使用
+  固定 action 的结构化输出，Grok 增加无评论写入的结构化输出模式；publisher
+  验证数据并在发布前后复核 head，以固定 `commit_id` 发布 `COMMENT` review。
+  模型不持 PR 写凭据、不执行待审代码、不自行签发完成标记。
 - [ ] 监控以确切 workflow run 和 head 绑定为准，空 check rollup、NEUTRAL 或旧 head
   不算审查完成；保留最新主干已修复的 merge-ref 可见性约束。
 - [ ] 写明 AI 线程与 `required_conversation_resolution` 的关系：切换后 Pre-heavy Gate
   的线程准入随重型 lane 消失，但 conversation resolution 仍是 required，AI 线程因此
   仍阻塞合并，直到人工 resolve——这就是 spec §4.1 的“人工接管”，不是新门禁。
   clean review 不得留下未解决线程（#707 的约束继续有效）。
+  新 publisher 对 clean review 使用 `comments=[]`，不依赖旧清理脚本；
+  新入口证据绑定 repository／PR／head／run／attempt／backend，监控核对 bot review
+  与 publisher 结果。dispatch 的控制 SHA 不冒充被审查 head，旧 CI 路径保持兼容。
 
-**验证：** 新 review 测试及现存 Claude/Grok/liveness/thread tests；portal check。
+**验证：** `ci_pr_review_workflow_test.py`、`ci_advisory_review_liveness_test.py`、
+`ci_grok_review_workflow_test.py`、`ci_claude_review_workflow_test.py`、
+`ci_retire_clean_review_threads_test.py`、`ci_change_scope_test.py`、
+`ci_workflow_topology_test.py`（均在 `tests/build/`，用 `python3` 执行）；
+`pr-review.yml` 的 actionlint；集成提交前 portal check。
+行为测试覆盖错误身份／跨 run 或 attempt／伪签名、发布前 stale 拒绝、
+发布过程中 head 变化、模型文本只作数据、缺凭据不复用旧产物、clean 无 inline thread。
+Grok 结构化模式还须拒绝缺失／重复／模糊的 Verdict、缺失 Findings 以及结论与
+findings 不一致的响应；“无法完成审查”或截断文本不能被转换为 clean 产物。
+合法的 `clean` 与 `issues` 均是已完成审查的数据，不把模型意见变成 merge 硬门禁；
+旧 `ci.yml` 的非结构化顾问调用保持原有兼容行为。
+本地测试不代表真实 review 已完成；O1 仍需授权验证第三方后端结构化输出、
+dispatch→artifact→发布→liveness、运行期间 head 更新、缺凭据／API 故障及人工 resolve。
+固定 action 的 [agent mode 源码](https://github.com/anthropics/claude-code-action/blob/fa2b2666b747000bf42767d1f332065b375e3c8f/src/modes/agent/index.ts)
+与 [action 接口](https://github.com/anthropics/claude-code-action/blob/fa2b2666b747000bf42767d1f332065b375e3c8f/action.yml)
+支持显式 prompt／`structured_output`；其 buffered inline publisher 不从 dispatch inputs
+取得 PR_NUMBER，因此本实现不伪造事件，而由独立 publisher 显式接收已解析的 PR 身份。
 Documentation impact: required
 Affected portal pages: /operations/testing-and-proof/
 
