@@ -1,5 +1,5 @@
 name: Core CI
-run-name: Core CI / ${{ inputs.queue_ticket || (github.event_name == 'schedule' && 'sweep main') || github.ref_name }}
+run-name: Core CI / ${{ inputs.queue_ticket || (github.event_name == 'schedule' && 'sweep main') || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && format('self-test {0}', inputs.target || github.sha)) || github.ref_name }}
 
 on:
   pull_request:
@@ -26,6 +26,25 @@ on:
           own push classified focused. A lane selection is never full evidence.
         required: false
         default: ""
+      target:
+        description: >-
+          Exact 40-hex main SHA the self-test batch checks out and judges.
+          Empty means the dispatched ref's tip. Only meaningful with no lane
+          selection and no queue ticket: that is a self-test batch, and the
+          dispatch ref must still be main because workflow_dispatch cannot
+          take a SHA as its ref.
+        required: false
+        default: ""
+      request_kind:
+        description: >-
+          Why an operator dispatched a self-test batch: node (an important
+          milestone) or candidate (a release candidate). Both run to a
+          conclusion even when the target already has one. Daily self-test
+          activation and deduplication wait for the later T5a rollout.
+        required: false
+        default: node
+        type: choice
+        options: [node, candidate]
       queue_ticket:
         description: Controller ticket mq:<queue-run-id>:<attempt>; all queue inputs are required together.
         required: false
@@ -53,7 +72,9 @@ env:
   LMDJ_EMSDK_VERSION: "6.0.5"
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('core-ci-pr-{0}', github.event.pull_request.number) || format('core-ci-sha-{0}', github.sha) }}
+  # Explicit self-tests are independent requests, even when their control SHA
+  # is identical. A later request must not replace an earlier pending target.
+  group: ${{ github.event_name == 'pull_request' && format('core-ci-pr-{0}', github.event.pull_request.number) || (github.event_name == 'workflow_dispatch' && inputs.queue_ticket == '' && inputs.lanes == '' && format('core-ci-self-test-{0}', github.run_id)) || format('core-ci-sha-{0}', github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -68,17 +89,124 @@ jobs:
       pull-request-body: ${{ steps.scope.outputs.pull-request-body }}
       resolved-base-sha: ${{ steps.scope.outputs.resolved-base-sha }}
       resolved-head-sha: ${{ steps.scope.outputs.resolved-head-sha }}
+      # Self-test batch identity (scripts/ci/self_test.py). `self-test` is
+      # true for an operator dispatch with neither lane selection nor queue
+      # ticket. Schedule remains the legacy sweep until T5a; every formal job
+      # of an explicit batch then checks out
+      # `self-test-target` instead of the ref's tip, and the verdict job
+      # judges the batch under `self-test-identity`.
+      self-test: ${{ steps.resolve.outputs.self-test }}
+      self-test-action: ${{ steps.resolve.outputs.self-test-action }}
+      self-test-target: ${{ steps.resolve.outputs.self-test-target }}
+      self-test-identity: ${{ steps.resolve.outputs.self-test-identity }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      # T2 is manual-first: the existing sweep and Nightly cron remain intact
+      # until O1/T5a. Main ref and ancestry are checked before testing a target.
+      # Partial Actions reruns inherit old successful jobs, so this initial
+      # protocol accepts only attempt 1; retry via a new explicit dispatch.
+      - name: Record the explicit self-test request
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '' }}
+        env:
+          REQUEST_KIND: ${{ inputs.request_kind || 'node' }}
+          TARGET_INPUT: ${{ inputs.target }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/self-test-request"
+          python3 - "$RUNNER_TEMP/self-test-request/request.json" <<'PYEOF'
+          import json, os, sys
+          json.dump({"evidence_schema": "lmdj.ci-self-test-request.v1",
+                     "request_kind": os.environ["REQUEST_KIND"],
+                     "control_revision": os.environ["GITHUB_SHA"],
+                     "target_revision": os.environ.get("TARGET_INPUT") or os.environ["GITHUB_SHA"],
+                     "target_verified": False,
+                     "run_id": int(os.environ["GITHUB_RUN_ID"]),
+                     "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"])},
+                    open(sys.argv[1], "w"), sort_keys=True)
+          PYEOF
+      - name: Retain the explicit request before validation
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-test-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/self-test-request/request.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Resolve the self-test target
+        id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_LANES: ${{ inputs.lanes }}
+          QUEUE_TICKET: ${{ inputs.queue_ticket }}
+          TARGET_INPUT: ${{ inputs.target }}
+          REQUEST_KIND: ${{ inputs.request_kind || 'node' }}
+          WORK: ${{ runner.temp }}/self-test
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && -z "${REQUESTED_LANES:-}" && -z "${QUEUE_TICKET:-}" ]]; then
+            self_test=true
+          else
+            self_test=false
+          fi
+          {
+            echo "self-test=$self_test"
+          } >>"$GITHUB_OUTPUT"
+          if [[ "$self_test" != "true" ]]; then
+            if [[ -n "${TARGET_INPUT:-}" ]]; then
+              echo 'why: target is only valid for a complete manual self-test; remedy: omit lanes and queue inputs' >&2
+              exit 1
+            fi
+            {
+              echo "self-test-action=none"
+              echo "self-test-target="
+              echo "self-test-identity="
+              echo "self-test-skip-reason="
+            } >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$GITHUB_REF" != "refs/heads/main" || "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
+            echo 'why: self-tests require main and a fresh run (attempt 1); remedy: create a new workflow_dispatch on main with the same target, not Re-run jobs' >&2
+            exit 1
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+          git rev-list refs/remotes/origin/main >"$WORK/main-history.txt"
+          python3 - "$WORK/request.json" <<'PYEOF'
+          import json, os, sys
+          json.dump({"kind": os.environ["REQUEST_KIND"],
+                     "target_revision": os.environ.get("TARGET_INPUT") or os.environ["GITHUB_SHA"],
+                     "requested_by": os.environ["GITHUB_ACTOR"]}, open(sys.argv[1], "w"))
+          PYEOF
+          python3 scripts/ci/self_test.py resolve \
+            --request "$WORK/request.json" \
+            --tip "$GITHUB_SHA" \
+            --main-history "$WORK/main-history.txt" \
+            --control-revision "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --out "$WORK/resolution.json"
+          python3 - "$WORK/resolution.json" >>"$GITHUB_OUTPUT" <<'PYEOF'
+          import json, sys
+          resolution = json.load(open(sys.argv[1]))
+          identity = resolution["identity"] or {}
+          print("self-test-action=" + resolution["action"])
+          print("self-test-target=" + identity.get("target_revision", ""))
+          print("self-test-identity=" + json.dumps(identity, sort_keys=True, separators=(",", ":")))
+          reason = resolution["diagnostics"][0] if resolution["action"] == "skip" and resolution["diagnostics"] else ""
+          print("self-test-skip-reason=" + reason.replace("\n", " "))
+          PYEOF
+          echo "self-test batch: action=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["action"])' "$WORK/resolution.json")"
       - name: Classify the complete change inventory
         id: scope
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ inputs.queue_base_sha || github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
-          HEAD_SHA: ${{ inputs.queue_head_sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ inputs.queue_base_sha || (steps.resolve.outputs.self-test == 'true' && steps.resolve.outputs.self-test-target) || github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
+          HEAD_SHA: ${{ inputs.queue_head_sha || (steps.resolve.outputs.self-test == 'true' && steps.resolve.outputs.self-test-target) || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          SELF_TEST_SKIP: ${{ steps.resolve.outputs.self-test-action == 'skip' && steps.resolve.outputs.self-test-skip-reason || '' }}
           REPOSITORY: ${{ github.repository }}
           HEAD_REPOSITORY: ${{ inputs.queue_ticket != '' && github.repository || github.event.pull_request.head.repo.full_name }}
           PR_NUMBER: ${{ inputs.queue_pr_number || github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
@@ -108,7 +236,8 @@ jobs:
             --queue-pr-number "${QUEUE_PR_NUMBER:-}" \
             --queue-base-sha "${QUEUE_BASE_SHA:-}" \
             --queue-head-sha "${QUEUE_HEAD_SHA:-}" \
-            --queue-validation-out "$QUEUE_VALIDATION_PATH"
+            --queue-validation-out "$QUEUE_VALIDATION_PATH" \
+            --self-test-skip "${SELF_TEST_SKIP:-}"
       - name: Retain the queue validation classification
         if: ${{ always() && inputs.queue_ticket != '' }}
         uses: actions/upload-artifact@v4
@@ -125,7 +254,7 @@ jobs:
       - name: Retain the scope manifest
         uses: actions/upload-artifact@v4
         with:
-          name: ci-scope-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          name: ci-scope-${{ (steps.resolve.outputs.self-test == 'true' && steps.resolve.outputs.self-test-target) || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
           path: ${{ runner.temp }}/ci-scope.json
           if-no-files-found: error
           overwrite: true
@@ -148,7 +277,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
           fetch-depth: 0
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       # Three-dot for the same reason `read_git_inventory` uses it: `BASE_SHA`
       # is the base branch tip at event time, so a two-dot range would report,
       # in reverse, everything that landed on the base branch after the branch
@@ -172,7 +307,7 @@ jobs:
     if: >-
       ${{
         !cancelled()
-        && needs.pre-heavy-gate.result == 'success'
+        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
         && fromJSON(needs.change-scope.outputs.manifest).lanes.portal
         && needs.change-scope.outputs.trusted-head == 'true'
       }}
@@ -185,6 +320,7 @@ jobs:
       check_documentation_impact: ${{ github.event_name == 'pull_request' || needs.change-scope.outputs.queue-mode == 'true' }}
       base_sha: ${{ needs.change-scope.outputs.resolved-base-sha }}
       head_sha: ${{ needs.change-scope.outputs.resolved-head-sha }}
+      checkout_ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
       pull_request_body: ${{ needs.change-scope.outputs.pull-request-body }}
 
   ci-contract:
@@ -196,6 +332,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       # Queue-aware actionlint release, pinned harder than a mutable Docker tag.
       # The original container action named a version but not an artifact; the
       # digest below names the exact bytes and the check fails closed on
@@ -245,7 +388,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
           fetch-depth: 0
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -290,6 +439,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -310,11 +466,11 @@ jobs:
     if: >-
       ${{
         !cancelled()
-        && needs.pre-heavy-gate.result == 'success'
+        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
         && fromJSON(needs.change-scope.outputs.manifest).lanes.package
         && needs.change-scope.outputs.trusted-head == 'true'
-        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
-        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || needs.core-ubuntu.result == 'success')
+        && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
+        && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || needs.core-ubuntu.result == 'success')
       }}
     concurrency:
       group: lmdj-native-heavy
@@ -325,8 +481,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
           fetch-depth: 0
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - name: Rehydrate Core test fixtures
         run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
@@ -352,7 +514,7 @@ jobs:
       - name: Retain the packaging comparison evidence
         uses: actions/upload-artifact@v4
         with:
-          name: package-evidence-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          name: package-evidence-${{ (needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target) || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
           path: |
             build/core/dist/*.build-manifest.json
             build/core/dist/*.zip.sha256
@@ -378,6 +540,13 @@ jobs:
       LC_ALL: C.UTF-8
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - uses: ./.github/actions/web-ci-proof
         with:
           lane: web_toolchain
@@ -410,7 +579,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - name: Rehydrate deterministic audio fixtures
         run: git lfs checkout -- tests/fixtures/audio
       - uses: ./.github/actions/web-ci-proof
@@ -439,7 +614,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - name: Rehydrate deterministic audio fixtures
         run: git lfs checkout -- tests/fixtures/audio
       - uses: ./.github/actions/web-ci-proof
@@ -460,6 +641,13 @@ jobs:
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -875,10 +1063,10 @@ jobs:
     if: >-
       ${{
         !cancelled()
-        && needs.pre-heavy-gate.result == 'success'
+        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
         && fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu
         && needs.change-scope.outputs.trusted-head == 'true'
-        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
+        && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
       }}
     concurrency:
       group: lmdj-native-heavy
@@ -889,8 +1077,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
           fetch-depth: 0
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - name: Rehydrate Core test fixtures
         run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
@@ -1108,8 +1302,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
           fetch-depth: 0
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - name: Verify self-hosted Python 3.11
         if: ${{ needs.select-macos-runner.outputs.self-hosted == 'true' }}
         shell: bash
@@ -1150,7 +1350,7 @@ jobs:
 
   macos-fallback:
     name: macOS gates (GitHub-hosted fallback)
-    needs: [select-macos-runner, macos-primary]
+    needs: [change-scope, select-macos-runner, macos-primary]
     if: >-
       ${{
         !cancelled()
@@ -1167,8 +1367,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
           fetch-depth: 0
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -1223,13 +1429,13 @@ jobs:
     if: >-
       ${{
         !cancelled()
-        && needs.pre-heavy-gate.result == 'success'
+        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
         && fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan
         && needs.change-scope.outputs.trusted-head == 'true'
-        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
-        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || needs.core-ubuntu.result == 'success')
-        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.package || needs.package.result == 'success')
-        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage || needs.core-coverage.result == 'success')
+        && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
+        && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || needs.core-ubuntu.result == 'success')
+        && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.package || needs.package.result == 'success')
+        && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage || needs.core-coverage.result == 'success')
       }}
     concurrency:
       group: lmdj-native-heavy
@@ -1240,8 +1446,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
           fetch-depth: 0
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - name: Rehydrate Core test fixtures
         run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
@@ -1275,12 +1487,12 @@ jobs:
     if: >-
       ${{
         !cancelled()
-        && needs.pre-heavy-gate.result == 'success'
+        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
         && fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage
         && needs.change-scope.outputs.trusted-head == 'true'
-        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
-        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || needs.core-ubuntu.result == 'success')
-        && (!fromJSON(needs.change-scope.outputs.manifest).lanes.package || needs.package.result == 'success')
+        && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
+        && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || needs.core-ubuntu.result == 'success')
+        && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.package || needs.package.result == 'success')
       }}
     concurrency:
       group: lmdj-native-heavy
@@ -1291,8 +1503,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
           fetch-depth: 0
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ needs.change-scope.outputs.self-test == 'true' }}
+        env:
+          EXPECTED_TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - name: Rehydrate Core test fixtures
         run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
@@ -1345,3 +1563,124 @@ jobs:
         run: >-
           ccache --show-log-stats
           || echo 'warning: ccache statistics are unavailable' >&2
+
+  # The two stress workloads Core Nightly defines, run inside a self-test
+  # batch against its target so the batch's verdict covers them. Each caller
+  # reports one result for the workflow it called, so the callers are one per
+  # suite; the called jobs keep their own native-heavy capacity queue.
+  nightly-tsan:
+    name: Self-test TSan stress
+    needs: [change-scope, pre-heavy-gate]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.change-scope.outputs.self-test == 'true'
+        && needs.change-scope.outputs.self-test-action == 'run'
+        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
+        && needs.change-scope.outputs.trusted-head == 'true'
+      }}
+    uses: ./.github/workflows/core-nightly.yml
+    with:
+      suite: tsan
+      target_revision: ${{ needs.change-scope.outputs.self-test-target }}
+
+  nightly-stress:
+    name: Self-test Release stress
+    needs: [change-scope, pre-heavy-gate]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.change-scope.outputs.self-test == 'true'
+        && needs.change-scope.outputs.self-test-action == 'run'
+        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
+        && needs.change-scope.outputs.trusted-head == 'true'
+      }}
+    uses: ./.github/workflows/core-nightly.yml
+    with:
+      suite: stress
+      target_revision: ${{ needs.change-scope.outputs.self-test-target }}
+
+  # One verdict per self-test batch (scripts/ci/self_test.py aggregate):
+  # every job of scripts/ci/self_test_policy.json is read from `needs`, the
+  # batch passes only when every suite passed, and the document is retained
+  # as `self-test-verdict-<target>-<run>-<attempt>` for the reporter and,
+  # after T7, for release authority. A future scheduled skipped batch retains
+  # a `self-test-skip-<target>-<run>-<attempt>`
+  # record instead. Hosted control plane, like PR Gate: it must outlive the
+  # pool it judges, and it runs the control revision's scripts, never the
+  # target's.
+  self-test-verdict:
+    name: Self-test verdict
+    needs: [change-scope, pre-heavy-gate, docs-static, portal, ci-contract, select-macos-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package, nightly-tsan, nightly-stress]
+    if: ${{ always() && !cancelled() && needs.change-scope.outputs.self-test == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Judge the batch
+        id: judge
+        shell: bash
+        env:
+          ACTION: ${{ needs.change-scope.outputs.self-test-action }}
+          IDENTITY: ${{ needs.change-scope.outputs.self-test-identity }}
+          TARGET: ${{ needs.change-scope.outputs.self-test-target }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          WORK: ${{ runner.temp }}/self-test
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK/out"
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
+            echo 'why: partial reruns can inherit results from another attempt; remedy: create a new workflow_dispatch on main with the same target, not Re-run jobs' >&2
+            exit 1
+          fi
+          printf '%s\n' "$IDENTITY" >"$WORK/identity.json"
+          printf '%s\n' "$NEEDS_JSON" >"$WORK/needs.json"
+          if [[ "$ACTION" == "skip" ]]; then
+            python3 - "$WORK/identity.json" "$WORK/out/skip.json" <<'PYEOF'
+          import json, sys
+          identity = json.load(open(sys.argv[1]))
+          json.dump({"evidence_schema": identity["evidence_schema"], "action": "skip", "identity": identity},
+                    open(sys.argv[2], "w"), sort_keys=True, indent=2)
+          PYEOF
+            echo "artifact=self-test-skip-$TARGET-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >>"$GITHUB_OUTPUT"
+            echo "self-test batch for $TARGET skipped: its target already has a complete conclusion"
+            exit 0
+          fi
+          # Dependencies mirror each job's `needs:` upstream of it, upstream
+          # first, so a skip behind a failed predecessor is `blocked`, not
+          # `missing`; tests/build/ci_self_test_workflow_test.py pins this
+          # list to the needs graph above.
+          python3 scripts/ci/self_test.py observations \
+            --identity "$WORK/identity.json" \
+            --needs "$WORK/needs.json" \
+            --alias core-tsan=nightly-tsan \
+            --alias core-stress=nightly-stress \
+            --dependency portal=pre-heavy-gate \
+            --dependency core-ubuntu=pre-heavy-gate,portal \
+            --dependency package=pre-heavy-gate,portal,core-ubuntu \
+            --dependency core-coverage=pre-heavy-gate,portal,core-ubuntu,package \
+            --dependency core-asan=pre-heavy-gate,portal,core-ubuntu,package,core-coverage \
+            --dependency macos-primary=select-macos-runner \
+            --dependency core-macos=select-macos-runner,macos-primary,macos-fallback \
+            --dependency core-asan-macos=select-macos-runner,macos-primary,macos-fallback \
+            --dependency core-tsan=pre-heavy-gate \
+            --dependency core-stress=pre-heavy-gate \
+            --out "$WORK/observations.json"
+          echo "artifact=self-test-verdict-$TARGET-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >>"$GITHUB_OUTPUT"
+          python3 scripts/ci/self_test.py aggregate \
+            --identity "$WORK/identity.json" \
+            --observations "$WORK/observations.json" \
+            --out "$WORK/out/verdict.json"
+      # Evidence lifetime, not a diagnostic: the resolver of the next batch
+      # and the reporter read it, and a failed upload must fail this job so a
+      # batch never ends without a retained record.
+      - name: Retain the batch record
+        if: ${{ always() && steps.judge.outputs.artifact != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.judge.outputs.artifact }}
+          path: ${{ runner.temp }}/self-test/out/
+          if-no-files-found: error
+          retention-days: 30

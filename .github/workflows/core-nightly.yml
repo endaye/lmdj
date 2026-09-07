@@ -1,19 +1,47 @@
 name: Core Nightly
 
+# Reused by the manual-first self-test batch. Keep the existing daily Nightly
+# coverage until O1/T5a explicitly migrates the sweep and retires this cron.
 on:
-  workflow_dispatch:
   schedule:
     - cron: "0 19 * * *"
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Which stress workload to run.
+        required: false
+        default: all
+        type: choice
+        options: [all, tsan, stress]
+      target_revision:
+        description: Exact commit to check out; empty checks out the dispatched ref.
+        required: false
+        default: ""
+        type: string
+  workflow_call:
+    outputs:
+      infrastructure_failure:
+        description: The TSan host prerequisite prevented test execution.
+        value: ${{ jobs.core-tsan.outputs.infrastructure_failure }}
+    inputs:
+      suite:
+        description: all | tsan | stress
+        required: false
+        default: all
+        type: string
+      target_revision:
+        description: Exact commit the caller resolved; empty checks out the caller's ref.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
 
-concurrency:
-  group: core-nightly-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   core-tsan:
+    outputs:
+      infrastructure_failure: ${{ steps.prerequisite.outputs.infrastructure_failure }}
     # Trusted native Core workload on the `ci-core` role since #693. TSan was
     # Hosted from 2026-08-05 because the self-hosted hosts' 6.8 kernel hands
     # out 32-bit `vm.mmap_rnd_bits` and no TSan runtime -- GCC 13, LLVM 18 or
@@ -26,6 +54,7 @@ jobs:
     # prerequisite is verified below before any TSan binary runs, so a host
     # that loses the setting fails with the remedy named instead of with a
     # runtime FATAL or, on some runtimes, no output at all.
+    if: ${{ inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'tsan' }}
     concurrency:
       group: lmdj-native-heavy
       queue: max
@@ -35,7 +64,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_revision || '' }}
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ inputs.target_revision != '' }}
+        env:
+          EXPECTED_TARGET: ${{ inputs.target_revision }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
         with:
@@ -44,9 +79,11 @@ jobs:
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
       - name: Verify the TSan host prerequisite
+        id: prerequisite
         run: |
           bits="$(sysctl -n vm.mmap_rnd_bits)"
           if [ "$bits" -gt 28 ]; then
+            echo 'infrastructure_failure=true' >>"$GITHUB_OUTPUT"
             echo "why: vm.mmap_rnd_bits is $bits on $(hostname); ThreadSanitizer cannot start under more than 28 bits of mmap ASLR entropy and the runner unit forbids the re-exec it would use to cope; remedy: an operator runs sudo scripts/ci/host/configure-sanitizer-aslr.sh on this host" >&2
             exit 1
           fi
@@ -70,6 +107,7 @@ jobs:
     # physical host, so a sibling job runs beside this one rather than after it,
     # and twenty consecutive stress repetitions are the least tolerant workload
     # in the repository. The capacity queue is what makes "queues behind" true.
+    if: ${{ inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'stress' }}
     concurrency:
       group: lmdj-native-heavy
       queue: max
@@ -79,7 +117,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_revision || '' }}
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ inputs.target_revision != '' }}
+        env:
+          EXPECTED_TARGET: ${{ inputs.target_revision }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
         with:

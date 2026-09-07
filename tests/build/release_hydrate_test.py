@@ -320,7 +320,7 @@ class ReleaseHydrateWorkflowTest(unittest.TestCase):
     def test_no_workflow_carries_its_own_inline_intent_hydrate_copy(self) -> None:
         for relative in RELEASE_WORKFLOWS:
             body = directives(self.source(relative))
-            for forbidden in (LEDGER_PATH, "git fetch --no-tags origin", "cat-file -e"):
+            for forbidden in (LEDGER_PATH, "cat-file -e"):
                 with self.subTest(workflow=relative, forbidden=forbidden):
                     self.assertNotIn(
                         forbidden, body,
@@ -328,6 +328,20 @@ class ReleaseHydrateWorkflowTest(unittest.TestCase):
                         "removed, and each copy drifts from the tool it works around; "
                         f"remedy: call `{HYDRATE_COMMAND}` in {relative} instead of "
                         "reading the intent ledger or fetching by SHA inline",
+                    )
+            # A canonical main ref fetch for self-test ancestry is not intent
+            # hydration. Permit only that exact job/refspec; fetching an intent
+            # SHA or adding another inlined release fetch remains forbidden.
+            for job_name, job in workflow_jobs(self.source(relative)).items():
+                for line in directives(job).splitlines():
+                    if "git fetch --no-tags origin" not in line:
+                        continue
+                    self.assertEqual(
+                        (relative, job_name, line.strip()),
+                        (".github/workflows/ci.yml", "change-scope",
+                         "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main"),
+                        "why: only the self-test resolver may fetch canonical main history; "
+                        f"remedy: use `{HYDRATE_COMMAND}` for intent SHA hydration",
                     )
 
 

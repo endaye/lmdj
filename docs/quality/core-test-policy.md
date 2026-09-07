@@ -312,6 +312,28 @@ is not retried. An empty operator `workflow_dispatch` and the daily sweep always
 range like a Ready Pull Request, which is the focused-`main` cost decision
 in `docs/governance/git-workflow.md` and the reason the sweep exists.
 
+T2 adds **manual-first self-test batches** (plan
+`docs/superpowers/plans/2026-09-07-lmdj-ci-capacity-redesign.md`). Only an empty
+operator dispatch enters the new path: it must run on `main`, and `target`
+must be an exact SHA in fetched main history. Every workload verifies its
+checked-out HEAD against that target. The two Nightly stress suites run
+inside this batch through `core-nightly.yml`'s `workflow_call`; the hosted
+`Self-test verdict` judges all sixteen policy suites and retains
+`self-test-verdict-<target>-<run>-<attempt>` for thirty days, without overwrite.
+Explicit requests use distinct run-scoped admission while keeping native-heavy
+resource locks. Independent suite failures do not prevent later suites from
+running; each suite still stops its own dependent test steps after build failure.
+The TSan host ASLR prerequisite is classified as infrastructure failure.
+
+This phase accepts attempt 1 only. Retry with a new same-target dispatch;
+Actions partial reruns can inherit earlier successful jobs, so both entry and
+verdict reject them instead of mixing attempts. Early request artifacts mark
+their target as unverified and are not test evidence. The existing daily sweep
+and Nightly cron are unchanged; scheduled self-tests and unchanged-target
+deduplication wait for O1/T5a. The verdict is not yet release evidence;
+`tools/release/ci_evidence.py` still requires the run's own head to be the target
+(plan T7).
+
 ### Hosted Control Plane and Head Trust
 
 `Change Scope`, `Pre-heavy Gate`, `PR Gate` and `select-macos-runner` stay on GitHub-hosted
@@ -357,7 +379,10 @@ every full run already has: `macos-primary` follows `select-macos-runner`, so
 on a day when the trusted Mac is offline the selector falls back to hosted
 `macos-latest` and the sweep spends hosted macOS minutes at that rate. That is
 an argument for keeping the Mac online, not against sweeping. Its red is a red `Core CI / sweep
-main` run, the same convention as the liveness check.
+main` run, the same convention as the liveness check. T2 does not yet change
+this sweep or the separate 19:00 UTC Nightly cron. O1/T5a must first verify
+the new manual full-batch/reporting path, then migrate the daily entry and
+remove the duplicate Nightly schedule together.
 
 The Merge Queue worker is the second worked example, and it separates two
 things the exception can conflate. `route` decides whether a Pull Request is

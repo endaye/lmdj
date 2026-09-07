@@ -19,6 +19,14 @@ on:
         required: false
         type: string
         default: ""
+      checkout_ref:
+        description: >-
+          Exact commit to check out instead of the caller's default ref. Set
+          only by a self-test batch whose target is not the tip; a Pull
+          Request call leaves it empty and keeps the merge ref.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -37,7 +45,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.checkout_ref || '' }}
           fetch-depth: 0
+      - name: Verify the checked-out target
+        if: ${{ inputs.checkout_ref != '' }}
+        env:
+          EXPECTED_TARGET: ${{ inputs.checkout_ref }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - uses: actions/setup-node@v6
         with:
           node-version: "22"

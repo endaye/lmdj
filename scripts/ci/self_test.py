@@ -390,11 +390,12 @@ class Observation:
     blocked_by: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
+    infrastructure_failure: bool = False
 
     @classmethod
     def from_document(cls, document: Mapping[str, object]) -> "Observation":
         allowed = {"suite", "job", "run_id", "run_attempt", "target_revision", "conclusion",
-                   "artifact", "blocked_by", "started_at", "completed_at"}
+                   "artifact", "blocked_by", "started_at", "completed_at", "infrastructure_failure"}
         extra = set(document) - allowed
         if extra:
             raise ValueError(f"observation carries unknown keys {sorted(extra)}")
@@ -409,6 +410,7 @@ class Observation:
             blocked_by=(str(document["blocked_by"]) if document.get("blocked_by") else None),
             started_at=(str(document["started_at"]) if document.get("started_at") else None),
             completed_at=(str(document["completed_at"]) if document.get("completed_at") else None),
+            infrastructure_failure=document.get("infrastructure_failure") is True,
         )
 
 
@@ -600,6 +602,12 @@ def _judge_suite(suite: Suite, by_job: Mapping[str, Observation]) -> SuiteResult
                 "a required job may only be skipped when its declared alternative succeeded in the same run"))
             continue
         if row.conclusion == "failure":
+            if row.infrastructure_failure:
+                statuses.append(SUITE_INFRASTRUCTURE_FAILURE)
+                diagnostics.append(_diagnostic(
+                    f"{suite.id}/{job} could not execute because its host prerequisite failed",
+                    "repair the reported runner prerequisite and dispatch a fresh batch"))
+                continue
             statuses.append(SUITE_TEST_FAILURE)
             diagnostics.append(_diagnostic(
                 f"{suite.id}/{job} failed",
@@ -615,6 +623,73 @@ def _judge_suite(suite: Suite, by_job: Mapping[str, Observation]) -> SuiteResult
         if candidate in statuses:
             return SuiteResult(suite.id, candidate, tuple(diagnostics), jobs)
     return SuiteResult(suite.id, statuses[0], tuple(diagnostics), jobs)
+
+
+# --------------------------------------------------------------------------
+# Observations from a workflow's `needs` context
+# --------------------------------------------------------------------------
+
+
+NEEDS_RESULTS = frozenset({"success", "failure", "cancelled", "skipped"})
+
+
+def observations_from_needs(
+    identity: Identity,
+    policy: Policy,
+    needs: Mapping[str, Mapping[str, object]],
+    *,
+    aliases: Mapping[str, str] | None = None,
+    dependencies: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[list[Observation], tuple[str, ...]]:
+    """Turn the caller's ``needs`` context into one observation per known job.
+
+    ``needs`` is ``toJSON(needs)`` from the verdict job: job id to
+    ``{"result": ...}``. ``aliases`` maps a policy job to the caller job that
+    ran it (a reusable-workflow caller reports one result for the workflow
+    it called). ``dependencies`` maps a job to the upstream jobs whose
+    non-success explains a skip; the first such upstream becomes
+    ``blocked_by``. A job absent from ``needs`` yields no observation, so
+    ``aggregate`` reports the suite as missing rather than this function
+    inventing a result. Diagnostics name every job whose result is not a
+    GitHub job result; those rows are still emitted so aggregate rejects them.
+    """
+    aliases = dict(aliases or {})
+    dependencies = {job: tuple(ups) for job, ups in (dependencies or {}).items()}
+    rows: list[Observation] = []
+    diagnostics: list[str] = []
+
+    def result_of(job: str) -> str | None:
+        entry = needs.get(aliases.get(job, job))
+        if not isinstance(entry, Mapping):
+            return None
+        return str(entry.get("result", ""))
+
+    watched = [(suite.id, job) for suite in policy.suites for job in suite.jobs]
+    watched += [(suite.id, alt) for suite in policy.suites
+                for alts in suite.alternatives.values() for alt in alts]
+    for suite_id, job in watched:
+        result = result_of(job)
+        if result is None:
+            continue
+        if result not in NEEDS_RESULTS:
+            diagnostics.append(_diagnostic(
+                f"needs.{aliases.get(job, job)}.result is {result!r}",
+                "the verdict job must run with always() so every needed job has a result"))
+        blocked_by = None
+        if result == "skipped":
+            for upstream in dependencies.get(job, ()):
+                upstream_result = result_of(upstream)
+                if upstream_result is not None and upstream_result != "success":
+                    blocked_by = upstream
+                    break
+        rows.append(Observation(
+            suite_id, job, identity.run_id, identity.run_attempt, identity.target_revision,
+            result, "none", blocked_by,
+            infrastructure_failure=(
+                needs.get(aliases.get(job, job), {}).get("outputs", {}).get("infrastructure_failure") == "true"
+            ),
+        ))
+    return rows, tuple(diagnostics)
 
 
 # --------------------------------------------------------------------------
@@ -665,7 +740,8 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
     history = {line.strip() for line in args.main_history.read_text(encoding="utf-8").splitlines()
                if line.strip()}
     last: Conclusion | None = None
-    if args.last_conclusion is not None and args.last_conclusion.exists():
+    if (args.last_conclusion is not None and args.last_conclusion.exists()
+            and args.last_conclusion.stat().st_size):
         document = _read_json(args.last_conclusion)
         if isinstance(document, dict):
             last = Conclusion(str(document.get("target_revision", "")), str(document.get("status", "")),
@@ -681,19 +757,69 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
     return 0 if resolution.action in ("run", "skip") else 1
 
 
-def _cmd_aggregate(args: argparse.Namespace) -> int:
+def _identity_from(path: Path) -> Identity | None:
+    document = _read_json(path)
+    if not isinstance(document, dict):
+        return None
+    return Identity(
+        str(document["evidence_schema"]), str(document["request_kind"]),
+        str(document["control_revision"]), str(document["target_revision"]),
+        int(document["run_id"]), int(document["run_attempt"]),  # type: ignore[arg-type]
+        str(document["policy_revision"]),
+    )
+
+
+def _parse_pairs(items: Sequence[str], *, many: bool) -> dict[str, object]:
+    parsed: dict[str, object] = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        if not sep or not key or not value:
+            raise ValueError(f"expected key=value, got {item!r}")
+        parsed[key] = tuple(v for v in value.split(",") if v) if many else value
+    return parsed
+
+
+def _cmd_observations(args: argparse.Namespace) -> int:
     policy = load_policy(args.policy)
-    identity_document = _read_json(args.identity)
-    if not isinstance(identity_document, dict):
+    identity = _identity_from(args.identity)
+    if identity is None:
         print(_diagnostic("identity file is not a JSON object", "pass the identity resolve wrote"),
               file=sys.stderr)
         return 2
-    identity = Identity(
-        str(identity_document["evidence_schema"]), str(identity_document["request_kind"]),
-        str(identity_document["control_revision"]), str(identity_document["target_revision"]),
-        int(identity_document["run_id"]), int(identity_document["run_attempt"]),  # type: ignore[arg-type]
-        str(identity_document["policy_revision"]),
+    needs = _read_json(args.needs)
+    if not isinstance(needs, dict):
+        print(_diagnostic("needs file is not a JSON object", "write toJSON(needs) to it"), file=sys.stderr)
+        return 2
+    try:
+        aliases = _parse_pairs(args.alias, many=False)
+        dependencies = _parse_pairs(args.dependency, many=True)
+    except ValueError as error:
+        print(_diagnostic(str(error), "pass --alias policy-job=caller-job and --dependency job=up1,up2"),
+              file=sys.stderr)
+        return 2
+    rows, diagnostics = observations_from_needs(
+        identity, policy, needs, aliases=aliases,  # type: ignore[arg-type]
+        dependencies=dependencies,  # type: ignore[arg-type]
     )
+    _write_json(args.out, [
+        {"suite": r.suite, "job": r.job, "run_id": r.run_id, "run_attempt": r.run_attempt,
+         "target_revision": r.target_revision, "conclusion": r.conclusion, "artifact": r.artifact,
+         "infrastructure_failure": r.infrastructure_failure,
+         **({"blocked_by": r.blocked_by} if r.blocked_by else {})}
+        for r in rows
+    ])
+    for line in diagnostics:
+        print(line, file=sys.stderr)
+    return 0
+
+
+def _cmd_aggregate(args: argparse.Namespace) -> int:
+    policy = load_policy(args.policy)
+    identity = _identity_from(args.identity)
+    if identity is None:
+        print(_diagnostic("identity file is not a JSON object", "pass the identity resolve wrote"),
+              file=sys.stderr)
+        return 2
     rows_document = _read_json(args.observations)
     if not isinstance(rows_document, list):
         print(_diagnostic("observations file is not a JSON list", "write one object per job"),
@@ -738,6 +864,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     res.add_argument("--run-attempt", type=int, required=True)
     res.add_argument("--out", type=Path, default=None)
     res.set_defaults(func=_cmd_resolve)
+
+    obs = sub.add_parser("observations", help="derive per-job observations from a workflow's needs context")
+    obs.add_argument("--identity", type=Path, required=True)
+    obs.add_argument("--needs", type=Path, required=True, help="file holding toJSON(needs)")
+    obs.add_argument("--alias", action="append", default=[], help="policy-job=caller-job")
+    obs.add_argument("--dependency", action="append", default=[], help="job=upstream1,upstream2")
+    obs.add_argument("--out", type=Path, default=None)
+    obs.set_defaults(func=_cmd_observations)
 
     agg = sub.add_parser("aggregate", help="judge one finished batch")
     agg.add_argument("--identity", type=Path, required=True)

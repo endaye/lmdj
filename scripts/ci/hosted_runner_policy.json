@@ -33,6 +33,12 @@
     },
     {
       "workflow": "ci.yml",
+      "job": "self-test-verdict",
+      "category": "control-plane",
+      "reason": "Judges a self-test batch from its needs context and retains the verdict artifact that the next batch's resolver and the failure reporter read. It runs the control revision's scripts, never the target's, and must remain available when every self-hosted runner is offline, exactly as PR Gate must."
+    },
+    {
+      "workflow": "ci.yml",
       "job": "select-macos-runner",
       "category": "control-plane",
       "reason": "Decides macOS routing by querying runner status. It cannot run on the runner whose availability it is deciding."

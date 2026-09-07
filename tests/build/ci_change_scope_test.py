@@ -661,6 +661,41 @@ class ChangeScopeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.classify(["docs/guide.md"], event_name="schedule", requested_lanes={"docs_static"})
 
+    def test_a_self_test_skip_selects_no_lane_and_says_why(self):
+        """A schedule or empty-dispatch batch whose target already has a
+        complete self-test conclusion runs nothing: focused, no lane, the
+        reason in the manifest. Focused rather than a new mode so release
+        authority, which needs a retained full manifest, rejects the run."""
+        for event in ("schedule", "workflow_dispatch"):
+            with self.subTest(event=event):
+                # A self-test batch has no change inventory: its base is its
+                # head, the target itself.
+                manifest = self.classify(
+                    [], event_name=event,
+                    self_test_skip="target a1b2c3d4e5f6 already concluded passed",
+                )
+                self.assertEqual(manifest["mode"], "focused")
+                self.assertEqual(self.true_lanes(manifest), set())
+                self.assertEqual(manifest["required_jobs"], [])
+                self.assertEqual(manifest["reasons"],
+                                 ["self-test skip: target a1b2c3d4e5f6 already concluded passed"])
+                self.assertTrue(manifest["trusted_head"])
+
+    def test_a_self_test_skip_is_refused_outside_a_self_test_batch(self):
+        cases = {
+            "pull_request": dict(event_name="pull_request"),
+            "push": dict(event_name="push"),
+            "lane selection": dict(event_name="workflow_dispatch", requested_lanes={"docs_static"}),
+            "empty reason": dict(event_name="schedule", self_test_skip=""),
+            "with an inventory that owns lanes": dict(event_name="schedule", paths=["docs/guide.md"]),
+        }
+        for label, kwargs in cases.items():
+            with self.subTest(case=label):
+                kwargs.setdefault("self_test_skip", "already concluded")
+                paths = kwargs.pop("paths", [])
+                with self.assertRaises(ValueError):
+                    self.classify(paths, **kwargs)
+
     def test_release_workflow_rules_are_exact_and_signing_control_remains_full(self):
         for path in (
             ".github/workflows/publish-release.yml",
