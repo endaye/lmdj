@@ -134,14 +134,16 @@ class ClaimWorkflowTests(unittest.TestCase):
         self.assertNotRegex(self.source, r"(?m)^concurrency:")
 
     def test_c1_excludes_scheduler_report_artifact_and_other_probe(self):
-        self.assertIn("inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' }}", self.controller)
+        self.assertIn("inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}", self.controller)
         self.assertIn("if: ${{ startsWith(inputs.batch_operation, 'report-') }}", self.controller)
         self.assertIn("if: ${{ inputs.batch_operation == 'recovery-probe' }}", self.controller)
         self.assertIn("if: ${{ inputs.batch_operation == 'claim-probe' }}", self.step)
         for forbidden in ("GITHUB_OUTPUT", "--output", "upload-artifact", "continue-on-error"):
             self.assertNotIn(forbidden, self.step)
         outputs = scalars(block(self.controller, "outputs", 4), 6)
-        self.assertEqual(outputs, {key: "${{ steps.control.outputs." + key + " }}" for key in ("action", "request", "executor")})
+        expected = {key: "${{ steps.control.outputs." + key + " }}" for key in ("action", "request", "executor")}
+        expected['diagnostic_ready'] = '${{ steps.cancel-diagnostic.outputs.diagnostic_ready }}'
+        self.assertEqual(outputs, expected)
         self.assertIn("needs.controller.outputs.action == 'execute'", block(self.source, "execute-batch", 2))
 
     def test_legacy_automatic_triggers_and_default_remain(self):
