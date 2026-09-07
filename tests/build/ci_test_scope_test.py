@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""Scope consistency gates; no mocks stand in for Git history operations."""
+import copy
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/ci"))
+import test_scope as scope
+
+
+class ScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.policy = scope.load_policy(ROOT)
+        self.identity = dict(repository="endaye/lmdj", pr_number=123, head_sha="a" * 40,
+                             base_sha="b" * 40, control_sha="c" * 40,
+                             backend="kimi", run_id=456, run_attempt=1)
+
+    def record(self, **kwargs):
+        return scope.build_record(self.policy, changed_paths=["apps/creator-web/src/App.tsx"],
+                                  **self.identity, **kwargs)
+
+    def test_full_uses_complete_authoritative_inventory(self):
+        selection = scope.select(self.policy, ["contracts/example/schema.json"])
+        self.assertEqual(set(selection["suites"]), set(self.policy.suite_ids))
+        self.assertEqual(len(selection["suites"]), 16)
+        self.assertIn("core_tsan_stress", selection["suites"])
+        self.assertIn("core_release_stress", selection["suites"])
+
+    def test_explanatory_docs_can_be_none(self):
+        self.assertEqual(scope.select(self.policy, ["docs/notes/design.md"])["kind"], "none")
+
+    def test_suffix_alone_is_not_none(self):
+        for path in ["AGENTS.md", "README.md", "docs/governance/git-workflow.md",
+                     "apps/architecture-portal/docs/operations/testing-and-proof.md",
+                     "docs/notes/generator.json", "contracts/example.md"]:
+            with self.subTest(path=path):
+                self.assertNotEqual(scope.select(self.policy, [path])["kind"], "none")
+
+    def test_document_consumer_overrides_exemption(self):
+        path = "docs/superpowers/plans/2026-08-07-lmdj-stage7-creator-editor.md"
+        self.assertIn("portal", scope.select(self.policy, [path])["suites"])
+
+    def test_host_includes_behavior_and_consumers(self):
+        selected = scope.select(self.policy, ["apps/web-runtime-host/src/main.mjs"])["suites"]
+        self.assertTrue({"web_runtime_host", "creator", "web_runtime_lab", "portal"} <= set(selected))
+
+    def test_core_routes_web_and_stress_consumers(self):
+        selected = scope.select(self.policy, ["packages/project-io/src/io.cpp"])["suites"]
+        self.assertTrue({"core_tsan_stress", "core_release_stress", "web_toolchain", "creator",
+                         "web_runtime_host", "core_macos"} <= set(selected))
+
+    def test_shared_concurrency_boundary_is_full(self):
+        self.assertEqual(scope.select(self.policy, ["packages/audio-runtime/src/clock.cpp"])["kind"], "full")
+
+    def test_removing_concurrency_full_rule_breaks_full_invariant(self):
+        mutant = copy.deepcopy(self.policy)
+        mutant.config["full_prefixes"].remove("packages/audio-runtime/")
+        self.assertNotEqual(scope.select(mutant, ["packages/audio-runtime/src/clock.cpp"])["kind"], "full",
+                            "why: fixture no longer isolates the concurrency full rule; remedy: restore mutation fixture")
+
+    def test_removing_contract_full_rule_breaks_full_invariant(self):
+        mutant = copy.deepcopy(self.policy)
+        mutant.routing["full_rules"] = [r for r in mutant.routing["full_rules"] if r["match"]["value"] != "contracts/"]
+        self.assertNotEqual(scope.select(mutant, ["contracts/example.md"])["kind"], "full",
+                            "why: fixture no longer isolates contract routing; remedy: restore mutation fixture")
+
+    def test_removing_host_dependency_breaks_consumer_invariant(self):
+        mutant = copy.deepcopy(self.policy)
+        mutant.config["dependencies"]["web_runtime_host"].remove("creator")
+        self.assertNotIn("creator", scope.select(mutant, ["apps/web-runtime-host/src/main.mjs"])["suites"],
+                         "why: fixture no longer isolates host dependency; remedy: restore mutation fixture")
+
+    def test_unknown_path_is_full(self):
+        self.assertEqual(scope.select(self.policy, ["new-root/unknown"])["kind"], "full")
+
+    def test_incomplete_inventory_is_full_even_with_none(self):
+        selected = scope.select(self.policy, [], ["test:none"], complete=False)
+        self.assertEqual(selected["kind"], "full")
+        self.assertIn("remedy:", selected["reasons"][0])
+
+    def test_ai_cannot_subtract_floor(self):
+        self.assertEqual(scope.select(self.policy, ["contracts/a"], ["test:none"])["kind"], "full")
+
+    def test_full_dominates_none(self):
+        self.assertEqual(scope.select(self.policy, ["docs/notes/a.md"], ["test:none", "test:full"])["kind"], "full")
+
+    def test_ai_addition_receives_dependency_closure(self):
+        result = scope.select(self.policy, ["docs/notes/a.md"], ["test:web_runtime_host"])
+        self.assertTrue({"creator", "web_runtime_lab"} <= set(result["suites"]))
+
+    def test_invalid_labels_are_rejected_with_remedy(self):
+        for labels in [["test:unknown"], [None], "test:none", ["test:creator", 1]]:
+            with self.subTest(labels=labels), self.assertRaisesRegex(scope.ScopeError, "why:.*remedy:"):
+                scope.select(self.policy, [], labels)
+
+    def test_union_deduplicates_and_full_dominates(self):
+        host = scope.select(self.policy, ["apps/creator-web/src/App.tsx"])
+        full = scope.select(self.policy, ["contracts/a"])
+        self.assertEqual(scope.union_selections(self.policy, [host, host]), host)
+        self.assertEqual(scope.union_selections(self.policy, [host, full])["kind"], "full")
+
+    def test_union_rejects_inconsistent_kind(self):
+        with self.assertRaisesRegex(scope.ScopeError, "why:.*remedy:"):
+            scope.union_selections(self.policy, [{"kind": "none", "suites": ["creator"], "reasons": []}])
+
+    def test_policy_changes_use_old_new_union(self):
+        old = copy.deepcopy(self.policy)
+        old.routing["rules"].append({"match": {"kind": "prefix", "value": "docs/notes/"}, "lanes": ["creator"]})
+        result = scope.select_across_policies(["docs/notes/a.md"], [self.policy, old])
+        self.assertIn("creator", result["suites"])
+
+    def test_missing_old_policy_is_full(self):
+        self.assertEqual(scope.select_across_policies(["docs/notes/a.md"], [self.policy, None])["kind"], "full")
+
+    def test_old_selection_receives_current_dependency_closure(self):
+        old = copy.deepcopy(self.policy)
+        old.routing["rules"].append({"match": {"kind": "prefix", "value": "docs/notes/"},
+                                     "lanes": ["web_toolchain"]})
+        old.config["dependencies"] = {}
+        result = scope.select_across_policies(["docs/notes/a.md"], [self.policy, old])
+        self.assertTrue({"web_toolchain", "web_runtime_host", "creator", "web_runtime_lab"}
+                        <= set(result["suites"]),
+                        "why: old selection lost current consumers; remedy: close the union across policies")
+
+    def test_cross_policy_dependency_edges_reach_a_fixed_point(self):
+        old = copy.deepcopy(self.policy)
+        old.routing["rules"].append({"match": {"kind": "prefix", "value": "docs/notes/"},
+                                     "lanes": ["web_toolchain"]})
+        old.config["dependencies"] = {"web_runtime_lab": ["chameleon_lab"]}
+        result = scope.select_across_policies(["docs/notes/a.md"], [self.policy, old])
+        self.assertIn("chameleon_lab", result["suites"],
+                      "why: dependency chain crosses policy versions; remedy: close all applicable edges")
+
+    def test_policy_digest_binds_all_three_documents(self):
+        files = ["scope_policy.json", "self_test_policy.json", "test_scope_policy.json"]
+        docs = [json.loads((ROOT / "scripts/ci" / name).read_text()) for name in files]
+        for position, key in [(0, "slo_seconds"), (1, "note"), (2, "none_prefixes")]:
+            changed = copy.deepcopy(docs)
+            if position == 0:
+                changed[position][key]["portal"] += 1
+            elif position == 1:
+                changed[position][key] += " changed"
+            else:
+                changed[position][key].append("docs/extra-notes/")
+            self.assertNotEqual(scope.parse_policy(*changed).digest, self.policy.digest)
+
+    def test_record_roundtrip(self):
+        record = self.record(ai_labels=["test:creator"])
+        self.assertEqual(scope.validate_record(record, self.policy, self.identity), record)
+
+    def test_json_duplicate_fields_rejected(self):
+        encoded = json.dumps(self.record())
+        encoded = encoded[:-1] + ', "schema": "lmdj.ci-test-scope.v1"}'
+        with self.assertRaisesRegex(scope.ScopeError, "duplicate JSON key"):
+            scope.parse_record(encoded, self.policy, self.identity)
+
+    def test_record_parser_roundtrip(self):
+        record = self.record()
+        self.assertEqual(scope.parse_record(json.dumps(record), self.policy, self.identity), record)
+
+    def test_unknown_schema_is_not_accepted(self):
+        record = self.record()
+        record["schema"] = "lmdj.ci-test-scope.v99"
+        with self.assertRaisesRegex(scope.ScopeError, "inconsistent"):
+            scope.validate_record(record, self.policy, self.identity)
+
+    def test_bad_path_is_not_none(self):
+        for path in ["../a", "/a", "docs/../a.md", "docs/notes/a\nb.md"]:
+            with self.subTest(path=path), self.assertRaisesRegex(scope.ScopeError, "why:.*remedy:"):
+                scope.select(self.policy, [path])
+
+    def test_record_identity_is_independently_bound(self):
+        for key, value in [("repository", "attacker/repo"), ("pr_number", 999), ("head_sha", "d" * 40),
+                           ("base_sha", "e" * 40), ("control_sha", "f" * 40), ("run_id", 99),
+                           ("run_attempt", 2), ("backend", "grok")]:
+            identity = {**self.identity, key: value}
+            with self.subTest(key=key), self.assertRaisesRegex(scope.ScopeError, "identity is stale"):
+                scope.validate_record(self.record(), self.policy, identity)
+
+    def test_record_is_closed(self):
+        record = self.record()
+        for key in record:
+            changed = {k: v for k, v in record.items() if k != key}
+            with self.subTest(key=key), self.assertRaisesRegex(scope.ScopeError, "schema is not closed"):
+                scope.validate_record(changed, self.policy, self.identity)
+        with self.assertRaisesRegex(scope.ScopeError, "schema is not closed"):
+            scope.validate_record({**record, "trusted": True}, self.policy, self.identity)
+
+    def test_recomputed_digest_does_not_allow_forged_scope(self):
+        record = self.record()
+        record["effective"] = {"kind": "none", "suites": [], "reasons": []}
+        record["record_digest"] = scope.self_test.digest_of({k: v for k, v in record.items() if k != "record_digest"})
+        with self.assertRaisesRegex(scope.ScopeError, "inconsistent"):
+            scope.validate_record(record, self.policy, self.identity)
+
+    def test_record_changed_paths_digest_tamper_rejected(self):
+        record = self.record()
+        record["changed_paths"] = []
+        with self.assertRaisesRegex(scope.ScopeError, "inconsistent"):
+            scope.validate_record(record, self.policy, self.identity)
+
+    def test_record_boolean_id_is_not_integer(self):
+        with self.assertRaisesRegex(scope.ScopeError, "positive integer"):
+            scope.build_record(self.policy, changed_paths=[], **{**self.identity, "run_id": True})
+
+    def test_none_cannot_hide_unknown_policy_fields(self):
+        config = copy.deepcopy(self.policy.config)
+        config["skip_all"] = True
+        inventory = json.loads((ROOT / "scripts/ci/self_test_policy.json").read_text())
+        with self.assertRaisesRegex(scope.ScopeError, "schema is not closed"):
+            scope.parse_policy(self.policy.routing, inventory, config)
+
+    def test_every_tracked_path_preserves_canonical_consumers(self):
+        paths = subprocess.check_output(["git", "-C", str(ROOT), "ls-files", "-z"]).decode().split("\0")
+        for path in filter(None, paths):
+            lanes, full = scope.change_scope.path_classification(self.policy.routing, path)
+            result = scope.select(self.policy, [path])
+            if result["kind"] == "none":
+                self.assertEqual(lanes, {"docs_static"}, f"why: none hides consumer {path}; remedy: restore routing")
+                self.assertFalse(full)
+            else:
+                self.assertTrue(lanes <= set(result["suites"]), f"why: consumers omitted for {path}; remedy: restore scope union")
+            if full:
+                self.assertEqual(result["kind"], "full", f"why: full rule lost for {path}; remedy: expand authoritative suites")
+
+
+class GitIntervalTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name)
+        self.git("init", "-b", "main")
+        self.git("config", "user.email", "scope-test@example.invalid")
+        self.git("config", "user.name", "Scope Test")
+        self.base = self.commit("README.md", "base")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.repo), *args], stderr=subprocess.PIPE).decode().strip()
+
+    def commit(self, path, text):
+        target = self.repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        self.git("add", path)
+        self.git("commit", "-m", "test: change")
+        return self.git("rev-parse", "HEAD")
+
+    def test_revert_is_not_erased_by_net_diff(self):
+        first = self.commit("contracts/a.json", "contract")
+        self.git("revert", "--no-edit", first)
+        target = self.git("rev-parse", "HEAD")
+        self.assertEqual(self.git("diff", "--name-only", self.base, target), "")
+        interval = scope.collect_interval(self.repo, self.base, target)
+        self.assertEqual(interval["paths"], ["contracts/a.json"])
+        self.assertEqual([c["changes"][0]["status"] for c in interval["commits"]], ["A", "D"])
+
+    def test_rename_preserves_both_ends(self):
+        base = self.commit("contracts/a.json", "contract")
+        self.git("mv", "contracts/a.json", "contracts/b.json")
+        self.git("commit", "-m", "test: rename")
+        result = scope.collect_interval(self.repo, base, self.git("rev-parse", "HEAD"))
+        self.assertEqual(result["paths"], ["contracts/a.json", "contracts/b.json"])
+
+    def test_merge_uses_actual_first_parent_result(self):
+        self.git("checkout", "-b", "feat/example")
+        side = self.commit("apps/creator-web/a", "side")
+        self.git("checkout", "main")
+        self.commit("docs/notes/a.md", "main")
+        self.git("merge", "--no-ff", "feat/example", "-m", "test: merge")
+        result = scope.collect_interval(self.repo, self.base, self.git("rev-parse", "HEAD"))
+        self.assertEqual(len(result["commits"]), 2)
+        self.assertNotIn(side, [c["sha"] for c in result["commits"]])
+        self.assertEqual(result["paths"], ["apps/creator-web/a", "docs/notes/a.md"])
+
+    def test_squash_includes_all_result_paths(self):
+        self.git("checkout", "-b", "feat/example")
+        self.commit("apps/creator-web/a", "a")
+        self.commit("apps/web-runtime-host/b", "b")
+        self.git("checkout", "main")
+        self.git("merge", "--squash", "feat/example")
+        self.git("commit", "-m", "test: squash")
+        result = scope.collect_interval(self.repo, self.base, self.git("rev-parse", "HEAD"))
+        self.assertEqual(len(result["commits"]), 1)
+        self.assertEqual(result["paths"], ["apps/creator-web/a", "apps/web-runtime-host/b"])
+
+    def test_merge_commit_changes_absent_from_reviewed_branch_are_included(self):
+        self.git("checkout", "-b", "feat/example")
+        self.commit("docs/notes/a.md", "reviewed")
+        self.git("checkout", "main")
+        self.git("merge", "--no-ff", "--no-commit", "feat/example")
+        target = self.commit("contracts/merge-resolution.json", "actual merge result")
+        result = scope.collect_interval(self.repo, self.base, target)
+        self.assertIn("contracts/merge-resolution.json", result["paths"])
+        self.assertEqual(scope.select(scope.load_policy(ROOT), result["paths"])["kind"], "full")
+
+    def test_side_parent_baseline_is_rejected(self):
+        self.git("checkout", "-b", "feat/example")
+        side = self.commit("side", "a")
+        self.git("checkout", "main")
+        self.commit("main-file", "b")
+        self.git("merge", "--no-ff", "feat/example", "-m", "test: merge")
+        with self.assertRaisesRegex(scope.ScopeError, "first-parent"):
+            scope.collect_interval(self.repo, side, self.git("rev-parse", "HEAD"))
+
+    def test_missing_history_is_not_empty(self):
+        with self.assertRaisesRegex(scope.ScopeError, "why:.*remedy:"):
+            scope.collect_interval(self.repo, "e" * 40, self.base)
+
+    def test_shallow_history_is_rejected(self):
+        self.commit("second", "a")
+        with tempfile.TemporaryDirectory() as clone:
+            subprocess.check_call(["git", "clone", "--quiet", "--depth", "1", self.repo.as_uri(), clone])
+            with self.assertRaisesRegex(scope.ScopeError, "shallow history"):
+                scope.collect_interval(clone, self.base, self.git("rev-parse", "HEAD"))
+
+    def test_annotated_tag_object_is_not_commit_endpoint(self):
+        self.git("tag", "-a", "test-tag", "-m", "test tag")
+        with self.assertRaisesRegex(scope.ScopeError, "not a commit"):
+            scope.collect_interval(self.repo, self.base, self.git("rev-parse", "test-tag"))
+
+    def test_large_inventory_has_no_page_truncation(self):
+        for number in range(105):
+            (self.repo / f"file-{number}").write_text(str(number))
+        self.git("add", ".")
+        self.git("commit", "-m", "test: inventory")
+        result = scope.collect_interval(self.repo, self.base, self.git("rev-parse", "HEAD"))
+        self.assertEqual(len(result["paths"]), 105)
+
+    def test_no_change_is_explicit_empty_interval(self):
+        result = scope.collect_interval(self.repo, self.base, self.base)
+        self.assertEqual(result["commits"], [])
+        self.assertEqual(result["paths"], [])
+
+
+if __name__ == "__main__":
+    unittest.main()
