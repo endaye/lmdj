@@ -575,25 +575,35 @@ pre-squash SHA 不是合法 release target。当前 Product Build 在 ledger 中
 snapshot 校验；重复 current intent 必须 fail closed。一个 current intent 存在时，exact-target、
 merged-main Proof、CI、main ancestry 与后续所有 release gate 仍全部适用。
 
-release target 的 CI 证据必须是 exact-main 的完整证据：该 target SHA 上一次
-completed、successful 的 `Core CI` run，其 `push` 或 `workflow_dispatch` 事件、`main`
-head branch、同一 run 内成功的 `Change Scope` 与 `PR Gate`，以及该 run 为同一 exact SHA
-保留的 scope manifest 必须是 `lmdj.ci-scope.v2`、`mode=full`、`trusted_head=true`。
-这里的 `Core CI` 是 run 的 `workflow_id` 与 path 共同绑定后，由 workflow metadata `name:`
-解析出的稳定身份；会按 ref 或 input 展开的 `run-name:` 以及 REST run/job display name 只用于
-显示，不能替代或否决 policy identity。
-`main` merge 按精确改动路径分类，可能合法地只跑 focused CI；因此当 target SHA 自身的 push
-是 focused 时，操作者必须对该 exact SHA 以空 `lanes` 输入显式 dispatch 一次 full run，并把新的
-run ID 写入 release intent 后才能请求任何 mutation。`requested`（指定 lane）与 focused 都不是
-full 证据；run conclusion、路径类型或“已在 main 上”都不能推断 full。
+T7 的 consumer 与 `tools/release/policy.json` 一起合入 protected main 时，prospective
+policy 显式切换为 `self-test-v1`。所有仍为 `releasable` 的 intent 都必须引用一次通过的完整
+16-suite 自测；旧 `lmdj.ci-scope.v2` 的 14 lanes 即使 `mode=full`、`trusted_head=true`、
+`Change Scope` / `PR Gate` 均绿色，也只能解释旧协议，不能绕过新候选的 TSan / Release
+stress 要求。旧 producer 兼容入口的删除仍须完成新 producer + consumer 的另行授权真实演练；
+入口暂留并不授予 legacy prospective fallback。当前 consumer 可先消费手动自测，定时切换
+不影响该发布证据契约。日测不是日发版，自测红色不构成 PR merge gate；正式版本仍手动发布。
 
-scope manifest artifact 的当前保留期是 14 天，这是 prospective 证据的硬性生命周期。过期后只有两条
-路径：在该 Actions run 仍被保留时对其重跑全部 job，保持同一 run ID 与 SHA 并产生新的 latest
-attempt；或者另行授权一次 exact-SHA full run 并同步更新 release intent。缺失或过期报告为
-`unverifiable`，focused/SHA 不符/Gate 缺失或失败报告为 `conflict`，传输与分页故障报告为
-`external-error`；证据不得被推断、重建或回填。已 `published` 的终态审计继续以不可变的
-tag/Release/asset/plan marker 证据判定，不因短生命周期 artifact 过期而改写历史。一次 full
-dispatch 本身不授权任何 release mutation。
+Owner 在 reviewed intent 中保留 `merged_main_run_id` 与 exact `target_revision`，另增闭合的
+`self_test_evidence`：`schema=lmdj.ci-self-test.v1`、`request_kind`、`control_revision`、
+`run_attempt`、`policy_revision` 和 `evidence_digest`。这些字段只能来自已验证的真实 verdict，
+不自动写入 intent，也不从输入参数或绿色总结猜测。`Core CI` 由稳定 workflow ID 与
+`.github/workflows/ci.yml` 及 canonical repository 共同绑定；动态 `run-name:` 不参与授权。
+GitHub `run.head_sha` 是 control revision，不要求等于 candidate target：两者各自验证为
+protected main 历史，且 control 不早于可信 producer 部署。必须精确绑定同一 run / attempt、
+成功的 verdict job、完整 suites / required job 结果、适用 policy 与 canonical digest。
+日测或 node 的现成通过证据可由 Owner 显式引用到同 SHA 候选，不重复补测；skip、失败、
+混合 attempt、缺少任一 suite、错误 SHA 或过期证据均不能授权候选。
+
+新的 verdict artifact 当前保留 30 天。过期或缺失为 `unverifiable`；身份、摘要、完整性或
+结果冲突为 `conflict`；传输与分页故障为 `external-error`。恢复须另行授权在 ref `main` 上
+以 candidate SHA 为 `target_revision` 新 dispatch，并独立 review intent 更新；不能把 SHA
+用作 dispatch ref，也不能 Re-run jobs（producer 当前只支持 attempt 1）。已 `published`
+的旧协议 intent 继续原只读审计，新协议 intent 的持久 reference 纳入 release plan digest，
+并由 `lmdj.release-plan-marker.v2` 显式保留完整 CI 身份；fresh remote audit 对比 marker
+与 intent，旧 v1 marker 不能证明新添的自测引用。Published 读取当时的 recorded attempt，
+后来的 rerun 不覆盖其历史；prospective 仍检查 latest attempt，不能借旧通过结论掩盖新失败。
+二者仍验证不可变 tag、签名、Release、asset 与 plan marker，不因短期 artifact 过期而改写
+历史，也不能只凭 intent 自称 published 就认定发布。自测通过本身不授权任何 release mutation。
 
 历史例外（historical exception）只解释控制面生效前不可改写的 exact 只读事实。只有 remote
 audit 可以报告 `ok-with-historical-exception`，并必须在 human/JSON evidence 中显式列出；

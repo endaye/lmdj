@@ -136,14 +136,13 @@ class ReleaseSkillTest(unittest.TestCase):
         source = self.read(SKILL)
         for expected in (
             "## Full exact-main CI evidence",
-            "`full`",
-            "trusted head",
-            "`Change Scope`",
-            "`PR Gate`",
-            "empty `lanes` input on the exact target SHA",
-            "`requested`",
-            "14",
-            "rerun all of its jobs",
+            "`self-test-v1`",
+            "16-suite",
+            "`self_test_evidence`",
+            "control/target",
+            "30 days",
+            "not Re-run jobs",
+            "digest",
             "A full dispatch is evidence, not authorization",
             "`unverifiable`",
             "`conflict`",
@@ -165,10 +164,10 @@ class ReleaseSkillTest(unittest.TestCase):
             with self.subTest(document="git-workflow", expected=expected):
                 self.assertIn(expected, git_workflow)
         for expected in (
-            "`mode=full`",
-            "`trusted_head=true`",
-            "`PR Gate`",
-            "14 天",
+            "`self-test-v1`",
+            "16-suite",
+            "`self_test_evidence`",
+            "30 天",
             "`unverifiable`",
             "`conflict`",
             "`external-error`",
