@@ -1234,7 +1234,22 @@ def verify_distribution(dist_root, repo_root):
         self.assertEqual(len(cast(list[str], detail["dist_files"])), 11)
         self.assertNotEqual(checkout, self.repo)
         self.assertEqual(checkout.name, "tag-target")
-        self.assertTrue(str(checkout).startswith(str(self.runner_temp.resolve())))
+        # `create_owned_temp` in scripts/creator-web-deploy.sh prefers RUNNER_TEMP but
+        # deliberately falls back to /tmp when the requested parent would push a
+        # projected GnuPG agent socket past its length budget. A macOS
+        # TemporaryDirectory lives under /private/var/folders/... and exceeds that
+        # budget, so on this platform the documented fallback fires and the
+        # checkout legitimately lands under /tmp. Pinning RUNNER_TEMP specifically
+        # therefore asserted the Linux runner's path length, not the contract. The
+        # contract is that the tag checkout lives in an owned temp root the script
+        # created, outside the repository.
+        resolved = Path(checkout).resolve()
+        allowed_parents = (self.runner_temp.resolve(), Path("/tmp").resolve())
+        self.assertTrue(
+            any(resolved.is_relative_to(parent) for parent in allowed_parents),
+            resolved,
+        )
+        self.assertTrue(resolved.parent.name.startswith("lmdj-creator-web-deploy."), resolved)
         self.assertFalse(checkout.exists())
 
     def test_tag_checkout_does_not_require_linked_worktree_metadata(self) -> None:
