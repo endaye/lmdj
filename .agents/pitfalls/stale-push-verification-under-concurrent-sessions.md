@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-09-07
     occurrence: https://github.com/endaye/lmdj/issues/669
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-07
+    occurrence: https://github.com/endaye/lmdj/actions/runs/34136825655
+    observed_by: Codex
 exit: gate:tests/build/ci_local_preflight_test.py
 ---
 
@@ -100,6 +103,18 @@ count and SHAs from this final reading, never from an earlier one.
 
 The same re-read applies before arming auto-merge, because auto-merge converts
 a stale reading into a merge without further review.
+
+An asynchronous push from the same agent is also a concurrent writer. During
+the controlled CI reporter drill, a still-running push session was mistaken for
+a completed push; dispatch 34136825655 therefore used old head `98bd0081` and
+reproduced the old duplicate-write defect. Exact test issues 776/777 were
+verified and closed. This was operator ordering, not evidence of delayed Git
+ref propagation. The corrected dispatch 34136943149 used the verified new head
+and passed. Wait for push exit status zero, check the remote branch SHA equals
+the reviewed local SHA, then dispatch and check the actual run's head SHA.
+A session ID is not push completion. Stop on an unknown or mismatched result.
+The existing stale-base gate does not verify this dispatch sequence; this is
+an explicit addition to the push-side operational guidance.
 
 The same re-read also applies before *diagnosing* anything against `main`, and
 this is the half the entry originally missed. Before investigating a failure on

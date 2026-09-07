@@ -2,18 +2,15 @@ name: Merge Queue
 run-name: Merge queue / ${{ github.event_name }} / PR ${{ github.event.pull_request.number || 'preflight-or-watchdog' }}
 
 on:
-  pull_request_target:
-    branches: [main]
-    types: [labeled]
+  # Retired: labels and periodic watchdog ticks cannot authorize new work.
+  # Existing runs retain their original workflow; O2 must reconcile them.
   workflow_dispatch:
     inputs:
       hold_seconds:
-        description: No-mutation queue preflight hold; must be 30 through 600 seconds.
-        required: true
+        description: Retired compatibility input; the manual entry only reports retirement.
+        required: false
         type: string
         default: "60"
-  schedule:
-    - cron: '*/15 * * * *'
 
 permissions: {}
 
@@ -42,14 +39,8 @@ jobs:
         run: |
           set -euo pipefail
           accepted=false
-          mode=ignored
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            accepted=true
-            mode=preflight
-          elif [[ "$EVENT_NAME" == "pull_request_target" && "$LABEL_NAME" == "merge:queue" ]]; then
-            accepted=true
-            mode=controller
-          fi
+          mode=retired
+          echo 'Merge Queue is retired. Use the ordinary authorized PR merge path.' >>"$GITHUB_STEP_SUMMARY"
           {
             echo "accepted=$accepted"
             echo "mode=$mode"

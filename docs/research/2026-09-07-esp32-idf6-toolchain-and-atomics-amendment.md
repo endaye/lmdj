@@ -235,6 +235,56 @@ codec 侧的实际配置（`M5.Speaker.config()` 读回）：
 （8 × 256 ≈ 42.7 ms 与该差值接近得可疑），但这需要真正的时序方法才能定论，而不是靠一个
 5 ms 轮询的忙等循环。因此它被记为 §5 的一个开放问题，不作为 quiescence 语义的结论。
 
+### 1.5 麦克风：ES8311 采集在 IDF 5.5.1 起的回归上，本板 6.0.3 与 6.1 均复现
+
+`M5.Mic` 在 Cardputer Adv 上采不到声音。症状精确到位：每个样本恒为 `f_gain × (−1)`
+（`magnification=16` 时为 `−8`），`distinct(512) = 1`，两个 I2S slot 相同，对声音毫无反应。
+出厂固件的麦克风测试是有效的，所以硬件没有问题。
+
+这不是新问题。上游已有同一硬件、同一症状、同一寄存器读回的报告并完成了版本二分：
+[espressif/esp-idf#18621](https://github.com/espressif/esp-idf/issues/18621)（2026-05-14，
+`Status: In Progress`）——ES8311 mic 在 **IDF v5.4.2 正常、v5.5.1 起恒定 `−8`/`−1`**，Espressif
+的假设是 v5.4→v5.5 I2S 驱动重构后 MCLK 未到达 codec，正在等示波器数据。
+[m5stack/uiflow-micropython#97](https://github.com/m5stack/uiflow-micropython/pull/97) 的变通
+是把 IDF 钉回 5.4；[m5stack/M5Unified#184](https://github.com/m5stack/M5Unified/issues/184)
+的末条评论把 Cardputer Adv 的静音麦克风明确指向了这个 IDF 回归。
+
+本增补新增的数据点（上游只有 5.4.2 与 5.5.1）：
+
+| ESP-IDF | ES8311 采集 | codec 寄存器读回 |
+| --- | --- | --- |
+| v6.0.3 | 恒定 `−8` | `00=80 01=BA 0D=01 0E=02 14=10 17=BF` |
+| v6.1 | 恒定 `−8` | 同上 |
+
+**回归至少覆盖 5.5.1 → 6.0.3 → 6.1**，与 IDF 6 的其它变化无关。
+
+为把原因收窄到 IDF 层，以下假设逐一在真机上被排除（每次只动一个变量）：
+
+| 假设 | 实验 | 结果 |
+| --- | --- | --- |
+| 采样率 / codec 时钟不匹配 | 16 kHz → 48 kHz | 完全相同的常数 |
+| 软件增益不足 | `magnification` 16/32/64/128 | 精确成比例 `−8/−16/−32/−64`；源码 `f_gain = magnification/(over_sampling<<1)` |
+| 扬声器占用共享 codec（[M5Unified#347](https://github.com/m5stack/M5Unified/issues/347)） | `cfg.internal_spk = false` | 仍恒定 |
+| I2S 端口错配 | mic 改到扬声器的 `I2S_NUM_1` | 仍恒定 |
+| 单声道读错 slot | 立体声读回 L/R | 两个 slot 都是 `−8` |
+| 时钟启动前 `0x0D` 写入被吸收（[M5Unified#348](https://github.com/m5stack/M5Unified/pull/348)，仅 StopWatch 注册） | 时钟运行后补写 `0x0D=0x01` ×3 | `0D` 前后均读回 `01`，数据不变 |
+| 模拟输入增益 / 数字麦路径 | `0x14 = 0x1A`，再 `0x14 = 0x50 (DMIC_ON)` | 寄存器写入生效（读回 `1A`/`50`），数据不变 |
+
+I2C 通路正常（扬声器走同一总线且正常出声；所有写入都能读回）、BCLK/WS 存在（采集任务持续
+返回数据块）、codec 寄存器处于 ADC 模式——但 ASDOUT（GPIO46）始终读到全 1。这和
+#18621 的观察一致。
+
+**对本研究的结论：** 麦克风在 IDF 6.x 上不可用不是 M5Unified 或 codec 配置能解决的，
+而是 IDF I2S 层的开放回归；在上游修复前，本板的采集只能通过降到 IDF 5.4.x 获得，
+这与 1 节选 6.x 的理由冲突。麦克风本来就不在第一轮范围内
+（[2026-09-03 分析](./2026-09-03-cardputer-adv-feasibility-analysis.md)第 271 行），
+因此不改变落点，只把这条记为已知外部阻断。
+
+测试中也证实了两个与本板相关的 M5Unified 0.2.21 事实：Cardputer Adv 的 mic case 没有像
+ChainCaptain 那样显式设置 `i2s_port`（扬声器在 `I2S_NUM_1`，mic 默认 `I2S_NUM_0`，两者共享
+BCLK 41 / WS 43）；以及 #348 的 post-start 修复只注册给了 StopWatch。两者在本板上都不是
+静音的原因，但在上游修复 IDF 回归后值得回头核对。
+
 ## 2. 修正：atomic 退化的条件比原文第 3 节记录的更宽
 
 原文第 3 节说“64 位 atomic 由一个全局 `portMUX_TYPE` 自旋锁模拟”。这一句是对的，但只覆盖
@@ -339,45 +389,45 @@ workaround 压根没有实现，问题仍在但没有保护。
 如果 ESP32 spike 也想用 Clang 工具链，必须先查清 IDF-9032 的实际内容，不得把
 “Clang 下 workaround 不生效”当成绕过手段使用。
 
-## 4. 本地环境（macOS arm64，实测可复现）
+## 4. 本地环境：统一使用 EIM（macOS arm64）
 
-**不要用 `git clone`。** 本机实测：GitHub 约 37 KB/s，Gitee 镜像同样慢且在
-`fetch-pack` 阶段 `early EOF` 中断；两次尝试都失败。真正的瓶颈是 submodule 递归拉取。
-Release 归档已内含全部 submodule，从乐鑫自己的资产镜像拉稳定在 5.6 MB/s：
+> 2026-09-08 更新：本节取代原有的手动 ZIP 下载与 `install.sh` 安装步骤。
 
-```bash
-brew install ninja dfu-util
+**ESP-IDF 统一通过 Espressif Installation Manager（EIM）下载、安装和管理。**
+以后需要新的 ESP-IDF 版本或开发环境，也使用 EIM；不要另用手动 Git 克隆、ZIP 解压或
+旧安装脚本建立平行安装。项目所需的精确版本由项目明确指定，安装方式不改变版本决策；
+本 spike 仍使用第 1 节选定的 `v6.1`，不随 EIM 默认选项自动升级。
 
-mkdir -p ~/esp && cd ~/esp
-curl -L -C - --retry 20 --retry-all-errors -o esp-idf-v6.1.zip \
-  https://dl.espressif.com/github_assets/espressif/esp-idf/releases/download/v6.1/esp-idf-v6.1.zip
-unzip -q esp-idf-v6.1.zip && mv esp-idf-v6.1 esp-idf
-
-cd ~/esp/esp-idf
-IDF_GITHUB_ASSETS=dl.espressif.com/github_assets ./install.sh esp32s3,esp32
-alias get_idf='. $HOME/esp/esp-idf/export.sh'
-```
-
-资产镜像必须用 `.com`，不是 `.cn`：同一个工具链文件实测 `dl.espressif.com` 4.85 MB/s、
-`dl.espressif.cn` 664 KB/s、`github.com` 302 重定向后 0 B/s。PyPI 走官方源即可，实测不是
-瓶颈，因此**不需要**把工具链的 Python 依赖指向第三方镜像。
-
-镜像不免检。解压后核对身份，`v6.1` 应为：
+先在 EIM 中查看已有安装；缺少项目所需版本时，通过 EIM 界面选择该精确版本并完成安装。
+已有对应版本时直接复用，不重复下载。终端按需进入环境：
 
 ```bash
-git -C ~/esp/esp-idf describe --tags          # v6.1
-git -C ~/esp/esp-idf rev-parse HEAD           # fff9895c82d744c7237be8847347bdd1b07c6643
-git -C ~/esp/esp-idf submodule status | grep -c '^-'   # 0
+eim list
+eim shell v6.1
 ```
 
-该 commit 就是 GitHub 上 `v6.1` 附注 tag 解引用的结果；归档尺寸也与 GitHub 记录的
-asset 尺寸逐字节相符。
+进入该 shell 后核对版本与源码身份：
 
-`export.sh` 不写进 shell profile，只用 alias 按需激活。ESP32-S3 有原生 USB-Serial/JTAG，
-macOS 不需要额外 USB 桥驱动，设备名形如 `/dev/cu.usbmodem1101`。
+```bash
+idf.py --version
+git -C "$IDF_PATH" describe --tags
+git -C "$IDF_PATH" rev-parse HEAD
+```
 
-这套环境与 `scripts/core.sh` 的宿主构建互不干扰：仓库内目前**没有**任何 ESP-IDF
-component、target 或 CI 通道，本节只描述开发机上的外部工具链。
+本 spike 的预期结果为 `ESP-IDF v6.1`、`v6.1` 与第 1 节记录的
+`fff9895c82d744c7237be8847347bdd1b07c6643`。其他项目或后续获准的版本使用各自锁定的
+身份，不套用这里的版本号。安装目录以 EIM 实际记录和激活后的 `IDF_PATH` 为准，
+不把个人机器的绝对路径写进项目配置，也不在 shell profile 中自动激活旧 `export.sh`。
+
+从旧安装切换时，保留项目源码、补丁和实验记录，重新生成引用旧 SDK 或 Python 路径的
+构建缓存。清理旧 SDK 前检查本地改动与引用；共享工具链须确认 EIM 不再使用才能删除，
+不能整目录删除 `~/.espressif`。第 1.1 节的 M5GFX 补丁义务仍然适用。
+
+2026-09-08 本机检查：EIM 的 `v6.1` 状态为 `ok`，通过其环境运行 `idf.py --version`
+与 Xtensa 编译器版本查询成功。这只证明环境可激活、工具可运行，不代表旧项目已经
+重新编译或完成真机验收。原安装时记录的镜像速度只属于当时的网络观察，不再作为安装流程。
+
+这套环境用于开发机上的外部 ESP32 工具链；`scripts/core.sh` 仍是宿主 Core 构建入口。
 
 ## 5. 仍未验证
 
@@ -389,7 +439,8 @@ component、target 或 CI 通道，本节只描述开发机上的外部工具链
   节要求的证据一项都还没有产生。1.3 节的堆数字来自一个点屏 demo，不能当测量结果引用。
 - `M5.Speaker.isPlaying()` 的 quiescence 语义：它似乎在最后一块 DMA 排空前就归零
   （1.4 节）。这影响任何“等播放结束”的逻辑，需要用真正的时序方法确认，不能靠忙等观察。
-- `M5.Mic` 的实际采集。1.4 节只让扬声器出了声，麦克风仍然只是报告 enabled。
+- `M5.Mic` 采集：**已定性为 IDF I2S 回归**（1.5 节），等 [esp-idf#18621](https://github.com/espressif/esp-idf/issues/18621)。
+  未验证的是"在 IDF 5.4.x 上本板确实正常"这一半——上游报告如此，本仓库没有复现。
 - IDF-9032 的内容与状态。
 
 ## 6. 版本与文档

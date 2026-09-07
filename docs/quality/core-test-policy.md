@@ -109,37 +109,59 @@ The default seed is `0`; a different seed must be fixed in the test command or
 fixture. Time, network access, and machine-local state are not random-seed
 substitutes and must be controlled or injected.
 
-## Risk-Based PR Selection
+## Optimistic PR Integration and Complete Self-tests
 
-The main CI workflow triggers for every Pull Request without a workflow-level
-path filter. `Change Scope` checks out the complete history, diffs the exact PR
-base and head, and reads current Draft and `ci:full` label state. Its retained
-`ci-scope-<head-sha>` artifact and job summary record one closed manifest with
-14 lane booleans and the formal jobs derived from them. Artifact upload uses
-same-run overwrite semantics so rerunning `Change Scope` cannot collide with
-the retained manifest from its earlier attempt.
+This change takes effect at the authorized O2 cutover together with T5a and
+live protection changes; an unmerged draft does not override existing main rules.
+Task-specific tests still belong to implementation. Current-head AI review or
+visible authorized takeover, real conflict handling, required conversations and
+explicit merge permission belong to PR shipping. Full Core/Web Proof, sanitizer,
+coverage, packaging and portal suites no longer gate PR merge or run on every
+main push. A non-conflicting PR need not update only because main advanced.
 
-Selection has three modes:
+Daily and explicitly requested important-node self-tests share the complete
+fixed policy suite set, including the two native stress suites formerly on a
+separate Nightly cron. The authoritative inventory is the self-test policy,
+not a changed-path subset or a local preflight cache. The O2 trigger cutover
+removes duplicate heavy schedules and PR/main-push fan-out; independent suites
+continue after another suite fails, while dependent steps within a failed
+build stop. Resource locks still protect timing-sensitive native work.
 
-- `draft` runs only `docs_static` and `ci_contract`; a transition to Ready
-  starts a new classification for the current head;
-- `focused` takes the union of every changed path's owners and inherits every
-  consumer test lane for shared code, contracts, fixtures, generated inputs,
-  renames, and deletions; and
-- `full` selects all 14 lanes for `ci:full`, central CI control changes,
-  unknown or unclassified ownership, broad cross-family risk, every `main`
-  push, and every manual dispatch.
+Each batch pins a verified main-history target independently from its trusted
+control revision and records exact run/attempt. Required suite failure, missing
+result, cancellation, malformed evidence or unavailable infrastructure never
+means success. The hosted verdict retains the complete sixteen-suite result in
+`self-test-verdict-<target>-<run>-<attempt>` for thirty days without overwrite.
+Only attempt 1 is accepted: repetition uses a new same-target dispatch, never
+an Actions partial rerun that can inherit successful jobs from another attempt.
+Early request records are unverified requests, not test evidence.
 
-`scripts/ci/scope_policy.json` is the one central CI control path that can
-escape the full upgrade, and only against a proof. The upgrade exists because
+Failures produce triage Issues, not a merge freeze. A single later green batch
+does not close a defect automatically. Daily self-testing does not release or
+allocate a version; manual candidate selection consumes only evidence accepted
+by the canonical release verifier. Local, PR review, self-test, release, deploy,
+snapshot and physical acceptance facts stay separate.
+
+### Advisory path selection and test ownership
+
+The canonical classifier remains available for local test selection and tracked
+path ownership. `focused` unions changed paths' consumer lanes; `full` recommends
+all local lanes for broad/unknown risk; legacy `draft` semantics remain an
+internal compatibility feature, not merge permission. The fourteen classifier
+lanes are distinct from the sixteen complete self-test suites. Renames,
+deletions, shared fixtures and generated inputs retain consumer coverage.
+Classification does not require every recommended lane to execute before push.
+
+`scripts/ci/scope_policy.json` has a classification-preserving exemption from
+the local full recommendation, and only against a proof. The upgrade exists because
 scoping a policy change by the policy it changes is circular. That circularity
 is real when an edit alters how an existing path routes, and absent when it
 only adds a rule for a path the same branch introduces — which is the common
-case, because the tracked-path ownership gate fails on any tracked path no rule
-classifies, so almost every Pull Request that adds a file must also edit the
-policy. Charging each of those a full run is the cost this exemption removes;
-one research spike spent three rounds of about 185 minutes across three days on
-exactly that shape.
+case when a new path needs a new ownership rule. Historically, coupling this
+classification to required PR CI charged even that shape a full run: one
+research spike spent three rounds of about 185 minutes across three days.
+The exemption preserves precise local recommendations; O2 removes the broader
+mandatory-run coupling rather than depending on exemptions to unblock merges.
 
 `policy_edit_is_classification_preserving` decides it by differential. It
 classifies every path tracked at the merge base under both the base policy and
@@ -165,8 +187,7 @@ assembled at runtime would evade it, and that gap is accepted rather than
 closed by tracing file handles.
 
 `scripts/ci/local_preflight.py` computes the same differential before it
-classifies. The pre-flight exists so a local run cannot select a different lane
-set than CI, and CI derives the exemption in `change_scope.main` rather than
+classifies. The pre-flight preserves the canonical classification semantics, and CI derives the exemption in `change_scope.main` rather than
 inside `classify`, so a pre-flight that only called `classify` would report
 `full` for a change CI classifies `focused` — the one divergence it exists to
 prevent. `tests/build/ci_local_preflight_test.py` holds both the wiring and an
@@ -229,184 +250,17 @@ named test no longer exists, so a rename cannot silently return them to the
 parallel phase. Widening a timing budget to buy parallelism would weaken the
 assertion; giving those two tests an idle machine does not.
 
-`select-macos-runner` is the only runner selector left, and it runs only for
-`core_macos`. Every Linux lane names its role literally instead, so no Linux
-lane has a runner-selector support job. Package retains LFS hydration and
-explicitly disables ccache; the three native Core lanes use the role's
-persistent `ccache` unconditionally, because they can no longer land anywhere
-that lacks it. Bounded build parallelism is unchanged. A selector does not make
-a semantic workload conditional on infrastructure success: a selected job must
-still publish its formal result.
+### Hosted control and untrusted code
 
-`PR Gate` is the single aggregate decision. It evaluates same-run static
-dependencies and applies this truth table:
+Trusted control must retain evidence even when self-hosted workloads are down.
+A verdict or reviewer publisher must not run PR-authored control code with
+write credentials. Fork or PR content is untrusted; title, label or changed
+paths do not grant trust. Carrying a reviewed external patch onto an authorized
+in-repository branch creates a new head that needs its own review/verification,
+not inheritance of fork evidence. Never provision runner/secrets access merely
+to make a fork review green.
 
-| Manifest selection | Job result | Gate result |
-| --- | --- | --- |
-| selected | `success` | pass |
-| selected | `skipped`, `failure`, `cancelled`, or missing | fail |
-| unselected | `skipped` | pass |
-| unselected | `success`, `failure`, `cancelled`, or missing | fail |
-
-The manifest schema, exact event base/head SHAs, lane-to-job mapping, and
-complete 17-result key set must also match. The results are the 15 published
-lane jobs plus `select-macos-runner` and `macos-primary`;
-`change-scope` is the manifest producer, and conditional `macos-fallback` is
-enforced transitively by `core-macos` and `core-asan-macos`. The producer is
-not an eighteenth result key, but its own job result must independently be
-`success`; a manifest output cannot make a later artifact-upload failure pass.
-
-### Pre-heavy Admission and Sparse Native Sequence
-
-Eight non-macOS preflight jobs — Docs/static, CI Contract, Deploy Contract,
-Chameleon Lab, Web Toolchain, Web Runtime Host, Creator, and Web Runtime Lab —
-run in parallel. Hosted `Pre-heavy Gate` validates their selected-success /
-unselected-skipped results before native-heavy work is admitted. macOS stays
-parallel and outside this gate: a selected macOS failure remains a PR Gate
-primary failure, but does not block Linux heavy work.
-
-The advisory reviewers also run in preflight, as `needs:` of `Pre-heavy Gate`,
-and contribute one admission condition that is not a verdict: the gate reads how many review threads on the Pull Request a human
-has not yet resolved, and holds native-heavy work while any is open. The
-review's own result is never consulted — it is `continue-on-error`, appears in
-neither `lane_jobs` nor `self_hosted_jobs`, and a reviewer that has died
-posts no threads and admits; `advisory-review-liveness.yml` is what notices
-that. Two reviewers run, not three: one Claude backend, chosen per Pull
-Request by `--select` from the same posted evidence the liveness check reads,
-with the other as the fallback it switches to when the first is DOWN; and
-Grok, which keeps its own pinned CLI and credential because that independent
-failure domain is the point of the slot — one action outage took both Claude
-backends down together, and Grok kept working. Only the ordering is shared:
-Grok's job moved into `ci.yml` so the gate can `needs:` it, because a reviewer
-in its own workflow can post after admission has already happened. The
-placement is the point. A finding costs one reply to resolve and a
-native-heavy set costs about 185 minutes, so the threads are held before the
-expensive work rather than at merge, where `required_conversation_resolution`
-held the same threads after it had already run (#659).
-
-The five jobs sharing the repository-wide `lmdj-native-heavy` `queue: max`
-capacity group run in sparse order: Portal, Core Ubuntu, Package, Coverage,
-then ASan. Each later job waits only for selected earlier jobs; an unselected
-earlier job is a legal scope skip. A gating or earlier selected-heavy failure
-therefore yields downstream skips rather than additional product failures.
-PR Gate remains the sole aggregate verdict and still requires selected success
-and unselected skip. `pre-heavy-gate` is its support dependency, outside the
-closed 17 formal-result keys; its non-success fails the control plane while
-the Gate reports primary failures, unexpected skips, downstream-blocked jobs,
-and scope skips separately.
-
-The existing automatic PR Gate summary reports Change Scope and formal-job
-queue/execution timing plus a pre-Gate critical-path span. It does not yet
-separate Pre-heavy Gate execution, Gate-ready time, native-heavy global-slot
-wait, heavy execution, or end-to-end span. Those phases are manual
-first-rollout evidence until matching automation is added. The 75-minute Web
-Runtime Host execution timeout is a hang bound, not an upper bound on Gate
-wait. This adds no API cancellation, workflow permission increase, retry,
-runner change, Product Build allocation, or immutable Portal snapshot.
-
-`Change Scope` and every selected lane or support job contribute timing
-evidence and a pre-Gate critical-path span to the Gate summary. Queue time is
-reported separately; only execution time is compared when the policy defines
-an execution SLO, otherwise the summary says `SLO not defined`. The macOS
-selector does not inherit a consumer lane SLO; `macos-primary` uses the
-defined `core_macos` SLO. Missing timing is non-blocking, and SLO observations
-are neither timeouts nor correctness assertions. Independent job safety limits
-and test-owned behavior timeouts remain hard failures. A slow successful job
-stays successful; a failed compile, Proof, test, sanitizer, or Coverage command
-is not retried. An empty operator `workflow_dispatch` and the daily sweep always run the full manifest; a `main` push classifies from its exact
-range like a Ready Pull Request, which is the focused-`main` cost decision
-in `docs/governance/git-workflow.md` and the reason the sweep exists.
-
-T2 adds **manual-first self-test batches** (plan
-`docs/superpowers/plans/2026-09-07-lmdj-ci-capacity-redesign.md`). Only an empty
-operator dispatch enters the new path: it must run on `main`, and `target`
-must be an exact SHA in fetched main history. Every workload verifies its
-checked-out HEAD against that target. The two Nightly stress suites run
-inside this batch through `core-nightly.yml`'s `workflow_call`; the hosted
-`Self-test verdict` judges all sixteen policy suites and retains
-`self-test-verdict-<target>-<run>-<attempt>` for thirty days, without overwrite.
-Explicit requests use distinct run-scoped admission while keeping native-heavy
-resource locks. Independent suite failures do not prevent later suites from
-running; each suite still stops its own dependent test steps after build failure.
-The TSan host ASLR prerequisite is classified as infrastructure failure.
-
-This phase accepts attempt 1 only. Retry with a new same-target dispatch;
-Actions partial reruns can inherit earlier successful jobs, so both entry and
-verdict reject them instead of mixing attempts. Early request artifacts mark
-their target as unverified and are not test evidence. The existing daily sweep
-and Nightly cron are unchanged; scheduled self-tests and unchanged-target
-deduplication wait for O1/T5a. The verdict is not yet release evidence;
-`tools/release/ci_evidence.py` still requires the run's own head to be the target
-(plan T7).
-
-### Hosted Control Plane and Head Trust
-
-`Change Scope`, `Pre-heavy Gate`, `PR Gate` and `select-macos-runner` stay on GitHub-hosted
-`ubuntu-24.04`. Change Scope must publish the exact diff, scope, trust,
-and upgrade reasons even when every self-hosted Linux runner is offline, and
-the Gate must adjudicate a workload without depending on that workload's host.
-These four are the only declared exception to routing Linux work to the
-trusted hosts; their minutes are reported as hosted control plane rather than
-as routine self-hosted workload. The two macOS adjudicators also run on
-`ubuntu-24.04`, but they republish an already produced result under the
-required check name and execute no workload.
-
-That exception is about evidence, not convenience. It exists so scope, trust,
-admission and verdict survive a self-hosted outage, and a job earns it only by
-publishing one of those. A job that publishes none of them belongs on the
-trusted role however small it looks, because GitHub bills each job rounded up
-to a whole minute: frequency, not duration, is what a hosted job costs. The
-Merge Queue watchdog is the worked example. It is an idempotent reconciler with
-a twenty-second runtime and a twenty-minute stall threshold, publishes no
-formal evidence, and ran hosted on a fifteen-minute cron — roughly 2,880 billed
-minutes a month, the account's entire included allowance, for about fourteen
-minutes of work. It now runs on `ci-general` at the same cadence; reducing the
-cadence instead would have saved only three quarters of that while adding up to
-an hour of latency before a stalled queue label is reconciled.
-
-The statement above is scoped to the formal Pull Request graph in `ci.yml`, and
-that implicit scope is what let the watchdog sit unexamined. Workflows outside
-that graph still place jobs on `ubuntu-24.04` — the remaining Merge Queue jobs,
-the release audit, the Portal deployment smoke, and the deployment and
-publication workflows. Each is a separate decision with its own reason; none of
-them is covered by the four-job exception, and none should be read as covered
-by it. Scheduled TSan left this list on 2026-09-06 (#693) once the `ci-core`
-host capped its mmap ASLR entropy; see Sanitizer Selection.
-
-`ci.yml` itself has one trigger beyond Pull Requests, pushes and dispatch: a
-daily `schedule` at 16:00 UTC that Change Scope classifies full (#543). It
-exists because focused `main` can leave a lane red across docs-only pushes
-that never select it; once a day the complete manifest-selected set runs on
-`main`'s tip so that cannot hide. In the steady state it costs the control
-plane's hosted minutes once a day and nothing else, and it sits in the same
-capacity queues as any other run. It carries one further exposure, the same one
-every full run already has: `macos-primary` follows `select-macos-runner`, so
-on a day when the trusted Mac is offline the selector falls back to hosted
-`macos-latest` and the sweep spends hosted macOS minutes at that rate. That is
-an argument for keeping the Mac online, not against sweeping. Its red is a red `Core CI / sweep
-main` run, the same convention as the liveness check. T2 does not yet change
-this sweep or the separate 19:00 UTC Nightly cron. O1/T5a must first verify
-the new manual full-batch/reporting path, then migrate the daily entry and
-remove the duplicate Nightly schedule together.
-
-The Merge Queue worker is the second worked example, and it separates two
-things the exception can conflate. `route` decides whether a Pull Request is
-admitted to the queue; that is admission evidence and it stays hosted.
-`queue-item` only carries the decision out, and it spends nearly all of its time
-inside `wait_validation`, polling for another GitHub run to finish -- about 33
-minutes per validation, and roughly 43% of the remaining hosted minutes once
-the watchdog moved. Waiting is not evidence, and the availability the exception
-buys does not exist here: when every self-hosted runner is down, the validation
-being waited for cannot run either. It therefore runs on `ci-general`, where the
-wait costs a role slot rather than money.
-
-GitHub's own merge queue would remove that wait entirely by moving it to
-GitHub's side. It is not available here: merge queues require a public
-repository or a private repository under GitHub Enterprise Cloud, and this is a
-private repository on a personal account. Recorded so the option is not
-re-proposed as though it were open.
-
-`scripts/ci/hosted_runner_policy.json` is the authoritative list of those
+`scripts/ci/hosted_runner_policy.json` is the authoritative list of hosted-runner
 decisions, and `tests/build/ci_hosted_runner_policy_test.py` enforces it. The
 test enumerates every job in `.github/workflows` whose `runs-on` can resolve to
 a GitHub-hosted label — a `runs-on` built from an expression counts, because it
@@ -421,58 +275,31 @@ name the Issue that removes it. The test also rejects entries whose job no longe
 exists or no longer runs hosted, so the list cannot outlive what it describes,
 and it separately requires every `ci-core` job to stay off hosted runners.
 
-This exists because prose drifts and a list does not. The watchdog is the
-evidence: the paragraph above was accurate about intent for months while a job
-outside its scope spent the entire included allowance. Adding a hosted job is now
+This exists because prose drifts. Historical watchdog polling spent hosted
+minutes without producing evidence; a workload's short runtime alone does not
+justify frequent hosted execution. Adding a hosted job is now
 a reviewed act with a written reason rather than the path of least resistance.
 `tests/build/workflow_inventory.py` holds the shared scan both this test and the
 `ci-core` registration gate read, so the two cannot disagree about what a job is.
 
-The scope manifest is `lmdj.ci-scope.v2`. v2 adds exactly one closed boolean
-field, `trusted_head`, and `Change Scope` publishes the matching `trusted-head`
-job output. Trust is derived only from the event: a non-`pull_request` event,
-or a Pull Request whose head repository equals `github.repository`. It is never
-derived from a Pull Request title, a label, the changed paths, or the code
-under test, because a fork controls all of those. Producer, Gate, and contract
-tests migrate to v2 in one commit; a mixed-version run fails closed.
-
-`scripts/ci/scope_policy.json` declares the closed `self_hosted_jobs` set: the
-thirteen formal jobs a self-hosted role may ever execute — Docs/static, Portal,
-CI Contract, Ubuntu Core, Linux ASan, Coverage, all four Web lanes, Deploy
-Contract, Chameleon Lab, and Package. Every one of them requires
-`needs.change-scope.outputs.trusted-head == 'true'` in its `if`, including the
-jobs still GitHub-hosted during the rollout, so an accidental repository or
-routing change fails closed before the first static self-hosted route exists.
-The policy validator rejects a missing, extra, duplicate, or non-formal entry
-in that set.
-
-`PR Gate` validates `trusted_head` before any job result. When an untrusted
-head selects any job in `self_hosted_jobs`, the Gate fails the run and reports
-`untrusted fork blocked from self-hosted CI`; the selected-but-skipped jobs
-that condition produces remain ordinary truth-table errors as well. A trusted
-head keeps the existing selected-success/unselected-skipped table unchanged.
-The repository-level private-fork workflow setting remains the primary
-boundary, because a fork can edit its own workflow file, and the manifest field
-is defence in depth. An external fork that needs formal merge evidence has its
-exact patch carried onto a trusted in-repository branch and CI rebuilt on the
-new SHA; a fork run is never inherited.
-
 ### Local Pre-Flight
 
-`scripts/local-ci.sh` (implemented by `scripts/ci/local_preflight.py` and the
-lane command table `scripts/ci/local_lanes.json`) runs the selected lanes on a
-developer machine before a push. It reuses `scripts/ci/change_scope.py` and
-`scripts/ci/scope_policy.json` directly, so its lane selection is the workflow's
-selection rather than a second opinion, and a contract test asserts the command
-table covers exactly the canonical lane list.
+`scripts/local-ci.sh` uses `local_preflight.py`, `local_lanes.json` and the
+canonical classifier. It is explicitly invoked advisory verification, not
+merge/release evidence and not an automatic all-PR gate. Use `--lanes` for
+Task-relevant work; `--list --json` only classifies. Four lane verdicts are
+`pass`, `cached-pass`, `fail` and `not-runnable-here`; unavailable platform,
+toolchain or clean-tree packaging preconditions cannot become a pass.
 
-The pre-flight is advisory and is never evidence. It publishes no job result,
-participates in no `needs` graph, and cannot satisfy a manifest-required job.
-`PR Gate` remains the single aggregate decision. Four verdicts are reported:
-`pass`, `cached-pass`, `fail`, and `not-runnable-here`. A lane whose platform,
-toolchain, or working-tree precondition is unmet reports `not-runnable-here`
-and never `pass`; the Linux-only core lanes on macOS and `package` against a
-modified working tree are the ordinary cases.
+The installed pre-push hook is idle unless `LMDJ_PRE_PUSH_FULL=1` explicitly
+requests heavy execution. Migration preserves an exact legacy generated hook
+in a backup and never overwrites a personal hook, symlink or conflicting backup,
+even with `--force`. See the Git workflow for shared-hook and rollback boundaries.
+
+`--declaration-only --pr-body FILE` validates the body without executing any
+lane. The body is never cached; a non-portal change can report not-applicable,
+which is not a portal pass. Run the complete portal check locally for affected
+Tasks only, while retaining it in every complete self-test batch.
 
 Cached verdicts are keyed by a digest of the lane name, its resolved commands,
 and the content identity of every repository path the policy maps to that lane.
@@ -578,13 +405,10 @@ burst ramps one service per cooldown interval rather than jumping to the
 ceiling; that ramp latency is the accepted cost of keeping credentials off the
 hosts, not a defect. Routing splits two ways:
 
-- **Hosted control plane, the declared exception.** Change Scope, Pre-heavy
-  Gate, PR Gate and `select-macos-runner` stay on `ubuntu-24.04`. Change Scope
-  decides what runs and whether the head is trusted, Pre-heavy Gate admits
-  native-heavy work, and PR Gate decides whether the run passed,
-  so a self-hosted outage must not be able to take the scope and trust
-  evidence down with the jobs it governs. The macOS selector is Hosted for the
-  same reason and is deliberately unchanged by this migration.
+- **Hosted control plane, the declared exception.** Trust, self-test verdict
+  and macOS selection remain independent of workload-host availability.
+  Retired Pre-heavy/PR Gate jobs are not PR admission or merge authority.
+  The explicit hosted policy records each current job's justification.
 - **Self-hosted workload, addressed by role.** The four Web lanes — Web
   Toolchain, Web Runtime Host, Creator and Web Runtime Lab — name
   `ci-web-heavy` literally. The five general Linux jobs — Docs / static,
@@ -592,8 +416,8 @@ hosts, not a defect. Routing splits two ways:
   `ci-general` literally. The four native Core jobs — Ubuntu Core, Linux ASan,
   Coverage and Core package — name `ci-core` literally. Architecture Portal
   declares its role inside the called `architecture-portal.yml`, because GitHub
-  does not allow a `uses:` job to carry `runs-on`. Outside the formal PR graph,
-  Nightly Release stress and, since #693, scheduled TSan also name `ci-core`;
+  does not allow a `uses:` job to carry `runs-on`. In the complete self-test batch,
+  Release stress and, since #693, TSan also name `ci-core`;
   both join the `lmdj-native-heavy` queue so they never run beside each other.
 
 `ci-core` deliberately does not span both hosts: the persistent native `ccache`
@@ -670,15 +494,14 @@ on the same reasoning as the Linux pool and with more weight behind it:
 GitHub-hosted macOS bills at 10.3 times the Linux rate and was 57 percent of
 the 2026-08-01..13 Actions spend on 11 percent of the minutes. Offline is
 still an availability condition, because a single laptop runner that is
-asleep would otherwise hold a Pull Request in the queue rather than merely
-delay it. When the self-hosted lane is selected, GitHub-hosted
+asleep would otherwise delay the complete self-test batch. When the self-hosted lane is selected, GitHub-hosted
 macOS may run the same gates only if checkout, acceleration/`ccache` setup,
 runner communication, or the 30-minute job limit prevents that lane from
 publishing a terminal result. A published preparation, Core Proof, or
 sanitizer failure is final and must not start the fallback lane.
 
 Local Mac preflight may run additional focused, Proof, or browser checks before
-push, but local results do not replace the commit-bound GitHub required checks.
+push, but local results do not replace exact-target complete self-test evidence.
 
 Scheduled TSan runs on `ci-core` since 2026-09-06 (#693), and the route was
 accepted on same-revision evidence, not on the compiler move. The history that

@@ -2,18 +2,9 @@ name: Core CI
 run-name: Core CI / ${{ inputs.queue_ticket || (github.event_name == 'schedule' && 'sweep main') || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && format('self-test {0}', inputs.target || github.sha)) || github.ref_name }}
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
-  push:
-    branches: [main]
-  # The daily sweep of `main` (#543). Focused `main` is a recorded cost
-  # decision; its blind spot is a lane left red across docs-only pushes that
-  # never select it. Once a day the complete manifest-selected set runs on
-  # `main`'s tip -- Change Scope classifies `schedule` as full -- and a red
-  # `Core CI / sweep main` is the alert, the way a red liveness run is. 16:00
-  # UTC is midnight in Shanghai and three hours ahead of Core Nightly, so the
-  # Core lanes clear the native-heavy queue before the stress tier arrives.
+  # Optimistic merge cutover: product verification no longer runs for PRs or
+  # ordinary pushes. PR Review supplies independent advisory feedback.
+  # Both entries below use one fixed-target, complete 16-suite self-test.
   schedule:
     - cron: "0 16 * * *"
   workflow_dispatch:
@@ -39,26 +30,26 @@ on:
         description: >-
           Why an operator dispatched a self-test batch: node (an important
           milestone) or candidate (a release candidate). Both run to a
-          conclusion even when the target already has one. Daily self-test
-          activation and deduplication wait for the later T5a rollout.
+          conclusion even when the target already has one. Only routine
+          scheduled requests may reuse an existing complete conclusion.
         required: false
         default: node
         type: choice
         options: [node, candidate]
       queue_ticket:
-        description: Controller ticket mq:<queue-run-id>:<attempt>; all queue inputs are required together.
+        description: Retired compatibility field; nonempty queue tickets are rejected.
         required: false
         default: ""
       queue_pr_number:
-        description: Pull Request number bound to the controller ticket.
+        description: Retired queue compatibility field; leave empty.
         required: false
         default: ""
       queue_base_sha:
-        description: Exact canonical main SHA captured by the controller.
+        description: Retired queue compatibility field; leave empty.
         required: false
         default: ""
       queue_head_sha:
-        description: Exact synchronized Pull Request head SHA to validate.
+        description: Retired queue compatibility field; leave empty.
         required: false
         default: ""
 
@@ -72,10 +63,11 @@ env:
   LMDJ_EMSDK_VERSION: "6.0.5"
 
 concurrency:
-  # Explicit self-tests are independent requests, even when their control SHA
-  # is identical. A later request must not replace an earlier pending target.
-  group: ${{ github.event_name == 'pull_request' && format('core-ci-pr-{0}', github.event.pull_request.number) || (github.event_name == 'workflow_dispatch' && inputs.queue_ticket == '' && inputs.lanes == '' && format('core-ci-self-test-{0}', github.run_id)) || format('core-ci-sha-{0}', github.sha) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Preserve every admitted event, including a delayed older schedule event.
+  # No shared single-pending group can replace a newer target or an explicit
+  # candidate. Native-heavy jobs retain their existing bounded resource lock.
+  group: ${{ format('core-ci-self-test-{0}', github.run_id) }}
+  cancel-in-progress: false
 
 jobs:
   change-scope:
@@ -90,9 +82,8 @@ jobs:
       resolved-base-sha: ${{ steps.scope.outputs.resolved-base-sha }}
       resolved-head-sha: ${{ steps.scope.outputs.resolved-head-sha }}
       # Self-test batch identity (scripts/ci/self_test.py). `self-test` is
-      # true for an operator dispatch with neither lane selection nor queue
-      # ticket. Schedule remains the legacy sweep until T5a; every formal job
-      # of an explicit batch then checks out
+      # true for a schedule or an empty operator dispatch; every formal job
+      # of a batch then checks out
       # `self-test-target` instead of the ref's tip, and the verdict job
       # judges the batch under `self-test-identity`.
       self-test: ${{ steps.resolve.outputs.self-test }}
@@ -103,14 +94,13 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      # T2 is manual-first: the existing sweep and Nightly cron remain intact
-      # until O1/T5a. Main ref and ancestry are checked before testing a target.
+      # Main ref and ancestry are checked before testing a fixed event target.
       # Partial Actions reruns inherit old successful jobs, so this initial
       # protocol accepts only attempt 1; retry via a new explicit dispatch.
-      - name: Record the explicit self-test request
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '' }}
+      - name: Record the self-test request
+        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '') }}
         env:
-          REQUEST_KIND: ${{ inputs.request_kind || 'node' }}
+          REQUEST_KIND: ${{ github.event_name == 'schedule' && 'schedule' || inputs.request_kind || 'node' }}
           TARGET_INPUT: ${{ inputs.target }}
         run: |
           mkdir -p "$RUNNER_TEMP/self-test-request"
@@ -125,8 +115,8 @@ jobs:
                      "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"])},
                     open(sys.argv[1], "w"), sort_keys=True)
           PYEOF
-      - name: Retain the explicit request before validation
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '' }}
+      - name: Retain the request before validation
+        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '') }}
         uses: actions/upload-artifact@v4
         with:
           name: self-test-request-${{ github.run_id }}-${{ github.run_attempt }}
@@ -141,12 +131,17 @@ jobs:
           REQUESTED_LANES: ${{ inputs.lanes }}
           QUEUE_TICKET: ${{ inputs.queue_ticket }}
           TARGET_INPUT: ${{ inputs.target }}
-          REQUEST_KIND: ${{ inputs.request_kind || 'node' }}
+          REQUEST_KIND: ${{ github.event_name == 'schedule' && 'schedule' || inputs.request_kind || 'node' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WORK: ${{ runner.temp }}/self-test
         run: |
           set -euo pipefail
           mkdir -p "$WORK"
-          if [[ "$EVENT_NAME" == "workflow_dispatch" && -z "${REQUESTED_LANES:-}" && -z "${QUEUE_TICKET:-}" ]]; then
+          if [[ -n "${QUEUE_TICKET:-}" ]]; then
+            echo 'why: integration queue admission is retired; remedy: use an authorized ordinary PR merge, or dispatch a self-test without queue inputs' >&2
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == "schedule" || ( "$EVENT_NAME" == "workflow_dispatch" && -z "${REQUESTED_LANES:-}" && -z "${QUEUE_TICKET:-}" ) ]]; then
             self_test=true
           else
             self_test=false
@@ -174,6 +169,17 @@ jobs:
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
           git rev-list refs/remotes/origin/main >"$WORK/main-history.txt"
+          history_args=()
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            if ! timeout 90s python3 scripts/ci/self_test_history.py \
+              --repository "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --run-id "$GITHUB_RUN_ID" --main-history "$WORK/main-history.txt" \
+              --out "$WORK/last-conclusion.json"; then
+              echo 'why: history lookup exceeded its budget or failed; remedy: run this batch normally and inspect the lookup logs' >&2
+              printf 'null\n' >"$WORK/last-conclusion.json"
+            fi
+            history_args=(--last-conclusion "$WORK/last-conclusion.json")
+          fi
           python3 - "$WORK/request.json" <<'PYEOF'
           import json, os, sys
           json.dump({"kind": os.environ["REQUEST_KIND"],
@@ -187,6 +193,7 @@ jobs:
             --control-revision "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            "${history_args[@]}" \
             --out "$WORK/resolution.json"
           python3 - "$WORK/resolution.json" >>"$GITHUB_OUTPUT" <<'PYEOF'
           import json, sys
@@ -657,6 +664,7 @@ jobs:
       - run: scripts/web-runtime-lab.sh test
 
   select-review-backend:
+    # Retired together with the PR trigger; PR Review owns backend selection.
     # One Claude backend reviews each Pull Request, not two (#659 item 3).
     # Which one is decided here from the same evidence the scheduled liveness
     # check uses -- what each backend actually posted on recent Pull Requests
@@ -669,15 +677,9 @@ jobs:
     # a different runtime with a different prompt -- shared no finding with
     # either. So the saving is here and not in dropping Grok.
     name: Select review backend
-    # Deliberately unconditional. `advisory-review` builds `strategy.matrix`
-    # from this job's output, and a matrix expression is not obviously
-    # evaluated after that job's own `if:` -- on a push run, where there is no
-    # Pull Request to review, a skipped selector would leave `fromJSON('')`
-    # to be evaluated on the protected branch's own CI. So this always runs
-    # and always prints a valid matrix; the review job's own condition is what
-    # keeps it to Pull Requests. Off the Pull Request path it answers without
-    # reading the API at all.
-    if: ${{ !cancelled() }}
+    # Retained for T6 code removal. The old review matrix has a parse-safe
+    # fallback when this disabled selector emits no output.
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 5
     # A selector that cannot decide must not withhold the review: the script
@@ -789,7 +791,7 @@ jobs:
       # advisory_review_liveness.py, so a backend cannot exist for this
       # workflow and not for the check that judges it.
       fail-fast: false
-      matrix: ${{ fromJSON(needs.select-review-backend.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.select-review-backend.outputs.matrix || '{"include":[{"backend":"glm","base_url":"https://api.z.ai/api/anthropic","secret_name":"ZAI_CODING_KEY"}]}') }}
     steps:
       - name: Resolve the backend credential
         id: backend

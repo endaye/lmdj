@@ -2,18 +2,16 @@ name: PR Review
 run-name: "PR Review / #${{ inputs.pr_number || github.event.pull_request.number }} @ ${{ github.event.pull_request.head.sha || 'dispatch' }}"
 
 # The standalone review entry of the CI Capacity Redesign (plan T4). It runs
-# the same reviewers `ci.yml` runs today -- one Claude backend chosen from
+# the established reviewers -- one Claude backend chosen from
 # posted evidence, plus Grok in its own runtime -- against the Pull Request's
 # *current* head, and depends on nothing else: no Change Scope, no full test
-# set, no queue ticket. When the plan's cutover (T5a) removes the heavy lanes
-# from the Pull Request path, this is what still reviews a Pull Request.
+# set, no queue ticket. This is the automatic Pull Request review entry;
+# product self-tests execute independently of it.
 #
-# Manual verification phase. The `pull_request` trigger below is declared but
-# inert until the repository variable PR_REVIEW_ENTRY is set to `standalone`;
-# until then only `workflow_dispatch` runs here, because `ci.yml` still runs
-# the old copies and two entries writing reviews against one head is the
-# double-write the plan forbids. T5a flips the switch: set the variable, and
-# in the same change remove the review jobs from `ci.yml`.
+# T5a activates the PR entry in the same diff that removes Core CI's PR
+# trigger. No out-of-band repository variable is needed to complete activation,
+# and the old review jobs cannot write against the same newly triggered head.
+# Manual dispatch remains available on main for a current-head retry.
 #
 # Honest state, not a verdict. Every job here fails when it did not do what
 # its name says: the credential was missing, the model call failed or timed
@@ -64,11 +62,10 @@ concurrency:
 jobs:
   target:
     name: Resolve review target
-    # The switch. `workflow_dispatch` always resolves; `pull_request` only once
-    # the operator has set PR_REVIEW_ENTRY=standalone (T5a).
+    # PR events are active. Manual retries must use trusted main control code.
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && vars.PR_REVIEW_ENTRY == 'standalone')
+      github.event_name == 'pull_request'
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 5
     permissions:

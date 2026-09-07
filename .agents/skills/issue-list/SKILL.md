@@ -39,71 +39,61 @@ To avoid git merge conflicts and domain coupling, assign parallel tasks to disti
 - **Stream C (Creator Web & UI)**: `apps/creator-web/`, `packages/web-runtime-platform/`
 - **Stream D (Architecture Decisions & Docs)**: `docs/prd/decisions/`, `docs/governance/`
 
-Two tasks in different streams can always be worked on simultaneously in separate git worktrees.
+Different streams are candidates for parallel work, not proof of independence.
+Check declared files, shared routing/portal/generated inputs and producer/consumer
+dependencies first; assign one owner per overlapping file and use isolated worktrees.
 
 ---
 
-## Mode 2: Branch & Worktree Cleanup (`issue-list 清理` / `issue-list clean`)
+## Mode 2: Branch/worktree audit and authorized cleanup
 
-When invoked with `清理` / `clean` / `prune` intent, perform a full workspace hygiene audit and clean up expired resources:
+A status question such as “哪些分支没 push / 没开 PR” is read-only. Audit does
+not authorize push, PR creation, merge, closing/reopening Issues, or deletion.
+Only an explicit cleanup request enables removal of resources proven safe below;
+shipping requires separate applicable authorization and `issue-done`.
 
-### Step 1: Discover Local Branches and Worktrees
-Fetch remote updates and list all local resources:
-```bash
-git fetch origin --prune
-git branch --list
-git worktree list
-```
+### 1. Discover and distinguish states
 
-### Step 2: Inspect State & Safety Matrix
-For every local task branch and its corresponding worktree:
-1. **Check Working Tree Cleanliness**:
-   ```bash
-   git -C <worktree-path> status --short
-   ```
-   > [!CAUTION]
-   > **Never** delete a worktree or branch that contains uncommitted changes (`M`, `A`, `??`) without explicit confirmation.
+Read `git branch -vv`, `git worktree list --porcelain`, each exact worktree's
+`git status --short`, and live PR metadata. Compare local HEAD with the actual
+remote branch, not just the existence of an upstream configuration; say when
+remote state could not be verified. A remote refresh updates local refs only;
+do not push, change another worktree's branch, reset or pull over local work.
 
-2. **Inspect Remote Pull Request Status**:
-   ```bash
-   gh pr list --head "<branch-name>" --state all --json number,title,state,url,mergedAt
-   ```
+For each branch report separately: uncommitted changes, local commits not pushed,
+remote branch existence, open/closed/merged PR, current PR head and review state,
+and whether any later local changes remain outside the merged PR. No open PR
+does not imply no remote branch or abandoned work.
 
-3. **Check Commit Equality with Main**:
-   Check if the branch's commits are already squashed or integrated into `origin/main`:
-   ```bash
-   git cherry origin/main <branch-name>
-   ```
+### 2. Protect before classifying
 
-### Step 3: Action Routing Matrix
+Never remove dirty (including untracked), locked, active/in-use or ambiguously
+owned worktrees. Ancestry and `git cherry origin/main <branch>` are useful
+diagnostics but alone do not prove whole-patch retention after squash.
+Verify the actual merged PR and compare the complete local change with its
+landed patch; protect post-merge local commits not covered by that evidence.
 
-| Resource State | PR State | Action |
-| :--- | :--- | :--- |
-| **Merged to main** | `MERGED` | **Safe to Clean**: Remove worktree (`git worktree remove <path>`) and delete local branch (`git branch -D <branch>`). |
-| **Squashed in main** | Closed / Merged | **Safe to Clean**: If commit diff shows changes already landed in main, remove worktree and delete branch. |
-| **Open PR (In-Flight)** | `OPEN` | **Keep & Report**: Check CI checks (`gh pr checks <pr-number>`). If green, inform user or proceed with auto-merge via `issue-done`. |
-| **Unpushed / No PR** | None | **Evaluate**: If work is done and verified, offer shipping via `issue-done`. If abandoned / empty, delete upon confirmation. |
-| **Dirty Working Tree** | Any | **Stop & Protect**: Do not delete; report uncommitted files to user. |
+| Observed resource | Response |
+| --- | --- |
+| Merged PR, complete local patch retained, clean and inactive worktree | Cleanup candidate only within explicit cleanup authorization |
+| Closed PR without proven retained patch | Keep; closure is not delivery |
+| Open PR | Report current-head review/findings, conflicts and applicable protection; no automatic merge |
+| Unpushed commits or no PR | Report exact missing transition; offer shipping, do not execute it from an audit |
+| Dirty, divergent, locked, active or uncertain | Keep and name the unresolved safety condition |
 
-### Step 4: Execute Cleanup Operations
-For all identified merged/obsolete resources:
-```bash
-# 1. Switch main repo to clean main branch
-git checkout main
-git pull origin main
+After O2, being behind main without conflict, or having red/in-flight daily
+self-tests, does not make a PR abandoned or unmergeable under project policy.
+AI review failures need visible current-head takeover, not automatic approval.
+An unmerged O2 draft does not override live main governance or branch protection.
 
-# 2. Remove obsolete worktree(s)
-git worktree remove <worktree-path>
+### 3. Remove only verified, authorized targets
 
-# 3. Delete merged local branch(es)
-git branch -d <branch-name>  # or git branch -D if squashed
+Operate from a different existing worktree without switching another session's
+branch. Use a resolved exact path with non-forced `git worktree remove`, then
+prefer `git branch -d <exact-branch>`. A squash-only `-D` requires prior proof
+that every local change is retained and deletion is authorized. Never force
+worktree removal or broaden a target to a workspace root. Remote branch deletion
+is not implied by local cleanup. Do not run blind deletion loops.
 
-# 4. Prune remote references
-git fetch origin --prune
-```
-
-### Step 5: Summary Report
-Print a clear markdown table showing:
-- **Cleaned Resources**: Deleted worktrees and branches.
-- **Active In-Flight Worktrees**: Worktrees with open PRs and their CI status.
-- **Pending/Local Branches**: Branches requiring attention or `issue-done`.
+Report what was removed, what remains and why. Listing/triage returns evidence
+and next actions, not claims that a green check granted shipping authority.

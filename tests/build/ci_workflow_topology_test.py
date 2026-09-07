@@ -339,24 +339,12 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         events = self.event_block(self.main_source)
         self.assertNotRegex(events, r"(?m)^\s+paths(?:-ignore)?:")
 
-    def test_pr_events_exclude_labeled_and_unlabeled(self) -> None:
+    def test_product_ci_has_no_pr_or_ordinary_push_trigger(self) -> None:
         events = self.event_block(self.main_source)
-        match = re.search(r"(?m)^    types: \[(?P<types>[^]]+)\]$", events)
-        self.assertIsNotNone(match, "pull_request event types are missing")
-        assert match is not None
-        actual = {value.strip() for value in match.group("types").split(",")}
-        self.assertEqual(
-            actual,
-            {
-                "opened",
-                "synchronize",
-                "reopened",
-                "ready_for_review",
-                "converted_to_draft",
-            },
-        )
+        self.assertNotRegex(events, r"(?m)^  (?:pull_request|pull_request_target|push):",
+                            "why: product verification is independent of optimistic merges; remedy: keep only daily/manual entries")
 
-    def test_pr_group_is_per_pr_and_cancels_but_main_group_is_per_sha_and_does_not_cancel(self) -> None:
+    def test_self_test_events_have_independent_non_cancelling_admission(self) -> None:
         concurrency = re.search(
             r"^concurrency:\n(?P<body>.*?)(?=^[a-z][a-z-]*:\n)",
             self.main_source,
@@ -365,13 +353,8 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIsNotNone(concurrency, "workflow concurrency block is missing")
         assert concurrency is not None
         body = concurrency.group("body")
-        self.assertIn("github.event.pull_request.number", body)
-        self.assertIn("github.sha", body)
-        self.assertIn("format('core-ci-pr-{0}'", body)
-        self.assertIn("format('core-ci-sha-{0}'", body)
-        self.assertIn(
-            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}", body
-        )
+        self.assertIn("format('core-ci-self-test-{0}', github.run_id)", body)
+        self.assertIn("cancel-in-progress: false", body)
 
     def test_change_scope_has_three_minute_limit_zero_dependency_install_and_live_pr_read(self) -> None:
         job = self.workflow_job("change-scope")
@@ -549,19 +532,18 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             "the failure notification; remedy: keep the sweep's run-name",
         )
 
-    def test_the_sweep_is_not_claimed_as_release_evidence(self) -> None:
-        """The documents and the verifier must tell one story.
+    def test_release_compatibility_scope_and_gate_remain_real_producer_jobs(self) -> None:
+        """T7 owns consumer acceptance; topology must not fake evidence.
 
-        `tools/release/ci_evidence.py` allows `push` and `workflow_dispatch`
-        and nothing else, so a `schedule` run recorded in a release intent is
-        refused as a policy conflict. Widening that allow-list is a
-        release-authority decision; until one is taken, no document may
-        promise otherwise.
+        Its release_self_test_evidence_test.py behavior tests own complete
+        schedule-verdict acceptance once T7 lands. Removing PR triggers does
+        not authorize replacing older consumers' scope/gate with fake jobs.
         """
-        evidence = (REPO_ROOT / "tools/release/ci_evidence.py").read_text(encoding="utf-8")
-        self.assertIn('_ALLOWED_EVENTS = frozenset(("push", "workflow_dispatch"))', evidence)
-        workflow_doc = (REPO_ROOT / "docs/governance/git-workflow.md").read_text(encoding="utf-8")
-        self.assertIn("The sweep is a visibility signal and **not** release evidence.", workflow_doc)
+        self.assertIn('python3 scripts/ci/change_scope.py', self.workflow_job('change-scope'))
+        gate = self.workflow_job('pr-gate')
+        self.assertIn('python3 scripts/ci/pr_gate.py', gate)
+        self.assertIn('FORMAL_RESULTS_JSON:', gate)
+        self.assertIn('--results-json "$FORMAL_RESULTS_JSON"', gate)
 
     def test_the_policy_does_not_claim_main_always_runs_full(self) -> None:
         """The sweep's premise and the policy must not contradict each other.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Contract tests for the self-test batch wired into Core CI (plan T2).
 
-A T2 self-test batch is an operator `workflow_dispatch` with neither lane
-selection nor queue ticket. Daily migration waits for O1/T5a. Change Scope resolves its target
+A self-test batch is a schedule or an operator `workflow_dispatch` with no lane
+selection. Queue dispatch admission is retired. Change Scope resolves its target
 first, every formal workload checks out that target rather than the ref's
 tip, the two Nightly stress suites run inside the batch, and one verdict job
 judges the whole batch under scripts/ci/self_test_policy.json. These tests
@@ -106,18 +106,18 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
         self.assertIn('git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main', body)
         self.assertIn('"$GITHUB_REF" != "refs/heads/main"', body)
         self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main', body)
-        self.assertNotIn('--last-conclusion', body,
-                         'Manual node/candidate requests never deduplicate; do not scan historical API runs.')
+        self.assertIn('if [[ "$EVENT_NAME" == "schedule" ]]; then', body)
+        self.assertIn('history_args=(--last-conclusion "$WORK/last-conclusion.json")', body)
         for output in ("self-test", "self-test-action", "self-test-target", "self-test-identity"):
             self.assertIn(f"      {output}: ${{{{ steps.resolve.outputs.{output} }}}}", body)
         self.assertIn('--self-test-skip "${SELF_TEST_SKIP:-}"', body)
         self.assertIn("steps.resolve.outputs.self-test-action == 'skip'", body)
 
-    def test_self_test_batch_condition_is_only_an_empty_dispatch_during_rollout(self) -> None:
+    def test_self_test_batch_condition_is_schedule_or_empty_dispatch(self) -> None:
         body = job_body(self.ci, "change-scope")
         self.assertIn(
-            'if [[ "$EVENT_NAME" == "workflow_dispatch" '
-            '&& -z "${REQUESTED_LANES:-}" && -z "${QUEUE_TICKET:-}" ]]; then',
+            'if [[ "$EVENT_NAME" == "schedule" || ( "$EVENT_NAME" == "workflow_dispatch" '
+            '&& -z "${REQUESTED_LANES:-}" && -z "${QUEUE_TICKET:-}" ) ]]; then',
             body,
             "why: a lane-selected or queue dispatch is not a complete self-test; remedy: keep both exclusions")
 
@@ -172,10 +172,10 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
 
     # -- nightly suites inside the batch ----------------------------------
 
-    def test_core_nightly_is_callable_per_suite_and_keeps_legacy_cron(self) -> None:
+    def test_core_nightly_is_callable_per_suite_without_duplicate_cron(self) -> None:
         self.assertIn("  workflow_call:\n", self.nightly)
-        self.assertIn('cron: "0 19 * * *"', self.nightly,
-                      "T2 is manual-first; do not remove existing nightly coverage before O1/T5a.")
+        self.assertNotRegex(self.nightly, r'(?m)^  schedule:',
+                            "why: stress runs in the daily complete batch; remedy: remove duplicate Nightly cron")
         for suite in ("tsan", "stress"):
             self.assertIn(f"inputs.suite == '{suite}'", self.nightly)
         self.assertEqual(self.nightly.count("ref: ${{ inputs.target_revision || '' }}"), 2,
@@ -248,6 +248,18 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
     def test_explicit_requests_have_run_scoped_concurrency(self) -> None:
         self.assertIn("format('core-ci-self-test-{0}', github.run_id)", self.ci.split("\njobs:\n")[0])
 
+    def test_history_lookup_is_bounded_and_only_runs_for_schedule(self) -> None:
+        body = job_body(self.ci, "change-scope")
+        lookup = body.split('if [[ "$EVENT_NAME" == "schedule" ]]; then', 1)[1].split('          fi', 1)[0]
+        self.assertIn('timeout 90s python3 scripts/ci/self_test_history.py', lookup)
+        self.assertIn('--target "$GITHUB_SHA"', lookup)
+        self.assertIn("printf 'null\\n'", lookup)
+
+    def test_old_review_selector_has_no_reachable_product_event(self) -> None:
+        self.assertIn("if: ${{ github.event_name == 'pull_request' }}", job_body(self.ci, 'select-review-backend'))
+        events = self.ci.split('\npermissions:', 1)[0]
+        self.assertNotRegex(events, r'(?m)^  (?:pull_request|pull_request_target|push):')
+
     def test_both_entry_and_verdict_reject_inherited_attempt_results(self) -> None:
         for job in ('change-scope', 'self-test-verdict'):
             self.assertIn('"$GITHUB_RUN_ATTEMPT" != "1"', job_body(self.ci, job))
@@ -291,6 +303,16 @@ class ResolverShellTest(unittest.TestCase):
             *) echo "unexpected git invocation: $*" >&2; return 96 ;;
           esac
         }
+        timeout() {
+          if [[ "$1" != "90s" || "$2" != "python3" || "$3" != "scripts/ci/self_test_history.py" ]]; then
+            echo "unexpected bounded command: $*" >&2; return 96
+          fi
+          if [[ -n "${HISTORY_JSON:-}" ]]; then
+            printf '%s\\n' "$HISTORY_JSON" >"$WORK/last-conclusion.json"
+          else
+            command timeout "$@"
+          fi
+        }
         '''
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -298,6 +320,7 @@ class ResolverShellTest(unittest.TestCase):
                        QUEUE_TICKET='', TARGET_INPUT='b' * 40, REQUEST_KIND='candidate',
                        GITHUB_REF='refs/heads/main', GITHUB_SHA='a' * 40,
                        GITHUB_RUN_ID='17', GITHUB_RUN_ATTEMPT='1', GITHUB_ACTOR='owner',
+                       GITHUB_REPOSITORY='owner/repo', GITHUB_TOKEN='',
                        WORK=str(root), GITHUB_OUTPUT=str(root / 'output'),
                        MAIN_HISTORY='a' * 40 + '\n' + 'b' * 40)
             env.update(overrides)
@@ -326,16 +349,40 @@ class ResolverShellTest(unittest.TestCase):
         self.assertIn('new workflow_dispatch', result.stderr)
 
     def test_target_cannot_silently_modify_lane_or_queue_dispatch(self):
-        for changes in ({'REQUESTED_LANES': 'portal'}, {'QUEUE_TICKET': 'mq:1:1'}):
+        for changes in ({'REQUESTED_LANES': 'portal'},):
             result, _, _ = self.resolve(**changes)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('target is only valid', result.stderr)
 
-    def test_legacy_schedule_does_not_resolve_or_run_nightly_twice(self):
-        result, output, resolution = self.resolve(EVENT_NAME='schedule', TARGET_INPUT='')
+    def test_retired_queue_dispatch_is_rejected(self):
+        result, _, _ = self.resolve(QUEUE_TICKET='mq:1:1', TARGET_INPUT='')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('queue admission is retired', result.stderr)
+
+    def test_schedule_fixes_event_sha_even_when_newer_main_exists(self):
+        result, output, resolution = self.resolve(EVENT_NAME='schedule', TARGET_INPUT='', REQUEST_KIND='schedule')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('self-test=false', output)
-        self.assertIsNone(resolution)
+        self.assertIn('self-test=true', output)
+        self.assertEqual(resolution['identity']['target_revision'], 'a' * 40)
+        self.assertEqual(resolution['identity']['request_kind'], 'schedule')
+
+    def test_actual_schedule_shell_passes_verified_conclusion_to_real_resolver(self):
+        sys.path.insert(0, str(ROOT / 'scripts/ci'))
+        import self_test
+        policy = self_test.load_policy(POLICY)
+        retained = json.dumps({'target_revision': 'a' * 40, 'status': 'failed',
+                               'evidence_digest': 'd' * 64, 'policy_revision': policy.revision})
+        result, output, resolution = self.resolve(EVENT_NAME='schedule', TARGET_INPUT='',
+                                                  REQUEST_KIND='schedule', HISTORY_JSON=retained)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(resolution['action'], 'skip')
+        self.assertIn('self-test-action=skip', output)
+        self.assertIn('complete failed conclusion', resolution['diagnostics'][0])
+
+    def test_manual_candidate_never_reads_even_matching_history(self):
+        result, _, resolution = self.resolve(HISTORY_JSON='invalid-if-read')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(resolution['action'], 'run')
 
     def test_verdict_rejects_rerun_before_reading_inherited_identity(self):
         body = job_body(CI.read_text(), 'self-test-verdict')
