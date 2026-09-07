@@ -1,0 +1,116 @@
+{
+  "manifests": [
+    {
+      "archive": "lmdj-creator-web-2.1.1-product-1.0.41.0.zip",
+      "archive_sha256": "a2ee506cb8e9237f9685870d15223a09d3a09e04b355fa9936f0a9df7195fbd2",
+      "fixture": "creator-web-2.1.1-product-1.0.41.0.json",
+      "host_id": "creator-web",
+      "host_version": "2.1.1",
+      "manifest_sha256": "f47c017edf82b0511b176f8fb8f13d034821d02b1aa0b5ddb29304b100e925b1",
+      "product_build": "1.0.41.0",
+      "release_tag": "lmdj-v1.0.41.0"
+    },
+    {
+      "archive": "lmdj-creator-web-3.0.0-product-1.0.42.0.zip",
+      "archive_sha256": "343b94530e5948b661e41607d01897c7f2a9f76cc5fb6bebb08edc3f482ddece",
+      "fixture": "creator-web-3.0.0-product-1.0.42.0.json",
+      "host_id": "creator-web",
+      "host_version": "3.0.0",
+      "manifest_sha256": "5052dd2dff57d77c27117ca15ffe33d952af3f3db82b67594037f439cf3ce25e",
+      "product_build": "1.0.42.0",
+      "release_tag": "lmdj-v1.0.42.0"
+    },
+    {
+      "archive": "lmdj-web-runtime-host-1.0.0-product-1.0.14.0.zip",
+      "archive_sha256": "87d6927e5d6bcd9930b30625cb4fad2c253556333075d497608d30294ebed21e",
+      "fixture": "web-runtime-host-1.0.0-product-1.0.14.0.json",
+      "host_id": "web-runtime-host",
+      "host_version": "1.0.0",
+      "manifest_sha256": "e46fd03b08d5aa46d1409dbb5644d02fbb943625fbd2bdae6f6e3120dc688ab2",
+      "product_build": "1.0.14.0",
+      "release_tag": "lmdj-v1.0.14.0"
+    },
+    {
+      "archive": "lmdj-web-runtime-host-1.1.2-product-1.0.15.2.zip",
+      "archive_sha256": "d56a7c99a3c489db068b93fcef70a254b498adf4bc65919253beccb199f3ad5a",
+      "fixture": "web-runtime-host-1.1.2-product-1.0.15.2.json",
+      "host_id": "web-runtime-host",
+      "host_version": "1.1.2",
+      "manifest_sha256": "9baeb753ecb34d4a2f2c77d1db6f36cd68849cef4b7726db822166942661f8b5",
+      "product_build": "1.0.15.2",
+      "release_tag": "lmdj-v1.0.15.2"
+    },
+    {
+      "archive": "lmdj-web-runtime-host-1.2.2-product-1.0.16.5.zip",
+      "archive_sha256": "ba3b9c821c9580fa0095e0c1890431daf6ba98b2e6456c3202cca2a90fb3ed5b",
+      "fixture": "web-runtime-host-1.2.2-product-1.0.16.5.json",
+      "host_id": "web-runtime-host",
+      "host_version": "1.2.2",
+      "manifest_sha256": "61be865aee0646c92c88a4c2bb902ada12c8e26edd05ddcf56a0b98484f397a4",
+      "product_build": "1.0.16.5",
+      "release_tag": "lmdj-v1.0.16.5"
+    },
+    {
+      "archive": "lmdj-web-runtime-host-1.2.5-product-1.0.16.8.zip",
+      "archive_sha256": "7c37248e2eafddb5cf4006b295a91b855e76b0612843269f2a92cdd10bb1fd92",
+      "fixture": "web-runtime-host-1.2.5-product-1.0.16.8.json",
+      "host_id": "web-runtime-host",
+      "host_version": "1.2.5",
+      "manifest_sha256": "a16b44e5794bc6ec6034362e233de2d0834ac4be7bdba23820d31d864f1ad92a",
+      "product_build": "1.0.16.8",
+      "release_tag": "lmdj-v1.0.16.8"
+    },
+    {
+      "archive": "lmdj-web-runtime-host-1.2.6-product-1.0.16.9.zip",
+      "archive_sha256": "c105ce34226d1a9b81197d3df8f59e440d412e4a36e5c57b88b4dfd85526f75a",
+      "fixture": "web-runtime-host-1.2.6-product-1.0.16.9.json",
+      "host_id": "web-runtime-host",
+      "host_version": "1.2.6",
+      "manifest_sha256": "c9f1c0a55a5110d29bf0a43238f7afd5c4f5025637b790e5095857991db7e4f7",
+      "product_build": "1.0.16.9",
+      "release_tag": "lmdj-v1.0.16.9"
+    },
+    {
+      "archive": "lmdj-web-runtime-host-1.2.15-product-1.0.36.0.zip",
+      "archive_sha256": "91237ea1f818edb952d99e109b2d0fbb1c42cf984dec7a19e9d169feb62b7211",
+      "fixture": "web-runtime-host-1.2.15-product-1.0.36.0.json",
+      "host_id": "web-runtime-host",
+      "host_version": "1.2.15",
+      "manifest_sha256": "22a518b8f0368d1e3a1527d5d8ee46a89a68841f65d3366a0faf8798f8c92b40",
+      "product_build": "1.0.36.0",
+      "release_tag": "lmdj-v1.0.36.0"
+    },
+    {
+      "archive": "lmdj-web-runtime-host-2.1.1-product-1.0.40.0.zip",
+      "archive_sha256": "e1581f487ac83a62ac9d497ef16a61c6410c0e16b4d6da42e2bd2c8242c452f4",
+      "fixture": "web-runtime-host-2.1.1-product-1.0.40.0.json",
+      "host_id": "web-runtime-host",
+      "host_version": "2.1.1",
+      "manifest_sha256": "336a3cedef290809959372eb4ff273d8a3575b8a777c8f62a548aeb7e53e43c3",
+      "product_build": "1.0.40.0",
+      "release_tag": "lmdj-v1.0.40.0"
+    },
+    {
+      "archive": "lmdj-web-runtime-host-2.1.1-product-1.0.41.0.zip",
+      "archive_sha256": "6c9129d5432c2cbb100fd343c652d24029813101637ffad42e9fb805d39125e6",
+      "fixture": "web-runtime-host-2.1.1-product-1.0.41.0.json",
+      "host_id": "web-runtime-host",
+      "host_version": "2.1.1",
+      "manifest_sha256": "bad392235bc4482f03d14fd349ea018483a2d8ec1822b95c5c2341c4d2d54e8b",
+      "product_build": "1.0.41.0",
+      "release_tag": "lmdj-v1.0.41.0"
+    },
+    {
+      "archive": "lmdj-web-runtime-host-3.0.0-product-1.0.42.0.zip",
+      "archive_sha256": "f2f0ed56fb5dc56cf6ef0db02407ea84eb9f1f1562cdccbf800a855a7b22ce58",
+      "fixture": "web-runtime-host-3.0.0-product-1.0.42.0.json",
+      "host_id": "web-runtime-host",
+      "host_version": "3.0.0",
+      "manifest_sha256": "5258ce93c5ee0d990ee8aed12dbcbc402628d9d281db6f538e566270fd6ca0c5",
+      "product_build": "1.0.42.0",
+      "release_tag": "lmdj-v1.0.42.0"
+    }
+  ],
+  "schema": "lmdj.published-host-manifests.v1",
+  "source": "dist/host-manifest.json extracted verbatim from the immutable GitHub Release archive named by each entry's archive field; archive_sha256 is the digest published beside it as <archive>.sha256. The fixture file names drop the lmdj- prefix because .gitignore excludes lmdj-creator-web-*.json as a local acceptance export."
+}

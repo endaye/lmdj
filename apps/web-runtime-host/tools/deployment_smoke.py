@@ -5,13 +5,28 @@ from __future__ import annotations
 import argparse
 import codecs
 import hashlib
+import importlib.util
 import ipaddress
 import json
+from pathlib import Path
 import re
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+
+ASSET_ROLES_PATH = Path(__file__).resolve().parent / "asset_roles.py"
+_ASSET_ROLES_SPEC = importlib.util.spec_from_file_location(
+    "_lmdj_manifest_asset_roles", ASSET_ROLES_PATH
+)
+if _ASSET_ROLES_SPEC is None or _ASSET_ROLES_SPEC.loader is None:
+    raise RuntimeError(
+        "shared manifest asset-role vocabulary is unavailable: "
+        f"{ASSET_ROLES_PATH} could not be loaded"
+    )
+_ASSET_ROLES = importlib.util.module_from_spec(_ASSET_ROLES_SPEC)
+_ASSET_ROLES_SPEC.loader.exec_module(_ASSET_ROLES)
 
 
 CSP = (
@@ -57,35 +72,17 @@ HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 HASHED_ASSET_PATTERN = re.compile(
     r"^assets/[a-z0-9-]+\.([0-9a-f]{64})\.(?:css|js|mjs|wasm)$"
 )
-ALLOWED_ASSET_ROLES = frozenset(
-    (
-        "host_main",
-        "host_module",
-        "host_style",
-        "capture_worklet",
-        "perform_master_tap_worklet",
-        "platform_module",
-        "product_identity",
-        "runtime_script",
-        "runtime_wasm",
-    )
-)
-SINGLETON_ASSET_ROLES = frozenset(
-    ("host_main", "host_style", "runtime_script", "runtime_wasm")
-)
-CREATOR_CURRENT_ASSET_ROLES = frozenset(
-    (
-        "capture_worklet",
-        "host_main",
-        "host_style",
-        "perform_master_tap_worklet",
-        "runtime_script",
-        "runtime_wasm",
-    )
-)
-CREATOR_LEGACY_ASSET_ROLES = CREATOR_CURRENT_ASSET_ROLES - {
-    "perform_master_tap_worklet",
-}
+# The manifest asset-role vocabulary is defined once, in `asset_roles.py`, and
+# consumed by both packagers as well as by this validator. Restating any role
+# name here would recreate the drift recorded in
+# `.agents/pitfalls/manifest-role-validator-sync.md`;
+# `apps/web-runtime-host/test/manifest_asset_role_parity_test.py` fails if this
+# module names a role as a literal.
+ASSET_ROLES = _ASSET_ROLES
+ALLOWED_ASSET_ROLES = _ASSET_ROLES.ALLOWED_ASSET_ROLES
+SINGLETON_ASSET_ROLES = _ASSET_ROLES.SINGLETON_ASSET_ROLES
+CREATOR_CURRENT_ASSET_ROLES = _ASSET_ROLES.CREATOR_CURRENT_ASSET_ROLES
+CREATOR_LEGACY_ASSET_ROLES = _ASSET_ROLES.CREATOR_LEGACY_ASSET_ROLES
 DEPLOY_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 MAX_INDEX_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -556,11 +553,11 @@ def _validate_manifest(
         ):
             raise SmokeError("manifest required asset role inventory is invalid")
     else:
-        if role_counts["host_module"] < 1:
+        if role_counts[_ASSET_ROLES.HOST_MODULE] < 1:
             raise SmokeError("manifest required asset role inventory is invalid")
-        if legacy_manifest and role_counts["platform_module"] != 0:
+        if legacy_manifest and role_counts[_ASSET_ROLES.PLATFORM_MODULE] != 0:
             raise SmokeError("manifest required asset role inventory is invalid")
-        if not legacy_manifest and role_counts["platform_module"] < 1:
+        if not legacy_manifest and role_counts[_ASSET_ROLES.PLATFORM_MODULE] < 1:
             raise SmokeError("manifest required asset role inventory is invalid")
     return validated
 
@@ -773,8 +770,8 @@ def smoke_http(
     ):
         raise SmokeError("retired Contract marker is present")
 
-    main = next(entry for entry in assets if entry["role"] == "host_main")
-    style = next(entry for entry in assets if entry["role"] == "host_style")
+    main = next(entry for entry in assets if entry["role"] == _ASSET_ROLES.HOST_MAIN)
+    style = next(entry for entry in assets if entry["role"] == _ASSET_ROLES.HOST_STYLE)
     _require_exact_once(index, f'src="./{main["path"]}"', "main asset binding")
     _require_exact_once(index, f'href="./{style["path"]}"', "style asset binding")
 

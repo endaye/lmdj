@@ -644,6 +644,23 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(unknown["mode"], "full")
         self.assertEqual(self.true_lanes(unknown), LANES)
 
+    def test_a_scheduled_sweep_of_main_is_full_and_trusted(self):
+        """#543: the daily sweep runs the complete manifest-selected set.
+
+        Focused `main` is a recorded cost decision; its blind spot is a lane
+        left red across docs-only pushes that never select it. A `schedule`
+        event on `main`'s tip classifies full so that cannot hide.
+        """
+        manifest = self.classify(["docs/guide.md"], event_name="schedule")
+        self.assertEqual(manifest["mode"], "full")
+        self.assertEqual(self.true_lanes(manifest), LANES)
+        self.assertIn("full event: schedule", manifest["reasons"])
+        self.assertTrue(manifest["trusted_head"])
+
+    def test_a_scheduled_sweep_carries_no_lane_selection(self):
+        with self.assertRaises(ValueError):
+            self.classify(["docs/guide.md"], event_name="schedule", requested_lanes={"docs_static"})
+
     def test_release_workflow_rules_are_exact_and_signing_control_remains_full(self):
         for path in (
             ".github/workflows/publish-release.yml",

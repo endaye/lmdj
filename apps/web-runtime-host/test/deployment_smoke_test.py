@@ -23,6 +23,7 @@ TOOLS_ROOT = REPO_ROOT / "apps/web-runtime-host/tools"
 sys.path.insert(0, str(TOOLS_ROOT))
 
 from deployment_smoke import (  # noqa: E402
+    ASSET_ROLES as ROLES,
     CSP,
     REQUIRED_SECURITY_HEADERS,
     RedirectGuard,
@@ -32,20 +33,20 @@ from deployment_smoke import (  # noqa: E402
 
 
 ASSET_LAYOUT = (
-    ("diagnostic-client", ".mjs", "platform_module"),
-    ("diagnostic-project", ".mjs", "host_module"),
-    ("input-adapters", ".mjs", "platform_module"),
-    ("main", ".mjs", "host_main"),
-    ("preflight", ".mjs", "platform_module"),
-    ("project-bundle-reader", ".mjs", "platform_module"),
-    ("protocol", ".mjs", "platform_module"),
-    ("runtime", ".js", "runtime_script"),
-    ("runtime", ".wasm", "runtime_wasm"),
-    ("runtime-loader", ".mjs", "platform_module"),
-    ("runtime-session", ".mjs", "platform_module"),
-    ("state-machine", ".mjs", "platform_module"),
-    ("styles", ".css", "host_style"),
-    ("web-runtime-identity", ".mjs", "product_identity"),
+    ("diagnostic-client", ".mjs", ROLES.PLATFORM_MODULE),
+    ("diagnostic-project", ".mjs", ROLES.HOST_MODULE),
+    ("input-adapters", ".mjs", ROLES.PLATFORM_MODULE),
+    ("main", ".mjs", ROLES.HOST_MAIN),
+    ("preflight", ".mjs", ROLES.PLATFORM_MODULE),
+    ("project-bundle-reader", ".mjs", ROLES.PLATFORM_MODULE),
+    ("protocol", ".mjs", ROLES.PLATFORM_MODULE),
+    ("runtime", ".js", ROLES.RUNTIME_SCRIPT),
+    ("runtime", ".wasm", ROLES.RUNTIME_WASM),
+    ("runtime-loader", ".mjs", ROLES.PLATFORM_MODULE),
+    ("runtime-session", ".mjs", ROLES.PLATFORM_MODULE),
+    ("state-machine", ".mjs", ROLES.PLATFORM_MODULE),
+    ("styles", ".css", ROLES.HOST_STYLE),
+    ("web-runtime-identity", ".mjs", ROLES.PRODUCT_IDENTITY),
 )
 LEGACY_OMITTED_ASSET_STEMS = frozenset(
     (
@@ -143,8 +144,8 @@ class SmokeFixture:
             )
         ]
         for entry in self.manifest["assets"]:
-            if entry["role"] == "platform_module":
-                entry["role"] = "host_module"
+            if entry["role"] == ROLES.PLATFORM_MODULE:
+                entry["role"] = ROLES.HOST_MODULE
         self.update_manifest(update_index=True)
 
     def update_manifest(self, *, update_index: bool) -> None:
@@ -155,11 +156,11 @@ class SmokeFixture:
         digest = hashlib.sha256(manifest_bytes).hexdigest()
         main = next(
             entry for entry in self.manifest["assets"]
-            if entry["role"] == "host_main"
+            if entry["role"] == ROLES.HOST_MAIN
         )
         style = next(
             entry for entry in self.manifest["assets"]
-            if entry["role"] == "host_style"
+            if entry["role"] == ROLES.HOST_STYLE
         )
         self.payloads["/index.html"] = (
             "<!doctype html><html><head>"
@@ -377,11 +378,11 @@ class DeploymentSmokeTest(unittest.TestCase):
     def test_rejects_wrong_wasm_mime_or_asset_cache(self) -> None:
         wasm = next(
             "/" + entry["path"] for entry in self.fixture.manifest["assets"]
-            if entry["role"] == "runtime_wasm"
+            if entry["role"] == ROLES.RUNTIME_WASM
         )
         main = next(
             "/" + entry["path"] for entry in self.fixture.manifest["assets"]
-            if entry["role"] == "host_main"
+            if entry["role"] == ROLES.HOST_MAIN
         )
         self.fixture.content_type_overrides[wasm] = "application/octet-stream"
         with self.assertRaisesRegex(SmokeError, "content-type"):
@@ -394,7 +395,7 @@ class DeploymentSmokeTest(unittest.TestCase):
     def test_accepts_standard_equivalent_content_types(self) -> None:
         main = next(
             "/" + entry["path"] for entry in self.fixture.manifest["assets"]
-            if entry["role"] == "host_main"
+            if entry["role"] == ROLES.HOST_MAIN
         )
         self.fixture.content_type_overrides["/index.html"] = (
             'Text/HTML; Charset="UTF-8"'
@@ -410,7 +411,7 @@ class DeploymentSmokeTest(unittest.TestCase):
     def test_accepts_cache_control_with_optional_whitespace(self) -> None:
         main = next(
             "/" + entry["path"] for entry in self.fixture.manifest["assets"]
-            if entry["role"] == "host_main"
+            if entry["role"] == ROLES.HOST_MAIN
         )
         self.fixture.cache_overrides[main] = (
             "public,max-age=31536000,immutable"
@@ -420,7 +421,7 @@ class DeploymentSmokeTest(unittest.TestCase):
     def test_rejects_wrong_or_malformed_content_types(self) -> None:
         wasm = next(
             "/" + entry["path"] for entry in self.fixture.manifest["assets"]
-            if entry["role"] == "runtime_wasm"
+            if entry["role"] == ROLES.RUNTIME_WASM
         )
         cases = (
             ("/index.html", "application/octet-stream"),
@@ -475,7 +476,7 @@ class DeploymentSmokeTest(unittest.TestCase):
         removed_index = next(
             index
             for index, entry in enumerate(self.fixture.manifest["assets"])
-            if entry["role"] == "runtime_wasm"
+            if entry["role"] == ROLES.RUNTIME_WASM
         )
         removed = self.fixture.manifest["assets"].pop(removed_index)
         self.fixture.update_manifest(update_index=True)
@@ -615,7 +616,7 @@ class DeploymentSmokeTest(unittest.TestCase):
     def test_asset_redirect_requires_immutable_cache_for_original_route(self) -> None:
         asset_path = next(
             "/" + entry["path"] for entry in self.fixture.manifest["assets"]
-            if entry["role"] == "host_main"
+            if entry["role"] == ROLES.HOST_MAIN
         )
         redirected = "/mirror" + asset_path
         self.fixture.payloads[redirected] = self.fixture.payloads[asset_path]

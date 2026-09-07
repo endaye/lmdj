@@ -1,7 +1,7 @@
 ---
 id: manifest-role-validator-sync
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-08-27
     occurrence: https://github.com/endaye/lmdj/issues/354
@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-09-06
     occurrence: https://github.com/endaye/lmdj/actions/runs/34017836312
     observed_by: grok-4.6
-exit: none
+exit: gate:apps/web-runtime-host/test/manifest_asset_role_parity_test.py
 ---
 
 # A manifest producer gaining a new asset role must update the deployment validator in the same change
@@ -33,27 +33,32 @@ published deployment with the same validator as its rollback anchor. The live
 identity discovery` with `manifest required asset role inventory is invalid`,
 so `1.0.42.0` never reached production (Actions run 34017836312).
 
+Both occurrences were escalations of one class: the vocabulary had no single
+definition, so nothing could compare a producer with the validator. #711
+removed the copies. `apps/web-runtime-host/tools/asset_roles.py` is now the
+only place a role name is written; both packagers, the validator and both
+smoke fixtures import it, and the gate compares the vocabulary against the
+producers and against the manifest of every published Build.
+
 ## How to apply
 
-- When package.py starts emitting a new manifest asset role (or drops one),
-  change `ALLOWED_ASSET_ROLES` (and SINGLETON_ASSET_ROLES if exactly-one) in
-  `deployment_smoke.py` and the fixture ASSET_LAYOUT in
-  `deployment_smoke_test.py` in the same commit.
-- Do not add a new role to SINGLETON_ASSET_ROLES unless every prior published
-  build also satisfies it: the deploy run baselines the previous published
-  deployment with the same validator, so an exactly-one rule on a new role
-  fails the rollback anchor. Creator 3.0.0's `perform_master_tap_worklet`
-  is the recurrence: `_creator_required_roles()` keeps the six-role inventory
-  on 3.x and the five-role inventory on 2.x priors. Preflight already verified
-  the signed candidate; a failed prior-identity discovery is not a failed
-  Release.
-- When a new role is required for the Build that introduces it, key the
-  requirement on the Host version (or manifest schema) that introduced it, and
-  add the last published Build's inventory as a passing fixture in the same
-  commit. A validator on `main` must accept every manifest it will be asked
-  to validate: the candidate and the currently published rollback anchor.
-- No gate exit yet: the version split above covers this exact recurrence, not
-  the class, and a mechanical producer-vs-validator comparison still needs a
-  shared constant. Recurrence 2 escalated that refactor to
-  [#711](https://github.com/endaye/lmdj/issues/711), which owns the shared
-  vocabulary and retained-prior-manifest gate candidates.
+- Add or drop a manifest asset role in exactly two places: its entry in
+  `hosts.<host_id>.expected_assets` in `tools/web-runtime/runtime-identity.json`
+  (regenerating `products/lmdj/generated/web-runtime-identity.json`), and the
+  constant plus the matching `*_EMITTED_ASSET_ROLES` and `ALLOWED_ASSET_ROLES`
+  membership in `apps/web-runtime-host/tools/asset_roles.py`. Never write a
+  role as a string literal anywhere else; the gate fails on one.
+- Do not make a role required — `SINGLETON_ASSET_ROLES`, or a Creator required
+  inventory — unless every already published manifest under
+  `apps/web-runtime-host/test/fixtures/published-host-manifests/` still
+  satisfies the rule. The deploy baselines the previously published deployment
+  with the same validator, so an exactly-one rule on a new role fails the
+  rollback anchor. Creator 3.0.0's `perform_master_tap_worklet` is the shape:
+  `_creator_required_roles()` keeps the six-role inventory on 3.x and the
+  five-role inventory on 2.x priors. Preflight already verified the signed
+  candidate; a failed prior-identity discovery is not a failed Release.
+- When a Build publishes, retain its `host-manifest.json` from the immutable
+  Release archive under that fixture directory with its `provenance.json`
+  entry. Never edit a retained manifest, and never relax the validator, to
+  make the gate green: the retained bytes are the evidence of what a published
+  Build really carries.

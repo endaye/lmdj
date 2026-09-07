@@ -655,6 +655,15 @@ def classify(
     # inheriting the operator's meaning. `queue` is what tells them apart.
     if event_name == "workflow_dispatch" and not requested and queue is None:
         full_reasons.add(f"full event: {event_name}")
+    # A scheduled run is the daily sweep of `main` (#543). Focused `main`
+    # classification is a recorded cost decision, and its known blind spot is
+    # a lane that stays red across docs-only pushes with nothing selecting it;
+    # the sweep exists to run the complete manifest-selected set once a day so
+    # that cannot hide. It is unconditionally full for the same reason an
+    # empty operator dispatch is, and it is trusted because its head is
+    # `main`'s own tip.
+    if event_name == "schedule":
+        full_reasons.add(f"full event: {event_name}")
     if unverifiable_base is not None:
         full_reasons.add(UNVERIFIABLE_PUSH_BASE)
         full_reasons.add(f"{UNVERIFIABLE_PUSH_BASE}: {unverifiable_base}")
