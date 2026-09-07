@@ -12,6 +12,7 @@ import re
 from typing import Mapping
 from urllib.parse import quote
 from types import MappingProxyType
+from .batch_reference import BatchEvidenceError, freeze, parse_reference, parse_source
 
 
 class ReleaseModelError(ValueError):
@@ -125,6 +126,7 @@ class ReleaseIntent:
     make_latest: bool = False
     promotions: tuple[PromotionRecord, ...] = ()
     self_test_evidence: Mapping[str, object] | None = None
+    batch_test_evidence: Mapping[str, object] | None = None
 
     @property
     def current_channel(self) -> str | None:
@@ -180,6 +182,7 @@ class ReleasePolicy:
     historical_cutoff: str
     promotion: PromotionPolicy
     prospective_ci_protocol: str = "self-test-v1"
+    batch_evidence_source: Mapping[str, object] | None = None
 
     def channel_release(self, channel: str, make_latest: bool = False) -> tuple[bool, bool]:
         if channel not in self.channels:
@@ -223,7 +226,11 @@ CANONICAL_PRODUCT_FINGERPRINT = _PRODUCT_FINGERPRINT
 
 
 def canonical_json(value: object) -> bytes:
-    return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    def mapping_document(item):
+        if isinstance(item, Mapping):
+            return dict(item)
+        raise TypeError("canonical JSON requires JSON values or immutable mappings")
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=mapping_document) + "\n").encode("utf-8")
 
 
 def canonical_sha256(value: object) -> str:
@@ -235,11 +242,19 @@ def load_policy(path: Path | str) -> ReleasePolicy:
     _require_exact_keys(document, {
         "schema", "repository", "branch", "blocking_workflow", "fingerprints", "tag_patterns", "profiles",
         "channels", "environments", "historical_cutoff", "promotion", "prospective_ci_protocol",
-    }, "policy")
+    }, "policy", optional={"batch_evidence_source"})
     if document["schema"] != _POLICY_SCHEMA:
         raise ReleaseModelError("unsupported policy schema")
-    if document["prospective_ci_protocol"] != "self-test-v1":
-        raise ReleaseModelError("prospective CI policy must require self-test-v1; legacy scope is historical only")
+    if document["prospective_ci_protocol"] not in ("self-test-v1", "complete-test-v2"):
+        raise ReleaseModelError("why: prospective CI policy must require self-test-v1 or complete-test-v2; remedy: keep legacy scope historical and select a reviewed complete-evidence protocol")
+    source = None
+    if document["prospective_ci_protocol"] == "complete-test-v2":
+        try:
+            source = parse_source(document.get("batch_evidence_source"))
+        except BatchEvidenceError as error:
+            raise ReleaseModelError(str(error)) from None
+    elif "batch_evidence_source" in document:
+        raise ReleaseModelError("why: old CI policy cannot activate a batch source; remedy: use a separately reviewed complete-test-v2 policy")
     repository = _require_string(document["repository"], "policy repository")
     branch = _require_string(document["branch"], "policy branch")
     blocking_workflow = _require_string(document["blocking_workflow"], "policy blocking workflow")
@@ -320,6 +335,7 @@ def load_policy(path: Path | str) -> ReleasePolicy:
         historical_cutoff=cutoff,
         promotion=promotion,
         prospective_ci_protocol=document["prospective_ci_protocol"],
+        batch_evidence_source=source,
     )
 
 
@@ -500,7 +516,7 @@ def _parse_entry(value: object, policy: ReleasePolicy) -> ReleaseIntent:
         required.add("channel")
     _require_exact_keys(
         item, required, "ledger entry",
-        optional={"snapshot", "merged_main_run_id", "make_latest", "promotions", "self_test_evidence"},
+        optional={"snapshot", "merged_main_run_id", "make_latest", "promotions", "self_test_evidence", "batch_test_evidence"},
     )
     tag = _require_string(item["tag"], "tag")
     tag_identity = classify_tag(tag, policy)
@@ -545,6 +561,19 @@ def _parse_entry(value: object, policy: ReleasePolicy) -> ReleaseIntent:
             )
         channel, snapshot, make_latest, promotions = None, None, False, ()
     run_id = _optional_positive_int(item, "merged_main_run_id")
+    batch_test_evidence = None
+    if "batch_test_evidence" in item:
+        if policy.prospective_ci_protocol != "complete-test-v2" or policy.batch_evidence_source is None:
+            raise ReleaseModelError("why: batch reference is not enabled by the current CI protocol; remedy: do not fall back to legacy scope; activate only a reviewed complete-test-v2 policy")
+        if "self_test_evidence" in item:
+            raise ReleaseModelError("why: release intent mixes evidence protocols; remedy: reference exactly one complete test source")
+        try:
+            evidence = parse_reference(item["batch_test_evidence"])
+        except BatchEvidenceError as error:
+            raise ReleaseModelError(str(error)) from None
+        if run_id is None or evidence["request"]["target"] != target_revision:
+            raise ReleaseModelError("why: batch reference lacks the exact intent target or executor; remedy: bind one verified target and run ID")
+        batch_test_evidence = freeze(evidence)
     self_test_evidence = None
     if "self_test_evidence" in item:
         evidence = _require_mapping(item["self_test_evidence"], "self_test_evidence")
@@ -564,7 +593,7 @@ def _parse_entry(value: object, policy: ReleasePolicy) -> ReleaseIntent:
     evidence_paths = _paths(item["evidence_paths"], "evidence_paths")
     return ReleaseIntent(
         tag, kind, identity, target_revision, disposition, profile, evidence_paths,
-        channel, snapshot, run_id, make_latest, promotions, self_test_evidence,
+        channel, snapshot, run_id, make_latest, promotions, self_test_evidence, batch_test_evidence,
     )
 
 

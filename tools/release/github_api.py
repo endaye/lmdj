@@ -559,8 +559,37 @@ class GitHubClient:
 
     def _download_artifact(self, artifact: ActionsArtifactProjection) -> bytes:
         """Download one artifact archive without forwarding credentials onward."""
+        return self._download_artifact_archive(artifact.archive_download_url, _CI_SCOPE_SIZE_CAP)
+
+    def get_batch_evidence(self, path: str, *, raw: bool = False) -> object:
+        """Closed GET-only transport for the inactive full-batch consumer.
+
+        No consumer import: orchestration owns this callback, avoiding a
+        github_api -> batch_evidence -> github_api dependency cycle.
+        """
+        prefix = "/repos/endaye/lmdj"
+        if not isinstance(path, str) or not path.startswith(prefix) or type(raw) is not bool:
+            raise CiScopeConflictError("why: batch evidence route is not canonical; remedy: use the closed read-only candidate consumer")
+        suffix = path[len(prefix):]
+        identifier = r"[1-9][0-9]*"
+        page = r"(?:[1-9]|[1-9][0-9]|100)"
+        if raw:
+            if re.fullmatch(rf"/actions/artifacts/{identifier}/zip", suffix) is None:
+                raise CiScopeConflictError("why: raw batch route is not an exact artifact ZIP; remedy: download only the authenticated artifact ID")
+            # Three individually bounded files, not the legacy one-file cap.
+            from .batch_reference import MAX_DOCUMENT
+            return self._download_artifact_archive(path, 3 * MAX_DOCUMENT)
+        allowed = (suffix in ("/branches/main", "/actions/workflows/self-test-report.yml")
+                   or re.fullmatch(rf"/actions/runs/{identifier}(?:/attempts/1)?", suffix)
+                   or re.fullmatch(rf"/actions/runs/{identifier}/(?:attempts/1/jobs|artifacts)\?per_page=100&page={page}", suffix))
+        if not allowed:
+            raise CiScopeConflictError("why: batch JSON route is outside the evidence allowlist; remedy: use exact run/attempt and bounded inventory pages")
+        return _json_response(self._request("GET", path), {200})
+
+    def _download_artifact_archive(self, url: str, size_cap: int) -> bytes:
+        """Shared transfer policy; callers own independently checked identity."""
         response = self._request(
-            "GET", artifact.archive_download_url, accept="application/vnd.github+json",
+            "GET", url, accept="application/vnd.github+json",
         )
         if response.status in (302, 307):
             location = _header(response.headers, "location")
@@ -582,7 +611,7 @@ class GitHubClient:
         if content_type is None or content_type.split(";", 1)[0].strip() != "application/zip":
             raise CiScopeConflictError("GitHub artifact content type is invalid")
         payload = response.body
-        if not isinstance(payload, bytes) or len(payload) > _CI_SCOPE_SIZE_CAP:
+        if not isinstance(payload, bytes) or len(payload) > size_cap:
             raise CiScopeConflictError("GitHub artifact archive exceeds its size cap")
         if not payload.startswith(b"PK\x03\x04"):
             raise CiScopeConflictError("GitHub artifact archive is not a ZIP archive")

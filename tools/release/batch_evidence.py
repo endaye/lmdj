@@ -11,67 +11,28 @@ from datetime import datetime, timezone
 import io
 import json
 from pathlib import Path
-import re
 import subprocess
 import zipfile
 
 from .self_test_protocol import protocol as self_test  # one trusted CI module identity
 from .github_api import CI_SCOPE_LANES
+from .batch_reference import (SCHEMA, MAX_DOCUMENT, EXECUTOR_EVENTS, BatchEvidenceError,
+                              require, positive, sha, parse_reference)
 import batch_evidence_validation as shared
 import incremental_batch as batch
 import test_scope
 
-SCHEMA = "lmdj.ci-batch-release-reference.v1"
 WORKFLOW = ".github/workflows/self-test-report.yml"
 CONTROLLER = "Incremental batch controller"
-MAX_BYTES = 1000000
+MAX_BYTES = MAX_DOCUMENT
 POLICY_FILES = ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")
 
-
-class BatchEvidenceError(ValueError):
-    def __init__(self, code, why):
-        self.code = code
-        super().__init__(f"why: {why}; remedy: obtain complete authenticated full-batch evidence for the exact candidate and review a new reference; do not repair artifacts or substitute a settlement snapshot")
-
-
-def require(condition, why, code="conflict"):
-    if not condition:
-        raise BatchEvidenceError(code, why)
-
-
-def positive(value):
-    return type(value) is int and value > 0
-
-
-def sha(value):
-    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None
-
-
-def digest(value):
-    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
 def equal(left, right):
     # Python equality conflates True with 1; evidence identity never does.
     return self_test.canonical_json(left) == self_test.canonical_json(right)
 
-
-def parse_reference(value):
-    require(isinstance(value, dict) and set(value) == {
-        "schema", "request", "executor_control_revision", "run_attempt",
-        "origin_record_digest", "admission_record_digest", "evidence_digest"}, "batch reference schema is not closed")
-    require(value["schema"] == SCHEMA and sha(value["executor_control_revision"]), "batch reference source protocol or control is invalid")
-    require(type(value["run_attempt"]) is int and value["run_attempt"] == 1, "batch reference is not a fresh first attempt")
-    require(all(digest(value[k]) for k in ("origin_record_digest", "admission_record_digest", "evidence_digest")), "batch reference digest is invalid")
-    request = value["request"]
-    require(isinstance(request, dict) and set(request) == {
-        "id", "kind", "base", "target", "control", "policy", "selection", "origin_run"}, "frozen request schema is not closed")
-    require(sha(request["target"]) and sha(request["control"]) and digest(request["policy"]), "frozen request identity is invalid")
-    origin = request["origin_run"]
-    require(isinstance(origin, dict) and set(origin) == {"run_id", "attempt"}
-            and positive(origin["run_id"]) and type(origin["attempt"]) is int and origin["attempt"] == 1,
-            "origin is not an exact fresh run")
-    return deepcopy(value)
 
 
 class BatchEvidenceConsumer:
@@ -126,7 +87,7 @@ git_root is an existing complete checkout; reads never fetch or execute source.
             require(len(items) == 100, "GitHub inventory ended before its declared total", "external-error")
         raise BatchEvidenceError("external-error", "GitHub inventory exceeded pagination budget")
 
-    def run(self, run_id, control):
+    def run(self, run_id, control, *, expected_event=None):
         require(positive(run_id), "run ID is invalid")
         latest = self.get(f"/actions/runs/{run_id}")
         run = self.get(f"/actions/runs/{run_id}/attempts/1")
@@ -135,7 +96,8 @@ git_root is an existing complete checkout; reads never fetch or execute source.
                     and type(row.get("run_attempt")) is int and row["run_attempt"] == 1
                     and type(row.get("workflow_id")) is int and row["workflow_id"] == self.workflow_id
                     and row.get("path") == WORKFLOW and row.get("head_sha") == control
-                    and row.get("head_branch") == "main" and row.get("event") in {"workflow_dispatch", "push", "workflow_run", "schedule"}
+                    and row.get("head_branch") == "main" and isinstance(row.get("event"), str) and row["event"] in EXECUTOR_EVENTS
+                    and (expected_event is None or row["event"] == expected_event)
                     and row.get("status") == "completed", "run is not a terminal first-attempt trusted main batch")
             for field in ("repository", "head_repository"):
                 repo = row.get(field)
@@ -222,7 +184,7 @@ git_root is an existing complete checkout; reads never fetch or execute source.
         require(isinstance(workflow, dict) and type(workflow.get("id")) is int and workflow["id"] == self.workflow_id
                 and workflow.get("path") == WORKFLOW, "stable workflow source is not independently authenticated")
         origin, _ = self.run(request["origin_run"]["run_id"], request["control"])
-        executor, jobs = self.run(run_id, ref["executor_control_revision"])
+        executor, jobs = self.run(run_id, ref["executor_control_revision"], expected_event=ref["executor_event"])
         require(executor.get("conclusion") == "success", "executor run is not successful full-candidate evidence")
         for path in shared.EXECUTION_SOURCES:
             for revision in (request["control"], executor["head_sha"]):

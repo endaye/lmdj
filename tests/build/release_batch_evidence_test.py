@@ -97,7 +97,7 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
         self.add_artifact(102, 2, "batch-controller-102-1", {"result.json": self.admission})
         self.add_artifact(102, 3, f"batch-verdict-{self.control}-102-1", self.bundle)
         self.ref = {"schema": consumer.SCHEMA, "request": self.request, "executor_control_revision": self.executor_control,
-            "run_attempt": 1, "origin_record_digest": self_test.digest_of(self.origin_snapshot),
+            "executor_event": "workflow_dispatch", "run_attempt": 1, "origin_record_digest": self_test.digest_of(self.origin_snapshot),
             "admission_record_digest": self_test.digest_of(self.admission), "evidence_digest": self.verdict["evidence_digest"]}
         self.reader = consumer.BatchEvidenceConsumer(api_get=self.get, git_root=self.root, repository="endaye/lmdj",
             repository_id=11, workflow_id=7, producer_revision=self.control, now=datetime(2026, 9, 8, tzinfo=timezone.utc))
@@ -492,10 +492,12 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
     def test_scheduled_bootstrap_origin_and_executor_preserve_full_attestation(self):
         self.same_run("bootstrap")
         self.executor_run["event"] = "schedule"
+        self.ref["executor_event"] = "schedule"
         self.assertEqual(self.verify(), self.verdict)
 
     def test_scheduled_executor_can_admit_a_queued_explicit_candidate(self):
         self.executor_run["event"] = "schedule"
+        self.ref["executor_event"] = "schedule"
         self.assertNotEqual(self.control, self.executor_control)
         self.assertEqual(self.verify(), self.verdict)
 
@@ -506,6 +508,68 @@ class BatchReleaseEvidenceTest(unittest.TestCase):
     def test_unknown_executor_event_is_rejected(self):
         self.executor_run["event"] = "repository_dispatch"
         self.rejected("trusted main")
+
+    def test_reference_cannot_infer_schedule_from_candidate_request_kind(self):
+        self.executor_run["event"] = "schedule"
+        self.rejected("trusted main")
+
+    def test_reference_event_must_match_latest_view_too(self):
+        self.route("/actions/runs/102", dict(self.executor_run, event="push"))
+        self.rejected("trusted main")
+
+    def test_reference_event_must_match_exact_attempt_view_too(self):
+        self.route("/actions/runs/102/attempts/1", dict(self.executor_run, event="workflow_run"))
+        self.rejected("trusted main")
+
+    def test_reference_missing_event_does_not_guess_it(self):
+        del self.ref["executor_event"]
+        self.rejected("schema")
+
+    def production_transport(self):
+        import release_github_api_test as fixture
+        from tools.release.github_api import GitHubClient, HttpResponse
+        transport = fixture.FakeTransport()
+        for path, document in self.routes.items():
+            transport.json_route(path, document)
+        for identifier, raw in self.downloads.items():
+            path = self.prefix + f"/actions/artifacts/{identifier}/zip"
+            signed = fixture.SIGNED_REDIRECT + f"&artifact={identifier}"
+            transport.route(path, HttpResponse(302, {"Location": signed}, b""))
+            transport.route(signed, HttpResponse(200, {"Content-Type": "application/zip"}, raw))
+        self.reader.api_get = GitHubClient(http_transport=transport, token="fixture-token").get_batch_evidence
+        return transport
+
+    def test_production_http_adapter_reaches_complete_verdict_without_write_or_cycle(self):
+        transport = self.production_transport()
+        self.assertEqual(self.verify(), self.verdict)
+        self.assertTrue(all(method == "GET" for method, _, _ in transport.requests))
+        signed = [headers for _, path, headers in transport.requests if path.startswith("https://")]
+        self.assertEqual(len(signed), 3)
+        self.assertTrue(all("Authorization" not in headers for headers in signed))
+        self.assertTrue(all("/issues" not in path and "/releases" not in path for _, path, _ in transport.requests))
+
+    def test_production_http_auth_failure_is_external_error_not_missing(self):
+        from tools.release.github_api import HttpResponse
+        transport = self.production_transport()
+        transport.route(self.prefix + "/actions/runs/102", HttpResponse(404, {}, b"hidden private run"))
+        self.rejected("unknown", "external-error")
+
+    def test_production_http_expired_artifact_is_still_unverifiable(self):
+        self.artifacts[102][1]["expired"] = True
+        self.production_transport()
+        self.rejected("expired", "unverifiable")
+
+    def test_production_http_wrong_verdict_is_not_accepted(self):
+        self.bundle["verdict.json"]["identity"]["target_sha"] = self.executor_control
+        self.downloads[3] = zipped(self.bundle)
+        self.production_transport()
+        self.rejected("recomputed")
+
+    def test_deeply_frozen_model_reference_reaches_real_consumer(self):
+        from tools.release.batch_reference import freeze
+        self.ref = freeze(self.ref)
+        self.production_transport()
+        self.assertEqual(self.verify(), self.verdict)
 
 
 if __name__ == "__main__":
