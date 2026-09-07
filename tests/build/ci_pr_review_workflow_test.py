@@ -59,8 +59,9 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = WORKFLOW.read_text(encoding="utf-8")
-        cls.jobs = {name: job_block(cls.source, name) for name in
-                    ("target", "claude-review", "grok-review", "publish-claude", "publish-grok")}
+        cls.jobs = {name: job_block(cls.source, actual) for name, actual in
+                    (("target", "target"), ("claude-review", "review"), ("grok-review", "review"),
+                     ("publish-claude", "publish"), ("publish-grok", "publish"))}
 
     def test_yaml_parser_retains_both_run_name_expressions_after_hash(self):
         # Use the actual pinned workflow parser instead of a hand-written YAML
@@ -129,7 +130,10 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
                 self.assertNotIn("ref: ${{ needs.target.outputs.head_sha }}", job)
                 self.assertIn("persist-credentials: false", job)
         for name in ("claude-review", "grok-review"):
-            self.assertIn('git diff --no-ext-diff --no-textconv "$BASE_SHA...$HEAD_SHA"', self.jobs[name])
+            self.assertIn('review_pipeline.py collect --directory "$REVIEW_DIR"', self.jobs[name])
+        adapter = (REPO_ROOT / "scripts/ci/review_pipeline.py").read_text()
+        self.assertIn('"--no-ext-diff", "--no-textconv"', adapter)
+        self.assertNotIn('git("checkout"', adapter)
 
     def test_models_have_no_write_token_or_executable_tools(self):
         for name in ("claude-review", "grok-review"):
@@ -137,18 +141,20 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
             self.assertIn("pull-requests: read", job)
             self.assertNotIn(": write", job)
             self.assertNotIn("--publish-file", job)
-            self.assertNotIn("continue-on-error: true", job)
+            # Individual backend failures are captured and validated before
+            # fallback. The job itself is not continue-on-error.
+            self.assertNotRegex(job, r"(?m)^    continue-on-error: true$")
             self.assertIn("Manual takeover", job)
         claude = self.jobs["claude-review"]
         self.assertIn('--tools "Read" --allowedTools "Read" --disable-slash-commands', claude)
         self.assertIn('classify_inline_comments: "false"', claude)
-        self.assertIn("steps.review.outputs.structured_output", claude)
+        self.assertIn("steps.glm.outputs.structured_output", claude)
+        self.assertIn("steps.kimi.outputs.structured_output", claude)
         self.assertNotIn("/pr-review --comment", claude)
         self.assertNotIn("Bash(", claude)
         grok = self.jobs["grok-review"]
-        self.assertIn('POST_COMMENT: "false"', grok)
-        self.assertIn('POST_REVIEW: "false"', grok)
-        self.assertIn("--structured-output", grok)
+        self.assertIn("review_pipeline.py grok", grok)
+        self.assertNotIn("GITHUB_TOKEN:", grok.split("      - name: Grok review", 1)[1].split("      - name: Validate Grok", 1)[0])
 
     def test_publishers_are_short_trusted_data_consumers(self):
         for name in ("publish-claude", "publish-grok"):
@@ -157,8 +163,8 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
             self.assertIn("timeout-minutes: 5", job)
             self.assertNotIn("contents: write", job)
             self.assertNotIn("issues: write", job)
-            self.assertIn(' --expect-head "$HEAD_SHA"', job)
-            self.assertIn("--publish-file", job)
+            self.assertIn('HEAD_SHA: ${{ needs.target.outputs.head_sha }}', job)
+            self.assertIn("review_pipeline.py publish", job)
             self.assertIn("actions/download-artifact@v4", job)
             self.assertIn("github.run_attempt", job)
             self.assertIn("needs.target.outputs.head_sha", job)
@@ -169,7 +175,7 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
 
     def test_review_has_no_heavy_dependency_and_no_merge_authority(self):
         jobs = self.source.split("\njobs:\n", 1)[1]
-        for forbidden in ("queue_ticket", "scope_policy.json", "phase_gate", "pr_gate",
+        for forbidden in ("queue_ticket", "phase_gate", "pr_gate",
                           "lmdj-native-heavy", "needs: [change-scope", "contents: write"):
             self.assertNotIn(forbidden, jobs)
         self.assertIn("required_conversation_resolution", self.source)
@@ -177,16 +183,19 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         self.assertIn("not a new gate", self.source)
 
     def test_backend_selector_and_runtime_pins_stay_compatible(self):
-        ci = CI.read_text(encoding="utf-8")
-        self.assertIn("vars.CLAUDE_REVIEW_ORDER || 'glm,kimi'", self.jobs["target"])
+        self.assertNotIn("vars.CLAUDE_REVIEW_ORDER", self.source)
+        self.assertIn("steps.capture-glm.outputs.reviewed != 'true'", self.jobs["claude-review"])
+        self.assertIn("steps.capture-kimi.outputs.reviewed != 'true'", self.jobs["grok-review"])
         pin = re.search(r"uses: anthropics/claude-code-action@([0-9a-f]{40})", self.source).group(1)
-        self.assertIn("claude-code-action@" + pin, ci)
-        for key in ("GROK_VERSION", "GROK_SHA256"):
+        self.assertEqual(pin, "fa2b2666b747000bf42767d1f332065b375e3c8f")
+        pins = {"GROK_VERSION": "1.0.13", "GROK_SHA256": "edf79521581bb5e6b95abef848491a6a742e860da3e237ebe86a280d30dce4c1"}
+        for key in pins:
             value = re.search(rf'{key}: "([^"]+)"', self.source).group(1)
-            self.assertIn(f'{key}: "{value}"', ci)
+            self.assertEqual(value, pins[key])
         self.assertIn("sha256sum --check --strict", self.source)
         self.assertNotIn("secrets.ANTHROPIC_API_KEY", self.source)
-        self.assertIn("ANTHROPIC_BASE_URL: ${{ matrix.base_url }}", self.source)
+        self.assertIn("ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic", self.source)
+        self.assertIn("ANTHROPIC_BASE_URL: https://api.kimi.com/coding/", self.source)
 
     def test_same_pr_cancellation_does_not_create_product_gate(self):
         self.assertIn("group: pr-review-${{ inputs.pr_number || github.event.pull_request.number }}", self.source)

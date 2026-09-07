@@ -100,6 +100,9 @@ GROK_MARKER = "<!-- lmdj-grok-review -->"
 
 def claude_lane(backend: str, workflow: str = "ci.yml") -> "Lane":
     """The lane one Claude backend occupies inside `workflow`."""
+    if workflow == "pr-review.yml":
+        return Lane(workflow, "Review fallback", f"Validate {backend} result before considering fallback",
+                    f"<!-- lmdj-review: {backend} -->", CLAUDE_SIGNS_SINCE)
     return Lane(workflow, f"Claude review ({backend})", "Review",
                 f"<!-- lmdj-review: {backend} -->", CLAUDE_SIGNS_SINCE)
 
@@ -110,6 +113,8 @@ def claude_lanes(backend: str) -> tuple["Lane", ...]:
 
 
 def grok_lane(workflow: str = "ci.yml") -> "Lane":
+    if workflow == "pr-review.yml":
+        return Lane(workflow, "Review fallback", "Validate Grok result", GROK_MARKER)
     return Lane(workflow, "Grok advisory review", "Run advisory Grok review", GROK_MARKER)
 
 
@@ -400,8 +405,10 @@ def exact_review_posted(repository: str, number: int, run: str, attempt: str,
 
 def collect_standalone_observations(repository: str, lane: Lane, *, limit: int,
                                    api: Request = _api) -> list[Observation]:
-    backend = "grok" if lane.marker == GROK_MARKER else lane.job.rsplit("(", 1)[1].rstrip(")")
-    publisher = "Publish Grok advisory review" if backend == "grok" else f"Publish Claude review ({backend})"
+    backend = "grok" if lane.marker == GROK_MARKER else lane.marker.removeprefix("<!-- lmdj-review: ").removesuffix(" -->")
+    if backend not in {"glm", "kimi", "grok"}:
+        raise LivenessUnavailable("why: unknown standalone backend marker; remedy: restore the finite review lane configuration")
+    publisher = "Publish review and scope"
     observations = []
     for page in range(1, MAX_RUN_PAGES + 1):
         payload = api(f"/repos/{repository}/actions/workflows/pr-review.yml/runs"
@@ -425,6 +432,10 @@ def collect_standalone_observations(repository: str, lane: Lane, *, limit: int,
                 continue
             publication = next((j for j in jobs if j.get("name") == publisher), {})
             step = next((s.get("conclusion") for s in job.get("steps", []) if s.get("name") == lane.step), None)
+            # A backend skipped after another valid review is not a failure
+            # sample. Shared job green alone never proves this backend.
+            if step in SILENT:
+                continue
             posted = (job.get("conclusion") == "success" and step == "success"
                       and publication.get("conclusion") == "success"
                       and exact_review_posted(repository, int(named.group(1)), str(run["id"]),
