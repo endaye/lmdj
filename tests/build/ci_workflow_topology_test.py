@@ -64,6 +64,7 @@ HOSTED_CONTROL_PLANE_JOBS = (
     # control revision's scripts, never the target's, and must outlive the
     # pool it judges for the same reason PR Gate must.
     "self-test-verdict",
+    "batch-verdict",
 )
 # Hosted Ubuntu jobs that are not control plane: each republishes an already
 # produced macOS result under its required check name and runs no workload.
@@ -420,7 +421,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_change_scope_publishes_trusted_head_from_event_or_queue_ticket(self) -> None:
         job = self.workflow_job("change-scope")
         self.assertIn(
-            "trusted-head: ${{ steps.scope.outputs.trusted-head }}", job
+            "trusted-head: ${{ steps.batch.outputs.trusted-head || steps.scope.outputs.trusted-head }}", job
         )
         self.assertIn(
             "HEAD_REPOSITORY: ${{ inputs.queue_ticket != '' && github.repository || "
@@ -703,7 +704,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             self.job_needs("pr-gate"),
             {"change-scope", "pre-heavy-gate", *FORMAL_RESULTS},
         )
-        self.assertIn("if: ${{ always() && !cancelled() }}", job)
+        self.assertIn("if: ${{ always() && !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}", job)
         result_keys = set(
             re.findall(
                 r'"([a-z0-9-]+)":\{"result":"\$\{\{ needs\.[a-z0-9-]+\.result \}\}"\}',
@@ -739,7 +740,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             msg=("why: product preflight must not wait for advisory review; "
                  "remedy: keep only actual product dependencies in pre-heavy-gate"),
         )
-        self.assertIn("if: ${{ !cancelled() }}", job)
+        self.assertIn("if: ${{ !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}", job)
         self.assertIn("runs-on: ubuntu-24.04", job)
         self.assertIn("timeout-minutes: 3", job)
         for forbidden in (

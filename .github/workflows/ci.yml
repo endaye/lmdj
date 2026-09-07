@@ -2,6 +2,20 @@ name: Core CI
 run-name: Core CI / ${{ inputs.queue_ticket || (github.event_name == 'schedule' && 'sweep main') || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && format('self-test {0}', inputs.target || github.sha)) || github.ref_name }}
 
 on:
+  workflow_call:
+    inputs:
+      batch_request:
+        description: Authenticated, durably admitted T3 request JSON; never raw PR input.
+        required: true
+        type: string
+      batch_executor:
+        description: Durable claim executor JSON matching this caller run and attempt.
+        required: true
+        type: string
+    secrets:
+      SELF_HOSTED_RUNNER_READ_TOKEN:
+        description: Existing optional read-only runner inventory credential.
+        required: false
   # Optimistic merge cutover: product verification no longer runs for PRs or
   # ordinary pushes. PR Review supplies independent advisory feedback.
   # Both entries below use one fixed-target, complete 16-suite self-test.
@@ -74,30 +88,141 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     outputs:
-      manifest: ${{ steps.scope.outputs.manifest }}
-      trusted-head: ${{ steps.scope.outputs.trusted-head }}
+      batch-mode: ${{ steps.entry.outputs.batch-mode }}
+      batch-execution: ${{ steps.batch.outputs.execution }}
+      manifest: ${{ steps.batch.outputs.execution || steps.scope.outputs.manifest }}
+      trusted-head: ${{ steps.batch.outputs.trusted-head || steps.scope.outputs.trusted-head }}
       queue-mode: ${{ steps.scope.outputs.queue-mode }}
       pull-request-body: ${{ steps.scope.outputs.pull-request-body }}
-      resolved-base-sha: ${{ steps.scope.outputs.resolved-base-sha }}
-      resolved-head-sha: ${{ steps.scope.outputs.resolved-head-sha }}
+      resolved-base-sha: ${{ steps.batch.outputs.base || steps.scope.outputs.resolved-base-sha }}
+      resolved-head-sha: ${{ steps.batch.outputs.target || steps.scope.outputs.resolved-head-sha }}
       # Self-test batch identity (scripts/ci/self_test.py). `self-test` is
       # true for a schedule or an empty operator dispatch; every formal job
       # of a batch then checks out
       # `self-test-target` instead of the ref's tip, and the verdict job
       # judges the batch under `self-test-identity`.
-      self-test: ${{ steps.resolve.outputs.self-test }}
-      self-test-action: ${{ steps.resolve.outputs.self-test-action }}
-      self-test-target: ${{ steps.resolve.outputs.self-test-target }}
+      self-test: ${{ steps.batch.outputs.fixed-target || steps.resolve.outputs.self-test }}
+      self-test-action: ${{ steps.batch.outputs.action || steps.resolve.outputs.self-test-action }}
+      self-test-target: ${{ steps.batch.outputs.target || steps.resolve.outputs.self-test-target }}
       self-test-identity: ${{ steps.resolve.outputs.self-test-identity }}
     steps:
+      # Reusable workflows inherit the caller's github event/context, not an
+      # event_name of workflow_call. A foreign caller with empty batch strings
+      # must fail, never fall through to legacy manual full evidence.
+      - name: Resolve the execution entry
+        id: entry
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          BATCH_REQUEST: ${{ inputs.batch_request }}
+          BATCH_EXECUTOR: ${{ inputs.batch_executor }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          native = f"{os.environ['GITHUB_REPOSITORY']}/.github/workflows/ci.yml@{os.environ['GITHUB_REF']}"
+          request, executor = os.environ['BATCH_REQUEST'], os.environ['BATCH_EXECUTOR']
+          batch = os.environ['CALLER_WORKFLOW_REF'] != native or bool(request) or bool(executor)
+          try:
+              if batch:
+                  def unique(pairs):
+                      result = {}
+                      for key, value in pairs:
+                          if key in result:
+                              raise ValueError('duplicate field')
+                          result[key] = value
+                      return result
+                  if os.environ['GITHUB_REF'] != 'refs/heads/main' or os.environ['GITHUB_RUN_ATTEMPT'] != '1':
+                      raise ValueError('untrusted caller ref/attempt')
+                  parsed = json.loads(request, object_pairs_hook=unique)
+                  owner = json.loads(executor, object_pairs_hook=unique)
+                  if not isinstance(parsed, dict) or not re.fullmatch('[0-9a-f]{40}', str(parsed.get('control', ''))):
+                      raise ValueError('invalid control')
+                  if not isinstance(owner, dict) or set(owner) != {'run_id', 'attempt'}:
+                      raise ValueError('invalid executor')
+                  if any(type(v) is not int for v in owner.values()) or owner != {'run_id': int(os.environ['GITHUB_RUN_ID']), 'attempt': 1}:
+                      raise ValueError('wrong executor')
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                  print('batch-mode=' + str(batch).lower(), file=output)
+                  if batch:
+                      print('control=' + parsed['control'], file=output)
+          except (ValueError, TypeError, KeyError):
+              raise SystemExit('why: batch entry is incomplete or not this admitted fresh main run; remedy: pass the authenticated request and matching executor, never retry as legacy full')
+          PYEOF
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Read the frozen policy checkout
+        if: ${{ steps.entry.outputs.batch-mode == 'true' }}
+        env:
+          FROZEN_CONTROL: ${{ steps.entry.outputs.control }}
+        run: |
+          git --no-replace-objects worktree add --detach .batch-policy "$FROZEN_CONTROL"
+      - name: Prepare the admitted fixed-target execution
+        id: batch
+        if: ${{ steps.entry.outputs.batch-mode == 'true' }}
+        env:
+          BATCH_REQUEST: ${{ inputs.batch_request }}
+          BATCH_EXECUTOR: ${{ inputs.batch_executor }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/batch-execution-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$work"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          # Only current trusted Python is executed. Historical checkout is
+          # policy JSON/Git data, not a source of control scripts or actions.
+          python3 - "$work/input.json" <<'PYEOF'
+          import json, os, subprocess, sys
+          sys.path.insert(0, 'scripts/ci')
+          import change_scope
+          request = json.loads(os.environ['BATCH_REQUEST'], object_pairs_hook=change_scope.reject_duplicates)
+          executor = json.loads(os.environ['BATCH_EXECUTOR'], object_pairs_hook=change_scope.reject_duplicates)
+          main = subprocess.check_output(['git', '--no-replace-objects', 'rev-parse', 'refs/remotes/origin/main'], text=True).strip()
+          # A queued request can retain an older policy control. The actual
+          # executor must still use the same complete reusable-workflow source
+          # closure; different SHAs alone are not an incompatibility.
+          sources = ('.github/workflows/self-test-report.yml', '.github/workflows/ci.yml',
+                     '.github/workflows/core-nightly.yml', '.github/workflows/architecture-portal.yml')
+          def git(*args):
+              return subprocess.check_output(['git', '--no-replace-objects', *args], stderr=subprocess.DEVNULL)
+          try:
+              actual = os.environ['GITHUB_SHA']
+              if len(actual) != 40 or any(char not in '0123456789abcdef' for char in actual):
+                  raise ValueError('invalid executor source')
+              for revision in (request['control'], actual, main):
+                  if git('cat-file', '-t', revision).strip() != b'commit':
+                      raise ValueError('source is not a commit')
+                  git('merge-base', '--is-ancestor', revision, main)
+              for path in sources:
+                  old, current = request['control'] + ':' + path, actual + ':' + path
+                  if git('cat-file', '-t', old).strip() != b'blob' or git('cat-file', '-t', current).strip() != b'blob':
+                      raise ValueError('missing source blob')
+                  if git('cat-file', 'blob', old) != git('cat-file', 'blob', current):
+                      raise ValueError('source changed')
+          except (KeyError, ValueError, subprocess.CalledProcessError):
+              raise SystemExit('why: batch workflow sources are incompatible or unavailable; remedy: retain verification debt and enqueue a request under compatible trusted control')
+          # The detached data worktree shares this exact fetched object store;
+          # do not issue another network fetch with a different main boundary.
+          document = dict(request=request, executor=executor, run_id=int(os.environ['GITHUB_RUN_ID']),
+                          run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']), control_sha=request['control'], main_sha=main)
+          with open(sys.argv[1], 'w') as output:
+              json.dump(document, output)
+          PYEOF
+          python3 scripts/ci/batch_execution.py prepare --root "$GITHUB_WORKSPACE/.batch-policy" \
+            --input "$work/input.json" --output "$work/execution.json"
+          python3 - "$work/execution.json" >>"$GITHUB_OUTPUT" <<'PYEOF'
+          import json, sys
+          execution = json.load(open(sys.argv[1]))
+          print('execution=' + json.dumps(execution, sort_keys=True, separators=(',', ':')))
+          print('target=' + execution['identity']['target_sha'])
+          print('base=' + (execution['identity']['base_sha'] or execution['identity']['target_sha']))
+          print('fixed-target=true')
+          print('action=run')
+          print('trusted-head=true')
+          PYEOF
       # Main ref and ancestry are checked before testing a fixed event target.
       # Partial Actions reruns inherit old successful jobs, so this initial
       # protocol accepts only attempt 1; retry via a new explicit dispatch.
       - name: Record the self-test request
-        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '') }}
+        if: ${{ steps.entry.outputs.batch-mode == 'false' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '')) }}
         env:
           REQUEST_KIND: ${{ github.event_name == 'schedule' && 'schedule' || inputs.request_kind || 'node' }}
           TARGET_INPUT: ${{ inputs.target }}
@@ -115,15 +240,17 @@ jobs:
                     open(sys.argv[1], "w"), sort_keys=True)
           PYEOF
       - name: Retain the request before validation
-        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '') }}
+        if: ${{ steps.entry.outputs.batch-mode == 'false' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '')) }}
         uses: actions/upload-artifact@v4
         with:
           name: self-test-request-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/self-test-request/request.json
           if-no-files-found: error
           retention-days: 30
+
       - name: Resolve the self-test target
         id: resolve
+        if: ${{ steps.entry.outputs.batch-mode == 'false' }}
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -207,6 +334,7 @@ jobs:
           echo "self-test batch: action=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["action"])' "$WORK/resolution.json")"
       - name: Classify the complete change inventory
         id: scope
+        if: ${{ steps.entry.outputs.batch-mode == 'false' }}
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -245,7 +373,7 @@ jobs:
             --queue-validation-out "$QUEUE_VALIDATION_PATH" \
             --self-test-skip "${SELF_TEST_SKIP:-}"
       - name: Retain the queue validation classification
-        if: ${{ always() && inputs.queue_ticket != '' }}
+        if: ${{ always() && steps.entry.outputs.batch-mode == 'false' && inputs.queue_ticket != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: queue-validation-${{ github.run_id }}
@@ -258,6 +386,7 @@ jobs:
       # lifetime rather than a diagnostic, and a failed upload must fail the
       # producer job instead of leaving the run without scope evidence.
       - name: Retain the scope manifest
+        if: ${{ steps.entry.outputs.batch-mode == 'false' }}
         uses: actions/upload-artifact@v4
         with:
           name: ci-scope-${{ (steps.resolve.outputs.self-test == 'true' && steps.resolve.outputs.self-test-target) || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
@@ -667,7 +796,7 @@ jobs:
     # Product preflight only. PR review and conversation protection belong
     # to the independent PR workflow, never this product execution token.
     needs: [change-scope, docs-static, ci-contract, deploy-contract, chameleon-lab, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -771,7 +900,7 @@ jobs:
   pr-gate:
     name: PR Gate
     needs: [change-scope, pre-heavy-gate, docs-static, portal, ci-contract, select-macos-runner, macos-primary, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package]
-    if: ${{ always() && !cancelled() }}
+    if: ${{ always() && !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -1215,6 +1344,7 @@ jobs:
         !cancelled()
         && needs.change-scope.outputs.self-test == 'true'
         && needs.change-scope.outputs.self-test-action == 'run'
+        && (needs.change-scope.outputs.batch-mode == 'false' || fromJSON(needs.change-scope.outputs.batch-execution).suites.core_tsan_stress)
         && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
         && needs.change-scope.outputs.trusted-head == 'true'
       }}
@@ -1231,6 +1361,7 @@ jobs:
         !cancelled()
         && needs.change-scope.outputs.self-test == 'true'
         && needs.change-scope.outputs.self-test-action == 'run'
+        && (needs.change-scope.outputs.batch-mode == 'false' || fromJSON(needs.change-scope.outputs.batch-execution).suites.core_release_stress)
         && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
         && needs.change-scope.outputs.trusted-head == 'true'
       }}
@@ -1251,7 +1382,7 @@ jobs:
   self-test-verdict:
     name: Self-test verdict
     needs: [change-scope, pre-heavy-gate, docs-static, portal, ci-contract, select-macos-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package, nightly-tsan, nightly-stress]
-    if: ${{ always() && !cancelled() && needs.change-scope.outputs.self-test == 'true' }}
+    if: ${{ always() && !cancelled() && needs.change-scope.outputs.batch-mode == 'false' && needs.change-scope.outputs.self-test == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -1323,3 +1454,77 @@ jobs:
           path: ${{ runner.temp }}/self-test/out/
           if-no-files-found: error
           retention-days: 30
+
+  # New incremental evidence is deliberately not named self-test-verdict or
+  # ci-scope: neither focused nor a new-source full is legacy release evidence.
+  batch-verdict:
+    name: Scoped batch verdict
+    needs: [change-scope, docs-static, portal, ci-contract, select-macos-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package, nightly-tsan, nightly-stress]
+    if: ${{ always() && needs.change-scope.outputs.batch-mode == 'true' && needs.change-scope.outputs.batch-execution != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Read the frozen verdict policy
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ fromJSON(needs.change-scope.outputs.batch-execution).identity.control_sha }}
+          path: .batch-policy
+          persist-credentials: false
+      - name: Judge selected suites from actual needs
+        id: judge
+        env:
+          EXECUTION_JSON: ${{ needs.change-scope.outputs.batch-execution }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/batch-verdict-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$work"
+          # No target or historical-control scripts are executed by this
+          # producer. The current trusted adapter reads frozen JSON policy.
+          python3 - "$work" <<'PYEOF'
+          import json, os, pathlib, sys
+          sys.path.insert(0, 'scripts/ci')
+          import batch_execution, change_scope, test_scope
+          work = pathlib.Path(sys.argv[1])
+          execution = json.loads(os.environ['EXECUTION_JSON'], object_pairs_hook=change_scope.reject_duplicates)
+          needs = json.loads(os.environ['NEEDS_JSON'], object_pairs_hook=change_scope.reject_duplicates)
+          if execution['identity']['run_id'] != int(os.environ['GITHUB_RUN_ID']) or execution['identity']['run_attempt'] != int(os.environ['GITHUB_RUN_ATTEMPT']) or os.environ['GITHUB_RUN_ATTEMPT'] != '1':
+              raise SystemExit('why: scoped verdict has wrong run/attempt; remedy: use a fresh admitted executor')
+          policy = test_scope.load_policy('.batch-policy')
+          aliases = {'core-tsan': 'nightly-tsan', 'core-stress': 'nightly-stress'}
+          # Batch jobs bypass legacy pre-heavy/pr gates and independent
+          # predecessor failures. Only true prerequisite failure explains a
+          # skipped selected job; nonselected jobs never become observations.
+          dependencies = {job: ['change-scope'] for job in policy.inventory.job_owner}
+          dependencies['macos-primary'] = ['change-scope', 'select-macos-runner']
+          dependencies['macos-fallback'] = ['change-scope', 'select-macos-runner', 'macos-primary']
+          dependencies['core-macos'] = ['change-scope', 'select-macos-runner']
+          dependencies['core-asan-macos'] = ['change-scope', 'select-macos-runner']
+          document = batch_execution.from_needs(policy, execution['identity'], execution['selection'], needs,
+                                                aliases=aliases, dependencies=dependencies)
+          for name, value in [('execution.json', execution), ('needs.json', needs), ('verdict.json', document)]:
+              (work / name).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('artifact=batch-verdict-' + execution['identity']['target_sha'] + '-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'], file=output)
+              print('status=' + document['status'], file=output)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              print('Scoped batch: ' + document['selection']['kind'] + ' / ' + document['status'], file=summary)
+              print('Unselected suites are not passed; this is not legacy full release evidence.', file=summary)
+          PYEOF
+      - name: Retain scoped verdict and raw needs
+        if: ${{ always() && steps.judge.outputs.artifact != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.judge.outputs.artifact }}
+          path: ${{ runner.temp }}/batch-verdict-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Keep failed selected work visible
+        if: ${{ steps.judge.outputs.status == 'failed' }}
+        run: |
+          echo 'why: selected batch work failed or remains uncovered; remedy: retain this verdict, report failures and reconcile verification debt' >&2
+          exit 1

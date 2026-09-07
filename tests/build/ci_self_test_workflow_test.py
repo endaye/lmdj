@@ -108,8 +108,11 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
         self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main', body)
         self.assertIn('if [[ "$EVENT_NAME" == "schedule" ]]; then', body)
         self.assertIn('history_args=(--last-conclusion "$WORK/last-conclusion.json")', body)
-        for output in ("self-test", "self-test-action", "self-test-target", "self-test-identity"):
-            self.assertIn(f"      {output}: ${{{{ steps.resolve.outputs.{output} }}}}", body)
+        for output, prefix in {"self-test": "steps.batch.outputs.fixed-target || ",
+                               "self-test-action": "steps.batch.outputs.action || ",
+                               "self-test-target": "steps.batch.outputs.target || ",
+                               "self-test-identity": ""}.items():
+            self.assertIn(f"      {output}: ${{{{ {prefix}steps.resolve.outputs.{output} }}}}", body)
         self.assertIn('--self-test-skip "${SELF_TEST_SKIP:-}"', body)
         self.assertIn("steps.resolve.outputs.self-test-action == 'skip'", body)
 
@@ -211,7 +214,7 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
                     self.assertIn(alt, needs)
         self.assertIn("change-scope", needs)
         self.assertIn("pre-heavy-gate", needs)
-        self.assertIn("if: ${{ always() && !cancelled() && needs.change-scope.outputs.self-test == 'true' }}", body)
+        self.assertIn("if: ${{ always() && !cancelled() && needs.change-scope.outputs.batch-mode == 'false' && needs.change-scope.outputs.self-test == 'true' }}", body)
         self.assertIn("runs-on: ubuntu-24.04", body)
 
     def test_verdict_aliases_and_dependencies_mirror_the_needs_graph(self) -> None:

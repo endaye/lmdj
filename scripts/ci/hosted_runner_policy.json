@@ -39,6 +39,12 @@
     },
     {
       "workflow": "ci.yml",
+      "job": "batch-verdict",
+      "category": "control-plane",
+      "reason": "Retains scoped incremental verdict and actual needs observations even when the self-hosted executors are unavailable. It runs current trusted adapters over frozen policy JSON, not product workloads, and must survive the pool it judges."
+    },
+    {
+      "workflow": "ci.yml",
       "job": "select-macos-runner",
       "category": "control-plane",
       "reason": "Decides macOS routing by querying runner status. It cannot run on the runner whose availability it is deciding."
