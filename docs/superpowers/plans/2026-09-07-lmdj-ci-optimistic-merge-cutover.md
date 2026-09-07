@@ -28,6 +28,7 @@ Declared files:
 - `tests/build/ci_pr_review_workflow_test.py`
 - `scripts/ci/self_test_history.py` (existing `scripts/ci/` full rule)
 - `tests/build/ci_self_test_history_test.py` (existing `tests/build/ci_` rule)
+- `.agents/pitfalls/stale-push-verification-under-concurrent-sessions.md`
 - this plan
 
 ## Implementation
@@ -84,6 +85,14 @@ verification is deliberately pending while T5b owns the shared build resource;
 no final T5a commit or remote cutover is claimed.
 
 ## O2 activation runbook
+
+Pre-cutover update: integrate main through `7d0d15fa` and retain the complete
+quoted review title plus its real-parser regression alongside the automatic
+PR entry tests. Kimi's real review 34137678442 successfully published against
+the original head; its minor retired-input finding is addressed by making
+`hold_seconds` optional, with a regression. The input remains accepted for
+legacy dispatch callers, but the retired entry does not consume it. This
+update does not itself activate branch protection changes.
 
 This is a runbook, not evidence O2 ran. At the root agent's read-only
 observation, protection still required `core (ubuntu-latest)`,
@@ -169,8 +178,9 @@ Version impact: none — CI routing changes no Product, Module, Provider or Cont
 Documentation impact: none — T5b owns the current portal/governance changes in
 the same O2 window. T5a must not remain on main overnight without T5b.
 
-Pitfall impact: none — timing and pending replacement constraints are explicitly
-tested and recorded here; no new external platform failure is asserted.
+Pitfall impact: recurrence stale-push-verification-under-concurrent-sessions —
+the controlled drill briefly dispatched before its async push finished; record
+the actual old-head run, exact cleanup and successful verified-head repeat.
 
 Platform basis: GitHub documents a single-pending default, a finite 100-pending
 `queue: max`, and ordering by actual wait time rather than dispatch time in

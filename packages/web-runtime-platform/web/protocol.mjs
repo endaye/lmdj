@@ -73,6 +73,10 @@ export const HOST_OPERATIONS = Object.freeze([
   "sequence.recovery.list",
   "sequence.recovery.apply",
   "sequence.recovery.discard",
+  "soundset.catalog.list",
+  "soundset.inspect",
+  "soundset.map.preview",
+  "soundset.install",
   "host.close",
 ]);
 

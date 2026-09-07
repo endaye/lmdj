@@ -88,26 +88,26 @@ succeeded; it is a separate boundary from deployment and does not follow from it
 
 ## Full exact-main CI evidence
 
-An ordinary `main` merge is classified from its own changed paths, so a merge
-can legitimately run focused CI. Release authority never accepts that: audit and
-`prepare` require the exact recorded Actions run for the release target to be a
-completed, successful `Core CI` run on `main` whose retained scope manifest is
-`full` for that exact SHA with a trusted head, and whose same-run `Change Scope`
-and `PR Gate` jobs both succeeded. A run conclusion, a merged path type, or a
-`main` SHA alone is never evidence of full CI.
+Current prospective policy is `self-test-v1`: the Owner explicitly references
+one passed, complete 16-suite self-test for the exact candidate in the reviewed
+intent's `self_test_evidence` and run ID. The tool verifies stable workflow and
+main ancestry, distinct control/target revisions, attempt, policy and digest;
+neither a green summary nor legacy `full`/`requested` scope is sufficient.
+See the version governance for the closed reference fields and cutover.
 
-When the release target's own push was focused, the operator dispatches `ci.yml`
-with an empty `lanes` input on the exact target SHA, waits for that run to
-finish, and records its run ID in the release intent before requesting any
-mutation. A lane selection produces a `requested` manifest, which is rejected.
+An existing valid daily or node verdict may be reused for the same exact target.
+If fresh evidence is required, separately authorize `ci.yml` dispatch on ref
+`main` with `target_revision` equal to the candidate SHA (not a SHA as ref).
+Use the self-test inputs, without lane selection or a queue ticket. The trusted
+control revision may be newer than the candidate. Record only the validated
+artifact's facts; never invent or backfill a digest or reference.
 
-The retained scope manifest is the prospective evidence and it expires after 14
-days. While the recorded run itself is retained, rerun all of its jobs to
-produce a fresh latest attempt on the same run ID and SHA. If that is
-unavailable, only a newly authorized exact-SHA full run plus a separately
-reviewed intent update may replace it; never reconstruct, infer or backfill the
-evidence. Report absent or expired evidence as `unverifiable` and focused,
-mismatched or ungated evidence as `conflict`.
+Verdict artifacts currently retain 30 days. Missing/expired evidence is
+`unverifiable`; mismatched, incomplete or non-passing evidence is `conflict`.
+Recovery requires a new dispatch on main for the same target and a separately
+reviewed intent update, not Re-run jobs: the producer currently accepts attempt
+1 only. Published legacy and self-test history remains read-only, with immutable
+tag/Release/asset/plan-marker verification; artifact expiry does not rewrite it.
 
 A full dispatch is evidence, not authorization: completing one authorizes no
 tag, Draft, publication, deployment or promotion.

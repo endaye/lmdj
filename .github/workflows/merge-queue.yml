@@ -8,7 +8,7 @@ on:
     inputs:
       hold_seconds:
         description: Retired compatibility input; the manual entry only reports retirement.
-        required: true
+        required: false
         type: string
         default: "60"
 

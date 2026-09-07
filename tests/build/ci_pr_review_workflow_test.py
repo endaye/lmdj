@@ -14,8 +14,11 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -58,6 +61,46 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         cls.source = WORKFLOW.read_text(encoding="utf-8")
         cls.jobs = {name: job_block(cls.source, name) for name in
                     ("target", "claude-review", "grok-review", "publish-claude", "publish-grok")}
+
+    def test_yaml_parser_retains_both_run_name_expressions_after_hash(self):
+        # Use the actual pinned workflow parser instead of a hand-written YAML
+        # approximation or an assertion that quotes happen to appear in source.
+        executable = os.environ.get("LMDJ_ACTIONLINT") or shutil.which("actionlint")
+        if not executable and os.environ.get("RUNNER_TEMP"):
+            candidate = Path(os.environ["RUNNER_TEMP"]) / "actionlint"
+            if candidate.is_file():
+                executable = str(candidate)
+        if not executable:
+            self.skipTest("set LMDJ_ACTIONLINT to the pinned actionlint for YAML semantic verification")
+
+        def parsed_expressions(line):
+            # secrets is forbidden in run-name. Each visible expression must
+            # produce one semantic diagnostic; a YAML comment produces none.
+            # Probe separately because actionlint stops at a scalar's first
+            # invalid expression; the other expression stays valid each time.
+            detected = 0
+            expressions = r"\$\{\{.*?\}\}"
+            for position in range(len(re.findall(expressions, line))):
+                indices = iter(range(len(re.findall(expressions, line))))
+                probe = re.sub(expressions, lambda _: "${{ secrets.RUN_TITLE_PARSE_PROBE }}"
+                               if next(indices) == position else "${{ 1 }}", line)
+                document = ("name: parser probe\n" + probe + "\non: workflow_dispatch\njobs:\n"
+                            "  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n")
+                result = subprocess.run([executable, "-no-color", "-shellcheck=", "-pyflakes=", "-"],
+                                        input=document, text=True, capture_output=True, timeout=15)
+                if result.returncode not in (0, 1):
+                    self.fail("why: actionlint did not complete semantic parsing; remedy: check its pinned installation")
+                detected += 'context "secrets" is not allowed here' in result.stdout + result.stderr
+            return detected
+
+        # Real old spelling reproduced the production truncation. It parses
+        # successfully but hides both expressions behind the YAML comment.
+        old = "run-name: PR Review / #${{ inputs.pr_number }} @ ${{ github.sha }}"
+        self.assertEqual(parsed_expressions(old), 0)
+        current = next(line for line in self.source.splitlines() if line.startswith("run-name:"))
+        self.assertEqual(parsed_expressions(current), 2,
+                         "why: YAML discarded the PR/head run-name expressions after #; "
+                         "remedy: quote the complete run-name scalar")
 
     def test_dispatch_only_on_main_and_pr_automatically_active(self):
         self.assertIn("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'", self.jobs["target"])

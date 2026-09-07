@@ -1,10 +1,10 @@
-"""One read-only verifier for full exact-main CI evidence.
+"""Read-only, versioned release qualification from exact-target CI evidence.
 
 Release authority never infers that a target was fully tested from its path
 type, its workflow conclusion, or the fact that it reached `main`. It reads
-three independent projections of one exact Actions run and requires all of
-them: the run identity, its same-run adjudication jobs, and the scope manifest
-that run retained for that exact head SHA.
+independent projections of the trusted control run and complete target verdict.
+The old scope verifier remains explicit for immutable legacy history and its
+pre-cutover regression matrix, never as a current prospective fallback.
 
 The result is closed and read-only. `audit.py` maps it to an audit finding and
 `prepare.py` maps every non-success to a refusal; neither is allowed to invent
@@ -14,6 +14,9 @@ a fourth outcome.
 from __future__ import annotations
 
 from dataclasses import dataclass
+# Reuse the producer's pure, closed validator; never load executable target code.
+from .self_test_protocol import protocol as self_test, validate_verdict_document, SelfTestEvidenceError
+from .model import Disposition, ReleaseIntent, ReleasePolicy
 
 from .github_api import (
     CI_SCOPE_LANES,
@@ -21,6 +24,7 @@ from .github_api import (
     CiScopeUnavailableError,
     RunJobProjection,
     RunProjection,
+    SelfTestRunProjection,
 )
 
 
@@ -39,13 +43,94 @@ class CiEvidenceResult:
     code: str
     message: str
     sources: tuple[str, ...] = ()
-    run: RunProjection | None = None
+    run: RunProjection | SelfTestRunProjection | None = None
 
     def __post_init__(self) -> None:
         if self.code not in _CODES:
             raise ValueError("CI evidence result code is not closed")
         if not self.message:
             raise ValueError("CI evidence result must describe its outcome")
+
+
+def verify_release_ci(github: object, *, policy: ReleasePolicy, intent: ReleaseIntent) -> CiEvidenceResult:
+    """Select explicitly between immutable legacy history and new candidate proof.
+
+    Published self-test references survive artifact expiry. The protected intent
+    records the exact digest/identity used to construct the immutable release
+    plan; historical audit still verifies tag, release marker and assets.
+    """
+    prospective = intent.disposition is Disposition.RELEASABLE
+    if policy.prospective_ci_protocol not in ("self-test-v1", "ci-scope-v2"):
+        return _self_test_conflict("unknown prospective CI evidence protocol")
+    reference = intent.self_test_evidence
+    if reference is None:
+        if prospective and policy.prospective_ci_protocol == "self-test-v1":
+            return CiEvidenceResult("unverifiable", "why: new candidates require an explicit complete self-test reference; remedy: validate a complete self-test for the exact target and separately review its intent reference", CI_EVIDENCE_SOURCES)
+        return verify_exact_main_ci(
+            github, repository=policy.repository, branch=policy.branch,
+            workflow=policy.blocking_workflow, target_revision=intent.target_revision,
+            run_id=intent.merged_main_run_id, require_full_scope=prospective,
+        )
+    try:
+        if prospective:
+            # Reject a latest rerun, including a failed rerun of a once-green
+            # batch. Current candidates cannot reuse an earlier attempt.
+            run = github.get_self_test_run(policy.repository, intent.merged_main_run_id)
+        else:
+            # Publication froze this attempt in its plan digest. An unrelated
+            # later rerun must not rewrite that historical observation.
+            run = github.get_self_test_run(policy.repository, intent.merged_main_run_id,
+                                           run_attempt=reference["run_attempt"])
+        if (
+            not isinstance(run, SelfTestRunProjection)
+            or run.id != intent.merged_main_run_id or run.workflow_name != policy.blocking_workflow
+            or run.head_branch != policy.branch or run.head_sha != reference["control_revision"]
+            or run.run_attempt != reference["run_attempt"] or run.run_attempt != 1
+            or run.event not in ("schedule", "workflow_dispatch")
+            or (run.event == "schedule") != (reference["request_kind"] == "schedule")
+            or run.status != "completed" or run.conclusion != "success"
+        ):
+            return _self_test_conflict("self-test run/control/attempt/event does not match the recorded successful batch")
+        authority_revision = github.verify_self_test_provenance(policy.repository, run, intent.target_revision)
+        if not prospective:
+            return CiEvidenceResult("ok", "published self-test identity matches its durable reference; retention is not re-adjudicated", CI_EVIDENCE_SOURCES, run)
+        # Both documents come from trusted main history. Requiring the current
+        # applicable policy prevents an older/weaker suite list self-certifying.
+        applicable = github.get_self_test_policy(policy.repository, authority_revision)
+        producing = github.get_self_test_policy(policy.repository, run.head_sha)
+        required = CI_SCOPE_LANES | {"core_tsan_stress", "core_release_stress"}
+        if {suite.id for suite in applicable.suites} != required:
+            return _self_test_conflict("current policy does not enumerate exactly the 16 required release suites", "repair the reviewed main policy before obtaining new evidence")
+        if producing.revision != applicable.revision:
+            return _self_test_conflict("control revision used a different policy from the current complete release protocol")
+        if reference["policy_revision"] != applicable.revision:
+            return _self_test_conflict("intent reference names a different policy from the current complete release protocol")
+        expected = self_test.Identity(self_test.EVIDENCE_SCHEMA, reference["request_kind"],
+                                     run.head_sha, intent.target_revision, run.id, run.run_attempt,
+                                     applicable.revision)
+        document = validate_verdict_document(
+            github.get_self_test_verdict(policy.repository, run, intent.target_revision),
+            policy=applicable, expected_identity=expected,
+        )
+        if document["status"] != "passed" or document["evidence_digest"] != reference["evidence_digest"]:
+            return _self_test_conflict("self-test verdict is not passed or differs from the Owner's exact digest reference")
+    except CiScopeUnavailableError:
+        return CiEvidenceResult("unverifiable", "why: self-test artifact is absent or expired; remedy: create a new dispatch on main for the same target, not Re-run jobs, and separately review the intent reference", CI_EVIDENCE_SOURCES)
+    except (CiScopeConflictError, SelfTestEvidenceError, self_test.SelfTestPolicyError) as error:
+        # These exceptions contain closed local diagnostics, not HTTP bodies,
+        # signed download URLs or raw transport exceptions. Keep the actual
+        # failed invariant actionable instead of hiding it behind 'conflict'.
+        detail = str(error).replace("\r", " ").replace("\n", " ")[:1500]
+        return _self_test_conflict(detail)
+    except Exception:
+        return _outage("why: self-test evidence projection is unavailable; remedy: restore GitHub read access and retry the exact candidate verification; no release authority granted")
+    return CiEvidenceResult("ok", "exact target has one retained, complete 16-suite self-test verdict", CI_EVIDENCE_SOURCES, run)
+
+
+def _self_test_conflict(why: str, remedy: str = "create a new dispatch on main for the same target, not Re-run jobs; validate it and separately review the intent reference") -> CiEvidenceResult:
+    if why.startswith("why:") and "; remedy:" in why:
+        return _conflict(why)
+    return _conflict(f"why: {why}; remedy: {remedy}")
 
 
 def verify_exact_main_ci(
@@ -191,4 +276,5 @@ __all__ = [
     "SCOPE_EVIDENCE_SOURCES",
     "SCOPE_SCHEMA",
     "verify_exact_main_ci",
+    "verify_release_ci",
 ]

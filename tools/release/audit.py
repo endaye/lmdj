@@ -15,7 +15,7 @@ import tempfile
 from typing import Callable, Iterable, Iterator
 import unicodedata
 
-from .ci_evidence import verify_exact_main_ci
+from .ci_evidence import verify_release_ci
 from .commands import sanitize_diagnostic
 from .github_api import GitHubAsset, GitHubEnvironment, GitHubRelease
 from .model import (
@@ -42,7 +42,7 @@ from scripts.version import _provider_source_package_sha256
 _REPORT_SCHEMA = "lmdj.release-audit.v1"
 _SUCCESS_CODES = frozenset(("ok", "ok-with-historical-exception"))
 _CODES = frozenset((*_SUCCESS_CODES, "missing", "conflict", "unauthorized", "unverifiable", "external-error"))
-_MARKER = re.compile(r"<!-- lmdj\.release-plan-marker\.v1 (\{[^\r\n]*\}) -->")
+_MARKER = re.compile(r"<!-- (lmdj\.release-plan-marker\.v[12]) (\{[^\r\n]*\}) -->")
 _STATIC_PROJECTION_MESSAGE = (
     "active Product, Assembly lock or immutable snapshot projection is inconsistent"
 )
@@ -749,20 +749,12 @@ def _ci_problem(context: object, intent: ReleaseIntent) -> AuditFinding | None:
     """Adjudicate the exact merged-main CI evidence one intent still depends on.
 
     A `releasable` intent is prospective: it can still authorize a tag, a Draft
-    and a publication, so it must hold retained `full` scope evidence for its
-    exact target plus a successful same-run Gate. Every terminal disposition is
+    and a publication, so current policy requires retained complete self-test
+    evidence for its exact target. Every terminal disposition is
     audited from immutable evidence instead, because a bounded artifact
     retention must never be able to rewrite recorded history.
     """
-    result = verify_exact_main_ci(
-        context.github,
-        repository=context.policy.repository,
-        branch=context.policy.branch,
-        workflow=context.policy.blocking_workflow,
-        target_revision=intent.target_revision,
-        run_id=intent.merged_main_run_id,
-        require_full_scope=intent.disposition is Disposition.RELEASABLE,
-    )
+    result = verify_release_ci(context.github, policy=context.policy, intent=intent)
     if result.code == "ok":
         return None
     return AuditFinding(result.code, intent.tag, result.message, result.sources)
@@ -868,19 +860,36 @@ def _release_problem(
         return "GitHub Release target_commitish conflicts with canonical identity"
     markers = _MARKER.findall(release.body)
     if not markers:
-        return None if allow_missing_marker else "GitHub Release plan marker is missing"
-    if len(markers) != 1:
+        return None if allow_missing_marker and intent.self_test_evidence is None else "GitHub Release plan marker is missing"
+    if len(markers) != 1 or release.body.count("lmdj.release-plan-marker.") != 2:
         return "GitHub Release plan marker is ambiguous"
     try:
-        marker = json.loads(markers[0])
-    except json.JSONDecodeError:
+        def reject_duplicates(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate marker key")
+                result[key] = value
+            return result
+        marker = json.loads(markers[0][1], object_pairs_hook=reject_duplicates)
+    except ValueError:
         return "GitHub Release plan marker is invalid"
-    if (
-        set(marker) != {
-            "schema", "plan_schema", "plan_sha256", "tag", "tag_object",
-            "target_revision", "intent",
+    reference = intent.self_test_evidence
+    schema = "lmdj.release-plan-marker.v2" if reference is not None else "lmdj.release-plan-marker.v1"
+    keys = {"schema", "plan_schema", "plan_sha256", "tag", "tag_object", "target_revision", "intent"}
+    if reference is not None:
+        keys.add("ci")
+        expected_ci = {
+            "run_id": intent.merged_main_run_id,
+            "event": "schedule" if reference["request_kind"] == "schedule" else "workflow_dispatch",
+            "head_sha": reference["control_revision"], "conclusion": "success",
+            "target_revision": intent.target_revision, "self_test_evidence": dict(reference),
         }
-        or marker.get("schema") != "lmdj.release-plan-marker.v1"
+        if not isinstance(marker, dict) or canonical_json(marker.get("ci")) != canonical_json(expected_ci):
+            return "why: GitHub Release permanent marker does not bind the exact self-test reference; remedy: investigate the published evidence and intent drift; do not backfill or rewrite history"
+    if (
+        not isinstance(marker, dict) or set(marker) != keys
+        or markers[0][0] != schema or marker.get("schema") != schema
         or marker.get("plan_schema") != "lmdj.release-plan.v1"
         or not isinstance(marker.get("plan_sha256"), str)
         or re.fullmatch(r"[0-9a-f]{64}", marker["plan_sha256"]) is None

@@ -10,6 +10,7 @@ independently of both the CI policy file and the release modules under test.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 import sys
 import tempfile
@@ -325,7 +326,8 @@ class ProspectiveReleaseAuditTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="lmdj-release-ci-evidence-")
         self.root = Path(self.temporary.name)
         (self.root / "evidence.md").write_text("fixture\n", encoding="utf-8")
-        self.policy = load_policy(ROOT / "tools/release/policy.json")
+        # This suite pins legacy scope semantics, not current candidate policy.
+        self.policy = replace(load_policy(ROOT / "tools/release/policy.json"), prospective_ci_protocol="ci-scope-v2")
         self.git = ReadOnlyGit(self.root)
         self.github = ProspectiveAuditGitHub()
         self.tag = "module/application-facade/v1.0.1"

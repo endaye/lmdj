@@ -169,6 +169,10 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "sequence.recovery.list",
     "sequence.recovery.apply",
     "sequence.recovery.discard",
+    "soundset.catalog.list",
+    "soundset.inspect",
+    "soundset.map.preview",
+    "soundset.install",
     "host.close",
   ]);
   assert.deepEqual(HOST_NOTIFICATIONS, [

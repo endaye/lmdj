@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import base64
 import io
 import json
 import os
@@ -12,6 +14,8 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qsl, quote, urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
+
+from .self_test_protocol import protocol as self_test
 
 
 class GitHubApiError(RuntimeError):
@@ -46,6 +50,13 @@ class RunProjection:
     workflow_name: str
     status: str
     conclusion: str | None
+
+
+@dataclass(frozen=True)
+class SelfTestRunProjection(RunProjection):
+    """Stable workflow identity resolved independently of dynamic run.name."""
+    run_attempt: int
+    repository_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -282,12 +293,117 @@ class GitHubClient:
             raise GitHubApiError("GitHub run workflow identity is invalid")
         return name
 
-    def list_run_jobs(self, repository: str, run_id: int) -> list[RunJobProjection]:
+    def get_self_test_run(self, repository: str, run_id: int, *, run_attempt: int | None = None) -> SelfTestRunProjection:
+        _require_repository(repository)
+        _require_id(run_id, "run")
+        endpoint = f"/repos/{repository}/actions/runs/{run_id}"
+        if run_attempt is not None:
+            _require_id(run_attempt, "attempt")
+            endpoint += f"/attempts/{run_attempt}"
+        document = _json_response(self._request("GET", endpoint), {200})
+        if not isinstance(document, dict):
+            raise GitHubApiError("self-test run projection is malformed")
+        workflow_id, path = _run_workflow_reference(document)
+        if path != ".github/workflows/ci.yml":
+            raise CiScopeConflictError("self-test run is from another workflow path")
+        # A second stable lookup prevents accepting a retired/replaced workflow
+        # ID merely because a run self-identifies with the expected file path.
+        workflow = _json_response(self._request("GET", f"/repos/{repository}/actions/workflows/ci.yml"), {200})
+        if not isinstance(workflow, dict) or workflow.get("id") != workflow_id or workflow.get("path") != path or workflow.get("name") != "Core CI":
+            raise CiScopeConflictError("self-test stable workflow identity conflicts")
+        repo, head_repo = document.get("repository"), document.get("head_repository")
+        if (not isinstance(repo, dict) or not isinstance(head_repo, dict)
+                or repo.get("full_name") != repository or head_repo.get("full_name") != repository
+                or not _positive_id(repo.get("id")) or repo["id"] != head_repo.get("id")):
+            raise CiScopeConflictError("self-test run is not from the canonical repository")
+        parsed = _parse_run(document, workflow["name"])
+        attempt = document.get("run_attempt")
+        if parsed.id != run_id or not _positive_id(attempt) or (run_attempt is not None and attempt != run_attempt):
+            raise CiScopeConflictError("self-test run/attempt identity conflicts")
+        return SelfTestRunProjection(**parsed.__dict__, run_attempt=attempt, repository_id=repo["id"])
+
+    def verify_self_test_provenance(self, repository: str, run: SelfTestRunProjection, target_revision: str) -> str:
+        """Both control and target must be in main; target need not equal control."""
+        _require_repository(repository)
+        if not _sha(target_revision):
+            raise CiScopeConflictError("self-test target is not an exact SHA")
+        main = self.get_branch(repository, "main")
+        if main.name != "main" or not main.protected:
+            raise CiScopeConflictError("self-test authority is not protected main")
+        # PR #757 introduced the trusted producer. Pre-deployment code cannot
+        # mint new evidence, even if an old control is rerun at a later date.
+        producer = "22247897e9163a3f34e15f564bec133419d1f177"
+        for base, head, subject in ((producer, run.head_sha, "control predates or diverges from trusted producer"),
+                                    (run.head_sha, main.commit_sha, "control is outside main history"),
+                                    (target_revision, main.commit_sha, "target is outside main history")):
+            document = _json_response(self._request("GET", f"/repos/{repository}/compare/{base}...{head}"), {200})
+            if not isinstance(document, dict) or document.get("status") not in ("ahead", "identical"):
+                raise CiScopeConflictError(f"self-test ancestry conflicts: {subject}")
+        return main.commit_sha
+
+    def get_self_test_policy(self, repository: str, revision: str):
+        _require_repository(repository)
+        if revision != "main" and not _sha(revision):
+            raise GitHubApiError("self-test policy revision is invalid")
+        document = _json_response(self._request("GET", f"/repos/{repository}/contents/scripts/ci/self_test_policy.json?{urlencode({'ref': revision})}"), {200})
+        try:
+            if not isinstance(document, dict) or document.get("type") != "file" or document.get("encoding") != "base64" or document.get("path") != "scripts/ci/self_test_policy.json":
+                raise ValueError("invalid policy projection")
+            encoded = document["content"]
+            if not isinstance(encoded, str) or len(encoded) > _CI_SCOPE_SIZE_CAP:
+                raise ValueError("invalid policy size")
+            payload = base64.b64decode("".join(encoded.split()), validate=True)
+            return self_test.parse_policy(json.loads(payload, object_pairs_hook=_reject_duplicate_keys))
+        except (ValueError, KeyError, TypeError):
+            raise CiScopeConflictError("trusted self-test policy document is malformed") from None
+
+    def get_self_test_verdict(self, repository: str, run: SelfTestRunProjection, target_revision: str) -> dict:
+        _require_repository(repository)
+        if not _sha(target_revision):
+            raise CiScopeConflictError("self-test target is not an exact SHA")
+        jobs = self.list_run_jobs(repository, run.id, run_attempt=run.run_attempt)
+        selected = [job for job in jobs if job.name == "Self-test verdict"]
+        if (len(selected) != 1 or selected[0].status != "completed" or selected[0].conclusion != "success"
+                or any(job.run_id != run.id or job.head_sha != run.head_sha for job in jobs)):
+            raise CiScopeConflictError("self-test verdict job did not succeed in this exact attempt")
+        name = f"self-test-verdict-{target_revision}-{run.id}-{run.run_attempt}"
+        matching = [a for a in self.list_run_artifacts(repository, run.id) if a.name == name]
+        if not matching:
+            raise CiScopeUnavailableError("self-test verdict artifact is absent")
+        if len(matching) != 1:
+            raise CiScopeConflictError("self-test verdict artifacts are ambiguous")
+        artifact = matching[0]
+        try:
+            expires = datetime.strptime(artifact.expires_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise CiScopeConflictError("self-test artifact retention timestamp is invalid") from None
+        if artifact.expired or expires <= datetime.now(timezone.utc):
+            raise CiScopeUnavailableError("self-test verdict artifact expired")
+        if (artifact.run_id != run.id or artifact.head_sha != run.head_sha or artifact.head_branch != run.head_branch
+                or artifact.repository_id != run.repository_id or artifact.head_repository_id != run.repository_id
+                or artifact.size_in_bytes > _CI_SCOPE_SIZE_CAP):
+            raise CiScopeConflictError("self-test artifact control/repository identity conflicts")
+        try:
+            with zipfile.ZipFile(io.BytesIO(self._download_artifact(artifact))) as archive:
+                members = archive.infolist()
+                if len(members) != 1 or members[0].filename != "verdict.json" or members[0].is_dir() or members[0].file_size > _CI_SCOPE_SIZE_CAP:
+                    raise ValueError("invalid verdict archive")
+                document = json.loads(archive.read(members[0]), object_pairs_hook=_reject_duplicate_keys)
+            if not isinstance(document, dict):
+                raise ValueError("invalid verdict JSON")
+            return document
+        except (ValueError, OSError, RuntimeError, zipfile.BadZipFile):
+            raise CiScopeConflictError("self-test verdict archive is malformed") from None
+
+    def list_run_jobs(self, repository: str, run_id: int, *, run_attempt: int | None = None) -> list[RunJobProjection]:
         """Return every latest-attempt job of one run bound to that run's identity."""
         _require_repository(repository)
         _require_id(run_id, "run")
         endpoint = f"/repos/{repository}/actions/runs/{run_id}/jobs"
-        required_query = {"filter": "latest", "per_page": "100"}
+        if run_attempt is not None:
+            _require_id(run_attempt, "attempt")
+            endpoint = f"/repos/{repository}/actions/runs/{run_id}/attempts/{run_attempt}/jobs"
+        required_query = {"per_page": "100"} if run_attempt is not None else {"filter": "latest", "per_page": "100"}
         next_path: str | None = f"{endpoint}?{urlencode(required_query)}"
         visited: set[str] = set()
         jobs: list[RunJobProjection] = []

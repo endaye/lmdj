@@ -350,7 +350,8 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.target = "a" * 40
         self.tag = "lmdj-v1.0.21.0"
         self.profile = "web-runtime-host"
-        self.policy = load_policy(ROOT / "tools/release/policy.json")
+        # Retain the historical pre-cutover transition matrix explicitly.
+        self.policy = replace(load_policy(ROOT / "tools/release/policy.json"), prospective_ci_protocol="ci-scope-v2")
         self.ledger = load_ledger_document({
             "schema": "lmdj.release-intents.v1",
             "entries": [{

@@ -4065,6 +4065,95 @@ void check_snapshot_published_notification(
            {"project_revision", project_revision}}));
 }
 
+// Stage 11's Sound Set operations reach the Facade through the Web Host with
+// the exact locked field sets, and only the two Project-scoped ones learn a
+// Project. Browsing and inspecting the Workspace Set Store follows the
+// `provider.list` precedent: it needs no open Project, and it never carries a
+// Workspace field.
+void test_soundset_operations_route_at_the_workspace_and_the_project() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+
+  // No Project is open yet, and the Workspace-level query still answers.
+  const auto listed = check_locked_success_result(
+      runtime->dispatch("soundset.catalog.list", Json::object(), {}));
+  check_exact_keys(
+      listed,
+      {"project_revision", "catalog_available", "sets", "refused"});
+  LMDJ_CHECK(listed.at("catalog_available") == false);
+  LMDJ_CHECK(listed.at("sets").empty());
+
+  const Json identity{
+      {"set_id", "11111111-1111-4111-8111-111111111111"},
+      {"version", "1.0.0"},
+      {"manifest_sha256", std::string(64, 'a')},
+  };
+  // Not in the Set Store, but refused by the Facade rather than by the Host's
+  // session gate: the operation reached Core.
+  check_error(
+      runtime->dispatch("soundset.inspect", identity, {}), "NOT_FOUND");
+
+  // Every locked shape is exact, and a stray Workspace field is refused by
+  // the Host before the Facade ever sees it.
+  auto stray = identity;
+  stray["workspace_path"] = temp.path().generic_string();
+  check_error(
+      runtime->dispatch("soundset.inspect", stray, {}),
+      "HOST_PROTOCOL_MISMATCH");
+  check_error(
+      runtime->dispatch(
+          "soundset.catalog.list",
+          {{"workspace_path", temp.path().generic_string()}},
+          {}),
+      "HOST_PROTOCOL_MISMATCH");
+  auto preview = identity;
+  preview["bank_id"] = 1;
+  // The two Project-scoped operations never carry a project_path of their
+  // own; the Host injects the retained Project.
+  auto preview_with_project = preview;
+  preview_with_project["project_path"] = temp.path().generic_string();
+  check_error(
+      runtime->dispatch("soundset.map.preview", preview_with_project, {}),
+      "HOST_PROTOCOL_MISMATCH");
+  check_error(
+      runtime->dispatch("soundset.map.preview", identity, {}),
+      "HOST_PROTOCOL_MISMATCH");
+  auto out_of_range = preview;
+  out_of_range["bank_id"] = 4;
+  check_error(
+      runtime->dispatch("soundset.map.preview", out_of_range, {}),
+      "HOST_PROTOCOL_MISMATCH");
+
+  auto install = preview;
+  install["command_id"] = uuid(4101);
+  install["expected_revision"] = 0;
+  auto bad_policy = install;
+  bad_policy["occupied_pad_policy"] = "overwrite";
+  check_error(
+      runtime->dispatch("soundset.install", bad_policy, {}),
+      "HOST_PROTOCOL_MISMATCH");
+
+  // Without an open Project the two Project-scoped operations are the ones
+  // the Host state gate refuses.
+  check_error(
+      runtime->dispatch("soundset.map.preview", preview, {}),
+      "HOST_STATE_INVALID");
+  check_error(
+      runtime->dispatch("soundset.install", install, {}),
+      "HOST_STATE_INVALID");
+
+  // With a Project open they reach the Facade, which refuses on the Set
+  // rather than on the Host state.
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  check_error(
+      runtime->dispatch("soundset.map.preview", preview, {}), "NOT_FOUND");
+  auto second_install = install;
+  second_install["occupied_pad_policy"] = "keep";
+  check_error(
+      runtime->dispatch("soundset.install", second_install, {}),
+      "NOT_FOUND");
+}
+
 void test_bridge_routes_sample_operations_without_a_project_path() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -5355,6 +5444,7 @@ int main() {
     test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention();
     test_host_close_releases_current_and_retired_runtime_banks();
     test_oversized_project_switch_is_inspectable_but_not_runnable();
+    test_soundset_operations_route_at_the_workspace_and_the_project();
     test_bridge_routes_sample_operations_without_a_project_path();
     test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
     test_bridge_rejects_duplicates_until_response_consumption();

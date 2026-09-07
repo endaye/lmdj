@@ -270,7 +270,9 @@ class ReleaseAuditFixture:
         self.root = Path(self.temporary.name)
         (self.root / "evidence.md").write_text("fixture\n", encoding="utf-8")
         self.install_static_authority(self.root)
-        self.policy = load_policy(ROOT / "tools/release/policy.json")
+        # Legacy protocol regression; current prospective policy has its own
+        # end-to-end verifier matrix in release_self_test_evidence_test.
+        self.policy = replace(load_policy(ROOT / "tools/release/policy.json"), prospective_ci_protocol="ci-scope-v2")
         self.git = ReadOnlyGit()
         self.github = ReadOnlyGitHub()
         self.git.authority_root = self.root

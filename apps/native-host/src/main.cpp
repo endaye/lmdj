@@ -122,8 +122,29 @@ constexpr std::array<std::pair<std::string_view, FacadeSurface>, 23>
         {"performance.resample.commit", FacadeSurface::command},
     }};
 
+// Stage 11's Sound Set operations are a second Facade surface this Host
+// forwards, kept in their own table so the P10-D20 Performance inventory that
+// `tests/host/performance_cli_test.py` pins against the Facade stays exactly
+// the Performance inventory.
+constexpr std::array<std::pair<std::string_view, FacadeSurface>, 4>
+    kSoundSetOperations{{
+        {"soundset.catalog.list", FacadeSurface::query},
+        {"soundset.inspect", FacadeSurface::query},
+        {"soundset.map.preview", FacadeSurface::query},
+        {"soundset.install", FacadeSurface::command},
+    }};
+
 std::optional<FacadeSurface> performance_surface(std::string_view operation) {
   for (const auto& [name, surface] : kPerformanceOperations) {
+    if (name == operation) {
+      return surface;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<FacadeSurface> soundset_surface(std::string_view operation) {
+  for (const auto& [name, surface] : kSoundSetOperations) {
     if (name == operation) {
       return surface;
     }
@@ -486,6 +507,8 @@ class NativeHost final {
         performance_adapter_(lmdj::facade::make_engine_performance_adapter(
             engine_,
             lmdj::facade::make_engine_pattern_publication_gateway(engine_))),
+        catalog_(lmdj::facade::make_workspace_soundset_catalog(
+            invocation_.workspace)),
         application_(lmdj::facade::ApplicationConfig{
             invocation_.workspace,
             std::move(providers),
@@ -498,6 +521,8 @@ class NativeHost final {
             performance_adapter_.launch_acknowledger,
             performance_adapter_.replay_controller,
             performance_adapter_.gesture_sink,
+            catalog_.transport,
+            catalog_.source,
         }) {
 #if defined(__APPLE__)
     if (!invocation_.no_device) {
@@ -573,9 +598,12 @@ class NativeHost final {
     const auto name = has_operation ? operation->get<std::string>() : "";
     const auto performance =
         has_operation ? performance_surface(name) : std::nullopt;
+    const auto soundset =
+        has_operation ? soundset_surface(name) : std::nullopt;
     const bool query_operation =
         name == "sample.quota" || name == "status" ||
-        (performance.has_value() && *performance == FacadeSurface::query);
+        (performance.has_value() && *performance == FacadeSurface::query) ||
+        (soundset.has_value() && *soundset == FacadeSurface::query);
     if (!has_operation || query_operation) {
       service_runtime_once();
     } else {
@@ -596,6 +624,9 @@ class NativeHost final {
       }
       if (performance.has_value()) {
         return performance_operation(request, *performance);
+      }
+      if (soundset.has_value()) {
+        return soundset_operation(request, *soundset);
       }
       if (name == "trigger") {
         return trigger(request);
@@ -657,6 +688,23 @@ class NativeHost final {
          project->get<std::string>() != invocation_.project.generic_string())) {
       return invalid_request(
           "Performance operation must target the Native Host Project");
+    }
+    std::lock_guard lock(facade_mutex_);
+    return surface == FacadeSurface::command
+               ? application_.command(request)
+               : application_.query(request);
+  }
+
+  // Workspace-level Sound Set operations carry no `project_path` at all, and
+  // the Project-scoped two must name this Host's Project, so the check is the
+  // presence-conditional one rather than a required field.
+  Json soundset_operation(const Json& request, FacadeSurface surface) {
+    const auto project = request.find("project_path");
+    if (project != request.end() &&
+        (!project->is_string() ||
+         project->get<std::string>() != invocation_.project.generic_string())) {
+      return invalid_request(
+          "Sound Set operation must target the Native Host Project");
     }
     std::lock_guard lock(facade_mutex_);
     return surface == FacadeSurface::command
@@ -1204,6 +1252,7 @@ class NativeHost final {
   Invocation invocation_;
   RealtimeEngine engine_;
   lmdj::facade::EnginePerformanceAdapter performance_adapter_;
+  lmdj::facade::LocalSoundSetCatalog catalog_;
   Application application_;
   std::mutex facade_mutex_;
   std::optional<Error> performance_service_error_;

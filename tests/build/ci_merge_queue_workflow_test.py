@@ -151,6 +151,11 @@ class MergeQueueWorkflowTest(unittest.TestCase):
         self.assertIn("needs.route.outputs.mode == 'preflight'", queue)
         self.assertIn("30 <= seconds <= 600", queue)
 
+    def test_retired_manual_entry_does_not_require_unused_hold_input(self):
+        inputs = self.source.split("      hold_seconds:", 1)[1].split("\npermissions:", 1)[0]
+        self.assertIn("required: false", inputs,
+                      "why: retired diagnostics do not consume the hold input; remedy: keep it optional for legacy callers")
+
     def test_reports_are_retained_even_when_the_worker_fails(self):
         queue = self.job("queue-item")
         self.assertIn("uses: actions/upload-artifact@v4", queue)

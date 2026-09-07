@@ -124,6 +124,7 @@ class ReleaseIntent:
     merged_main_run_id: int | None = None
     make_latest: bool = False
     promotions: tuple[PromotionRecord, ...] = ()
+    self_test_evidence: Mapping[str, object] | None = None
 
     @property
     def current_channel(self) -> str | None:
@@ -178,6 +179,7 @@ class ReleasePolicy:
     creator_canary_environment: str
     historical_cutoff: str
     promotion: PromotionPolicy
+    prospective_ci_protocol: str = "self-test-v1"
 
     def channel_release(self, channel: str, make_latest: bool = False) -> tuple[bool, bool]:
         if channel not in self.channels:
@@ -232,10 +234,12 @@ def load_policy(path: Path | str) -> ReleasePolicy:
     document = _load_json(path, "policy")
     _require_exact_keys(document, {
         "schema", "repository", "branch", "blocking_workflow", "fingerprints", "tag_patterns", "profiles",
-        "channels", "environments", "historical_cutoff", "promotion",
+        "channels", "environments", "historical_cutoff", "promotion", "prospective_ci_protocol",
     }, "policy")
     if document["schema"] != _POLICY_SCHEMA:
         raise ReleaseModelError("unsupported policy schema")
+    if document["prospective_ci_protocol"] != "self-test-v1":
+        raise ReleaseModelError("prospective CI policy must require self-test-v1; legacy scope is historical only")
     repository = _require_string(document["repository"], "policy repository")
     branch = _require_string(document["branch"], "policy branch")
     blocking_workflow = _require_string(document["blocking_workflow"], "policy blocking workflow")
@@ -315,6 +319,7 @@ def load_policy(path: Path | str) -> ReleasePolicy:
         creator_canary_environment=creator_canary_environment,
         historical_cutoff=cutoff,
         promotion=promotion,
+        prospective_ci_protocol=document["prospective_ci_protocol"],
     )
 
 
@@ -495,7 +500,7 @@ def _parse_entry(value: object, policy: ReleasePolicy) -> ReleaseIntent:
         required.add("channel")
     _require_exact_keys(
         item, required, "ledger entry",
-        optional={"snapshot", "merged_main_run_id", "make_latest", "promotions"},
+        optional={"snapshot", "merged_main_run_id", "make_latest", "promotions", "self_test_evidence"},
     )
     tag = _require_string(item["tag"], "tag")
     tag_identity = classify_tag(tag, policy)
@@ -540,10 +545,26 @@ def _parse_entry(value: object, policy: ReleasePolicy) -> ReleaseIntent:
             )
         channel, snapshot, make_latest, promotions = None, None, False, ()
     run_id = _optional_positive_int(item, "merged_main_run_id")
+    self_test_evidence = None
+    if "self_test_evidence" in item:
+        evidence = _require_mapping(item["self_test_evidence"], "self_test_evidence")
+        _require_exact_keys(evidence, {
+            "schema", "request_kind", "control_revision", "run_attempt", "policy_revision", "evidence_digest",
+        }, "self_test_evidence")
+        if evidence["schema"] != "lmdj.ci-self-test.v1" or evidence["request_kind"] not in ("candidate", "node", "schedule"):
+            raise ReleaseModelError("self_test_evidence has unsupported protocol or request kind")
+        _require_sha(evidence["control_revision"], "self_test_evidence control_revision")
+        if type(evidence["run_attempt"]) is not int or evidence["run_attempt"] != 1:
+            raise ReleaseModelError("self_test_evidence run_attempt must be 1; use a new dispatch, not rerun")
+        for field in ("policy_revision", "evidence_digest"):
+            _require_digest(evidence[field], f"self_test_evidence {field}")
+        if run_id is None:
+            raise ReleaseModelError("self_test_evidence requires merged_main_run_id")
+        self_test_evidence = MappingProxyType(dict(evidence))
     evidence_paths = _paths(item["evidence_paths"], "evidence_paths")
     return ReleaseIntent(
         tag, kind, identity, target_revision, disposition, profile, evidence_paths,
-        channel, snapshot, run_id, make_latest, promotions,
+        channel, snapshot, run_id, make_latest, promotions, self_test_evidence,
     )
 
 

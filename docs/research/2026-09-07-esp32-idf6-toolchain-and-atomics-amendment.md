@@ -10,9 +10,10 @@
 > 状态：已按上游发布 tag 逐字核对源码与 Kconfig。不是 spike 授权、Embedded Host 批准、
 > Product Assembly 变更或硬件 SKU 决策。
 >
-> 证据边界：全部结论来自上游 tag 的静态源码核对与 GitHub Releases 元数据，未执行交叉
-> 编译、烧录、I2S 真机输出或任何时间测量。原文第 3 节引用的是 `master` 分支链接，本
-> 增补一律引用固定 tag 路径。
+> 证据边界：版本与 atomic 结论来自上游固定 tag 的源码核对；第 1.1、1.3 与 2.5 节另有
+> Cardputer Adv 真机烧录与串口读回的证据。**未执行**任何时间测量、I2S 音频输出、
+> linker map 归因或长时间压力测试，原文 10.2 节要求的证据一项都还没有产生。原文第 3 节
+> 引用的是 `master` 分支链接，本增补一律引用固定 tag 路径。
 
 ## 0. 看过什么
 
@@ -29,6 +30,11 @@
 | M5Unified `0.2.21 src/M5Unified.hpp` | `_speaker_enabled_cb_cardputer_adv`、`_microphone_enabled_cb_cardputer_adv` 存在 |
 | arduino-esp32 `3.3.11`（2026-07-22） | 底座为 IDF `5.5.5` |
 | arduino-esp32 `4.0.0-alpha1`（2026-05-27） | 预发布，底座为 `release/v6.0` 分支，自述 “Due to incompatibilities with ESP-IDF6, some of the components are not yet available”（Matter、RainMaker） |
+| M5Unified `.github/workflows/IDFBuild.yml` | 构建矩阵覆盖 esp32/esp32s3 的 IDF `6.0.2`，**只构建不运行**，不含 6.1 |
+| `v6.1 components/esp_driver_spi/include/driver/spi_common.h:127` | 新增 `spi_bus_config_t::dma_burst_size`；`v6.0.3`、`v6.0`、`v5.5.5` 的同一头文件中不存在该字段 |
+| M5GFX `0.2.28 src/lgfx/v1/platforms/esp32/common.cpp:841` | `memset(&buscfg, ~0u, sizeof(spi_bus_config_t))`，对 `data_io_default_level`（≥5.4）与 `isr_cpu_id`（≥5.2）有版本分支，无 6.1 分支 |
+| Cardputer Adv `esptool flash-id` 读回 | `ESP32-S3 (QFN56) revision v0.2`；Features 为 `Wi-Fi, BT 5 (LE), Dual Core + LP Core, 240MHz, Embedded Flash 8MB (GD)`，**无 Embedded PSRAM**；flash quad / 3.3 V；USB mode `USB-Serial/JTAG` |
+| Cardputer Adv 串口读回（两个版本一致） | `board=24 M5CardputerADV`、`240x135`、speaker/mic enabled、`MALLOC_CAP_SPIRAM` 总量 `0`、`__cplusplus=202400`、`gcc 15.2.0` |
 
 组件在 v6.0 从 `components/newlib/` 改名为 `components/esp_libc/`，两处 atomic 实现只是
 随之搬迁，内容没有任何改动。
@@ -36,21 +42,32 @@
 ## 1. 版本落点：本地 spike 用 `v6.1`
 
 原文第 13 节要求“正式 spike 必须锁定精确 ESP-IDF 版本、工具链和开发板”，但没有指定版本；
-原文各处引用 5.5.1 文档只是写作时的检索痕迹，不构成版本决策。本增补记录的落点是 `v6.1`。
+原文各处引用 5.5.1 文档只是写作时的检索痕迹，不构成版本决策。本增补记录的落点是
+**`v6.1`**（2026-08-27，HEAD `fff9895c82d744c7237be8847347bdd1b07c6643`）。
 
-支持这个落点的核对结果：
+这个落点**附带一项持续义务**，见 1.1 节：`v6.1` 上 M5GFX `0.2.28` 会在 `M5.begin()` 处
+启动即崩，必须打一行补丁才能运行。`v6.0.3` 经实测无需补丁（1.3 节两列对照），但落点仍定
+为 `v6.1`；因此补丁的持久化机制是这个决定的一部分，不是可选项。
+
+选 6.x 而不是 5.5 线的理由：
 
 - **两颗目标芯片都是一等支持。** Cardputer Adv 的 ESP32-S3 与手上的独立经典 ESP32 都在
   `SUPPORTED_TARGETS` 里，不属于 preview。
-- **M5 生态已声明 IDF 6 支持。** M5Unified `0.2.21` 与 M5GFX `0.2.28` 都是发布版，前者的
-  `CMakeLists.txt` 有显式的 `IDF_VERSION_MAJOR >= 6` 依赖分支，后者已含
-  `board_M5CardputerADV` 与自动识别，M5Unified 里也已有 Cardputer Adv 的扬声器与麦克风
-  回调。这两个库可以作为纯 ESP-IDF component 使用，不需要 Arduino-as-component。
+- **M5 生态在 6.x 上实测可用。** M5Unified `0.2.21` 与 M5GFX `0.2.28` 作为纯 ESP-IDF
+  component（不需要 Arduino-as-component）在 `v6.1`（加 1.1 节那行补丁）与 `v6.0.3`
+  （原样）上都完成了编译、运行、点亮屏幕、板型识别与音频外设检测，见 1.3 节。
 - **只有 Arduino 路线卡在 5.5 线上。** arduino-esp32 稳定版 `3.3.11` 的底座是 IDF `5.5.5`，
-  支持 IDF 6 的只有 `4.0.0-alpha1`，且自述有组件缺失。**因此“选 v6.1”与“不走 Arduino
+  支持 IDF 6 的只有 `4.0.0-alpha1`，且自述有组件缺失。**因此“选 6.x”与“不走 Arduino
   路线”是同一个决定的两面**，不能分开取。
 - **5.5 线已过 Service 期。** 按乐鑫的 12 个月 Service + 18 个月 Maintenance 政策，
   `v5.5`（2025-07-21）已进入只收高危与安全修复的 Maintenance 期，官方不建议新项目采用。
+
+其余核对结果：
+
+- **M5 库的 IDF6 分支是真的走到了。** M5Unified `0.2.21` 的 `CMakeLists.txt:24` 有显式的
+  `IDF_VERSION_MAJOR >= 6` 依赖分支；配置日志打印的正是该分支的 requires 列表。
+- **component manager 能按精确版本解析。** `dependencies.lock` 记录
+  `m5gfx 0.2.28`（hash `a0d59be9…`）与 `m5unified 0.2.21`（hash `869d7193…`）。
 
 需要一并接受的代价，全部来自 v6.0 的默认值变更，与生态无关：
 
@@ -62,9 +79,161 @@
 | legacy I2S/ADC/DAC/timer/PCNT/RMT/SDM/温度传感器驱动移除 | 新代码无影响；只约束第三方组件 |
 | 最低 Python 3.10、CMake 3.22 | 本机 Python 3.11.15、CMake 4.4.2 已满足 |
 
-M5 那两个库虽然**声明**了 IDF 6 支持，但这一路径尚无本仓库的实测证据。“M5Unified 在
-v6.1 下能编过、能点亮屏、能出声”必须作为独立的前置验证步骤完成，不能与 Core 移植混在
-同一次测量里。
+### 1.1 `v6.1` 的附带义务：`dma_burst_size` 事故
+
+`v6.1` 在 `spi_bus_config_t` 里新增了一个字段：
+
+```c
+uint32_t dma_burst_size; ///< DMA data burst size in bytes. Only used when DMA is enabled.
+                         ///  Set to 0 to use driver default.
+```
+
+（`v6.1 components/esp_driver_spi/include/driver/spi_common.h:127`）
+
+M5GFX 在 `src/lgfx/v1/platforms/esp32/common.cpp:841` 用 `memset(&buscfg, ~0u, sizeof(...))`
+填充这个结构体——这是为了让各 `*_io_num` 变成 `-1`（未使用）的惯用写法。该函数对
+`data_io_default_level`（≥5.4）和 `isr_cpu_id`（≥5.2）都有 `ESP_IDF_VERSION` 分支，但没有
+6.1 这一格，于是新字段停在 `0xFFFFFFFF`，既不是 0 也不是任何芯片支持的 burst 值。
+
+后果不是编译失败，而是启动即崩：
+
+```
+E gdma: gdma_config_transfer(425): invalid max_data_burst_size: 4294967295
+E spi_common: alloc_dma_chan(319): config gdma tx transfer failed
+Guru Meditation Error: Core  1 panic'ed (LoadProhibited).   EXCVADDR: 0x00000004
+```
+
+调用链（`addr2line` 解码）：`M5Unified::begin()` → `LGFX_Device::init()` →
+`M5GFX::init_impl()` → `M5GFX::autodetect()` → `Bus_SPI::init()` → `lgfx::v1::spi::init()` →
+`spi_bus_initialize()` → `spicommon_dma_chan_free()`，在最后一帧 panic。
+
+字段只在 6.1 存在：
+
+| ESP-IDF | `spi_bus_config_t` 有 `dma_burst_size` |
+| --- | --- |
+| v6.1 | 有 |
+| v6.0.3 / v6.0 | 无 |
+| v5.5.5 | 无 |
+
+因此 `v6.0.3` 上 M5GFX 那句 `memset` 碰不到这个字段，**无需任何补丁即可运行**；
+`v6.1` 上必须补。补丁本身是一行：
+
+```cpp
+#if defined (ESP_IDF_VERSION_VAL)
+  #if (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 1, 0))
+        buscfg.dma_burst_size = 0;   // 0 = 驱动默认值
+  #endif
+#endif
+```
+
+**关键约束：这行补丁不能只改 `managed_components/`。** component manager 每次重新解析
+依赖都会把该目录还原，补丁随之消失，而症状是启动即崩的 boot loop——不是编译失败，所以
+不会在构建阶段被发现。
+
+落点选 `v6.1` 因此必须给补丁一个持久化载体。已采用的是 `override_path`：M5GFX `0.2.28`
+的 registry 副本落到工程内 `vendor/m5gfx`，只改一个文件，差异以 patch 文件留档，
+`main/idf_component.yml` 把依赖指向该路径。干净重解依赖后 `dependencies.lock` 记录的是
+`source: {path: vendor/m5gfx, type: local}`（本地来源，无 `component_hash`），
+`managed_components/` 里不再出现 m5gfx——覆盖确实生效，而不只是声明。
+
+被覆盖路径不受 registry 校验，因此 vendored 副本里的 `CHECKSUMS.json` 与被改文件不再
+相符；patch 文件才是差异的记录。退役路径是：上游修复发布后删掉 vendored 副本、去掉
+`override_path`、上浮版本、重跑冒烟检查。
+
+**冒烟检查是这个机制的必要一半，并且经过双向验证。** 摘掉补丁之后 `idf.py build` **仍然
+成功**——这正是该失败模式的要害，所以门必须建在真机上而不是构建上：
+
+| | 补丁在 | 补丁被摘掉 |
+| --- | --- | --- |
+| `idf.py build` | 成功 | **仍然成功** |
+| 冒烟检查退出码 | 0 | 1 |
+| 15 秒内 boots / panics | 2 / 0 | 95 / 94 |
+
+检查读 15 秒串口，断言无 `Guru Meditation`、重启次数不超过自身的复位序列、bring-up 报告
+打印完整、板型识别为 `MATCH`；失败信息按 `why:` / `remedy:` 直接点名丢失的文件与那一行。
+一个从未见过红色的门不能证明任何事，所以上表的右列是实际跑出来的，不是设计意图。
+
+已报上游：[m5stack/M5GFX#278](https://github.com/m5stack/M5GFX/issues/278)。同时观察到
+ESP-IDF 6.1 一侧的问题：`spi_bus_initialize()` 在自己的错误清理路径里 panic，而不是把
+`alloc_dma_chan()` 已经产生的错误返回出来（`spicommon_dma_chan_free()` 解引用了从未完整
+分配的 DMA 上下文）。这一条尚未向 Espressif 提交。
+
+**这个事故的一般形状值得单独记住**：M5 的上游 CI（`IDFBuild.yml`）覆盖 6.0.2 且**只构建
+不运行**，而“上游给结构体加一个字段”这件事不需要改任何源码就能编过——所以无论矩阵里加
+多少个版本，build-only 的 CI 结构上都不可能发现这一类不兼容。“声明支持某个 major”与“在
+该 major 的某个 minor 上能跑”是两件事。
+
+### 1.2 实测新增的一条移植代价
+
+`int32_t` 在 `xtensa-esp-elf` 上是 `long int`，不是 `int`。因此：
+
+- 任何 `%d` 配 `int32_t` 的格式串在 v6.0 的 warnings-as-errors 下**直接编译失败**
+  （`-Werror=format=`），而不是告警；
+- 任何“`int32_t` 就是 `int`”的隐含假设（重载决议、模板特化、`std::is_same`）在这里不成立。
+
+本 Core 大量使用 `std::int32_t`，所以这条会成规模出现。它不是 v6.0 引入的（是 xtensa 的
+ABI 事实），只是被 warnings-as-errors 从“告警”提升为“编译失败”。上表那一行“清一轮告警”
+因此偏轻描淡写。
+
+### 1.3 Cardputer Adv 真机 bring-up 结果
+
+一个只做板型识别与点屏的最小工程（不做任何测量），两个版本各刷一次同一块板：
+
+| | `v6.1` | `v6.0.3` |
+| --- | --- | --- |
+| 编译 | 0 error 0 warning | 0 error 0 warning |
+| **未打补丁运行** | **15 秒内 282 次 panic 重启** | **0 panic** |
+| 需要 M5GFX 补丁 | 是 | **否** |
+| `getBoard()` | 24 `board_M5CardputerADV`（打补丁后） | 24 `board_M5CardputerADV` |
+| 屏幕 | 240×135 点亮，人工确认 | 240×135 点亮，人工确认 |
+| speaker / mic | enabled / enabled | enabled / enabled |
+| `MALLOC_CAP_SPIRAM` 总量 | 0 字节 | 0 字节 |
+| 内部堆 free / 最大连续块 | 368820 / 311296 | 369760 / 311296 |
+| `__cplusplus` | 202400 | 202400 |
+| 编译器 | gcc 15.2.0 | gcc 15.2.0 |
+
+因果是隔离过的：6.1 那一列除了 M5GFX 里加的那一行 `buscfg.dma_burst_size = 0`，其余完全
+相同，282 次 panic 随之变成 0 次；6.0.3 这一列用的是全新工程副本与重新拉取的未打补丁
+M5GFX（已核对 `memset(&buscfg, ~0u, ...)` 原样在 842 行）。
+
+两列除“要不要补丁”外没有差异——编译器、C++ 标准、外设、堆都一致。也就是说 `v6.0.3`
+本可以用少一个 minor 换掉这个补丁；落点仍定为 `v6.1`，代价就是 1.1 节那条持续义务由本
+项目承担。本节记录的是这次权衡的实测底数，不是对结论的追认。
+
+`__cplusplus` 读回 `202400` 也实测确认了 v6.0 的默认 C++ 标准变更确实生效。
+
+**这里的数字不能当测量结果用。** `internal free` 与最大连续块是这个点屏 demo 的值，不是
+Core 的内存预算；本节唯一的用途是回答“M5 路线在该版本上是否可用”。
+
+### 1.4 ES8311 音频路径已出声
+
+§5 此前只记到“`M5.Speaker` 报告 enabled”，那距离“音频链路通了”还有一段。现已在同一块
+板子上出声，两条路径都由人工听音确认：
+
+- `tone()`：M5Unified 自带发生器，最便宜的可听证明；
+- `playRaw()`：**在设备上生成的 int16 PCM**，按 codec 自己的采样率喂入
+  （10560 samples / 21120 字节 / 220 ms）。
+
+第二条才是与本 Core 相关的那条——LMDJ 产出的是采样，不是音调。两条路径播放同一组
+C-E-G-C，听感一致。
+
+codec 侧的实际配置（`M5.Speaker.config()` 读回）：
+
+| 项 | 值 | 说明 |
+| --- | --- | --- |
+| sample rate | 48000 Hz | 单声道 |
+| `use_dac` | false | 走 I2S codec；ESP32-S3 本身没有 DAC |
+| `buzzer` | false | 是真 codec 输出，不是蜂鸣器 |
+| DMA | 8 × 256 samples | 48 kHz 下约 **42.7 ms** |
+| mixer task | priority 2，core `-1`（未固定） | M5Unified 默认 |
+
+**42.7 ms 的 DMA 深度是这里唯一有前瞻价值的数字**：它是 M5Unified 默认给出的缓冲量，
+本 Core 的音频回调将来必须在这个约束内工作。它是配置读回值，不是测量结果。
+
+**本节不产生任何时序结论。** 播放调用返回耗时稳定在 171–181 ms，而缓冲区是 220 ms；
+六轮循环重复一致。最可能的解释是 `isPlaying()` 在最后一块 DMA 尚未排空时就已归零
+（8 × 256 ≈ 42.7 ms 与该差值接近得可疑），但这需要真正的时序方法才能定论，而不是靠一个
+5 ms 轮询的忙等循环。因此它被记为 §5 的一个开放问题，不作为 quiescence 语义的结论。
 
 ## 2. 修正：atomic 退化的条件比原文第 3 节记录的更宽
 
@@ -134,20 +303,31 @@ v6.1 下能编过、能点亮屏、能出声”必须作为独立的前置验证
 | 实物 | 判定依据 |
 | --- | --- |
 | Cardputer Adv | `ESP32-S3FN8` 无封装内 PSRAM，M5Stack 规格也未提供板载 PSRAM |
-| 独立 `ESP-32S` 模组 | 裸 WROOM 级模组，无 PSRAM |
+| 独立 `ESP-32S` 模组（芯片 `ESP32-D0WD-V3`） | 芯片无封装内 PSRAM；模组为 WROOM 级，无板载 PSRAM |
 
 `ESP-32S` 是 Ai-Thinker 的**模组**丝印，不是乐鑫的芯片型号；它在规格与引脚上对应
-Espressif `ESP-WROOM-32`，模组内是经典 ESP32（双核 Xtensa LX6、520 KiB 片上 SRAM），
-常见 4 MiB flash。
+Espressif `ESP-WROOM-32`。模组内的芯片读作 `ESP32-D0WD-V3`：经典 ESP32 的 ECO V3
+版本（chip revision v3.0），双核 Xtensa LX6、520 KiB 片上 SRAM，模组侧常见 4 MiB flash。
 
-“裸模组”这一句是判定的必要部分，不能省。AI-Thinker 的 **ESP32-CAM** 板上贴的模组丝印
-同样是 `ESP32-S`，而那块板带 **4 MiB 外挂 PSRAM**，落在 2.2 表的中间一行。同一丝印、
-相反的 PSRAM 结论，因此丝印必须与实物形态一起读：带 PSRAM 的模组会在丝印上写
-`WROVER`，而 ESP32-CAM 认得出摄像头座子。
+PSRAM 由此双重定案。带封装内 PSRAM 的经典 ESP32 变体在料号里带 `R`（例如
+`ESP32-D0WDR2-V3`），`D0WD-V3` 不带，所以 PSRAM 只可能来自板载外挂；而 WROOM 级模组
+不提供板载外挂 PSRAM，提供的那一类丝印会写 `WROVER`。
 
-外挂 PSRAM 不写 efuse，所以 `esptool.py flash_id` 的 `Features` 行不报告它。首次烧录时
-顺手复核一次即可：开启 `CONFIG_SPIRAM` 的构建，启动日志不应出现 `esp_psram: Found ...`。
+“裸模组”这一句仍是判定的必要部分，不能省。AI-Thinker 的 **ESP32-CAM** 板上贴的模组
+丝印同样是 `ESP32-S`，芯片也可以是同一颗 `ESP32-D0WD-V3`，但那块板在模组内另配了
+**4 MiB 外挂 PSRAM**，落在 2.2 表的中间一行。芯片料号与模组丝印都不足以单独定案，
+必须连实物形态一起读：ESP32-CAM 认得出摄像头座子。
+
+外挂 PSRAM 不写 efuse，所以 `esptool flash-id` 的 `Features` 行不报告它（`esptool.py` 与
+`flash_id` 在 esptool 5.4.0 上均已弃用，改用 `esptool` 与 `flash-id`）。首次烧录时顺手
+复核一次即可：开启 `CONFIG_SPIRAM` 的构建，启动日志不应出现 `esp_psram: Found ...`。
 这是零成本的确认，不是阻塞项。
+
+**Cardputer Adv 这一行已由真机确认。** 设备读回 `ESP32-S3 (QFN56) revision v0.2`，
+Features 列出 `Embedded Flash 8MB (GD)` 而**没有** Embedded PSRAM；固件侧
+`heap_caps_get_total_size(MALLOC_CAP_SPIRAM)` 在 `v6.1` 与 `v6.0.3` 上均读回 **0 字节**。
+所以 `CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND` 在这块板上确实不触发，2.2 表末行对它
+成立，不再只是从料号推断。独立 `ESP-32S` 那一行仍是料号推断，尚未上电确认。
 
 ## 3. 未决线索：Clang 与 IDF-9032
 
@@ -159,29 +339,57 @@ workaround 压根没有实现，问题仍在但没有保护。
 如果 ESP32 spike 也想用 Clang 工具链，必须先查清 IDF-9032 的实际内容，不得把
 “Clang 下 workaround 不生效”当成绕过手段使用。
 
-## 4. 本地环境（macOS arm64）
+## 4. 本地环境（macOS arm64，实测可复现）
+
+**不要用 `git clone`。** 本机实测：GitHub 约 37 KB/s，Gitee 镜像同样慢且在
+`fetch-pack` 阶段 `early EOF` 中断；两次尝试都失败。真正的瓶颈是 submodule 递归拉取。
+Release 归档已内含全部 submodule，从乐鑫自己的资产镜像拉稳定在 5.6 MB/s：
 
 ```bash
 brew install ninja dfu-util
+
 mkdir -p ~/esp && cd ~/esp
-git clone -b v6.1 --recursive https://github.com/espressif/esp-idf.git
+curl -L -C - --retry 20 --retry-all-errors -o esp-idf-v6.1.zip \
+  https://dl.espressif.com/github_assets/espressif/esp-idf/releases/download/v6.1/esp-idf-v6.1.zip
+unzip -q esp-idf-v6.1.zip && mv esp-idf-v6.1 esp-idf
+
 cd ~/esp/esp-idf
-./install.sh esp32s3,esp32     # 同时装 S3 与经典 ESP32 工具链
+IDF_GITHUB_ASSETS=dl.espressif.com/github_assets ./install.sh esp32s3,esp32
 alias get_idf='. $HOME/esp/esp-idf/export.sh'
 ```
 
-`export.sh` 不写进 shell profile，只用 alias 按需激活。ESP32-S3 有原生
-USB-Serial/JTAG，macOS 不需要额外 USB 桥驱动。
+资产镜像必须用 `.com`，不是 `.cn`：同一个工具链文件实测 `dl.espressif.com` 4.85 MB/s、
+`dl.espressif.cn` 664 KB/s、`github.com` 302 重定向后 0 B/s。PyPI 走官方源即可，实测不是
+瓶颈，因此**不需要**把工具链的 Python 依赖指向第三方镜像。
+
+镜像不免检。解压后核对身份，`v6.1` 应为：
+
+```bash
+git -C ~/esp/esp-idf describe --tags          # v6.1
+git -C ~/esp/esp-idf rev-parse HEAD           # fff9895c82d744c7237be8847347bdd1b07c6643
+git -C ~/esp/esp-idf submodule status | grep -c '^-'   # 0
+```
+
+该 commit 就是 GitHub 上 `v6.1` 附注 tag 解引用的结果；归档尺寸也与 GitHub 记录的
+asset 尺寸逐字节相符。
+
+`export.sh` 不写进 shell profile，只用 alias 按需激活。ESP32-S3 有原生 USB-Serial/JTAG，
+macOS 不需要额外 USB 桥驱动，设备名形如 `/dev/cu.usbmodem1101`。
 
 这套环境与 `scripts/core.sh` 的宿主构建互不干扰：仓库内目前**没有**任何 ESP-IDF
 component、target 或 CI 通道，本节只描述开发机上的外部工具链。
 
 ## 5. 仍未验证
 
-- M5Unified `0.2.21` + M5GFX `0.2.28` 在 v6.1 下对 Cardputer Adv 的实际编译与运行结果。
-- 本 Core 在 `gnu++26` + warnings-as-errors + Picolibc 下的编译结果。
-- 任何 callback deadline、固件尺寸、峰值内存或 underrun 数字。原文 10.2 节要求的证据一项
-  都还没有产生。
+- 本 Core 在 `gnu++26` + warnings-as-errors + Picolibc 下的编译结果。1.2 节只覆盖了格式串
+  与 `int32_t` 这一类，Picolibc 与 `std::filesystem` 一侧完全没碰。
+- ESP-IDF 6.1 一侧 `spi_bus_initialize()` 错误路径 panic 的问题尚未向 Espressif 提交。
+- [M5GFX#278](https://github.com/m5stack/M5GFX/issues/278) 的上游处置结果。
+- 任何 callback deadline、固件尺寸、峰值内存、linker map 归因或 underrun 数字。原文 10.2
+  节要求的证据一项都还没有产生。1.3 节的堆数字来自一个点屏 demo，不能当测量结果引用。
+- `M5.Speaker.isPlaying()` 的 quiescence 语义：它似乎在最后一块 DMA 排空前就归零
+  （1.4 节）。这影响任何“等播放结束”的逻辑，需要用真正的时序方法确认，不能靠忙等观察。
+- `M5.Mic` 的实际采集。1.4 节只让扬声器出了声，麦克风仍然只是报告 enabled。
 - IDF-9032 的内容与状态。
 
 ## 6. 版本与文档
