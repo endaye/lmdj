@@ -107,3 +107,101 @@ jobs:
           else
             emit "ccache is absent, so native Core work here would start cold."
           fi
+          emit ""
+          emit "### Real-time measurement validity"
+          emit ""
+          emit "\`audio.master_fx_stress\` asserts zero callback overruns using"
+          emit "\`CLOCK_THREAD_CPUTIME_ID\`, and its comment says thread CPU time is"
+          emit "why a descheduled runner cannot make it fail. That holds for the"
+          emit "kernel descheduling the thread. It does not hold unconditionally for"
+          emit "a guest: Linux subtracts steal and IRQ time from the runqueue clock"
+          emit "that feeds \`task_sched_runtime()\` only when the matching option is"
+          emit "compiled in, so without them a hypervisor preemption or an interrupt"
+          emit "burst is billed to whichever thread was running. #666 turns on"
+          emit "whether that is the case here, so these are readings, not verdicts."
+          emit ""
+
+          # Reports rather than asserts, like every other section here. Both
+          # sources can legitimately be absent -- /boot/config-* is not always
+          # world-readable and /proc/config.gz needs CONFIG_IKCONFIG_PROC -- so
+          # "unavailable" is an answer and never a failure.
+          config_answer=""
+          config_source=""
+          config_verdict=""
+          read_kernel_config() {
+            local key="$1" src="" line=""
+            config_answer="no matching line"
+            config_source="unavailable"
+            config_verdict="unavailable"
+            for src in "/boot/config-$(uname -r)" /proc/config.gz; do
+              [ -r "$src" ] || continue
+              case "$src" in
+                *.gz)
+                  command -v zcat >/dev/null 2>&1 || continue
+                  line="$(zcat "$src" 2>/dev/null | grep -E "^(# )?${key}[= ]" | head -n1)"
+                  ;;
+                *)
+                  line="$(grep -E "^(# )?${key}[= ]" "$src" 2>/dev/null | head -n1)"
+                  ;;
+              esac
+              config_source="$src"
+              if [ -n "$line" ]; then
+                config_answer="$line"
+                case "$line" in
+                  *"=y"*) config_verdict="compiled in" ;;
+                  *"=m"*) config_verdict="module" ;;
+                  *"is not set"*) config_verdict="**not compiled in**" ;;
+                  *) config_verdict="unrecognised" ;;
+                esac
+              else
+                # A key absent from a config that was readable is the same
+                # effective answer as an explicit "is not set".
+                config_answer="absent from this config"
+                config_verdict="**not compiled in**"
+              fi
+              return 0
+            done
+          }
+
+          emit "| Kernel option | Effective | Source | Raw line |"
+          emit "| --- | --- | --- | --- |"
+          for key in CONFIG_PARAVIRT_TIME_ACCOUNTING CONFIG_IRQ_TIME_ACCOUNTING; do
+            read_kernel_config "$key"
+            emit "| \`$key\` | $config_verdict | \`$config_source\` | \`$config_answer\` |"
+          done
+          emit ""
+
+          virt="$(systemd-detect-virt 2>/dev/null)" || virt=""
+          [ -n "$virt" ] || virt="$(grep -m1 -E 'hypervisor' /proc/cpuinfo >/dev/null 2>&1 && echo "hypervisor flag present" || echo unavailable)"
+          emit "| Property | Value |"
+          emit "| --- | --- |"
+          emit "| virtualization | \`$virt\` |"
+          emit "| USER_HZ | $(getconf CLK_TCK 2>/dev/null || echo unavailable) |"
+          emit ""
+
+          # An absolute counter since boot cannot say whether steal is accruing
+          # now, which is the part that matters for a callback measured in
+          # microseconds. Two samples over a fixed window give a rate.
+          cpu_fields() { awk '$1=="cpu"{print $7" "$8" "$9; exit}' /proc/stat 2>/dev/null; }
+          before="$(cpu_fields)"
+          sleep 5
+          after="$(cpu_fields)"
+          if [ -n "$before" ] && [ -n "$after" ]; then
+            emit "Idle-host accounting over a 5 s window, in USER_HZ ticks:"
+            emit ""
+            emit "| Counter | Before | After | Delta |"
+            emit "| --- | --- | --- | --- |"
+            printf '%s\n%s\n' "$before" "$after" | awk '
+              NR==1 { b1=$1; b2=$2; b3=$3 }
+              NR==2 { a1=$1; a2=$2; a3=$3
+                      printf "| irq | %s | %s | %s |\n", b1, a1, a1-b1
+                      printf "| softirq | %s | %s | %s |\n", b2, a2, a2-b2
+                      printf "| steal | %s | %s | %s |\n", b3, a3, a3-b3 }
+            ' | while IFS= read -r row; do emit "$row"; done
+            emit ""
+            emit "A non-zero steal delta on an otherwise idle host means the"
+            emit "hypervisor is taking this vCPU away during normal operation."
+          else
+            emit "\`/proc/stat\` did not yield a \`cpu\` aggregate line, so steal and"
+            emit "IRQ accounting is unavailable on this host."
+          fi
