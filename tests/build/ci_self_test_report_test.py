@@ -468,10 +468,223 @@ class DedupeTest(unittest.TestCase):
         self.assertLess(len(body), 4000)
 
 
+class LaggingGitHubApi(FakeGitHubApi):
+    """Successful writes persist immediately, while list endpoints may lag."""
+    def __init__(self, *, issue_lag=0, comment_lag=0, issue_fault=None, comment_fault=None):
+        super().__init__()
+        self.issue_lag, self.comment_lag = issue_lag, comment_lag
+        self.issue_reads_hidden = self.comment_reads_hidden = 0
+        self.issue_fault, self.comment_fault = issue_fault, comment_fault
+
+    def list_issues(self, **kwargs):
+        result = super().list_issues(**kwargs)
+        if self.issue_reads_hidden:
+            if self.issue_reads_hidden > 0:
+                self.issue_reads_hidden -= 1
+            return []
+        return result
+
+    def list_comments(self, number):
+        result = super().list_comments(number)
+        if self.comment_reads_hidden:
+            if self.comment_reads_hidden > 0:
+                self.comment_reads_hidden -= 1
+            return []
+        return result
+
+    @staticmethod
+    def damaged_response(result, fault):
+        if fault == "lost":
+            raise rep.GitHubApiError(0, "response lost after persistence")
+        if fault == "500":
+            raise rep.GitHubApiError(500, "response failed after persistence")
+        if fault == "malformed":
+            return None
+        if fault == "invalid-id":
+            return {**result, "number": True, "id": True}
+        return result
+
+    def create_issue(self, **kwargs):
+        result = super().create_issue(**kwargs)
+        self.issue_reads_hidden = self.issue_lag
+        return self.damaged_response(result, self.issue_fault)
+
+    def create_comment(self, number, body):
+        result = super().create_comment(number, body)
+        self.comment_reads_hidden = self.comment_lag
+        return self.damaged_response(result, self.comment_fault)
+
+
+class WriteVisibilityTest(unittest.TestCase):
+    def item(self, observation="1"):
+        return rep.Report("self-test-drill-test", "test", observation, "low", (rep.REPORT_LABEL,), "test", "detail")
+
+    def apply(self, api, observation="1", sleep=None):
+        return rep.apply_report(api, self.item(observation), assignee="maintainer", sleep=sleep or Sleep())
+
+    def writes(self, api, kind):
+        return sum(call[0] == kind for call in api.calls)
+
+    def test_acknowledged_issue_waits_for_actual_visibility_not_elapsed_time(self):
+        api = LaggingGitHubApi(issue_lag=2)
+        sleep = Sleep()
+        self.assertEqual(self.apply(api, sleep=sleep).action, "created")
+        self.assertEqual(sleep.delays, list(rep.WRITE_VISIBILITY_DELAYS[:2]))
+        self.assertEqual(self.apply(api).action, "duplicate")
+        self.assertEqual(self.writes(api, "create_issue"), 1)
+
+    def test_permanently_invisible_ack_stops_without_second_post_or_next_bucket(self):
+        api = LaggingGitHubApi(issue_lag=-1)
+        sleep = Sleep()
+        with self.assertRaisesRegex(rep.WriteVisibilityError, "visibility unresolved"):
+            self.apply(api, sleep=sleep)
+        self.assertEqual(sleep.delays, list(rep.WRITE_VISIBILITY_DELAYS))
+        self.assertEqual(len(api.issues), 1)
+        api.issue_reads_hidden = 0  # caller must not silently resume a poisoned process
+        with self.assertRaisesRegex(rep.WriteVisibilityError, "prior write"):
+            self.apply(api, "2")
+        self.assertEqual(self.writes(api, "create_issue"), 1)
+        self.assertEqual(self.writes(api, "create_comment"), 0)
+
+    def test_uncertain_and_malformed_issue_responses_recover_with_reads_only(self):
+        for fault in ("lost", "500", "malformed", "invalid-id"):
+            with self.subTest(fault=fault):
+                api = LaggingGitHubApi(issue_lag=2, issue_fault=fault)
+                self.assertEqual(self.apply(api).action, "duplicate")
+                self.assertEqual(self.writes(api, "create_issue"), 1)
+                self.assertEqual(len(api.issues), 1)
+
+    def test_invisible_uncertain_issue_response_is_not_reposted(self):
+        api = LaggingGitHubApi(issue_lag=-1, issue_fault="lost")
+        with self.assertRaises(rep.WriteVisibilityError):
+            self.apply(api)
+        self.assertEqual(self.writes(api, "create_issue"), 1)
+        self.assertEqual(len(api.issues), 1)
+
+    def test_comment_ack_and_unknown_response_wait_for_exact_observation(self):
+        for fault in (None, "lost", "500", "malformed", "invalid-id"):
+            with self.subTest(fault=fault):
+                api = LaggingGitHubApi(comment_lag=2, comment_fault=fault)
+                self.apply(api)
+                outcome = self.apply(api, "2")
+                self.assertEqual(outcome.action, "commented" if fault is None else "duplicate")
+                self.assertEqual(self.apply(api, "2").action, "duplicate")
+                self.assertEqual(self.writes(api, "create_comment"), 1)
+
+    def test_permanently_hidden_comment_response_never_reposts(self):
+        for fault in (None, "lost"):
+            with self.subTest(fault=fault):
+                api = LaggingGitHubApi(comment_lag=-1, comment_fault=fault)
+                self.apply(api)
+                with self.assertRaises(rep.WriteVisibilityError):
+                    self.apply(api, "2")
+                self.assertEqual(self.writes(api, "create_comment"), 1)
+                self.assertEqual(sum(map(len, api.comments.values())), 1)
+
+    def test_same_process_issue_list_regression_does_not_create_replacement(self):
+        api = LaggingGitHubApi()
+        self.apply(api)
+        api.issue_reads_hidden = 2
+        self.assertEqual(self.apply(api, "2").action, "commented")
+        self.assertEqual(self.writes(api, "create_issue"), 1)
+        api.issue_reads_hidden = -1
+        with self.assertRaises(rep.WriteVisibilityError):
+            self.apply(api)
+        self.assertEqual(self.writes(api, "create_issue"), 1)
+
+    def test_same_process_comment_list_regression_does_not_repost(self):
+        api = LaggingGitHubApi()
+        self.apply(api)
+        self.apply(api, "2")
+        api.comment_reads_hidden = 2
+        self.assertEqual(self.apply(api, "2").action, "duplicate")
+        api.comment_reads_hidden = -1
+        with self.assertRaises(rep.WriteVisibilityError):
+            self.apply(api, "2")
+        self.assertEqual(self.writes(api, "create_comment"), 1)
+
+    def test_duplicate_trusted_buckets_are_rejected_even_if_one_is_closed(self):
+        api = LaggingGitHubApi()
+        self.apply(api)
+        api.issues.append({**api.issues[0], "number": 999, "state": "closed"})
+        with self.assertRaisesRegex(rep.WriteVisibilityError, "ambiguous"):
+            self.apply(api, "2")
+        self.assertEqual(self.writes(api, "create_comment"), 0)
+
+    def test_duplicate_observation_comments_are_not_silently_accepted(self):
+        api = LaggingGitHubApi()
+        self.apply(api)
+        number = self.apply(api, "2").issue_number
+        api.comments[number].append({**api.comments[number][0], "id": 999})
+        with self.assertRaisesRegex(rep.WriteVisibilityError, "duplicate trusted observation"):
+            self.apply(api, "2")
+
+    def test_known_receipt_author_change_fails_closed_without_replacement(self):
+        api = LaggingGitHubApi()
+        self.apply(api)
+        api.issues[0]["user"] = {"login": "maintainer", "type": "User"}
+        with self.assertRaises(rep.WriteVisibilityError):
+            self.apply(api, "2")
+        self.assertEqual(self.writes(api, "create_issue"), 1)
+        self.assertEqual(self.writes(api, "create_comment"), 0)
+
+    def test_success_response_cannot_ack_a_different_positive_id(self):
+        api = LaggingGitHubApi()
+        create = api.create_issue
+        api.create_issue = lambda **kwargs: {**create(**kwargs), "number": 999}
+        with self.assertRaises(rep.WriteVisibilityError):
+            self.apply(api)
+        self.assertEqual(self.writes(api, "create_issue"), 1)
+
+    def test_malformed_lists_are_not_negative_dedupe_evidence(self):
+        client = rep.UrllibGitHubApi(REPO, "dummy")
+        for document in ({}, {"message": "bad response"}, [None], ["issue"]):
+            for method in (lambda: client.list_issues(label=rep.REPORT_LABEL, state="all"),
+                           lambda: client.list_comments(1)):
+                with self.subTest(document=document), mock.patch.object(client, "_request", return_value=document):
+                    with self.assertRaisesRegex(rep.ReportingError, "malformed"):
+                        method()
+
+    def test_get_no_cache_is_only_an_advisory_request_header(self):
+        client = rep.UrllibGitHubApi(REPO, "dummy")
+        opener = mock.Mock()
+        opener.open.return_value = io.BytesIO(b"[]")
+        with mock.patch("urllib.request.build_opener", return_value=opener):
+            client.list_issues(label=rep.REPORT_LABEL, state="all")
+        self.assertEqual(opener.open.call_args.args[0].get_header("Cache-control"), "no-cache")
+
+    def test_post_refusal_is_not_retried(self):
+        for status in (403, 429):
+            api = LaggingGitHubApi()
+            api.failures["create_issue"] = [status]
+            sleep = Sleep()
+            with self.assertRaises(rep.GitHubApiError):
+                self.apply(api, sleep=sleep)
+            self.assertEqual(self.writes(api, "create_issue"), 1)
+            self.assertEqual(sleep.delays, [])
+
+    def test_unknown_write_stops_reconciliation_before_next_batch(self):
+        api = LaggingGitHubApi(issue_lag=-1).with_batch(100).with_batch(200)
+        api.run_lists[("schedule", None)] = [run_document(100), run_document(200)]
+        with self.assertRaises(rep.WriteVisibilityError):
+            rep.reconcile_recent(api, repository=REPO, assignee="maintainer", sleep=Sleep())
+        self.assertEqual(self.writes(api, "create_issue"), 1)
+        self.assertNotIn(("get_run", 200), api.calls)
+
+    def test_unknown_write_in_requested_run_stops_main_before_reconcile(self):
+        with mock.patch.object(rep, "UrllibGitHubApi"), \
+             mock.patch.object(rep, "report_run", side_effect=rep.WriteVisibilityError("unknown write")), \
+             mock.patch.object(rep, "reconcile_recent") as reconcile, \
+             mock.patch.object(rep, "_write_summary") as summary, mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(rep.main(["--repository", REPO, "report", "--run-id", "100"]), 2)
+        reconcile.assert_not_called()
+        self.assertIn("reporting-error", summary.call_args.args[1])
+
+
 class ReportingErrorTest(unittest.TestCase):
-    def test_transient_429_and_5xx_are_retried_with_the_injected_sleep(self) -> None:
+    def test_transient_read_429_and_5xx_are_retried_with_the_injected_sleep(self) -> None:
         api = FakeGitHubApi().with_batch()
-        api.failures["create_issue"] = [429, 503]
+        api.failures["list_issues"] = [429, 503]
         sleep = Sleep()
         result = report(api, sleep=sleep)
         self.assertEqual(sorted(o.action for o in result.outcomes), ["created", "created"])
@@ -480,9 +693,9 @@ class ReportingErrorTest(unittest.TestCase):
     def test_a_persistent_5xx_is_a_reporting_error_that_leaves_the_verdict_alone(self) -> None:
         api = FakeGitHubApi().with_batch()
         api.failures["create_issue"] = [500, 500, 500]
-        with self.assertRaises(rep.GitHubApiError) as caught:
+        with self.assertRaises(rep.WriteVisibilityError):
             report(api)
-        self.assertEqual(caught.exception.status, 500)
+        self.assertEqual(sum(call[0] == "create_issue" for call in api.calls), 1)
         self.assertEqual(api.issues, [])
         self.assertEqual(api.blobs[1000], verdict_zip(verdict_document()))
 
@@ -572,7 +785,11 @@ class BoundaryRegressionTest(unittest.TestCase):
                 forged = next(issue for issue in api.issues if "creator" in issue["title"])
                 forged["user"] = author
                 forged["state"] = "closed"
-                api.with_batch(200, document=verdict_document(run_id=200), run=run_document(200))
+                # A fresh process sees a pre-existing user-authored forgery;
+                # GitHub does not mutate an acknowledged Issue's author.
+                api = FakeGitHubApi().with_batch(200, document=verdict_document(run_id=200), run=run_document(200))
+                api.issues.append(forged)
+                api.next_number = forged["number"]
                 result = report(api, 200)
                 creator = next(outcome for outcome in result.outcomes if "creator" in outcome.key)
                 self.assertEqual(creator.action, "created")

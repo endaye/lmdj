@@ -7,7 +7,8 @@ self-tests from compatibility runs. Missing selected-batch evidence is an
 infrastructure problem, never an implicit pass. The shared evidence consumer
 validates the verdict against its trusted control revision policy.
 
-Reporting is idempotent by construction. An Issue is addressed by a stable
+Reporting uses positively observed write receipts, not an assumption that
+negative lists are immediately consistent. An Issue is addressed by a stable
 dedupe key (`suite id` + failure class; never a SHA or a date), carried as a
 hidden marker in its body, and an observation by `run/attempt/suite/
 fingerprint`, carried as a marker in the comment that recorded it. The same
@@ -16,6 +17,12 @@ its marker and adds nothing. A closed Issue that recurs is reopened with the
 new observation; a green batch closes nothing. The fingerprint describes job
 conclusions, not extracted test IDs or log errors: one bucket may contain
 different defects and maintainers may split them during triage.
+
+Each POST is attempted only once. Unknown write outcomes get read-only
+reconciliation, never another POST. An unresolved write stops this process.
+In-process receipts prevent list regression from causing replacement writes;
+they cannot provide cross-process exactly-once after a crash. An operator must
+resolve an unknown write before starting another process to retry it.
 
 The verdict is never altered by anything here. When the GitHub API refuses
 (403, 429, 5xx past a bounded retry) the reporter exits non-zero with a
@@ -85,6 +92,8 @@ TEXT_LIMIT = 1200
 #: Retry budget for a refused API call. Three tries with the injected sleep;
 #: the delays are seconds and the caller may pass a no-op.
 RETRY_DELAYS = (5.0, 20.0)
+# Positive list visibility is the condition; elapsed time is never success.
+WRITE_VISIBILITY_DELAYS = (1.0, 4.0, 10.0)
 #: Bounded recovery within the producer's 30-day retention window. Every
 #: entry point rechecks recent runs; reaching the cap is a visible error,
 #: never a claim that all older observations have been reported.
@@ -118,6 +127,10 @@ def _diagnostic(why: str, remedy: str) -> str:
 
 class ReportingError(RuntimeError):
     """The reporter could not do its job. The verdict it was reporting stands."""
+
+
+class WriteVisibilityError(ReportingError):
+    """Stop the whole reporter: a write or its identity remains unresolved."""
 
 
 class GitHubApiError(RuntimeError):
@@ -187,6 +200,7 @@ class UrllibGitHubApi:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "lmdj-self-test-report",
+            **({"Cache-Control": "no-cache"} if method == "GET" else {}),
             **({"Content-Type": "application/json"} if data is not None else {}),
         })
         try:
@@ -275,7 +289,9 @@ class UrllibGitHubApi:
         for page in range(1, 11):
             query = urllib.parse.urlencode({"labels": label, "state": state, "per_page": "100", "page": str(page)})
             document = self._request("GET", self._repo(f"/issues?{query}"))
-            if not isinstance(document, list) or not document:
+            if not isinstance(document, list) or any(not isinstance(item, dict) for item in document):
+                raise ReportingError(_diagnostic("issue list response is malformed", "inspect the API response; do not treat it as an empty dedupe set"))
+            if not document:
                 return issues
             issues.extend(item for item in document if isinstance(item, dict) and "pull_request" not in item)
             if len(document) < 100:
@@ -287,7 +303,9 @@ class UrllibGitHubApi:
         for page in range(1, 11):
             document = self._request(
                 "GET", self._repo(f"/issues/{int(number)}/comments?per_page=100&page={page}"))
-            if not isinstance(document, list) or not document:
+            if not isinstance(document, list) or any(not isinstance(item, dict) for item in document):
+                raise ReportingError(_diagnostic("comment list response is malformed", "inspect the API response; do not treat it as an empty observation set"))
+            if not document:
                 return comments
             comments.extend(item for item in document if isinstance(item, dict))
             if len(document) < 100:
@@ -681,51 +699,191 @@ def _trusted_marker_author(document: Mapping[str, object]) -> bool:
 def _find_issue(api: GitHubApi, key: str, *, sleep: Callable[[float], None]) -> Mapping[str, object] | None:
     marker = _KEY_MARKER.format(key=key)
     issues = with_retry(lambda: api.list_issues(label=REPORT_LABEL, state="all"), sleep=sleep)
-    assert isinstance(issues, list)
+    if not isinstance(issues, list) or any(not isinstance(issue, dict) for issue in issues):
+        raise ReportingError("why: malformed issue list; remedy: inspect the API response before deduplication")
     matching = [issue for issue in issues if _trusted_marker_author(issue)
                 and marker in str(issue.get("body") or "")]
     if not matching:
         return None
-    # Prefer the open one; otherwise the most recently created.
-    matching.sort(key=lambda issue: (str(issue.get("state")) != "open", -int(issue.get("number", 0))))  # type: ignore[arg-type]
+    if len(matching) != 1 or not _positive_id(matching[0].get("number")):
+        raise WriteVisibilityError(_diagnostic(f"ambiguous or invalid trusted issue bucket for {key}",
+                                              "manually reconcile duplicate buckets; never silently select one"))
     return matching[0]
+
+
+def _positive_id(value: object) -> bool:
+    return type(value) is int and value > 0
+
+
+def _observation_receipt(api: GitHubApi, issue: Mapping[str, object], report: Report,
+                         *, sleep: Callable[[float], None]) -> tuple[int, int | None] | None:
+    """Return the unique trusted (issue number, comment ID or issue-body None)."""
+    matches: list[int | None] = []
+    if _trusted_marker_author(issue) and report.observation_marker in str(issue.get("body") or ""):
+        if str(issue["body"]).count(report.observation_marker) != 1:
+            raise WriteVisibilityError("why: duplicate issue observation markers; remedy: manually reconcile this bucket")
+        matches.append(None)
+    comments = with_retry(lambda: api.list_comments(int(issue["number"])), sleep=sleep)  # type: ignore[arg-type]
+    if not isinstance(comments, list) or any(not isinstance(comment, dict) for comment in comments):
+        raise ReportingError("why: malformed comment list; remedy: inspect the API response before deduplication")
+    for comment in comments:
+        if _trusted_marker_author(comment) and report.observation_marker in str(comment.get("body") or ""):
+            if (not _positive_id(comment.get("id"))
+                    or str(comment["body"]).count(report.observation_marker) != 1):
+                raise WriteVisibilityError("why: invalid trusted comment receipt; remedy: inspect its exact ID and marker")
+            matches.append(comment["id"])
+    if len(matches) > 1:
+        raise WriteVisibilityError("why: duplicate trusted observation receipts; remedy: manually reconcile the duplicate comments")
+    return (int(issue["number"]), matches[0]) if matches else None
 
 
 def _observation_recorded(api: GitHubApi, issue: Mapping[str, object], report: Report,
                           *, sleep: Callable[[float], None]) -> bool:
-    if _trusted_marker_author(issue) and report.observation_marker in str(issue.get("body") or ""):
-        return True
-    comments = with_retry(lambda: api.list_comments(int(issue["number"])), sleep=sleep)  # type: ignore[arg-type]
-    assert isinstance(comments, list)
-    return any(_trusted_marker_author(comment)
-               and report.observation_marker in str(comment.get("body") or "") for comment in comments)
+    return _observation_receipt(api, issue, report, sleep=sleep) is not None
+
+
+@dataclass
+class _WriteState:
+    buckets: dict[str, int] = field(default_factory=dict)
+    observations: dict[tuple[str, str], tuple[int, int | None]] = field(default_factory=dict)
+    unresolved: str | None = None
+
+
+def _write_state(api: GitHubApi) -> _WriteState:
+    state = getattr(api, "_self_test_write_state", None)
+    if state is None:
+        state = _WriteState()
+        setattr(api, "_self_test_write_state", state)
+    return state
+
+
+def _wait_for_receipt(api: GitHubApi, report: Report, *, state: _WriteState,
+                      expected: tuple[int, int | None] | None,
+                      sleep: Callable[[float], None]) -> tuple[int, int | None]:
+    """Only reads here. A negative or stale read never authorizes another POST."""
+    for delay in (0.0, *WRITE_VISIBILITY_DELAYS):
+        if delay:
+            sleep(delay)
+        issue = _find_issue(api, report.key, sleep=sleep)
+        if issue is None:
+            continue
+        known_bucket = state.buckets.get(report.key)
+        if known_bucket is not None and issue["number"] != known_bucket:
+            raise WriteVisibilityError("why: trusted bucket changed after receipt; remedy: reconcile exact issue IDs manually")
+        receipt = _observation_receipt(api, issue, report, sleep=sleep)
+        if receipt is None:
+            continue
+        if expected is not None and receipt != expected:
+            raise WriteVisibilityError("why: visible observation differs from the acknowledged write ID; remedy: inspect exact issue/comment receipts")
+        state.buckets[report.key] = receipt[0]
+        state.observations[(report.key, report.observation)] = receipt
+        return receipt
+    raise WriteVisibilityError(_diagnostic(
+        f"write visibility unresolved for key={report.key} obs={report.observation}; expected={expected}",
+        "stop automatic reporting; inspect the exact run, issue/comment IDs and markers before an operator retries; "
+        "a negative list is not proof that the POST failed and no second POST was sent"))
+
+
+def _post_once(api: GitHubApi, report: Report, *, state: _WriteState,
+               issue_number: int | None, assignee: str,
+               sleep: Callable[[float], None]) -> tuple[int, bool]:
+    """POST once, then require an actual unique receipt in the dedupe read path."""
+    state.unresolved = f"key={report.key} obs={report.observation}"
+    expected = None
+    acknowledged = False
+    try:
+        try:
+            response = (api.create_issue(title=report.title, body=report.issue_body(assignee),
+                                         labels=report.labels, assignees=(assignee,))
+                        if issue_number is None else api.create_comment(issue_number, report.comment_body()))
+            id_key = "number" if issue_number is None else "id"
+            if (isinstance(response, dict) and _positive_id(response.get(id_key))
+                    and _trusted_marker_author(response)
+                    and str(response.get("body") or "").count(report.observation_marker) == 1
+                    and (issue_number is not None or report.key_marker in str(response.get("body") or ""))):
+                expected = ((response["number"], None) if issue_number is None else (issue_number, response["id"]))
+                state.buckets[report.key] = expected[0]
+                acknowledged = True
+        except GitHubApiError as error:
+            if error.status != 0 and error.status < 500:
+                state.unresolved = None  # explicit refusal, still no POST retry
+                raise
+            # Unknown outcome: a read-only lookup may recover it, never re-POST.
+        except (ValueError, TypeError, KeyError, AssertionError):
+            # Malformed successful response may follow a persisted write.
+            pass
+        receipt = _wait_for_receipt(api, report, state=state, expected=expected, sleep=sleep)
+        state.unresolved = None
+        return receipt[0], acknowledged
+    except (ReportingError, GitHubApiError, ValueError, TypeError, KeyError) as error:
+        if state.unresolved is not None:
+            if isinstance(error, WriteVisibilityError):
+                raise
+            raise WriteVisibilityError(_diagnostic(
+                f"unresolved write {state.unresolved}: {error}",
+                "halt this reporter/reconcile process; manually verify persisted markers before any new-process retry")) from error
+        raise
 
 
 def apply_report(api: GitHubApi, report: Report, *, assignee: str,
                  sleep: Callable[[float], None]) -> Outcome:
-    # A failed POST response does not prove that GitHub failed to persist it.
-    # Retry the *read/decide/write transaction*, never the write in isolation.
-    return with_retry(lambda: _apply_report_once(api, report, assignee=assignee, sleep=sleep), sleep=sleep)
+    try:
+        return _apply_report(api, report, assignee=assignee, sleep=sleep)
+    except (ReportingError, GitHubApiError, ValueError, TypeError, KeyError) as error:
+        state = _write_state(api)
+        if isinstance(error, WriteVisibilityError) or state.unresolved is not None:
+            state.unresolved = state.unresolved or f"unsafe bucket key={report.key} obs={report.observation}"
+            if isinstance(error, WriteVisibilityError):
+                raise
+            raise WriteVisibilityError(_diagnostic(str(error),
+                                                  "stop all reporting; manually verify this write/bucket before retry")) from error
+        raise
 
 
-def _apply_report_once(api: GitHubApi, report: Report, *, assignee: str,
-                       sleep: Callable[[float], None]) -> Outcome:
+def _apply_report(api: GitHubApi, report: Report, *, assignee: str,
+                  sleep: Callable[[float], None]) -> Outcome:
+    state = _write_state(api)
+    if state.unresolved is not None:
+        raise WriteVisibilityError(_diagnostic(f"prior write remains unresolved: {state.unresolved}",
+                                              "stop; manually reconcile it before any new-process retry"))
     issue = _find_issue(api, report.key, sleep=sleep)
+    if issue is None and report.key in state.buckets:
+        state.unresolved = f"known bucket disappeared: {report.key} issue={state.buckets[report.key]}"
+        for delay in WRITE_VISIBILITY_DELAYS:
+            sleep(delay)
+            issue = _find_issue(api, report.key, sleep=sleep)
+            if issue is not None:
+                break
+        if issue is None:
+            raise WriteVisibilityError("why: known issue remains invisible in dedupe list; remedy: inspect its exact ID; never create a replacement")
+        state.unresolved = None
     if issue is None:
-        created = api.create_issue(
-            title=report.title, body=report.issue_body(assignee),
-            labels=report.labels, assignees=(assignee,))
-        assert isinstance(created, dict)
-        return Outcome(report.key, "created", int(created.get("number", 0)))  # type: ignore[arg-type]
+        number, acknowledged = _post_once(api, report, state=state, issue_number=None,
+                                         assignee=assignee, sleep=sleep)
+        return Outcome(report.key, "created" if acknowledged else "duplicate", number)
     number = int(issue["number"])  # type: ignore[arg-type]
-    if _observation_recorded(api, issue, report, sleep=sleep):
+    if report.key in state.buckets and state.buckets[report.key] != number:
+        raise WriteVisibilityError("why: bucket ID changed within this process; remedy: reconcile exact issue IDs")
+    state.buckets[report.key] = number
+    observed = _observation_receipt(api, issue, report, sleep=sleep)
+    known = state.observations.get((report.key, report.observation))
+    if observed is not None:
+        if known is not None and known != observed:
+            raise WriteVisibilityError("why: observation ID changed within this process; remedy: reconcile exact comment IDs")
+        state.observations[(report.key, report.observation)] = observed
+        return Outcome(report.key, "duplicate", number)
+    if known is not None:
+        state.unresolved = f"known observation disappeared: {report.key} obs={report.observation}"
+        _wait_for_receipt(api, report, state=state, expected=known, sleep=sleep)
+        state.unresolved = None
         return Outcome(report.key, "duplicate", number)
     action = "commented"
     if str(issue.get("state")) == "closed":
         with_retry(lambda: api.set_issue_state(number, "open"), sleep=sleep)
         action = "reopened"
-    api.create_comment(number, report.comment_body())
-    return Outcome(report.key, action, number)
+    number, acknowledged = _post_once(api, report, state=state, issue_number=number,
+                                     assignee=assignee, sleep=sleep)
+    return Outcome(report.key, action if acknowledged else "duplicate", number)
 
 
 # ---------------------------------------------------------------------------
@@ -882,6 +1040,8 @@ def reconcile_recent(api: GitHubApi, *, repository: str, assignee: str, sleep: C
             seen.add(run_id)
             try:
                 results.append(report_run(api, run_id, repository=repository, assignee=assignee, sleep=sleep))
+            except WriteVisibilityError:
+                raise  # a later batch must not turn an uncertain write into another POST
             except (ReportingError, GitHubApiError, ValueError, TypeError, KeyError) as error:
                 results.append(RunReport(run_id, error=sanitize(str(error))))
         if len(runs) >= limit:
@@ -990,6 +1150,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 reports.append(report_run(api, args.run_id, repository=args.repository,
                                           assignee=args.assignee, sleep=sleep))
+            except WriteVisibilityError:
+                raise  # outer handler records the error and stops before reconciliation
             except (ReportingError, GitHubApiError, ValueError, TypeError, KeyError) as error:
                 reports.append(RunReport(args.run_id, error=sanitize(str(error))))
             if not args.no_reconcile:
