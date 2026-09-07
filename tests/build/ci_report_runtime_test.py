@@ -25,7 +25,7 @@ import test_scope
 from ci_batch_controller_test import Memory, Inputs, A, B, C, POLICY
 import ci_batch_runtime_test as runtime_fixture
 import ci_review_failure_report_test as review_fixture
-from ci_self_test_report_test import FakeGitHubApi
+from ci_self_test_report_test import FakeGitHubApi, full_legacy_api
 
 
 class Crash(BaseException):
@@ -87,6 +87,50 @@ class ProjectionTests(unittest.TestCase):
 
     def posts(self):
         return [call for call in self.api.calls if call[0] in {"create_issue", "create_comment"}]
+
+    def legacy(self):
+        self.api = full_legacy_api()
+        self.adapter.api = self.api
+        self.adapter.repository = "endaye/lmdj"
+        self.adapter.storage = SimpleNamespace(authenticate_current=lambda: None)
+
+    def test_legacy_full_plan_crosses_outbox_before_issue_and_replay_has_no_post(self):
+        self.legacy()
+        with mock.patch.object(module.reporting, "report_run", side_effect=AssertionError("old direct writer forbidden")):
+            answer = self.adapter.execute("legacy", run_id=100, attempt=1)
+            self.assertEqual(answer["outcomes"][0]["status"], "delivered")
+            self.assertEqual([e["type"] for e in self.outbox.journal().load()], ["queue", "claim", "ack", "delivered"])
+            self.assertEqual(len(self.posts()), 1)
+            self.assertIn("100/1", self.api.issues[0]["body"])
+            self.adapter.execute("legacy", run_id=100, attempt=1)
+            self.assertEqual(len(self.posts()), 1)
+        self.assertFalse(self.scheduler.comments)
+
+    def test_legacy_wrong_attempt_cannot_queue_or_post(self):
+        self.legacy()
+        with self.assertRaises(Exception):
+            self.adapter.execute("legacy", run_id=100, attempt=2)
+        self.assertFalse(self.outbox.comments)
+        self.assertFalse(self.posts())
+
+    def test_legacy_lost_post_response_is_recovered_by_receipt_not_a_second_post(self):
+        self.legacy()
+        original = self.api.create_issue
+        def lost(**kwargs):
+            original(**kwargs)
+            raise Crash("response lost after actual issue creation")
+        self.api.create_issue = lost
+        with self.assertRaises(Crash):
+            self.adapter.execute("legacy", run_id=100, attempt=1)
+        self.assertEqual(len(self.posts()), 1)
+        self.assertEqual([e["type"] for e in self.outbox.journal().load()], ["queue", "claim"])
+        answer = self.adapter.execute("legacy", run_id=100, attempt=1)
+        self.assertEqual(answer["status"], "ready")
+        self.assertEqual(len(self.posts()), 1)
+        state = self.adapter.outbox().load()
+        delivery = next(iter(state["deliveries"].values()))
+        self.assertEqual(delivery["status"], "delivered")
+        self.assertEqual(delivery["receipt"]["issue_number"], self.api.issues[0]["number"])
 
     def test_pre_advance_failure_reaches_actual_issue_and_durable_receipt(self):
         request, _ = result(self.scheduler, failed=(POLICY.inventory.suites[0].jobs[0],))
@@ -320,6 +364,67 @@ class RuntimeJourneyTests(unittest.TestCase):
         self.assertIsNone(answer["state"])
         self.assertEqual(self.scheduler_http.issue["body"], batch_runtime.EMPTY_TEMPLATE)
         self.assertEqual([p for m, p, _ in self.actual_calls if m == "PATCH"], ["/repos/endaye/lmdj/issues/783"])
+
+    def install_legacy(self):
+        source = full_legacy_api()
+        for name in ("get_run", "get_workflow", "compare", "list_artifacts", "download_artifact", "get_policy"):
+            setattr(self.api, name, getattr(source, name))
+        return source
+
+    def test_legacy_full_reaches_authenticated_http_journal_and_exact_receipt(self):
+        self.initialize()
+        source = self.install_legacy()
+        scheduler_before = deepcopy(self.scheduler_http.issue)
+        answer = self.make().execute("legacy", run_id=100, attempt=1)
+        self.assertEqual(answer["source"], "self-test-v1")
+        self.assertEqual(answer["verdict_status"], "failed")
+        state = self.make().outbox().load()
+        self.assertEqual(len(state["deliveries"]), 1)
+        delivery = next(iter(state["deliveries"].values()))
+        self.assertEqual(delivery["status"], "delivered")
+        self.assertEqual(delivery["receipt"], {"issue_number": self.api.issues[0]["number"], "comment_id": None})
+        self.assertEqual(self.api.issues[0]["body"], delivery["payload"]["issue_body"])
+        self.assertEqual(scheduler_before, self.scheduler_http.issue)
+        self.assertFalse(source.issues)  # the source adapter only reads evidence
+        self.make().execute("legacy", run_id=100, attempt=1)
+        self.assertEqual(len(self.api.issues), 1)
+        self.assertFalse(self.api.comments)
+
+    def test_legacy_unknown_run_api_does_not_queue_or_post(self):
+        self.initialize()
+        source = self.install_legacy()
+        source.runs.clear()
+        with self.assertRaises(Exception):
+            self.make().execute("legacy", run_id=100, attempt=1)
+        self.assertFalse(self.api.issues)
+        self.assertFalse(self.outbox_http.comments)
+
+    def test_legacy_queued_report_can_drain_after_artifact_expiry(self):
+        self.initialize()
+        source = self.install_legacy()
+        _, planned = module.reporting.plan_run(source, 100, attempt=1, repository="endaye/lmdj", sleep=lambda _: None)
+        box = self.make().outbox()
+        box.load()
+        key = batch.digest({"key": planned[0].key, "observation": planned[0].observation})
+        box._persist("queue", {"delivery": key, "payload": report_outbox.freeze(planned[0], "endaye")})
+        source.blobs.clear()
+        self.assertEqual(self.make().execute("drain")["status"], "delivered")
+        self.assertEqual(len(self.api.issues), 1)
+        self.assertEqual(self.make().execute("drain"), {"status": "idle"})
+
+    def test_legacy_cli_passes_explicit_run_attempt_to_outbox(self):
+        self.initialize()
+        self.install_legacy()
+        with tempfile.TemporaryDirectory() as directory:
+            config, summary = Path(directory) / "config.json", Path(directory) / "summary"
+            config.write_text(json.dumps(self.config))
+            with mock.patch.dict("os.environ", self.fixture.env, clear=True), mock.patch.object(
+                    batch_runtime, "UrllibGitHubApi", return_value=self.api):
+                code = module.main(["--config", str(config), "--root", str(self.fixture.root), "--summary", str(summary),
+                                    "legacy", "--run-id", "100", "--attempt", "1"])
+            self.assertEqual(code, 0)
+            self.assertIn('"source": "self-test-v1"', summary.read_text())
+            self.assertEqual(len(self.api.issues), 1)
 
     def test_all_backends_failure_zip_reaches_issue_and_real_authenticated_outbox(self):
         self.initialize()

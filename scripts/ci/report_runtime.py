@@ -169,7 +169,7 @@ class ReportRuntime:
                 **({"why": blocked["why"], "remedy": blocked["remedy"]} if blocked else {})}
 
     def execute(self, operation, *, run_id=None, attempt=None, limit=8):
-        require(operation in {"init-outbox", "review", "batches", "drain"}, "unknown report operation")
+        require(operation in {"init-outbox", "review", "legacy", "batches", "drain"}, "unknown report operation")
         if operation == "init-outbox":
             return self.storage.initialize()
         self.storage.authenticate_current()
@@ -178,6 +178,15 @@ class ReportRuntime:
         if operation == "review":
             planned = review_failure_report.collect(self.api, self.repository, run_id, attempt)
             return self.deliver((planned,), limit) if planned else {"status": "not-applicable"}
+        if operation == "legacy":
+            metadata, planned = reporting.plan_run(self.api, run_id, attempt=attempt,
+                                                   repository=self.repository, sleep=lambda _: None)
+            require(metadata.error is None, metadata.error or "legacy planning failed")
+            if metadata.skipped is not None:
+                return {"status": "not-applicable", "why": metadata.skipped}
+            answer = self.deliver(planned, limit)
+            return {**answer, "source": "self-test-v1", "run_id": run_id, "attempt": attempt,
+                    "target": metadata.target, "verdict_status": metadata.verdict_status}
         # authenticate_current refreshes the outbox Runtime's inputs; scheduler
         # inputs are a separate object and must independently resolve main.
         self.scheduler.inputs.refresh()
@@ -196,6 +205,10 @@ def main(argv=None):
     review = commands.add_parser("review")
     review.add_argument("--run-id", type=int, required=True)
     review.add_argument("--attempt", type=int, required=True)
+    legacy = commands.add_parser("legacy", help="report one exact legacy full attempt through the durable outbox")
+    legacy.add_argument("--run-id", type=int, required=True)
+    legacy.add_argument("--attempt", type=int, required=True)
+    legacy.add_argument("--limit", type=int, default=8)
     batches = commands.add_parser("batches")
     batches.add_argument("--limit", type=int, default=8)
     args = parser.parse_args(argv)
