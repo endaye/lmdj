@@ -119,7 +119,7 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         self.assertNotRegex(ci_events, r'(?m)^  (?:pull_request|pull_request_target|push):',
                             'why: PR Review owns new-head review and product self-tests are independent; remedy: retire Core CI PR/push triggers')
         events = self.source.split('\npermissions:', 1)[0]
-        self.assertIn('types: [opened, synchronize, reopened, ready_for_review]', events)
+        self.assertIn('types: [opened, synchronize, reopened, ready_for_review, closed]', events)
         self.assertNotRegex(events, r'(?m)^  (?:push|schedule):')
 
     def test_no_pr_head_executable_checkout_in_any_job(self):

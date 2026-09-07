@@ -16,7 +16,7 @@ on:
         type: string
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: pr-review-${{ inputs.pr_number || github.event.pull_request.number }}
+  group: pr-review-${{ inputs.pr_number || github.event.pull_request.number }}${{ github.event.action == 'closed' && '-merge-map' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -49,6 +49,7 @@ jobs:
           persist-credentials: false
       - name: Resolve the Pull Request head
         id: target
+        if: ${{ github.event.action != 'closed' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
@@ -228,7 +229,10 @@ jobs:
   publish:
     name: Publish review and scope
     needs: [target, review]
-    if: ${{ !cancelled() && needs.target.outputs.review == 'true' && needs.review.result == 'success' }}
+    if: >-
+      !cancelled() &&
+      ((github.event.action == 'closed' && github.event.pull_request.merged == true) ||
+       (needs.target.outputs.review == 'true' && needs.review.result == 'success'))
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 5
     permissions:
@@ -242,20 +246,37 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@v4
+        if: ${{ github.event.action != 'closed' }}
         with:
           name: pr-review-result-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/review-publish
       - name: Publish exact-head review and scope
+        if: ${{ github.event.action != 'closed' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.target.outputs.number }}
           HEAD_SHA: ${{ needs.target.outputs.head_sha }}
         run: python3 scripts/ci/review_pipeline.py publish --directory "$RUNNER_TEMP/review-publish"
       - uses: actions/upload-artifact@v4
-        if: ${{ always() }}
+        if: ${{ always() && github.event.action != 'closed' }}
         with:
           name: pr-test-scope-${{ needs.target.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/review-publish/scope.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Map merged PR without another AI call
+        if: ${{ github.event.action == 'closed' && github.event.pull_request.merged == true }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: python3 scripts/ci/review_merge_map.py --output "$RUNNER_TEMP/review-merge-map/map.json"
+      - uses: actions/upload-artifact@v4
+        if: ${{ github.event.action == 'closed' && github.event.pull_request.merged == true }}
+        with:
+          name: pr-review-merge-map-${{ github.event.pull_request.merge_commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/review-merge-map/map.json
           if-no-files-found: error
           retention-days: 30
       - name: Report the review state
