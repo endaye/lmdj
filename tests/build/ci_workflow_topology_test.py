@@ -145,17 +145,8 @@ RELEASE_NODE_CONSUMERS = (
     "macos-fallback",
 )
 FORMAL_RESULTS = FORMAL_LANE_JOBS + SUPPORT_JOBS
-# On the general role, guards no lane, contributes no result (#659). Counted in
-# the literal-role scan so the closed set stays closed without calling the
-# reviewer a lane; ordered before Pre-heavy Gate so the gate can read the
-# threads it left, never its result.
-# The reviewers Pre-heavy Gate orders itself after. Both post review threads,
-# and the gate's admission condition counts unresolved ones.
-REVIEWER_JOBS = ("advisory-review", "grok-review")
-# Plus the selector, which is upstream of a reviewer rather than of the gate:
-# advisory-review needs it, so the ordering already holds transitively and a
-# direct edge would only claim the gate reads something it does not.
-GENERAL_ROLE_NON_LANE_JOBS = ("select-review-backend", *REVIEWER_JOBS)
+# Review is exclusively in pr-review.yml; Core CI has no non-lane reviewers.
+GENERAL_ROLE_NON_LANE_JOBS = ()
 GATING_PREFLIGHT_JOBS = (
     "docs-static", "ci-contract", "deploy-contract", "chameleon-lab",
     "web-toolchain-conformance", "web-runtime-host", "creator-web",
@@ -339,6 +330,19 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         events = self.event_block(self.main_source)
         self.assertNotRegex(events, r"(?m)^\s+paths(?:-ignore)?:")
 
+    def test_product_ci_has_only_read_only_execution_permissions(self) -> None:
+        directives = "\n".join(line for line in self.main_source.splitlines()
+                               if not line.lstrip().startswith("#"))
+        self.assertNotRegex(directives, r"(?m)^\s+(?:pull-requests|issues):",
+                            "why: retired review grants prevent least-privilege reuse; remedy: keep review authority in pr-review.yml")
+        self.assertNotRegex(directives, r"(?m)^\s+[a-z-]+: write$",
+                            "why: product execution must not write repository state; remedy: isolate publishers from Core CI")
+
+    def test_product_ci_has_no_retired_review_jobs(self) -> None:
+        for job in ("select-review-backend", "advisory-review", "grok-review"):
+            self.assertNotIn(f"  {job}:\n", self.main_source,
+                             "why: retired review jobs still expand the product DAG; remedy: use the independent PR Review entry")
+
     def test_product_ci_has_no_pr_or_ordinary_push_trigger(self) -> None:
         events = self.event_block(self.main_source)
         self.assertNotRegex(events, r"(?m)^  (?:pull_request|pull_request_target|push):",
@@ -368,7 +372,8 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("github.event.pull_request.number", job)
         self.assertIn('--pr-number "$PR_NUMBER"', job)
         self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", job)
-        self.assertIn("pull-requests: read", self.main_source)
+        self.assertNotRegex(self.main_source, r"(?m)^\s+pull-requests:",
+                            "why: Core CI has no PR event or review consumer; remedy: keep PR permissions in pr-review.yml")
         self.assertEqual(set(re.findall(r"secrets\.([A-Z0-9_]+)", job)), {"GITHUB_TOKEN"})
         for forbidden in (
             r"\bnpm\b",
@@ -728,17 +733,11 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_pre_heavy_gate_is_closed_hosted_preflight_admission(self) -> None:
         job = self.workflow_job("pre-heavy-gate")
         self.assertIn("fetch-depth: 0", job)
-        # The reviewer is a needs: for ordering only. It is absent from
-        # PREFLIGHT_RESULTS_JSON (asserted below against GATING_PREFLIGHT_JOBS
-        # alone), so the gate can read the threads it left without ever
-        # reading its result.
         self.assertEqual(
             self.job_needs("pre-heavy-gate"),
-            {"change-scope", *GATING_PREFLIGHT_JOBS, *REVIEWER_JOBS},
-            msg=("why: a reviewer outside the gate's needs may post its findings "
-                 "after the gate has already admitted the native-heavy set, which "
-                 "is exactly the run where the fallback reviewer matters most; "
-                 "remedy: every reviewer job is a need of pre-heavy-gate"),
+            {"change-scope", *GATING_PREFLIGHT_JOBS},
+            msg=("why: product preflight must not wait for advisory review; "
+                 "remedy: keep only actual product dependencies in pre-heavy-gate"),
         )
         self.assertIn("if: ${{ !cancelled() }}", job)
         self.assertIn("runs-on: ubuntu-24.04", job)

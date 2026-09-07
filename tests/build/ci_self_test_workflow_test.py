@@ -255,8 +255,10 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
         self.assertIn('--target "$GITHUB_SHA"', lookup)
         self.assertIn("printf 'null\\n'", lookup)
 
-    def test_old_review_selector_has_no_reachable_product_event(self) -> None:
-        self.assertIn("if: ${{ github.event_name == 'pull_request' }}", job_body(self.ci, 'select-review-backend'))
+    def test_retired_reviews_are_absent_from_product_self_tests(self) -> None:
+        for name in ("select-review-backend", "advisory-review", "grok-review"):
+            self.assertNotIn(f"  {name}:\n", self.ci,
+                             "why: retired review still requires product permissions; remedy: keep review in pr-review.yml")
         events = self.ci.split('\npermissions:', 1)[0]
         self.assertNotRegex(events, r'(?m)^  (?:pull_request|pull_request_target|push):')
 
