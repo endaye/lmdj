@@ -1,7 +1,7 @@
 ---
 id: release-intent-target-reachability
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-08-26
     occurrence: https://github.com/endaye/lmdj/pull/328
@@ -12,7 +12,10 @@ recurrences:
   - date: 2026-08-29
     occurrence: https://github.com/endaye/lmdj/pull/400
     observed_by: codex/gpt-5
-exit: none
+  - date: 2026-09-06
+    occurrence: https://github.com/endaye/lmdj/issues/332
+    observed_by: claude-code/opus-5
+exit: gate:tests/build/release_hydrate_test.py
 ---
 
 # Allocated release intents can target commits no branch or tag reaches, and long-lived runner workspaces mask it
@@ -29,24 +32,27 @@ Deploy contract lane passed for weeks on established runners and failed the
 first time an elastic runner with a fresh workspace picked it up (PR #328,
 `lmdj-v1.0.25.0`, target `349a834f`). The failure signature depends on which
 machine takes the job, not on the change under test, and the same trap awaits
-any operator running `scripts/release.sh audit --local` from a fresh clone.
+any operator running `scripts/release.sh audit` from a fresh clone.
+
+Reachability is a property of the remote, so it cannot be asserted
+repo-statically and never becomes a gate of its own. What the recurrences
+actually cost was ownership: hydration had no home, so every consuming workflow
+copied the same inline `git fetch --no-tags origin <sha>` step and each copy
+could drift. The recurrence-2 escalation
+[#332](https://github.com/endaye/lmdj/issues/332) settled that question, and the
+gate below asserts the settled shape rather than the remote property.
 
 ## How to apply
 
-- GitHub serves these objects when fetched by SHA; hydrate explicitly instead
-  of relying on workspace history. The Deploy contract lane now does this in a
-  dedicated step before the release test suite (`.github/workflows/ci.yml`).
-- When a release audit reports an intent target absent from the local object
-  store, first `git fetch --no-tags origin <sha>` before treating the intent
-  as inconsistent.
-- `release-audit.yml` and both `publish-release.yml` jobs now hydrate the same
-  way before invoking `scripts/release.sh`, and their workflow contract tests
-  assert the hydration step runs first
-  (`tests/build/release_audit_workflow_test.py`,
-  `tests/build/release_publish_workflow_test.py`).
-- No gate exit yet: reachability cannot be asserted repo-statically (it is a
-  property of the remote), and the audit tool's own fetch-on-miss behavior is
-  a release-tooling decision that should not be settled inside an unrelated
-  Task. The recurrence-2 escalation is
-  [#332](https://github.com/endaye/lmdj/issues/332): decide fetch-on-miss
-  hydration inside the release tooling instead of per-workflow copies.
+Hydration is `scripts/release.sh hydrate` — the stable interface's only
+object-store write. Run it before `scripts/release.sh audit` on any fresh
+clone; it is idempotent and prints `all release intent targets were already
+present` when nothing is missing, so running it unconditionally is safe. The
+audit stays read-only and never fetches on miss: an absent target is reported
+as `unverifiable` with the remedy in the message.
+
+Never re-add an inline hydrate copy to a workflow, a script, or a runbook, and
+never make the audit self-heal. `tests/build/release_hydrate_test.py` fails
+closed on both, and on an audit remedy naming a subcommand `release.sh` does
+not accept. Rationale and the two rejected alternatives:
+[`docs/prd/decisions/2026-09-06-release-intent-hydrate-subcommand.md`](../../docs/prd/decisions/2026-09-06-release-intent-hydrate-subcommand.md).
