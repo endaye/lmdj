@@ -13,6 +13,7 @@
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 
+#include "tests/core/support/legacy_project.hpp"
 #include "tests/core/support/test.hpp"
 
 namespace {
@@ -201,10 +202,10 @@ void test_v3_sequence_begin_bytes_remain_exactly_unchanged() {
   TempDirectory temp;
   ProjectStore store;
   auto state = project();
-  state.contract = ProjectContract::v3;
   state.performances.clear();
   const auto bundle = temp.path() / "legacy.lmdj";
   LMDJ_CHECK(store.create(bundle, state).has_value());
+  lmdj::test::make_v3_bundle_on_disk(store, bundle);
   SequenceJournal journal;
   LMDJ_CHECK(
       journal
@@ -256,10 +257,10 @@ void test_same_kind_second_begin_prioritizes_active_session() {
   TempDirectory temp;
   ProjectStore store;
   auto state = project();
-  state.contract = ProjectContract::v3;
   state.performances.clear();
   const auto bundle = temp.path() / "legacy.lmdj";
   LMDJ_CHECK(store.create(bundle, state).has_value());
+  lmdj::test::make_v3_bundle_on_disk(store, bundle);
   SequenceJournal journal;
   const lmdj::domain::Pattern pattern{
       PatternId{std::string{kPatternId}}, 1, {}};
@@ -306,10 +307,10 @@ void test_concurrent_sequence_begins_admit_only_one_session() {
   TempDirectory temp;
   ProjectStore store;
   auto state = project();
-  state.contract = ProjectContract::v3;
   state.performances.clear();
   const auto bundle = temp.path() / "legacy.lmdj";
   LMDJ_CHECK(store.create(bundle, state).has_value());
+  lmdj::test::make_v3_bundle_on_disk(store, bundle);
   const lmdj::domain::Pattern pattern{
       PatternId{std::string{kPatternId}}, 1, {}};
   const auto fingerprint =
@@ -431,10 +432,10 @@ void test_legacy_v3_sequence_tail_flush_completion_and_seal_reconcile() {
   TempDirectory temp;
   ProjectStore store;
   auto state = project();
-  state.contract = ProjectContract::v3;
   state.performances.clear();
   const auto bundle = temp.path() / "legacy.lmdj";
   LMDJ_CHECK(store.create(bundle, state).has_value());
+  lmdj::test::make_v3_bundle_on_disk(store, bundle);
   SequenceJournal journal;
   const lmdj::domain::Pattern pattern{
       PatternId{std::string{kPatternId}}, 1, {}};

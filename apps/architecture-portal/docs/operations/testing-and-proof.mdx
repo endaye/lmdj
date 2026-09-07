@@ -128,7 +128,7 @@ provenance。缺失 squash witness 时用官方 `architecture-portal.sh witness`
 
 Packaged Chromium 还用真实 capability Worker 覆盖 2.5 秒 delayed result 与 test-only shortened deadline：前者必须保留三项 OPFS capability 并进入 `audio-suspended`，后者必须精确报告 `HOST_TIMEOUT`，两者都验证 Worker/Blob cleanup。Issue #166 的 branch/PR proof 之外还要求一个 pinned Linux runner 在同一固定 CPU + file-I/O contention session 中连续三次完整 `scripts/web-runtime-host.sh proof` 全部通过；不得从更大样本挑选成功运行。
 
-Chromium diagnostic journey 验证 Project v3 fixture、500 个 paced Trigger、frame-stamped Sequence begin/event/flush/stop、next-Bar switch、跨窗口 status/observer/busy、idempotent receipt replay、owner-loss recovery，以及既有 Snapshot/lifecycle/terminal failure paths。Host 不含 Take operation、Project parser、quantizer 或 fallback sequencer。
+Chromium diagnostic journey 验证 Project v4 fixture、500 个 paced Trigger、frame-stamped Sequence begin/event/flush/stop、next-Bar switch、跨窗口 status/observer/busy、idempotent receipt replay、owner-loss recovery，以及既有 Snapshot/lifecycle/terminal failure paths。Host 不含 Take operation、Project parser、quantizer 或 fallback sequencer。
 
 WebKit smoke 只有在所有 mandatory primitive 可用时才运行 protocol、OPFS、restart 与 lifecycle；否则必须输出结构化 `UNSUPPORTED_WEB_RUNTIME` limitation。当前 Playwright WebKit 缺少 `opfsSyncAccessHandle` 与 `opfsWritableReplace`，因此是明确限制记录，不是完整 PASS。
 ## Creator Web Proof

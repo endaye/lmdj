@@ -16,6 +16,7 @@
 #include <lmdj/project_io/sequence_journal.hpp>
 
 #include "packages/project-io/src/testing_hooks.hpp"
+#include "tests/core/support/legacy_project.hpp"
 #include "tests/core/support/test.hpp"
 
 namespace {
@@ -119,9 +120,9 @@ std::filesystem::path create_empty_v3_bundle(
       ProjectId{std::string{kProjectId}}, 120);
   LMDJ_CHECK(created.has_value());
   auto state = std::move(created.value());
-  state.contract = ProjectContract::v3;
   const auto bundle = temp.path() / "project.lmdj";
   LMDJ_CHECK(store.create(bundle, state).has_value());
+  lmdj::test::make_v3_bundle_on_disk(store, bundle);
   return bundle;
 }
 

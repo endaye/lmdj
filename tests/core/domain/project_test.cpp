@@ -44,13 +44,32 @@ void test_uuid_validation_matches_project_contract_grammar() {
   }
 }
 
+void test_every_new_project_declares_lmdj_project_v4() {
+  // The Contract level of a Project is not emergent from its command history:
+  // every Project this Build creates declares lmdj.project.v4 before any
+  // command is applied, so a v4-only command never has to promote it first.
+  const auto result = lmdj::domain::create_project(
+      lmdj::foundation::ProjectId{kProjectId}, 120);
+
+  LMDJ_CHECK(result.has_value());
+  LMDJ_CHECK(result.value().contract == lmdj::domain::ProjectContract::v4);
+  LMDJ_CHECK(result.value().revision == 0);
+  LMDJ_CHECK(
+      result.value().pattern_slots.size() ==
+      lmdj::domain::kPatternSlotCount);
+  for (const auto& slot : result.value().pattern_slots) {
+    LMDJ_CHECK(!slot.has_value());
+  }
+  LMDJ_CHECK(result.value().performances.empty());
+}
+
 void test_new_project_creates_all_64_addressable_pad_slots() {
   const auto result = lmdj::domain::create_project(
       lmdj::foundation::ProjectId{kProjectId}, 120);
 
   LMDJ_CHECK(result.has_value());
   const auto& project = result.value();
-  LMDJ_CHECK(project.contract == lmdj::domain::ProjectContract::v3);
+  LMDJ_CHECK(project.contract == lmdj::domain::ProjectContract::v4);
   LMDJ_CHECK(project.revision == 0);
   LMDJ_CHECK(project.quantize_enabled);
   LMDJ_CHECK(project.swing_percent == 50);
@@ -178,6 +197,7 @@ int main() {
   try {
     test_uuid_validation_matches_project_contract_grammar();
     test_new_project_creates_all_64_addressable_pad_slots();
+    test_every_new_project_declares_lmdj_project_v4();
     test_tick_helpers_follow_locked_quantize_swing_and_duration_rules();
     test_pattern_merge_is_last_write_wins_and_canonically_ordered();
     test_pad_playback_defaults_are_project_v2_contract_values();

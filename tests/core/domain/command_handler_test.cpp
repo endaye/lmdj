@@ -143,10 +143,23 @@ void test_valid_command_increments_revision_once() {
       initial, Command{import_asset(kImportCommand1, 0, kAsset1)});
 
   LMDJ_CHECK(applied.state.revision == 1);
-  LMDJ_CHECK(applied.state.contract == lmdj::domain::ProjectContract::v3);
+  LMDJ_CHECK(applied.state.contract == lmdj::domain::ProjectContract::v4);
   LMDJ_CHECK(applied.state.assets.size() == 1);
   LMDJ_CHECK(!applied.replayed);
   LMDJ_CHECK(applied.event.at("command_id") == kImportCommand1);
+}
+
+void test_ordinary_command_does_not_promote_a_loaded_v3_project() {
+  // A v3 Project opened from disk keeps its declared Contract level while it
+  // is being edited: promotion to v4 belongs to the persist boundary, not to
+  // command application, so opening a v3 Project never migrates it.
+  auto initial = new_project();
+  initial.contract = lmdj::domain::ProjectContract::v3;
+  const auto applied = apply_or_throw(
+      initial, Command{import_asset(kImportCommand1, 0, kAsset1)});
+
+  LMDJ_CHECK(applied.state.contract == lmdj::domain::ProjectContract::v3);
+  LMDJ_CHECK(applied.state.revision == 1);
 }
 
 void test_wrong_revision_returns_conflict_without_changing_state() {
@@ -191,7 +204,7 @@ void test_import_assign_sample_is_one_revision_and_resets_playback() {
 
   LMDJ_CHECK(result.has_value());
   const auto& state = result.value().state;
-  LMDJ_CHECK(state.contract == lmdj::domain::ProjectContract::v3);
+  LMDJ_CHECK(state.contract == lmdj::domain::ProjectContract::v4);
   LMDJ_CHECK(state.revision == 1);
   LMDJ_CHECK(state.assets.size() == 1);
   LMDJ_CHECK(state.banks[0][0].asset_id == AssetId{kAsset1});
@@ -210,7 +223,7 @@ void test_update_pad_playback_migrates_an_unassigned_v1_project() {
 
   LMDJ_CHECK(updated.has_value());
   LMDJ_CHECK(updated.value().state.contract ==
-             lmdj::domain::ProjectContract::v3);
+             lmdj::domain::ProjectContract::v4);
   LMDJ_CHECK(updated.value().state.revision == 1);
   LMDJ_CHECK(
       updated.value().state.banks[0][0].playback.trim_start_frame == 10);
@@ -242,7 +255,7 @@ void test_update_pad_playback_accepts_all_modes_bounds_and_nullable_end() {
     LMDJ_CHECK(applied.has_value());
     LMDJ_CHECK(applied.value().state.revision == state.revision + 1);
     LMDJ_CHECK(applied.value().state.contract ==
-               lmdj::domain::ProjectContract::v3);
+               lmdj::domain::ProjectContract::v4);
     LMDJ_CHECK(applied.value().state.banks[0][0].playback == cases[index]);
     state = applied.value().state;
   }
@@ -827,6 +840,7 @@ void test_v4_authoring_commands_preserve_pattern_slot_truth() {
 int main() {
   try {
     test_valid_command_increments_revision_once();
+    test_ordinary_command_does_not_promote_a_loaded_v3_project();
     test_wrong_revision_returns_conflict_without_changing_state();
     test_duplicate_command_id_replays_original_successful_outcome();
     test_import_assign_sample_is_one_revision_and_resets_playback();

@@ -212,6 +212,21 @@ async function clearFaultControl(page) {
   });
 }
 
+// Every checkpoint this Build writes carries the lmdj.project.v4 shape,
+// including the Pattern Slot and Performance carriers v3 has no room for.
+const CHECKPOINT_V4_KEYS = [
+  "assets",
+  "banks",
+  "bpm",
+  "contract",
+  "pattern_slots",
+  "patterns",
+  "performances",
+  "project_id",
+  "revision",
+  "sequence_settings",
+];
+
 async function readCheckpointShape(page, bundle, revision) {
   return page.evaluate(async ({bundle, revision}) => {
     const root = await navigator.storage.getDirectory();
@@ -223,6 +238,7 @@ async function readCheckpointShape(page, bundle, revision) {
     const pad = checkpoint.banks[0].pads[0];
     return {
       contract: checkpoint.contract,
+      checkpointKeys: Object.keys(checkpoint).sort(),
       padKeys: Object.keys(pad).sort(),
       playbackKeys: pad.playback ? Object.keys(pad.playback).sort() : [],
     };
@@ -444,15 +460,16 @@ test("Web Project I/O binds every mutation to its same-page platform owner", asy
   expect(result.postReleaseAcquisition).toBe("pass");
 });
 
-test("Web Project I/O creates and opens an untouched v3 Project", async ({context, browserName}) => {
+test("Web Project I/O creates and opens an untouched v4 Project", async ({context, browserName}) => {
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   const project = await trackedPage(context);
-  const bundle = `v3-round-trip-${Date.now()}`;
+  const bundle = `v4-round-trip-${Date.now()}`;
   await project.goto(
       `/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
   expect((await waitForResult(project)).revision).toBe(0);
   expect(await readCheckpointShape(project, bundle, 0)).toEqual({
-    contract: "lmdj.project.v3",
+    contract: "lmdj.project.v4",
+    checkpointKeys: CHECKPOINT_V4_KEYS,
     padKeys: ["asset_id", "pad", "playback"],
     playbackKeys: [
       "gain_millidb",
@@ -485,7 +502,7 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
       `/project_io/project_io_web_test.html?action=prepare_sample_cache&bundle=${bundle}`);
   expect(await waitForResult(prepare)).toEqual({
     revision: 0,
-    contract: "lmdj.project.v3",
+    contract: "lmdj.project.v4",
     oldStagingPresent: true,
     stagingDirectories: [oldStagingToken],
   });
@@ -496,7 +513,7 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
       `/project_io/project_io_web_test.html?action=mutate_sample_cache&bundle=${bundle}`);
   expect(await waitForResult(mutate)).toEqual({
     revision: 1,
-    contract: "lmdj.project.v3",
+    contract: "lmdj.project.v4",
     replayed: true,
     padAssetId: assetId,
     padPlayback,
@@ -519,7 +536,7 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
       `/project_io/project_io_web_test.html?action=reopen_sample_cache&bundle=${bundle}`);
   expect(await waitForResult(reopen)).toEqual({
     revision: 1,
-    contract: "lmdj.project.v3",
+    contract: "lmdj.project.v4",
     padAssetId: assetId,
     padPlayback,
     assetCount: 1,
@@ -657,7 +674,8 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     await prepare.goto(`/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
     expect((await waitForResult(prepare)).revision).toBe(0);
     expect(await readCheckpointShape(prepare, bundle, 0)).toEqual({
-      contract: "lmdj.project.v3",
+      contract: "lmdj.project.v4",
+      checkpointKeys: CHECKPOINT_V4_KEYS,
       padKeys: ["asset_id", "pad", "playback"],
       playbackKeys: [
         "gain_millidb",
@@ -681,7 +699,8 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     const expectedRevision = replacementReachedCommit(point) ? 1 : 0;
     expect((await waitForResult(restarted)).revision).toBe(expectedRevision);
     expect(await readCheckpointShape(restarted, bundle, expectedRevision)).toEqual({
-      contract: "lmdj.project.v3",
+      contract: "lmdj.project.v4",
+      checkpointKeys: CHECKPOINT_V4_KEYS,
       padKeys: ["asset_id", "pad", "playback"],
       playbackKeys: [
         "gain_millidb",

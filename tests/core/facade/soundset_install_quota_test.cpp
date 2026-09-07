@@ -190,7 +190,10 @@ std::string uuid(std::uint32_t ordinal) {
   return value;
 }
 
-std::filesystem::path create_v4_project(
+// A Facade-created Project is `lmdj.project.v4` from its first persist, so a
+// Sound Set installs into it with no intervening command. This is the path a
+// first-run user takes.
+std::filesystem::path create_project(
     Application& application,
     const std::filesystem::path& root,
     std::uint32_t ordinal) {
@@ -204,15 +207,6 @@ std::filesystem::path create_v4_project(
                      Pattern{pattern_id, 1, {}},
                  })
                  .has_value());
-  const auto assigned = application.command({
-      {"operation", "pattern.slot.assign"},
-      {"project_path", project.generic_string()},
-      {"command_id", uuid(ordinal + 2)},
-      {"expected_revision", 0},
-      {"pattern_slot", 0},
-      {"pattern_id", pattern_id.value()},
-  });
-  LMDJ_CHECK(assigned.at("ok").get<bool>());
   return project;
 }
 
@@ -270,7 +264,7 @@ void test_a_duplicate_artifact_on_two_pads_is_charged_twice() {
       lmdj::project_io::make_local_directory_catalog_transport(objects),
       limits(dedup_would_fit, kSpaciousBytes)));
   publish_fixture_sets(application);
-  const auto project = create_v4_project(application, temp.path(), 0x400);
+  const auto project = create_project(application, temp.path(), 0x400);
   const auto before = inspect_project(application, project);
 
   const auto refused = application.command(install_request(
@@ -318,7 +312,7 @@ void test_the_generation_quota_refuses_with_zero_change() {
       lmdj::project_io::make_local_directory_catalog_transport(objects),
       limits(kSpaciousBytes, kFoundryPreparedBytes - 1U)));
   publish_fixture_sets(application);
-  const auto project = create_v4_project(application, temp.path(), 0x500);
+  const auto project = create_project(application, temp.path(), 0x500);
   const auto before = inspect_project(application, project);
 
   const auto refused = application.command(install_request(
@@ -351,7 +345,7 @@ void test_occupied_pad_policy_never_bypasses_quota() {
         lmdj::project_io::make_local_directory_catalog_transport(objects),
         limits(kSpaciousBytes, kSpaciousBytes)));
     publish_fixture_sets(spacious);
-    const auto project = create_v4_project(spacious, temp.path(), 0x600);
+    const auto project = create_project(spacious, temp.path(), 0x600);
     const auto seeded = spacious.command(install_request(
         project,
         uuid(0x610),
