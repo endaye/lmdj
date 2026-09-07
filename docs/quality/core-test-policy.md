@@ -109,38 +109,74 @@ The default seed is `0`; a different seed must be fixed in the test command or
 fixture. Time, network access, and machine-local state are not random-seed
 substitutes and must be controlled or injected.
 
-## Optimistic PR Integration and Complete Self-tests
+## Optimistic PR Integration and Incremental Main Self-tests
 
-This change takes effect at the authorized O2 cutover together with T5a and
-live protection changes; an unmerged draft does not override existing main rules.
+PR integration no longer requires the retired full-CI/strict-update gate.
+The incremental automatic trigger switch remains a separate authorized T5
+transition after O1 acceptance. Manual incremental controls are implemented;
+legacy automatic triggers still exist until that switch. This policy states
+the approved target, not a claim that automatic incremental scheduling is live.
 Task-specific tests still belong to implementation. Current-head AI review or
 visible authorized takeover, real conflict handling, required conversations and
 explicit merge permission belong to PR shipping. Full Core/Web Proof, sanitizer,
 coverage, packaging and portal suites no longer gate PR merge or run on every
 main push. A non-conflicting PR need not update only because main advanced.
 
-Daily and explicitly requested important-node self-tests share the complete
-fixed policy suite set, including the two native stress suites formerly on a
-separate Nightly cron. The authoritative inventory is the self-test policy,
-not a changed-path subset or a local preflight cache. The O2 trigger cutover
-removes duplicate heavy schedules and PR/main-push fan-out; independent suites
-continue after another suite fails, while dependent steps within a failed
-build stop. Resource locks still protect timing-sensitive native work.
+There is no daily automatic product-test requirement. After the T5 switch, main
+updates and completion wake the lightweight controller; an independent bounded
+control-plane health check may recover existing work but must not start product
+tests merely because a date changed. No new changes or explicit eligible work
+means no heavy run. Keep legacy automatic entrypoints until the authorized
+switch removes their product schedules and daily-missing alert together.
+
+For each automatic batch, enumerate every commit in the complete main
+first-parent interval from processed SHA to the frozen latest target, including
+rename/delete/revert and merge results, not only the net endpoint diff. Union
+the deterministic old/new policy floors, authenticated PR review requirements
+and eligible verification debt, then close over affected consumers. Host scope
+includes behavior/dependencies, not merely compilation. AI is consulted during
+PR review, not again after merge; labels are display, not trusted scope records.
+Unknown mappings, incomplete history or unprovable policy coverage cannot yield
+none: retain conservative full scope or block when history cannot be obtained.
+Only explicitly safe explanatory documents without consumers may select none;
+that does not discard outstanding debt or failures.
+
+The authoritative full inventory remains the sixteen-suite self-test policy,
+including TSan and Release stress; do not hand-copy a shorter inventory or lower
+coverage, stress budgets or platform coverage to reduce selection. The frozen
+batch runs selected suites once; new merges coalesce into the next target, never
+cancel the active batch. Independent suites continue collecting results after a
+sibling failure, while failed build dependencies become blocked. Resource locks
+still protect timing-sensitive native work.
 
 Each batch pins a verified main-history target independently from its trusted
 control revision and records exact run/attempt. Required suite failure, missing
 result, cancellation, malformed evidence or unavailable infrastructure never
-means success. The hosted verdict retains the complete sixteen-suite result in
+means success. Incremental verdicts distinguish none/focused/full and give
+not-selected reasons; not-required and not-selected are not pass. Persist terminal
+results before advancing processed progress, preserving failures independently
+from missing/blocked/cancelled/infrastructure debt. Bounded debt recovery pauses
+known unavailable work without claiming coverage or repeatedly restarting it
+on unrelated docs. New obligations remain recorded; explicit resume is distinct
+from report retry. Historical explicit candidates cannot move automatic progress
+or clear newer failures/debt.
+
+The separate legacy complete verdict retains the complete sixteen-suite result in
 `self-test-verdict-<target>-<run>-<attempt>` for thirty days without overwrite.
 Only attempt 1 is accepted: repetition uses a new same-target dispatch, never
 an Actions partial rerun that can inherit successful jobs from another attempt.
 Early request records are unverified requests, not test evidence.
 
 Failures produce triage Issues, not a merge freeze. A single later green batch
-does not close a defect automatically. Daily self-testing does not release or
+does not close a defect automatically. Incremental self-testing does not release or
 allocate a version; manual candidate selection consumes only evidence accepted
 by the canonical release verifier. Local, PR review, self-test, release, deploy,
-snapshot and physical acceptance facts stay separate.
+snapshot and physical acceptance facts stay separate. Manual exact-target full
+remains available, but even a new full result requires independent acceptance
+by the canonical release verifier. Focused/none or cross-SHA results cannot be
+promoted to legacy complete release evidence. Report recovery consumes verified
+results through a durable outbox; unknown Issue POST responses require positive
+receipt reconciliation or visible manual follow-up, not blind re-creation.
 
 ### Advisory path selection and test ownership
 

@@ -7,7 +7,9 @@ description: Universal skill for shipping a completed local task/issue to main -
 
 This skill defines the canonical, universal workflow for taking a locally completed GitHub issue/task in an isolated worktree branch, verifying it, creating a Conventional Commit, pushing, opening a Pull Request, checking current-head review and, when authorized, squash-merging into `main`, and cleaning up the branch and worktree.
 
-The optimistic merge procedure applies only after the authorized O2 cutover.
+The current merge procedure retains PR review/conflict/conversation protection,
+not retired full-CI or strict-update gates. The separate T5 incremental automatic
+trigger switch remains pending; manual controls do not prove automatic activation.
 An unmerged draft does not override current `main` governance or live protection.
 This skill grants no new authority: push, PR creation, merge, Issue mutation and
 cleanup require the user's applicable authorization; stop at its boundary.
@@ -227,7 +229,7 @@ instead of applying a universal split rule.
 
 The historical queue-specific limitation in
 [`release-cut-bundles-control-plane`](../../pitfalls/release-cut-bundles-control-plane.md)
-does not make ordinary PRs queue-dependent after O2. Product Build allocation
+does not make ordinary PRs queue-dependent. Product Build allocation
 still follows the canonical version policy and is not bundled with unrelated
 feature work.
 
@@ -327,14 +329,13 @@ lint reads the text you give it and cannot see a directive added afterwards.
    for takeover on the PR. Do not wait forever, forge green evidence or silently
    treat missing review as approval. A new push invalidates old-head evidence.
 4. **Merge without the former queue/full-CI loop**. A non-conflicting PR need
-   not update just because main advanced. Daily/node self-test failures,
+   not update just because main advanced. Incremental or explicit full self-test failures,
    in-flight suites, coverage, sanitizer or portal batch results do not block
    an ordinary PR merge; they remain visible evidence and Issue follow-up.
    There is no `merge:queue` ticket or full-green prerequisite. Resolve real
    conflicts locally, rerun affected Task tests and review the changed head.
-   Before O2, continue under the current main workflow, not this draft. If O2
-   is recorded complete but live protection still requires retired gates or
-   strict updates, stop and report configuration drift; do not bypass it or
+   If live protection requires retired gates or strict updates, stop and report
+   configuration drift; do not bypass it or
    alter protection under shipping authority. Squash-merge only the head just inspected, using an atomic
    expected-head guard where supported, and recheck if it changed.
 5. **Verify the result**. Read PR state, `mergedAt` and `mergeCommit`; report
@@ -354,9 +355,19 @@ lint reads the text you give it and cannot see a directive added afterwards.
    commenting needs applicable Issue-mutation authority. Preserve the closing
    keyword pitfall and record a qualifying recurrence when authorized.
 
-The reporter collects complete-batch failures in suite/class Issue buckets;
+The target main-only strategy batches the complete unprocessed commit interval,
+using deterministic floor union authenticated review scope and eligible debt.
+AI labels cannot shrink that scope; safe docs-none does not clear prior failures
+or debt. No daily product-test requirement or automatic release follows from
+shipping a PR. Legacy automatic triggers remain until the separate T5 cutover.
+
+The report runtime collects authenticated review-infrastructure and selected
+batch failures into durable outboxes and stable Issue buckets;
 these are not proven root-cause fingerprints, and one green batch does not
-close an Issue automatically. Remote O1 acceptance remains separate.
+close an Issue automatically. Unknown business POST outcomes require an exact
+positive receipt or explicit manual reconciliation, never a blind duplicate POST.
+Report retries do not execute tests, and processed progress is not full health
+or release evidence. Remote O1 acceptance and automatic activation remain separate.
 It does not automatically release a version. Release preparation, publication,
 deployment and Channel promotion follow their own exact-candidate evidence
 and authorization boundaries.

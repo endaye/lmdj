@@ -7,8 +7,11 @@ is the only active product source.
 
 `main` is the protected integration branch; it may temporarily contain defects.
 Release readiness belongs to an explicitly selected, fully verified candidate,
-not every merge. The optimistic CI rules take effect only at the authorized
-O2 cutover; a draft branch does not override live `main` governance or protection.
+not every merge. Ordinary PRs retain Task verification, current-head review,
+conflict and conversation protection without a full-CI or strict-update gate.
+The main-only incremental batch strategy is a separately authorized T5 trigger
+cutover; implemented manual controls do not mean automatic scheduling is enabled.
+A draft branch never overrides live `main` governance or protection.
 Work only on a short-lived
 branch in an isolated worktree. Branch names must use `feat/<task>`,
 `fix/<task>`, or `docs/<task>`; this applies equally to people and coding
@@ -39,7 +42,7 @@ release, publication, deployment, or Channel promotion.
 ## Task shipping and issue operations
 
 - For querying/triaging open issues, parallel workstreams, and auditing/cleaning local branches and worktrees, follow `.agents/skills/issue-list/SKILL.md`.
-- For shipping a locally completed issue or task, coding agents must follow `.agents/skills/issue-done/SKILL.md` (handles verification, Conventional Commit, push, PR creation, CI auto-merge, and worktree/branch cleanup).
+- For shipping a locally completed issue or task, coding agents must follow `.agents/skills/issue-done/SKILL.md` (handles verification, Conventional Commit, push, PR creation, current-head review, authorized merge, and separately authorized cleanup).
 
 ## Pitfall ledger
 
@@ -169,7 +172,10 @@ the `stress` tier. Running `scripts/core.sh test dev` therefore does not run the
 stress tier; run it explicitly when changing lock-free or concurrent code.
 `proof` also excludes the stress tier. The `core-asan` CI job runs `full` then
 `stress`, and `core-asan-macos` selects the `native` label. These belong to
-complete daily/node self-tests, not a Pull Request merge gate. `core-asan-macos` covers native tests only: the
+selected incremental main batches and explicit complete self-tests, not a Pull
+Request merge gate. There is no daily product-test requirement in the target
+strategy; legacy automatic triggers remain until the authorized T5 switch.
+`core-asan-macos` covers native tests only: the
 Python-hosted tests preload the sanitizer runtime into CPython, which does not
 work on arm64 macOS, so Linux `core-asan` owns that coverage.
 `docs/quality/core-test-policy.md` is the canonical tier definition.
