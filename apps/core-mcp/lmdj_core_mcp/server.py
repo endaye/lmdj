@@ -412,6 +412,13 @@ def input_schemas() -> dict[str, dict]:
         "pattern": FILE_ID_PATTERN,
     }
     uint = {"type": "integer", "minimum": 0}
+    sha256 = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    semver = {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+    }
+    bank_id = {"type": "integer", "minimum": 0, "maximum": 3}
+    occupied_pad_policy = {"type": "string", "enum": ["keep", "replace"]}
     slot = object_schema(
         {
             "bank": {"type": "integer", "minimum": 0, "maximum": 3},
@@ -1136,6 +1143,52 @@ def input_schemas() -> dict[str, dict]:
             },
             ["project_path", "pattern_id", "output_path"],
         ),
+        "lmdj.soundset.catalog.list": object_schema({}, []),
+        "lmdj.soundset.inspect": object_schema(
+            {
+                "set_id": uuid,
+                "version": semver,
+                "manifest_sha256": sha256,
+            },
+            ["set_id", "version", "manifest_sha256"],
+        ),
+        "lmdj.soundset.map.preview": object_schema(
+            {
+                "project_path": path,
+                "bank_id": bank_id,
+                "set_id": uuid,
+                "version": semver,
+                "manifest_sha256": sha256,
+            },
+            [
+                "project_path",
+                "bank_id",
+                "set_id",
+                "version",
+                "manifest_sha256",
+            ],
+        ),
+        "lmdj.soundset.install": object_schema(
+            {
+                "project_path": path,
+                "command_id": uuid,
+                "expected_revision": uint,
+                "bank_id": bank_id,
+                "set_id": uuid,
+                "version": semver,
+                "manifest_sha256": sha256,
+                "occupied_pad_policy": occupied_pad_policy,
+            },
+            [
+                "project_path",
+                "command_id",
+                "expected_revision",
+                "bank_id",
+                "set_id",
+                "version",
+                "manifest_sha256",
+            ],
+        ),
         "lmdj.provider.list": object_schema({}, []),
         "lmdj.provider.select": object_schema(
             {"capability": file_id, "provider_id": file_id},
@@ -1299,6 +1352,10 @@ def tool_table() -> tuple[Tool, ...]:
         ("lmdj.sequence.recovery.discard", "sequence.recovery.discard", "command"),
         ("lmdj.snapshot.cook", "snapshot.cook", "query"),
         ("lmdj.render.offline", "render.offline", "command"),
+        ("lmdj.soundset.catalog.list", "soundset.catalog.list", "query"),
+        ("lmdj.soundset.inspect", "soundset.inspect", "query"),
+        ("lmdj.soundset.map.preview", "soundset.map.preview", "query"),
+        ("lmdj.soundset.install", "soundset.install", "command"),
         ("lmdj.provider.list", "provider.list", "query"),
         ("lmdj.provider.select", "provider.select", "command"),
         ("lmdj.provider.run", "provider.run", "command"),

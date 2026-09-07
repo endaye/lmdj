@@ -220,7 +220,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 65> operations{
+  static constexpr std::array<std::string_view, 69> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -285,6 +285,10 @@ bool supported_operation(std::string_view operation) {
       "performance.replay.stop",
       "performance.replay.status",
       "performance.resample.commit",
+      "soundset.catalog.list",
+      "soundset.inspect",
+      "soundset.map.preview",
+      "soundset.install",
       "host.close",
   };
   return std::find(operations.begin(), operations.end(), operation) !=
@@ -2849,6 +2853,10 @@ int main() {
       LMDJ_WEB_LIMIT_GENERATION_BYTES,
       LMDJ_WEB_LIMIT_RESIDENT_BYTES,
   };
+  // Task 4 wires the Web Host with the local adapter only: the Workspace's
+  // own Catalog directory and index. The network `CatalogTransport` that
+  // replaces the transport here is Task 5's.
+  auto catalog = lmdj::facade::make_workspace_soundset_catalog(workspace);
   auto created = ControlRuntime::create(
       workspace,
       ApplicationConfig{
@@ -2862,6 +2870,9 @@ int main() {
           nullptr,
           nullptr,
           lmdj::facade::make_unavailable_performance_replay_controller(),
+          nullptr,
+          std::move(catalog.transport),
+          std::move(catalog.source),
       },
       limits);
   if (!created.has_value()) {

@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -27,6 +28,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <picosha2.h>
+
 #include <lmdj/audio/offline_renderer.hpp>
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/cooker/project_cooker.hpp>
@@ -38,6 +41,7 @@
 #include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/foundation/error.hpp>
+#include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/project_bundle_transfer.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
@@ -115,6 +119,18 @@ constexpr audio::RuntimePreparationLimits kDefaultSampleLimits{
     134'217'728,
     268'435'456,
 };
+// Task 6 writes each Host's real Sound Set limits into its manifest. Until
+// then a Host that injects none gets these, which are the sample limits'
+// shape one order of magnitude apart: one manifest object, one blob, one
+// Set's deduplicated total, and the whole staging area.
+constexpr project_io::SoundSetStoreLimits kDefaultSoundSetStoreLimits{
+    1'048'576,
+    67'108'864,
+    268'435'456,
+    536'870'912,
+};
+constexpr std::string_view kSoundSetReasonAudioUnsupported =
+    "soundset_audio_unsupported";
 constexpr std::string_view kSampleStagingContract =
     "lmdj.sample-import-staging.v1";
 constexpr std::string_view kWaveformCacheContract =
@@ -188,6 +204,10 @@ const std::map<std::string, OperationKind>& operations() {
       {"sequence.recovery.list", OperationKind::query},
       {"sequence.recovery.apply", OperationKind::command},
       {"sequence.recovery.discard", OperationKind::command},
+      {"soundset.catalog.list", OperationKind::query},
+      {"soundset.inspect", OperationKind::query},
+      {"soundset.install", OperationKind::command},
+      {"soundset.map.preview", OperationKind::query},
   };
   return value;
 }
@@ -1384,6 +1404,303 @@ Error runtime_project_quota_error(
   };
 }
 
+// Why one Catalog entry did not become available, in public vocabulary only:
+// the `lmdj.error.v1` code and, when the failing module attached one, the
+// locked `details.reason` token. A Catalog that cannot be reached and a
+// Catalog that answers with something that is not
+// `lmdj.soundset-catalog.v1` are the same fact to every caller — no usable
+// index — and neither is fatal.
+nlohmann::json soundset_refusal_json(
+    const project_io::SoundSetCatalogEntry& entry,
+    const Error& error) {
+  nlohmann::json refusal{
+      {"set_id", entry.set_id},
+      {"version", entry.version},
+      {"manifest_sha256", entry.manifest_sha256},
+      {"code", foundation::error_code_name(error.code)},
+  };
+  const auto reason = error.details.is_object()
+                          ? error.details.value("reason", std::string{})
+                          : std::string{};
+  refusal["reason"] =
+      reason.empty() ? nlohmann::json(nullptr) : nlohmann::json(reason);
+  return refusal;
+}
+
+// A published Set that cannot produce a declared Artifact's bytes is a
+// corrupted Set Store copy, whether the blob is absent or its bytes changed.
+// The locked table has exactly one reason for that: soundset_content_mismatch.
+Error soundset_artifact_error(const Error& error) {
+  if (error.details.is_object() &&
+      error.details.value("reason", std::string{}) ==
+          std::string(project_io::kSoundSetReasonContentMismatch)) {
+    return error;
+  }
+  return Error{
+      ErrorCode::io_error,
+      "Sound Set Artifact bytes do not match the published manifest",
+      {{"reason", project_io::kSoundSetReasonContentMismatch}},
+  };
+}
+
+// S11-D3: Sound Set audio is ordinary S8-D6 audio, so the project-cooker WAV
+// reader decides it. The reader raises UNSUPPORTED_AUDIO with no reason token,
+// and the Sound Set path is where that reason exists; attaching it here keeps
+// the shared reader free of a Sound Set concept.
+Error soundset_audio_error(const Error& error, std::uint8_t slot_index) {
+  if (error.code != ErrorCode::unsupported_audio) {
+    return error;
+  }
+  return Error{
+      ErrorCode::unsupported_audio,
+      error.message,
+      {
+          {"reason", kSoundSetReasonAudioUnsupported},
+          {"slot_index", slot_index},
+      },
+  };
+}
+
+bool semver_string(std::string_view value) {
+  std::size_t offset = 0;
+  for (int component = 0; component < 3; ++component) {
+    if (component > 0) {
+      if (offset >= value.size() || value[offset] != '.') {
+        return false;
+      }
+      ++offset;
+    }
+    const auto begin = offset;
+    while (offset < value.size() && value[offset] >= '0' &&
+           value[offset] <= '9') {
+      ++offset;
+    }
+    const auto digits = offset - begin;
+    if (digits == 0 || (digits > 1 && value[begin] == '0')) {
+      return false;
+    }
+  }
+  return offset == value.size();
+}
+
+// The C++ mirror of `lmdj.soundset-catalog.v1`, written the way
+// `packages/authoring-domain/src/project.cpp` mirrors the Project Schema:
+// exact keys, checked types, no JSON Schema validator in Core.
+std::optional<std::vector<project_io::SoundSetCatalogEntry>>
+parse_soundset_catalog_index(std::string_view bytes) {
+  if (!valid_utf8(bytes)) {
+    return std::nullopt;
+  }
+  const auto parsed = foundation::parse_bounded_json(bytes);
+  if (!parsed.has_value() || !parsed->is_object() ||
+      !exact_keys(*parsed, {"contract", "entries"}) ||
+      !parsed->at("contract").is_string() ||
+      parsed->at("contract").get<std::string>() !=
+          "lmdj.soundset-catalog.v1" ||
+      !parsed->at("entries").is_array()) {
+    return std::nullopt;
+  }
+  std::vector<project_io::SoundSetCatalogEntry> entries;
+  std::set<std::string> seen_entries;
+  for (const auto& item : parsed->at("entries")) {
+    if (!item.is_object() ||
+        !seen_entries.insert(foundation::canonical_json(item)).second) {
+      return std::nullopt;
+    }
+    for (const auto& required : {
+             "set_id",
+             "version",
+             "manifest_sha256",
+             "total_bytes",
+             "name",
+             "publisher",
+             "roles_summary",
+             "license_summary",
+         }) {
+      if (!item.contains(required)) {
+        return std::nullopt;
+      }
+    }
+    for (auto field = item.begin(); field != item.end(); ++field) {
+      const auto& key = field.key();
+      if (key != "set_id" && key != "version" && key != "manifest_sha256" &&
+          key != "total_bytes" && key != "name" && key != "publisher" &&
+          key != "roles_summary" && key != "license_summary" &&
+          key != "bpm" && key != "key") {
+        return std::nullopt;
+      }
+    }
+    const auto& summary = item.at("license_summary");
+    if (!item.at("set_id").is_string() ||
+        !domain::is_valid_uuid(item.at("set_id").get_ref<const std::string&>()) ||
+        !item.at("version").is_string() ||
+        !semver_string(item.at("version").get_ref<const std::string&>()) ||
+        !item.at("manifest_sha256").is_string() ||
+        !lowercase_sha256(
+            item.at("manifest_sha256").get_ref<const std::string&>()) ||
+        !item.at("total_bytes").is_number_unsigned() ||
+        item.at("total_bytes").get<std::uint64_t>() == 0U ||
+        !item.at("name").is_string() ||
+        item.at("name").get_ref<const std::string&>().empty() ||
+        !item.at("publisher").is_string() ||
+        item.at("publisher").get_ref<const std::string&>().empty() ||
+        !item.at("roles_summary").is_array() ||
+        !exact_keys(summary, {"spdx_id", "rights_holder"}) ||
+        !summary.at("spdx_id").is_string() ||
+        summary.at("spdx_id").get_ref<const std::string&>().empty() ||
+        !summary.at("rights_holder").is_string() ||
+        summary.at("rights_holder").get_ref<const std::string&>().empty()) {
+      return std::nullopt;
+    }
+    // `roles_summary` is a closed enum with uniqueItems, and the two optional
+    // keys are typed and ranged exactly as the Contract declares them.
+    std::set<std::string> roles;
+    for (const auto& role : item.at("roles_summary")) {
+      if (!role.is_string() ||
+          std::ranges::find(
+              foundation::kSoundSetRoles,
+              role.get_ref<const std::string&>()) ==
+              foundation::kSoundSetRoles.end() ||
+          !roles.insert(role.get<std::string>()).second) {
+        return std::nullopt;
+      }
+    }
+    if (item.contains("bpm")) {
+      const auto& bpm = item.at("bpm");
+      if (!bpm.is_number_integer() || bpm.is_number_float()) {
+        return std::nullopt;
+      }
+      const auto value = bpm.is_number_unsigned()
+                             ? static_cast<std::int64_t>(
+                                   std::min<std::uint64_t>(
+                                       bpm.get<std::uint64_t>(),
+                                       static_cast<std::uint64_t>(
+                                           std::numeric_limits<
+                                               std::int64_t>::max())))
+                             : bpm.get<std::int64_t>();
+      if (value < 40 || value > 240) {
+        return std::nullopt;
+      }
+    }
+    if (item.contains("key") &&
+        (!item.at("key").is_string() ||
+         item.at("key").get_ref<const std::string&>().empty())) {
+      return std::nullopt;
+    }
+    entries.push_back(
+        project_io::SoundSetCatalogEntry{
+            item.at("set_id").get<std::string>(),
+            item.at("version").get<std::string>(),
+            item.at("manifest_sha256").get<std::string>(),
+            item.at("total_bytes").get<std::uint64_t>(),
+            foundation::CatalogLicenseSummary{
+                summary.at("spdx_id").get<std::string>(),
+                summary.at("rights_holder").get<std::string>(),
+            },
+        });
+  }
+  return entries;
+}
+
+// The Set Store names each published Set by its canonical manifest digest,
+// and `StoredSoundSet` carries the canonical bytes rather than the name, so a
+// listing recomputes it over exactly the bytes S11-D1 defines the identity as.
+std::string canonical_manifest_digest(std::string_view canonical_bytes) {
+  picosha2::hash256_one_by_one hasher;
+  const auto* begin =
+      reinterpret_cast<const unsigned char*>(canonical_bytes.data());
+  hasher.process(begin, begin + canonical_bytes.size());
+  hasher.finish();
+  return picosha2::get_hash_hex_string(hasher);
+}
+
+// An install's Asset identities have to be a function of the request, not of
+// a random source. Task 3's commit path serves a replayed `command_id` only
+// when the whole persisted command matches byte for byte, so a Host retrying
+// after a lost response must present the same Asset ids it presented the first
+// time. Deriving them from the command id, the Set's manifest digest and the
+// target Pad makes the retry identical by construction, and makes two Pads of
+// one install two distinct Assets even when they share an Artifact.
+std::string derived_asset_id(
+    std::string_view command_id,
+    std::string_view manifest_sha256,
+    std::uint8_t bank,
+    std::uint8_t pad) {
+  const auto seed = std::string("lmdj.soundset.install.asset\n") +
+                    std::string(command_id) + "\n" +
+                    std::string(manifest_sha256) + "\n" +
+                    std::to_string(static_cast<unsigned>(bank)) + "\n" +
+                    std::to_string(static_cast<unsigned>(pad));
+  const auto digest = canonical_manifest_digest(seed);
+  auto value = digest.substr(0, 32);
+  // A lowercase canonical UUID with the version-4 nibble and the RFC variant
+  // bits, so `domain::is_valid_uuid` accepts it like any other Asset id.
+  value.at(12) = '4';
+  constexpr std::string_view variants = "89ab";
+  value.at(16) = variants.at(
+      static_cast<std::size_t>(
+          std::string_view("0123456789abcdef").find(value.at(16))) %
+      variants.size());
+  return value.substr(0, 8) + "-" + value.substr(8, 4) + "-" +
+         value.substr(12, 4) + "-" + value.substr(16, 4) + "-" +
+         value.substr(20, 12);
+}
+
+nlohmann::json soundset_artifact_json(const foundation::ArtifactRef& artifact) {
+  return {
+      {"sha256", artifact.sha256},
+      {"media_type", artifact.media_type},
+      {"byte_length", artifact.byte_length},
+  };
+}
+
+nlohmann::json soundset_license_json(const foundation::SoundSetLicense& license) {
+  return {
+      {"spdx_id", license.spdx_id},
+      {"rights_holder", license.rights_holder},
+      {"copyright", license.copyright},
+      {"attribution", license.attribution},
+  };
+}
+
+// Identity plus everything a Host needs to list a Set. The occupied slot roles
+// are read from the verified manifest, never from the Catalog summary.
+nlohmann::json soundset_summary_json(
+    const project_io::StoredSoundSet& stored,
+    std::string_view manifest_sha256) {
+  const auto& manifest = stored.manifest;
+  auto slots = nlohmann::json::array();
+  for (const auto& slot : manifest.slots) {
+    if (!slot.occupied.has_value()) {
+      continue;
+    }
+    slots.push_back({
+        {"slot", slot.index},
+        {"role", slot.occupied->role},
+        {"name", slot.occupied->name},
+    });
+  }
+  nlohmann::json summary{
+      {"set_id", manifest.set_id},
+      {"version", manifest.version},
+      {"manifest_sha256", std::string{manifest_sha256}},
+      {"name", manifest.name},
+      {"publisher", manifest.publisher},
+      {"total_bytes", stored.total_bytes},
+      {"license", soundset_license_json(manifest.license)},
+      {"occupied_slots", std::move(slots)},
+      {"has_demo", manifest.demo.has_value()},
+  };
+  summary["description"] = manifest.description.has_value()
+                               ? nlohmann::json(*manifest.description)
+                               : nlohmann::json(nullptr);
+  summary["bpm"] = manifest.bpm.has_value() ? nlohmann::json(*manifest.bpm)
+                                            : nlohmann::json(nullptr);
+  summary["key"] = manifest.key.has_value() ? nlohmann::json(*manifest.key)
+                                            : nlohmann::json(nullptr);
+  return summary;
+}
+
 bool valid_host_project_path(const std::filesystem::path& path) {
   const auto encoded = path.generic_string();
   return valid_utf8(encoded) && path.is_absolute() &&
@@ -1878,6 +2195,12 @@ struct Application::Impl {
         performance_gesture_sink(std::move(config.performance_gesture_sink)),
         sample_limits(
             config.runtime_preparation_limits.value_or(kDefaultSampleLimits)),
+        soundset_transport(std::move(config.soundset_catalog_transport)),
+        soundset_source(std::move(config.soundset_catalog_source)),
+        soundset_limits(
+            config.soundset_store_limits.value_or(
+                kDefaultSoundSetStoreLimits)),
+        soundset_sets(workspace_root, soundset_limits, storage_platform),
         projects(storage_platform),
         sequence_journals(storage_platform),
         bundle_transfers(storage_platform),
@@ -3621,6 +3944,18 @@ struct Application::Impl {
     if (operation == "provider.selected") {
       return provider_selected(request);
     }
+    if (operation == "soundset.catalog.list") {
+      return soundset_catalog_list(request);
+    }
+    if (operation == "soundset.inspect") {
+      return soundset_inspect(request);
+    }
+    if (operation == "soundset.map.preview") {
+      return soundset_map_preview(request);
+    }
+    if (operation == "soundset.install") {
+      return soundset_install(request);
+    }
     return attempt_inspect(request);
   }
 
@@ -4038,22 +4373,33 @@ struct Application::Impl {
     return computed;
   }
 
-  foundation::Result<PreparedQuotaUsage> measure_prepared_quota(
+  struct DecodedAudio {
+    std::uint32_t sample_rate;
+    std::uint16_t channels;
+    std::uint64_t source_frames;
+    PreparedQuotaUsage prepared;
+  };
+
+  // One decode answers both questions the Sound Set path asks: is this S8-D6
+  // audio at all, and how much prepared PCM would it cost. The refusal is the
+  // project-cooker WAV reader's own UNSUPPORTED_AUDIO; nothing here re-decides
+  // the format.
+  foundation::Result<DecodedAudio> measure_decoded_audio(
       std::span<const std::byte> bytes) const {
     const auto decoded = cooker::decode_wav(bytes);
     if (!decoded.has_value()) {
-      return foundation::Result<PreparedQuotaUsage>::failure(
-          decoded.error());
+      return foundation::Result<DecodedAudio>::failure(decoded.error());
     }
-    auto frames = static_cast<std::uint64_t>(
+    const auto source_frames = static_cast<std::uint64_t>(
         decoded.value()->interleaved.size() / decoded.value()->channels);
+    auto frames = source_frames;
     if (decoded.value()->sample_rate != 48'000) {
       const auto prepared = cooker::prepare_runtime_pcm(*decoded.value());
       if (!prepared.has_value() || prepared.value()->channels == 0 ||
           prepared.value()->interleaved.size() %
                   prepared.value()->channels !=
               0) {
-        return foundation::Result<PreparedQuotaUsage>::failure(
+        return foundation::Result<DecodedAudio>::failure(
             prepared.has_value()
                 ? Error{
                       ErrorCode::cook_failed,
@@ -4067,26 +4413,49 @@ struct Application::Impl {
     }
     const auto prepared_bytes = audio::checked_mono_float_bytes(frames);
     if (!prepared_bytes.has_value()) {
-      return foundation::Result<PreparedQuotaUsage>::failure(Error{
+      return foundation::Result<DecodedAudio>::failure(Error{
           ErrorCode::invalid_argument,
           "prepared Sample PCM byte length overflowed",
       });
     }
-    return foundation::Result<PreparedQuotaUsage>::success(
-        PreparedQuotaUsage{*prepared_bytes, frames});
+    return foundation::Result<DecodedAudio>::success(
+        DecodedAudio{
+            decoded.value()->sample_rate,
+            decoded.value()->channels,
+            source_frames,
+            PreparedQuotaUsage{*prepared_bytes, frames},
+        });
   }
 
-  foundation::Result<SampleQuotaComputation> compute_sample_quota(
-      const std::filesystem::path& project_path,
-      const domain::ProjectState& project,
-      domain::PadSlotId target) const {
-    if (!sample_limits.has_value()) {
-      return foundation::Result<SampleQuotaComputation>::failure(
-          invalid_sample_request("Sample quota is unavailable"));
+  foundation::Result<PreparedQuotaUsage> measure_prepared_quota(
+      std::span<const std::byte> bytes) const {
+    const auto measured = measure_decoded_audio(bytes);
+    if (!measured.has_value()) {
+      return foundation::Result<PreparedQuotaUsage>::failure(
+          measured.error());
     }
+    return foundation::Result<PreparedQuotaUsage>::success(
+        measured.value().prepared);
+  }
+
+  struct BankQuotaLedger {
     std::array<std::uint64_t, 4> bank_used_bytes{};
     std::uint64_t project_used_bytes = 0;
     std::vector<SampleQuotaConsumed> consumed;
+  };
+
+  // The prepared-PCM ledger of the whole Project with a set of target Pads
+  // removed. `excluded_pads` is a bitmask over `target_bank`: those are the
+  // Pads a caller is about to write, so whatever they hold now is not part of
+  // what the write has to fit into. Every other assigned Pad counts once per
+  // Pad, so one Artifact on two Pads is two residencies — the 2026-08-28
+  // accounting amendment, and the rule S11-D8 reuses for an install.
+  foundation::Result<BankQuotaLedger> compute_bank_ledger(
+      const std::filesystem::path& project_path,
+      const domain::ProjectState& project,
+      std::uint8_t target_bank,
+      std::uint16_t excluded_pads) const {
+    BankQuotaLedger ledger;
     std::map<std::string, PreparedQuotaUsage> cached_usage;
 
     for (std::uint8_t bank = 0; bank < project.banks.size(); ++bank) {
@@ -4100,7 +4469,7 @@ struct Application::Impl {
         }
         const auto asset = domain::resolve_slot_asset(project, slot);
         if (!asset.has_value()) {
-          return foundation::Result<SampleQuotaComputation>::failure(
+          return foundation::Result<BankQuotaLedger>::failure(
               unavailable_sample());
         }
         auto usage = cached_usage.find(asset->artifact.sha256);
@@ -4108,41 +4477,64 @@ struct Application::Impl {
           const auto artifact_bytes =
               projects.read_artifact(project_path, asset->artifact);
           if (!artifact_bytes.has_value()) {
-            return foundation::Result<SampleQuotaComputation>::failure(
+            return foundation::Result<BankQuotaLedger>::failure(
                 sample_artifact_read_error(artifact_bytes.error()));
           }
           const auto measured = measure_prepared_quota(artifact_bytes.value());
           if (!measured.has_value()) {
-            return foundation::Result<SampleQuotaComputation>::failure(
+            return foundation::Result<BankQuotaLedger>::failure(
                 measured.error());
           }
           usage = cached_usage.emplace(
               asset->artifact.sha256, measured.value()).first;
         }
-        if (bank == target.bank) {
-          consumed.push_back(SampleQuotaConsumed{
+        if (bank == target_bank) {
+          ledger.consumed.push_back(SampleQuotaConsumed{
               slot,
               usage->second.bytes,
               usage->second.frames,
           });
-        }
-        if (slot == target) {
-          continue;
+          if ((excluded_pads & (std::uint16_t{1} << pad)) != 0U) {
+            continue;
+          }
         }
         const auto next_bank = audio::checked_runtime_byte_sum(
-            bank_used_bytes.at(bank), usage->second.bytes);
+            ledger.bank_used_bytes.at(bank), usage->second.bytes);
         const auto next_project = audio::checked_runtime_byte_sum(
-            project_used_bytes, usage->second.bytes);
+            ledger.project_used_bytes, usage->second.bytes);
         if (!next_bank.has_value() || !next_project.has_value()) {
-          return foundation::Result<SampleQuotaComputation>::failure(Error{
+          return foundation::Result<BankQuotaLedger>::failure(Error{
               ErrorCode::invalid_project,
               "Sample quota ledger overflowed",
           });
         }
-        bank_used_bytes.at(bank) = *next_bank;
-        project_used_bytes = *next_project;
+        ledger.bank_used_bytes.at(bank) = *next_bank;
+        ledger.project_used_bytes = *next_project;
       }
     }
+    return foundation::Result<BankQuotaLedger>::success(std::move(ledger));
+  }
+
+  foundation::Result<SampleQuotaComputation> compute_sample_quota(
+      const std::filesystem::path& project_path,
+      const domain::ProjectState& project,
+      domain::PadSlotId target) const {
+    if (!sample_limits.has_value()) {
+      return foundation::Result<SampleQuotaComputation>::failure(
+          invalid_sample_request("Sample quota is unavailable"));
+    }
+    auto computed = compute_bank_ledger(
+        project_path,
+        project,
+        target.bank,
+        static_cast<std::uint16_t>(std::uint16_t{1} << target.pad));
+    if (!computed.has_value()) {
+      return foundation::Result<SampleQuotaComputation>::failure(
+          computed.error());
+    }
+    const auto bank_used_bytes = computed.value().bank_used_bytes;
+    const auto project_used_bytes = computed.value().project_used_bytes;
+    auto consumed = std::move(computed.value().consumed);
 
     const auto assessment = audio::assess_runtime_quota(
         bank_used_bytes.at(target.bank),
@@ -7332,6 +7724,518 @@ struct Application::Impl {
         std::nullopt);
   }
 
+  // ---------------------------------------------------------------- Sound Set
+
+  // Best effort by design (S11-D7): a Catalog that cannot be read is not an
+  // error, it is simply no index this call. Every Set already published in the
+  // Workspace Set Store stays usable, and its eligibility is then decided by
+  // its own manifest, exactly as #465 Q1 case 5 requires.
+  std::optional<std::vector<project_io::SoundSetCatalogEntry>>
+  read_catalog_entries() const {
+    if (!soundset_source) {
+      return std::nullopt;
+    }
+    const auto bytes = soundset_source->read_index(
+        soundset_limits.maximum_soundset_manifest_bytes);
+    if (!bytes.has_value()) {
+      return std::nullopt;
+    }
+    return parse_soundset_catalog_index(
+        std::string_view(
+            reinterpret_cast<const char*>(bytes.value().data()),
+            bytes.value().size()));
+  }
+
+  static std::optional<foundation::CatalogLicenseSummary>
+  catalog_summary_for(
+      const std::optional<std::vector<project_io::SoundSetCatalogEntry>>&
+          entries,
+      std::string_view set_id,
+      std::string_view version,
+      std::string_view manifest_sha256) {
+    if (!entries.has_value()) {
+      return std::nullopt;
+    }
+    for (const auto& entry : entries.value()) {
+      if (entry.set_id == set_id && entry.version == version &&
+          entry.manifest_sha256 == manifest_sha256) {
+        return entry.license_summary;
+      }
+    }
+    return std::nullopt;
+  }
+
+  // A Set the Catalog declares becomes available by being acquired; a Set that
+  // fails to acquire simply does not appear. One Set's fault never hides the
+  // Catalog's other entries, and none of it touches a Project.
+  nlohmann::json refresh_soundset_store(
+      const std::vector<project_io::SoundSetCatalogEntry>& entries) {
+    auto refused = nlohmann::json::array();
+    if (!soundset_transport) {
+      return refused;
+    }
+    for (const auto& entry : entries) {
+      const auto acquired = soundset_sets.acquire(*soundset_transport, entry);
+      if (!acquired.has_value()) {
+        refused.push_back(soundset_refusal_json(entry, acquired.error()));
+      }
+    }
+    return refused;
+  }
+
+  // S11-D3 on every occupied slot and on the optional set-level demo. The
+  // whole Set is decided before anything is reported, so a Set with one bad
+  // blob is refused as a whole rather than half-described.
+  struct SoundSetSlotAudio {
+    std::vector<std::byte> bytes;
+    DecodedAudio audio;
+  };
+
+  // Every occupied slot of a Set, read once and decoded once. S11-D3 makes
+  // this the whole Set's decision: a Set with one blob that is not S8-D6 is
+  // refused wherever it is used, so `install` cannot admit under
+  // `occupied_pad_policy: keep` what `inspect` refuses. Install then reuses
+  // these bytes for the Pads it writes rather than decoding a second time.
+  foundation::Result<std::array<std::optional<SoundSetSlotAudio>, 16>>
+  decode_soundset_audio(
+      const project_io::StoredSoundSet& stored,
+      std::string_view manifest_sha256) const {
+    using Decoded = std::array<std::optional<SoundSetSlotAudio>, 16>;
+    Decoded decoded;
+    for (const auto& slot : stored.manifest.slots) {
+      if (!slot.occupied.has_value()) {
+        continue;
+      }
+      const auto index = static_cast<std::uint8_t>(slot.index);
+      auto bytes = soundset_sets.read_artifact(
+          manifest_sha256, slot.occupied->artifact.sha256);
+      if (!bytes.has_value()) {
+        return foundation::Result<Decoded>::failure(
+            soundset_artifact_error(bytes.error()));
+      }
+      const auto measured = measure_decoded_audio(bytes.value());
+      if (!measured.has_value()) {
+        return foundation::Result<Decoded>::failure(
+            soundset_audio_error(measured.error(), index));
+      }
+      decoded.at(index) =
+          SoundSetSlotAudio{std::move(bytes.value()), measured.value()};
+    }
+    // S11-D5's set-level demo is under the same S8-D6 constraint. It is not a
+    // slot, so its refusal carries no slot_index.
+    if (stored.manifest.demo.has_value()) {
+      const auto bytes = soundset_sets.read_artifact(
+          manifest_sha256, stored.manifest.demo->sha256);
+      if (!bytes.has_value()) {
+        return foundation::Result<Decoded>::failure(
+            soundset_artifact_error(bytes.error()));
+      }
+      const auto measured = measure_decoded_audio(bytes.value());
+      if (!measured.has_value()) {
+        return foundation::Result<Decoded>::failure(Error{
+            ErrorCode::unsupported_audio,
+            measured.error().message,
+            {{"reason", kSoundSetReasonAudioUnsupported}},
+        });
+      }
+    }
+    return foundation::Result<Decoded>::success(std::move(decoded));
+  }
+
+  static nlohmann::json soundset_slots_json(
+      const project_io::StoredSoundSet& stored,
+      const std::array<std::optional<SoundSetSlotAudio>, 16>& decoded) {
+    auto slots = nlohmann::json::array();
+    for (const auto& slot : stored.manifest.slots) {
+      const auto index = static_cast<std::size_t>(slot.index);
+      nlohmann::json encoded{{"slot", slot.index}};
+      if (!slot.occupied.has_value()) {
+        encoded["occupied"] = false;
+        slots.push_back(std::move(encoded));
+        continue;
+      }
+      const auto& audio = decoded.at(index)->audio;
+      encoded["occupied"] = true;
+      encoded["role"] = slot.occupied->role;
+      encoded["name"] = slot.occupied->name;
+      encoded["artifact"] = soundset_artifact_json(slot.occupied->artifact);
+      encoded["bpm"] = slot.occupied->bpm.has_value()
+                           ? nlohmann::json(*slot.occupied->bpm)
+                           : nlohmann::json(nullptr);
+      encoded["key"] = slot.occupied->key.has_value()
+                           ? nlohmann::json(*slot.occupied->key)
+                           : nlohmann::json(nullptr);
+      encoded["audio"] = {
+          {"sample_rate", audio.sample_rate},
+          {"channels", audio.channels},
+          {"source_frames", audio.source_frames},
+          {"prepared_bytes", audio.prepared.bytes},
+          {"prepared_frames", audio.prepared.frames},
+      };
+      slots.push_back(std::move(encoded));
+    }
+    return slots;
+  }
+
+  struct ResolvedSoundSet {
+    project_io::StoredSoundSet stored;
+    std::string manifest_sha256;
+  };
+
+  // Read a published Set and decide its eligibility against whatever the
+  // Catalog currently declares about it. Reachable Catalog plus a
+  // `license_summary` that differs from the verified manifest is
+  // PERMISSION_DENIED; unreachable Catalog leaves the cached manifest as the
+  // sole authority.
+  foundation::Result<ResolvedSoundSet> resolve_soundset(
+      const nlohmann::json& request) const {
+    const auto set_id = uuid_field(request, "set_id");
+    const auto version = string_field(request, "version");
+    require(semver_string(version), "version must be a SemVer string");
+    const auto manifest_sha256 = string_field(request, "manifest_sha256");
+    require(
+        lowercase_sha256(manifest_sha256),
+        "manifest_sha256 must be 64 lowercase hex characters");
+    auto stored = soundset_sets.read(set_id, version, manifest_sha256);
+    if (!stored.has_value()) {
+      return foundation::Result<ResolvedSoundSet>::failure(stored.error());
+    }
+    const auto eligible = foundation::check_soundset_eligibility(
+        stored.value().manifest,
+        catalog_summary_for(
+            read_catalog_entries(), set_id, version, manifest_sha256));
+    if (!eligible.has_value()) {
+      return foundation::Result<ResolvedSoundSet>::failure(eligible.error());
+    }
+    return foundation::Result<ResolvedSoundSet>::success(
+        ResolvedSoundSet{std::move(stored.value()), manifest_sha256});
+  }
+
+  nlohmann::json soundset_catalog_list(const nlohmann::json& request) {
+    require(
+        exact_keys(request, {"operation"}),
+        "soundset.catalog.list request shape is invalid");
+    const auto entries = read_catalog_entries();
+    auto refused = nlohmann::json::array();
+    if (entries.has_value()) {
+      refused = refresh_soundset_store(entries.value());
+    }
+    const auto listed = soundset_sets.list();
+    if (!listed.has_value()) {
+      return error_envelope(listed.error());
+    }
+    auto sets = nlohmann::json::array();
+    for (const auto& stored : listed.value()) {
+      const auto digest =
+          canonical_manifest_digest(stored.manifest.canonical_bytes);
+      // #465 Q1 case 3: listing, preview, download and install share one
+      // eligibility, so an ineligible Set is not offered at all. A cached Set
+      // the Catalog now disagrees with is named among the refusals rather
+      // than vanishing without a reason.
+      const auto eligible = foundation::check_soundset_eligibility(
+          stored.manifest,
+          catalog_summary_for(
+              entries,
+              stored.manifest.set_id,
+              stored.manifest.version,
+              digest));
+      if (!eligible.has_value()) {
+        refused.push_back(
+            soundset_refusal_json(
+                project_io::SoundSetCatalogEntry{
+                    stored.manifest.set_id,
+                    stored.manifest.version,
+                    digest,
+                    stored.total_bytes,
+                    std::nullopt,
+                },
+                eligible.error()));
+        continue;
+      }
+      sets.push_back(soundset_summary_json(stored, digest));
+    }
+    return success_envelope(
+        {
+            {"catalog_available", entries.has_value()},
+            {"sets", std::move(sets)},
+            {"refused", std::move(refused)},
+        },
+        std::nullopt);
+  }
+
+  nlohmann::json soundset_inspect(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request, {"operation", "set_id", "version", "manifest_sha256"}),
+        "soundset.inspect request shape is invalid");
+    auto resolved = resolve_soundset(request);
+    if (!resolved.has_value()) {
+      return error_envelope(resolved.error());
+    }
+    const auto decoded = decode_soundset_audio(
+        resolved.value().stored, resolved.value().manifest_sha256);
+    if (!decoded.has_value()) {
+      return error_envelope(decoded.error());
+    }
+    auto result = soundset_summary_json(
+        resolved.value().stored, resolved.value().manifest_sha256);
+    result["slots"] =
+        soundset_slots_json(resolved.value().stored, decoded.value());
+    result["demo"] = resolved.value().stored.manifest.demo.has_value()
+                         ? soundset_artifact_json(
+                               *resolved.value().stored.manifest.demo)
+                         : nlohmann::json(nullptr);
+    return success_envelope(std::move(result), std::nullopt);
+  }
+
+  nlohmann::json soundset_map_preview(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "bank_id", "set_id", "version",
+             "manifest_sha256"}),
+        "soundset.map.preview request shape is invalid");
+    const auto project_path = absolute_path_field(request, "project_path");
+    const auto bank = static_cast<std::uint8_t>(
+        unsigned_field(request, "bank_id", 3));
+    auto resolved = resolve_soundset(request);
+    if (!resolved.has_value()) {
+      return error_envelope(resolved.error());
+    }
+    const auto loaded = projects.load(project_path);
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    // S11-D3 again: a Set that could never install must not be previewed as
+    // installable, so the same whole-Set audio decision runs before the pure
+    // map.
+    const auto decoded = decode_soundset_audio(
+        resolved.value().stored, resolved.value().manifest_sha256);
+    if (!decoded.has_value()) {
+      return error_envelope(decoded.error());
+    }
+    const auto mapping = domain::map_soundset(
+        resolved.value().stored.manifest, loaded.value().banks.at(bank));
+    auto proposed = nlohmann::json::array();
+    for (const auto& pad : mapping.proposed) {
+      proposed.push_back({
+          {"slot_index", pad.slot_index},
+          {"pad", pad.pad},
+          {"artifact", soundset_artifact_json(pad.artifact)},
+      });
+    }
+    return success_envelope(
+        {
+            {"bank_id", bank},
+            {"set_id", resolved.value().stored.manifest.set_id},
+            {"version", resolved.value().stored.manifest.version},
+            {"manifest_sha256", resolved.value().manifest_sha256},
+            {"proposed", std::move(proposed)},
+            {"collisions", mapping.collisions},
+            {"kept", mapping.kept},
+        },
+        loaded.value().revision);
+  }
+
+  nlohmann::json soundset_install(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id", "expected_revision",
+             "bank_id", "set_id", "version", "manifest_sha256"}) ||
+            exact_keys(
+                request,
+                {"operation", "project_path", "command_id",
+                 "expected_revision", "bank_id", "set_id", "version",
+                 "manifest_sha256", "occupied_pad_policy"}),
+        "soundset.install request shape is invalid");
+    const auto project_path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto expected_revision = unsigned_field(request, "expected_revision");
+    const auto bank = static_cast<std::uint8_t>(
+        unsigned_field(request, "bank_id", 3));
+    std::optional<domain::OccupiedPadPolicy> policy;
+    if (request.contains("occupied_pad_policy")) {
+      const auto value = string_field(request, "occupied_pad_policy");
+      require(
+          value == "keep" || value == "replace",
+          "occupied_pad_policy must be keep or replace");
+      policy = value == "keep" ? domain::OccupiedPadPolicy::keep
+                               : domain::OccupiedPadPolicy::replace;
+    }
+    auto resolved = resolve_soundset(request);
+    if (!resolved.has_value()) {
+      return error_envelope(resolved.error());
+    }
+    // S11-D3 is a property of the Set, not of the write set: the whole Set is
+    // read and decoded here, before the target Bank is even consulted, so no
+    // `occupied_pad_policy` and no empty write set can admit a Set that
+    // `inspect` and `soundset.map.preview` both refuse. These bytes are the
+    // ones the commit publishes, so each occupied slot is decoded exactly
+    // once. Nothing has been written at this point, or below it until the
+    // single commit.
+    const auto decoded = decode_soundset_audio(
+        resolved.value().stored, resolved.value().manifest_sha256);
+    if (!decoded.has_value()) {
+      return error_envelope(decoded.error());
+    }
+    const auto loaded = projects.load(project_path);
+    if (!loaded.has_value()) {
+      return error_envelope(loaded.error());
+    }
+    const auto mapping = domain::map_soundset(
+        resolved.value().stored.manifest, loaded.value().banks.at(bank));
+    const auto write_set =
+        domain::resolve_soundset_write_set(mapping, policy);
+    if (!write_set.has_value()) {
+      // Carries the complete collisions list and soundset_occupied_conflict,
+      // and nothing has been read, decoded or written at this point.
+      return error_envelope(write_set.error());
+    }
+    // #465 Q2: `keep` on a Bank whose every proposed Pad is occupied writes
+    // nothing and succeeds. There is no command to commit, so the revision
+    // stands and the Project is untouched.
+    if (write_set.value().empty()) {
+      return success_envelope(
+          {
+              {"bank_id", bank},
+              {"set_id", resolved.value().stored.manifest.set_id},
+              {"version", resolved.value().stored.manifest.version},
+              {"manifest_sha256", resolved.value().manifest_sha256},
+              {"installed", nlohmann::json::array()},
+              {"collisions", mapping.collisions},
+              {"kept", mapping.kept},
+              {"replayed", false},
+          },
+          loaded.value().revision);
+    }
+
+    // Every quota decision happens before the first Project mutation.
+    std::uint64_t requested_bytes = 0;
+    std::uint64_t requested_frames = 0;
+    std::uint16_t written_pads = 0;
+    for (const auto& pad : write_set.value()) {
+      const auto& prepared =
+          decoded.value().at(pad.slot_index)->audio.prepared;
+      // S11-D8: per-Pad residency. One Artifact on two Pads is two charges,
+      // so the sum is over the write set and not over unique hashes.
+      const auto next_bytes =
+          audio::checked_runtime_byte_sum(requested_bytes, prepared.bytes);
+      const auto next_frames =
+          audio::checked_runtime_byte_sum(requested_frames, prepared.frames);
+      if (!next_bytes.has_value() || !next_frames.has_value()) {
+        return error_envelope(Error{
+            ErrorCode::invalid_argument,
+            "installed Sound Set prepared PCM byte length overflowed",
+        });
+      }
+      requested_bytes = *next_bytes;
+      requested_frames = *next_frames;
+      written_pads =
+          static_cast<std::uint16_t>(written_pads | (std::uint16_t{1} << pad.pad));
+    }
+
+    if (!sample_limits.has_value()) {
+      return error_envelope(
+          invalid_sample_request("Sample quota is unavailable"));
+    }
+    const auto ledger = compute_bank_ledger(
+        project_path, loaded.value(), bank, written_pads);
+    if (!ledger.has_value()) {
+      return error_envelope(ledger.error());
+    }
+    const auto assessment = audio::assess_runtime_quota(
+        ledger.value().bank_used_bytes.at(bank),
+        ledger.value().project_used_bytes,
+        requested_bytes,
+        *sample_limits);
+    if (!assessment.has_value()) {
+      return error_envelope(Error{
+          ErrorCode::invalid_project,
+          "Sample quota ledger exceeds configured limits",
+      });
+    }
+    if (assessment->constraint == audio::RuntimeQuotaConstraint::user_bank) {
+      std::vector<nlohmann::json> consumed;
+      consumed.reserve(ledger.value().consumed.size());
+      for (const auto& entry : ledger.value().consumed) {
+        consumed.push_back({
+            {"pad", entry.slot.pad},
+            {"prepared_bytes", entry.prepared_bytes},
+            {"prepared_frames", entry.prepared_frames},
+        });
+      }
+      return error_envelope(runtime_bank_quota_error(
+          domain::PadSlotId{bank, write_set.value().front().pad},
+          requested_bytes,
+          requested_frames,
+          assessment->user_bank_remaining_bytes,
+          sample_limits->maximum_user_bank_bytes,
+          consumed));
+    }
+    if (assessment->constraint == audio::RuntimeQuotaConstraint::generation) {
+      return error_envelope(runtime_project_quota_error(
+          requested_bytes,
+          requested_frames,
+          ledger.value().project_used_bytes,
+          assessment->generation_remaining_bytes,
+          sample_limits->maximum_generation_bytes,
+          ledger.value().bank_used_bytes));
+    }
+
+    std::vector<project_io::ProjectStore::SoundSetInstallSlotRequest> slots;
+    slots.reserve(write_set.value().size());
+    for (const auto& pad : write_set.value()) {
+      slots.push_back(
+          project_io::ProjectStore::SoundSetInstallSlotRequest{
+              domain::PadSlotId{bank, pad.pad},
+              foundation::AssetId{derived_asset_id(
+                  command_id,
+                  resolved.value().manifest_sha256,
+                  bank,
+                  pad.pad)},
+              "audio/wav",
+              decoded.value().at(pad.slot_index)->bytes,
+              domain::AssetLineage{
+                  domain::SoundSetLineageSource{
+                      resolved.value().stored.manifest.set_id,
+                      resolved.value().stored.manifest.version,
+                      resolved.value().manifest_sha256,
+                      pad.slot_index,
+                      pad.artifact.sha256,
+                  },
+                  domain::SoundSetInstallLineageDerivation{},
+              },
+          });
+    }
+    const auto committed = projects.install_soundset(
+        project_path,
+        project_io::ProjectStore::SoundSetInstallRequest{
+            domain::CommandMeta{
+                foundation::CommandId{command_id}, expected_revision},
+            std::move(slots),
+        });
+    if (!committed.has_value()) {
+      return error_envelope(committed.error());
+    }
+    auto installed = nlohmann::json::array();
+    for (const auto& pad : write_set.value()) {
+      installed.push_back({{"slot_index", pad.slot_index}, {"pad", pad.pad}});
+    }
+    return success_envelope(
+        {
+            {"bank_id", bank},
+            {"set_id", resolved.value().stored.manifest.set_id},
+            {"version", resolved.value().stored.manifest.version},
+            {"manifest_sha256", resolved.value().manifest_sha256},
+            {"installed", std::move(installed)},
+            {"collisions", mapping.collisions},
+            {"kept", mapping.kept},
+            {"replayed", committed.value().replayed},
+        },
+        committed.value().state.revision);
+  }
+
   nlohmann::json attempt_inspect(const nlohmann::json& request) {
     require(
         exact_keys(request, {"operation", "attempt_id"}),
@@ -7356,6 +8260,10 @@ struct Application::Impl {
   std::shared_ptr<PerformanceReplayController> performance_replay_controller;
   std::shared_ptr<PerformanceGestureSink> performance_gesture_sink;
   std::optional<audio::RuntimePreparationLimits> sample_limits;
+  std::shared_ptr<project_io::CatalogTransport> soundset_transport;
+  std::shared_ptr<SoundSetCatalogSource> soundset_source;
+  project_io::SoundSetStoreLimits soundset_limits;
+  project_io::SoundSetStore soundset_sets;
   project_io::ProjectStore projects;
   project_io::SequenceJournal sequence_journals;
   project_io::ProjectBundleTransfer bundle_transfers;
@@ -7373,6 +8281,66 @@ struct Application::Impl {
   std::set<std::string> used_sample_import_tokens;
   std::deque<std::string> remembered_sample_import_tokens;
 };
+
+namespace {
+
+constexpr std::string_view kWorkspaceCatalogDirectory =
+    ".lmdj-host/soundset-catalog";
+
+// Reads the Workspace's Catalog index off the Host's own filesystem. It is
+// the trivial implementation of the S11-D6 seam: a missing, unreadable or
+// oversized index is an unreachable Catalog, never a fatal one.
+class LocalFileCatalogSource final : public SoundSetCatalogSource {
+ public:
+  explicit LocalFileCatalogSource(std::filesystem::path index_path)
+      : index_path_(std::move(index_path)) {}
+
+  foundation::Result<std::vector<std::byte>> read_index(
+      std::uint64_t maximum_bytes) override {
+    using Result = foundation::Result<std::vector<std::byte>>;
+    const auto unavailable = [](std::string message) {
+      return Error{
+          ErrorCode::io_error,
+          std::move(message),
+          {{"reason", project_io::kSoundSetReasonCatalogUnavailable}},
+      };
+    };
+    std::error_code code;
+    const auto size = std::filesystem::file_size(index_path_, code);
+    if (code || size > maximum_bytes) {
+      return Result::failure(
+          unavailable("Workspace Catalog index is not readable"));
+    }
+    std::ifstream stream(index_path_, std::ios::binary);
+    if (!stream) {
+      return Result::failure(
+          unavailable("Workspace Catalog index could not be opened"));
+    }
+    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+    if (size != 0 &&
+        !stream.read(
+            reinterpret_cast<char*>(bytes.data()),
+            static_cast<std::streamsize>(size))) {
+      return Result::failure(
+          unavailable("Workspace Catalog index could not be read"));
+    }
+    return Result::success(std::move(bytes));
+  }
+
+ private:
+  std::filesystem::path index_path_;
+};
+
+}  // namespace
+
+LocalSoundSetCatalog make_workspace_soundset_catalog(
+    const std::filesystem::path& workspace_root) {
+  const auto root = workspace_root / kWorkspaceCatalogDirectory;
+  return LocalSoundSetCatalog{
+      project_io::make_local_directory_catalog_transport(root / "objects"),
+      std::make_shared<LocalFileCatalogSource>(root / "index.json"),
+  };
+}
 
 Application::Application(ApplicationConfig config)
     : impl_(std::make_unique<Impl>(std::move(config))) {}

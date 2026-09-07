@@ -25,6 +25,8 @@ target_link_libraries(
     lmdj::project_cooker
     lmdj::audio_runtime
     lmdj::provider_sdk
+  PRIVATE
+    lmdj_picosha2
 )
 lmdj_target_warnings(lmdj_application)
 lmdj_target_sanitizers(lmdj_application)
@@ -364,6 +366,52 @@ if(BUILD_TESTING)
     NAME facade.web_runtime_limits
     TIER component
     COMMAND lmdj_facade_web_runtime_limit_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+
+  add_executable(
+    lmdj_facade_soundset_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/soundset_facade_test.cpp"
+  )
+  target_include_directories(
+    lmdj_facade_soundset_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_facade_soundset_tests
+    PRIVATE
+      lmdj::application
+  )
+  lmdj_target_warnings(lmdj_facade_soundset_tests)
+  lmdj_target_sanitizers(lmdj_facade_soundset_tests)
+  lmdj_add_test(
+    NAME facade.soundset
+    TIER component
+    COMMAND lmdj_facade_soundset_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+
+  add_executable(
+    lmdj_facade_soundset_install_quota_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/soundset_install_quota_test.cpp"
+  )
+  target_include_directories(
+    lmdj_facade_soundset_install_quota_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_facade_soundset_install_quota_tests
+    PRIVATE
+      lmdj::application
+  )
+  lmdj_target_warnings(lmdj_facade_soundset_install_quota_tests)
+  lmdj_target_sanitizers(lmdj_facade_soundset_install_quota_tests)
+  lmdj_add_test(
+    NAME facade.soundset_install_quota
+    TIER component
+    COMMAND lmdj_facade_soundset_install_quota_tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
 

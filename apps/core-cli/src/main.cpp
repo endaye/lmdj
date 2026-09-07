@@ -387,6 +387,9 @@ std::optional<Runtime> make_runtime(
   auto bridge =
       lmdj::facade::make_headless_performance_runtime_bridge(
           lmdj::facade::make_steady_performance_time_source());
+  // v1 Hosts use the Workspace-local Catalog: a directory of
+  // content-addressed objects and an index beside it, no network.
+  auto catalog = lmdj::facade::make_workspace_soundset_catalog(workspace);
   auto application = std::make_unique<lmdj::facade::Application>(
       lmdj::facade::ApplicationConfig{
           std::move(workspace),
@@ -399,6 +402,9 @@ std::optional<Runtime> make_runtime(
           bridge.input_sequencer,
           bridge.launch_acknowledger,
           bridge.replay_controller,
+          nullptr,
+          std::move(catalog.transport),
+          std::move(catalog.source),
       });
   return Runtime{std::move(bridge), std::move(application)};
 }

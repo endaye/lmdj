@@ -133,6 +133,8 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_facade_performance_rebase_matrix_tests
     lmdj_facade_sample_surface_tests
     lmdj_facade_web_runtime_limit_tests
+    lmdj_facade_soundset_tests
+    lmdj_facade_soundset_install_quota_tests
     lmdj_web_control_runtime_tests
     lmdj_web_manifest_gate_tests
     lmdj_web_realtime_session_tests

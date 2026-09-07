@@ -19,6 +19,8 @@
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/facade/performance_replay.hpp>
 #include <lmdj/foundation/error.hpp>
+#include <lmdj/project_io/soundset_catalog_transport.hpp>
+#include <lmdj/project_io/soundset_store.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
 
@@ -95,6 +97,48 @@ public:
   virtual foundation::Result<void> apply_gesture(audio::FxGesture gesture) = 0;
 };
 
+// S11-D6: the Catalog index itself. A `CatalogTransport` resolves exactly
+// `{object_kind, sha256}`, so it can never name the index; the Host that owns
+// the Catalog endpoint owns fetching it and hands Core the bytes. A local
+// directory, an OPFS cache and a network endpoint are three implementations of
+// this one read, and Core keeps every Contract, hash and eligibility check.
+class SoundSetCatalogSource {
+public:
+  virtual ~SoundSetCatalogSource() = default;
+
+  SoundSetCatalogSource(const SoundSetCatalogSource &) = delete;
+  SoundSetCatalogSource &operator=(const SoundSetCatalogSource &) = delete;
+  SoundSetCatalogSource(SoundSetCatalogSource &&) = delete;
+  SoundSetCatalogSource &operator=(SoundSetCatalogSource &&) = delete;
+
+  // The current `lmdj.soundset-catalog.v1` index, never longer than
+  // `maximum_bytes`. An unreachable Catalog fails with `IO_ERROR` and
+  // `details.reason = catalog_unavailable`, which is never fatal: every Set
+  // already published in the Workspace Set Store stays listable, inspectable
+  // and installable (S11-D7).
+  virtual foundation::Result<std::vector<std::byte>>
+  read_index(std::uint64_t maximum_bytes) = 0;
+
+protected:
+  SoundSetCatalogSource() = default;
+};
+
+// The Workspace-local Catalog every Host wires in v1: a directory of
+// content-addressed objects and the `lmdj.soundset-catalog.v1` index beside
+// it, both under the Workspace the Host already owns. Core ships no network
+// code, so a network Catalog is a Host-side `CatalogTransport` that replaces
+// `transport` while `source` keeps supplying the index.
+struct LocalSoundSetCatalog {
+  std::shared_ptr<project_io::CatalogTransport> transport;
+  std::shared_ptr<SoundSetCatalogSource> source;
+};
+
+// `workspace_root/.lmdj-host/soundset-catalog/{index.json,objects/<sha256>}`.
+// Neither the index nor the object directory needs to exist: a Workspace with
+// no Catalog reads as an unreachable Catalog, which S11-D7 makes non-fatal.
+LocalSoundSetCatalog make_workspace_soundset_catalog(
+    const std::filesystem::path &workspace_root);
+
 struct ApplicationConfig {
   std::filesystem::path workspace_root;
   std::shared_ptr<provider::Registry> providers;
@@ -111,6 +155,16 @@ struct ApplicationConfig {
       nullptr;
   std::shared_ptr<PerformanceReplayController> performance_replay_controller;
   std::shared_ptr<PerformanceGestureSink> performance_gesture_sink = nullptr;
+  // Sound Set members are appended, never inserted. Every brace
+  // initialisation of this struct in the repository is positional, and each
+  // trailing member is a `shared_ptr` or an `optional`, so an insertion in the
+  // middle would silently rebind Hosts' collaborators by type instead of
+  // failing to compile.
+  std::shared_ptr<project_io::CatalogTransport> soundset_catalog_transport =
+      nullptr;
+  std::shared_ptr<SoundSetCatalogSource> soundset_catalog_source = nullptr;
+  std::optional<project_io::SoundSetStoreLimits> soundset_store_limits =
+      std::nullopt;
 };
 
 struct RuntimeSnapshotRequest {

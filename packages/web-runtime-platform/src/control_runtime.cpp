@@ -344,6 +344,57 @@ void validate_performance_gesture(const Json& event) {
       exact_keys(event, {"kind"}));
 }
 
+// The Web Host's mirror of the plan's Locked Facade Surface. The two
+// Workspace-level operations carry no `project_path`, so unlike a Performance
+// operation the Host does not inject the retained Project into them.
+void validate_soundset_operation_payload(
+    std::string_view operation,
+    const Json& payload) {
+  const auto set_identity = [&payload]() {
+    (void)uuid_field(payload, "set_id");
+    const auto version = string_field(payload, "version");
+    require(!version.empty() && version.size() <= 32);
+    const auto manifest = string_field(payload, "manifest_sha256");
+    require(
+        manifest.size() == 64 &&
+        std::all_of(manifest.begin(), manifest.end(), [](char value) {
+          return (value >= '0' && value <= '9') ||
+                 (value >= 'a' && value <= 'f');
+        }));
+  };
+  if (operation == "soundset.catalog.list") {
+    require(exact_keys(payload, {}));
+  } else if (operation == "soundset.inspect") {
+    require(exact_keys(payload, {"set_id", "version", "manifest_sha256"}));
+    set_identity();
+  } else if (operation == "soundset.map.preview") {
+    require(exact_keys(
+        payload, {"bank_id", "set_id", "version", "manifest_sha256"}));
+    (void)safe_unsigned_field(payload, "bank_id", 3U);
+    set_identity();
+  } else if (operation == "soundset.install") {
+    require(
+        exact_keys(
+            payload,
+            {"command_id", "expected_revision", "bank_id", "set_id",
+             "version", "manifest_sha256"}) ||
+        exact_keys(
+            payload,
+            {"command_id", "expected_revision", "bank_id", "set_id",
+             "version", "manifest_sha256", "occupied_pad_policy"}));
+    (void)uuid_field(payload, "command_id");
+    (void)safe_unsigned_field(payload, "expected_revision");
+    (void)safe_unsigned_field(payload, "bank_id", 3U);
+    set_identity();
+    if (payload.contains("occupied_pad_policy")) {
+      const auto policy = string_field(payload, "occupied_pad_policy");
+      require(policy == "keep" || policy == "replace");
+    }
+  } else {
+    protocol_failure();
+  }
+}
+
 void validate_performance_operation_payload(
     std::string_view operation,
     const Json& payload) {
@@ -2015,6 +2066,45 @@ Json ControlRuntime::dispatch(
         {"performance.replay.status", true},
         {"performance.resample.commit", false},
     };
+    static const std::map<std::string_view, bool> soundset_operations{
+        {"soundset.catalog.list", true},
+        {"soundset.inspect", true},
+        {"soundset.map.preview", true},
+        {"soundset.install", false},
+    };
+    if (const auto found = soundset_operations.find(operation);
+        found != soundset_operations.end()) {
+      require(sidecar.empty());
+      validate_soundset_operation_payload(operation, payload);
+      // S11-D6: the Set Store and the Catalog cache resolve from the
+      // Workspace, so browsing and inspecting a Set needs no open Project —
+      // the `provider.list` precedent the Locked Facade Surface names. Only
+      // the two Project-scoped operations require, and learn, a Project.
+      const bool project_scoped = operation == "soundset.map.preview" ||
+                                  operation == "soundset.install";
+      if (project_scoped && !impl_->session_available()) {
+        return state_error();
+      }
+      impl_->service_performance_adapter();
+      auto request = payload;
+      require(request.is_object());
+      request["operation"] = operation;
+      if (project_scoped) {
+        request["project_path"] =
+            impl_->retained_project_path->generic_string();
+      }
+      const auto response = found->second
+          ? impl_->application.query(request)
+          : impl_->application.command(request);
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      if (response.at("project_revision").is_number_unsigned()) {
+        impl_->project_revision =
+            response.at("project_revision").get<std::uint64_t>();
+      }
+      return normalized_facade_success(response);
+    }
     if (const auto found = performance_operations.find(operation);
         found != performance_operations.end()) {
       require(sidecar.empty());
