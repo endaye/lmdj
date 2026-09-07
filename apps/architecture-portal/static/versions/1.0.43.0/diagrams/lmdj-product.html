@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LMDJ 全产品架构</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="5e369f6112bd76d57422f1723cb5950c2b84e4ac6ff079d29095b0d82423791a">
+  <title id="title">LMDJ 全产品架构</title><desc id="description">Creator、共享 Web Runtime、Project transfer、双 Host Release 与独立部署边界</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
+  <style>
+    :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    @media(prefers-color-scheme:dark){:root{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}}
+    [data-theme=dark]{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}
+    [data-theme=light]{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
+    .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
+  </style>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">LMDJ 全产品架构</text><text class="page-summary" x="40" y="68">Creator、共享 Web Runtime、Project transfer、双 Host Release 与独立部署边界</text>
+
+    <g class="boundary"><rect x="520" y="96" width="1000" height="470" rx="22"/><text x="540" y="126">Product-neutral Headless Core</text></g>
+  <g class="connection"><path class="edge-mask" d="M 220 181 H 253 V 291 H 285"/><path class="edge" d="M 220 181 H 253 V 291 H 285" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 220 396 H 253 V 291 H 285"/><path class="edge" d="M 220 396 H 253 V 291 H 285" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 495 291 H 525 V 291 H 555"/><path class="edge" d="M 495 291 H 525 V 291 H 555" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 220 536 H 388 V 291 H 555"/><path class="edge" d="M 220 536 H 388 V 291 H 555" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 495 501 H 525 V 291 H 555"/><path class="edge" d="M 495 501 H 525 V 291 H 555" marker-end="url(#arrow)"/><text x="525" y="387">import/export</text></g>
+<g class="connection"><path class="edge-mask" d="M 755 291 H 785 V 191 H 815"/><path class="edge" d="M 755 291 H 785 V 191 H 815" marker-end="url(#arrow)"/><text x="785" y="232">commands</text></g>
+<g class="connection"><path class="edge-mask" d="M 995 191 H 1025 V 191 H 1055"/><path class="edge" d="M 995 191 H 1025 V 191 H 1055" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 1235 191 H 1265 V 191 H 1295"/><path class="edge" d="M 1235 191 H 1265 V 191 H 1295" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 995 191 H 1029 V 485 H 781 V 431 H 815"/><path class="edge" d="M 995 191 H 1029 V 485 H 781 V 431 H 815" marker-end="url(#arrow)"/><text x="905" y="302">persist</text></g>
+<g class="connection"><path class="edge-mask" d="M 755 291 H 905 V 431 H 1055"/><path class="edge" d="M 755 291 H 905 V 431 H 1055" marker-end="url(#arrow)"/><text x="905" y="352">capability</text></g>
+<g class="connection"><path class="edge-mask" d="M 1485 191 H 1519 V 485 H 1261 V 431 H 1295"/><path class="edge" d="M 1485 191 H 1519 V 485 H 1261 V 431 H 1295" marker-end="url(#arrow)"/><text x="1390" y="302">read-only</text></g>
+
+    <g class="component kind-host">
+      <rect class="node-mask" x="26" y="131" width="198" height="100" rx="18"/>
+      <rect class="node" x="30" y="135" width="190" height="92" rx="14"/>
+      <text class="node-title" x="46" y="167">Creator Web</text>
+      <text class="node-detail" x="46" y="193">Project · Sample · Perform</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="26" y="346" width="198" height="100" rx="18"/>
+      <rect class="node" x="30" y="350" width="190" height="92" rx="14"/>
+      <text class="node-title" x="46" y="382">Diagnostic Web</text>
+      <text class="node-detail" x="46" y="408">proof · stress</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="26" y="486" width="198" height="100" rx="18"/>
+      <rect class="node" x="30" y="490" width="190" height="92" rx="14"/>
+      <text class="node-title" x="46" y="522">Native Hosts</text>
+      <text class="node-detail" x="46" y="548">CLI · MCP · Test</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="281" y="241" width="218" height="100" rx="18"/>
+      <rect class="node" x="285" y="245" width="210" height="92" rx="14"/>
+      <text class="node-title" x="301" y="277">Web Runtime Platform</text>
+      <text class="node-detail" x="301" y="303">shared runtime · master tap</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="281" y="451" width="218" height="100" rx="18"/>
+      <rect class="node" x="285" y="455" width="210" height="92" rx="14"/>
+      <text class="node-title" x="301" y="487">Project Bundle</text>
+      <text class="node-detail" x="301" y="513">transfer-only</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="551" y="241" width="208" height="100" rx="18"/>
+      <rect class="node" x="555" y="245" width="200" height="92" rx="14"/>
+      <text class="node-title" x="571" y="277">Application Facade</text>
+      <text class="node-detail" x="571" y="303">only Core entry</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="811" y="141" width="188" height="100" rx="18"/>
+      <rect class="node" x="815" y="145" width="180" height="92" rx="14"/>
+      <text class="node-title" x="831" y="177">Project Truth</text>
+      <text class="node-detail" x="831" y="203">v4 Pattern Slot + Perform</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1051" y="141" width="188" height="100" rx="18"/>
+      <rect class="node" x="1055" y="145" width="180" height="92" rx="14"/>
+      <text class="node-title" x="1071" y="177">Project Cooker</text>
+      <text class="node-detail" x="1071" y="203">WAV · waveform · derive</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1291" y="141" width="198" height="100" rx="18"/>
+      <rect class="node" x="1295" y="145" width="190" height="92" rx="14"/>
+      <text class="node-title" x="1311" y="177">Runtime Snapshot</text>
+      <text class="node-detail" x="1311" y="203">immutable</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="811" y="381" width="188" height="100" rx="18"/>
+      <rect class="node" x="815" y="385" width="180" height="92" rx="14"/>
+      <text class="node-title" x="831" y="417">Project I/O</text>
+      <text class="node-detail" x="831" y="443">Store · Bundle</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1051" y="381" width="188" height="100" rx="18"/>
+      <rect class="node" x="1055" y="385" width="180" height="92" rx="14"/>
+      <text class="node-title" x="1071" y="417">Provider SDK</text>
+      <text class="node-detail" x="1071" y="443">Capability · Attempt</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1291" y="381" width="198" height="100" rx="18"/>
+      <rect class="node" x="1295" y="385" width="190" height="92" rx="14"/>
+      <text class="node-title" x="1311" y="417">Audio Runtime</text>
+      <text class="node-detail" x="1311" y="443">preview · Voice · master FX</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Project Truth</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">唯一权威创作状态；Bundle 只传输，Runtime Snapshot 只派生。</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Product Assembly</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Product Build、Host allowlist 与 Provider wiring 只在 products/lmdj。</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">当前交付</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Stage 10 已集成 Pattern Slot 启动、固定八级 master FX、Performance 录制/replay/resample 与 master tap 采集；Perform 物理验收仍是 deferred，Provider、快照与发布各有独立门禁。</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Web Hosts</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">web-hosts Release 精确六资产；Creator 分发清单为六资产并含 perform master tap，诊断 Host 十五资产且不含 tap；Site、授权、证据和回滚互不推断。</div></foreignObject></g>
+</svg>
+</main><script>const diagram=document.querySelector('svg');function applyTheme(theme){diagram.setAttribute('data-theme',theme);document.body.setAttribute('data-theme',theme)}const requested=new URLSearchParams(location.search).get('theme');if(requested==='light'||requested==='dark')applyTheme(requested);window.addEventListener('message',(event)=>{const data=event.data;if(data&&data.type==='lmdj-diagram-theme'&&(data.theme==='light'||data.theme==='dark'))applyTheme(data.theme)});</script></body></html>
