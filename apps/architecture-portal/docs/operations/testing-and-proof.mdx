@@ -44,7 +44,7 @@ Publication job 在显式 dispatch 进入 exact-main-only `release` Environment 
 exact Draft；当前单人维护者模式没有 required reviewer，人工授权边界就是这次独立 dispatch。
 workflow 成功也不自动触发 Runtime deployment。Runtime deployment 保持 manual-only exact-tag
 dispatch，部署 evidence 与 Channel promotion 再分别验证。测试、workflow 或工具已进入仓库，
-都不表示当前 Product Build `1.0.42.0` 已经 released、deployed 或 promoted。
+都不表示当前 Product Build `1.0.43.0` 已经 released、deployed 或 promoted。
 
 ## Integration Queue
 
@@ -133,7 +133,9 @@ exact prior rollback；Release publication 不 fan-out。历史 `1.0.40.0` 证�
 
 Product Build `1.0.41.0` 的 Creator 自动化覆盖长素材格式嗅探、浏览器解码边界、波形选区、Bank 配额、非破坏性提交、超过 1 MiB 的多 chunk 选区 WAV，以及非 snapshot 协议 details 的 reducer containment；malformed Bank/Project quota details 继续 fail closed。自动化也覆盖 Sequence 状态机、Pattern/Record/Stop/settings 控件、统一 Pointer/Keyboard/MIDI admission、next-Bar acknowledgement、Capture trim overlay、reload 与 recovery；Core gates 覆盖 Project v3 migration、journal/receipt/recovery、整数 transport、Facade/CLI/MCP/Native/Web parity。自动化不替代真实听感或物理设备验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
 
-当前 Product Build `1.0.42.0` 在同一入口上叠加 Stage 10 Perform：`test` 增加 `apps/creator-web/test/master_tap.test.ts`、`performance_recording_store.test.ts`、`wav_stream_writer.test.ts` 与 `perform_surface.test.tsx`；Capture 专项证明初始全选时 Start/End 均可操作、两个端点独立、最少一帧、midpoint 命中区与 grab offset 无跳变、middle inert、键盘/辅助技术秒值、只读 Duration，以及提交后的精确 Project Truth artifact 长度；`package` 增加第六个 Creator 资产 `perform_master_tap_worklet` 的哈希与主 bundle 绑定门禁；`proof` 从 Git tracked inventory 选择全部 `tests/platform/web/creator/*.spec.mjs`，因此 `creator_web_perform.spec.mjs` 的打包 Chromium 旅程自动进入稳定 Creator Proof。Core gates 的写入契约同时从 `lmdj.project.v3` 换成 `lmdj.project.v4`，v3 与 v1/v2 一样只剩迁移读取。完整边界见下文 Stage 10 小节；该 Build 至今没有任何 Perform 物理验收。
+Product Build `1.0.42.0` 曾在同一入口上叠加 Stage 10 Perform：`test` 增加 `apps/creator-web/test/master_tap.test.ts`、`performance_recording_store.test.ts`、`wav_stream_writer.test.ts` 与 `perform_surface.test.tsx`；Capture 专项证明初始全选时 Start/End 均可操作、两个端点独立、最少一帧、midpoint 命中区与 grab offset 无跳变、middle inert、键盘/辅助技术秒值、只读 Duration，以及提交后的精确 Project Truth artifact 长度；`package` 增加第六个 Creator 资产 `perform_master_tap_worklet` 的哈希与主 bundle 绑定门禁；`proof` 从 Git tracked inventory 选择全部 `tests/platform/web/creator/*.spec.mjs`，因此 `creator_web_perform.spec.mjs` 的打包 Chromium 旅程自动进入稳定 Creator Proof。Core gates 的写入契约同时从 `lmdj.project.v3` 换成 `lmdj.project.v4`，v3 与 v1/v2 一样只剩迁移读取。完整边界见下文 Stage 10 小节；该 Build 至今没有任何 Perform 物理验收。
+
+当前 Product Build `1.0.43.0` 只做 `lmdj.project.v4` 的 Contract cut，不新增 Creator、Platform 或 Host 自动化边界：Contract MINOR 由 `4.0.0` 升到 `4.1.0`，`asset_lineage` 的 `source` 与 `derivation` 各成为一组由常量 `kind` 判别的封闭 `oneOf`，新增 `soundset` source 与 `soundset_install` derivation 两个变体。`python3 tests/conformance/schema_contract_test.py` 因此新增 `project-v4-soundset-lineage-valid.json` 与 `project-v4-soundset-lineage-invalid.json` 两个 fixture：前者证明六个必填 soundset source 字段与空负载 derivation 通过校验，后者证明缺 `manifest_sha256` 一律拒绝；逐字段负例另覆盖 malformed set UUID、非 SemVer `set_version`、大写 SHA-256、越界与负 `slot_index`、未知 source/derivation kind，并断言四个 lineage 变体全部保持 `additionalProperties: false` 与常量 `kind`。既有 `asset_artifact` / `resample` fixture 不变。该 Build 同样没有任何物理验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
 
 [#239](https://github.com/endaye/lmdj/issues/239) 在 `1.0.40.0` exact packaged Creator 上完成了 macOS Chrome M2 人耳旅程：严格非零裁剪边界、One Shot、Gate release、Loop Gate、Loop Toggle、Volume/Mute、Bank A 16 Pads、Replace 与 reload 全部通过。约 40 ms 选区的快速重复纹理一度被误判为接缝咔哒；同一候选复听后，操作者明确确认没有明显独立爆音，声音来自短片段的高速循环。精确设备、浏览器、fixture/package 哈希、逐步观察与修正轨迹由 [M2 evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md) 保留；该 `PASS` 不外推到 Safari、iPadOS、Release、部署或 Channel。
 
@@ -160,7 +162,7 @@ Stage 9 M2 的 #373 source remediation 使用真实子进程：`press/release/pr
 
 Stage 9 M3 的 source remediation 注入 manifest 已提交后的 journal completion 失败，在同一 Facade session 中继续录入，再用原 `command_id` 重试：旧 receipt 只重放一次，后到事件保持 pending 并由新命令形成下一 revision。Project I/O fault matrix 对 receipt reload 与 journal completion 两个 post-commit 点分别覆盖 same-bundle retry 和 restart reconcile，并断言 journal identity 与 Project Truth 都是 single-write。
 
-Product Build `1.0.42.0` 的 current source 新增以下 Stage 10 Perform 自动化边界：
+Product Build `1.0.42.0` 曾新增以下 Stage 10 Perform 自动化边界：
 
 - Authoring/Cooker 覆盖 `lmdj.project.v4`：`pattern_slots` 是恰好 16 项的可启动 Pattern 地址空间，`performances` 的事件是 `pad_hit`、`pattern_launch`、`fx_engage`、`fx_move`、`fx_release`、`hold_on`、`hold_off` 七种的封闭并集，tick 仍是 PPQ 960，事件仍只引用 Pad Slot 与 Pattern Slot 而不引用 Asset。`domain.performance`、`domain.migration_v4` 与 `cooker.performance_replay` 分别覆盖模型约束、v3→v4 迁移与只读 replay projection（`resolved_revision`、64 个 Pad、16 个 Pattern Slot 的 Runtime Snapshot、offset 化事件边界与 `event_count`）。`domain.migration_v4` 只接受 v3 声明的文档，携带 Asset Lineage、`performances` 或 `pattern_slots` 的 v3 文档一律拒绝；v1/v2 仍走既有 legacy 迁移读取。v4 是唯一写入契约；Asset Lineage 只允许写在 v4 Project Truth 上，`project_store.cpp` 对更旧契约直接拒绝。
 - Project I/O 的 journal 现在区分 `SessionKind::sequence` 与 `SessionKind::performance`，并新增 `begin_performance_draft` → flush → `save_performance_draft` / `discard_performance_draft` 的 draft 生命周期。`project_io.performance_journal`、`project_io.performance_lifecycle`、`project_io.performance_rebase` 与 stress 层的 `project_io.performance_writer_lease_stress` 覆盖这条路径。既有 writer lease admission、flush receipt、canonical tail、owner-loss recovery 与 fail-closed 损坏证据全部不变，Stage 10 只在其上叠加 session kind 与 draft。
