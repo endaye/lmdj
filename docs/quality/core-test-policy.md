@@ -308,7 +308,9 @@ defined `core_macos` SLO. Missing timing is non-blocking, and SLO observations
 are neither timeouts nor correctness assertions. Independent job safety limits
 and test-owned behavior timeouts remain hard failures. A slow successful job
 stays successful; a failed compile, Proof, test, sanitizer, or Coverage command
-is not retried. `main` and manual dispatch always run the full manifest.
+is not retried. An empty operator `workflow_dispatch` and the daily sweep always run the full manifest; a `main` push classifies from its exact
+range like a Ready Pull Request, which is the focused-`main` cost decision
+in `docs/governance/git-workflow.md` and the reason the sweep exists.
 
 ### Hosted Control Plane and Head Trust
 
@@ -343,6 +345,19 @@ publication workflows. Each is a separate decision with its own reason; none of
 them is covered by the four-job exception, and none should be read as covered
 by it. Scheduled TSan left this list on 2026-09-06 (#693) once the `ci-core`
 host capped its mmap ASLR entropy; see Sanitizer Selection.
+
+`ci.yml` itself has one trigger beyond Pull Requests, pushes and dispatch: a
+daily `schedule` at 16:00 UTC that Change Scope classifies full (#543). It
+exists because focused `main` can leave a lane red across docs-only pushes
+that never select it; once a day the complete manifest-selected set runs on
+`main`'s tip so that cannot hide. In the steady state it costs the control
+plane's hosted minutes once a day and nothing else, and it sits in the same
+capacity queues as any other run. It carries one further exposure, the same one
+every full run already has: `macos-primary` follows `select-macos-runner`, so
+on a day when the trusted Mac is offline the selector falls back to hosted
+`macos-latest` and the sweep spends hosted macOS minutes at that rate. That is
+an argument for keeping the Mac online, not against sweeping. Its red is a red `Core CI / sweep
+main` run, the same convention as the liveness check.
 
 The Merge Queue worker is the second worked example, and it separates two
 things the exception can conflate. `route` decides whether a Pull Request is
