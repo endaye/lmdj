@@ -1,0 +1,43 @@
+{
+  "schema": "lmdj.ci-self-test-policy.v1",
+  "evidence_schema": "lmdj.ci-self-test.v1",
+  "scope_policy": "scripts/ci/scope_policy.json",
+  "note": "The one authoritative list of what a complete self-test of an exact main revision runs. Scope-lane suites mirror scope_policy.json lane for lane and job for job (the parity test in tests/build/ci_self_test_test.py fails when they drift); nightly suites carry the stress workloads core-nightly.yml runs today, which no scope lane covers. Every suite is required: a batch passes only when each suite's jobs all succeeded, with the one recorded exception that a job may be skipped when a named alternative succeeded in the same run.",
+  "suites": [
+    {"id": "docs_static", "origin": {"kind": "scope_lane", "lane": "docs_static"}, "jobs": ["docs-static"], "required": true},
+    {"id": "portal", "origin": {"kind": "scope_lane", "lane": "portal"}, "jobs": ["portal"], "required": true},
+    {"id": "ci_contract", "origin": {"kind": "scope_lane", "lane": "ci_contract"}, "jobs": ["ci-contract"], "required": true},
+    {"id": "core_ubuntu", "origin": {"kind": "scope_lane", "lane": "core_ubuntu"}, "jobs": ["core-ubuntu"], "required": true},
+    {"id": "core_asan", "origin": {"kind": "scope_lane", "lane": "core_asan"}, "jobs": ["core-asan"], "required": true},
+    {"id": "core_coverage", "origin": {"kind": "scope_lane", "lane": "core_coverage"}, "jobs": ["core-coverage"], "required": true},
+    {
+      "id": "core_macos",
+      "origin": {"kind": "scope_lane", "lane": "core_macos"},
+      "jobs": ["select-macos-runner", "macos-primary", "core-macos", "core-asan-macos"],
+      "required": true,
+      "alternatives": {"macos-primary": ["macos-fallback"]},
+      "note": "select-macos-runner picks one of two gate jobs; the other is skipped by design. The skip is legitimate only when the alternative succeeded in the same run."
+    },
+    {"id": "web_toolchain", "origin": {"kind": "scope_lane", "lane": "web_toolchain"}, "jobs": ["web-toolchain-conformance"], "required": true},
+    {"id": "web_runtime_host", "origin": {"kind": "scope_lane", "lane": "web_runtime_host"}, "jobs": ["web-runtime-host"], "required": true},
+    {"id": "creator", "origin": {"kind": "scope_lane", "lane": "creator"}, "jobs": ["creator-web"], "required": true},
+    {"id": "web_runtime_lab", "origin": {"kind": "scope_lane", "lane": "web_runtime_lab"}, "jobs": ["web-runtime-lab"], "required": true},
+    {"id": "deploy_contract", "origin": {"kind": "scope_lane", "lane": "deploy_contract"}, "jobs": ["deploy-contract"], "required": true},
+    {"id": "chameleon_lab", "origin": {"kind": "scope_lane", "lane": "chameleon_lab"}, "jobs": ["chameleon-lab"], "required": true},
+    {"id": "package", "origin": {"kind": "scope_lane", "lane": "package"}, "jobs": ["package"], "required": true},
+    {
+      "id": "core_tsan_stress",
+      "origin": {"kind": "nightly_job", "workflow": ".github/workflows/core-nightly.yml", "job": "core-tsan"},
+      "jobs": ["core-tsan"],
+      "required": true,
+      "note": "scripts/core.sh test tsan stress. Depends on the host's vm.mmap_rnd_bits; a host that cannot start ThreadSanitizer is an infrastructure failure, never a pass."
+    },
+    {
+      "id": "core_release_stress",
+      "origin": {"kind": "nightly_job", "workflow": ".github/workflows/core-nightly.yml", "job": "core-stress"},
+      "jobs": ["core-stress"],
+      "required": true,
+      "note": "Release build, stress tier, --repeat until-fail:20. Neither `core.sh test dev full` nor `proof` runs it."
+    }
+  ]
+}
