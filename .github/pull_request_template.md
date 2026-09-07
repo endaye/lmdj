@@ -10,7 +10,14 @@ Related issue: <!-- Write exactly one: Closes #123 | Relates to #123 | None — 
 
 <!-- Exact commands and retained evidence. -->
 
+## PR Review
+
+<!-- Current head SHA, exact-head review evidence or visible manual takeover;
+record findings/disposition and any missing review, not assumed approval. -->
+
 ## CI Scope
+
+<!-- Advisory local-test selection; not a queue/full-green merge prerequisite. -->
 
 Expected mode: focused
 Expected selected lanes: <!-- Closed lane names, space-separated. -->
@@ -55,4 +62,6 @@ Reason: <!-- Explain why release state changes or remains unchanged. -->
 
 ## Transition authority
 
-- [ ] Push/PR only; no tag, Release, deploy, publication, or Channel promotion is implied.
+<!-- Record the actual user-authorized boundary. This template grants none. -->
+Authorized transitions: <!-- push | PR | merge | cleanup, only as explicitly authorized -->
+No tag, Release, deploy, publication, or Channel promotion is implied.

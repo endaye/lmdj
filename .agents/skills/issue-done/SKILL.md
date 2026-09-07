@@ -1,11 +1,16 @@
 ---
 name: issue-done
-description: Universal skill for shipping a completed local task/issue to main - handles verification, Conventional Commit, push, PR creation with governance declarations, CI tracking, auto-merging, and local worktree/branch cleanup.
+description: Universal skill for shipping a completed local task/issue to main - handles verification, Conventional Commit, push, PR creation with governance declarations, current-head review, authorized merge, and safe local worktree/branch cleanup.
 ---
 
 # Issue Done (Local Issue/Task → Main & Cleanup)
 
-This skill defines the canonical, universal workflow for taking a locally completed GitHub issue/task in an isolated worktree branch, verifying it, creating a Conventional Commit, pushing, opening a Pull Request, waiting for CI / auto-merging into `main`, and cleaning up the branch and worktree.
+This skill defines the canonical, universal workflow for taking a locally completed GitHub issue/task in an isolated worktree branch, verifying it, creating a Conventional Commit, pushing, opening a Pull Request, checking current-head review and, when authorized, squash-merging into `main`, and cleaning up the branch and worktree.
+
+The optimistic merge procedure applies only after the authorized O2 cutover.
+An unmerged draft does not override current `main` governance or live protection.
+This skill grants no new authority: push, PR creation, merge, Issue mutation and
+cleanup require the user's applicable authorization; stop at its boundary.
 
 Compatible with: **Antigravity (AGY)**, **Codex / OpenAI**, **Claude Code**, **Kimi**, **Cursor**, **GitHub Copilot**, and human contributors.
 
@@ -20,10 +25,11 @@ Before starting the shipping pipeline:
    git branch --show-current
    ```
 2. **Local Pre-flight & Tests**:
-   Run the task-specific verification or local CI pre-flight:
+   Run the Task's declared, relevant verification; do not substitute an automatic
+   full lane set or an unrelated portal build. For example:
    ```bash
-   scripts/local-ci.sh
-   # or fast core tests:
+   scripts/local-ci.sh --lanes <task-relevant-lanes>
+   # or, for a Task whose verification calls for fast core tests:
    scripts/core.sh test dev fast
    ```
 3. **Inspect Working Tree**: Ensure there are no uncommitted or untracked changes left behind unintentionally.
@@ -197,40 +203,21 @@ may retain both an `unclassified path` diagnostic and its named `full rule`
 reason; that diagnostic alone is not a push blocker. Stop before pushing
 only when a path matches neither `rules` nor `full_rules`.
 
-### Split control-plane paths first
+### Keep control-plane changes reviewable
 
-Before opening the Pull Request, check whether the branch touches the
-control-plane set named in
-[`docs/governance/git-workflow.md`](../../../docs/governance/git-workflow.md) §5
-— `.github/workflows/merge-queue.yml`, `.github/workflows/ci.yml`,
-`.github/actionlint.yaml`, `scripts/ci/merge_queue.py`,
-`scripts/ci/github_queue_api.py`, `scripts/ci/merge_queue_watchdog.py`,
-`scripts/ci/change_scope.py`, `scripts/ci/pr_gate.py`, or
-`scripts/ci/scope_policy.json`:
+Path classification remains useful for ownership and selecting local tests; it
+does not require a complete CI run, a queue ticket, or chasing a moving main.
+Split changes when they are independently reviewable or have a real producer /
+consumer dependency, not merely because a control-plane path is present.
+Preserve routing coverage when introducing new paths. A routing prerequisite
+may land separately when the live baseline needs it; record that dependency
+instead of applying a universal split rule.
 
-```bash
-git diff --name-only origin/main...HEAD | grep -E '^(\.github/workflows/(ci|merge-queue)\.yml|\.github/actionlint\.yaml|scripts/ci/(merge_queue|github_queue_api|merge_queue_watchdog|change_scope|pr_gate)\.py|scripts/ci/scope_policy\.json)$'
-```
-
-A Pull Request touching any of them **cannot use the Integration Queue** and
-must take the ordinary protected path, where `strict` branch protection
-requires the head to contain current `main`. If it also carries ordinary work,
-**split it**: land the control-plane change as its own Pull Request, then open
-the remainder, which is queue-eligible and usually selects far fewer lanes.
-
-Bundling loses a race rather than failing loudly. Full CI here runs about 185
-minutes, so an active `main` flips the Pull Request to `BEHIND` faster than a
-rerun can finish, and each cycle costs another full run. Merging past it needs
-a human to bypass `strict`, which discards the guarantee that requirement
-exists to provide.
-
-When the control-plane change is a routing rule for paths the same branch
-introduces — the common case, since
-`tests/build/ci_change_scope_test.py` fails on any tracked path no rule
-classifies — land the rule first and the paths second. A rule for a path that
-does not exist yet classifies nothing and breaks nothing.
-
-See [`release-cut-bundles-control-plane`](../../pitfalls/release-cut-bundles-control-plane.md).
+The historical queue-specific limitation in
+[`release-cut-bundles-control-plane`](../../pitfalls/release-cut-bundles-control-plane.md)
+does not make ordinary PRs queue-dependent after O2. Product Build allocation
+still follows the canonical version policy and is not bundled with unrelated
+feature work.
 
 ### Related-Issue vocabulary and the closing-directive check
 
@@ -276,41 +263,21 @@ lint reads the text you give it and cannot see a directive added afterwards.
    git push -u origin "$BRANCH"
    ```
 
-2. **Write the Pull Request body to a file, gate it, then open the Pull Request**:
-   The body goes to a file first so the declaration can be checked *before* the
-   `pull_request` event exists. It goes to `/tmp`, not the worktree: an untracked
-   file in the worktree makes §6's `git worktree remove` refuse, so cleanup would
-   fail on every Task that followed this step. Creating the Pull Request first is what makes a
-   bad declaration expensive: the portal lane is already queued against it, and
-   correcting the body afterwards needs a fresh event, because a rerun replays
-   the stale payload.
+2. **Write and validate the Pull Request body before opening it**:
+   Use the repository template and a unique temporary file outside the worktree.
+   Record exact Task commands, results, unexercised acceptance legs, version and
+   documentation impact, and pitfall disposition. Do not say full verification
+   passed when only a local subset ran.
    ```bash
-   cat > /tmp/pr-body.md <<'PR_BODY'
-   ## Summary
-   Closes #<ISSUE_ID>
-
-   ## Verification
-   - Task tests and local verification passed cleanly.
-
-   ## Impact Declaration
-   Documentation impact: none
-   Reason: Task-specific implementation with no public API/documentation impact.
-
-   Pitfall impact: none — reason: no process invariant was learned that the code does not already state.
-   <!-- Use exactly one: `new <id>` | `recurrence <id>` | `none — reason: ...` -->
-   PR_BODY
-
-   bash scripts/local-ci.sh --pr-body /tmp/pr-body.md   # gate the declaration first
-
+   python3 tests/build/ci_pr_body_lint.py --body-file <body-file>
+   scripts/local-ci.sh --declaration-only --pr-body <body-file>
    gh pr create --base main --head "$BRANCH" \
-     --title "<Conventional Commit Title>" --body-file /tmp/pr-body.md
+     --title "<Conventional Commit Title>" --body-file <body-file>
    ```
-   The declaration verdict is printed before any lane output, so a malformed
-   declaration is visible almost immediately — but `--pr-body` has no
-   declaration-only mode: it goes on to execute every selected lane afterwards,
-   and a failed declaration changes only the final exit code. Read the verdict
-   and interrupt if you only need that answer; do not describe this as a
-   milliseconds-only check.
+   The declaration-only command executes no lanes. A not-applicable result is
+   not a portal pass; run portal checks locally when the Task affects them.
+   Validate a changed body again, without closing/reopening the PR merely to
+   manufacture an old CI event.
 
    `Documentation impact` means **Architecture Portal pages**, not any file
    under `docs/`. Declare `required` when this change edits a page under
@@ -327,118 +294,76 @@ lint reads the text you give it and cannot see a directive added afterwards.
    which repeated seven times because six of those Pull Requests were merged by
    hand while the gate that would have said so was queued or red.
 
-   After correcting a body, the gate needs a fresh `pull_request` event: a
-   rerun replays the stale payload and fails again on text you already fixed.
-   Close and reopen, or push.
-
 ---
 
-## 5. Enable Auto-Merge & Monitor CI
+## 5. Current-head review and authorized merge
 
-1. **Arm auto-merge, then label `merge:queue` last, at an observed head**:
+1. **Check live state and authority**. Push and PR permission do not imply merge
+   permission. Read the PR's current head SHA, open/draft state, conflicts,
+   unresolved review threads and effective protection. Unknown mergeability is
+   not proof of no conflict: reread with a bounded wait or report it.
+2. **Inspect review evidence for that exact head**. Independent AI review is
+   feedback, not a machine verdict granting merge permission. Use the trusted
+   review publisher's head/run/attempt evidence and findings, not empty check
+   lists, NEUTRAL checks, the model's own completion claim, or old-head reviews.
+   Read and address substantive findings; dismissing or resolving a thread
+   requires an actual disposition and applicable authority.
+3. **Handle review failure visibly**. A missing credential, failed backend,
+   timeout, malformed output or stale head is not a clean review. Seek an
+   authorized human/agent takeover that actually inspects the current diff and
+   records reviewer, exact head, findings/disposition, limitations and reason
+   for takeover on the PR. Do not wait forever, forge green evidence or silently
+   treat missing review as approval. A new push invalidates old-head evidence.
+4. **Merge without the former queue/full-CI loop**. A non-conflicting PR need
+   not update just because main advanced. Daily/node self-test failures,
+   in-flight suites, coverage, sanitizer or portal batch results do not block
+   an ordinary PR merge; they remain visible evidence and Issue follow-up.
+   There is no `merge:queue` ticket or full-green prerequisite. Resolve real
+   conflicts locally, rerun affected Task tests and review the changed head.
+   Before O2, continue under the current main workflow, not this draft. If O2
+   is recorded complete but live protection still requires retired gates or
+   strict updates, stop and report configuration drift; do not bypass it or
+   alter protection under shipping authority. Squash-merge only the head just inspected, using an atomic
+   expected-head guard where supported, and recheck if it changed.
+5. **Verify the result**. Read PR state, `mergedAt` and `mergeCommit`; report
+   the actual merged SHA. A successful request or armed auto-merge is not a
+   merged PR. Queries that fail or return no evidence must say so.
+6. **Check conditional snapshot provenance**. If this Task allocated a Product
+   Build or introduced a snapshot, verify provenance against the actual merged
+   introducing SHA; retain the source object until that proof is complete.
+   A missing squash witness must be generated with the official
+   `scripts/architecture-portal.sh witness PRODUCT_BUILD [INTRODUCING_REVISION]`
+   and shipped in a separate commit/PR within applicable authorization; never
+   hand-edit frozen metadata. Report the gap until repaired. This obligation
+   does not run the full portal for ordinary unrelated Tasks and grants no
+   release-operation authority.
+7. **Audit retained Issues read-only**. For each `Relates to #<number>`,
+   inspect its live state. An unintended closure is a finding; reopening or
+   commenting needs applicable Issue-mutation authority. Preserve the closing
+   keyword pitfall and record a qualifying recurrence when authorized.
 
-   Both are required, and the order matters. `main` is `strict: true`, so
-   GitHub-native auto-merge cannot merge on its own — a Pull Request with only
-   auto-merge armed parks as `BEHIND` indefinitely. But auto-merge, once armed,
-   also updates the head branch by merging `main` into it whenever the base
-   advances, and the queue controller authorizes the **exact** SHA the
-   `labeled` event carried. Label first and that SHA can go stale before the
-   controller reads it, which it refuses as `ineligible-pr`.
+The reporter collects complete-batch failures in suite/class Issue buckets;
+these are not proven root-cause fingerprints, and one green batch does not
+close an Issue automatically. Remote O1 acceptance remains separate.
+It does not automatically release a version. Release preparation, publication,
+deployment and Channel promotion follow their own exact-candidate evidence
+and authorization boundaries.
 
-   ```bash
-   gh pr merge --auto --squash --delete-branch
-   gh pr view <number> --json headRefOid --jq .headRefOid   # observe the head
-   gh pr edit <number> --add-label "merge:queue"            # authorize it
-   ```
+## 6. Local worktree and branch cleanup
 
-   If the controller still stops with `ineligible-pr` naming an
-   `observed_head_sha` you never pushed, auto-merge moved the head under you.
-   That is not a fault in the change: confirm the new head is your work plus a
-   merge of `main`, re-run the Task's verification on it, and explicitly re-add
-   the label — the controller removes it when it stops, so nothing retries on
-   its own. See
-   [`queue-authorized-head-moved-by-auto-merge`](../../pitfalls/queue-authorized-head-moved-by-auto-merge.md).
+Cleanup is a separate authorized action, not a side effect of listing branches
+or observing a merged PR. Use `issue-list` for the lifecycle audit when needed.
 
-2. **Watch CI Checks — not with `gh pr checks`**:
+Before removing an exact worktree/branch, verify the PR is merged, all local
+changes are retained on main (including squash equivalence), the worktree is
+clean including untracked files, and it is neither locked nor in use by another
+session. A merged PR does not prove that later local commits are retained.
+Ancestry or `git cherry` alone can be inconclusive after squash.
 
-   Core CI reports against the `<pr>/merge` ref, so its check runs never enter
-   the Pull Request head's `statusCheckRollup` and `gh pr checks` does not list
-   them at all. What it does list is the Cursor and Netlify check runs, whose
-   bucket is `skipping` (`NEUTRAL`) — neither `pass` nor `pending`. A predicate
-   like `all(.bucket != "pending")` is therefore true the moment the Pull
-   Request opens, against zero real lanes, and reports a green Pull Request
-   that has run nothing. See
-   [`pr-checks-omits-merge-ref-lanes`](../../pitfalls/pr-checks-omits-merge-ref-lanes.md).
-
-   Watch the workflow runs and the Pull Request's own state instead:
-   ```bash
-   gh run list --branch "$BRANCH" --limit 20 \
-     --json name,status,conclusion,databaseId
-   gh pr view <number> --json state,mergeStateStatus
-   ```
-   Treat a `conclusion` of `failure`, `cancelled`, `timed_out` or
-   `action_required` as terminal, and `MERGED`/`CLOSED` as the end state. A
-   `cancelled` Core CI run whose `createdAt` precedes a newer run for the same
-   Pull Request is normal concurrency-group supersession, not a failure.
-   `mergeStateStatus` of `BEHIND` or `BLOCKED` is the `strict: true`
-   up-to-date requirement the Integration Queue exists to resolve, not a
-   verdict on the change.
-
-   Whatever you poll with, make the check distinguish "failed to measure" from
-   "measured something good": if the process crashed, the lane was cancelled,
-   or the query returned an empty set, the check must say something. Silence is
-   not success, and neither is an empty result set.
-
-3. **Confirm Merged State**:
-   ```bash
-   gh pr view --json state,mergedAt,mergeCommit
-   ```
-
-   If this Task allocated a Product Build or introduced its Portal snapshot,
-   verify snapshot provenance against the actual merged introducing SHA before
-   cleanup. A pre-squash local pass is insufficient. If the verifier requests
-   a squash witness, retain the source object, use
-   `scripts/architecture-portal.sh witness PRODUCT_BUILD INTRODUCING_REVISION`,
-   and ship the generated proof in a follow-up Task within existing authority.
-   Never edit immutable snapshots or infer release authority. This conditional
-   follow-through does not add Portal checks to unrelated Tasks. See
-   [`squash-witness-provenance`](../../pitfalls/squash-witness-provenance.md).
-
-4. **Audit the live state of every Issue the Pull Request meant to keep open**:
-   ```bash
-   gh issue view <number> --json number,state
-   ```
-   Run this for each `Relates to #<number>` reference. The closing-directive
-   lint reads the body, not GitHub's parser, so a merge that closed a retained
-   Issue anyway is still a finding: reopen the Issue, say why in a comment, and
-   record the occurrence on
-   [`github-closing-keyword-negation`](../../pitfalls/github-closing-keyword-negation.md).
-
----
-
-## 6. Local Worktree & Branch Cleanup
-
-After the PR is confirmed `MERGED`:
-
-1. **Switch to main workspace / root repo**:
-   ```bash
-   git checkout main
-   git pull origin main
-   ```
-
-2. **Remove the temporary worktree**:
-   ```bash
-   git worktree list
-   git worktree remove <worktree-path>
-   ```
-
-3. **Delete local branch and prune remote references**:
-   ```bash
-   git branch -d "$BRANCH"
-   git fetch --prune
-   ```
-
-4. **Confirm Clean State**:
-   ```bash
-   git status
-   ```
+Use the validated exact path with non-forced `git worktree remove`; run the
+command from a different existing worktree without switching another session's
+branch. Prefer `git branch -d`. If squash requires `-D`, first prove the whole
+patch is retained and that deletion is within the cleanup authorization.
+Protect dirty, divergent, ambiguous and active resources; report them instead.
+Do not automatically delete remote branches, reset worktrees or run broad
+cleanup loops. Report precisely what was removed and what was kept.

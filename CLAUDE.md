@@ -5,7 +5,11 @@ is the only active product source.
 
 ## Git workflow
 
-`main` is protected and must remain deployable. Work only on a short-lived
+`main` is the protected integration branch; it may temporarily contain defects.
+Release readiness belongs to an explicitly selected, fully verified candidate,
+not every merge. The optimistic CI rules take effect only at the authorized
+O2 cutover; a draft branch does not override live `main` governance or protection.
+Work only on a short-lived
 branch in an isolated worktree. Branch names must use `feat/<task>`,
 `fix/<task>`, or `docs/<task>`; this applies equally to people and coding
 agents. Do not create long-lived `develop`, `release/*`, or `hotfix/*` branches.
@@ -111,7 +115,9 @@ required, update the current pages and source diagrams in the same Task.
 
 Do not hand-enter or guess Product, Module, Host, Provider, Contract, Channel,
 or revision identities; the portal derives them from active manifests. Run
-`scripts/architecture-portal.sh check` before commit. A local build, CI run, or
+`scripts/architecture-portal.sh check` before commit when the Task affects portal
+pages, diagrams, tooling, projected identities or documented source facts; it is
+not a universal pre-push requirement for unrelated Tasks. A local build, CI run, or
 Pull Request Preview does not create a permanent snapshot. Any Product Build
 allocated for team testing or release must include an immutable snapshot made
 with `scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL`; Product
@@ -138,8 +144,8 @@ except `stress`, `fast` runs only `unit` and `component`, and `stress` runs only
 the `stress` tier. Running `scripts/core.sh test dev` therefore does not run the
 stress tier; run it explicitly when changing lock-free or concurrent code.
 `proof` also excludes the stress tier. The `core-asan` CI job runs `full` then
-`stress`, and `core-asan-macos` selects the `native` label, so both stress tests
-block a Pull Request. `core-asan-macos` covers native tests only: the
+`stress`, and `core-asan-macos` selects the `native` label. These belong to
+complete daily/node self-tests, not a Pull Request merge gate. `core-asan-macos` covers native tests only: the
 Python-hosted tests preload the sanitizer runtime into CPython, which does not
 work on arm64 macOS, so Linux `core-asan` owns that coverage.
 `docs/quality/core-test-policy.md` is the canonical tier definition.

@@ -33,6 +33,11 @@ rule. Use `Relates to #<number>` for partial work or evidence. Use
 One umbrella feature may have several bounded implementation Issues. It never
 authorizes unrelated Tasks in one branch, commit, or Pull Request.
 
+O2 乐观合并切换后，PR 保留 Task 范围验证、当前 head 的 review 与 findings 处置；
+AI 失败、缺凭据或过期证据须显式人工/agent 接管，不视为空 findings。
+不要求追逐无冲突的 main 更新、排 Integration Queue 或等待全量测试绿。
+这不扩大 push、PR、merge、Issue 写入或清理权限；未合入草案不替代当前规则。
+
 ## Closure
 
 A feature, bug, task, or documentation Issue closes after its required change

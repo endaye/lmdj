@@ -64,7 +64,7 @@ def pre_push_contract_errors(source: str) -> list[str]:
     pre_push = section(
         source,
         "## 4. Push & Create Pull Request",
-        "### Split control-plane paths first",
+        "### Keep control-plane changes reviewable",
     )
     errors = []
     if OWNERSHIP_CONTRACT not in pre_push:
@@ -239,7 +239,7 @@ class IssueDoneSkillTest(unittest.TestCase):
     def test_pre_push_missing_section_boundaries_report_contract_error(self) -> None:
         for boundary in (
             "## 4. Push & Create Pull Request",
-            "### Split control-plane paths first",
+            "### Keep control-plane changes reviewable",
         ):
             with self.subTest(boundary=boundary):
                 mutated = self.source.replace(

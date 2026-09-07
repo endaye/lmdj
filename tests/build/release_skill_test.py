@@ -155,12 +155,12 @@ class ReleaseSkillTest(unittest.TestCase):
         git_workflow = self.read(GIT_WORKFLOW)
         version_policy = self.read(VERSION_POLICY)
         for expected in (
-            "focused",
-            "unverifiable base",
-            "empty `lanes` input",
-            "retained scope manifest is `full`",
-            "`PR Gate` both succeeded",
-            "14 days",
+            "verified exact main-history",
+            "canonical\nrelease verifier accepts",
+            "complete, current, exact-candidate evidence",
+            "Expired or missing evidence",
+            "new authorized test request",
+            "separate authorization and verification",
         ):
             with self.subTest(document="git-workflow", expected=expected):
                 self.assertIn(expected, git_workflow)
