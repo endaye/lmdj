@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,26 @@ import stat
 import subprocess
 import sys
 import tempfile
+
+
+# The manifest asset-role vocabulary is shared with the Runtime Host packager
+# and the deployment validator. Cross-app Python here is loaded by file path,
+# the precedent set by `apps/creator-web/tools/deployment_smoke.py`.
+ASSET_ROLES_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "web-runtime-host/tools/asset_roles.py"
+)
+_ASSET_ROLES_SPEC = importlib.util.spec_from_file_location(
+    "_lmdj_manifest_asset_roles", ASSET_ROLES_PATH
+)
+if _ASSET_ROLES_SPEC is None or _ASSET_ROLES_SPEC.loader is None:
+    raise RuntimeError(
+        "shared manifest asset-role vocabulary is unavailable: "
+        f"{ASSET_ROLES_PATH} could not be loaded"
+    )
+ROLES = importlib.util.module_from_spec(_ASSET_ROLES_SPEC)
+_ASSET_ROLES_SPEC.loader.exec_module(ROLES)
+EMITTED_ASSET_ROLES = ROLES.CREATOR_WEB_EMITTED_ASSET_ROLES
 
 
 MANIFEST_TOOLCHAIN_KEYS = (
@@ -158,6 +179,25 @@ def write_hashed_asset(
     payload: bytes,
     role: str,
 ) -> dict:
+    if role not in EMITTED_ASSET_ROLES:
+        raise PackageError(
+            "why: this packager emitted the manifest asset role "
+            f"{role!r}, which is not in the Creator inventory "
+            f"{sorted(EMITTED_ASSET_ROLES)} declared by "
+            "apps/web-runtime-host/tools/asset_roles.py, so the shared "
+            "deployment validator would reject the published manifest at the "
+            "deployment boundary, after packaging, signing and release have "
+            "all passed. remedy: add the role to ALLOWED_ASSET_ROLES and to "
+            "CREATOR_WEB_EMITTED_ASSET_ROLES in "
+            "apps/web-runtime-host/tools/asset_roles.py, add its entry to "
+            "hosts.creator-web.expected_assets in "
+            "tools/web-runtime/runtime-identity.json, and rerun "
+            "apps/web-runtime-host/test/manifest_asset_role_parity_test.py, "
+            "all in this same change. A role that becomes required for every "
+            "Creator manifest also needs the Host-major split in "
+            "CREATOR_LEGACY_ASSET_ROLES, or the exact-tag deploy's prior "
+            "published rollback anchor stops validating."
+        )
     digest = sha256(payload)
     path = assets_root / f"{stem}.{digest}{suffix}"
     path.write_bytes(payload)
@@ -260,7 +300,7 @@ def build_distribution(
             "capture-worklet",
             ".js",
             source_worklet.read_bytes(),
-            "capture_worklet",
+            ROLES.CAPTURE_WORKLET,
         )
         try:
             main_text = source_main.read_text(encoding="utf-8")
@@ -279,7 +319,7 @@ def build_distribution(
             "perform-master-tap",
             ".js",
             source_tap.read_bytes(),
-            "perform_master_tap_worklet",
+            ROLES.PERFORM_MASTER_TAP_WORKLET,
         )
         tap_reference = f"/assets/{source_tap.name}"
         if main_text.count(tap_reference) != 1:
@@ -288,13 +328,13 @@ def build_distribution(
             )
         main_text = main_text.replace(tap_reference, f"/{tap_entry['path']}", 1)
         main_entry = write_hashed_asset(
-            assets_root, "main", ".js", main_text.encode("utf-8"), "host_main"
+            assets_root, "main", ".js", main_text.encode("utf-8"), ROLES.HOST_MAIN
         )
         style_entry = write_hashed_asset(
-            assets_root, "styles", ".css", source_style.read_bytes(), "host_style"
+            assets_root, "styles", ".css", source_style.read_bytes(), ROLES.HOST_STYLE
         )
         wasm_entry = write_hashed_asset(
-            assets_root, "runtime", ".wasm", runtime_wasm.read_bytes(), "runtime_wasm"
+            assets_root, "runtime", ".wasm", runtime_wasm.read_bytes(), ROLES.RUNTIME_WASM
         )
         try:
             runtime_text = runtime_js.read_text(encoding="utf-8")
@@ -310,7 +350,7 @@ def build_distribution(
             "runtime",
             ".js",
             runtime_text.encode("utf-8"),
-            "runtime_script",
+            ROLES.RUNTIME_SCRIPT,
         )
         entries = [main_entry, runtime_entry, wasm_entry, style_entry, worklet_entry, tap_entry]
         manifest = {
@@ -473,7 +513,7 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
             raise DistributionError(f"absolute local path in asset: {relative}")
         payloads_by_role[role] = payload
         expected_files.add(relative)
-    host_main = payloads_by_role["host_main"]
+    host_main = payloads_by_role[ROLES.HOST_MAIN]
     if any(marker not in host_main for marker in REQUIRED_SAMPLE_EDITOR_MARKERS):
         raise DistributionError("Stage 8 Sample Editor surface is missing")
     if any(
@@ -509,8 +549,8 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
     ):
         if index.count(exact) != 1:
             raise DistributionError("index identity metadata mismatch")
-    main = next(entry for entry in assets if entry["role"] == "host_main")
-    style = next(entry for entry in assets if entry["role"] == "host_style")
+    main = next(entry for entry in assets if entry["role"] == ROLES.HOST_MAIN)
+    style = next(entry for entry in assets if entry["role"] == ROLES.HOST_STYLE)
     if index.count(f'./{main["path"]}') != 1 or index.count(f'./{style["path"]}') != 1:
         raise DistributionError("index production asset binding mismatch")
     if re.search(r"<script(?![^>]*\bsrc=)[^>]*>", index, re.IGNORECASE):

@@ -10,6 +10,10 @@ const SLOT_A1 = {bank: 0, pad: 0};
 // Runtime request, so the state that follows an accepted gesture is promised
 // only within that bound plus bounded render settling.
 const AUDIO_TRANSITION_TIMEOUT_MS = 30_000 + 5_000;
+// The exported report is produced from published Project truth, which settles
+// after the control that caused the mutation is re-enabled, so the report is
+// reachable only within one more bounded Runtime request plus the download.
+const REPORT_REVISION_TIMEOUT_MS = 30_000 + 5_000;
 let pointerSequence = 10;
 
 function pcm16Wav({frames = 96_000, sampleRate = 48_000, phase = 0}) {
@@ -133,8 +137,16 @@ async function rawRequest(page, operation, payload) {
 }
 
 async function expectProjectRevision(page, expectedRevision) {
-  const report = await downloadReport(page);
-  expect(report.sample.project_revision).toBe(expectedRevision);
+  // A control is re-enabled when its own Runtime request returns, which is not
+  // when the Project revision it committed has been published into the report;
+  // on a loaded host a single read of the report sampled the near side of that
+  // transition and saw the previous revision (#713). Polling only re-reads the
+  // report, so the assertion stays exact equality: a revision that never
+  // arrives, or one that overshoots, still fails.
+  await expect.poll(
+    async () => (await downloadReport(page)).sample.project_revision,
+    {timeout: REPORT_REVISION_TIMEOUT_MS},
+  ).toBe(expectedRevision);
 }
 
 async function downloadReport(page) {
