@@ -7,15 +7,16 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-# The lane moved into ci.yml (#659): a reviewer in its own workflow is not
-# ordered before Pre-heavy Gate, which needs its reviewers.
-WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+# Runtime workflow checks follow the independent review entry. Script behavior
+# tests below remain unchanged when the retired Core CI copy is removed.
+WORKFLOW = REPO_ROOT / ".github/workflows/pr-review.yml"
 SCRIPT = REPO_ROOT / ".github/scripts/grok_review.py"
 MERGE_QUEUE = REPO_ROOT / "scripts/ci/merge_queue.py"
 SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
@@ -35,68 +36,32 @@ class GrokReviewWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = WORKFLOW.read_text(encoding="utf-8")
-        # The lane is one job inside Core CI now, so every contract that used
-        # to be about the whole file is about this block.
-        cls.job = cls.source.split("\n  grok-review:\n", 1)[1].split("\n  pre-heavy-gate:", 1)[0]
+        cls.job = re.search(r"(?ms)^  review:\n(.*?)(?=^  [a-zA-Z][\w-]*:\n|\Z)", cls.source).group(1)
         cls.script = load_script()
         cls.policy = json.loads(SCOPE_POLICY.read_text(encoding="utf-8"))
 
-    def test_the_job_is_advisory_pull_request_only(self) -> None:
-        message = (
-            "why: Grok review holds no grant its sink does not need, and Core "
-            "CI also runs on push and dispatch, where there is no Pull Request "
-            "to review; remedy: keep the job's pull_request-only condition and "
-            "exactly contents: read plus pull-requests: write -- issues: write "
-            "went with the tracking Issue"
-        )
-        self.assertIn("github.event_name == 'pull_request' &&", self.job, message)
-        self.assertIn("github.event.pull_request.draft == false", self.job, message)
-        self.assertIn(
-            "github.event.pull_request.head.repo.full_name == github.repository",
-            self.job,
-            message,
-        )
-        self.assertNotIn("pull_request_target:", self.source, message)
-        self.assertIn(
-            "    permissions:\n      contents: read\n      pull-requests: write",
-            self.job,
-            message,
-        )
-        # Scan directives, not the raw source: the job explains in a comment
-        # why `issues: write` is gone, and a raw-text absence check would fail
-        # on its own explanation. See gate-matches-its-own-prose.
-        directives = "\n".join(
-            line for line in self.job.splitlines()
-            if not line.lstrip().startswith("#")
-        )
-        self.assertNotIn("issues: write", directives, message)
-        self.assertNotIn("contents: write", directives, message)
-        self.assertNotIn("id-token: write", directives, message)
+    def test_the_job_is_read_only_in_the_independent_review_entry(self) -> None:
+        header = self.job.split("    steps:", 1)[0]
+        self.assertIn("contents: read", header)
+        self.assertIn("pull-requests: read", header)
+        self.assertNotIn(": write", header,
+                         "why: a model holds mutation authority; remedy: keep it only in the independent publisher")
+        self.assertNotIn("pull_request_target:", self.source)
+        self.assertIn("needs.target.outputs.review == 'true'", self.job)
 
-    def test_the_job_cannot_redden_core_ci(self) -> None:
-        """Advisory in name has to mean advisory in effect, and it is in ci.yml now."""
-        header = self.job.split("\n    steps:", 1)[0]
-        self.assertIn(
-            "continue-on-error: true",
-            header,
-            msg=("why: inside ci.yml a failed job fails the workflow and skips "
-                 "Pre-heavy Gate, which needs this one; the step-level flag "
-                 "covers neither a job timeout nor a failed install; remedy: "
-                 "keep continue-on-error at job level"),
-        )
+    def test_the_job_has_no_product_ci_dependency(self) -> None:
+        core = CORE_CI.read_text()
+        self.assertNotIn("\n  grok-review:\n", core,
+                         "why: Core CI still executes advisory review; remedy: use pr-review.yml only")
+        self.assertNotIn("pre-heavy-gate", self.job,
+                         "why: review depends on product admission; remedy: keep independent DAGs")
 
     def test_workflow_skips_drafts_and_forks(self) -> None:
-        message = (
-            "why: fork heads must not receive repository Grok credentials, and "
-            "drafts should not spend SuperGrok quota; remedy: keep the draft "
-            "and same-repository job guard"
-        )
-        self.assertIn("github.event.pull_request.draft == false", self.source, message)
-        self.assertIn(
-            "github.event.pull_request.head.repo.full_name == github.repository",
-            self.source,
-            message,
-        )
+        target = (REPO_ROOT / ".github/scripts/pr_review_target.py").read_text()
+        self.assertIn("draft", target)
+        self.assertIn("fork", target)
+        self.assertIn("needs.target.outputs.review == 'true'", self.job,
+                      "why: model bypasses trusted PR admission; remedy: honor target's review output")
 
     def test_workflow_runs_on_the_general_self_hosted_role(self) -> None:
         message = (
@@ -110,36 +75,22 @@ class GrokReviewWorkflowTest(unittest.TestCase):
             self.job,
             message,
         )
-        # Job-scoped: Core CI's control plane is deliberately hosted, so the
-        # file as a whole says ubuntu-24.04 several times.
+        # Job-scoped: the separate publisher may use a different runner.
         self.assertNotIn("runs-on: ubuntu-24.04", self.job, message)
         self.assertNotIn("ci-core", self.job, message)
         self.assertNotIn("ci-web-heavy", self.job, message)
 
-    def test_an_advisory_lane_does_not_paint_the_pull_request_red(self) -> None:
-        """Advisory in name has to mean advisory in effect.
-
-        This lane failed red on #610 with `max turns reached` -- a review that
-        did not finish, not a change that is wrong. A lane that cannot block a
-        merge but can redden every Pull Request devalues every other red check.
-        """
-        self.assertIn(
-            "continue-on-error: true",
-            self.source,
-            msg=(
-                "why: this lane cannot block a merge, so a failure here is a "
-                "missing review rather than a defect, and a red check for it "
-                "devalues every other red check; remedy: keep continue-on-error "
-                "on the review step"
-            ),
-        )
+    def test_model_failure_is_not_hidden_by_job_level_continue_on_error(self) -> None:
+        header = self.job.split("    steps:", 1)[0]
+        self.assertNotIn("continue-on-error: true", header,
+                         "why: unavailable review would be presented as complete; remedy: report honest review state")
 
     def test_the_cli_is_fetched_by_digest_not_piped_from_an_installer(self) -> None:
         """A version names a release; a digest names the bytes.
 
         The upstream installer publishes no checksum and verifies nothing but
         an HTTP status and a `--version` string, so a changed script would be
-        executed unchallenged. This job holds `pull-requests: write` and a
+        executed unchallenged. This job holds `pull-requests: read` and a
         `GITHUB_TOKEN`, and since it moved to a self-hosted runner it executes
         on our own machine, which raises the cost of that rather than lowering
         it. The CI contract lane already answers the same question the same
@@ -147,7 +98,7 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         """
         message = (
             "why: the Grok CLI is installed on a self-hosted runner in a job "
-            "holding pull-requests: write, so its bytes must be named by a "
+            "holding backend credentials, so its bytes must be named by a "
             "digest rather than only by a version; remedy: fetch "
             "https://x.ai/cli/grok-${GROK_VERSION}-linux-x86_64 directly and "
             "verify it against GROK_SHA256, the way the CI contract lane pins "
@@ -157,7 +108,7 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         self.assertNotIn("| bash", self.source, message)
         self.assertRegex(self.source, r'GROK_SHA256: "[0-9a-f]{64}"', message)
         self.assertIn(
-            'https://x.ai/cli/grok-${GROK_VERSION}-linux-x86_64', self.source, message
+            'https://x.ai/cli/grok-$GROK_VERSION-linux-x86_64', self.source, message
         )
         self.assertIn("sha256sum --check --strict -", self.source, message)
 
@@ -169,7 +120,9 @@ class GrokReviewWorkflowTest(unittest.TestCase):
             "Ubuntu cannot resolve Grok's runtime-socket deny path"
         )
         self.assertIn(f'GROK_VERSION: "{self.script.PINNED_GROK_VERSION}"', self.source, message)
-        self.assertIn("python3 .github/scripts/grok_review.py", self.source, message)
+        adapter = REPO_ROOT / "scripts/ci/review_pipeline.py"
+        self.assertIn("review_pipeline.py grok", self.source, message)
+        self.assertIn("grok_review.grok_command", adapter.read_text(), message)
         command = self.script.grok_command(Path("/tmp/prompt.md"), Path("/tmp/repo"))
         self.assertEqual(command[command.index("--tools") + 1], self.script.READ_ONLY_TOOLS)
         self.assertNotIn("--sandbox", command, message)
@@ -178,35 +131,17 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         self.assertIn("Read(**/.grok/**)", command)
         self.assertIn("Read(**/auth.json)", command)
 
-    def test_grok_is_ordered_before_the_gate_without_becoming_merge_evidence(self) -> None:
-        """It moved into ci.yml (#659) for ordering, and for nothing else.
-
-        A reviewer in its own workflow is not ordered before Pre-heavy Gate,
-        so its findings could arrive after the gate had already admitted the
-        native-heavy set -- worst in the case this lane exists for, when both
-        Claude backends are down and Grok is the only reviewer posting. Being
-        in ci.yml must not make it a verdict: the gate reads the threads it
-        leaves, never its result.
-        """
+    def test_grok_stays_outside_product_and_merge_evidence(self) -> None:
         core = CORE_CI.read_text(encoding="utf-8")
         queue = MERGE_QUEUE.read_text(encoding="utf-8")
-        self.assertIn("  grok-review:\n", core)
-        self.assertIn(
-            "advisory-review, grok-review]",
-            core,
-            msg=("why: a reviewer outside the gate's needs can post after "
-                 "admission; remedy: keep grok-review in pre-heavy-gate's needs"),
-        )
-        not_evidence = (
-            "why: Grok review is advisory; remedy: keep it out of lane_jobs, "
-            "self_hosted_jobs, PR Gate's results and the merge-queue path list"
-        )
-        self.assertNotIn("grok", str(self.policy["lane_jobs"]), not_evidence)
-        self.assertNotIn("grok-review", self.policy["self_hosted_jobs"], not_evidence)
+        self.assertNotIn("\n  grok-review:\n", core,
+                         "why: retired model job keeps product write permissions; remedy: use the independent PR Review entry")
+        self.assertNotIn("grok", str(self.policy["lane_jobs"]))
+        self.assertNotIn("grok-review", self.policy["self_hosted_jobs"])
         pr_gate = core.split("\n  pr-gate:\n", 1)[1].split("\n  select-macos-runner:", 1)[0]
-        self.assertNotIn("grok", pr_gate, not_evidence)
-        self.assertNotIn("grok-review.yml", queue, not_evidence)
-        self.assertNotIn(".github/scripts/grok_review.py", queue, not_evidence)
+        self.assertNotIn("grok", pr_gate)
+        self.assertNotIn("grok-review.yml", queue)
+        self.assertNotIn(".github/scripts/grok_review.py", queue)
 
     def test_scope_policy_classifies_review_files_as_ci_contract_only(self) -> None:
         paths = {".github/scripts/grok_review.py"}

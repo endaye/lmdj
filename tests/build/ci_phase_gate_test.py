@@ -242,25 +242,20 @@ class PhaseGateTest(unittest.TestCase):
                 self.assertFalse(report.ok)
                 self.assertIn("non-negative integer", " ".join(report.errors))
 
-    def test_the_gate_workflow_passes_the_thread_count(self):
-        """The argument exists for one caller; that caller must use it."""
+    def test_product_gate_does_not_query_or_wait_for_review_threads(self):
+        """The historical thread validator remains tested above, but unwired."""
         source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        for needle in (
-            "--unresolved-review-threads",
-            "reviewThreads(first:100,after:$c)",
-            "pageInfo{hasNextPage endCursor}",
-            '[[ "$has_next" == "true" ]] || break',
-            "advisory-review, grok-review]",
-        ):
+        gate = source.split("\n  pre-heavy-gate:\n", 1)[1].split("\n  core-ubuntu:\n", 1)[0]
+        directives = "\n".join(line for line in gate.splitlines()
+                               if not line.lstrip().startswith("#"))
+        for needle in ("--unresolved-review-threads", "reviewThreads(", "gh api",
+                       "advisory-review", "grok-review"):
             with self.subTest(needle=needle):
-                self.assertIn(
-                    needle, source,
-                    msg=("why: Pre-heavy Gate must order itself after the review and "
-                         "pass a thread count that reads every page -- one page of 100 "
-                         "is fail-open once threads accumulate across rounds; remedy: "
-                         "keep advisory-review in needs and the paginated GraphQL count "
-                         "wired to --unresolved-review-threads"),
-                )
+                self.assertNotIn(needle, directives,
+                                 "why: product admission consumes obsolete PR state; remedy: preserve conversations in PR protection only")
+        self.assertIn("python3 scripts/ci/phase_gate.py", gate,
+                      "why: removing review must not remove product preflight; remedy: retain the phase judge")
+        self.assertIn('--results-json "$PREFLIGHT_RESULTS_JSON"', gate)
 
     def test_change_scope_result_and_closed_json_shape_fail_closed(self):
         manifest = requested_manifest(

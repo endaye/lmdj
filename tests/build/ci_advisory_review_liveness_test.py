@@ -457,14 +457,29 @@ class ScopeCostTest(unittest.TestCase):
 class SignatureContractTest(unittest.TestCase):
     """Each lane's marker must be exactly what its workflow actually emits."""
 
-    def test_claude_backends_are_told_to_sign_with_their_marker(self) -> None:
-        source = CLAUDE.read_text(encoding="utf-8")
-        self.assertIn("<!-- lmdj-review: ${{ matrix.backend }} -->", source,
-                      "why: the two backends post as one identity from one job, so only a "
-                      "signature separates them, and a dead backend otherwise hides behind a "
-                      "live one; remedy: keep the signing instruction in the prompt")
+    def test_trusted_publisher_signs_claude_backends_with_their_marker(self) -> None:
+        import pr_review_target
+
+        repository, head = "example/project", "a" * 40
+        target = {"state": "open", "draft": False,
+                  "head": {"sha": head, "repo": {"full_name": repository}},
+                  "base": {"ref": "main"}}
         for lane, backend in ((GLM, "glm"), (KIMI, "kimi")):
-            self.assertEqual(lane.marker, f"<!-- lmdj-review: {backend} -->")
+            with self.subTest(backend=backend):
+                writes = []
+                pr_review_target.publish_review(
+                    repository, 7, head, "123", "1", backend,
+                    {"summary": "Review result", "findings": [
+                        {"path": "example.py", "line": 1, "body": "Finding"}]},
+                    api=lambda path: target,
+                    write=lambda path, payload: writes.append((path, payload)))
+                self.assertEqual(len(writes), 1)
+                self.assertEqual(writes[0][0], "/repos/example/project/pulls/7/reviews")
+                for body in (writes[0][1]["body"], writes[0][1]["comments"][0]["body"]):
+                    self.assertEqual(body.splitlines()[0], lane.marker,
+                                     "why: shared fallback jobs cannot identify the winning backend; "
+                                     "remedy: have the trusted publisher prefix each review and "
+                                     "inline finding with the matching liveness marker")
 
     def test_the_vendored_command_does_not_contradict_the_signature(self) -> None:
         """`/pr-review` mandates a fixed clean-review format.
