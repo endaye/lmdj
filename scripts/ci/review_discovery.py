@@ -91,7 +91,56 @@ def new_state(*, epoch, repository, workflow_id, source_floor):
     return {"schema": SCHEMA, "epoch": epoch, "repository": repository,
             "workflow_id": workflow_id, "source_floor": deepcopy(source_floor),
             "generation": 0, "inventory_frontier": source_floor["created_at"],
-            "windows": [], "gaps": [], "runs": {}, "seen_events": {}}
+            "windows": [], "gaps": [], "runs": {}, "seen_events": {},
+            "metadata_scan": {"round": 0, "active": None, "errors": {}}}
+
+
+def _scan_start(state, data):
+    closed(data, {"round", "run_ids"})
+    scan = state["metadata_scan"]
+    require(scan["active"] is None and type(data["round"]) is int and data["round"] == scan["round"],
+            "metadata scan round is already active or not next")
+    expected = sorted({record["identity"]["run_id"] for record in state["runs"].values()})
+    require(isinstance(data["run_ids"], list) and bool(expected)
+            and all(type(v) is int for v in data["run_ids"]) and data["run_ids"] == expected,
+            "metadata scan must freeze the complete known run-id set")
+    scan["active"] = {"run_ids": expected, "position": 0}
+
+
+def _scan_result(state, data):
+    closed(data, {"round", "position", "run_id", "outcome"})
+    scan, outcome = state["metadata_scan"], data["outcome"]
+    active = scan["active"]
+    require(active is not None and type(data["round"]) is int and data["round"] == scan["round"]
+            and type(data["position"]) is int and data["position"] == active["position"]
+            and type(data["run_id"]) is int and data["run_id"] == active["run_ids"][active["position"]],
+            "metadata receipt is not the frozen current scan position")
+    require(isinstance(outcome, dict) and isinstance(outcome.get("status"), str)
+            and outcome["status"] in {"observed", "unresolved"}, "unknown metadata outcome")
+    key = str(data["run_id"])
+    if outcome["status"] == "observed":
+        closed(outcome, {"status", "created_at", "latest_attempt", "receipt_digest"})
+        positive(outcome["latest_attempt"])
+        hex_value(outcome["receipt_digest"], 64)
+        original = state["runs"][key + "/1"]
+        require(outcome["created_at"] == original["created_at"], "metadata changed original run creation time")
+        require(all(f"{key}/{attempt}" in state["runs"] for attempt in range(1, outcome["latest_attempt"] + 1)),
+                "metadata progress would omit a discovered later attempt")
+        require(outcome["latest_attempt"] >= max(record["identity"]["attempt"] for record in state["runs"].values()
+                                                if record["identity"]["run_id"] == data["run_id"]),
+                "metadata latest attempt regressed")
+        scan["errors"].pop(key, None)
+    else:
+        closed(outcome, {"status", "why", "remedy"})
+        text(outcome["why"])
+        text(outcome["remedy"])
+        scan["errors"][key] = deepcopy(outcome)
+    # Error is a persisted obligation, not a successful metadata observation.
+    # Advance the frozen position so a bad API response cannot starve siblings.
+    active["position"] += 1
+    if active["position"] == len(active["run_ids"]):
+        scan["active"] = None
+        scan["round"] += 1
 
 
 def _overlap(a, b):
@@ -237,7 +286,8 @@ def reduce(state, event):
                 "event identity was reused with different complete content")
         return deepcopy(state)
     require(type(event["generation"]) is int and event["generation"] == state["generation"], "discovery event generation is not next")
-    handlers = {"inventory": _inventory, "inventory-gap": _gap, "attempt": _attempt, "disposition": _disposition}
+    handlers = {"inventory": _inventory, "inventory-gap": _gap, "attempt": _attempt, "disposition": _disposition,
+                "metadata-start": _scan_start, "metadata-result": _scan_result}
     require(isinstance(event["type"], str) and event["type"] in handlers, "unknown discovery event type")
     result = deepcopy(state)
     handlers[event["type"]](result, event["data"])
@@ -261,6 +311,7 @@ def summary(state):
     return {"inventory_frontier": state["inventory_frontier"],
             "inventory_gaps": deepcopy(state["gaps"]),
             "latest_inventory_end": max([state["inventory_frontier"], *[w["end"] for w in state["windows"]]]),
+            "metadata_scan": deepcopy(state["metadata_scan"]),
             "unresolved": unresolved,
             "retention_lost": [key for key, value in unresolved.items() if value["status"] == "retention-lost"],
             "queued_failures": {key: value["proof"]["outbox_key"] for key, value in state["runs"].items()
