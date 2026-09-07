@@ -1056,8 +1056,10 @@ void test_all_operations_share_one_facade_and_revision_contract() {
           "assets",
           "patterns",
           "sequence_settings",
+          "pattern_slots",
+          "performances",
       });
-  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v3");
+  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v4");
   LMDJ_CHECK(projected.at("revision") == 5);
   LMDJ_CHECK(projected.at("patterns").at(kPatternId).at("events").size() == 4);
 

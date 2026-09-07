@@ -199,7 +199,7 @@ foundation::Result<ProjectState> create_project(
   }
 
   ProjectState state{
-      ProjectContract::v3,
+      ProjectContract::v4,
       std::move(id),
       0,
       bpm,

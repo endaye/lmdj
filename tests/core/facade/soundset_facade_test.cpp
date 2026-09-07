@@ -235,11 +235,10 @@ std::string uuid(std::uint32_t ordinal) {
   return value;
 }
 
-// A Project the Sound Set path can actually write: `InstallSoundSet` requires
-// `lmdj.project.v4` Project Truth, and a Facade-created Project is persisted
-// as v3 until a v4-only command lands, so the Pattern Slot assignment here is
-// the ordinary product path onto v4, not test scaffolding.
-std::filesystem::path create_v4_project(
+// A Facade-created Project is `lmdj.project.v4` from its first persist, so a
+// Sound Set installs into it with no intervening command. This is the path a
+// first-run user takes.
+std::filesystem::path create_project(
     Application& application,
     const std::filesystem::path& root,
     std::uint32_t ordinal) {
@@ -253,15 +252,6 @@ std::filesystem::path create_v4_project(
                      Pattern{pattern_id, 1, {}},
                  })
                  .has_value());
-  const auto assigned = application.command({
-      {"operation", "pattern.slot.assign"},
-      {"project_path", project.generic_string()},
-      {"command_id", uuid(ordinal + 2)},
-      {"expected_revision", 0},
-      {"pattern_slot", 0},
-      {"pattern_id", pattern_id.value()},
-  });
-  LMDJ_CHECK(assigned.at("ok").get<bool>());
   return project;
 }
 
@@ -682,7 +672,7 @@ void test_unsupported_audio_is_refused_with_zero_project_change() {
           flatten_fixture_corpus(temp)),
       source));
   LMDJ_CHECK(catalog_list(application).at("ok").get<bool>());
-  const auto project = create_v4_project(application, temp.path(), 0x100);
+  const auto project = create_project(application, temp.path(), 0x100);
   const auto before = inspect_project(application, project);
 
   const auto inspected =
@@ -719,7 +709,7 @@ void test_a_policy_cannot_narrow_the_audio_decision() {
           flatten_fixture_corpus(temp)),
       source));
   LMDJ_CHECK(catalog_list(application).at("ok").get<bool>());
-  const auto project = create_v4_project(application, temp.path(), 0x800);
+  const auto project = create_project(application, temp.path(), 0x800);
 
   // Occupy the three Pads the Unsupported Audio Kit proposes, using a Set
   // whose own audio is fine.
@@ -858,7 +848,7 @@ void test_a_failing_transport_leaves_cached_sets_usable() {
   LMDJ_CHECK(
       refusal_reason(listing, kTamperedSetId) == "catalog_unavailable");
 
-  const auto project = create_v4_project(offline, temp.path(), 0x900);
+  const auto project = create_project(offline, temp.path(), 0x900);
   const auto installed = offline.command(install_request(
       project,
       uuid(0x910),
@@ -882,7 +872,7 @@ void test_map_preview_is_index_identity_and_changes_nothing() {
           flatten_fixture_corpus(temp)),
       source));
   LMDJ_CHECK(catalog_list(application).at("ok").get<bool>());
-  const auto project = create_v4_project(application, temp.path(), 0x200);
+  const auto project = create_project(application, temp.path(), 0x200);
   const auto before = inspect_project(application, project);
 
   const auto previewed =
@@ -924,7 +914,7 @@ void test_install_policies_write_the_three_write_sets() {
           flatten_fixture_corpus(temp)),
       source));
   LMDJ_CHECK(catalog_list(application).at("ok").get<bool>());
-  const auto project = create_v4_project(application, temp.path(), 0x300);
+  const auto project = create_project(application, temp.path(), 0x300);
 
   // The Attribution Kit occupies Pads 0..3 of an empty Bank, so this install
   // needs no policy at all.
@@ -1060,7 +1050,7 @@ void test_audition_reaches_both_s11_d5_layers() {
       source));
   LMDJ_CHECK(catalog_list(application).at("ok").get<bool>());
 
-  const auto project = create_v4_project(application, temp.path(), 900);
+  const auto project = create_project(application, temp.path(), 900);
   const auto before = inspect_project(application, project);
 
   // Layer one: the set-level demo, a standalone 48 kHz stereo blob that no
@@ -1232,7 +1222,7 @@ void test_the_workspace_local_catalog_serves_a_host_with_no_injection() {
           .at("ok")
           .get<bool>());
 
-  const auto project = create_v4_project(application, temp.path(), 0xa00);
+  const auto project = create_project(application, temp.path(), 0xa00);
   const auto installed = application.command(install_request(
       project,
       uuid(0xa10),

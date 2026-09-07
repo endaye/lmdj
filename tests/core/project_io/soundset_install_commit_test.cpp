@@ -21,25 +21,31 @@
 #include <picosha2.h>
 
 #include <lmdj/domain/command_handler.hpp>
+#include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/project_store.hpp>
 
 #include "packages/project-io/src/testing_hooks.hpp"
+#include "tests/core/support/legacy_project.hpp"
 #include "tests/core/support/test.hpp"
 
 namespace {
 
 using lmdj::domain::AssetLineage;
 using lmdj::domain::CommandMeta;
+using lmdj::domain::PadPlayback;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::ProjectContract;
 using lmdj::domain::SoundSetInstallLineageDerivation;
 using lmdj::domain::SoundSetLineageSource;
+using lmdj::domain::TriggerMode;
+using lmdj::domain::UpdatePadPlayback;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::ProjectId;
 using lmdj::project_io::ProjectStore;
 using lmdj::project_io::testing::FaultPoint;
+using lmdj::test::downgrade_checkpoint_zero_to_v3;
 
 constexpr std::uint8_t kBank = 2;
 constexpr const char* kSetId = "30000000-0000-4000-8000-000000000009";
@@ -141,10 +147,12 @@ std::string digest_of(const std::vector<std::byte>& bytes) {
 }
 
 lmdj::domain::ProjectState new_v4_project() {
+  // create_project already declares lmdj.project.v4; the assertion keeps this
+  // fixture honest if that ever stops being true.
   auto project =
       lmdj::domain::create_project(ProjectId{test_uuid("project")}, 120);
   LMDJ_CHECK(project.has_value());
-  project.value().contract = ProjectContract::v4;
+  LMDJ_CHECK(project.value().contract == ProjectContract::v4);
   return project.value();
 }
 
@@ -392,17 +400,60 @@ void test_install_refuses_before_it_changes_anything() {
   LMDJ_CHECK(std::filesystem::is_empty(bundle / "history/transactions"));
 
   // A v3 Project has no Lineage carrier at all, so the install fails closed.
+  // The fixture has to be downgraded on disk: a Project this Build creates
+  // declares v4 and installs without a promoting command first.
   TempDirectory legacy_temp("legacy");
   const auto legacy_bundle = legacy_temp.path() / "project.lmdj";
-  auto legacy_project =
-      lmdj::domain::create_project(ProjectId{test_uuid("project")}, 120);
-  LMDJ_CHECK(legacy_project.has_value());
-  LMDJ_CHECK(store.create(legacy_bundle, legacy_project.value()).has_value());
+  LMDJ_CHECK(store.create(legacy_bundle, new_v4_project()).has_value());
+  downgrade_checkpoint_zero_to_v3(legacy_bundle);
+  const auto legacy_opened = store.load(legacy_bundle);
+  LMDJ_CHECK(legacy_opened.has_value());
+  LMDJ_CHECK(legacy_opened.value().contract == ProjectContract::v3);
   auto legacy = install_fixture("legacy-install", 0);
   const auto refused = store.install_soundset(legacy_bundle, legacy.request);
   LMDJ_CHECK(!refused.has_value());
   LMDJ_CHECK(refused.error().code == ErrorCode::invalid_argument);
   LMDJ_CHECK(std::filesystem::is_empty(legacy_bundle / "assets"));
+}
+
+void test_a_promoted_v3_project_still_reopens_after_an_install() {
+  // Installing a Sound Set is a v4-only command, and a Project promoted to v4
+  // by an earlier persist still has a v3 checkpoint zero. Reopening it replays
+  // that install, so the replay has to start at the Contract level the head
+  // checkpoint declares rather than at checkpoint zero's.
+  TempDirectory temp("promoted-reopen");
+  const auto bundle = temp.path() / "project.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_v4_project()).has_value());
+  downgrade_checkpoint_zero_to_v3(bundle);
+  const auto opened = store.load(bundle);
+  LMDJ_CHECK(opened.has_value());
+  LMDJ_CHECK(opened.value().contract == ProjectContract::v3);
+
+  const auto promoted = store.execute(
+      bundle,
+      UpdatePadPlayback{
+          CommandMeta{CommandId{test_uuid("promote-before-install")}, 0},
+          PadSlotId{3, 3},
+          PadPlayback{4, 12, TriggerMode::gate, 6000, true},
+      });
+  LMDJ_CHECK(promoted.has_value());
+  LMDJ_CHECK(promoted.value().state.contract == ProjectContract::v4);
+
+  auto fixture = install_fixture("promoted-install", 1);
+  const auto installed = store.install_soundset(bundle, fixture.request);
+  LMDJ_CHECK(installed.has_value());
+  LMDJ_CHECK(installed.value().state.revision == 2);
+
+  const auto reopened = store.load(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value() == installed.value().state);
+  LMDJ_CHECK(reopened.value().contract == ProjectContract::v4);
+  for (const auto& slot : fixture.request.slots) {
+    LMDJ_CHECK(
+        reopened.value().banks.at(kBank).at(slot.slot.pad).asset_id ==
+        slot.asset_id);
+  }
 }
 
 }  // namespace
@@ -413,6 +464,7 @@ int main() {
     test_replayed_command_id_returns_the_stored_receipt();
     test_faults_before_publication_preserve_every_project_truth_projection();
     test_install_refuses_before_it_changes_anything();
+    test_a_promoted_v3_project_still_reopens_after_an_install();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

@@ -414,7 +414,11 @@ nlohmann::json pattern_json(const domain::Pattern& pattern) {
   return encoded;
 }
 
-domain::ProjectState persisted_projection(
+// The canonical persisted shape of a state, leaving its Contract level alone.
+// The load path compares a replayed state against the head checkpoint at
+// whatever level that checkpoint declares, including a level an older Build
+// wrote, so the Contract decision does not belong here.
+domain::ProjectState canonical_projection(
     const domain::ProjectState& state) {
   auto projected = state;
   if (projected.contract == domain::ProjectContract::v1 ||
@@ -422,11 +426,6 @@ domain::ProjectState persisted_projection(
     projected.quantize_enabled = true;
     projected.swing_percent = 50;
   }
-  projected.contract =
-      projected.contract == domain::ProjectContract::v4 ||
-              !projected.performances.empty()
-          ? domain::ProjectContract::v4
-          : domain::ProjectContract::v3;
   for (auto& [id, pattern] : projected.patterns) {
     (void)id;
     pattern.events = domain::merge_pattern_events({}, pattern.events);
@@ -436,6 +435,17 @@ domain::ProjectState persisted_projection(
     performance.events =
         domain::canonical_performance_events(performance.events);
   }
+  return projected;
+}
+
+// Every Project this Build persists is written as lmdj.project.v4, so a
+// Project's Contract level never has to be inferred from its command history.
+// An existing v3 Project on disk still loads at v3 and is promoted to v4 the
+// first time it is persisted; nothing is rewritten merely by opening it.
+domain::ProjectState persisted_projection(
+    const domain::ProjectState& state) {
+  auto projected = canonical_projection(state);
+  projected.contract = domain::ProjectContract::v4;
   return projected;
 }
 
@@ -2331,6 +2341,11 @@ foundation::Result<LoadedProject> load_project(
         {},
         {},
     };
+    // The head checkpoint, not the replayed command history, states a
+    // Project's Contract level: a Project promoted to v4 by an earlier persist
+    // still replays from a v3 checkpoint zero, and a v4-only command in that
+    // history has to replay against v4 Project Truth.
+    loaded.state.contract = checkpoint.value().contract;
     for (const auto& encoded_path : manifest.at("transactions")) {
       const auto relative =
           std::filesystem::path{encoded_path.get<std::string>()};
@@ -2447,7 +2462,7 @@ foundation::Result<LoadedProject> load_project(
               manifest_path));
     }
 
-    if (checkpoint.value() != persisted_projection(loaded.state) ||
+    if (checkpoint.value() != canonical_projection(loaded.state) ||
         (checkpoint_is_current &&
          foundation::canonical_json(checkpoint_json.value()) !=
              foundation::canonical_json(project_json(loaded.state)))) {
@@ -3089,12 +3104,17 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
   }
 
-  const auto encoded_state = project_json(applied.value().state);
+  // Every Project this Build persists is written as lmdj.project.v4, so an
+  // existing v3 Project is promoted on its first persist. Promote the state
+  // being committed, not just the bytes, so the checkpoint on disk, the state
+  // returned to the caller, and the next load all agree on the Contract level.
+  auto committed = applied.value();
+  committed.state = persisted_projection(committed.state);
+  const auto encoded_state = project_json(committed.state);
   const auto validated_state =
       parse_project(encoded_state, bundle / "manifest.json");
   if (!validated_state.has_value() ||
-      validated_state.value() !=
-          persisted_projection(applied.value().state)) {
+      validated_state.value() != committed.state) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -3190,7 +3210,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
   }
 
-  const auto revision = applied.value().state.revision;
+  const auto revision = committed.state.revision;
   const auto transaction_relative =
       std::filesystem::path{"history/transactions"} /
       (std::to_string(revision) + "-" +
@@ -3203,7 +3223,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
 
   nlohmann::json transaction = {
       {"command", command_json(command)},
-      {"event", applied.value().event},
+      {"event", committed.event},
       {"revision", revision},
   };
   if (sequence_flush_identity.has_value()) {
@@ -3251,7 +3271,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   }
 
   const auto checkpoint_bytes =
-      foundation::canonical_json(project_json(applied.value().state)) + "\n";
+      foundation::canonical_json(project_json(committed.state)) + "\n";
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
   if (sequence_flush_identity.has_value() ||
       performance_flush_identity.has_value() || performance_truth_command) {
@@ -3356,7 +3376,8 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
   }
 
-  return applied;
+  return foundation::Result<domain::AppliedCommand>::success(
+      std::move(committed));
 }
 
 foundation::Result<void> create_bundle_directories(
@@ -3777,6 +3798,10 @@ foundation::Result<void> ProjectStore::create(
             "project bundle must end in .lmdj and start at revision zero",
         });
   }
+  // The Contract level of `initial` does not survive: every Project this Build
+  // persists is written as lmdj.project.v4. A caller that wants a v3 Project on
+  // disk has to write one, which is what tests/core/support/legacy_project.hpp
+  // is for.
   const auto persisted_initial = persisted_projection(initial);
   const auto encoded = project_json(persisted_initial);
   const auto validated = parse_project(encoded, bundle);

@@ -18,7 +18,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <DiagramFrame title="LMDJ Headless Core" diagramId="lmdj-core" />
 
-Foundation 提供基础与 Sequence identity；Authoring Domain 通过 `lmdj.project.v3` 拥有 tick-native Project Truth；Project I/O 读取旧 Project 并只写 v3，原子发布 Sample/Sequence mutation、receipt 与 portable Bundle；Project Cooker 生成不可变 Runtime Snapshot；Audio Runtime 消费 prepared bank 并发布整数 transport；Provider SDK 隔离 Capability/Attempt；Application Facade 是 Host 唯一 Core 入口；Web Runtime Platform 复用 frame-stamped input、Sequence、Voice/Bar state 与 AudioWorklet 接线。
+Foundation 提供基础与 Sequence identity；Authoring Domain 通过 `lmdj.project.v4` 拥有 tick-native Project Truth；Project I/O 读取旧 Project 并只写 v4——打开不改写，首次持久化时提升——原子发布 Sample/Sequence mutation、receipt 与 portable Bundle；Project Cooker 生成不可变 Runtime Snapshot；Audio Runtime 消费 prepared bank 并发布整数 transport；Provider SDK 隔离 Capability/Attempt；Application Facade 是 Host 唯一 Core 入口；Web Runtime Platform 复用 frame-stamped input、Sequence、Voice/Bar state 与 AudioWorklet 接线。
 
 ## 边界不变量
 

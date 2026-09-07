@@ -1007,8 +1007,9 @@ def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
     assert empty["error"]["code"] == "MISSING_ASSET"
     assert empty["error"]["details"] == {}
 
-    # A Sound Set install needs lmdj.project.v4 Project Truth, which a Pattern
-    # Slot assignment establishes.
+    # A Project the CLI creates is lmdj.project.v4 from its first persist, so
+    # a Sound Set installs into it with no intervening command: this is the
+    # path a first-run user takes.
     project = temp_root / "soundset-beat.lmdj"
     run_request(
         executable,
@@ -1026,19 +1027,6 @@ def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
             },
         },
     )
-    run_request(
-        executable,
-        workspace,
-        "command",
-        {
-            "operation": "pattern.slot.assign",
-            "project_path": str(project),
-            "command_id": uuid(902),
-            "expected_revision": 0,
-            "pattern_slot": 0,
-            "pattern_id": uuid(901),
-        },
-    )
 
     previewed = run_request(
         executable,
@@ -1053,7 +1041,7 @@ def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
             "manifest_sha256": FOUNDRY_MANIFEST,
         },
     )
-    check_success(previewed, 1)
+    check_success(previewed, 0)
     assert len(previewed["result"]["proposed"]) == 11
     assert previewed["result"]["collisions"] == []
     assert previewed["result"]["kept"] == [10, 11, 13, 14, 15]
@@ -1066,14 +1054,14 @@ def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
             "operation": "soundset.install",
             "project_path": str(project),
             "command_id": uuid(903),
-            "expected_revision": 1,
+            "expected_revision": 0,
             "bank_id": 2,
             "set_id": FOUNDRY_SET_ID,
             "version": "1.0.0",
             "manifest_sha256": FOUNDRY_MANIFEST,
         },
     )
-    check_success(installed, 2)
+    check_success(installed, 1)
     assert len(installed["result"]["installed"]) == 11
 
     projected = run_request(
@@ -1082,7 +1070,7 @@ def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
         "query",
         {"operation": "project.inspect", "project_path": str(project)},
     )
-    check_success(projected, 2)
+    check_success(projected, 1)
     pads = projected["result"]["project"]["banks"][2]["pads"]
     assert [pad["pad"] for pad in pads if pad["asset_id"]] == [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12
