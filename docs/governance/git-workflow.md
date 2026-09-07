@@ -205,6 +205,9 @@ Prepare, one exact tag push, Draft creation, protected publication, each Host
 deployment and Channel promotion are separate authorization and verification
 boundaries. Follow the canonical policy's current asset inventory, signatures,
 profile and historical exceptions rather than duplicating them here.
+The [Web Host release and deployment policy](version-management.md) is
+authoritative for the release profile, signed asset inventory, independent Host
+deployments, and immutable historical exceptions.
 Publication never implicitly fans out to deployments.
 
 Keep Product Build allocation reviewable and separate from unrelated feature /
