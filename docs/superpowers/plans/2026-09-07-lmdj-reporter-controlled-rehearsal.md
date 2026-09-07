@@ -1,6 +1,6 @@
 # Temporary controlled reporter rehearsal
 
-Status: local preparation only; no remote run or live acceptance yet.
+Status: first remote drill failed; repaired exact-commit repeat pending.
 Base: `d360d3805f21a18ec75d86bb0fc69cda747e9d9d`.
 Branch: `feat/ci-report-controlled-rehearsal`. NEVER merge this branch into main.
 
@@ -32,7 +32,7 @@ branch name and attempt 1. It uses the normal reporter concurrency lock; this
 short bounded drill may briefly delay another report, but cannot replace or
 cancel it. No schedule or workflow_run event selects the rehearsal job.
 
-Checkout trusted production reporter at the immutable base above, and the
+Checkout reviewed reporter fix `d890a593d5882f2cfe947746adc8623b2b838e3c`, and the
 reviewed harness at this dispatch's exact github.sha into separate paths with
 persist-credentials disabled. The genuine Actions GITHUB_TOKEN gets only
 contents:read and issues:write. No token is retrieved from a local gh session,
@@ -54,7 +54,7 @@ Report objects, not fabricated verdicts, target identities or test results.
    permission-denial measurement.
 5. Retry explicitly; a third comment appears. Repeat adds nothing.
 6. Persist a real fourth comment, locally discard its success response and
-   raise transport error. Original transaction retry rereads GitHub, returns
+   raise transport error. Fixed reporter read-only reconciliation reads GitHub, returns
    duplicate, and comments remain exactly 4.
 7. A second isolated bucket repeats lost-response recovery for issue creation.
    Exactly two issues exist, and each observation marker appears exactly once.
@@ -96,6 +96,23 @@ whitespace check pass. One combined-test mock identity leak initially issued
 read-only repository GETs using a fixed invalid test token (HTTP 401, no writes).
 The test now pins its imported module and denies real socket connections;
 the complete rerun passed. No live drill acceptance is claimed.
+
+## First live discovery and repeat
+
+Run 34134692783 failed: an immediate negative label-filtered list after a
+successful real bot POST caused duplicate issues 771/772. Initial cleanup also
+mistook an empty list for closure. Root verified exact ownership and closed
+both at 14:47:06Z/14:47:10Z. Cache versus replication/index delay is unknown.
+The failed record is retained; it is not passing acceptance.
+
+The repeat pins the independently reviewed production fix above (also
+cherry-picked into this never-merged branch for source-identical local tests).
+The adapter tracks attempted POST count and known created IDs. Cleanup unions
+known IDs with label discovery, checks exact ownership and closure by direct
+GET, and refuses to claim cleanup when any attempted POST lacks a known issue.
+An always-step JSONL journal preserves that knowledge across cleanup processes.
+This does not guarantee recovery from an unlogged crash or unknown remote ID.
+Use a new dispatch/namespace, never rerun attempt 2.
 
 ## Version Management
 

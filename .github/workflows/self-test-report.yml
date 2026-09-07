@@ -120,7 +120,7 @@ jobs:
       - name: Checkout immutable trusted production reporter
         uses: actions/checkout@v6
         with:
-          ref: d360d3805f21a18ec75d86bb0fc69cda747e9d9d
+          ref: d890a593d5882f2cfe947746adc8623b2b838e3c
           path: trusted
           fetch-depth: 1
           persist-credentials: false
@@ -165,6 +165,7 @@ jobs:
           python3 -S rehearsal/scripts/ci/self_test_report_rehearsal.py \
             --checkout "$GITHUB_WORKSPACE/trusted" --drill-id "$DRILL_ID" \
             --run-id "$GITHUB_RUN_ID" --execute --confirm-repository endaye/lmdj --cleanup \
+            --journal reporter-rehearsal.jsonl \
             2>&1 | tee reporter-rehearsal-cleanup.jsonl
       - name: Publish clearly bounded rehearsal evidence
         if: always()

@@ -112,7 +112,9 @@ class RehearsalHarnessTest(unittest.TestCase):
         self.assertEqual(len(client.issues), 2)
         self.assertEqual(sum(map(len, client.comments.values())), 4)
         self.assertTrue(all(i["state"] == "closed" for i in client.issues.values()))
-        self.assertEqual(sleep.call_args_list, [mock.call(5.0), mock.call(5.0)])
+        # This fake exposes writes immediately; positive receipt needs no backoff.
+        # Delayed-list behavior is covered by the production reporter tests.
+        sleep.assert_not_called()
         stages = [json.loads(line) for line in output.splitlines()]
         refusal = next(row for row in stages if row["stage"] == "injected-refusal")
         self.assertFalse(refusal["request_sent"])
@@ -154,6 +156,21 @@ class RehearsalHarnessTest(unittest.TestCase):
         self.invoke(client, cleanup=True)
         self.assertEqual(before, client.issues)
 
+    def test_negative_list_cannot_hide_known_created_issues_from_cleanup(self):
+        client = FakeClient()
+        with mock.patch.object(client, "list_issues", return_value=[]):
+            with self.assertRaisesRegex(rep.WriteVisibilityError, "visibility unresolved"):
+                self.invoke(client)
+        self.assertEqual(len(client.issues), 1)
+        self.assertTrue(all(issue["state"] == "closed" for issue in client.issues.values()),
+                        "why: a stale empty list cannot erase known POST identities; remedy: verify cleanup by direct issue GET")
+
+    def test_unknown_issue_post_and_empty_discovery_never_claim_cleanup(self):
+        client = FakeClient()
+        with mock.patch.object(client, "create_issue", side_effect=rep.GitHubApiError(0, "unknown POST outcome")):
+            with self.assertRaisesRegex(RuntimeError, "Cleanup unverified"):
+                self.invoke(client)
+
     def test_branch_workflow_separates_authority_and_is_not_a_production_entry(self):
         source = (ROOT / ".github/workflows/self-test-report.yml").read_text()
         original = block(source, "report", 2)
@@ -162,7 +179,7 @@ class RehearsalHarnessTest(unittest.TestCase):
         self.assertIn("github.run_attempt == 1", field(job, "if", 4))
         self.assertIn("refs/heads/feat/ci-report-controlled-rehearsal", field(job, "if", 4))
         self.assertEqual(scalars(block(job, "permissions", 4), 6), {"contents": "read", "issues": "write"})
-        self.assertIn("ref: d360d3805f21a18ec75d86bb0fc69cda747e9d9d", job)
+        self.assertIn("ref: d890a593d5882f2cfe947746adc8623b2b838e3c", job)
         self.assertIn("ref: ${{ github.sha }}", job)
         self.assertEqual(job.count("persist-credentials: false"), 2)
         self.assertIn("--cleanup", job)

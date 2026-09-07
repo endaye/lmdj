@@ -19,7 +19,7 @@ import sys
 import time
 
 REPOSITORY = "endaye/lmdj"
-REPORTER_SHA256 = "7e1bae282bfcb1183873428c0b2de92ecb01ff707cca4539b5be9aa8db6b0a7b"
+REPORTER_SHA256 = "05af7d27d0fbce6302e7106a2e68e09d32bc467a5c41d294b0f318fbe83ceced"
 WARNING = "SYNTHETIC REPORTER DRILL — NOT A PRODUCT FAILURE OR SELF-TEST VERDICT"
 
 
@@ -47,6 +47,8 @@ class IsolatedApi:
         self.fault = None
         self.writes = []
         self.sleeps = []
+        self.known_issues = set()
+        self.issue_post_count = 0
 
     def request(self, method, suffix, body=None):
         return self.client._request(method, self.client._repo(suffix), body=body)
@@ -80,10 +82,13 @@ class IsolatedApi:
                                            for key in self.keys), "Unsafe create_issue input")
         # Two planned buckets only. This does not mask a duplicate: any third
         # create is an explicit failure, while final assertions require two.
-        require(sum(w[0] == "create_issue" for w in self.writes) < 2, "Issue write budget exceeded")
+        require(self.issue_post_count < 2, "Issue write budget exceeded")
+        self.issue_post_count += 1
+        emit("issue-post-started", count=self.issue_post_count)
         result = self.client.create_issue(title=title, body=f"> **{WARNING}**\n\n" + body,
                                           labels=labels, assignees=assignees)
         self.writes.append(("create_issue", result["number"]))
+        self.known_issues.add(int(result["number"]))
         self.owned(result)
         require(self.rep._trusted_marker_author(result),
                 "Real author is not github-actions[bot]/Bot; stop, never rewrite its identity")
@@ -127,12 +132,17 @@ class IsolatedApi:
     def cleanup(self):
         # Recover by dedicated label too, in case a genuine POST response was
         # lost before its issue number reached this process. Never delete.
-        for issue in self.list_issues(label=self.rep.REPORT_LABEL, state="all"):
+        candidates = self.list_issues(label=self.rep.REPORT_LABEL, state="all")
+        numbers = self.known_issues | {int(issue["number"]) for issue in candidates}
+        for number in sorted(numbers):
+            issue = self.get_issue(number)
             if issue["state"] != "closed":
                 self.set_issue_state(issue["number"], "closed")
-        require(all(issue["state"] == "closed" for issue in
-                    self.list_issues(label=self.rep.REPORT_LABEL, state="all")), "Cleanup not verified")
-        emit("cleanup-verified", label=self.label, action="closed-only-label-retained")
+            require(self.get_issue(number)["state"] == "closed", "Direct issue cleanup not verified")
+        require(len(numbers) >= self.issue_post_count,
+                "Cleanup unverified: an issued POST has no confirmed issue identity; inspect this exact drill namespace manually")
+        emit("cleanup-verified" if numbers else "cleanup-no-known-issues",
+             label=self.label, issues=sorted(numbers), action="closed-only-label-retained")
 
 
 def main():
@@ -142,13 +152,14 @@ def main():
     parser.add_argument("--run-id", type=int, required=True, help="actual Actions rehearsal run id, not a self-test run")
     parser.add_argument("--execute", action="store_true", help="explicitly permit real issue/label writes")
     parser.add_argument("--cleanup", action="store_true", help="close only this exact drill's issues")
+    parser.add_argument("--journal", type=Path, help="prior JSONL evidence used only to recover exact created issue numbers")
     parser.add_argument("--confirm-repository", default="")
     args = parser.parse_args()
     require(re.fullmatch(r"[0-9a-f]{12}", args.drill_id), "Invalid drill id")
     require(args.run_id > 0, "Actual rehearsal run id must be positive")
     source = args.checkout / "scripts/ci/self_test_report.py"
     require(hashlib.sha256(source.read_bytes()).hexdigest() == REPORTER_SHA256,
-            "Reporter source differs from reviewed main; stop and re-review")
+            "Reporter source differs from the reviewed fix commit; stop and re-review")
     sys.path.insert(0, str(source.parent.resolve()))
     rep = importlib.import_module("self_test_report")
     emit("plan", repository=REPOSITORY, label=f"self-test-drill-{args.drill_id}", run_id=args.run_id,
@@ -170,6 +181,21 @@ def main():
     require(api.request("GET", "").get("full_name") == REPOSITORY,
             "Repository read must succeed before interpreting an absent label")
     if args.cleanup:
+        if args.journal and args.journal.is_file():
+            for line in args.journal.read_text(encoding="utf-8").splitlines():
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get("stage") == "real-create-issue":
+                    number = row.get("number")
+                    require(type(number) is int and number > 0, "Invalid created-issue journal identity")
+                    api.known_issues.add(number)
+                if isinstance(row, dict) and row.get("stage") == "issue-post-started":
+                    count = row.get("count")
+                    require(type(count) is int and 0 < count <= 2, "Invalid issue POST journal count")
+                    api.issue_post_count = max(api.issue_post_count, count)
+            # Every recovered number still requires a fresh exact ownership GET.
         api.cleanup()
         return 0
     try:
