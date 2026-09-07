@@ -126,6 +126,29 @@ v6.1 下能编过、能点亮屏、能出声”必须作为独立的前置验证
   atomic 路径的干净是同一个事实的两面**：这块板适合先量 atomic 与 callback deadline，
   不适合量内存预算。
 
+### 2.4 手上两件硬件的落点
+
+两件实物都落在 2.2 表的末行，即 ≤4 字节 atomic 走真硬件 S32C1I，只有 64 位仍是全局
+自旋锁加关中断。
+
+| 实物 | 判定依据 |
+| --- | --- |
+| Cardputer Adv | `ESP32-S3FN8` 无封装内 PSRAM，M5Stack 规格也未提供板载 PSRAM |
+| 独立 `ESP-32S` 模组 | 裸 WROOM 级模组，无 PSRAM |
+
+`ESP-32S` 是 Ai-Thinker 的**模组**丝印，不是乐鑫的芯片型号；它在规格与引脚上对应
+Espressif `ESP-WROOM-32`，模组内是经典 ESP32（双核 Xtensa LX6、520 KiB 片上 SRAM），
+常见 4 MiB flash。
+
+“裸模组”这一句是判定的必要部分，不能省。AI-Thinker 的 **ESP32-CAM** 板上贴的模组丝印
+同样是 `ESP32-S`，而那块板带 **4 MiB 外挂 PSRAM**，落在 2.2 表的中间一行。同一丝印、
+相反的 PSRAM 结论，因此丝印必须与实物形态一起读：带 PSRAM 的模组会在丝印上写
+`WROVER`，而 ESP32-CAM 认得出摄像头座子。
+
+外挂 PSRAM 不写 efuse，所以 `esptool.py flash_id` 的 `Features` 行不报告它。首次烧录时
+顺手复核一次即可：开启 `CONFIG_SPIRAM` 的构建，启动日志不应出现 `esp_psram: Found ...`。
+这是零成本的确认，不是阻塞项。
+
 ## 3. 未决线索：Clang 与 IDF-9032
 
 上述 `default` 表达式带 `!IDF_TOOLCHAIN_CLANG`，且注释是 `# TODO IDF-9032`。这是上游的
@@ -157,31 +180,9 @@ component、target 或 CI 通道，本节只描述开发机上的外部工具链
 
 - M5Unified `0.2.21` + M5GFX `0.2.28` 在 v6.1 下对 Cardputer Adv 的实际编译与运行结果。
 - 本 Core 在 `gnu++26` + warnings-as-errors + Picolibc 下的编译结果。
-- 手上那颗独立经典 ESP32 是否带 PSRAM，因而它落入 2.2 表的哪一行。见 5.1。
 - 任何 callback deadline、固件尺寸、峰值内存或 underrun 数字。原文 10.2 节要求的证据一项
   都还没有产生。
 - IDF-9032 的内容与状态。
-
-### 5.1 `ESP-32S` 是模组丝印，不足以判定 PSRAM
-
-手上那颗独立芯片的丝印是 `ESP-32S`。这不是乐鑫的芯片型号，而是 Ai-Thinker 的**模组**
-丝印，规格与引脚同 Espressif `ESP-WROOM-32` 基本一致；模组内是经典 ESP32（双核
-Xtensa LX6、520 KiB 片上 SRAM），常见 4 MiB flash。
-
-关键歧义：AI-Thinker 的 **ESP32-CAM** 板上贴的也是丝印为 `ESP32-S` 的模组，而那块板带
-**4 MiB 外部 PSRAM**。同一丝印因此对应 2.2 表的两行：
-
-| 实物 | 落在 2.2 表 | ≤4 字节 atomic |
-| --- | --- | --- |
-| 裸 `ESP-32S` / `ESP-WROOM-32` 模组或 DevKit（无 PSRAM） | 末行 | 真硬件 S32C1I |
-| ESP32-CAM（外挂 4 MiB PSRAM） | 中间行 | 开 SPIRAM 后退化为函数调用 + 地址判断 |
-
-丝印与模组外观都不足以定论，必须在设备上读。外挂 PSRAM 不写 efuse，因此
-`esptool.py -p <port> flash_id` 的 `Features` 行不会报告它，只能确认芯片型号、revision
-与 flash 容量。定论方式是烧一个开启 `CONFIG_SPIRAM` 的固件并读启动日志：出现
-`esp_psram: Found ...` 即有 PSRAM，检测失败即无。
-
-在做出这一判定之前，不得把这颗芯片上的任何 atomic 或时序测量结果归因到 2.2 表的某一行。
 
 ## 6. 版本与文档
 
