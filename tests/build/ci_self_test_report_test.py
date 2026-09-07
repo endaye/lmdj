@@ -274,6 +274,64 @@ def report(api, run_id=100, **kwargs):
     return rep.report_run(api, run_id, repository=REPO, assignee="maintainer", sleep=sleep, **kwargs)
 
 
+def full_legacy_api(*, failed="creator", attempt=1):
+    """Actual 16-suite aggregate with a manual exact-target candidate identity."""
+    protocol = rep.self_test
+    document = json.loads((ROOT / "scripts/ci/self_test_policy.json").read_text())
+    policy = protocol.parse_policy(document)
+    identity = protocol.Identity(protocol.EVIDENCE_SCHEMA, "candidate", CONTROL, TARGET, 100, attempt, policy.revision)
+    observations = [protocol.Observation(s.id, job, 100, attempt, TARGET,
+                    "failure" if s.id == failed else "success") for s in policy.suites for job in s.jobs]
+    verdict = protocol.aggregate(identity, policy, observations)
+    payload = verdict.as_document()
+    payload["evidence_digest"] = verdict.digest
+    api = FakeGitHubApi().with_batch(document=payload, run=run_document(attempt=attempt, event="workflow_dispatch"))
+    api.policies[CONTROL] = document
+    return api
+
+
+class ReadOnlyPlanTest(unittest.TestCase):
+    def test_full_16_suite_manual_candidate_plan_does_not_write(self):
+        api = full_legacy_api()
+        metadata, planned = rep.plan_run(api, 100, attempt=1, repository=REPO, sleep=Sleep())
+        self.assertEqual(len(api.policies[CONTROL]["suites"]), 16)
+        self.assertEqual(metadata.target, TARGET)
+        self.assertEqual(metadata.verdict_status, "failed")
+        self.assertEqual(metadata.outcomes, [])
+        self.assertEqual([p.key for p in planned], ["self-test-creator-test-failure"])
+        self.assertFalse(api.issues)
+        self.assertFalse(any(c[0] in ("create_issue", "create_comment", "set_issue_state") for c in api.calls))
+
+    def test_later_attempt_is_not_substituted_for_requested_attempt(self):
+        api = full_legacy_api(attempt=2)
+        with self.assertRaisesRegex(rep.ReportingError, "run/attempt differs"):
+            rep.plan_run(api, 100, attempt=1, repository=REPO, sleep=Sleep())
+        self.assertFalse(api.issues)
+
+    def test_explicit_second_attempt_retains_its_own_report_identity(self):
+        api = full_legacy_api(attempt=2)
+        _, planned = rep.plan_run(api, 100, attempt=2, repository=REPO, sleep=Sleep())
+        self.assertIn("100/2/creator", planned[0].observation)
+
+    def test_one_missing_required_suite_is_not_an_accepted_full_verdict(self):
+        api = full_legacy_api()
+        document = rep.read_verdict_zip(api.blobs[1000])
+        document["suites"].pop()
+        document["evidence_digest"] = rep.document_digest({k:v for k,v in document.items() if k != "evidence_digest"})
+        api.blobs[1000] = verdict_zip(document)
+        with self.assertRaises(rep.ReportingError):
+            rep.plan_run(api, 100, attempt=1, repository=REPO, sleep=Sleep())
+        self.assertFalse(api.issues)
+
+    def test_plan_of_incomplete_batch_keeps_diagnostic_without_post(self):
+        api = full_legacy_api()
+        api.artifacts[100] = []
+        metadata, planned = rep.plan_run(api, 100, attempt=1, repository=REPO, sleep=Sleep())
+        self.assertEqual(metadata.verdict_status, "incomplete")
+        self.assertEqual(planned[0].key, "self-test-batch-incomplete")
+        self.assertFalse(api.issues)
+
+
 class DetectionTest(unittest.TestCase):
     def test_a_failed_batch_without_an_artifact_is_an_incomplete_batch(self) -> None:
         api = FakeGitHubApi(runs={100: run_document(100)}, artifacts={100: [{"id": 1, "name": "ci-scope-" + TARGET}]})

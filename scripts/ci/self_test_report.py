@@ -901,8 +901,7 @@ class RunReport:
     error: str | None = None
 
 
-def _batch_problem(api: GitHubApi, run: RunView, why: str, *, assignee: str,
-                    sleep: Callable[[float], None]) -> RunReport:
+def _batch_problem(run: RunView, why: str) -> tuple[RunReport, tuple[Report, ...]]:
     report = Report(
         key="self-test-batch-incomplete", title="self-test: batch evidence incomplete",
         observation=f"{run.id}/{run.attempt}/batch/incomplete", severity="medium",
@@ -914,39 +913,60 @@ def _batch_problem(api: GitHubApi, run: RunView, why: str, *, assignee: str,
         detail="```text\n" + sanitize(why) + "\n```",
     )
     result = RunReport(run.id, verdict_status="incomplete")
-    result.outcomes.append(apply_report(api, report, assignee=assignee, sleep=sleep))
-    return result
+    return result, (report,)
 
 
 def report_run(api: GitHubApi, run_id: int, *, repository: str, assignee: str,
                sleep: Callable[[float], None]) -> RunReport:
-    """Report one completed run. Not a self-test -> skipped with the reason."""
+    """Legacy writer retained until the atomic T5 workflow cutover."""
+    result, planned = _plan_run(api, run_id, repository=repository, sleep=sleep)
+    for report in planned:
+        result.outcomes.append(apply_report(api, report, assignee=assignee, sleep=sleep))
+    return result
+
+
+def plan_run(api: GitHubApi, run_id: int, *, attempt: int, repository: str,
+             sleep: Callable[[float], None]) -> tuple[RunReport, tuple[Report, ...]]:
+    """Read one exact completed legacy attempt; never perform a business write.
+
+    The live workflow still uses report_run until T5. New callers must persist
+    these reports through report_outbox, not invoke apply_report directly.
+    """
+    if type(run_id) is not int or run_id <= 0 or type(attempt) is not int or attempt <= 0:
+        raise ReportingError(_diagnostic("legacy report lacks an exact run/attempt", "supply positive integer run-id and attempt"))
+    return _plan_run(api, run_id, repository=repository, sleep=sleep, attempt=attempt)
+
+
+def _plan_run(api: GitHubApi, run_id: int, *, repository: str,
+              sleep: Callable[[float], None], attempt: int | None = None) -> tuple[RunReport, tuple[Report, ...]]:
     result = RunReport(run_id)
     run_document = with_retry(lambda: api.get_run(run_id), sleep=sleep)
     assert isinstance(run_document, dict)
     run = parse_run(run_document)
+    if run.id != run_id or (attempt is not None and run.attempt != attempt):
+        raise ReportingError(_diagnostic("legacy run/attempt differs from the requested identity", "inspect the exact completed attempt; never combine a later rerun with older artifacts"))
     reason = classify_run(run, repository=repository)
     if reason is not None:
         result.skipped = reason
-        return result
+        return result, ()
     workflow = with_retry(api.get_workflow, sleep=sleep)
     if (workflow.get("id") != run.workflow_id or workflow.get("path") != run.workflow_path):
         result.skipped = "run workflow identity does not match the trusted Core CI workflow"
-        return result
+        return result, ()
     control_history = with_retry(lambda: api.compare(run.head_sha, "main"), sleep=sleep)
     if control_history.get("status") not in ("ahead", "identical"):
         result.skipped = "control revision is not in main history"
-        return result
+        return result, ()
     producer_history = with_retry(lambda: api.compare(PRODUCER_REVISION, run.head_sha), sleep=sleep)
     if producer_history.get("status") == "behind":
         result.skipped = f"control revision predates self-test producer {PRODUCER_REVISION[:12]}"
-        return result
+        return result, ()
     if producer_history.get("status") not in ("ahead", "identical"):
         result.error = _diagnostic(
             "control revision has no verified ancestry from the deployed self-test producer "
             f"(compare status={producer_history.get('status')!r})",
             "verify the producer boundary and GitHub ancestry response, then retry this run's report")
-        return result
+        return result, ()
     artifacts = with_retry(lambda: api.list_artifacts(run.id), sleep=sleep)
     assert isinstance(artifacts, list)
     found = find_verdict_artifact(artifacts, run=run)
@@ -962,7 +982,7 @@ def report_run(api: GitHubApi, run_id: int, *, repository: str, assignee: str,
             if ancestry.get("status") not in ("ahead", "identical"):
                 raise ReportingError("skip target is not in current main history")
             result.skipped = "verified unchanged-target schedule skip"
-            return result
+            return result, ()
         requests = [artifact for artifact in artifacts
                     if artifact.get("name") == f"self-test-request-{run.id}-{run.attempt}"
                     and not artifact.get("expired", False)]
@@ -986,7 +1006,7 @@ def report_run(api: GitHubApi, run_id: int, *, repository: str, assignee: str,
                         " Requested target is not in main history; resolver failed closed.")
             else:
                 why += " Requested target is invalid; resolver failed closed."
-            return _batch_problem(api, run, why, assignee=assignee, sleep=sleep)
+            return _batch_problem(run, why)
         jobs = with_retry(lambda: api.list_jobs(run.id, run.attempt), sleep=sleep)
         verdict_jobs = [job for job in jobs if job.get("name") == "Self-test verdict"]
         # Compatibility schedules and dispatches do not select the new
@@ -998,11 +1018,11 @@ def report_run(api: GitHubApi, run_id: int, *, repository: str, assignee: str,
                                   and job.get("conclusion") not in ("success", "skipped") for job in jobs)
             if run.conclusion not in ("success", "neutral") and (not jobs or resolver_failed):
                 result.error = "control run never produced request/job evidence; inspect this unclassified startup failure"
-                return result
+                return result, ()
             result.skipped = "compatibility run did not select self-test execution"
-            return result
-        return _batch_problem(api, run, "No current-attempt verdict or verified skip artifact; "
-                              f"run conclusion={run.conclusion}", assignee=assignee, sleep=sleep)
+            return result, ()
+        return _batch_problem(run, "No current-attempt verdict or verified skip artifact; "
+                              f"run conclusion={run.conclusion}")
     artifact_id, target = found
     payload = with_retry(lambda: api.download_artifact(artifact_id), sleep=sleep)
     assert isinstance(payload, bytes)
@@ -1013,9 +1033,7 @@ def report_run(api: GitHubApi, run_id: int, *, repository: str, assignee: str,
     verdict = parse_verdict(read_verdict_zip(payload), run=run, target=target, policy=policy)
     result.verdict_status = verdict.status
     result.target = target
-    for report in plan_reports(verdict, run):
-        result.outcomes.append(apply_report(api, report, assignee=assignee, sleep=sleep))
-    return result
+    return result, plan_reports(verdict, run)
 
 
 def reconcile_recent(api: GitHubApi, *, repository: str, assignee: str, sleep: Callable[[float], None],
