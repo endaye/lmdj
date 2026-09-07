@@ -18,6 +18,20 @@ From the repository root, run the automated gate:
 scripts/web-runtime-lab.sh test
 ```
 
+### What this automated gate proves
+
+The wrapper runs the Lab's Node tests, Python server tests and, when present,
+the active-tree boundary test. The `web-runtime-lab` job in
+[Core CI](../../.github/workflows/ci.yml) calls this same wrapper with Node and
+Python; it does not use Creator's shared Emscripten/Playwright proof action.
+Passing it is evidence for these automated checks, not a Creator proof or a
+physical Touch-to-Sound result.
+
+The serving, `prepare` and `evaluate` commands below are separate operations.
+The automated gate does not collect the five physical-device runs, retain
+video or wired-loopback captures, or turn an unverified dossier into a pass.
+Keep that physical evidence obligation even when this CI job succeeds.
+
 Start the loopback-only server:
 
 ```bash
