@@ -225,6 +225,35 @@ class GitHubJournalTest(unittest.TestCase):
         with self.assertRaisesRegex(JournalBlocked, "control provenance"):
             self.transport.read_body(782)
 
+    def test_pending_parent_preserves_completed_writer(self):
+        # Exact attempt API, O1 34155431379; not merely generic run status.
+        self.api.run_changes.update(status="pending", conclusion=None)
+        self.api.job_changes.update(status="completed", conclusion="success",
+                                    started_at="2026-09-07T19:24:10Z", completed_at="2026-09-07T19:24:48Z")
+        self.assertEqual(self.transport.read_body(782)["checkpoint"], {"head": None, "pending": None},
+            "why: pending product siblings invalidated a completed writer; remedy: authenticate exact writer start independently")
+
+    def test_known_wait_states_preserve_started_writer(self):
+        # Requested/waiting remain fixture coverage, not observed O1 states.
+        for state in ("queued", "waiting", "requested", "pending"):
+            with self.subTest(state=state):
+                self.transport._checked_writers.clear()
+                self.api.run_changes.update(status=state, conclusion=None)
+                self.api.job_changes.update(status="in_progress", started_at="2026-09-07T19:24:10Z")
+                self.transport.read_body(782)
+
+    def test_known_wait_states_reject_unproven_writer(self):
+        for state in ("queued", "waiting", "requested", "pending"):
+            for job in ({"status": "queued", "started_at": None},
+                        {"status": "completed", "conclusion": "skipped", "started_at": "2026-09-07T19:24:10Z"},
+                        {"status": "completed", "conclusion": "success", "started_at": None}):
+                with self.subTest(state=state, job=job):
+                    self.transport._checked_writers.clear()
+                    self.api.run_changes.update(status=state, conclusion=None)
+                    self.api.job_changes = job
+                    with self.assertRaises(JournalBlocked):
+                        self.transport.read_body(782)
+
     def test_later_run_rerun_does_not_invalidate_historical_first_attempt(self):
         self.api.latest_attempt = 2
         self.transport.read_body(782)
