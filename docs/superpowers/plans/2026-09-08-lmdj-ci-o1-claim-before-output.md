@@ -1,14 +1,15 @@
-# O1 C1: durable execution claim before output — design only
+# O1 C1: durable execution claim before output
 
-Status: design-only delivery of the previously reviewed local design commits
+Historical design delivery: the previously reviewed local design commits
 `a96abc66fcda0d92d9900b53d10d3cee0474d621` and
-`c389501b2fbb5f3ae40d6d482fa1b07943cad298`, now based on main
+`c389501b2fbb5f3ae40d6d482fa1b07943cad298` were delivered based on main
 `dc1e57622136b019aab1a514298ff252a0c32ae6`. The design below records its
 original prerequisite boundaries, not the current progress of separately owned
-configuration, initialization or implementation Tasks. This delivery still
-requires exact-head review. No adapter, workflow wiring,
-reservation, initialization, dispatch or cancellation is authorized by this
-document. C1 is controlled process exit after a real claim, not GitHub
+configuration, initialization or implementation Tasks.
+
+Status: approved design with local three-file implementation awaiting independent
+review. No workflow wiring, remote reservation, initialization, dispatch or
+cancellation is authorized by this document. C1 is controlled process exit after a real claim, not GitHub
 cancellation, lost HTTP response or cancellation of executing product tests.
 
 ## This documentation Task
@@ -135,10 +136,13 @@ fact that its old empty checkpoint has no epoch. Tests must demonstrate both
 cases using the real initialization shape, alongside missing-manifest refusal.
 Historical nonempty journals retain their existing event-epoch validation.
 
-The three-file adapter remains blocked on this concrete reviewed manifest.
-This documentation update authorizes neither adapter implementation nor live
-reservation, configuration shipping, initialization or dispatch. C2 cancellation
-remains a separate unimplemented authorization boundary.
+The three-file adapter's local manifest prerequisite was reviewed at exact
+`ca668cc0056deb60bf23b7a699fcfad23d623eca`; implementation is based on that
+configuration commit, not a guessed manifest. Remote operation still requires
+the manifest and adapter to be present in actual reviewed current main, with
+root's separate operation authorization. The adapter reads that main Git blob
+and verifies actual storage anew; it does not take this plan as live evidence.
+C2 cancellation remains a separate unimplemented authorization boundary.
 
 The operator intent is closed: only C1 operation plus explicit enabled/disabled
 selection; disabled is the default and the entire invocation makes zero writes.
@@ -268,3 +272,62 @@ projected source facts change.
 
 Pitfall impact: none — applies existing fixture-strictness, acceptance journey,
 unknown-API and no-invented-evidence guidance; no new remote incident occurred.
+
+## Local implementation and verification boundary
+
+The implementation changes only the three declared adapter/test/plan files;
+the shared manifest and existing Runtime/controller/journal remain unchanged.
+The original development stack retained both earlier design commits separately.
+This standalone delivery inherits that design through merged PR #828 and the
+fixed configuration through PR #831; it includes no design, configuration or
+workflow dependency commit of its own.
+
+`ClaimProbe.prepare` reads `control:scripts/ci/o1_recovery_storage.json` through
+actual Git, validates the closed map and distinct numeric/node identities,
+requires the full config to equal the claim role, authenticates current API/
+Git/main and strictly read-only empty storage, then calls the REAL old-run
+preflight. `execute` repeats preparation and requires complete equality before
+calling real `Runtime.reconcile(execute=True)`, including its independent
+race-sensitive old-run audit. It replays the committed journal and compares
+exact returned state/request, full canonical suite inventory and sole claim.
+Only then does it raise `ControlledExit`, before executable serialization.
+
+CLI is closed `--config PATH --request PATH --root PATH --summary PATH` with
+no `--output`. Intent is `{operation: claim-before-output, fault?: disabled |
+after-durable-claim}`. Default disabled makes no API calls/writes. Exit 87 means
+only controlled durable-claim-before-output exit; its summary explicitly says
+it is not GitHub cancellation. Ordinary failures exit 1 without exposing raw
+HTTP/Git credentials or claiming fault completion. No waiting/cancel mode or
+heavy execution bridge exists.
+
+Tests use a real temporary Git blob with the same closed role map and isolated
+fixture identities, never modify the shared production manifest, and reproduce
+the actual empty-checkpoint epoch limitation before proving manifest refusal.
+The complete C1 journey uses run 17 for claim, run 18 for ordinary settlement,
+and run 19 for ordinary replay. Its missing result, 16 debts/attempt 1, immutable
+claim, unchanged failures and repeated zero-write settlement are asserted.
+The documentation leg uses an actual temporary Git commit only as a local
+fixture, checks the real interval floor is none, and checks required selection
+still contains all debt suites. No remote documentation interval or hosted
+fault/cancellation acceptance is claimed by these tests.
+
+Original implementation precommit evidence: all 24 new probe tests passed; complete CI
+discovery with pinned actionlint passed 1455 tests with no skips on the reviewed
+manifest-based stack. Staged new-file ownership passed 66 tests and staged
+whitespace passed. `scripts/architecture-portal.sh check` was run before this
+implementation commit and exited 1 at its initial Node stage: 57 tests, 54
+passed, 3 missing dependencies (`glob`, `gray-matter`, `cheerio`), no skips.
+Later Portal stages were not reached and no Portal pass is claimed. This Task
+does not change a workflow or shared configuration and has performed no remote
+mutation, initialization, fault dispatch, cancellation, push or release.
+
+Standalone delivery on main `e7fb23cc7f0156327730d88d0fc112a0fa5a2383` retains
+the historical design provenance and documentation-delivery verification above.
+Only its current status and implementation evidence are updated; the adapter
+and test blobs are identical to reviewed
+`f68f966a300c082503e24db1e0f0f19bda1c488a`. Verification was rerun before this
+delivery commit: 24 targeted tests, 1498 complete CI tests with pinned actionlint
+and no skips, 66 staged ownership tests and staged whitespace all passed.
+Portal was also actually rerun: 57 initial tests / 54 passed / 3 missing-package
+failures, exit 1, with no later Portal stages or Portal pass claimed. This
+standalone delivery still contains no workflow/configuration or remote operation.
