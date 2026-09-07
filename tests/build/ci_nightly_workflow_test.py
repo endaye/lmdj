@@ -4,7 +4,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import re
+import subprocess
+import sys
+import tempfile
+import textwrap
 import unittest
 
 
@@ -187,6 +192,86 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         )
         self.assertIn("permissions:\n  contents: read", prefix, message)
         self.assertNotIn("contents: write", self.source, message)
+
+    def prerequisite(self, *, value="28", code=0):
+        step = self.job("core-tsan").split("      - name: Verify the TSan host prerequisite\n", 1)[1]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("      - name:", 1)[0])
+        # Actual Actions bash -e behavior, including failed command substitution.
+        # Stub only the exact read command; no host sysctl is read or changed.
+        stub = '''sysctl() {
+          if [[ "$#" != 2 || "$1" != -n || "$2" != vm.mmap_rnd_bits ]]; then return 97; fi
+          printf '%s\\n' "$TEST_BITS"
+          if [[ "$TEST_EXIT" != 0 ]]; then printf '%s\\n' "sysctl: permission denied on key 'vm.mmap_rnd_bits'" >&2; fi
+          return "$TEST_EXIT"
+        }
+        '''
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "outputs"
+            result = subprocess.run(["/bin/bash", "-e", "-c", stub + script + '\nprintf "BUILD_REACHED\\n"'],
+                env={**os.environ, "GITHUB_OUTPUT": str(output), "TEST_BITS": value, "TEST_EXIT": str(code)},
+                capture_output=True, text=True)
+            flags = dict(line.split("=", 1) for line in output.read_text().splitlines()) if output.exists() else {}
+        return result, flags
+
+    def assert_infrastructure(self, result, flags):
+        self.assertNotEqual(result.returncode, 0, "why: unknown TSan prerequisite became success; remedy: fail before build")
+        self.assertEqual(flags, {"infrastructure_failure": "true"},
+                         "why: TSan preflight failure lost its infrastructure flag; remedy: emit before exiting")
+        self.assertNotIn("BUILD_REACHED", result.stdout)
+        self.assertIn("why:", result.stderr)
+        self.assertIn("remedy:", result.stderr)
+
+    def test_permission_denied_records_infrastructure_before_shell_exit(self):
+        self.assert_infrastructure(*self.prerequisite(value="", code=1))
+
+    def test_nonzero_sysctl_with_plausible_stdout_is_still_infrastructure(self):
+        self.assert_infrastructure(*self.prerequisite(value="28", code=1))
+
+    def test_invalid_sysctl_values_fail_closed(self):
+        for value in ("", "not-a-number", "-1", "28 29", "99999999999999999999999999999999"):
+            with self.subTest(value=value):
+                self.assert_infrastructure(*self.prerequisite(value=value))
+
+    def test_entropy_above_threshold_still_fails_before_build(self):
+        self.assert_infrastructure(*self.prerequisite(value="32"))
+
+    def test_valid_entropy_retains_build_and_test_path(self):
+        for value in ("0", "27", "28"):
+            with self.subTest(value=value):
+                result, flags = self.prerequisite(value=value)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(flags, {})
+                self.assertIn("BUILD_REACHED", result.stdout)
+
+    def test_real_preflight_flag_flows_through_reusable_output_to_scoped_debt(self):
+        # Output links are the platform leg; execute their source here, then
+        # consume the actual bytes via the production scoped verdict adapter.
+        self.assertIn('infrastructure_failure: ${{ steps.prerequisite.outputs.infrastructure_failure }}', self.source)
+        self.assertIn('value: ${{ jobs.core-tsan.outputs.infrastructure_failure }}', self.source)
+        failed, flags = self.prerequisite(value="", code=1)
+        self.assert_infrastructure(failed, flags)
+        sys.path.insert(0, str(REPO_ROOT / "scripts/ci"))
+        import batch_verdict
+        import self_test
+        import test_scope
+        policy = test_scope.load_policy(REPO_ROOT)
+        sha = "a" * 40
+        identity = dict(request_id="tsan-prerequisite", request_kind="auto", base_sha="b" * 40,
+            target_sha=sha, control_sha=sha, policy_digest=policy.digest, run_id=51, run_attempt=1)
+        selection = test_scope.select(policy, [], ["test:core_tsan_stress"])
+        legacy_identity = self_test.Identity(batch_verdict.SCHEMA, "auto", sha, sha, 51, 1, policy.inventory.revision)
+        rows, _ = self_test.observations_from_needs(legacy_identity, policy.inventory,
+            {"nightly-tsan": {"result": "failure", "outputs": flags}}, aliases={"core-tsan": "nightly-tsan"})
+        from dataclasses import asdict
+        selected_rows = [asdict(row) for row in rows if row.suite in selection["suites"]]
+        verdict = batch_verdict.build(policy, identity, selection, selected_rows)
+        suite = next(s for s in verdict["suites"] if s["id"] == "core_tsan_stress")
+        self.assertEqual(suite["status"], "infrastructure_failure")
+        self.assertTrue(suite["verification_debt"])
+        self.assertEqual(suite["failures"], [])
+        self.assertEqual(batch_verdict.scheduler_outcomes(verdict, policy, identity, selection),
+                         {"core_tsan_stress": "infrastructure"})
+        self.assertEqual(verdict["status"], "failed")
 
 
 if __name__ == "__main__":
