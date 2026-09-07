@@ -15,6 +15,12 @@ Environment、Site credential、evidence 与 exact prior rollback，Release publ
 deployment fan-out。历史 `1.0.40.0` 及更早的三资产 Runtime Release/部署保持不可变；本修订
 只约束后续获准 Product Build。
 
+修订：2026-09-06 — §12 新增显式子命令 `scripts/release.sh hydrate`。它是稳定接口里
+唯一被允许写本地 Git object store 的子命令，专门补全 release intent 记录的
+`target_revision` 对象；audit 仍然只读，缺失 target 只报告 `unverifiable` 并在消息里
+写明 remedy，绝不 fetch-on-miss（决策
+`docs/prd/decisions/2026-09-06-release-intent-hydrate-subcommand.md`，#332）。
+
 ## 1. 结论
 
 LMDJ 将 tag、GitHub Release 与部署从临时人工命令收敛为一个仓库拥有、分段授权、
@@ -560,10 +566,20 @@ Remote audit 每次读取并验证这些 GitHub 侧配置；缺失、不可读�
 稳定入口：
 
 ```bash
+scripts/release.sh hydrate
 scripts/release.sh audit
 scripts/release.sh audit --tag <exact-tag>
 scripts/release.sh audit --json <path>
 ```
+
+（修订 2026-09-06，#332）`hydrate` 与 audit 是两个分开的边界。已获准 intent 可能记录
+一个没有任何 advertised ref 能到达的 pre-squash `target_revision`，全新 clone 因此缺少
+该对象，audit 只能报告该 intent `unverifiable`。补全这些对象归 `hydrate`：它读
+`docs/release-evidence/release-intents.json` 的 `entries` 与 `historical_exceptions`，
+逐个探测后只对缺失的执行一次 `git fetch --no-tags origin <missing shas>`，幂等且什么都
+不缺时不发起 fetch。Audit 不做 fetch-on-miss——那会修掉它本该报告的缺陷；缺失 target 的
+finding 因此同时携带 why 与 `remedy: run scripts/release.sh hydrate`。全新 clone 的操作
+顺序是先 `hydrate` 再 `audit`。
 
 审计数据面：
 

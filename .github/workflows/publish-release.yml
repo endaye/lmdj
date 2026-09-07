@@ -52,31 +52,21 @@ jobs:
       # no write token enters preflight.
       # Allocated release intents may target pre-squash commits that no
       # branch or tag reaches, so a fresh full clone lacks their objects and
-      # the release audit reports the intents unverifiable; hydrate them by
-      # SHA before any release.sh invocation. Pitfall:
-      # .agents/pitfalls/release-intent-target-reachability.md
+      # the release audit reports the intents unverifiable. `hydrate` is the
+      # stable interface's only object-store write and runs before every
+      # verifying release.sh invocation; the audit itself never fetches.
+      # Decision:
+      # docs/prd/decisions/2026-09-06-release-intent-hydrate-subcommand.md;
+      # pitfall: .agents/pitfalls/release-intent-target-reachability.md
       - name: Hydrate release intent target objects
         env:
           GIT_CONFIG_COUNT: "1"
           GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
           GIT_CONFIG_VALUE_0: https://github.com/
+        shell: bash
         run: |
-          python3 - <<'EOF'
-          import json, subprocess
-          data = json.load(open("docs/release-evidence/release-intents.json"))
-          revisions = [entry["target_revision"] for entry in data["entries"]]
-          revisions += [entry["target_revision"] for entry in data["historical_exceptions"]]
-          missing = [
-              revision for revision in revisions
-              if subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"],
-                                capture_output=True).returncode != 0
-          ]
-          if missing:
-              subprocess.run(["git", "fetch", "--no-tags", "origin", *missing], check=True)
-              print("hydrated intent targets:", " ".join(missing))
-          else:
-              print("all intent targets already present")
-          EOF
+          set -euo pipefail
+          scripts/release.sh hydrate
 
       # GitHub exposes Draft Releases only to write-scoped identities, so a
       # read-only preflight cannot run verify-draft at all (the Actions token
@@ -120,30 +110,18 @@ jobs:
           python-version: "3.11"
 
       # Same environment-only fetch credential and hydration contract as
-      # preflight; see the comment there. Pitfall:
-      # .agents/pitfalls/release-intent-target-reachability.md
+      # preflight; see the comment there. Decision:
+      # docs/prd/decisions/2026-09-06-release-intent-hydrate-subcommand.md;
+      # pitfall: .agents/pitfalls/release-intent-target-reachability.md
       - name: Hydrate release intent target objects
         env:
           GIT_CONFIG_COUNT: "1"
           GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
           GIT_CONFIG_VALUE_0: https://github.com/
+        shell: bash
         run: |
-          python3 - <<'EOF'
-          import json, subprocess
-          data = json.load(open("docs/release-evidence/release-intents.json"))
-          revisions = [entry["target_revision"] for entry in data["entries"]]
-          revisions += [entry["target_revision"] for entry in data["historical_exceptions"]]
-          missing = [
-              revision for revision in revisions
-              if subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"],
-                                capture_output=True).returncode != 0
-          ]
-          if missing:
-              subprocess.run(["git", "fetch", "--no-tags", "origin", *missing], check=True)
-              print("hydrated intent targets:", " ".join(missing))
-          else:
-              print("all intent targets already present")
-          EOF
+          set -euo pipefail
+          scripts/release.sh hydrate
 
       - name: Reverify exact Draft Release before publication
         shell: bash

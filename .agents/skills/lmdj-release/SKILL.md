@@ -68,6 +68,15 @@ Use `scripts/release.sh verify-draft TAG RELEASE_ID PLAN_SHA256` only for
 read-only Draft verification. The audit before and after a mutation is
 `scripts/release.sh audit --remote --tag TAG`.
 
+On a fresh clone or a fresh runner workspace, run `scripts/release.sh hydrate`
+before the first audit. It is the only stable subcommand that writes the local
+Git object store: it fetches by SHA exactly the release intent target objects
+the clone lacks, prints what it hydrated versus what was already present, and is
+idempotent, so running it unconditionally is safe. It authorizes nothing — no
+tag, Draft, publication, deployment or promotion follows from it. The audit
+itself never fetches on miss, so an absent target is a reported finding whose
+remedy names this command.
+
 Channel promotion is `scripts/release.sh promote TAG CHANNEL --deployment-run
 HOST=RUN_ID ... [--evidence PATH ...]`. It is a local mutation of the ledger and
 one evidence document only: it audits first, verifies every Host deployment
@@ -131,6 +140,12 @@ contract is [`docs/governance/pitfall-ledger.md`](../../../docs/governance/pitfa
   `main` SHA with `scripts/architecture-portal.sh witness PRODUCT_BUILD
   INTRODUCING_REVISION` and verify it; never hand-edit an immutable snapshot to
   make provenance agree.
+- Before running any audit from a fresh clone or workspace —
+  [`release-intent-target-reachability`](../../pitfalls/release-intent-target-reachability.md).
+  An allocated intent can record a pre-squash target no advertised ref reaches,
+  so the clone lacks the object and the audit correctly reports the intent
+  unverifiable. Run `scripts/release.sh hydrate` first; never add an inline
+  fetch copy of your own and never make the audit self-heal.
 - Before creating or binding a release intent —
   [`release-intent-binding`](../../pitfalls/release-intent-binding.md).
   Allocation needs no intent. Bind the intent only after the exact

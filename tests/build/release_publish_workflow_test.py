@@ -181,9 +181,14 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
                     if "Hydrate release intent target objects" in step
                 ]
                 self.assertEqual(len(hydrate_indexes), 1)
+                # `hydrate` is itself a release.sh subcommand now, so the
+                # ordering assertion compares it against the verifying calls
+                # only. Pitfall:
+                # .agents/pitfalls/release-intent-target-reachability.md
                 release_indexes = [
                     index for index, step in enumerate(steps)
                     if "scripts/release.sh" in step
+                    and "scripts/release.sh hydrate" not in step
                 ]
                 self.assertTrue(release_indexes)
                 self.assertLess(hydrate_indexes[0], min(release_indexes))

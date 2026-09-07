@@ -22,6 +22,11 @@ from tools.release.audit import (  # noqa: E402
     write_report,
 )
 from tools.release.git_repository import GitRepository, GitRepositoryError  # noqa: E402
+from tools.release.hydrate import (  # noqa: E402
+    HydrateError,
+    format_hydration,
+    hydrate_release_intent_targets,
+)
 from tools.release.github_api import GitHubApiError, GitHubClient  # noqa: E402
 from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError  # noqa: E402
 from tools.release.openpgp import OpenPgpError, OpenPgpVerifier  # noqa: E402
@@ -89,6 +94,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     for name in ("prepare", "push-tag", "create-draft", "cleanup"):
         selected = rehearsal_commands.add_parser(name)
         selected.add_argument("tag")
+    commands.add_parser("hydrate")
     audited = commands.add_parser("audit")
     mode = audited.add_mutually_exclusive_group(required=True)
     mode.add_argument("--local", action="store_true")
@@ -220,6 +226,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         options = parse_arguments(argv if argv is not None else sys.argv[1:])
         root = options.repo_root.expanduser().resolve(strict=True)
+        if options.command == "hydrate":
+            # The only subcommand that writes to the local object store on
+            # purpose. It stays separate from `audit` because the pipeline
+            # design's read-only audit contract forbids the audit creating Git
+            # state, and `git fetch` creates objects. Pitfall:
+            # .agents/pitfalls/release-intent-target-reachability.md
+            print(format_hydration(hydrate_release_intent_targets(root)))
+            return 0
         if options.command == "audit":
             report = audit(
                 build_audit_context(root, remote=options.remote),
@@ -277,10 +291,11 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as error:
         return 0 if error.code == 0 else 64
     except (
-        CommandError, GitHubApiError, GitRepositoryError, OpenPgpError, PrepareError,
-        ProfileError, PromotionError, RehearsalError, ReleaseModelError, TransitionError, OSError,
+        CommandError, GitHubApiError, GitRepositoryError, HydrateError, OpenPgpError,
+        PrepareError, ProfileError, PromotionError, RehearsalError, ReleaseModelError,
+        TransitionError, OSError,
     ) as error:
-        detail = error.detail if isinstance(error, CommandError) else ""
+        detail = error.detail if isinstance(error, (CommandError, HydrateError)) else ""
         suffix = f": {detail}" if detail else ""
         print(f"release verification error: {error}{suffix}", file=sys.stderr)
         return 2
