@@ -45,6 +45,7 @@ SCRIPT = REPO_ROOT / ".github/scripts/advisory_review_liveness.py"
 SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
 WORKFLOW = REPO_ROOT / ".github/workflows/advisory-review-liveness.yml"
 CLAUDE = REPO_ROOT / ".github/workflows/ci.yml"  # the review job lives here since #659
+STANDALONE = REPO_ROOT / ".github/workflows/pr-review.yml"  # the T4 standalone entry
 GROK_SCRIPT = REPO_ROOT / ".github/scripts/grok_review.py"
 
 GLM = next(l for l in REVIEW_LANES if l.job.endswith("(glm)"))
@@ -492,16 +493,58 @@ class SignatureContractTest(unittest.TestCase):
                       "REVIEW_LANES and grok_review.COMMENT_MARKER in step")
 
     def test_every_lane_names_a_job_and_step_that_exist(self) -> None:
-        sources = {"ci.yml": CLAUDE.read_text(encoding="utf-8")}
+        sources = {"ci.yml": CLAUDE.read_text(encoding="utf-8"),
+                   "pr-review.yml": STANDALONE.read_text(encoding="utf-8")}
         for lane in REVIEW_LANES:
             with self.subTest(lane=lane.name):
                 self.assertIn(f"- name: {lane.step}", sources[lane.workflow])
+                job_name = lane.job.replace("(glm)", "(${{ matrix.backend }})") \
+                                   .replace("(kimi)", "(${{ matrix.backend }})")
+                self.assertIn(f"name: {job_name}", sources[lane.workflow],
+                              "why: the liveness check finds a lane by its job name; "
+                              "remedy: keep the job names identical across workflows")
 
     def test_it_watches_exactly_the_lanes_that_fail_quietly(self) -> None:
         for workflow, path in (("ci.yml", CLAUDE),):
             with self.subTest(workflow=workflow):
                 self.assertIn("continue-on-error: true", path.read_text(encoding="utf-8"))
                 self.assertIn(workflow, {l.workflow for l in REVIEW_LANES})
+
+    def test_the_standalone_entry_is_watched_with_the_same_lane_definitions(self) -> None:
+        """T4: one lane definition per reviewer describes both entries.
+
+        The standalone workflow does not carry continue-on-error -- its jobs
+        are red when they did not review -- but the effect it is judged by is
+        the same signature, so the same lane applies.
+        """
+        self.assertEqual(liveness.REVIEW_WORKFLOWS, ("ci.yml", "pr-review.yml"))
+        by_workflow = {}
+        for lane in REVIEW_LANES:
+            by_workflow.setdefault(lane.workflow, set()).add((lane.job, lane.step, lane.marker))
+        self.assertEqual(by_workflow["ci.yml"], by_workflow["pr-review.yml"],
+                         "why: a lane that exists for one entry and not the other is a "
+                         "reviewer the check cannot see there; remedy: derive both from "
+                         "REVIEW_WORKFLOWS")
+        self.assertEqual({l.workflow for l in liveness.claude_lanes("glm")},
+                         set(liveness.REVIEW_WORKFLOWS))
+        self.assertEqual(liveness.grok_lane("pr-review.yml").marker, liveness.GROK_MARKER)
+
+    def test_selection_reads_a_backends_evidence_from_every_review_workflow(self) -> None:
+        """After T5a only the standalone entry posts; a selector reading ci.yml
+        alone would watch every backend age into 'stale' and never DOWN."""
+        listed = []
+
+        def api(path, context):
+            if "/actions/workflows/" in path:
+                listed.append(path.split("/actions/workflows/")[1].split("/")[0])
+                return {"workflow_runs": []}
+            raise AssertionError(path)
+
+        chosen, _ = select_backends(
+            "o/r", ["glm", "kimi"], window=5,
+            now=datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc), api=api)
+        self.assertEqual(chosen, ["glm"])
+        self.assertEqual(set(listed), {"ci.yml", "pr-review.yml"})
 
 
 class StalenessTest(unittest.TestCase):
@@ -689,6 +732,50 @@ class ReportTest(unittest.TestCase):
         report = render([evaluate(l.name, [seen("failure")] * 5, window=5) for l in (GLM, KIMI)])
         self.assertIn("glm", report)
         self.assertIn("kimi", report)
+
+
+class StandaloneExactEvidenceTest(unittest.TestCase):
+    def review(self, **changes):
+        value = {"body": "<!-- lmdj-review: glm -->\n<!-- lmdj-review-v1 o/r 7 " + "a" * 40 + " 123 2 glm -->\nclean",
+                 "commit_id": "a" * 40, "state": "COMMENTED", "user": {"login": "github-actions[bot]"}}
+        value.update(changes)
+        return value
+
+    def test_only_bot_review_exact_run_attempt_head_counts(self):
+        good = self.review()
+        def check(review, run="123", attempt="2", backend="glm"):
+            return liveness.exact_review_posted("o/r", 7, run, attempt, backend, api=lambda path, context: [review])
+        self.assertTrue(check(good))
+        self.assertFalse(check(self.review(user={"login": "human"})))
+        self.assertFalse(check(self.review(commit_id="b" * 40)))
+        self.assertFalse(check(self.review(state="PENDING")))
+        self.assertFalse(check(good, run="122"))
+        self.assertFalse(check(good, attempt="1"))
+        self.assertFalse(check(good, backend="kimi"))
+
+    def collect(self, *, publisher="success", event="workflow_dispatch", model="success"):
+        run = {"id": 123, "run_attempt": 2, "event": event, "head_branch": "main", "head_sha": "b" * 40,
+               "display_title": "PR Review / #7 @ dispatch", "conclusion": "success",
+               "pull_requests": [], "created_at": "2026-09-07T10:00:00Z"}
+        def api(path, context):
+            if "/actions/workflows/" in path:
+                self.assertNotIn("event=pull_request", path)
+                return {"workflow_runs": [run]}
+            if "/jobs?" in path:
+                return {"jobs": [{"name": "Claude review (glm)", "conclusion": model,
+                                   "steps": [{"name": "Review", "conclusion": model}]},
+                                  {"name": "Publish Claude review (glm)", "conclusion": publisher}]}
+            if "/pulls/7/reviews?" in path:
+                return [self.review()]
+            raise AssertionError(path)
+        return liveness.collect_observations("o/r", liveness.claude_lane("glm", "pr-review.yml"), limit=5, api=api)
+
+    def test_dispatch_without_pull_requests_uses_exact_published_head_not_control_sha(self):
+        self.assertEqual(self.collect()[0].outcome, "success")
+
+    def test_stale_or_failed_publisher_cannot_pass_on_an_existing_review(self):
+        self.assertEqual(self.collect(publisher="failure")[0].outcome, "failure")
+        self.assertEqual(self.collect(model="neutral")[0].outcome, "failure")
 
 
 if __name__ == "__main__":

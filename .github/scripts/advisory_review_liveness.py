@@ -42,6 +42,7 @@ from typing import NamedTuple
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -87,18 +88,35 @@ CLAUDE_BACKENDS = (
 )
 
 
-def claude_lane(backend: str) -> "Lane":
-    """The lane one Claude backend occupies inside `ci.yml`."""
-    return Lane("ci.yml", f"Claude review ({backend})", "Review",
+# The workflows a reviewer can run in. `ci.yml` is where the lanes have lived
+# since #659; `pr-review.yml` is the standalone entry the capacity plan (T4)
+# prepares, which runs the same jobs under the same names and step names so
+# one lane definition describes both. Both are watched until T5a retires the
+# `ci.yml` copies; the standalone entry posts nothing on `pull_request` runs
+# until its switch is flipped, so its lanes read "too few to judge", not DOWN.
+REVIEW_WORKFLOWS = ("ci.yml", "pr-review.yml")
+GROK_MARKER = "<!-- lmdj-grok-review -->"
+
+
+def claude_lane(backend: str, workflow: str = "ci.yml") -> "Lane":
+    """The lane one Claude backend occupies inside `workflow`."""
+    return Lane(workflow, f"Claude review ({backend})", "Review",
                 f"<!-- lmdj-review: {backend} -->", CLAUDE_SIGNS_SINCE)
 
 
+def claude_lanes(backend: str) -> tuple["Lane", ...]:
+    """Every lane one Claude backend occupies, across the review workflows."""
+    return tuple(claude_lane(backend, workflow) for workflow in REVIEW_WORKFLOWS)
+
+
+def grok_lane(workflow: str = "ci.yml") -> "Lane":
+    return Lane(workflow, "Grok advisory review", "Run advisory Grok review", GROK_MARKER)
+
+
 REVIEW_LANES = (
-    # The Claude backends run inside ci.yml since #659, so Pre-heavy Gate can
-    # order itself after them. Job and step names are unchanged.
-    *(claude_lane(entry["backend"]) for entry in CLAUDE_BACKENDS),
-    Lane("ci.yml", "Grok advisory review", "Run advisory Grok review",
-         "<!-- lmdj-grok-review -->"),
+    *(claude_lane(entry["backend"], workflow)
+      for workflow in REVIEW_WORKFLOWS for entry in CLAUDE_BACKENDS),
+    *(grok_lane(workflow) for workflow in REVIEW_WORKFLOWS),
 )
 
 # Outcomes that carry no evidence either way and are dropped rather than
@@ -289,6 +307,8 @@ def collect_observations(
     repository: str, lane: Lane, *, limit: int, api: Request = _api,
 ) -> list[Observation]:
     """One `success` or `failure` per attempted run for `lane`, newest first."""
+    if lane.workflow == "pr-review.yml":
+        return collect_standalone_observations(repository, lane, limit=limit, api=api)
     # Paged until `limit` *observations* exist, not until `limit` runs have
     # been seen. The Claude lanes live in ci.yml, which also runs on push,
     # dispatch and draft events -- completed, non-cancelled runs that skip the
@@ -350,6 +370,73 @@ def collect_observations(
     return observations
 
 
+def exact_review_posted(repository: str, number: int, run: str, attempt: str,
+                        backend: str, *, api: Request = _api) -> bool:
+    """A trusted bot COMMENT review from this run/attempt, attached to its head.
+
+    Legacy marker/time heuristics remain only for the unchanged ci.yml entry.
+    User comments, a later head, another backend or an updated sticky comment
+    cannot stand in for this immutable publisher observation.
+    """
+    identity = re.compile(
+        r"^<!-- lmdj-review-v1 " + re.escape(repository) + " " + str(number)
+        + r" ([0-9a-f]{40}) " + re.escape(run) + " " + re.escape(attempt)
+        + " " + re.escape(backend) + r" -->$"
+    )
+    for page in range(1, 11):
+        reviews = api(f"/repos/{repository}/pulls/{number}/reviews?per_page=100&page={page}",
+                      f"reading exact review evidence on PR {number}") or []
+        for review in reviews:
+            lines = (review.get("body") or "").splitlines()
+            match = identity.fullmatch(lines[1]) if len(lines) > 1 else None
+            if (match and review.get("commit_id") == match.group(1)
+                    and review.get("state") == "COMMENTED"
+                    and (review.get("user") or {}).get("login") == "github-actions[bot]"):
+                return True
+        if len(reviews) < 100:
+            return False
+    raise LivenessUnavailable("why: review evidence exceeded the bounded page budget; remedy: inspect this run manually")
+
+
+def collect_standalone_observations(repository: str, lane: Lane, *, limit: int,
+                                   api: Request = _api) -> list[Observation]:
+    backend = "grok" if lane.marker == GROK_MARKER else lane.job.rsplit("(", 1)[1].rstrip(")")
+    publisher = "Publish Grok advisory review" if backend == "grok" else f"Publish Claude review ({backend})"
+    observations = []
+    for page in range(1, MAX_RUN_PAGES + 1):
+        payload = api(f"/repos/{repository}/actions/workflows/pr-review.yml/runs"
+                      f"?status=completed&per_page={RUNS_PER_PAGE}&page={page}",
+                      "listing standalone PR review runs") or {}
+        batch = payload.get("workflow_runs") or []
+        for run in batch:
+            if run.get("conclusion") in SILENT or run.get("event") not in {"pull_request", "workflow_dispatch"}:
+                continue
+            if run.get("event") == "workflow_dispatch" and run.get("head_branch") != "main":
+                continue
+            # dispatch has no run.pull_requests and head_sha is the control
+            # revision, not the PR head. The trusted run-name supplies its PR.
+            named = re.match(r"^PR Review / #([1-9][0-9]*) @ ", run.get("display_title") or "")
+            if not named:
+                continue
+            jobs = (api(f"/repos/{repository}/actions/runs/{run['id']}/jobs?per_page=100",
+                        "reading standalone review and publisher outcomes") or {}).get("jobs") or []
+            job = next((j for j in jobs if j.get("name") == lane.job), None)
+            if not job or job.get("conclusion") in SILENT:
+                continue
+            publication = next((j for j in jobs if j.get("name") == publisher), {})
+            step = next((s.get("conclusion") for s in job.get("steps", []) if s.get("name") == lane.step), None)
+            posted = (job.get("conclusion") == "success" and step == "success"
+                      and publication.get("conclusion") == "success"
+                      and exact_review_posted(repository, int(named.group(1)), str(run["id"]),
+                                              str(run.get("run_attempt", 1)), backend, api=api))
+            observations.append(Observation("success" if posted else "failure", run["created_at"]))
+            if len(observations) >= limit:
+                return observations
+        if len(batch) < RUNS_PER_PAGE:
+            break
+    return observations
+
+
 def render(verdicts: Sequence[LaneVerdict]) -> str:
     lines = ["## Advisory review liveness", ""]
     for verdict in verdicts:
@@ -400,12 +487,17 @@ def select_backends(
         return list(candidates), f"{candidates[0]} is the only candidate"
     reasons = []
     for backend in candidates:
-        verdict = evaluate(
-            backend,
-            collect_observations(repository, claude_lane(backend), limit=window, api=api),
-            window=window,
-            now=now,
+        # A backend's evidence is what it posted from any review workflow. The
+        # two entries are the same lane on a different trigger, and after T5a
+        # only the standalone one keeps posting -- judging `ci.yml` alone would
+        # then see every backend age into "stale" and never DOWN.
+        observations = sorted(
+            (observation
+             for lane in claude_lanes(backend)
+             for observation in collect_observations(repository, lane, limit=window, api=api)),
+            key=lambda observation: observation.at, reverse=True,
         )
+        verdict = evaluate(backend, observations, window=window, now=now)
         reasons.append(f"{backend}: {verdict.detail}")
         if not verdict.down:
             note = "primary" if backend == candidates[0] else "fallback for a DOWN primary"

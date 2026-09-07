@@ -454,6 +454,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("PR_SAME_REPOSITORY", "true") == "true",
     )
     parser.add_argument("--output", default=os.environ.get("REVIEW_OUTPUT", ""))
+    parser.add_argument("--structured-output", default="",
+                        help="Read-only standalone mode: write model data and never post to GitHub")
     parser.add_argument("--post-comment", action="store_true", default=os.environ.get("POST_COMMENT", "true") == "true")
     parser.add_argument("--no-post-comment", action="store_false", dest="post_comment")
     parser.add_argument("--post-review", action="store_true", default=os.environ.get("POST_REVIEW", "true") == "true")
@@ -476,6 +478,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         same_repository=bool(args.same_repository),
     )
     if reason:
+        if args.structured_output:
+            raise RuntimeError(f"why: Grok did not review ({reason}); remedy: fix the cause or review manually")
         notice(f"Grok advisory review skipped: {reason}")
         return 0
 
@@ -510,6 +514,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     text = str(payload.get("text") or "")
     findings = parse_findings(text)
     verdict = parse_verdict(text)
+    if args.structured_output:
+        # The standalone model job has no PR write permission. A separate
+        # trusted publisher validates these data and the current head.
+        from pr_review_target import TargetUnavailable, validate_review
+        if not text.strip() or (verdict == "issues" and not findings):
+            raise TargetUnavailable("why: Grok returned no actionable structured review; remedy: rerun or review manually")
+        inline = []
+        for item in actionable_findings(findings):
+            location = parse_location(item.get("body") or "")
+            if not location or not location[1]:
+                raise TargetUnavailable("why: Grok finding has no exact inline location; remedy: review manually")
+            inline.append({"path": location[0], "line": location[2] or location[1],
+                           "body": f"**[{item['severity']}] {item['title']}**\n\n{item['body']}"})
+        data = validate_review({"summary": text, "findings": inline})
+        Path(args.structured_output).write_text(json.dumps(data), encoding="utf-8")
+        return 0
     token = os.environ.get("GITHUB_TOKEN", "")
     if args.post_review and token and args.repository and args.pr_number and args.head_sha:
         review_action = post_review(
