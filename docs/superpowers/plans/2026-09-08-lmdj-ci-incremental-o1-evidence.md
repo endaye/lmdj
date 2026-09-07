@@ -126,7 +126,136 @@ approval. Authorized independent current-head review is recorded on the PR.
 The real all-backend-failure report through the durable outbox remains an
 acceptance gap; the presence of the failure artifact is not a created Issue.
 
-## Verification
+## Subsequent terminal and recovery evidence (2026-09-08)
+
+This update supersedes the earlier pending observations above, without rewriting
+their historical meaning. It declares only this ledger, uses the isolated
+`docs/ci-o1-recovery-evidence` branch, and changes no workflow or product code.
+Daily triggers remain active until the separate T5 cutover. A successful local
+check or a completed diagnostic is not acceptance of the whole migration.
+
+### Full execution, debt and reporting
+
+Bootstrap run `34155431379/1` completed with 13 passing suites and three actual
+failures: CI contract, Deploy contract and TSan stress. Its terminal result was
+persisted by `34158982215/1`; reporting run `34159207772/1` created Issue #820.
+Later fixes do not rewrite this historical result.
+
+The next full run `34159345765/1` targeted
+`f5ce0b6b0a516001a1611b16a4f45001eab69061`, starting from the bootstrap target.
+Its complete first-parent interval contained 11 commits and 31 paths. Fifteen
+suites passed; TSan failed before compilation/tests because the runner could
+not read `vm.mmap_rnd_bits`. Original verdict artifact `10033180165` has evidence
+digest `2da78956699bd6661413bb968d5bb6b5b17d472ed839685e88a09302056e2f85`.
+Settlement `34163454728/1` retained the infrastructure debt and prior failures.
+Report `34163537574/1` created the separate infrastructure Issue #827.
+
+While this full run was active, observers `34159537840/1` and `34162283852/1`
+retained its exact request and claim while recording newer pending main SHAs;
+neither started a second heavy batch. The following run `34163559657/1` selected
+only executable TSan debt despite its docs-only delta. It hit the same runner
+prerequisite failure. Settlement `34163785824/1` retained that debt at attempt 2,
+paused it under the existing bound, and preserved all three historical failures.
+Report `34163882659/1` appended to Issue #827 instead of creating a new bucket.
+These are real full-inventory execution and recovery observations, not a claim
+that full testing passed or that the runner prerequisite has been repaired.
+
+### True docs-none, idle replay and focused Host completion
+
+The genuine documentation change in PR #828 produced the exact one-commit,
+one-document interval ending at `b70987d01ac5992dcd9ec8c48ea5281f3c00a09f`.
+Run `34164008872/1` admitted `none` with no selected suites. Only its controller
+ran; no product execution was launched. Settlement `34164114877/1` persisted
+`not-required`, then advanced processed progress. Fresh execution-enabled
+reconcile `34164206056/1` returned idle with no request and an identical complete
+state: no generation change, duplicate admission or heavy run. Paused TSan debt
+and all historical failures remained unchanged.
+
+PR #829 changed two Host READMEs and their explanatory plan. Run
+`34164424476/1` fixed base `b70987d01ac5992dcd9ec8c48ea5281f3c00a09f` and
+target/control `0fedd7268e5f0f9a27390c3d8085387083f46e86`. The actual selection
+was exactly `creator`, `docs_static`, `portal`, `web_runtime_host`, and
+`web_runtime_lab`. All five passed. The other eleven suites were not selected,
+not passed. Original artifact `10034155914` has ZIP SHA-256
+`190fd054c9c682cf5b1e356f8388aab1a371d70ae203710e6f6547893543a5a6`
+and verdict evidence digest
+`b45bc67cc3a41f329cec4b92f61fc39b20e1157dbf05a04fd16d3f8a15940647`.
+Independent validation reconstructed the verdict from the frozen request,
+historical policy and raw needs, and authenticated all 27 actual job records.
+This Host closure includes Creator; it is not proof of two disjoint closures.
+
+During that Host run, observer `34164738962/1` recorded subsequent code merges
+as pending while preserving the entire original request, claim, debt and failure
+state. Settlement `34166337225/1`, artifact `10034278582`, recorded the five
+actual outcomes, cleared active and advanced processed only to the frozen Host
+target. At generation 30, pending was the newer
+`16e822775d6357861ba37e5a93314ab8995e5d61`. Complete debt and historical failure
+objects still matched admission. Focused green did not become full health.
+
+### Actual response-loss recovery and fresh replay
+
+The ordinary, non-diagnostic all-backend-failure report was also completed:
+run `34158764724/1` created Issue #819 and replay `34158836074/1` did not duplicate
+it. Thus the earlier normal-report acceptance gap is resolved; this does not
+turn the original failed review into valid AI advice.
+
+The reviewed isolated storage roles are scheduler #824 and outbox #825; neither
+is the main scheduler #807. Run `34165108385/1` stopped with controlled exit 86
+after the scheduler's actual append but before acknowledging its response.
+Comment `5576019621` existed exactly once with digest
+`81ff2ea463fb0a72cc220dbe5a4265fcedb33c6a6fe4afaa3121f06f1c0ba9ac`.
+Ordinary settlement `34165196646/1` recovered that existing append; fresh replay
+`34165520261/1` kept the complete recovered state and remote journal unchanged.
+No product request, result, baseline or heavy execution was created.
+
+Run `34165285937/1` stopped with controlled exit 86 after the actual creation of
+diagnostic Issue #836, before delivery acknowledgement. Its source was the real
+all-backend-failure observation for PR #812, head
+`b589400ee4c251cecefd65f54d9b46a11e08f99a`, review `34156734074/1`.
+The diagnostic namespace isolates this exercise from production Issue #819.
+Ordinary drain `34165454334/1` found the existing Issue and persisted delivery
+comment `5576058486`, with receipt `{issue_number: 836, comment_id: null}`.
+It did not invent an acknowledgement or create a second business Issue.
+Fresh drain `34165503120/1` left complete journal and business Issue snapshots
+unchanged; an all-state Issue inventory still found exactly one matching Issue.
+The API did not expose a final step summary; idempotence is established by the
+actual far-side state, not by claiming to have inspected that summary.
+
+### Claim-before-output boundary and remaining acceptance
+
+Run `34166438455/1`, at exact control
+`16e822775d6357861ba37e5a93314ab8995e5d61`, used the fresh assigned claim journal
+#826. The actual controller exited 87 after authenticated durable
+observe/admit/claim events and before any execution output. Its full bootstrap
+request selected all 16 suites, with null base and the current run as executor.
+All three journal envelopes were independently authenticated and hash-replayed;
+the anchored head was
+`5f33af4b113529bd175048903fc8a3ae5594b1434a293784f93bf48865dd90b4`, pending null.
+The terminal run had only the failed controller and two skipped jobs, and zero
+artifacts. No product test ran. This proves the controlled exit boundary, not
+GitHub cancellation.
+
+Fresh ordinary settlement `34166543480/1`, artifact `10034333280`, then persisted
+the result before advance. Complete authenticated history was exactly
+observe/admit/claim/result/advance, retaining the original three records without
+any changes. Generation 5 cleared active and advanced processed to the fixed
+target, but recorded every one of the 16 selected suites as missing, with debt
+at attempt 1 and no invented test failures. This is processed, not tested.
+Fresh settlement replay `34166702231/1`, artifact `10034378791`, returned idle
+with no request and a complete state identical to the first settlement,
+including generation 5, all original request/result identities and every debt's
+attempt count. No execution-enabled recovery was used in either settlement.
+
+Still outstanding: real GitHub cancellation and preserved missing-suite debt;
+later docs-only changes retaining that debt; exact full candidate acceptance
+from the new source; remaining completion-boundary/consumer-union journeys;
+automatic main/completion/independent-health-tick cutover and real chain-limit
+recovery with idle verification. An actual valid Kimi fallback after GLM failure
+has not been observed; existing real evidence proves all-backend failure, while
+the bounded successful-fallback matrix is local-test evidence. No tag, Release,
+version allocation, deployment or Channel promotion has been performed.
+
+## Ledger verification
 
 Check linked actual run/Issue identities against the API and download actual
 controller artifacts; do not substitute local mocks for the claims above.
