@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-05
     occurrence: https://github.com/endaye/lmdj/issues/591
     observed_by: claude-code/opus-5
+  - date: 2026-09-07
+    occurrence: https://github.com/endaye/lmdj/issues/669
+    observed_by: Claude Code (Opus 5)
 exit: gate:tests/build/ci_local_preflight_test.py
 ---
 
@@ -76,6 +79,18 @@ compare them to the commits you actually reviewed:
 git fetch -q origin
 git rev-parse HEAD
 git log --oneline origin/main..HEAD
+git status --short
+```
+
+Read `git status --short` as part of that reading, not only the tip: a session
+holding uncommitted work can find it committed by another session, so a clean
+tree is evidence to check rather than to assume. When the tip names a commit
+you did not make, verify its content before building on it:
+
+```bash
+git show <sha> --stat
+diff <(git show <sha>:<path>) <path>   # for each path you verified
+git reflog --date=iso                  # names the foreign operations
 ```
 
 If the tip is not the SHA you committed, stop. Read every unfamiliar commit
@@ -122,6 +137,48 @@ the second occurrence reproduced a defect upstream had already fixed.
 `tests/build/ci_local_preflight_test.py` pins the comparison, its timeout, and
 that it can only notify, never fail. Escalated and resolved in
 [#654](https://github.com/endaye/lmdj/issues/654).
+
+The third occurrence, on 2026-09-07 shipping #669, widens the blast radius from
+a ref to the worktree itself, and names an orchestration trigger the first two
+did not have. The Task 2 agent hit its usage limit while holding uncommitted
+work in `.worktrees/issue-669-soundset-store`, waiting for a dependency Pull
+Request to merge. The orchestrator concluded the agent was gone and spawned a
+replacement for the same lane. The original agent's limit then reset and it
+resumed, so two agents held one worktree, each believing it owned the lane.
+
+The replacement committed the original's uncommitted working tree as
+`dfb305fb`, checked `tmp/llvm22-probe` out in the same worktree, merged
+`origin/main` into it, returned to the task branch, and rebased that branch
+onto current `main` as `ad4621a7` -- all between the original agent's last
+verification and its push. Both agents shared one Git identity, so none of this
+was distinguishable from the original's own work in history; see
+[`cross-agent-commit-attribution`](cross-agent-commit-attribution.md).
+
+Nothing was lost, and the rebase was the one the original was about to perform
+itself. The hazard is that a shared worktree is not only a shared ref: an
+uncommitted tree is committable by another agent, and a worktree can be
+borrowed as a scratch checkout, so "my working tree is what I last left" is as
+unsafe an assumption as "my branch tip is what I last read". The original agent
+caught it only because it re-read the tip and found a commit it had not made,
+then diffed the commit's blobs against the tree it had actually verified before
+building on it. Had it gone straight from a green pre-flight to `git push`, it
+would have shipped a commit whose boundary it never authored, with evidence
+bound to a tree that no longer existed -- and the commit message was the exact
+one it had been instructed to use, so the message proved nothing.
+
+The upstream cause is not a Git behaviour and cannot be fixed by a pushing
+agent: a stalled agent is indistinguishable from a finished one, and a usage
+limit is a pause, not an exit. The remedy belongs to whoever spawns the
+replacement.
+
+For an orchestrator, the third occurrence adds a rule before the push-time
+ones: one agent per lane, one worktree per agent. Before spawning a replacement
+for an agent that has gone quiet, establish that the original cannot resume --
+a usage limit is a pause, and the original will come back to the worktree it
+left. If a replacement is spawned anyway, stand one of the two down explicitly
+and say which, rather than letting both hold the same worktree; the shared Git
+identity means neither agent, and no later reader of the history, can tell
+their work apart.
 
 The push half stays guidance. The repository cannot tell an authorized
 concurrent collaborator from an unexpected branch mutation, so a push-time
