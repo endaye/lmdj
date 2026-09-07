@@ -47,6 +47,11 @@ jobs:
         with:
           ref: ${{ inputs.checkout_ref || '' }}
           fetch-depth: 0
+      - name: Verify the checked-out target
+        if: ${{ inputs.checkout_ref != '' }}
+        env:
+          EXPECTED_TARGET: ${{ inputs.checkout_ref }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - uses: actions/setup-node@v6
         with:
           node-version: "22"

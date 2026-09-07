@@ -793,7 +793,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 self.assertIn(TRUST_CONDITION, job)
                 for predecessor in earlier:
                     self.assertIn(
-                        "(!fromJSON(needs.change-scope.outputs.manifest).lanes."
+                        "(needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes."
                         f"{HEAVY_LANES[predecessor]} || needs.{predecessor}.result == 'success')",
                         job,
                     )

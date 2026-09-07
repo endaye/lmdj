@@ -1,13 +1,10 @@
 name: Core Nightly
 
-# The two stress workloads no Core CI lane runs. Since the self-test batch
-# (ci.yml, `schedule` and operator `workflow_dispatch`) calls this workflow
-# for them, the daily execution lives there: one fixed target, one batch,
-# one verdict. The cron this file carried until then would have run the same
-# suites against the same tip three hours later, so it is gone rather than
-# kept as a second daily copy; `workflow_dispatch` stays for a diagnostic
-# rerun of one suite.
+# Reused by the manual-first self-test batch. Keep the existing daily Nightly
+# coverage until O1/T5a explicitly migrates the sweep and retires this cron.
 on:
+  schedule:
+    - cron: "0 19 * * *"
   workflow_dispatch:
     inputs:
       suite:
@@ -22,6 +19,10 @@ on:
         default: ""
         type: string
   workflow_call:
+    outputs:
+      infrastructure_failure:
+        description: The TSan host prerequisite prevented test execution.
+        value: ${{ jobs.core-tsan.outputs.infrastructure_failure }}
     inputs:
       suite:
         description: all | tsan | stress
@@ -39,6 +40,8 @@ permissions:
 
 jobs:
   core-tsan:
+    outputs:
+      infrastructure_failure: ${{ steps.prerequisite.outputs.infrastructure_failure }}
     # Trusted native Core workload on the `ci-core` role since #693. TSan was
     # Hosted from 2026-08-05 because the self-hosted hosts' 6.8 kernel hands
     # out 32-bit `vm.mmap_rnd_bits` and no TSan runtime -- GCC 13, LLVM 18 or
@@ -63,6 +66,11 @@ jobs:
         with:
           ref: ${{ inputs.target_revision || '' }}
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ inputs.target_revision != '' }}
+        env:
+          EXPECTED_TARGET: ${{ inputs.target_revision }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
         with:
@@ -71,9 +79,11 @@ jobs:
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
       - name: Verify the TSan host prerequisite
+        id: prerequisite
         run: |
           bits="$(sysctl -n vm.mmap_rnd_bits)"
           if [ "$bits" -gt 28 ]; then
+            echo 'infrastructure_failure=true' >>"$GITHUB_OUTPUT"
             echo "why: vm.mmap_rnd_bits is $bits on $(hostname); ThreadSanitizer cannot start under more than 28 bits of mmap ASLR entropy and the runner unit forbids the re-exec it would use to cope; remedy: an operator runs sudo scripts/ci/host/configure-sanitizer-aslr.sh on this host" >&2
             exit 1
           fi
@@ -109,6 +119,11 @@ jobs:
         with:
           ref: ${{ inputs.target_revision || '' }}
           lfs: true
+      - name: Verify the checked-out target
+        if: ${{ inputs.target_revision != '' }}
+        env:
+          EXPECTED_TARGET: ${{ inputs.target_revision }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
       - run: git lfs checkout -- tests/fixtures
       - uses: actions/setup-python@v6
         with:

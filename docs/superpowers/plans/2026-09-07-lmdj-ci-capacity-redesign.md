@@ -140,23 +140,39 @@ Documentation impact: none；此时协议尚未接入任何执行或发布入口
 
 ### T2：把 sweep 扩展为固定目标的自测入口
 
+T2 接手修订边界：先启用手动空 dispatch 的固定目标批次，旧每日 sweep 与 Nightly
+cron 均保持现状，O1/T5a 才切换每日入口与去重。显式请求按 run ID 独立保留，仍使用
+现有重型资源锁；独立 suite 的先后顺序保留，但不因前一个 suite 失败而取消后一个。
+本阶段仅接受 attempt 1；诊断重试必须新建同 target 的 dispatch，避免 Actions 局部
+rerun 继承旧成功结果。resolver 和 verdict 都拒绝后续 attempt，日后若支持完整 rerun，
+须先证明所有 suite 的真实 attempt。产物名含 target/run/attempt，旧失败不覆盖。
+解析前另保留 self-test-request 记录，未验证 target 只供识别请求，不构成测试证据。
+
 **分支／commit：** `feat/ci-self-test-runner` /
 `feat(ci): run complete self-tests on a fixed main revision`
 
-**修改：** `.github/workflows/ci.yml`（schedule／dispatch 路径）、
-`.github/workflows/core-nightly.yml`、`scripts/ci/change_scope.py`、
-`scripts/ci/scope_policy.json`（本 Task 新增文件的登记随本 Task 进行，
-T0 已取消）、T1 协议实现和测试、
-`tests/build/ci_workflow_topology_test.py`、`ci_nightly_workflow_test.py`；
+**修改：** `.github/workflows/ci.yml`（手动 dispatch 路径）、
+`.github/workflows/core-nightly.yml`、`.github/workflows/architecture-portal.yml`、
+`scripts/ci/change_scope.py`、`scripts/ci/hosted_runner_policy.json`、
+`scripts/ci/self_test.py`；`tests/build/ci_self_test_test.py`、
+`tests/build/ci_change_scope_test.py`、`tests/build/ci_workflow_topology_test.py`、
+`tests/build/ci_runner_fallback_test.py`、`tests/build/release_hydrate_test.py`
+（允许 resolver 精确 fetch main，仍禁止内联 intent hydrate）；
 `apps/architecture-portal/docs/operations/testing-and-proof.mdx`、
-`docs/quality/core-test-policy.md`。
+`docs/quality/core-test-policy.md`、`docs/governance/git-workflow.md`、本文。
+**新增：** `tests/build/ci_self_test_workflow_test.py`、
+`scripts/ci/self_test_evidence.py`、`tests/build/ci_self_test_evidence_test.py`。
+后两项提供 T3 共用的只读消费校验器，严格核对身份、digest、suite/job 集合与结论。
+新文件沿现有 scripts/ci full 规则与 ci_*_test.py 所有权登记；验证后若存在缺口，
+同 Task 更新 `scripts/ci/scope_policy.json`，不另设 T0。
 
 - [ ] 在 #724 的 sweep 路径上增加 `target` 输入：手动 dispatch 可指定 main 历史上的
   完整 SHA，checkout 该 SHA 而非 ref tip，scope manifest 记录 `target_revision`；
-  `schedule` 事件把 tip 解析为 target。`workflow_dispatch` 的 ref 只能是分支或 tag，
+  `schedule` 的新目标解析延至 T5a 接线。`workflow_dispatch` 的 ref 只能是分支或 tag，
   所以“指定旧 SHA”只能靠输入＋校验实现，不能靠 ref。
 - [ ] 把 Nightly 的 TSan stress 与 Release stress 并入同一批次报告；Nightly 自己的
-  cron 在 T5a 停用前保留，但两者不得在同一天对同一 SHA 各跑一遍。
+  cron 在 T5a 停用前保留，新批次暂不接 schedule，避免两套自动任务重复同一 SHA；
+  Owner 显式手动验证同 SHA 不属于自动重复，需保留独立请求与结论。
   TSan suite 依赖主机 `vm.mmap_rnd_bits ≤ 28`（`scripts/ci/host/configure-sanitizer-aslr.sh`，
   操作者 sudo）；前提缺失按 infrastructure failure 报告，不记为 blocked 或通过。
   保留现有资源锁、工具链、LFS 和 release hydrate 调用。
@@ -169,7 +185,8 @@ T0 已取消）、T1 协议实现和测试、
   默认矩阵 fail-fast 不得取消其余覆盖。
 - [ ] 验证 main A 测试中出现 B 时，全部 suite 和 package 仍指向 A；
   错误／非 main 目标被拒绝。先不改 release verifier。
-- [ ] 门户准确标注“sweep 现可指定目标并含 Nightly 套件，旧门禁仍生效”，
+- [ ] 门户准确标注“手动自测现可指定目标并含 Nightly 套件，旧 sweep/Nightly cron
+  与门禁仍生效，日测尚未迁移”，
   不提前宣布乐观合并已上线。
 
 **验证：** T1/T2 测试；现存 `ci_workflow_topology_test.py`、
@@ -283,8 +300,8 @@ T5 按§2 的规则拆成 T5a（工作流）与 T5b（治理、skill、模板、
   保留旧 `ci.yml` 的显式 full 候选入口及其真实 scope/gate，直至 T7 迁移通过。
   同次切换启用新 review 的 PR 事件并停用旧 review，避免对同一 head 重复审查。
 - [ ] 自测入口（T2 扩展后的 sweep）接管每日 16:00 UTC 及重要节点；同时停用其余
-  自动全量与队列 cron：`merge-queue.yml` 每 15 分钟（`core-nightly.yml` 19:00 已在 T2
-  随两个 stress suite 并入自测批次时退役，此处不再有事可做）；
+  自动全量与队列 cron：`merge-queue.yml` 每 15 分钟、`core-nightly.yml` 19:00；
+  接线 T1 的无新目标去重，并实现普通日测 pending 的目标核对，不能吞掉显式请求；
   `advisory-review-liveness.yml` 21:00 改为监视新 review 入口或一并退役，不能留着
   监视一个已不存在的 job。不保留两套自动全量。显式候选仍独立于普通 pending 的合并规则。
 - [ ] 停止旧 queue 新 ticket 入口和 watchdog 自动补发；明确已在途 ticket 的完成、

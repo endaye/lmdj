@@ -189,17 +189,25 @@ manifest-selected lane set runs on `main`'s tip once a day, so a red lane is
 seen within a day rather than on the next full-classifying merge (#543). A red
 `Core CI / sweep main` run is the alert.
 
-The sweep is also the daily **self-test batch** of the CI Capacity Redesign
-plan (T2). Change Scope resolves the batch's target first -- the tip, or the
-exact `main` SHA an operator passes in the `target` input of an otherwise
-empty `workflow_dispatch` -- and every workload job checks out that target;
-the Nightly TSan and Release stress suites run inside the batch; the hosted
-`Self-test verdict` job records one verdict for the whole batch as
-`self-test-verdict-<target>`. A `schedule` batch is skipped, with the reason
-in its manifest, when `main` has not moved since the last complete
-conclusion; operator `node` and `candidate` requests always run. The verdict
-artifact is what the failure reporter (T3) consumes; until it lands, the red
-run is still the only alert.
+T2 adds a **manual-first self-test batch**, not a daily cutover. An otherwise
+empty `workflow_dispatch` on `main` may name an exact main-history SHA in
+`target`; every workload checks out and verifies that SHA. Nightly's TSan and
+Release stress run in the same batch, and `Self-test verdict` retains
+`self-test-verdict-<target>-<run>-<attempt>` for 30 days without overwriting
+earlier failures. The early `self-test-request-<run>-<attempt>` record contains
+an unverified requested target, not proof of main ancestry or a test result.
+Explicit requests have independent run-scoped admission and cannot replace
+each other's pending targets; the existing native-heavy resource lock remains.
+Independent suites continue collecting failures even if preflight or a previous
+independently built suite failed; the ordinary PR and sweep gates are unchanged.
+
+This initial execution protocol accepts only attempt 1. For another observation,
+create a **new dispatch with the same target**, not Actions' Re-run jobs: a
+partial rerun can inherit successful jobs from the old attempt. Both resolver
+and verdict refuse reruns rather than claiming mixed results as fresh proof.
+Daily sweep and the separate Nightly cron remain unchanged until O1/T5a; daily
+deduplication is not active yet. T3 consumes the verdict/request artifacts;
+until it lands, the red run is still the only alert.
 
 The sweep is a visibility signal and **not** release evidence. Release
 authority still accepts only a `push` or an explicit operator

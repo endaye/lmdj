@@ -390,11 +390,12 @@ class Observation:
     blocked_by: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
+    infrastructure_failure: bool = False
 
     @classmethod
     def from_document(cls, document: Mapping[str, object]) -> "Observation":
         allowed = {"suite", "job", "run_id", "run_attempt", "target_revision", "conclusion",
-                   "artifact", "blocked_by", "started_at", "completed_at"}
+                   "artifact", "blocked_by", "started_at", "completed_at", "infrastructure_failure"}
         extra = set(document) - allowed
         if extra:
             raise ValueError(f"observation carries unknown keys {sorted(extra)}")
@@ -409,6 +410,7 @@ class Observation:
             blocked_by=(str(document["blocked_by"]) if document.get("blocked_by") else None),
             started_at=(str(document["started_at"]) if document.get("started_at") else None),
             completed_at=(str(document["completed_at"]) if document.get("completed_at") else None),
+            infrastructure_failure=document.get("infrastructure_failure") is True,
         )
 
 
@@ -600,6 +602,12 @@ def _judge_suite(suite: Suite, by_job: Mapping[str, Observation]) -> SuiteResult
                 "a required job may only be skipped when its declared alternative succeeded in the same run"))
             continue
         if row.conclusion == "failure":
+            if row.infrastructure_failure:
+                statuses.append(SUITE_INFRASTRUCTURE_FAILURE)
+                diagnostics.append(_diagnostic(
+                    f"{suite.id}/{job} could not execute because its host prerequisite failed",
+                    "repair the reported runner prerequisite and dispatch a fresh batch"))
+                continue
             statuses.append(SUITE_TEST_FAILURE)
             diagnostics.append(_diagnostic(
                 f"{suite.id}/{job} failed",
@@ -677,6 +685,9 @@ def observations_from_needs(
         rows.append(Observation(
             suite_id, job, identity.run_id, identity.run_attempt, identity.target_revision,
             result, "none", blocked_by,
+            infrastructure_failure=(
+                needs.get(aliases.get(job, job), {}).get("outputs", {}).get("infrastructure_failure") == "true"
+            ),
         ))
     return rows, tuple(diagnostics)
 
@@ -729,7 +740,8 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
     history = {line.strip() for line in args.main_history.read_text(encoding="utf-8").splitlines()
                if line.strip()}
     last: Conclusion | None = None
-    if args.last_conclusion is not None and args.last_conclusion.exists():
+    if (args.last_conclusion is not None and args.last_conclusion.exists()
+            and args.last_conclusion.stat().st_size):
         document = _read_json(args.last_conclusion)
         if isinstance(document, dict):
             last = Conclusion(str(document.get("target_revision", "")), str(document.get("status", "")),
@@ -792,6 +804,7 @@ def _cmd_observations(args: argparse.Namespace) -> int:
     _write_json(args.out, [
         {"suite": r.suite, "job": r.job, "run_id": r.run_id, "run_attempt": r.run_attempt,
          "target_revision": r.target_revision, "conclusion": r.conclusion, "artifact": r.artifact,
+         "infrastructure_failure": r.infrastructure_failure,
          **({"blocked_by": r.blocked_by} if r.blocked_by else {})}
         for r in rows
     ])

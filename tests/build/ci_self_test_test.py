@@ -440,6 +440,15 @@ class ObservationsFromNeedsTest(unittest.TestCase):
     def needs(self, **results):
         return {job: {"result": result} for job, result in results.items()}
 
+    def test_tsan_host_prerequisite_is_infrastructure_not_product_failure(self):
+        ident = identity()
+        needs = {'nightly-tsan': {'result': 'failure', 'outputs': {'infrastructure_failure': 'true'}}}
+        rows, _ = st.observations_from_needs(ident, POLICY, needs, aliases={'core-tsan': 'nightly-tsan'})
+        verdict = st.aggregate(ident, POLICY, rows)
+        suite = next(s for s in verdict.suites if s.id == 'core_tsan_stress')
+        self.assertEqual(suite.status, 'infrastructure_failure')
+        self.assertIn('host prerequisite', suite.diagnostics[0])
+
     def test_every_needed_policy_job_becomes_one_observation(self) -> None:
         ident = identity()
         needs = self.needs(**{job: "success" for suite in POLICY.suites for job in suite.jobs
@@ -508,10 +517,11 @@ class CommandLineTest(unittest.TestCase):
             (root / "request.json").write_text(json.dumps(
                 {"kind": "candidate", "target_revision": OLDER, "requested_by": "owner"}), encoding="utf-8")
             (root / "main.txt").write_text(f"{TIP}\n{OLDER}\n", encoding="utf-8")
+            (root / "last.json").write_text('', encoding='utf-8')
             resolve = self.run_cli(
                 "resolve", "--request", "request.json", "--tip", TIP, "--main-history", "main.txt",
                 "--control-revision", CONTROL, "--run-id", "7", "--run-attempt", "1",
-                "--out", "resolution.json", cwd=root)
+                "--last-conclusion", "last.json", "--out", "resolution.json", cwd=root)
             self.assertEqual(resolve.returncode, 0, resolve.stderr)
             resolution = json.loads((root / "resolution.json").read_text(encoding="utf-8"))
             self.assertEqual(resolution["action"], "run")
