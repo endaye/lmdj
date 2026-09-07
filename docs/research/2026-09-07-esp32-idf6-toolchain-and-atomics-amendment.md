@@ -134,16 +134,20 @@ v6.1 下能编过、能点亮屏、能出声”必须作为独立的前置验证
 | 实物 | 判定依据 |
 | --- | --- |
 | Cardputer Adv | `ESP32-S3FN8` 无封装内 PSRAM，M5Stack 规格也未提供板载 PSRAM |
-| 独立 `ESP-32S` 模组 | 裸 WROOM 级模组，无 PSRAM |
+| 独立 `ESP-32S` 模组（芯片 `ESP32-D0WD-V3`） | 芯片无封装内 PSRAM；模组为 WROOM 级，无板载 PSRAM |
 
 `ESP-32S` 是 Ai-Thinker 的**模组**丝印，不是乐鑫的芯片型号；它在规格与引脚上对应
-Espressif `ESP-WROOM-32`，模组内是经典 ESP32（双核 Xtensa LX6、520 KiB 片上 SRAM），
-常见 4 MiB flash。
+Espressif `ESP-WROOM-32`。模组内的芯片读作 `ESP32-D0WD-V3`：经典 ESP32 的 ECO V3
+版本（chip revision v3.0），双核 Xtensa LX6、520 KiB 片上 SRAM，模组侧常见 4 MiB flash。
 
-“裸模组”这一句是判定的必要部分，不能省。AI-Thinker 的 **ESP32-CAM** 板上贴的模组丝印
-同样是 `ESP32-S`，而那块板带 **4 MiB 外挂 PSRAM**，落在 2.2 表的中间一行。同一丝印、
-相反的 PSRAM 结论，因此丝印必须与实物形态一起读：带 PSRAM 的模组会在丝印上写
-`WROVER`，而 ESP32-CAM 认得出摄像头座子。
+PSRAM 由此双重定案。带封装内 PSRAM 的经典 ESP32 变体在料号里带 `R`（例如
+`ESP32-D0WDR2-V3`），`D0WD-V3` 不带，所以 PSRAM 只可能来自板载外挂；而 WROOM 级模组
+不提供板载外挂 PSRAM，提供的那一类丝印会写 `WROVER`。
+
+“裸模组”这一句仍是判定的必要部分，不能省。AI-Thinker 的 **ESP32-CAM** 板上贴的模组
+丝印同样是 `ESP32-S`，芯片也可以是同一颗 `ESP32-D0WD-V3`，但那块板在模组内另配了
+**4 MiB 外挂 PSRAM**，落在 2.2 表的中间一行。芯片料号与模组丝印都不足以单独定案，
+必须连实物形态一起读：ESP32-CAM 认得出摄像头座子。
 
 外挂 PSRAM 不写 efuse，所以 `esptool.py flash_id` 的 `Features` 行不报告它。首次烧录时
 顺手复核一次即可：开启 `CONFIG_SPIRAM` 的构建，启动日志不应出现 `esp_psram: Found ...`。
