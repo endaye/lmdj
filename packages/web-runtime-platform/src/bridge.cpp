@@ -220,7 +220,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 69> operations{
+  static constexpr std::array<std::string_view, 72> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -286,6 +286,9 @@ bool supported_operation(std::string_view operation) {
       "performance.replay.status",
       "performance.resample.commit",
       "soundset.catalog.list",
+      "soundset.catalog.index",
+      "soundset.catalog.supply",
+      "soundset.catalog.pending",
       "soundset.inspect",
       "soundset.map.preview",
       "soundset.install",
@@ -2836,6 +2839,14 @@ EMSCRIPTEN_KEEPALIVE const char* lmdj_web_audio_test_poll() {
 
 }  // extern "C"
 
+// The browser-side crossing buffer for Catalog objects: what the Host has
+// fetched and Core has not yet published. These are Host capacity for the
+// staging hand-off, not the four `resource_limits.maximum_soundset_*` Host
+// manifest keys the Set Store enforces; those are allocated with the rest of
+// the Web Host's limits and reach Core through `ApplicationConfig`.
+constexpr std::uint64_t kWebSoundSetStagingBytes = 32ULL * 1024ULL * 1024ULL;
+constexpr std::size_t kWebSoundSetStagingObjects = 256;
+
 int main() {
   if (!web_manifest_gate.begin_runtime()) {
     return 2;
@@ -2853,10 +2864,13 @@ int main() {
       LMDJ_WEB_LIMIT_GENERATION_BYTES,
       LMDJ_WEB_LIMIT_RESIDENT_BYTES,
   };
-  // Task 4 wires the Web Host with the local adapter only: the Workspace's
-  // own Catalog directory and index. The network `CatalogTransport` that
-  // replaces the transport here is Task 5's.
-  auto catalog = lmdj::facade::make_workspace_soundset_catalog(workspace);
+  // S11-D6: the Web Host's Catalog is a network endpoint, and Core ships no
+  // network code, so the browser side performs the `fetch` and stages the
+  // bytes here. The same object is Core's `CatalogTransport` and its Catalog
+  // index source; it resolves nothing itself and keeps the hash check.
+  auto catalog = lmdj::facade::make_supplied_soundset_catalog(
+      kWebSoundSetStagingBytes,
+      kWebSoundSetStagingObjects);
   auto created = ControlRuntime::create(
       workspace,
       ApplicationConfig{

@@ -4173,6 +4173,384 @@ void test_soundset_operations_route_at_the_workspace_and_the_project() {
       "NOT_FOUND");
 }
 
+// The transport itself, without a Facade in front of it. Everything the
+// browser side can reach is checked here, because the Set Store's own
+// independent verification would otherwise mask a transport that verified
+// nothing: both refuse a tampered Set, so only a direct read distinguishes
+// them.
+void test_host_supplied_catalog_verifies_what_it_serves() {
+  using lmdj::project_io::CatalogObjectKind;
+  using lmdj::project_io::CatalogObjectRef;
+
+  const auto handle = lmdj::facade::make_supplied_soundset_catalog(64, 2);
+  auto& control = *handle.control;
+  auto& transport = *handle.transport;
+  auto& source = *handle.source;
+  const std::string payload = "sound-set-object";
+  std::vector<std::byte> bytes(payload.size());
+  std::transform(
+      payload.begin(), payload.end(), bytes.begin(), [](char value) {
+        return static_cast<std::byte>(static_cast<unsigned char>(value));
+      });
+  const auto digest = picosha2::hash256_hex_string(payload);
+
+  // A miss is an unreachable Catalog and records the address exactly once,
+  // however many times Core asks.
+  const auto missed = transport.read_object(
+      CatalogObjectRef{CatalogObjectKind::blob, digest}, 1024);
+  LMDJ_CHECK(!missed.has_value());
+  LMDJ_CHECK(missed.error().code == lmdj::foundation::ErrorCode::io_error);
+  LMDJ_CHECK(missed.error().details.at("reason") == "catalog_unavailable");
+  LMDJ_CHECK(!transport.read_object(
+      CatalogObjectRef{CatalogObjectKind::blob, digest}, 1024).has_value());
+  // The same digest under the other kind is a different address.
+  LMDJ_CHECK(!transport.read_object(
+      CatalogObjectRef{CatalogObjectKind::manifest, digest}, 1024).has_value());
+  auto pending = control.drain_pending();
+  LMDJ_CHECK(!pending.index);
+  LMDJ_CHECK(pending.objects.size() == 2);
+  LMDJ_CHECK(pending.objects.at(0).object_kind == "blob");
+  LMDJ_CHECK(pending.objects.at(0).sha256 == digest);
+  LMDJ_CHECK(pending.objects.at(1).object_kind == "manifest");
+  LMDJ_CHECK(control.drain_pending().objects.empty());
+
+  // An address that is not a lowercase sha256 is not an address at all, and
+  // is never recorded as something the Host could go and fetch.
+  LMDJ_CHECK(!transport.read_object(
+      CatalogObjectRef{CatalogObjectKind::blob, "../secret"}, 1024).has_value());
+  LMDJ_CHECK(control.drain_pending().objects.empty());
+
+  // Bytes that do not hash to the address they were staged under never reach
+  // Core, and re-asking cannot help, so the address stays off the pending set.
+  LMDJ_CHECK(control.supply("blob", std::string(64, 'b'), 0, bytes.size(), bytes).has_value());
+  const auto mismatched = transport.read_object(
+      CatalogObjectRef{CatalogObjectKind::blob, std::string(64, 'b')}, 1024);
+  LMDJ_CHECK(!mismatched.has_value());
+  LMDJ_CHECK(mismatched.error().details.at("reason") == "soundset_content_mismatch");
+  LMDJ_CHECK(control.drain_pending().objects.empty());
+
+  // A staged address serves its own bytes, and supplying it clears it from the
+  // pending set.
+  LMDJ_CHECK(!transport.read_object(
+      CatalogObjectRef{CatalogObjectKind::blob, digest}, 1024).has_value());
+  LMDJ_CHECK(control.supply("blob", digest, 0, bytes.size(), bytes).has_value());
+  LMDJ_CHECK(control.drain_pending().objects.empty());
+  const auto served = transport.read_object(
+      CatalogObjectRef{CatalogObjectKind::blob, digest}, 1024);
+  LMDJ_CHECK(served.has_value());
+  LMDJ_CHECK(served.value() == bytes);
+  // The caller's own bound still decides, and being over it is not a fault in
+  // the Set.
+  const auto bounded = transport.read_object(
+      CatalogObjectRef{CatalogObjectKind::blob, digest}, 4);
+  LMDJ_CHECK(!bounded.has_value());
+  LMDJ_CHECK(bounded.error().details.at("reason") == "catalog_unavailable");
+
+  // Host staging capacity is decided before an allocation: 64 bytes and two
+  // objects are already spent by the two staged above.
+  LMDJ_CHECK(!control.supply("manifest", std::string(64, 'c'), 0, bytes.size(), bytes).has_value());
+  control.clear_staged();
+  LMDJ_CHECK(control.supply("manifest", std::string(64, 'c'), 0, bytes.size(), bytes).has_value());
+  std::vector<std::byte> oversized(65, std::byte{0});
+  LMDJ_CHECK(!control.supply("blob", std::string(64, 'd'), 0, oversized.size(), oversized).has_value());
+
+  // Only the two locked kinds and only a lowercase sha256 name an object.
+  LMDJ_CHECK(!control.supply("index", digest, 0, bytes.size(), bytes).has_value());
+  LMDJ_CHECK(!control.supply("archive", digest, 0, bytes.size(), bytes).has_value());
+  LMDJ_CHECK(!control.supply("blob", "manifest/" + digest, 0, bytes.size(), bytes).has_value());
+  LMDJ_CHECK(!control.supply("blob", std::string(64, 'B'), 0, bytes.size(), bytes).has_value());
+
+  // A chunked object is readable only when the whole of it has arrived, and a
+  // run that does not continue the one in flight is refused rather than
+  // stitched into a Set nobody sent.
+  control.clear_staged();
+  const std::span<const std::byte> whole(bytes);
+  LMDJ_CHECK(
+      control.supply("blob", digest, 0, bytes.size(), whole.first(4)).value() ==
+      false);
+  LMDJ_CHECK(!transport.read_object(
+      CatalogObjectRef{CatalogObjectKind::blob, digest}, 1024).has_value());
+  // Wrong offset, wrong declared length, and a different address mid-run.
+  LMDJ_CHECK(!control.supply("blob", digest, 5, bytes.size(), whole.subspan(5))
+                  .has_value());
+  LMDJ_CHECK(!control.supply("blob", digest, 4, bytes.size() + 1,
+                             whole.subspan(4)).has_value());
+  LMDJ_CHECK(!control.supply("manifest", digest, 4, bytes.size(),
+                             whole.subspan(4)).has_value());
+  // A chunk that runs past the declared length is refused whole.
+  LMDJ_CHECK(!control.supply("blob", digest, 0, 2, whole).has_value());
+  LMDJ_CHECK(
+      control.supply("blob", digest, 0, bytes.size(), whole.first(4)).value() ==
+      false);
+  LMDJ_CHECK(
+      control.supply("blob", digest, 4, bytes.size(), whole.subspan(4))
+          .value() == true);
+  LMDJ_CHECK(transport.read_object(
+      CatalogObjectRef{CatalogObjectKind::blob, digest}, 1024).has_value());
+  control.clear_staged();
+
+  // The index is the second, separate read: absent, present, and withdrawn.
+  const auto no_index = source.read_index(1024);
+  LMDJ_CHECK(!no_index.has_value());
+  LMDJ_CHECK(no_index.error().details.at("reason") == "catalog_unavailable");
+  LMDJ_CHECK(control.drain_pending().index);
+  LMDJ_CHECK(!control.drain_pending().index);
+  LMDJ_CHECK(control.supply_index(bytes).has_value());
+  LMDJ_CHECK(source.read_index(1024).has_value());
+  control.forget_index();
+  LMDJ_CHECK(!source.read_index(1024).has_value());
+}
+
+// The Web Host's own half of the Sound Set Catalog. S11-D6 gives a Catalog
+// adapter exactly one power, and these three Host-local operations are the
+// whole of the browser side's access to it: stage the Catalog index, stage one
+// object addressed by `{object_kind, sha256}`, and read back the addresses
+// Core asked for and could not be served. There is no path, URL, archive
+// member or third object kind anywhere in that surface, and a request that is
+// not one of those shapes is refused rather than repaired.
+void test_host_supplied_catalog_resolves_only_addressed_objects() {
+  TempDirectory temp;
+  const std::filesystem::path corpus =
+      std::filesystem::path(LMDJ_SOURCE_DIR) / "tests/fixtures/soundset";
+  LMDJ_CHECK(std::filesystem::is_directory(corpus));
+
+  auto catalog = lmdj::facade::make_supplied_soundset_catalog(
+      4ULL * 1024ULL * 1024ULL, 256);
+  auto config = make_application_config(temp.path());
+  config.soundset_catalog_transport = catalog.transport;
+  config.soundset_catalog_source = catalog.source;
+  auto created = ControlRuntime::create(temp.path(), std::move(config), kWebLimits);
+  LMDJ_CHECK(created.has_value());
+  auto runtime = std::move(created.value());
+
+  const auto read_fixture = [&corpus](const std::filesystem::path& relative) {
+    std::ifstream stream(corpus / relative, std::ios::binary);
+    LMDJ_CHECK(stream.good());
+    const std::string text(
+        (std::istreambuf_iterator<char>(stream)),
+        std::istreambuf_iterator<char>());
+    std::vector<std::byte> bytes(text.size());
+    std::transform(
+        text.begin(), text.end(), bytes.begin(), [](char value) {
+          return static_cast<std::byte>(static_cast<unsigned char>(value));
+        });
+    return bytes;
+  };
+
+  // Nothing has been asked for yet.
+  const auto empty = check_exact_success(
+      runtime->dispatch("soundset.catalog.pending", Json::object(), {}),
+      {"index", "objects"});
+  LMDJ_CHECK(empty.at("index") == false);
+  LMDJ_CHECK(empty.at("objects").empty());
+
+  // An unreachable Catalog is not fatal, and the Host learns that the index is
+  // the read that failed.
+  const auto cold = check_locked_success_result(
+      runtime->dispatch("soundset.catalog.list", Json::object(), {}));
+  LMDJ_CHECK(cold.at("catalog_available") == false);
+  LMDJ_CHECK(cold.at("sets").empty());
+  const auto wanted_index = check_locked_success_result(
+      runtime->dispatch("soundset.catalog.pending", Json::object(), {}));
+  LMDJ_CHECK(wanted_index.at("index") == true);
+  LMDJ_CHECK(wanted_index.at("objects").empty());
+
+  // Only the two locked kinds, only a lowercase sha256, and only those two
+  // fields. Every other spelling is refused before a byte is staged.
+  const auto index_bytes = read_fixture("catalog/index.json");
+  check_error(
+      runtime->dispatch(
+          "soundset.catalog.supply",
+          {{"object_kind", "manifest"}, {"sha256", std::string(64, 'a')},
+           {"offset", 0}, {"byte_length", index_bytes.size()},
+           {"url", "https://example.invalid/object"}},
+          index_bytes),
+      "HOST_PROTOCOL_MISMATCH");
+  check_error(
+      runtime->dispatch(
+          "soundset.catalog.supply",
+          {{"object_kind", "manifest"}, {"offset", 0}},
+          index_bytes),
+      "HOST_PROTOCOL_MISMATCH");
+  check_error(
+      runtime->dispatch(
+          "soundset.catalog.supply",
+          {{"object_kind", "archive"}, {"sha256", std::string(64, 'a')},
+           {"offset", 0}, {"byte_length", index_bytes.size()}},
+          index_bytes),
+      "INVALID_ARGUMENT");
+  check_error(
+      runtime->dispatch(
+          "soundset.catalog.supply",
+          {{"object_kind", "index"}, {"sha256", std::string(64, 'a')},
+           {"offset", 0}, {"byte_length", index_bytes.size()}},
+          index_bytes),
+      "INVALID_ARGUMENT");
+  check_error(
+      runtime->dispatch(
+          "soundset.catalog.supply",
+          {{"object_kind", "blob"}, {"sha256", "../../../etc/passwd"},
+           {"offset", 0}, {"byte_length", index_bytes.size()}},
+          index_bytes),
+      "INVALID_ARGUMENT");
+  check_error(
+      runtime->dispatch(
+          "soundset.catalog.supply",
+          {{"object_kind", "blob"}, {"sha256", std::string(64, 'A')},
+           {"offset", 0}, {"byte_length", index_bytes.size()}},
+          index_bytes),
+      "INVALID_ARGUMENT");
+  // The index is not an object of either locked kind, so it never travels on
+  // the object surface, and an absent index carries no bytes.
+  check_error(
+      runtime->dispatch(
+          "soundset.catalog.index", {{"available", false}}, index_bytes),
+      "HOST_PROTOCOL_MISMATCH");
+  check_error(
+      runtime->dispatch(
+          "soundset.catalog.index",
+          {{"available", true}, {"sha256", std::string(64, 'a')}},
+          index_bytes),
+      "HOST_PROTOCOL_MISMATCH");
+
+  check_exact_success(
+      runtime->dispatch(
+          "soundset.catalog.index", {{"available", true}}, index_bytes),
+      {"staged"});
+
+  // Every address Core asks for is one basename under one object kind, and
+  // one pass of the loop below stages exactly the addresses of the last pass.
+  Json listed;
+  std::vector<std::string> addresses;
+  for (int round = 0; round < 32; ++round) {
+    listed = check_locked_success_result(
+        runtime->dispatch("soundset.catalog.list", Json::object(), {}));
+    const auto pending = check_locked_success_result(
+        runtime->dispatch("soundset.catalog.pending", Json::object(), {}));
+    LMDJ_CHECK(pending.at("index") == false);
+    if (pending.at("objects").empty()) {
+      break;
+    }
+    for (const auto& object : pending.at("objects")) {
+      check_exact_keys(object, {"object_kind", "sha256"});
+      const auto kind = object.at("object_kind").get<std::string>();
+      const auto sha256 = object.at("sha256").get<std::string>();
+      LMDJ_CHECK(kind == "manifest" || kind == "blob");
+      LMDJ_CHECK(sha256.size() == 64);
+      addresses.push_back(kind + "/" + sha256);
+      // An object crosses the bridge in as many messages as it needs, and is
+      // readable only once the last one has arrived.
+      const auto bytes = read_fixture(std::filesystem::path(kind) / sha256);
+      const auto half = bytes.size() / 2;
+      const auto first = check_locked_success_result(runtime->dispatch(
+          "soundset.catalog.supply",
+          {{"object_kind", kind}, {"sha256", sha256}, {"offset", 0},
+           {"byte_length", bytes.size()}},
+          std::span<const std::byte>(bytes).first(half)));
+      LMDJ_CHECK(first.at("staged") == false);
+      const auto last = check_locked_success_result(runtime->dispatch(
+          "soundset.catalog.supply",
+          {{"object_kind", kind}, {"sha256", sha256}, {"offset", half},
+           {"byte_length", bytes.size()}},
+          std::span<const std::byte>(bytes).subspan(half)));
+      LMDJ_CHECK(last.at("staged") == true);
+    }
+  }
+  LMDJ_CHECK(!addresses.empty());
+  // One address is one download: the Attribution Kit's demo declares its own
+  // slot 0 hash, and the Foundry CC0 Set reuses slot 0's Artifact on slot 12.
+  auto unique = addresses;
+  std::sort(unique.begin(), unique.end());
+  LMDJ_CHECK(std::unique(unique.begin(), unique.end()) == unique.end());
+
+  LMDJ_CHECK(listed.at("catalog_available") == true);
+  const auto set_named = [&listed](std::string_view name) {
+    for (const auto& entry : listed.at("sets")) {
+      if (entry.at("name") == name) {
+        return entry;
+      }
+    }
+    throw std::runtime_error("Set is not listed: " + std::string(name));
+  };
+  // The CC-BY-4.0 attribution string reaches listing through the Web Host.
+  const auto attribution_kit = set_named("Fixture Attribution Kit");
+  LMDJ_CHECK(attribution_kit.at("license").at("spdx_id") == "CC-BY-4.0");
+  LMDJ_CHECK(
+      !attribution_kit.at("license").at("attribution").get<std::string>().empty());
+  const auto foundry = set_named("Fixture Foundry CC0");
+  LMDJ_CHECK(foundry.at("has_demo") == true);
+
+  // An ineligible or corrupted Set is named among the refusals with its own
+  // public reason rather than vanishing, and the eligible Sets beside it still
+  // list. Which layer refused the tampered bytes is not asserted here: the Set
+  // Store verifies independently of the transport, and
+  // `test_host_supplied_catalog_verifies_what_it_serves` is what pins the
+  // transport's own check.
+  const auto refused_reason = [&listed](std::string_view manifest_sha256) {
+    for (const auto& entry : listed.at("refused")) {
+      if (entry.at("manifest_sha256") == manifest_sha256) {
+        return entry.at("reason").get<std::string>();
+      }
+    }
+    throw std::runtime_error("Set is not refused: " + std::string(manifest_sha256));
+  };
+  LMDJ_CHECK(
+      refused_reason(
+          "00a4700e06a3006d23b7e1b70a09295076c1009c119bd6d3950361ff9892df8e") ==
+      "soundset_content_mismatch");
+  LMDJ_CHECK(
+      refused_reason(
+          "9bdf31630ae7edb863a6520d0b6bebabf45d4b63416b75f1e4ab5086e3ba9592") ==
+      "soundset_license_ineligible");
+
+  // Supplied objects live for one listing pass. Core has published what it
+  // accepted into the Workspace Set Store, so opening the next pass frees the
+  // crossing buffer -- otherwise the two Host bounds would be lifetime totals
+  // and a long session would quietly stop being able to acquire anything.
+  check_exact_success(
+      runtime->dispatch(
+          "soundset.catalog.index", {{"available", true}}, index_bytes),
+      {"staged"});
+  check_locked_success_result(
+      runtime->dispatch("soundset.catalog.list", Json::object(), {}));
+  const auto reasked = check_locked_success_result(
+      runtime->dispatch("soundset.catalog.pending", Json::object(), {}));
+  // Every published Set is idempotent and asks for nothing; only the Sets the
+  // Set Store never accepted come back, and they come back from an empty
+  // staging area rather than being served a second time from it.
+  LMDJ_CHECK(!reasked.at("objects").empty());
+
+  // S11-D7: the Catalog going away leaves every published Set listable.
+  check_exact_success(
+      runtime->dispatch("soundset.catalog.index", {{"available", false}}, {}),
+      {"staged"});
+  const auto offline = check_locked_success_result(
+      runtime->dispatch("soundset.catalog.list", Json::object(), {}));
+  LMDJ_CHECK(offline.at("catalog_available") == false);
+  LMDJ_CHECK(offline.at("sets").size() == listed.at("sets").size());
+  LMDJ_CHECK(!offline.at("sets").empty());
+}
+
+// A Host that wired no Catalog transport has no browser side to stage into,
+// and says so rather than pretending to accept bytes.
+void test_host_catalog_operations_need_a_wired_transport() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_error(
+      runtime->dispatch("soundset.catalog.pending", Json::object(), {}),
+      "HOST_STATE_INVALID");
+  check_error(
+      runtime->dispatch("soundset.catalog.index", {{"available", true}}, {}),
+      "HOST_STATE_INVALID");
+  check_error(
+      runtime->dispatch(
+          "soundset.catalog.supply",
+          {{"object_kind", "blob"}, {"sha256", std::string(64, 'a')},
+           {"offset", 0}, {"byte_length", 0}},
+          {}),
+      "HOST_STATE_INVALID");
+}
+
 void test_bridge_routes_sample_operations_without_a_project_path() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -5464,6 +5842,9 @@ int main() {
     test_host_close_releases_current_and_retired_runtime_banks();
     test_oversized_project_switch_is_inspectable_but_not_runnable();
     test_soundset_operations_route_at_the_workspace_and_the_project();
+    test_host_supplied_catalog_verifies_what_it_serves();
+    test_host_supplied_catalog_resolves_only_addressed_objects();
+    test_host_catalog_operations_need_a_wired_transport();
     test_bridge_routes_sample_operations_without_a_project_path();
     test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
     test_bridge_rejects_duplicates_until_response_consumption();

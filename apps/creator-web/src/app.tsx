@@ -8,6 +8,10 @@ import {PerformSurface} from "./components/perform_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {SampleSurface} from "./components/sample_surface";
 import {SequenceSurface} from "./components/sequence_surface";
+import {
+  isSoundSetSession,
+  SoundSetSurface,
+} from "./components/soundset_surface";
 import {StatusBar, type MidiStatus} from "./components/status_bar";
 import {
   createAcceptanceReport,
@@ -1018,6 +1022,7 @@ function Workspace({
       />
       <ModeRail
         activeMode={activeMode}
+        soundSetEnabled={isSoundSetSession(session)}
         sequenceEnabled={isSequenceSession(session) &&
           state.project.phase === "ready" && state.project.current !== null}
         performEnabled={performController !== null && performCaptureConfigured &&
@@ -1135,6 +1140,22 @@ function Workspace({
               {...(inputController.current ? {controller: inputController.current} : {})} />
           </section>
         </>
+      ) : activeMode === "soundset" && isSoundSetSession(session) ? (
+        <SoundSetSurface
+          session={session}
+          projectRevision={state.project.current?.revision ?? null}
+          activeBank={state.activeBank}
+          onBankChange={(bank) => {
+            inputController.current?.clearPressed();
+            dispatch({type: "bank-selected", bank});
+          }}
+          onInstalled={(revision) => {
+            // The install committed ordinary Assets and Pad assignments, so
+            // the Pad projection every other surface reads is now stale.
+            dispatch({type: "project-revision-updated", revision});
+            void refreshPerformProject().catch(() => {});
+          }}
+        />
       ) : activeMode === "perform" && state.project.current !== null &&
         performController !== null ? (
         <PerformSurface

@@ -379,3 +379,135 @@ import type {
   PerformanceRuntimeSession,
   WebPerformanceCaptureSession,
 } from "@lmdj/web-runtime-platform/runtime_types";
+
+export interface SoundSetLicense {
+  spdxId: string;
+  rightsHolder: string;
+  copyright: string;
+  // S11-D2 keeps this a required key that is empty for a Set that needs no
+  // attribution, so the surface shows the string the manifest declared and
+  // never composes one of its own.
+  attribution: string;
+}
+
+export interface SoundSetArtifact {
+  sha256: string;
+  mediaType: string;
+  byteLength: number;
+}
+
+export interface SoundSetOccupiedSlotSummary {
+  slot: number;
+  role: string;
+  name: string;
+}
+
+export interface SoundSetSummary {
+  setId: string;
+  version: string;
+  manifestSha256: string;
+  name: string;
+  publisher: string;
+  description: string | null;
+  bpm: number | null;
+  key: string | null;
+  totalBytes: number;
+  hasDemo: boolean;
+  license: Readonly<SoundSetLicense>;
+  occupiedSlots: readonly Readonly<SoundSetOccupiedSlotSummary>[];
+}
+
+export interface SoundSetSlotAudio {
+  sampleRate: number;
+  channels: number;
+  sourceFrames: number;
+  preparedBytes: number;
+  preparedFrames: number;
+}
+
+// S11-D12: a Set slot is empty exactly when it carries no `artifact`. There is
+// no emptiness flag, because an empty slot is never an instruction to clear
+// the Pad it maps to.
+export interface SoundSetSlot {
+  slot: number;
+  role?: string;
+  name?: string;
+  bpm?: number | null;
+  key?: string | null;
+  artifact: Readonly<SoundSetArtifact> | null;
+  audio?: Readonly<SoundSetSlotAudio>;
+}
+
+export interface SoundSetInspect extends SoundSetSummary {
+  slots: readonly Readonly<SoundSetSlot>[];
+  demo: Readonly<SoundSetArtifact> | null;
+}
+
+export interface SoundSetRefusal {
+  setId: string;
+  version: string;
+  manifestSha256: string;
+  code: string;
+  reason: string | null;
+}
+
+export interface SoundSetCatalog {
+  catalogAvailable: boolean;
+  sets: readonly Readonly<SoundSetSummary>[];
+  refused: readonly Readonly<SoundSetRefusal>[];
+}
+
+export interface SoundSetProposedPad {
+  slotIndex: number;
+  pad: number;
+  artifact: Readonly<SoundSetArtifact> | null;
+}
+
+export interface SoundSetMapPreview {
+  bankId: number;
+  setId: string;
+  version: string;
+  manifestSha256: string;
+  projectRevision: number;
+  proposed: readonly Readonly<SoundSetProposedPad>[];
+  collisions: readonly number[];
+  kept: readonly number[];
+}
+
+export type OccupiedPadPolicy = "keep" | "replace";
+
+export interface SoundSetInstallReceipt {
+  bankId: number;
+  setId: string;
+  version: string;
+  manifestSha256: string;
+  committedRevision: number;
+  replayed: boolean;
+  installed: readonly Readonly<{slotIndex: number; pad: number}>[];
+  collisions: readonly number[];
+  kept: readonly number[];
+}
+
+export interface SoundSetIdentity {
+  setId: string;
+  version: string;
+  manifestSha256: string;
+}
+
+export interface CreatorSoundSetRuntimeSession extends CreatorRuntimeSession {
+  listSoundSets(): Promise<Readonly<SoundSetCatalog>>;
+  inspectSoundSet(
+    request: Readonly<SoundSetIdentity>,
+  ): Promise<Readonly<SoundSetInspect>>;
+  previewSoundSetMap(
+    request: Readonly<SoundSetIdentity & {bankId: number}>,
+  ): Promise<Readonly<SoundSetMapPreview>>;
+  installSoundSet(
+    request: Readonly<SoundSetIdentity & {
+      bankId: number;
+      commandId: string;
+      expectedRevision: number;
+      occupiedPadPolicy?: OccupiedPadPolicy;
+    }>,
+  ): Promise<Readonly<SoundSetInstallReceipt>>;
+}

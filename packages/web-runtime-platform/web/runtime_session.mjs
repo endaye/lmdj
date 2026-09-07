@@ -59,6 +59,15 @@ const SAFE_ERROR_DETAIL_NAMES = new Set([
 const VOICE_STATES = new Set(["started", "stopped", "completed"]);
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+// One acquisition pass resolves the addresses the previous pass asked for, and
+// Core only learns a Set's blob addresses once it holds that Set's manifest.
+// Sixteen slots, a set-level demo, the manifest and the index bound the chain;
+// the margin keeps an interrupted pass from ending the loop early.
+const SOUNDSET_ACQUISITION_ROUNDS = 24;
+// Comfortably inside the bridge's sidecar bound, so one Catalog object crosses
+// in as many messages as it needs instead of being silently unreachable.
+const SOUNDSET_SUPPLY_CHUNK_BYTES = 512 * 1024;
 const ALLOWED_TYPED_ERROR_CODES = new Set([
   "INVALID_ARGUMENT",
   "NOT_FOUND",
@@ -253,6 +262,10 @@ function protocolMismatch(message) {
 
 function isUnsignedInteger(value, maximum = Number.MAX_SAFE_INTEGER) {
   return Number.isSafeInteger(value) && value >= 0 && value <= maximum;
+}
+
+function isPlainRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function flatSlotAddress(flatSlot) {
@@ -1194,6 +1207,17 @@ function createRuntimeSessionController(options = {}) {
     ((audioOptions) => new window.AudioContext(audioOptions));
   const createPerformanceMasterTap =
     options.createPerformanceMasterTap ?? defaultCreatePerformanceMasterTap;
+  // The Host's network `CatalogTransport`, injected because Core ships no
+  // network code. A Host that wires none browses whatever its Workspace Set
+  // Store already holds.
+  const soundsetCatalog = options.soundsetCatalog ?? null;
+  if (
+    soundsetCatalog !== null &&
+    (typeof soundsetCatalog.readIndex !== "function" ||
+      typeof soundsetCatalog.readObject !== "function")
+  ) {
+    throw new TypeError("Sound Set Catalog transport is invalid");
+  }
   const transport =
     options.transport ??
     Object.freeze({
@@ -4394,6 +4418,330 @@ function createRuntimeSessionController(options = {}) {
     }
   }
 
+  // Stage 11 Sound Set. The Locked Facade Surface is four operations; the
+  // Workspace-level two carry no Project, exactly like `provider.list`. The
+  // Host's own Catalog endpoint never enters a request and never enters
+  // Project Truth: it lives in `soundsetCatalog`, the injected network
+  // `CatalogTransport`, and only bytes cross to Core.
+  function soundsetIdentity(request, extra = []) {
+    if (
+      !exactKeys(request, ["setId", "version", "manifestSha256", ...extra]) ||
+      !UUID_PATTERN.test(request.setId) ||
+      typeof request.version !== "string" ||
+      request.version.length === 0 ||
+      !SHA256_PATTERN.test(request.manifestSha256)
+    ) {
+      throw typedError("INVALID_ARGUMENT", "Sound Set identity is invalid");
+    }
+    return {
+      set_id: request.setId,
+      version: request.version,
+      manifest_sha256: request.manifestSha256,
+    };
+  }
+
+  function normalizeSoundSetLicense(value) {
+    if (
+      !exactKeys(value, ["spdx_id", "rights_holder", "copyright", "attribution"])
+    ) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set license is invalid");
+    }
+    return Object.freeze({
+      spdxId: value.spdx_id,
+      rightsHolder: value.rights_holder,
+      copyright: value.copyright,
+      // S11-D2 keeps `attribution` a required key that is empty for a Set that
+      // needs none, so the Creator shows the string it was given and never
+      // invents one.
+      attribution: value.attribution,
+    });
+  }
+
+  function normalizeSoundSetArtifact(value) {
+    if (value === null) {
+      return null;
+    }
+    if (!exactKeys(value, ["sha256", "media_type", "byte_length"])) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set Artifact is invalid");
+    }
+    return Object.freeze({
+      sha256: value.sha256,
+      mediaType: value.media_type,
+      byteLength: value.byte_length,
+    });
+  }
+
+  function normalizeSoundSetSummary(value) {
+    if (
+      !isPlainRecord(value) ||
+      typeof value.set_id !== "string" ||
+      typeof value.manifest_sha256 !== "string" ||
+      !Array.isArray(value.occupied_slots)
+    ) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set summary is invalid");
+    }
+    return {
+      setId: value.set_id,
+      version: value.version,
+      manifestSha256: value.manifest_sha256,
+      name: value.name,
+      publisher: value.publisher,
+      description: value.description ?? null,
+      bpm: value.bpm ?? null,
+      key: value.key ?? null,
+      totalBytes: value.total_bytes,
+      hasDemo: value.has_demo === true,
+      license: normalizeSoundSetLicense(value.license),
+      occupiedSlots: Object.freeze(value.occupied_slots.map((slot) =>
+        Object.freeze({slot: slot.slot, role: slot.role, name: slot.name}))),
+    };
+  }
+
+  function normalizeSoundSetSlot(value) {
+    if (!isPlainRecord(value) || !isUnsignedInteger(value.slot, 15)) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set slot is invalid");
+    }
+    // S11-D12: past this point emptiness is the absence of an Artifact, never
+    // a flag a surface could read as "clear this Pad". Core states the same
+    // fact twice -- an `occupied` boolean and the presence of `artifact` -- so
+    // the two are required to agree here rather than one of them silently
+    // winning; a slot that declares itself occupied and names nothing, or the
+    // reverse, is a protocol fault and not an empty slot.
+    const occupied = value.artifact !== undefined && value.artifact !== null;
+    if (value.occupied !== occupied) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH", "Sound Set slot occupancy is inconsistent");
+    }
+    if (!occupied) {
+      return Object.freeze({slot: value.slot, artifact: null});
+    }
+    return Object.freeze({
+      slot: value.slot,
+      role: value.role,
+      name: value.name,
+      bpm: value.bpm ?? null,
+      key: value.key ?? null,
+      artifact: normalizeSoundSetArtifact(value.artifact),
+      audio: Object.freeze({
+        sampleRate: value.audio.sample_rate,
+        channels: value.audio.channels,
+        sourceFrames: value.audio.source_frames,
+        preparedBytes: value.audio.prepared_bytes,
+        preparedFrames: value.audio.prepared_frames,
+      }),
+    });
+  }
+
+  function normalizePadIndexList(value) {
+    if (!Array.isArray(value) || !value.every((pad) => isUnsignedInteger(pad, 15))) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set Pad list is invalid");
+    }
+    return Object.freeze([...value]);
+  }
+
+  async function refreshSoundSetCatalogIndex() {
+    let index = null;
+    try {
+      index = await soundsetCatalog.readIndex();
+    } catch (error) {
+      if (errorCode(error) === "HOST_PROTOCOL_MISMATCH") {
+        throw error;
+      }
+      index = null;
+    }
+    if (index === null) {
+      // S11-D7: an unreachable Catalog is never fatal, and it must not be
+      // reported from a stale index either.
+      await boundedRequest("soundset.catalog.index", {available: false});
+      return false;
+    }
+    await boundedRequest(
+      "soundset.catalog.index", {available: true}, {sidecar: index});
+    return true;
+  }
+
+  async function supplySoundSetObject(object) {
+    // The transport resolves `{object_kind, sha256}` and nothing else; a shape
+    // it never declared throws here rather than reaching the network.
+    const bytes = await soundsetCatalog.readObject(object);
+    const total = bytes.byteLength;
+    let offset = 0;
+    do {
+      const end = Math.min(total, offset + SOUNDSET_SUPPLY_CHUNK_BYTES);
+      await boundedRequest(
+        "soundset.catalog.supply",
+        {
+          object_kind: object.object_kind,
+          sha256: object.sha256,
+          offset,
+          byte_length: total,
+        },
+        {sidecar: bytes.subarray(offset, end)},
+      );
+      offset = end;
+    } while (offset < total);
+  }
+
+  // Core decides which objects a Set needs, because only Core parses the
+  // manifest. Each pass asks Core to acquire, reads back the addresses it
+  // could not be served, resolves exactly those, and asks again. A pass that
+  // resolves nothing new ends the loop: the Catalog is unreachable, and every
+  // Set already in the Set Store still lists.
+  async function acquireSoundSets() {
+    let listed = null;
+    for (let round = 0; round < SOUNDSET_ACQUISITION_ROUNDS; ++round) {
+      listed = await recoverableQuery("soundset.catalog.list", {});
+      if (soundsetCatalog === null) {
+        return listed;
+      }
+      const pending = await boundedRequest("soundset.catalog.pending", {});
+      if (!Array.isArray(pending?.objects) || pending.objects.length === 0) {
+        return listed;
+      }
+      let resolved = 0;
+      for (const object of pending.objects) {
+        try {
+          await supplySoundSetObject(object);
+          resolved += 1;
+        } catch (error) {
+          const code = errorCode(error);
+          if (code === "HOST_PROTOCOL_MISMATCH") {
+            throw error;
+          }
+          if (["HOST_RESTART_REQUIRED", "HOST_TIMEOUT"].includes(code)) {
+            fail(code);
+            throw error;
+          }
+          // One unreachable object leaves its Set unpublished and every other
+          // Set alone.
+        }
+      }
+      if (resolved === 0) {
+        return listed;
+      }
+    }
+    // The budget ran out with objects still arriving. `listed` was taken
+    // before the last pass's supplies landed, so read it once more rather than
+    // reporting a Catalog state that is already stale.
+    return recoverableQuery("soundset.catalog.list", {});
+  }
+
+  async function listSoundSets() {
+    if (closing || !started) {
+      throw typedError("HOST_STATE_INVALID", "Sound Set browsing is unavailable");
+    }
+    if (soundsetCatalog !== null) {
+      await refreshSoundSetCatalogIndex();
+    }
+    const result = await acquireSoundSets();
+    if (
+      !isPlainRecord(result) ||
+      typeof result.catalog_available !== "boolean" ||
+      !Array.isArray(result.sets) ||
+      !Array.isArray(result.refused)
+    ) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set catalog is invalid");
+    }
+    return Object.freeze({
+      catalogAvailable: result.catalog_available,
+      sets: Object.freeze(result.sets.map((value) =>
+        Object.freeze(normalizeSoundSetSummary(value)))),
+      refused: Object.freeze(result.refused.map((value) => Object.freeze({
+        setId: value.set_id,
+        version: value.version,
+        manifestSha256: value.manifest_sha256,
+        code: value.code,
+        reason: value.reason ?? null,
+      }))),
+    });
+  }
+
+  async function inspectSoundSet(request) {
+    const result = await recoverableQuery(
+      "soundset.inspect", soundsetIdentity(request));
+    if (!isPlainRecord(result) || !Array.isArray(result.slots)) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set inspect is invalid");
+    }
+    return Object.freeze({
+      ...normalizeSoundSetSummary(result),
+      slots: Object.freeze(result.slots.map(normalizeSoundSetSlot)),
+      demo: normalizeSoundSetArtifact(result.demo ?? null),
+    });
+  }
+
+  async function previewSoundSetMap(request) {
+    const payload = soundsetIdentity(request, ["bankId"]);
+    if (!isUnsignedInteger(request.bankId, 3)) {
+      throw typedError("INVALID_ARGUMENT", "target Bank is invalid");
+    }
+    payload.bank_id = request.bankId;
+    const result = await recoverableQuery("soundset.map.preview", payload);
+    if (!isPlainRecord(result) || !Array.isArray(result.proposed)) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set preview is invalid");
+    }
+    return Object.freeze({
+      bankId: result.bank_id,
+      setId: result.set_id,
+      version: result.version,
+      manifestSha256: result.manifest_sha256,
+      projectRevision: result.project_revision,
+      proposed: Object.freeze(result.proposed.map((pad) => Object.freeze({
+        slotIndex: pad.slot_index,
+        pad: pad.pad,
+        artifact: normalizeSoundSetArtifact(pad.artifact),
+      }))),
+      collisions: normalizePadIndexList(result.collisions),
+      kept: normalizePadIndexList(result.kept),
+    });
+  }
+
+  function installSoundSet(request) {
+    return serializeProjectAction(async () => {
+      const optional = Object.hasOwn(request ?? {}, "occupiedPadPolicy")
+        ? ["occupiedPadPolicy"]
+        : [];
+      const payload = soundsetIdentity(
+        request, ["bankId", "commandId", "expectedRevision", ...optional]);
+      if (
+        !isUnsignedInteger(request.bankId, 3) ||
+        !UUID_PATTERN.test(request.commandId) ||
+        !isUnsignedInteger(request.expectedRevision)
+      ) {
+        throw typedError("INVALID_ARGUMENT", "Sound Set install is invalid");
+      }
+      payload.bank_id = request.bankId;
+      payload.command_id = request.commandId;
+      payload.expected_revision = request.expectedRevision;
+      if (optional.length === 1) {
+        // #465 Q2: omitting the policy while `collisions` is non-empty is
+        // `soundset_occupied_conflict` and zero Project change, so the Host
+        // forwards the user's choice and never substitutes a default.
+        if (!["keep", "replace"].includes(request.occupiedPadPolicy)) {
+          throw typedError("INVALID_ARGUMENT", "occupied Pad policy is invalid");
+        }
+        payload.occupied_pad_policy = request.occupiedPadPolicy;
+      }
+      const result = await boundedRequest("soundset.install", payload);
+      if (!isPlainRecord(result) || !Array.isArray(result.installed)) {
+        throw typedError("HOST_PROTOCOL_MISMATCH", "Sound Set install is invalid");
+      }
+      return Object.freeze({
+        bankId: result.bank_id,
+        setId: result.set_id,
+        version: result.version,
+        manifestSha256: result.manifest_sha256,
+        committedRevision: result.project_revision,
+        replayed: result.replayed === true,
+        installed: Object.freeze(result.installed.map((pad) => Object.freeze({
+          slotIndex: pad.slot_index,
+          pad: pad.pad,
+        }))),
+        collisions: normalizePadIndexList(result.collisions),
+        kept: normalizePadIndexList(result.kept),
+      });
+    });
+  }
+
   const session = Object.freeze({
     start,
     trigger,
@@ -4447,6 +4795,10 @@ function createRuntimeSessionController(options = {}) {
     clearSamplePreview,
     reloadSnapshot,
     retryPrepare,
+    listSoundSets,
+    inspectSoundSet,
+    previewSoundSetMap,
+    installSoundSet,
     activateAudio,
     suspendAudio,
     release,
@@ -4491,6 +4843,8 @@ export function createRuntimeSession({
   assemblyIdentity,
   inputConfiguration = {},
   inputOwnership = "session",
+  soundsetCatalog =
+    /** @type {import("./soundset_catalog.mjs").CatalogClient | null} */ (null),
   seams = {},
 }) {
   return createRuntimeSessionController({
@@ -4501,6 +4855,7 @@ export function createRuntimeSession({
     manifestSource,
     assemblyIdentity,
     inputOwnership,
+    soundsetCatalog,
     ...inputConfiguration,
     ...seams,
   });
