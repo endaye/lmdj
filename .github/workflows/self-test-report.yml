@@ -27,11 +27,24 @@ on:
     inputs:
       run_id:
         description: Core CI run id to report (explicit retry after a reporting-error).
-        required: true
+        required: false
       reconcile:
         description: Also reconcile recent batches (off by default to isolate the requested retry).
         type: boolean
         default: false
+      batch_operation:
+        description: Isolated incremental rehearsal only; legacy preserves the existing reporter.
+        type: choice
+        options: [legacy, init, reconcile, settle]
+        default: legacy
+      journal_config:
+        description: Exact isolated journal identity JSON; no automatic Issue creation or baseline.
+        type: string
+        required: false
+      batch_request:
+        description: Optional explicit node/candidate JSON for reconcile only.
+        type: string
+        required: false
 
 # Everything not listed is `none`. The reporter reads runs and artifacts and
 # writes Issues; it holds no pull-request, contents-write or deploy authority.
@@ -41,24 +54,27 @@ permissions: {}
 # of replacing pending completions. Automatic entries reconcile recent
 # producer-era batches. Manual retries are isolated unless explicitly opted
 # into reconciliation, so unrelated errors cannot block a run-id retry.
-concurrency:
-  group: self-test-report
-  cancel-in-progress: false
-  queue: max
+# The shared lock belongs to short writer jobs, never to the parent workflow:
+# the reusable product DAG must not hold the lock needed by its next observer.
 
 jobs:
   report:
     name: Self-test report
     if: >-
-      github.event_name != 'workflow_run'
+      (inputs.batch_operation == '' || inputs.batch_operation == 'legacy') &&
+      (github.event_name != 'workflow_run'
       || (github.event.workflow_run.head_branch == 'main'
           && (github.event.workflow_run.event == 'schedule'
-              || github.event.workflow_run.event == 'workflow_dispatch'))
+              || github.event.workflow_run.event == 'workflow_dispatch')))
     # Hosted, as scripts/ci/hosted_runner_policy.json records: this is the
     # check that must run when the self-hosted hosts that run the batches are
     # the thing that went missing.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    concurrency:
+      group: self-test-report
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       actions: read
@@ -99,3 +115,91 @@ jobs:
           --repository "${{ github.repository }}"
           --summary "$GITHUB_STEP_SUMMARY"
           missing --date "$(date -u +%Y-%m-%d)"
+
+  controller:
+    name: Incremental batch controller
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      (inputs.batch_operation == 'init' || inputs.batch_operation == 'reconcile' || inputs.batch_operation == 'settle')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: self-test-report
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    outputs:
+      action: ${{ steps.control.outputs.action }}
+      request: ${{ steps.control.outputs.request }}
+      executor: ${{ steps.control.outputs.executor }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Reconcile the isolated journal under the short writer lock
+        id: control
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATCH_WRITER_LOCK: self-test-report
+          BATCH_OPERATION: ${{ inputs.batch_operation }}
+          JOURNAL_CONFIG: ${{ inputs.journal_config }}
+          BATCH_REQUEST: ${{ inputs.batch_request }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          import subprocess
+          directory = Path(os.environ['RUNNER_TEMP']) / 'incremental-controller'
+          directory.mkdir(exist_ok=True)
+          config, output = directory / 'config.json', directory / 'result.json'
+          config.write_text(os.environ['JOURNAL_CONFIG'])
+          operation = os.environ['BATCH_OPERATION']
+          command = ['python3', 'scripts/ci/batch_runtime.py', operation,
+                     '--config', str(config), '--output', str(output)]
+          if os.environ.get('BATCH_REQUEST'):
+              if operation != 'reconcile':
+                  raise SystemExit('why: explicit request outside reconcile; remedy: select reconcile or omit the request')
+              request = directory / 'request.json'
+              request.write_text(os.environ['BATCH_REQUEST'])
+              command += ['--request', str(request)]
+          subprocess.run(command, check=True)
+          result = json.loads(output.read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as handle:
+              for key in ('action', 'request', 'executor'):
+                  value = result[key] if key == 'action' else json.dumps(result[key], separators=(',', ':'))
+                  handle.write(f'{key}={value}\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as handle:
+              handle.write('Incremental rehearsal: ' + result['action'] + '\n')
+              handle.write('This operation is not release evidence or automatic trigger cutover.\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: batch-controller-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/incremental-controller/result.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  execute-batch:
+    name: Execute incremental batch
+    needs: [controller]
+    if: ${{ needs.controller.outputs.action == 'execute' }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      batch_request: ${{ needs.controller.outputs.request }}
+      batch_executor: ${{ needs.controller.outputs.executor }}
+    secrets:
+      SELF_HOSTED_RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
