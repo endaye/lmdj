@@ -291,8 +291,10 @@ Affected portal pages: /operations/testing-and-proof/
 **新增：** `.github/workflows/pr-review.yml`、
 `.github/scripts/pr_review_target.py`、
 `tests/build/ci_pr_review_workflow_test.py`。
-**修改：** `scripts/ci/scope_policy.json`（登记新 workflow 与 target/publisher 脚本）、
-`.github/scripts/advisory_review_liveness.py`、`.github/scripts/grok_review.py`、
+新 workflow 与辅助脚本的路径登记先由独立
+[路由 PR #760](https://github.com/endaye/lmdj/pull/760) 交付；本功能 PR 不再携带
+`scripts/ci/scope_policy.json` 控制面改动。
+**修改：** `.github/scripts/advisory_review_liveness.py`、`.github/scripts/grok_review.py`、
 `tests/build/ci_advisory_review_liveness_test.py`、
 `apps/architecture-portal/docs/operations/testing-and-proof.mdx`、本计划的 T4 范围与验证说明。
 旧 `.github/scripts/retire_clean_review_threads.py` 与 Claude command 不改；
@@ -327,6 +329,10 @@ Affected portal pages: /operations/testing-and-proof/
 `pr-review.yml` 的 actionlint；集成提交前 portal check。
 行为测试覆盖错误身份／跨 run 或 attempt／伪签名、发布前 stale 拒绝、
 发布过程中 head 变化、模型文本只作数据、缺凭据不复用旧产物、clean 无 inline thread。
+Grok 结构化模式还须拒绝缺失／重复／模糊的 Verdict、缺失 Findings 以及结论与
+findings 不一致的响应；“无法完成审查”或截断文本不能被转换为 clean 产物。
+合法的 `clean` 与 `issues` 均是已完成审查的数据，不把模型意见变成 merge 硬门禁；
+旧 `ci.yml` 的非结构化顾问调用保持原有兼容行为。
 本地测试不代表真实 review 已完成；O1 仍需授权验证第三方后端结构化输出、
 dispatch→artifact→发布→liveness、运行期间 head 更新、缺凭据／API 故障及人工 resolve。
 固定 action 的 [agent mode 源码](https://github.com/anthropics/claude-code-action/blob/fa2b2666b747000bf42767d1f332065b375e3c8f/src/modes/agent/index.ts)

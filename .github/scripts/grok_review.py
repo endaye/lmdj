@@ -178,6 +178,31 @@ def parse_findings(text: str) -> list[dict[str, str]]:
     return findings
 
 
+def validate_structured_response(text: str, findings: Sequence[Mapping[str, str]]) -> None:
+    """Require the promised review format before minting publishable model data.
+
+    This is completion validation, not a clean/failed merge verdict: both
+    valid `clean` and valid `issues` responses continue to the same publisher.
+    The legacy advisory entry deliberately keeps its permissive parser.
+    """
+    verdicts = list(VERDICT_LINE.finditer(text))
+    sections = list(re.finditer(r"^##\s*Findings[ \t]*\n([\s\S]*?)(?=^##\s|\Z)",
+                                text, re.MULTILINE | re.IGNORECASE))
+    conclusion = (re.fullmatch(r"(?:`(clean|issues)`|(clean|issues))",
+                              verdicts[0].group(1).strip(), re.IGNORECASE)
+                  if len(verdicts) == 1 else None)
+    if conclusion is None or len(sections) != 1:
+        raise RuntimeError("why: Grok returned an incomplete or malformed review format; "
+                           "remedy: require one explicit clean/issues Verdict and Findings section, or review manually")
+    verdict = (conclusion.group(1) or conclusion.group(2)).lower()
+    section = sections[0].group(1).strip()
+    clean_line = section.splitlines()[0].strip().strip("`").lower() if section else ""
+    if ((verdict == "clean" and (findings or clean_line not in {"no findings.", "no findings"}))
+            or (verdict == "issues" and not findings)):
+        raise RuntimeError("why: Grok verdict and findings are missing or inconsistent; "
+                           "remedy: rerun for a complete review or inspect the current head manually")
+
+
 def actionable_findings(findings: Sequence[Mapping[str, str]]) -> list[Mapping[str, str]]:
     return [item for item in findings if item.get("severity") in ACTIONABLE_SEVERITIES]
 
@@ -518,8 +543,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The standalone model job has no PR write permission. A separate
         # trusted publisher validates these data and the current head.
         from pr_review_target import TargetUnavailable, validate_review
-        if not text.strip() or (verdict == "issues" and not findings):
-            raise TargetUnavailable("why: Grok returned no actionable structured review; remedy: rerun or review manually")
+        validate_structured_response(text, findings)
         inline = []
         for item in actionable_findings(findings):
             location = parse_location(item.get("body") or "")

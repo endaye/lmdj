@@ -296,10 +296,51 @@ class TrustedPublisherTest(unittest.TestCase):
             diff.write_text("diff --git a/x b/x\n+changed\n")
             output = Path(directory) / "review.json"
             with mock.patch.dict("os.environ", {"XAI_API_KEY": "test", "GROK_AUTH_JSON": "", "RUNNER_TEMP": directory}), \
-                    mock.patch.object(grok_review, "run_grok", return_value={"text": "No issues found."}), \
+                    mock.patch.object(grok_review, "run_grok", return_value={"text": "## Verdict\n`clean`\n\n## Findings\nNo findings.\n\nThe diff changes x."}), \
                     mock.patch.object(grok_review, "github_request", side_effect=AssertionError("model cannot write")):
                 self.assertEqual(grok_review.main(["--diff-file", str(diff), "--structured-output", str(output)]), 0)
             self.assertEqual(json.loads(output.read_text())["findings"], [])
+
+    def test_grok_malformed_or_unfinished_response_is_not_a_clean_artifact(self):
+        from unittest import mock
+        import grok_review
+        responses = (
+            "I could not complete the review.",
+            "No issues found.",
+            "## Verdict\nunknown\n\n## Findings\nNo findings.",
+            "## Verdict\nclean or issues\n\n## Findings\nNo findings.",
+            "## Verdict\nclean\n\n## Verdict\nissues\n\n## Findings\nNo findings.",
+            "## Verdict\nclean",  # truncated before the mandatory findings section
+            "## Verdict\nclean\n\n## Findings\nCould not complete review.",
+            "## Verdict\nissues\n\n## Findings\nNo findings.",
+            "## Verdict\nclean\n\n## Findings\n### [important] Bad return\n- Path: `x:1`",
+        )
+        for response in responses:
+            with self.subTest(response=response), tempfile.TemporaryDirectory() as directory:
+                diff = Path(directory) / "diff"
+                diff.write_text("diff --git a/x b/x\n+changed\n")
+                output = Path(directory) / "review.json"
+                with mock.patch.dict("os.environ", {"XAI_API_KEY": "test", "GROK_AUTH_JSON": "", "RUNNER_TEMP": directory}), \
+                        mock.patch.object(grok_review, "run_grok", return_value={"text": response}), \
+                        mock.patch.object(grok_review, "github_request", side_effect=AssertionError("model cannot write")):
+                    with self.assertRaisesRegex(RuntimeError, "remedy:"):
+                        grok_review.main(["--diff-file", str(diff), "--structured-output", str(output)])
+                self.assertFalse(output.exists(), "invalid model response must not acquire publishable evidence")
+
+    def test_grok_valid_issues_are_completed_review_data_not_a_failed_gate(self):
+        from unittest import mock
+        import grok_review
+        response = "## Verdict\n`issues`\n\n## Findings\n### [important] Bad return\n- Path: `x:1`\n- Why: wrong result\n- Remedy: correct the return"
+        with tempfile.TemporaryDirectory() as directory:
+            diff = Path(directory) / "diff"
+            diff.write_text("diff --git a/x b/x\n+changed\n")
+            output = Path(directory) / "review.json"
+            with mock.patch.dict("os.environ", {"XAI_API_KEY": "test", "GROK_AUTH_JSON": "", "RUNNER_TEMP": directory}), \
+                    mock.patch.object(grok_review, "run_grok", return_value={"text": response}), \
+                    mock.patch.object(grok_review, "github_request", side_effect=AssertionError("model cannot write")):
+                self.assertEqual(grok_review.main(["--diff-file", str(diff), "--structured-output", str(output)]), 0)
+            finding = json.loads(output.read_text())["findings"][0]
+            self.assertEqual((finding["path"], finding["line"]), ("x", 1))
 
     def test_grok_skip_cannot_reuse_a_stale_output_file(self):
         from unittest import mock
