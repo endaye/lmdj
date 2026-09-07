@@ -128,14 +128,30 @@ Guru Meditation Error: Core  1 panic'ed (LoadProhibited).   EXCVADDR: 0x00000004
 
 **关键约束：这行补丁不能只改 `managed_components/`。** component manager 每次重新解析
 依赖都会把该目录还原，补丁随之消失，而症状是启动即崩的 boot loop——不是编译失败，所以
-不会在构建阶段被发现。落点选 `v6.1` 就意味着必须给它一个持久化载体，可选：
+不会在构建阶段被发现。
 
-- 在 `idf_component.yml` 里用 `override_path` 指向本地 M5GFX 检出；
-- 或在工程 `components/` 下放同名本地 component，覆盖托管副本；
-- 或等上游修复后把版本上浮到含修复的 M5GFX。
+落点选 `v6.1` 因此必须给补丁一个持久化载体。已采用的是 `override_path`：M5GFX `0.2.28`
+的 registry 副本落到工程内 `vendor/m5gfx`，只改一个文件，差异以 patch 文件留档，
+`main/idf_component.yml` 把依赖指向该路径。干净重解依赖后 `dependencies.lock` 记录的是
+`source: {path: vendor/m5gfx, type: local}`（本地来源，无 `component_hash`），
+`managed_components/` 里不再出现 m5gfx——覆盖确实生效，而不只是声明。
 
-无论选哪个，都必须有一条冒烟检查能在 `M5.begin()` 之后确认板子没有进入 boot loop，
-否则这个补丁的丢失是静默的。
+被覆盖路径不受 registry 校验，因此 vendored 副本里的 `CHECKSUMS.json` 与被改文件不再
+相符；patch 文件才是差异的记录。退役路径是：上游修复发布后删掉 vendored 副本、去掉
+`override_path`、上浮版本、重跑冒烟检查。
+
+**冒烟检查是这个机制的必要一半，并且经过双向验证。** 摘掉补丁之后 `idf.py build` **仍然
+成功**——这正是该失败模式的要害，所以门必须建在真机上而不是构建上：
+
+| | 补丁在 | 补丁被摘掉 |
+| --- | --- | --- |
+| `idf.py build` | 成功 | **仍然成功** |
+| 冒烟检查退出码 | 0 | 1 |
+| 15 秒内 boots / panics | 2 / 0 | 95 / 94 |
+
+检查读 15 秒串口，断言无 `Guru Meditation`、重启次数不超过自身的复位序列、bring-up 报告
+打印完整、板型识别为 `MATCH`；失败信息按 `why:` / `remedy:` 直接点名丢失的文件与那一行。
+一个从未见过红色的门不能证明任何事，所以上表的右列是实际跑出来的，不是设计意图。
 
 已报上游：[m5stack/M5GFX#278](https://github.com/m5stack/M5GFX/issues/278)。同时观察到
 ESP-IDF 6.1 一侧的问题：`spi_bus_initialize()` 在自己的错误清理路径里 panic，而不是把
@@ -337,7 +353,6 @@ component、target 或 CI 通道，本节只描述开发机上的外部工具链
 
 - 本 Core 在 `gnu++26` + warnings-as-errors + Picolibc 下的编译结果。1.2 节只覆盖了格式串
   与 `int32_t` 这一类，Picolibc 与 `std::filesystem` 一侧完全没碰。
-- 1.1 节那行补丁的持久化载体尚未选定，也还没有能发现补丁丢失的冒烟检查。
 - ESP-IDF 6.1 一侧 `spi_bus_initialize()` 错误路径 panic 的问题尚未向 Espressif 提交。
 - [M5GFX#278](https://github.com/m5stack/M5GFX/issues/278) 的上游处置结果。
 - 任何 callback deadline、固件尺寸、峰值内存、linker map 归因或 underrun 数字。原文 10.2
