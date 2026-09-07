@@ -193,6 +193,38 @@ class GitHubJournalTest(unittest.TestCase):
         self.api.job_changes.update(status="completed", conclusion="failure")
         self.transport.read_body(782)
 
+    def test_queued_parent_preserves_completed_writer_checkpoint(self):
+        # O1 run 34155431379: aggregate queued while controller succeeded.
+        self.api.run_changes.update(status="queued", conclusion=None)
+        self.api.job_changes.update(status="completed", conclusion="success",
+                                    started_at="2026-09-07T19:24:10Z", completed_at="2026-09-07T19:24:48Z")
+        self.assertEqual(self.transport.read_body(782)["checkpoint"], {"head": None, "pending": None},
+            "why: queued product jobs invalidated a completed journal writer; remedy: authenticate the exact started writer job")
+
+    def test_queued_parent_does_not_authorize_unstarted_writer(self):
+        self.api.run_changes.update(status="queued", conclusion=None)
+        self.api.job_changes.update(status="queued", started_at=None, completed_at=None)
+        with self.assertRaises(JournalBlocked):
+            self.transport.read_body(782)
+
+    def test_queued_parent_does_not_authorize_skipped_writer(self):
+        self.api.run_changes.update(status="queued", conclusion=None)
+        self.api.job_changes.update(status="completed", conclusion="skipped",
+                                    started_at="2026-09-07T19:24:10Z", completed_at="2026-09-07T19:24:10Z")
+        with self.assertRaises(JournalBlocked):
+            self.transport.read_body(782)
+
+    def test_queued_parent_requires_start_evidence_for_completed_writer(self):
+        self.api.run_changes.update(status="queued", conclusion=None)
+        self.api.job_changes.update(status="completed", conclusion="success", started_at=None)
+        with self.assertRaisesRegex(JournalBlocked, "proven started writer"):
+            self.transport.read_body(782)
+
+    def test_unknown_parent_status_remains_blocked(self):
+        self.api.run_changes.update(status="future-unknown")
+        with self.assertRaisesRegex(JournalBlocked, "control provenance"):
+            self.transport.read_body(782)
+
     def test_later_run_rerun_does_not_invalidate_historical_first_attempt(self):
         self.api.latest_attempt = 2
         self.transport.read_body(782)

@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-02
     occurrence: https://github.com/endaye/lmdj/pull/567
     observed_by: claude-fable-5-1
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/actions/runs/34155431379
+    observed_by: Codex
 exit: gate:tests/build/ci_merge_queue_api_test.py
 ---
 
@@ -41,3 +44,12 @@ the PR's own `merge-queue.yml` run before believing it: a `queue-item` job in
 remedy is to re-add `merge:queue` after the fix lands or after the head of the
 queue finishes. Any future stall heuristic must enumerate GitHub's full set of
 non-terminal run statuses, not the two a human expects.
+
+During incremental O1, the aggregate run endpoint reported `queued` even after
+the journal controller succeeded and while product siblings ran. A later exact
+attempt read was `in_progress`; this does not establish the cause of an earlier
+generic reconcile failure. Do not invalidate an authenticated historical writer
+solely because other jobs queue, and do not infer that a queued writer ran.
+`tests/build/ci_batch_github_journal_test.py` is the companion mechanism: queued
+parents require exact-attempt/source identity and actual non-skipped writer
+start evidence; unstarted and unknown identities remain rejected.
