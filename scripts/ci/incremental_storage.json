@@ -1,0 +1,18 @@
+{
+  "scheduler": {
+    "repository": "endaye/lmdj",
+    "issue_number": 807,
+    "issue_node_id": "I_kwDOTK_1fs8AAAABQJKJ5w",
+    "bot_node_id": "MDM6Qm90NDE4OTgyODI=",
+    "workflow_id": 352307416,
+    "epoch": "o1-incremental-20260908-issue807"
+  },
+  "outbox": {
+    "repository": "endaye/lmdj",
+    "issue_number": 817,
+    "issue_node_id": "I_kwDOTK_1fs8AAAABQJfE_Q",
+    "bot_node_id": "MDM6Qm90NDE4OTgyODI=",
+    "workflow_id": 352307416,
+    "epoch": "o1-report-outbox-20260908-issue817"
+  }
+}
