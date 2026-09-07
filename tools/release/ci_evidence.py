@@ -17,6 +17,8 @@ from dataclasses import dataclass
 # Reuse the producer's pure, closed validator; never load executable target code.
 from .self_test_protocol import protocol as self_test, validate_verdict_document, SelfTestEvidenceError
 from .model import Disposition, ReleaseIntent, ReleasePolicy
+from .batch_evidence import BatchEvidenceConsumer
+from .batch_reference import BatchEvidenceError, parse_source, thaw
 
 from .github_api import (
     CI_SCOPE_LANES,
@@ -52,7 +54,7 @@ class CiEvidenceResult:
             raise ValueError("CI evidence result must describe its outcome")
 
 
-def verify_release_ci(github: object, *, policy: ReleasePolicy, intent: ReleaseIntent) -> CiEvidenceResult:
+def verify_release_ci(github: object, *, policy: ReleasePolicy, intent: ReleaseIntent, git_root=None) -> CiEvidenceResult:
     """Select explicitly between immutable legacy history and new candidate proof.
 
     Published self-test references survive artifact expiry. The protected intent
@@ -60,11 +62,38 @@ def verify_release_ci(github: object, *, policy: ReleasePolicy, intent: ReleaseI
     plan; historical audit still verifies tag, release marker and assets.
     """
     prospective = intent.disposition is Disposition.RELEASABLE
-    if policy.prospective_ci_protocol not in ("self-test-v1", "ci-scope-v2"):
+    if policy.prospective_ci_protocol not in ("complete-test-v2", "self-test-v1", "ci-scope-v2"):
         return _self_test_conflict("unknown prospective CI evidence protocol")
     reference = intent.self_test_evidence
+    batch_reference = intent.batch_test_evidence
+    if reference is not None and batch_reference is not None:
+        return _self_test_conflict("mixed complete evidence sources are forbidden")
+    if batch_reference is not None:
+        if policy.prospective_ci_protocol != "complete-test-v2" or policy.batch_evidence_source is None:
+            return _self_test_conflict("batch reference requires the reviewed complete-test-v2 source policy")
+        if intent.disposition not in (Disposition.RELEASABLE, Disposition.PUBLISHED):
+            return _self_test_conflict("only releasable candidates or published history may use batch evidence")
+        if git_root is None:
+            return CiEvidenceResult("unverifiable", "why: complete local Git provenance is required; remedy: use the release entry point with its verified checkout", CI_EVIDENCE_SOURCES)
+        try:
+            source = parse_source(thaw(policy.batch_evidence_source))
+            consumer = BatchEvidenceConsumer(api_get=github.get_batch_evidence, git_root=git_root,
+                repository=policy.repository, repository_id=source["repository_id"],
+                workflow_id=source["workflow_id"], producer_revision=source["producer_revision"])
+            _, observed = consumer.verify_run(batch_reference, run_id=intent.merged_main_run_id,
+                target_revision=intent.target_revision, published=intent.disposition is Disposition.PUBLISHED)
+            run = SelfTestRunProjection(id=observed["id"], event=observed["event"], head_sha=observed["head_sha"],
+                head_branch=observed["head_branch"], workflow_name="Self-test Report", status=observed["status"],
+                conclusion=observed["conclusion"], run_attempt=observed["run_attempt"], repository_id=source["repository_id"])
+            return CiEvidenceResult("ok", "published batch provenance matches its permanent reference; immutable release proof remains required"
+                if intent.disposition is Disposition.PUBLISHED else "exact target has authenticated full passed 16-suite batch evidence",
+                CI_EVIDENCE_SOURCES, run)
+        except BatchEvidenceError as error:
+            return CiEvidenceResult(error.code, str(error), CI_EVIDENCE_SOURCES)
+        except Exception:
+            return _outage("why: batch evidence projection is unavailable; remedy: restore read-only evidence access; no release authority granted")
     if reference is None:
-        if prospective and policy.prospective_ci_protocol == "self-test-v1":
+        if prospective and policy.prospective_ci_protocol in ("self-test-v1", "complete-test-v2"):
             return CiEvidenceResult("unverifiable", "why: new candidates require an explicit complete self-test reference; remedy: validate a complete self-test for the exact target and separately review its intent reference", CI_EVIDENCE_SOURCES)
         return verify_exact_main_ci(
             github, repository=policy.repository, branch=policy.branch,

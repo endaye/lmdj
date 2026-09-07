@@ -575,8 +575,10 @@ pre-squash SHA 不是合法 release target。当前 Product Build 在 ledger 中
 snapshot 校验；重复 current intent 必须 fail closed。一个 current intent 存在时，exact-target、
 merged-main Proof、CI、main ancestry 与后续所有 release gate 仍全部适用。
 
-T7 的 consumer 与 `tools/release/policy.json` 一起合入 protected main 时，prospective
-policy 显式切换为 `self-test-v1`。所有仍为 `releasable` 的 intent 都必须引用一次通过的完整
+T7 曾将 prospective policy 切换为 `self-test-v1`。2026-09-08 B2 的 consumer 与
+`tools/release/policy.json` 同一 Task 将现行协议设为 `complete-test-v2`：`releasable`
+intent 恰好引用一种完整证据，旧 `self_test_evidence` 或新增 `batch_test_evidence`，
+不得混用。没有 reference 不能退回旧 scope。两种来源都必须引用一次通过的完整
 16-suite 自测；旧 `lmdj.ci-scope.v2` 的 14 lanes 即使 `mode=full`、`trusted_head=true`、
 `Change Scope` / `PR Gate` 均绿色，也只能解释旧协议，不能绕过新候选的 TSan / Release
 stress 要求。旧 producer 兼容入口的删除仍须完成新 producer + consumer 的另行授权真实演练；
@@ -596,7 +598,7 @@ protected main 历史，且 control 不早于可信 producer 部署。必须精�
 
 新的 verdict artifact 当前保留 30 天。过期或缺失为 `unverifiable`；身份、摘要、完整性或
 结果冲突为 `conflict`；传输与分页故障为 `external-error`。恢复须另行授权在 ref `main` 上
-以 candidate SHA 为 `target_revision` 新 dispatch，并独立 review intent 更新；不能把 SHA
+以 candidate SHA 为 `ci.yml` 的 `target` 输入新 dispatch，并独立 review intent 更新；不能把 SHA
 用作 dispatch ref，也不能 Re-run jobs（producer 当前只支持 attempt 1）。已 `published`
 的旧协议 intent 继续原只读审计，新协议 intent 的持久 reference 纳入 release plan digest，
 并由 `lmdj.release-plan-marker.v2` 显式保留完整 CI 身份；fresh remote audit 对比 marker
@@ -604,6 +606,25 @@ protected main 历史，且 control 不早于可信 producer 部署。必须精�
 后来的 rerun 不覆盖其历史；prospective 仍检查 latest attempt，不能借旧通过结论掩盖新失败。
 二者仍验证不可变 tag、签名、Release、asset 与 plan marker，不因短期 artifact 过期而改写
 历史，也不能只凭 intent 自称 published 就认定发布。自测通过本身不授权任何 release mutation。
+
+增量批次的闭合 `batch_test_evidence` 使用 `lmdj.ci-batch-release-reference.v1`：保存完整
+frozen `request`（id/kind/base/target/control/policy/selection/origin_run）、
+`executor_control_revision`、`executor_event`、`run_attempt=1`、
+`origin_record_digest`、`admission_record_digest`、`evidence_digest`。Executor event 是
+workflow_dispatch/push/workflow_run/schedule 闭集，不能从排队 request kind 推断。
+来源只由 reviewed policy 的 repository/workflow ID、workflow path 与 producer 下界认证，
+不得信任 artifact 自称来源。原 origin 与 executor controller artifact 必须仍在有效保留期，
+且分别证明原请求及同 epoch 的 durable-claim admission；这是可信 producer attestation，
+不是独立重放最新 Issue Journal。再完整读取 verdict/execution/needs 三文件、真实 API jobs，
+独立重算 exact target、current/frozen/executor policy 一致的全 16-suite passed verdict。
+focused、none、债务、旧 policy、缺 artifact 或跨 SHA/attempt 拼接一律不授予候选资格。
+
+新 batch reference 全部写入 plan `ci` 及永久 `lmdj.release-plan-marker.v3`；v1/v2 marker
+不证明 batch 引用，旧 self-test v2 与 legacy v1 历史不迁移。仅 `Disposition.PUBLISHED`
+可读取 recorded attempt 的稳定来源/target/control/event provenance 而不再次要求短期 artifact
+或永远不变的 current policy；仍必须通过实际 immutable tag、signer、Release、assets 和
+精确 v3 marker 验证。allocated/abandoned/superseded 不能使用这条历史例外。
+本协议不自动选择候选，不修改既有 intent，也不取消旧手动 full 入口或改变自动测试触发。
 
 历史例外（historical exception）只解释控制面生效前不可改写的 exact 只读事实。只有 remote
 audit 可以报告 `ok-with-historical-exception`，并必须在 human/JSON evidence 中显式列出；

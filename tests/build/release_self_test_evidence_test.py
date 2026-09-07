@@ -85,6 +85,14 @@ class SelfTestReleaseEvidenceTest(unittest.TestCase):
         result = self.verify()
         self.assertEqual(result.code, "ok", result.message)
         self.assertEqual(result.run.head_sha, CONTROL)
+    def test_complete_test_v2_preserves_old_full_sixteen_source_without_batch_fallback(self):
+        self.assertEqual(self.policy.prospective_ci_protocol, "complete-test-v2")
+        original = self.intent()
+        for protocol in ("self-test-v1", "complete-test-v2"):
+            with self.subTest(protocol=protocol):
+                result = verify_release_ci(self.github, policy=replace(self.policy, prospective_ci_protocol=protocol), intent=original)
+                self.assertEqual(result.code, "ok", result.message)
+        self.assertEqual(self.verify(ref=False).code, "unverifiable")
     def test_missing_stress_digest_wrong_target_and_nonpass_fail(self):
         for mutation in ("core_tsan_stress", "core_release_stress", "digest", "target", "status", "attempt"):
             with self.subTest(mutation=mutation):

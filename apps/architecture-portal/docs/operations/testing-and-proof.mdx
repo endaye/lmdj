@@ -37,6 +37,11 @@ Host SemVer 是不同版本轴。
 具体协议、兼容旧证据和拒绝条件以 [版本与发布](/operations/version-and-release/) 为准，
 不能由 PR merge、局部测试或缓存推断。缺失/过期的证据必须通过新的获授权请求补齐，
 不把旧 run 的部分重跑拼成完整通过。已发布历史仍按不可变 tag/Release/assets 审计。
+当前 `complete-test-v2` 恰好接受旧完整 16-suite self-test 或新 full passed 16-suite
+增量批次；focused/none、AI 标签、缺少 suite 或带债务的 batch 都不能授予候选资格。
+增量来源还验证原 controller admission attestation、完整三文件重算、真实 API jobs 与
+current policy。整个 reference 和实际 executor event 绑定永久 v3 marker；这不改变
+自动触发、不自动选择版本，也不等于已经取得真实平台 full-passed 候选证据。
 
 发布控制面的自动化覆盖四段：`scripts/release.sh prepare TAG`、
 `scripts/release.sh push-tag TAG`、`scripts/release.sh create-draft TAG` 与 dispatch-only

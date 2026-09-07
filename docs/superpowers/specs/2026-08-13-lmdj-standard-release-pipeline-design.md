@@ -4,6 +4,18 @@
 
 状态：规格已批准
 
+修订：2026-09-08 — B2 激活 `complete-test-v2`：新候选必须恰好引用旧完整 16-suite
+`self_test_evidence` 或新完整 16-suite passed `batch_test_evidence`，缺失/混合引用、
+focused/none、旧 14-lane scope 都不能授权。新来源由 reviewed policy 的固定
+repository/workflow/path/producer 下界认证；原 origin/admission controller artifact 证明
+可信 producer durable-claim attestation（不声称重放最新 journal），verdict/execution/needs
+三文件与真实 API jobs 独立重算 exact target 与 current/frozen/executor policy。
+新 batch 引用及真实 `executor_event` 完整进入 `lmdj.release-plan-marker.v3`；
+旧 self-test v2 与 legacy v1 不改写。仅实际 `Disposition.PUBLISHED` 历史使用原 recorded
+attempt provenance 而不重审短期 artifact；tag/signer/Release/assets/精确 v3 marker 仍必需。
+此消费者切换不选择或发布任何版本，也不改变测试触发。下述 2026-09-07 修订保留为
+旧 self-test 16-suite 来源说明，完整字段以版本治理 §12.1 为准。
+
 修订：2026-09-07 — T7 consumer 与 prospective policy 同一 Task 合入主干时，后续
 `releasable` intent 一律改用 `self-test-v1`，本页旧 exact-main scope 描述仅保留为历史协议。
 完整自测是 16 suites（含 TSan / Release stress），不是旧 14-lane `full` 或 PR gate。

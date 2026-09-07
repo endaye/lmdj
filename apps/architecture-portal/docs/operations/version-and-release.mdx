@@ -77,8 +77,9 @@ exact-target、merged-main Proof、完整 CI 与 protected-main ancestry 门禁�
 `scripts/release.sh audit --remote --tag TAG`。Audit 从 policy、release intent ledger 与 live
 Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，不能满足新的 prospective gate。
 
-T7 consumer 与 policy 合入主干即把新候选证据切换为 `self-test-v1`：Owner 在 intent 中显式
-引用一个 exact target 的完整 16-suite verdict，包括 TSan 与 Release stress。旧 14-lane
+当前 `complete-test-v2` 要求 Owner 在 reviewed intent 中恰好引用一种来源：旧
+`self-test-v1` 的 `self_test_evidence`，或增量 full 批次的 `batch_test_evidence`。
+两者都必须是 exact target 的完整 16-suite passed verdict，包括 TSan 与 Release stress。旧 14-lane
 `full` scope 不能再授权 prospective 发布。日测不是日发版，自测不阻碍 PR merge；正式版本
 仍由人手动发布。现成同 SHA 的日测或 node 通过结论可复用，不要求重复补测。
 
@@ -89,13 +90,23 @@ reference 由已验证事实写入独立 reviewed intent，并纳入 release pla
 新的内部发布元数据 `release plan marker v2`（不是产品 Contract）永久保留完整 CI reference，fresh remote audit 逐项比对；
 给旧 v1 发布记录补填 intent 字段不会使它获得新自测资格。
 
+增量来源还独立认证原 origin/admission controller artifacts 的 durable-claim attestation
+（不是重放最新 journal），以及 verdict/execution/needs 三文件与真实 API jobs；current、
+frozen control、actual executor 的 policy 必须一致。focused/none、债务、未知来源、过期
+或跨 SHA 拼接不能作为候选证据。完整 batch reference 与真实 `executor_event` 永久写入
+`lmdj.release-plan-marker.v3`；不能从 request kind 推断 event，也不能用 v1/v2 marker
+证明新增 batch 引用。旧 markers 与 intent 不迁移、不自动补填。
+
 Verdict artifact 保留 30 天。缺失、过期、错误 SHA、失败、skip 或混合 attempt 一律不能
-通过候选验证。恢复须另行授权在 ref `main` 上以 `target_revision` 指定同一 candidate 新
+通过候选验证。恢复须另行授权在 ref `main` 上以 `ci.yml` 的 `target` 指定同一 candidate 新
 dispatch，再独立更新 intent；不使用 SHA 作为 dispatch ref，不 Re-run jobs（当前只允许
 attempt 1）。旧兼容入口退休前仍须新 producer + consumer 的真实演练，不能以本地测试冒充。
 已 published 的新旧协议均保留只读历史，继续核验不可变 tag、签名、Release、asset 与
 plan marker；artifact 到期不改写历史。完整字段与切换规则见版本治理。
 新协议 published 审计读取 recorded attempt；后续 rerun 不会覆盖历史，但新候选仍检查 latest。
+仅实际 `Disposition.PUBLISHED` 可使用增量历史 provenance 路径；仍须 tag、signer、Release、
+assets 与 v3 marker 全部通过，不把 allocated/abandoned/superseded 当作已发布。
+消费者支持不是一次真实全量通过证明；不改变自动触发或取消手动 full 兼容入口。
 
 签名发生在可信本地边界；GitHub workflow 只持有 public trust anchors。公开 publication 必须由
 精确输入的 workflow dispatch 显式授权，并通过受保护的 `release` Environment。当前单人维护者

@@ -63,7 +63,8 @@ class _VerifiedRelease:
 
 _MARKER_SCHEMA = "lmdj.release-plan-marker.v1"
 _SELF_TEST_MARKER_SCHEMA = "lmdj.release-plan-marker.v2"
-_MARKER_PATTERN = re.compile(r"<!-- (lmdj\.release-plan-marker\.v[12]) (\{[^\r\n]*\}) -->")
+_BATCH_MARKER_SCHEMA = "lmdj.release-plan-marker.v3"
+_MARKER_PATTERN = re.compile(r"<!-- (lmdj\.release-plan-marker\.v[123]) (\{[^\r\n]*\}) -->")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -248,7 +249,10 @@ def marker_for_plan(document: dict[str, object], digest: str) -> str:
     try:
         ci = document.get("ci")
         self_test = isinstance(ci, dict) and "self_test_evidence" in ci
-        schema = _SELF_TEST_MARKER_SCHEMA if self_test else _MARKER_SCHEMA
+        batch_test = isinstance(ci, dict) and "batch_test_evidence" in ci
+        if self_test and batch_test:
+            raise TransitionError("release plan has mixed complete evidence references")
+        schema = _BATCH_MARKER_SCHEMA if batch_test else _SELF_TEST_MARKER_SCHEMA if self_test else _MARKER_SCHEMA
         summary = {
             "schema": schema,
             "plan_schema": document["schema"],
@@ -262,7 +266,7 @@ def marker_for_plan(document: dict[str, object], digest: str) -> str:
         }
         if "channel" in document:
             summary["intent"]["channel"] = document["channel"]
-        if self_test:
+        if self_test or batch_test:
             # Fresh remote audit must bind the permanent CI reference without
             # relying on a bounded artifact or an opaque plan hash alone.
             summary["ci"] = ci

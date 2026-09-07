@@ -317,9 +317,12 @@ class ReleaseModelTest(unittest.TestCase):
                 "origin_run": {"run_id": 122, "attempt": 1}}}
         return document
 
-    def test_current_policy_data_stays_on_old_sixteen_suite_protocol(self):
-        self.assertEqual(self.policy.prospective_ci_protocol, "self-test-v1")
-        self.assertIsNone(self.policy.batch_evidence_source)
+    def test_current_policy_enables_two_strict_sixteen_suite_sources(self):
+        self.assertEqual(self.policy.prospective_ci_protocol, "complete-test-v2")
+        self.assertEqual(dict(self.policy.batch_evidence_source), {
+            "repository_id": 1286600062, "workflow_id": 352307416,
+            "workflow_path": ".github/workflows/self-test-report.yml",
+            "producer_revision": "24ee0c4f79e0fe21a89be8813cb0566948583aa4"})
 
     def test_both_old_protocols_reject_batch_reference_before_legacy_fallback(self):
         for protocol in ("self-test-v1", "ci-scope-v2"):
@@ -395,6 +398,7 @@ class ReleaseModelTest(unittest.TestCase):
 
     def test_old_current_policy_cannot_carry_a_new_source_block(self):
         document = json.loads((ROOT / "tools/release/policy.json").read_text())
+        document["prospective_ci_protocol"] = "self-test-v1"
         document["batch_evidence_source"] = {}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "policy.json"
