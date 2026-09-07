@@ -1,5 +1,5 @@
 name: Core CI
-run-name: Core CI / ${{ inputs.queue_ticket || github.ref_name }}
+run-name: Core CI / ${{ inputs.queue_ticket || (github.event_name == 'schedule' && 'sweep main') || github.ref_name }}
 
 on:
   pull_request:
@@ -7,6 +7,15 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
     branches: [main]
+  # The daily sweep of `main` (#543). Focused `main` is a recorded cost
+  # decision; its blind spot is a lane left red across docs-only pushes that
+  # never select it. Once a day the complete manifest-selected set runs on
+  # `main`'s tip -- Change Scope classifies `schedule` as full -- and a red
+  # `Core CI / sweep main` is the alert, the way a red liveness run is. 16:00
+  # UTC is midnight in Shanghai and three hours ahead of Core Nightly, so the
+  # Core lanes clear the native-heavy queue before the stress tier arrives.
+  schedule:
+    - cron: "0 16 * * *"
   workflow_dispatch:
     inputs:
       lanes:
