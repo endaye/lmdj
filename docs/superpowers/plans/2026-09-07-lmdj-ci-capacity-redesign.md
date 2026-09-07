@@ -7,6 +7,12 @@
 [spec PR #752](https://github.com/endaye/lmdj/pull/752)。
 计划检查基线：`0d713914`；各 Task 开始前重新读取最新 `origin/main` 和现行治理，
 不得覆盖其他任务刚落地的 CI、release hydrate 或审查监控修复。
+本计划以 spec PR #752 合入为前提；spec 若在评审中修订，先更新本文的依据修订再实施。
+
+2026-09-07 评审修订：以 #724 的每日 sweep 为现任自测入口（§3.1、T2）；取消 T0，
+登记随各自 workflow 的 Task 进行；T5 拆为 T5a／T5b；O1 对旧手动入口的目标绑定
+改为定论并把 T7 提前到 O2 之前；O2 写明保护规则前置判据；补齐 spec §5.1 的
+“无新 main 则跳过”与 §9 的统计口径归属。
 
 ## 1. 交付结果与边界
 
@@ -28,16 +34,17 @@ Owner 手动选择版本候选 → 核验该 SHA 的完整证据 → 分别授�
 
 | 顺序 | 交付 | 退出证据 |
 | --- | --- | --- |
-| T0–T2 | 所有权、固定 SHA 全量自测 | 完整套件清单；一个真实目标的终态报告 |
+| T1–T2 | 固定 SHA 全量自测的清单与入口 | 完整套件清单；一个真实目标的终态报告 |
 | T3–T4 | 去重 issue 报告、AI review 独立入口 | 失败可定位且可重试；review 不依赖重型任务 |
 | O1 | 切换前受控验收 | 自测、报告、旧手动候选路径均可用 |
-| T5 + O2 + T6 | 切换规则、停止重复触发、退役队列 | 落后但无冲突的 PR 不 update、不等全量即可合并 |
-| T7 | 新日测证据接入发布验证器 | 精确完整证据可复用；无效证据拒绝 |
-| T8 + O3 | 资源收缩与稳定性验收 | 无重型 merge 等待；日测问题反馈持续有效 |
+| T7 | 新日测证据接入发布验证器 | 精确完整证据可复用；无效证据拒绝；候选可指定旧 main SHA |
+| T5a/T5b + O2 + T6 | 切换规则、停止重复触发、退役队列 | 落后但无冲突的 PR 不 update、不等全量即可合并 |
+| T8 + O3 | 资源收缩、统计口径与稳定性验收 | 无重型 merge 等待；日测问题反馈持续有效；§9 指标有数据来源 |
 
-T0–T4 期间现有门禁仍生效。新自测先仅手动演练，不同时开启两套每日全量任务。
+T1–T4 期间现有门禁仍生效。新自测先仅手动演练，不同时开启两套每日全量任务。
 O1 通过后由维护者确定一个有开始、截止和回退负责人的切换窗口；不无限期双跑，
-也不为采样而强制等待七天。T7、T8 不应延迟已具备反馈和候选路径的合并政策切换。
+也不为采样而强制等待七天。T7 排在 O2 之前（见 O1 第四项的定论）；T8 不应延迟
+已具备反馈和候选路径的合并政策切换。
 
 每个 T Task 是一个 reviewable Conventional Commit，使用独立短分支及 worktree。
 若文件范围实际过大，在实现前按行为边界拆 Task，而不是合为一个巨型控制面 PR。
@@ -62,6 +69,14 @@ O Task 是远端操作与证据检查点，不通过空 commit 伪装成代码�
 T1 为此定义一个权威的自测套件清单和校验器。旧 scope policy 在兼容期用于旧 CI，
 用 parity test 对照两个入口；不得长期手工维护两份互不校验的“全量”列表。
 
+现任入口是 #724 的每日 sweep：`ci.yml` 的 `schedule: "0 16 * * *"` 已对 main tip 的
+固定 SHA 运行完整 manifest，带同 run 的 Change Scope／PR Gate 裁决、保留的 scope
+manifest 和 release verifier 认识的 `Core CI` 身份。它与本计划的自测只差三件事：
+Nightly 的 TSan／Release stress 未并入同一批次；手动 dispatch 不能指定旧 main SHA；
+verifier 不接受 `schedule` 事件。**本计划以扩展这条路径为默认实现**，不新建平行的
+`self-test.yml` 复制十余个 job 定义；若实施中发现必须分离 workflow，须在 T2 的 PR
+里写明复制优于扩展的理由和消除复制的 Task。
+
 ### 3.2 固定目标，不伪造事件身份
 
 自测证据区分 `control_revision`、`target_revision`、run ID、run attempt、
@@ -77,6 +92,8 @@ T7 使用新协议显式验证两者及可信 resolver、checkout、suite 结果
 
 执行中的批次不因新 main 取消。普通日测 pending 可合并为最新尚未覆盖的目标；
 显式节点／候选请求不可被普通 pending 替换，重复同 SHA 请求可复用有效结果或订阅同批次。
+当天 main 没有新提交时，普通定时自测跳过并保留上一完整结论（spec §5.1）；
+跳过本身记录为一次观察，不算漏跑，也不把旧结论的日期改成今天。
 
 优先采用短生命周期的入口／结束回调加 Actions 状态查询，不增加数据库或常驻服务。
 不要在自托管 runner 上保留数小时 polling job。原生 pending 替换不保证业务目标
@@ -96,25 +113,6 @@ reporter 失败不改变测试 verdict；自身产生可见的 reporting-error�
 
 ## 4. Tasks
 
-### T0：预先登记新增控制面路径
-
-**分支／commit：** `feat/ci-self-test-ownership` /
-`feat(ci): register self-test control-plane ownership`
-
-**修改文件：** `scripts/ci/scope_policy.json`、
-`tests/build/ci_change_scope_test.py`；必要时补同目录 policy parity 测试。
-
-- [ ] 登记后续新增的 `.github/workflows/self-test.yml`、`self-test-report.yml`、
-  `pr-review.yml` 为显式控制面路径；新 `scripts/ci/` 文件已有 full rule，
-  仍逐一核实路径覆盖。测试文件使用既有规则。
-- [ ] 分类 fixture 验证全量升级原因与完整 lane 集合；不降低 unknown-path 的安全含义。
-- [ ] 本 Task 只有路由及其测试，不捎带新工作流实现；先走现行普通受保护 PR，
-  不让改路由的 PR 使用正在修改的 Integration Queue。
-
-**验证：** `python3 tests/build/ci_change_scope_test.py`，
-`python3 tests/build/ci_scope_policy_differential_test.py`。
-Documentation impact: none；纯预登记，不改变任何现存路径行为或门户操作说明。
-
 ### T1：自测清单、身份及终态协议
 
 **分支／commit：** `feat/ci-self-test-contract` /
@@ -130,29 +128,40 @@ Documentation impact: none；纯预登记，不改变任何现存路径行为或
 - [ ] 清单涵盖 §3.1 的全部现存覆盖，parity test 在旧 policy 增减 lane 时失败并指出 remedy。
 - [ ] 判定明确区分 test failure、infrastructure failure、blocked、expected supersession；
   普通失败保留可行动的 why / remedy，不借分类把失败改成通过。
-- [ ] 固定输出及 digest；外部 API、时间和存储采用严格测试替身，
-  替身拒绝真实工具不接受的参数形状。
+- [ ] 固定输出及 digest；外部 API、时间和存储的测试替身按
+  `.agents/pitfalls/fake-tool-stub-strictness.md` 现行指引构造：测试显式调用的方法
+  镜像生产工具的参数形状，按墙钟触达的方法另行处理；不在本计划另写一套替身规则。
+- [ ] 去重键同时决定“无新 main 则跳过”：resolve 收到与上一完整结论相同的目标时
+  返回 skip 观察而非新批次；显式候选与节点请求不受此规则影响。
 
 **验证：** `python3 tests/build/ci_self_test_test.py`，
 `python3 tests/build/ci_change_scope_test.py`。
 Documentation impact: none；此时协议尚未接入任何执行或发布入口。
 
-### T2：独立手动全量入口，日测触发预备
+### T2：把 sweep 扩展为固定目标的自测入口
 
 **分支／commit：** `feat/ci-self-test-runner` /
 `feat(ci): run complete self-tests on a fixed main revision`
 
-**新增：** `.github/workflows/self-test.yml`、
-`tests/build/ci_self_test_workflow_test.py`。
-**修改：** T1 协议实现和测试；
+**修改：** `.github/workflows/ci.yml`（schedule／dispatch 路径）、
+`.github/workflows/core-nightly.yml`、`scripts/ci/change_scope.py`、
+`scripts/ci/scope_policy.json`（本 Task 新增文件的登记随本 Task 进行，
+T0 已取消）、T1 协议实现和测试、
+`tests/build/ci_workflow_topology_test.py`、`ci_nightly_workflow_test.py`；
 `apps/architecture-portal/docs/operations/testing-and-proof.mdx`、
 `docs/quality/core-test-policy.md`。
 
-- [ ] 使用现有 proof、Web action、Mac action 和 package 命令实现所有 suites，
-  包含 nightly 两个 stress 工作负载；第一版只启用 workflow_dispatch。
-  保留现有资源锁、工具链、LFS、sanitizer host prerequisite 和 release hydrate 调用。
-- [ ] 尽量复用现有组件；若为隔离旧入口而短期复制 job 定义，列出原 job 到新 suite
-  的对应关系和 parity test，并在 T6 消除旧自动执行，不创建长期第二套测试实现。
+- [ ] 在 #724 的 sweep 路径上增加 `target` 输入：手动 dispatch 可指定 main 历史上的
+  完整 SHA，checkout 该 SHA 而非 ref tip，scope manifest 记录 `target_revision`；
+  `schedule` 事件把 tip 解析为 target。`workflow_dispatch` 的 ref 只能是分支或 tag，
+  所以“指定旧 SHA”只能靠输入＋校验实现，不能靠 ref。
+- [ ] 把 Nightly 的 TSan stress 与 Release stress 并入同一批次报告；Nightly 自己的
+  cron 在 T5a 停用前保留，但两者不得在同一天对同一 SHA 各跑一遍。
+  TSan suite 依赖主机 `vm.mmap_rnd_bits ≤ 28`（`scripts/ci/host/configure-sanitizer-aslr.sh`，
+  操作者 sudo）；前提缺失按 infrastructure failure 报告，不记为 blocked 或通过。
+  保留现有资源锁、工具链、LFS 和 release hydrate 调用。
+- [ ] 不复制 job 定义。若某个 suite 确实必须从 `ci.yml` 分离，本 PR 写明理由、
+  原 job 到新 suite 的对应关系、parity test 和消除复制的 Task。
 - [ ] 当前控制代码负责解析、checkout、清单和汇总；测试进程无 issues/PR/contents 写权限，
   无签名、发布或部署凭证。不得在高权限 `pull_request_target` 中执行 PR 代码。
 - [ ] 测试工件与报告放在 checkout 之外，避免弄脏目标让 package 拒绝或记录错误 revision。
@@ -160,11 +169,12 @@ Documentation impact: none；此时协议尚未接入任何执行或发布入口
   默认矩阵 fail-fast 不得取消其余覆盖。
 - [ ] 验证 main A 测试中出现 B 时，全部 suite 和 package 仍指向 A；
   错误／非 main 目标被拒绝。先不改 release verifier。
-- [ ] 门户准确标注“新增手动入口，旧门禁仍生效”，不提前宣布乐观合并已上线。
+- [ ] 门户准确标注“sweep 现可指定目标并含 Nightly 套件，旧门禁仍生效”，
+  不提前宣布乐观合并已上线。
 
 **验证：** T1/T2 测试；现存 `ci_workflow_topology_test.py`、
-`ci_nightly_workflow_test.py`、`ci_toolchain_pin_test.py`；
-CI contract 的 pinned actionlint；portal check。
+`ci_nightly_workflow_test.py`、`ci_toolchain_pin_test.py`、
+`ci_change_scope_test.py`；CI contract 的 pinned actionlint；portal check。
 Documentation impact: required
 Affected portal pages: /operations/testing-and-proof/
 
@@ -177,9 +187,11 @@ Affected portal pages: /operations/testing-and-proof/
 `scripts/ci/self_test_report.py`、
 `tests/build/ci_self_test_report_test.py`、
 `tests/build/ci_self_test_report_workflow_test.py`。
-**修改：** 测试门户页面；`docs/governance/github-work-management.md`。
+**修改：** `scripts/ci/scope_policy.json`（登记新 workflow 为控制面路径）、
+测试门户页面；`docs/governance/github-work-management.md`。
 
-- [ ] 用受保护默认分支代码处理 workflow completion 和显式重试；
+- [ ] 用受保护默认分支代码处理 workflow completion 和显式重试（`workflow_run`
+  只为默认分支上的 workflow 触发，这是安全前提也是部署约束）；
   校验 repository、稳定 workflow 身份、允许事件、run ID/attempt、目标和 artifact。
   不从被测 checkout 加载可执行 reporter；下载解压拒绝路径穿越。
 - [ ] 单独 job 最小权限 `contents: read`、`actions: read`、`issues: write`；
@@ -210,6 +222,7 @@ Affected portal pages: /operations/testing-and-proof/
 
 **新增：** `.github/workflows/pr-review.yml`、
 `tests/build/ci_pr_review_workflow_test.py`。
+**修改：** `scripts/ci/scope_policy.json`（登记新 workflow 为控制面路径）。
 **按实际接口修改：** `.github/scripts/advisory_review_liveness.py`、
 `.github/scripts/grok_review.py`、`.github/scripts/retire_clean_review_threads.py`
 及各自 `ci_*_test.py`；测试门户页面。
@@ -224,6 +237,10 @@ Affected portal pages: /operations/testing-and-proof/
   不让带高权限的 AI 任意执行 PR 提供的代码。
 - [ ] 监控以确切 workflow run 和 head 绑定为准，空 check rollup、NEUTRAL 或旧 head
   不算审查完成；保留最新主干已修复的 merge-ref 可见性约束。
+- [ ] 写明 AI 线程与 `required_conversation_resolution` 的关系：切换后 Pre-heavy Gate
+  的线程准入随重型 lane 消失，但 conversation resolution 仍是 required，AI 线程因此
+  仍阻塞合并，直到人工 resolve——这就是 spec §4.1 的“人工接管”，不是新门禁。
+  clean review 不得留下未解决线程（#707 的约束继续有效）。
 
 **验证：** 新 review 测试及现存 Claude/Grok/liveness/thread tests；portal check。
 Documentation impact: required
@@ -236,37 +253,59 @@ Affected portal pages: /operations/testing-and-proof/
 - [ ] 授权隔离演练目标与测试 issue，复演首报 → 重送 → 再现 → API 故障 → 重试；
   不将 mock 通过描述为真实 GitHub side effects 已验证，不污染正式问题列表。
 - [ ] 验证 review 新入口同一 head、过期 head、人工接管三条路径。
-- [ ] 核实保留的 `ci.yml` 手动 full 入口能为准确 main SHA 产生旧验证器接受的证据。
-  过渡期候选还须记录同 SHA 的 TSan/Release stress 结果；
-  旧 full manifest 本身不证明已包含 Nightly。
-- [ ] 若旧手动入口不能可靠固定目标，先修复目标绑定或将 T7 提前；
-  不伪造 event/head_branch 绕过验证器，也不切换到没有可用候选验证路径的状态。
+- [ ] 旧 `ci.yml` 手动 full 入口**只能证明 dispatch 那一刻的 main tip**：
+  `workflow_dispatch` 的 ref 不能是 SHA，旧 verifier 又要求 `run.head_sha == target`。
+  这是定论，不是待核实项。因此 **T7 排在 O2 之前**：切换后的第一个候选就能指定
+  任意已自测的 main SHA。若 T7 确实来不及，过渡期规则只有一种：候选 = dispatch 时的
+  tip，且操作者在候选记录里人工附上同 SHA 的 TSan／Release stress run 链接，
+  因为旧 full manifest 不证明 Nightly 已覆盖。不伪造 event/head_branch 绕过验证器，
+  也不切换到没有可用候选验证路径的状态。
 - [ ] 记录双跑截止、操作者、现行保护规则备份、现有队列 ticket 处置清单、
   scheduled 时间与资源预算。证据缺失时停在这里，旧门禁保持有效。
 
-### T5：准备切换配置与一致的治理说明
+### T5a：工作流切换 diff
 
 **分支／commit：** `feat/ci-optimistic-merge-cutover` /
 `feat(ci): separate optimistic PR merges from self-tests`
 
 **修改文件：** `.github/workflows/ci.yml`、`core-nightly.yml`、
-`merge-queue.yml`、新 self-test/review workflows；
-`AGENTS.md`、`CLAUDE.md`（若有同义约束）、
+`merge-queue.yml`、`advisory-review-liveness.yml`、`pr-review.yml`、
+`self-test-report.yml`；对应 workflow contract tests。
+
+T5 按§2 的规则拆成 T5a（工作流）与 T5b（治理、skill、模板、preflight、门户），
+两者在同一 O2 窗口内先后合入；T5a 不带治理文本，T5b 不带 workflow。
+
+- [ ] 提交可审查的切换 diff 和 O2 runbook。此 PR 的 `pull_request` run 执行的是
+  PR 自己的 `ci.yml`；一旦它不再在 PR 事件产出 `PR Gate`、`core (ubuntu-latest)`、
+  `core (macos-latest)`，在旧保护规则下永远不能绿。因此本 PR **在 O2 移除这三个
+  required contexts 之后才合入**，见 O2 的前置判据。
+- [ ] 切换后 PR 仅自动做 AI review 和可选轻量 advisory；普通 main push 不再启动产品全量。
+  保留旧 `ci.yml` 的显式 full 候选入口及其真实 scope/gate，直至 T7 迁移通过。
+  同次切换启用新 review 的 PR 事件并停用旧 review，避免对同一 head 重复审查。
+- [ ] 自测入口（T2 扩展后的 sweep）接管每日 16:00 UTC 及重要节点；同时停用其余
+  自动全量与队列 cron：`core-nightly.yml` 19:00、`merge-queue.yml` 每 15 分钟；
+  `advisory-review-liveness.yml` 21:00 改为监视新 review 入口或一并退役，不能留着
+  监视一个已不存在的 job。不保留两套自动全量。显式候选仍独立于普通 pending 的合并规则。
+- [ ] 停止旧 queue 新 ticket 入口和 watchdog 自动补发；明确已在途 ticket 的完成、
+  停止或人工交接，旧 label 不再被任何新代码解释为新的合并授权。
+
+**验证：** 全 `ci_*_test.py`，release CI evidence 回归；
+静态扫描所有活跃消费者的 queue/required/strict/full-test 假设。
+Documentation impact: none — 工作流 diff 的门户说明由 T5b 同窗口交付；
+若 T5b 不能在同一窗口合入，T5a 不得单独留在 main 上过夜。
+
+### T5b：治理、skill、模板与 preflight 的一致说明
+
+**分支／commit：** `docs/ci-optimistic-merge-governance` /
+`docs(ci): describe optimistic merges and self-tests as the current workflow`
+
+**修改文件：** `AGENTS.md`、`CLAUDE.md`（若有同义约束）、
 `docs/governance/git-workflow.md`、`architecture-portal.md`、
 `github-work-management.md`、`docs/quality/core-test-policy.md`；
 `.agents/skills/issue-done/SKILL.md`、`issue-list/SKILL.md`、
 `.github/pull_request_template.md`、`scripts/ci/local_preflight.py`；
-对应 workflow/skill/preflight contract tests 及两个 operations 门户页面。
+对应 skill/preflight contract tests 及两个 operations 门户页面。
 
-- [ ] 提交可审查的切换 diff 和 O2 runbook；此 PR 仍走当前保护规则。
-  O2 移除旧 required contexts 前，不能先让仍被要求的 producer 消失。
-- [ ] 切换后 PR 仅自动做 AI review 和可选轻量 advisory；普通 main push 不再启动产品全量。
-  保留旧 `ci.yml` 的显式 full 候选入口及其真实 scope/gate，直至 T7 迁移通过。
-  同次切换启用新 review 的 PR 事件并停用旧 review，避免对同一 head 重复审查。
-- [ ] 新 self-test 接管每日 16:00 UTC 及重要节点入口，旧 Core CI / Nightly cron 同时停用；
-  不保留两套自动全量。显式候选仍独立于普通 pending 的合并规则。
-- [ ] 停止旧 queue 新 ticket 入口和 watchdog 自动补发；明确已在途 ticket 的完成、
-  停止或人工交接，旧 label 不再被任何新代码解释为新的合并授权。
 - [ ] 更新 skills 与 PR 模板：不再为合并等待全量／反复 update main／发 queue ticket；
   task-specific 本地验证保留，但不得强制执行所有产品 lanes 后才允许 push/merge。
 - [ ] pre-push 的重型检查变为显式 opt-in；已有 hook 的迁移给出可识别、可恢复方案，
@@ -275,9 +314,10 @@ Affected portal pages: /operations/testing-and-proof/
   不留下“全量门户生产构建必须远端绿色才能 merge”的隐形门禁。
 - [ ] 门户区分 main 集成状态与版本资格；涉及的内嵌流程图随页面更新，
   若现有架构源图实际引用旧流程则同 Task 更新，禁止改历史快照或手写生成图。
+- [ ] 治理文本以 O2 实际切换为生效点；在 T5a 合入前不得先落地“main 允许暂时不稳定”
+  的表述。
 
-**验证：** 全 `ci_*_test.py`，release CI evidence 回归，
-portal check；静态扫描所有活跃消费者的 queue/required/strict/full-test 假设。
+**验证：** skill/preflight contract tests，portal check。
 Documentation impact: required
 Affected portal pages: /operations/testing-and-proof/ /operations/version-and-release/
 
@@ -285,11 +325,13 @@ Affected portal pages: /operations/testing-and-proof/ /operations/version-and-re
 
 - [ ] 再次读取 live protection/rulesets，确认没有其他约束覆盖此次修改；保存精确旧配置。
 - [ ] 停止队列接收新请求，逐个核对既有 ticket 的授权与状态，不批量盲目合并。
-- [ ] 在新自测、报告、review 和候选兼容入口 ready 的前提下，移除旧三个 required
+- [ ] 在新自测、报告、review 和 T7 候选证据 ready 的前提下，移除旧三个 required
   contexts，关闭 strict up-to-date；保留 PR、冲突、必要对话和其他未获准修改的保护。
-- [ ] 核对实际生效配置后，在已有明确 merge 授权下合入 T5 切换 PR；
+- [ ] **前置判据**：`gh api repos/endaye/lmdj/branches/main/protection` 的
+  `required_status_checks.contexts` 不再含 `core (ubuntu-latest)`、`core (macos-latest)`、
+  `PR Gate`，且 `strict` 为 `false`——满足后才合入 T5a，再合入 T5b。
   不在 YAML 上创建假的同名成功 context 来填空。
-- [ ] 若 T5 不能在约定窗口内合入／生效，恢复备份并停止，不把中间状态留到无人值守。
+- [ ] 若 T5a／T5b 不能在约定窗口内合入／生效，恢复备份并停止，不把中间状态留到无人值守。
 - [ ] 复核六个已获各自合并授权、当前 head 已审查、无冲突的 PR：即便落后 main，
   日测在途或红色，也可合并；记录每次实际 merged SHA 和等待时间。
 - [ ] 本步骤完成后停止；不顺带发布、删除用户分支或变更 runner 主机。
@@ -307,6 +349,8 @@ Affected portal pages: /operations/testing-and-proof/ /operations/version-and-re
 
 - [ ] 先列引用和现有消费者，确认无在途旧授权；仅删除确实专属 queue 的文件与测试。
   通用 GitHub API 或新 self-test 已复用的逻辑先迁移，不能连新报告一起删掉。
+  因为 T2 扩展的是 `ci.yml` 而非平行 workflow，本 Task 不含“消除复制的 job 定义”；
+  若 T2 最终分离了 workflow，把该项加回这里。
 - [ ] 保留旧手动 full 入口在 T7 前仍需的 Change Scope、PR Gate 和 scope artifact；
   名称虽有 PR，当前仍是 release 证据依赖，不能按名称一并删除。
 - [ ] 保留测试资产而非盲删所有旧测试：有效身份、安全、所有权与 failure readability
@@ -318,7 +362,7 @@ portal check。
 Documentation impact: required
 Affected portal pages: /operations/testing-and-proof/ /operations/version-and-release/
 
-### T7：发布验证器接入完整日测证据
+### T7：发布验证器接入完整日测证据（排在 O2 之前）
 
 **分支／commit：** `feat/ci-self-test-release-evidence` /
 `feat(release): verify complete self-test evidence for exact candidates`
@@ -334,7 +378,8 @@ release pipeline spec、版本发布门户页面；必要时修改 T1/T2 的证�
   控制修订、目标 main SHA、run/attempt、完整 policy suite 集合、全部 required 结果、
   artifact 摘要和有效保留期；workflow 名称或绿色总结文本不是证据。
 - [ ] 允许可信 schedule 或手动 self-test 被 Owner 为同 SHA 候选显式引用；
-  不能从新 target input 猜测其等于 GitHub run.head_sha。
+  `target_revision` 来自受信 manifest，不能从新 target input 猜测其等于
+  GitHub `run.head_sha`——T2 之后两者对旧 SHA 候选必然不同。
 - [ ] 优先单批次汇总全套 suites；若平台实现必须跨 runs，枚举每个成员的
   workflow/run/attempt/target 和结论，不用任意两个绿色 run 拼成“全量”。
 - [ ] 缺少 TSan/Release stress、requested/focused、失败、未运行、错误 SHA、
@@ -370,6 +415,9 @@ Affected portal pages: /operations/testing-and-proof/ /operations/version-and-re
   不为节约等待把覆盖率 profile 或构建目录跨并发批次共享。
 - [ ] 删除已经无消费者的旧自动全量副本、轮询和多余触发；不先采购主机或取消安全锁。
 - [ ] 主机安装／systemd／ASLR 修改属于单独授权的运维动作，不由 PR 合并隐式执行。
+- [ ] 承接 spec §9 的统计口径：runner 分钟、日测结论年龄、未完成请求、问题去重与
+  修复耗时的数据来源与保留位置在本 Task 定下（可以只是 artifact 或 issue 评论模板），
+  O3 据此报数；没有数据来源的指标不写进 O3。
 
 **验证：** 受影响 contract tests、同主机重叠运行的受控测量、portal check。
 Documentation impact: required
@@ -381,7 +429,7 @@ Affected portal pages: /operations/testing-and-proof/
 
 | Spec 场景 | 负责 Task | 必须看到的后置事实 |
 | --- | --- | --- |
-| 落后 main 无冲突 PR | T5/O2 | 不 update、不等全量，当前 head 审查后实际 merged SHA 可查 |
+| 落后 main 无冲突 PR | T5a/O2 | 不 update、不等全量，当前 head 审查后实际 merged SHA 可查 |
 | review 缺失／失败／旧 head | T4/O1 | 可见真实状态，人工接管有记录，旧结论不冒充当前 |
 | 六 PR 与重型日测并行 | O2/T8 | 各自授权的合并完成，重型等待不出现在 merge 依赖中 |
 | A 运行时 B 合入 | T2/O1 | A 全部结果仍属于 A；B 未被假记为已覆盖 |
@@ -395,6 +443,7 @@ Affected portal pages: /operations/testing-and-proof/
 | 新／失败候选 | T7 | 候选拒绝或补测，不影响普通 PR |
 | schedule 协议迁移 | T7 | 旧协议明确拒绝，新协议仅接受完整可信证据 |
 | 混合重型负载 | T8 | 物理隔离实测成立，断言、floor、stress 次数未削弱 |
+| §9 指标可报数 | T8/O3 | 每项指标有数据来源与样本数；缺样本的指标标为未测而非达标 |
 
 初始观测目标：产品全量导致的 PR merge 等待为 0；review 完成且获授权后无冲突
 合并通常不超过 3 分钟；AI review p90 目标 10 分钟（含故障接管统计）。
@@ -434,7 +483,7 @@ CI 内部 evidence schema 演进按 producer/consumer 兼容迁移处理，不�
 有新文件时在 staging 后运行 ownership suite → Conventional Commit →
 核对 committed files 与 clean status。push/PR/merge 不从本地 commit 推导授权。
 
-本次唯一新增文件：
+本次声明文件仅为：
 `docs/superpowers/plans/2026-09-07-lmdj-ci-capacity-redesign.md`。
 
 本次文档验证：
