@@ -394,6 +394,16 @@ lint reads the text you give it and cannot see a directive added afterwards.
    gh pr view --json state,mergedAt,mergeCommit
    ```
 
+   If this Task allocated a Product Build or introduced its Portal snapshot,
+   verify snapshot provenance against the actual merged introducing SHA before
+   cleanup. A pre-squash local pass is insufficient. If the verifier requests
+   a squash witness, retain the source object, use
+   `scripts/architecture-portal.sh witness PRODUCT_BUILD INTRODUCING_REVISION`,
+   and ship the generated proof in a follow-up Task within existing authority.
+   Never edit immutable snapshots or infer release authority. This conditional
+   follow-through does not add Portal checks to unrelated Tasks. See
+   [`squash-witness-provenance`](../../pitfalls/squash-witness-provenance.md).
+
 4. **Audit the live state of every Issue the Pull Request meant to keep open**:
    ```bash
    gh issue view <number> --json number,state
