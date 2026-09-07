@@ -119,10 +119,20 @@ class RehearsalWorkflowTests(unittest.TestCase):
             self.invoke('reconcile', fail=True)
 
     def test_execute_outputs_reach_real_callee_validation_unchanged(self):
-        # Real Git and the shipped execution validator cover the far-side JSON
-        # boundary. The runtime process remains a fixture: no claim, GitHub
-        # lock or actual product execution is certified by this test.
-        control = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+        # Own the complete Git fixture: CI checks this test out shallow, while
+        # the real execution adapter correctly requires complete provenance.
+        # Runtime remains a fixture; no platform claim or lock is certified.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(['git', 'init', '--quiet', str(repo)], check=True)
+            subprocess.run(['git', '-C', str(repo), '-c', 'user.name=CI fixture',
+                            '-c', 'user.email=ci-fixture@example.invalid',
+                            '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet',
+                            '--allow-empty', '-m', 'Execution identity fixture'], check=True)
+            control = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+            self.assert_execution_bridge(repo, control)
+
+    def assert_execution_bridge(self, repo, control):
         policy = test_scope.load_policy(ROOT)
         executor = {'run_id': 10, 'attempt': 1}
         request = incremental_batch.make_request(policy, request_id='rehearsal-fixture', kind='node',
@@ -136,7 +146,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
         decoded_request, decoded_executor = json.loads(values['request']), json.loads(values['executor'])
         self.assertEqual(decoded_request, request)
         self.assertEqual(decoded_executor, executor)
-        manifest = batch_execution.prepare(policy, decoded_request, decoded_executor, repo=ROOT,
+        manifest = batch_execution.prepare(policy, decoded_request, decoded_executor, repo=repo,
             run_id=10, run_attempt=1, control_sha=control, main_sha=control)
         self.assertEqual(manifest['identity']['request_id'], request['id'])
         self.assertEqual(manifest['selection'], request['selection'])
