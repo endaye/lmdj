@@ -312,6 +312,23 @@ is not retried. An empty operator `workflow_dispatch` and the daily sweep always
 range like a Ready Pull Request, which is the focused-`main` cost decision
 in `docs/governance/git-workflow.md` and the reason the sweep exists.
 
+Both of those runs are **self-test batches** (plan
+`docs/superpowers/plans/2026-09-07-lmdj-ci-capacity-redesign.md`, T2). Change
+Scope first fixes the batch's target with `scripts/ci/self_test.py resolve`:
+the tip for `schedule`, or the exact `main` SHA an operator names in the
+`target` input (the dispatch ref stays `main`; `workflow_dispatch` cannot
+take a SHA as its ref). Every workload job checks out that target rather
+than the ref's tip, the two Nightly stress suites run inside the batch
+through `core-nightly.yml`'s `workflow_call`, and the hosted `Self-test
+verdict` job judges the batch against the sixteen suites of
+`scripts/ci/self_test_policy.json`, retaining `self-test-verdict-<target>`
+for thirty days. A `schedule` batch whose target the last complete
+conclusion already judged under the same policy revision is skipped -- its
+manifest selects no lane and says why -- so an unchanged `main` neither
+reruns nor re-dates an old result; `node` and `candidate` dispatches always
+run. The verdict is not yet release evidence; `tools/release/ci_evidence.py`
+still requires the run's own head to be the target (plan T7).
+
 ### Hosted Control Plane and Head Trust
 
 `Change Scope`, `Pre-heavy Gate`, `PR Gate` and `select-macos-runner` stay on GitHub-hosted
@@ -357,7 +374,10 @@ every full run already has: `macos-primary` follows `select-macos-runner`, so
 on a day when the trusted Mac is offline the selector falls back to hosted
 `macos-latest` and the sweep spends hosted macOS minutes at that rate. That is
 an argument for keeping the Mac online, not against sweeping. Its red is a red `Core CI / sweep
-main` run, the same convention as the liveness check.
+main` run, the same convention as the liveness check. Since the sweep became
+a self-test batch it also carries the TSan and Release stress suites that
+`core-nightly.yml` used to run on its own 19:00 UTC cron; that cron is gone,
+and Nightly remains dispatchable for a diagnostic rerun of one suite.
 
 The Merge Queue worker is the second worked example, and it separates two
 things the exception can conflate. `route` decides whether a Pull Request is

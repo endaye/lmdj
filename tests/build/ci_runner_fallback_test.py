@@ -453,7 +453,9 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn(
             "needs: [change-scope, select-macos-runner]", primary
         )
-        self.assertIn("needs: [select-macos-runner, macos-primary]", fallback)
+        # change-scope is a direct need since the self-test batch: the
+        # fallback checks out the batch's target like every other workload.
+        self.assertIn("needs: [change-scope, select-macos-runner, macos-primary]", fallback)
         expected_adjudicator_needs = (
             "needs: [change-scope, select-macos-runner, macos-primary, macos-fallback]"
         )

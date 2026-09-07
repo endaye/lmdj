@@ -576,8 +576,18 @@ def classify(
     force_full: bool = False, requested_lanes: Collection[str] | None = None,
     trusted_head: bool = True, unverifiable_base: str | None = None,
     queue: QueueInputs | None = None, policy_edit_preserving: bool = False,
+    self_test_skip: str | None = None,
 ) -> dict[str, object]:
     """Return a deterministic closed v2 scope manifest as a dictionary.
+
+    ``self_test_skip`` carries the reason a self-test batch (a ``schedule``
+    run or an operator ``workflow_dispatch`` without lane selection) is not
+    running: its target already has a complete conclusion under the current
+    self-test policy. The manifest then selects no lane at all, so every
+    formal job skips and the Gate has nothing to adjudicate, and it says why
+    in ``reasons``. It is ``focused`` rather than a new mode so that release
+    authority, which accepts only a retained ``full`` manifest, rejects it
+    for what it is: a run that tested nothing.
 
     ``trusted_head`` defaults to the non-Pull-Request branch of
     :func:`derive_trusted_head`, which is exactly what an in-repository caller
@@ -667,7 +677,19 @@ def classify(
     if unverifiable_base is not None:
         full_reasons.add(UNVERIFIABLE_PUSH_BASE)
         full_reasons.add(f"{UNVERIFIABLE_PUSH_BASE}: {unverifiable_base}")
-    if requested:
+    if self_test_skip is not None:
+        if not isinstance(self_test_skip, str) or not self_test_skip:
+            raise ValueError("a self-test skip reason must be a nonempty string")
+        if event_name not in ("schedule", "workflow_dispatch") or queue is not None or requested or draft:
+            raise ValueError(
+                "a self-test skip is only defined for a schedule run or an operator "
+                "workflow_dispatch without lane selection"
+            )
+        full_reasons = {f"self-test skip: {self_test_skip}"}
+    if self_test_skip is not None:
+        mode = "focused"
+        true_lanes = set()
+    elif requested:
         full_reasons.discard("forced full")
         reasons.discard("forced full")
         mode = "requested"
@@ -793,6 +815,9 @@ def _validate_manifest(
                 raise ValueError(f"duplicate logical path: {path}")
             seen_paths.add(path)
             changed_paths.append(path)
+    skip_reasons = [reason for reason in manifest["reasons"] if str(reason).startswith("self-test skip: ")]
+    if skip_reasons and (enabled_lanes or manifest["mode"] != "focused" or changed_paths):
+        raise ValueError("a self-test skip manifest selects no lane, is focused, and has no inventory")
     if manifest["mode"] == "focused":
         expected_lanes, full_reasons = _evaluate_ready_paths(
             policy, changed_paths, policy_edit_preserving=policy_edit_preserving,
@@ -1247,6 +1272,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--lanes", default="",
         help="comma-separated lanes for a focused workflow_dispatch",
     )
+    parser.add_argument(
+        "--self-test-skip", default="",
+        help="reason a self-test batch selects no lane: its target already has a complete conclusion",
+    )
     args = parser.parse_args(argv)
     queue: QueueInputs | None = None
     queue_evaluation: QueueEvaluation | None = None
@@ -1326,6 +1355,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             trusted_head=trusted_head,
             unverifiable_base=unverifiable_base,
             queue=queue,
+            self_test_skip=args.self_test_skip or None,
         )
         compact = encode_manifest(manifest)
         _write(args.manifest_out, compact)

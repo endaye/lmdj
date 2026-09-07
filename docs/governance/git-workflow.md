@@ -187,7 +187,19 @@ runs on a daily `schedule` (16:00 UTC), and Change Scope classifies that event
 as unconditionally full, exactly like an empty operator dispatch: the complete
 manifest-selected lane set runs on `main`'s tip once a day, so a red lane is
 seen within a day rather than on the next full-classifying merge (#543). A red
-`Core CI / sweep main` run is the alert; nothing files an Issue for it.
+`Core CI / sweep main` run is the alert.
+
+The sweep is also the daily **self-test batch** of the CI Capacity Redesign
+plan (T2). Change Scope resolves the batch's target first -- the tip, or the
+exact `main` SHA an operator passes in the `target` input of an otherwise
+empty `workflow_dispatch` -- and every workload job checks out that target;
+the Nightly TSan and Release stress suites run inside the batch; the hosted
+`Self-test verdict` job records one verdict for the whole batch as
+`self-test-verdict-<target>`. A `schedule` batch is skipped, with the reason
+in its manifest, when `main` has not moved since the last complete
+conclusion; operator `node` and `candidate` requests always run. The verdict
+artifact is what the failure reporter (T3) consumes; until it lands, the red
+run is still the only alert.
 
 The sweep is a visibility signal and **not** release evidence. Release
 authority still accepts only a `push` or an explicit operator

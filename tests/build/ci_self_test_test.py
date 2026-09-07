@@ -434,6 +434,65 @@ class AggregateTest(unittest.TestCase):
                                           "conclusion": "success", "head_sha": TIP})
 
 
+class ObservationsFromNeedsTest(unittest.TestCase):
+    """The verdict job derives observations from `toJSON(needs)`; nothing is invented."""
+
+    def needs(self, **results):
+        return {job: {"result": result} for job, result in results.items()}
+
+    def test_every_needed_policy_job_becomes_one_observation(self) -> None:
+        ident = identity()
+        needs = self.needs(**{job: "success" for suite in POLICY.suites for job in suite.jobs
+                              if job not in ("core-tsan", "core-stress")},
+                           **{"nightly-tsan": "success", "nightly-stress": "success"})
+        rows, diagnostics = st.observations_from_needs(
+            ident, POLICY, needs, aliases={"core-tsan": "nightly-tsan", "core-stress": "nightly-stress"})
+        self.assertEqual(diagnostics, ())
+        self.assertEqual({(r.suite, r.job) for r in rows},
+                         {(s.id, j) for s in POLICY.suites for j in s.jobs})
+        self.assertTrue(all(r.conclusion == "success" and r.artifact == "none" for r in rows))
+        self.assertTrue(all((r.run_id, r.run_attempt, r.target_revision) == (7, 1, TIP) for r in rows))
+        self.assertEqual(st.aggregate(ident, POLICY, rows).status, "passed")
+
+    def test_an_absent_job_yields_no_row_so_aggregate_reports_it_missing(self) -> None:
+        ident = identity()
+        rows, _ = st.observations_from_needs(ident, POLICY, self.needs(package="success"))
+        self.assertEqual([(r.suite, r.job) for r in rows], [("package", "package")])
+        verdict = st.aggregate(ident, POLICY, rows)
+        self.assertEqual(verdict.status, "failed")
+        self.assertEqual(next(r for r in verdict.suites if r.id == "core_ubuntu").status, "missing")
+
+    def test_a_skip_behind_a_failed_upstream_is_blocked_by_that_upstream(self) -> None:
+        ident = identity()
+        needs = self.needs(**{"pre-heavy-gate": "success", "core-ubuntu": "failure",
+                              "package": "skipped", "core-coverage": "skipped", "portal": "success"})
+        rows, _ = st.observations_from_needs(
+            ident, POLICY, needs,
+            dependencies={"package": ["pre-heavy-gate", "portal", "core-ubuntu"],
+                          "core-coverage": ["pre-heavy-gate", "portal", "core-ubuntu", "package"]})
+        by_job = {r.job: r for r in rows}
+        self.assertEqual(by_job["package"].blocked_by, "core-ubuntu")
+        self.assertEqual(by_job["core-coverage"].blocked_by, "core-ubuntu",
+                         "why: the first non-success upstream in declaration order names the cause; "
+                         "remedy: keep dependency order upstream-first")
+        self.assertIsNone(by_job["core-ubuntu"].blocked_by)
+
+    def test_alternatives_are_observed_under_the_declaring_suite(self) -> None:
+        ident = identity()
+        rows, _ = st.observations_from_needs(
+            ident, POLICY, self.needs(**{"macos-primary": "skipped", "macos-fallback": "success"}))
+        by_job = {r.job: r for r in rows}
+        self.assertEqual(by_job["macos-fallback"].suite, "core_macos")
+        self.assertEqual(by_job["macos-primary"].conclusion, "skipped")
+
+    def test_a_non_result_is_reported_not_repaired(self) -> None:
+        ident = identity()
+        rows, diagnostics = st.observations_from_needs(ident, POLICY, self.needs(package=""))
+        self.assertEqual(rows[0].conclusion, "")
+        self.assertIn("needs.package.result is ''", diagnostics[0])
+        self.assertEqual(st.aggregate(ident, POLICY, rows).status, "invalid")
+
+
 class CommandLineTest(unittest.TestCase):
     def run_cli(self, *args, cwd):
         return subprocess.run([sys.executable, str(SCRIPT_PATH), *args], cwd=cwd,
@@ -480,6 +539,29 @@ class CommandLineTest(unittest.TestCase):
                                   "--observations", "observations.json", cwd=root)
             self.assertEqual(failed.returncode, 1)
             self.assertIn("required suites did not pass", failed.stderr)
+
+    def test_observations_command_reads_needs_aliases_and_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ident = identity()
+            (root / "identity.json").write_text(json.dumps(ident.as_document()), encoding="utf-8")
+            (root / "needs.json").write_text(json.dumps(
+                {"core-ubuntu": {"result": "failure"}, "package": {"result": "skipped"},
+                 "nightly-stress": {"result": "success"}, "pre-heavy-gate": {"result": "success"}}),
+                encoding="utf-8")
+            out = self.run_cli("observations", "--identity", "identity.json", "--needs", "needs.json",
+                               "--alias", "core-stress=nightly-stress",
+                               "--dependency", "package=pre-heavy-gate,core-ubuntu",
+                               "--out", "observations.json", cwd=root)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            rows = {r["job"]: r for r in json.loads((root / "observations.json").read_text(encoding="utf-8"))}
+            self.assertEqual(set(rows), {"core-ubuntu", "package", "core-stress"})
+            self.assertEqual(rows["package"]["blocked_by"], "core-ubuntu")
+            self.assertEqual(rows["core-stress"]["conclusion"], "success")
+            self.assertNotIn("blocked_by", rows["core-ubuntu"])
+            bad = self.run_cli("observations", "--identity", "identity.json", "--needs", "needs.json",
+                               "--dependency", "package", cwd=root)
+            self.assertEqual(bad.returncode, 2)
 
     def test_resolve_reports_a_skip_with_exit_zero_and_a_reject_with_exit_one(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -283,7 +283,8 @@ T5 按§2 的规则拆成 T5a（工作流）与 T5b（治理、skill、模板、
   保留旧 `ci.yml` 的显式 full 候选入口及其真实 scope/gate，直至 T7 迁移通过。
   同次切换启用新 review 的 PR 事件并停用旧 review，避免对同一 head 重复审查。
 - [ ] 自测入口（T2 扩展后的 sweep）接管每日 16:00 UTC 及重要节点；同时停用其余
-  自动全量与队列 cron：`core-nightly.yml` 19:00、`merge-queue.yml` 每 15 分钟；
+  自动全量与队列 cron：`merge-queue.yml` 每 15 分钟（`core-nightly.yml` 19:00 已在 T2
+  随两个 stress suite 并入自测批次时退役，此处不再有事可做）；
   `advisory-review-liveness.yml` 21:00 改为监视新 review 入口或一并退役，不能留着
   监视一个已不存在的 job。不保留两套自动全量。显式候选仍独立于普通 pending 的合并规则。
 - [ ] 停止旧 queue 新 ticket 入口和 watchdog 自动补发；明确已在途 ticket 的完成、
