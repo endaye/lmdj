@@ -335,11 +335,29 @@ lint reads the text you give it and cannot see a directive added afterwards.
 
 ## 5. Enable Auto-Merge & Monitor CI
 
-1. **Enable GitHub Auto-Merge (Squash Merge & Delete Branch)**:
+1. **Arm auto-merge, then label `merge:queue` last, at an observed head**:
+
+   Both are required, and the order matters. `main` is `strict: true`, so
+   GitHub-native auto-merge cannot merge on its own — a Pull Request with only
+   auto-merge armed parks as `BEHIND` indefinitely. But auto-merge, once armed,
+   also updates the head branch by merging `main` into it whenever the base
+   advances, and the queue controller authorizes the **exact** SHA the
+   `labeled` event carried. Label first and that SHA can go stale before the
+   controller reads it, which it refuses as `ineligible-pr`.
+
    ```bash
    gh pr merge --auto --squash --delete-branch
+   gh pr view <number> --json headRefOid --jq .headRefOid   # observe the head
+   gh pr edit <number> --add-label "merge:queue"            # authorize it
    ```
-   *(Optional: If the repository uses `merge:queue`, apply label: `gh pr edit --add-label "merge:queue"`)*
+
+   If the controller still stops with `ineligible-pr` naming an
+   `observed_head_sha` you never pushed, auto-merge moved the head under you.
+   That is not a fault in the change: confirm the new head is your work plus a
+   merge of `main`, re-run the Task's verification on it, and explicitly re-add
+   the label — the controller removes it when it stops, so nothing retries on
+   its own. See
+   [`queue-authorized-head-moved-by-auto-merge`](../../pitfalls/queue-authorized-head-moved-by-auto-merge.md).
 
 2. **Watch CI Checks — not with `gh pr checks`**:
 
