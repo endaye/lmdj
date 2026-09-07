@@ -327,6 +327,60 @@ class DiscoveryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "why: .*; remedy: "):
             d.digest({"value": float("nan")})
 
+    def scan_result(self, run=7, outcome=None):
+        scan = self.state["metadata_scan"]
+        return {"round": scan["round"], "position": scan["active"]["position"], "run_id": run,
+                "outcome": outcome or {"status": "observed", "created_at": self.record()["created_at"],
+                                       "latest_attempt": 1, "receipt_digest": "a" * 64}}
+
+    def test_metadata_round_freezes_members_and_position_across_restart(self):
+        self.apply("inventory", self.inventory([self.record(7), self.record(8)]))
+        self.apply("metadata-start", {"round": 0, "run_ids": [7, 8]})
+        first = self.apply("metadata-result", self.scan_result())
+        self.assertEqual(1, self.state["metadata_scan"]["active"]["position"])
+        self.assertEqual(self.state, d.replay(self.config, [*self.events, first]))
+        self.apply("inventory", self.inventory([self.record(9, created="2026-09-08T01:01:00Z")], "2026-09-08T02:00:00Z"))
+        self.assertEqual([7, 8], self.state["metadata_scan"]["active"]["run_ids"])
+        self.apply("metadata-result", self.scan_result(run=8))
+        self.assertIsNone(self.state["metadata_scan"]["active"])
+        self.apply("metadata-start", {"round": 1, "run_ids": [7, 8, 9]})
+        self.assertEqual([7, 8, 9], self.state["metadata_scan"]["active"]["run_ids"])
+
+    def test_metadata_error_advances_position_but_preserves_retry_and_terminal(self):
+        self.apply("inventory", self.inventory())
+        self.apply("disposition", self.disposition())
+        self.apply("metadata-start", {"round": 0, "run_ids": [7]})
+        self.apply("metadata-result", self.scan_result(outcome={"status": "unresolved", "why": "API unavailable", "remedy": "revisit"}))
+        self.assertEqual("valid-review", self.state["runs"]["7/1"]["status"])
+        self.assertIn("7", self.state["metadata_scan"]["errors"])
+        self.apply("metadata-start", {"round": 1, "run_ids": [7]})
+        self.apply("metadata-result", self.scan_result())
+        self.assertEqual({}, self.state["metadata_scan"]["errors"])
+
+    def test_metadata_observation_requires_all_later_attempts_registered(self):
+        self.apply("inventory", self.inventory())
+        self.apply("metadata-start", {"round": 0, "run_ids": [7]})
+        data = self.scan_result()
+        data["outcome"]["latest_attempt"] = 2
+        self.reject(self.event("metadata-result", data))
+        self.apply("attempt", self.record(attempt=2))
+        self.apply("metadata-result", data)
+        self.assertIn("7/2", self.state["runs"])
+
+    def test_metadata_start_cannot_omit_members_or_replace_active_round(self):
+        self.apply("inventory", self.inventory([self.record(7), self.record(8)]))
+        self.reject(self.event("metadata-start", {"round": 0, "run_ids": [7]}))
+        self.apply("metadata-start", {"round": 0, "run_ids": [7, 8]})
+        self.reject(self.event("metadata-start", {"round": 0, "run_ids": [7, 8]}))
+
+    def test_metadata_position_cannot_skip_or_change_identity(self):
+        self.apply("inventory", self.inventory([self.record(7), self.record(8)]))
+        self.apply("metadata-start", {"round": 0, "run_ids": [7, 8]})
+        self.reject(self.event("metadata-result", self.scan_result(run=8)))
+        data = self.scan_result()
+        data["position"] = True
+        self.reject(self.event("metadata-result", data))
+
 
 if __name__ == "__main__":
     unittest.main()
