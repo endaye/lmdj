@@ -7,9 +7,10 @@ name: Self-test Report
 # never holds `issues: write`, and nothing the tested revision produced is
 # executed here; its verdict is read as data.
 #
-# `workflow_run` fires for every Core CI completion, Pull Requests included;
-# the job-level `if` keeps the hosted minute for the two events a self-test can
-# have. The daily `schedule` here is the "expected a batch, none started"
+# `workflow_run` only subscribes to main control runs; queue dispatches on task
+# branches must not start reporters that rescan unrelated main history. The
+# job-level `if` also requires a self-test-capable event. The daily `schedule`
+# here is the "expected a batch, none started"
 # check; it runs on Actions and therefore cannot fire on a day Actions did not
 # run it -- the Issue it files says so.
 
@@ -17,6 +18,7 @@ on:
   workflow_run:
     workflows: ["Core CI"]
     types: [completed]
+    branches: [main]
   schedule:
     # Two hours after the 16:00 UTC sweep: long enough for a batch to have
     # started, early enough that a missing one is noticed the same day.
@@ -26,14 +28,19 @@ on:
       run_id:
         description: Core CI run id to report (explicit retry after a reporting-error).
         required: true
+      reconcile:
+        description: Also reconcile recent batches (off by default to isolate the requested retry).
+        type: boolean
+        default: false
 
 # Everything not listed is `none`. The reporter reads runs and artifacts and
 # writes Issues; it holds no pull-request, contents-write or deploy authority.
 permissions: {}
 
 # One short writer at a time; retain up to the platform queue limit instead
-# of replacing pending completions. Every entry point also reconciles recent
-# batches, with an explicit reporting-error when the recovery window fills.
+# of replacing pending completions. Automatic entries reconcile recent
+# producer-era batches. Manual retries are isolated unless explicitly opted
+# into reconciliation, so unrelated errors cannot block a run-id retry.
 concurrency:
   group: self-test-report
   cancel-in-progress: false
@@ -44,8 +51,9 @@ jobs:
     name: Self-test report
     if: >-
       github.event_name != 'workflow_run'
-      || github.event.workflow_run.event == 'schedule'
-      || github.event.workflow_run.event == 'workflow_dispatch'
+      || (github.event.workflow_run.head_branch == 'main'
+          && (github.event.workflow_run.event == 'schedule'
+              || github.event.workflow_run.event == 'workflow_dispatch'))
     # Hosted, as scripts/ci/hosted_runner_policy.json records: this is the
     # check that must run when the self-hosted hosts that run the batches are
     # the thing that went missing.
@@ -72,11 +80,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.run_id }}
-        run: >-
-          python3 scripts/ci/self_test_report.py
-          --repository "${{ github.repository }}"
-          --summary "$GITHUB_STEP_SUMMARY"
-          report --run-id "$RUN_ID"
+          RECONCILE: ${{ github.event_name != 'workflow_dispatch' || inputs.reconcile }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          report_args=()
+          if [[ "$RECONCILE" != "true" ]]; then report_args+=(--no-reconcile); fi
+          python3 scripts/ci/self_test_report.py \
+            --repository "${{ github.repository }}" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            report --run-id "$RUN_ID" "${report_args[@]}"
       - name: Check that today's batch started
         if: github.event_name == 'schedule'
         env:

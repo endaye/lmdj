@@ -59,6 +59,13 @@ from self_test_evidence import validate_verdict_document
 #: The workflow whose completed runs may carry a self-test verdict.
 WORKFLOW_NAME = "Core CI"
 WORKFLOW_FILE = "ci.yml"
+# Verified first deployed producer: PR #757's immutable squash commit. Use its
+# committer time as a conservative scan floor (12:20:36Z); PR merged_at became
+# visible at 12:20:37Z and is not the earliest possible main-ref observation.
+# Time narrows recovery scans only; every run must also prove its control
+# revision descends from this commit. Recent reruns cannot promote old code.
+PRODUCER_REVISION = "22247897e9163a3f34e15f564bec133419d1f177"
+PRODUCER_SCAN_SINCE = "2026-09-07T12:20:36Z"
 #: Events a self-test batch may have. A pull_request or push run never carries
 #: a verdict artifact today, and if one did it would not be a fixed-target
 #: self-test, so it is refused rather than reported.
@@ -772,6 +779,16 @@ def report_run(api: GitHubApi, run_id: int, *, repository: str, assignee: str,
     if control_history.get("status") not in ("ahead", "identical"):
         result.skipped = "control revision is not in main history"
         return result
+    producer_history = with_retry(lambda: api.compare(PRODUCER_REVISION, run.head_sha), sleep=sleep)
+    if producer_history.get("status") == "behind":
+        result.skipped = f"control revision predates self-test producer {PRODUCER_REVISION[:12]}"
+        return result
+    if producer_history.get("status") not in ("ahead", "identical"):
+        result.error = _diagnostic(
+            "control revision has no verified ancestry from the deployed self-test producer "
+            f"(compare status={producer_history.get('status')!r})",
+            "verify the producer boundary and GitHub ancestry response, then retry this run's report")
+        return result
     artifacts = with_retry(lambda: api.list_artifacts(run.id), sleep=sleep)
     assert isinstance(artifacts, list)
     found = find_verdict_artifact(artifacts, run=run)
@@ -940,6 +957,15 @@ def _write_summary(path: str | None, text: str) -> None:
     sys.stdout.write(text)
 
 
+def recovery_created_filter(now: datetime) -> str:
+    """Query optimization, not run authority: retain post-deployment history."""
+    if now.tzinfo is None:
+        raise ValueError("recovery time must include a timezone")
+    deployed = datetime.fromisoformat(PRODUCER_SCAN_SINCE.replace("Z", "+00:00"))
+    lower_bound = max(now.astimezone(timezone.utc) - timedelta(days=30), deployed)
+    return ">=" + lower_bound.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repository", required=True)
@@ -957,7 +983,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sleep = time.sleep
     try:
         api = UrllibGitHubApi(args.repository, os.environ.get("GITHUB_TOKEN", ""))
-        recovery_window = ">=" + (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+        recovery_window = recovery_created_filter(datetime.now(timezone.utc))
         reports: list[RunReport] = []
         missing: Outcome | None = None
         if args.command == "report":

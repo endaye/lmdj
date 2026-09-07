@@ -12,6 +12,8 @@ import json
 import ast
 from pathlib import Path
 import re
+import os
+import subprocess
 import sys
 import unittest
 
@@ -36,18 +38,22 @@ class SelfTestReportWorkflowTest(unittest.TestCase):
 
     def test_it_reacts_to_core_ci_completion_a_daily_check_and_an_explicit_retry(self) -> None:
         on = self.document[True] if True in self.document else self.document["on"]
-        self.assertEqual(on["workflow_run"], {"workflows": ["Core CI"], "types": ["completed"]},
+        self.assertEqual(on["workflow_run"], {"workflows": ["Core CI"], "types": ["completed"], "branches": ["main"]},
                          "why: the reporter must see every finished batch and nothing before it "
                          "finishes; remedy: keep workflow_run on Core CI completed")
         self.assertEqual(on["schedule"], [{"cron": "0 18 * * *"}])
         self.assertIn("run_id", on["workflow_dispatch"]["inputs"])
         self.assertTrue(on["workflow_dispatch"]["inputs"]["run_id"]["required"])
+        retry = on["workflow_dispatch"]["inputs"]["reconcile"]
+        self.assertEqual(retry["type"], "boolean")
+        self.assertFalse(retry["default"])
 
     def test_the_job_skips_pull_request_and_push_completions(self) -> None:
         condition = self.job["if"]
         for event in ("schedule", "workflow_dispatch"):
             self.assertIn(f"github.event.workflow_run.event == '{event}'", condition)
         self.assertIn("github.event_name != 'workflow_run'", condition)
+        self.assertIn("github.event.workflow_run.head_branch == 'main'", condition)
         self.assertNotIn("pull_request", condition,
                          "why: a pull_request run is never a self-test and each hosted minute is "
                          "billed; remedy: keep the job to the two batch events")
@@ -125,6 +131,20 @@ class SelfTestReportWorkflowTest(unittest.TestCase):
         self.assertIn('VERDICT_FILE = "verdict.json"', source)
         self.assertIn('WORKFLOW_NAME = "Core CI"', source)
         self.assertRegex(source, r'ALLOWED_EVENTS = frozenset\(\{"schedule", "workflow_dispatch"\}\)')
+
+    def test_manual_retry_can_execute_without_reconciling_unrelated_runs(self) -> None:
+        step = next(step for step in self.job["steps"] if step.get("name") == "Report the completed batch")
+        self.assertEqual(step["env"]["RECONCILE"], "${{ github.event_name != 'workflow_dispatch' || inputs.reconcile }}")
+        source = step["run"].replace("${{ github.repository }}", "endaye/lmdj")
+        for reconcile in ("true", "false"):
+            with self.subTest(reconcile=reconcile):
+                result = subprocess.run(
+                    ["bash", "-c", "python3() { printf '%s\\n' \"$@\"; }\n" + source],
+                    env={**os.environ, "RECONCILE": reconcile, "RUN_ID": "100", "GITHUB_STEP_SUMMARY": "/unused"},
+                    capture_output=True, text=True, check=True)
+                args = result.stdout.splitlines()
+                self.assertEqual("--no-reconcile" in args, reconcile == "false")
+                self.assertIn("100", args)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 import importlib.util
 import io
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import unittest
@@ -810,6 +811,88 @@ class BoundaryRegressionTest(unittest.TestCase):
         text = rep.sanitize("Authorization: Bearer secret-value github_pat_abcdef ghp_123456")
         self.assertNotIn("secret-value", text)
         self.assertNotIn("github_pat_abcdef", text)
+
+
+class ProducerMigrationTest(unittest.TestCase):
+    # Verified PR #757 squash; scan from committer time before merged_at settles.
+    PRODUCER = "22247897e9163a3f34e15f564bec133419d1f177"
+
+    def legacy_api(self, *, run_id, control, conclusion, jobs, attempt=1):
+        run = run_document(run_id, head=control, conclusion=conclusion, attempt=attempt,
+                           event="workflow_dispatch", name="Core CI / main")
+        run["created_at"] = "2026-08-15T18:48:00Z"
+        run["updated_at"] = "2026-09-08T12:00:00Z"  # a later rerun is still old control code
+        api = FakeGitHubApi(runs={run_id: run}, jobs={run_id: jobs})
+        api.compare = lambda base, head: {
+            "status": "behind" if (base, head) == (self.PRODUCER, control) else "ahead"}
+        return api
+
+    def test_real_legacy_scope_failure_and_cancelled_run_are_not_new_startup_failures(self):
+        cases = (
+            (31902121850, "0714ba48dbfd5d87b2275375def4a15a6140025f", "failure",
+             [{"name": "Change Scope", "conclusion": "failure"}]),
+            (33246108574, "c6549c437c918445359ae4051edaa15dc379ba66", "cancelled", []),
+        )
+        for run_id, control, conclusion, jobs in cases:
+            with self.subTest(run_id=run_id):
+                api = self.legacy_api(run_id=run_id, control=control, conclusion=conclusion, jobs=jobs)
+                result = report(api, run_id)
+                self.assertIn("predates self-test producer", result.skipped or "")
+                self.assertIsNone(result.error)
+                self.assertNotIn(("list_artifacts", run_id), api.calls)
+                self.assertEqual(api.issues, [])
+
+    def test_recent_rerun_of_old_control_still_predates_producer(self):
+        api = self.legacy_api(run_id=31902121850, control="0714ba48dbfd5d87b2275375def4a15a6140025f",
+                              conclusion="failure", jobs=[], attempt=3)
+        result = report(api, 31902121850)
+        self.assertIn("predates self-test producer", result.skipped or "")
+        self.assertIsNone(result.error)
+
+    def test_exact_producer_boundary_is_accepted_and_later_startup_failure_stays_visible(self):
+        for control in (self.PRODUCER, CONTROL):
+            with self.subTest(control=control):
+                api = FakeGitHubApi(runs={100: run_document(head=control, conclusion="failure")})
+                api.jobs[100] = [{"name": "Change Scope", "conclusion": "failure"}]
+                api.compare = lambda base, head: {"status": "identical" if base == head else "ahead"}
+                result = report(api)
+                self.assertIsNone(result.skipped)
+                self.assertIn("startup failure", result.error or "")
+
+    def test_diverged_or_unknown_control_is_not_silently_classified_as_legacy(self):
+        for status in ("diverged", "unknown", None):
+            with self.subTest(status=status):
+                api = FakeGitHubApi().with_batch()
+                api.compare = lambda base, head: {"status": status if base == self.PRODUCER else "ahead"}
+                result = report(api)
+                self.assertIsNone(result.skipped)
+                self.assertIn("producer", result.error or "")
+                self.assertIn("why:", result.error or "")
+                self.assertIn("remedy:", result.error or "")
+                self.assertEqual(api.issues, [])
+
+    def test_recovery_filter_uses_later_of_exact_deployment_and_retention(self):
+        self.assertEqual(rep.recovery_created_filter(datetime(2026, 9, 8, tzinfo=timezone.utc)),
+                         ">=2026-09-07T12:20:36Z")
+        self.assertEqual(rep.recovery_created_filter(datetime(2026, 10, 10, 12, tzinfo=timezone.utc)),
+                         ">=2026-09-10T12:00:00Z")
+
+    def test_manual_no_reconcile_retries_only_requested_run_despite_unrelated_overflow(self):
+        api = FakeGitHubApi().with_batch()
+        api.run_lists[("schedule", None)] = [run_document(run_id=n) for n in range(1, 101)]
+        with mock.patch.object(rep, "UrllibGitHubApi", return_value=api), \
+                mock.patch.object(rep, "reconcile_recent", side_effect=AssertionError("must not scan unrelated history")), \
+                mock.patch.object(rep, "_write_summary"):
+            self.assertEqual(rep.main(["--repository", REPO, "report", "--run-id", "100", "--no-reconcile"]), 0)
+        self.assertEqual(len(api.issues), 2)
+
+    def test_automatic_reconciliation_gets_exact_deployment_time_filter(self):
+        api = FakeGitHubApi().with_batch()
+        with mock.patch.object(rep, "UrllibGitHubApi", return_value=api), \
+                mock.patch.object(rep, "reconcile_recent", return_value=[]) as reconcile, \
+                mock.patch.object(rep, "_write_summary"):
+            self.assertEqual(rep.main(["--repository", REPO, "report", "--run-id", "100"]), 0)
+        self.assertGreaterEqual(reconcile.call_args.kwargs["created"], ">=2026-09-07T12:20:36Z")
 
 
 

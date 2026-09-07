@@ -93,8 +93,14 @@ focused `main` 的已知盲区——某条 lane 在连续多次仅文档的 push
 观察、关闭后再现重新打开；同一观察重送与写入响应丢失后的重试先重读 marker，不
 重复写入。一次绿色不自动关闭 Issue。`invalid` 为基础设施问题，合法 `superseded`
 不制造缺陷。共享证据校验失败与 API 故障显示 `reporting-error`，不改变测试 verdict。
-报告队列保留 pending，所有入口补查保留期内最近 30 天、每类至多 100 个完成 run；
-窗口满额明确报错，维护者用指定 run ID 重试补齐，不宣称已自动恢复无限期历史。
+报告队列保留 pending，仅 main 控制分支的完成事件会启动回调，旧 queue 的任务分支
+不触发无关补扫。自动回调和每日检查从“保留期最近 30 天”与已验证 producer 上线
+下界的较晚者开始扫描，每类至多 100 个完成 run。producer 下界是
+[#757](https://github.com/endaye/lmdj/pull/757) 的 squash，时间仅用于缩小查询；每个
+run 仍单独证明控制修订不早于该 producer 且属于 main 历史。旧控制修订即使新 rerun
+也明确跳过，部署后的启动失败仍可见，未知祖先关系不当作 legacy 吞掉。
+窗口满额明确报错而不冒充恢复完成；手动报告重试默认 `reconcile: false`，只处理指定
+run，不因其他历史失败或满窗口再次失败。需整窗补查时才显式选择 `reconcile: true`。
 报告器重试仅补报告；重做自测须对同一精确目标发起 new dispatch，不能 rerun 原 run
 （当前 producer 拒绝后续 attempt）。产品修复后则明确选择并 dispatch 修复后的 SHA。
 

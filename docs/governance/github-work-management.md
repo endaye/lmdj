@@ -68,11 +68,23 @@ files it runs on GitHub Actions and cannot report a day on which Actions did
 not run it, so a day with no `Self-test Report` run at all is unchecked, not
 clean.
 
-The reporter is a bounded recovery tool, not an infinite event store. Every
-completion, retry and daily check reconciles retained runs from the last
-30 days (at most 100 per allowed event); reaching that cap is a visible
-`reporting-error`. A maintainer must explicitly retry affected run IDs after
-an outage or overflow. A run whose selected request has no verdict is an
+The reporter is a bounded recovery tool, not an infinite event store. Main
+completion callbacks and daily checks reconcile retained runs since the later
+of the 30-day retention boundary and the verified producer's scan floor.
+The first producer is PR #757's squash `22247897e9163a3f34e15f564bec133419d1f177`;
+its committer time, `2026-09-07T12:20:36Z`, conservatively precedes the PR's
+`merged_at` by one second. Time only narrows queries: each run independently
+proves control ancestry from that producer and membership in main history.
+Older control revisions, including their recent reruns, are explicitly legacy;
+post-deployment startup failures remain visible, and unknown/diverged ancestry
+fails closed. Non-main queue completion callbacks do not start this reporter.
+
+The scan is capped at 100 per allowed event; reaching the cap is a visible
+`reporting-error`, not proof of recovery. A maintainer must explicitly retry
+affected run IDs after an outage or overflow. Manual reporter dispatch defaults
+to `reconcile: false`, processing only that run so unrelated history or a full
+scan window cannot block its recovery; set `reconcile: true` only to request
+the wider scan. A run whose selected request has no verdict is an
 infrastructure observation; legacy sweeps that have not selected the new
 self-test path are not relabelled as failed self-tests. Verify the configured
 `self-test` label and default assignee during rollout before enabling reports.
