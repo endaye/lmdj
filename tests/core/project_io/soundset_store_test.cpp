@@ -162,6 +162,22 @@ std::string manifest_bytes(
   return lmdj::foundation::canonical_json(manifest);
 }
 
+// The same manifest carrying the S11-D5 set-level demo Artifact. `demo_bytes`
+// is what the Catalog will serve for it; `declared_length` overrides the
+// declared byte_length so a demo can be made to contradict itself.
+std::string manifest_bytes_with_demo(
+    const std::vector<SlotSpec>& occupied,
+    const std::string& demo_bytes,
+    std::optional<std::uint64_t> declared_length = std::nullopt) {
+  auto manifest = nlohmann::json::parse(manifest_bytes(occupied));
+  manifest["demo"] = nlohmann::json{
+      {"sha256", sha256_hex(demo_bytes)},
+      {"media_type", "audio/wav"},
+      {"byte_length", declared_length.value_or(demo_bytes.size())},
+  };
+  return lmdj::foundation::canonical_json(manifest);
+}
+
 // Two slots that name one sha256 with different byte_lengths. Task 1's parser
 // validates each Artifact ref in isolation, so only the store can catch this.
 std::string manifest_with_contradictory_artifact(
@@ -375,6 +391,177 @@ void expect_invisible(
       LMDJ_CHECK(
           entry.path().parent_path().filename() != sha256_hex(manifest));
     }
+  }
+}
+
+// S11-D7 puts the set-level demo in the same unique-blob accounting as the
+// slots: it is verified before publication, and a demo whose hash duplicates a
+// slot Artifact is downloaded once and charged once.
+void test_set_level_demo_is_verified_and_counted_once() {
+  {
+    // A demo no slot references is a unique blob of its own: fetched,
+    // hash- and length-verified, charged, and readable afterwards.
+    TempDirectory workspace;
+    FakeCatalogTransport transport;
+    const std::string kick(64, 'k');
+    const std::string demo(512, 'd');
+    const auto manifest = manifest_bytes_with_demo({{0, "kick", kick}}, demo);
+    transport.publish(manifest);
+    transport.publish(kick);
+    transport.publish(demo);
+
+    SoundSetStore store(
+        workspace.path(), generous_limits(), platform_for(workspace.path()));
+    const auto acquired = store.acquire(
+        transport, entry_for(manifest, declared_total(manifest, {kick, demo})));
+    LMDJ_CHECK(acquired.has_value());
+    LMDJ_CHECK(acquired.value().manifest.demo.has_value());
+    LMDJ_CHECK(acquired.value().manifest.demo->sha256 == sha256_hex(demo));
+    LMDJ_CHECK(acquired.value().manifest.demo->byte_length == demo.size());
+    LMDJ_CHECK(
+        acquired.value().total_bytes ==
+        manifest.size() + kick.size() + demo.size());
+    LMDJ_CHECK(transport.reads(sha256_hex(demo)) == 1);
+    LMDJ_CHECK(transport.reads_of_kind(sha256_hex(demo), ":blob") == 1);
+
+    // The demo's bytes are readable from the published Set, which is what a
+    // preview path will ask for.
+    const auto blob =
+        store.read_artifact(sha256_hex(manifest), sha256_hex(demo));
+    LMDJ_CHECK(blob.has_value());
+    LMDJ_CHECK(text_of(blob.value()) == demo);
+
+    // A reopened Set still reports the demo and the same total.
+    const auto read = store.read(kSetId, kVersion, sha256_hex(manifest));
+    LMDJ_CHECK(read.has_value());
+    LMDJ_CHECK(read.value().manifest.demo->sha256 == sha256_hex(demo));
+    LMDJ_CHECK(read.value().total_bytes == acquired.value().total_bytes);
+  }
+  {
+    // Downloaded once, counted once: the demo names the Artifact slot 0
+    // already names, so the Set holds one blob, not two.
+    //
+    // On its own this block cannot distinguish "deduplicated the demo against
+    // the slot" from "ignored the demo": with the hashes equal, both produce
+    // one fetch and one charge. It records the rule S11-D7 states. What pins
+    // the rule against a store that stops deduplicating is the differing
+    // byte_length case below, which is refused only because the demo and the
+    // slot are compared with each other.
+    TempDirectory workspace;
+    FakeCatalogTransport transport;
+    const std::string kick(64, 'k');
+    const auto manifest = manifest_bytes_with_demo({{0, "kick", kick}}, kick);
+    transport.publish(manifest);
+    transport.publish(kick);
+
+    SoundSetStore store(
+        workspace.path(), generous_limits(), platform_for(workspace.path()));
+    const auto acquired = store.acquire(
+        transport, entry_for(manifest, declared_total(manifest, {kick})));
+    LMDJ_CHECK(acquired.has_value());
+    LMDJ_CHECK(acquired.value().manifest.demo->sha256 == sha256_hex(kick));
+    // One fetch for the shared hash, and the length is added once.
+    LMDJ_CHECK(transport.reads(sha256_hex(kick)) == 1);
+    LMDJ_CHECK(
+        acquired.value().total_bytes == manifest.size() + kick.size());
+    // Charging it twice would have produced this instead.
+    LMDJ_CHECK(
+        acquired.value().total_bytes !=
+        manifest.size() + kick.size() + kick.size());
+  }
+  {
+    // A demo blob whose bytes do not hash to the declared sha256.
+    TempDirectory workspace;
+    FakeCatalogTransport transport;
+    const std::string kick(64, 'k');
+    const std::string demo(512, 'd');
+    const auto manifest = manifest_bytes_with_demo({{0, "kick", kick}}, demo);
+    transport.publish(manifest);
+    transport.publish(kick);
+    transport.publish_as(sha256_hex(demo), std::string(512, 'D'));
+
+    SoundSetStore store(
+        workspace.path(), generous_limits(), platform_for(workspace.path()));
+    const auto acquired = store.acquire(
+        transport, entry_for(manifest, declared_total(manifest, {kick, demo})));
+    LMDJ_CHECK(!acquired.has_value());
+    LMDJ_CHECK(acquired.error().code == ErrorCode::io_error);
+    LMDJ_CHECK(reason_of(acquired.error()) == "soundset_content_mismatch");
+    // The refusal has to come from checking the demo's bytes, not from an
+    // earlier total mismatch: a store that never enumerated the demo would
+    // refuse with the same code and reason having fetched nothing.
+    LMDJ_CHECK(transport.reads(sha256_hex(demo)) == 1);
+    expect_invisible(store, workspace.path(), manifest);
+  }
+  {
+    // A demo blob served at the declared hash but the wrong length.
+    TempDirectory workspace;
+    FakeCatalogTransport transport;
+    const std::string kick(64, 'k');
+    const std::string demo(512, 'd');
+    const auto manifest =
+        manifest_bytes_with_demo({{0, "kick", kick}}, demo, demo.size() + 1);
+    transport.publish(manifest);
+    transport.publish(kick);
+    transport.publish_as(sha256_hex(demo), demo);
+
+    SoundSetStore store(
+        workspace.path(), generous_limits(), platform_for(workspace.path()));
+    const auto acquired = store.acquire(
+        transport,
+        entry_for(manifest, manifest.size() + kick.size() + demo.size() + 1));
+    LMDJ_CHECK(!acquired.has_value());
+    LMDJ_CHECK(reason_of(acquired.error()) == "soundset_content_mismatch");
+    // Again: fetched, then refused on its length -- not refused before the
+    // demo was ever considered.
+    LMDJ_CHECK(transport.reads(sha256_hex(demo)) == 1);
+    expect_invisible(store, workspace.path(), manifest);
+  }
+  {
+    // A demo reusing a slot's hash must agree with it on length, for the same
+    // reason two slots must: one hash is one immutable object.
+    TempDirectory workspace;
+    FakeCatalogTransport transport;
+    const std::string kick(64, 'k');
+    const auto manifest =
+        manifest_bytes_with_demo({{0, "kick", kick}}, kick, kick.size() + 1);
+    transport.publish(manifest);
+    transport.publish(kick);
+
+    SoundSetStore store(
+        workspace.path(), generous_limits(), platform_for(workspace.path()));
+    const auto acquired = store.acquire(
+        transport, entry_for(manifest, manifest.size() + kick.size()));
+    LMDJ_CHECK(!acquired.has_value());
+    LMDJ_CHECK(acquired.error().code == ErrorCode::io_error);
+    LMDJ_CHECK(reason_of(acquired.error()) == "soundset_content_mismatch");
+    // Refused before a single blob left the Catalog.
+    LMDJ_CHECK(transport.reads(sha256_hex(kick)) == 0);
+    expect_invisible(store, workspace.path(), manifest);
+  }
+  {
+    // The demo is bounded by the same per-blob Host limit as any Artifact.
+    TempDirectory workspace;
+    FakeCatalogTransport transport;
+    const std::string kick(64, 'k');
+    const std::string demo(512, 'd');
+    const auto manifest = manifest_bytes_with_demo({{0, "kick", kick}}, demo);
+    transport.publish(manifest);
+    transport.publish(kick);
+    transport.publish(demo);
+
+    auto limits = generous_limits();
+    limits.maximum_soundset_blob_bytes = demo.size() - 1;
+    SoundSetStore store(
+        workspace.path(), limits, platform_for(workspace.path()));
+    const auto acquired = store.acquire(
+        transport, entry_for(manifest, declared_total(manifest, {kick, demo})));
+    LMDJ_CHECK(!acquired.has_value());
+    LMDJ_CHECK(
+        refused_resource(acquired.error()) == "maximum_soundset_blob_bytes");
+    LMDJ_CHECK(refused_observed(acquired.error()) == demo.size());
+    LMDJ_CHECK(refused_limit(acquired.error()) == demo.size() - 1);
+    expect_invisible(store, workspace.path(), manifest);
   }
 }
 
@@ -907,6 +1094,7 @@ int main() {
     test_store_refuses_a_workspace_root_that_is_not_managed();
     test_reads_of_absent_sets_and_artifacts_are_not_found();
     test_one_hash_with_two_descriptions_is_refused();
+    test_set_level_demo_is_verified_and_counted_once();
     test_a_corrupted_published_set_reports_the_corruption();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

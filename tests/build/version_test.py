@@ -290,7 +290,7 @@ expected_contract_sources = {
     "contracts/project/lmdj.project.v3.schema.json": "3.0.0",
     "contracts/project/lmdj.project.v4.schema.json": "4.0.0",
     "contracts/project/lmdj.project-bundle.v1.schema.json": "1.1.0",
-    "contracts/soundset/lmdj.soundset.v1.schema.json": "1.0.0",
+    "contracts/soundset/lmdj.soundset.v1.schema.json": "1.1.0",
     "contracts/soundset-catalog/lmdj.soundset-catalog.v1.schema.json": "1.0.0",
     "contracts/version/lmdj.product-version.v1.schema.json": "1.0.0",
 }
@@ -315,7 +315,17 @@ assert not unregistered_contracts and not retired_contracts, (
 )
 for relative, contract_version in expected_contract_sources.items():
     contract = json.loads((repo_root / relative).read_text(encoding="utf-8"))
-    assert contract["x-lmdj-contract-version"] == contract_version
+    found_version = contract["x-lmdj-contract-version"]
+    assert found_version == contract_version, (
+        f"why: {relative} declares x-lmdj-contract-version {found_version}, "
+        f"but this gate's inventory expects {contract_version}, so the "
+        "Contract's identity and the gate that pins it disagree. "
+        f"Remedy: if the bump is intended, set {relative!r} to "
+        f'"{found_version}" in expected_contract_sources above (and in '
+        "tests/conformance/schema_contract_test.py's contract_versions, which "
+        "pins the same value); otherwise restore the schema to "
+        f"{contract_version}."
+    )
 
 expected_provider_manifests = {
     "providers/local-proof-failure/module.json": {

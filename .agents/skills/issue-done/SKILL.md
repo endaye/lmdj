@@ -335,17 +335,59 @@ lint reads the text you give it and cannot see a directive added afterwards.
 
 ## 5. Enable Auto-Merge & Monitor CI
 
-1. **Enable GitHub Auto-Merge (Squash Merge & Delete Branch)**:
+1. **Arm auto-merge, then label `merge:queue` last, at an observed head**:
+
+   Both are required, and the order matters. `main` is `strict: true`, so
+   GitHub-native auto-merge cannot merge on its own — a Pull Request with only
+   auto-merge armed parks as `BEHIND` indefinitely. But auto-merge, once armed,
+   also updates the head branch by merging `main` into it whenever the base
+   advances, and the queue controller authorizes the **exact** SHA the
+   `labeled` event carried. Label first and that SHA can go stale before the
+   controller reads it, which it refuses as `ineligible-pr`.
+
    ```bash
    gh pr merge --auto --squash --delete-branch
+   gh pr view <number> --json headRefOid --jq .headRefOid   # observe the head
+   gh pr edit <number> --add-label "merge:queue"            # authorize it
    ```
-   *(Optional: If the repository uses `merge:queue`, apply label: `gh pr edit --add-label "merge:queue"`)*
 
-2. **Watch CI Checks**:
+   If the controller still stops with `ineligible-pr` naming an
+   `observed_head_sha` you never pushed, auto-merge moved the head under you.
+   That is not a fault in the change: confirm the new head is your work plus a
+   merge of `main`, re-run the Task's verification on it, and explicitly re-add
+   the label — the controller removes it when it stops, so nothing retries on
+   its own. See
+   [`queue-authorized-head-moved-by-auto-merge`](../../pitfalls/queue-authorized-head-moved-by-auto-merge.md).
+
+2. **Watch CI Checks — not with `gh pr checks`**:
+
+   Core CI reports against the `<pr>/merge` ref, so its check runs never enter
+   the Pull Request head's `statusCheckRollup` and `gh pr checks` does not list
+   them at all. What it does list is the Cursor and Netlify check runs, whose
+   bucket is `skipping` (`NEUTRAL`) — neither `pass` nor `pending`. A predicate
+   like `all(.bucket != "pending")` is therefore true the moment the Pull
+   Request opens, against zero real lanes, and reports a green Pull Request
+   that has run nothing. See
+   [`pr-checks-omits-merge-ref-lanes`](../../pitfalls/pr-checks-omits-merge-ref-lanes.md).
+
+   Watch the workflow runs and the Pull Request's own state instead:
    ```bash
-   gh pr checks --watch
+   gh run list --branch "$BRANCH" --limit 20 \
+     --json name,status,conclusion,databaseId
+   gh pr view <number> --json state,mergeStateStatus
    ```
-   Wait until all checks pass and GitHub automatically squash-merges the PR into `main`.
+   Treat a `conclusion` of `failure`, `cancelled`, `timed_out` or
+   `action_required` as terminal, and `MERGED`/`CLOSED` as the end state. A
+   `cancelled` Core CI run whose `createdAt` precedes a newer run for the same
+   Pull Request is normal concurrency-group supersession, not a failure.
+   `mergeStateStatus` of `BEHIND` or `BLOCKED` is the `strict: true`
+   up-to-date requirement the Integration Queue exists to resolve, not a
+   verdict on the change.
+
+   Whatever you poll with, make the check distinguish "failed to measure" from
+   "measured something good": if the process crashed, the lane was cancelled,
+   or the query returned an empty set, the check must say something. Silence is
+   not success, and neither is an empty result set.
 
 3. **Confirm Merged State**:
    ```bash

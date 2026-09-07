@@ -46,3 +46,7 @@ required context is still stale, and stop with named `merge-box:*` evidence
 plus `merge-box:remedy=gh-run-rerun` rather than `evidence-redacted`. The
 enforcing tests are `tests/build/ci_merge_queue_test.py`. Do not restore
 `cancel_superseded_pull_runs` on the dispatch path.
+
+See also [[pr-checks-omits-merge-ref-lanes]] for the observer side of the same
+GitHub behaviour: a head-SHA rollup omits these lanes, so `gh pr checks` reads
+green against zero of them.

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lmdj.dev/contracts/soundset/lmdj.soundset.v1.schema.json",
-  "x-lmdj-contract-version": "1.0.0",
+  "x-lmdj-contract-version": "1.1.0",
   "title": "LMDJ Sound Set Contract v1",
   "type": "object",
   "required": [
@@ -46,6 +46,9 @@
     },
     "license": {
       "$ref": "#/$defs/license"
+    },
+    "demo": {
+      "$ref": "#/$defs/artifact_ref"
     },
     "slots": {
       "type": "array",
