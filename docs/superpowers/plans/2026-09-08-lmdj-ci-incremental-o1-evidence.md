@@ -71,14 +71,17 @@ coverage, terminal verdict validation or successful full testing.
   cancelled, journal reset or second heavy execution authorized by this run.
 - Actual nested product job identities, complete scoped verdict and raw needs
   must be checked at whole-run termination, then result and advance reread.
-- Real none and focused intervals require genuine main changes and valid
-  reviewed-head merge maps. Existing CI-only changes cannot be relabeled none.
+- Real none and focused intervals require genuine main changes and complete
+  deterministic Git/policy scope. Valid reviewed-head advice must be retained;
+  missing advice uses the spec's deterministic fallback, not fabricated review
+  success. Existing CI-only changes cannot be relabeled none.
 - Multiple merges while active must coalesce to the complete first-parent
   interval and fixed latest target, not one heavy run per PR.
 - Failure reporting, durable outbox, terminal retry/recovery, no-change idle,
   manual full candidate and final trigger/documentation cutover remain open.
-- Runtime has no CLI resume operation yet. A local controller resume fixture
-  does not verify recovery of a paused real debt queue.
+- Runtime lacked a CLI resume operation at the first observer. PR #815 has
+  since added it; its local tests do not verify recovery of a paused real debt
+  queue, and the manual workflow still needs this operation connected.
 
 ## Subsequent active observer verified
 
@@ -110,10 +113,18 @@ always full; it is not a way to manufacture focused acceptance.
 PR #803 review run `34154005940` retained not-reviewed with all three backends
 failed; there was no valid AI scope. It was merged before the publisher began.
 The closed mapper `34154278366`, artifact `10030414406`, is authenticated but
-incomplete with no scope records and explicit full fallback gaps. That is not
-none/focused evidence. Early merge with late review remains a conservative
-over-testing case; accepting late historical identity needs a separate design,
-not removal of current-head authentication.
+incomplete with no scope records and historical full fallback diagnostics. That
+is not none/focused evidence. The accepted spec instead requires a verified
+deterministic floor when advice is missing. Preserving valid late historical
+advice needs a separate design, not removal of current-head authentication.
+
+PR #812's review run `34156734074`, bound to historical head
+`b589400ee4c251cecefd65f54d9b46a11e08f99a`, also retained `not-reviewed`:
+GLM and Grok reported runtime failure, Kimi invalid output. Its retained scope
+artifact is deterministic `none` for this explanatory ledger, not an AI
+approval. Authorized independent current-head review is recorded on the PR.
+The real all-backend-failure report through the durable outbox remains an
+acceptance gap; the presence of the failure artifact is not a created Issue.
 
 ## Verification
 
