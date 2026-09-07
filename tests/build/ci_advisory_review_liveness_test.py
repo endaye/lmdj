@@ -492,10 +492,13 @@ class SignatureContractTest(unittest.TestCase):
                       "rename on either side makes every Grok review invisible; remedy: keep "
                       "REVIEW_LANES and grok_review.COMMENT_MARKER in step")
 
-    def test_every_lane_names_a_job_and_step_that_exist(self) -> None:
-        sources = {"ci.yml": CLAUDE.read_text(encoding="utf-8"),
-                   "pr-review.yml": STANDALONE.read_text(encoding="utf-8")}
+    def test_every_active_lane_names_a_job_and_step_that_exist(self) -> None:
+        # Historical ci.yml evidence stays readable without requiring the
+        # retired workflow to retain executable reviewer jobs forever.
+        sources = {"pr-review.yml": STANDALONE.read_text(encoding="utf-8")}
         for lane in REVIEW_LANES:
+            if lane.workflow not in sources:
+                continue
             with self.subTest(lane=lane.name):
                 self.assertIn(f"- name: {lane.step}", sources[lane.workflow])
                 job_name = lane.job.replace("(glm)", "(${{ matrix.backend }})") \
@@ -520,7 +523,7 @@ class SignatureContractTest(unittest.TestCase):
         self.assertEqual(liveness.REVIEW_WORKFLOWS, ("ci.yml", "pr-review.yml"))
         by_workflow = {}
         for lane in REVIEW_LANES:
-            by_workflow.setdefault(lane.workflow, set()).add((lane.job, lane.step, lane.marker))
+            by_workflow.setdefault(lane.workflow, set()).add(lane.marker)
         self.assertEqual(by_workflow["ci.yml"], by_workflow["pr-review.yml"],
                          "why: a lane that exists for one entry and not the other is a "
                          "reviewer the check cannot see there; remedy: derive both from "
@@ -753,7 +756,7 @@ class StandaloneExactEvidenceTest(unittest.TestCase):
         self.assertFalse(check(good, attempt="1"))
         self.assertFalse(check(good, backend="kimi"))
 
-    def collect(self, *, publisher="success", event="workflow_dispatch", model="success"):
+    def collect(self, *, publisher="success", event="workflow_dispatch", model="success", step=None, posted=True):
         run = {"id": 123, "run_attempt": 2, "event": event, "head_branch": "main", "head_sha": "b" * 40,
                "display_title": "PR Review / #7 @ dispatch", "conclusion": "success",
                "pull_requests": [], "created_at": "2026-09-07T10:00:00Z"}
@@ -762,11 +765,11 @@ class StandaloneExactEvidenceTest(unittest.TestCase):
                 self.assertNotIn("event=pull_request", path)
                 return {"workflow_runs": [run]}
             if "/jobs?" in path:
-                return {"jobs": [{"name": "Claude review (glm)", "conclusion": model,
-                                   "steps": [{"name": "Review", "conclusion": model}]},
-                                  {"name": "Publish Claude review (glm)", "conclusion": publisher}]}
+                return {"jobs": [{"name": "Review fallback", "conclusion": model,
+                                   "steps": [{"name": "Validate glm result before considering fallback", "conclusion": step or model}]},
+                                  {"name": "Publish review and scope", "conclusion": publisher}]}
             if "/pulls/7/reviews?" in path:
-                return [self.review()]
+                return [self.review()] if posted else []
             raise AssertionError(path)
         return liveness.collect_observations("o/r", liveness.claude_lane("glm", "pr-review.yml"), limit=5, api=api)
 
@@ -776,6 +779,12 @@ class StandaloneExactEvidenceTest(unittest.TestCase):
     def test_stale_or_failed_publisher_cannot_pass_on_an_existing_review(self):
         self.assertEqual(self.collect(publisher="failure")[0].outcome, "failure")
         self.assertEqual(self.collect(model="neutral")[0].outcome, "failure")
+
+    def test_shared_job_green_without_this_backend_signature_is_failure(self):
+        self.assertEqual(self.collect(posted=False)[0].outcome, "failure")
+
+    def test_backend_skipped_after_prior_success_is_not_failure_sample(self):
+        self.assertEqual(self.collect(step="skipped"), [])
 
 
 if __name__ == "__main__":
