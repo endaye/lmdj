@@ -1,0 +1,88 @@
+name: Self-test Report
+
+# A self-test batch (a `Core CI` schedule or dispatch run that retains a
+# `self-test-verdict-<sha>-<run>-<attempt>` artifact) ends in a verdict, not in an alert. This
+# workflow collects that verdict in one deduplicated Issue per suite/class,
+# from default-branch code, after the batch has finished -- so the batch itself
+# never holds `issues: write`, and nothing the tested revision produced is
+# executed here; its verdict is read as data.
+#
+# `workflow_run` fires for every Core CI completion, Pull Requests included;
+# the job-level `if` keeps the hosted minute for the two events a self-test can
+# have. The daily `schedule` here is the "expected a batch, none started"
+# check; it runs on Actions and therefore cannot fire on a day Actions did not
+# run it -- the Issue it files says so.
+
+on:
+  workflow_run:
+    workflows: ["Core CI"]
+    types: [completed]
+  schedule:
+    # Two hours after the 16:00 UTC sweep: long enough for a batch to have
+    # started, early enough that a missing one is noticed the same day.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Core CI run id to report (explicit retry after a reporting-error).
+        required: true
+
+# Everything not listed is `none`. The reporter reads runs and artifacts and
+# writes Issues; it holds no pull-request, contents-write or deploy authority.
+permissions: {}
+
+# One short writer at a time; retain up to the platform queue limit instead
+# of replacing pending completions. Every entry point also reconciles recent
+# batches, with an explicit reporting-error when the recovery window fills.
+concurrency:
+  group: self-test-report
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  report:
+    name: Self-test report
+    if: >-
+      github.event_name != 'workflow_run'
+      || github.event.workflow_run.event == 'schedule'
+      || github.event.workflow_run.event == 'workflow_dispatch'
+    # Hosted, as scripts/ci/hosted_runner_policy.json records: this is the
+    # check that must run when the self-hosted hosts that run the batches are
+    # the thing that went missing.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      # Default-branch code only. `workflow_run` and `schedule` already run in
+      # the default branch's context; the explicit ref keeps a dispatch from a
+      # branch from substituting its own reporter.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Report the completed batch
+        if: github.event_name != 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.run_id }}
+        run: >-
+          python3 scripts/ci/self_test_report.py
+          --repository "${{ github.repository }}"
+          --summary "$GITHUB_STEP_SUMMARY"
+          report --run-id "$RUN_ID"
+      - name: Check that today's batch started
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 scripts/ci/self_test_report.py
+          --repository "${{ github.repository }}"
+          --summary "$GITHUB_STEP_SUMMARY"
+          missing --date "$(date -u +%Y-%m-%d)"

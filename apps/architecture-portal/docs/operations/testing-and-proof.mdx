@@ -79,6 +79,30 @@ focused `main` 的已知盲区——某条 lane 在连续多次仅文档的 push
 未被选中的 job 跑了也会失败，所以它成功本身就证明每一次 skip 都是应有的。见
 [focused merge evidence 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-29-focused-merge-evidence.md)。
 
+手动自测批次以 `self-test-verdict-<sha>-<run>-<attempt>` artifact 保留结论；
+`self-test-report.yml` 在 `Core CI` 完成后使用默认分支代码读取数据，核验稳定 workflow
+身份、main 控制修订、目标属于当前 main 历史、精确 attempt，并复用共享的完整证据
+校验器。目标可以晚于控制修订；两者分别验证属于 main 历史，不要求目标是控制修订的
+祖先。旧 sweep
+与兼容 dispatch 尚未选择新自测时不会被误报为缺少 verdict；请求记录已保留却没有
+结论的取消、解析失败或上传失败则报告为基础设施问题，不把未验证目标冒充已测 SHA。
+
+报告按 “suite id + 失败类别” 维护带 `self-test` 标签的故障收集 Issue；这是 suite/class
+收集桶，不是已完成的根因级去重。目前尚未抽取真实 test ID 与日志错误指纹，不同缺陷
+可能进入同一桶，维护者可在分诊时拆成独立缺陷 Issue。首次创建、再现追加
+观察、关闭后再现重新打开；同一观察重送与写入响应丢失后的重试先重读 marker，不
+重复写入。一次绿色不自动关闭 Issue。`invalid` 为基础设施问题，合法 `superseded`
+不制造缺陷。共享证据校验失败与 API 故障显示 `reporting-error`，不改变测试 verdict。
+报告队列保留 pending，所有入口补查保留期内最近 30 天、每类至多 100 个完成 run；
+窗口满额明确报错，维护者用指定 run ID 重试补齐，不宣称已自动恢复无限期历史。
+报告器重试仅补报告；重做自测须对同一精确目标发起 new dispatch，不能 rerun 原 run
+（当前 producer 拒绝后续 attempt）。产品修复后则明确选择并 dispatch 修复后的 SHA。
+
+独立 hosted 检查每天 18:00 UTC 核对当天 16:00 UTC sweep 是否存在，进行中或排队
+也算已触发；该检查运行在 Actions 上，Actions 自身未运行检查的那天仍属未知。
+当前合并门禁不变，日测切换和发布证据接入仍由后续 Task 操作；报告器不合并 PR、
+不创建版本、不发布或部署。
+
 被测 head 自己产生 CI 证据，
 因此 review 与 branch protection 仍是最终信任边界；任何 merge-authority control-plane diff
 都不能由队列自动合并，必须走普通受保护合并路径。

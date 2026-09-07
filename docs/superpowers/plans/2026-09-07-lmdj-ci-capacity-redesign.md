@@ -205,7 +205,16 @@ Affected portal pages: /operations/testing-and-proof/
 `tests/build/ci_self_test_report_test.py`、
 `tests/build/ci_self_test_report_workflow_test.py`。
 **修改：** `scripts/ci/scope_policy.json`（登记新 workflow 为控制面路径）、
-测试门户页面；`docs/governance/github-work-management.md`。
+`scripts/ci/hosted_runner_policy.json`、测试门户页面；
+`docs/governance/github-work-management.md`、本文、
+`.agents/pitfalls/fake-tool-stub-strictness.md`（真实 Actions API 的动态 run name
+与 fixture 不同，记录复现；稳定 workflow ID/path 才是身份）。
+
+T3 实施边界：当前先按 suite/class 归集故障观察，尚未抽取真实 test ID 或日志错误
+指纹，维护者可拆分同桶内的不同缺陷；下述根因级去重验收仍待补齐，不因本地测试
+通过而勾选。报告器只信任 Actions bot 发布的归集与观察 marker；目标和控制 revision
+分别核对 main 历史，展示名不作为 workflow 身份。真实 GitHub 创建、重送与恢复验证
+仍留在 O1，不将 fake API 的绿色当作远端闭环证明。
 
 - [ ] 用受保护默认分支代码处理 workflow completion 和显式重试（`workflow_run`
   只为默认分支上的 workflow 触发，这是安全前提也是部署约束）；
