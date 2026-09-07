@@ -339,24 +339,12 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         events = self.event_block(self.main_source)
         self.assertNotRegex(events, r"(?m)^\s+paths(?:-ignore)?:")
 
-    def test_pr_events_exclude_labeled_and_unlabeled(self) -> None:
+    def test_product_ci_has_no_pr_or_ordinary_push_trigger(self) -> None:
         events = self.event_block(self.main_source)
-        match = re.search(r"(?m)^    types: \[(?P<types>[^]]+)\]$", events)
-        self.assertIsNotNone(match, "pull_request event types are missing")
-        assert match is not None
-        actual = {value.strip() for value in match.group("types").split(",")}
-        self.assertEqual(
-            actual,
-            {
-                "opened",
-                "synchronize",
-                "reopened",
-                "ready_for_review",
-                "converted_to_draft",
-            },
-        )
+        self.assertNotRegex(events, r"(?m)^  (?:pull_request|pull_request_target|push):",
+                            "why: product verification is independent of optimistic merges; remedy: keep only daily/manual entries")
 
-    def test_pr_group_is_per_pr_and_cancels_but_main_group_is_per_sha_and_does_not_cancel(self) -> None:
+    def test_self_test_events_have_independent_non_cancelling_admission(self) -> None:
         concurrency = re.search(
             r"^concurrency:\n(?P<body>.*?)(?=^[a-z][a-z-]*:\n)",
             self.main_source,
@@ -365,13 +353,8 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIsNotNone(concurrency, "workflow concurrency block is missing")
         assert concurrency is not None
         body = concurrency.group("body")
-        self.assertIn("github.event.pull_request.number", body)
-        self.assertIn("github.sha", body)
-        self.assertIn("format('core-ci-pr-{0}'", body)
-        self.assertIn("format('core-ci-sha-{0}'", body)
-        self.assertIn(
-            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}", body
-        )
+        self.assertIn("format('core-ci-self-test-{0}', github.run_id)", body)
+        self.assertIn("cancel-in-progress: false", body)
 
     def test_change_scope_has_three_minute_limit_zero_dependency_install_and_live_pr_read(self) -> None:
         job = self.workflow_job("change-scope")

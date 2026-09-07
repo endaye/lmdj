@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 
@@ -28,13 +32,29 @@ class MergeQueueWorkflowTest(unittest.TestCase):
         self.assertIsNotNone(match, f"missing workflow job {name}")
         return match.group("body")
 
-    def test_only_labeled_pull_requests_enter_the_router(self):
-        self.assertIn("  pull_request_target:\n    branches: [main]\n    types: [labeled]", self.source)
+    def test_retired_queue_accepts_no_new_label_or_scheduled_authorization(self):
         event = self.source.split("permissions:", 1)[0]
         self.assertNotIn("synchronize", event)
         self.assertNotIn("closed", event)
-        self.assertIn("github.event.label.name", self.job("route"))
-        self.assertIn("merge:queue", self.job("route"))
+        self.assertNotRegex(event, r"(?m)^  (?:pull_request_target|schedule):")
+        self.assertIn("accepted=false", self.job("route"))
+        self.assertIn("mode=retired", self.job("route"))
+        self.assertNotIn("accepted=true", self.job("route"))
+
+    def test_real_retired_router_never_authorizes_even_a_stale_label(self):
+        script = textwrap.dedent(self.job("route").split("        run: |\n", 1)[1])
+        for event in ("workflow_dispatch", "pull_request_target", "schedule"):
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "output"
+                result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                        env={**os.environ, "EVENT_NAME": event,
+                                             "LABEL_NAME": "merge:queue", "PR_NUMBER": "17",
+                                             "EVENT_ACTOR": "owner", "EVENT_HEAD_SHA": "a" * 40,
+                                             "GITHUB_OUTPUT": str(output),
+                                             "GITHUB_STEP_SUMMARY": str(Path(directory) / "summary")})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("accepted=false", output.read_text())
+                self.assertIn("mode=retired", output.read_text())
 
     def test_exact_route_precedes_job_level_queue_concurrency(self):
         prefix = self.source.split("jobs:", 1)[0]
@@ -97,7 +117,7 @@ class MergeQueueWorkflowTest(unittest.TestCase):
         self.assertIn("if: ${{ github.event_name == 'schedule' }}", watchdog)
         self.assertIn("python3 scripts/ci/merge_queue_watchdog.py", watchdog)
         self.assertNotIn("concurrency:", watchdog)
-        self.assertIn("- cron: '*/15 * * * *'", self.source)
+        self.assertNotRegex(self.source, r"(?m)^\s+- cron:")
 
     def test_watchdog_reconciles_on_the_trusted_role_not_hosted_minutes(self):
         """A 10-second job on a 15-minute cron is billed as a whole minute each run.
@@ -122,22 +142,19 @@ class MergeQueueWorkflowTest(unittest.TestCase):
             ),
         )
         self.assertNotIn("runs-on: ubuntu-24.04", watchdog)
-        self.assertIn(
-            "- cron: '*/15 * * * *'",
-            self.source,
-            msg=(
-                "why: the cadence is what bounds how long a stalled queue label "
-                "goes unreconciled, and the 20-minute stall threshold in "
-                "merge_queue_watchdog.py assumes it; remedy: rehome the job "
-                "rather than reducing its frequency"
-            ),
-        )
+        self.assertNotRegex(self.source, r"(?m)^\s+- cron:",
+                            "why: retired queue must not reconcile new tickets; remedy: keep cron disabled")
 
     def test_manual_preflight_is_bounded_and_uses_the_same_queue(self):
         self.assertIn("hold_seconds:", self.source)
         queue = self.job("queue-item")
         self.assertIn("needs.route.outputs.mode == 'preflight'", queue)
         self.assertIn("30 <= seconds <= 600", queue)
+
+    def test_retired_manual_entry_does_not_require_unused_hold_input(self):
+        inputs = self.source.split("      hold_seconds:", 1)[1].split("\npermissions:", 1)[0]
+        self.assertIn("required: false", inputs,
+                      "why: retired diagnostics do not consume the hold input; remedy: keep it optional for legacy callers")
 
     def test_reports_are_retained_even_when_the_worker_fails(self):
         queue = self.job("queue-item")
