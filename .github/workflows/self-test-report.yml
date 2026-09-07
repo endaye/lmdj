@@ -35,16 +35,32 @@ on:
       batch_operation:
         description: Isolated incremental rehearsal only; legacy preserves the existing reporter.
         type: choice
-        options: [legacy, init, reconcile, settle]
+        options: [legacy, init, reconcile, settle, resume, report-init-outbox, report-review, report-batches, report-drain]
         default: legacy
       journal_config:
         description: Exact isolated journal identity JSON; no automatic Issue creation or baseline.
         type: string
         required: false
       batch_request:
-        description: Optional explicit node/candidate JSON for reconcile only.
+        description: Explicit node/candidate JSON for reconcile, or required closed id/suites/reason JSON for resume.
         type: string
         required: false
+      report_config:
+        description: Closed scheduler/outbox JSON with two distinct fixed Issue identities; each uses the six-field runtime config.
+        type: string
+        required: false
+      review_run_id:
+        description: Exact completed PR Review run ID for report-review only.
+        type: string
+        required: false
+      review_attempt:
+        description: Exact PR Review attempt for report-review only; no implicit latest attempt.
+        type: string
+        required: false
+      report_limit:
+        description: Maximum newly queued observations for report-batches (1..32).
+        type: number
+        default: 8
 
 # Everything not listed is `none`. The reporter reads runs and artifacts and
 # writes Issues; it holds no pull-request, contents-write or deploy authority.
@@ -119,8 +135,10 @@ jobs:
   controller:
     name: Incremental batch controller
     if: >-
-      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
-      (inputs.batch_operation == 'init' || inputs.batch_operation == 'reconcile' || inputs.batch_operation == 'settle')
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == '1' &&
+      (inputs.batch_operation == 'init' || inputs.batch_operation == 'reconcile' || inputs.batch_operation == 'settle' ||
+       inputs.batch_operation == 'resume' || inputs.batch_operation == 'report-init-outbox' ||
+       inputs.batch_operation == 'report-review' || inputs.batch_operation == 'report-batches' || inputs.batch_operation == 'report-drain')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
@@ -146,6 +164,7 @@ jobs:
           python-version: "3.11"
       - name: Reconcile the isolated journal under the short writer lock
         id: control
+        if: ${{ !startsWith(inputs.batch_operation, 'report-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATCH_WRITER_LOCK: self-test-report
@@ -167,8 +186,8 @@ jobs:
           command = ['python3', 'scripts/ci/batch_runtime.py', operation,
                      '--config', str(config), '--output', str(output)]
           if os.environ.get('BATCH_REQUEST'):
-              if operation != 'reconcile':
-                  raise SystemExit('why: explicit request outside reconcile; remedy: select reconcile or omit the request')
+              if operation not in ('reconcile', 'resume'):
+                  raise SystemExit('why: explicit request outside reconcile/resume; remedy: select its command or omit the request')
               request = directory / 'request.json'
               request.write_text(os.environ['BATCH_REQUEST'])
               command += ['--request', str(request)]
@@ -182,8 +201,50 @@ jobs:
               handle.write('Incremental rehearsal: ' + result['action'] + '\n')
               handle.write('This operation is not release evidence or automatic trigger cutover.\n')
           PY
+      - name: Report through the isolated outbox under the short writer lock
+        if: ${{ startsWith(inputs.batch_operation, 'report-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATCH_WRITER_LOCK: self-test-report
+          REPORT_OPERATION: ${{ inputs.batch_operation }}
+          REPORT_CONFIG: ${{ inputs.report_config }}
+          REVIEW_RUN_ID: ${{ inputs.review_run_id }}
+          REVIEW_ATTEMPT: ${{ inputs.review_attempt }}
+          REPORT_LIMIT: ${{ inputs.report_limit }}
+          BATCH_REQUEST: ${{ inputs.batch_request }}
+          JOURNAL_CONFIG: ${{ inputs.journal_config }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          operations = {'report-init-outbox': 'init-outbox', 'report-review': 'review',
+                        'report-batches': 'batches', 'report-drain': 'drain'}
+          operation = operations.get(os.environ['REPORT_OPERATION'])
+          if operation is None or os.environ.get('BATCH_REQUEST') or os.environ.get('JOURNAL_CONFIG'):
+              raise SystemExit('why: report command is unknown or mixed with scheduler inputs; remedy: use only report_config and the selected report arguments')
+          directory = Path(os.environ['RUNNER_TEMP']) / 'incremental-report'
+          directory.mkdir(exist_ok=True)
+          config = directory / 'config.json'
+          config.write_text(os.environ['REPORT_CONFIG'])
+          command = ['python3', 'scripts/ci/report_runtime.py', '--config', str(config),
+                     '--root', str(Path.cwd()), '--summary', os.environ['GITHUB_STEP_SUMMARY'], operation]
+          run_id, attempt = os.environ.get('REVIEW_RUN_ID', ''), os.environ.get('REVIEW_ATTEMPT', '')
+          if operation == 'review':
+              if not run_id or not attempt:
+                  raise SystemExit('why: review report lacks exact run/attempt; remedy: supply both review_run_id and review_attempt')
+              command += ['--run-id', run_id, '--attempt', attempt]
+          elif run_id or attempt:
+              raise SystemExit('why: review identity supplied to another report operation; remedy: select report-review or omit it')
+          if operation == 'batches':
+              command += ['--limit', os.environ.get('REPORT_LIMIT', '8')]
+          subprocess.run(command, check=True)
+          # Report CLI writes its own summary; there is deliberately no control
+          # result, GITHUB_OUTPUT action, or executor request from this step.
+          PY
       - uses: actions/upload-artifact@v4
-        if: ${{ always() }}
+        if: ${{ always() && !startsWith(inputs.batch_operation, 'report-') }}
         with:
           name: batch-controller-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/incremental-controller/result.json
