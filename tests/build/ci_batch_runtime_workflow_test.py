@@ -174,7 +174,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
 
     def test_manual_choices_and_inputs_are_explicit_without_new_trigger(self):
         inputs = block(block(block(self.source, 'on', 0), 'workflow_dispatch', 2), 'inputs', 4)
-        for operation in ('resume', 'report-init-outbox', 'report-review', 'report-batches', 'report-drain'):
+        for operation in ('resume', 'report-init-outbox', 'report-review', 'report-batches', 'report-drain', 'report-discovery'):
             self.assertIn(operation, field(block(inputs, 'batch_operation', 6), 'options', 8))
             self.assertIn(f"inputs.batch_operation == '{operation}'", field(self.control, 'if', 4))
         self.assertIn("github.run_attempt == '1'", field(self.control, 'if', 4))
