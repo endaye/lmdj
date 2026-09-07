@@ -131,6 +131,7 @@ fields are invalid. `uuid` is a lowercase canonical UUID.
 | --- | --- | --- |
 | `soundset.catalog.list` | query | (none) |
 | `soundset.inspect` | query | `set_id, version, manifest_sha256` |
+| `soundset.audition` | query | `set_id, version, manifest_sha256, slot_index?` |
 | `soundset.map.preview` | query | `project_path, bank_id, set_id, version, manifest_sha256` |
 | `soundset.install` | command | `project_path, command_id, expected_revision, bank_id, set_id, version, manifest_sha256, occupied_pad_policy?` |
 
@@ -140,6 +141,37 @@ Workspace-level operations resolve the Set Store and Catalog cache from
 `exact_keys` check like any other extra field. `soundset.catalog.list` is a
 query with respect to Project Truth: it may refresh the Host-side Catalog
 cache, and that side effect never touches a Project, Asset, Pad, or revision.
+
+`soundset.audition` is S11-D5's audition surface, added at
+[#773](https://github.com/endaye/lmdj/issues/773) because the four-operation
+table above could not carry it: a Set in the Workspace Set Store is not a
+Project Pad, so the Pad-addressed `sample.preview.set` cannot reach it, and
+moving playback Host-side would make a Host read Set Store bytes instead of
+using the Application Facade. It is Set-scoped: omitting `slot_index`
+resolves the set-level `demo` of S11-D5, supplying one resolves that slot's
+Artifact, through the same project-cooker preparation the ordinary Runtime
+preview path uses. Like `soundset.inspect` it is a query with respect to
+Project Truth — no Asset, no Pad, no revision — and it resolves the Set Store
+from the Workspace. It refuses what the other Set-reading operations refuse,
+in the same order: identity, `soundset_license_ineligible`,
+`soundset_content_mismatch`, then S11-D3's whole-Set
+`soundset_audio_unsupported`. An audition with no source — a `slot_index`
+naming an empty slot, keyed off the absence of an `artifact` and never off a
+flag, or a `demo` request on a Set that declares none — is the existing
+`MISSING_ASSET` carrying no `details.reason`: the Locked Error Reasons table
+above does not grow for this operation.
+
+**S11-D5 is not yet closed by this operation.** `soundset.audition` resolves
+and gates the audition source and reports the geometry of the exact bytes the
+Runtime would play; it does not itself make sound. Nothing carries those
+prepared bytes into a Host's audio engine today: the Facade owns no engine and
+emits no binary channel, and the engine's preview control is a Pad-slot
+override on the bank cooked from a Project, which holds no Set. Delivering the
+bytes needs either an audition sink on the Facade or an audition bank in the
+Runtime, and the second answers a product question this plan has not settled —
+whether auditioning a Set displaces the open Project's bank. Until that is
+decided and built, a Host can browse, inspect, gate and describe an audition
+but cannot hear one, and S11-D5 stays open.
 
 `soundset.map.preview` is the pure function
 `map(manifest, bank occupancy) → {proposed, collisions, kept}` and mutates
@@ -175,7 +207,7 @@ must not invent a second Lineage model.
 | S11-D2 schema + license keys | 1 | four keys required; allowlist not a Schema enum |
 | S11-D3 S8-D6 audio | 4 | `soundset_audio_unsupported` on inspect/preview/install via project-cooker |
 | S11-D4 role enum | 1 | unknown role → `soundset_slot_invalid` |
-| S11-D5 preview, no Project change | 4, 5 | inspect/preview leave revision unchanged |
+| S11-D5 audition, no Project change | 4, 5 | inspect/preview leave revision unchanged; `soundset.audition` resolves the set-level `demo` and a slot's Artifact and leaves the revision unchanged. Playback delivery is outstanding — see the Locked Facade Surface note |
 | S11-D6 catalog adapters, no archive | 2 | `CatalogTransport` interface; local adapter rejects symlink/`..`/non-regular file |
 | S11-D7 download, unique bytes, Host limits | 2 | exact/+1 of four limits; hash mismatch invisible |
 | S11-D8 InstallSoundSet, quota, policy | 3, 4 | three write-sets (Task 3); per-Pad decoded-PCM quota zero-change (Task 4) |
@@ -413,10 +445,13 @@ Contract with a new ID.
       `assess_runtime_quota` binding-constraint rule; either quota fails with
       `BANK_QUOTA_EXHAUSTED` / `PROJECT_QUOTA_EXHAUSTED` and zero change;
       `occupied_pad_policy` never bypasses quota.
-- [ ] Implement the four operations. Preview of set/slot audio uses the
-      ordinary Runtime preview path and does not create Assets. Install
-      decodes each occupied slot once through the project-cooker WAV reader,
-      rehearses quota, then calls Task 3's store commit.
+- [ ] Implement the four Task 4 operations. Install decodes each occupied slot
+      once through the project-cooker WAV reader, rehearses quota, then calls
+      Task 3's store commit. Audition of set/slot audio is `soundset.audition`,
+      the fifth operation, added at #773 — it creates no Assets. Its Facade,
+      MCP and Native Host registrations landed with it; the Web Host's
+      `bridge.cpp` / `protocol.mjs` pair and the Creator control follow Task 5,
+      so a browser request for it is refused at the bridge until then.
 - [ ] GREEN: `scripts/core.sh test dev fast`.
 - [ ] `scripts/architecture-portal.sh check`.
 - [ ] Commit `feat(facade): add Sound Set catalog, preview, and install operations`.

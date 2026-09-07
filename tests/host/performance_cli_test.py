@@ -41,6 +41,21 @@ PERFORMANCE_OPERATIONS = {
 }
 assert len(PERFORMANCE_OPERATIONS) == 23
 
+# Stage 11's Sound Set surface is a second Facade inventory the Native Host
+# forwards, kept apart from the Performance one above so P10-D20 stays exactly
+# P10-D20. The Facade's `dispatch()` routes an unlisted operation name to
+# `attempt_inspect`, so an operation missing from one of these two tables
+# misbehaves quietly instead of erroring: pinning the exact set is what makes
+# that loud.
+SOUNDSET_OPERATIONS = {
+    "soundset.audition": "query",
+    "soundset.catalog.list": "query",
+    "soundset.inspect": "query",
+    "soundset.install": "command",
+    "soundset.map.preview": "query",
+}
+assert len(SOUNDSET_OPERATIONS) == 5
+
 
 def registered_facade_performance_operations() -> dict[str, str]:
     source = (REPO_ROOT / "packages/application-facade/src/application.cpp").read_text(
@@ -61,6 +76,32 @@ def registered_native_performance_operations() -> dict[str, str]:
         encoding="utf-8"
     )
     start = source.index("kPerformanceOperations{{")
+    end = source.index("}};", start)
+    entries = re.findall(
+        r'\{"([^"]+)", FacadeSurface::(command|query)\}',
+        source[start:end],
+    )
+    return dict(entries)
+
+
+def registered_facade_soundset_operations() -> dict[str, str]:
+    source = (REPO_ROOT / "packages/application-facade/src/application.cpp").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("const std::map<std::string, OperationKind>& operations()")
+    end = source.index("\n  };", start)
+    entries = re.findall(
+        r'\{"(soundset\.[^"]+)", OperationKind::(command|query)\}',
+        source[start:end],
+    )
+    return dict(entries)
+
+
+def registered_native_soundset_operations() -> dict[str, str]:
+    source = (REPO_ROOT / "apps/native-host/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("kSoundSetOperations{{")
     end = source.index("}};", start)
     entries = re.findall(
         r'\{"([^"]+)", FacadeSurface::(command|query)\}',
@@ -224,6 +265,8 @@ def cli_operation_kind_contract(
 ) -> None:
     assert registered_facade_performance_operations() == PERFORMANCE_OPERATIONS
     assert registered_native_performance_operations() == PERFORMANCE_OPERATIONS
+    assert registered_facade_soundset_operations() == SOUNDSET_OPERATIONS
+    assert registered_native_soundset_operations() == SOUNDSET_OPERATIONS
     for operation, surface in PERFORMANCE_OPERATIONS.items():
         request = {"operation": operation}
         response = cli_request(cli, workspace, assembly, surface, request)

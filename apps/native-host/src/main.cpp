@@ -126,8 +126,9 @@ constexpr std::array<std::pair<std::string_view, FacadeSurface>, 23>
 // forwards, kept in their own table so the P10-D20 Performance inventory that
 // `tests/host/performance_cli_test.py` pins against the Facade stays exactly
 // the Performance inventory.
-constexpr std::array<std::pair<std::string_view, FacadeSurface>, 4>
+constexpr std::array<std::pair<std::string_view, FacadeSurface>, 5>
     kSoundSetOperations{{
+        {"soundset.audition", FacadeSurface::query},
         {"soundset.catalog.list", FacadeSurface::query},
         {"soundset.inspect", FacadeSurface::query},
         {"soundset.map.preview", FacadeSurface::query},

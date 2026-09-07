@@ -1,11 +1,12 @@
 // Stage 11 Task 4: the locked Sound Set Facade surface.
 //
-// The four operations of the plan's Locked Facade Surface are
-// `soundset.catalog.list`, `soundset.inspect`, `soundset.map.preview` and
-// `soundset.install`. This binary owns their request contract, the Catalog
-// and Set Store behaviour behind them, S11-D3 audio validation and the
-// S11-D5/D8/D12 zero-Project-change guarantees. Quota rehearsal lives in
-// `soundset_install_quota_test.cpp` so neither binary carries both budgets.
+// The five operations of the plan's Locked Facade Surface are
+// `soundset.catalog.list`, `soundset.inspect`, `soundset.map.preview`,
+// `soundset.install` and `soundset.audition`. This binary owns their
+// request contract, the Catalog and Set Store behaviour behind them, S11-D3
+// audio validation and the S11-D5/D8/D12 zero-Project-change guarantees.
+// Quota rehearsal lives in `soundset_install_quota_test.cpp` so neither
+// binary carries both budgets.
 //
 // Everything runs against the real fixture corpus in `tests/fixtures/soundset`
 // through the real local directory `CatalogTransport`: real canonical
@@ -22,6 +23,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <string_view>
@@ -64,6 +66,15 @@ constexpr std::string_view kTamperedSetId =
     "44444444-4444-4444-8444-444444444444";
 constexpr std::string_view kMismatchedSetId =
     "55555555-5555-4555-8555-555555555555";
+constexpr std::string_view kMismatchedManifest =
+    "68500bf29592c9de307d6682c1b66c957635733e01cf9aee34dfd20aa2cf8ce6";
+// Foundry CC0's set-level `demo` is a standalone blob no slot references;
+// its slots 0 and 12 share one Artifact and its slots 10, 11 and 13-15 are
+// empty.
+constexpr std::string_view kFoundryDemoArtifact =
+    "644fe37aef9fcb3d645b87105461b040453523784ce115cf38fd4c539e8813a2";
+constexpr std::string_view kFoundrySlotZeroArtifact =
+    "10b24f4f256ba6d2dde5a63dbd797bf3b707cb533a987bed72ea2242d6546e13";
 constexpr std::string_view kUnallowlistedSetId =
     "66666666-6666-4666-8666-666666666666";
 constexpr std::string_view kUnattributedSetId =
@@ -287,6 +298,25 @@ nlohmann::json inspect_set(
   });
 }
 
+// S11-D5's two layers through one request shape: no `slot_index` auditions
+// the set-level `demo`, a `slot_index` auditions that slot's Artifact.
+nlohmann::json audition_set(
+    const Application& application,
+    std::string_view set_id,
+    std::string_view manifest_sha256,
+    std::optional<std::uint8_t> slot_index = std::nullopt) {
+  nlohmann::json request{
+      {"operation", "soundset.audition"},
+      {"set_id", set_id},
+      {"version", kSetVersion},
+      {"manifest_sha256", manifest_sha256},
+  };
+  if (slot_index.has_value()) {
+    request["slot_index"] = *slot_index;
+  }
+  return application.query(request);
+}
+
 nlohmann::json map_preview(
     const Application& application,
     const std::filesystem::path& project,
@@ -402,6 +432,7 @@ void test_locked_operations_are_registered_with_exact_kinds() {
   require_registered(application, "soundset.inspect", false);
   require_registered(application, "soundset.map.preview", false);
   require_registered(application, "soundset.install", true);
+  require_registered(application, "soundset.audition", false);
 }
 
 // Every Sound Set operation resolves the Set Store and the Catalog cache from
@@ -468,6 +499,38 @@ void test_locked_requests_reject_extra_fields() {
   LMDJ_CHECK(
       application.command(bad_policy).at("error").at("message") ==
       "occupied_pad_policy must be keep or replace");
+
+  // The audition is Workspace-level for the same reason the other two
+  // Workspace operations are, so it refuses a Workspace field, and its
+  // `slot_index` is the only field it accepts beyond the Set identity.
+  const auto stray_audition = application.query({
+      {"operation", "soundset.audition"},
+      {"set_id", kFoundrySetId},
+      {"version", kSetVersion},
+      {"manifest_sha256", kFoundryManifest},
+      {"workspace_path", workspace},
+  });
+  LMDJ_CHECK(
+      stray_audition.at("error").at("message") ==
+      "soundset.audition request shape is invalid");
+
+  auto audition_with_project = nlohmann::json{
+      {"operation", "soundset.audition"},
+      {"project_path", project},
+      {"set_id", kFoundrySetId},
+      {"version", kSetVersion},
+      {"manifest_sha256", kFoundryManifest},
+  };
+  LMDJ_CHECK(
+      application.query(audition_with_project).at("error").at("message") ==
+      "soundset.audition request shape is invalid");
+
+  const auto out_of_range = audition_set(
+      application, kFoundrySetId, kFoundryManifest, 16);
+  LMDJ_CHECK(!out_of_range.at("ok").get<bool>());
+  LMDJ_CHECK(out_of_range.at("error").at("code") == "INVALID_ARGUMENT");
+  LMDJ_CHECK(
+      out_of_range.at("error").at("message") == "slot_index is out of range");
 }
 
 // #465 Q1 case 3: one eligibility for listing, preview, download and install.
@@ -590,6 +653,12 @@ void test_catalog_summary_mismatch_is_ineligible_at_inspect() {
 
   check_refusal(
       inspect_set(application, kFoundrySetId, kFoundryManifest),
+      "PERMISSION_DENIED",
+      "soundset_license_ineligible");
+  // One eligibility for every use, the audition included: a Set the Catalog
+  // now disagrees with is not auditionable either.
+  check_refusal(
+      audition_set(application, kFoundrySetId, kFoundryManifest),
       "PERMISSION_DENIED",
       "soundset_license_ineligible");
   // The Set does not silently vanish from the listing: it is named among the
@@ -976,6 +1045,160 @@ void test_install_policies_write_the_three_write_sets() {
 // just the Workspace's own `.lmdj-host/soundset-catalog/` directory. This is
 // the whole path a native Host, the C ABI and the Web Host take today, so it
 // is the one that has to work offline end to end.
+// S11-D5: the two audition layers are reachable, and neither is a Project
+// change. The set-level `demo` and a slot's own Artifact answer through one
+// operation, and Foundry CC0's slot 12 reusing slot 0's Artifact makes the
+// audition source content-addressed rather than slot-addressed.
+void test_audition_reaches_both_s11_d5_layers() {
+  TempDirectory temp("audition");
+  auto source = std::make_shared<FakeCatalogSource>();
+  source->publish(fixture_catalog_index());
+  Application application(config(
+      temp.path(),
+      lmdj::project_io::make_local_directory_catalog_transport(
+          flatten_fixture_corpus(temp)),
+      source));
+  LMDJ_CHECK(catalog_list(application).at("ok").get<bool>());
+
+  const auto project = create_v4_project(application, temp.path(), 900);
+  const auto before = inspect_project(application, project);
+
+  // Layer one: the set-level demo, a standalone 48 kHz stereo blob that no
+  // slot references.
+  const auto demo = audition_set(application, kFoundrySetId, kFoundryManifest);
+  LMDJ_CHECK(demo.at("ok").get<bool>());
+  const auto& played = demo.at("result");
+  LMDJ_CHECK(played.at("set_id") == kFoundrySetId);
+  LMDJ_CHECK(played.at("version") == kSetVersion);
+  LMDJ_CHECK(played.at("manifest_sha256") == kFoundryManifest);
+  LMDJ_CHECK(played.at("slot_index").is_null());
+  LMDJ_CHECK(played.at("artifact").at("sha256") == kFoundryDemoArtifact);
+  LMDJ_CHECK(played.at("artifact").at("byte_length") == 46124);
+  LMDJ_CHECK(played.at("audio").at("sample_rate") == 48'000);
+  LMDJ_CHECK(played.at("audio").at("channels") == 2);
+  LMDJ_CHECK(played.at("audio").at("source_frames") == 11'520);
+  LMDJ_CHECK(played.at("audio").at("prepared_frames") == 11'520);
+  LMDJ_CHECK(played.at("audio").at("prepared_bytes") == 46'080);
+  // A query with respect to Project Truth carries no revision at all.
+  LMDJ_CHECK(demo.at("project_revision").is_null());
+
+  // Layer two: one slot's own Artifact, resampled to the 48 kHz Runtime rate
+  // by the same preparation the ordinary preview path uses.
+  const auto slot_zero =
+      audition_set(application, kFoundrySetId, kFoundryManifest, 0);
+  LMDJ_CHECK(slot_zero.at("ok").get<bool>());
+  LMDJ_CHECK(slot_zero.at("result").at("slot_index") == 0);
+  LMDJ_CHECK(
+      slot_zero.at("result").at("artifact").at("sha256") ==
+      kFoundrySlotZeroArtifact);
+  LMDJ_CHECK(slot_zero.at("result").at("audio").at("sample_rate") == 44'100);
+  LMDJ_CHECK(slot_zero.at("result").at("audio").at("channels") == 1);
+  LMDJ_CHECK(slot_zero.at("result").at("audio").at("source_frames") == 2'646);
+  LMDJ_CHECK(slot_zero.at("result").at("audio").at("prepared_frames") == 2'880);
+  LMDJ_CHECK(
+      slot_zero.at("result").at("audio").at("prepared_bytes") == 11'520);
+
+  // Slot 12 reuses slot 0's Artifact, so the two auditions resolve the same
+  // bytes under different slot indices.
+  const auto slot_twelve =
+      audition_set(application, kFoundrySetId, kFoundryManifest, 12);
+  LMDJ_CHECK(slot_twelve.at("ok").get<bool>());
+  LMDJ_CHECK(slot_twelve.at("result").at("slot_index") == 12);
+  LMDJ_CHECK(
+      slot_twelve.at("result").at("artifact") ==
+      slot_zero.at("result").at("artifact"));
+  LMDJ_CHECK(
+      slot_twelve.at("result").at("audio") ==
+      slot_zero.at("result").at("audio"));
+
+  // S11-D12: an empty slot is the author's silence, not a playable source.
+  // The refusal is an existing public code carrying no reason token, because
+  // the locked Sound Set error vocabulary does not grow for this.
+  const auto empty_slot =
+      audition_set(application, kFoundrySetId, kFoundryManifest, 10);
+  LMDJ_CHECK(!empty_slot.at("ok").get<bool>());
+  LMDJ_CHECK(empty_slot.at("error").at("code") == "MISSING_ASSET");
+  LMDJ_CHECK(empty_slot.at("error").at("message") == "Sound Set slot is empty");
+  LMDJ_CHECK(empty_slot.at("error").at("details") == nlohmann::json::object());
+
+  // Neither the successful auditions nor the refusal touched the Project.
+  LMDJ_CHECK(inspect_project(application, project) == before);
+}
+
+// A Set that declares no `demo` has no set-level layer to play, and that is a
+// property of the manifest rather than of the request. The Mismatched Summary
+// Kit's manifest is eligible on its own terms, so correcting the Catalog
+// summary the test elsewhere corrupts admits an eligible, S8-D6-valid Set
+// that carries no demo.
+void test_audition_refuses_a_set_that_declares_no_demo() {
+  TempDirectory temp("audition-no-demo");
+  auto source = std::make_shared<FakeCatalogSource>();
+  auto index = fixture_catalog_index();
+  for (auto& entry : index.at("entries")) {
+    if (entry.at("set_id") == kMismatchedSetId) {
+      entry.at("license_summary").at("rights_holder") = "Bea Waveform";
+    }
+  }
+  source->publish(index);
+  Application application(config(
+      temp.path(),
+      lmdj::project_io::make_local_directory_catalog_transport(
+          flatten_fixture_corpus(temp)),
+      source));
+  const auto listing = catalog_list(application);
+  LMDJ_CHECK(listing.at("ok").get<bool>());
+  LMDJ_CHECK(listing_contains(listing, kMismatchedSetId));
+  LMDJ_CHECK(!listed_set(listing, kMismatchedSetId).at("has_demo").get<bool>());
+
+  // Its two occupied slots audition, so the refusal below is about the demo
+  // and not about the Set.
+  LMDJ_CHECK(
+      audition_set(application, kMismatchedSetId, kMismatchedManifest, 0)
+          .at("ok")
+          .get<bool>());
+
+  const auto absent =
+      audition_set(application, kMismatchedSetId, kMismatchedManifest);
+  LMDJ_CHECK(!absent.at("ok").get<bool>());
+  LMDJ_CHECK(absent.at("error").at("code") == "MISSING_ASSET");
+  LMDJ_CHECK(
+      absent.at("error").at("message") == "Sound Set declares no demo");
+  LMDJ_CHECK(absent.at("error").at("details") == nlohmann::json::object());
+}
+
+// S11-D3 belongs to the Set, not to the slot: a Set carrying one blob that is
+// not S8-D6 is unauditionable through every slot, including the legal one,
+// and the audio decision is reached before the audition source is looked up.
+// The Unsupported Audio Kit declares no demo, so a demo request answers with
+// the audio refusal rather than with the missing-source one.
+void test_audition_refuses_a_set_whose_audio_is_not_s8_d6() {
+  TempDirectory temp("audition-unsupported");
+  auto source = std::make_shared<FakeCatalogSource>();
+  source->publish(fixture_catalog_index());
+  Application application(config(
+      temp.path(),
+      lmdj::project_io::make_local_directory_catalog_transport(
+          flatten_fixture_corpus(temp)),
+      source));
+  LMDJ_CHECK(catalog_list(application).at("ok").get<bool>());
+
+  for (const std::optional<std::uint8_t> slot :
+       {std::optional<std::uint8_t>{0}, std::optional<std::uint8_t>{2},
+        std::optional<std::uint8_t>{5}, std::optional<std::uint8_t>{}}) {
+    check_refusal(
+        audition_set(
+            application, kUnsupportedSetId, kUnsupportedManifest, slot),
+        "UNSUPPORTED_AUDIO",
+        "soundset_audio_unsupported");
+  }
+
+  // A Set the Store never held is NOT_FOUND, not an audition of nothing.
+  const auto unknown = audition_set(
+      application, kUnsupportedSetId, std::string(64, 'b'), 0);
+  LMDJ_CHECK(!unknown.at("ok").get<bool>());
+  LMDJ_CHECK(unknown.at("error").at("code") == "NOT_FOUND");
+}
+
 void test_the_workspace_local_catalog_serves_a_host_with_no_injection() {
   TempDirectory temp("workspace-catalog");
   const auto catalog = temp.path() / ".lmdj-host" / "soundset-catalog";
@@ -1077,6 +1300,9 @@ int main() {
     test_a_failing_transport_leaves_cached_sets_usable();
     test_map_preview_is_index_identity_and_changes_nothing();
     test_install_policies_write_the_three_write_sets();
+    test_audition_reaches_both_s11_d5_layers();
+    test_audition_refuses_a_set_that_declares_no_demo();
+    test_audition_refuses_a_set_whose_audio_is_not_s8_d6();
     test_the_workspace_local_catalog_serves_a_host_with_no_injection();
     test_a_missing_stored_artifact_is_a_content_mismatch();
   } catch (const std::exception& error) {

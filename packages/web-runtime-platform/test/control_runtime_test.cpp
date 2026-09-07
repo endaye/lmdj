@@ -4067,9 +4067,9 @@ void check_snapshot_published_notification(
 
 // Stage 11's Sound Set operations reach the Facade through the Web Host with
 // the exact locked field sets, and only the two Project-scoped ones learn a
-// Project. Browsing and inspecting the Workspace Set Store follows the
-// `provider.list` precedent: it needs no open Project, and it never carries a
-// Workspace field.
+// Project. Browsing, inspecting and auditioning the Workspace Set Store
+// follows the `provider.list` precedent: it needs no open Project, and it
+// never carries a Workspace field.
 void test_soundset_operations_route_at_the_workspace_and_the_project() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -4122,6 +4122,25 @@ void test_soundset_operations_route_at_the_workspace_and_the_project() {
   out_of_range["bank_id"] = 4;
   check_error(
       runtime->dispatch("soundset.map.preview", out_of_range, {}),
+      "HOST_PROTOCOL_MISMATCH");
+
+  // S11-D5's audition is Workspace-level like `inspect`: no open Project, no
+  // Project field, and the optional `slot_index` is bounded by SLOT_MAX.
+  check_error(
+      runtime->dispatch("soundset.audition", identity, {}), "NOT_FOUND");
+  auto audition_slot = identity;
+  audition_slot["slot_index"] = 15;
+  check_error(
+      runtime->dispatch("soundset.audition", audition_slot, {}), "NOT_FOUND");
+  auto audition_out_of_range = identity;
+  audition_out_of_range["slot_index"] = 16;
+  check_error(
+      runtime->dispatch("soundset.audition", audition_out_of_range, {}),
+      "HOST_PROTOCOL_MISMATCH");
+  auto audition_with_project = identity;
+  audition_with_project["project_path"] = temp.path().generic_string();
+  check_error(
+      runtime->dispatch("soundset.audition", audition_with_project, {}),
       "HOST_PROTOCOL_MISMATCH");
 
   auto install = preview;

@@ -87,6 +87,7 @@ def expected_schemas() -> dict[str, dict]:
         "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
     }
     bank_id = {"type": "integer", "minimum": 0, "maximum": 3}
+    soundset_slot_index = {"type": "integer", "minimum": 0, "maximum": 15}
     occupied_pad_policy = {"type": "string", "enum": ["keep", "replace"]}
     slot = object_schema(
         {
@@ -458,6 +459,17 @@ def expected_schemas() -> dict[str, dict]:
                 "output_path": path,
             },
             ["project_path", "pattern_id", "output_path"],
+        ),
+        # S11-D5: omitting `slot_index` auditions the set-level `demo`,
+        # supplying one auditions that slot's Artifact.
+        "lmdj.soundset.audition": object_schema(
+            {
+                "set_id": uuid,
+                "version": semver,
+                "manifest_sha256": sha256,
+                "slot_index": soundset_slot_index,
+            },
+            ["set_id", "version", "manifest_sha256"],
         ),
         "lmdj.soundset.catalog.list": object_schema({}, []),
         "lmdj.soundset.inspect": object_schema(
@@ -1315,6 +1327,7 @@ def tools_list(library: Path, temp_root: Path) -> None:
         ("lmdj.sequence.recovery.discard", "sequence.recovery.discard", "command"),
         ("lmdj.snapshot.cook", "snapshot.cook", "query"),
         ("lmdj.render.offline", "render.offline", "command"),
+        ("lmdj.soundset.audition", "soundset.audition", "query"),
         ("lmdj.soundset.catalog.list", "soundset.catalog.list", "query"),
         ("lmdj.soundset.inspect", "soundset.inspect", "query"),
         ("lmdj.soundset.map.preview", "soundset.map.preview", "query"),
@@ -1491,6 +1504,12 @@ def valid_arguments(temp_root: Path) -> dict[str, dict]:
             "project_path": str(missing_project),
             "pattern_id": uuid,
             "output_path": str(temp_root / "missing-render.wav"),
+        },
+        "lmdj.soundset.audition": {
+            "set_id": uuid,
+            "version": "1.0.0",
+            "manifest_sha256": "0" * 64,
+            "slot_index": 0,
         },
         "lmdj.soundset.catalog.list": {},
         "lmdj.soundset.inspect": {
