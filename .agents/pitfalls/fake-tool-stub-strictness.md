@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-06
     occurrence: https://github.com/endaye/lmdj/pull/730
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-07
+    occurrence: https://github.com/endaye/lmdj/actions/runs/34119041231
+    observed_by: Codex
 exit: gate:apps/web-runtime-host/test/deploy_command_test.py
 escalation: https://github.com/endaye/lmdj/issues/726
 ---
@@ -62,6 +65,24 @@ be neutral with respect to state the test staged, which is a stronger
 requirement than merely matching the production return type.
 
 ## How to apply
+
+The self-test reporter takeover found the same gap in an external API response
+fixture before rollout. Its fake Actions run always returned `name: Core CI`,
+and the consumer treated that display string as workflow authority. A read-only
+query of the occurrence above returned both `name` and `display_title` as
+`Core CI / 757/merge`, while `workflow_id` and `path` identified Core CI. The
+literal-name check would have skipped real dynamically named self-tests. This
+was a fixture/consumer finding, not a claim that the unreleased reporter had
+already dropped a production report. `tests/build/ci_self_test_report_test.py`
+now uses dynamic display names and proves that only the independently checked
+workflow ID/path and run provenance determine admission. The broader existing
+escalation #726 remains open; this narrow regression does not absorb its
+unresolved typed-polling scope.
+
+For an external API double, verify representative response fields against the
+real read-only endpoint or a source-backed fixture, including configurable
+display fields. Do not promote a presentation value into an identity merely
+because the fake always returns one literal.
 
 When a test fakes an external tool, every faked subcommand must reject the
 invocations the real tool rejects (arity, required flags, mode conflicts) —

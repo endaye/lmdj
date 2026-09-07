@@ -204,8 +204,59 @@ Affected portal pages: /operations/testing-and-proof/
 `scripts/ci/self_test_report.py`、
 `tests/build/ci_self_test_report_test.py`、
 `tests/build/ci_self_test_report_workflow_test.py`。
-**修改：** `scripts/ci/scope_policy.json`（登记新 workflow 为控制面路径）、
-测试门户页面；`docs/governance/github-work-management.md`。
+新 workflow 的路径登记先由独立 [路由 PR #760](https://github.com/endaye/lmdj/pull/760)
+交付；本功能 PR 不再携带 `scripts/ci/scope_policy.json` 控制面改动。
+**修改：** `scripts/ci/hosted_runner_policy.json`、测试门户页面；
+`docs/governance/github-work-management.md`、本文、
+`.agents/pitfalls/fake-tool-stub-strictness.md`（真实 Actions API 的动态 run name
+与 fixture 不同，记录复现；稳定 workflow ID/path 才是身份）。
+
+T3 实施边界：当前先按 suite/class 归集故障观察，尚未抽取真实 test ID 或日志错误
+指纹，维护者可拆分同桶内的不同缺陷；下述根因级去重验收仍待补齐，不因本地测试
+通过而勾选。报告器只信任 Actions bot 发布的归集与观察 marker；目标和控制 revision
+分别核对 main 历史，展示名不作为 workflow 身份。真实 GitHub 创建、重送与恢复验证
+仍留在 O1，不将 fake API 的绿色当作远端闭环证明。
+
+2026-09-07 迁移复审（只读真实 API，补入原验收依据）：
+
+- 查询 `ci.yml`、`main`、`completed`、`created>=2026-08-08`：
+  `workflow_dispatch` 共 38 条（36 success、1 failure、1 cancelled），`schedule` 为 0；
+  main run 展示名为 22 条 `Core CI` 与 16 条 `Core CI / main`。不限定分支的 dispatch
+  共 188 条，最新 10 条为任务分支上的 `Core CI / mq:...`。因此当时并非 main 窗口
+  已被 100 条旧 queue 填满，不能把全分支总数误作 reporter 的实际输入。
+- 但 [旧 run 31902121850](https://github.com/endaye/lmdj/actions/runs/31902121850)
+  的 Change Scope failure，以及
+  [旧 run 33246108574](https://github.com/endaye/lmdj/actions/runs/33246108574)
+  的 cancelled／空 jobs，都会在原 30 天整窗扫描中被误判为新自测启动失败。
+  两个 control 都仍属于 main 历史；用只允许 GET 的真实 API adapter 执行原
+  `report_run` 已复现 `reporting-error`，不是用 fixture 代替远端行为。
+  旧兼容 run 的原读取链路实测为 5 GET；38 条整窗补扫估算约 192 GET，未含新批次、
+  issue 查询与重试，不能把“满窗可见”称为可恢复机制。
+- 可信 producer 下界采用已核验 [PR #757](https://github.com/endaye/lmdj/pull/757)
+  的 squash `22247897e9163a3f34e15f564bec133419d1f177`。提交时间是
+  `2026-09-07T12:20:36Z`，GitHub `merged_at` 是 `12:20:37Z`；扫描保守从前者开始，
+  避免 main ref 先于 PR 元数据可见的边界漏扫。时间只优化查询，不能作权限判据。
+- 每个 run 另核对 producer→control：`ahead`／`identical` 才进入新协议，`behind`
+  才明确跳过为旧实现；`diverged`／未知须显示 why/remedy。control→main 的验证保留。
+  因此旧 control 的新 rerun 不会升级成新自测，部署后的启动失败也不会被一起吞掉。
+  修改后的 GET-only 复验使上述两条旧 run 明确 skipped、无 error、无写入；这仅证明
+  迁移过滤，不证明真实 issue 闭环已经验收。
+- 用代码 `recovery_created_filter()` 实际产出的 `>=2026-09-07T12:20:36Z` 调用
+  GitHub API，带时分秒的 created 过滤被接受；本次 main completed 查询中 dispatch
+  与 schedule 均返回 0 条，原 38 条部署前运行不再进入自动补扫。适配器拒绝所有
+  非 GET 与下载请求，只发出两条 GET；未创建 issue、未触发 workflow。
+- `workflow_run` 在触发过滤和 job 条件两处限定 main；手动 reporter dispatch 默认
+  `reconcile: false`，接入 CLI 的 `--no-reconcile`，允许指定 run 独立恢复；只有主动
+  勾选 `reconcile: true` 才整窗补查。自动回调与每日检查仍补扫部署后的保留期窗口，
+  保留 100 条上限及显式溢出错误，不承诺自动恢复无限期或任意规模积压。
+
+本轮验证先观察迁移与 workflow 回归为红，再修复到绿；覆盖两条真实 legacy 形态、
+旧 control 新 rerun、exact producer 边界、部署后启动失败、未知 ancestry、
+实际 CLI 不调用 reconciliation 的隔离重试、真实 Bash 参数接线与非 main 回调过滤。
+尚未创建测试 issue、触发自测或完成 O1；根因级指纹与五分钟远端反馈仍未验收。
+本轮轻量验证：55 项 reporter、10 项 workflow、6 项 hosted runner policy 测试通过；
+集成复验：完整 808 项 CI contracts、pinned actionlint、staged ownership 及 whitespace
+检查通过；完整门户检查通过，42 个必需路由及内部链接有效。以上不替代 O1 远端验收。
 
 - [ ] 用受保护默认分支代码处理 workflow completion 和显式重试（`workflow_run`
   只为默认分支上的 workflow 触发，这是安全前提也是部署约束）；
