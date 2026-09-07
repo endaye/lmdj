@@ -10,6 +10,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -291,6 +293,128 @@ class ReleaseModelTest(unittest.TestCase):
         identity = classify_tag("module/project-io/v0.3.0", self.policy)
         self.assertEqual(identity.output_name, "module%2Fproject-io%2Fv0.3.0")
         self.assertNotIn("/", identity.output_name)
+
+    def future_policy(self):
+        document = json.loads((ROOT / "tools/release/policy.json").read_text())
+        document["prospective_ci_protocol"] = "complete-test-v2"
+        document["batch_evidence_source"] = {"repository_id": 11, "workflow_id": 7,
+            "workflow_path": ".github/workflows/self-test-report.yml", "producer_revision": "b" * 40}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            path.write_text(json.dumps(document))
+            return load_policy(path)
+
+    def batch_ledger(self):
+        document = self.ledger_fixture(disposition="releasable")
+        suites = sorted(suite["id"] for suite in json.loads((ROOT / "scripts/ci/self_test_policy.json").read_text())["suites"])
+        document["entries"][0]["batch_test_evidence"] = {
+            "schema": "lmdj.ci-batch-release-reference.v1", "executor_control_revision": "c" * 40,
+            "executor_event": "schedule", "run_attempt": 1,
+            "origin_record_digest": "d" * 64, "admission_record_digest": "e" * 64, "evidence_digest": "f" * 64,
+            "request": {"id": "frozen-candidate", "kind": "candidate", "base": None,
+                "target": "a" * 40, "control": "b" * 40, "policy": "f" * 64,
+                "selection": {"kind": "full", "suites": suites, "reasons": ["explicit full request"]},
+                "origin_run": {"run_id": 122, "attempt": 1}}}
+        return document
+
+    def test_current_policy_data_stays_on_old_sixteen_suite_protocol(self):
+        self.assertEqual(self.policy.prospective_ci_protocol, "self-test-v1")
+        self.assertIsNone(self.policy.batch_evidence_source)
+
+    def test_both_old_protocols_reject_batch_reference_before_legacy_fallback(self):
+        for protocol in ("self-test-v1", "ci-scope-v2"):
+            with self.subTest(protocol=protocol), self.assertRaisesRegex(ReleaseModelError, "not enabled"):
+                load_ledger_document(self.batch_ledger(), replace(self.policy, prospective_ci_protocol=protocol))
+
+    def test_future_model_binds_exact_target_executor_and_event(self):
+        intent = load_ledger_document(self.batch_ledger(), self.future_policy()).entries[0]
+        self.assertEqual(intent.target_revision, intent.batch_test_evidence["request"]["target"])
+        self.assertEqual(intent.merged_main_run_id, 123)
+        self.assertEqual(intent.batch_test_evidence["executor_event"], "schedule")
+        self.assertIsNone(intent.self_test_evidence)
+
+    def test_batch_reference_is_deeply_immutable_and_canonically_serializable(self):
+        document = self.batch_ledger()
+        original = copy.deepcopy(document["entries"][0]["batch_test_evidence"])
+        reference = load_ledger_document(document, self.future_policy()).entries[0].batch_test_evidence
+        document["entries"][0]["batch_test_evidence"]["request"]["target"] = "f" * 40
+        self.assertEqual(canonical_json(reference), canonical_json(original))
+        with self.assertRaises(TypeError):
+            reference["request"]["target"] = "e" * 40
+        with self.assertRaises(TypeError):
+            reference["request"]["selection"]["suites"][0] = "other"
+        with self.assertRaises(TypeError):
+            reference["request"]["origin_run"]["attempt"] = 2
+
+    def test_mixed_protocol_references_are_rejected(self):
+        document = self.batch_ledger()
+        document["entries"][0]["self_test_evidence"] = {}
+        with self.assertRaisesRegex(ReleaseModelError, "mixes"):
+            load_ledger_document(document, self.future_policy())
+
+    def test_batch_target_cannot_differ_from_intent(self):
+        document = self.batch_ledger()
+        document["entries"][0]["batch_test_evidence"]["request"]["target"] = "c" * 40
+        with self.assertRaisesRegex(ReleaseModelError, "exact intent target"):
+            load_ledger_document(document, self.future_policy())
+
+    def test_batch_reference_requires_explicit_executor_run(self):
+        document = self.batch_ledger()
+        del document["entries"][0]["merged_main_run_id"]
+        with self.assertRaisesRegex(ReleaseModelError, "executor"):
+            load_ledger_document(document, self.future_policy())
+
+    def test_batch_event_and_nested_attempts_are_strict(self):
+        for value in (None, "repository_dispatch", True):
+            with self.subTest(value=value):
+                document = self.batch_ledger()
+                document["entries"][0]["batch_test_evidence"]["executor_event"] = value
+                with self.assertRaisesRegex(ReleaseModelError, "event"):
+                    load_ledger_document(document, self.future_policy())
+        document = self.batch_ledger()
+        document["entries"][0]["batch_test_evidence"]["request"]["origin_run"]["attempt"] = True
+        with self.assertRaisesRegex(ReleaseModelError, "origin"):
+            load_ledger_document(document, self.future_policy())
+
+    def test_pure_reference_and_model_imports_do_not_load_api_or_runtime(self):
+        result = subprocess.run([sys.executable, "-c", "import sys; from tools.release import model, batch_reference; assert 'tools.release.github_api' not in sys.modules; assert 'batch_runtime' not in sys.modules"],
+            cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_future_policy_requires_explicit_closed_source(self):
+        for source in (None, {}, {"repository_id": True, "workflow_id": 7,
+                "workflow_path": ".github/workflows/self-test-report.yml", "producer_revision": "b" * 40},
+                {"repository_id": 11, "workflow_id": 7, "workflow_path": ".github/workflows/ci.yml", "producer_revision": "b" * 40}):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as directory:
+                document = json.loads((ROOT / "tools/release/policy.json").read_text())
+                document.update(prospective_ci_protocol="complete-test-v2", batch_evidence_source=source)
+                path = Path(directory) / "policy.json"
+                path.write_text(json.dumps(document))
+                with self.assertRaisesRegex(ReleaseModelError, "batch source policy"):
+                    load_policy(path)
+
+    def test_old_current_policy_cannot_carry_a_new_source_block(self):
+        document = json.loads((ROOT / "tools/release/policy.json").read_text())
+        document["batch_evidence_source"] = {}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(ReleaseModelError, "old CI policy"):
+                load_policy(path)
+
+    def test_model_rejects_focused_and_none_batch_references(self):
+        for kind in ("focused", "none"):
+            with self.subTest(kind=kind):
+                document = self.batch_ledger()
+                document["entries"][0]["batch_test_evidence"]["request"]["selection"]["kind"] = kind
+                with self.assertRaisesRegex(ReleaseModelError, "focused or none"):
+                    load_ledger_document(document, self.future_policy())
+
+    def test_reference_unknown_field_is_not_silently_discarded(self):
+        document = self.batch_ledger()
+        document["entries"][0]["batch_test_evidence"]["extra"] = "untrusted"
+        with self.assertRaisesRegex(ReleaseModelError, "schema"):
+            load_ledger_document(document, self.future_policy())
 
 
 if __name__ == "__main__":

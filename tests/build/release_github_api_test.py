@@ -729,5 +729,83 @@ class SelfTestGitHubApiTest(unittest.TestCase):
         self.assertTrue(all("filter=" not in request[1] for request in self.transport.requests))
 
 
+class BatchEvidenceHttpTest(unittest.TestCase):
+    def setUp(self):
+        self.transport = FakeTransport()
+        self.client = GitHubClient(http_transport=self.transport, token=TOKEN)
+        self.prefix = "/repos/endaye/lmdj"
+        self.zip_path = self.prefix + "/actions/artifacts/7001/zip"
+
+    def test_closed_json_read_uses_authenticated_get(self):
+        path = self.prefix + "/actions/runs/123/attempts/1/jobs?per_page=100&page=1"
+        self.transport.json_route(path, {"total_count": 0, "jobs": []})
+        self.assertEqual(self.client.get_batch_evidence(path), {"total_count": 0, "jobs": []})
+        self.assertEqual(self.transport.requests[0][0], "GET")
+        self.assertIn("Authorization", self.transport.requests[0][2])
+
+    def test_no_issue_release_foreign_or_unbounded_route_is_exposed(self):
+        paths = ("/issues/807", "/releases/123", "/actions/runs/123/attempts/2",
+                 "/actions/runs/123/artifacts?per_page=100&page=101", "/actions/runs/123?evil=true")
+        for suffix in paths:
+            with self.subTest(suffix=suffix), self.assertRaises(CiScopeConflictError):
+                self.client.get_batch_evidence(self.prefix + suffix)
+        with self.assertRaises(CiScopeConflictError):
+            self.client.get_batch_evidence("https://example.invalid/secret")
+        self.assertEqual(self.transport.requests, [])
+
+    def test_raw_reads_only_an_exact_artifact_zip(self):
+        with self.assertRaises(CiScopeConflictError):
+            self.client.get_batch_evidence(self.prefix + "/branches/main", raw=True)
+        self.assertEqual(self.transport.requests, [])
+
+    def test_signed_zip_redirect_never_forwards_credentials(self):
+        payload = scope_archive()
+        self.transport.route(self.zip_path, HttpResponse(302, {"Location": SIGNED_REDIRECT}, b""))
+        self.transport.route(SIGNED_REDIRECT, HttpResponse(200, {"Content-Type": "application/zip"}, payload))
+        self.assertEqual(self.client.get_batch_evidence(self.zip_path, raw=True), payload)
+        self.assertIn("Authorization", self.transport.requests[0][2])
+        self.assertNotIn("Authorization", self.transport.requests[1][2])
+        self.assertTrue(all(method == "GET" for method, _, _ in self.transport.requests))
+
+    def test_foreign_redirect_fails_without_sending_a_request_there(self):
+        self.transport.route(self.zip_path, HttpResponse(302, {"Location": "https://example.invalid/private?sig=secret"}, b""))
+        with self.assertRaises(CiScopeConflictError) as caught:
+            self.client.get_batch_evidence(self.zip_path, raw=True)
+        self.assertNotIn("secret", str(caught.exception))
+        self.assertEqual(len(self.transport.requests), 1)
+
+    def test_wrong_content_type_and_unreadable_status_are_not_absence(self):
+        for response in (HttpResponse(200, {"Content-Type": "text/html"}, b"PK\x03\x04"), HttpResponse(404, {}, b"private")):
+            with self.subTest(status=response.status):
+                self.transport.route(self.zip_path, response)
+                with self.assertRaises((CiScopeConflictError, GitHubApiError)):
+                    self.client.get_batch_evidence(self.zip_path, raw=True)
+
+    def test_api_error_does_not_become_empty_inventory(self):
+        path = self.prefix + "/actions/runs/123/artifacts?per_page=100&page=1"
+        self.transport.route(path, HttpResponse(403, {}, b"secret denial"))
+        with self.assertRaises(GitHubApiError):
+            self.client.get_batch_evidence(path)
+
+    def test_missing_credentials_do_not_create_authenticated_evidence(self):
+        client = GitHubClient(http_transport=self.transport, token="")
+        path = self.prefix + "/branches/main"
+        self.transport.route(path, HttpResponse(401, {}, b"requires authentication"))
+        with self.assertRaises(GitHubApiError):
+            client.get_batch_evidence(path)
+        self.assertNotIn("Authorization", self.transport.requests[0][2])
+
+    def test_legacy_download_cap_is_unchanged(self):
+        payload = b"PK\x03\x04" + b"x" * (1024 * 1024)
+        url = artifact_document()["archive_download_url"]
+        self.transport.route(url, HttpResponse(200, {"Content-Type": "application/zip"}, payload))
+        artifact = ActionsArtifactProjection(id=7001, name="fixture", size_in_bytes=len(payload),
+            api_url=artifact_document()["url"], archive_download_url=url, expired=False, run_id=RUN_ID,
+            repository_id=11, head_repository_id=11, head_branch="main", head_sha=TARGET,
+            expires_at="2099-01-01T00:00:00Z")
+        with self.assertRaises(CiScopeConflictError):
+            self.client._download_artifact(artifact)
+
+
 if __name__ == "__main__":
     unittest.main()
