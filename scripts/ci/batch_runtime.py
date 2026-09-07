@@ -184,7 +184,7 @@ class Runtime:
             self.advice_diagnostics = reader.diagnostics
             return answer
         except Exception:
-            self.advice_diagnostics = ["why: mapping identity unavailable; remedy: use full until authenticated advice is restored"]
+            self.advice_diagnostics = ["why: mapping identity unavailable; remedy: use the independently verified Git and policy floor and restore authenticated advice"]
             return {"complete": False, "labels": []}
 
     def lock_held(self):

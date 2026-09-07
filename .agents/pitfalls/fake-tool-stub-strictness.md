@@ -15,6 +15,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/actions/runs/34151840695
     observed_by: Codex
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/pull/802
+    observed_by: Codex
 exit: gate:apps/web-runtime-host/test/deploy_command_test.py
 escalation: https://github.com/endaye/lmdj/issues/726
 ---
@@ -104,6 +107,17 @@ gate here is the hardened fake git in
 `apps/web-runtime-host/test/deploy_command_test.py`, which now fails a bare
 `cat-file <object>` exactly like real git. Apply the same strictness when
 adding new subcommands to any fake tool.
+
+Independent review of the later scope fallback integration found that #802's
+mapping reader expected `commit.paths`, while the real Git collector returns
+`commit.changes[*].paths`. Its tests mocked collection with the invented shape,
+so valid advice failed authentication in a real-shaped interval. Unconditional
+full fallback had concealed the defect. The reader now derives the actual
+per-commit path union and its regression runs real Git collection through the
+reader and final selection, retaining valid extra AI advice. HTTP receipts in
+that regression remain fixtures; this was an independent code/fixture finding,
+not proof of a historical remote lost-advice incident. Escalation #726 remains
+open for the broader polling-double scope.
 
 When a test doubles an internal typed interface, the defect to avoid is the
 same — the double resolving something the real implementation never resolves,

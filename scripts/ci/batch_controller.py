@@ -24,7 +24,8 @@ class GitInputs:
 read_main must fetch/authenticate the actual repository main, returning its full
 SHA. advice, when supplied, authenticates every interval PR mapping and returns
 {complete: bool, labels: [...]}; it cannot replace actual Git path classification.
-Absent/incomplete advice conservatively selects full until the mapper is wired.
+Absent/incomplete advice does not mean that independently verified Git history
+is incomplete. Complete paths and trusted policies still define the floor.
 """
     def __init__(self, repository, control_sha, read_main, advice=None):
         self.repository = Path(repository)
@@ -83,9 +84,18 @@ Absent/incomplete advice conservatively selects full until the mapper is wired.
         batch.require(isinstance(advice, dict) and set(advice) == {"complete", "labels"}
                       and type(advice["complete"]) is bool and isinstance(advice["labels"], list),
                       "scope mapping observation is malformed")
+        # collect_interval independently proved the full first-parent union.
+        # Missing advice cannot turn that proof into an incomplete path list:
+        # spec 3.3 calls for actual-file fallback, not unconditional full runs.
+        # Retain every authenticated partial suggestion. Missing old policies,
+        # unknown paths/dependencies or valid full advice still select full.
         selection = test_scope.select_across_policies(interval["paths"], policies,
-                                                     advice["labels"], complete=advice["complete"])
-        return selection
+                                                     advice["labels"], complete=True)
+        if not advice["complete"]:
+            selection["reasons"].append(
+                "why: review scope records are incomplete; remedy: restore authenticated review evidence; "
+                "complete Git and historical-policy rules define the fallback scope")
+        return test_scope._selection(policy, selection["suites"], selection["reasons"])
 
 
 class Controller:
