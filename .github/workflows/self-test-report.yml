@@ -35,7 +35,7 @@ on:
       batch_operation:
         description: Isolated incremental rehearsal only; legacy preserves the existing reporter.
         type: choice
-        options: [legacy, init, reconcile, settle, resume, report-init-outbox, report-review, report-batches, report-drain, recovery-probe, claim-probe, cancel-probe]
+        options: [legacy, init, reconcile, settle, resume, report-init-outbox, report-review, report-batches, report-drain, report-discovery, recovery-probe, claim-probe, cancel-probe]
         default: legacy
       journal_config:
         description: Exact isolated journal identity JSON; no automatic Issue creation or baseline.
@@ -142,7 +142,7 @@ jobs:
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == '1' &&
       (inputs.batch_operation == 'init' || inputs.batch_operation == 'reconcile' || inputs.batch_operation == 'settle' ||
        inputs.batch_operation == 'resume' || inputs.batch_operation == 'report-init-outbox' ||
-       inputs.batch_operation == 'report-review' || inputs.batch_operation == 'report-batches' || inputs.batch_operation == 'report-drain' ||
+       inputs.batch_operation == 'report-review' || inputs.batch_operation == 'report-batches' || inputs.batch_operation == 'report-drain' || inputs.batch_operation == 'report-discovery' ||
        inputs.batch_operation == 'recovery-probe' || inputs.batch_operation == 'claim-probe' || inputs.batch_operation == 'cancel-probe')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -213,6 +213,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATCH_WRITER_LOCK: self-test-report
           REPORT_OPERATION: ${{ inputs.batch_operation }}
+          PROBE_REQUEST: ${{ inputs.probe_request }}
+          LEGACY_RUN_ID: ${{ inputs.run_id }}
+          LEGACY_RECONCILE: ${{ inputs.reconcile }}
           REPORT_CONFIG: ${{ inputs.report_config }}
           REVIEW_RUN_ID: ${{ inputs.review_run_id }}
           REVIEW_ATTEMPT: ${{ inputs.review_attempt }}
@@ -227,6 +230,23 @@ jobs:
           from pathlib import Path
           operations = {'report-init-outbox': 'init-outbox', 'report-review': 'review',
                         'report-batches': 'batches', 'report-drain': 'drain'}
+          if os.environ['REPORT_OPERATION'] == 'report-discovery':
+              import re
+              if (any(os.environ.get(key) for key in ('REPORT_CONFIG', 'JOURNAL_CONFIG', 'BATCH_REQUEST', 'PROBE_REQUEST', 'LEGACY_RUN_ID'))
+                  or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')):
+                  raise SystemExit('why: discovery mixed with another operation; remedy: use only report_limit and optional paired review identity')
+              limit = os.environ.get('REPORT_LIMIT', '8')
+              run_id, attempt = os.environ.get('REVIEW_RUN_ID', ''), os.environ.get('REVIEW_ATTEMPT', '')
+              if (not re.fullmatch(r'[1-9][0-9]*', limit) or not 1 <= int(limit) <= 32
+                  or bool(run_id) != bool(attempt)
+                  or (run_id and (not re.fullmatch(r'[1-9][0-9]*', run_id) or not re.fullmatch(r'[1-9][0-9]*', attempt)))):
+                  raise SystemExit('why: discovery limit or exact attempt is invalid; remedy: use limit 1..32 and either omit both review fields or supply positive integers')
+              command = ['python3', 'scripts/ci/review_discovery_runtime.py', '--root', str(Path.cwd()),
+                         '--summary', os.environ['GITHUB_STEP_SUMMARY'], '--limit', limit]
+              if run_id:
+                  command += ['--run-id', run_id, '--attempt', attempt]
+              # Incomplete discovery remains red; never run the old mapping too.
+              raise SystemExit(subprocess.run(command, check=False).returncode)
           operation = operations.get(os.environ['REPORT_OPERATION'])
           if operation is None or os.environ.get('BATCH_REQUEST') or os.environ.get('JOURNAL_CONFIG'):
               raise SystemExit('why: report command is unknown or mixed with scheduler inputs; remedy: use only report_config and the selected report arguments')
