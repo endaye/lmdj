@@ -30,6 +30,11 @@ public boundary. Promote a test only when the behavior depends on a real
 cross-module, host, or assembled-product collaboration. Do not use an `e2e`
 test to replace missing unit, component, or contract coverage.
 
+This rule is the test-layer form of
+[`docs/governance/minimization-principle.md`](../governance/minimization-principle.md):
+a test has one reason to fail, and that reason names the defect. The lowest
+tier keeps the fixture minimal; it never licenses a weaker assertion.
+
 The required Test Selection Rules are:
 
 1. valid result;

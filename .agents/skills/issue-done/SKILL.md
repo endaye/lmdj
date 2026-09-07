@@ -39,6 +39,18 @@ Before starting the shipping pipeline:
    required identity (for example digest and byte length, not only media type).
    If a leg was not exercised, keep it as an explicit acceptance gap; a green
    prefix of the journey is not a pass for the full journey.
+5. **Apply the minimization principle** before declaring the Task complete
+   ([`docs/governance/minimization-principle.md`](../../../docs/governance/minimization-principle.md)):
+   - every new or changed test fails for one reason, and that reason names
+     the defect;
+   - every new required check names the defect it catches, meets the gate
+     admission criteria, and fails with `why` and `remedy`; anything that
+     cannot is advisory, not required;
+   - the diff is one behavior over the Task's declared files, and any
+     control-plane path is split into its own Pull Request (§4);
+   - no coverage floor, timeout, stress budget, lane selection, or journey
+     leg was reduced to make a run green. If one was, the Task is not done;
+     restore it and fix the cause.
 
 ---
 

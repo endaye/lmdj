@@ -69,6 +69,10 @@ Before committing:
 Do not create empty commits. If verification fails or the commit boundary
 cannot be isolated, stop and report the blocker instead of committing.
 
+These steps are the change-layer form of
+[`minimization-principle.md`](minimization-principle.md): a small, declared
+commit is what lets a red gate point at its cause.
+
 ### Local pre-flight
 
 `scripts/local-ci.sh` runs the lanes CI would select for the current working

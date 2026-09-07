@@ -89,6 +89,30 @@ restore, wrap, translate, or emit the retired contracts.
   receives a mutable Project or Project bundle path.
 - Product-specific wiring belongs only in Product Assembly.
 
+## Minimization principle
+
+[`docs/governance/minimization-principle.md`](docs/governance/minimization-principle.md)
+is the canonical statement. It applies at every stage — designing a feature,
+writing a plan, implementing, testing, and adding or changing a gate — and it
+names three rules, each with something that gets smaller and something that
+must never shrink:
+
+- **Gates** minimize the set of required checks, never the invariants they
+  cover. A required check must name the defect it catches; otherwise it is
+  advisory. Conservative lane selection stays fail-closed.
+- **Tests** minimize the reasons a test can fail, never its strictness. One
+  test fixes one fact; reduce a defect before fixing it; acceptance journeys
+  keep every leg with a far-side assertion per transition.
+- **Changes** minimize the distance from a red gate to its cause, never the
+  Task's declared scope. One Task is one commit of declared files; a plan
+  Task names its files, its lowest-tier tests, and the defect any new gate
+  catches.
+
+Thresholds are instruments, not targets: never lower a coverage floor, widen a
+timeout, skip a test, de-select an owned lane, or drop a journey leg to make a
+run green. Making something smaller is not minimization when what shrinks is
+coverage, strictness, or scope.
+
 ## Version management
 
 `docs/governance/version-management.md` is the canonical version policy.
