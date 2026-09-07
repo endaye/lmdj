@@ -2,6 +2,8 @@
 
 > 日期：2026-09-03
 >
+> 更新：2026-09-07 [ESP-IDF v6.1 工具链与 atomic 退化条件增补](./2026-09-07-esp32-idf6-toolchain-and-atomics-amendment.md) 记录 v6.1 版本落点、已声明 IDF 6 支持的 M5 库版本，以及本板无 PSRAM 对 atomic 路径的影响
+>
 > 评估对象：M5Stack Cardputer Adv（K132-ADV）与 LMDJ New Headless Core
 >
 > LMDJ 源码基线：`64ea7027e3162507e6bb10fba7aa0a278f4a5e98`
