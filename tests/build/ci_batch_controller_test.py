@@ -163,6 +163,34 @@ class ControllerTests(unittest.TestCase):
         self.make().reconcile()
         self.assertEqual(self.make().reconcile()["action"], "waiting")
 
+    def test_settlement_only_does_not_admit_initial_bootstrap(self):
+        answer = self.make().reconcile(allow_execution=False)
+        self.assertEqual(answer["action"], "idle")
+        self.assertIsNone(answer["state"]["active"])
+        self.assertIsNone(answer["state"]["processed"])
+
+    def test_settlement_only_does_not_claim_same_run_lost_admit(self):
+        self.memory.fail = ("admit", "after")
+        with self.assertRaises(JournalBlocked):
+            self.make().reconcile()
+        answer = self.make().reconcile(allow_execution=False)
+        self.assertEqual(answer["action"], "waiting")
+        self.assertIsNone(answer["state"]["active"]["claim"])
+
+    def test_settlement_only_persists_terminal_result_without_starting_next(self):
+        start = self.make().reconcile()
+        self.settle(start, 1)
+        self.inputs.main = C
+        answer = self.make(2).reconcile(allow_execution=False)
+        self.assertEqual(answer["action"], "idle")
+        self.assertEqual(answer["state"]["processed"], B)
+        self.assertEqual(answer["state"]["pending"], C)
+        self.assertIsNone(answer["state"]["active"])
+
+    def test_execution_switch_requires_boolean(self):
+        with self.assertRaisesRegex(batch.BatchError, "boolean"):
+            self.make().reconcile(allow_execution="false")
+
     def test_partial_run_attempt_rejected(self):
         with self.assertRaisesRegex(batch.BatchError, "reruns"):
             controller.Controller(None, None, {"run_id": 1, "attempt": 2}, run_state=None,

@@ -139,7 +139,7 @@ All methods must be invoked inside the SAME externally managed short lock.
     def _answer(self, action, reason, request=None):
         return {"action": action, "reason": reason, "request": deepcopy(request), "state": deepcopy(self.state)}
 
-    def _settle_active(self):
+    def _settle_active(self, allow_execution=True):
         active = self.state["active"]
         if active is None:
             return None
@@ -151,7 +151,7 @@ All methods must be invoked inside the SAME externally managed short lock.
         if status != "terminal":
             # A prior admit whose response was lost can still claim in its own
             # run; an already committed claim can NEVER reissue execution.
-            if status == "running" and executor == self.run and active["claim"] is None:
+            if allow_execution and status == "running" and executor == self.run and active["claim"] is None:
                 self._persist("claim", {"request_id": request["id"], "run": executor})
                 return self._answer("execute" if request["selection"]["suites"] else "idle",
                                     "new durable claim; none waits for real executor completion", request)
@@ -182,15 +182,18 @@ All methods must be invoked inside the SAME externally managed short lock.
         self._persist("advance", {"request_id": request["id"]})
         return None
 
-    def reconcile(self, *, explicit=None, resume=None):
+    def reconcile(self, *, explicit=None, resume=None, allow_execution=True):
         """At most one execution action; no loops chasing changing main.
 
 explicit is a complete T3 node/candidate request authenticated by the caller;
 its caller-provided stable ID makes redelivery idempotent. resume is an explicit
 {suites,reason,id} command, journal-id fenced so redelivery cannot reset budgets.
 Report retries only read state.results; they never call this method to re-test.
+allow_execution=False is settlement-only: it also forbids recovering a live
+same-run claim into execution, not just creating new admissions.
 """
         self._guard()
+        batch.require(type(allow_execution) is bool, "execution authorization must be boolean")
         events = self.journal.load()
         latest = self.inputs.refresh()
         self.policy = self.inputs.policy_at(self.inputs.control_sha)
@@ -217,9 +220,11 @@ Report retries only read state.results; they never call this method to re-test.
                 expected = batch.reduce(self.state, command, self.policy)
                 self.state = self._replay(self.journal.append(command))
                 batch.require(self.state == expected, "resume was not durably committed")
-        waiting = self._settle_active()
+        waiting = self._settle_active(allow_execution)
         if waiting is not None:
             return waiting
+        if not allow_execution:
+            return self._answer("idle", "settlement-only; no execution authorized")
         if self.state["blocked"]:
             return self._answer("waiting", "admission explicitly blocked")
         # Completion-to-new-admission boundary observes main again, not the
