@@ -344,7 +344,7 @@ void validate_performance_gesture(const Json& event) {
       exact_keys(event, {"kind"}));
 }
 
-// The Web Host's mirror of the plan's Locked Facade Surface. The two
+// The Web Host's mirror of the plan's Locked Facade Surface. The three
 // Workspace-level operations carry no `project_path`, so unlike a Performance
 // operation the Host does not inject the retained Project into them.
 void validate_soundset_operation_payload(
@@ -364,6 +364,18 @@ void validate_soundset_operation_payload(
   };
   if (operation == "soundset.catalog.list") {
     require(exact_keys(payload, {}));
+  } else if (operation == "soundset.audition") {
+    // S11-D5's optional `slot_index` is the only field beyond the Set
+    // identity: absent auditions the set-level `demo`, present auditions that
+    // slot's Artifact.
+    require(
+        exact_keys(payload, {"set_id", "version", "manifest_sha256"}) ||
+        exact_keys(
+            payload, {"set_id", "version", "manifest_sha256", "slot_index"}));
+    if (payload.contains("slot_index")) {
+      (void)safe_unsigned_field(payload, "slot_index", 15U);
+    }
+    set_identity();
   } else if (operation == "soundset.inspect") {
     require(exact_keys(payload, {"set_id", "version", "manifest_sha256"}));
     set_identity();
@@ -2067,6 +2079,7 @@ Json ControlRuntime::dispatch(
         {"performance.resample.commit", false},
     };
     static const std::map<std::string_view, bool> soundset_operations{
+        {"soundset.audition", true},
         {"soundset.catalog.list", true},
         {"soundset.inspect", true},
         {"soundset.map.preview", true},
@@ -2077,9 +2090,10 @@ Json ControlRuntime::dispatch(
       require(sidecar.empty());
       validate_soundset_operation_payload(operation, payload);
       // S11-D6: the Set Store and the Catalog cache resolve from the
-      // Workspace, so browsing and inspecting a Set needs no open Project —
-      // the `provider.list` precedent the Locked Facade Surface names. Only
-      // the two Project-scoped operations require, and learn, a Project.
+      // Workspace, so browsing, inspecting and auditioning a Set needs no
+      // open Project — the `provider.list` precedent the Locked Facade
+      // Surface names. Only the two Project-scoped operations require, and
+      // learn, a Project.
       const bool project_scoped = operation == "soundset.map.preview" ||
                                   operation == "soundset.install";
       if (project_scoped && !impl_->session_available()) {

@@ -204,6 +204,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"sequence.recovery.list", OperationKind::query},
       {"sequence.recovery.apply", OperationKind::command},
       {"sequence.recovery.discard", OperationKind::command},
+      {"soundset.audition", OperationKind::query},
       {"soundset.catalog.list", OperationKind::query},
       {"soundset.inspect", OperationKind::query},
       {"soundset.install", OperationKind::command},
@@ -3943,6 +3944,9 @@ struct Application::Impl {
     }
     if (operation == "provider.selected") {
       return provider_selected(request);
+    }
+    if (operation == "soundset.audition") {
+      return soundset_audition(request);
     }
     if (operation == "soundset.catalog.list") {
       return soundset_catalog_list(request);
@@ -7791,16 +7795,25 @@ struct Application::Impl {
     DecodedAudio audio;
   };
 
+  // The whole Set's audio, decoded once: every occupied slot, plus the
+  // optional S11-D5 set-level `demo`. The demo's measurement is kept rather
+  // than dropped so `soundset.audition` can report the geometry of the exact
+  // bytes it resolved without reading the blob a second time.
+  struct DecodedSoundSetAudio {
+    std::array<std::optional<SoundSetSlotAudio>, 16> slots;
+    std::optional<DecodedAudio> demo;
+  };
+
   // Every occupied slot of a Set, read once and decoded once. S11-D3 makes
   // this the whole Set's decision: a Set with one blob that is not S8-D6 is
   // refused wherever it is used, so `install` cannot admit under
   // `occupied_pad_policy: keep` what `inspect` refuses. Install then reuses
   // these bytes for the Pads it writes rather than decoding a second time.
-  foundation::Result<std::array<std::optional<SoundSetSlotAudio>, 16>>
+  foundation::Result<DecodedSoundSetAudio>
   decode_soundset_audio(
       const project_io::StoredSoundSet& stored,
       std::string_view manifest_sha256) const {
-    using Decoded = std::array<std::optional<SoundSetSlotAudio>, 16>;
+    using Decoded = DecodedSoundSetAudio;
     Decoded decoded;
     for (const auto& slot : stored.manifest.slots) {
       if (!slot.occupied.has_value()) {
@@ -7818,7 +7831,7 @@ struct Application::Impl {
         return foundation::Result<Decoded>::failure(
             soundset_audio_error(measured.error(), index));
       }
-      decoded.at(index) =
+      decoded.slots.at(index) =
           SoundSetSlotAudio{std::move(bytes.value()), measured.value()};
     }
     // S11-D5's set-level demo is under the same S8-D6 constraint. It is not a
@@ -7838,6 +7851,7 @@ struct Application::Impl {
             {{"reason", kSoundSetReasonAudioUnsupported}},
         });
       }
+      decoded.demo = measured.value();
     }
     return foundation::Result<Decoded>::success(std::move(decoded));
   }
@@ -7980,12 +7994,108 @@ struct Application::Impl {
     auto result = soundset_summary_json(
         resolved.value().stored, resolved.value().manifest_sha256);
     result["slots"] =
-        soundset_slots_json(resolved.value().stored, decoded.value());
+        soundset_slots_json(resolved.value().stored, decoded.value().slots);
     result["demo"] = resolved.value().stored.manifest.demo.has_value()
                          ? soundset_artifact_json(
                                *resolved.value().stored.manifest.demo)
                          : nlohmann::json(nullptr);
     return success_envelope(std::move(result), std::nullopt);
+  }
+
+  // S11-D5's two audition layers, and the only Facade operation that resolves
+  // Sound Set audio for playback rather than for a write. It resolves and
+  // gates the audition source and reports the geometry of the exact bytes the
+  // Runtime would play; carrying those bytes into a Host's audio engine is
+  // still outstanding, because the engine's preview control is a Pad-slot
+  // override on a bank cooked from a Project and a Set is in neither.
+  //
+  // It is Set-scoped, not Pad-scoped: a Set sitting in the Workspace Set
+  // Store is not a Project Pad, so `sample.preview.set` cannot address it.
+  // Omitting `slot_index` resolves the set-level `demo`; supplying one
+  // resolves that slot's Artifact. Like `soundset.inspect` it is a query
+  // with respect to Project Truth — no Asset, no Pad, no revision — and it
+  // resolves the Set Store from the Workspace, so a `workspace_path` fails
+  // `exact_keys` like any other extra field.
+  nlohmann::json soundset_audition(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request, {"operation", "set_id", "version", "manifest_sha256"}) ||
+            exact_keys(
+                request,
+                {"operation", "set_id", "version", "manifest_sha256",
+                 "slot_index"}),
+        "soundset.audition request shape is invalid");
+    std::optional<std::uint8_t> slot_index;
+    if (request.contains("slot_index")) {
+      slot_index = static_cast<std::uint8_t>(
+          unsigned_field(request, "slot_index", 15));
+    }
+    auto resolved = resolve_soundset(request);
+    if (!resolved.has_value()) {
+      return error_envelope(resolved.error());
+    }
+    // S11-D3 is a property of the Set, so the audition refuses exactly what
+    // `inspect`, `soundset.map.preview` and `install` refuse, in the same
+    // order: a Set carrying one blob that is not S8-D6 is not auditionable
+    // through any of its slots. That costs a whole-Set read and decode per
+    // request, which is the price of one audio decision rather than sixteen;
+    // an interactive surface that auditions slot after slot should cache the
+    // Set it is browsing rather than weaken the decision to per-slot.
+    const auto decoded = decode_soundset_audio(
+        resolved.value().stored, resolved.value().manifest_sha256);
+    if (!decoded.has_value()) {
+      return error_envelope(decoded.error());
+    }
+    const auto& manifest = resolved.value().stored.manifest;
+    foundation::ArtifactRef artifact{};
+    DecodedAudio audio{};
+    if (slot_index.has_value()) {
+      const auto slot = std::ranges::find_if(
+          manifest.slots,
+          [index = *slot_index](const auto& candidate) {
+            return candidate.index == index;
+          });
+      // S11-D12: an empty slot is the author's silence, keyed off the absence
+      // of an `artifact` and never off a flag. There is nothing to audition,
+      // and inventing a reason token for it would widen the locked error
+      // vocabulary, so this is the existing MISSING_ASSET with no reason.
+      if (slot == manifest.slots.end() || !slot->occupied.has_value()) {
+        return error_envelope(Error{
+            ErrorCode::missing_asset,
+            "Sound Set slot is empty",
+        });
+      }
+      artifact = slot->occupied.value().artifact;
+      audio = decoded.value().slots.at(*slot_index).value().audio;
+    } else {
+      if (!manifest.demo.has_value()) {
+        return error_envelope(Error{
+            ErrorCode::missing_asset,
+            "Sound Set declares no demo",
+        });
+      }
+      artifact = manifest.demo.value();
+      audio = decoded.value().demo.value();
+    }
+    return success_envelope(
+        {
+            {"set_id", manifest.set_id},
+            {"version", manifest.version},
+            {"manifest_sha256", resolved.value().manifest_sha256},
+            {"slot_index",
+             slot_index.has_value() ? nlohmann::json(*slot_index)
+                                    : nlohmann::json(nullptr)},
+            {"artifact", soundset_artifact_json(artifact)},
+            {"audio",
+             {
+                 {"sample_rate", audio.sample_rate},
+                 {"channels", audio.channels},
+                 {"source_frames", audio.source_frames},
+                 {"prepared_bytes", audio.prepared.bytes},
+                 {"prepared_frames", audio.prepared.frames},
+             }},
+        },
+        std::nullopt);
   }
 
   nlohmann::json soundset_map_preview(const nlohmann::json& request) {
@@ -8116,7 +8226,7 @@ struct Application::Impl {
     std::uint16_t written_pads = 0;
     for (const auto& pad : write_set.value()) {
       const auto& prepared =
-          decoded.value().at(pad.slot_index)->audio.prepared;
+          decoded.value().slots.at(pad.slot_index)->audio.prepared;
       // S11-D8: per-Pad residency. One Artifact on two Pads is two charges,
       // so the sum is over the write set and not over unique hashes.
       const auto next_bytes =
@@ -8195,7 +8305,7 @@ struct Application::Impl {
                   bank,
                   pad.pad)},
               "audio/wav",
-              decoded.value().at(pad.slot_index)->bytes,
+              decoded.value().slots.at(pad.slot_index)->bytes,
               domain::AssetLineage{
                   domain::SoundSetLineageSource{
                       resolved.value().stored.manifest.set_id,

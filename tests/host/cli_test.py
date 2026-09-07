@@ -912,7 +912,7 @@ FOUNDRY_MANIFEST = (
 
 
 def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
-    """List, inspect, preview and install a Sound Set across CLI processes.
+    """List, inspect, audition, preview and install a Set across CLI processes.
 
     Nothing is injected: the Host wires the Workspace-local Catalog, so this
     exercises the same offline path a native Host, the C ABI and the Web Host
@@ -951,6 +951,61 @@ def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
     )
     check_success(inspected, None)
     assert len(inspected["result"]["slots"]) == 16
+
+    # S11-D5's two audition layers reach the same generic passthrough: no
+    # `slot_index` plays the set-level demo, one plays that slot's Artifact.
+    demo = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.audition",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        },
+    )
+    check_success(demo, None)
+    assert demo["result"]["slot_index"] is None
+    assert demo["result"]["audio"]["prepared_frames"] > 0
+
+    slot_audition = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.audition",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+            "slot_index": 0,
+        },
+    )
+    check_success(slot_audition, None)
+    assert slot_audition["result"]["slot_index"] == 0
+    assert (
+        slot_audition["result"]["artifact"]["sha256"]
+        != demo["result"]["artifact"]["sha256"]
+    )
+
+    # An empty slot is not a playable source, and the refusal mints no new
+    # reason token.
+    empty = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.audition",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+            "slot_index": 10,
+        },
+        expected_exit=2,
+    )
+    assert empty["ok"] is False
+    assert empty["error"]["code"] == "MISSING_ASSET"
+    assert empty["error"]["details"] == {}
 
     # A Sound Set install needs lmdj.project.v4 Project Truth, which a Pattern
     # Slot assignment establishes.
