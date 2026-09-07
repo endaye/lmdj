@@ -35,7 +35,7 @@ on:
       batch_operation:
         description: Isolated incremental rehearsal only; legacy preserves the existing reporter.
         type: choice
-        options: [legacy, init, reconcile, settle, resume, report-init-outbox, report-review, report-batches, report-drain]
+        options: [legacy, init, reconcile, settle, resume, report-init-outbox, report-review, report-batches, report-drain, recovery-probe]
         default: legacy
       journal_config:
         description: Exact isolated journal identity JSON; no automatic Issue creation or baseline.
@@ -61,6 +61,10 @@ on:
         description: Maximum newly queued observations for report-batches (1..32).
         type: number
         default: 8
+      probe_request:
+        description: Isolated manual recovery probe closed intent JSON; omitted fault stays disabled.
+        type: string
+        required: false
 
 # Everything not listed is `none`. The reporter reads runs and artifacts and
 # writes Issues; it holds no pull-request, contents-write or deploy authority.
@@ -138,7 +142,8 @@ jobs:
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == '1' &&
       (inputs.batch_operation == 'init' || inputs.batch_operation == 'reconcile' || inputs.batch_operation == 'settle' ||
        inputs.batch_operation == 'resume' || inputs.batch_operation == 'report-init-outbox' ||
-       inputs.batch_operation == 'report-review' || inputs.batch_operation == 'report-batches' || inputs.batch_operation == 'report-drain')
+       inputs.batch_operation == 'report-review' || inputs.batch_operation == 'report-batches' || inputs.batch_operation == 'report-drain' ||
+       inputs.batch_operation == 'recovery-probe')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
@@ -164,7 +169,7 @@ jobs:
           python-version: "3.11"
       - name: Reconcile the isolated journal under the short writer lock
         id: control
-        if: ${{ !startsWith(inputs.batch_operation, 'report-') }}
+        if: ${{ !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATCH_WRITER_LOCK: self-test-report
@@ -243,8 +248,46 @@ jobs:
           # Report CLI writes its own summary; there is deliberately no control
           # result, GITHUB_OUTPUT action, or executor request from this step.
           PY
+      - name: Run the isolated recovery response probe
+        if: ${{ inputs.batch_operation == 'recovery-probe' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATCH_WRITER_LOCK: self-test-report
+          BATCH_OPERATION: ${{ inputs.batch_operation }}
+          REPORT_CONFIG: ${{ inputs.report_config }}
+          PROBE_REQUEST: ${{ inputs.probe_request }}
+          JOURNAL_CONFIG: ${{ inputs.journal_config }}
+          BATCH_REQUEST: ${{ inputs.batch_request }}
+          LEGACY_RUN_ID: ${{ inputs.run_id }}
+          LEGACY_RECONCILE: ${{ inputs.reconcile }}
+          REVIEW_RUN_ID: ${{ inputs.review_run_id }}
+          REVIEW_ATTEMPT: ${{ inputs.review_attempt }}
+          REPORT_LIMIT: ${{ inputs.report_limit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          if (os.environ['BATCH_OPERATION'] != 'recovery-probe'
+              or any(os.environ.get(key) for key in ('JOURNAL_CONFIG', 'BATCH_REQUEST', 'LEGACY_RUN_ID', 'REVIEW_RUN_ID', 'REVIEW_ATTEMPT'))
+              or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')
+              or os.environ.get('REPORT_LIMIT', '8') != '8'):
+              raise SystemExit('why: probe mixed with another operation; remedy: use only report_config and probe_request')
+          if not os.environ.get('REPORT_CONFIG') or not os.environ.get('PROBE_REQUEST'):
+              raise SystemExit('why: probe lacks explicit isolated config or intent; remedy: supply report_config and probe_request')
+          directory = Path(os.environ['RUNNER_TEMP']) / 'incremental-recovery-probe'
+          directory.mkdir(exist_ok=True)
+          config, request = directory / 'config.json', directory / 'request.json'
+          config.write_text(os.environ['REPORT_CONFIG'])
+          request.write_text(os.environ['PROBE_REQUEST'])
+          command = ['python3', 'scripts/ci/o1_recovery_probe.py', '--config', str(config),
+                     '--request', str(request), '--root', str(Path.cwd()),
+                     '--summary', os.environ['GITHUB_STEP_SUMMARY']]
+          raise SystemExit(subprocess.run(command, check=False).returncode)
+          PY
       - uses: actions/upload-artifact@v4
-        if: ${{ always() && !startsWith(inputs.batch_operation, 'report-') }}
+        if: ${{ always() && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' }}
         with:
           name: batch-controller-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/incremental-controller/result.json

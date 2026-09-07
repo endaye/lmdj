@@ -124,7 +124,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
 
     def report_code(self):
         step = self.control.split('      - name: Report through the isolated outbox under the short writer lock\n', 1)[1]
-        step = step.split('      - uses:', 1)[0]
+        step = step.split('      - ', 1)[0]
         source = field(step, 'run', 8)
         return source.split("python3 - <<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
 
@@ -183,10 +183,10 @@ class RehearsalWorkflowTests(unittest.TestCase):
         self.assertEqual(field(block(inputs, 'report_limit', 6), 'default', 8), '8')
 
     def test_report_and_control_steps_are_mutually_exclusive(self):
-        self.assertIn("if: ${{ !startsWith(inputs.batch_operation, 'report-') }}", self.control)
+        self.assertIn("if: ${{ !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' }}", self.control)
         self.assertIn("if: ${{ startsWith(inputs.batch_operation, 'report-') }}", self.control)
-        self.assertIn("if: ${{ always() && !startsWith(inputs.batch_operation, 'report-') }}", self.control)
-        self.assertEqual(self.control.count('BATCH_WRITER_LOCK: self-test-report'), 2)
+        self.assertIn("if: ${{ always() && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' }}", self.control)
+        self.assertEqual(self.control.count('BATCH_WRITER_LOCK: self-test-report'), 3)
 
     def test_each_report_operation_routes_to_actual_cli_with_no_execution_output(self):
         for operation in ('init-outbox', 'review', 'batches', 'drain'):
