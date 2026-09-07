@@ -60,6 +60,10 @@ HOSTED_CONTROL_PLANE_JOBS = (
     "pre-heavy-gate",
     "pr-gate",
     "select-macos-runner",
+    # Judges a self-test batch from `needs` and retains the verdict; runs the
+    # control revision's scripts, never the target's, and must outlive the
+    # pool it judges for the same reason PR Gate must.
+    "self-test-verdict",
 )
 # Hosted Ubuntu jobs that are not control plane: each republishes an already
 # produced macOS result under its required check name and runs no workload.
@@ -789,7 +793,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 self.assertIn(TRUST_CONDITION, job)
                 for predecessor in earlier:
                     self.assertIn(
-                        "(!fromJSON(needs.change-scope.outputs.manifest).lanes."
+                        "(needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes."
                         f"{HEAVY_LANES[predecessor]} || needs.{predecessor}.result == 'success')",
                         job,
                     )
@@ -913,13 +917,15 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_push_classification_uses_the_exact_before_range(self) -> None:
         job = self.workflow_job("change-scope")
         self.assertIn(
-            "BASE_SHA: ${{ inputs.queue_base_sha || github.event_name == 'pull_request' && "
+            "BASE_SHA: ${{ inputs.queue_base_sha || (steps.resolve.outputs.self-test == 'true' "
+            "&& steps.resolve.outputs.self-test-target) || github.event_name == 'pull_request' && "
             "github.event.pull_request.base.sha || github.event_name == 'push' "
             "&& github.event.before || github.sha }}",
             job,
         )
         self.assertIn(
-            "HEAD_SHA: ${{ inputs.queue_head_sha || github.event_name == 'pull_request' && "
+            "HEAD_SHA: ${{ inputs.queue_head_sha || (steps.resolve.outputs.self-test == 'true' "
+            "&& steps.resolve.outputs.self-test-target) || github.event_name == 'pull_request' && "
             "github.event.pull_request.head.sha || github.sha }}",
             job,
         )
