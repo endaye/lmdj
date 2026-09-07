@@ -235,6 +235,56 @@ codec 侧的实际配置（`M5.Speaker.config()` 读回）：
 （8 × 256 ≈ 42.7 ms 与该差值接近得可疑），但这需要真正的时序方法才能定论，而不是靠一个
 5 ms 轮询的忙等循环。因此它被记为 §5 的一个开放问题，不作为 quiescence 语义的结论。
 
+### 1.5 麦克风：ES8311 采集在 IDF 5.5.1 起的回归上，本板 6.0.3 与 6.1 均复现
+
+`M5.Mic` 在 Cardputer Adv 上采不到声音。症状精确到位：每个样本恒为 `f_gain × (−1)`
+（`magnification=16` 时为 `−8`），`distinct(512) = 1`，两个 I2S slot 相同，对声音毫无反应。
+出厂固件的麦克风测试是有效的，所以硬件没有问题。
+
+这不是新问题。上游已有同一硬件、同一症状、同一寄存器读回的报告并完成了版本二分：
+[espressif/esp-idf#18621](https://github.com/espressif/esp-idf/issues/18621)（2026-05-14，
+`Status: In Progress`）——ES8311 mic 在 **IDF v5.4.2 正常、v5.5.1 起恒定 `−8`/`−1`**，Espressif
+的假设是 v5.4→v5.5 I2S 驱动重构后 MCLK 未到达 codec，正在等示波器数据。
+[m5stack/uiflow-micropython#97](https://github.com/m5stack/uiflow-micropython/pull/97) 的变通
+是把 IDF 钉回 5.4；[m5stack/M5Unified#184](https://github.com/m5stack/M5Unified/issues/184)
+的末条评论把 Cardputer Adv 的静音麦克风明确指向了这个 IDF 回归。
+
+本增补新增的数据点（上游只有 5.4.2 与 5.5.1）：
+
+| ESP-IDF | ES8311 采集 | codec 寄存器读回 |
+| --- | --- | --- |
+| v6.0.3 | 恒定 `−8` | `00=80 01=BA 0D=01 0E=02 14=10 17=BF` |
+| v6.1 | 恒定 `−8` | 同上 |
+
+**回归至少覆盖 5.5.1 → 6.0.3 → 6.1**，与 IDF 6 的其它变化无关。
+
+为把原因收窄到 IDF 层，以下假设逐一在真机上被排除（每次只动一个变量）：
+
+| 假设 | 实验 | 结果 |
+| --- | --- | --- |
+| 采样率 / codec 时钟不匹配 | 16 kHz → 48 kHz | 完全相同的常数 |
+| 软件增益不足 | `magnification` 16/32/64/128 | 精确成比例 `−8/−16/−32/−64`；源码 `f_gain = magnification/(over_sampling<<1)` |
+| 扬声器占用共享 codec（[M5Unified#347](https://github.com/m5stack/M5Unified/issues/347)） | `cfg.internal_spk = false` | 仍恒定 |
+| I2S 端口错配 | mic 改到扬声器的 `I2S_NUM_1` | 仍恒定 |
+| 单声道读错 slot | 立体声读回 L/R | 两个 slot 都是 `−8` |
+| 时钟启动前 `0x0D` 写入被吸收（[M5Unified#348](https://github.com/m5stack/M5Unified/pull/348)，仅 StopWatch 注册） | 时钟运行后补写 `0x0D=0x01` ×3 | `0D` 前后均读回 `01`，数据不变 |
+| 模拟输入增益 / 数字麦路径 | `0x14 = 0x1A`，再 `0x14 = 0x50 (DMIC_ON)` | 寄存器写入生效（读回 `1A`/`50`），数据不变 |
+
+I2C 通路正常（扬声器走同一总线且正常出声；所有写入都能读回）、BCLK/WS 存在（采集任务持续
+返回数据块）、codec 寄存器处于 ADC 模式——但 ASDOUT（GPIO46）始终读到全 1。这和
+#18621 的观察一致。
+
+**对本研究的结论：** 麦克风在 IDF 6.x 上不可用不是 M5Unified 或 codec 配置能解决的，
+而是 IDF I2S 层的开放回归；在上游修复前，本板的采集只能通过降到 IDF 5.4.x 获得，
+这与 1 节选 6.x 的理由冲突。麦克风本来就不在第一轮范围内
+（[2026-09-03 分析](./2026-09-03-cardputer-adv-feasibility-analysis.md)第 271 行），
+因此不改变落点，只把这条记为已知外部阻断。
+
+测试中也证实了两个与本板相关的 M5Unified 0.2.21 事实：Cardputer Adv 的 mic case 没有像
+ChainCaptain 那样显式设置 `i2s_port`（扬声器在 `I2S_NUM_1`，mic 默认 `I2S_NUM_0`，两者共享
+BCLK 41 / WS 43）；以及 #348 的 post-start 修复只注册给了 StopWatch。两者在本板上都不是
+静音的原因，但在上游修复 IDF 回归后值得回头核对。
+
 ## 2. 修正：atomic 退化的条件比原文第 3 节记录的更宽
 
 原文第 3 节说“64 位 atomic 由一个全局 `portMUX_TYPE` 自旋锁模拟”。这一句是对的，但只覆盖
@@ -389,7 +439,8 @@ component、target 或 CI 通道，本节只描述开发机上的外部工具链
   节要求的证据一项都还没有产生。1.3 节的堆数字来自一个点屏 demo，不能当测量结果引用。
 - `M5.Speaker.isPlaying()` 的 quiescence 语义：它似乎在最后一块 DMA 排空前就归零
   （1.4 节）。这影响任何“等播放结束”的逻辑，需要用真正的时序方法确认，不能靠忙等观察。
-- `M5.Mic` 的实际采集。1.4 节只让扬声器出了声，麦克风仍然只是报告 enabled。
+- `M5.Mic` 采集：**已定性为 IDF I2S 回归**（1.5 节），等 [esp-idf#18621](https://github.com/espressif/esp-idf/issues/18621)。
+  未验证的是"在 IDF 5.4.x 上本板确实正常"这一半——上游报告如此，本仓库没有复现。
 - IDF-9032 的内容与状态。
 
 ## 6. 版本与文档
