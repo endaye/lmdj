@@ -431,12 +431,13 @@ git -C "$IDF_PATH" rev-parse HEAD
 
 ## 5. 仍未验证
 
-- 本 Core 在 `gnu++26` + warnings-as-errors + Picolibc 下的编译结果。1.2 节只覆盖了格式串
-  与 `int32_t` 这一类，Picolibc 与 `std::filesystem` 一侧完全没碰。
+- 完整 Core 的目标适配仍未验证。第 7 节保留首次失败；第 8 节记录独立 Core 修正后的
+  Step A：选定的 14 个编译单元已编译、链接，`artifact.cpp` 的文件系统路径已静态解析。
+  这不包含 Facade，也不等于完整 Core 或文件系统在真机可用；没有采用 `gnu++26`。
 - ESP-IDF 6.1 一侧 `spi_bus_initialize()` 错误路径 panic 的问题尚未向 Espressif 提交。
 - [M5GFX#278](https://github.com/m5stack/M5GFX/issues/278) 的上游处置结果。
-- 任何 callback deadline、固件尺寸、峰值内存、linker map 归因或 underrun 数字。原文 10.2
-  节要求的证据一项都还没有产生。1.3 节的堆数字来自一个点屏 demo，不能当测量结果引用。
+- callback deadline、峰值内存、jitter、underrun、voice count、音频输出与真机运行。
+  第 8 节只有静态固件尺寸及 linker map 归因；1.3 节点屏 demo 的堆数字不能移作 Core 测量。
 - `M5.Speaker.isPlaying()` 的 quiescence 语义：它似乎在最后一块 DMA 排空前就归零
   （1.4 节）。这影响任何“等播放结束”的逻辑，需要用真正的时序方法确认，不能靠忙等观察。
 - `M5.Mic` 采集：**已定性为 IDF I2S 回归**（1.5 节），等 [esp-idf#18621](https://github.com/espressif/esp-idf/issues/18621)。
@@ -453,3 +454,235 @@ git -C "$IDF_PATH" rev-parse HEAD
   Assembly 身份变更。若后续批准 Embedded Host 或 Product Assembly 变更，必须在同一实施
   Task 更新对应 Portal 路由并按版本政策处理身份。
 - 本文不批准 spike、不批准硬件 SKU、不设定 Contract，也不回改原文的可行性分档与工期分档。
+
+## 7. 2026-09-08 Step A 首次交叉编译：停在既有 lock-free 断言
+
+历史状态：**首次尝试时 Step A 未完成，Step B 未开始**；恢复结果见第 8 节。这是
+[A → B 计划](../plans/2026-09-08-lmdj-esp32-render-probe.md)
+的停止点证据，不是完整 Core 已可移植的结论。本次研究记录只改本文件；产品源码不变。
+
+### 7.1 身份、复现和两次构建
+
+- Core source：`5eb314f52ea71c879a8a4e00f749135791c16879`，工作区
+  `/Users/endaye/orca/workspaces/lmdj/feat-esp32-render-probe-a`。
+- 仓库外工程：`/Users/endaye/esp/lmdj-spike/lmdj-render-probe/`。
+- 实测 IDF：`v6.1`，`fff9895c82d744c7237be8847347bdd1b07c6643`；GCC 15.2.0，
+  `esp-15.2.0_20251204`，目标 `esp32s3`。实际 sdkconfig 使用 Picolibc、8 MB flash、
+  USB-Serial/JTAG console，`CONFIG_SPIRAM` 未启用。
+- 14 条 Core compile commands 的最后一个语言标准选项均为 `-std=gnu++20`。
+  命令含 `-Wall -Wextra -Wpedantic -Werror`，但也继承 IDF 的 `-Wno-error=extra`
+  等豁免，**尚不能宣称与宿主警告策略完全等价**；恢复 probe 时须审计这些选项。
+
+两次构建均用 `set -o pipefail` 与 `tee` 保留完整输出，记录 `idf.py` 退出码 2：
+
+```bash
+cd /Users/endaye/esp/lmdj-spike/lmdj-render-probe
+set -o pipefail
+source /Users/endaye/esp/esp-idf/export.sh
+idf.py -DIDF_TARGET=esp32s3 build 2>&1 | tee evidence/build-01.log
+# 第一次失败后，仅在 probe 的 defaults 和 sdkconfig 启用
+# CONFIG_COMPILER_CXX_EXCEPTIONS=y，然后执行：
+idf.py build 2>&1 | tee evidence/build-02-exceptions.log
+```
+
+| 日志 | 实际失败 | SHA-256 |
+| --- | --- | --- |
+| `evidence/build-01.log` | `authoring-domain/src/project.cpp:83:32: error: exception handling disabled, use '-fexceptions' to enable` | `3330ef822e5cb5c651f3f400a3aeee8ac63c1fb318ca6f1025526fbf633b0c03` |
+| `evidence/build-02-exceptions.log` | `audio-runtime/src/realtime_engine.cpp:51:43: error: static assertion failed` | `67bc526023a4023105783b813aa375410c596aa35f7cd52a5f5b009259f49cc1` |
+
+第二次构建结束后，原 IDF 路径 `/Users/endaye/esp/esp-idf` 在本地消失，原因未确认。
+上面的 IDF identity 是消失前读取的结果；日志、对象文件和 `.espressif` 下的目标工具仍在。
+**重放前须重新定位或恢复并核对该 IDF checkout**，不能把这段路径当成当前可用性证明。
+`capture-evidence.sh` 保存编译命令、对象清单、artifact 反汇编及未解析符号，并生成
+`evidence/SHA256SUMS`；用 `shasum -a 256 -c evidence/SHA256SUMS` 校验。
+这批原始证据保留在本机仓库外，尚未上传为团队可获取资产。
+
+### 7.2 逐文件裁决与计划修正
+
+以下对象均在第二次构建中生成，来源直接指向上述 checkout，无 Core 源码复制或补丁：
+
+| 模块 | 文件 | 结果 |
+| --- | --- | --- |
+| foundation | `artifact.cpp`, `json.cpp`, `soundset_manifest.cpp` | 3/3 编译通过；第二轮共同启用 probe-local exceptions |
+| authoring-domain | `project.cpp`, `migration.cpp`, `command_handler.cpp` | 3/3 编译通过；`project.cpp` 第一轮失败明确要求 exceptions |
+| project-cooker | `wav_reader.cpp`, `wav_selection.cpp`, `sample_analysis.cpp`, `project_cooker.cpp`, `performance_replay.cpp` | 5/5 编译通过；第二轮共同启用 probe-local exceptions |
+| audio-runtime | `master_fx.cpp`, `prepared_sample_bank.cpp` | 2/2 编译通过；第二轮共同启用 probe-local exceptions |
+| audio-runtime | `realtime_engine.cpp` | 编译失败，未生成对象 |
+
+源码 `packages/audio-runtime/src/realtime_engine.cpp:51` 已明确要求：
+
+```cpp
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+```
+
+因此计划 Mechanism 4 的“Xtensa 上 build passes，只有 map 会报告静默退化”不适用于
+这个 source revision。停止发生在编译期，先于链接；`__atomic_*_8` 的最终引用计数是
+**不可获取**，不是零。没有完整 app ELF / map，`idf.py size` / `size-components`、
+Flash/IRAM/DRAM/BSS archive 归因均未完成。不能用中间对象尺寸补齐这些验收项。
+该结果支持原有实时并发阻断判断，不改变 2026-08-27 评估的可行性分档。
+
+### 7.3 artifact.cpp 的有限裁决
+
+`artifact.cpp` 在第二轮 exceptions 配置下编译为 Xtensa 对象，使用仓库 vendored
+nlohmann/json 3.12.0 与 picosha2。`nm -uC` 仍列出 `std::filesystem::status`、
+`std::basic_ifstream` 构造/析构及 `std::istream::read`；这证明编译成功，但没有最终
+链接，不能宣布这些调用已经解析到 IDF VFS。
+
+`describe_artifact` 对象反汇编保留大栈帧：`entry a1,32` 后加载 literal offset `0x40`
+处的 `0xfffefc10`（-66544），再以 `movsp` 调整栈，总计 66576 字节；literal offset
+`0x2c` 处仍有 `0x00010000`。结合源码的 `std::array<unsigned char, 64U * 1024U>`，
+64 KiB 缓冲没有在该对象中消失。该结果不是运行时 stack high-water 或真机可用性证据。
+完整反汇编和 section dump 分别保存在 `evidence/artifact-disassembly.txt` 与
+`evidence/artifact-sections.txt`，最终 ELF 保留与 VFS 路径仍待后续验证。
+
+### 7.4 恢复条件与独立后续 Task
+
+后续候选 Task：`feat/esp32-lock-free-runtime-state`，当前仅为候选，尚未实施。
+它必须先设计 32 位目标上的状态发布、计数器一致性、回绕、CAS 与跨核可见性，再通过
+宿主回归及并发测试；不能直接把 64 位成员窄化，也不能删断言、伪造 lock-free trait 或
+引入锁来使 probe 通过。这里涉及仓库禁止静默决定的并发问题，需先确认设计方向。
+其 Version Management 与 Documentation impact 应由实际设计判定，不能沿用研究 Task
+的 `none`。源码修改须另开独立 worktree 和 Task，不能混入本研究记录。
+
+源阻断解决后，probe 本身还须补齐：每个对象的显式保留符号及 ELF 检查（现有
+`WHOLE_ARCHIVE` 不能单独防止 `--gc-sections`）；保留 `render` 与 `describe_artifact`
+且不执行它们；避免 stub 在堆报告前分配尚未证明能容纳的默认 engine；核对警告豁免。
+初始 scaffold 分为四个 Core archive 以便归因，尚非计划所写的单 component wrapper；
+两个 vendored 依赖都是 header-only，不能假定存在第五个二进制 archive。
+计划中的 M5GFX override 也尚未接入。以上均是未完成项，未用简化版本替代原验收。
+
+同一 source revision 的主机控制测试复跑 11/11 PASS（12.41 s），日志为
+`evidence/host-control-5eb314f5.log`：
+
+```bash
+ctest --preset dev --output-on-failure -R '^audio\.(realtime_queue|prepared_sample_bank|realtime_engine|snapshot_publication_invariant|master_fx|master_fx_determinism|master_fx_allocation_guard|realtime_spsc_stress|snapshot_publication_stress|long_sample_publication_stress|master_fx_stress)$'
+```
+
+这包含计划指定的 7 个 unit/component 和 4 个 stress 测试，不代表全仓库测试通过。
+本轮没有 callback deadline、jitter、underrun、voice count、音频输出或真机运行证据。
+Step A 完整验收及 Step B1 保持待完成；Step B2 未获批准。
+
+## 8. 2026-09-08 Step A 恢复：严格警告下的完整子集链接
+
+独立 Core Task [PR #953](https://github.com/endaye/lmdj/pull/953) 已合入
+`ce2d12910ae7b098439c83eb50c0d443c17cf8e9`：Audio Runtime 改用 32 位原子交接、
+writer-owned 完整 64 位状态和值发布；不是删除断言或把身份截成 32 位。
+本节的 docs-only Task 直接引用该修正之后的 checkout，不修改、复制或补丁化产品源码。
+第 7 节的两份失败日志及 SHA-256 保持不变，不能用本轮成功覆盖首次失败。
+
+### 8.1 配置、闭包与保留可信度
+
+- 继续使用 EIM 管理的 IDF v6.1，完整 commit 同 §7.1；Xtensa GCC 15.2.0、ESP32-S3、
+  Picolibc、`-Og`、8 MB flash、`CONFIG_SPIRAM` 关闭。尺寸不是 Release 优化配置的承诺。
+  没有 M5GFX、I2S、Host 或 Facade 依赖。
+  计划沿用点屏工程的 M5GFX override 在无显示探针中没有消费方，因此未加入该库。
+- 14/14 个 Core 编译单元（§7.2 的全部文件）均为 **compiled with a probe-local flag**：
+  共同启用 `CONFIG_COMPILER_CXX_EXCEPTIONS=y`，第一轮要求 exceptions 的失败见 §7.1。
+  `CONFIG_COMPILER_CXX_RTTI` 仍关闭；编译器 response file 中实际包含 `-fno-rtti`。
+- 每条 Core 命令最终生效的标准为 `-std=gnu++20`；`-Wall -Wextra -Wpedantic -Werror`
+  完整保留，IDF 的 `-Wno-error=*`、`-Wno-*` 豁免已从这四个 Core target 中去除。
+  IDF 自身 targets 的诊断策略未改。第三轮 Core 14/14 通过，但 stub 因 SDK `assert.h`
+  的 `#include_next` 触发 pedantic 错误；完整失败日志保留。第四轮只把该 SDK-owned
+  include 目录对 stub 标为 SYSTEM，未压制 Core 诊断，构建和链接成功。
+- 四个归因 archive 对应 foundation、authoring-domain、project-cooker、audio-runtime；
+  vendored nlohmann/json 与 picosha2 是 header-only，没有第五个二进制 archive。
+- `WHOLE_ARCHIVE` 之外，`retain-symbols.py` 从四个 archive 枚举全部导出的 LMDJ text
+  符号，用 linker `--undefined` roots 对抗 `--gc-sections`。14 个对象、336 个唯一 root
+  全部出现在最终 ELF，缺失数为 0；`render` 与 `describe_artifact` 函数体仍在。
+  这是刻意保留的子集成本，不是实际应用可达性优化后的最小固件。
+- stub 只打印 IDF 版本、`__cplusplus`、internal heap total/free/largest 与 PSRAM total，
+  然后 idle；不构造 engine、不执行 Core、不打开文件。本轮未烧录或执行 stub，故没有
+  实测堆数值，亦不能引用点屏 demo 的堆数字填空。
+
+### 8.2 静态尺寸（字节）
+
+`build-final-main` 主镜像 `idf.py size`：Flash Code 512,066；Flash Data 209,300；DIRAM 53,666
+（text 32,999、data 13,067、bss 7,600）；IRAM 16,384（text 15,356、vectors 1,028）。
+其 `Total image size` 为 783,852 字节；实际带填充的 app `.bin` 为 **783,968 字节**。
+第四轮 `build-post-core` 的相应数字是 783,836/783,952，日志分别保留，不能混为一组。
+四个 LMDJ archive 的归因在两轮中相同；不因产品源文件相同就假定整镜像逐字节相同。
+IRAM 16,384 是本链接布局的区域统计，不等于整颗芯片
+没有可重新分配的内部 RAM，更不证明 render 已放入 IRAM 或满足 cache-off 实时要求。
+
+| LMDJ archive | Flash code | Flash data | IRAM/DIRAM text | DRAM data | BSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| foundation | 136873 | 30548 | 0 | 512 | 84 |
+| authoring-domain | 65685 | 11142 | 0 | 0 | 0 |
+| project-cooker | 23327 | 4322 | 0 | 0 | 0 |
+| audio-runtime | 42481 | 3540 | 0 | 0 | 0 |
+
+归因来自 `idf.py size-components` 及同 map 的 `esp_idf_size --format json2 --archives`。
+共享模板/标准库按链接器选中的 archive 归属，不能把这张表当独立模块增量成本。
+没有构造 engine，因此静态 BSS 不包含 engine、Sample Bank 或运行时分配的预算。
+
+### 8.3 64 位 atomic：先验证零计数，再解释它
+
+四个 LMDJ archive 的 undefined entries 和代码/literal relocation 中，`__atomic_load_8`、
+`store_8`、`exchange_8`、`compare_exchange_8`、所有 `fetch_*_8` 均为 **0**。
+没有据此直接跳过计划的零计数停止条件：先修复保留，再检查 336 个 root，另建不执行的
+positive-control image。其 `atomic64-positive.cpp.obj::lmdj_probe_atomic64_control`
+分别触发 load/store/exchange/CAS/fetch-add/sub/and/or/xor：每项 1 个 undefined entry、
+1 个 literal relocation 与 1 个 call-relaxation relocation，9 个 helper 全部保留到 ELF。
+两种 relocation 描述同一调用位置，不当作两次运行时调用。
+
+主镜像仍保留 **1 个** 64 位 helper：`__atomic_fetch_or_8`，由
+`libesp_hw_support.a(esp_gpio_reserve.c.obj)::esp_gpio_reserve` 引入，最终解析到
+`libesp_libc.a(stdatomic.c.obj)`。反汇编有加载 helper 地址并 `callx8` 的调用点。
+同 SDK 对象还引用 `fetch_and_8` 与 `load_8`，但对应 revoke/is_reserved 路径被 GC；
+不能把 map 的 discarded sections 或全局 cross-reference table 当最终存活调用。
+因此结论是“此精确配置下，保留的 LMDJ 子集未引用模拟 64 位 atomic helper”，
+不是“整镜像没有全局锁”，更不是 callback deadline 已验证。
+
+### 8.4 artifact.cpp：编译、链接与运行严格分开
+
+- `std::filesystem::is_regular_file` 已编译并保留；最终链为
+  `is_regular_file → std::filesystem::status → stat → _stat_r`。
+  `status` 来自 toolchain `libstdc++.a`，`stat` 来自 IDF `esp_libc/syscalls.c.obj`，
+  `_stat_r`/`esp_vfs_stat` 来自 `vfs/vfs_calls.c.obj`，再经注册的 VFS 回调分派。
+- `std::ifstream` 构造、析构及读取已编译链接。底层 `std::__basic_file<char>::open`
+  调用 Picolibc `fopen`；`xsgetn` 经 `read → _read_r` 进入 IDF VFS，open 经
+  `open → _open_r`。这不代表存在挂载的存储或文件可读；stub 不做挂载、读写和 IO。
+- `describe_artifact` 最终反汇编仍为 `entry a1,32` 加 -66544 的动态栈调整，总计
+  **66,576 字节**；`-fstack-usage` 的 `.su` 同样报告 66576/static。64 KiB 数组未被
+  优化掉，不能在本 probe 的默认 3,584 字节 main task 栈上试调用。没有栈高水位实测。
+
+### 8.5 复核与验收边界
+
+证据在仓库外 `lmdj-render-probe/evidence/step-a-post-core.W1d0zV/`；
+`build-03-post-core.log` 为完整 stub 失败，`build-04-sdk-system-include.log` 为成功，
+`build-05-positive.log` 为阳性对照。`analysis-04/`、`analysis-05/` 保存 ELF 符号、
+反汇编、逐 archive relocations/undefined entries 和机械计数。工具与 source identity、
+最终 Task commit 的复跑记录及可重放 scaffold 一并由最终证据包保存。
+证据仅保存在本机，未宣称已发布为团队资产；本研究不创建 Release。
+
+恢复时主机复跑发现旧 stress oracle 把 generation 等同 accepted count；所有 accepted/
+applied 守恒断言先通过，最终身份断言失败。独立
+[PR #955](https://github.com/endaye/lmdj/pull/955) 用公开 API 的 past-frame 拒绝制造确定性
+generation 间隙，再与最后一次成功回执精确比较；没有减压力预算、改超时或减少旅程。
+该 Task 的普通/TSan 四项 stress 各 4/4 PASS，不能以此冒充本 Task 的最终源码复跑。
+
+本 Task 在该修正之上配置、构建并复跑：计划的 7 个 unit/component、4 个 stress，
+另加新值通道 unit，合计 **12/12 PASS（13.90 s）**。源码与第四轮 ESP32 构建的
+`packages/`、vendored `third_party/` 完全相同；测试修正不改变 probe 的产品输入。
+最终 docs-only commit 后再次执行同一选择，并把原始日志绑定到 `source-revision.txt`；
+重放时先将 checkout 固定到证据中的该 SHA，而不是移动的 `main`。
+
+```bash
+# 在对应 LMDJ checkout 配置并构建上述 12 个测试目标之后：
+ctest --preset dev --output-on-failure -R '^audio\.(value_channel|realtime_queue|prepared_sample_bank|realtime_engine|snapshot_publication_invariant|master_fx|master_fx_determinism|master_fx_allocation_guard|realtime_spsc_stress|snapshot_publication_stress|long_sample_publication_stress|master_fx_stress)$'
+scripts/docs-site.sh check
+# 在仓库外 probe 中，参数使用证据 source-revision.txt 的完整 SHA：
+bash capture-final.sh RECORDED_TASK_SHA evidence/replay-step-a
+```
+
+`capture-final.sh` 拒绝 source revision 不符或 dirty checkout，保留未过滤 build 日志与
+退出码，分别构建 main/positive-control，保存 size、map、ELF、编译命令、roots、栈记录
+与分析输出。最终记录位于同一证据目录的 `final-step-a/`，其中 `scaffold.tar.gz`
+包含可重放脚本；归档后的 `SHA256SUMS` 覆盖证据文件。不要运行历史的旧路径 capture
+脚本覆盖第 7 节原始证据。Portal 检查需先在 `apps/docs-site` 按 lockfile `npm ci`；
+本次首次检查因该隔离 worktree 缺少依赖失败，安装后重新检查，不改变任何依赖版本。
+
+本轮改变的是选定子集的编译/链接阻断结论，不推翻原可行性或工期分档，因此不回改
+2026-08-27 评估的历史正文。完整 Core、Facade、Host、存储及资源预算仍未获适配证明。
+**没有 callback deadline、jitter、underrun、voice count、音频输出或真机运行证据。**
+Step B1 只在本 Step A 独立交付后开始；B2、新 Contract、Embedded Profile 均不在授权内。
