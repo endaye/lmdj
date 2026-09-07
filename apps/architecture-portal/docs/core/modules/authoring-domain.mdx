@@ -23,7 +23,7 @@ Core/产品共同维护语义，仅依赖 Foundation。
 ## 4. 架构与数据流
 命令进入 Handler，经 `expected_revision` 验证后产生新的权威创作状态；playback 属于 Pad Slot，Pattern event 只引用 Pad Slot。整数 quantizer 是唯一量化与 Swing 权威。Performance event 沿用同一间接层：`pad_hit` 只引用 Pad Slot，`pattern_launch` 只引用 Pattern Slot 序号，两者都不直接引用 Asset；tick 仍是 PPQ 960 tick-native，不引入墙钟时间。Performance 的 canonical 事件顺序由领域自身定义，Host 不得自行重排。
 ## 5. API 与 Contract 边界
-领域对象遵循 active `lmdj.project.v4 · 4.0.0` Contract，不接受 Host 私有 JSON 形状；v4 顶层必需键为 `contract, project_id, revision, bpm, sequence_settings, banks, assets, patterns, pattern_slots, performances`。v1/v2/v3 只是只读迁移输入，migration 不重新解释已退休字段，也不为旧 Contract 追加 Performance 或 Pattern Slot 语义。
+领域对象遵循 active `lmdj.project.v4 · 4.1.0` Contract，不接受 Host 私有 JSON 形状；v4 顶层必需键为 `contract, project_id, revision, bpm, sequence_settings, banks, assets, patterns, pattern_slots, performances`。v1/v2/v3 只是只读迁移输入，migration 不重新解释已退休字段，也不为旧 Contract 追加 Performance 或 Pattern Slot 语义。
 ## 6. 状态、错误与生命周期
 Project Truth 可演进但不包含 Runtime Snapshot、Provider 选择或 Attempt failure。Performance 与 Pattern Slot 属于创作真相；Performance 的 replay 投影、实时 FX 状态与录音会话进度都是派生或瞬态状态，不回写领域模型。
 ## 7. 产品使用方
