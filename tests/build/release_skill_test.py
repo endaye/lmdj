@@ -136,9 +136,15 @@ class ReleaseSkillTest(unittest.TestCase):
         source = self.read(SKILL)
         for expected in (
             "## Full exact-main CI evidence",
+            "`complete-test-v2`",
             "`self-test-v1`",
             "16-suite",
             "`self_test_evidence`",
+            "`batch_test_evidence`",
+            "`lmdj.release-plan-marker.v3`",
+            "`executor_event`",
+            "durable-claim attestation",
+            "exactly one",
             "control/target",
             "30 days",
             "not Re-run jobs",
@@ -149,6 +155,8 @@ class ReleaseSkillTest(unittest.TestCase):
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, source)
+        self.assertIn("`main` with `target` equal to the candidate SHA", source)
+        self.assertNotIn("`main` with `target_revision`", source)
 
     def test_governance_binds_release_authority_to_full_exact_main_evidence(self) -> None:
         git_workflow = self.read(GIT_WORKFLOW)
@@ -164,6 +172,7 @@ class ReleaseSkillTest(unittest.TestCase):
             with self.subTest(document="git-workflow", expected=expected):
                 self.assertIn(expected, git_workflow)
         for expected in (
+            "`complete-test-v2`",
             "`self-test-v1`",
             "16-suite",
             "`self_test_evidence`",
@@ -171,6 +180,9 @@ class ReleaseSkillTest(unittest.TestCase):
             "`unverifiable`",
             "`conflict`",
             "`external-error`",
+            "`batch_test_evidence`",
+            "`lmdj.release-plan-marker.v3`",
+            "`Disposition.PUBLISHED`",
         ):
             with self.subTest(document="version-management", expected=expected):
                 self.assertIn(expected, version_policy)

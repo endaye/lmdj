@@ -88,16 +88,21 @@ succeeded; it is a separate boundary from deployment and does not follow from it
 
 ## Full exact-main CI evidence
 
-Current prospective policy is `self-test-v1`: the Owner explicitly references
-one passed, complete 16-suite self-test for the exact candidate in the reviewed
-intent's `self_test_evidence` and run ID. The tool verifies stable workflow and
-main ancestry, distinct control/target revisions, attempt, policy and digest;
-neither a green summary nor legacy `full`/`requested` scope is sufficient.
+Current prospective policy is `complete-test-v2`: the Owner explicitly references
+exactly one passed, complete 16-suite source for the exact candidate in a reviewed
+intent: old `self-test-v1` via `self_test_evidence`, or full incremental evidence
+via `batch_test_evidence`, together with the actual executor run ID. No reference,
+mixed references, focused/none batches or legacy fourteen-lane scope qualify.
+The tool verifies stable source and main ancestry, distinct control/target
+revisions, attempt, current policy and digest; a green summary or AI label
+is not evidence. Batch evidence additionally requires original origin/admission
+controller artifacts (trusted durable-claim attestation, not latest journal
+replay), the complete three-file verdict bundle and authenticated API jobs.
 See the version governance for the closed reference fields and cutover.
 
 An existing valid daily or node verdict may be reused for the same exact target.
 If fresh evidence is required, separately authorize `ci.yml` dispatch on ref
-`main` with `target_revision` equal to the candidate SHA (not a SHA as ref).
+`main` with `target` equal to the candidate SHA (not a SHA as ref).
 Use the self-test inputs, without lane selection or a queue ticket. The trusted
 control revision may be newer than the candidate. Record only the validated
 artifact's facts; never invent or backfill a digest or reference.
@@ -106,8 +111,13 @@ Verdict artifacts currently retain 30 days. Missing/expired evidence is
 `unverifiable`; mismatched, incomplete or non-passing evidence is `conflict`.
 Recovery requires a new dispatch on main for the same target and a separately
 reviewed intent update, not Re-run jobs: the producer currently accepts attempt
-1 only. Published legacy and self-test history remains read-only, with immutable
-tag/Release/asset/plan-marker verification; artifact expiry does not rewrite it.
+1 only. Only actually `published` history may use the recorded attempt without
+re-adjudicating ephemeral retention; allocated/abandoned/superseded is not this
+exception. Immutable tag/signature/Release/assets and exact plan-marker proof
+remain required. Batch `lmdj.release-plan-marker.v3` permanently binds the entire
+reference including `executor_event`; old self-test v2 and legacy v1 remain
+unchanged. An old marker cannot prove a newly added batch reference. Never
+rewrite history or infer executor event from the queue request kind.
 
 A full dispatch is evidence, not authorization: completing one authorizes no
 tag, Draft, publication, deployment or promotion.

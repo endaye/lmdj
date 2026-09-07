@@ -1,4 +1,4 @@
-"""Read-only full-batch candidate evidence. Not wired into release authority yet.
+"""Read-only full-batch candidate evidence and recorded published provenance.
 
 Controller artifacts attest that the trusted producer durably claimed this
 request. This consumer does NOT replay the latest Issue Journal. No Runtime,
@@ -38,8 +38,8 @@ def equal(left, right):
 class BatchEvidenceConsumer:
     """Only api_get(path, raw=False) is injected; configuration is trusted policy.
 
-Task B must bind repository/workflow IDs and producer_revision in reviewed
-release policy. They must never be taken from the candidate reference itself.
+Repository/workflow IDs and producer_revision come from reviewed release
+policy. They must never be taken from the candidate reference itself.
 git_root is an existing complete checkout; reads never fetch or execute source.
 """
     def __init__(self, *, api_get, git_root, repository, repository_id, workflow_id, producer_revision, now=None):
@@ -87,11 +87,11 @@ git_root is an existing complete checkout; reads never fetch or execute source.
             require(len(items) == 100, "GitHub inventory ended before its declared total", "external-error")
         raise BatchEvidenceError("external-error", "GitHub inventory exceeded pagination budget")
 
-    def run(self, run_id, control, *, expected_event=None):
+    def run(self, run_id, control, *, expected_event=None, published=False):
         require(positive(run_id), "run ID is invalid")
-        latest = self.get(f"/actions/runs/{run_id}")
+        latest = None if published else self.get(f"/actions/runs/{run_id}")
         run = self.get(f"/actions/runs/{run_id}/attempts/1")
-        for row in (latest, run):
+        for row in ((run,) if published else (latest, run)):
             require(isinstance(row, dict) and type(row.get("id")) is int and row["id"] == run_id
                     and type(row.get("run_attempt")) is int and row["run_attempt"] == 1
                     and type(row.get("workflow_id")) is int and row["workflow_id"] == self.workflow_id
@@ -103,9 +103,14 @@ git_root is an existing complete checkout; reads never fetch or execute source.
                 repo = row.get(field)
                 require(isinstance(repo, dict) and type(repo.get("id")) is int and repo["id"] == self.repository_id
                         and repo.get("full_name") == self.repository, "run repository identity conflicts")
-        require(latest.get("conclusion") == run.get("conclusion"), "latest and exact-attempt run views disagree")
+        require(published or latest.get("conclusion") == run.get("conclusion"), "latest and exact-attempt run views disagree")
         self.ancestor(control)
         self.git("merge-base", "--is-ancestor", self.producer_revision, control)
+        if published:
+            # Only the outer release audit may authorize this mode, and only
+            # for PUBLISHED. Immutable tag/signature/assets/v3 marker remain
+            # mandatory there; this is provenance, not fresh coverage proof.
+            return run, []
         jobs = self.pages(f"/actions/runs/{run_id}/attempts/1/jobs", "jobs")
         require(all(type(j.get("run_id")) is int and j["run_id"] == run_id and type(j.get("run_attempt")) is int
                     and j["run_attempt"] == 1 and j.get("head_sha") == control and j.get("status") == "completed" for j in jobs),
@@ -156,8 +161,16 @@ git_root is an existing complete checkout; reads never fetch or execute source.
         return result
 
     def verify(self, reference, *, run_id, target_revision):
+        return self.verify_run(reference, run_id=run_id, target_revision=target_revision)[0]
+
+    def verify_run(self, reference, *, run_id, target_revision, published=False):
+        """Return (verdict, authenticated executor); published returns no verdict.
+
+        Published provenance alone grants no release authority. Its caller must
+        still prove the immutable tag, signer, Release, assets and v3 marker.
+        """
         try:
-            return self._verify(reference, run_id=run_id, target_revision=target_revision)
+            return self._verify(reference, run_id=run_id, target_revision=target_revision, published=published)
         except BatchEvidenceError:
             raise
         except (ValueError, TypeError, KeyError, AttributeError, zipfile.BadZipFile, RuntimeError):
@@ -165,7 +178,7 @@ git_root is an existing complete checkout; reads never fetch or execute source.
         except (OSError, subprocess.SubprocessError):
             raise BatchEvidenceError("external-error", "local read-only provenance could not complete") from None
 
-    def _verify(self, reference, *, run_id, target_revision):
+    def _verify(self, reference, *, run_id, target_revision, published=False):
         ref = parse_reference(reference)
         request = ref["request"]
         require(sha(target_revision) and request["target"] == target_revision, "candidate target differs from frozen request")
@@ -183,9 +196,11 @@ git_root is an existing complete checkout; reads never fetch or execute source.
         workflow = self.get("/actions/workflows/self-test-report.yml")
         require(isinstance(workflow, dict) and type(workflow.get("id")) is int and workflow["id"] == self.workflow_id
                 and workflow.get("path") == WORKFLOW, "stable workflow source is not independently authenticated")
-        origin, _ = self.run(request["origin_run"]["run_id"], request["control"])
-        executor, jobs = self.run(run_id, ref["executor_control_revision"], expected_event=ref["executor_event"])
+        origin, _ = self.run(request["origin_run"]["run_id"], request["control"], published=published)
+        executor, jobs = self.run(run_id, ref["executor_control_revision"], expected_event=ref["executor_event"], published=published)
         require(executor.get("conclusion") == "success", "executor run is not successful full-candidate evidence")
+        if published:
+            return None, deepcopy(executor)
         for path in shared.EXECUTION_SOURCES:
             for revision in (request["control"], executor["head_sha"]):
                 require(self.git("cat-file", "-t", f"{revision}:{path}").strip() == b"blob", "execution source is not a Git blob")
@@ -227,4 +242,4 @@ git_root is an existing complete checkout; reads never fetch or execute source.
                 "execution projection types differ from independently resolved identity and selection")
         shared.validate_job_observations(checked, producers[0], jobs)
         require(checked["status"] == "passed" and checked["evidence_digest"] == ref["evidence_digest"], "full candidate verdict is not the referenced passed evidence")
-        return deepcopy(checked)
+        return deepcopy(checked), deepcopy(executor)

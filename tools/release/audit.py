@@ -42,7 +42,7 @@ from scripts.version import _provider_source_package_sha256
 _REPORT_SCHEMA = "lmdj.release-audit.v1"
 _SUCCESS_CODES = frozenset(("ok", "ok-with-historical-exception"))
 _CODES = frozenset((*_SUCCESS_CODES, "missing", "conflict", "unauthorized", "unverifiable", "external-error"))
-_MARKER = re.compile(r"<!-- (lmdj\.release-plan-marker\.v[12]) (\{[^\r\n]*\}) -->")
+_MARKER = re.compile(r"<!-- (lmdj\.release-plan-marker\.v[123]) (\{[^\r\n]*\}) -->")
 _STATIC_PROJECTION_MESSAGE = (
     "active Product, Assembly lock or immutable snapshot projection is inconsistent"
 )
@@ -754,7 +754,7 @@ def _ci_problem(context: object, intent: ReleaseIntent) -> AuditFinding | None:
     audited from immutable evidence instead, because a bounded artifact
     retention must never be able to rewrite recorded history.
     """
-    result = verify_release_ci(context.github, policy=context.policy, intent=intent)
+    result = verify_release_ci(context.github, policy=context.policy, intent=intent, git_root=context.repo_root)
     if result.code == "ok":
         return None
     return AuditFinding(result.code, intent.tag, result.message, result.sources)
@@ -860,7 +860,7 @@ def _release_problem(
         return "GitHub Release target_commitish conflicts with canonical identity"
     markers = _MARKER.findall(release.body)
     if not markers:
-        return None if allow_missing_marker and intent.self_test_evidence is None else "GitHub Release plan marker is missing"
+        return None if allow_missing_marker and intent.self_test_evidence is None and intent.batch_test_evidence is None else "GitHub Release plan marker is missing"
     if len(markers) != 1 or release.body.count("lmdj.release-plan-marker.") != 2:
         return "GitHub Release plan marker is ambiguous"
     try:
@@ -875,8 +875,20 @@ def _release_problem(
     except ValueError:
         return "GitHub Release plan marker is invalid"
     reference = intent.self_test_evidence
-    schema = "lmdj.release-plan-marker.v2" if reference is not None else "lmdj.release-plan-marker.v1"
+    batch_reference = intent.batch_test_evidence
+    if reference is not None and batch_reference is not None:
+        return "GitHub Release intent has mixed complete evidence references"
+    schema = "lmdj.release-plan-marker.v3" if batch_reference is not None else "lmdj.release-plan-marker.v2" if reference is not None else "lmdj.release-plan-marker.v1"
     keys = {"schema", "plan_schema", "plan_sha256", "tag", "tag_object", "target_revision", "intent"}
+    if batch_reference is not None:
+        keys.add("ci")
+        expected_ci = {
+            "run_id": intent.merged_main_run_id, "event": batch_reference["executor_event"],
+            "head_sha": batch_reference["executor_control_revision"], "conclusion": "success",
+            "target_revision": intent.target_revision, "batch_test_evidence": batch_reference,
+        }
+        if not isinstance(marker, dict) or canonical_json(marker.get("ci")) != canonical_json(expected_ci):
+            return "why: GitHub Release permanent marker does not bind the exact batch reference; remedy: investigate published evidence and intent drift; do not backfill or rewrite history"
     if reference is not None:
         keys.add("ci")
         expected_ci = {

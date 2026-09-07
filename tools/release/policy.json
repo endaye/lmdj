@@ -3,7 +3,13 @@
   "repository": "endaye/lmdj",
   "branch": "main",
   "blocking_workflow": "Core CI",
-  "prospective_ci_protocol": "self-test-v1",
+  "prospective_ci_protocol": "complete-test-v2",
+  "batch_evidence_source": {
+    "repository_id": 1286600062,
+    "workflow_id": 352307416,
+    "workflow_path": ".github/workflows/self-test-report.yml",
+    "producer_revision": "24ee0c4f79e0fe21a89be8813cb0566948583aa4"
+  },
   "fingerprints": {
     "product": "2B5EE362F058800036AD4FB5116ECE156F954D29",
     "checksum": "CB928A6E89DE498851688EF1AAC3E7019FC1478B"

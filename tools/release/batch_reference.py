@@ -1,4 +1,4 @@
-"""Closed, inactive batch reference schema. Standard library only; no I/O."""
+"""Closed batch reference schema. Standard library only; no I/O."""
 from collections.abc import Mapping
 from copy import deepcopy
 import re

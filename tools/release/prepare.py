@@ -12,6 +12,7 @@ import tempfile
 from typing import Callable, Protocol
 
 from .ci_evidence import verify_release_ci
+from .batch_reference import thaw
 from .github_api import (
     BranchProjection,
     CiScopeProjection,
@@ -201,7 +202,7 @@ def _verify_ci(context: PrepareContext, intent: ReleaseIntent) -> RunProjection:
     from immutable tag, Release, assets and plan marker instead: its artifact
     has a bounded retention and must not be able to invalidate history.
     """
-    result = verify_release_ci(context.github, policy=context.policy, intent=intent)
+    result = verify_release_ci(context.github, policy=context.policy, intent=intent, git_root=context.repo_root)
     if result.code == "external-error":
         raise PrepareError("exact target CI projection is unavailable")
     if result.code == "unverifiable":
@@ -305,6 +306,9 @@ def _plan_document(
         document["snapshot"] = intent.snapshot
     if intent.self_test_evidence is not None:
         document["ci"]["self_test_evidence"] = dict(intent.self_test_evidence)
+        document["ci"]["target_revision"] = intent.target_revision
+    if intent.batch_test_evidence is not None:
+        document["ci"]["batch_test_evidence"] = thaw(intent.batch_test_evidence)
         document["ci"]["target_revision"] = intent.target_revision
     return document
 

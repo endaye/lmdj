@@ -1,11 +1,15 @@
 # Full-batch release evidence activation — Task B proposal
 
-Status: design reviewed; root approved B1 implementation only. B2 remains
-design-pending and every shipping/activation boundary remains held.
+Status: design reviewed; B1 merged as #837, main
+`2b8a44e275942e8e37be0d70e0c101cfd9b335b5`. Root authorized B2 local
+implementation of the seventeen files below; the coordinated C1 window has
+ended and B2 shipping still requires current-head review. Earlier HOLD statements
+below are historical stage records, not current claims about Task A/B1.
 Base for this draft: Task A plus reviewed follow-up
 `761f2cef36e1a1f098287ed25b6487b2d1e67dda`. Both remain held from shipping.
-This draft does not activate a policy, edit intent data, select a tag, dispatch
-tests, audit a Release or authorize any release/deployment transition.
+The original draft did not activate a policy. B2 now changes only local policy
+and consumer code; it does not edit intent data, select a tag, dispatch tests,
+audit a Release or authorize any release/deployment transition.
 
 ## Actual source baseline and authority
 
@@ -117,12 +121,14 @@ Declared files:
 
 - `tools/release/ci_evidence.py`;
 - `tools/release/batch_evidence.py` (separate prospective/history interfaces);
+- `tools/release/batch_reference.py` (root-approved removal of stale inactive docstring only);
 - `tools/release/policy.json`;
 - `tools/release/prepare.py`;
 - `tools/release/audit.py`;
 - `tools/release/transitions.py`;
 - new `tests/build/release_batch_binding_test.py`;
 - `tests/build/release_self_test_evidence_test.py`;
+- `tests/build/release_model_test.py` (root-approved current-policy assertion migration);
 - `tests/build/release_skill_test.py`;
 - `.agents/skills/lmdj-release/SKILL.md`;
 - `docs/governance/version-management.md`;
@@ -222,6 +228,67 @@ explicitly authorized exact full test and read-only consumer run must verify
 the complete real chain, without performing release/tag/deployment operations.
 
 ## Version Management
+
+### B2 local activation implementation
+
+This Task starts from main `16e822775d6357861ba37e5a93314ab8995e5d61`
+(#838, immediately after B1 #837) in its own
+`feat/ci-batch-release-activation` worktree. It changes exactly the
+seventeen declared B2 files. The current policy becomes `complete-test-v2` with
+the previously observed repository/workflow/path/producer lower bound; no
+release-intent data, product/version identity, workflow or runner state changes.
+
+The existing consumer now returns its authenticated executor projection with
+the independently recomputed verdict. The separate published mode only reads
+recorded first-attempt provenance and never claims fresh full coverage from
+that path. The release route permits it only for `Disposition.PUBLISHED`;
+actual audit still checks immutable tag, signer, Release, assets and v3 marker.
+New candidates still require latest attempt one, retained original controller
+attestations and three-file evidence, real API job identities and current policy.
+No reference or two references cannot fall through to old fourteen-lane scope.
+Old self-test v2 and legacy v1 markers are not rewritten.
+
+The new binding journey uses real temporary Git and the production read-only
+HTTP adapter through prepare, audit and transition orchestration. Far-side
+assertions inspect the actual local plan, canonical digest and v3 body marker;
+they reject absent tag/Release, wrong signer, altered assets, old markers,
+target/event drift, missing/expired evidence and later attempts for candidates.
+Recorded published history remains valid after ephemeral deletion and a later
+failed rerun, but not permanent proof drift. Fake signing/profile/GitHub
+mutation adapters remain confined to temporary fixtures; no actual release
+operation or remote release audit is executed. The successful fixture chain
+is not a real platform full-passed O1 candidate acceptance.
+
+The skill-creator instructions require a narrow skill change: only the full
+evidence subsection is updated, including the real manual `target` input.
+All per-mutation authorization, exact-tag audit, publication/deployment and
+history boundaries remain intact. `quick_validate.py` and meaningful skill
+contracts are run, alongside the full release, CI, staged ownership and Portal
+checks. The current portal routes are updated in this Task; existing source
+diagrams do not depict this CI-reference protocol and need no unrelated edits.
+
+No new pitfall recurrence is claimed for fixture construction errors corrected
+during this Task; production invariants are captured in behavior tests. The
+existing #726 fake-tool-stub escalation remains open. Real full-passed batch
+acceptance, B2 shipping and all release/tag/deployment actions remain separate
+unperformed boundaries.
+
+Staged verification: 66 ownership tests and whitespace checks pass; complete
+CI discovery passes 1,514 tests without skips using actionlint 1.7.12. All 11
+skill contracts and skill-creator `quick_validate.py` pass. Portal check reports
+54 passes and three missing-package failures (glob, gray-matter, cheerio), no
+skips; this is a disclosed verification gap, not a Portal pass.
+The source-policy revalidation initially rejected the model's MappingProxy
+and the real binding journeys went red. Passing a detached JSON copy to the
+same strict parser fixes that incompatibility; a dedicated regression still
+rejects unknown keys, wrong workflow paths and boolean numeric identities.
+Final release discovery passes all 425 tests without skips, including 14 new
+batch-binding journeys, 19 old self-test evidence tests and all unchanged
+legacy release/prepare/audit/transition regressions. The final binding fixtures
+also keep artifact expiry relative to the production clock, rather than
+silently expiring on a fixed calendar date. Root independently reviewed the
+working diff and ran 14 binding, 19 old self-test and 23 model tests; final
+commit review remains required before shipping.
 
 ### B1 fresh-main integration evidence
 
