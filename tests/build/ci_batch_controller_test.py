@@ -480,9 +480,51 @@ class RealGitTests(unittest.TestCase):
         self.inputs.refresh()
         self.assertEqual(self.inputs.interval_selection(self.base, self.tip, POLICY)["kind"], "none")
 
-    def test_missing_scope_mapper_conservatively_selects_full(self):
+    def test_missing_mapper_preserves_complete_git_floor(self):
+        note = self.root / "docs/notes/n.md"
+        note.parent.mkdir(parents=True)
+        note.write_text("explanatory note")
+        self.tip = self.commit()
         self.inputs.advice = None
         self.inputs.refresh()
+        selection = self.inputs.interval_selection(self.base, self.tip, POLICY)
+        self.assertEqual(selection["kind"], "none",
+            "why: missing advice was confused with missing Git inventory; remedy: preserve complete deterministic scope per spec section 3.3")
+        self.assertTrue(any("review" in reason and "remedy:" in reason for reason in selection["reasons"]))
+
+    def test_incomplete_advice_preserves_host_floor_and_valid_additions(self):
+        path = "apps/creator-web/src/fixture.ts"
+        target = self.root / path
+        target.parent.mkdir(parents=True)
+        target.write_text("// fixture")
+        self.tip = self.commit()
+        self.inputs.advice = lambda interval: {"complete": False, "labels": ["test:web_runtime_host"]}
+        self.inputs.refresh()
+        selected = self.inputs.interval_selection(self.base, self.tip, POLICY)
+        expected = test_scope.select(POLICY, [path], ["test:web_runtime_host"])
+        self.assertEqual(selected["suites"], expected["suites"])
+        self.assertEqual(selected["kind"], "focused")
+
+    def test_missing_advice_never_reduces_contract_or_unknown_floor(self):
+        self.inputs.advice = None
+        for path in ("contracts/new.json", "unknown-future-area/file.txt"):
+            with self.subTest(path=path):
+                target = self.root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("fixture")
+                self.tip = self.commit()
+                self.inputs.refresh()
+                self.assertEqual(self.inputs.interval_selection(self.base, self.tip, POLICY)["suites"], sorted(POLICY.suite_ids))
+
+    def test_incomplete_advice_full_still_dominates_docs(self):
+        self.inputs.advice = lambda interval: {"complete": False, "labels": ["test:full"]}
+        self.inputs.refresh()
+        self.assertEqual(self.inputs.interval_selection(self.base, self.base, POLICY)["kind"], "full")
+
+    def test_missing_policy_with_incomplete_advice_still_requires_full(self):
+        self.inputs.advice = None
+        self.inputs.refresh()
+        self.inputs.policy_at = lambda sha: (_ for _ in ()).throw(batch.BatchError("fixture missing policy"))
         self.assertEqual(self.inputs.interval_selection(self.base, self.base, POLICY)["kind"], "full")
 
     def test_tag_object_is_not_main_commit(self):

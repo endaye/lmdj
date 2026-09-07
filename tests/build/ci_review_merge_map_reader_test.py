@@ -5,6 +5,8 @@ import io
 import json
 from pathlib import Path
 import sys
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 import zipfile
@@ -14,6 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts/ci"))
 import review_merge_map_reader as reader
 import review_merge_map as mapping
 import test_scope
+import batch_controller
 
 A, B, C = (c * 40 for c in "abc")
 POLICY = test_scope.load_policy(ROOT)
@@ -41,7 +44,9 @@ class ReaderTests(unittest.TestCase):
                                                                ("Publish exact-head review and scope", "skipped")])]
         self.source = b"trusted workflow"
         self.interval = {"base_sha": B, "target_sha": C, "paths": ["docs/notes/a.md"],
-                         "commits": [{"sha": C, "parent_sha": B, "paths": ["docs/notes/a.md"]}]}
+                         "changed_path_digest": self.record["changed_path_digest"],
+                         "commits": [{"sha": C, "parent_sha": B,
+                                      "changes": [{"status": "A", "paths": ["docs/notes/a.md"]}]}]}
         self.inputs = mock.Mock(repository=ROOT, main=C, control_sha=B)
         self.inputs.policy_at.return_value = POLICY
         self.inputs._git.side_effect = lambda *args: (B + "\n" + C).encode() if args[0] == "rev-list" else b"trusted workflow"
@@ -92,8 +97,55 @@ class ReaderTests(unittest.TestCase):
         self.assertFalse(self.call()["complete"])
 
     def test_unmapped_second_commit_cannot_be_lost_in_net_paths(self):
-        self.interval["commits"].append({"sha": "d" * 40, "parent_sha": C, "paths": ["docs/notes/a.md"]})
+        self.interval["commits"].append({"sha": "d" * 40, "parent_sha": C,
+                                         "changes": [{"status": "M", "paths": ["docs/notes/a.md"]}]})
         self.assertFalse(self.call()["complete"])
+
+    def test_real_git_interval_retains_valid_ai_suggestion_through_final_scope(self):
+        # Real interval data, not a fake commit['paths'] shape. HTTP receipts
+        # remain fixtures; this does not claim real Actions producer authority.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(root),
+                    '-c', 'user.name=CI fixture', '-c', 'user.email=ci-fixture@example.invalid',
+                    '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', *args], text=True).strip()
+            git('init', '-q')
+            for name in ('scope_policy.json', 'self_test_policy.json', 'test_scope_policy.json'):
+                path = root / 'scripts/ci' / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((ROOT / 'scripts/ci' / name).read_bytes())
+            source = root / '.github/workflows/pr-review.yml'
+            source.parent.mkdir(parents=True)
+            source.write_bytes(self.source)
+            git('add', '.')
+            git('commit', '-qm', 'trusted policy fixture')
+            base = git('rev-parse', 'HEAD')
+            note = root / 'docs/notes/a.md'
+            note.parent.mkdir(parents=True)
+            note.write_text('Explanatory document; AI adds a consumer test.\n')
+            git('add', '.')
+            git('commit', '-qm', 'actual interval fixture')
+            tip = git('rev-parse', 'HEAD')
+            identity = {**self.identity, 'base_sha': base, 'head_sha': tip, 'control_sha': base}
+            record = test_scope.build_record(POLICY, changed_paths=['docs/notes/a.md'],
+                                            ai_labels=['test:creator'], **identity)
+            self.document = mapping.build_map(repository='endaye/lmdj', repository_id=5, pr_number=7,
+                head_sha=tip, merge_sha=tip, control_sha=base, run_id=2, run_attempt=1, workflow_id=42,
+                changed_paths=['docs/notes/a.md'], scope_records=[{'record': record, 'review_id': 3, 'artifact_id': 4}],
+                complete=True, gaps=[])
+            self.artifacts[0]['name'] = f'pr-review-merge-map-{tip}-2-1'
+            self.run['head_sha'] = tip
+            self.inputs = batch_controller.GitInputs(root, base, lambda: tip)
+            self.inputs.refresh()
+            self.consumer = reader.MergeMapReader('endaye/lmdj', 5, 42, self.inputs, self.get, self.download)
+            self.inputs.advice = self.consumer
+            actual = test_scope.collect_interval(root, base, tip)
+            self.assertEqual(self.consumer(actual), {'complete': True, 'labels': ['test:creator']},
+                'why: real commit shape lost valid AI advice; remedy: derive per-commit paths from actual changes')
+            selected = self.inputs.interval_selection(base, tip, POLICY)
+            self.assertEqual(selected['kind'], 'focused')
+            self.assertEqual(selected['suites'], ['creator'])
 
     def test_failed_mapper_cannot_authorize_none(self):
         self.run["conclusion"] = "failure"
@@ -143,11 +195,26 @@ class ReaderTests(unittest.TestCase):
         self.change_map(changed_paths=["docs/notes/b.md"])
         self.assertFalse(self.call()["complete"])
 
+    def test_mapping_must_include_both_actual_rename_paths(self):
+        paths = ['docs/notes/a.md', 'docs/notes/old.md']
+        self.interval['commits'][0]['changes'] = [{'status': 'R100', 'paths': list(reversed(paths))}]
+        self.interval['paths'] = paths
+        self.assertFalse(self.call()['complete'])
+        self.change_map(changed_paths=paths)
+        self.assertTrue(self.call()['complete'])
+
+    def test_incomplete_mapping_keeps_authenticated_partial_ai_advice(self):
+        record = test_scope.build_record(POLICY, changed_paths=['docs/notes/a.md'],
+                                        ai_labels=['test:creator'], **self.identity)
+        self.change_map(complete=False, gaps=['another review unavailable'],
+                        scope_records=[{'record': record, 'review_id': 3, 'artifact_id': 4}])
+        self.assertEqual(self.call(), {'complete': False, 'labels': ['test:creator']})
+
     def test_historical_policy_is_independently_recomputed(self):
         self.inputs.policy_at.side_effect = ValueError("historical policy unavailable")
         self.assertFalse(self.call()["complete"])
 
-    def test_incomplete_map_remains_full(self):
+    def test_incomplete_map_preserves_unavailability_not_a_scope_verdict(self):
         self.change_map(complete=False, gaps=["scope unavailable"])
         self.assertFalse(self.call()["complete"])
 

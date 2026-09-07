@@ -87,7 +87,8 @@ class MergeMapReader:
         workflow = base64.b64decode(source["content"].replace("\n", ""), validate=True)
         mapping.require(workflow == self.inputs._git("show", document["control_sha"] + ":.github/workflows/pr-review.yml"),
                         "actual run workflow differs from trusted main control")
-        mapping.require(document["changed_paths"] == commit["paths"], "mapping paths differ from actual first-parent delta")
+        commit_paths = sorted({path for change in commit["changes"] for path in change["paths"]})
+        mapping.require(document["changed_paths"] == commit_paths, "mapping paths differ from actual first-parent delta")
         labels = set()
         current = self.inputs.policy_at(self.inputs.control_sha)
         for item in document["scope_records"]:
@@ -116,18 +117,18 @@ class MergeMapReader:
                 matches = [a for a in artifacts if a.get("name", "").startswith(f"pr-review-merge-map-{commit['sha']}-")]
                 if not matches:
                     complete = False
-                    self.diagnostics.append("why: commit mapping is missing; remedy: use full until authenticated evidence is available")
+                    self.diagnostics.append("why: commit mapping is missing; remedy: use verified Git/policy rules and restore authenticated advice")
                 for artifact in matches:
                     try:
                         valid, additions = self._authenticate(artifact, commit)
                         complete = complete and valid
                         labels.update(additions)
                         if not valid:
-                            self.diagnostics.append("why: mapping reports incomplete evidence; remedy: preserve full fallback")
+                            self.diagnostics.append("why: mapping reports incomplete evidence; remedy: preserve verified Git/policy floor and valid advice")
                     except Exception:
                         complete = False
-                        self.diagnostics.append("why: mapping cannot be authenticated; remedy: preserve full fallback and reconcile receipts")
+                        self.diagnostics.append("why: mapping cannot be authenticated; remedy: use verified Git/policy rules and reconcile receipts")
         except Exception:
             complete = False
-            self.diagnostics.append("why: mapping inventory or Git history unavailable; remedy: use full and restore authenticated read access")
+            self.diagnostics.append("why: mapping inventory or Git history unavailable; remedy: require independent complete Git/policy verification or full/blocked fallback")
         return {"complete": complete, "labels": sorted(labels)}
