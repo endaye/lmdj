@@ -128,14 +128,30 @@ Guru Meditation Error: Core  1 panic'ed (LoadProhibited).   EXCVADDR: 0x00000004
 
 **关键约束：这行补丁不能只改 `managed_components/`。** component manager 每次重新解析
 依赖都会把该目录还原，补丁随之消失，而症状是启动即崩的 boot loop——不是编译失败，所以
-不会在构建阶段被发现。落点选 `v6.1` 就意味着必须给它一个持久化载体，可选：
+不会在构建阶段被发现。
 
-- 在 `idf_component.yml` 里用 `override_path` 指向本地 M5GFX 检出；
-- 或在工程 `components/` 下放同名本地 component，覆盖托管副本；
-- 或等上游修复后把版本上浮到含修复的 M5GFX。
+落点选 `v6.1` 因此必须给补丁一个持久化载体。已采用的是 `override_path`：M5GFX `0.2.28`
+的 registry 副本落到工程内 `vendor/m5gfx`，只改一个文件，差异以 patch 文件留档，
+`main/idf_component.yml` 把依赖指向该路径。干净重解依赖后 `dependencies.lock` 记录的是
+`source: {path: vendor/m5gfx, type: local}`（本地来源，无 `component_hash`），
+`managed_components/` 里不再出现 m5gfx——覆盖确实生效，而不只是声明。
 
-无论选哪个，都必须有一条冒烟检查能在 `M5.begin()` 之后确认板子没有进入 boot loop，
-否则这个补丁的丢失是静默的。
+被覆盖路径不受 registry 校验，因此 vendored 副本里的 `CHECKSUMS.json` 与被改文件不再
+相符；patch 文件才是差异的记录。退役路径是：上游修复发布后删掉 vendored 副本、去掉
+`override_path`、上浮版本、重跑冒烟检查。
+
+**冒烟检查是这个机制的必要一半，并且经过双向验证。** 摘掉补丁之后 `idf.py build` **仍然
+成功**——这正是该失败模式的要害，所以门必须建在真机上而不是构建上：
+
+| | 补丁在 | 补丁被摘掉 |
+| --- | --- | --- |
+| `idf.py build` | 成功 | **仍然成功** |
+| 冒烟检查退出码 | 0 | 1 |
+| 15 秒内 boots / panics | 2 / 0 | 95 / 94 |
+
+检查读 15 秒串口，断言无 `Guru Meditation`、重启次数不超过自身的复位序列、bring-up 报告
+打印完整、板型识别为 `MATCH`；失败信息按 `why:` / `remedy:` 直接点名丢失的文件与那一行。
+一个从未见过红色的门不能证明任何事，所以上表的右列是实际跑出来的，不是设计意图。
 
 已报上游：[m5stack/M5GFX#278](https://github.com/m5stack/M5GFX/issues/278)。同时观察到
 ESP-IDF 6.1 一侧的问题：`spi_bus_initialize()` 在自己的错误清理路径里 panic，而不是把
@@ -188,6 +204,36 @@ M5GFX（已核对 `memset(&buscfg, ~0u, ...)` 原样在 842 行）。
 
 **这里的数字不能当测量结果用。** `internal free` 与最大连续块是这个点屏 demo 的值，不是
 Core 的内存预算；本节唯一的用途是回答“M5 路线在该版本上是否可用”。
+
+### 1.4 ES8311 音频路径已出声
+
+§5 此前只记到“`M5.Speaker` 报告 enabled”，那距离“音频链路通了”还有一段。现已在同一块
+板子上出声，两条路径都由人工听音确认：
+
+- `tone()`：M5Unified 自带发生器，最便宜的可听证明；
+- `playRaw()`：**在设备上生成的 int16 PCM**，按 codec 自己的采样率喂入
+  （10560 samples / 21120 字节 / 220 ms）。
+
+第二条才是与本 Core 相关的那条——LMDJ 产出的是采样，不是音调。两条路径播放同一组
+C-E-G-C，听感一致。
+
+codec 侧的实际配置（`M5.Speaker.config()` 读回）：
+
+| 项 | 值 | 说明 |
+| --- | --- | --- |
+| sample rate | 48000 Hz | 单声道 |
+| `use_dac` | false | 走 I2S codec；ESP32-S3 本身没有 DAC |
+| `buzzer` | false | 是真 codec 输出，不是蜂鸣器 |
+| DMA | 8 × 256 samples | 48 kHz 下约 **42.7 ms** |
+| mixer task | priority 2，core `-1`（未固定） | M5Unified 默认 |
+
+**42.7 ms 的 DMA 深度是这里唯一有前瞻价值的数字**：它是 M5Unified 默认给出的缓冲量，
+本 Core 的音频回调将来必须在这个约束内工作。它是配置读回值，不是测量结果。
+
+**本节不产生任何时序结论。** 播放调用返回耗时稳定在 171–181 ms，而缓冲区是 220 ms；
+六轮循环重复一致。最可能的解释是 `isPlaying()` 在最后一块 DMA 尚未排空时就已归零
+（8 × 256 ≈ 42.7 ms 与该差值接近得可疑），但这需要真正的时序方法才能定论，而不是靠一个
+5 ms 轮询的忙等循环。因此它被记为 §5 的一个开放问题，不作为 quiescence 语义的结论。
 
 ## 2. 修正：atomic 退化的条件比原文第 3 节记录的更宽
 
@@ -337,13 +383,13 @@ component、target 或 CI 通道，本节只描述开发机上的外部工具链
 
 - 本 Core 在 `gnu++26` + warnings-as-errors + Picolibc 下的编译结果。1.2 节只覆盖了格式串
   与 `int32_t` 这一类，Picolibc 与 `std::filesystem` 一侧完全没碰。
-- 1.1 节那行补丁的持久化载体尚未选定，也还没有能发现补丁丢失的冒烟检查。
 - ESP-IDF 6.1 一侧 `spi_bus_initialize()` 错误路径 panic 的问题尚未向 Espressif 提交。
 - [M5GFX#278](https://github.com/m5stack/M5GFX/issues/278) 的上游处置结果。
 - 任何 callback deadline、固件尺寸、峰值内存、linker map 归因或 underrun 数字。原文 10.2
   节要求的证据一项都还没有产生。1.3 节的堆数字来自一个点屏 demo，不能当测量结果引用。
-- ES8311 的实际音频输出。1.3 节只确认 `M5.Speaker` / `M5.Mic` 报告 enabled，没有出过声，
-  也没有测过 I2S。
+- `M5.Speaker.isPlaying()` 的 quiescence 语义：它似乎在最后一块 DMA 排空前就归零
+  （1.4 节）。这影响任何“等播放结束”的逻辑，需要用真正的时序方法确认，不能靠忙等观察。
+- `M5.Mic` 的实际采集。1.4 节只让扬声器出了声，麦克风仍然只是报告 enabled。
 - IDF-9032 的内容与状态。
 
 ## 6. 版本与文档
