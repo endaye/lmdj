@@ -11,7 +11,7 @@ import shutil
 import tempfile
 from typing import Callable, Protocol
 
-from .ci_evidence import verify_exact_main_ci
+from .ci_evidence import verify_release_ci
 from .github_api import (
     BranchProjection,
     CiScopeProjection,
@@ -195,21 +195,13 @@ def _verify_key_roles(context: PrepareContext, intent: ReleaseIntent) -> None:
 def _verify_ci(context: PrepareContext, intent: ReleaseIntent) -> RunProjection:
     """Require full exact-main evidence before any prospective release step.
 
-    `prepare` only ever reaches this with a `releasable` intent, so it always
-    requires the retained full scope manifest and the same-run Gate. The shared
+    `prepare` only ever reaches this with a `releasable` intent, so current
+    policy requires its retained complete self-test verdict. The shared
     transition path also verifies an already `published` intent, which is read
-    from immutable tag, Release and asset evidence instead: its scope artifact
+    from immutable tag, Release, assets and plan marker instead: its artifact
     has a bounded retention and must not be able to invalidate history.
     """
-    result = verify_exact_main_ci(
-        context.github,
-        repository=context.policy.repository,
-        branch=context.policy.branch,
-        workflow=context.policy.blocking_workflow,
-        target_revision=intent.target_revision,
-        run_id=intent.merged_main_run_id,
-        require_full_scope=intent.disposition is Disposition.RELEASABLE,
-    )
+    result = verify_release_ci(context.github, policy=context.policy, intent=intent)
     if result.code == "external-error":
         raise PrepareError("exact target CI projection is unavailable")
     if result.code == "unverifiable":
@@ -311,6 +303,9 @@ def _plan_document(
         document["channel"] = plan.channel
     if intent.snapshot is not None:
         document["snapshot"] = intent.snapshot
+    if intent.self_test_evidence is not None:
+        document["ci"]["self_test_evidence"] = dict(intent.self_test_evidence)
+        document["ci"]["target_revision"] = intent.target_revision
     return document
 
 

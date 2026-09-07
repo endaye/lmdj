@@ -10,6 +10,7 @@ expected identities are written here independently of the production module.
 from __future__ import annotations
 
 import io
+import base64
 import json
 from pathlib import Path
 import sys
@@ -30,6 +31,7 @@ from tools.release.github_api import (  # noqa: E402
     HttpResponse,
     RunJobProjection,
     RunProjection,
+    SelfTestRunProjection,
 )
 
 
@@ -622,6 +624,109 @@ class ReleaseGitHubApiTest(unittest.TestCase):
         self.assertNotIsInstance(captured.exception, CiScopeUnavailableError)
         self.assertNotIsInstance(captured.exception, CiScopeConflictError)
         self.assertNotIn("fixture outage", str(captured.exception))
+
+
+class SelfTestGitHubApiTest(unittest.TestCase):
+    def setUp(self):
+        self.transport = FakeTransport()
+        self.client = GitHubClient(http_transport=self.transport, token=TOKEN)
+        self.run = SelfTestRunProjection(RUN_ID, "workflow_dispatch", TARGET, "main", "Core CI", "completed", "success", 1, 11)
+        self.prefix = f"/repos/{REPOSITORY}"
+        self.repo = {"id": 11, "full_name": REPOSITORY}
+        self.raw = run_document(run_attempt=1, repository=self.repo, head_repository=self.repo)
+        self.transport.json_route(f"{self.prefix}/actions/runs/{RUN_ID}", self.raw)
+        self.transport.json_route(f"{self.prefix}/actions/workflows/ci.yml", workflow_document())
+    def test_dynamic_name_is_not_authority_but_workflow_id_path_and_repo_are(self):
+        self.raw["name"] = "arbitrary display title"
+        self.transport.json_route(f"{self.prefix}/actions/runs/{RUN_ID}", self.raw)
+        self.assertEqual(self.client.get_self_test_run(REPOSITORY, RUN_ID), self.run)
+        for field, value in (("workflow_id", 42), ("path", ".github/workflows/other.yml"),
+                             ("head_repository", {"id": 12, "full_name": REPOSITORY}),
+                             ("id", RUN_ID + 1), ("run_attempt", True)):
+            with self.subTest(field=field):
+                self.transport.json_route(f"{self.prefix}/actions/runs/{RUN_ID}", dict(self.raw, **{field: value}))
+                with self.assertRaises(GitHubApiError):
+                    self.client.get_self_test_run(REPOSITORY, RUN_ID)
+    def test_main_history_accepts_old_or_new_target_and_rejects_divergence(self):
+        tip = "d" * 40
+        producer = "22247897e9163a3f34e15f564bec133419d1f177"
+        self.transport.json_route(f"{self.prefix}/branches/main", {"name": "main", "protected": True, "commit": {"sha": tip}})
+        comparisons = ((producer, TARGET), (TARGET, tip), (BASE, tip))
+        for base, head in comparisons:
+            self.transport.json_route(f"{self.prefix}/compare/{base}...{head}", {"status": "ahead"})
+        self.client.verify_self_test_provenance(REPOSITORY, self.run, BASE)
+        for base, head in comparisons:
+            url = f"{self.prefix}/compare/{base}...{head}"
+            for status in ("behind", "diverged", "unknown", None):
+                with self.subTest(comparison=url, status=status):
+                    self.transport.json_route(url, {"status": status})
+                    with self.assertRaises(CiScopeConflictError):
+                        self.client.verify_self_test_provenance(REPOSITORY, self.run, BASE)
+            self.transport.json_route(url, {"status": "ahead"})
+        self.assertTrue(all(request[0] == "GET" for request in self.transport.requests))
+    def test_recorded_attempt_is_fetched_independently_of_latest_rerun(self):
+        self.transport.json_route(f"{self.prefix}/actions/runs/{RUN_ID}", dict(self.raw, run_attempt=2, conclusion="failure"))
+        endpoint = f"{self.prefix}/actions/runs/{RUN_ID}/attempts/1"
+        self.transport.json_route(endpoint, self.raw)
+        latest = self.client.get_self_test_run(REPOSITORY, RUN_ID)
+        historical = self.client.get_self_test_run(REPOSITORY, RUN_ID, run_attempt=1)
+        self.assertEqual((latest.run_attempt, latest.conclusion), (2, "failure"))
+        self.assertEqual((historical.run_attempt, historical.conclusion), (1, "success"))
+        self.transport.json_route(endpoint, dict(self.raw, run_attempt=2))
+        with self.assertRaises(CiScopeConflictError):
+            self.client.get_self_test_run(REPOSITORY, RUN_ID, run_attempt=1)
+    def artifact_routes(self, *, artifact=None, payload=None):
+        self.transport.json_route(f"{self.prefix}/actions/runs/{RUN_ID}/attempts/1/jobs?per_page=100",
+                                  {"total_count": 1, "jobs": [job_document(1, "Self-test verdict")]})
+        artifact = artifact or artifact_document(name=f"self-test-verdict-{BASE}-{RUN_ID}-1", expires_at="2099-01-01T00:00:00Z")
+        self.transport.json_route(f"{self.prefix}/actions/runs/{RUN_ID}/artifacts?per_page=100", {"total_count": 1, "artifacts": [artifact]})
+        self.transport.route(artifact["archive_download_url"], HttpResponse(302, {"Location": SIGNED_REDIRECT}, b""))
+        self.transport.route(SIGNED_REDIRECT, HttpResponse(200, {"Content-Type": "application/zip"}, payload or scope_archive(members=(("verdict.json", b'{"test":true}'),))))
+    def test_exact_attempt_archive_and_redirect_never_forward_authorization(self):
+        self.artifact_routes()
+        self.assertEqual(self.client.get_self_test_verdict(REPOSITORY, self.run, BASE), {"test": True})
+        blob = [request for request in self.transport.requests if request[1] == SIGNED_REDIRECT]
+        self.assertEqual(len(blob), 1)
+        self.assertNotIn("Authorization", blob[0][2])
+        self.assertTrue(all(request[0] == "GET" for request in self.transport.requests))
+    def test_missing_wrong_attempt_expired_forged_control_and_duplicate_json_fail(self):
+        base = artifact_document(name=f"self-test-verdict-{BASE}-{RUN_ID}-1", expires_at="2099-01-01T00:00:00Z")
+        for kind in ("attempt", "expired", "time", "head", "repo", "duplicate", "member"):
+            with self.subTest(kind=kind):
+                artifact = json.loads(json.dumps(base))
+                payload = None
+                if kind == "attempt": artifact["name"] = f"self-test-verdict-{BASE}-{RUN_ID}-2"
+                if kind == "expired": artifact["expired"] = True
+                if kind == "time": artifact["expires_at"] = "2020-01-01T00:00:00Z"
+                if kind == "head": artifact["workflow_run"]["head_sha"] = BASE
+                if kind == "repo": artifact["workflow_run"]["repository_id"] = 22
+                if kind == "duplicate": payload = scope_archive(members=(("verdict.json", b'{"test":true,"test":false}'),))
+                if kind == "member": payload = scope_archive(members=(("verdict.json", b'{}'), ("../another", b'{}')))
+                self.artifact_routes(artifact=artifact, payload=payload)
+                with self.assertRaises(GitHubApiError):
+                    self.client.get_self_test_verdict(REPOSITORY, self.run, BASE)
+    def test_policy_is_read_at_exact_control_and_duplicate_keys_fail(self):
+        document = json.loads((ROOT / "scripts/ci/self_test_policy.json").read_text())
+        url = f"{self.prefix}/contents/scripts/ci/self_test_policy.json?ref={TARGET}"
+        raw = {"type": "file", "encoding": "base64", "path": "scripts/ci/self_test_policy.json",
+               "content": base64.b64encode(json.dumps(document).encode()).decode()}
+        self.transport.json_route(url, raw)
+        self.assertEqual(len(self.client.get_self_test_policy(REPOSITORY, TARGET).suites), 16)
+        raw["content"] = base64.b64encode(b'{"schema":1,"schema":2}').decode()
+        self.transport.json_route(url, raw)
+        with self.assertRaises(CiScopeConflictError):
+            self.client.get_self_test_policy(REPOSITORY, TARGET)
+
+
+    def test_attempt_job_pagination_uses_supported_query_only(self):
+        endpoint = f"{self.prefix}/actions/runs/{RUN_ID}/attempts/1/jobs"
+        first, second = f"{endpoint}?per_page=100", f"{endpoint}?per_page=100&page=2"
+        self.transport.json_route(first, {"total_count": 2, "jobs": [job_document(1, "Change Scope")]},
+                                  link=f'<https://api.github.com{second}>; rel="next"')
+        self.transport.json_route(second, {"total_count": 2, "jobs": [job_document(2, "Self-test verdict")]})
+        jobs = self.client.list_run_jobs(REPOSITORY, RUN_ID, run_attempt=1)
+        self.assertEqual([job.id for job in jobs], [1, 2])
+        self.assertTrue(all("filter=" not in request[1] for request in self.transport.requests))
 
 
 if __name__ == "__main__":

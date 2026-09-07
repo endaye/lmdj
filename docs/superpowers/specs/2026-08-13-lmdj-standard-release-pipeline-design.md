@@ -4,6 +4,24 @@
 
 状态：规格已批准
 
+修订：2026-09-07 — T7 consumer 与 prospective policy 同一 Task 合入主干时，后续
+`releasable` intent 一律改用 `self-test-v1`，本页旧 exact-main scope 描述仅保留为历史协议。
+完整自测是 16 suites（含 TSan / Release stress），不是旧 14-lane `full` 或 PR gate。
+Owner 可显式复用同 target 的有效日测 / node / candidate verdict；`run.head_sha` 是可信
+control，与 candidate SHA 分别验证为 main 历史，不能再假定二者相同。
+Intent 通过现有 target / run ID 加闭合 `self_test_evidence`（schema、request_kind、
+control_revision、run_attempt、policy_revision、evidence_digest）绑定已验证事实；新 release
+plan 的 `ci` 同时记录 target 与此 reference；新的 `lmdj.release-plan-marker.v2` 显式保留
+完整 CI 身份，fresh remote audit 必须逐项匹配，旧 v1 marker 不证明新添 reference。
+Published 读取 recorded attempt，后续 rerun 不覆盖历史；prospective 仍检查 latest。稳定 workflow
+ID / path / repository、可信 producer 下界、同 attempt 的成功 verdict job、全部 suites / jobs、
+适用 policy、canonical digest 与 30 天有效 artifact 缺一不可。过期须在 ref main 上以同 target
+新 dispatch 并 review 更新 intent，当前不接受 Re-run jobs。旧协议已 published 审计保持只读，
+新协议 published reference 仍与不可变签名 / tag / Release / assets / plan marker 联合验证，
+不依赖短期 artifact 永久留存。旧入口的删除须另获授权完成真实 producer / consumer 演练，
+不能恢复旧 14-lane prospective fallback。日测不阻 merge、不等于日发版；发布继续逐边界人工
+授权。详细字段约束以 `docs/governance/version-management.md` §12.1 为准。
+
 修订：2026-08-26 — §8.4 preflight/publish 验证边界。GitHub 不向只读身份暴露 Draft
 Release，Draft 专属验证从 preflight 移交 publish job（维护者批准，#335）。
 

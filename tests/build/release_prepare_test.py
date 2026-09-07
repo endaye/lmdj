@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, redirect_stderr
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import io
 import json
@@ -221,7 +221,9 @@ class ReleasePrepareTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.target_sha = "a" * 40
         self.tag = "lmdj-v1.0.21.0"
-        self.policy = load_policy(ROOT / "tools/release/policy.json")
+        # Exercise the pre-cutover scope protocol in this legacy regression
+        # matrix; release_self_test_evidence_test covers current policy.
+        self.policy = replace(load_policy(ROOT / "tools/release/policy.json"), prospective_ci_protocol="ci-scope-v2")
         self.ledger = self.ledger_fixture()
         self.git = FakeGit(self.target_sha, self.policy.product_fingerprint)
         self.github = FakeGitHub(self.target_sha, 123)
