@@ -341,11 +341,35 @@ lint reads the text you give it and cannot see a directive added afterwards.
    ```
    *(Optional: If the repository uses `merge:queue`, apply label: `gh pr edit --add-label "merge:queue"`)*
 
-2. **Watch CI Checks**:
+2. **Watch CI Checks — not with `gh pr checks`**:
+
+   Core CI reports against the `<pr>/merge` ref, so its check runs never enter
+   the Pull Request head's `statusCheckRollup` and `gh pr checks` does not list
+   them at all. What it does list is the Cursor and Netlify check runs, whose
+   bucket is `skipping` (`NEUTRAL`) — neither `pass` nor `pending`. A predicate
+   like `all(.bucket != "pending")` is therefore true the moment the Pull
+   Request opens, against zero real lanes, and reports a green Pull Request
+   that has run nothing. See
+   [`pr-checks-omits-merge-ref-lanes`](../../pitfalls/pr-checks-omits-merge-ref-lanes.md).
+
+   Watch the workflow runs and the Pull Request's own state instead:
    ```bash
-   gh pr checks --watch
+   gh run list --branch "$BRANCH" --limit 20 \
+     --json name,status,conclusion,databaseId
+   gh pr view <number> --json state,mergeStateStatus
    ```
-   Wait until all checks pass and GitHub automatically squash-merges the PR into `main`.
+   Treat a `conclusion` of `failure`, `cancelled`, `timed_out` or
+   `action_required` as terminal, and `MERGED`/`CLOSED` as the end state. A
+   `cancelled` Core CI run whose `createdAt` precedes a newer run for the same
+   Pull Request is normal concurrency-group supersession, not a failure.
+   `mergeStateStatus` of `BEHIND` or `BLOCKED` is the `strict: true`
+   up-to-date requirement the Integration Queue exists to resolve, not a
+   verdict on the change.
+
+   Whatever you poll with, make the check distinguish "failed to measure" from
+   "measured something good": if the process crashed, the lane was cancelled,
+   or the query returned an empty set, the check must say something. Silence is
+   not success, and neither is an empty result set.
 
 3. **Confirm Merged State**:
    ```bash
