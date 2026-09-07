@@ -53,3 +53,10 @@ solely because other jobs queue, and do not infer that a queued writer ran.
 `tests/build/ci_batch_github_journal_test.py` is the companion mechanism: queued
 parents require exact-attempt/source identity and actual non-skipped writer
 start evidence; unstarted and unknown identities remain rejected.
+
+A subsequent read of that same O1 run's exact `/attempts/1` endpoint returned
+`pending` with the controller still completed/success. Queued-only compatibility
+was insufficient. The companion transport tests cover the closed queued,
+waiting, requested and pending set with the same started-writer requirement.
+Only queued/pending were observed remotely here; requested/waiting remain local
+fixture coverage. Do not infer historical failure causality from a later read.

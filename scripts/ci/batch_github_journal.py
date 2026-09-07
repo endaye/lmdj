@@ -19,6 +19,8 @@ from self_test_report import UrllibGitHubApi
 
 SCHEMA = "lmdj.ci-journal-object.v1"
 LIMIT = 60000
+WAITING_RUN_STATUSES = ("queued", "waiting", "requested", "pending")
+KNOWN_RUN_STATUSES = WAITING_RUN_STATUSES + ("in_progress", "completed")
 ACTOR = "{ __typename ... on Bot { id } }"
 METADATA = f"id body author {ACTOR} editor {ACTOR} lastEditedAt"
 BODY_QUERY = f"""query($owner:String!,$name:String!,$number:Int!) {{
@@ -149,7 +151,7 @@ class GitHubJournalTransport:
                 and type(run.get("run_attempt")) is int and run["run_attempt"] == 1
                 and type(run.get("workflow_id")) is int and run["workflow_id"] == writer["workflow_id"]
                 and run.get("head_sha") == control and run.get("head_branch") == "main"
-                and run.get("path") == path and run.get("status") in ("queued", "in_progress", "completed")
+                and run.get("path") == path and run.get("status") in KNOWN_RUN_STATUSES
                 and run.get("event") in ("push", "workflow_dispatch", "workflow_run", "schedule")
                 and isinstance(run.get("repository"), dict) and run["repository"].get("full_name") == self.repository
                 and isinstance(run.get("head_repository"), dict) and run["head_repository"].get("full_name") == self.repository,
@@ -197,14 +199,14 @@ class GitHubJournalTransport:
                 and matches[0]["run_id"] == writer["run_id"]
                 and type(matches[0].get("run_attempt")) is int and matches[0]["run_attempt"] == 1
                 and matches[0].get("status") in ("in_progress", "completed"), "writer job is missing or ambiguous")
-        if run["status"] == "queued":
-            # Aggregate status can return to queued while product siblings wait.
+        if run["status"] in WAITING_RUN_STATUSES:
+            # Aggregate status can return to waiting while product siblings wait.
             # It never proves this writer ran: authenticate its own start too.
             job = matches[0]
             require(isinstance(job.get("started_at"), str) and bool(job["started_at"])
                     and (job["status"] == "in_progress" or job.get("conclusion") in {
                         "success", "failure", "cancelled", "timed_out", "action_required", "neutral", "stale"}),
-                    "queued parent has no proven started writer")
+                    "waiting parent has no proven started writer")
         self._checked_writers.add(cache_key)
         return deepcopy(writer)
 
