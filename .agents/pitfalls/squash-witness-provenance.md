@@ -27,7 +27,10 @@ recurrences:
   - date: 2026-09-06
     occurrence: https://github.com/endaye/lmdj/pull/689
     observed_by: grok-4.6-build
-exit: skill:.agents/skills/lmdj-release/SKILL.md
+  - date: 2026-09-07
+    occurrence: https://github.com/endaye/lmdj/pull/761
+    observed_by: Codex
+exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
 # A squash merge rewrites the introducing commit, so an immutable Portal snapshot loses its provenance unless a squash witness is generated for the exact resulting `main` SHA.
@@ -74,3 +77,10 @@ against the exact `main` SHA the squash produced, and verify it before treating
 the Product Build as allocated. A witness is only accepted when it exactly
 rebuilds the authenticated source tree and commit in a temporary Git index;
 never hand-edit an immutable snapshot to make provenance agree.
+
+The 2026-09-07 recurrence was found while integrating CI work after the manual
+merge of the Product Build cut. Release-only guidance did not reach that
+ordinary task-shipping boundary: the next unrelated Portal check found the
+missing witness. The exit now also lives in `issue-done`'s post-merge step,
+conditionally for Tasks allocating a Build or introducing a snapshot; it does
+not require every unrelated Task to run a new post-merge Portal build.

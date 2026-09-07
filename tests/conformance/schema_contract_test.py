@@ -62,7 +62,7 @@ contract_versions = {
         "1.1.0"
         if name in {"project_bundle", "error", "soundset"}
         else (
-            "4.0.0"
+            "4.1.0"
             if name == "project_v4"
             else (
                 "3.0.0"
@@ -287,6 +287,66 @@ assert asset_v4["properties"]["lineage"] == {
         {"type": "null"},
     ]
 }
+asset_lineage_v4 = project_v4["$defs"]["asset_lineage"]
+assert set(asset_lineage_v4["required"]) == {"source", "derivation"}
+assert asset_lineage_v4["additionalProperties"] is False
+assert asset_lineage_v4["properties"]["source"] == {
+    "oneOf": [
+        {"$ref": "#/$defs/asset_artifact_lineage_source"},
+        {"$ref": "#/$defs/soundset_lineage_source"},
+    ]
+}, (
+    "why: Contract 4.1.0 adds the S11-D9 soundset Lineage source beside the "
+    "existing asset_artifact source on the same Lineage carrier; remedy: keep "
+    "both variants in one closed oneOf and never add a second Lineage field"
+)
+assert asset_lineage_v4["properties"]["derivation"] == {
+    "oneOf": [
+        {"$ref": "#/$defs/resample_lineage_derivation"},
+        {"$ref": "#/$defs/soundset_install_lineage_derivation"},
+    ]
+}, (
+    "why: an installed Sound Set slot derives through soundset_install, not "
+    "resample; remedy: keep both derivation variants in one closed oneOf"
+)
+for lineage_variant in (
+    "asset_artifact_lineage_source",
+    "soundset_lineage_source",
+    "resample_lineage_derivation",
+    "soundset_install_lineage_derivation",
+):
+    variant_schema = project_v4["$defs"][lineage_variant]
+    assert variant_schema["additionalProperties"] is False, (
+        f"why: {lineage_variant} must stay closed so an unknown key fails; "
+        "remedy: restore additionalProperties false"
+    )
+    assert "const" in variant_schema["properties"]["kind"], (
+        f"why: {lineage_variant} is discriminated by a constant kind; "
+        "remedy: restore the const discriminator"
+    )
+    assert "kind" in variant_schema["required"]
+assert project_v4["$defs"]["soundset_lineage_source"]["properties"]["kind"][
+    "const"
+] == "soundset"
+assert set(
+    project_v4["$defs"]["soundset_lineage_source"]["required"]
+) == {
+    "kind",
+    "set_id",
+    "set_version",
+    "manifest_sha256",
+    "slot_index",
+    "artifact_sha256",
+}, (
+    "why: S11-D9 requires every typed soundset source field, not only kind; "
+    "remedy: require all six keys"
+)
+assert project_v4["$defs"]["soundset_install_lineage_derivation"][
+    "properties"
+]["kind"]["const"] == "soundset_install"
+assert set(
+    project_v4["$defs"]["soundset_install_lineage_derivation"]["required"]
+) == {"kind"}
 event_definitions_v4 = [
     "performance_pad_hit_event",
     "performance_pattern_launch_event",
@@ -446,6 +506,12 @@ invalid_pattern_slots_v4 = load_json(
 )
 migration_project_v4 = load_json(
     fixture_root / "project-v3-to-v4-migration.json"
+)
+valid_soundset_lineage_project_v4 = load_json(
+    fixture_root / "project-v4-soundset-lineage-valid.json"
+)
+invalid_soundset_lineage_project_v4 = load_json(
+    fixture_root / "project-v4-soundset-lineage-invalid.json"
 )
 assert valid_project_v2["banks"][0]["pads"][0]["asset_id"] == (
     valid_project_v2["banks"][0]["pads"][1]["asset_id"]
@@ -974,6 +1040,71 @@ for extra_path in (["source"], ["derivation"], []):
     assert json_schema.validate(project_with_lineage, project_v4), (
         "why: Lineage objects must reject extra keys; "
         "remedy: keep every nested object closed"
+    )
+json_schema.check(
+    valid_soundset_lineage_project_v4,
+    project_v4,
+    "project-v4-soundset-lineage-valid",
+)
+assert (
+    valid_soundset_lineage_project_v4["assets"][0]["lineage"]["source"]["kind"]
+    == "soundset"
+)
+assert (
+    valid_soundset_lineage_project_v4["assets"][0]["lineage"]["derivation"]
+    == {"kind": "soundset_install"}
+)
+assert json_schema.validate(
+    invalid_soundset_lineage_project_v4, project_v4
+), (
+    "why: a soundset Lineage source missing manifest_sha256 must fail; "
+    "remedy: keep every typed soundset source field required"
+)
+soundset_lineage = valid_soundset_lineage_project_v4["assets"][0]["lineage"]
+for case_name, path, value in (
+    ("malformed set UUID", ["source", "set_id"], "bad"),
+    ("non-SemVer set version", ["source", "set_version"], "1.2"),
+    ("uppercase manifest SHA-256", ["source", "manifest_sha256"], "C" * 64),
+    ("uppercase artifact SHA-256", ["source", "artifact_sha256"], "A" * 64),
+    ("out-of-range slot index", ["source", "slot_index"], 16),
+    ("negative slot index", ["source", "slot_index"], -1),
+    ("unknown source kind", ["source", "kind"], "soundset_v2"),
+    ("unknown derivation kind", ["derivation", "kind"], "soundset_apply"),
+):
+    malformed_soundset = json.loads(json.dumps(soundset_lineage))
+    target = malformed_soundset
+    for segment in path[:-1]:
+        target = target[segment]
+    target[path[-1]] = value
+    assert json_schema.validate(
+        mutated(
+            valid_project_v4, ["assets", 0, "lineage"], malformed_soundset
+        ),
+        project_v4,
+    ), (
+        f"why: Project v4 must reject {case_name} soundset Lineage; "
+        "remedy: preserve the exact closed soundset Lineage shape"
+    )
+for mixed_name, mixed in (
+    (
+        "soundset source with a resample derivation",
+        {
+            "source": soundset_lineage["source"],
+            "derivation": valid_lineage["derivation"],
+        },
+    ),
+    (
+        "asset_artifact source with a soundset_install derivation",
+        {
+            "source": valid_lineage["source"],
+            "derivation": soundset_lineage["derivation"],
+        },
+    ),
+):
+    json_schema.check(
+        mutated(valid_project_v4, ["assets", 0, "lineage"], mixed),
+        project_v4,
+        f"project-v4-valid {mixed_name}",
     )
 for case_name, mutator in (
     (

@@ -62,7 +62,8 @@ class _VerifiedRelease:
 
 
 _MARKER_SCHEMA = "lmdj.release-plan-marker.v1"
-_MARKER_PATTERN = re.compile(r"<!-- (lmdj\.release-plan-marker\.v1) (\{[^\r\n]*\}) -->")
+_SELF_TEST_MARKER_SCHEMA = "lmdj.release-plan-marker.v2"
+_MARKER_PATTERN = re.compile(r"<!-- (lmdj\.release-plan-marker\.v[12]) (\{[^\r\n]*\}) -->")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -245,8 +246,11 @@ def marker_for_plan(document: dict[str, object], digest: str) -> str:
     if _DIGEST.fullmatch(digest) is None:
         raise TransitionError("release plan marker digest is invalid")
     try:
+        ci = document.get("ci")
+        self_test = isinstance(ci, dict) and "self_test_evidence" in ci
+        schema = _SELF_TEST_MARKER_SCHEMA if self_test else _MARKER_SCHEMA
         summary = {
-            "schema": _MARKER_SCHEMA,
+            "schema": schema,
             "plan_schema": document["schema"],
             "plan_sha256": digest,
             "tag": document["tag"],
@@ -258,10 +262,14 @@ def marker_for_plan(document: dict[str, object], digest: str) -> str:
         }
         if "channel" in document:
             summary["intent"]["channel"] = document["channel"]
+        if self_test:
+            # Fresh remote audit must bind the permanent CI reference without
+            # relying on a bounded artifact or an opaque plan hash alone.
+            summary["ci"] = ci
     except (KeyError, TypeError):
         raise TransitionError("release plan marker input is invalid") from None
     payload = json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return f"<!-- {_MARKER_SCHEMA} {payload} -->"
+    return f"<!-- {schema} {payload} -->"
 
 
 def _formal_authority(
@@ -521,9 +529,10 @@ def _verify_release_metadata(
         raise TransitionError("GitHub Release metadata conflicts with the release plan")
     expected_marker = marker_for_plan(document, digest)
     markers = _MARKER_PATTERN.findall(release.body)
-    if len(markers) != 1 or markers[0][0] != _MARKER_SCHEMA or markers[0][1] != expected_marker.split(" ", 2)[2][:-4]:
+    expected_schema = expected_marker.split(" ", 2)[1]
+    if len(markers) != 1 or markers[0][0] != expected_schema or markers[0][1] != expected_marker.split(" ", 2)[2][:-4]:
         raise TransitionError("GitHub Release plan marker is absent or invalid")
-    if release.body.count(_MARKER_SCHEMA) != 2:
+    if release.body.count("lmdj.release-plan-marker.") != 2:
         # The schema appears once as marker label and once inside its canonical JSON.
         raise TransitionError("GitHub Release plan marker is duplicated or malformed")
 

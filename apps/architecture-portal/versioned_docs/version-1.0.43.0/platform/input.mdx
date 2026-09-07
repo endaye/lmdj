@@ -1,0 +1,50 @@
+---
+title: Input Platform
+area: platform
+status: partial
+owners: [product, platform]
+source_paths:
+  - docs/prd/open-questions.md
+  - docs/prd/questions/
+  - docs/superpowers/plans/2026-08-03-lmdj-foundation-input-hardening.md
+  - packages/web-runtime-platform/web/input_adapters.mjs
+  - packages/web-runtime-platform/web/runtime_session.mjs
+  - apps/web-runtime-host/src/main.mjs
+  - docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md
+  - docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md
+  - docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md
+  - docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 状态
+
+<StatusBadge status="partial" /> Product Build `1.0.41.0` 的 Creator Web Host `2.1.1` 与 Diagnostic Web Runtime Host `2.1.1` 通过 Web Runtime Platform `2.0.1` 使用 64-Pad Pointer、Keyboard 与 Web MIDI adapter。三种输入以同一 Audio Runtime frame clock 和单调 `input_sequence` 驱动 live trigger 与 Sequence recording；双 Host 交付控制面不改变输入语义，`partial` 仅表示仍缺少完整物理输入/延迟矩阵。
+
+## 目标事件
+
+Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的 Sample inspect→`trigger(flatSlot, velocity, source)` admission，并保留归一化来源和 release/cancel identity。Project `{bank, pad}` 只在输入边界按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。
+
+Creator 默认键盘 mapping 使用 `KeyboardEvent.code`，按实体键盘与视觉 Pad 的共同上下顺序分配：`Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，`A S D F G H J K` 对应 Pad 9–16。Pad 上的 `kbd` 提示与 accessible name 均从同一个导出 mapping 派生，不维护第二份 Creator 键表；切换 Bank 只改变稳定的 16-Slot offset。
+
+Creator 在用户明确授权 Web MIDI 后监听每个可用 input，在 channels 1–16 上接受 Note On `36..51` 并保留 velocity；Note On velocity `0` 与对应 Note Off 释放 Pad，范围外 note 仍忽略。共享 Platform adapter 保留可选的单 channel filter，Creator 不启用该限制，也不按设备名称分支。
+
+## 生命周期
+
+普通输入只在 `running` admitted；拒绝输入不重放。Gate/Loop Gate release、Loop Toggle latch 与 Voice sequence 精确关联；blur/hidden/suspend/close 先禁 admission、清 preview、stop all，再暴露状态。恢复期只有 Context 与 generation 就绪后开启的一次真实用户 probe 例外；MIDI 断开清理状态，不合成 Trigger。
+
+## 自动化证据
+
+Node 回归覆盖 primary Pointer、Chromium 整数化 compatibility mouse coordinate suppression、Keyboard `code`/repeat/editable focus、MIDI channels 1–16、显式授权/velocity/disconnect/privacy，以及 admission/recovery。Creator 与 Diagnostic packaged Chromium journey 分别覆盖实际 DOM Pointer Pad、mapped Keyboard、sequence-addressed Trigger、lifecycle 与 recovery 路由；它们不替代物理设备测量。
+
+## 非能力
+
+当前不证明 MIDI Learn、Controller Profile、移动端触控质量或完整跨设备物理延迟矩阵已经交付。
+
+## 状态升级证据
+
+物理行分别记录：macOS Safari Pointer 已在 Product Build `1.0.36.0` local source、tested revision `703b339f` 上完成 500-trigger 与十分钟前台验收（[L1 evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md)）；macOS Chrome Pointer 已在 Product Build `1.0.40.0` local source、tested revision `5c094c98` 上完成相同范围验收（[L2 evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md)）；macOS Chrome physical MIDI 已在 Product Build `1.0.40.0` local source、tested revision `1869a925` 上以 Akai MPD218 完成 500-event 与物理时序验收（[L3 evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md)）；iPadOS Safari Touch 已在 Product Build `1.0.40.0` local source、tested revision `e2cd0cf9`、iPad Air 13-inch (M3) model `A3268` 上完成 500-trigger、物理时序与十分钟前台验收（[L4 evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md)）；同一设备上的 Safari lifecycle/route recovery 已在 tested revision `67a7ac03` 上完成 background/foreground、lock/unlock、Voice Memos 音频会话中断和最终单 onset 验收（[L5 evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l5-ipados-safari-lifecycle-1.0.40.0.md)）。L1–L5 retained matrix 已通过，但不推导 tag、Release、部署或 Channel 结论。

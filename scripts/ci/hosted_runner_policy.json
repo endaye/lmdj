@@ -126,6 +126,12 @@
       "job": "smoke",
       "category": "deploy-authority",
       "reason": "Exercises the published Portal deployment from outside. A smoke test of a public deployment should not run on a host that participates in producing it."
+    },
+    {
+      "workflow": "self-test-report.yml",
+      "job": "report",
+      "category": "control-plane",
+      "reason": "Turns a finished self-test verdict into failure Issues and files the daily missing-batch alert. It must run when the self-hosted hosts that execute the batches are the thing that went missing, which is exactly when a self-hosted reporter could not."
     }
   ]
 }

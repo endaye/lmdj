@@ -43,6 +43,56 @@ merged and linked.
 A merged Pull Request does not imply release, deployment, publication, or Channel promotion.
 Those remain separate authorization and verification boundaries.
 
+## Self-test triage
+
+`self-test-report.yml` maintains one failure-collection Issue per suite/class,
+labelled `self-test` and assigned to the configured maintainer until triaged.
+These are collection buckets, not proven root-cause deduplication: real test
+IDs and log-error fingerprints are not yet extracted, so different defects
+may share a bucket. A maintainer may split them into separate defect Issues.
+Each day someone reads the open `self-test` Issues and does two things:
+
+- Classify each as a product regression, a test flake or an infrastructure
+  failure, and relabel it; the reporter's `test_failure` /
+  `infrastructure_failure` / `blocked` / `missing` class is where it starts,
+  not the verdict.
+- Decide severity. A high-severity product defect makes the targets it was
+  observed on ineligible as release candidates; it never blocks an ordinary
+  Pull Request merge, and a fix Pull Request merges on the same terms as any
+  other. Infrastructure failures go to the host or workflow owner.
+
+An Issue is closed by a person after the cause is understood, not by the next
+green batch: one green run does not establish that a flaky defect is gone. A
+`self-test-missing` Issue means the daily batch did not start; the check that
+files it runs on GitHub Actions and cannot report a day on which Actions did
+not run it, so a day with no `Self-test Report` run at all is unchecked, not
+clean.
+
+The reporter is a bounded recovery tool, not an infinite event store. Main
+completion callbacks and daily checks reconcile retained runs since the later
+of the 30-day retention boundary and the verified producer's scan floor.
+The first producer is PR #757's squash `22247897e9163a3f34e15f564bec133419d1f177`;
+its committer time, `2026-09-07T12:20:36Z`, conservatively precedes the PR's
+`merged_at` by one second. Time only narrows queries: each run independently
+proves control ancestry from that producer and membership in main history.
+Older control revisions, including their recent reruns, are explicitly legacy;
+post-deployment startup failures remain visible, and unknown/diverged ancestry
+fails closed. Non-main queue completion callbacks do not start this reporter.
+
+The scan is capped at 100 per allowed event; reaching the cap is a visible
+`reporting-error`, not proof of recovery. A maintainer must explicitly retry
+affected run IDs after an outage or overflow. Manual reporter dispatch defaults
+to `reconcile: false`, processing only that run so unrelated history or a full
+scan window cannot block its recovery; set `reconcile: true` only to request
+the wider scan. A run whose selected request has no verdict is an
+infrastructure observation; legacy sweeps that have not selected the new
+self-test path are not relabelled as failed self-tests. Verify the configured
+`self-test` label and default assignee during rollout before enabling reports.
+To repeat a self-test, start a new dispatch for the same exact target; do not
+rerun the old run because the current producer rejects later attempts. After
+a product fix, explicitly choose and dispatch the fixed target. Reporter-only
+retries still reference the original run ID and do not execute tests again.
+
 ## Migration and history
 
 Migrate active work only after the replacement Issue is created and the source

@@ -2,7 +2,7 @@
   "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
-    "version": "1.0.42.0"
+    "version": "1.0.43.0"
   },
   "provider_policy": {
     "allowed_regions": [
@@ -102,7 +102,7 @@
     },
     {
       "id": "lmdj.project.v4",
-      "version": "4.0.0"
+      "version": "4.1.0"
     },
     {
       "id": "lmdj.project-bundle.v1",
