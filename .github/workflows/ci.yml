@@ -257,24 +257,15 @@ jobs:
       # the repository-local audit reports them unverifiable. Long-lived
       # runner workspaces masked this with leftover objects; hydrating by SHA
       # makes the lane deterministic on any runner, new or old.
+      # `hydrate` is the stable interface's only object-store write, kept
+      # separate so the audit stays read-only. Decision:
+      # docs/prd/decisions/2026-09-06-release-intent-hydrate-subcommand.md;
+      # pitfall: .agents/pitfalls/release-intent-target-reachability.md
       - name: Hydrate release intent target objects
+        shell: bash
         run: |
-          python3 - <<'EOF'
-          import json, subprocess
-          data = json.load(open("docs/release-evidence/release-intents.json"))
-          revisions = [entry["target_revision"] for entry in data["entries"]]
-          revisions += [entry["target_revision"] for entry in data["historical_exceptions"]]
-          missing = [
-              revision for revision in revisions
-              if subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"],
-                                capture_output=True).returncode != 0
-          ]
-          if missing:
-              subprocess.run(["git", "fetch", "--no-tags", "origin", *missing], check=True)
-              print("hydrated intent targets:", " ".join(missing))
-          else:
-              print("all intent targets already present")
-          EOF
+          set -euo pipefail
+          scripts/release.sh hydrate
       - run: python3 -m unittest discover -s tests/build -p 'release_*_test.py'
       - run: python3 tests/build/web_runtime_deploy_workflow_test.py
       - run: python3 tests/build/creator_web_deploy_workflow_test.py

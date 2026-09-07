@@ -48,30 +48,20 @@ jobs:
       # environment-only git config; nothing is written to disk.
       # Allocated release intents may target pre-squash commits that no
       # branch or tag reaches, so a fresh full clone lacks their objects and
-      # the audit reports the intents unverifiable; hydrate them by SHA
-      # first. Pitfall: .agents/pitfalls/release-intent-target-reachability.md
+      # the audit reports the intents unverifiable. `hydrate` is the stable
+      # interface's only object-store write and runs first; the audit itself
+      # never fetches. Decision:
+      # docs/prd/decisions/2026-09-06-release-intent-hydrate-subcommand.md;
+      # pitfall: .agents/pitfalls/release-intent-target-reachability.md
       - name: Hydrate release intent target objects
         env:
           GIT_CONFIG_COUNT: "1"
           GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
           GIT_CONFIG_VALUE_0: https://github.com/
+        shell: bash
         run: |
-          python3 - <<'EOF'
-          import json, subprocess
-          data = json.load(open("docs/release-evidence/release-intents.json"))
-          revisions = [entry["target_revision"] for entry in data["entries"]]
-          revisions += [entry["target_revision"] for entry in data["historical_exceptions"]]
-          missing = [
-              revision for revision in revisions
-              if subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"],
-                                capture_output=True).returncode != 0
-          ]
-          if missing:
-              subprocess.run(["git", "fetch", "--no-tags", "origin", *missing], check=True)
-              print("hydrated intent targets:", " ".join(missing))
-          else:
-              print("all intent targets already present")
-          EOF
+          set -euo pipefail
+          scripts/release.sh hydrate
 
       - name: Audit release identity and drift
         shell: bash

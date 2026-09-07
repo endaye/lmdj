@@ -645,6 +645,13 @@ class ReleaseAuditTest(ReleaseAuditFixture, unittest.TestCase):
         finding = next(item for item in report.findings if item.code == "unverifiable")
         self.assertIn("release intent target objects", finding.message)
         self.assertIn(str(missing["tag"]), finding.message)
+        # The finding is the operator's only signal, so it carries both parts
+        # docs/governance/pitfall-ledger.md requires: why the intent cannot be
+        # verified, and the one command that repairs it.
+        self.assertIn(str(missing["target_revision"]), finding.message)
+        self.assertIn("cannot bind the intent to the commit it records", finding.message)
+        self.assertIn("must not fetch it itself", finding.message)
+        self.assertIn("remedy: run scripts/release.sh hydrate", finding.message)
 
     def test_explicit_unregistered_tag_is_unauthorized_in_both_modes(self) -> None:
         tag = "module/not-in-ledger/v9.9.9"
