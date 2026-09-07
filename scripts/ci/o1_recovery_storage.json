@@ -1,0 +1,26 @@
+{
+  "scheduler": {
+    "repository": "endaye/lmdj",
+    "issue_number": 824,
+    "issue_node_id": "I_kwDOTK_1fs8AAAABQJ5ORQ",
+    "bot_node_id": "MDM6Qm90NDE4OTgyODI=",
+    "workflow_id": 352307416,
+    "epoch": "o1-recovery-scheduler-20260908-issue824"
+  },
+  "outbox": {
+    "repository": "endaye/lmdj",
+    "issue_number": 825,
+    "issue_node_id": "I_kwDOTK_1fs8AAAABQJ5UMQ",
+    "bot_node_id": "MDM6Qm90NDE4OTgyODI=",
+    "workflow_id": 352307416,
+    "epoch": "o1-recovery-outbox-20260908-issue825"
+  },
+  "claim": {
+    "repository": "endaye/lmdj",
+    "issue_number": 826,
+    "issue_node_id": "I_kwDOTK_1fs8AAAABQJ5bLA",
+    "bot_node_id": "MDM6Qm90NDE4OTgyODI=",
+    "workflow_id": 352307416,
+    "epoch": "o1-claim-20260908-issue826"
+  }
+}
