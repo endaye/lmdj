@@ -1,21 +1,12 @@
 name: Advisory Review Liveness
 
-# Both advisory review lanes carry `continue-on-error`, so a failed review no
-# longer reddens a Pull Request. That trade was deliberate -- a lane which
-# cannot block a merge should not be able to redden every Pull Request -- and it
-# creates a blind spot: a lane can now fail for weeks with nothing to show for
-# it. This is the mechanism that closes it, rather than a note saying somebody
-# should look.
-#
-# The alert is this job failing. A scheduled workflow that goes red notifies the
-# repository owner on its own, which is enough, and it avoids the Issue
-# creation and deduplication logic a bespoke alert would need.
+# Read-only manual diagnostic retained after retirement of the old scheduled
+# monitor. Independent PR Review jobs now expose missing/failed review honestly.
+# This workflow creates no Issues and holds no merge authority.
 
 on:
-  schedule:
-    # Two hours after Core Nightly, so a failure here is not competing with one
-    # there for attention.
-    - cron: "0 21 * * *"
+  # Legacy periodic entry retired. The standalone PR Review jobs expose their
+  # own failures; this read-only manual diagnostic remains available.
   workflow_dispatch:
 
 # `actions: read` lists the runs and jobs; the other two read the surfaces the

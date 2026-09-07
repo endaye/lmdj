@@ -3,7 +3,7 @@
 
 `pr-review.yml` reviews a Pull Request's current head independently of
 `ci.yml`, and `.github/scripts/pr_review_target.py` is what binds a run to
-that head. These pin the switch that keeps the entry manual until T5a, the
+that head. These pin T5a's automatic entry and the
 trust boundaries, the head binding, the honest-state reporting, and the
 relationship to `required_conversation_resolution` the plan asks to be written
 down.
@@ -59,12 +59,24 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         cls.jobs = {name: job_block(cls.source, name) for name in
                     ("target", "claude-review", "grok-review", "publish-claude", "publish-grok")}
 
-    def test_dispatch_only_on_main_and_pr_opt_in(self):
+    def test_dispatch_only_on_main_and_pr_automatically_active(self):
         self.assertIn("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'", self.jobs["target"])
-        self.assertIn("github.event_name == 'pull_request' && vars.PR_REVIEW_ENTRY == 'standalone'", self.jobs["target"])
-        self.assertIn("T5a flips the switch", self.source)
+        condition = self.jobs["target"].split('    if: >-\n', 1)[1].split('    runs-on:', 1)[0]
+        self.assertEqual(' '.join(condition.split()),
+                         "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || github.event_name == 'pull_request'")
         self.assertIn("pull_request:", self.source)
         self.assertNotIn("pull_request_target:", self.source)
+        directives = '\n'.join(line for line in self.source.splitlines() if not line.lstrip().startswith('#'))
+        self.assertNotIn('PR_REVIEW_ENTRY', directives,
+                         'why: automatic review must activate with the workflow cutover; remedy: remove the manual-rollout variable gate')
+
+    def test_automatic_review_has_one_entry_and_no_product_trigger(self):
+        ci_events = CI.read_text().split('\npermissions:', 1)[0]
+        self.assertNotRegex(ci_events, r'(?m)^  (?:pull_request|pull_request_target|push):',
+                            'why: PR Review owns new-head review and product self-tests are independent; remedy: retire Core CI PR/push triggers')
+        events = self.source.split('\npermissions:', 1)[0]
+        self.assertIn('types: [opened, synchronize, reopened, ready_for_review]', events)
+        self.assertNotRegex(events, r'(?m)^  (?:push|schedule):')
 
     def test_no_pr_head_executable_checkout_in_any_job(self):
         trusted = "ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}"

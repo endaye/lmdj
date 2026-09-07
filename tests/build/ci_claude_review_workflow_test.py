@@ -174,10 +174,10 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         change.
         """
         self.assertIn(
-            "matrix: ${{ fromJSON(needs.select-review-backend.outputs.matrix) }}",
+            "matrix: ${{ fromJSON(needs.select-review-backend.outputs.matrix ||",
             self.source,
-            msg=("why: a literal two-entry matrix is what this replaces; remedy: "
-                 "keep the matrix coming from the selector job"),
+            msg=("why: the retired selector emits no matrix; remedy: keep a one-entry "
+                 "parse-safe fallback while the old PR-only job remains unreachable"),
         )
         self.assertNotIn(
             "- backend: glm",
@@ -253,13 +253,10 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
                  "step ends in a matrix"),
         )
         self.assertIn(
-            "if: ${{ !cancelled() }}",
+            "if: ${{ github.event_name == 'pull_request' }}",
             selector,
-            msg=("why: advisory-review's strategy.matrix reads this job's "
-                 "output, and a skipped selector would leave fromJSON('') to "
-                 "be evaluated on push runs of the protected branch; remedy: "
-                 "keep the selector unconditional and let the review job's own "
-                 "condition keep it to Pull Requests"),
+            msg=("why: the old review selector must not run during self-tests; "
+                 "remedy: retain its now-unreachable PR condition and the matrix fallback"),
         )
 
     def test_a_missing_secret_skips_rather_than_fails(self) -> None:

@@ -1,10 +1,9 @@
 name: Core Nightly
 
-# Reused by the manual-first self-test batch. Keep the existing daily Nightly
-# coverage until O1/T5a explicitly migrates the sweep and retires this cron.
+# Reusable stress implementation for the complete daily/manual self-test batch.
+# A manual suite probe remains diagnostic, not a substitute for that batch.
 on:
-  schedule:
-    - cron: "0 19 * * *"
+  # Automatic stress coverage belongs to Core CI's 16:00 UTC self-test batch.
   workflow_dispatch:
     inputs:
       suite:
