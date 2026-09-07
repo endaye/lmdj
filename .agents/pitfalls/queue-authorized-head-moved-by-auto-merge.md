@@ -82,3 +82,19 @@ authorization.
   controller removes the label when it stops, so nothing retries on its own.
 - Do not "fix" this by dropping auto-merge: without it the Pull Request parks
   the moment the queue's own merge leaves it behind. Arm both; just label last.
+- Separate this from the controller's own branch update before reacting, because
+  from `gh pr view` alone they are identical — in both cases `headRefOid` is a
+  commit you never pushed. Compare the queue run's `headSha` with the SHA you
+  labelled:
+  ```bash
+  gh run list --branch <branch> --json name,status,conclusion,headSha
+  ```
+  If the queue run captured your authorized SHA, the controller held your
+  authorization and the later head move is its own documented work —
+  [`git-workflow.md`](../../docs/governance/git-workflow.md) §"Serialized
+  Integration Queue" has it "merge exact current `main` into the PR branch when
+  needed" — so there is nothing to re-label and nothing has gone terminal. Only
+  a head that moved *before* the controller's read is this pitfall. The
+  `synchronize` run GitHub then creates in `action_required` state with zero
+  jobs is likewise the controller's to bind and approve; approving it by hand
+  takes that step away from it.
