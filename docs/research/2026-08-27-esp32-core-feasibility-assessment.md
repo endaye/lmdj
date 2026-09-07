@@ -4,6 +4,8 @@
 >
 > 更新：2026-09-01 增补第 9 节目标芯片选型
 >
+> 更新：2026-09-07 [ESP-IDF v6.1 工具链与 atomic 退化条件增补](./2026-09-07-esp32-idf6-toolchain-and-atomics-amendment.md) 修正第 3 节，并记录本地 spike 的 ESP-IDF 版本落点
+>
 > 评估对象：当前 New Headless Core 主线源码与 ESP-IDF 平台能力
 >
 > 文档性质：静态可行性研究，不是已批准的产品范围、实施计划、排期承诺或硬件选型
@@ -89,6 +91,11 @@ RTTI 则按配置启用。语言版本本身不是本次评估中的主要不可
 来源：[ESP-IDF C++ Support](https://docs.espressif.com/projects/esp-idf/en/v5.4/esp32/api-guides/cplusplus.html)
 
 ## 3. 首要阻断：64 位原子不满足当前实时契约
+
+> 2026-09-07 修正：本节只覆盖了 64 位 atomic。开启 SPIRAM 且使用 GCC 时，Xtensa 上
+> 32 位及以下的 atomic 同样会离开硬件路径，因此本节给出的“改用 32 位 lock-free
+> counter”方向不能假定 32 位那一侧是免费的。精确触发条件、按目标的分布表与固定 tag
+> 的源码引用见 [2026-09-07 增补](./2026-09-07-esp32-idf6-toolchain-and-atomics-amendment.md)第 2 节。
 
 当前 Audio Runtime 在编译期要求：
 
