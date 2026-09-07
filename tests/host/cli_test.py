@@ -905,6 +905,160 @@ def fresh_process_snapshot_render_golden(
     assert (project / "manifest.json").read_bytes() == manifest_before
 
 
+FOUNDRY_SET_ID = "11111111-1111-4111-8111-111111111111"
+FOUNDRY_MANIFEST = (
+    "33175f66912a9add3e4e551d19d85072adcd1f0331fcc9fed80ab0bc18dd9111"
+)
+
+
+def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
+    """List, inspect, preview and install a Sound Set across CLI processes.
+
+    Nothing is injected: the Host wires the Workspace-local Catalog, so this
+    exercises the same offline path a native Host, the C ABI and the Web Host
+    all take, one fresh process per request.
+    """
+    workspace = temp_root / "soundset-workspace"
+    catalog = workspace / ".lmdj-host/soundset-catalog/objects"
+    catalog.mkdir(parents=True)
+    fixtures = REPO_ROOT / "tests/fixtures/soundset"
+    for kind in ("manifest", "blob"):
+        for source in sorted((fixtures / kind).iterdir()):
+            if source.is_file():
+                (catalog / source.name).write_bytes(source.read_bytes())
+    (workspace / ".lmdj-host/soundset-catalog/index.json").write_bytes(
+        (fixtures / "catalog/index.json").read_bytes()
+    )
+
+    listed = run_request(
+        executable, workspace, "query", {"operation": "soundset.catalog.list"}
+    )
+    check_success(listed, None)
+    assert listed["result"]["catalog_available"] is True
+    published = {entry["set_id"] for entry in listed["result"]["sets"]}
+    assert FOUNDRY_SET_ID in published
+
+    inspected = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.inspect",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        },
+    )
+    check_success(inspected, None)
+    assert len(inspected["result"]["slots"]) == 16
+
+    # A Sound Set install needs lmdj.project.v4 Project Truth, which a Pattern
+    # Slot assignment establishes.
+    project = temp_root / "soundset-beat.lmdj"
+    run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "project.create",
+            "project_path": str(project),
+            "project_id": uuid(900),
+            "bpm": 120,
+            "initial_pattern": {
+                "pattern_id": uuid(901),
+                "bars": 1,
+                "events": [],
+            },
+        },
+    )
+    run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "pattern.slot.assign",
+            "project_path": str(project),
+            "command_id": uuid(902),
+            "expected_revision": 0,
+            "pattern_slot": 0,
+            "pattern_id": uuid(901),
+        },
+    )
+
+    previewed = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.map.preview",
+            "project_path": str(project),
+            "bank_id": 2,
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        },
+    )
+    check_success(previewed, 1)
+    assert len(previewed["result"]["proposed"]) == 11
+    assert previewed["result"]["collisions"] == []
+    assert previewed["result"]["kept"] == [10, 11, 13, 14, 15]
+
+    installed = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "soundset.install",
+            "project_path": str(project),
+            "command_id": uuid(903),
+            "expected_revision": 1,
+            "bank_id": 2,
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        },
+    )
+    check_success(installed, 2)
+    assert len(installed["result"]["installed"]) == 11
+
+    projected = run_request(
+        executable,
+        workspace,
+        "query",
+        {"operation": "project.inspect", "project_path": str(project)},
+    )
+    check_success(projected, 2)
+    pads = projected["result"]["project"]["banks"][2]["pads"]
+    assert [pad["pad"] for pad in pads if pad["asset_id"]] == [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12
+    ]
+    lineages = [
+        projected["result"]["project"]["assets"][pad["asset_id"]]["lineage"]
+        for pad in pads
+        if pad["asset_id"]
+    ]
+    assert len(lineages) == 11
+    for lineage in lineages:
+        assert lineage["source"]["kind"] == "soundset"
+        assert lineage["source"]["set_id"] == FOUNDRY_SET_ID
+        assert lineage["source"]["manifest_sha256"] == FOUNDRY_MANIFEST
+        assert lineage["derivation"]["kind"] == "soundset_install"
+
+    # The install left the Set Store bytes alone: the Set stays inspectable.
+    reinspected = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.inspect",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        },
+    )
+    check_success(reinspected, None)
+
+
 def host_boundary_and_identity(executable: Path) -> None:
     version = json.loads(
         (REPO_ROOT / "products/lmdj/version.json").read_text(
@@ -1054,13 +1208,15 @@ def main() -> int:
             executable, workspace, temp_root, project
         )
         passed += 1
+        soundset_facade_contract(executable, temp_root)
+        passed += 1
         host_boundary_and_identity(executable)
         passed += 1
         timeout_policy_contract()
         passed += 1
 
-    assert passed == 12
-    print("cli behavior fixtures: 12 passed")
+    assert passed == 13
+    print("cli behavior fixtures: 13 passed")
     return 0
 
 

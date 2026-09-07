@@ -261,6 +261,8 @@ int lmdj_engine_create(
     auto bridge =
         lmdj::facade::make_headless_performance_runtime_bridge(
             lmdj::facade::make_steady_performance_time_source());
+    auto catalog =
+        lmdj::facade::make_workspace_soundset_catalog(workspace_root);
     auto application = std::make_shared<lmdj::facade::Application>(
         lmdj::facade::ApplicationConfig{
             workspace_root,
@@ -273,6 +275,9 @@ int lmdj_engine_create(
             bridge.input_sequencer,
             bridge.launch_acknowledger,
             bridge.replay_controller,
+            nullptr,
+            std::move(catalog.transport),
+            std::move(catalog.source),
         });
     auto state = std::make_shared<EngineState>(
         std::move(application), std::move(bridge));
