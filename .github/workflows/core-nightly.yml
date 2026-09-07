@@ -80,7 +80,16 @@ jobs:
       - name: Verify the TSan host prerequisite
         id: prerequisite
         run: |
-          bits="$(sysctl -n vm.mmap_rnd_bits)"
+          if ! bits="$(sysctl -n vm.mmap_rnd_bits)"; then
+            echo 'infrastructure_failure=true' >>"$GITHUB_OUTPUT"
+            echo 'why: the runner cannot read vm.mmap_rnd_bits, so the TSan host prerequisite is unverified; remedy: an operator investigates the runner sysctl read restriction before a fresh test request; this job does not change host permissions' >&2
+            exit 1
+          fi
+          if [[ ! "$bits" =~ ^[0-9]{1,2}$ ]]; then
+            echo 'infrastructure_failure=true' >>"$GITHUB_OUTPUT"
+            echo 'why: vm.mmap_rnd_bits did not return a valid bounded entropy value; remedy: an operator checks the sysctl interface and host configuration before a fresh test request' >&2
+            exit 1
+          fi
           if [ "$bits" -gt 28 ]; then
             echo 'infrastructure_failure=true' >>"$GITHUB_OUTPUT"
             echo "why: vm.mmap_rnd_bits is $bits on $(hostname); ThreadSanitizer cannot start under more than 28 bits of mmap ASLR entropy and the runner unit forbids the re-exec it would use to cope; remedy: an operator runs sudo scripts/ci/host/configure-sanitizer-aslr.sh on this host" >&2
