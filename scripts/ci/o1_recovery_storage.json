@@ -17,10 +17,10 @@
   },
   "claim": {
     "repository": "endaye/lmdj",
-    "issue_number": 826,
-    "issue_node_id": "I_kwDOTK_1fs8AAAABQJ5bLA",
+    "issue_number": 840,
+    "issue_node_id": "I_kwDOTK_1fs8AAAABQKYSiQ",
     "bot_node_id": "MDM6Qm90NDE4OTgyODI=",
     "workflow_id": 352307416,
-    "epoch": "o1-claim-20260908-issue826"
+    "epoch": "o1-claim-cancel-20260908-issue840"
   }
 }
