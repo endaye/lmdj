@@ -1,7 +1,9 @@
 # LMDJ 主干增量批次自测实施计划
 
 日期：2026-09-08
-状态：仅设计交付；下列实施 Task 均未执行，不代表线上触发器已改变。
+原始计划交付时状态：仅设计交付，当时下列实施 Task 均未执行。
+这不是当前完成度清单；后续实现与真实演练见各 Task 记录。本文后续澄清仍不代表
+T5 自动触发切换已完成，不能据此跳过 O1 前置验收。
 
 依据：[同次提交的 spec](../specs/2026-09-08-lmdj-ci-incremental-batches.md)。
 源码检查基线：`5eb314f52ea71c879a8a4e00f749135791c16879`，各 Task 开始前重新读取 main。
@@ -99,18 +101,30 @@ Documentation impact: none — 内部兼容扩展未切换；Version impact: non
 ### T5 + O2 — 触发切换与现行文档
 
 依赖 O1；记录切换窗口、旧在途批次、初始进度及回退责任。
-文件：CI／report workflow、新增唯一 dispatcher workflow（开始 Task 时确定名称）、
+文件：`.github/workflows/ci.yml`、既有 `.github/workflows/self-test-report.yml`、
 workflow inventory tests、AGENTS／CLAUDE、相关 issue-done／issue-list skills、
 测试／Git／GitHub 工作管理／门户与相关证据治理、门户 testing／release 页面和源图。
 
 - 同一切换移除每日产品 cron 及每日未启动告警，启用 main 轻量唤醒与完成接续。
 - 旧批次完成或明确取消，结果保留；状态未知 bootstrap full，不把历史失败当全绿。
-- 可配置轻量控制面健康巡检，但无新变化不产生产品测试。
+- 复用 `self-test-report.yml` 作为唯一调度控制器和 reusable 执行调用者，不另建
+  dispatcher workflow 或迁移 workflow ID。保留现有固定 writer／controller 身份；
+  main push、整次执行完成通知、手动恢复都进入同一短写锁，重型子任务不持有该锁。
+- 独立 `schedule` 的轻量控制面健康巡检为有界完成链提供恢复入口：读取已有请求、
+  未处理 main 变化和报告状态，不依赖前一条 `workflow_run` 继续触发。它不是每日
+  产品测试，不因日期变化运行产品测试；无未处理变化、待执行请求或显式恢复时
+  不启动重型任务。
+- 完成通知只唤醒应结算或接续的工作；纯报告／idle 运行完成不能无条件制造新的
+  同类运行。GitHub 的 `workflow_run` 最多链接三层，不能承诺无限即时接续；巡检
+  的频率与最坏接续延迟须在接线 Task 中声明，Actions 全局不可用时保留人工入口。
 - 保留 PR／冲突／对话和非 strict 状态，本计划不授权修改远端保护。
 - 回退停 admission，保留进度、在途结果和手动 full，不自动恢复日测或旧队列。
 
 验证：相关完整 CI 合约回归、staged ownership、portal check；线上确认 cron 已去掉、
 main 唤醒与完成接续真实发生、无变化不启动重型 run、没有发布动作。
+O2 还必须保留真实“完成通知链达到平台上限 → 独立健康巡检恢复已有尾部工作 →
+进度追平”的逐腿证据，以及无变化巡检不启动重型任务的证据；本地模拟不能替代
+该平台恢复验收。此要求不取消前述 O1 前置条件。
 Documentation impact: required
 Affected portal pages: /operations/testing-and-proof/ /operations/version-and-release/
 Reason: 触发、范围和结果语义改变，current 页面与治理必须同步。
@@ -140,3 +154,25 @@ Version impact: none
 
 Reason: 不改变产品、模块、Host、Provider 或产品 Contract 版本。
 内部 CI schema 在实施 Task 中版本化，不据此自动分配 Product Build 或发布。
+
+## 4. 后续设计澄清：复用控制器与有界接续
+
+本次澄清检查基线为 `c2932ab2fcf43f6643bbd78a160a8ec1b4eb9eaf`。既有 runtime
+已固定 `self-test-report.yml` 的可信 workflow 身份、controller job 和执行源码
+闭集，因此撤销原计划“新增唯一 dispatcher workflow”的文件选择，采用上面的
+复用方案。这只确定后续 T5 实现边界，不重写历史 Task 为全部未执行或全部完成；
+真实 O1 尚须逐项验证，当前每日入口也未因本次文档修改退役。
+
+平台依据：[GitHub workflow_run 事件说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)。
+独立巡检是对完成链深度上限的恢复机制，不是绕过有界重试、暂停债务或状态认证。
+
+本次 Task 仅声明本计划文件；不改 workflow、runtime、权限、Portal 页面或远端
+状态。按 issue-done 执行 staged ownership、缓存区 whitespace 检查及最终提交范围
+docs-static；Portal check 在提交前实际执行并如实记录缺失依赖，不声称构建通过。
+本地单 commit 后 HOLD shipping，等当前 none 演练窗口结束再另行授权。
+本地检查：staged ownership 66 项通过、缓存区 whitespace 通过；Portal check
+54 项通过、3 项因隔离 worktree 未安装依赖失败，下游校验和构建未运行。
+
+Documentation impact: none — 本次只是实施边界澄清；现行 Portal 不提前宣布切换，
+T5 的 required 页面义务保持不变。
+Version impact: none — 不分配任何产品身份或发布版本。
