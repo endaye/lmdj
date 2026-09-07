@@ -81,10 +81,16 @@ landed patch; protect post-merge local commits not covered by that evidence.
 | Unpushed commits or no PR | Report exact missing transition; offer shipping, do not execute it from an audit |
 | Dirty, divergent, locked, active or uncertain | Keep and name the unresolved safety condition |
 
-After O2, being behind main without conflict, or having red/in-flight daily
-self-tests, does not make a PR abandoned or unmergeable under project policy.
+Being behind main without conflict, or having red/in-flight incremental or
+explicit full self-tests, does not make a PR abandoned or unmergeable under
+project policy. The target strategy has no daily product-test requirement;
+legacy automatic triggers remain until the separately authorized T5 cutover.
 AI review failures need visible current-head takeover, not automatic approval.
-An unmerged O2 draft does not override live main governance or branch protection.
+An unmerged draft does not override live main governance or branch protection.
+Report processed progress, selected results, unresolved failures and unexecuted
+debt separately; docs-none or a later focused pass is not overall health.
+Outbox unknown-write state needs receipt reconciliation, not blind Issue creation.
+An audit grants no report retry, dispatch, protection change or Issue mutation.
 
 ### 3. Remove only verified, authorized targets
 

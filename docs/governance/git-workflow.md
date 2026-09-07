@@ -3,10 +3,13 @@
 This document is the canonical Git workflow for LMDJ. It applies equally to
 human contributors and coding agents.
 
-The optimistic CI procedure takes effect at the explicitly authorized O2
-cutover, after the T5a trigger switch and protection update. An unmerged draft
-cannot override current main governance or live required checks. The cutover
-must account for in-flight old queue items; it is not an ordinary PR permission.
+Ordinary PR integration uses current-head review and Task verification without
+the retired full-CI/strict-update gate; read live protection before each merge.
+The incremental main-only automatic trigger switch is a separate T5 transition,
+not an ordinary PR permission. At this document's update, manual incremental
+controls exist but legacy automatic triggers remain. The approved target below
+does not claim that switch is complete; it requires O1 acceptance and an
+authorized window accounting for old in-flight runs and persistent state.
 
 ## 1. Model
 
@@ -142,7 +145,7 @@ completion marker are not review evidence. Resolving threads is not a way to
 erase findings without actually evaluating them.
 
 No full test matrix, sanitizer, coverage, portal build, `PR Gate` or Integration
-Queue ticket is a PR merge prerequisite after O2. A non-conflicting branch need
+Queue ticket is a PR merge prerequisite. A non-conflicting branch need
 not follow every main advancement. Unknown mergeability is not false or true:
 reread within a bounded interval, then report uncertainty. Resolve real conflicts
 and rerun affected Task checks; rebasing unshared work is preferred, but published
@@ -150,7 +153,7 @@ history must not be rewritten without collaborator agreement and force-push
 authority. A self-test failure does not prevent ordinary repair PRs merging.
 
 Read actual protection before merging. If retired required checks or strict
-up-to-date rules remain, stop and report an incomplete O2 cutover. Shipping
+up-to-date rules reappear, stop and report configuration drift. Shipping
 authority is not permission to bypass or edit protection. Legacy queue scripts
 or labels retained until T6 do not authorize new queue work.
 
@@ -163,16 +166,35 @@ classification's breadth recommends verification, not universal full execution.
 Split control-plane changes when reviewability or a real dependency warrants
 it; do not require every such PR to split or chase main.
 
-Daily self-tests run the complete fixed policy suite set on a pinned main
-target, not a PR-selected subset. Important-node self-tests are explicit
-requests. Preserve resource locks, all suite verdicts, exact target/control
-revision/run/attempt and report failures to Issues without blocking PR merge.
-Do not retry a failure until it becomes green: corrections produce a separately
-recorded new request/result. Missing infrastructure/evidence is not success.
+The approved incremental strategy has no daily automatic product tests. A main
+wakeup selects one pinned target from the complete first-parent interval since
+durable processed progress, including each commit's rename/delete/revert paths,
+not only the endpoint net diff. Scope is the conservative deterministic floor
+under applicable old/new policies, union authenticated review requirements and
+eligible verification debt, closed over all affected consumers. AI and mutable
+labels cannot reduce that floor. Unknown scope evidence selects full; unreadable
+history blocks admission rather than inventing a complete interval.
+None requires explicitly safe explanatory documents with no automated consumer
+and no selected debt. Local classification is not the authoritative review record.
 
-The daily process tests; it does not release daily or automatically select a
-candidate. Release candidate selection and full evidence verification follow
-the separate version policy.
+One active automatic batch runs at a time. New merges coalesce into the next
+target without cancelling the current batch. Persist the immutable request and
+execution claim before heavy work, then the terminal result before progress;
+the short writer lock must not span heavy execution. Preserve resource locks,
+exact target/control/policy/run/attempt and each selected or not-selected verdict.
+Processed progress is not health: test failures remain separate from unexecuted,
+blocked, cancelled or infrastructure verification debt. Bounded recovery may
+pause debt, never erase it or retry indefinitely for green. Missing evidence is
+not success; storage failure blocks progress rather than inventing a result.
+
+Authenticated failures enter durable report outboxes without freezing PR merges;
+report recovery does not rerun product tests. Explicit exact-target full requests
+remain available and cannot be displaced by automatic pending work. Historical
+candidate results do not move automatic progress or clear newer debt.
+Testing does not allocate a version or select/release a candidate. See
+[the incremental spec](../superpowers/specs/2026-09-08-lmdj-ci-incremental-batches.md)
+for the activation and recovery requirements; legacy automatic triggers are
+retired only by the separately verified T5 switch.
 
 ### Post-merge provenance and cleanup
 
@@ -192,7 +214,7 @@ authorization.
 
 Releases remain manual from an explicitly chosen, verified exact main-history
 candidate under [version-management.md](version-management.md) and the
-`lmdj-release` skill. A green daily self-test is reusable only if the canonical
+`lmdj-release` skill. A green complete self-test is reusable only if the canonical
 release verifier accepts its complete, current, exact-candidate evidence; it
 does not authorize prepare, tag, Draft, publication, deploy or promotion.
 Expired or missing evidence must be reacquired as a new authorized test request,
@@ -200,7 +222,7 @@ never inferred or reconstructed from a focused/local pass.
 
 Use only `scripts/release.sh`, beginning with a fresh exact-tag remote audit.
 Publication uses the separately dispatched `publish-release.yml` workflow and
-its protected `release` Environment; a daily self-test does not invoke it.
+its protected `release` Environment; a self-test does not invoke it.
 Prepare, one exact tag push, Draft creation, protected publication, each Host
 deployment and Channel promotion are separate authorization and verification
 boundaries. Follow the canonical policy's current asset inventory, signatures,
