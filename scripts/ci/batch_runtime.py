@@ -20,6 +20,8 @@ import zlib
 
 import batch_controller
 import batch_execution
+from batch_evidence_validation import (PREFIX, PRODUCER_JOB, ALIASES, JOB_NAMES, EXECUTION_SOURCES,
+                                       dependencies, producer_uploaded, validate_bundle, validate_job_observations)
 import batch_github_journal as storage
 import batch_verdict
 import change_scope
@@ -33,32 +35,11 @@ import test_scope
 SCHEMA = "lmdj.ci-batch-runtime.v1"
 WORKFLOW = ".github/workflows/self-test-report.yml"
 CONTROLLER_JOB = "Incremental batch controller"
-PREFIX = "Execute incremental batch / "
-PRODUCER_JOB = PREFIX + "Scoped batch verdict"
 EMPTY_TEMPLATE = "<!-- lmdj-ci-journal-uninitialized-v1 -->\n"
 REFERENCE_PREFIX = "batch-verdict-v1:zlib-base64:"
 MAX_DOCUMENT = 1000000
 MAX_REFERENCE = 40000
 ARTIFACT_RETENTION = timedelta(days=30)
-ALIASES = {"core-tsan": "nightly-tsan", "core-stress": "nightly-stress"}
-JOB_NAMES = {
-    "docs-static": "Docs / static", "portal": "Architecture Portal / portal",
-    "ci-contract": "CI contract", "deploy-contract": "Deploy contract",
-    "chameleon-lab": "Chameleon Lab", "package": "Core package",
-    "web-toolchain-conformance": "web-toolchain-conformance",
-    "web-runtime-host": "web-runtime-host", "creator-web": "creator-web",
-    "web-runtime-lab": "web-runtime-lab", "core-ubuntu": "core (ubuntu-latest)",
-    "select-macos-runner": "Select macOS runner", "macos-primary": "macOS gates (primary)",
-    "macos-fallback": "macOS gates (GitHub-hosted fallback)",
-    "core-macos": "core (macos-latest)", "core-asan-macos": "core-asan-macos",
-    "core-asan": "core-asan", "core-coverage": "core-coverage",
-    "core-tsan": "Self-test TSan stress / core-tsan",
-    "core-stress": "Self-test Release stress / core-stress",
-}
-EXECUTION_SOURCES = (
-    ".github/workflows/self-test-report.yml", ".github/workflows/ci.yml",
-    ".github/workflows/core-nightly.yml", ".github/workflows/architecture-portal.yml",
-)
 
 
 def compatible_sources(git, frozen_control, executor_control):
@@ -93,25 +74,6 @@ def parse_bundle(raw, filenames):
             return {entry.filename: strict_json(archive.read(entry)) for entry in entries}
     except (ValueError, TypeError, KeyError, RuntimeError, zipfile.BadZipFile, zlib.error, NotImplementedError):
         raise InvalidEvidence("why: downloaded artifact content is not acceptable evidence; remedy: inspect exact-run artifact and retain missing coverage") from None
-
-
-def dependencies(policy):
-    result = {job: ["change-scope"] for job in policy.inventory.job_owner}
-    for job in ("macos-primary", "core-macos", "core-asan-macos"):
-        result[job] = ["change-scope", "select-macos-runner"]
-    result["macos-fallback"] = ["change-scope", "select-macos-runner", "macos-primary"]
-    return result
-
-
-def producer_uploaded(producer):
-    steps = producer.get("steps")
-    if not isinstance(steps, list):
-        return False
-    for name in ("Judge selected suites from actual needs", "Retain scoped verdict and raw needs"):
-        matches = [step for step in steps if isinstance(step, dict) and step.get("name") == name]
-        if len(matches) != 1 or matches[0].get("status") != "completed" or matches[0].get("conclusion") != "success":
-            return False
-    return True
 
 
 def require(condition, why):
@@ -404,42 +366,14 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
         except (ValueError, TypeError, KeyError):
             print("why: authenticated artifact contradicts frozen evidence; remedy: inspect the retained exact-run artifact; coverage remains missing")
             return {"status": "missing"}
-        visibility = [s for s in producers[0]["steps"] if s.get("name") == "Keep failed selected work visible"]
-        expected_conclusion = "failure" if checked["status"] == "failed" else "skipped"
-        require(len(visibility) == 1 and visibility[0].get("conclusion") == expected_conclusion
-                and producers[0]["conclusion"] == ("failure" if checked["status"] == "failed" else "success"),
-                "producer business outcome contradicts recomputed verdict")
-        for observation in checked["observations"]:
-            name = JOB_NAMES.get(observation["job"])
-            require(name is not None, "product job has no reviewed API name mapping")
-            matches = [j for j in jobs if j.get("name") == PREFIX + name]
-            if observation["conclusion"] == "skipped" and not matches:
-                continue  # GitHub may omit unexpanded reusable skipped jobs.
-            require(len(matches) == 1, "product job API evidence missing or ambiguous")
-            actual, claimed = matches[0].get("conclusion"), observation["conclusion"]
-            compatible = actual == claimed or claimed == "failure" and actual in {"timed_out", "action_required", "startup_failure"}
-            # Only this reviewed job deliberately uses job-level continuation.
-            compatible |= observation["job"] == "macos-primary" and claimed == "success" and actual == "failure"
-            require(compatible, "product job API conclusion contradicts retained needs")
+        validate_job_observations(checked, producers[0], jobs)
         reference = encode_reference(checked)
         return {"status": "ready", "outcomes": batch_verdict.scheduler_outcomes(checked, policy, identity, request["selection"]),
                 "reference": reference}
 
     def validate_bundle(self, bundle, request, run, policy):
         """Pure content validation; no API, Git, journal or downloads here."""
-        identity = {"request_id": request["id"], "request_kind": request["kind"], "base_sha": request["base"],
-                    "target_sha": request["target"], "control_sha": request["control"], "policy_digest": request["policy"],
-                    "run_id": run["id"], "run_attempt": 1}
-        selected = set(request["selection"]["suites"])
-        expected_execution = {"schema": batch_execution.SCHEMA, "identity": identity, "selection": request["selection"],
-            "lanes": {s.scope_lane: s.id in selected for s in policy.inventory.suites if s.scope_lane is not None},
-            "suites": {s.id: s.id in selected for s in policy.inventory.suites}}
-        require(bundle["execution.json"] == expected_execution, "execution artifact differs from frozen request")
-        rebuilt = batch_execution.from_needs(policy, identity, request["selection"], bundle["needs.json"],
-                                              aliases=ALIASES, dependencies=dependencies(policy))
-        checked = batch_verdict.validate(bundle["verdict.json"], policy, identity, request["selection"])
-        require(checked == rebuilt, "verdict differs from actual retained needs context")
-        return checked, identity
+        return validate_bundle(bundle, request, run, policy)
 
     def answer(self, action, reason, request, state):
         return {"schema": SCHEMA, "action": action, "reason": reason, "request": request,
