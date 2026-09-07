@@ -71,12 +71,27 @@ gate here is the hardened fake git in
 `cat-file <object>` exactly like real git. Apply the same strictness when
 adding new subcommands to any fake tool.
 
-When a test doubles an internal typed interface, the same rule applies to
-return values: a method the double stubs must resolve what the real
-implementation resolves. Give particular attention to any method the code
-under test reaches by wall-clock — a poll, an interval, a retry — because no
-test opts into it, so no test will notice that it returns nothing. A bare
-`vi.fn()` for such a method is a lax stub, not a neutral one.
+When a test doubles an internal typed interface, the defect to avoid is the
+same — the double resolving something the real implementation never resolves,
+such as the `undefined` a bare `vi.fn()` yields for a method declared
+`Promise<PerformanceReplayStatus>`. The *repair*, though, splits by how the
+method is reached, and mirroring production is right for only one half:
+
+- **A method a test invokes explicitly** — mirror production: resolve the shape
+  the real implementation resolves, and let each test stage its own value.
+- **A method the code reaches by wall-clock** — a poll, an interval, a retry —
+  must instead be **neutral with respect to state the test staged**. Any value
+  such a stub resolves can land late and overwrite state the test set up two
+  steps earlier, which trades one load-sensitive failure for another rather
+  than fixing anything; the reproduction in the Why section is exactly that.
+  Model "the Core has not answered yet" — `vi.fn(() => new Promise(() => {}))`
+  — and let a test that wants the poll answered stage the answer itself.
+
+So do not read this entry as "always make the double production-shaped". For a
+wall-clock-reached method a bare `vi.fn()` is a lax stub and a
+production-shaped one is an unsafe stub; the neutral one is the fix. Give these
+methods particular attention, because no test opts into them, so no test will
+notice what they return.
 
 That half of the invariant has no gate. The deploy suite's hardened fake git
 covers one Python suite's fake external tool and cannot see a TypeScript
