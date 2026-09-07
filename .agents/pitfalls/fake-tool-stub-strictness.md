@@ -12,6 +12,9 @@ recurrences:
   - date: 2026-09-07
     occurrence: https://github.com/endaye/lmdj/actions/runs/34119041231
     observed_by: Codex
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/actions/runs/34151840695
+    observed_by: Codex
 exit: gate:apps/web-runtime-host/test/deploy_command_test.py
 escalation: https://github.com/endaye/lmdj/issues/726
 ---
@@ -83,6 +86,16 @@ For an external API double, verify representative response fields against the
 real read-only endpoint or a source-backed fixture, including configurable
 display fields. Do not promote a presentation value into an identity merely
 because the fake always returns one literal.
+
+The 2026-09-08 merged-review mapping fixture omitted another actual Actions
+shape: after merge, an original PR review run can retain its exact PR head but
+return `pull_requests: []`. Empty association is not absence of a PR, and also
+is not proof by itself. `tests/build/ci_review_merge_map_test.py` now exercises
+that shape while retaining exact-attempt head, live merged PR bot COMMENT,
+trusted source/control/jobs, historical policy and actual same-run artifact
+equality. Wrong head, wrong nonempty association and another PR's otherwise
+valid artifact remain rejected. This narrow external API regression does not
+close the broader escalation #726 or claim successful platform O1 acceptance.
 
 When a test fakes an external tool, every faked subcommand must reject the
 invocations the real tool rejects (arity, required flags, mode conflicts) —

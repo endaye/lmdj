@@ -95,8 +95,14 @@ def authenticated_record(record, *, repository_id, workflow_id, download):
     if run.get("event") == "workflow_dispatch":
         require(run.get("head_branch") == "main" and run.get("head_sha") == record["control_sha"], "untrusted manual review source")
     else:
-        require(run.get("event") == "pull_request" and any(p.get("number") == record["pr_number"]
-                and p.get("head", {}).get("sha") == record["head_sha"] for p in run.get("pull_requests", [])),
+        # GitHub may erase this association after merge. It does not erase the
+        # exact-attempt head. Caller has bound the record to the live merged
+        # PR's bot COMMENT; source/jobs/policy and actual artifact still verify
+        # below. Empty association is neither a rejection nor proof by itself.
+        associated = run.get("pull_requests")
+        require(run.get("event") == "pull_request" and run.get("head_sha") == record["head_sha"]
+                and isinstance(associated, list) and (not associated or any(p.get("number") == record["pr_number"]
+                and p.get("head", {}).get("sha") == record["head_sha"] for p in associated)),
                 "historical PR event does not bind reviewed head")
     jobs = pipeline.pages(f"/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs")
     for name in ("Review fallback", "Publish review and scope"):
