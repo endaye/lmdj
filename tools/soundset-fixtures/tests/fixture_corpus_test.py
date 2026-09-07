@@ -152,6 +152,8 @@ observed_rates: set[int] = set()
 observed_channels: set[int] = set()
 s8_d6_violations = 0
 duplicate_artifact_sets = 0
+demo_sets = 0
+demo_reusing_a_slot_artifact = 0
 
 for manifest in manifests.values():
     assert manifest["contract"] == "lmdj.soundset.v1"
@@ -176,6 +178,24 @@ for manifest in manifests.values():
     references = [slot["artifact"]["sha256"] for slot in occupied]
     if len(references) != len(set(references)):
         duplicate_artifact_sets += 1
+
+    # S11-D5: the optional set-level demo Artifact. It is a plain Artifact ref
+    # under the same S8-D6 constraints, so it is stored and checked like any
+    # slot's Artifact.
+    demo = manifest.get("demo")
+    if demo is not None:
+        demo_sets += 1
+        assert set(demo) == {"sha256", "media_type", "byte_length"}, demo
+        assert demo["media_type"] == "audio/wav"
+        demo_stored = committed.get(f"blob/{demo['sha256']}")
+        assert demo_stored is not None, f"missing demo blob {demo['sha256']}"
+        assert demo["byte_length"] == len(demo_stored), demo
+        audio_format, channels, sample_rate, bits = wav_format(demo_stored)
+        assert audio_format == 1, demo
+        assert sample_rate in SUPPORTED_SAMPLE_RATES, demo
+        assert bits == 16 and channels in (1, 2), demo
+        if demo["sha256"] in set(references):
+            demo_reusing_a_slot_artifact += 1
 
     for slot in occupied:
         assert slot["role"] in ROLES, slot
@@ -206,6 +226,15 @@ assert s8_d6_violations >= 1, "no S8-D6-invalid blob case"
 assert duplicate_artifact_sets >= 1, (
     "no Set reuses one Artifact across two slots; S11-D7 unique-byte "
     "accounting has nothing to bite on"
+)
+assert demo_sets >= 1, (
+    "no Set carries a set-level demo Artifact; S11-D5 preview has nothing "
+    "to play"
+)
+assert demo_reusing_a_slot_artifact >= 1, (
+    "no Set's demo reuses a slot Artifact hash, so S11-D7's "
+    "'downloaded once, counted once' rule across the demo and the slots has "
+    "no witness in the corpus"
 )
 
 # --------------------------------------------------------------------------
@@ -239,12 +268,15 @@ for entry in entries:
     assert entry["roles_summary"] == roles, entry["set_id"]
 
     # S11-D7: canonical manifest bytes plus each unique blob's declared
-    # byte_length, counted exactly once.
+    # byte_length, counted exactly once. The set-level demo joins the same
+    # unique set, so a demo that reuses a slot Artifact adds nothing.
     unique = {
         slot["artifact"]["sha256"]: slot["artifact"]["byte_length"]
         for slot in manifest["slots"]
         if "artifact" in slot
     }
+    if "demo" in manifest:
+        unique[manifest["demo"]["sha256"]] = manifest["demo"]["byte_length"]
     assert entry["total_bytes"] == len(manifest_bytes) + sum(unique.values()), (
         entry["set_id"]
     )

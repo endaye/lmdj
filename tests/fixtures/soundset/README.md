@@ -64,8 +64,8 @@ emits a redirect and never follows a symlinked basename.
 
 | Set | `set_id` | `manifest_sha256` | License | Occupied slots | What it exercises |
 | --- | --- | --- | --- | --- | --- |
-| Fixture Foundry CC0 | `11111111-…-111111111111` | `bb249c6f…e657cab6` | `CC0-1.0`, empty attribution | 0–9, 12 | The happy path. Both S8-D6 sample rates, mono and stereo, five empty slots, and slot 12 reusing slot 0's Artifact. |
-| Fixture Attribution Kit | `22222222-…-222222222222` | `3ebb263e…a1bdfcfa` | `CC-BY-4.0`, non-empty attribution | 0–3 | An eligible `CC-BY-4.0` Set whose attribution string must reach listing and inspect. |
+| Fixture Foundry CC0 | `11111111-…-111111111111` | `33175f66…18dd9111` | `CC0-1.0`, empty attribution | 0–9, 12 | The happy path. Both S8-D6 sample rates, mono and stereo, five empty slots, slot 12 reusing slot 0's Artifact, and a set-level `demo` no slot references. |
+| Fixture Attribution Kit | `22222222-…-222222222222` | `ae578e4f…7a313bb4` | `CC-BY-4.0`, non-empty attribution | 0–3 | An eligible `CC-BY-4.0` Set whose attribution string must reach listing and inspect. Its set-level `demo` declares slot 0's Artifact hash, so the Set holds four unique blobs and `total_bytes` counts that one once. |
 | Fixture Unsupported Audio Kit | `33333333-…-333333333333` | `57ab3bf8…0df2e64c` | `CC0-1.0` | 0–2 | Slot 0 is 22.05 kHz, slot 1 is 8-bit, slot 2 is legal 48 kHz. Manifest and hashes are valid, so the only fault is the audio. |
 | Fixture Tampered Kit | `44444444-…-444444444444` | `00a4700e…9892df8e` | `CC0-1.0` | 0–1 | Slot 0's stored bytes contradict its declared `sha256` **and** `byte_length`; slot 1 is honest. |
 | Fixture Mismatched Summary Kit | `55555555-…-555555555555` | `68500bf2…a2cf8ce6` | `CC-BY-4.0` | 0–1 | The manifest is eligible; the catalog entry names `Impostor Records` as `rights_holder`. |
@@ -75,6 +75,14 @@ emits a redirect and never follows a symlinked basename.
 Every Set has 16 slots numbered 0–15 with at least one empty slot, so S11-D12
 (an empty Set slot is not a wipe instruction) always has something to assert.
 
+Two Sets carry the optional set-level `demo` Artifact of S11-D5, and they carry
+it the two ways that differ under S11-D7's unique-blob accounting. Foundry CC0's
+demo is a blob no slot references, so it adds its own length to `total_bytes`.
+The Attribution Kit's demo declares the *same* `sha256` as its slot 0, so it is
+one stored object: it is downloaded once, counted once, and the Set's
+`total_bytes` is 34788 — canonical manifest bytes plus four unique blob lengths
+— rather than the 40592 a second charge would produce.
+
 ## Which plan checkbox each case serves
 
 | Fixture case | Plan checkbox |
@@ -82,6 +90,8 @@ Every Set has 16 slots numbered 0–15 with at least one empty slot, so S11-D12
 | Canonical manifest objects, no trailing newline, hash over exactly those bytes | Task 1 — "RED: `soundset_manifest_test.cpp` — canonical byte equality" |
 | `blob/`, `manifest/` as single-basename, lowercase-sha256 stores | Task 2 — "RED: local adapter rejects `/`, `..`, non-lowercase sha256 basename, symlink, and non-regular file" |
 | Foundry CC0 slot 12 reusing slot 0's Artifact; every `total_bytes` in the index | Task 2 — "RED: unique blob hash is fetched once; declared `total_bytes` must equal canonical manifest bytes plus unique blob lengths" |
+| Attribution Kit's `demo` reusing its slot 0 Artifact hash | Task 2 / #740 — the same rule across the demo and the slots: one hash is one download and one charge |
+| Foundry CC0's standalone `demo` blob | Task 4 — S11-D5 set-level audition; Task 5 — the preview surface |
 | Fixture Tampered Kit | Task 2 — "Tampered blob → `soundset_content_mismatch`" (staging must stay invisible) |
 | Small, exactly known object and Set sizes | Task 2 — "RED: four Host limits, each exact allowed and +1 fail-closed" |
 | Foundry CC0 empty slots 10, 11, 13–15 | Task 3 — "empty Set slots never clear occupied pads"; Task 4 — S11-D12 |

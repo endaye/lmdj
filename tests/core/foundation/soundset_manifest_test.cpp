@@ -44,6 +44,17 @@ Json valid_object() {
   return Json::parse(valid_fixture_bytes());
 }
 
+// The same Set, carrying the optional set-level demo Artifact of S11-D5.
+std::string valid_demo_fixture_bytes() {
+  return read_bytes(
+      std::filesystem::path{LMDJ_SOURCE_DIR} / "tests" / "fixtures" /
+      "contracts" / "soundset-v1-valid-demo.json");
+}
+
+Json valid_demo_object() {
+  return Json::parse(valid_demo_fixture_bytes());
+}
+
 std::string dump(const Json& value) {
   return canonical_json(value);
 }
@@ -471,6 +482,98 @@ void test_every_license_artifact_and_slot_refusal_is_reachable() {
       "soundset_manifest_invalid");
 }
 
+// S11-D5 gives a Set an optional set-level demo Artifact. It is carried under
+// the same exact-keys discipline as a slot's Artifact ref, so every way of
+// malforming it is soundset_manifest_invalid -- the locked vocabulary gains no
+// code, no reason token and no details key.
+void test_set_level_demo_is_optional_and_validated() {
+  // Absent is the common case and stays valid.
+  const auto without = parse_soundset_manifest(valid_fixture_bytes());
+  LMDJ_CHECK(without.has_value());
+  LMDJ_CHECK(!without.value().demo.has_value());
+
+  const auto bytes = valid_demo_fixture_bytes();
+  LMDJ_CHECK(!bytes.empty());
+  LMDJ_CHECK(bytes.back() != '\n');
+  const auto parsed = parse_soundset_manifest(bytes);
+  LMDJ_CHECK(parsed.has_value());
+  LMDJ_CHECK(parsed.value().canonical_bytes == bytes);
+  LMDJ_CHECK(parsed.value().demo.has_value());
+  LMDJ_CHECK(parsed.value().demo->sha256 == std::string(64, 'b'));
+  LMDJ_CHECK(parsed.value().demo->media_type == "audio/wav");
+  LMDJ_CHECK(parsed.value().demo->byte_length == 176444U);
+  // A demo says nothing about eligibility.
+  LMDJ_CHECK(check_soundset_eligibility(parsed.value()).has_value());
+
+  // A demo may name the very Artifact a slot already names. The parser
+  // validates each ref in isolation; S11-D7 accounting is the store's job.
+  auto shared = valid_demo_object();
+  shared["demo"] = shared["slots"][0]["artifact"];
+  const auto parsed_shared = parse_soundset_manifest(dump(shared));
+  LMDJ_CHECK(parsed_shared.has_value());
+  LMDJ_CHECK(
+      parsed_shared.value().demo->sha256 ==
+      parsed_shared.value().slots.at(0).occupied->artifact.sha256);
+
+  auto extra_key = valid_demo_object();
+  extra_key["demo"]["duration_ms"] = 8000;
+  expect_parse_fail(
+      dump(extra_key),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto missing_key = valid_demo_object();
+  missing_key["demo"].erase("media_type");
+  expect_parse_fail(
+      dump(missing_key),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto uppercase_sha = valid_demo_object();
+  uppercase_sha["demo"]["sha256"] = std::string(64, 'B');
+  expect_parse_fail(
+      dump(uppercase_sha),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto sha_not_string = valid_demo_object();
+  sha_not_string["demo"]["sha256"] = 1;
+  expect_parse_fail(
+      dump(sha_not_string),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto empty_media_type = valid_demo_object();
+  empty_media_type["demo"]["media_type"] = "";
+  expect_parse_fail(
+      dump(empty_media_type),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto zero_length = valid_demo_object();
+  zero_length["demo"]["byte_length"] = 0;
+  expect_parse_fail(
+      dump(zero_length),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  auto negative_length = valid_demo_object();
+  negative_length["demo"]["byte_length"] = -1;
+  expect_parse_fail(
+      dump(negative_length),
+      ErrorCode::invalid_argument,
+      "soundset_manifest_invalid");
+
+  for (const auto& scalar : {Json("x"), Json(1), Json::array(), Json(nullptr)}) {
+    auto demo_not_object = valid_demo_object();
+    demo_not_object["demo"] = scalar;
+    expect_parse_fail(
+        dump(demo_not_object),
+        ErrorCode::invalid_argument,
+        "soundset_manifest_invalid");
+  }
+}
+
 void test_eligibility_is_not_schema() {
   auto unknown_spdx = valid_object();
   unknown_spdx["license"]["spdx_id"] = "MIT";
@@ -518,6 +621,7 @@ int main() {
     test_every_root_refusal_is_reachable();
     test_optional_root_and_slot_fields_round_trip();
     test_every_license_artifact_and_slot_refusal_is_reachable();
+    test_set_level_demo_is_optional_and_validated();
     test_eligibility_is_not_schema();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

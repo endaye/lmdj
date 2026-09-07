@@ -347,20 +347,22 @@ struct SoundSetStore::Impl {
         StoredSoundSet{std::move(manifest.value()), total.value()});
   }
 
-  // Occupied slots in slot order, each Artifact hash counted once however many
-  // slots reference it. One hash is one immutable object, so two slots that
-  // declare the same sha256 with a different byte_length or media_type are
-  // describing something that cannot exist: refuse rather than silently keep
-  // the first declaration and let the second reach the Set Store unchecked.
+  // The set-level demo (S11-D5) first, then the occupied slots in slot order,
+  // each Artifact hash counted once however many places reference it. S11-D7
+  // makes the demo part of this accounting rather than a separate download, so
+  // a demo that names a slot's Artifact is fetched and charged exactly once.
+  // The demo comes first because the canonical manifest declares it first.
+  //
+  // One hash is one immutable object, so two references that declare the same
+  // sha256 with a different byte_length or media_type -- two slots, or the
+  // demo and a slot -- are describing something that cannot exist: refuse
+  // rather than silently keep the first declaration and let the second reach
+  // the Set Store unchecked.
   static foundation::Result<std::vector<foundation::ArtifactRef>>
   unique_artifacts(const foundation::SoundSetManifest& manifest) {
     using Result = foundation::Result<std::vector<foundation::ArtifactRef>>;
     std::vector<foundation::ArtifactRef> unique;
-    for (const auto& slot : manifest.slots) {
-      if (!slot.occupied.has_value()) {
-        continue;
-      }
-      const auto& artifact = slot.occupied->artifact;
+    const auto add = [&unique](const foundation::ArtifactRef& artifact) {
       const auto seen = std::find_if(
           unique.begin(),
           unique.end(),
@@ -369,9 +371,20 @@ struct SoundSetStore::Impl {
           });
       if (seen == unique.end()) {
         unique.push_back(artifact);
+        return true;
+      }
+      return *seen == artifact;
+    };
+    if (manifest.demo.has_value() && !add(*manifest.demo)) {
+      return Result::failure(
+          content_mismatch(
+              "Sound Set declares one Artifact hash with two descriptions"));
+    }
+    for (const auto& slot : manifest.slots) {
+      if (!slot.occupied.has_value()) {
         continue;
       }
-      if (*seen != artifact) {
+      if (!add(slot.occupied->artifact)) {
         return Result::failure(
             content_mismatch(
                 "Sound Set declares one Artifact hash with two descriptions"));

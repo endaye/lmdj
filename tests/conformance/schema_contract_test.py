@@ -60,7 +60,7 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 contract_versions = {
     name: (
         "1.1.0"
-        if name in {"project_bundle", "error"}
+        if name in {"project_bundle", "error", "soundset"}
         else (
             "4.0.0"
             if name == "project_v4"
@@ -642,6 +642,20 @@ soundset_roles = [
 ]
 occupied_slot = soundset["$defs"]["slot"]["oneOf"][1]
 assert occupied_slot["properties"]["role"]["enum"] == soundset_roles
+# S11-D5: the set-level demo is one optional Artifact ref, and it reuses the
+# same $def the slots do rather than restating the shape.
+assert soundset["properties"]["demo"] == {"$ref": "#/$defs/artifact_ref"}
+assert "demo" not in soundset["required"], (
+    "why: S11-D5 makes the set-level demo optional; "
+    "remedy: keep demo out of the required list"
+)
+assert (
+    occupied_slot["properties"]["artifact"]["$ref"]
+    == soundset["properties"]["demo"]["$ref"]
+), (
+    "why: a demo Artifact and a slot Artifact are the same kind of reference; "
+    "remedy: point both at #/$defs/artifact_ref"
+)
 license_schema = soundset["$defs"]["license"]
 assert set(license_schema["required"]) == {
     "spdx_id",
@@ -805,6 +819,44 @@ uppercase_sha256 = mutated(
 assert json_schema.validate(uppercase_sha256, soundset), (
     "why: artifact sha256 is lowercase hex; remedy: keep the sha256 pattern"
 )
+# S11-D5: a manifest carrying the set-level demo validates, and one without
+# it stays valid -- `valid_soundset` above is the no-demo case.
+valid_soundset_demo = load_json(fixture_root / "soundset-v1-valid-demo.json")
+json_schema.check(valid_soundset_demo, soundset, "soundset-v1-valid-demo")
+assert "demo" in valid_soundset_demo
+assert "demo" not in valid_soundset
+
+# A demo ref carrying a key the Contract never declares is refused, exactly as
+# a slot Artifact ref is: artifact_ref is additionalProperties false.
+invalid_soundset_demo = load_json(
+    fixture_root / "soundset-v1-invalid-demo.json"
+)
+assert json_schema.validate(invalid_soundset_demo, soundset), (
+    "why: a demo ref with an undeclared key must fail Schema; "
+    "remedy: keep artifact_ref additionalProperties false"
+)
+assert "duration_ms" in invalid_soundset_demo["demo"]
+
+for field, value in (
+    ("sha256", "A" * 64),
+    ("media_type", ""),
+    ("byte_length", 0),
+):
+    assert json_schema.validate(
+        mutated(valid_soundset_demo, ["demo", field], value), soundset
+    ), (
+        f"why: a malformed demo {field} must fail Schema; "
+        f"remedy: keep demo on #/$defs/artifact_ref"
+    )
+
+# Adding the demo carrier must not open the root object up.
+assert json_schema.validate(
+    mutated(valid_soundset_demo, ["unexpected"], True), soundset
+), (
+    "why: unknown top-level keys stay rejected after 1.1.0; "
+    "remedy: keep the root additionalProperties false"
+)
+
 unknown_spdx = mutated(valid_soundset, ["license", "spdx_id"], "MIT")
 json_schema.check(
     unknown_spdx,
