@@ -389,45 +389,45 @@ workaround 压根没有实现，问题仍在但没有保护。
 如果 ESP32 spike 也想用 Clang 工具链，必须先查清 IDF-9032 的实际内容，不得把
 “Clang 下 workaround 不生效”当成绕过手段使用。
 
-## 4. 本地环境（macOS arm64，实测可复现）
+## 4. 本地环境：统一使用 EIM（macOS arm64）
 
-**不要用 `git clone`。** 本机实测：GitHub 约 37 KB/s，Gitee 镜像同样慢且在
-`fetch-pack` 阶段 `early EOF` 中断；两次尝试都失败。真正的瓶颈是 submodule 递归拉取。
-Release 归档已内含全部 submodule，从乐鑫自己的资产镜像拉稳定在 5.6 MB/s：
+> 2026-09-08 更新：本节取代原有的手动 ZIP 下载与 `install.sh` 安装步骤。
 
-```bash
-brew install ninja dfu-util
+**ESP-IDF 统一通过 Espressif Installation Manager（EIM）下载、安装和管理。**
+以后需要新的 ESP-IDF 版本或开发环境，也使用 EIM；不要另用手动 Git 克隆、ZIP 解压或
+旧安装脚本建立平行安装。项目所需的精确版本由项目明确指定，安装方式不改变版本决策；
+本 spike 仍使用第 1 节选定的 `v6.1`，不随 EIM 默认选项自动升级。
 
-mkdir -p ~/esp && cd ~/esp
-curl -L -C - --retry 20 --retry-all-errors -o esp-idf-v6.1.zip \
-  https://dl.espressif.com/github_assets/espressif/esp-idf/releases/download/v6.1/esp-idf-v6.1.zip
-unzip -q esp-idf-v6.1.zip && mv esp-idf-v6.1 esp-idf
-
-cd ~/esp/esp-idf
-IDF_GITHUB_ASSETS=dl.espressif.com/github_assets ./install.sh esp32s3,esp32
-alias get_idf='. $HOME/esp/esp-idf/export.sh'
-```
-
-资产镜像必须用 `.com`，不是 `.cn`：同一个工具链文件实测 `dl.espressif.com` 4.85 MB/s、
-`dl.espressif.cn` 664 KB/s、`github.com` 302 重定向后 0 B/s。PyPI 走官方源即可，实测不是
-瓶颈，因此**不需要**把工具链的 Python 依赖指向第三方镜像。
-
-镜像不免检。解压后核对身份，`v6.1` 应为：
+先在 EIM 中查看已有安装；缺少项目所需版本时，通过 EIM 界面选择该精确版本并完成安装。
+已有对应版本时直接复用，不重复下载。终端按需进入环境：
 
 ```bash
-git -C ~/esp/esp-idf describe --tags          # v6.1
-git -C ~/esp/esp-idf rev-parse HEAD           # fff9895c82d744c7237be8847347bdd1b07c6643
-git -C ~/esp/esp-idf submodule status | grep -c '^-'   # 0
+eim list
+eim shell v6.1
 ```
 
-该 commit 就是 GitHub 上 `v6.1` 附注 tag 解引用的结果；归档尺寸也与 GitHub 记录的
-asset 尺寸逐字节相符。
+进入该 shell 后核对版本与源码身份：
 
-`export.sh` 不写进 shell profile，只用 alias 按需激活。ESP32-S3 有原生 USB-Serial/JTAG，
-macOS 不需要额外 USB 桥驱动，设备名形如 `/dev/cu.usbmodem1101`。
+```bash
+idf.py --version
+git -C "$IDF_PATH" describe --tags
+git -C "$IDF_PATH" rev-parse HEAD
+```
 
-这套环境与 `scripts/core.sh` 的宿主构建互不干扰：仓库内目前**没有**任何 ESP-IDF
-component、target 或 CI 通道，本节只描述开发机上的外部工具链。
+本 spike 的预期结果为 `ESP-IDF v6.1`、`v6.1` 与第 1 节记录的
+`fff9895c82d744c7237be8847347bdd1b07c6643`。其他项目或后续获准的版本使用各自锁定的
+身份，不套用这里的版本号。安装目录以 EIM 实际记录和激活后的 `IDF_PATH` 为准，
+不把个人机器的绝对路径写进项目配置，也不在 shell profile 中自动激活旧 `export.sh`。
+
+从旧安装切换时，保留项目源码、补丁和实验记录，重新生成引用旧 SDK 或 Python 路径的
+构建缓存。清理旧 SDK 前检查本地改动与引用；共享工具链须确认 EIM 不再使用才能删除，
+不能整目录删除 `~/.espressif`。第 1.1 节的 M5GFX 补丁义务仍然适用。
+
+2026-09-08 本机检查：EIM 的 `v6.1` 状态为 `ok`，通过其环境运行 `idf.py --version`
+与 Xtensa 编译器版本查询成功。这只证明环境可激活、工具可运行，不代表旧项目已经
+重新编译或完成真机验收。原安装时记录的镜像速度只属于当时的网络观察，不再作为安装流程。
+
+这套环境用于开发机上的外部 ESP32 工具链；`scripts/core.sh` 仍是宿主 Core 构建入口。
 
 ## 5. 仍未验证
 
