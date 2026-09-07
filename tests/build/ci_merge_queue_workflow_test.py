@@ -183,7 +183,7 @@ class MergeQueueWorkflowTest(unittest.TestCase):
             self.assertIn(f"      {name}:\n", self.core_source)
             self.assertIn(f"--{name.replace('_', '-')} ", self.core_source)
         self.assertIn("queue-validation-${{ github.run_id }}", self.core_source)
-        self.assertIn("if: ${{ always() && inputs.queue_ticket != '' }}", self.core_source)
+        self.assertIn("if: ${{ always() && steps.entry.outputs.batch-mode == 'false' && inputs.queue_ticket != '' }}", self.core_source)
         self.assertIn("queue-mode: ${{ steps.scope.outputs.queue-mode }}", self.core_source)
         self.assertIn("pull-request-body: ${{ steps.scope.outputs.pull-request-body }}", self.core_source)
 
