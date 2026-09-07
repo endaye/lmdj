@@ -287,7 +287,7 @@ Result<SoundSetManifest> parse_soundset_manifest(std::string_view bytes) {
            "publisher",
            "license",
            "slots"},
-          {"description", "bpm", "key"})) {
+          {"description", "bpm", "key", "demo"})) {
     return Result<SoundSetManifest>::failure(
         manifest_invalid("sound set root has unknown or missing keys"));
   }
@@ -334,6 +334,16 @@ Result<SoundSetManifest> parse_soundset_manifest(std::string_view bytes) {
   if (!license.has_value()) {
     return Result<SoundSetManifest>::failure(license.error());
   }
+  // The set-level demo is an Artifact ref like any other, so it reuses
+  // parse_artifact and therefore its soundset_manifest_invalid refusals.
+  std::optional<ArtifactRef> demo;
+  if (parsed->contains("demo")) {
+    auto parsed_demo = parse_artifact(parsed->at("demo"));
+    if (!parsed_demo.has_value()) {
+      return Result<SoundSetManifest>::failure(parsed_demo.error());
+    }
+    demo = std::move(parsed_demo.value());
+  }
   if (!parsed->at("slots").is_array() ||
       parsed->at("slots").size() !=
           static_cast<std::size_t>(kSoundSetSlotCount)) {
@@ -353,6 +363,7 @@ Result<SoundSetManifest> parse_soundset_manifest(std::string_view bytes) {
     manifest.key = parsed->at("key").get<std::string>();
   }
   manifest.license = std::move(license.value());
+  manifest.demo = std::move(demo);
   manifest.canonical_bytes = canonical;
 
   std::array<bool, kSoundSetSlotCount> seen{};

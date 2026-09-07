@@ -36,6 +36,9 @@ recurrences:
   - date: 2026-09-06
     occurrence: https://github.com/endaye/lmdj/pull/697
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-07
+    occurrence: https://github.com/endaye/lmdj/issues/740
+    observed_by: Claude Code (Opus 5)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -74,6 +77,23 @@ nothing but `AssertionError` on the macOS `core` gate, naming neither the two
 unregistered paths nor the list that had to learn them. The two sequences were
 already in hand at the call site, so the message now reports both directions --
 unregistered on disk and listed but absent -- with the remedy.
+
+The twelfth occurrence (#740) landed one line below the eleventh, in the same
+`for` loop #697 had just repaired. #697 gave the *inventory* comparison a
+why/remedy message; the very next statement,
+`assert contract["x-lmdj-contract-version"] == contract_version`, kept none. A
+Contract MINOR bump — `lmdj.soundset.v1` 1.0.0 to 1.1.0 — therefore failed with
+a bare `AssertionError` naming neither the Contract, the version found, the
+version expected, nor the inventory holding the stale value. Worse, the same
+number is pinned a second time in
+`tests/conformance/schema_contract_test.py`'s `contract_versions`, and nothing
+at either site says so, so a bump satisfies one gate and trips the other. The
+message now names the file, both versions, and both inventories.
+
+This is the shape to expect when repairing this pitfall: a fix aimed at one
+assertion leaves its neighbours untouched, because the omission is per
+statement, not per file. When you repair one message, read every other
+fail-closed assertion in the same block before you leave.
 
 The invariant is not mechanically decidable — no test can judge whether prose
 is actionable — so it exits to guidance at the point where a gate is authored

@@ -66,6 +66,11 @@ struct SoundSetManifest {
   std::optional<int> bpm;
   std::optional<std::string> key;
   SoundSetLicense license;
+  // S11-D5: an optional set-level demonstration mix, carried as a plain
+  // Artifact ref under the same S8-D6 constraints as a slot's Artifact.
+  // S11-D7 counts it in the same unique-blob accounting as the slots, so a
+  // demo that reuses a slot's hash is one object downloaded and billed once.
+  std::optional<ArtifactRef> demo;
   std::array<SoundSetSlot, kSoundSetSlotCount> slots{};
   std::string canonical_bytes;
 };

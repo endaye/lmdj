@@ -161,6 +161,11 @@ BLOBS = {
     "a-chord-48000-stereo": BlobSpec(
         "a-chord-48000-stereo", 48_000, 2, 0x0000010A
     ),
+    # Set A's set-level `demo` (S11-D5): a longer stereo mix that no slot
+    # references, so it is a unique blob of its own in S11-D7 accounting.
+    "a-demo-48000-stereo": BlobSpec(
+        "a-demo-48000-stereo", 48_000, 2, 0x0000010B, duration_ms=240
+    ),
     # Set B — CC-BY-4.0.
     "b-kick-48000-mono": BlobSpec("b-kick-48000-mono", 48_000, 1, 0x00000201),
     "b-snare-44100-mono": BlobSpec("b-snare-44100-mono", 44_100, 1, 0x00000202),
@@ -235,6 +240,7 @@ SET_SPECS = [
         "bpm": 120,
         "key_signature": "Am",
         "license": dict(CC0),
+        "demo": "a-demo-48000-stereo",
         "slots": [
             _occupied(0, "kick", "Foundry Kick", "a-kick-44100-mono"),
             _occupied(1, "snare", "Foundry Snare", "a-snare-44100-mono"),
@@ -289,6 +295,10 @@ SET_SPECS = [
             "copyright": "Copyright 2026 Bea Waveform",
             "attribution": "Fixture Attribution Kit by Bea Waveform (CC BY 4.0)",
         },
+        # S11-D7's "downloaded once, counted once" witness: the set-level demo
+        # declares the same Artifact hash as slot 0, so the Set holds four
+        # unique blobs, not five, and `total_bytes` counts it once.
+        "demo": "b-kick-48000-mono",
         "slots": [
             _occupied(0, "kick", "Attribution Kick", "b-kick-48000-mono"),
             _occupied(1, "snare", "Attribution Snare", "b-snare-44100-mono"),
@@ -450,6 +460,25 @@ def build_corpus() -> dict[str, bytes]:
         slots: list[dict] = []
         roles: list[str] = []
         unique_bytes: dict[str, int] = {}
+
+        # S11-D5: the optional set-level demo Artifact. S11-D7 puts it in the
+        # same unique-blob accounting as the slots, so a demo that reuses a
+        # slot's hash is one stored object, counted once.
+        if "demo" in spec:
+            demo_label = spec["demo"]
+            manifest["demo"] = {
+                "sha256": blob_hash[demo_label],
+                "media_type": MEDIA_TYPE,
+                "byte_length": len(blob_bytes[demo_label]),
+            }
+            unique_bytes[blob_hash[demo_label]] = len(blob_bytes[demo_label])
+            demo_served = (
+                TAMPERED_SERVED_BLOB
+                if demo_label == TAMPERED_DECLARED_BLOB
+                else demo_label
+            )
+            files[f"blob/{blob_hash[demo_label]}"] = blob_bytes[demo_served]
+
         for slot_spec in spec["slots"]:
             if "blob" not in slot_spec:
                 slots.append({"slot": slot_spec["slot"]})
