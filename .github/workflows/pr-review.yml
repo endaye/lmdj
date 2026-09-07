@@ -1,5 +1,5 @@
 name: PR Review
-run-name: PR Review / #${{ inputs.pr_number || github.event.pull_request.number }} @ ${{ github.event.pull_request.head.sha || 'dispatch' }}
+run-name: "PR Review / #${{ inputs.pr_number || github.event.pull_request.number }} @ ${{ github.event.pull_request.head.sha || 'dispatch' }}"
 
 # The standalone review entry of the CI Capacity Redesign (plan T4). It runs
 # the same reviewers `ci.yml` runs today -- one Claude backend chosen from
