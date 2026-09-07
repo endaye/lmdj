@@ -32,6 +32,10 @@ on:
         description: Also reconcile recent batches (off by default to isolate the requested retry).
         type: boolean
         default: false
+      rehearsal_only:
+        description: TEMPORARY branch-only isolated reporter drill; run_id is ignored (pass 0).
+        type: boolean
+        default: false
 
 # Everything not listed is `none`. The reporter reads runs and artifacts and
 # writes Issues; it holds no pull-request, contents-write or deploy authority.
@@ -50,10 +54,11 @@ jobs:
   report:
     name: Self-test report
     if: >-
-      github.event_name != 'workflow_run'
+      !(github.event_name == 'workflow_dispatch' && inputs.rehearsal_only)
+      && (github.event_name != 'workflow_run'
       || (github.event.workflow_run.head_branch == 'main'
           && (github.event.workflow_run.event == 'schedule'
-              || github.event.workflow_run.event == 'workflow_dispatch'))
+              || github.event.workflow_run.event == 'workflow_dispatch')))
     # Hosted, as scripts/ci/hosted_runner_policy.json records: this is the
     # check that must run when the self-hosted hosts that run the batches are
     # the thing that went missing.
@@ -99,3 +104,83 @@ jobs:
           --repository "${{ github.repository }}"
           --summary "$GITHUB_STEP_SUMMARY"
           missing --date "$(date -u +%Y-%m-%d)"
+
+  rehearsal:
+    name: Isolated reporter rehearsal (NOT self-test verdict)
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.rehearsal_only
+      && github.ref == 'refs/heads/feat/ci-report-controlled-rehearsal'
+      && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout immutable trusted production reporter
+        uses: actions/checkout@v6
+        with:
+          ref: d360d3805f21a18ec75d86bb0fc69cda747e9d9d
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Checkout exact reviewed rehearsal harness
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: rehearsal
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Allocate isolated drill namespace
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          drill_id="$(python3 -S -c 'import secrets; print(secrets.token_hex(6))')"
+          printf 'drill_id=%s\n' "$drill_id" >> "$GITHUB_OUTPUT"
+          printf '### Isolated reporter rehearsal\n\nRun: %s, attempt: %s\n\nLabel: `self-test-drill-%s`\n\nNo product verdict or release evidence is produced.\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$drill_id" >> "$GITHUB_STEP_SUMMARY"
+      - name: Exercise real persistence and injected faults
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRILL_ID: ${{ steps.identity.outputs.drill_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -S rehearsal/scripts/ci/self_test_report_rehearsal.py \
+            --checkout "$GITHUB_WORKSPACE/trusted" --drill-id "$DRILL_ID" \
+            --run-id "$GITHUB_RUN_ID" --execute --confirm-repository endaye/lmdj \
+            2>&1 | tee reporter-rehearsal.jsonl
+      - name: Independently verify isolated issue closure
+        if: ${{ always() && steps.identity.outputs.drill_id != '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRILL_ID: ${{ steps.identity.outputs.drill_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -S rehearsal/scripts/ci/self_test_report_rehearsal.py \
+            --checkout "$GITHUB_WORKSPACE/trusted" --drill-id "$DRILL_ID" \
+            --run-id "$GITHUB_RUN_ID" --execute --confirm-repository endaye/lmdj --cleanup \
+            2>&1 | tee reporter-rehearsal-cleanup.jsonl
+      - name: Publish clearly bounded rehearsal evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '\n### Reporter transport evidence (synthetic reports, real API writes)\n\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          for evidence_file in reporter-rehearsal.jsonl reporter-rehearsal-cleanup.jsonl; do
+            if [[ -f "$evidence_file" ]]; then head -c 40000 "$evidence_file" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+          printf '\n```\nInjected 403 is pre-HTTP; response loss is injected after real persistence. Neither claims a real GitHub outage.\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain rehearsal evidence separately from self-test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporter-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reporter-rehearsal*.jsonl
+          if-no-files-found: error
+          retention-days: 30

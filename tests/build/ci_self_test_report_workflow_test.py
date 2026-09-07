@@ -131,7 +131,7 @@ class SelfTestReportWorkflowTest(unittest.TestCase):
 
     def test_it_is_a_recorded_hosted_control_plane_job(self) -> None:
         jobs = jobs_in(WORKFLOW)
-        self.assertEqual([job.job_id for job in jobs], ["report"])
+        self.assertEqual([job.job_id for job in jobs], ["report", "rehearsal"])
         self.assertEqual(jobs[0].runs_on, "ubuntu-24.04")
         policy = json.loads(HOSTED_POLICY.read_text(encoding="utf-8"))
         entry = next((e for e in policy["allowed"]

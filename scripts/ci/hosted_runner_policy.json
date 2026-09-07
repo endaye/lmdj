@@ -14,6 +14,12 @@
   },
   "allowed": [
     {
+      "workflow": "self-test-report.yml",
+      "job": "rehearsal",
+      "category": "control-plane",
+      "reason": "User-authorized temporary branch-only reporter transport rehearsal. Real Actions bot identity and issues-write authority are required to test original marker trust. This branch must never merge; its one hosted job and allowance retire with the rehearsal branch."
+    },
+    {
       "workflow": "ci.yml",
       "job": "change-scope",
       "category": "control-plane",
