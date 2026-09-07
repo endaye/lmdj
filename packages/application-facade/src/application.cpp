@@ -5921,9 +5921,12 @@ struct Application::Impl {
       }
     }
     const domain::AssetLineage lineage{
-        {performance.recording_artifact->sha256,
-         performance.recording_revision},
-        {{start_frame, end_frame}, performance.id},
+        domain::AssetArtifactLineageSource{
+            performance.recording_artifact->sha256,
+            performance.recording_revision},
+        domain::ResampleLineageDerivation{
+            {start_frame, end_frame},
+            performance.id},
     };
     const auto committed = projects.import_assign_sample_bytes(
         path,

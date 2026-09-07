@@ -413,9 +413,10 @@ void test_atomic_sample_import_faults_preserve_every_project_truth_projection() 
         std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
     };
     const AssetLineage lineage{
-        {std::string(64, 'a'), 7},
-        {{10, 20},
-         PerformanceId{"40000000-0000-4000-8000-000000000001"}},
+        lmdj::domain::AssetArtifactLineageSource{std::string(64, 'a'), 7},
+        lmdj::domain::ResampleLineageDerivation{
+            {10, 20},
+            PerformanceId{"40000000-0000-4000-8000-000000000001"}},
     };
 
     lmdj::foundation::Result<lmdj::domain::AppliedCommand> result =
@@ -578,9 +579,10 @@ void test_crash_after_sample_manifest_publication_recovers_new_truth() {
   };
   const auto asset_id = AssetId{test_uuid("sample-post-publication-asset")};
   const AssetLineage lineage{
-      {std::string(64, 'b'), 9},
-      {{20, 40},
-       PerformanceId{"40000000-0000-4000-8000-000000000002"}},
+      lmdj::domain::AssetArtifactLineageSource{std::string(64, 'b'), 9},
+      lmdj::domain::ResampleLineageDerivation{
+          {20, 40},
+          PerformanceId{"40000000-0000-4000-8000-000000000002"}},
   };
   lmdj::foundation::Result<lmdj::domain::AppliedCommand> result =
       lmdj::foundation::Result<lmdj::domain::AppliedCommand>::failure(
