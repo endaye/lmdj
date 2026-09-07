@@ -135,6 +135,12 @@
     },
     {
       "workflow": "self-test-report.yml",
+      "job": "controller",
+      "category": "control-plane",
+      "reason": "Authenticates and journals incremental batch admission or terminal recovery under the existing short reporter writer lock. It executes no product tests and must remain available when the self-hosted executors are unavailable."
+    },
+    {
+      "workflow": "self-test-report.yml",
       "job": "report",
       "category": "control-plane",
       "reason": "Turns a finished self-test verdict into failure Issues and files the daily missing-batch alert. It must run when the self-hosted hosts that execute the batches are the thing that went missing, which is exactly when a self-hosted reporter could not."

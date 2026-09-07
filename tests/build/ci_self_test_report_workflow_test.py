@@ -69,7 +69,8 @@ class SelfTestReportWorkflowTest(unittest.TestCase):
         schedule = block(on, "schedule", 2)
         self.assertEqual(re.findall(r'(?m)^    - cron: (.+)$', schedule), ['"0 18 * * *"'])
         inputs = block(block(on, "workflow_dispatch", 2), "inputs", 4)
-        self.assertEqual(field(block(inputs, "run_id", 6), "required", 8), "true")
+        self.assertEqual(field(block(inputs, "run_id", 6), "required", 8), "false")
+        self.assertEqual(field(block(inputs, "batch_operation", 6), "default", 8), "legacy")
         retry = block(inputs, "reconcile", 6)
         self.assertEqual(field(retry, "type", 8), "boolean")
         self.assertEqual(field(retry, "default", 8), "false")
@@ -122,7 +123,9 @@ class SelfTestReportWorkflowTest(unittest.TestCase):
             self.assertEqual(field(step, "GITHUB_TOKEN", 10), "${{ secrets.GITHUB_TOKEN }}")
 
     def test_one_writer_at_a_time_without_killing_a_running_report(self) -> None:
-        self.assertEqual(scalars(block(self.source, "concurrency", 0), 2),
+        self.assertNotRegex(self.source, r'(?m)^concurrency:',
+                            'why: a parent lock would span product execution; remedy: lock only short writers')
+        self.assertEqual(scalars(block(self.job, "concurrency", 4), 6),
                          {"group": "self-test-report", "cancel-in-progress": "false", "queue": "max"})
         self.assertIn("reconcile", self.source,
                       "why: GitHub keeps one pending run per group and drops the rest, so the workflow "
@@ -131,7 +134,7 @@ class SelfTestReportWorkflowTest(unittest.TestCase):
 
     def test_it_is_a_recorded_hosted_control_plane_job(self) -> None:
         jobs = jobs_in(WORKFLOW)
-        self.assertEqual([job.job_id for job in jobs], ["report"])
+        self.assertEqual([job.job_id for job in jobs], ["report", "controller", "execute-batch"])
         self.assertEqual(jobs[0].runs_on, "ubuntu-24.04")
         policy = json.loads(HOSTED_POLICY.read_text(encoding="utf-8"))
         entry = next((e for e in policy["allowed"]
