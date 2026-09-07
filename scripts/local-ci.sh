@@ -4,7 +4,7 @@
 # The pre-flight is advisory. It reuses scripts/ci/change_scope.py so it
 # cannot select a different lane set than CI, and it reports
 # not-runnable-here rather than pass for lanes this platform cannot execute.
-# `PR Gate` remains the single aggregate decision; a green local run
+# Local results are not merge or release evidence; a green local run
 # authorizes no push, Pull Request, merge, or later state transition.
 #
 # Usage:
@@ -13,13 +13,15 @@
 #   scripts/local-ci.sh --lanes docs_static # restrict to named lanes
 #   scripts/local-ci.sh --no-cache          # ignore cached lane verdicts
 #   scripts/local-ci.sh --pr-body body.md   # also check the PR body declaration
-#   scripts/local-ci.sh --install-hook      # install the pre-push hook
+#   scripts/local-ci.sh --declaration-only --pr-body body.md # no lane execution
+#   scripts/local-ci.sh --install-hook      # install an opt-in pre-push hook
+#   LMDJ_PRE_PUSH_FULL=1 git push           # explicitly run selected lanes
 #
 # --pr-body runs CI's own check-doc-impact.mjs against a Pull Request body
 # file. The declaration verdict prints before any lane output, so a malformed
 # `Documentation impact:` line is visible before the Pull Request exists --
-# but every selected lane still runs afterwards; there is no declaration-only
-# mode. It is never cached, and it reports not-applicable when the portal lane
+# use --declaration-only to avoid executing selected lanes. The check is
+# never cached, and it reports not-applicable when the portal lane
 # is not selected, because that is the only condition under which CI checks
 # the declaration.
 #

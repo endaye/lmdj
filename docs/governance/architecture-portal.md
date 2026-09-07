@@ -2,7 +2,7 @@
 
 日期：2026-08-04
 
-状态：已生效
+状态：已生效；本次 CI/合并流程调整在获明确授权的 O2 切换时生效，未合入草案不替代当前 main 规则。
 适用范围：产品、Core Module、Host、Provider、Contract、Product Assembly、平台适配、测试/发布流程与门户本身。
 
 ## 1. 目的与 Source of Truth
@@ -65,7 +65,7 @@ scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL
 scripts/architecture-portal.sh smoke BASE_URL
 ```
 
-实现 Task 的负责人同时负责相关 current 页面和源图。`scripts/architecture-portal.sh check` 是合入前稳定门禁，覆盖单测、元数据、current truth、确定性图、类型、生产构建、路由、身份和站内链接。
+实现 Task 的负责人同时负责相关 current 页面和源图。影响页面、源图、门户工具、投影身份或已记载源码事实的 Task，在提交前运行 `scripts/architecture-portal.sh check`，覆盖单测、元数据、current truth、确定性图、类型、生产构建、路由、身份和站内链接。无关 Task 不强制运行门户重构建，也不把它搬成所有 PR 的 pre-push 门禁；完整日测/节点自测仍保留该 suite。
 
 ## 6. 构建与快照分级
 
@@ -125,8 +125,9 @@ validation，再把该 ID 对应的 HTML/SVG 输出精确复制到
 
 ## 7. CI、发布与回滚证据
 
-受影响 PR 和 `main` push 运行 Architecture Portal CI。PR 还会校验文档影响声明及
-changed files；Product Build/Assembly 变化不能选择 `none`。完整门户检查同时验证
+完整日测/节点自测运行 Architecture Portal suite；可选 PR Preview 是反馈，不是合并必过项。
+受影响 Task 本地校验文档影响声明和 changed files；Product Build/Assembly 变化不能选择
+`none`。完整门户检查同时验证
 当前 Product Build 存在匹配的 `versions.json` 条目、快照源码和冻结元数据，并比对
 Product、Assembly Lock、Module、Host、Provider、Contract、Channel、完整 Git 来源、
 source projection、版本文档/sidebar/图表 inventory 与冻结/introducing 时间。正常生产发布只能由合入后的 Git/Netlify 构建触发；禁止把本地目录或

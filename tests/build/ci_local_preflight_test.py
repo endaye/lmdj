@@ -1121,7 +1121,7 @@ class AdvisoryBoundaryTest(unittest.TestCase):
 
     def test_entry_point_states_it_authorizes_no_state_transition(self) -> None:
         text = ENTRY_POINT_PATH.read_text(encoding="utf-8")
-        self.assertIn("PR Gate", text)
+        self.assertIn("not merge or release evidence", text)
         self.assertIn("authorizes no push", text)
 
     def test_hook_installation_refuses_to_clobber_a_foreign_hook(self) -> None:
@@ -1132,12 +1132,98 @@ class AdvisoryBoundaryTest(unittest.TestCase):
         hook.write_text("#!/bin/sh\necho someone else's hook\n", encoding="utf-8")
         with self.assertRaises(RuntimeError):
             self.preflight.install_hook(repository.path)
-        self.assertEqual(
-            self.preflight.install_hook(repository.path, force=True).read_text(
-                encoding="utf-8"
-            ),
-            self.preflight.HOOK_TEMPLATE,
-        )
+        with self.assertRaisesRegex(RuntimeError, "why:.*remedy:"):
+            self.preflight.install_hook(repository.path, force=True)
+        self.assertIn("someone else's hook", hook.read_text())
+
+    def test_default_hook_does_no_work_and_opt_in_propagates_failure(self) -> None:
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        repository.write("scripts/local-ci.sh", "#!/bin/sh\necho invoked > hook-observation\nexit 7\n")
+        (repository.path / "scripts/local-ci.sh").chmod(0o755)
+        hook = self.preflight.install_hook(repository.path)
+        environment = dict(os.environ, **GIT_ENV)
+        environment.pop("LMDJ_PRE_PUSH_FULL", None)
+        result = subprocess.run([str(hook)], cwd=repository.path, env=environment, capture_output=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse((repository.path / "hook-observation").exists())
+        environment["LMDJ_PRE_PUSH_FULL"] = "1"
+        result = subprocess.run([str(hook)], cwd=repository.path, env=environment, capture_output=True)
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual((repository.path / "hook-observation").read_text().strip(), "invoked")
+
+    def test_exact_legacy_hook_is_migrated_with_a_recoverable_backup(self) -> None:
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        hook = self.preflight.install_hook(repository.path)
+        hook.write_text(self.preflight.LEGACY_HOOK_TEMPLATE)
+        self.preflight.install_hook(repository.path)
+        self.assertEqual(hook.read_text(), self.preflight.HOOK_TEMPLATE)
+        backup = hook.with_name("pre-push.lmdj-before-optimistic")
+        self.assertEqual(backup.read_text(), self.preflight.LEGACY_HOOK_TEMPLATE)
+
+    def test_reinstalling_current_hook_preserves_legacy_backup(self) -> None:
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        hook = self.preflight.install_hook(repository.path)
+        backup = hook.with_name("pre-push.lmdj-before-optimistic")
+        backup.write_text("retained original backup\n")
+        self.preflight.install_hook(repository.path, force=True)
+        self.assertEqual(hook.read_text(), self.preflight.HOOK_TEMPLATE)
+        self.assertEqual(backup.read_text(), "retained original backup\n")
+
+    def test_configured_shared_hooks_directory_does_not_grant_ownership(self) -> None:
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "pre-push"
+            hook.write_text("#!/bin/sh\necho personal shared hook\n")
+            git(repository.path, "config", "core.hooksPath", directory)
+            with self.assertRaisesRegex(RuntimeError, "why:.*remedy:"):
+                self.preflight.install_hook(repository.path, force=True)
+            self.assertEqual(hook.read_text(), "#!/bin/sh\necho personal shared hook\n")
+
+    def test_symlink_and_conflicting_backup_are_never_overwritten(self) -> None:
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        hook = self.preflight.install_hook(repository.path)
+        hook.write_text(self.preflight.LEGACY_HOOK_TEMPLATE)
+        backup = hook.with_name("pre-push.lmdj-before-optimistic")
+        backup.write_text("private backup\n")
+        with self.assertRaisesRegex(RuntimeError, "why:.*remedy:"):
+            self.preflight.install_hook(repository.path)
+        self.assertEqual(hook.read_text(), self.preflight.LEGACY_HOOK_TEMPLATE)
+        hook.unlink()
+        hook.symlink_to(backup)
+        with self.assertRaisesRegex(RuntimeError, "why:.*remedy:"):
+            self.preflight.install_hook(repository.path, force=True)
+        self.assertTrue(hook.is_symlink())
+        self.assertEqual(backup.read_text(), "private backup\n")
+
+    def test_declaration_only_never_executes_lanes(self) -> None:
+        import contextlib
+        import io
+        from unittest import mock
+        plan = {"mode": "full", "selected": ["portal"], "ci_lanes": ["portal"], "base_sha": "a" * 40, "head_sha": "b" * 40,
+                "pr_body": "body", "changed_paths": ["apps/architecture-portal/docs/x.mdx"]}
+        for verdict, expected in ((self.preflight.PASS, 0), (self.preflight.FAIL, 1)):
+            with mock.patch.object(self.preflight, "build_plan", return_value=plan), \
+                    mock.patch.object(self.preflight, "check_declaration", return_value=self.preflight.DeclarationResult(verdict, "test")), \
+                    mock.patch.object(self.preflight, "execute", side_effect=AssertionError("must not run lanes")), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(self.preflight.main(["--declaration-only", "--pr-body", "body.md"]), expected)
+
+    def test_declaration_only_requires_a_body_before_planning(self) -> None:
+        import contextlib
+        import io
+        from unittest import mock
+
+        errors = io.StringIO()
+        with mock.patch.object(self.preflight, "build_plan", side_effect=AssertionError("must not plan")), \
+                contextlib.redirect_stderr(errors):
+            self.assertEqual(self.preflight.main(["--declaration-only"]), 2)
+        self.assertIn("why:", errors.getvalue())
+        self.assertIn("remedy:", errors.getvalue())
 
     def test_module_documents_that_it_is_not_evidence(self) -> None:
         documentation = " ".join((self.preflight.__doc__ or "").split())

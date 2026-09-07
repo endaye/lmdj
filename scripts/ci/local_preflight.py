@@ -3,7 +3,7 @@
 
 The pre-flight answers one question: of the lanes CI would select for the
 current working tree, which ones pass on this machine right now? It is not
-evidence. `PR Gate` remains the single aggregate decision, and a green local
+evidence. It does not grant merge or release eligibility, and a green local
 run authorizes no push, Pull Request, merge, or later state transition.
 
 Two properties keep it honest. The lane selection comes from
@@ -551,7 +551,7 @@ def execute(
     return results
 
 
-HOOK_TEMPLATE = """#!/usr/bin/env bash
+LEGACY_HOOK_TEMPLATE = """#!/usr/bin/env bash
 # Installed by scripts/ci/local_preflight.py --install-hook.
 # The pre-flight is advisory: PR Gate remains the only aggregate decision.
 # Bypass with `git push --no-verify` when you intend to push anyway.
@@ -560,7 +560,24 @@ exec "$(git rev-parse --show-toplevel)/scripts/local-ci.sh"
 """
 
 
+HOOK_TEMPLATE = """#!/usr/bin/env bash
+# Installed by scripts/ci/local_preflight.py --install-hook (optimistic v1).
+# Local verification is advisory; it authorizes no push, merge or release.
+# Opt in to the complete selected lane set: LMDJ_PRE_PUSH_FULL=1 git push.
+# git push --no-verify bypasses hooks; it grants no additional authorization.
+set -euo pipefail
+if [[ "${LMDJ_PRE_PUSH_FULL:-0}" != "1" ]]; then
+  echo "pre-push: heavy verification not requested (LMDJ_PRE_PUSH_FULL=1 opts in)" >&2
+  exit 0
+fi
+exec "$(git rev-parse --show-toplevel)/scripts/local-ci.sh"
+"""
+
+
 def install_hook(root: Path, *, force: bool = False) -> Path:
+    # `force` is retained for CLI compatibility, never as authority to replace
+    # a personal hook. Git's hooks directory may be shared by linked worktrees;
+    # touch only this explicitly requested target, never enumerate worktrees.
     hooks_dir = Path(
         _git(root, "rev-parse", "--git-path", "hooks").decode().strip()
     )
@@ -568,12 +585,25 @@ def install_hook(root: Path, *, force: bool = False) -> Path:
         hooks_dir = root / hooks_dir
     hooks_dir.mkdir(parents=True, exist_ok=True)
     hook = hooks_dir / "pre-push"
-    if hook.exists() and not force:
+    if hook.is_symlink() or (hook.exists() and not hook.is_file()):
+        raise RuntimeError(f"why: hook is not a regular owned file: {hook}; remedy: inspect it manually; it was not changed")
+    if hook.exists():
         existing = hook.read_text(encoding="utf-8", errors="replace")
-        if existing != HOOK_TEMPLATE:
+        if existing not in {HOOK_TEMPLATE, LEGACY_HOOK_TEMPLATE}:
             raise RuntimeError(
-                f"refusing to overwrite an existing hook: {hook} (pass --force)"
+                f"why: refusing to overwrite a personal or modified hook: {hook}; "
+                "remedy: integrate the opt-in manually; --force does not override ownership"
             )
+        if existing == LEGACY_HOOK_TEMPLATE:
+            backup = hook.with_name("pre-push.lmdj-before-optimistic")
+            if backup.is_symlink() or (backup.exists() and
+                    (not backup.is_file() or backup.read_text(encoding="utf-8", errors="replace") != existing)):
+                raise RuntimeError(f"why: migration backup already differs: {backup}; remedy: inspect and preserve it manually")
+            if not backup.exists():
+                with backup.open("x", encoding="utf-8") as handle:
+                    handle.write(existing)
+                backup.chmod(hook.stat().st_mode & 0o777)
+            print(f"preserved old hook at {backup}; restore that exact backup manually if rollback is authorized")
     hook.write_text(HOOK_TEMPLATE, encoding="utf-8")
     hook.chmod(0o755)
     return hook
@@ -624,7 +654,7 @@ def _render(
                 f"  declaration not verified here: {declaration.detail}"
             )
     lines.append(
-        "  advisory only: PR Gate is the aggregate decision and this run "
+        "  advisory only: task verification is not merge/release evidence; this run "
         "authorizes no push or merge."
     )
     return "\n".join(lines)
@@ -652,11 +682,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--install-hook", action="store_true")
-    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--force", action="store_true", help="compatibility flag; never overwrites a personal hook")
+    parser.add_argument("--declaration-only", action="store_true",
+                        help="check --pr-body and exit without executing any selected lane")
     args = parser.parse_args(argv)
 
     root = ROOT
     try:
+        if args.declaration_only and not args.pr_body:
+            raise ValueError("why: --declaration-only needs --pr-body FILE; remedy: pass the declaration file")
         if args.install_hook:
             print(f"installed {install_hook(root, force=args.force)}")
             return 0
@@ -684,8 +718,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{len(plan['selected'])} lane(s): {', '.join(plan['selected']) or 'none'}"
     )
     try:
-        # The declaration check costs milliseconds and its failure is certain
-        # to fail CI, so it is answered before any lane is run.
+        # Report the uncached declaration before lanes; declaration-only never
+        # invokes the lane executor.
         declaration = None
         if plan["pr_body"] is not None:
             declaration = check_declaration(
@@ -695,7 +729,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not args.json:
                 suffix = f" ({declaration.detail})" if declaration.detail else ""
                 print(f"  declaration: {declaration.verdict}{suffix}", flush=True)
-        results = execute(
+        results = [] if args.declaration_only else execute(
             root, plan, cache_dir=Path(args.cache_dir),
             use_cache=not args.no_cache, echo=not args.json,
         )

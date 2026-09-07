@@ -532,19 +532,18 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             "the failure notification; remedy: keep the sweep's run-name",
         )
 
-    def test_the_sweep_is_not_claimed_as_release_evidence(self) -> None:
-        """The documents and the verifier must tell one story.
+    def test_release_compatibility_scope_and_gate_remain_real_producer_jobs(self) -> None:
+        """T7 owns consumer acceptance; topology must not fake evidence.
 
-        `tools/release/ci_evidence.py` allows `push` and `workflow_dispatch`
-        and nothing else, so a `schedule` run recorded in a release intent is
-        refused as a policy conflict. Widening that allow-list is a
-        release-authority decision; until one is taken, no document may
-        promise otherwise.
+        Its release_self_test_evidence_test.py behavior tests own complete
+        schedule-verdict acceptance once T7 lands. Removing PR triggers does
+        not authorize replacing older consumers' scope/gate with fake jobs.
         """
-        evidence = (REPO_ROOT / "tools/release/ci_evidence.py").read_text(encoding="utf-8")
-        self.assertIn('_ALLOWED_EVENTS = frozenset(("push", "workflow_dispatch"))', evidence)
-        workflow_doc = (REPO_ROOT / "docs/governance/git-workflow.md").read_text(encoding="utf-8")
-        self.assertIn("The sweep is a visibility signal and **not** release evidence.", workflow_doc)
+        self.assertIn('python3 scripts/ci/change_scope.py', self.workflow_job('change-scope'))
+        gate = self.workflow_job('pr-gate')
+        self.assertIn('python3 scripts/ci/pr_gate.py', gate)
+        self.assertIn('FORMAL_RESULTS_JSON:', gate)
+        self.assertIn('--results-json "$FORMAL_RESULTS_JSON"', gate)
 
     def test_the_policy_does_not_claim_main_always_runs_full(self) -> None:
         """The sweep's premise and the policy must not contradict each other.
