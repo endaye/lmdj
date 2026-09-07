@@ -1,0 +1,15 @@
+{
+  "storage": {
+    "repository": "endaye/lmdj",
+    "issue_number": 849,
+    "issue_node_id": "I_kwDOTK_1fs8AAAABQKj2dQ",
+    "bot_node_id": "MDM6Qm90NDE4OTgyODI=",
+    "workflow_id": 352307416,
+    "epoch": "review-discovery-20260908-issue849"
+  },
+  "source_floor": {
+    "control_sha": "0bcb14e9ada890f4c0e6b549f72dcdce05cf9c1c",
+    "created_at": "2026-09-07T18:29:09Z"
+  },
+  "review_workflow_id": 352327391
+}
