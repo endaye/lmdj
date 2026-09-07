@@ -78,9 +78,10 @@ class HistoricalTests(unittest.TestCase):
     def setUp(self):
         MapTests.setUp(self)
 
-    def authenticate(self, *, conclusion="success", artifact_record=None, expired=False, source_match=True, producer="success"):
+    def authenticate(self, *, conclusion="success", artifact_record=None, expired=False, source_match=True, producer="success", run_patch=None):
         run = {"id": 99, "run_attempt": 1, "workflow_id": 42, "repository": {"id": 5, "full_name": "endaye/lmdj"},
                "status": "completed", "conclusion": conclusion, "event": "workflow_dispatch", "head_branch": "main", "head_sha": "c" * 40}
+        run.update(run_patch or {})
         def api(path):
             self.assertEqual(path, "/repos/endaye/lmdj/actions/runs/99/attempts/1")
             return run
@@ -107,6 +108,35 @@ class HistoricalTests(unittest.TestCase):
 
     def test_historical_evidence_needs_no_open_pr(self):
         self.assertEqual(self.authenticate(), 12)
+
+    def test_merged_pr_empty_association_retains_exact_head_evidence(self):
+        self.assertEqual(self.authenticate(run_patch={"event": "pull_request", "head_sha": "a" * 40,
+                                                      "pull_requests": []}), 12)
+
+    def test_empty_association_does_not_authorize_wrong_run_head(self):
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "reviewed head"):
+            self.authenticate(run_patch={"event": "pull_request", "head_sha": "d" * 40, "pull_requests": []})
+
+    def test_nonempty_association_must_still_match_pr(self):
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "reviewed head"):
+            self.authenticate(run_patch={"event": "pull_request", "head_sha": "a" * 40,
+                "pull_requests": [{"number": 8, "head": {"sha": "a" * 40}}]})
+
+    def test_matching_association_does_not_override_wrong_actual_head(self):
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "reviewed head"):
+            self.authenticate(run_patch={"event": "pull_request", "head_sha": "d" * 40,
+                "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}]})
+
+    def test_missing_association_is_not_an_empty_platform_array(self):
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "reviewed head"):
+            self.authenticate(run_patch={"event": "pull_request", "head_sha": "a" * 40})
+
+    def test_empty_association_cannot_substitute_another_pr_artifact(self):
+        other = test_scope.build_record(self.policy, changed_paths=["docs/notes/a.md"],
+                                       **{**self.identity, "pr_number": 8})
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "actual publisher artifact"):
+            self.authenticate(artifact_record=other, run_patch={"event": "pull_request", "head_sha": "a" * 40,
+                                                              "pull_requests": []})
 
     def test_failed_run_cannot_authorize_scope(self):
         with self.assertRaisesRegex(review_scope.ReviewScopeError, "terminal successful"):
