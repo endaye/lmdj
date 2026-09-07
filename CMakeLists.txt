@@ -147,6 +147,8 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_performance_rebase_tests
     lmdj_session_mutual_exclusion_tests
     lmdj_project_io_fault_matrix_tests
+    lmdj_soundset_store_tests
+    lmdj_soundset_local_adapter_tests
     lmdj_application_c_api_stress_tests
   )
   if(APPLE)
