@@ -445,7 +445,16 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
         return {"schema": SCHEMA, "action": action, "reason": reason, "request": request,
                 "executor": deepcopy(self.current), "state": state}
 
-    def reconcile(self, *, execute=False, explicit=None):
+    def reconcile(self, *, execute=False, explicit=None, resume=None):
+        if resume is not None:
+            require(execute is False and explicit is None, "resume cannot authorize execution or an explicit batch")
+            require(isinstance(resume, dict) and set(resume) == {'id', 'suites', 'reason'}
+                    and all(isinstance(resume[key], str) and bool(resume[key].strip()) for key in ('id', 'reason')),
+                    "resume requires a closed command with nonempty id and reason")
+            suites = resume['suites']
+            require(isinstance(suites, list) and bool(suites)
+                    and all(isinstance(suite, str) and bool(suite.strip()) for suite in suites)
+                    and len(suites) == len(set(suites)), "resume requires nonempty unique debt suites")
         self.authenticate_current()
         journal = self.journal()
         request = None
@@ -470,13 +479,27 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
         controller = batch_controller.Controller(journal, self.inputs, self.current,
             run_state=self.run_state, result_for=self.result_for, old_runs_terminal=self.old_runs_terminal,
             lock_held=self.lock_held, epoch=self.config["epoch"])
-        answer = controller.reconcile(explicit=request, allow_execution=execute)
+        if resume is not None:
+            # Preflight and replay stay inside the same externally held lock.
+            # Do not use settlement-only reconcile as the preflight: even that
+            # mode may settle a terminal active executor and clear passed debt.
+            events = journal.load()
+            controller.policy = self.inputs.policy_at(self.control)
+            state = controller._replay(events)
+            require(state['active'] is None, "resume requires no active executor; settle separately before resume")
+            existing = next((event for event in events if event['id'] == 'resume:' + resume['id']), None)
+            if existing is None:
+                require(all(suite in state['debts'] for suite in resume['suites']), "resume names unknown debt")
+            else:
+                require(existing['data'] == {key: resume[key] for key in ('suites', 'reason')},
+                        "resume identity reused with different command")
+        answer = controller.reconcile(explicit=request, resume=resume, allow_execution=execute)
         return self.answer(answer["action"], answer["reason"], answer["request"], answer["state"])
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "reconcile", "settle"))
+    parser.add_argument("command", choices=("init", "reconcile", "settle", "resume"))
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -484,10 +507,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         require(not args.output.exists(), "output already exists; a stale execute action must never be reused")
-        require(args.request is None or args.command == "reconcile", "explicit request requires execution mode")
+        require(args.request is None or args.command in {'reconcile', 'resume'}, "request requires reconcile or resume mode")
+        require(args.command != 'resume' or args.request is not None, "resume requires its explicit command file")
         runtime = Runtime(strict_json(args.config.read_bytes()), root=args.root)
+        command = strict_json(args.request.read_bytes()) if args.request else None
+        require(args.command != 'resume' or isinstance(command, dict), "resume requires an explicit command object")
         answer = runtime.initialize() if args.command == "init" else runtime.reconcile(
-            execute=args.command == "reconcile", explicit=strict_json(args.request.read_bytes()) if args.request else None)
+            execute=args.command == "reconcile", explicit=command if args.command == 'reconcile' else None,
+            resume=command if args.command == 'resume' else None)
         with args.output.open("x") as stream:
             stream.write(self_test.canonical_json(answer) + "\n")
     except Exception:
