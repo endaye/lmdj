@@ -246,14 +246,104 @@ with no request and a complete state identical to the first settlement,
 including generation 5, all original request/result identities and every debt's
 attempt count. No execution-enabled recovery was used in either settlement.
 
-Still outstanding: real GitHub cancellation and preserved missing-suite debt;
-later docs-only changes retaining that debt; exact full candidate acceptance
+At that recording point, outstanding legs included real GitHub cancellation
+and preserved missing-suite debt, and later docs-only changes retaining that
+debt. The subsequent evidence below narrows these gaps, without claiming an
+interrupted-process cancellation pass. Still outstanding: exact full candidate acceptance
 from the new source; remaining completion-boundary/consumer-union journeys;
 automatic main/completion/independent-health-tick cutover and real chain-limit
 recovery with idle verification. An actual valid Kimi fallback after GLM failure
 has not been observed; existing real evidence proves all-backend failure, while
 the bounded successful-fallback matrix is local-test evidence. No tag, Release,
 version allocation, deployment or Channel promotion has been performed.
+
+### Subsequent C1 documentation observer
+
+This one-file update uses isolated branch `docs/ci-o1-cancellation-evidence`,
+based on `e5412a4b1359dd928b556379c4195ffc05ed014d`. It records observations;
+it does not change code, storage, triggers or the acceptance standard.
+
+The genuine one-document merge #839 ended at
+`aca410cbc2bdeb8a31c01e0a4ceb1df9d6269979`. Its complete interval from the
+previous C1 target selected deterministic `none` under both policy versions.
+[Observer 34166959881/1](https://github.com/endaye/lmdj/actions/runs/34166959881/attempts/1),
+artifact `10034462772`, ran settlement-only, not execution-enabled reconcile.
+The actual original controller result changed only events, generation and pending
+in the complete scheduler state: generation became 6 and pending became that
+documentation SHA. All 16 missing-debt objects, requests, results, failures and
+processed progress were exactly unchanged. Only the controller succeeded;
+legacy reporter and product execution were skipped.
+
+This proves observing a genuine later documentation change did not erase C1
+debt. It is not an execution-enabled debt-processing pass and does not claim
+the pending documentation interval was completed.
+
+### C2 actual cancellation terminal, timeout race and recovery
+
+The separately reviewed fixed claim role moved to fresh
+[journal #840](https://github.com/endaye/lmdj/issues/840), node
+`I_kwDOTK_1fs8AAAABQKYSiQ`, epoch `o1-claim-cancel-20260908-issue840`.
+Previous claim journal #826 was preserved. Initialization `34167612410/1`,
+artifact `10034662007`, established an empty checkpoint at control
+`e7fc6959134a434a95a5cbfc8e755ff9b18efede`; this was not a tested baseline.
+
+[Diagnostic 34168119615/1](https://github.com/endaye/lmdj/actions/runs/34168119615/attempts/1)
+fixed target/control `e5412a4b1359dd928b556379c4195ffc05ed014d` and request
+`batch:o1-claim-cancel-20260908-issue840:1`. Its actual bootstrap selected all
+16 suites with null base. Complete pre-cancel GraphQL records
+`5576390280`, `5576391486`, `5576392030` were observe/admit/claim, authored by
+stable Bot node `MDM6Qm90NDE4OTgyODI=` without comment edits. Every envelope's
+previous link and digest was recomputed; the checkpoint head was
+`8e8c1093ad86b9aec863af88d87e001e2cf8d1e262823087e6aa367cb0acefad`, pending null.
+Actual historical Git policy and reducer replay bound the claim to this run's
+first attempt, with no processed baseline or invented test outcomes.
+
+The controller job `101883109982` succeeded; the independent, unprivileged
+waiter `101883240654` was observed in progress after the short writer lock had
+ended. Legacy and product execution jobs were skipped, and artifact inventory
+was zero. One ordinary cancellation POST was accepted at `22:57:53Z`; it was
+not repeated. The API subsequently reported both parent run and waiter job
+`completed/cancelled`, with parent updated at `22:57:55Z`.
+
+**Timing limitation:** the original waiter log first records natural expiry at
+`22:57:53.2122906Z`, after its 285-second sleep, then exit 1 at
+`22:57:53.2139369Z`. Its actual wait step concluded failure, before the job/run
+reached cancelled. Therefore this is not evidence that cancellation interrupted
+a still-running wait process. The real cancelled executor's recovery below is
+verified; the interrupted-process leg remains open. A successful cancellation
+API response or cancelled job label alone cannot erase this race.
+
+The complete GraphQL response after cancellation matched the pre-cancel ready
+snapshot exactly: body, editor metadata, all three comments and pagination.
+No product jobs or artifacts appeared. Ordinary settlement
+[34168456440/1](https://github.com/endaye/lmdj/actions/runs/34168456440/attempts/1)
+then succeeded, with original artifact `10034927085`, ZIP SHA-256
+`66d3e4841ad51a5a92f0ce84b4d4a6e03a80165e5a139250720091541dcef532`.
+It preserved all three original comment objects unchanged and appended result
+`5576437322` before advance `5576437815`. Replaying all five authenticated
+events with the real historical policy reproduced the entire original result
+state: generation 5, active null, all 16 suites missing with debt attempt 1,
+no invented test failures. Processed advanced to the frozen target, not to a
+tested or healthy baseline.
+
+Fresh ordinary replay
+[34168494357/1](https://github.com/endaye/lmdj/actions/runs/34168494357/attempts/1)
+retained artifact `10034936370`, ZIP SHA-256
+`d1b9f6620f3d4cb376c6a320ecb7cadcd6f5bd993bceb252746da4c7650ce9cc`.
+Both original ZIP hashes matched their API digests. Replay returned idle with
+no request and a complete state identical to settlement. The entire GraphQL
+response also remained identical, including all five comments and metadata.
+Both recovery runs had four jobs: controller success, legacy reporter, waiter
+and product execution skipped. No repeated admission, debt-attempt reset or
+product execution was hidden by the replay.
+
+Original API responses, complete snapshots, waiter log and both original ZIPs
+were retained outside the worktree at
+`/tmp/lmdj-o1-C2-independent.usuSfl`; that local path is an investigation copy,
+not a permanent remote storage guarantee. The remaining candidate, execution-
+enabled debt, completion/consumer-union, real interrupted-process cancellation
+and T5 cutover/chain-limit journeys remain open. Nothing here authorizes a
+release or states that automatic cutover is complete.
 
 ## Ledger verification
 
