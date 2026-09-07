@@ -1,4 +1,6 @@
 name: PR Review
+# NEVER MERGE: controlled O1 diagnostic branch only. Trusted review/publisher
+# scripts remain fixed to d360d380; only the error sanitizer uses dispatch SHA.
 run-name: PR Review / #${{ inputs.pr_number || github.event.pull_request.number }} @ ${{ github.event.pull_request.head.sha || 'dispatch' }}
 
 # The standalone review entry of the CI Capacity Redesign (plan T4). It runs
@@ -68,6 +70,7 @@ jobs:
     # the operator has set PR_REVIEW_ENTRY=standalone (T5a).
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fix/ci-review-controlled-diagnostics') ||
       (github.event_name == 'pull_request' && vars.PR_REVIEW_ENTRY == 'standalone')
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 5
@@ -90,13 +93,11 @@ jobs:
       started_at: ${{ steps.clock.outputs.started_at }}
       matrix: ${{ steps.select.outputs.matrix }}
     steps:
-      # Never the Pull Request head here: this job's scripts decide who
-      # reviews and what, so they come from the base (`pull_request`) or from
-      # the ref the operator dispatched (`workflow_dispatch`), the same rule
-      # `ci.yml`'s selector follows.
+      # NEVER MERGE rehearsal: review target, selector and all publishers use
+      # the frozen trusted base, not the diagnostic branch or PR head.
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          ref: d360d3805f21a18ec75d86bb0fc69cda747e9d9d
           fetch-depth: 1
           persist-credentials: false
       - name: Record when the review began
@@ -163,7 +164,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          ref: d360d3805f21a18ec75d86bb0fc69cda747e9d9d
           fetch-depth: 0
           persist-credentials: false
       - name: Resolve the backend credential
@@ -213,6 +214,21 @@ jobs:
           claude_args: >-
             --tools "Read" --allowedTools "Read" --disable-slash-commands
             --json-schema '{"type":"object","additionalProperties":false,"required":["summary","findings"],"properties":{"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{"path":{"type":"string"},"line":{"type":"integer","minimum":1},"body":{"type":"string"}}}}}}'
+      - name: Checkout the exact controlled diagnostic helper
+        if: ${{ always() && steps.review.outcome == 'failure' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fix/ci-review-controlled-diagnostics' }}
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-diagnostics
+          sparse-checkout: scripts/ci/review_diagnostics.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Classify failure without disclosing model or API text
+        if: ${{ always() && steps.review.outcome == 'failure' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fix/ci-review-controlled-diagnostics' }}
+        env:
+          REVIEW_HEAD_SHA: ${{ needs.target.outputs.head_sha }}
+          REVIEW_BACKEND: ${{ matrix.backend }}
+        run: python3 -I .ci-diagnostics/scripts/ci/review_diagnostics.py
       - name: Validate model data
         env:
           REVIEW_JSON: ${{ steps.review.outputs.structured_output }}
@@ -245,7 +261,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          ref: d360d3805f21a18ec75d86bb0fc69cda747e9d9d
           fetch-depth: 0
           persist-credentials: false
       - name: Collect the exact review input
@@ -319,7 +335,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          ref: d360d3805f21a18ec75d86bb0fc69cda747e9d9d
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
@@ -353,7 +369,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          ref: d360d3805f21a18ec75d86bb0fc69cda747e9d9d
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:

@@ -67,7 +67,8 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         self.assertNotIn("pull_request_target:", self.source)
 
     def test_no_pr_head_executable_checkout_in_any_job(self):
-        trusted = "ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}"
+        # NEVER MERGE controlled rehearsal pins all five production consumers.
+        trusted = "ref: d360d3805f21a18ec75d86bb0fc69cda747e9d9d"
         for name, job in self.jobs.items():
             with self.subTest(job=name):
                 self.assertIn(trusted, job)
