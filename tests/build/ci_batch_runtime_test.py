@@ -468,9 +468,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(second["state"]["requests"][explicit["id"]], first["state"]["requests"][explicit["id"]])
         self.assertEqual(second["state"]["queue"], [explicit["id"]])
 
-    def advance_main(self, *, workflow_change=False):
+    def advance_main(self, *, workflow_change=False, content="changed main content\n"):
         path = runtime.EXECUTION_SOURCES[1] if workflow_change else "note.md"
-        (self.root / path).write_text("changed main content\n")
+        (self.root / path).write_text(content)
         self.git("add", path)
         self.git("commit", "-qm", "advance main fixture")
         self.api.sha = self.git("rev-parse", "HEAD")
@@ -565,6 +565,182 @@ class RuntimeTests(unittest.TestCase):
         arguments = factory.call_args.args
         self.assertEqual(arguments[:3], ("endaye/lmdj", 1286600062, 8))
         self.assertIs(arguments[3], instance.inputs)
+
+    def paused_debts(self):
+        first = self.start()
+        self.evidence(first['request'], missing_job='core-asan-macos', failed_job='docs-static')
+        self.api.add_run(18)
+        self.make(18).reconcile(execute=False)
+        self.advance_main()
+        self.api.add_run(19)
+        second = self.make(19).reconcile(execute=True)
+        self.evidence(second['request'], missing_job='core-asan-macos', failed_job='docs-static', run=19)
+        self.api.add_run(20)
+        settled = self.make(20).reconcile(execute=False)
+        self.assertTrue(settled['state']['debts']['core_macos']['paused'])
+        self.assertEqual(settled['state']['debts']['core_macos']['attempts'], 2)
+        return settled
+
+    def test_resume_unpauses_only_without_execution_or_erasing_evidence(self):
+        before = self.paused_debts()['state']
+        command = {'id': 'repair-host-1', 'suites': ['core_macos'], 'reason': 'host repair verified'}
+        after = self.make(20).reconcile(resume=command)
+        self.assertEqual(after['action'], 'idle')
+        self.assertIsNone(after['state']['active'])
+        for key in ('processed', 'failures', 'results', 'requests'):
+            self.assertEqual(after['state'][key], before[key], 'why: resume erased evidence; remedy: retain prior observations')
+        expected = {**before['debts']['core_macos'], 'paused': False, 'attempts': 0}
+        self.assertEqual(after['state']['debts'], {'core_macos': expected})
+        self.assertTrue(after['state']['recovery_requested'])
+        self.assertEqual(self.make(20).journal().load()[-1]['id'], 'resume:repair-host-1')
+
+    def test_resume_redelivery_after_new_failure_cannot_reset_budget(self):
+        self.paused_debts()
+        command = {'id': 'repair-once', 'suites': ['core_macos'], 'reason': 'host repaired'}
+        self.make(20).reconcile(resume=command)
+        self.api.add_run(21)
+        recovery = self.make(21).reconcile(execute=True)
+        self.assertEqual(recovery['action'], 'execute')
+        self.assertEqual(recovery['request']['base'], recovery['request']['target'])
+        self.api.runs[21].update(status='completed', conclusion='cancelled')
+        self.api.jobs[21][0].update(status='completed', conclusion='success')
+        self.api.add_run(22)
+        settled = self.make(22).reconcile(execute=False)
+        before = self.make(22).journal().load()
+        repeated = self.make(22).reconcile(resume=command)
+        self.assertEqual(repeated['state'], settled['state'])
+        self.assertEqual(self.make(22).journal().load(), before)
+        self.assertEqual(repeated['state']['debts']['core_macos']['attempts'], 1)
+        self.assertFalse(repeated['state']['recovery_requested'])
+        self.assertEqual(self.make(22).reconcile(execute=True)['action'], 'idle')
+
+    def test_resume_same_identity_different_payload_is_refused(self):
+        self.paused_debts()
+        command = {'id': 'repair-once', 'suites': ['core_macos'], 'reason': 'host repaired'}
+        self.make(20).reconcile(resume=command)
+        with self.assertRaisesRegex(batch.BatchError, 'different command'):
+            self.make(20).reconcile(resume={**command, 'reason': 'different repair'})
+
+    def test_resume_redelivery_after_coverage_is_noop(self):
+        self.paused_debts()
+        command = {'id': 'repair-once', 'suites': ['core_macos'], 'reason': 'host repaired'}
+        self.make(20).reconcile(resume=command)
+        self.advance_main(content="second main change\n")
+        self.api.add_run(21)
+        recovery = self.make(21).reconcile(execute=True)
+        self.evidence(recovery['request'], run=21)
+        self.api.add_run(22)
+        settled = self.make(22).reconcile(execute=False)
+        self.assertEqual(settled['state']['debts'], {})
+        before = self.make(22).journal().load()
+        repeated = self.make(22).reconcile(resume=command)
+        self.assertEqual(repeated['state'], settled['state'],
+                         'why: old resume recreated covered debt; remedy: replay stable command as a no-op')
+        self.assertEqual(self.make(22).journal().load(), before)
+
+    def test_resume_live_or_terminal_active_requires_separate_settle(self):
+        start = self.start()
+        command = {'id': 'not-yet', 'suites': ['core_macos'], 'reason': 'repair'}
+        for terminal in (False, True):
+            if terminal:
+                self.evidence(start['request'], missing_job='core-asan-macos')
+            self.api.add_run(18)
+            before = self.make(18).journal().load()
+            with self.assertRaisesRegex(batch.BatchError, 'settle'):
+                self.make(18).reconcile(resume=command)
+            self.assertEqual(self.make(18).journal().load(), before)
+
+    def test_resume_closed_input_rejects_invalid_values_before_events(self):
+        self.paused_debts()
+        valid = {'id': 'repair', 'suites': ['core_macos'], 'reason': 'fixed host'}
+        for command in ({**valid, 'extra': 1}, {**valid, 'id': ' '}, {**valid, 'reason': ' '},
+                        {**valid, 'id': True}, {**valid, 'suites': []},
+                        {**valid, 'suites': ['core_macos', 'core_macos']},
+                        {**valid, 'suites': [True]}, {**valid, 'suites': ['not-a-debt']}):
+            with self.subTest(command=command):
+                before = self.make(20).journal().load()
+                with self.assertRaises(batch.BatchError):
+                    self.make(20).reconcile(resume=command)
+                self.assertEqual(self.make(20).journal().load(), before)
+
+    def test_resume_cannot_combine_execution_or_explicit_request(self):
+        self.paused_debts()
+        command = {'id': 'repair', 'suites': ['core_macos'], 'reason': 'fixed host'}
+        for options in ({'execute': True}, {'explicit': {'id': 'node', 'kind': 'node', 'target': self.api.sha}}):
+            before = self.make(20).journal().load()
+            with self.assertRaisesRegex(batch.BatchError, 'resume'):
+                self.make(20).reconcile(resume=command, **options)
+            self.assertEqual(self.make(20).journal().load(), before)
+
+    def test_resume_write_response_loss_replays_once(self):
+        self.paused_debts()
+        command = {'id': 'repair-once', 'suites': ['core_macos'], 'reason': 'fixed host'}
+        self.api.lose = 'resume'
+        with self.assertRaises(batch.BatchError):
+            self.make(20).reconcile(resume=command)
+        answer = self.make(20).reconcile(resume=command)
+        self.assertEqual(answer['action'], 'idle')
+        self.assertEqual(sum(e['type'] == 'resume' for e in self.make(20).journal().load()), 1)
+
+    def test_resume_refuses_unavailable_storage(self):
+        self.paused_debts()
+        self.api.fail = ('POST', '/graphql')
+        with self.assertRaises(batch.BatchError):
+            self.make(20).reconcile(resume={'id': 'repair', 'suites': ['core_macos'], 'reason': 'fixed host'})
+
+    def resume_cli(self, contents, operation='resume'):
+        config, request, output = self.root / 'config.json', self.root / 'resume.json', self.root / 'answer.json'
+        config.write_text(json.dumps(self.config))
+        request.write_text(contents)
+        instance = self.make(20)
+        # Actual CLI parser, file input and real runtime/Journal/HTTP fixtures;
+        # only constructor injection replaces environment/token discovery.
+        with mock.patch.object(runtime, 'Runtime', return_value=instance):
+            status = runtime.main([operation, '--config', str(config), '--request', str(request), '--output', str(output)])
+        return status, json.loads(output.read_text()) if output.exists() else None
+
+    def test_actual_resume_cli_persists_idle_action_not_execute(self):
+        self.paused_debts()
+        status, answer = self.resume_cli(json.dumps({'id': 'cli-repair', 'suites': ['core_macos'], 'reason': 'host restored'}))
+        self.assertEqual(status, 0)
+        self.assertEqual(answer['action'], 'idle')
+        self.assertFalse(answer['state']['debts']['core_macos']['paused'])
+        self.assertIsNone(answer['state']['active'])
+
+    def test_resume_cli_null_is_not_implicit_settle(self):
+        self.paused_debts()
+        before = self.make(20).journal().load()
+        status, answer = self.resume_cli('null')
+        self.assertEqual(status, 1, 'why: null resume silently became settle; remedy: require an explicit closed command')
+        self.assertIsNone(answer)
+        self.assertEqual(self.make(20).journal().load(), before)
+
+    def test_resume_cli_duplicate_key_refuses_without_output(self):
+        self.paused_debts()
+        status, answer = self.resume_cli('{"id":"first","id":"second","suites":["core_macos"],"reason":"fixed"}')
+        self.assertEqual(status, 1)
+        self.assertIsNone(answer)
+
+    def test_init_and_settle_cli_do_not_accept_resume_command(self):
+        self.paused_debts()
+        for operation in ('init', 'settle'):
+            before = self.make(20).journal().load()
+            status, answer = self.resume_cli(json.dumps({'id': 'repair', 'suites': ['core_macos'], 'reason': 'fixed'}), operation)
+            self.assertEqual(status, 1)
+            self.assertIsNone(answer)
+            self.assertEqual(self.make(20).journal().load(), before)
+
+    def test_resume_cli_requires_command_file_before_constructing_runtime(self):
+        with mock.patch.object(runtime, 'Runtime') as constructor:
+            status = runtime.main(['resume', '--config', str(self.root / 'unused'), '--output', str(self.root / 'absent')])
+        self.assertEqual(status, 1)
+        constructor.assert_not_called()
+
+    def test_resume_requires_same_writer_lock(self):
+        self.paused_debts()
+        self.env['BATCH_WRITER_LOCK'] = 'wrong'
+        with self.assertRaisesRegex(batch.BatchError, 'short writer lock'):
+            self.make(20).reconcile(resume={'id': 'repair', 'suites': ['core_macos'], 'reason': 'fixed'})
 
     def test_reference_bomb_and_trailing_stream_rejected(self):
         for compressed in (zlib.compress(b"x" * (runtime.MAX_DOCUMENT + 1)), zlib.compress(b"{}") + zlib.compress(b"{}")):
