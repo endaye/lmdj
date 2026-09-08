@@ -16,6 +16,7 @@ import zipfile
 
 import change_scope
 import review_scope
+import review_merge_map as mapping
 import self_test_report as reporting
 import test_scope
 
@@ -55,6 +56,106 @@ def _step(job, name, conclusion="success"):
     require(len(matches) == 1 and matches[0].get("conclusion") == conclusion, "required review step is missing or incomplete")
 
 
+def _first_parent_chain(api, prefix, base, head):
+    """Prove actual parent links from a complete bounded compare inventory."""
+    commits, total = {}, None
+    for page in range(1, 101):
+        response = api._request('GET', prefix + f'/compare/{base}...{head}?per_page=100&page={page}')
+        count, items = response.get('total_commits'), response.get('commits')
+        require(response.get('status') in {'ahead', 'identical'} and response.get('merge_base_commit', {}).get('sha') == base,
+                'historical mapping control is not main ancestry')
+        require(type(count) is int and 0 <= count <= 10000 and (total is None or total == count)
+                and isinstance(items, list) and len(items) <= 100, 'compare inventory is incomplete or changed')
+        total = count
+        for item in items:
+            sha, parents = item.get('sha'), item.get('parents')
+            require(isinstance(sha, str) and re.fullmatch('[0-9a-f]{40}', sha) and sha not in commits
+                    and isinstance(parents, list) and bool(parents)
+                    and all(isinstance(p, dict) and isinstance(p.get('sha'), str)
+                            and re.fullmatch('[0-9a-f]{40}', p['sha']) for p in parents), 'compare parent inventory is malformed or duplicated')
+            commits[sha] = parents[0]['sha']
+        require(len(commits) <= total, 'compare inventory exceeds its declared count')
+        if len(commits) == total:
+            chain, current = {base}, head
+            while current != base:
+                require(current in commits and current not in chain, 'first-parent main chain is incomplete or cyclic')
+                chain.add(current)
+                current = commits[current]
+            return chain
+        require(len(items) == 100, 'compare inventory truncated before its declared count')
+    require(False, 'compare inventory exceeds bounded pagination')
+
+
+def _merge_paths(api, prefix, merge):
+    files, parents = {}, None
+    # The commit API caps file inventory at 3000. Reject a full final page:
+    # it cannot prove there was not a silently truncated next file.
+    for page in range(1, 31):
+        response = api._request('GET', prefix + f'/commits/{merge}?per_page=100&page={page}')
+        current, entries = response.get('parents'), response.get('files')
+        require(response.get('sha') == merge and isinstance(current, list) and len(current) == 1
+                and isinstance(current[0], dict) and isinstance(current[0].get('sha'), str)
+                and re.fullmatch('[0-9a-f]{40}', current[0]['sha'])
+                and (parents is None or parents == current) and isinstance(entries, list) and len(entries) <= 100,
+                'merge commit identity, single parent or file inventory differs')
+        parents = current
+        for entry in entries:
+            name, status = entry.get('filename'), entry.get('status')
+            require(isinstance(name, str) and name not in files and status in {'added', 'modified', 'removed', 'renamed', 'copied', 'changed'},
+                    'merge file inventory is malformed or duplicated')
+            paths = [name]
+            if status == 'renamed':
+                require(isinstance(entry.get('previous_filename'), str), 'rename origin is missing')
+                paths.append(entry['previous_filename'])
+            files[name] = test_scope._paths(paths)
+        if len(entries) < 100:
+            return sorted({p for paths in files.values() for p in paths})
+    require(False, 'merge file inventory reaches the API truncation boundary')
+
+
+def _historical_closed_map(api, repository, repo_id, workflow_id, run, publisher, main, actual_source):
+    """No review was run: authenticate the historical map, never its AI scope."""
+    require(type(run.get('run_attempt')) is int and run.get('conclusion') == 'success'
+            and publisher.get('conclusion') == 'success', 'historical mapping did not succeed with an exact attempt')
+    _step(publisher, 'Map merged PR without another AI call')
+    _step(publisher, 'Publish exact-head review and scope', 'skipped')
+    uploads = [i for i, s in enumerate(publisher.get('steps', [])) if s.get('name') == 'Run actions/upload-artifact@v4' and s.get('conclusion') == 'success']
+    mapper = next(i for i, s in enumerate(publisher['steps']) if s.get('name') == 'Map merged PR without another AI call')
+    require(len(uploads) == 1 and uploads[0] > mapper, 'historical map upload is missing or precedes mapping')
+    prefix = f'/repos/{repository}'
+    inventory = api._request('GET', prefix + f"/actions/runs/{run['id']}/artifacts?per_page=100")
+    artifacts = inventory.get('artifacts')
+    require(isinstance(artifacts, list) and type(inventory.get('total_count')) is int
+            and inventory['total_count'] == len(artifacts), 'historical mapping artifact inventory is truncated')
+    pattern = re.compile(rf"^pr-review-merge-map-([0-9a-f]{{40}})-{run['id']}-{run['run_attempt']}$")
+    matches = [a for a in artifacts if isinstance(a, dict) and pattern.fullmatch(a.get('name', ''))]
+    require(len(matches) == 1, 'historical mapping artifact is missing or ambiguous')
+    artifact = matches[0]
+    require(type(artifact.get('id')) is int and artifact['id'] > 0 and artifact.get('expired') is False
+            and artifact.get('workflow_run', {}).get('id') == run['id'], 'historical mapping artifact identity or expiry differs')
+    raw = api.download_artifact(artifact['id'])
+    require(isinstance(raw, bytes) and len(raw) <= 8_000_000, 'mapping archive exceeds budget')
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        require(archive.namelist() == ['map.json'] and archive.getinfo('map.json').file_size <= 8_000_000, 'mapping archive schema or expanded size differs')
+        document = mapping.validate_map(json.loads(archive.read('map.json'), object_pairs_hook=change_scope.reject_duplicates))
+    require(document['repository'] == repository and document['repository_id'] == repo_id
+            and document['workflow_id'] == workflow_id and document['run_id'] == run['id']
+            and document['run_attempt'] == run['run_attempt']
+            and document['merge_sha'] == pattern.fullmatch(artifact['name']).group(1), 'historical mapping identity differs')
+    require(run['head_sha'] in {document['head_sha'], document['merge_sha']}, 'historical mapping run head is unrelated')
+    associated = run.get('pull_requests')
+    require(isinstance(associated, list) and (not associated or any(p.get('number') == document['pr_number']
+            and p.get('head', {}).get('sha') == document['head_sha'] for p in associated)), 'historical mapping names another PR')
+    control, merge = document['control_sha'], document['merge_sha']
+    chain = _first_parent_chain(api, prefix, control, main)
+    if merge not in chain:
+        _first_parent_chain(api, prefix, merge, control)
+    require(actual_source == _source(api, repository, control, WORKFLOW), 'historical mapping source differs from trusted main control')
+    require(document['changed_paths'] == _merge_paths(api, prefix, merge), 'historical mapping paths differ from its actual merge delta')
+    # complete=False is valid *mapping-only* evidence, never a valid AI review.
+    # No scope record, label, failure report or product selection is returned.
+
+
 def collect(api, repository, run_id, attempt):
     require(all(type(v) is int and v > 0 for v in (run_id, attempt)), "invalid exact run attempt")
     prefix = f"/repos/{repository}"
@@ -89,8 +190,16 @@ def collect(api, repository, run_id, attempt):
         maps = [s for s in publisher.get("steps", []) if s.get("name") == "Map merged PR without another AI call"]
         require(len(maps) == 1 and maps[0].get("conclusion") in {"success", "failure", "cancelled"},
                 "skipped producer has no executed mapping step")
-        require(run["event"] == "pull_request" and _source(api, repository, run["head_sha"], WORKFLOW)
-                == _source(api, repository, main, WORKFLOW), "skipped producer is not a trusted closed mapping entry")
+        require(run["event"] == "pull_request", "skipped producer is not a PR mapping entry")
+        actual_source = _source(api, repository, run["head_sha"], WORKFLOW)
+        if actual_source != _source(api, repository, main, WORKFLOW):
+            try:
+                _historical_closed_map(api, repository, repo['id'], workflow['id'], run, publisher, main, actual_source)
+            except reporting.ReportingError:
+                raise
+            except Exception as error:
+                raise reporting.ReportingError('why: historical mapping receipt or API shape cannot be authenticated; '
+                    'remedy: restore the exact retained mapping evidence; do not infer a review or backend failure') from error
         return None
     producer = job("Review fallback", "success")
     for name in ("Collect complete fixed input without executing PR files", "Save honest final result", "Run actions/upload-artifact@v4"):
