@@ -40,18 +40,23 @@ def child_environment(*, github=False, cloudflare=False):
     return env
 
 
+def write_diagnostic(path, *outputs):
+    diagnostic = ''.join(value.decode('utf-8', errors='replace') if isinstance(value, bytes)
+                         else value or '' for value in outputs)
+    for name in ('GITHUB_TOKEN', 'CLOUDFLARE_API_TOKEN'):
+        secret = os.environ.get(name)
+        if secret:
+            diagnostic = diagnostic.replace(secret, '[REDACTED]')
+    path.write_text(diagnostic[-1024 * 1024:])
+
+
 def stage(tag, host, workspace):
     out = workspace / host
     result = subprocess.run(['bash', str(ROOT/'scripts'/SCRIPTS[host]), 'stage', tag, str(out)],
                             cwd=ROOT, env=child_environment(github=True),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    diagnostic = result.stdout + result.stderr
-    for name in ('GITHUB_TOKEN', 'CLOUDFLARE_API_TOKEN'):
-        secret = os.environ.get(name)
-        if secret:
-            diagnostic = diagnostic.replace(secret, '[REDACTED]')
     log = workspace/'stage-verification.log'
-    log.write_text(diagnostic[-1024 * 1024:])
+    write_diagnostic(log, result.stdout, result.stderr)
     if result.returncode:
         raise CommandError('fresh signed release staging failed; inspect ' + str(log))
     receipt = json.loads((out/'stage.json').read_text())
@@ -66,7 +71,7 @@ def upload_receipt(path, worker, *, initialize=False):
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     expected_type = 'deploy' if initialize else 'version-upload'
     uploads = [r for r in rows if isinstance(r, dict) and r.get('type') == expected_type]
-    if len(uploads) != 1 or any(not isinstance(r, dict) or r.get('type') == 'error' for r in rows):
+    if len(uploads) != 1 or any(not isinstance(r, dict) or r.get('type') in {'error', 'command-failed'} for r in rows):
         raise CommandError('Wrangler upload did not yield one positive receipt')
     row = uploads[0]
     if type(row.get('version')) is not int or row['version'] != 1 or row.get('worker_name') != worker:
@@ -104,10 +109,15 @@ def upload(args, dist, workspace, worker):
     try:
         command = ['deploy'] if args.initialize else ['versions', 'upload']
         result = subprocess.run([str(node), str(wrangler), *command, '--config', str(config)],
-                                cwd=workspace, env=env, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, timeout=180)
-    except (OSError, subprocess.TimeoutExpired):
-        raise CommandError('upload outcome unknown') from None
+                                cwd=workspace, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, timeout=180)
+    except subprocess.TimeoutExpired as error:
+        write_diagnostic(workspace/'wrangler.log', error.stdout, error.stderr)
+        raise CommandError('upload outcome unknown; inspect retained wrangler.log') from None
+    except OSError as error:
+        write_diagnostic(workspace/'wrangler.log', str(error))
+        raise CommandError('upload outcome unknown; inspect retained wrangler.log') from None
+    write_diagnostic(workspace/'wrangler.log', result.stdout, result.stderr)
     if result.returncode:
         raise CommandError('upload outcome unknown')
     return upload_receipt(output, worker, initialize=args.initialize)

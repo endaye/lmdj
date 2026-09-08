@@ -10,7 +10,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'tools'))
-from cloudflare_host import candidate, upload_receipt, child_environment, command_store, main, stage, CommandError
+from cloudflare_host import candidate, upload_receipt, child_environment, command_store, main, stage, write_diagnostic, CommandError
 from cloudflare_run_store import RunStore, StoreError
 from cloudflare_api import CloudflareError
 
@@ -68,6 +68,12 @@ class HostCommandTest(unittest.TestCase):
 
     def test_duplicate_positive_receipts_are_unknown(self):
         p = self.receipt(); p.write_text(p.read_text()*2)
+        with self.assertRaises(CommandError): upload_receipt(p, self.client.worker)
+
+    def test_failed_command_record_invalidates_a_positive_upload_receipt(self):
+        p = self.receipt()
+        with p.open('a') as stream:
+            stream.write(json.dumps({'type':'command-failed','version':1,'message':'fetch failed'})+'\n')
         with self.assertRaises(CommandError): upload_receipt(p, self.client.worker)
 
     def test_candidate_success_verifies_exact_version_and_keeps_production(self):
@@ -272,6 +278,11 @@ class HostCommandTest(unittest.TestCase):
         self.assertIn('validation failed',log)
         self.assertNotIn('github-fixture',log)
         self.assertNotIn('cf-fixture',log)
+
+    def test_timeout_byte_diagnostics_are_retained_without_credentials(self):
+        with patch.dict(os.environ, {'CLOUDFLARE_API_TOKEN':'cf-fixture'}):
+            write_diagnostic(self.root/'wrangler.log', b'cf-fixture network failed', None)
+        self.assertEqual((self.root/'wrangler.log').read_text(), '[REDACTED] network failed')
 
     def test_provider_credentials_do_not_cross_child_boundaries(self):
         with patch.dict(os.environ, {'GITHUB_TOKEN':'github-fixture', 'CLOUDFLARE_API_TOKEN':'cf-fixture',
