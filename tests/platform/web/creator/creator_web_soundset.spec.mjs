@@ -136,7 +136,7 @@ async function startCatalogServer() {
   return {child, baseUrl};
 }
 
-// Idempotent, because leg 5 stops the Catalog on purpose and `afterEach` then
+// Idempotent, because leg 6 stops the Catalog on purpose and `afterEach` then
 // stops it again. A child killed by a signal reports `exitCode === null` and
 // names the signal in `signalCode`, so testing `exitCode` alone reads an
 // already-dead server as still running -- and the second `once("exit")` waits
@@ -159,7 +159,7 @@ async function stopCatalogServer(server) {
 // a corpse and calling it a pass.
 test.beforeEach(async () => {
   catalog = await startCatalogServer();
-  // Written after the fixture has a port and before the page is opened. Leg 5
+  // Written after the fixture has a port and before the page is opened. Leg 6
   // stops the fixture and deliberately leaves this pointing at the dead port:
   // a Catalog that goes away is exactly what that leg is about, and the
   // forward then fails the way a real outage would.
