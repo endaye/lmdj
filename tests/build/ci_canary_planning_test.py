@@ -10,6 +10,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from tools.canary import planning as p, records as r
+import batch_runtime
+import batch_verdict
+import incremental_batch as batch
+import test_scope
 
 
 class PlanningTests(unittest.TestCase):
@@ -173,11 +177,131 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(result, self.plan(kind="manual", sites=["creator"], force=True))
         self.assertFalse(result["admission_evidence"])
 
-    def test_daily_cannot_silently_become_filtered_or_forced(self):
-        for kwargs in ({"force": True}, {"sites": ["creator"]}, {"sites": []},
+    def test_direct_preview_rejects_retired_or_unbound_automatic_requests(self):
+        for kwargs in ({"kind": "daily"}, {"kind": "result"}, {"kind": "recovery"}, {"sites": []},
                        {"kind": "unknown"}, {"force": 1}, {"sites": ["creator", "creator"]}):
             with self.subTest(kwargs=kwargs), self.assertRaises(r.CanaryError):
                 self.plan(**kwargs)
+
+    def result_state(self, *, suites=("ci_contract",), conclusion="success", reference=None):
+        policy = test_scope.load_policy(self.root)
+        target = self.git("rev-parse", "main")
+        request = batch.make_request(policy, request_id="batch:fixture:1", kind="auto",
+            base_sha=self.base, target_sha=target, control_sha=self.base,
+            selection=test_scope._selection(policy, suites, []), origin_run={"run_id": 12, "attempt": 1})
+        identity = dict(request_id=request["id"], request_kind="auto", base_sha=self.base,
+            target_sha=target, control_sha=self.base, policy_digest=policy.digest, run_id=12, run_attempt=1)
+        observations = [dict(suite=suite.id, job=job, target_revision=target,
+            run_id=12, run_attempt=1, conclusion=conclusion)
+            for suite in policy.inventory.suites if suite.id in suites for job in suite.jobs]
+        verdict = batch_verdict.build(policy, identity, request["selection"], observations)
+        state = batch.new_state("fixture")
+        state.update(processed=target, history_unknown=False)
+        state["requests"][request["id"]] = request
+        state["results"][request["id"]] = dict(request_id=request["id"], run={"run_id": 12, "attempt": 1},
+            target=target, policy=policy.digest, terminal=True,
+            reference=reference or batch_runtime.encode_reference(verdict),
+            outcomes=batch_verdict.scheduler_outcomes(verdict, policy, identity, request["selection"]))
+        return state
+
+    def from_result(self, state, **kwargs):
+        return p.plan_after_result(self.root, scheduler=state, source_request_id="batch:fixture:1",
+            main_sha=self.git("rev-parse", "main"), control_sha=self.base,
+            progress=kwargs.pop("progress", self.progress), **kwargs)
+
+    def test_result_and_recovery_return_identical_pinned_plan(self):
+        target = self.change("apps/creator-web/src/example.ts")
+        state = self.result_state()
+        first = self.from_result(state)
+        self.assertEqual(first["action"], "plan")
+        self.assertEqual(first["plan"]["kind"], "result")
+        self.assertEqual(first, self.from_result(state, wakeup="recovery"))
+        self.change("packages/foundation/src/later.cpp")
+        self.assertEqual(first, self.from_result(state))
+        self.assertEqual(first["plan"]["target_sha"], target)
+
+    def test_focused_green_does_not_cover_older_deployment_changes_or_clear_debt(self):
+        self.change("apps/creator-web/src/example.ts")
+        state = self.result_state()
+        state["failures"] = [{"suite": "creator", "target": self.base, "reference": "retained"}]
+        state["debts"] = {"creator": {"target": self.base, "paused": True}}
+        before = deepcopy(state), deepcopy(self.progress), self.git("status", "--porcelain"), self.git("show-ref")
+        result = self.from_result(state)
+        self.assertIn("creator", result["plan"]["test_floor"]["suites"])
+        self.assertEqual(result["plan"]["version_interval"]["base_sha"], self.base)
+        self.assertFalse(result["plan"]["admission_evidence"])
+        self.assertEqual(result["source_role"], "wakeup-only")
+        self.assertEqual((state, self.progress, self.git("status", "--porcelain"), self.git("show-ref")), before)
+
+    def test_failed_missing_and_not_required_results_do_not_create_plan(self):
+        for state in (self.result_state(conclusion="failure"), self.result_state(suites=()),
+                      self.result_state(reference="missing:batch:fixture:1")):
+            if state["results"]["batch:fixture:1"]["reference"].startswith("missing:"):
+                state["results"]["batch:fixture:1"]["outcomes"] = {"ci_contract": "missing"}
+            with self.subTest(state=state):
+                result = self.from_result(state)
+                self.assertEqual(result["action"], "ignore")
+                self.assertIsNone(result["plan"])
+
+    def test_result_identity_and_outcomes_cannot_be_replaced(self):
+        for field, value in (("target", "f" * 40), ("policy", "f" * 64), ("terminal", False),
+                             ("run", {"run_id": True, "attempt": 1}), ("outcomes", {"ci_contract": "failed"}),
+                             ("reference", "not-a-verdict")):
+            state = self.result_state()
+            state["results"]["batch:fixture:1"][field] = value
+            with self.subTest(field=field), self.assertRaises(r.CanaryError):
+                self.from_result(state)
+
+    def test_result_wakeup_requires_retained_request_and_terminal_record(self):
+        for field in ("requests", "results"):
+            state = self.result_state()
+            state[field].clear()
+            with self.subTest(field=field), self.assertRaises(r.CanaryError):
+                self.from_result(state)
+        for wakeup in ("daily", "manual", "unknown"):
+            with self.subTest(wakeup=wakeup), self.assertRaises(r.CanaryError):
+                self.from_result(self.result_state(), wakeup=wakeup)
+
+    def test_rehashed_verdict_status_is_not_success_evidence(self):
+        state = self.result_state(conclusion="failure")
+        row = state["results"]["batch:fixture:1"]
+        verdict = batch_runtime.decode_reference(row["reference"])
+        verdict["status"] = "passed"
+        verdict.pop("evidence_digest")
+        verdict["evidence_digest"] = batch_runtime.self_test.digest_of(verdict)
+        row["reference"] = batch_runtime.encode_reference(verdict)
+        with self.assertRaises(r.CanaryError):
+            self.from_result(state)
+
+    def test_source_control_must_also_belong_to_first_parent_main(self):
+        self.git("checkout", "-b", "side")
+        side = self.change("docs/design/side.md")
+        self.git("checkout", "main")
+        self.change("docs/design/main.md")
+        self.git("merge", "--no-ff", "side", "-m", "merge side")
+        state = self.result_state()
+        request = state["requests"]["batch:fixture:1"]
+        row = state["results"]["batch:fixture:1"]
+        request["control"] = side
+        verdict = batch_runtime.decode_reference(row["reference"])
+        identity = {**verdict["identity"], "control_sha": side}
+        policy = test_scope.load_policy(self.root)
+        verdict = batch_verdict.build(policy, identity, request["selection"], verdict["observations"])
+        row["reference"] = batch_runtime.encode_reference(verdict)
+        with self.assertRaises(r.CanaryError):
+            self.from_result(state)
+
+    def test_not_required_special_receipt_has_no_work_and_cannot_hide_outcomes(self):
+        state = self.result_state(suites=(), reference="not-required:batch:fixture:1")
+        self.assertEqual(self.from_result(state)["action"], "ignore")
+        state["results"]["batch:fixture:1"]["outcomes"] = {"ci_contract": "passed"}
+        with self.assertRaises(r.CanaryError):
+            self.from_result(state)
+
+    def test_cancelled_and_infrastructure_results_are_not_delivery_wakeups(self):
+        for conclusion in ("cancelled", "timed_out"):
+            with self.subTest(conclusion=conclusion):
+                self.assertEqual(self.from_result(self.result_state(conclusion=conclusion))["action"], "ignore")
 
     def test_bootstrap_selects_all_but_does_not_invent_commit_interval(self):
         result = self.plan(progress=r.initial_progress("endaye/lmdj"))
