@@ -45,3 +45,26 @@ serialized production deployment evidence changes.
 
 Documentation impact: none. No current Portal page or deployed workflow changes;
 this plan explicitly retains the remaining producer/publisher integration work.
+
+## Producer handoff
+
+The same trusted module now supplies `package_static` and a credential-free CLI
+with `--source` and `--archive`. It emits a regular-member inner ZIP plus an
+independently computed per-file digest/length manifest. The eventual GitHub
+artifact may wrap that inner ZIP; authenticated bounded transport unwrapping is
+still a publisher responsibility. The publisher must recompute the manifest;
+producer-provided metadata cannot authenticate itself.
+
+Only `_headers` and `.nojekyll` are omitted deliberately. The publisher must
+supply known headers outside the untrusted output tree. Other hidden/config
+files, symlinks, special files, oversize trees, existing outputs and an archive
+path inside the source are rejected. Packaging validates the completed candidate
+with the consumer before making the archive available. No untrusted process may
+modify the source or destination concurrently; runner isolation remains required.
+
+Verification of this extension: all 17 focused tests pass, including producer /
+consumer round trip, attempted symlink leakage, executable config, self-inclusion
+and preservation of existing output. A previously checked Portal build from the
+#929 worktree packs and validates 3,764 files, a 58,053,946-byte archive and a
+largest file of 1,392,522 bytes. This is local artifact compatibility evidence,
+not proof of a GitHub PR build, authenticated download or Cloudflare Preview.

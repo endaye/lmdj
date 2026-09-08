@@ -113,5 +113,51 @@ class StaticZipTest(unittest.TestCase):
         self.assertEqual((self.destination / 'existing').read_text(), 'keep')
 
 
+class ProducerTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.source = self.root / 'source'
+        self.source.mkdir()
+        (self.source / 'index.html').write_bytes(b'index')
+        (self.source / '404.html').write_bytes(b'missing')
+        self.archive = self.root / 'static.zip'
+
+    def test_round_trip_preserves_assets_and_omits_provider_headers(self):
+        (self.source / '_headers').write_text('untrusted headers')
+        (self.source / '.nojekyll').touch()
+        (self.source / 'assets').mkdir()
+        (self.source / 'assets/runtime.wasm').write_bytes(b'\x00asm')
+        receipt = preview.package_static(self.source, self.archive)
+        manifest = preview.extract_static(self.archive, self.root / 'extracted')
+        self.assertEqual(receipt['files'], manifest)
+        self.assertEqual([f['path'] for f in manifest], ['404.html', 'assets/runtime.wasm', 'index.html'])
+        self.assertEqual((self.root / 'extracted/assets/runtime.wasm').read_bytes(), b'\x00asm')
+        self.assertEqual(receipt['archive_bytes'], self.archive.stat().st_size)
+
+    def test_rejects_symlink_without_publishing_archive(self):
+        (self.source / 'leak').symlink_to('/etc/passwd')
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            preview.package_static(self.source, self.archive)
+        self.assertFalse(self.archive.exists())
+
+    def test_rejects_worker_config_without_publishing_archive(self):
+        (self.source / 'wrangler.json').write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'configuration'):
+            preview.package_static(self.source, self.archive)
+        self.assertFalse(self.archive.exists())
+
+    def test_cannot_package_into_source(self):
+        with self.assertRaisesRegex(ValueError, 'inside static source'):
+            preview.package_static(self.source, self.source / 'output.zip')
+
+    def test_existing_archive_is_preserved(self):
+        self.archive.write_bytes(b'keep')
+        with self.assertRaisesRegex(ValueError, 'already exists'):
+            preview.package_static(self.source, self.archive)
+        self.assertEqual(self.archive.read_bytes(), b'keep')
+
+
 if __name__ == '__main__':
     unittest.main()

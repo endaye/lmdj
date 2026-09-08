@@ -6,6 +6,9 @@ GitHub APIs, not from files inside the archive.
 """
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
+import json
+import shutil
+import tempfile
 import re
 import stat
 from zipfile import ZipFile
@@ -114,3 +117,66 @@ def extract_static(archive, destination):
             destination.rmdir()
             raise
     return sorted(entries, key=lambda entry: entry['path'])
+
+
+def package_static(source, archive):
+    """Create the inner static ZIP consumed by extract_static.
+
+    The CI artifact transport may wrap this ZIP. Publishers must validate and
+    unwrap that transport separately; a producer manifest is never authority.
+    Only the known build-only .nojekyll and provider _headers files are omitted.
+    Trusted publication supplies its own headers. No configuration is executed.
+    """
+    source, archive = Path(source), Path(archive)
+    require(source.is_dir() and not source.is_symlink(), "static source is not a real directory")
+    source = source.resolve()
+    require(not archive.resolve().is_relative_to(source), "archive target is inside static source")
+    require(not archive.exists(), "archive target already exists")
+    require(archive.parent.is_dir(), "archive parent directory is missing")
+    with tempfile.TemporaryDirectory(prefix='portal-static-', dir=archive.parent) as temporary:
+        temporary = Path(temporary)
+        candidate = temporary / 'static.zip'
+        paths = []
+        total = 0
+        for path in source.rglob('*'):
+            require(not path.is_symlink(), "static source contains a symlink")
+            if path.is_dir():
+                continue
+            require(path.is_file(), "static source contains a non-regular file")
+            name = path.relative_to(source).as_posix()
+            if name in {'_headers', '.nojekyll'}:
+                continue
+            size = path.stat().st_size
+            require(size <= MAX_FILE_BYTES, "static file exceeds limit")
+            total += size
+            require(total <= MAX_TOTAL_BYTES, "static source exceeds total limit")
+            paths.append((name, path))
+            require(len(paths) <= MAX_FILES, "static source exceeds file count")
+        with ZipFile(candidate, 'w') as zipped:
+            for name, path in sorted(paths):
+                zipped.write(path, name)
+        manifest = extract_static(candidate, temporary / 'verified')
+        with candidate.open('rb') as content:
+            digest = sha256()
+            while chunk := content.read(1024 * 1024):
+                digest.update(chunk)
+        created = False
+        try:
+            with archive.open('xb') as output, candidate.open('rb') as content:
+                created = True
+                shutil.copyfileobj(content, output)
+        except BaseException:
+            if created:
+                archive.unlink()
+            raise
+    return {'archive_sha256': digest.hexdigest(), 'archive_bytes': archive.stat().st_size,
+            'files': manifest}
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', required=True)
+    parser.add_argument('--archive', required=True)
+    args = parser.parse_args()
+    print(json.dumps(package_static(args.source, args.archive), sort_keys=True))
