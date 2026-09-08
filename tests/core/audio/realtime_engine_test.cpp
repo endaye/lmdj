@@ -1166,6 +1166,275 @@ void rejects_publication_until_trigger_queue_is_empty() {
   LMDJ_CHECK(left.at(0) == 0.75F * (ramp_part(1) * ramp_part(1)));
 }
 
+// #799. An audition Bank carries a sentinel identity, not a Project's, because
+// no Project produced it. `project_id()` is diagnostic-only and nothing in the
+// engine reads it.
+PreparedSampleBank audition_bank_with_sample(std::span<const float> sample) {
+  auto bank = PreparedSampleBank::empty(
+      lmdj::audio::kAuditionBankProjectId(),
+      lmdj::audio::kAuditionBankProjectRevision);
+  LMDJ_CHECK(
+      bank.set_sample(lmdj::audio::kAuditionSampleSlot, sample).has_value());
+  return bank;
+}
+
+// The defect this catches: an audition that is silent, or that plays the
+// Project's bytes. Reserving a Bank slot alone does not make a Set audible --
+// `current_sample` always reads `bank_slots_[current_bank_slot_]`, so without a
+// voice-start path that reads the audition pool the preview plays the Project's
+// Pad 0, or nothing. Asserted on rendered sample values, not on a state flag.
+void audition_renders_its_own_bytes_while_the_project_bank_stays_current() {
+  RealtimeEngine engine;
+  // Samples longer than kRealtimeRampFrames on both sides, so the only gain
+  // factor in play is the attack ramp. A short sample also applies a tail fade
+  // (`ramp_part(frames_remaining)`), which would put ramp arithmetic rather
+  // than the byte source in the assertion.
+  const std::array<float, 256> project_sample = [] {
+    std::array<float, 256> filled{};
+    filled.fill(0.5F);
+    return filled;
+  }();
+  LMDJ_CHECK(
+      engine.publish_sample_bank(bank_with_sample(1, project_sample)) ==
+      PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+
+  const std::array<float, 256> audition_sample = [] {
+    std::array<float, 256> filled{};
+    filled.fill(0.25F);
+    return filled;
+  }();
+  LMDJ_CHECK(
+      engine.publish_audition_bank(audition_bank_with_sample(audition_sample)) ==
+      PublishResult::accepted);
+
+  PadControlEvent audition{};
+  audition.sequence = 1;
+  audition.velocity = 127;
+  audition.kind = PadControlKind::audition_start;
+  LMDJ_CHECK(engine.enqueue_control(audition) == EnqueueResult::accepted);
+
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  engine.render(left.data(), right.data(), 2);
+  // Audition bytes (0.25), not the Project's Pad 0 (0.5), under the attack
+  // ramp alone. If the voice-start path had read `current_sample`, frame 1
+  // would be 0.5 * ramp_part(1) -- exactly twice this.
+  LMDJ_CHECK(left.at(0) == 0.25F * ramp_part(0));
+  LMDJ_CHECK(left.at(1) == 0.25F * ramp_part(1));
+
+  // The Project Bank is untouched: still current, still the source for Pads.
+  LMDJ_CHECK(engine.bank_telemetry().current_generation == 1);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{2, 0, 127}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 2);
+  // Both sound at once: the audition continues on its own bytes while Pad 0
+  // enters on the Project's, so the mix exceeds the audition's own contribution
+  // at that frame.
+  LMDJ_CHECK(left.at(1) > 0.25F * ramp_part(3));
+}
+
+// The defect this catches: an audition consuming or freeing a Project Bank
+// slot. This is the regression the "reserve a slot" decision creates, and the
+// named test the Issue asked for -- it fails if a fourth concurrent Project
+// publication ever becomes reachable through the audition path.
+void audition_never_consumes_a_project_bank_slot() {
+  static_assert(lmdj::audio::kRealtimeBankCapacity == 4);
+  RealtimeEngine engine;
+  const std::array<float, 1> sample{0.125F};
+  for (std::uint64_t revision = 1; revision <= 4; ++revision) {
+    LMDJ_CHECK(
+        engine.publish_sample_bank(bank_with_sample(revision, sample)) ==
+        PublishResult::accepted);
+    if (revision == 1) {
+      LMDJ_CHECK(engine.start().has_value());
+    } else {
+      std::array<float, 1> left{};
+      std::array<float, 1> right{};
+      engine.render(left.data(), right.data(), 1);
+    }
+  }
+  // All four Project slots are taken.
+  LMDJ_CHECK(
+      engine.publish_sample_bank(bank_with_sample(5, sample)) ==
+      PublishResult::bank_slots_full);
+
+  // An audition still succeeds: it draws from the reserved pool, so a full
+  // Project pool cannot make a preview impossible.
+  const std::array<float, 1> audition_sample{0.25F};
+  LMDJ_CHECK(
+      engine.publish_audition_bank(audition_bank_with_sample(audition_sample)) ==
+      PublishResult::accepted);
+
+  // And it neither stole a Project slot nor freed one: the Project pool is
+  // exactly as full as it was.
+  LMDJ_CHECK(
+      engine.publish_sample_bank(bank_with_sample(6, sample)) ==
+      PublishResult::bank_slots_full);
+  LMDJ_CHECK(engine.bank_telemetry().bank_slot_rejections == 2);
+}
+
+// The defect this catches: a replaced audition whose buffer is freed while
+// voices are still reading it, or whose slot is never reclaimed so the third
+// audition reports the pool full forever.
+void replacing_an_audition_drains_the_outgoing_bank() {
+  RealtimeEngine engine;
+  const std::array<float, 8> project_sample{};
+  LMDJ_CHECK(
+      engine.publish_sample_bank(bank_with_sample(1, project_sample)) ==
+      PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+
+  const std::array<float, 8> first{0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F};
+  LMDJ_CHECK(engine.publish_audition_bank(audition_bank_with_sample(first)) ==
+             PublishResult::accepted);
+  PadControlEvent start{};
+  start.velocity = 127;
+  start.kind = PadControlKind::audition_start;
+  start.sequence = 1;
+  LMDJ_CHECK(engine.enqueue_control(start) == EnqueueResult::accepted);
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+
+  // Replace while the first audition is still ringing.
+  const std::array<float, 8> second{0.25F, 0.25F, 0.25F, 0.25F,
+                                    0.25F, 0.25F, 0.25F, 0.25F};
+  LMDJ_CHECK(engine.publish_audition_bank(audition_bank_with_sample(second)) ==
+             PublishResult::accepted);
+  start.sequence = 2;
+  LMDJ_CHECK(engine.enqueue_control(start) == EnqueueResult::accepted);
+
+  // A third publication while both slots are still held is refused rather than
+  // overwriting a buffer a voice is reading.
+  const std::array<float, 8> third{};
+  LMDJ_CHECK(engine.publish_audition_bank(audition_bank_with_sample(third)) ==
+             PublishResult::bank_slots_full);
+  // and that refusal is not accounted against the Project pool.
+  LMDJ_CHECK(engine.bank_telemetry().bank_slot_rejections == 0);
+
+  // Drain: stop the auditions and render past the release ramp.
+  PadControlEvent stop{};
+  stop.kind = PadControlKind::audition_stop;
+  stop.sequence = 3;
+  LMDJ_CHECK(engine.enqueue_control(stop) == EnqueueResult::accepted);
+  for (int pass = 0; pass < 400; ++pass) {
+    engine.render(left.data(), right.data(), 1);
+  }
+  LMDJ_CHECK(engine.reclaim_retired_banks() >= 1);
+
+  // With a slot reclaimed, auditioning works again.
+  LMDJ_CHECK(engine.publish_audition_bank(audition_bank_with_sample(second)) ==
+             PublishResult::accepted);
+}
+
+// The defect this catches: an audition leaking into Pad state. It must never
+// become the current Bank, never alter the Pad availability the Host reports,
+// and never be stopped by a Pad stop or by stop-all.
+void audition_never_becomes_current_and_never_moves_availability() {
+  RealtimeEngine engine;
+  // Long enough that neither voice ends on its own during this test: a voice
+  // that ran out of samples would look exactly like one that was stopped.
+  const std::array<float, 4096> project_sample = [] {
+    std::array<float, 4096> filled{};
+    filled.fill(0.5F);
+    return filled;
+  }();
+  LMDJ_CHECK(
+      engine.publish_sample_bank(bank_with_sample(7, project_sample)) ==
+      PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  const auto generation_before = engine.bank_telemetry().current_generation;
+  // Pad availability has no public accessor, so it is asserted through the
+  // behaviour it governs: Pad 0 carries the sample, Pad 1 does not.
+  PadControlEvent absent_pad{};
+  absent_pad.slot = 1;
+  absent_pad.velocity = 127;
+  absent_pad.kind = PadControlKind::press;
+  absent_pad.sequence = 100;
+  LMDJ_CHECK(engine.enqueue_control(absent_pad) ==
+             EnqueueResult::sample_unavailable);
+
+  const std::array<float, 4096> audition_sample = [] {
+    std::array<float, 4096> filled{};
+    filled.fill(0.25F);
+    return filled;
+  }();
+  LMDJ_CHECK(
+      engine.publish_audition_bank(audition_bank_with_sample(audition_sample)) ==
+      PublishResult::accepted);
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+
+  // Publishing an audition applies no Project publication and moves no Pad.
+  LMDJ_CHECK(engine.bank_telemetry().current_generation == generation_before);
+  LMDJ_CHECK(engine.bank_telemetry().pending_publications == 0);
+  // Availability is exactly where it was: the empty Pad is still empty, and
+  // the occupied one is still playable. An audition that had written
+  // `availability_mask_` would flip one of these.
+  absent_pad.sequence = 101;
+  LMDJ_CHECK(engine.enqueue_control(absent_pad) ==
+             EnqueueResult::sample_unavailable);
+  PadControlEvent present_pad{};
+  present_pad.slot = 0;
+  present_pad.velocity = 127;
+  present_pad.kind = PadControlKind::press;
+  present_pad.sequence = 102;
+  LMDJ_CHECK(engine.enqueue_control(present_pad) == EnqueueResult::accepted);
+
+  PadControlEvent start{};
+  start.velocity = 127;
+  start.kind = PadControlKind::audition_start;
+  start.sequence = 103;
+  LMDJ_CHECK(engine.enqueue_control(start) == EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  // Two voices: the Pad 0 press enqueued above, and the audition.
+  LMDJ_CHECK(engine.telemetry().active_voices == 2);
+
+  // stop_all is a Pad gesture. It must silence the Pad and leave the preview
+  // running -- otherwise a performer stopping playback also kills the Set they
+  // are auditioning, and auditioning during playback becomes unusable.
+  PadControlEvent stop_all{};
+  stop_all.kind = PadControlKind::stop_all;
+  stop_all.sequence = 104;
+  LMDJ_CHECK(engine.enqueue_control(stop_all) == EnqueueResult::accepted);
+  // Render past kRealtimeRampFrames so the stopped Pad voice finishes its
+  // release tail and deactivates; a stop is not an immediate silence.
+  for (int pass = 0; pass < 200; ++pass) {
+    engine.render(left.data(), right.data(), 1);
+  }
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+
+  // And `audition_stop` does reach it, so the preview is stoppable.
+  PadControlEvent audition_stop{};
+  audition_stop.kind = PadControlKind::audition_stop;
+  audition_stop.sequence = 105;
+  LMDJ_CHECK(engine.enqueue_control(audition_stop) == EnqueueResult::accepted);
+  for (int pass = 0; pass < 400; ++pass) {
+    engine.render(left.data(), right.data(), 1);
+  }
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
+
+// The defect this catches: an audition request accepted with nothing published,
+// which would be discarded on the audio thread where the caller cannot see it.
+void audition_without_a_published_bank_is_refused_at_enqueue() {
+  RealtimeEngine engine;
+  const std::array<float, 1> project_sample{0.5F};
+  LMDJ_CHECK(
+      engine.publish_sample_bank(bank_with_sample(1, project_sample)) ==
+      PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+
+  PadControlEvent start{};
+  start.velocity = 127;
+  start.kind = PadControlKind::audition_start;
+  start.sequence = 1;
+  LMDJ_CHECK(engine.enqueue_control(start) ==
+             EnqueueResult::sample_unavailable);
+}
+
 void applies_explicit_bank_slot_backpressure_until_reclaimed() {
   RealtimeEngine engine;
   const std::array<float, 1> sample{0.125F};
@@ -2775,6 +3044,11 @@ int main() {
   publishes_sample_banks_only_at_safe_render_boundaries();
   rejects_publication_until_trigger_queue_is_empty();
   applies_explicit_bank_slot_backpressure_until_reclaimed();
+  audition_renders_its_own_bytes_while_the_project_bank_stays_current();
+  audition_never_consumes_a_project_bank_slot();
+  replacing_an_audition_drains_the_outgoing_bank();
+  audition_never_becomes_current_and_never_moves_availability();
+  audition_without_a_published_bank_is_refused_at_enqueue();
   reports_exact_bytes_for_non_fifo_heterogeneous_bank_reclaim();
   preserves_high_frame_trim_loop_and_ramp_arithmetic();
   captures_voice_starts_at_exact_runtime_frames_and_disarms_at_end();
