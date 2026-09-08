@@ -12,7 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tests/build'))
 sys.path.insert(0, str(ROOT / 'scripts/ci'))
-from ci_self_test_report_workflow_test import block, field, scalars
+from ci_self_test_report_workflow_test import block, field, scalars, wakeup_group
 import batch_execution
 import incremental_batch
 import test_scope
@@ -31,7 +31,9 @@ class RehearsalWorkflowTests(unittest.TestCase):
         self.assertNotIn("\n  report:\n", self.source)
 
     def test_lock_belongs_to_short_writers_not_executor(self):
-        self.assertNotRegex(self.source, r'(?m)^concurrency:')
+        for event in ('push', 'workflow_dispatch'):
+            self.assertNotEqual(wakeup_group(self.source, event, 17), 'self-test-report',
+                                'why: outer workflow would hold the journal lock; remedy: keep admission and writer groups distinct')
         for job in ('controller',):
             self.assertEqual(scalars(block(block(self.source, job, 2), 'concurrency', 4), 6),
                              {'group': 'self-test-report', 'cancel-in-progress': 'false', 'queue': 'max'})

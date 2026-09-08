@@ -12,7 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'scripts/ci'), str(ROOT / 'tests/build')]
-from ci_self_test_report_workflow_test import block, field, scalars
+from ci_self_test_report_workflow_test import block, field, scalars, wakeup_group
 import o1_execution_cancel_probe as c2
 
 
@@ -166,7 +166,11 @@ class CancelWorkflowTests(unittest.TestCase):
         self.assertEqual(scalars(block(self.controller, 'permissions', 4), 6),
                          {'contents': 'read', 'actions': 'read', 'issues': 'write'})
         self.assertIn('group: self-test-report', block(self.controller, 'concurrency', 4))
-        self.assertNotRegex(self.source, r'(?m)^concurrency:')
+        self.assertNotEqual(wakeup_group(self.source, 'workflow_dispatch', 17), 'self-test-report',
+                            'why: manual waiter would hold the journal lock; remedy: keep its outer admission group distinct')
+        self.assertNotEqual(wakeup_group(self.source, 'workflow_dispatch', 17),
+                            wakeup_group(self.source, 'workflow_dispatch', 18),
+                            'why: another manual command could replace a pending probe; remedy: retain per-run admission')
         self.assertIn("inputs.batch_operation != 'cancel-probe'", self.controller)
         self.assertNotIn('${{', self.code)
         from batch_evidence_validation import EXECUTION_SOURCES, JOB_NAMES
