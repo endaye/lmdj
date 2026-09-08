@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
-from urllib.error import URLError
+from urllib.error import URLError, HTTPError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import cloudflare_api as api
@@ -43,6 +43,22 @@ class ClientTest(unittest.TestCase):
             with patch.object(api, 'build_opener') as opener, self.assertRaises(api.CloudflareError):
                 api.CloudflareClient(token='secret', target=target, account=account)
             opener.assert_not_called()
+
+    def test_only_explicit_worker_not_found_proves_absence(self):
+        body = io.BytesIO(json.dumps({'success':False,'errors':[{'code':10007}]}).encode())
+        client, requests = self.client([HTTPError('https://api.cloudflare.com',404,'missing',{},body)])
+        self.assertFalse(client.exists())
+        self.assertTrue(requests[0].full_url.endswith('/settings'))
+
+    def test_null_success_response_does_not_prove_absence(self):
+        client, _ = self.client([None])
+        with self.assertRaises(api.CloudflareError): client.exists()
+
+    def test_other_http_failures_do_not_prove_absence(self):
+        for status, code in [(403,10007), (404,10000), (500,10007)]:
+            body = io.BytesIO(json.dumps({'success':False,'errors':[{'code':code}]}).encode())
+            client, _ = self.client([HTTPError('https://api.cloudflare.com',status,'error',{},body)])
+            with self.assertRaises(api.CloudflareError): client.exists()
 
     def test_single_version_state(self):
         client, _ = self.client([deployment()])

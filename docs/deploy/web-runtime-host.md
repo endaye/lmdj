@@ -328,3 +328,10 @@ scripts/web-runtime-deploy.sh stage TAG /absolute/path/to/new-stage
 
 `stage.json` 是内部暂存记录，不是部署证据或发布授权。后续部署命令仍须
 重新验证保留的签名和资源，并核对实时目标、版本及操作记录；不能仅凭此文件发布。
+
+## Cloudflare operator commands
+
+The shared [Cloudflare Host runbook](cloudflare-hosts.md) documents signed
+candidate, verify, promote, recover, inspection and explicit reconciliation.
+Use the Host-specific target and verified release tag. HTTP command success does
+not replace this Host's browser/manual migration acceptance.
