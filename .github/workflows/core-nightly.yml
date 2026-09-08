@@ -50,9 +50,9 @@ jobs:
     # revision probe passed with that state: run 34030066433 on
     # netcup-lmdj-linux-04, 11/11 stress tests, 52 s, beside the Hosted lane's
     # 11/11 in 157 s (docs/quality/2026-09-06-llvm-22-coverage-measurement.md). The
-    # prerequisite is verified below before any TSan binary runs, so a host
-    # that loses the setting fails with the remedy named instead of with a
-    # runtime FATAL or, on some runtimes, no output at all.
+    # prerequisite is verified with the pinned runtime below, as the runner
+    # user cannot read the root-only entropy sysctl. A failed startup keeps
+    # infrastructure debt and never reaches the product tests.
     if: ${{ inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'tsan' }}
     concurrency:
       group: lmdj-native-heavy
@@ -80,22 +80,32 @@ jobs:
       - name: Verify the TSan host prerequisite
         id: prerequisite
         run: |
-          if ! bits="$(sysctl -n vm.mmap_rnd_bits)"; then
+          fail_prerequisite() {
             echo 'infrastructure_failure=true' >>"$GITHUB_OUTPUT"
-            echo 'why: the runner cannot read vm.mmap_rnd_bits, so the TSan host prerequisite is unverified; remedy: an operator investigates the runner sysctl read restriction before a fresh test request; this job does not change host permissions' >&2
+            echo 'why: the pinned TSan runtime cannot compile or start under the runner service; remedy: inspect the compiler/runtime output and have an operator verify the host ASLR cap with scripts/ci/host/configure-sanitizer-aslr.sh before a fresh test request' >&2
             exit 1
-          fi
-          if [[ ! "$bits" =~ ^[0-9]{1,2}$ ]]; then
-            echo 'infrastructure_failure=true' >>"$GITHUB_OUTPUT"
-            echo 'why: vm.mmap_rnd_bits did not return a valid bounded entropy value; remedy: an operator checks the sysctl interface and host configuration before a fresh test request' >&2
-            exit 1
-          fi
-          if [ "$bits" -gt 28 ]; then
-            echo 'infrastructure_failure=true' >>"$GITHUB_OUTPUT"
-            echo "why: vm.mmap_rnd_bits is $bits on $(hostname); ThreadSanitizer cannot start under more than 28 bits of mmap ASLR entropy and the runner unit forbids the re-exec it would use to cope; remedy: an operator runs sudo scripts/ci/host/configure-sanitizer-aslr.sh on this host" >&2
-            exit 1
-          fi
-          echo "vm.mmap_rnd_bits=$bits on $(hostname)"
+          }
+          # mmap_rnd_bits is root-only (0600); test runtime compatibility as
+          # the actual runner user instead of requiring privileged sysctl reads.
+          probe_dir="$(mktemp -d)" || fail_prerequisite
+          trap 'rm -rf "$probe_dir"' EXIT
+          cat >"$probe_dir/probe.cpp" <<'CPP' || fail_prerequisite
+          #include <thread>
+          int main() {
+            int result = 0;
+            std::thread worker([&] { result = 42; });
+            worker.join();
+            return result == 42 ? 0 : 1;
+          }
+          CPP
+          runtime_dir="$(clang++-22 -print-runtime-dir)" || fail_prerequisite
+          test -d "$runtime_dir" || fail_prerequisite
+          clang++-22 -fsanitize=thread -shared-libsan "-Wl,-rpath,$runtime_dir" -pthread \
+            "$probe_dir/probe.cpp" -o "$probe_dir/probe" || fail_prerequisite
+          # All ten starts must succeed; this is a startup check, not retries.
+          for attempt in {1..10}; do
+            timeout 10s "$probe_dir/probe" || fail_prerequisite
+          done
       - name: Verify the TSan toolchain
         # Host state, provisioned once by the operator with
         # scripts/ci/host/install-llvm-toolchain.sh; the lane installs nothing
