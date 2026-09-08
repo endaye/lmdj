@@ -134,7 +134,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(failure["attempts"]), 3)
         self.assertFalse((self.directory / "review.json").exists())
 
-    def cli(self, *arguments):
+    def cli(self, *arguments, env=None):
         """Run the real CLI the workflow runs, and return `(returncode, stderr)`.
 
         The workflow reads an exit code, not a return value, so that is what
@@ -142,10 +142,11 @@ class PipelineTests(unittest.TestCase):
         function does and say nothing about the job's conclusion, which is the
         thing #939 was about.
         """
+        environment = {**os.environ, **self.env, **(env or {})}
         completed = subprocess.run(
             [sys.executable, str(ROOT / "scripts/ci/review_pipeline.py"),
              *arguments, "--directory", str(self.directory)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, env=environment,
         )
         return completed.returncode, completed.stderr
 
@@ -192,6 +193,43 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("review pipeline operation failed", stderr)
         self.assertNotIn("no model reviewed this head", stderr)
+
+    def test_publish_prints_which_precondition_refused(self):
+        """#939: the publisher's refusals must name themselves.
+
+        It drops roughly one review in four and every log said only "review
+        pipeline operation failed", so no remedy could be designed: a retry
+        aimed at the wrong precondition would look like a fix and change
+        nothing. These messages already existed at every `require` in
+        `publish()`; the handler was destroying them.
+        """
+        self.capture("glm")
+        pipeline.finalize(self.directory)
+        # The publisher's whole environment, with exactly one value wrong, so
+        # the first `require` in `publish()` is the only thing that can fire.
+        code, stderr = self.cli("publish", env={
+            "GITHUB_REPOSITORY": self.identity["repository"],
+            "PR_NUMBER": "999999",
+            "HEAD_SHA": self.identity["head_sha"],
+            "GITHUB_RUN_ID": str(self.identity["run_id"]),
+            "GITHUB_RUN_ATTEMPT": str(self.identity["run_attempt"]),
+        })
+        self.assertEqual(code, 1)
+        self.assertIn("artifact identity differs from publisher context", stderr)
+        self.assertNotIn("review pipeline operation failed", stderr)
+
+    def test_only_publish_gets_the_specific_message(self):
+        """The generic line stays everywhere the model's text is still in scope.
+
+        `grok` raises `ReviewScopeError` from positions that describe provider
+        output, and two tests below keep those generic. This asserts the
+        boundary directly rather than leaving it to them, because the arm added
+        for `publish` is one `args.command` away from covering them too.
+        """
+        code, stderr = self.cli("finalize")  # empty history: chain unfinished
+        self.assertEqual(code, 1)
+        self.assertIn("review pipeline operation failed", stderr)
+        self.assertNotIn("review chain did not finish", stderr)
 
     def test_attempt_after_success_is_refused(self):
         self.capture("glm")
