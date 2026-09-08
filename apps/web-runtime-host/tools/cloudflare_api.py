@@ -12,7 +12,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 ACCOUNT = "0b62b8881c07f48f7935f5380a1f55db"
 TARGETS = {"creator-web": "creator", "web-runtime-host": "lab",
-           "creator-recovery": "creator-recovery", "runtime-recovery": "lab-recovery"}
+           "creator-recovery": "creator-recovery", "runtime-recovery": "lab-recovery",
+           "creator-initialization": "creator-initialization",
+           "runtime-initialization": "lab-initialization"}
 MAX_RESPONSE = 1024 * 1024
 _ABSENT = object()
 

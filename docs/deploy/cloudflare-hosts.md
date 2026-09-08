@@ -17,9 +17,13 @@ Supply `GITHUB_TOKEN` for fresh signed tag/Release/package verification and
 credentials in child processes. Tokens belong in the process environment, not
 command arguments, configuration files or journal records.
 
-Targets are `creator-web`, `web-runtime-host`, `creator-recovery` and
-`runtime-recovery`. Production maps to the fixed `creator` and `lab` Workers;
-isolated tests map to `creator-recovery` and `lab-recovery`. Select the tag from
+Targets are `creator-web`, `web-runtime-host`, `creator-recovery`,
+`runtime-recovery`, `creator-initialization` and `runtime-initialization`. Production maps to the fixed `creator` and `lab` Workers;
+recovery tests map to `creator-recovery` and `lab-recovery`. First-deployment
+acceptance maps to separate `creator-initialization` and `lab-initialization`
+Workers. Retain their versions after acceptance; never delete a recovery Worker
+to manufacture an empty target. The standalone HTTP verifier requires
+`--initialization-target` for these addresses. Select the tag from
 the verified release audit and take version/deployment IDs from exact receipts.
 
 ## Candidate, verify, promote and recover

@@ -80,6 +80,19 @@ class HostCommandTest(unittest.TestCase):
         time.sleep(2.5)
         self.assertFalse(marker.exists(), 'cancelled upload descendant must not keep writing')
 
+    def test_initialization_command_binds_host_worker_and_http_target(self):
+        for target, host, worker in [('creator-initialization', 'creator-web', 'creator-initialization'),
+                                      ('runtime-initialization', 'web-runtime-host', 'lab-initialization')]:
+            def staged(tag, requested_host, workspace):
+                self.assertEqual(requested_host, host)
+                return workspace, {'tag': tag, 'host_id': host}
+            with patch.dict(os.environ, {'CLOUDFLARE_API_TOKEN': 'fixture'}), patch('cloudflare_host.stage', side_effect=staged), patch('cloudflare_host.CloudflareClient.require_version'), patch('cloudflare_host.smoke', return_value={}) as http, redirect_stdout(io.StringIO()):
+                self.assertEqual(main(['verify', 'lmdj-v1.0.42.0', '--target', target,
+                                       '--state-root', str(self.root/'state'), '--version', A]), 0)
+            self.assertEqual(http.call_args.args[1], f'https://{A[:8]}-{worker}.lmdj.workers.dev')
+            self.assertEqual(http.call_args.kwargs, {'preview': True, 'recovery_target': False,
+                                                     'initialization_target': True})
+
     def receipt(self, **overrides):
         row = {'type': 'version-upload', 'version': 1, 'worker_name': self.client.worker,
                'version_id': B, 'preview_url': f'https://{B[:8]}-{self.client.worker}.lmdj.workers.dev'}

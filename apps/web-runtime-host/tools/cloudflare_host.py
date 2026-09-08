@@ -19,7 +19,8 @@ from cloudflare_transaction import promote, TransactionError
 
 ROOT = Path(__file__).resolve().parents[3]
 HOSTS = {'creator-web': 'creator-web', 'creator-recovery': 'creator-web',
-         'web-runtime-host': 'web-runtime-host', 'runtime-recovery': 'web-runtime-host'}
+         'web-runtime-host': 'web-runtime-host', 'runtime-recovery': 'web-runtime-host',
+         'creator-initialization': 'creator-web', 'runtime-initialization': 'web-runtime-host'}
 SCRIPTS = {'creator-web': 'creator-web-deploy.sh', 'web-runtime-host': 'web-runtime-deploy.sh'}
 
 
@@ -249,7 +250,8 @@ def main(argv=None):
             recovery = args.target.endswith('-recovery')
             def verify_dist(dist, url):
                 try:
-                    smoke(dist, url, preview=url != f'https://{client.worker}.lmdj.workers.dev', recovery_target=recovery)
+                    smoke(dist, url, preview=url != f'https://{client.worker}.lmdj.workers.dev', recovery_target=recovery,
+                          initialization_target=args.target.endswith('-initialization'))
                 except Exception:
                     raise CommandError('exact signed HTTP verification failed') from None
                 return True
