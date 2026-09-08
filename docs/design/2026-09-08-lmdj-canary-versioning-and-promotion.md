@@ -1,5 +1,12 @@
 # LMDJ daily conditional canary and candidate promotion
 
+September 9 update: the [result-driven delivery plan](../plans/2026-09-09-lmdj-result-driven-delivery.md)
+supersedes this proposal's daily deployment schedule and implementation order.
+Use persisted test results, manual requests and recovery observations as wakeups;
+CI reports Issues but does not autonomously repair or merge fixes. The remaining
+candidate identity and promotion boundaries below remain design inputs, not
+activation evidence. Netcup isolation must be verified before automatic delivery.
+
 Date: 2026-09-08
 
 Status: implementation proposal following the user's design review; not an

@@ -1,5 +1,12 @@
 # Implement conditional canaries and exact-candidate promotion
 
+September 9 update: the [result-driven delivery plan](2026-09-09-lmdj-result-driven-delivery.md)
+supersedes daily deployment and the ordering below. Verify incremental testing
+and Issue reporting first; then continue the candidate tasks with result/manual/
+recovery wakeups, independent canary sites and a verified Netcup deployment
+boundary. Autonomous Issue repair/merge is excluded. Existing T1 tooling is
+reused, not restarted; the older T2–T8 details remain inputs subject to this update.
+
 Date: 2026-09-08
 
 Status: staged implementation plan; T0 is documentation only. No rollout,

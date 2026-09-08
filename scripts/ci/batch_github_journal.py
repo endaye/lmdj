@@ -10,10 +10,11 @@ protocol. API failures never mean absence and never include response bodies.
 from __future__ import annotations
 
 import base64
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 import json
 import re
+from threading import Lock
 
 from incremental_batch_journal import JournalBlocked
 from self_test_report import UrllibGitHubApi
@@ -63,6 +64,34 @@ def decode(body):
     require(value["schema"] == SCHEMA and value["kind"] in ("checkpoint", "event"), "unsupported journal object kind")
     require(isinstance(value["payload"], dict), "journal payload must be an object")
     return value
+
+
+class _PageControlProofs:
+    """Single-flight verification, discarded with the page, never API data.
+
+    Only validated control identities enter here. Both success and failure are
+    shared for this page; a retry/new page redoes the verification. Individual
+    run/jobs and the transport's all-or-nothing writer trust set remain separate.
+    """
+
+    def __init__(self):
+        self._lock = Lock()
+        self._proofs = {}
+
+    def verify(self, key, check):
+        with self._lock:
+            owner = key not in self._proofs
+            if owner:
+                self._proofs[key] = Future()
+            proof = self._proofs[key]
+        if owner:
+            try:
+                check()
+            except BaseException as error:
+                proof.set_exception(error)
+            else:
+                proof.set_result(None)
+        proof.result()
 
 
 class GitHubJournalTransport:
@@ -128,7 +157,34 @@ class GitHubJournalTransport:
         else:
             require(self._bot(node["author"]), "checkpoint author is not the trusted bot")
 
-    def _writer(self, writer, *, remember=True):
+    def _control(self, writer):
+        """Prove exact workflow/control provenance, not any writer's execution."""
+        path, control = writer['workflow_path'], writer['control_sha']
+        workflow = self._call("GET", self._repo(f"/actions/workflows/{writer['workflow_id']}"))
+        require(isinstance(workflow, dict) and type(workflow.get("id")) is int
+                and workflow["id"] == writer["workflow_id"] and workflow.get("path") == path, "workflow API identity differs")
+        ref = self._call("GET", self._repo("/git/ref/heads/main"))
+        ref_object = ref.get("object") if isinstance(ref, dict) else None
+        main = ref_object.get("sha") if isinstance(ref_object, dict) else None
+        require(isinstance(main, str) and re.fullmatch(r"[0-9a-f]{40}", main), "main ref is unavailable")
+        # Only ancestry metadata is used here. Changed files appear on page 1;
+        # page 2 avoids that payload and is never a scope/commit inventory.
+        comparison = self._call("GET", self._repo(f"/compare/{control}...{main}?per_page=1&page=2"))
+        require(isinstance(comparison, dict) and comparison.get("status") in ("ahead", "identical")
+                and isinstance(comparison.get("base_commit"), dict) and comparison["base_commit"].get("sha") == control
+                and isinstance(comparison.get("merge_base_commit"), dict)
+                and comparison["merge_base_commit"].get("sha") == control, "writer control is not proven main history")
+        source = self._call("GET", self._repo(f"/contents/{path}?ref={control}"))
+        require(isinstance(source, dict) and source.get("type") == "file" and source.get("path") == path
+                and source.get("encoding") == "base64" and isinstance(source.get("content"), str), "trusted workflow source unavailable")
+        try:
+            require(bool(base64.b64decode("".join(source["content"].split()), validate=True)), "trusted workflow source is empty")
+        except JournalBlocked:
+            raise
+        except Exception:
+            raise JournalBlocked("why: trusted workflow source is malformed; remedy: restore exact-control source visibility") from None
+
+    def _writer(self, writer, *, remember=True, control_proofs=None):
         require(isinstance(writer, dict) and set(writer) == {
             "repository", "issue_number", "run_id", "run_attempt", "control_sha", "workflow_path", "workflow_id", "job_name"},
             "writer identity schema is not closed")
@@ -157,29 +213,11 @@ class GitHubJournalTransport:
                 and isinstance(run.get("repository"), dict) and run["repository"].get("full_name") == self.repository
                 and isinstance(run.get("head_repository"), dict) and run["head_repository"].get("full_name") == self.repository,
                 "writer run does not match trusted control provenance")
-        workflow = self._call("GET", self._repo(f"/actions/workflows/{writer['workflow_id']}"))
-        require(isinstance(workflow, dict) and type(workflow.get("id")) is int
-                and workflow["id"] == writer["workflow_id"] and workflow.get("path") == path, "workflow API identity differs")
-        ref = self._call("GET", self._repo("/git/ref/heads/main"))
-        ref_object = ref.get("object") if isinstance(ref, dict) else None
-        main = ref_object.get("sha") if isinstance(ref_object, dict) else None
-        require(isinstance(main, str) and re.fullmatch(r"[0-9a-f]{40}", main), "main ref is unavailable")
-        # Only ancestry metadata is used here. Changed files appear on page 1;
-        # page 2 avoids that payload and is never a scope/commit inventory.
-        comparison = self._call("GET", self._repo(f"/compare/{control}...{main}?per_page=1&page=2"))
-        require(isinstance(comparison, dict) and comparison.get("status") in ("ahead", "identical")
-                and isinstance(comparison.get("base_commit"), dict) and comparison["base_commit"].get("sha") == control
-                and isinstance(comparison.get("merge_base_commit"), dict)
-                and comparison["merge_base_commit"].get("sha") == control, "writer control is not proven main history")
-        source = self._call("GET", self._repo(f"/contents/{path}?ref={control}"))
-        require(isinstance(source, dict) and source.get("type") == "file" and source.get("path") == path
-                and source.get("encoding") == "base64" and isinstance(source.get("content"), str), "trusted workflow source unavailable")
-        try:
-            require(bool(base64.b64decode("".join(source["content"].split()), validate=True)), "trusted workflow source is empty")
-        except JournalBlocked:
-            raise
-        except Exception:
-            raise JournalBlocked("why: trusted workflow source is malformed; remedy: restore exact-control source visibility") from None
+        if control_proofs is None:
+            self._control(writer)
+        else:
+            control_proofs.verify((self.repository, path, writer['workflow_id'], control),
+                                  lambda: self._control(writer))
         jobs, total, seen = [], None, set()
         for page in range(1, 101):
             document = self._call("GET", self._repo(f"/actions/runs/{writer['run_id']}/attempts/1/jobs?per_page=100&page={page}"))
@@ -266,10 +304,13 @@ class GitHubJournalTransport:
         if unchecked:
             # The production HTTP client creates a separate Request/opener/response
             # per call. Workers use only _writer's GET path, never pagination,
-            # anchors, writes or the trust-cache mutation. No mutable API caching.
+            # anchors, writes or the trust-cache mutation. Only the common
+            # control proof is single-flight; no mutable API responses are cached.
             # Exiting the context joins all readers even when one future fails.
+            control_proofs = _PageControlProofs()
             with ThreadPoolExecutor(max_workers=min(4, len(unchecked))) as readers:
-                futures = [readers.submit(self._writer, writer, remember=False) for writer in unchecked.values()]
+                futures = [readers.submit(self._writer, writer, remember=False, control_proofs=control_proofs)
+                           for writer in unchecked.values()]
                 for future in futures:
                     future.result()
             self._checked_writers.update(unchecked)
