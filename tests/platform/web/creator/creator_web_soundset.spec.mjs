@@ -410,6 +410,11 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   await expect(receipt).toContainText("Installed 0 Pads into Bank A");
   const kept = await page.evaluate(() =>
     window.__soundsetInstalls?.at(-1) ?? null);
+  expect(
+    kept,
+    "no soundset.install reached the transport tap, so nothing below is " +
+    "measuring the Host -- fix the tap before reading the rest",
+  ).not.toBeNull();
   expect(kept.ok).toBe(true);
   expect(kept.payload.occupied_pad_policy).toBe("keep");
   expect(kept.result.installed).toEqual([]);
@@ -450,6 +455,11 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
 
   const committed = await page.evaluate(() =>
     window.__soundsetInstalls?.at(-1) ?? null);
+  expect(
+    committed,
+    "no soundset.install reached the transport tap, so nothing below is " +
+    "measuring the Host -- fix the tap before reading the rest",
+  ).not.toBeNull();
   expect(committed.ok).toBe(true);
   expect(committed.payload.occupied_pad_policy).toBe("replace");
   expect(committed.result.installed.map((entry) => entry.pad))
