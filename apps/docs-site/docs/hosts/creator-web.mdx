@@ -111,14 +111,15 @@ Safari `PASS`。
 
 后续 Web 产品使用 `web-hosts` profile：同一 Product Release 精确包含 Creator 与 Runtime
 各自的 ZIP、checksum、detached checksum signature，共六资产。Creator verifier 在闭合验证
-六资产后只选择 Creator triplet，生产 URL 固定为 `https://lmdj-creator.netlify.app/`；Runtime
-保持 `https://lmdj-runtime.netlify.app/`。两者是独立 Host、独立 Site、独立 manual-only
-workflow、独立 evidence 与 exact prior rollback，Release publication 不 fan-out deployment。
+六资产后只选择 Creator triplet。当前固定入口由 Creator 和 Runtime 各自的 Cloudflare
+部署配置定义，分别为 `https://creator.lmdj.workers.dev/` 和 `https://lab.lmdj.workers.dev/`。
+两者独立部署、验证和恢复，使用 `scripts/cloudflare-host.sh` 消费已签名发布归档；
+Release publication 不 fan-out deployment。
 
-Creator workflow 源码使用 `creator-canary` Environment 与 `NETLIFY_CREATOR_SITE_ID`，但这只
-证明操作路径已实现。站点创建、Environment 配置与真实 dispatch 仍各需授权和 live evidence；
-在这些证据出现前，Portal 不声称 Creator 已生产部署。历史 `1.0.40.0` Release 和 Runtime
-部署事实保持不可变，不能被重述为六资产 Creator deployment。
+2026-09-08 用户授权删除两个旧 Host Netlify 站点，旧手动 workflow 已停用。
+历史 Netlify 工具源码与证据保留供审计，旧站点不再是回滚或数据迁移入口。
+删除远端托管内容未清除用户浏览器本地 Project；正式导出/导入另由 #961 设计。
+Cloudflare 自动化部署验证通过，Safari、真实听感及稳定观察仍由 #925 追踪。
 
 ## 自动化证据
 

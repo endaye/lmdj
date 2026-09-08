@@ -78,10 +78,14 @@ smoke/recovery 与 evidence；Channel promotion 继续是后续独立边界。�
 
 后续标准 Web Release profile 是 `web-hosts`：Creator 与 Runtime 各自提供 archive、checksum、
 detached checksum signature，同一 Product Release 精确六资产。Runtime 与 Creator verifier 都先
-验证闭合 inventory，再各自只 staging 所属 triplet。Runtime 生产 URL 是
-`https://lmdj-runtime.netlify.app/`，Creator 是 `https://lmdj-creator.netlify.app/`；两条部署
-manual-only 且具有独立 Site、Environment、授权、evidence 与 exact prior rollback。Release
+验证闭合 inventory，再各自只 staging 所属 triplet。当前 Runtime 固定入口是
+`https://lab.lmdj.workers.dev/`，Creator 是 `https://creator.lmdj.workers.dev/`，由各自
+Cloudflare 部署配置定义。使用 `scripts/cloudflare-host.sh` 独立部署、验证与恢复。Release
 publication 不 fan-out。历史 `1.0.40.0` Release 与部署保持不可变，不能按新 profile 改写。
+
+2026-09-08 用户授权删除旧 Netlify 站点，两条旧手动 workflow 已停用。
+当前 Cloudflare 自动化验证通过，Safari、真实听感与稳定观察仍由 #926 追踪。
+以下是保留的历史 Netlify 工具与证据说明，已删除的站点不能用于部署或回滚。
 
 两阶段 Netlify release/deploy 工具已进入仓库源码：部署 workflow 先运行不加入
 `runtime-canary` environment、因而读不到 Netlify credential 的 preflight job，它只用 Python
@@ -105,7 +109,7 @@ smoke/Draft 前拒绝自动 enable；publication projection 接受并保留 Netl
 immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
 工具测试或 PR Preview 上升为当前候选的公开部署结论。
 
-Netlify 生产面将静态服务已验证的 release `dist`，与 Python proof-only server 完全分离。
+历史 Netlify 生产面静态服务已验证的 release `dist`，与 Python proof-only server 完全分离。
 `lmdj-canary` 属于 Creator 交付边界，不绑定给 Diagnostic Runtime Host，亦不作为其 Runtime URL。
 操作前置条件、失败处置、精确 Deploy-ID 回滚和轮换在仓库运行手册
 `docs/deploy/web-runtime-host.md`；当前 acceptance 记录在
