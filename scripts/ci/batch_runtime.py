@@ -221,14 +221,22 @@ class Runtime:
         return "unknown"
 
     def authenticate_current(self):
+        # Internal failure location only; never evidence or execution authority.
+        self.diagnostic_stage = "auth-lock"
         require(self.lock_held(), "runtime lacks short writer lock")
+        self.diagnostic_stage = "auth-checkout"
         require(self.git("rev-parse", "HEAD").decode().strip() == self.control, "checkout is not frozen control")
+        self.diagnostic_stage = "auth-main-refresh"
         self.inputs.refresh()
+        self.diagnostic_stage = "auth-current-run"
         require(self.run_state(self.current) == "running", "current controller run is not live")
+        self.diagnostic_stage = "auth-journal-writer"
         self.transport._writer(self.writer)
+        self.diagnostic_stage = "auth-current-job"
         jobs = self.pages(f"/actions/runs/{self.current['run_id']}/attempts/1/jobs", "jobs")
         own = [j for j in jobs if j.get("name") == CONTROLLER_JOB]
         require(len(own) == 1 and own[0].get("status") == "in_progress", "current controller job is not active")
+        self.diagnostic_stage = None
 
     def initialize(self):
         self.authenticate_current()

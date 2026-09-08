@@ -151,6 +151,31 @@ class RuntimeTests(unittest.TestCase):
     def make(self, run=17):
         return runtime.Runtime(self.config, root=self.root, api=self.api, environment={**self.env, "GITHUB_RUN_ID": str(run)})
 
+    def test_authentication_failure_retains_only_current_phase(self):
+        for stage, owner, method in (
+            ("auth-lock", "runtime", "lock_held"),
+            ("auth-checkout", "runtime", "git"),
+            ("auth-main-refresh", "inputs", "refresh"),
+            ("auth-current-run", "runtime", "run_state"),
+            ("auth-journal-writer", "transport", "_writer"),
+            ("auth-current-job", "runtime", "pages"),
+        ):
+            with self.subTest(stage=stage):
+                instance = self.make()
+                target = instance if owner == "runtime" else getattr(instance, owner)
+                with mock.patch.object(target, method, side_effect=OSError("SECRET")):
+                    with self.assertRaises(OSError):
+                        instance.authenticate_current()
+                self.assertEqual(instance.diagnostic_stage, stage,
+                    "why: authentication location lost; remedy: retain the failing closed phase")
+
+    def test_successful_authentication_clears_previous_failure_phase(self):
+        instance = self.make()
+        instance.diagnostic_stage = "auth-main-refresh"
+        instance.authenticate_current()
+        self.assertIsNone(instance.diagnostic_stage,
+            "why: successful auth must not blame later journal failures; remedy: clear phase on success")
+
     def start(self):
         instance = self.make()
         instance.initialize()
