@@ -190,9 +190,37 @@ engine has **four** bank slots, not one: `kRealtimeBankCapacity = 4`
 `current_bank_slot_` names the live one, and `publish_sample_bank`
 (`packages/audio-runtime/src/realtime_engine.cpp:571-579`) allocates whichever
 slot is `BankState::empty`, returning `PublishResult::bank_slots_full` only
-when none is. Reserving one therefore costs hot-swap headroom — four down to
-three — rather than requiring a slot the engine does not have. "One current
-bank and 64 pad slots with no spare" is true of **pad** slots.
+when none is. "One current bank and 64 pad slots with no spare" is true of
+**pad** slots.
+
+**The reserved slot is a dedicated member, not one of the four.** The decision
+was first priced as "hot-swap headroom four down to three", and that number was
+wrong: the audition slot lives beside `bank_slots_` as its own
+`std::optional<PreparedSampleBank>` plus a sentinel index, so
+`kRealtimeBankCapacity` stays 4 and **every existing publication path keeps its
+exact arithmetic**. Carving one of the four was rejected for a reason the
+original pricing missed — it forces rewriting
+`tests/core/audio/realtime_engine_test.cpp:1169-1190`, which publishes four
+banks, asserts the fifth is `bank_slots_full`, and asserts
+`reclaim_retired_banks() == 3`. Those constants measure real realtime headroom,
+so editing them to go green is a threshold edit of the kind the Minimization
+Principle forbids. It would also leave
+`snapshot_publication_stress_test.cpp:244-262` numerically true at 4 == 4 while
+the prose argument behind its `static_assert` quietly stopped holding.
+
+**Holding a slot is not by itself audible, and that cost is real.**
+`current_sample` (`packages/audio-runtime/src/realtime_engine.cpp:297`) reads
+`bank_slots_[current_bank_slot_]` unconditionally, so every byte a voice plays
+comes from the *current* bank. Making the reserved slot current would be the
+rejected displacement option under another name, so the engine instead gains a
+voice-start path that reads the reserved slot explicitly. `Voice` already
+carries `bank_slot` and `release_voice_bank` already refcounts the drain, with
+`pattern_slot` as precedent for a voice sourcing off a non-current slot;
+`apply_published_bank` must not be reused, because it retires the current bank,
+writes `current_bank_slot_` and overwrites `availability_mask_`. The decision
+therefore costs an engine change rather than a held slot — which does not
+revive either rejected option, since both were rejected on correctness rather
+than on cost.
 
 The decision is recorded here; the mechanism is not built. #799 carries the
 byte path, and until it lands S11-D5 stays open on delivery alone rather than
