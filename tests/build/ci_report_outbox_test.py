@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "scripts/ci"), str(ROOT / "tests/build")]
@@ -38,6 +39,71 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual(first["status"], "delivered")
         self.assertEqual(len(self.posts()), 1)
         self.assertEqual([e["type"] for e in self.memory.journal().load()], ["queue", "claim", "ack", "delivered"])
+
+    def test_delivery_reuses_each_authenticated_append_result_without_third_history_read(self):
+        # Real Journal pre/post reads, transport/API doubles. This count is not
+        # a production latency claim or a proof of GitHub permissions/locking.
+        with mock.patch.object(self.memory, "page", wraps=self.memory.page) as page:
+            delivered = self.fresh().deliver(self.api, self.report)
+            self.assertEqual(page.call_count, 10,
+                "why: four appends need eight authenticated pre/post reads plus initial/recovery reads; "
+                "remedy: replay the verified append result instead of reading the entire history a third time")
+        self.assertEqual(delivered["status"], "delivered")
+        state = self.fresh().load()
+        row = next(iter(state["deliveries"].values()))
+        self.assertEqual(row["status"], "delivered")
+        self.assertEqual(row["receipt"], delivered["receipt"])
+        self.assertEqual(self.api.issues[0]["body"], row["payload"]["issue_body"])
+        self.assertEqual(self.api.issues[0]["number"], delivered["receipt"]["issue_number"])
+        self.assertEqual(self.fresh().deliver(self.api, self.report), delivered)
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_missing_or_incomplete_append_result_cannot_authorize_business_post(self):
+        for invalid in (None, [], {"events": []}):
+            with self.subTest(invalid=invalid):
+                self.memory, self.api = Memory(), FakeGitHubApi()
+                driver = self.fresh()
+                append = driver.journal.append
+                def lose_result(event):
+                    append(event)
+                    return deepcopy(invalid)
+                with mock.patch.object(driver.journal, "append", side_effect=lose_result):
+                    with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+                        driver.deliver(self.api, self.report)
+                self.assertFalse(self.posts())
+                self.assertEqual(driver.state["generation"], 0)
+                # The queue really persisted, but the failed caller could not
+                # prove it. A fresh reader can recover it, without a lost claim.
+                self.assertEqual([e["type"] for e in self.memory.journal().load()], ["queue"])
+                self.assertEqual(self.fresh().drain_once(self.api)["status"], "delivered")
+                self.assertEqual(len(self.posts()), 1)
+
+    def test_changed_prior_history_in_append_result_cannot_publish_expected_state(self):
+        self.fresh().deliver(self.api, self.report)
+        driver = self.fresh()
+        append = driver.journal.append
+        def changed_history(event):
+            committed = append(event)
+            committed[0]["data"]["payload"]["issue_body"] += "changed"
+            return committed
+        with mock.patch.object(driver.journal, "append", side_effect=changed_history):
+            with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+                driver.deliver(self.api, replace(self.report, observation="new"))
+        self.assertEqual(driver.state["generation"], 4)
+        self.assertEqual(len(self.posts()), 1)
+
+    def test_lock_lost_after_verified_append_cannot_authorize_business_post(self):
+        driver = self.fresh()
+        append = driver.journal.append
+        def release_lock(event):
+            committed = append(event)
+            self.memory.lock = False
+            return committed
+        with mock.patch.object(driver.journal, "append", side_effect=release_lock):
+            with self.assertRaisesRegex(outbox.OutboxBlocked, "why:.*remedy:"):
+                driver.deliver(self.api, self.report)
+        self.assertFalse(self.posts())
+        self.assertEqual(driver.state["generation"], 0)
 
     def test_new_observation_uses_existing_bucket(self):
         first = self.fresh().deliver(self.api, self.report)
