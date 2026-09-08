@@ -445,6 +445,134 @@ uses the complete original objects above, nonempty committed-range docs-static,
 for this unrelated explanatory ledger; the earlier Portal result below remains
 historical rather than a claimed fresh pass.
 
+### Automatic batch 38 and the two frozen historical candidates
+
+This evidence-only Task uses `docs/ci-o1-auto38-candidate-evidence`, based on
+`bc23b4882276c54a8e30c6f1c2e8001fc4a00eb8`. Its only declared file is this
+ledger. It appends subsequent observations without changing the C3 cancellation
+facts above. Root owned the actual dispatches; the independent audits and this
+documentation Task performed no product execution, dispatch or journal mutation.
+
+#### Automatic interval, complete result and settlement
+
+[Automatic run 34175405275/1](https://github.com/endaye/lmdj/actions/runs/34175405275/attempts/1)
+froze request `batch:o1-incremental-20260908-issue807:38`, base
+`0c50b0a9bfbf23ed73e2357e5ff2c0d6d2850728`, target/control
+`fe043fd3a2a06dfbca4088cc59e0e8ef6997f336`, and policy
+`bc6834ca20b75872c42c92c3e5c5ac1fcc3d515889f4544cb37aff27620ea1c6`.
+Its admission artifact `10037092682` has ZIP SHA-256
+`bedffb15473ae3a56f08eee38f6b3469b9dadbfbd2adecf8aa5bb93f6b88ed15`.
+Independent real Git collection found nine first-parent commits and 27 changed
+paths, including the actual intervening CI changes rather than only the two
+Host documentation changes. The ten historical policy reads (base plus each
+commit) had the same digest. The deterministic floor already selected all
+sixteen suites; authenticated partial review suggestions did not reduce it.
+The journal held one claim for this executor, not a heavy run per intervening PR.
+
+The parent completed with `failure` at the terminal API observation updated
+`2026-09-08T02:01:09Z`. Original artifact `10038089553`, named
+`batch-verdict-fe043fd3a2a06dfbca4088cc59e0e8ef6997f336-34175405275-1`,
+has ZIP SHA-256
+`b0e679ce9044af673601c363a385bce5bca8600709c023de1775e9fdbd22492e`.
+Its three original members are `needs.json`, `execution.json`, and `verdict.json`.
+The independent audit used the actual Runtime result consumer with GET-only
+API access, exact source/module parity, historical policy, complete terminal
+job observations and the original artifact. It accepted a complete full-scope
+result: fourteen suites passed; `ci_contract` and `creator` failed. Both stress
+suites, including `core_tsan_stress`, passed. No suite was missing, blocked,
+cancelled or infrastructure-classified. This is **not** an all-passed candidate.
+
+The CI contract failure occurred before Python tests: actual actionlint invoked
+ShellCheck and rejected an unused TSan preflight loop variable. Its later repair
+does not recolor this frozen result. The Creator failure remains a separate
+observed suite failure; this appendix does not infer its root cause.
+
+[Settlement 34178674753/1](https://github.com/endaye/lmdj/actions/runs/34178674753/attempts/1)
+returned idle with `settlement-only; no execution authorized`. Original artifact
+`10038132907` has ZIP SHA-256
+`0729f4446b25547c3d5cc87337c28b29dd3fcc79d4e588ae00b4026b73bb7b63`.
+The authenticated state reached generation 45 with processed `fe043fd3…`,
+pending `bc23b488…`, active null and both explicit candidate IDs still queued.
+The new result preceded advance. Debt became empty because the previous TSan
+verification debt was actually covered; the seven historical failure records
+remained, including the new CI contract and Creator failures. Zero debt means
+no missing verification at this boundary, not an overall green project.
+
+#### Old candidate rejected before heavy work
+
+Candidate `o1-full-candidate-0fedd-20260908-01` retained its original target
+`0fedd7268e5f0f9a27390c3d8085387083f46e86`, control `fe043fd3…`, policy
+`bc6834ca…ea1c6` and origin `34175608688/1`. Its actual executor was the
+different fresh [run 34179012035/1](https://github.com/endaye/lmdj/actions/runs/34179012035/attempts/1)
+under `bc23b488…`. Controller `101914073664` succeeded; Change Scope
+`101914263082` failed at `02:09:36Z` with the actual diagnostic that the batch
+workflow sources were incompatible or unavailable. The log's displayed script
+also contains a later candidate-policy check; that preview is not evidence the
+later check executed. The observed rejection was the earlier source check.
+
+The complete 28-job inventory had one success, one failure and 26 skips. The
+only artifact was admission `10038242350`, ZIP SHA-256
+`2311a75f44086d77f89910086b3c5f0defcf1d18e492aa1cd1b960cbb41b239e`;
+there was no scoped verdict or product execution. The old request was retained,
+not silently rewritten under the new control. Its later ordinary terminal
+settlement recorded all sixteen selected outcomes as `missing`, then advanced
+only its explicit queue slot. It did not rewind automatic processed progress,
+create automatic debt for the older candidate or clear newer failure records.
+
+#### Second candidate admitted; completion and reporting still pending
+
+[Run 34179165063/1](https://github.com/endaye/lmdj/actions/runs/34179165063/attempts/1)
+settled the first candidate and admitted
+`o1-full-candidate-0fedd-20260908-02`. This second request retained the same
+exact historical target `0fedd726…`, but its own frozen control
+`bc23b4882276c54a8e30c6f1c2e8001fc4a00eb8`, policy
+`874064884b84235f6e8337369001923975a6e63742308728bd9bedfa10ace961`
+and origin `34177534122/1`. Its full sixteen-suite selection was not replaced
+by newer automatic pending work. Original admission artifact `10038301423`
+has ZIP SHA-256
+`c0bab42f2a65d416b75ebf65904464edb053ca785fd8b8161729829dc5fd66fd`.
+Change Scope `101914786412` succeeded and product jobs actually started; this
+is stronger than a queued request but is not a completed candidate result.
+
+Independent full journal authentication reached generation 51: events 45/46
+admitted and claimed candidate 01, 47 persisted its missing result, 48 advanced
+it, and 49/50 admitted and claimed candidate 02 for executor `34179165063/1`.
+Both checkpoint reads agreed on head
+`bd8814b2fbb6b1134dfa296cf026a6568b2fcf9c7f8dc267cf28343ac8ba60fd`.
+The audit checked every actual writer/run/attempt/workflow/source/main-history
+binding, author/editor rules and digest chain, then independently replayed the
+whole state equal to the admission artifact. Hashes alone were not treated as
+writer identity. All previous requests were unchanged; queue was empty and
+active named only candidate 02. Processed `fe043fd3…`, empty debts and all seven
+failure records were byte-for-byte equivalent to automatic batch 38 settlement.
+
+At the `2026-09-08T02:17Z` read-only observation, candidate executor
+`34179165063/1` and report run
+[34179303196/1](https://github.com/endaye/lmdj/actions/runs/34179303196/attempts/1)
+were both `in_progress` with no conclusion. This appendix claims neither a
+passed candidate nor completed report delivery. The execution-enabled C3 debt
+recovery, remaining O1 journeys, and T5/O2 activation remain separate unfinished
+boundaries; no version or release operation is implied.
+
+Raw original evidence is retained in
+`/tmp/lmdj-o1-auto38-independent.WONv4M`,
+`/tmp/lmdj-auto38-root-settle.FoeenZ`,
+`/tmp/lmdj-auto38-settle-audit.XF7TvO`,
+`/tmp/lmdj-o1-candidate1-independent.ZBziSO`,
+`/tmp/lmdj-candidate2-root-admit.840Tg1`, and
+`/tmp/lmdj-candidate2-admit-audit.tVHxqQ`. These are investigation copies, not
+permanent platform-retention guarantees. This Task cross-checked original ZIP
+digests, complete states and the live exact-attempt identities; local fixtures
+were not substituted for the observations.
+
+Task verification: staged ownership, nonempty-range docs-static and whitespace
+checks are recorded with the final PR. Version impact: none. Documentation
+impact: none — only explanatory evidence is added; no Portal page, diagram,
+tooling, projected identity or documented product source fact changes. Under
+the current Task-scoped policy, no fresh Portal run is required or claimed;
+the historical result below is unchanged. Pitfall impact: none — existing
+whole-journey, failure visibility and exact-source guidance is applied.
+
 ## Ledger verification
 
 Check linked actual run/Issue identities against the API and download actual
