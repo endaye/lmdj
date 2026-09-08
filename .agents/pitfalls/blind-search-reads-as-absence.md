@@ -262,3 +262,9 @@ but that catches a missed call site, which is a different defect; it would not
 have caught this one, and shipping it as this entry's exit would put a mechanism
 in the ledger that does not enforce the rule it claims to. Revisit if a later
 recurrence turns out to be mechanically decidable.
+
+A sound search whose result later expired is a different failure and has its
+own entry: [`stale-premise-gets-implemented`](stale-premise-gets-implemented.md).
+This entry is about a search that could never have distinguished present from
+absent; that one is about a finding that was correct when measured and was
+re-used after the tree moved past it.
