@@ -124,6 +124,8 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         self.assertIn("review_pipeline.py grok", self.source, message)
         self.assertIn("grok_review.grok_command", adapter.read_text(), message)
         command = self.script.grok_command(Path("/tmp/prompt.md"), Path("/tmp/repo"))
+        self.assertEqual(command[command.index("--model") + 1], self.script.PINNED_GROK_MODEL)
+        self.assertEqual(command[command.index("--effort") + 1], "medium")
         self.assertEqual(command[command.index("--tools") + 1], self.script.READ_ONLY_TOOLS)
         self.assertNotIn("--sandbox", command, message)
         self.assertIn("--disable-web-search", command)

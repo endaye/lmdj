@@ -105,6 +105,11 @@ jobs:
         env:
           ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.ZAI_CODING_KEY }}
+          ANTHROPIC_MODEL: glm-5.1
+          ANTHROPIC_DEFAULT_OPUS_MODEL: glm-5.1
+          ANTHROPIC_DEFAULT_SONNET_MODEL: glm-5.1
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: glm-4.5-air
+          CLAUDE_CODE_EFFORT_LEVEL: medium
           API_TIMEOUT_MS: "300000"
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -154,6 +159,11 @@ jobs:
         env:
           ANTHROPIC_BASE_URL: https://api.kimi.com/coding/
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.KIMI_CODING_KEY }}
+          ANTHROPIC_MODEL: k3-256k
+          ANTHROPIC_DEFAULT_OPUS_MODEL: k3-256k
+          ANTHROPIC_DEFAULT_SONNET_MODEL: k3-256k
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: k3-256k
+          CLAUDE_CODE_EFFORT_LEVEL: medium
           API_TIMEOUT_MS: "300000"
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

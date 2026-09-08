@@ -35,6 +35,7 @@ THREAD_MARKER = "<!-- lmdj-grok-review-thread -->"
 SKIP_LABEL = "skip-grok-review"
 MAX_DIFF_BYTES = 400_000
 PINNED_GROK_VERSION = "1.0.13"
+PINNED_GROK_MODEL = "grok-4.6"
 READ_ONLY_TOOLS = "read_file,grep,list_dir"
 GROK_TIMEOUT_SECONDS = 720
 API_VERSION = "2022-11-28"
@@ -272,6 +273,8 @@ def grok_command(prompt_file: Path, cwd: Path) -> list[str]:
     # allowlist plus credential path denies.
     return [
         "grok",
+        "--model",
+        PINNED_GROK_MODEL,
         "--prompt-file",
         str(prompt_file),
         "--output-format",

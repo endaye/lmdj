@@ -68,6 +68,17 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
             self.assertNotIn(forbidden, self.directives,
                              "why: substitution must not consume unrelated Anthropic credentials; remedy: use configured GLM/Kimi credentials")
 
+    def test_glm_and_kimi_models_and_effort_are_pinned(self):
+        self.assertIn("ANTHROPIC_MODEL: glm-5.1", self.model)
+        self.assertIn("ANTHROPIC_DEFAULT_OPUS_MODEL: glm-5.1", self.model)
+        self.assertIn("ANTHROPIC_DEFAULT_SONNET_MODEL: glm-5.1", self.model)
+        self.assertIn("ANTHROPIC_DEFAULT_HAIKU_MODEL: glm-4.5-air", self.model)
+        self.assertIn("ANTHROPIC_MODEL: k3-256k", self.model)
+        self.assertIn("ANTHROPIC_DEFAULT_OPUS_MODEL: k3-256k", self.model)
+        self.assertIn("ANTHROPIC_DEFAULT_SONNET_MODEL: k3-256k", self.model)
+        self.assertIn("ANTHROPIC_DEFAULT_HAIKU_MODEL: k3-256k", self.model)
+        self.assertEqual(self.model.count("CLAUDE_CODE_EFFORT_LEVEL: medium"), 2)
+
     def test_model_has_only_read_tools(self):
         self.assertIn('--tools "Read" --allowedTools "Read" --disable-slash-commands', self.model,
                       "why: model may execute commands or post its own review; remedy: retain read-only tools")
