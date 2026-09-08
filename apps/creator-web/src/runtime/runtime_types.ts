@@ -396,6 +396,28 @@ export interface SoundSetArtifact {
   byteLength: number;
 }
 
+// #799. What an audition returns is the geometry of the bytes the Host played,
+// never the bytes: `sourceFrames` is what the Artifact holds and
+// `preparedFrames` is what the engine received after resampling, so a Set
+// authored at 44.1 kHz reports both and a caller can tell them apart.
+export interface SoundSetAuditionGeometry {
+  sampleRate: number;
+  channels: number;
+  sourceFrames: number;
+  preparedBytes: number;
+  preparedFrames: number;
+}
+
+export interface SoundSetAudition {
+  setId: string;
+  version: string;
+  manifestSha256: string;
+  // `null` when the set-level demo was auditioned rather than a slot.
+  slotIndex: number | null;
+  artifact: Readonly<SoundSetArtifact> | null;
+  audio: Readonly<SoundSetAuditionGeometry>;
+}
+
 export interface SoundSetOccupiedSlotSummary {
   slot: number;
   role: string;
@@ -499,6 +521,13 @@ export interface CreatorSoundSetRuntimeSession extends CreatorRuntimeSession {
   inspectSoundSet(
     request: Readonly<SoundSetIdentity>,
   ): Promise<Readonly<SoundSetInspect>>;
+  // Omitting `slotIndex` auditions the set-level demo; supplying one auditions
+  // that slot's Artifact. Both are queries with respect to Project Truth.
+  auditionSoundSet(
+    request: Readonly<SoundSetIdentity & {slotIndex?: number}>,
+  ): Promise<Readonly<SoundSetAudition>>;
+  // Idempotent: stopping when nothing is auditioning succeeds.
+  stopSoundSetAudition(): Promise<Readonly<{accepted: true}>>;
   previewSoundSetMap(
     request: Readonly<SoundSetIdentity & {bankId: number}>,
   ): Promise<Readonly<SoundSetMapPreview>>;

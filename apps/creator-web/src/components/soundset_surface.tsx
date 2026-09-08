@@ -161,6 +161,37 @@ export function SoundSetSurface({
     }
   };
 
+  // #799. Audition is fire-and-forget with respect to this surface: the Host
+  // publishes the decoded PCM into its reserved audition bank and starts a
+  // voice, and what comes back is only the geometry of what it played. There
+  // is no "now playing" state to hold, because the engine owns that and a
+  // second audition replaces the first without this surface arbitrating.
+  const audition = async (slotIndex?: number) => {
+    if (session === undefined || state.selected === null) return;
+    try {
+      await session.auditionSoundSet(
+        slotIndex === undefined
+          ? identityOf(state.selected)
+          : {...identityOf(state.selected), slotIndex},
+      );
+    } catch (error) {
+      dispatch({type: "failed", error: failure(error)});
+    }
+  };
+
+  // Idempotent by contract, so this needs no guard on whether anything is
+  // playing -- asking for that guard here would be this surface duplicating a
+  // decision the engine already owns, and getting it wrong whenever a voice
+  // ended between the render and the click.
+  const stopAudition = async () => {
+    if (session === undefined) return;
+    try {
+      await session.stopSoundSetAudition();
+    } catch (error) {
+      dispatch({type: "failed", error: failure(error)});
+    }
+  };
+
   const preview = async () => {
     if (session === undefined || state.selected === null) return;
     dispatch({type: "previewing"});
@@ -316,7 +347,14 @@ export function SoundSetSurface({
           {/* Audition attachment point 1 of 2: the set-level demo. */}
           {selected.demo === null ? null : (
             <p className="soundset-demo">
-              Set demo · {formatSetBytes(selected.demo.byteLength)}
+              <button
+                type="button"
+                className="soundset-audition"
+                onClick={() => void audition()}
+              >
+                Audition set demo
+              </button>{" "}
+              · {formatSetBytes(selected.demo.byteLength)}
             </p>
           )}
 
@@ -331,13 +369,29 @@ export function SoundSetSurface({
                 ) : (
                   /* Audition attachment point 2 of 2: one occupied slot. */
                   <span className="soundset-slot-sound">
-                    {slot.name} · {slot.role} · {slot.audio?.sampleRate} Hz ·{" "}
+                    <button
+                      type="button"
+                      className="soundset-audition"
+                      aria-label={`Audition ${slot.name}`}
+                      onClick={() => void audition(slot.slot)}
+                    >
+                      {slot.name}
+                    </button>{" "}
+                    · {slot.role} · {slot.audio?.sampleRate} Hz ·{" "}
                     {slot.audio?.channels === 1 ? "mono" : "stereo"}
                   </span>
                 )}
               </li>
             ))}
           </ol>
+
+          <button
+            type="button"
+            className="soundset-audition-stop"
+            onClick={() => void stopAudition()}
+          >
+            Stop audition
+          </button>
 
           <div className="soundset-target">
             <h4 id="soundset-target-bank">Install into Bank</h4>

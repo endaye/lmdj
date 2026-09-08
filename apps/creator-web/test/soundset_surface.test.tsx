@@ -157,12 +157,27 @@ function fakeSession(overrides: Partial<CreatorSoundSetRuntimeSession> = {}) {
       collisions: [],
       kept: [],
     })),
+    auditionSoundSet: vi.fn(async (request: {slotIndex?: number}) => ({
+      ...FOUNDRY,
+      slotIndex: request.slotIndex ?? null,
+      artifact: artifact("0a"),
+      audio: {
+        sampleRate: 48_000,
+        channels: 1,
+        sourceFrames: 1_024,
+        preparedBytes: 4_456,
+        preparedFrames: 1_114,
+      },
+    })),
+    stopSoundSetAudition: vi.fn(async () => ({accepted: true as const})),
     ...overrides,
   } as unknown as CreatorSoundSetRuntimeSession & {
     listSoundSets: ReturnType<typeof vi.fn>;
     inspectSoundSet: ReturnType<typeof vi.fn>;
     previewSoundSetMap: ReturnType<typeof vi.fn>;
     installSoundSet: ReturnType<typeof vi.fn>;
+    auditionSoundSet: ReturnType<typeof vi.fn>;
+    stopSoundSetAudition: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -403,4 +418,80 @@ test("a Set cannot be installed before a Project is open", async () => {
     name: /Preview mapping into Bank A/,
   })) as HTMLButtonElement).disabled).toBe(true);
   expect(session.previewSoundSetMap).not.toHaveBeenCalled();
+});
+
+// #799 Task 4b. The two attachment points the surface documented for three
+// Stages: the set-level demo and one occupied slot. Each dispatches exactly one
+// audition, addressed the way S11-D5 defines -- no `slotIndex` for the demo,
+// the slot's own index for a slot.
+test("the set demo control auditions the Set without a slot index", async () => {
+  const session = fakeSession();
+  renderSurface(session);
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Inspect Fixture Attribution Kit"}));
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Audition set demo"}));
+  await waitFor(() => expect(session.auditionSoundSet).toHaveBeenCalledTimes(1));
+  const request = session.auditionSoundSet.mock.calls[0]![0]!;
+  // The demo is addressed by Set identity alone. A `slotIndex` here would
+  // audition slot 0's Artifact instead, which for the Attribution Kit is the
+  // same bytes -- so asserting its absence is the only way to tell them apart.
+  expect(request.slotIndex).toBeUndefined();
+  expect(request.manifestSha256).toBe(ATTRIBUTION_KIT.manifestSha256);
+});
+
+test("an occupied slot control auditions that slot", async () => {
+  const session = fakeSession();
+  renderSurface(session);
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Inspect Fixture Attribution Kit"}));
+  const slots = await screen.findByRole("list", {name: "Sound Set slots"});
+  const controls = within(slots).getAllByRole("button", {name: /^Audition /});
+  // Only occupied slots carry a control: `slotIsEmpty` decides, and an empty
+  // Set slot is not an action the user can take.
+  expect(controls).toHaveLength(4);
+  await userEvent.click(controls[2]!);
+  await waitFor(() => expect(session.auditionSoundSet).toHaveBeenCalledTimes(1));
+  expect(session.auditionSoundSet.mock.calls[0]![0]!.slotIndex).toBe(2);
+});
+
+test("the stop control stops without addressing a Set", async () => {
+  const session = fakeSession();
+  renderSurface(session);
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Inspect Fixture Attribution Kit"}));
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Stop audition"}));
+  await waitFor(() =>
+    expect(session.stopSoundSetAudition).toHaveBeenCalledTimes(1));
+  // Stopping names no Set: there is only ever one audition, so a Set argument
+  // would be a field this surface could get wrong.
+  expect(session.stopSoundSetAudition.mock.calls[0]!).toHaveLength(0);
+});
+
+test("an audition refusal reaches the surface instead of being swallowed", async () => {
+  const session = fakeSession({
+    auditionSoundSet: vi.fn(async () => {
+      throw {code: "UNSUPPORTED_AUDIO", message: "Sound Set audio is unsupported",
+             details: {reason: "soundset_audio_unsupported"}};
+    }),
+  });
+  renderSurface(session);
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Inspect Fixture Attribution Kit"}));
+  await userEvent.click(
+    await screen.findByRole("button", {name: "Audition set demo"}));
+  // A refusal the Facade already decided must be shown, not dropped: this
+  // surface plays nothing itself, so a swallowed error is indistinguishable
+  // from an audition that simply made no sound.
+  //
+  // The assertion is on the guidance, not on the raw `soundset_audio_unsupported`
+  // token, because the surface maps locked reasons to guidance rather than
+  // printing them -- and the guidance is what proves the *typed* reason was
+  // understood. Any thrown object would produce a message; only this one
+  // produces the S8-D6 accepted-audio line.
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Sound Set audio is unsupported");
+  expect(alert.textContent).toContain(
+    "Accepted Set audio: PCM16 WAV, mono or stereo, 44.1 or 48 kHz");
 });
