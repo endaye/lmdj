@@ -42,6 +42,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/actions/runs/34199071822
     observed_by: Codex
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/issues/988
+    observed_by: Claude Code (Opus 5)
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -97,6 +100,33 @@ This is the shape to expect when repairing this pitfall: a fix aimed at one
 assertion leaves its neighbours untouched, because the omission is per
 statement, not per file. When you repair one message, read every other
 fail-closed assertion in the same block before you leave.
+
+The occurrence at #988 is the first where the message was **well formed and
+wrong**. `tests/build/ci_nightly_workflow_test.py` failed six times on macOS
+with a `why:`/`remedy:` pair that read cleanly and named the wrong cause: "the
+pinned TSan runtime cannot compile or start under the runner service; remedy:
+... have an operator verify the host ASLR cap". The actual line was
+`/bin/bash: line 26: timeout: command not found` — GNU coreutils is absent on
+macOS, so the extracted workflow script could not start its probe at all. An
+operator following that remedy would have gone to the sanitizer configuration
+and found nothing wrong with it.
+
+So the shape widens: this entry has been about messages that say too little,
+and the same cost arrives from a message that says enough of the wrong thing.
+The discriminator is whether the check can tell "the invariant was violated"
+apart from "the check could not run" — if it cannot, its `why` is a guess
+written in advance, and being well formed makes it more convincing rather than
+less. That case also carried the reverse: the one sibling test that exists to
+prove timeout handling **passed**, because a missing binary exits 127 and the
+assertion only required non-zero. Six loud wrong answers and one quiet wrong
+answer, from one absent prerequisite.
+
+The exit is unchanged and was not repaired. It is guidance at the point a gate
+is authored, and it did not fire here because nobody was authoring a gate —
+the messages were years-correct for the Linux lane that enforces them and only
+became wrong on a host the author never ran. Recording that the mechanism did
+not reach this case is more useful than widening it into something that would
+have.
 
 The invariant is not mechanically decidable — no test can judge whether prose
 is actionable — so it exits to guidance at the point where a gate is authored
