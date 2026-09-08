@@ -33,11 +33,24 @@ commit:
 Coding agents commit autonomously: once a change is complete and its
 Task-specific verification passes, create the Conventional Commit without
 asking for confirmation, and commit later user-requested modifications the
-same way. This autonomy covers local commits only; push and every later
-state transition still require explicit authorization.
+same way. A user request to implement or modify a Task grants standing
+authorization to complete commit, push, Pull Request creation, current-head
+review, and squash merge without asking for confirmation at each step, unless
+the user explicitly limits the Task to local, draft, review-only, or other
+narrower work. Task-specific verification, live branch protection, conflict
+checks, and resolution of review findings and conversations remain required.
 
-A commit does not authorize push, Pull Request creation, merge, tag push,
-release, publication, deployment, or Channel promotion.
+This standing Task authorization does not itself initiate a release. A single
+user authorization to perform a release covers the complete release sequence
+described below; individual release transitions do not need renewed approval.
+Cleanup still requires applicable authorization and proof of safe removal.
+
+These authorization rules take precedence over conflicting per-transition
+approval or mandatory-stop wording in repository governance documents and
+skills, including `git-workflow.md`, `version-management.md`, `issue-done`, and
+`lmdj-release`. Their technical procedures, verification requirements, and
+protection rules still apply. An explicit user restriction takes precedence
+over this standing authorization.
 
 ## Task shipping and issue operations
 
@@ -57,11 +70,23 @@ before shipping, follow `issue-done` to record or bump any qualifying pitfall.
 For any release audit or operation, coding agents must read and follow
 `.agents/skills/lmdj-release/SKILL.md`. The normal release path uses only the
 stable `scripts/release.sh` interface and begins with a fresh exact-tag remote
-audit. `prepare`, `push-tag`, `create-draft`, publication through the protected
-`publish-release.yml` workflow, Runtime deployment, and Channel promotion are
-separate authorization and verification boundaries. Complete at most one
-authorized mutation, rerun the audit, report the verified state and stop before
-the next boundary.
+audit. One overall user authorization to perform a release covers `prepare`,
+`push-tag`, `create-draft`, publication through the protected
+`publish-release.yml` workflow, Runtime deployment, and Channel promotion for
+that release. Do not ask for separate approval at each transition. Bind the
+release candidate, deployment targets, and Channel to the user's request and
+established release configuration; ask for missing information only when the
+intended scope cannot be determined, and do not expand it silently.
+
+Each transition remains a separate verification boundary. Execute mutations
+sequentially through the supported interfaces, rerun the applicable audit or
+verification after each mutation, report the verified state, and continue to
+the next covered transition when its prerequisites pass. Stop and report a
+failed gate, unresolved scope, or required external approval; never bypass
+signing, immutable tags, protected Environments, or deployment checks. A
+successful prior transition is evidence of state, not a substitute for the
+overall release authorization. Publication and deployment remain distinct
+operations even when both are covered by that authorization.
 
 Handwritten tag/Release commands, one-step public Release flows,
 `gh release upload --clobber`, and `git push --tags` are outside the normal
