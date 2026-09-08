@@ -14,6 +14,12 @@
   },
   "allowed": [
     {
+      "workflow": "incremental-completion.yml",
+      "job": "relay",
+      "category": "control-plane",
+      "reason": "Retains the authenticated completion association when product executors are unavailable. It is one bounded read-only hosted job, not a product executor or scheduler; completion recovery must not depend on the pool whose failure it reports."
+    },
+    {
       "workflow": "ci.yml",
       "job": "change-scope",
       "category": "control-plane",

@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 
 import batch_runtime
+import incremental_completion
 import incremental_batch as batch
 import report_runtime
 import self_test
@@ -73,6 +74,7 @@ class Entry:
         self.runtime = batch_runtime.Runtime(self.config["scheduler"], root=self.root, environment=self.env, api=api)
 
     def event(self, payload):
+        self.relay_witness = None
         kind = self.env.get("GITHUB_EVENT_NAME")
         require(kind in EVENTS and isinstance(payload, dict), "automatic event is outside the closed entry set")
         require(isinstance(payload.get("repository"), dict)
@@ -84,6 +86,13 @@ class Entry:
             return kind, None
         require(payload.get("action") == "completed" and isinstance(payload.get("workflow_run"), dict), "callback is not a completed run event")
         hint = payload["workflow_run"]
+        if hint.get("path") == incremental_completion.WORKFLOW:
+            # The relay is only an authenticated parent association, never
+            # a new executor or a generic permission to reconcile. Preserve
+            # the exact active-parent check below and the Runtime's stable
+            # writer workflow identity.
+            parent, self.relay_witness = incremental_completion.resolve(self.runtime, hint)
+            return "batch", parent
         require(type(hint.get("id")) is int and hint["id"] > 0 and type(hint.get("run_attempt")) is int
                 and hint["run_attempt"] > 0, "callback run/attempt is invalid")
         run = self.runtime.call("GET", self.runtime.repo(f"/actions/runs/{hint['id']}/attempts/{hint['run_attempt']}"))
@@ -128,14 +137,17 @@ class Entry:
         # Read-only provenance for actual callback-chain audits. This proves
         # authenticated source identity, not admission, health or chain depth.
         # Never print the raw event, credentials or unvalidated source hints.
-        print(self_test.canonical_json({
+        witness = {
             "schema": "lmdj.ci-source-witness.v1",
             "current": {"run_id": self.runtime.current["run_id"],
                         "attempt": self.runtime.current["attempt"],
                         "control": self.runtime.control, "event": self.env["GITHUB_EVENT_NAME"]},
             "source_family": source,
             "source_run": {"id": run["id"], "attempt": run["run_attempt"]} if run is not None else None,
-        }), flush=True)
+        }
+        if self.relay_witness is not None:
+            witness.update(schema="lmdj.ci-source-witness.v2", relay=self.relay_witness)
+        print(self_test.canonical_json(witness), flush=True)
         if source in {"push", "schedule"}:
             return self.runtime.reconcile(execute=True)
         if source == "batch":

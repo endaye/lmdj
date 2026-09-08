@@ -6,7 +6,7 @@ on:
   push:
     branches: [main]
   workflow_run:
-    workflows: ["Self-test Report", "Core CI", "PR Review"]
+    workflows: ["Incremental Completion", "Core CI", "PR Review"]
     types: [completed]
   schedule:
     - cron: "7,22,37,52 * * * *"

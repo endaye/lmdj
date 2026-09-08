@@ -3,7 +3,7 @@ title: Testing 与 Proof
 area: operations
 status: implemented
 owners: [core, quality]
-source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/quality/2026-08-24-creator-capture-precommit-crop.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md, docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md, docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md, docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md, docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md, docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/creator-web-deploy.sh, scripts/web-toolchain-conformance.sh, .github/workflows/pr-review.yml, .github/workflows/self-test-report.yml, scripts/ci/self_test.py, scripts/ci/self_test_report.py, scripts/ci/elastic_runner.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, scripts/ci/incremental_entry.py, scripts/ci/incremental_storage.json, scripts/ci/test_scope.py, scripts/ci/batch_runtime.py, scripts/ci/report_runtime.py, scripts/ci/review_discovery_runtime.py]
+source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/quality/2026-08-24-creator-capture-precommit-crop.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md, docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md, docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md, docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md, docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md, docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/creator-web-deploy.sh, scripts/web-toolchain-conformance.sh, .github/workflows/pr-review.yml, .github/workflows/self-test-report.yml, scripts/ci/self_test.py, scripts/ci/self_test_report.py, scripts/ci/elastic_runner.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, scripts/ci/incremental_entry.py, scripts/ci/incremental_storage.json, scripts/ci/test_scope.py, scripts/ci/batch_runtime.py, scripts/ci/report_runtime.py, scripts/ci/review_discovery_runtime.py, .github/workflows/incremental-completion.yml, scripts/ci/incremental_completion.py, docs/plans/2026-09-08-lmdj-ci-completion-relay.md]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -102,8 +102,17 @@ processed 只是处理进度：none／focused 成功不能清除历史失败或�
 
 每日产品 cron 与每日未启动告警均已退役。独立轻量健康巡检按 UTC 每小时
 7、22、37、52 分运行，用于恢复已有 pending、请求和报告，不能因日期启动产品测试。
-完成通知链有平台深度上限，巡检提供独立恢复；Actions 延迟或不可用时不能承诺
-15 分钟内接续，保留手动恢复入口。无变化、无待执行请求或显式恢复则不跑重测试。
+完成接续采用只读 `Incremental Completion` 中继，`Self-test Report` 不直接监听自己。
+中继 artifact 关联精确父 run／attempt，原控制器重新核验中继与父运行身份，并检查
+父运行是否对应 durable active executor；中继不是第二调度器，不写状态或启动测试。
+直接自订阅已被真实 GitHub HTTP 422 拒绝，切换 PR 的合入不代表调度可用；修复后的
+跨 workflow 接续仍须真实平台验收，不能用本地测试或 artifact 存在替代。
+
+完成通知链有平台深度上限，巡检提供独立恢复；必须保留真实链到上限→独立巡检
+恢复已有尾部→追平→无变化不启动重型任务的完整证据。平台可能投递有界轻量
+relay／idle 外壳，但无关父运行不能因此产生新 admission 或产品执行，也不承诺
+无限即时循环。Actions 延迟或不可用时不能承诺 15 分钟内接续，保留手动恢复入口。
+无变化、无待执行请求或显式恢复则不跑重测试。
 
 以下为保留的旧完整来源及旧报告器历史说明，不是当前 dispatch／定时配置：
 旧手动自测批次以 `self-test-verdict-<sha>-<run>-<attempt>` artifact 保留结论；

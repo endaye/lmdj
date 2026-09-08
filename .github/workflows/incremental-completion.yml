@@ -1,0 +1,39 @@
+name: Incremental Completion
+
+on:
+  workflow_run:
+    workflows: ["Self-test Report"]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  relay:
+    name: Relay authenticated completion
+    permissions:
+      contents: read
+      actions: read
+    if: github.ref == 'refs/heads/main' && github.run_attempt == '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Save authenticated parent receipt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/ci/incremental_completion.py --output "$RUNNER_TEMP/receipt.json"
+      - name: Retain authenticated completion receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: incremental-completion-${{ github.run_id }}-1
+          path: ${{ runner.temp }}/receipt.json
+          if-no-files-found: error
+          retention-days: 30
