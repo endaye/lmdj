@@ -38,6 +38,10 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 <BuildIdentity />
 
+Cloudflare 迁移将诊断 Host 的固定入口设为 `https://lab.lmdj.workers.dev/`，
+与独立 Web Realtime Audio Lab 区分。运行版本由已验证 Release 决定，部署操作见
+[Web Runtime Host 手册](https://github.com/endaye/lmdj/blob/main/docs/deploy/web-runtime-host.md)。
+
 ## 状态
 
 <StatusBadge status="implemented" /> Formal Web Runtime Host `4.0.0` 已进入 Product Build `1.0.44.0` Assembly。Host 只依赖 Web Runtime Platform `4.0.0`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。`sample.import.begin.byte_length` 接受 manifest 约束内的完整选区 WAV，`sample.import.chunk` 继续把每个 sidecar 限制为 1 MiB。Diagnostic flow 继续覆盖 revision-bound `sample.quota`、Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。

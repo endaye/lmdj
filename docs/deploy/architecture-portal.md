@@ -6,22 +6,17 @@
 `apps/architecture-portal/deploy/wrangler.json`；配置存在不表示已经发布。
 `lmdj` Worker 继续保留既有试点，`docs` 通过 Git 构建部署。
 
-在 Cloudflare 为 Worker `docs` 连接 `endaye/lmdj`，仓库根目录 `/`，
-Node 使用根目录 `.node-version`。构建命令为：
+`.github/workflows/deploy-cloudflare-portal.yml` 由 `main` push 触发，在现有
+`ci-general` 自托管 runner 构建和验证精确 Git SHA。生产并发组串行化发布，排队的
+中间 push 可以被 GitHub 合并为最新待处理工作，不取消正在发布的事务。
+部署凭据保存在只接受受保护分支的 `portal-cloudflare` Environment；构建与 CLI
+安装步骤不注入 token，部署步骤才使用它。
 
-```sh
-npx --yes npm@10.9.3 --prefix apps/architecture-portal ci && npx --yes npm@10.9.3 --prefix apps/architecture-portal run check
-```
-
-生产部署命令为：
-
-```sh
-npx --yes wrangler@4.129.1 deploy --config apps/architecture-portal/deploy/wrangler.json
-```
-
-上述配置必须先进入被 Cloudflare 构建的 Git 分支；本地目录不能作为手动生产上传输入。
-发布后从相同 Git revision 运行 Portal smoke 并记录 Cloudflare version ID。
-自有域名与 Netlify 地址保持原状。
+`scripts/cloudflare-portal-deploy.py` 先上传版本 Preview 并验证同一 Git SHA，再发布
+同一个 version ID；初始 Worker 在 Preview 通过前关闭主路由。生产 HTTP smoke
+有界重试等待路由传播，失败后核对活动版本并恢复 exact prior 或关闭首次部署入口。
+操作观察保留为 workflow artifact。自有域名、旧 Netlify 地址与 `lmdj` 试点保持原状。
+正常发布由 Git 触发；本地目录不能作为手动生产上传输入。
 
 日期：2026-08-04
 

@@ -13,8 +13,12 @@ Account: `0b62b8881c07f48f7935f5380a1f55db`; workers.dev subdomain: `lmdj`.
   stage its exact bytes and generated security/cache headers, upload with the
   main route disabled, validate the candidate, then enable and verify the fixed
   `creator.lmdj.workers.dev` route. Disable the route on failed initial promotion.
-- Lab: resolve whether the owner means the formal Diagnostic Web Runtime Host
-  or the independent Web Realtime Audio Lab before provisioning `lab`.
+- Lab: use the existing formal Diagnostic Web Runtime Host, consistent with
+  the three-Netlify-site migration scope; the independent Audio Lab is excluded.
+  Stage the Runtime asset from the same signed Release and verify its fixed URL.
+- Portal publication: add a main-push GitHub workflow using the existing
+  ci-general runner and a protected-branch deployment Environment. Validate
+  new-site publication, preview failure, exact-prior recovery and lost receipts.
 - Retain explicit version identities and HTTP/browser evidence. Existing
   Netlify deployments and custom DNS are preserved throughout this operation.
 
