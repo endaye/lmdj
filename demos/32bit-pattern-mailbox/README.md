@@ -4,6 +4,7 @@
 
 ```bash
 python3 demos/32bit-pattern-mailbox/model.py
+python3 demos/32bit-pattern-mailbox/boundary_test.py
 ```
 
 ## 两个不同的证明问题
@@ -49,3 +50,25 @@ SC admission 的一般顺序论据：音频关闭后，在它重新开放之前�
 
 取消/激活/回收模型为 38 个状态，两种胜者与安全槽位复用均可达。立即回收的
 错误版本以 `control reclaimed an audio-owned slot` 被拒绝。
+
+## 帧边界与跨通道顺序
+
+`boundary_test.py` 保存六项缩减检查（不是完整 Engine 模型）：
+
+- 现有 `publication_claim_race_preserves_the_claimed_boundary_and_phase` 场景：
+  callback 从 95,999 开始，长度 2；待激活 Pattern 的起点为 96,000，bar 长度
+  128,000。控制应读取 callback 开始时推进的前沿 96,001，安排到 224,000。
+  若仅在 callback 尾发布 Transport，旧前沿 95,999 会错误算出 96,000。
+- 源码 `apply_published_pattern` 先更新 origin，再清 audio-pending descriptor。
+  候选 Transport 也必须在清 A 的 release 前发布 origin。检查明确枚举反例：
+  清 A → 控制看见 A 空 → 控制仍读旧 origin → 音频才发布新 origin。
+- Claim 交接必须先发布 A 再清 Q；空 Q 的 claimed 标志不代表有效槽位或身份。
+
+对照源码：`packages/audio-runtime/src/realtime_engine.cpp` 的
+`render`、`apply_published_pattern`、`publish_pattern_view_impl`，以及
+`tests/core/audio/realtime_engine_test.cpp`。检查基线是实验分支父基线
+`694b983b3a6b9de7be780d1399072b9b2afdf5cc`；本轮未运行产品测试，未宣称
+已经重现产品缺陷。错误的是上述候选变体，不是现有源码。
+
+2026-09-08：六项缩减检查通过。跨域 release/acquire 的真实 C++ 实现、完整
+控制重试与 authority 校验仍需后续验证；数字样例和 SC 合并顺序不证明它们。
