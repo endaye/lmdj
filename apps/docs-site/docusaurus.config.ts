@@ -19,7 +19,7 @@ const config: Config = {
   title: 'LMDJ Docs',
   tagline: 'LMDJ 产品、架构与交付说明书',
   favicon: 'img/logo.svg',
-  url: 'https://lmdj.netlify.app',
+  url: 'https://docs.lmdj.workers.dev',
   baseUrl: '/',
   future: {v4: true},
   onBrokenLinks: 'throw',

@@ -125,6 +125,12 @@ validation，再把该 ID 对应的 HTML/SVG 输出精确复制到
 
 ## 7. CI、发布与回滚证据
 
+当前正式入口为 `https://docs.lmdj.workers.dev`。生成的 canonical、Open Graph
+URL 与 sitemap 使用该固定地址，版本 Preview 沿用正式 canonical，不把临时版本
+地址当作正式来源。此设置不修改自有域名，也不为旧 `netlify.app` 地址建立重定向；
+旧入口退役由迁移验收单独决定。冻结快照源码与来源元数据保持不可变。
+
+
 全量增量批次与显式完整候选／节点自测运行 Architecture Portal suite；可选 PR Preview 是反馈，不是合并必过项。
 受影响 Task 本地校验文档影响声明和 changed files；Product Build/Assembly 变化不能选择
 `none`。完整门户检查同时验证

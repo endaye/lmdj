@@ -35,6 +35,9 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 本地构建、普通 CI 和 PR Preview 只校验 current 页面，不创建永久快照。任何已分配并交付团队测试的 `canary`、`dev`、`beta` Product Build，以及 `stable` 发布，都必须冻结匹配的不可变快照；current main 始终标明非正式快照。
 schema-2 快照把 37 页 current source、versioned sidebar、十张图的 20 个 HTML/SVG 资产和自认证 Git/source projection 元数据作为一个生成边界。版本页的卡片按 active doc ID 解析，图表按版本资产根解析；缺失、重复、越界、符号链接或哈希漂移都 fail closed。已有 schema-1 快照保持只读兼容，不回写为 schema 2。若 squash introducing tree 还包含冻结后的 mutable current/non-projection 更新，必须用 `scripts/docs-site.sh witness PRODUCT_BUILD INTRODUCING_REVISION` 生成反向差异；验证器只在临时 Git index 精确重建 raw source commit 已认证的 tree/commit 后才接受，不能重建、身份不匹配或被篡改的 witness 继续 fail closed，且不能改写不可变快照。
 ## 发布规则
+正式入口为 [产品说明书](https://docs.lmdj.workers.dev)。页面 canonical、Open Graph
+地址及 sitemap 使用该固定入口；版本 Preview 仍引用正式 canonical。此变更不修改
+自有域名或旧 Netlify 入口，冻结快照的源码和来源记录保持原样。
 Git 合入 main 触发 Cloudflare 构建；先通过完整 Portal check，再验证同一 Git SHA 的版本 Preview，发布同一个 version ID 并验证生产 smoke。手工本地上传不能替代 Git 生产流程。
 
 ## CI 影响检查
