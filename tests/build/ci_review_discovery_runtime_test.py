@@ -222,7 +222,9 @@ class RuntimeTests(unittest.TestCase):
             if path.endswith("/actions/runs/51/attempts/1"):
                 return old
             if path.endswith("/actions/runs/51/attempts/2"):
-                return deepcopy(self.review.run)
+                # Actual Actions attempt metadata uses its own creation time,
+                # e.g. run 34124875948/2 is 59 seconds after run creation.
+                return {**deepcopy(self.review.run), "created_at": "2026-09-08T00:01:59Z"}
             return previous(method, path, body=body, raw=raw)
         self.api._request = request
         def download(artifact):
@@ -233,6 +235,58 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual({}, result["state"]["unresolved"])
         self.assertEqual("failure-queued", self.make().load()["runs"]["51/2"]["status"])
         self.assertEqual(2, len(self.make().outbox.load()["deliveries"]))
+        state = self.make().load()
+        self.assertEqual(old["created_at"], state["runs"]["51/2"]["created_at"])
+        self.assertEqual(state["runs"]["51/1"]["created_at"], state["runs"]["51/2"]["created_at"])
+        before = deepcopy(self.fixture.outbox_http.comments)
+        self.run_adapter()
+        self.assertEqual(before, self.fixture.outbox_http.comments)
+
+    def test_first_attempt_timestamp_can_differ_without_moving_inventory(self):
+        previous = self.api._request
+        def request(method, path, *, body=None, raw=False):
+            if path.endswith("/actions/runs/51/attempts/1"):
+                # Actual run 34137319062 has a one-second offset on attempt 1.
+                return {**deepcopy(self.review.run), "created_at": "2026-09-08T00:01:01Z"}
+            return previous(method, path, body=body, raw=raw)
+        self.api._request = request
+        self.run_adapter()
+        state = self.make().load()
+        self.assertEqual("failure-queued", state["runs"]["51/1"]["status"])
+        self.assertEqual(self.review.run["created_at"], state["runs"]["51/1"]["created_at"])
+        self.assertEqual(END, state["inventory_frontier"])
+        self.assertEqual(1, len(self.make().outbox.load()["deliveries"]))
+        self.assertFalse(self.api.issues)
+
+    def test_invalid_or_pre_run_attempt_timestamp_cannot_queue(self):
+        previous = self.api._request
+        for timestamp in ("2026-09-08T00:00:59Z", "not-a-time", None):
+            def request(method, path, *, body=None, raw=False):
+                if path.endswith("/actions/runs/51/attempts/1"):
+                    return {**deepcopy(self.review.run), "created_at": timestamp}
+                return previous(method, path, body=body, raw=raw)
+            self.api._request = request
+            with self.subTest(timestamp=timestamp):
+                result = self.run_adapter()
+                self.assertEqual("unresolved", result["state"]["unresolved"]["51/1"]["status"])
+                self.assertFalse(self.make().outbox.load()["deliveries"])
+
+    def test_later_timestamp_does_not_weaken_exact_source_identity(self):
+        previous = self.api._request
+        changes = ({"id": 52}, {"run_attempt": 2}, {"workflow_id": 43},
+                   {"path": ".github/workflows/foreign.yml"},
+                   {"repository": {"full_name": "endaye/lmdj", "id": 999}},
+                   {"head_sha": "f" * 40})
+        for change in changes:
+            def request(method, path, *, body=None, raw=False):
+                if path.endswith("/actions/runs/51/attempts/1"):
+                    return {**deepcopy(self.review.run), "created_at": "2026-09-08T00:01:01Z", **change}
+                return previous(method, path, body=body, raw=raw)
+            self.api._request = request
+            with self.subTest(change=change):
+                result = self.run_adapter()
+                self.assertEqual("unresolved", result["state"]["unresolved"]["51/1"]["status"])
+                self.assertFalse(self.make().outbox.load()["deliveries"])
 
     def test_actual_journal_round_budget_continues_in_fresh_process(self):
         values = [{**self.review.run, "id": n} for n in (51, 52)]
