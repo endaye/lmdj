@@ -4669,6 +4669,73 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  // #799. Audition is a query with respect to Project Truth -- no Asset, no
+  // Pad, no revision -- so it goes through `recoverableQuery` like its Set
+  // reading siblings. The Host publishes the decoded PCM into its reserved
+  // audition bank as a side effect; what crosses this boundary is only the
+  // geometry of the bytes it played, never the bytes.
+  async function auditionSoundSet(request) {
+    const payload = soundsetIdentity(
+      request, request.slotIndex === undefined ? [] : ["slotIndex"]);
+    if (request.slotIndex !== undefined) {
+      if (!isUnsignedInteger(request.slotIndex, 15)) {
+        throw typedError("INVALID_ARGUMENT", "Sound Set slot is invalid");
+      }
+      payload.slot_index = request.slotIndex;
+    }
+    const result = await recoverableQuery("soundset.audition", payload);
+    if (!isPlainRecord(result) || !isPlainRecord(result.audio)) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH", "Sound Set audition is invalid");
+    }
+    const audio = result.audio;
+    if (!exactKeys(audio, [
+      "sample_rate", "channels", "source_frames", "prepared_bytes",
+      "prepared_frames",
+    ])) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH", "Sound Set audition geometry is invalid");
+    }
+    const slotIndex = result.slot_index ?? null;
+    // A slot audition always names the Artifact it played; only a set-level
+    // demo may answer without one. Accepting `null` here would hand the
+    // surface a result the type says cannot occur, and `normalizeSoundSetSlot`
+    // already treats the same inconsistency as a protocol fault for an
+    // occupied slot.
+    if (slotIndex !== null && (result.artifact ?? null) === null) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH",
+        "Sound Set slot audition named no Artifact");
+    }
+    return Object.freeze({
+      setId: result.set_id,
+      version: result.version,
+      manifestSha256: result.manifest_sha256,
+      slotIndex,
+      artifact: normalizeSoundSetArtifact(result.artifact ?? null),
+      audio: Object.freeze({
+        sampleRate: audio.sample_rate,
+        channels: audio.channels,
+        sourceFrames: audio.source_frames,
+        preparedBytes: audio.prepared_bytes,
+        preparedFrames: audio.prepared_frames,
+      }),
+    });
+  }
+
+  // Stopping addresses no Set: there is only ever one audition, so naming one
+  // would be a field this Host could get wrong. Idempotent by contract --
+  // stopping when nothing plays succeeds -- which is what keeps it inside the
+  // frozen error vocabulary, with no "nothing to stop" condition to name.
+  async function stopSoundSetAudition() {
+    const result = await recoverableQuery("soundset.audition.stop", {});
+    if (!isPlainRecord(result) || result.accepted !== true) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH", "Sound Set audition stop is invalid");
+    }
+    return Object.freeze({accepted: true});
+  }
+
   async function previewSoundSetMap(request) {
     const payload = soundsetIdentity(request, ["bankId"]);
     if (!isUnsignedInteger(request.bankId, 3)) {
@@ -4797,6 +4864,8 @@ function createRuntimeSessionController(options = {}) {
     retryPrepare,
     listSoundSets,
     inspectSoundSet,
+    auditionSoundSet,
+    stopSoundSetAudition,
     previewSoundSetMap,
     installSoundSet,
     activateAudio,

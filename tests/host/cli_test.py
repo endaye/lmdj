@@ -1571,6 +1571,108 @@ def soundset_acceptance_journey(executable: Path, temp_root: Path) -> None:
     )
     assert project_state(executable, workspace, project, 2)[1] == {}
 
+    # Leg 10 -- S11-D5 audition. #799 made a Set audible before install, and
+    # the invariant that makes that safe is that auditioning is a query with
+    # respect to Project Truth: no Asset, no Pad, no revision. Asserted after
+    # the transition rather than before it, because "nothing changed" is only
+    # a claim about a thing that has already happened.
+    #
+    # Four auditions, chosen so a Project change could come from any of the
+    # shapes the operation has: a set-level demo, an occupied slot, a slot the
+    # Set leaves empty, and a Set whose audio the Facade refuses.
+    demo = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.audition",
+            "set_id": ATTRIBUTION_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": ATTRIBUTION_MANIFEST,
+        },
+    )
+    check_success(demo, None)
+    # Addressed without a slot, so the set-level demo answered. `sample_rate`
+    # is the Artifact's own rate, not the engine's -- this demo is authored at
+    # 48 kHz, so its source and prepared frame counts agree and it cannot show
+    # a resample. The slot below is the case that can.
+    assert demo["result"]["slot_index"] is None
+    assert demo["result"]["audio"]["sample_rate"] == 48_000
+    assert (demo["result"]["audio"]["prepared_frames"]
+            == demo["result"]["audio"]["source_frames"] == 2_880)
+
+    slot = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.audition",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+            "slot_index": 0,
+        },
+    )
+    check_success(slot, None)
+    assert slot["result"]["slot_index"] == 0
+    assert slot["result"]["artifact"]["sha256"]
+    # The load-bearing one. Foundry slot 0 is authored at 44.1 kHz and the
+    # engine runs at 48, so `prepared_frames` is the resampled count and
+    # `source_frames` is what the Artifact holds: 2646 * 48000 / 44100 = 2880.
+    # Handing a Host the source frames would publish 44.1 kHz audio into a
+    # 48 kHz engine and play every preview sharp -- a defect that ships and
+    # comes back months later as "previews sound wrong". The two fields
+    # differing is the only place that is visible.
+    foundry_audio = slot["result"]["audio"]
+    assert foundry_audio["sample_rate"] == 44_100, foundry_audio
+    assert foundry_audio["source_frames"] == 2_646, foundry_audio
+    assert foundry_audio["prepared_frames"] == 2_880, foundry_audio
+
+    # An empty Set slot is not a playable thing, and S11-D12 keeps emptiness a
+    # property of the absent Artifact rather than a flag. The existing
+    # `MISSING_ASSET` carries it, so the locked vocabulary does not grow.
+    empty = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.audition",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+            "slot_index": 11,
+        },
+        expected_exit=2,
+    )
+    check_error(empty, "MISSING_ASSET")
+
+    # S11-D3 is a whole-Set decision, so it refuses an audition for the same
+    # reason it refused the install in leg 9 -- the same code and the same
+    # token, decided in the same place.
+    unsupported_audition = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.audition",
+            "set_id": UNSUPPORTED_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": UNSUPPORTED_MANIFEST,
+        },
+        expected_exit=2,
+    )
+    check_error(unsupported_audition, "UNSUPPORTED_AUDIO")
+    assert unsupported_audition["error"]["details"]["reason"] == (
+        "soundset_audio_unsupported"
+    )
+
+    # The far side of all four: the Project is exactly where leg 9 left it.
+    # Revision, this Bank's occupancy and the whole Asset table -- an audition
+    # that created an Asset would show here even if no Pad moved.
+    assert project_state(executable, workspace, project, bank) == (
+        4, d12_pads, d12_assets
+    )
+
     soundset_offline_and_export_journey(
         executable, workspace, temp_root, project
     )

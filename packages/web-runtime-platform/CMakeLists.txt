@@ -484,4 +484,16 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
       "${CMAKE_CURRENT_SOURCE_DIR}/test/source_boundary_test.py"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
+  # #799 Task 4b. Cross-Host, so it is registered beside the other Host
+  # boundary gates rather than under any one Host: it reads all six Host
+  # protocol sources at once, which is the only vantage from which one Host
+  # drifting from the Facade is visible.
+  lmdj_add_test(
+    NAME host.soundset_refusal_ownership
+    TIER contract
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/host/soundset_refusal_ownership_test.py"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
 endif()

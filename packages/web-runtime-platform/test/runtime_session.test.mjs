@@ -40,11 +40,13 @@ const API = [
   "listPerformances",
   "listLocalProjects",
   "listSequenceRecovery",
+  "auditionSoundSet",
   "listSoundSets",
   "openProject",
   "performanceMasterCaptureStatus",
   "movePatternSlot",
   "previewSoundSetMap",
+  "stopSoundSetAudition",
   "queryPerformanceRecordingStatus",
   "queryPerformanceReplayStatus",
   "querySampleQuota",
@@ -5030,6 +5032,62 @@ test("forwards the occupied Pad policy only when the caller chose one", async ()
     "set_id",
     "version",
   ]);
+});
+
+// #799. A slot audition names the Artifact it played; only a set-level demo
+// may answer without one. Accepting `null` would hand the caller a result the
+// documented type says cannot occur -- the same class
+// `normalizeSoundSetSlot` already refuses for an occupied slot.
+test("a slot audition that names no Artifact is refused", async () => {
+  const auditionWith = (artifact, slotIndex) => fixture({
+    soundsetCatalog: null,
+    send(envelope) {
+      if (envelope.operation !== "soundset.audition") {
+        return success(envelope, defaultResult(envelope.operation));
+      }
+      return success(envelope, {
+        set_id: SET_ID,
+        version: "1.0.0",
+        manifest_sha256: MANIFEST_SHA,
+        slot_index: slotIndex,
+        artifact,
+        audio: {
+          sample_rate: 44_100,
+          channels: 1,
+          source_frames: 2_646,
+          prepared_bytes: 11_520,
+          prepared_frames: 2_880,
+        },
+      });
+    },
+  });
+  const identity = {
+    setId: SET_ID,
+    version: "1.0.0",
+    manifestSha256: MANIFEST_SHA,
+  };
+  const artifact = {
+    sha256: BLOB_SHA,
+    media_type: "audio/wav",
+    byte_length: 64,
+  };
+
+  await assert.rejects(
+    auditionWith(null, 0).session.auditionSoundSet({...identity, slotIndex: 0}),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+  // The demo case is the one that may answer without an Artifact, so the same
+  // absence must be accepted there -- a rule that refused both would be
+  // refusing the shape the contract defines.
+  const demo = await auditionWith(null, null).session.auditionSoundSet(identity);
+  assert.equal(demo.artifact, null);
+  assert.equal(demo.slotIndex, null);
+  // And the ordinary slot answer still passes, so the rule is not refusing
+  // everything.
+  const played = await auditionWith(artifact, 0)
+    .session.auditionSoundSet({...identity, slotIndex: 0});
+  assert.equal(played.artifact.sha256, BLOB_SHA);
+  assert.equal(played.audio.preparedFrames, 2_880);
 });
 
 test("a Set slot that disagrees with itself about being empty is refused", async () => {
