@@ -38,6 +38,33 @@ const SUMMARY_KEYS = [
   "revision",
 ].sort();
 
+// The browser reader is the fourth independent copy of the Bundle level
+// enumeration, after `contracts/project/lmdj.project-bundle.v1.schema.json`,
+// `tools/project-bundle/project_bundle.py` and Project I/O's `parse_index`.
+// #784 moved the other three to `1.2.0`/`lmdj.project.v4` and left this one at
+// `1.1.0`/`lmdj.project.v3`, which refused every Project this Build creates
+// before a byte crossed the Host bridge (#900). These are exported so
+// `project_bundle_reader.test.mjs` can bind them to the Contract document
+// rather than to a list a test author retyped.
+export const BUNDLE_CONTRACT = "lmdj.project-bundle.v1";
+// Widening the Project Contract enum is an additive Contract MINOR, so a
+// `1.2.0` reader accepts every `1.0.0` and `1.1.0` index unchanged. This
+// mirrors `project_bundle.READABLE_CONTRACT_VERSIONS`.
+export const READABLE_CONTRACT_VERSIONS = Object.freeze([
+  "1.0.0",
+  "1.1.0",
+  "1.2.0",
+]);
+// Every Project Contract level a Bundle may name. This must stay equal to the
+// Contract's `project_contract` enum; the Build writes `lmdj.project.v4` and
+// the older levels remain readable migration inputs.
+export const READABLE_PROJECT_CONTRACTS = Object.freeze([
+  "lmdj.project.v1",
+  "lmdj.project.v2",
+  "lmdj.project.v3",
+  "lmdj.project.v4",
+]);
+
 function typedError(code, message) {
   return new HostProtocolError(code, message, {});
 }
@@ -116,11 +143,10 @@ async function validateIndex(indexBytes, fileSize, crypto) {
     throw invalid("Project Bundle index is not canonical JSON");
   }
   if (
-    index.contract !== "lmdj.project-bundle.v1" ||
-    !["1.0.0", "1.1.0"].includes(index.contract_version) ||
+    index.contract !== BUNDLE_CONTRACT ||
+    !READABLE_CONTRACT_VERSIONS.includes(index.contract_version) ||
     index.compression !== "none" ||
-    !["lmdj.project.v1", "lmdj.project.v2", "lmdj.project.v3"]
-      .includes(index.project_contract) ||
+    !READABLE_PROJECT_CONTRACTS.includes(index.project_contract) ||
     !UUID_PATTERN.test(index.project_id) ||
     !SHA256_PATTERN.test(index.bundle_digest) ||
     !Array.isArray(index.entries) ||

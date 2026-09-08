@@ -567,6 +567,24 @@ lmdj_add_test(
   TIMEOUT 60
 )
 
+# Node, not a native target: the reader under test is the browser ES module in
+# packages/web-runtime-platform/web/, and the only honest input for it is a
+# Bundle the shipped CLI and packer produced, which needs the assembled
+# product. Every CI job that runs scripts/core.sh provisions Node 22.
+lmdj_add_test(
+  NAME e2e.project_bundle_browser_reader
+  TIER e2e
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/e2e/project_bundle_browser_reader_test.py
+    "$<TARGET_FILE:lmdj_core_cli>"
+    "${CMAKE_SOURCE_DIR}/products/lmdj/assembly.json"
+    "${CMAKE_BINARY_DIR}/bundle-browser-reader"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS assembly
+  TIMEOUT 120
+)
+
 lmdj_add_test(
   NAME e2e.headless_core_proof
   TIER e2e
