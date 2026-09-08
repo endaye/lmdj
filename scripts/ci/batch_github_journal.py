@@ -164,7 +164,9 @@ class GitHubJournalTransport:
         ref_object = ref.get("object") if isinstance(ref, dict) else None
         main = ref_object.get("sha") if isinstance(ref_object, dict) else None
         require(isinstance(main, str) and re.fullmatch(r"[0-9a-f]{40}", main), "main ref is unavailable")
-        comparison = self._call("GET", self._repo(f"/compare/{control}...{main}"))
+        # Only ancestry metadata is used here. Changed files appear on page 1;
+        # page 2 avoids that payload and is never a scope/commit inventory.
+        comparison = self._call("GET", self._repo(f"/compare/{control}...{main}?per_page=1&page=2"))
         require(isinstance(comparison, dict) and comparison.get("status") in ("ahead", "identical")
                 and isinstance(comparison.get("base_commit"), dict) and comparison["base_commit"].get("sha") == control
                 and isinstance(comparison.get("merge_base_commit"), dict)
