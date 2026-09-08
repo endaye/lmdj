@@ -5,3 +5,4 @@ self-hosted-runner:
     - ci-general
     - ci-web-heavy
     - ci-core
+    - contabo

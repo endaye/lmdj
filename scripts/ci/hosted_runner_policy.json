@@ -2,47 +2,15 @@
   "schema": "lmdj.hosted-runner-policy.v1",
   "rationale": [
     "GitHub bills each job rounded up to a whole minute, so on hosted runners job count costs more than job duration. Self-hosted minutes cost nothing. A hosted job is therefore a spending decision, and this file is where that decision is recorded.",
-    "A job earns a hosted runner only by publishing scope, trust, admission or verdict evidence that must survive a self-hosted outage, by holding authority the CI runner users deliberately lack, or by a recorded platform incompatibility. Convenience is not a reason.",
+    "Routine Linux control, adjudication and product jobs use self-hosted runners. The Contabo general pool is separate from Netcup heavy executors; loss of that control pool queues work, never buys hosted Linux capacity. macOS availability recovery remains an explicitly accepted paid exception.",
     "tests/build/ci_hosted_runner_policy_test.py enumerates every job whose runs-on can resolve to a GitHub-hosted label and requires an entry here, so adding a hosted job is a reviewed act rather than a default."
   ],
   "categories": {
-    "control-plane": "Publishes scope, trust, admission or verdict evidence that must remain available when every self-hosted runner is offline.",
-    "adjudicator": "Republishes an already produced result under a required check name and executes no workload.",
     "deploy-authority": "Holds deployment, signing or publication authority that the self-hosted CI runner users are deliberately denied.",
     "platform": "A recorded platform incompatibility makes the self-hosted host unusable for this job.",
     "temporary": "Not justified on the merits; scheduled for removal by a named Issue."
   },
   "allowed": [
-    {
-      "workflow": "incremental-completion.yml",
-      "job": "relay",
-      "category": "control-plane",
-      "reason": "Retains the authenticated completion association when product executors are unavailable. It is one bounded read-only hosted job, not a product executor or scheduler; completion recovery must not depend on the pool whose failure it reports."
-    },
-    {
-      "workflow": "ci.yml",
-      "job": "change-scope",
-      "category": "control-plane",
-      "reason": "Publishes the exact diff, lane selection, trust and upgrade reasons. It must produce that evidence even when every self-hosted Linux runner is offline, because the rest of the run is adjudicated against it."
-    },
-    {
-      "workflow": "ci.yml",
-      "job": "pre-heavy-gate",
-      "category": "control-plane",
-      "reason": "Decides whether native-heavy work is admitted. A gate that depended on the hosts it admits work to could not report their unavailability."
-    },
-    {
-      "workflow": "ci.yml",
-      "job": "batch-verdict",
-      "category": "control-plane",
-      "reason": "Retains scoped incremental verdict and actual needs observations even when the self-hosted executors are unavailable. It runs current trusted adapters over frozen policy JSON, not product workloads, and must survive the pool it judges."
-    },
-    {
-      "workflow": "ci.yml",
-      "job": "select-macos-runner",
-      "category": "control-plane",
-      "reason": "Decides macOS routing by querying runner status. It cannot run on the runner whose availability it is deciding."
-    },
     {
       "workflow": "ci.yml",
       "job": "macos-primary",
@@ -54,36 +22,6 @@
       "job": "macos-fallback",
       "category": "platform",
       "reason": "Infrastructure recovery, not a test retry. It starts only when the selected self-hosted lane could not publish a terminal result; a published preparation, Proof or sanitizer failure is final and must not start it."
-    },
-    {
-      "workflow": "ci.yml",
-      "job": "core-macos",
-      "category": "adjudicator",
-      "reason": "Republishes the macOS Core Proof result under the required check name. Reads upstream job outputs and executes no workload."
-    },
-    {
-      "workflow": "ci.yml",
-      "job": "core-asan-macos",
-      "category": "adjudicator",
-      "reason": "Republishes the native macOS sanitizer result under the required check name. Reads upstream job outputs and executes no workload."
-    },
-    {
-      "workflow": "merge-queue.yml",
-      "job": "route",
-      "category": "control-plane",
-      "reason": "Routes the exact authorization event and decides admission to the queue. Like the other adjudicators it must not depend on the hosts running the work it authorizes."
-    },
-    {
-      "workflow": "merge-queue.yml",
-      "job": "finalize",
-      "category": "control-plane",
-      "reason": "Reconciles an aborted worker and publishes the closed queue report. It must be able to run when the worker's own host has died, which is the case it exists for."
-    },
-    {
-      "workflow": "release-audit.yml",
-      "job": "audit",
-      "category": "control-plane",
-      "reason": "Publishes release identity evidence. Release authority must be independent of the hosts that produced the artifacts it audits."
     },
     {
       "workflow": "publish-release.yml",
@@ -120,18 +58,6 @@
       "job": "deploy",
       "category": "deploy-authority",
       "reason": "Performs the deployment and holds its credentials. Same boundary as the preflight above."
-    },
-    {
-      "workflow": "self-test-report.yml",
-      "job": "controller",
-      "category": "control-plane",
-      "reason": "Authenticates and journals incremental batch admission or terminal recovery under the existing short reporter writer lock. It executes no product tests and must remain available when the self-hosted executors are unavailable."
-    },
-    {
-      "workflow": "self-test-report.yml",
-      "job": "cancel-probe-waiter",
-      "category": "control-plane",
-      "reason": "Offers a bounded manual diagnostic parent-run cancellation window after the short journal writer has finished. It has no write permissions or product work and must not occupy a self-hosted product executor."
     },
     {
       "workflow": "cloudflare-preview-build.yml",

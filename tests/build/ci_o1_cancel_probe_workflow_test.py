@@ -154,7 +154,7 @@ class CancelWorkflowTests(unittest.TestCase):
             self.assertIn(value, condition)
         self.assertEqual(field(waiter, 'permissions', 4), '{}')
         self.assertEqual(field(waiter, 'timeout-minutes', 4), '5')
-        self.assertEqual(field(waiter, 'runs-on', 4), 'ubuntu-24.04')
+        self.assertEqual(field(waiter, 'runs-on', 4), '[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]')
         for forbidden in ('concurrency:', 'always()', 'uses:', 'GITHUB_TOKEN', 'secrets.', 'continue-on-error', 'GITHUB_OUTPUT'):
             self.assertNotIn(forbidden, waiter)
         self.assertIn('sleep 285', waiter)
@@ -174,8 +174,7 @@ class CancelWorkflowTests(unittest.TestCase):
         self.assertNotIn('cancel-probe-waiter', JOB_NAMES)
         policy = json.loads((ROOT / 'scripts/ci/hosted_runner_policy.json').read_text())
         entries = [e for e in policy['allowed'] if e['workflow'] == 'self-test-report.yml' and e['job'] == 'cancel-probe-waiter']
-        self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0]['category'], 'control-plane')
+        self.assertEqual(entries, [], 'why: a diagnostic wait must not consume hosted minutes; remedy: retain its literal Contabo self-hosted route without a paid exemption')
 
 
 if __name__ == '__main__':

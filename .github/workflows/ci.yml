@@ -35,7 +35,7 @@ concurrency:
 jobs:
   change-scope:
     name: Change Scope
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     timeout-minutes: 3
     outputs:
       batch-mode: ${{ steps.entry.outputs.batch-mode }}
@@ -104,7 +104,10 @@ jobs:
         env:
           FROZEN_CONTROL: ${{ steps.entry.outputs.control }}
         run: |
-          git --no-replace-objects worktree add --detach .batch-policy "$FROZEN_CONTROL"
+          # checkout cleans this directory on persistent runners, leaving Git's
+          # registration behind. One --force recovers only this missing path;
+          # locked registrations still fail rather than overriding their owner.
+          git --no-replace-objects worktree add --force --detach .batch-policy "$FROZEN_CONTROL"
       - name: Prepare the admitted fixed-target execution
         id: batch
         if: ${{ steps.entry.outputs.batch-mode == 'true' }}
@@ -584,7 +587,7 @@ jobs:
     # to the independent PR workflow, never this product execution token.
     needs: [change-scope, docs-static, ci-contract, deploy-contract, chameleon-lab, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab]
     if: ${{ !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v6
@@ -688,7 +691,7 @@ jobs:
     name: Select macOS runner
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_macos }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     outputs:
       runner: ${{ steps.select.outputs.runner }}
       self-hosted: ${{ steps.select.outputs.self-hosted }}
@@ -913,7 +916,7 @@ jobs:
     name: core (macos-latest)
     needs: [change-scope, select-macos-runner, macos-primary, macos-fallback]
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_macos }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     steps:
       - uses: actions/checkout@v6
       - name: Adjudicate macOS Core Proof
@@ -930,7 +933,7 @@ jobs:
     name: core-asan-macos
     needs: [change-scope, select-macos-runner, macos-primary, macos-fallback]
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_macos }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     steps:
       - uses: actions/checkout@v6
       - name: Adjudicate native macOS sanitizers
@@ -1130,7 +1133,7 @@ jobs:
     name: Scoped batch verdict
     needs: [change-scope, docs-static, portal, ci-contract, select-macos-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package, nightly-tsan, nightly-stress]
     if: ${{ always() && needs.change-scope.outputs.batch-mode == 'true' && needs.change-scope.outputs.batch-execution != '' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     timeout-minutes: 5
     permissions:
       contents: read
