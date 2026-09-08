@@ -24,13 +24,16 @@ def current_pr(github, run, number, pilot):
     require(run['path'] == WORKFLOW and run['event'] == 'pull_request', 'unexpected build workflow/event')
     require(pilot and run['head_branch'] == pilot, 'build is outside the configured pilot')
     require(run['status'] == 'completed', 'build is not complete')
-    require(any(p['number'] == number and p['head']['sha'] == run['head_sha']
-                for p in run['pull_requests']), 'run/PR association mismatch')
+    require(any(p['number'] == number for p in run['pull_requests']), 'run/PR association number mismatch; reconcile the exact build run and PR before retry')
     pr = github.metadata(f'/repos/{REPOSITORY}/pulls/{number}')
     require(pr['base']['repo']['full_name'] == REPOSITORY and pr['base']['ref'] == 'main' and
             pr['head']['repo']['full_name'] == REPOSITORY, 'foreign PR source/base')
+    # Actions keeps run.head_sha immutable but refreshes the nested PR head.
+    # Authenticate the current PR first; a moved/closed PR needs no publication.
     if pr['state'] != 'open' or pr['head']['sha'] != run['head_sha']:
         return None
+    require(any(p['number'] == number and p['head']['sha'] == run['head_sha']
+                for p in run['pull_requests']), 'run/PR association head mismatch; reconcile the current PR and exact build SHA before retry')
     return pr
 
 

@@ -21,6 +21,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/actions/runs/34124875948/attempts/2
     observed_by: Codex
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/issues/968
+    observed_by: Codex
 exit: gate:apps/web-runtime-host/test/deploy_command_test.py
 escalation: https://github.com/endaye/lmdj/issues/726
 ---
@@ -165,3 +168,15 @@ already holds. Escalation Issue
 [#726](https://github.com/endaye/lmdj/issues/726) tracks the narrower
 mechanism — gate only the wall-clock-reachable methods — and records that
 analysis so no later Task ships the blanket version.
+
+
+The Cloudflare pilot exposed a further real Actions shape: after a PR push,
+`run.head_sha` stays at the original build revision while the nested
+`pull_requests[].head.sha` (and base SHA) updates to the current PR. A fixture
+that changed only the independently fetched PR omitted this mutation and made
+stale completion appear valid locally. #968 moves current-PR staleness handling
+ahead of the mutable association-head assertion, while retaining repository,
+workflow, event, pilot branch and PR-number checks first and exact association
+head checks for publishable runs. Its regression asserts no download, Cloudflare
+call, upload or status write for a real-shaped superseded run. The broader
+escalation #726 remains open.
