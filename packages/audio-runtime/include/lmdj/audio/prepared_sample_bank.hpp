@@ -7,6 +7,8 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -173,6 +175,18 @@ class PreparedPatternView final {
   bool has_overlay_{};
 };
 
+// Identity carried by a Sound Set audition Bank (#799). A nil UUID and
+// revision 0, named rather than written at the call site, so a reader who
+// finds it in a debugger can tell at once that it is not a Project, and a
+// future consumer collides with a name instead of a plausible-looking UUID.
+inline constexpr std::string_view kAuditionBankProjectIdValue =
+    "00000000-0000-0000-0000-000000000000";
+inline constexpr std::uint64_t kAuditionBankProjectRevision = 0;
+
+inline foundation::ProjectId kAuditionBankProjectId() {
+  return foundation::ProjectId(std::string{kAuditionBankProjectIdValue});
+}
+
 class PreparedSampleBank final {
  public:
   PreparedSampleBank(PreparedSampleBank&&) noexcept = default;
@@ -195,6 +209,14 @@ class PreparedSampleBank final {
       std::span<const float> mono_pcm,
       cooker::ResolvedPlayback playback);
 
+  // Diagnostic only. Nothing in the engine reads this to make a decision; it
+  // exists so a Bank in a debugger can be traced back to what produced it.
+  //
+  // A Sound Set audition Bank (#799) is not produced by a Project and carries
+  // `kAuditionBankProjectId` with revision `kAuditionBankProjectRevision`. If
+  // you are about to key a decision off this accessor, that sentinel is why
+  // you must not: an audition Bank would answer with a Project identity that
+  // names no Project.
   const foundation::ProjectId& project_id() const noexcept;
   std::uint64_t project_revision() const noexcept;
   std::uint64_t availability_mask() const noexcept;

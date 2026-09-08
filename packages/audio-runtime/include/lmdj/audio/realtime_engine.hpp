@@ -29,6 +29,16 @@ inline constexpr std::size_t kRealtimeSampleSlots = 64;
 inline constexpr std::size_t kRealtimeQueueCapacity = 1'024;
 inline constexpr std::size_t kRealtimeVoiceCapacity = 128;
 inline constexpr std::size_t kRealtimeBankCapacity = 4;
+// Sound Set audition Banks live outside `kRealtimeBankCapacity` so a preview
+// costs the Project no hot-swap headroom (#799). Two, not one: replacing a
+// ringing audition must publish the new Bank while the outgoing one is still
+// being read by draining voices, which is the same reason the Project Bank
+// pool is larger than one. Two is the minimum that supports replace.
+inline constexpr std::size_t kRealtimeAuditionBankCapacity = 2;
+// An audition Bank carries exactly one sound, at a fixed index. The Bank type
+// is reused rather than duplicated (#799), so the other 63 sample slots stay
+// empty and only this one is ever read.
+inline constexpr std::uint8_t kAuditionSampleSlot = 0;
 inline constexpr std::size_t kRealtimePublishQueueCapacity = 4;
 inline constexpr std::size_t kRealtimePatternCapacity = 4;
 // Occupancy includes the full ring, one producer reservation and one entry
@@ -127,6 +137,10 @@ enum class PadControlKind : std::uint8_t {
   stop_all,
   preview_set,
   preview_clear,
+  // Sound Set audition (#799). These address the audition Bank, never a Pad,
+  // so `slot` is ignored and `stop_slot` / `stop_all` do not reach them.
+  audition_start,
+  audition_stop,
 };
 
 enum class PadControlOrigin : std::uint8_t {
@@ -309,6 +323,14 @@ class RealtimeEngine final {
   //     this exact release/acquire chain and the serialized control producer.
   // Applies the bank directly, and so requires quiescence, when stopped.
   PublishResult publish_sample_bank(PreparedSampleBank&& bank) noexcept;
+
+  // Publish a Sound Set audition Bank (#799). It goes to the reserved audition
+  // pool, never to `bank_slots_`, so it can neither displace the Project's Bank
+  // nor consume its hot-swap headroom, and it never returns `bank_slots_full`.
+  // A second publication replaces the first: the outgoing Bank is retired and
+  // its voices drain on the ordinary release ramp. Returns `bank_slots_full`
+  // only when both audition slots are still draining an earlier audition.
+  PublishResult publish_audition_bank(PreparedSampleBank&& bank) noexcept;
   // Control thread. The immutable view is applied immediately while stopped,
   // or atomically at the next Bar boundary while running. Journal overlays
   // remain Runtime-only and never mutate the source Runtime Snapshot.
@@ -418,6 +440,23 @@ class RealtimeEngine final {
 
   static constexpr std::uint8_t kLegacyBankSlot = 0xff;
   static constexpr std::uint8_t kNoPatternSlot = 0xff;
+  // Audition Bank slots are addressed as `kAuditionBankSlotBase + index` in
+  // `Voice::bank_slot`, so a voice records which pool it drew from without a
+  // second field, and `bank_slots_` indices stay 0..kRealtimeBankCapacity-1.
+  static constexpr std::uint8_t kAuditionBankSlotBase = 0xf0;
+  static constexpr std::uint8_t kNoAuditionSlot = 0xff;
+  // `kLegacyBankSlot` is 0xff and so is also >= the audition base; a bare
+  // `>= base` test would misclassify every legacy voice as an audition. The
+  // range must be closed at both ends.
+  static constexpr bool is_audition_bank_slot(std::uint8_t bank_slot) noexcept {
+    return bank_slot >= kAuditionBankSlotBase && bank_slot != kLegacyBankSlot;
+  }
+  static_assert(
+      kRealtimeBankCapacity <= kAuditionBankSlotBase,
+      "Project Bank indices must not collide with the audition sentinel base");
+  static_assert(
+      kAuditionBankSlotBase + kRealtimeAuditionBankCapacity <= kLegacyBankSlot,
+      "audition sentinels must not collide with kLegacyBankSlot");
 
   struct BankSlot {
     std::optional<PreparedSampleBank> bank;
@@ -481,6 +520,11 @@ class RealtimeEngine final {
       const PadControlEvent& event,
       std::uint64_t absolute_start_frame) noexcept;
   const std::vector<float>& current_sample(std::uint8_t slot) const noexcept;
+  // Resolves `Voice::bank_slot` to the slot that owns the voice's samples,
+  // across both pools. Returns nullptr for `kLegacyBankSlot`, which owns none.
+  BankSlot* bank_slot_for(std::uint8_t bank_slot) noexcept;
+  const std::vector<float>& audition_sample(std::uint8_t slot) const noexcept;
+  void retire_audition(std::uint8_t slot) noexcept;
   cooker::ResolvedPlayback published_playback(
       std::uint8_t slot) const noexcept;
   bool publish_voice_state(
@@ -509,6 +553,10 @@ class RealtimeEngine final {
       fx_queue_;
   MasterFxChain master_fx_;
   std::array<BankSlot, kRealtimeBankCapacity> bank_slots_{};
+  // Reserved for Sound Set audition (#799). Never becomes `current_bank_slot_`
+  // and never writes `availability_mask_`: an audition is not a Project Bank.
+  std::array<BankSlot, kRealtimeAuditionBankCapacity> audition_slots_{};
+  std::atomic<std::uint8_t> current_audition_slot_{kNoAuditionSlot};
   detail::FixedSpscQueue<
       std::uint8_t,
       kRealtimePublishQueueCapacity>
