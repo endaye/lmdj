@@ -396,9 +396,12 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
   ]);
 
+  // Yield the pre-install Asset id, not `null`, while no Project has been read
+  // back: `null` is never equal to an Asset id, so a `null` here would satisfy
+  // `.not.toBe(...)` on the first tick and the poll would not wait at all.
   await expect.poll(async () => {
     const truth = await occupancyOf(page, 0);
-    return truth === null ? null : truth.pads[0];
+    return truth === null ? before.pads[0] : truth.pads[0];
   }, {timeout: REQUEST_TIMEOUT_MS}).not.toBe(before.pads[0]);
   const after = await occupancyOf(page, 0);
   for (const pad of [0, 1, 2, 3]) {
@@ -448,7 +451,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   });
   await expect.poll(async () => {
     const truth = await occupancyOf(page, 1);
-    return truth === null ? null : truth.pads[0];
+    return truth === null ? beforeB.pads[0] : truth.pads[0];
   }, {timeout: REQUEST_TIMEOUT_MS}).not.toBe(beforeB.pads[0]);
   const offlineTruth = await occupancyOf(page, 1);
   // The Foundry Set occupies eleven of its sixteen slots, and the proof
