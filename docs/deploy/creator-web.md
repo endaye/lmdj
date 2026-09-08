@@ -119,3 +119,19 @@ Release/tag/signature/bundle、Site identity、prior smoke、candidate smoke 或
 停止后续 mutation。draft 创建前失败无需回滚；draft 后但 publish 前失败不改变生产 alias；
 publish 后失败按上述 reconcile 恢复 exact prior 或首次发布 disable。删除历史 Deploy、改写
 Release、移动 tag、把 Runtime Site 当 Creator Site，均不属于正常恢复路径。
+
+## 保留已验签的 Cloudflare 暂存输入
+
+在已有 GitHub 只读认证环境下，使用：
+
+```bash
+scripts/creator-web-deploy.sh stage TAG /absolute/path/to/new-stage
+```
+
+该命令复用 `verify TAG` 的远端 tag、签名、Release 元数据和 Host 包检查，
+然后保留 `dist/`、原始发布包及校验和/签名、精确源码 `source.tar` 和
+逐文件 SHA-256/字节数记录 `stage.json`。目标目录必须不存在；失败目录不得
+当作成功暂存复用。命令不会上传、发布或修改 Cloudflare 路由。
+
+`stage.json` 是内部暂存记录，不是部署证据或发布授权。后续部署命令仍须
+重新验证保留的签名和资源，并核对实时目标、版本及操作记录；不能仅凭此文件发布。

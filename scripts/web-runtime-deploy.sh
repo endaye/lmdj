@@ -53,6 +53,7 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   scripts/web-runtime-deploy.sh verify TAG
+  scripts/web-runtime-deploy.sh stage TAG ABSOLUTE_OUTPUT_DIRECTORY
   scripts/web-runtime-deploy.sh deploy TAG
   scripts/web-runtime-deploy.sh smoke BASE_URL PRODUCT_BUILD HOST_VERSION
 EOF
@@ -85,6 +86,7 @@ without_deploy_secrets() {
     -u GITHUB_TOKEN \
     -u GITHUB_ENTERPRISE_TOKEN \
     -u NETLIFY_AUTH_TOKEN \
+    -u CLOUDFLARE_API_TOKEN \
     -u NETLIFY_RUNTIME_SITE_ID \
     "$@"
 }
@@ -93,6 +95,7 @@ with_pinned_github() {
   with_gh_environment_removed \
     -u GITHUB_ENTERPRISE_TOKEN \
     -u NETLIFY_AUTH_TOKEN \
+    -u CLOUDFLARE_API_TOKEN \
     -u NETLIFY_RUNTIME_SITE_ID \
     "$@"
 }
@@ -977,8 +980,16 @@ shift
 cd "$repo_root"
 
 case "$command_name" in
-  verify)
-    [[ $# -eq 1 ]] || { usage; exit 64; }
+  verify|stage)
+    if [[ "$command_name" == stage ]]; then
+      [[ $# -eq 2 ]] || { usage; exit 64; }
+      stage_output="$2"
+      [[ "$stage_output" == /* && ! -e "$stage_output" && ! -L "$stage_output" ]] || {
+        fail "stage output must be an absent absolute directory"; exit 2;
+      }
+    else
+      [[ $# -eq 1 ]] || { usage; exit 64; }
+    fi
     require_secret GITHUB_TOKEN
     validate_tag "$1"
     tag="$1"
@@ -987,6 +998,14 @@ case "$command_name" in
     done
     [[ -f "$orchestrator_tool" ]] || fail "deployment orchestrator is unavailable"
     verify_release "$tag"
+    if [[ "$command_name" == stage ]]; then
+      without_deploy_secrets "$python_bin" "$repo_root/apps/web-runtime-host/tools/cloudflare_release_stage.py" \
+        --repo-root "$repo_root" --source "$tag_target" --tag "$tag" \
+        --dist "$dist_root" --archive "$archive_path" --checksum "$checksum_path" \
+        --signature "$signature_path" --archive-sha256 "$archive_sha256" \
+        --index-sha256 "$staged_index_sha256" --manifest-sha256 "$staged_manifest_sha256" \
+        --output "$stage_output"
+    fi
     echo "Web Runtime Host release verification: PASS ($tag)"
     ;;
   deploy)
