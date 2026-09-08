@@ -1,0 +1,21 @@
+---
+title: Capability Contract
+area: contracts
+status: implemented
+owners: [core, providers]
+contracts: [lmdj.capability.v2]
+source_paths: [contracts/capability/lmdj.capability.v2.schema.json, packages/provider-sdk]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="contracts" id="lmdj.capability.v2" />
+
+## 目的
+`lmdj.capability.v2` 描述 Provider 可提供的能力、端口和版本要求。
+## 多端口边界
+能力输入输出以 Artifact 端口表达，Provider 不获得 Project 内部可变对象。
+## 选择与 Attempt
+Registry 解析能力；Workspace/Host 做选择；Attempt Store 管理调用状态和失败。
+## 证据
+Provider SDK conformance 与两个本地 Proof Provider 证明成功/失败路径。
