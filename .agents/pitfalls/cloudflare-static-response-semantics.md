@@ -36,7 +36,17 @@ so this entry remains open pending a durable live-acceptance mechanism.
 
 
 The second occurrence is the isolated PR Preview's first deployment: API upload
-and route state passed while early HTTP returned 404. #965 is the escalation
-Issue and implements exact-entry readiness before unchanged full smoke. Live
-edge propagation remains provider evidence; the deterministic retry tests do
-not turn an upload receipt into HTTP acceptance. This entry remains open.
+and route state passed while early HTTP returned 404. #965 implements
+exact-entry readiness before unchanged full smoke, and is closed. Live edge
+propagation remains provider evidence; the deterministic retry tests do not
+turn an upload receipt into HTTP acceptance, so #965 is a recurrence and not
+the mechanism this entry waits for.
+
+The escalation Issue is
+https://github.com/endaye/lmdj/issues/985, which names what would close this:
+a live-acceptance mechanism asserting signed bytes, combined response headers,
+charset, robots directives and bounded readiness against the fixed address
+rather than a Preview. Under `pitfall-ledger.md` gate admission this cannot
+become a CI gate -- violation is decidable only against a live deployment, and
+propagation timing is not deterministic -- so the exit will be a `skill:<path>`
+section, and naming it is the work #985 tracks. This entry remains open.
