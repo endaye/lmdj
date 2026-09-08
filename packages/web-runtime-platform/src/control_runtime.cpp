@@ -376,6 +376,10 @@ void validate_soundset_operation_payload(
       (void)safe_unsigned_field(payload, "slot_index", 15U);
     }
     set_identity();
+  } else if (operation == "soundset.audition.stop") {
+    // Stopping addresses no Set: there is only ever one audition, so naming
+    // which one to stop would be a field the Host could get wrong.
+    require(exact_keys(payload, {}));
   } else if (operation == "soundset.inspect") {
     require(exact_keys(payload, {"set_id", "version", "manifest_sha256"}));
     set_identity();
@@ -1468,6 +1472,64 @@ struct ControlRuntime::Impl {
         });
   }
 
+  // #799. Publish the audition PCM the Facade decoded into the engine's
+  // reserved audition pool and start a voice on it. Best effort by design: see
+  // the call site for why a failure here is not an error on a query.
+  void play_audition(const Json& payload) {
+    facade::SoundSetAuditionRequest request{
+        payload.at("set_id").get<std::string>(),
+        payload.at("version").get<std::string>(),
+        payload.at("manifest_sha256").get<std::string>(),
+        std::nullopt,
+    };
+    if (payload.contains("slot_index")) {
+      request.slot_index = static_cast<std::uint8_t>(
+          payload.at("slot_index").get<std::uint64_t>());
+    }
+    const auto audio = application.audition_soundset(request);
+    if (!audio.has_value()) {
+      // The Facade already refused this request through the envelope the
+      // caller is about to receive; there is nothing further to report.
+      return;
+    }
+    const auto& source = *audio.value().prepared;
+    if (source.channels == 0 || source.interleaved.empty() ||
+        source.interleaved.size() % source.channels != 0) {
+      return;
+    }
+    // Down-mix to the mono float the Bank stores, exactly as
+    // `PreparedSampleBank::from_snapshot` does for a Project Pad.
+    std::vector<float> mono;
+    mono.reserve(source.interleaved.size() / source.channels);
+    for (std::size_t frame = 0; frame < source.interleaved.size();
+         frame += source.channels) {
+      if (source.channels == 1) {
+        mono.push_back(audio::prepared_pcm16_to_float(
+            source.interleaved[frame]));
+      } else {
+        mono.push_back(
+            (audio::prepared_pcm16_to_float(source.interleaved[frame]) +
+             audio::prepared_pcm16_to_float(source.interleaved[frame + 1])) *
+            0.5F);
+      }
+    }
+    auto bank = audio::PreparedSampleBank::empty(
+        audio::kAuditionBankProjectId(),
+        audio::kAuditionBankProjectRevision);
+    if (!bank.set_sample(audio::kAuditionSampleSlot, mono).has_value()) {
+      return;
+    }
+    if (engine.publish_audition_bank(std::move(bank)) !=
+        audio::PublishResult::accepted) {
+      // Both audition slots are still draining an earlier preview. Dropping
+      // this one is the honest outcome: the alternative is overwriting bytes a
+      // voice is still reading, which is the defect this pool exists to avoid.
+      return;
+    }
+    static_cast<void>(engine.enqueue_control(audio::PadControlEvent{
+        0, 0, 127, audio::PadControlKind::audition_start, {}}));
+  }
+
   std::optional<Json> enqueue_sample_control(
       audio::PadControlKind kind,
       domain::PadSlotId slot,
@@ -2150,8 +2212,18 @@ Json ControlRuntime::dispatch(
       }
       return success({{"staged", staged.value()}});
     }
+    // The value is `is_query`, read only by the Facade forwarding at the end
+    // of this block. Membership is load-bearing for every entry -- it gates
+    // `require(sidecar.empty())` and the payload validation -- but the value
+    // is inert for an operation answered before the forwarding is reached.
+    // `soundset.audition.stop` is the one such entry: it returns below without
+    // consulting this bool, so neither `true` nor `false` describes it. Read
+    // `true` here as "not a command", never as "the Facade serves it" -- it
+    // does not, which is why the operation is deliberately absent from the
+    // Native Host's `kSoundSetOperations` and from core-mcp.
     static const std::map<std::string_view, bool> soundset_operations{
         {"soundset.audition", true},
+        {"soundset.audition.stop", true},
         {"soundset.catalog.list", true},
         {"soundset.inspect", true},
         {"soundset.map.preview", true},
@@ -2166,6 +2238,20 @@ Json ControlRuntime::dispatch(
       // open Project — the `provider.list` precedent the Locked Facade
       // Surface names. Only the two Project-scoped operations require, and
       // learn, a Project.
+      // #799. Stopping touches only this Host's engine -- no Set, no Facade,
+      // no Project -- so it is answered here in full, the way
+      // `sample.preview.clear` is. It is idempotent: stopping when nothing is
+      // auditioning succeeds, which is what keeps it inside the locked error
+      // vocabulary, because there is no "nothing to stop" condition to name.
+      if (operation == "soundset.audition.stop") {
+        if (impl_->runtime_ready) {
+          static_cast<void>(impl_->engine.enqueue_control(
+              audio::PadControlEvent{
+                  0, 0, 0, audio::PadControlKind::audition_stop, {}}));
+        }
+        return success({{"accepted", true}});
+      }
+
       const bool project_scoped = operation == "soundset.map.preview" ||
                                   operation == "soundset.install";
       if (project_scoped && !impl_->session_available()) {
@@ -2188,6 +2274,18 @@ Json ControlRuntime::dispatch(
       if (response.at("project_revision").is_number_unsigned()) {
         impl_->project_revision =
             response.at("project_revision").get<std::uint64_t>();
+      }
+      // #799. The Facade has answered with the geometry; this Host owns an
+      // engine, so it also plays the bytes. The Facade resolved, gated and
+      // decoded them -- this never reads the Set Store, which is what keeps
+      // audition inside "Hosts use only the Application Facade".
+      //
+      // Failing to play is deliberately not an error: the metadata answer is
+      // already correct and useful, a Host with no running runtime is a normal
+      // state rather than a refusal, and reporting a playback failure through
+      // a query's envelope would need vocabulary the Stage has frozen.
+      if (operation == "soundset.audition" && impl_->runtime_ready) {
+        impl_->play_audition(payload);
       }
       return normalized_facade_success(response);
     }

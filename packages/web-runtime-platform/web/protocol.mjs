@@ -74,6 +74,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "sequence.recovery.apply",
   "sequence.recovery.discard",
   "soundset.audition",
+  "soundset.audition.stop",
   "soundset.catalog.list",
   "soundset.catalog.index",
   "soundset.catalog.supply",
