@@ -68,3 +68,24 @@ and preservation of existing output. A previously checked Portal build from the
 #929 worktree packs and validates 3,764 files, a 58,053,946-byte archive and a
 largest file of 1,392,522 bytes. This is local artifact compatibility evidence,
 not proof of a GitHub PR build, authenticated download or Cloudflare Preview.
+
+## Authenticated transport Task
+
+Additional declared files: `scripts/ci/cloudflare_preview_download.py`,
+`tests/build/ci_cloudflare_preview_download_test.py`, scope policy and this plan.
+The trusted caller provides a GitHub read token and numeric PR/run/artifact IDs.
+The downloader fetches all identity metadata itself and rejects redirects for
+authenticated API requests. Only the artifact endpoint's authenticated 302 is
+used; a fresh credential-free request downloads that signed storage URL.
+No deployment token is required by this module.
+
+The outer GitHub artifact must contain exactly one regular `static.zip` member.
+Both transport download and inner extraction are bounded; current head is fetched
+again after download before exposing the inner archive. The caller must still
+invoke `extract_static`, run trusted content smoke, and revalidate current head
+at publication/status time. No archive execution or platform mutation occurs.
+Six focused transport tests cover authenticated identity selection, absent
+storage credentials, moving head, foreign-run rejection before download, unsafe
+outer member, bounded streaming and preservation of pre-existing output.
+This brings the combined Preview helper suite to 23 tests. Actual workflow/API
+artifact acceptance remains pending; synthetic API fixtures are not live proof.
