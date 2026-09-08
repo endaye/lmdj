@@ -17,39 +17,47 @@
 // these legs would fail rather than quietly prove a topology the deployment
 // does not use.
 //
-// BOTH CASES STILL CARRY `test.fail()`. Of the three pre-existing defects
-// measured during the #674 acceptance run and filed rather than shortened
-// away, two are fixed and #900 still stops this journey at its first wall:
+// ALL THREE DEFECTS THAT BLOCKED THIS JOURNEY ARE FIXED, and both cases now
+// run unaided. The `test.fail()` annotations they carried are gone:
 //
-//   #900  OPEN. The browser Bundle reader allowlists only container
-//         1.0.0/1.1.0 and lmdj.project.v1..v3, so no Project this Build
-//         creates can be imported at all. This is the first wall, and the only
-//         one the journey has actually reached unaided.
-//   #901  FIXED. The packaged Creator's `connect-src 'self'` blocked every
-//         cross-origin Catalog, and every real Catalog is cross-origin. The
-//         Creator now reaches its Catalog through a same-origin prefix that
-//         the Host forwards, so that directive -- the exfiltration barrier
-//         around the Projects and audio held in OPFS -- was left untouched.
-//   #902  FIXED. With #900 and #901 patched locally the transport fetched the
-//         whole fixture corpus correctly -- 1 index, 7 manifests, 19 blobs,
-//         all 200, one request per unique hash -- and the Workspace Set Store
-//         then refused to publish every eligible Set with a bare IO_ERROR.
+//   #900  FIXED (f1293997). The browser Bundle reader allowlisted only
+//         container 1.0.0/1.1.0 and lmdj.project.v1..v3, so no Project this
+//         Build creates could be imported at all. This was the first wall and
+//         the only one the journey ever reached unaided.
+//   #901  FIXED (043623b0). The packaged Creator's `connect-src 'self'`
+//         blocked every cross-origin Catalog, and every real Catalog is
+//         cross-origin. The Creator now reaches its Catalog through a
+//         same-origin prefix that the Host forwards, so that directive -- the
+//         exfiltration barrier around the Projects and audio held in OPFS --
+//         was left untouched.
+//   #902  FIXED (694b983b). The Workspace Set Store refused to publish every
+//         eligible Set with a bare IO_ERROR, because publication needs a
+//         writer lease on the destination and the Store leased only its
+//         staging directory.
 //
-// `test.fail()` rather than `skip` or `fixme` on purpose. The journey still
-// runs in full, every leg and every far-side assertion stays exactly as
-// strict as it is written, and Playwright turns the lane RED the moment the
-// journey starts passing -- so the annotation cannot outlive the defects.
-// Removing a leg to make this green would be the `acceptance-journey-
-// truncation` pitfall. **Whoever lands #900 removes both annotations**, and
-// should expect to debug legs 2 to 5 rather than watch them pass.
-//
-// HOW FAR THIS HAS ACTUALLY RUN, so nobody reads more into it than was
-// measured: unaided, leg 1 stops at the Bundle import (#900). With #900 and
-// #901 patched locally it reached leg 1's listing assertion and stopped
-// there (#902). **Legs 2 to 5 have never executed.** Their selectors and
-// expected counts were checked by hand against
+// WHAT CHANGED IN THIS FILE when the journey first executed end to end, since
+// legs 2 to 5 had until then only been checked by hand against
 // `apps/creator-web/src/components/soundset_surface.tsx` and the 64-Pad proof
-// fixture, not by running them; expect to debug them when #900 lands.
+// fixture. Two expectations were wrong about the product rather than the
+// product being wrong, and both were corrected upwards rather than removed:
+//
+//   * leg 1 expected one `/catalog/index.json`. There are two, because the
+//     surface lists on mount and this leg then clicks Refresh Catalog. The
+//     assertion now pins two, and pins that the second listing re-fetched no
+//     object at all -- which proves the Workspace Set Store answered it.
+//   * the last leg expected Bank B to hold 11 occupied Pads after installing
+//     an 11-slot Set into it. The proof fixture fills all 64 Pads, so Bank B
+//     holds 16 before and after; 11 move and 5 are left alone. The assertion
+//     now pins that, which is the S11-D12 statement the leg was reaching for
+//     and is stronger than the count it replaced.
+//
+// A `keep` leg was also missing and is now leg 4. Because the proof fixture
+// fills every Bank, every occupied Set slot collides and `keep` can only ever
+// write zero Pads here; that degenerate case is asserted for what it is -- the
+// Host accepts the policy, answers, and moves neither a Pad nor the revision.
+// A `keep` that writes some Pads and spares others needs a Bank with a free
+// Pad under an occupied Set slot, which this Bundle does not contain, and is
+// proved natively in `tests/host/cli_test.py::soundset_acceptance_journey`.
 import {spawn} from "node:child_process";
 import {writeFileSync} from "node:fs";
 import {dirname, resolve} from "node:path";
@@ -128,8 +136,18 @@ async function startCatalogServer() {
   return {child, baseUrl};
 }
 
+// Idempotent, because leg 6 stops the Catalog on purpose and `afterEach` then
+// stops it again. A child killed by a signal reports `exitCode === null` and
+// names the signal in `signalCode`, so testing `exitCode` alone reads an
+// already-dead server as still running -- and the second `once("exit")` waits
+// forever on an event that has already been emitted.
 async function stopCatalogServer(server) {
-  if (server === null || server.child.exitCode !== null) return;
+  if (
+    server === null || server.child.exitCode !== null ||
+    server.child.signalCode !== null
+  ) {
+    return;
+  }
   const exited = new Promise((resolveExit) =>
     server.child.once("exit", resolveExit));
   server.child.kill("SIGTERM");
@@ -141,7 +159,7 @@ async function stopCatalogServer(server) {
 // a corpse and calling it a pass.
 test.beforeEach(async () => {
   catalog = await startCatalogServer();
-  // Written after the fixture has a port and before the page is opened. Leg 5
+  // Written after the fixture has a port and before the page is opened. Leg 6
   // stops the fixture and deliberately leaves this pointing at the dead port:
   // a Catalog that goes away is exactly what that leg is about, and the
   // forward then fails the way a real outage would.
@@ -199,6 +217,11 @@ async function installProjectTap(page, catalogEndpoint) {
             }
             if (request?.operation === "project.inspect" && response?.ok) {
               window.__lastProjectTruth = response.result?.project ?? null;
+              // Counted so a leg can wait for a Project read that is newer
+              // than the commit it just made. Without it, an install that
+              // writes nothing is indistinguishable from reading the snapshot
+              // taken before it.
+              window.__projectTruthReads = (window.__projectTruthReads ?? 0) + 1;
             }
             return response;
           },
@@ -240,16 +263,15 @@ async function importProject(page) {
   if (await alert.isVisible()) {
     throw new Error(
       "why: the Creator refused the acceptance Project Bundle -- " +
-      `"${(await alert.innerText()).replace(/\s+/g, " ").trim()}". The ` +
-      "browser-side reader in packages/web-runtime-platform/web/" +
-      "project_bundle_reader.mjs still allowlists only contract_version " +
-      "1.0.0/1.1.0 and lmdj.project.v1..v3, while the packer this Build " +
-      "ships writes 1.2.0 and lmdj.project.v4, so no Project this Build " +
-      "creates can be imported into a browser at all. remedy: fix issue " +
-      "#900 -- widen both lists to the versions lmdj.project-bundle.v1 now " +
-      "declares and give project_bundle_reader.test.mjs a case at the level " +
-      "the packer actually writes. Issues #901 and #902 block the legs after " +
-      "this one.",
+      `"${(await alert.innerText()).replace(/\s+/g, " ").trim()}". No leg of ` +
+      "this journey can run without a Project, so everything below is " +
+      "unmeasured rather than passing. remedy: compare the container " +
+      "`contract_version` and `project_contract` the packer " +
+      "(tools/project-bundle/project_bundle.py) writes against the two lists " +
+      "the browser-side reader admits in packages/web-runtime-platform/web/" +
+      "project_bundle_reader.mjs, and against the enum in " +
+      "contracts/project/lmdj.project-bundle.v1.schema.json. Issue #900 was " +
+      "exactly that drift once already, so check it before looking further.",
     );
   }
   await expect(heading).toBeVisible();
@@ -275,9 +297,6 @@ async function occupancyOf(page, bank) {
 
 test("Sound Sets browse, inspect, preview and install through the Web fetch transport", async ({page, browserName, baseURL}) => {
   test.skip(browserName !== "chromium");
-  // Remove together with the `test.fail()` in the case below, once #900 is
-  // fixed. Playwright fails the run if this ever passes.
-  test.fail();
   test.setTimeout(300_000);
   const origin = new URL(baseURL).origin;
   const targets = recordCatalogTraffic(page, origin);
@@ -306,12 +325,24 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     "Fixture Attribution Kit by Bea Waveform (CC BY 4.0)",
   );
 
+  // Two index reads, because there are two listings: the surface lists on
+  // mount and this leg clicks Refresh Catalog. What the second listing must
+  // not do is fetch one object again -- every manifest and blob below appears
+  // exactly once across both listings, which is how this leg proves the
+  // Workspace Set Store answered the second one rather than the Catalog.
   expect(targets.filter((target) => target === "/catalog/index.json"))
-    .toHaveLength(1);
+    .toHaveLength(2);
   const objects = targets.filter((target) => target !== "/catalog/index.json");
   for (const target of objects) {
     expect(target).toMatch(/^\/object\/(manifest|blob)\/[0-9a-f]{64}$/);
   }
+  // One manifest per Catalog entry, eligible or not: eligibility is decided
+  // from the verified manifest, so all seven are fetched and only the three
+  // that pass go on to have their Artifacts acquired.
+  expect(objects.filter((target) => target.startsWith("/object/manifest/")))
+    .toHaveLength(7);
+  expect(objects.filter((target) => target.startsWith("/object/blob/")))
+    .toHaveLength(19);
   // S11-D7: one hash is one download. The Attribution Kit names its slot 0
   // Artifact twice -- once as a slot, once as the set-level demo -- and the
   // Host must fetch it once.
@@ -349,11 +380,6 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   const install = page.getByRole("button", {name: /^Install /});
   await expect(install).toBeDisabled();
 
-  // Leg 4 -- install replace. Far side: the receipt names the committed
-  // revision, and the Project the Host reads back afterwards shows the four
-  // Pads replaced with typed `soundset` Lineage while the twelve Pads under
-  // empty Set slots still hold the Asset they held before (S11-D12), and the
-  // Assets the install replaced are still Project Truth (S8-D5).
   const before = await occupancyOf(page, 0);
   expect(
     before,
@@ -361,15 +387,79 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     "no project.inspect reached the tap -- fix that before reading the rest",
   ).not.toBeNull();
   expect(Object.keys(before.pads)).toHaveLength(16);
+
+  // Leg 4 -- install `keep`. The 64-Pad proof fixture fills every Bank, so
+  // every one of this Set's four occupied slots collides and `keep` has
+  // nothing left to write. That degenerate shape is the only `keep` this
+  // fixture can produce -- a Bank with a free Pad under an occupied Set slot
+  // does not exist in it -- and it is worth a leg anyway, because it is the
+  // strongest possible statement of what `keep` means: the Host accepts the
+  // policy, answers, and changes nothing at all. A non-degenerate `keep`,
+  // where some Pads are written and the occupied ones are spared, is proved
+  // natively in `tests/host/cli_test.py::soundset_acceptance_journey` and is
+  // not reachable here without a second Bundle fixture.
+  await page.getByRole("radio", {name: "Keep the Pads I already have"})
+    .check();
+  await expect(install).toBeEnabled();
+  await expect(install).toHaveText("Install 0 of 16 into Bank A");
+  const readsBeforeKeep = await page.evaluate(() =>
+    window.__projectTruthReads ?? 0);
+  await install.click();
+  const receipt = page.locator(".soundset-receipt");
+  await expect(receipt).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
+  await expect(receipt).toContainText("Installed 0 Pads into Bank A");
+  const kept = await page.evaluate(() =>
+    window.__soundsetInstalls?.at(-1) ?? null);
+  expect(
+    kept,
+    "no soundset.install reached the transport tap, so nothing below is " +
+    "measuring the Host -- fix the tap before reading the rest",
+  ).not.toBeNull();
+  expect(kept.ok).toBe(true);
+  expect(kept.payload.occupied_pad_policy).toBe("keep");
+  expect(kept.result.installed).toEqual([]);
+  expect(kept.result.collisions).toEqual([0, 1, 2, 3]);
+  expect(kept.result.kept).toEqual([
+    4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+  ]);
+  // The far side that matters: Project Truth did not move. A commit that
+  // writes nothing must not advance the revision, and no Pad may change.
+  expect(kept.result.project_revision).toBe(kept.payload.expected_revision);
+  // Read a Project the Host produced *after* the commit, not the snapshot
+  // taken before it. The Creator refreshes its Pad projection on every
+  // install, zero-write ones included, so this always advances -- and without
+  // waiting for it, "no Pad changed" would be satisfied by a stale read.
+  await expect.poll(async () =>
+    await page.evaluate(() => window.__projectTruthReads ?? 0),
+  {timeout: REQUEST_TIMEOUT_MS}).toBeGreaterThan(readsBeforeKeep);
+  const afterKeep = await occupancyOf(page, 0);
+  for (let pad = 0; pad < 16; pad += 1) {
+    expect(afterKeep.pads[pad]).toBe(before.pads[pad]);
+  }
+
+  // Leg 5 -- install replace, over the same collisions `keep` just spared.
+  // Far side: the receipt names the committed revision, and the Project the
+  // Host reads back afterwards shows the four Pads replaced with typed
+  // `soundset` Lineage while the twelve Pads under empty Set slots still hold
+  // the Asset they held before (S11-D12), and the Assets the install replaced
+  // are still Project Truth (S8-D5).
+  await page.getByRole("button", {name: "Preview mapping into Bank A"})
+    .click();
+  await expect(preview).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
+  await expect(install).toBeDisabled();
   await page.getByRole("radio", {name: "Replace them with this Set"}).check();
   await expect(install).toBeEnabled();
   await install.click();
-  const receipt = page.locator(".soundset-receipt");
   await expect(receipt).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
   await expect(receipt).toContainText("Installed 4 Pads into Bank A");
 
   const committed = await page.evaluate(() =>
     window.__soundsetInstalls?.at(-1) ?? null);
+  expect(
+    committed,
+    "no soundset.install reached the transport tap, so nothing below is " +
+    "measuring the Host -- fix the tap before reading the rest",
+  ).not.toBeNull();
   expect(committed.ok).toBe(true);
   expect(committed.payload.occupied_pad_policy).toBe("replace");
   expect(committed.result.installed.map((entry) => entry.pad))
@@ -377,10 +467,16 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   expect(committed.result.kept).toEqual([
     4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
   ]);
+  // Unlike `keep` above, this one really committed.
+  expect(committed.result.project_revision)
+    .toBe(committed.payload.expected_revision + 1);
 
+  // Yield the pre-install Asset id, not `null`, while no Project has been read
+  // back: `null` is never equal to an Asset id, so a `null` here would satisfy
+  // `.not.toBe(...)` on the first tick and the poll would not wait at all.
   await expect.poll(async () => {
     const truth = await occupancyOf(page, 0);
-    return truth === null ? null : truth.pads[0];
+    return truth === null ? before.pads[0] : truth.pads[0];
   }, {timeout: REQUEST_TIMEOUT_MS}).not.toBe(before.pads[0]);
   const after = await occupancyOf(page, 0);
   for (const pad of [0, 1, 2, 3]) {
@@ -396,7 +492,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     expect(after.pads[pad]).toBe(before.pads[pad]);
   }
 
-  // Leg 5 -- the Catalog goes away. Far side: the cached Sets are still
+  // Leg 6 -- the Catalog goes away. Far side: the cached Sets are still
   // listed and still installable, and the surface says so rather than
   // emptying itself.
   await stopCatalogServer(catalog);
@@ -421,6 +517,8 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   await page.getByRole("button", {name: "Preview mapping into Bank B"})
     .click();
   await expect(preview).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
+  const beforeB = await occupancyOf(page, 1);
+  expect(Object.keys(beforeB.pads)).toHaveLength(16);
   await page.getByRole("radio", {name: "Replace them with this Set"}).check();
   await page.getByRole("button", {name: /^Install /}).click();
   await expect(receipt).toContainText("Installed 11 Pads into Bank B", {
@@ -428,22 +526,46 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   });
   await expect.poll(async () => {
     const truth = await occupancyOf(page, 1);
-    return truth === null ? 0 : Object.keys(truth.pads).length;
-  }, {timeout: REQUEST_TIMEOUT_MS}).toBe(11);
+    return truth === null ? beforeB.pads[0] : truth.pads[0];
+  }, {timeout: REQUEST_TIMEOUT_MS}).not.toBe(beforeB.pads[0]);
   const offlineTruth = await occupancyOf(page, 1);
+  // The Foundry Set occupies eleven of its sixteen slots, and the proof
+  // fixture fills all 64 Pads, so Bank B holds sixteen Pads before and after:
+  // eleven move and five are left alone. Counting occupancy would therefore
+  // prove nothing -- which Pad each Asset came from is the S11-D12 statement.
+  expect(Object.keys(offlineTruth.pads)).toHaveLength(16);
   for (const pad of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]) {
-    expect(offlineTruth.assets[offlineTruth.pads[pad]].lineage.source.kind)
-      .toBe("soundset");
+    expect(offlineTruth.pads[pad]).not.toBe(beforeB.pads[pad]);
+    const lineage = offlineTruth.assets[offlineTruth.pads[pad]].lineage;
+    expect(lineage.source.kind).toBe("soundset");
+    expect(lineage.derivation.kind).toBe("soundset_install");
+    expect(lineage.source.slot_index).toBe(pad);
+  }
+  // S11-D12 offline as well as online: the Set's five empty slots left their
+  // Pads exactly as they were, under the most destructive policy there is.
+  for (const pad of [10, 11, 13, 14, 15]) {
+    expect(offlineTruth.pads[pad]).toBe(beforeB.pads[pad]);
   }
 });
 
-// The webkit slot runs only this case. It is a headless WebKit engine, not
-// Safari on macOS or iPadOS: it proves the fetch transport and the surface
-// work on the WebKit engine, and it says nothing about a real Safari or a real
-// iPad, which stay human verification.
-test("Sound Set capability boundary: the fetch transport reaches a Catalog through the same-origin forward", async ({page, baseURL}) => {
-  // Blocked by the same #900 import wall. See the `test.fail()` note above.
-  test.fail();
+// This case was originally titled so that the Creator gate's webkit slot
+// (`--grep "capability boundary"`) would select it, on the belief that it
+// would prove the transport on the WebKit engine. It cannot, and the title no
+// longer says it does. Playwright's headless WebKit fails the Creator's
+// preflight outright: `navigator.storage.getDirectory()` resolves but
+// `getFileHandle(..., {create: true})` throws `UnknownError`, so `opfs` is
+// missing, the session raises `UNSUPPORTED_WEB_RUNTIME`, and the Creator never
+// leaves the `unsupported` phase -- there is no Sound Sets surface to drive.
+// That boundary is pre-existing, is nothing to do with Sound Sets, and is
+// already owned by `creator_web_accessibility.spec.mjs:239`; asserting it a
+// second time here would add no signal. It also says nothing about Safari on
+// macOS or a real iPad, which support OPFS sync access handles and stay human
+// verification.
+//
+// What survives is a chromium case worth keeping on its own: the same-origin
+// forward and the once-only accounting, proved without the install legs.
+test("Sound Set listing reaches a Catalog through the same-origin forward", async ({page, browserName, baseURL}) => {
+  test.skip(browserName !== "chromium");
   test.setTimeout(300_000);
   const origin = new URL(baseURL).origin;
   const targets = recordCatalogTraffic(page, origin);
@@ -456,8 +578,10 @@ test("Sound Set capability boundary: the fetch transport reaches a Catalog throu
   await expect(listing.getByRole("heading", {name: FOUNDRY}))
     .toBeVisible({timeout: REQUEST_TIMEOUT_MS});
   await expect(listing.getByRole("listitem")).toHaveCount(3);
+  // Two listings, one on mount and one on the Refresh click, and still exactly
+  // one fetch of the hash the Attribution Kit names twice.
   expect(targets.filter((target) => target === "/catalog/index.json"))
-    .toHaveLength(1);
+    .toHaveLength(2);
   expect(
     targets.filter((target) =>
       target === `/object/blob/${ATTRIBUTION_SHARED_ARTIFACT}`),
