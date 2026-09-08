@@ -38,7 +38,7 @@ def main() -> int:
     preparer = read("src/physical-evidence-preparer.mjs")
     prepare_cli = read("src/prepare-physical-evidence.mjs")
     lab_readme = read("README.md")
-    apps_readme = read_repository("apps/README.md")
+    demos_readme = read_repository("demos/README.md")
     ci_workflow = read_repository(".github/workflows/ci.yml")
     lab_script = read_repository("scripts/web-runtime-lab.sh")
 
@@ -294,9 +294,9 @@ def main() -> int:
         "lab README",
     )
     require(
-        apps_readme,
+        demos_readme,
         ("web-runtime-lab", "product-neutral", "experimental Host"),
-        "apps README",
+        "demos README",
     )
     require(
         ci_workflow,

@@ -4,7 +4,7 @@ area: platform
 status: partial
 owners: [web, audio]
 source_paths:
-  - apps/web-runtime-lab
+  - demos/web-runtime-lab
   - apps/web-runtime-host
   - apps/creator-web
   - packages/web-runtime-platform
@@ -39,6 +39,10 @@ Host preflight 的单次 Control Worker capability probe 使用 15 秒有界预�
 Project I/O 的三个文件 mutation primitive（`append_durable`、`replace_complete`、`create_immutable`）都要求目标 Project 的有效 writer lease，且 lease 必须属于发起调用的同一 `ProjectStoragePlatform`；无覆盖 lease 时以 `IO_ERROR` + `storage_condition=invalid_state` 失败，不同 same-page platform 试图复用 owner lease 时以 `IO_ERROR` + `storage_condition=project_busy` 在打开 target 或 intent 前失败。Web OPFS 还把 `QuotaExceededError` 与 `InvalidStateError` 保留为 `quota_exceeded` / `invalid_state` 类型化条件，而不是丢失为空 details。
 
 ## 分发与服务
+
+独立音频实验台位于 `demos/web-runtime-lab/`，不依赖 Core 或 Product Assembly，
+继续通过 `scripts/web-runtime-lab.sh` 单独运行与验证。它不是
+`apps/web-runtime-host/` 诊断 Host，迁移不改变后者的 Cloudflare 部署路径。
 
 两个 Host 都生成 canonical manifest 与内容哈希资产；固定 Emscripten `6.0.5`、512 MiB heap、协议仍为 `1`，以及九个精确资源上限：64 MiB/Bank、128 MiB/generation、256 MiB publication residency、100 MiB source、43,200,000 decoded frames、2 channels、65 MiB committed WAV，以及 Stage 10 新增的 `perform_recording_frames` 86,400,000 帧（48 kHz 下三十分钟）与 `perform_recording_queue_batches` 32。`decoded_frames_per_pad` 已退役。两份分发清单的资产集合不同：Creator Web 的 distribution contract 声明六项——`host_main`、`runtime_script`、`runtime_wasm`、`host_style`、`capture_worklet` 与新增的 `perform_master_tap_worklet`（`assets/perform-master-tap.*.js`），并声明兼容 Host `web-runtime-host 3.0.0`；Diagnostic Host 保持十五项且明确不声明 tap 资产。manifest gate 逐个校验两个新上限为正的安全整数且值精确，拒绝多余默认项、重复角色、错误前后缀、digest 不符，以及主包 URL 未落到精确 hash 资产的情况；更早的不可变包保留各自的精确身份，不被回溯要求携带 Stage 10 字段。proof-only server 在 bind 前验证完整 dist，并固定 COOP/COEP/CORP/CSP、MIME、cache、no-follow 与每请求 hash；它不是生产部署服务。
 

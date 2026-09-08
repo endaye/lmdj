@@ -3,7 +3,7 @@
 ## Cloudflare 固定诊断入口
 
 本次三站点迁移将现有诊断 Web Runtime Host 放在 `https://lab.lmdj.workers.dev/`；
-独立的 `apps/web-runtime-lab` Audio Lab 不在本次部署范围。配置位于
+独立的 `demos/web-runtime-lab` Audio Lab 不在本次部署范围。配置位于
 `apps/web-runtime-host/deploy/wrangler.json`，输入是独立验证签名后的 Runtime Release
 资产，暂存于 `build/deploy/cloudflare/lab/dist`。Worker 默认关闭主路由，候选验证后
 才启用固定地址。Creator 与 Runtime 使用同一 Product tag 的各自签名资产。

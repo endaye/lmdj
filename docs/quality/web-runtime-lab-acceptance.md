@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`apps/web-runtime-lab/` is a product-neutral feasibility Host. It measures
+`demos/web-runtime-lab/` is a product-neutral feasibility Host. It measures
 browser realtime-audio capability and prepares physical device evidence. It
 does not implement Creator UI, use Product Assembly, or change Core behavior.
 

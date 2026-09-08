@@ -40,7 +40,7 @@ Start the loopback-only server:
 scripts/chameleon-lab.sh serve --port 4175
 ```
 
-or, from `apps/chameleon-lab`:
+or, from `demos/chameleon-lab`:
 
 ```bash
 npm run dev
