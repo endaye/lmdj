@@ -107,3 +107,6 @@ testdata/audio/suno/**/*.mp3
 
 # Local Netlify folder
 .netlify
+
+# Local cache folder
+.local
