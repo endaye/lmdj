@@ -466,7 +466,22 @@ change from declaring `none`.
 - [ ] Commit `feat(facade): add Sound Set catalog, preview, and install operations`.
 
 **Version Management:** none in this Task's manifests. `application-facade`
-MAJOR is paid at Task 6.
+SemVer is paid at Task 6. **Corrected at execution:** this line predicted a
+MAJOR, and Task 6 paid a MINOR, `3.0.0` → `3.1.0`. The prediction was written
+before this Task existed and guessed at a diff nobody had yet. The diff turned
+out to be purely additive — new operations, `SoundSetCatalogSource`,
+`make_workspace_soundset_catalog`, and three members **appended** to
+`ApplicationConfig` — with no changed signature, no new pure virtual on an
+existing class, and `lmdj_engine_create` untouched. Every one of the ~26
+positional brace initialisations of `ApplicationConfig` still compiles with the
+new members value-initialised, which is what
+`docs/governance/version-management.md` §6 calls 向后兼容的新公开能力. A
+number that does not mean what the policy says it means mis-describes
+compatibility to every consumer, so the policy governs, not the guess.
+
+Contrast `web-runtime-platform`, which Task 6 did pay as a MAJOR for the
+opposite reason: its manifest gate now **rejects a distribution manifest it
+previously accepted**, which is incompatible in the policy's sense.
 
 **Documentation impact:** none in this Task.
 
