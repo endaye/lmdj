@@ -220,7 +220,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 72> operations{
+  static constexpr std::array<std::string_view, 73> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -285,6 +285,7 @@ bool supported_operation(std::string_view operation) {
       "performance.replay.stop",
       "performance.replay.status",
       "performance.resample.commit",
+      "soundset.audition",
       "soundset.catalog.list",
       "soundset.catalog.index",
       "soundset.catalog.supply",
