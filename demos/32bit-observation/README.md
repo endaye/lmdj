@@ -62,3 +62,38 @@ SC 模型遍历 429 个状态、750 条转换、7 个终态；过早归还槽的
 覆盖到错误槽位复用；保留这个负向检测，防止模型范围缩小后出现虚假的通过。
 
 这些是主机原型结果，不是 ESP32 交叉编译或产品集成结果。
+
+## ESP32-S3 对象代码实验
+
+在 EIM 管理的 v6.1 环境中运行：
+
+```bash
+bash demos/32bit-observation/codegen.sh
+```
+
+也可将 `CODEGEN_CXX` 指向该 EIM 安装中的 `xtensa-esp32s3-elf-g++`。
+脚本在独立临时目录保留 -O2/-Os 对象、反汇编、undefined symbols 和编译器版本，
+不修改原 Step A 的配置或失败证据。`codegen_control.cpp` 单独编译，故意使用
+atomic64 load，确认诊断确实能看到 `__atomic_load_8`；它不是原型 fallback。
+
+这是使用目标编译器和 32 位 ABI 的**对象编译**，不是完整 ESP-IDF 工程构建或链接。
+没有复用旧 probe cache 的 SDK include/specs，也未配置 PSRAM、执行硬件或分配
+目标内存。实际集成还必须核对 SDK 编译参数、内存放置、libc 解析及完整链接图。
+
+2026-09-08 实测：`eim list` 为 v6.1，SDK revision 为
+`fff9895c82d744c7237be8847347bdd1b07c6643`；编译器为
+`esp-15.2.0_20251204` / GCC 15.2.0。-O2 和 -Os 均退出 0：
+
+- 对象格式 `elf32-xtensa-le`，五个指定函数全部保留，text 为 169 字节，data/bss
+  为 0。这只是这份小对象的尺寸，不是固件 Flash/IRAM 或三缓冲对象内存占用。
+- `demo_publish` 和 `demo_exchange` 的交换为 `wsr.scompare1` / `s32c1i` /
+  `bne` 回跳；`demo_claim` 的 fetch-or 同样是 CAS 重试环，失败结果成为下一轮
+  expected。单个 C++ RMW 调用不能视作一条固定耗时的目标指令。
+- seq_cst 标志 store/load 各为相应 32 位访问及前后 `memw`。
+- 候选对象唯一 undefined symbol 为 `memcpy`，发布函数有两次 24-byte memcpy
+  调用；未引用 atomic64、mutex 或分配 helper。独立正对照引用 `__atomic_load_8`。
+  **未链接 memcpy，不据此断言其最终实现或时延。**
+
+代码形态与先前“CAS 失败后采用新观察值”的条件式争用分析一致，但这并未验证
+中断影响、内存放置或完整协议的工作界限。原 Step A 仍需修复设计并获实施授权
+后重新构建；不得用本对象不存在 atomic64 来替代原探针的完整归因检查。
