@@ -525,6 +525,7 @@ class RealtimeEngine final {
   BankSlot* bank_slot_for(std::uint8_t bank_slot) noexcept;
   const std::vector<float>& audition_sample(std::uint8_t slot) const noexcept;
   void retire_audition(std::uint8_t slot) noexcept;
+  void apply_published_audition(std::uint8_t slot) noexcept;
   cooker::ResolvedPlayback published_playback(
       std::uint8_t slot) const noexcept;
   bool publish_voice_state(
@@ -557,6 +558,13 @@ class RealtimeEngine final {
   // and never writes `availability_mask_`: an audition is not a Project Bank.
   std::array<BankSlot, kRealtimeAuditionBankCapacity> audition_slots_{};
   std::atomic<std::uint8_t> current_audition_slot_{kNoAuditionSlot};
+  // Its own queue, sized to the audition pool for the same reason the Project
+  // queue is sized to the Project pool: pushing requires a slot found `empty`,
+  // and a full queue would require every slot `pending`, so the two conditions
+  // cannot hold at once and `publish_queue_full` stays unreachable here too.
+  // Sharing the Project queue would have broken that argument on both sides.
+  detail::FixedSpscQueue<std::uint8_t, kRealtimeAuditionBankCapacity>
+      audition_publish_queue_;
   detail::FixedSpscQueue<
       std::uint8_t,
       kRealtimePublishQueueCapacity>

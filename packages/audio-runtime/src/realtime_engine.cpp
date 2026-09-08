@@ -314,6 +314,22 @@ void RealtimeEngine::retire_audition(std::uint8_t slot) noexcept {
   }
 }
 
+// Audio thread only. Retirement and voice starts are therefore serialised by
+// the render callback, which is the whole point of routing publication through
+// the queue: a Bank cannot be retired between a voice reading it and that voice
+// counting itself against it.
+void RealtimeEngine::apply_published_audition(std::uint8_t slot) noexcept {
+  const auto live = current_audition_slot_.load(std::memory_order_relaxed);
+  audition_slots_[slot].state.store(
+      BankState::current, std::memory_order_release);
+  current_audition_slot_.store(
+      static_cast<std::uint8_t>(kAuditionBankSlotBase + slot),
+      std::memory_order_release);
+  if (live != kNoAuditionSlot) {
+    retire_audition(static_cast<std::uint8_t>(live - kAuditionBankSlotBase));
+  }
+}
+
 void RealtimeEngine::release_voice_pattern(Voice& voice) noexcept {
   if (voice.pattern_slot == kNoPatternSlot) {
     return;
@@ -594,16 +610,31 @@ foundation::Result<void> RealtimeEngine::clear_sample(std::uint8_t slot) {
   return foundation::Result<void>::success();
 }
 
-// The Sound Set audition publication path (#799). It deliberately shares no
-// code with `publish_sample_bank`: that function allocates from `bank_slots_`,
-// counts `bank_slot_rejections_`, and on the non-running path calls
-// `apply_published_bank`, which retires the current Bank, writes
-// `current_bank_slot_` and overwrites `availability_mask_`. Every one of those
-// is exactly what an audition must not do.
+// The Sound Set audition publication path (#799). It mirrors
+// `publish_sample_bank`'s protocol rather than inventing one, and that is
+// load-bearing rather than tidiness.
+//
+// An earlier revision published, swapped `current_audition_slot_` and retired
+// the outgoing Bank all on the control thread, on the reasoning that an
+// audition shares nothing with a Project Bank. It raced: every Bank read on the
+// voice-start path happens before `++owner->active_voices`, so a control-thread
+// `retire_audition` could observe `active_voices == 0`, mark the Bank
+// reclaimable, and have the sweep free it while a voice was mid-read of that
+// same `std::vector`. It also read `active_voices` across threads, which is a
+// data race in its own right. Neither is visible to a single-threaded test.
+//
+// The Project protocol is not more complicated than it needs to be; it is that
+// complicated because of exactly this. Priming an `empty` slot here and letting
+// the audio thread apply and retire inside `render` is what serialises
+// retirement against voice starts.
+//
+// What stays different is only what must: the audition pool is outside
+// `bank_slots_`, so this never reports `bank_slot_rejections_`, never calls
+// `apply_published_bank`, and so never writes `current_bank_slot_` or
+// `availability_mask_`.
 PublishResult RealtimeEngine::publish_audition_bank(
     PreparedSampleBank&& bank) noexcept {
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
-  const auto live = current_audition_slot_.load(std::memory_order_acquire);
 
   auto free_slot = std::find_if(
       audition_slots_.begin(),
@@ -614,28 +645,59 @@ PublishResult RealtimeEngine::publish_audition_bank(
       });
   if (free_slot == audition_slots_.end()) {
     // Both audition slots are still draining. This never consumes or reports a
-    // Project Bank slot, so `bank_slot_rejections_` is deliberately untouched.
+    // Project Bank slot, so `bank_slot_rejections_` is deliberately untouched:
+    // that counter measures Project pressure, and audition pressure reported
+    // through it would misdescribe the Project pool.
+    //
+    // Nor is `state_` re-checked here. A slot stays non-empty until the audio
+    // thread drains it, so this refusal is correct whether or not the engine
+    // stopped in the meantime, and re-reading `state_` would only widen the
+    // window without changing the answer.
     return PublishResult::bank_slots_full;
   }
 
+  // Deliberately no `events_pending` guard, unlike `publish_sample_bank`. That
+  // guard is Pad-pool-specific: `enqueue_control` validates a press against
+  // `availability_mask_`, so an in-flight press admitted against Bank N must
+  // not be served by Bank N+1. An audition publication writes no
+  // `availability_mask_` and can serve no Pad event, so no in-flight event can
+  // be mis-served by it.
+  //
+  // The audition's own in-flight case is decided rather than accidental:
+  // publish A, enqueue `audition_start`, publish B, then render plays B,
+  // because `render` drains this queue before the control events. That is
+  // replace semantics working as specified -- the last publication wins -- and
+  // reaching it at all requires two publications inside one callback, which is
+  // a user clicking preview twice in under a buffer. Do not "fix" this
+  // asymmetry into an `events_pending` refusal; it would refuse exactly the
+  // browse-and-preview sequence the feature exists for.
+
   const auto slot_index = static_cast<std::uint8_t>(
       std::distance(audition_slots_.begin(), free_slot));
+  // Safe on the control thread only because the slot is `empty`: no voice can
+  // reference a Bank that was never current, so nothing reads these writes.
   free_slot->bank.emplace(std::move(bank));
   free_slot->active_voices = 0;
   free_slot->generation = next_bank_generation_++;
-  // Release-store the state so the audio thread, which acquires it before
-  // reading `bank`, cannot observe a slot marked current with a half-written
-  // Bank behind it.
-  free_slot->state.store(BankState::current, std::memory_order_release);
-  current_audition_slot_.store(
-      static_cast<std::uint8_t>(kAuditionBankSlotBase + slot_index),
-      std::memory_order_release);
 
-  // Replace: the outgoing audition stops accepting new voices and drains on the
-  // ordinary release ramp. Its buffer stays alive until the last voice lets go,
-  // which is the whole reason the audition pool holds two.
-  if (live != kNoAuditionSlot) {
-    retire_audition(static_cast<std::uint8_t>(live - kAuditionBankSlotBase));
+  const auto running =
+      state_.load(std::memory_order_acquire) == RealtimeState::running;
+  if (!running) {
+    // Nothing is rendering, so there is no voice to race and applying here is
+    // the same quiescent case `publish_sample_bank` handles inline.
+    apply_published_audition(slot_index);
+    return PublishResult::accepted;
+  }
+
+  free_slot->state.store(BankState::pending, std::memory_order_release);
+  if (!audition_publish_queue_.try_push(slot_index)) {
+    // Unreachable while the queue is sized to the pool -- a full queue needs
+    // every slot `pending`, and reaching this push needed one `empty`. Kept
+    // complete anyway, because a future capacity divergence makes it live.
+    free_slot->bank.reset();
+    free_slot->generation = 0;
+    free_slot->state.store(BankState::empty, std::memory_order_release);
+    return PublishResult::publish_queue_full;
   }
   return PublishResult::accepted;
 }
@@ -1390,11 +1452,23 @@ EnqueueResult RealtimeEngine::enqueue_control(PadControlEvent event) noexcept {
   // increment three milliseconds later is not. `sample_unavailable` is the
   // existing member for "the bytes you asked for are not there"; auditions add
   // no new result vocabulary.
-  if (event.kind == PadControlKind::audition_start &&
-      current_audition_slot_.load(std::memory_order_acquire) ==
-          kNoAuditionSlot) {
-    invalid_events_ += 1;
-    return EnqueueResult::sample_unavailable;
+  if (event.kind == PadControlKind::audition_start) {
+    // `current` or `pending`: since publication is applied by the audio thread,
+    // a Bank published moments ago is still `pending` here, and the render that
+    // processes this event drains the audition queue before the control events,
+    // so it will be current by the time the voice starts. Requiring `current`
+    // would refuse the ordinary publish-then-play sequence.
+    const auto playable = std::any_of(
+        audition_slots_.begin(),
+        audition_slots_.end(),
+        [](const BankSlot& candidate) {
+          const auto state = candidate.state.load(std::memory_order_acquire);
+          return state == BankState::current || state == BankState::pending;
+        });
+    if (!playable) {
+      invalid_events_ += 1;
+      return EnqueueResult::sample_unavailable;
+    }
   }
   if (event.kind == PadControlKind::press &&
       (event.velocity == 0 || event.velocity > 127)) {
@@ -1561,6 +1635,12 @@ void RealtimeEngine::render(
   while (publish_queue_.try_pop(published_slot)) {
     apply_published_bank(published_slot);
     pending_publications_.fetch_sub(1, std::memory_order_release);
+  }
+  // Before the control events below, so an audition published and started in
+  // the same callback is audible in that callback rather than the next.
+  std::uint8_t published_audition = 0;
+  while (audition_publish_queue_.try_pop(published_audition)) {
+    apply_published_audition(published_audition);
   }
   if (!audio_pending_pattern_.has_value()) {
 #if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING

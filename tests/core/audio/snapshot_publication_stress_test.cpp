@@ -471,6 +471,133 @@ void test_observers_remain_valid_across_quiescent_writer_handoffs() {
 
 }  // namespace
 
+// #799. The audition pool is claimed and released by a different protocol from
+// the Project pool, so the Project races above say nothing about it. This is
+// the test that lives in the gap the byte-path Pull Request named.
+//
+// The defect it is written against is the one review found: publishing,
+// swapping `current_audition_slot_` and retiring the outgoing Bank all on the
+// control thread let `retire_audition` observe `active_voices == 0` while the
+// audio thread was between reading the Bank and counting itself against it, so
+// the sweep freed a `std::vector` a live voice was reading. Under ASan or TSan
+// this races into a use-after-free or a reported data race; without a
+// sanitizer it is a silent wrong read, which is why the assertions below are
+// about conservation rather than about audio.
+PreparedSampleBank audition_bank_at(std::uint64_t revision) {
+  auto bank = PreparedSampleBank::empty(
+      lmdj::audio::kAuditionBankProjectId(),
+      lmdj::audio::kAuditionBankProjectRevision);
+  // Long enough that voices stay alive across many callbacks, so the retiring
+  // Bank is genuinely still being read when its successor lands.
+  std::vector<float> sample(4'096, 0.25F);
+  LMDJ_CHECK(
+      bank.set_sample(lmdj::audio::kAuditionSampleSlot, sample).has_value());
+  static_cast<void>(revision);
+  return bank;
+}
+
+void test_audition_replacement_is_conserved_under_concurrency() {
+  static_assert(lmdj::audio::kRealtimeAuditionBankCapacity == 2);
+  RealtimeEngine engine;
+  LMDJ_CHECK(
+      engine.publish_sample_bank(bank_at(1)) == PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+
+  std::atomic<bool> rendering{true};
+  std::thread audio_thread([&engine, &rendering]() {
+    std::array<float, 1> left{};
+    std::array<float, 1> right{};
+    while (rendering.load(std::memory_order_acquire)) {
+      engine.render(left.data(), right.data(), 1);
+    }
+    for (int drain = 0; drain < 1'024; ++drain) {
+      engine.render(left.data(), right.data(), 1);
+    }
+  });
+
+  // The control thread hammers publish/start/stop while the audio thread reads
+  // whatever is current. Reclaim runs here too, as it does in a real Host, so
+  // the sweep and the voice reads are genuinely concurrent.
+  std::uint64_t accepted = 0;
+  std::uint64_t refused = 0;
+  std::uint64_t started = 0;
+  for (std::uint64_t round = 0; round < 4'000; ++round) {
+    switch (engine.publish_audition_bank(audition_bank_at(round))) {
+      case PublishResult::accepted: {
+        ++accepted;
+        lmdj::audio::PadControlEvent start{};
+        start.sequence = round;
+        start.velocity = 127;
+        start.kind = lmdj::audio::PadControlKind::audition_start;
+        if (engine.enqueue_control(start) == lmdj::audio::EnqueueResult::accepted) {
+          ++started;
+        }
+        break;
+      }
+      case PublishResult::bank_slots_full:
+        ++refused;
+        break;
+      case PublishResult::publish_queue_full:
+        // Unreachable while the audition queue is sized to the audition pool;
+        // if this ever fires, that argument has stopped holding.
+        LMDJ_CHECK(false);
+        break;
+      case PublishResult::events_pending:
+        break;
+    }
+    if (round % 8 == 0) {
+      lmdj::audio::PadControlEvent stop{};
+      stop.sequence = round;
+      stop.kind = lmdj::audio::PadControlKind::audition_stop;
+      static_cast<void>(engine.enqueue_control(stop));
+    }
+    static_cast<void>(engine.reclaim_retired_banks());
+  }
+
+  rendering.store(false, std::memory_order_release);
+  audio_thread.join();
+  // With the audio thread joined this thread is the only one touching the
+  // engine, so the rest is deterministic: stop every audition and render past
+  // the release ramp until quiescent. Doing this before the join would race the
+  // producer loop and make the leak assertion below depend on scheduling.
+  {
+    std::array<float, 1> left{};
+    std::array<float, 1> right{};
+    lmdj::audio::PadControlEvent final_stop{};
+    final_stop.kind = lmdj::audio::PadControlKind::audition_stop;
+    static_cast<void>(engine.enqueue_control(final_stop));
+    for (int drain = 0; drain < 4'096 &&
+                        engine.telemetry().active_voices != 0;
+         ++drain) {
+      engine.render(left.data(), right.data(), 1);
+    }
+    LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  }
+
+
+  // Both outcomes must actually have occurred, or the race was never exercised
+  // and the assertions below are vacuous.
+  LMDJ_CHECK(accepted > 0);
+  LMDJ_CHECK(started > 0);
+  LMDJ_CHECK(refused > 0);
+
+  // The Project pool is untouched by any of it: one publication before start,
+  // no audition ever counted against Project pressure.
+  const auto telemetry = engine.bank_telemetry();
+  LMDJ_CHECK(telemetry.accepted_publications == 1);
+  LMDJ_CHECK(telemetry.bank_slot_rejections == 0);
+  LMDJ_CHECK(telemetry.publish_queue_drops == 0);
+
+  // And the engine is still usable: no audition slot was leaked, so a further
+  // publication still succeeds after the pool drains.
+  for (int drain = 0; drain < 16; ++drain) {
+    static_cast<void>(engine.reclaim_retired_banks());
+  }
+  LMDJ_CHECK(
+      engine.publish_audition_bank(audition_bank_at(0)) ==
+      PublishResult::accepted);
+}
+
 int main() {
   try {
     test_publication_accounting_is_conserved_under_concurrency();
@@ -478,6 +605,7 @@ int main() {
     test_pattern_publication_switches_are_conserved_under_concurrency();
     test_same_boundary_pattern_supersession_is_conserved_under_concurrency();
     test_observers_remain_valid_across_quiescent_writer_handoffs();
+    test_audition_replacement_is_conserved_under_concurrency();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
