@@ -146,6 +146,28 @@ B2 onset scoring, SDK execution, deadline/process-group enforcement, real
 process-tree/GPU sampling and measured candidate evaluation remain separate
 Tasks under the [benchmark plan](../../docs/superpowers/plans/2026-09-08-lmdj-stage12-benchmark-tools.md).
 
+## Slice onset scorer (B2)
+
+```bash
+python3 tools/provider-benchmark/score_slice.py \
+  --manifest tests/fixtures/provider-benchmark/sample-slice/manifest.json \
+  --predictions tools/provider-benchmark/tests/fixtures/predictions-basic.json
+python3 tools/provider-benchmark/tests/score_slice_test.py
+```
+
+The scorer accepts one closed prediction row for each success fixture. Frames
+are zero-based, strictly increasing integers within the generated source
+length. It verifies the manifest digest, source byte digest and byte length,
+then applies each manifest-declared inclusive tolerance with deterministic
+one-to-one maximum-cardinality matching. Input-failure scenarios are not
+quality-scored. Per-case and micro TP/FP/FN counts are authoritative; nullable
+precision, recall and F1 values are derived and no quality threshold or
+Provider promotion decision is emitted.
+
+`provider.benchmark_slice_score` runs the scorer boundary suite in the
+contract tier. It is a local metric tool and does not execute a Provider or
+create an active Capability Contract.
+
 Version impact: none. Internal tooling/test format only; no Product, Module,
 Host, Provider, Contract, Assembly or Channel identity changes.
 Documentation impact: none. This README documents local tooling; current
