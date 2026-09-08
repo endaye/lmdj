@@ -134,6 +134,65 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(failure["attempts"]), 3)
         self.assertFalse((self.directory / "review.json").exists())
 
+    def cli(self, *arguments):
+        """Run the real CLI the workflow runs, and return `(returncode, stderr)`.
+
+        The workflow reads an exit code, not a return value, so that is what
+        this asserts. Calling `finalize()` directly would pass whatever the
+        function does and say nothing about the job's conclusion, which is the
+        thing #939 was about.
+        """
+        completed = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/ci/review_pipeline.py"),
+             *arguments, "--directory", str(self.directory)],
+            capture_output=True, text=True, timeout=60,
+        )
+        return completed.returncode, completed.stderr
+
+    def test_finalize_exits_nonzero_when_no_model_reviewed(self):
+        # The producer job is named `Review fallback`; its conclusion is what a
+        # reader scanning job names sees. Reporting success over a
+        # `not-reviewed` artifact makes that name a lie.
+        for backend in review_scope.BACKENDS:
+            self.capture(backend, BACKEND_OUTCOME="failure")
+        code, stderr = self.cli("finalize")
+        self.assertEqual(code, 1)
+        self.assertIn("no model reviewed this head", stderr)
+
+    def test_finalize_still_writes_every_receipt_when_it_fails(self):
+        # The exit code changes; the evidence must not. A dropped review is
+        # recoverable from this artifact, which is how #916's was found hours
+        # later, so failing must not cost the receipts.
+        for backend in review_scope.BACKENDS:
+            self.capture(backend, BACKEND_OUTCOME="failure")
+        code, _ = self.cli("finalize")
+        self.assertEqual(code, 1)
+        result = pipeline.read(self.directory / "result.json")
+        self.assertEqual(result["status"], "not-reviewed")
+        failure = pipeline.read(self.directory / "failure.json")
+        self.assertEqual(len(failure["attempts"]), 3)
+        self.assertTrue((self.directory / "history.json").exists())
+        self.assertTrue((self.directory / "context.json").exists())
+
+    def test_finalize_exits_zero_when_a_model_did_review(self):
+        # The positive control. Without it the case above would pass against a
+        # `finalize` that always failed, which would be a different defect and
+        # would read identically here.
+        self.capture("glm")
+        code, stderr = self.cli("finalize")
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(
+            pipeline.read(self.directory / "result.json")["status"], "reviewed")
+
+    def test_a_crash_and_a_clean_not_reviewed_are_told_apart(self):
+        # Both exit nonzero, so the job fails either way -- but a reader
+        # diagnosing the run must be able to tell "the backends were down" from
+        # "the pipeline broke". Same exit code, different stderr.
+        code, stderr = self.cli("finalize")  # empty history: chain unfinished
+        self.assertEqual(code, 1)
+        self.assertIn("review pipeline operation failed", stderr)
+        self.assertNotIn("no model reviewed this head", stderr)
+
     def test_attempt_after_success_is_refused(self):
         self.capture("glm")
         with self.assertRaisesRegex(review_scope.ReviewScopeError, "fallback order"):

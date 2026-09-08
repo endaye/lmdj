@@ -156,6 +156,37 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
         self.assertIn("review_pipeline.py grok", grok)
         self.assertNotIn("GITHUB_TOKEN:", grok.split("      - name: Grok review", 1)[1].split("      - name: Validate Grok", 1)[0])
 
+    def test_the_producer_cannot_report_success_over_a_not_reviewed_result(self):
+        """The `finalize` verdict must be able to fail the job.
+
+        #939: `Review fallback` reported success while its artifact said
+        `not-reviewed`, so a reader scanning job names saw a green check over a
+        review that never happened. The lane as a whole never lost the
+        distinction -- the publisher refuses a not-reviewed result -- but the
+        producer's own name and conclusion did not match what it produced.
+
+        `review_pipeline.py finalize` now exits nonzero for that case. This
+        asserts the workflow lets that exit reach the job conclusion, because
+        the fix is defeated by a single `continue-on-error` or `|| true` on the
+        step, and neither would look wrong in review.
+        """
+        job = self.jobs["claude-review"]
+        finalize = job.split("      - name: Save honest final result", 1)[1]
+        finalize = finalize.split("      - uses:", 1)[0]
+        self.assertIn("review_pipeline.py finalize", finalize)
+        self.assertNotIn("continue-on-error", finalize)
+        self.assertNotIn("|| true", finalize)
+        self.assertNotIn("|| :", finalize)
+        # The receipts must still upload after that failure, or a dropped
+        # review stops being recoverable -- #916's was recovered from exactly
+        # this artifact hours after the fact.
+        upload = job.split("      - uses: actions/upload-artifact", 1)[1]
+        self.assertIn("if: ${{ always() }}", upload)
+        # And the workflow already expected this exit: its takeover step is
+        # guarded on failure() and says NOT REVIEWED.
+        self.assertIn("Manual takeover", job)
+        self.assertIn("if: ${{ failure() }}", job)
+
     def test_publishers_are_short_trusted_data_consumers(self):
         for name in ("publish-claude", "publish-grok"):
             job = self.jobs[name]
