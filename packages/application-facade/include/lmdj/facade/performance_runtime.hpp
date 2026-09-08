@@ -4,7 +4,8 @@
 #include <functional>
 #include <memory>
 
-#include <lmdj/facade/application.hpp>
+#include <lmdj/facade/performance_ports.hpp>
+#include <lmdj/facade/performance_replay.hpp>
 
 namespace lmdj::facade {
 

@@ -10,7 +10,7 @@
     {"id": "modules", "label": "Core Modules", "detail": "domain · I/O · cook · audio", "kind": "core", "x": 1010, "y": 250, "width": 220, "height": 96},
     {"id": "result", "label": "Typed Response", "detail": "receipt · Pattern identity · overlay", "kind": "host", "x": 1310, "y": 250, "width": 210, "height": 96},
     {"id": "performance", "label": "Performance Ops", "detail": "record · replay · recovery · resample", "kind": "core", "x": 1010, "y": 430, "width": 250, "height": 96},
-    {"id": "collaborators", "label": "Collaborators", "detail": "clock · sequencer · replay · engine", "kind": "core", "x": 1310, "y": 430, "width": 210, "height": 96}
+    {"id": "collaborators", "label": "Performance Runtime", "detail": "ports · bridge · replay · engine adapter", "kind": "core", "x": 1310, "y": 430, "width": 250, "height": 96}
   ],
   "connections": [
     {"from": "native-hosts", "to": "facade", "label": "Facade API"},
@@ -19,10 +19,10 @@
     {"from": "facade", "to": "modules", "label": "orchestrate"},
     {"from": "modules", "to": "result"},
     {"from": "facade", "to": "performance", "label": "20 operations"},
-    {"from": "performance", "to": "collaborators", "label": "Facade-owned"}
+    {"from": "performance", "to": "collaborators", "label": "one-way link"}
   ],
   "cards": [
-    {"title": "Dependencies", "body": "Six lower Core Modules at locked versions."},
+    {"title": "Dependencies", "body": "Full Facade: six lower Modules. lmdj::application links lmdj::performance_runtime, the sole owner of bridge/replay/engine adapter, without Project IO or Provider SDK. Same Module; not a device API."},
     {"title": "Sequence authority", "body": "Project-scoped admission, armed-Pad selective rebase and session-owned pending overlay share one authority; exact receipt replay never repeats Project mutation."},
     {"title": "Performance authority", "body": "Twenty Performance operations plus three Pattern Slot commands; open gestures, HOLD and the last acknowledged launch come from record status, never from Host prediction."},
     {"title": "Forbidden boundary", "body": "No Host UI, Web protocol or product-specific wiring in the Facade."}
