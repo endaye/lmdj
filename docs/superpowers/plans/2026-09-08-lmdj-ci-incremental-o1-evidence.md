@@ -345,6 +345,106 @@ enabled debt, completion/consumer-union, real interrupted-process cancellation
 and T5 cutover/chain-limit journeys remain open. Nothing here authorizes a
 release or states that automatic cutover is complete.
 
+### C3 running-process cancellation, ordinary settlement and replay
+
+This subsequent one-file Task uses `docs/ci-o1-live-cancel-evidence`, based on
+`fe043fd3a2a06dfbca4088cc59e0e8ef6997f336`. Its only declared file is this
+ledger. It does not rewrite the C2 expiry race above: that earlier attempt did
+not prove a running-process interruption. C3 supplies a separate real journey
+with fresh storage, not a reset or reinterpretation of #840.
+
+The reviewed binding in PR #864 reserved
+[journal #857](https://github.com/endaye/lmdj/issues/857), node
+`I_kwDOTK_1fs8AAAABQLLT3w`, epoch
+`o1-claim-cancel-live-20260908-issue857`. All four following runs used exact
+control `fe043fd3a2a06dfbca4088cc59e0e8ef6997f336`, existing workflow
+`352307416`, and attempt 1. The root performed the separately authorized
+dispatches and one normal cancellation; independent verification was read-only.
+
+[Initialization 34174908092/1](https://github.com/endaye/lmdj/actions/runs/34174908092/attempts/1)
+succeeded. Original artifact `10036940294`, named
+`batch-controller-34174908092-1`, has ZIP SHA-256
+`0406d5f3b190cfc6f4dc18b46e8bae60ceef9a85aa25f9747ae82462fc95828f`.
+Its result was `initialized`, with null state/request and the exact executor.
+The independent GraphQL read found zero comments and a checkpoint with head
+and pending null. Its editor was stable Bot `MDM6Qm90NDE4OTgyODI=`, and its
+writer bound the exact repository, Issue, workflow, controller job, control,
+run and attempt. Only controller `101902284120` succeeded; all three other
+jobs were skipped. Initialization created neither a claim nor a tested baseline.
+
+[Diagnostic 34175087273/1](https://github.com/endaye/lmdj/actions/runs/34175087273/attempts/1)
+durably recorded observe `5577455885`, admit `5577456613`, and claim
+`5577457236` before the controller completed. The fixed request was
+`batch:o1-claim-cancel-live-20260908-issue857:1`, bootstrap with null base,
+target equal to control, and executor `34175087273/1`. Policy digest
+`bc6834ca20b75872c42c92c3e5c5ac1fcc3d515889f4544cb37aff27620ea1c6`
+selected the complete sixteen-suite inventory. All three comments were authored
+by the stable Bot, with null editor/lastEditedAt and complete pagination.
+Their previous links and content digests were independently recomputed;
+the checkpoint head was
+`7baea770ba42da71500d822954edb6d5bb775ff3c206764c5ec8e3b03da9cfa9`,
+pending null. Hashes establish content consistency, not independent signatures.
+
+Controller `101902795399` succeeded and waiter `101902884628` was actually
+in progress from `2026-09-08T00:59:20Z`. The original waiter log records
+`Run sleep 285` at `00:59:21.0827833Z`, then the actual error
+`The operation was canceled.` at `01:00:14.3120617Z`, followed by
+`Terminate orphan process: pid (1895) (sleep)` at `01:00:14.3422814Z`.
+Thus cancellation interrupted the live sleep after approximately 53 seconds,
+well before the 285-second expiry. The log's earlier colored shell-command
+preview contains the future expiry echo and `exit 1`; these are displayed
+script text, **not executed expiry output**. Unlike C2, this log contains no
+actual natural-expiry message or process exit-1 result before cancellation.
+
+Independent exact-attempt API reads confirmed the whole parent and waiter
+`completed/cancelled`; the actual wait step was cancelled. The four-job
+inventory contained only the successful controller, cancelled waiter, skipped
+legacy reporter and skipped product execution. Artifact inventory was zero.
+The complete Issue GraphQL responses before and after cancellation were byte
+identical, including checkpoint, editor metadata, all three records and pagination.
+
+[Ordinary settlement 34175249441/1](https://github.com/endaye/lmdj/actions/runs/34175249441/attempts/1)
+then succeeded. Original artifact `10037022559`, named
+`batch-controller-34175249441-1`, has ZIP SHA-256
+`e441c8a05dd529a3081992c870efbe3cf67b17476ca58f86dd11e7f266f6032d`.
+The complete original three comment objects were unchanged; result `5577478685`
+preceded advance `5577479369`. All five previous/digest links and the final
+checkpoint were checked against the actual records, with unchanged Bot identity
+and no comment editing. The original result recorded generation 5, active null,
+all sixteen outcomes `missing`, and sixteen debts each at attempt 1 with
+`paused=false`. Failures remained empty; no missing suite was made green or
+invented as a product failure. Processed/pending were the frozen target; this
+is processing progress, not tested health. The result was idle, request null,
+explicitly settlement-only with no execution authorized.
+
+[Fresh ordinary replay 34175357574/1](https://github.com/endaye/lmdj/actions/runs/34175357574/attempts/1)
+succeeded with original artifact `10037052635`, named
+`batch-controller-34175357574-1`, ZIP SHA-256
+`58ed9a9f58735e3592006ae7c8cf29d700fb0485e340522f847419f4d7b50ca8`.
+The entire replay state equalled settlement, not only its generation or debt
+count. It returned idle/request null with its own exact executor identity.
+The entire GraphQL response was also byte identical to settlement, retaining
+all five records and metadata with no new event. Both ordinary recovery runs
+had exactly four jobs: controller success and all other jobs skipped. They did
+not re-admit a request, reset debt attempts or run products.
+
+All three downloaded original ZIP hashes matched the API artifact digests.
+Complete exact-attempt runs/jobs, Issue snapshots, original ZIPs and the waiter
+log are retained at `/tmp/lmdj-o1-C3-independent.xeBoAb`; this is an investigation
+copy, not a promise of permanent artifact retention. This closes the separately
+observed running-interruption → missing-evidence settlement → idempotent replay
+leg. It does not prove execution-enabled debt recovery, an exact full candidate,
+remaining completion/consumer-union journeys or automatic T5/chain-limit
+acceptance. It adds no claims about later product batches or reports.
+
+For this C3 evidence-only appendix, Version impact: none — no version or release
+identity is allocated. Documentation impact: none — no Portal page, source
+diagram, current behavior or documented source contract changes. Verification
+uses the complete original objects above, nonempty committed-range docs-static,
+66 ownership tests and whitespace checks. No additional Portal build is required
+for this unrelated explanatory ledger; the earlier Portal result below remains
+historical rather than a claimed fresh pass.
+
 ## Ledger verification
 
 Check linked actual run/Issue identities against the API and download actual
