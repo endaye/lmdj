@@ -86,13 +86,13 @@ class ProbeWorkflowTests(unittest.TestCase):
     def test_manual_main_first_attempt_guard_and_existing_authority(self):
         condition = field(self.controller, 'if', 4)
         for guard in ("github.event_name == 'workflow_dispatch'", "github.ref == 'refs/heads/main'",
-                      "github.run_attempt == '1'", "inputs.batch_operation == 'recovery-probe'"):
+                      "github.run_attempt == '1'"):
             self.assertIn(guard, condition)
         self.assertEqual(scalars(block(self.controller, 'permissions', 4), 6),
                          {'contents': 'read', 'actions': 'read', 'issues': 'write'})
         self.assertIn('group: self-test-report', self.controller)
         self.assertIn('BATCH_WRITER_LOCK: self-test-report', self.step)
-        self.assertNotIn('continue-on-error:', self.controller)
+        self.assertNotIn('continue-on-error:', self.step)
 
     def test_no_outputs_no_artifact_and_no_automatic_trigger_change(self):
         self.assertNotIn('GITHUB_OUTPUT', self.step)
@@ -101,11 +101,11 @@ class ProbeWorkflowTests(unittest.TestCase):
         self.assertIn("if: ${{ inputs.batch_operation == 'recovery-probe' }}", self.step)
         self.assertIn("!startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe'", self.controller)
         events = block(self.source, 'on', 0)
-        self.assertIn('workflows: ["Core CI"]', events)
-        self.assertIn('cron: "0 18 * * *"', events)
-        self.assertNotIn('  push:', events)
+        self.assertIn('workflows: ["Self-test Report", "Core CI", "PR Review"]', events)
+        self.assertIn('cron: "7,22,37,52 * * * *"', events)
+        self.assertIn('  push:', events)
         inputs = block(block(events, 'workflow_dispatch', 2), 'inputs', 4)
-        self.assertIn('default: legacy', inputs)
+        self.assertIn('default: reconcile', inputs)
         self.assertIn('probe_request:', inputs)
 
 

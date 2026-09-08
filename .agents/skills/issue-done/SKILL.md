@@ -8,8 +8,8 @@ description: Universal skill for shipping a completed local task/issue to main -
 This skill defines the canonical, universal workflow for taking a locally completed GitHub issue/task in an isolated worktree branch, verifying it, creating a Conventional Commit, pushing, opening a Pull Request, checking current-head review and, when authorized, squash-merging into `main`, and cleaning up the branch and worktree.
 
 The current merge procedure retains PR review/conflict/conversation protection,
-not retired full-CI or strict-update gates. The separate T5 incremental automatic
-trigger switch remains pending; manual controls do not prove automatic activation.
+not retired full-CI or strict-update gates. Automatic incremental activation
+requires its own platform evidence; manual controls alone do not prove it.
 An unmerged draft does not override current `main` governance or live protection.
 This skill grants no new authority: push, PR creation, merge, Issue mutation and
 cleanup require the user's applicable authorization; stop at its boundary.
@@ -359,11 +359,12 @@ lint reads the text you give it and cannot see a directive added afterwards.
    commenting needs applicable Issue-mutation authority. Preserve the closing
    keyword pitfall and record a qualifying recurrence when authorized.
 
-The target main-only strategy batches the complete unprocessed commit interval,
+The main-only strategy batches the complete unprocessed commit interval,
 using deterministic floor union authenticated review scope and eligible debt.
 AI labels cannot shrink that scope; safe docs-none does not clear prior failures
-or debt. No daily product-test requirement or automatic release follows from
-shipping a PR. Legacy automatic triggers remain until the separate T5 cutover.
+or debt. Daily product tests and daily-missing alerts are retired. Lightweight
+health ticks recover pending work without date-based product requests; shipping
+a PR never authorizes automatic release.
 
 The report runtime collects authenticated review-infrastructure and selected
 batch failures into durable outboxes and stable Issue buckets;

@@ -193,8 +193,9 @@ remain available and cannot be displaced by automatic pending work. Historical
 candidate results do not move automatic progress or clear newer debt.
 Testing does not allocate a version or select/release a candidate. See
 [the incremental spec](../design/2026-09-08-lmdj-ci-incremental-batches.md)
-for the activation and recovery requirements; legacy automatic triggers are
-retired only by the separately verified T5 switch.
+for the activation and recovery requirements. Daily product triggers and their
+daily-missing alert are retired together; the independent lightweight health
+tick recovers existing pending work and never creates a date-based test request.
 
 ### Post-merge provenance and cleanup
 

@@ -137,7 +137,9 @@ test('current truth tracks the formal Web Host, candidate lifecycle, and evidenc
   assert.match(proof, /`required_conversation_resolution`/);
   assert.match(proof, /共享重型锁继续保护真实资源容量/);
   assert.match(proof, /repository、PR、head、run、attempt 和 backend/);
-  assert.match(proof, /这是每日自测，不是每日发版/);
+  assert.match(proof, /每日产品 cron 与每日未启动告警均已退役/);
+  assert.match(proof, /无变化、无待执行请求或显式恢复则不跑重测试/);
+  assert.match(proof, /全部 first-parent 提交与有效审查记录，不只读取两端净 diff/);
   assert.match(proof, /发布[\s\S]+验证器证明同一 exact main-history target/);
 
   const overview = await readFile(path.join(docsRoot, 'overview/index.mdx'), 'utf8');

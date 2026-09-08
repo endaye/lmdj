@@ -996,10 +996,10 @@ class ChangeScopeTest(unittest.TestCase):
             self.module.validate_manifest(broken, self.policy)
 
     def test_dispatch_lane_input_is_declared_and_threaded(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        self.assertIn("      lanes:", workflow)
-        self.assertIn("REQUESTED_LANES: ${{ inputs.lanes }}", workflow)
-        self.assertIn('--lanes "${REQUESTED_LANES:-}"', workflow)
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertNotIn("inputs.lanes", workflow)
+        self.assertIn("batch_request:", workflow)
+        self.assertIn("batch_execution.py prepare", workflow)
 
     def test_invalid_sha_noncanonical_path_duplicate_path_and_unknown_status_fail(self):
         with self.subTest("invalid sha"):

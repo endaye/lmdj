@@ -125,6 +125,17 @@ class Entry:
     def control(self, payload):
         self.authenticate()
         source, run = self.event(payload)
+        # Read-only provenance for actual callback-chain audits. This proves
+        # authenticated source identity, not admission, health or chain depth.
+        # Never print the raw event, credentials or unvalidated source hints.
+        print(self_test.canonical_json({
+            "schema": "lmdj.ci-source-witness.v1",
+            "current": {"run_id": self.runtime.current["run_id"],
+                        "attempt": self.runtime.current["attempt"],
+                        "control": self.runtime.control, "event": self.env["GITHUB_EVENT_NAME"]},
+            "source_family": source,
+            "source_run": {"id": run["id"], "attempt": run["run_attempt"]} if run is not None else None,
+        }), flush=True)
         if source in {"push", "schedule"}:
             return self.runtime.reconcile(execute=True)
         if source == "batch":
@@ -162,7 +173,7 @@ class Entry:
         # payload. Each operation has its own visible result; no execute path.
         for operation in [*operations, "drain"]:
             try:
-                result = reporter.execute(operation, **({"run_id": run["id"], "attempt": run["run_attempt"]}
+                result = reporter.execute(operation, limit=1, **({"run_id": run["id"], "attempt": run["run_attempt"]}
                     if operation in {"legacy", "review"} else {}))
             except Exception:
                 result = {"status": "error", "why": "authenticated report source or outbox state is unresolved",

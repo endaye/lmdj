@@ -93,7 +93,7 @@ M1 当前固定为 `1.0.*.*`。
 `BUILD` 是产品集成构建号。
 
 - 在同一正式产品版本线中单调递增，跨 Milestone 不重置。
-- 每个通过保护分支 PR Gate、值得被测试或分发的 Product Assembly 分配一个新
+- 每个经保护分支 PR 评审合入、值得被测试或分发的 Product Assembly 分配一个新
   `BUILD`。
 - 新 Build 必须来自 `main` 上一个精确、CI 已验证的提交。
 - Build 可以有间断；失败或放弃的编号不得复用。
@@ -123,7 +123,7 @@ for another PATCH-level Assembly change.
 - Patch 从已发布 tag 上的短命 `fix/<task>` 分支产生，用完即删；仓库不设 `release/*`
   或 `hotfix/*` 长期分支。新 Build 的分配遵循
   [`git-workflow.md`](git-workflow.md) 的 Release cut 规则：功能与 control-plane
-  改动先各自合入 `main`，切版 PR 只携带分配材料并经 Integration Queue 合入。
+  改动先各自合入 `main`，切版 PR 只携带分配材料并经当前 head 评审 squash 合入。
 
 示例：
 
@@ -140,7 +140,7 @@ Channel 与四段数字版本分开记录：
 | Channel | 用途 | 最低门禁 |
 | --- | --- | --- |
 | `canary` | 每个可构建候选，供自动化和开发者快速发现问题 | 编译成功、基础单测通过 |
-| `dev` | 一个 PR Gate 或纵向开发阶段完成，供团队集成验证 | 全量 CI、对应 E2E、版本一致性检查通过 |
+| `dev` | 一个集成或纵向开发阶段完成，供团队集成验证 | 全量 CI、对应 E2E、版本一致性检查通过 |
 | `beta` | 已具备真实用户价值，进入受控用户测试 | 用户流程、数据恢复、平台/设备验收通过 |
 | `stable` | 可正式交付的生产版本 | Release Checklist、回滚、签名、发布和生产验证通过 |
 
@@ -173,7 +173,7 @@ M1 Headless Core Proof 最多进入 `dev`；它没有 Creator UI 和真实用户
 操作入口是 `scripts/release.sh promote TAG CHANNEL --deployment-run HOST=RUN_ID ...`
 `[--evidence PATH ...]`。它先运行 exact-tag remote audit 且要求全部通过，再校验转换与门禁并
 下载核对部署证据，然后只向工作区写入一份晋级证据文档与一条 ledger 记录，并打印下一步。它不
-push、不改 GitHub。这两个文件作为 docs PR 经 Integration Queue 评审合入，与 release intent
+push、不改 GitHub。这两个文件作为 docs PR 经当前 Git workflow 评审合入，与 release intent
 的绑定方式一致。`audit` 会核验 `promotions` 的结构与顺序、`max_channel`，以及每条记录的部署
 run 仍然存在、属于该 Host 的部署 workflow、由 `main` 上的 `workflow_dispatch` 触发并成功。
 保留制品有生命周期，因此审计不重新下载 `evidence.json`；记录中的 SHA-256 与证据文档是持久
@@ -581,9 +581,11 @@ intent 恰好引用一种完整证据，旧 `self_test_evidence` 或新增 `batc
 不得混用。没有 reference 不能退回旧 scope。两种来源都必须引用一次通过的完整
 16-suite 自测；旧 `lmdj.ci-scope.v2` 的 14 lanes 即使 `mode=full`、`trusted_head=true`、
 `Change Scope` / `PR Gate` 均绿色，也只能解释旧协议，不能绕过新候选的 TSan / Release
-stress 要求。旧 producer 兼容入口的删除仍须完成新 producer + consumer 的另行授权真实演练；
-入口暂留并不授予 legacy prospective fallback。当前 consumer 可先消费手动自测，定时切换
-不影响该发布证据契约。日测不是日发版，自测红色不构成 PR merge gate；正式版本仍手动发布。
+stress 要求。T5 切换以新 producer + consumer 的真实演练为前置条件；未通过不得
+合入切换。切换后 `ci.yml` 只保留 reusable 执行，不再接受每日或手动产品请求；
+历史完整来源的严格 reader 保留，不能退回 legacy prospective fallback。
+新手动全量与自动增量共用持久调度，完整候选证据契约不变。
+自测红色不构成 PR merge gate；正式版本仍手动发布。
 
 Owner 在 reviewed intent 中保留 `merged_main_run_id` 与 exact `target_revision`，另增闭合的
 `self_test_evidence`：`schema=lmdj.ci-self-test.v1`、`request_kind`、`control_revision`、
@@ -598,8 +600,12 @@ protected main 历史，且 control 不早于可信 producer 部署。必须精�
 
 新的 verdict artifact 当前保留 30 天。过期或缺失为 `unverifiable`；身份、摘要、完整性或
 结果冲突为 `conflict`；传输与分页故障为 `external-error`。恢复须另行授权在 ref `main` 上
-以 candidate SHA 为 `ci.yml` 的 `target` 输入新 dispatch，并独立 review intent 更新；不能把 SHA
-用作 dispatch ref，也不能 Re-run jobs（producer 当前只支持 attempt 1）。已 `published`
+向 `self-test-report.yml` 发送 `batch_operation=reconcile`，`batch_request` 为闭合
+`{"id":"<new-stable-request-id>","kind":"candidate","target":"<exact-main-SHA>"}`，
+`journal_config` 留空以使用可信源码中的固定调度器，并独立 review intent 更新。
+同 ID 同目标的重送只恢复原请求；真正重新测试使用新 ID。显式诊断使用 `kind=node`，
+同样固定全 16-suite，不推进自动 processed SHA，也不被后续 main 替换。
+不能把 SHA 用作 dispatch ref，也不能 Re-run jobs（producer 当前只支持 attempt 1）。已 `published`
 的旧协议 intent 继续原只读审计，新协议 intent 的持久 reference 纳入 release plan digest，
 并由 `lmdj.release-plan-marker.v2` 显式保留完整 CI 身份；fresh remote audit 对比 marker
 与 intent，旧 v1 marker 不能证明新添的自测引用。Published 读取当时的 recorded attempt，
@@ -624,7 +630,8 @@ focused、none、债务、旧 policy、缺 artifact 或跨 SHA/attempt 拼接一
 可读取 recorded attempt 的稳定来源/target/control/event provenance 而不再次要求短期 artifact
 或永远不变的 current policy；仍必须通过实际 immutable tag、signer、Release、assets 和
 精确 v3 marker 验证。allocated/abandoned/superseded 不能使用这条历史例外。
-本协议不自动选择候选，不修改既有 intent，也不取消旧手动 full 入口或改变自动测试触发。
+本协议不自动选择候选，不修改既有 intent。手动精确 full 能力由上述统一入口保留；
+旧 `ci.yml` dispatch 的退役不删除历史来源验证，也不降低完整证据要求。
 
 历史例外（historical exception）只解释控制面生效前不可改写的 exact 只读事实。只有 remote
 audit 可以报告 `ok-with-historical-exception`，并必须在 human/JSON evidence 中显式列出；

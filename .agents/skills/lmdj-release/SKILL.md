@@ -81,7 +81,7 @@ Channel promotion is `scripts/release.sh promote TAG CHANNEL --deployment-run
 HOST=RUN_ID ... [--evidence PATH ...]`. It is a local mutation of the ledger and
 one evidence document only: it audits first, verifies every Host deployment
 run's retained evidence for the exact tag, and never edits the GitHub Release.
-The written files ship as a docs Pull Request through the Integration Queue.
+The written files ship as a reviewed docs Pull Request under the current Git workflow.
 `stable` is refused; the open question it points at is the authority, not this
 skill. Promotion requires a published intent and both Host deployments to have
 succeeded; it is a separate boundary from deployment and does not follow from it.
@@ -100,16 +100,22 @@ controller artifacts (trusted durable-claim attestation, not latest journal
 replay), the complete three-file verdict bundle and authenticated API jobs.
 See the version governance for the closed reference fields and cutover.
 
-An existing valid daily or node verdict may be reused for the same exact target.
-If fresh evidence is required, separately authorize `ci.yml` dispatch on ref
-`main` with `target` equal to the candidate SHA (not a SHA as ref).
-Use the self-test inputs, without lane selection or a queue ticket. The trusted
-control revision may be newer than the candidate. Record only the validated
-artifact's facts; never invent or backfill a digest or reference.
+An existing valid complete verdict may be reused for the same exact target,
+including retained historical daily/node evidence. Fresh complete verification
+uses `self-test-report.yml` on ref `main`, `batch_operation=reconcile`, and
+`batch_request={"id":"<stable-request-id>","kind":"candidate","target":"<exact-main-SHA>"}`.
+Leave `journal_config` empty to use the repository's authenticated fixed scheduler.
+Use `kind=node` for an explicit diagnostic rather than candidate selection.
+Both kinds request all 16 suites and share the durable execution budget;
+neither moves automatic processing progress or authorizes a release.
+Redelivering the same ID and target reconciles the original request; a genuinely
+new test needs a new ID. Do not use lane selection, a queue ticket, or a SHA as
+the dispatch ref. The trusted control revision may be newer than the candidate.
+Record only validated artifacts' facts; never invent or backfill a reference.
 
 Verdict artifacts currently retain 30 days. Missing/expired evidence is
 `unverifiable`; mismatched, incomplete or non-passing evidence is `conflict`.
-Recovery requires a new dispatch on main for the same target and a separately
+Recovery requires a new explicit request ID on main for the same target and a separately
 reviewed intent update, not Re-run jobs: the producer currently accepts attempt
 1 only. Only actually `published` history may use the recorded attempt without
 re-adjudicating ephemeral retention; allocated/abandoned/superseded is not this

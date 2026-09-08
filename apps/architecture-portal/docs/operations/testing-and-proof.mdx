@@ -3,7 +3,7 @@ title: Testing 与 Proof
 area: operations
 status: implemented
 owners: [core, quality]
-source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/quality/2026-08-24-creator-capture-precommit-crop.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md, docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md, docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md, docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md, docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md, docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/creator-web-deploy.sh, scripts/web-toolchain-conformance.sh, .github/workflows/pr-review.yml, .github/workflows/self-test-report.yml, scripts/ci/self_test.py, scripts/ci/self_test_report.py, scripts/ci/elastic_runner.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml]
+source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/quality/2026-08-24-creator-capture-precommit-crop.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md, docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md, docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md, docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md, docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md, docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/creator-web-deploy.sh, scripts/web-toolchain-conformance.sh, .github/workflows/pr-review.yml, .github/workflows/self-test-report.yml, scripts/ci/self_test.py, scripts/ci/self_test_report.py, scripts/ci/elastic_runner.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, scripts/ci/incremental_entry.py, scripts/ci/incremental_storage.json, scripts/ci/test_scope.py, scripts/ci/batch_runtime.py, scripts/ci/report_runtime.py, scripts/ci/review_discovery_runtime.py]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -31,9 +31,9 @@ Host SemVer 是不同版本轴。
 
 ## Release 验证边界
 
-发布保持人工选择、手动操作。获授权的候选可以复用受信 daily/node 自测，但必须由发布
+发布保持人工选择、手动操作。获授权的候选可以复用受信完整自测（包括有效历史证据），但必须由发布
 验证器证明同一 exact main-history target、可信控制修订、完整固定 suite 集合、
-精确 run/attempt、全部必需结果与未过期的 artifact；每日绿色不自动选候选或发布。
+精确 run/attempt、全部必需结果与未过期的 artifact；测试绿色不自动选候选或发布。
 具体协议、兼容旧证据和拒绝条件以 [版本与发布](/operations/version-and-release/) 为准，
 不能由 PR merge、局部测试或缓存推断。缺失/过期的证据必须通过新的获授权请求补齐，
 不把旧 run 的部分重跑拼成完整通过。已发布历史仍按不可变 tag/Release/assets 审计。
@@ -70,8 +70,10 @@ findings 处置和未覆盖范围；处理 thread 不等于未经检查自动清
 这不是模型对 merge 的自动裁决，clean review 不应产生阻塞用的 inline thread。
 实际 merge SHA、review 证据和动作授权分别核验；空 check 列表和 NEUTRAL 不是通过。
 
-`pr-review.yml` 选择一个 Claude 后端，并另运行 Grok。两者只读取可信控制代码与
-作为数据的 PR diff，不 checkout 或执行 PR head，也没有 PR 写权限。短 publisher
+`pr-review.yml` 按 GLM → Kimi → Grok 有界回退；获得一次有效 findings 与范围结果即停止，
+发现代码问题不触发换模型。三者均不可用时保留真实失败并通过 outbox 报告 Issue，
+不能伪造 clean。模型只读取可信控制代码与作为数据的 PR diff，不 checkout 或执行
+PR head，也没有 PR 写权限。短 publisher
 校验结构化结果及当前 head，用固定 `commit_id` 发布 COMMENT review；模型不生成
 合并授权。可信发布器绑定 repository、PR、head、run、attempt 和 backend，liveness
 核对同一身份的模型、publisher 与 bot review。发布过程中 head 移动会留下旧 commit
@@ -79,17 +81,32 @@ findings 处置和未覆盖范围；处理 thread 不等于未经检查自动清
 真实缺凭据、API/模型故障及人工 resolve 的远端验收仍分别记录，不从本地测试推导。
 若线上仍要求旧 required contexts 或 strict，报告切换未完成，不借普通 shipping 权限绕过。
 
-## 每日与节点自测
+## 主干增量批次与手动全量
 
-每天 16:00 UTC 和显式重要节点请求共享完整自测入口，目标固定为已验证的 main-history
-SHA，不按 PR 路径跳过 suite；不在每次 PR 或 main push 重跑全量，也不保留重复 Nightly
-cron。完整批次包括原 Nightly 两个 native stress suite。独立 suite 在另一 suite 失败后
-仍收集结果，构建失败后的依赖步骤可以停止；共享重型锁继续保护真实资源容量。
-仅接受 attempt 1，重测创建新的同目标 dispatch，不能混合旧 attempt 成功结果。
-失败、缺结果和基础设施故障都可见，日测报告 Issue，不阻碍普通或修复 PR 合并。
-这是每日自测，不是每日发版。
+main push 唤醒 `self-test-report.yml` 的轻量控制器。同一时间最多一个自动批次；
+新合入只更新 pending，不取消当前固定目标。下一轮汇总 processed 到最新 main 的
+全部 first-parent 提交与有效审查记录，不只读取两端净 diff。确定性旧／新策略下限与
+head／policy 绑定的 AI 建议取并集，标签仅展示；合入后不再调用 AI。
 
-手动自测批次以 `self-test-verdict-<sha>-<run>-<attempt>` artifact 保留结论；
+合规无消费者说明文档可为 none；局部改动执行相关 Host／模块及行为和依赖测试；
+底层、广泛或无法可靠分类的改动为 full。完整集合仍含全部 16 suites，包括 sanitizer
+和两组 stress。独立 suite 在其他 suite 失败后继续收集结果，构建阻断如实记录。
+共享重型锁继续保护真实资源容量；短控制器锁不得跨重型执行持有。
+processed 只是处理进度：none／focused 成功不能清除历史失败或未覆盖债务。
+
+手动诊断／候选使用同一 workflow 的 `batch_operation=reconcile` 与闭合
+`batch_request={"id":"<stable-request-id>","kind":"candidate","target":"<exact-main-SHA>"}`；
+诊断改用 `kind=node`，ref 保持 `main`，`journal_config` 留空使用可信固定配置。
+两种请求都强制完整 16-suite，目标不随 main 漂移，不推进自动 processed。重送同 ID
+恢复原请求；真正重新测试使用新 ID，而不是混合 Re-run jobs 的不同 attempt。
+
+每日产品 cron 与每日未启动告警均已退役。独立轻量健康巡检按 UTC 每小时
+7、22、37、52 分运行，用于恢复已有 pending、请求和报告，不能因日期启动产品测试。
+完成通知链有平台深度上限，巡检提供独立恢复；Actions 延迟或不可用时不能承诺
+15 分钟内接续，保留手动恢复入口。无变化、无待执行请求或显式恢复则不跑重测试。
+
+以下为保留的旧完整来源及旧报告器历史说明，不是当前 dispatch／定时配置：
+旧手动自测批次以 `self-test-verdict-<sha>-<run>-<attempt>` artifact 保留结论；
 `self-test-report.yml` 在 `Core CI` 完成后使用默认分支代码读取数据，核验稳定 workflow
 身份、main 控制修订、目标属于当前 main 历史、精确 attempt，并复用共享的完整证据
 校验器。目标可以晚于控制修订；两者分别验证属于 main 历史，不要求目标是控制修订的
@@ -103,19 +120,18 @@ cron。完整批次包括原 Nightly 两个 native stress suite。独立 suite �
 观察、关闭后再现重新打开；同一观察重送与写入响应丢失后的重试先重读 marker，不
 重复写入。一次绿色不自动关闭 Issue。`invalid` 为基础设施问题，合法 `superseded`
 不制造缺陷。共享证据校验失败与 API 故障显示 `reporting-error`，不改变测试 verdict。
-报告队列保留 pending，仅 main 控制分支的完成事件会启动回调，旧 queue 的任务分支
-不触发无关补扫。自动回调和每日检查从“保留期最近 30 天”与已验证 producer 上线
-下界的较晚者开始扫描，每类至多 100 个完成 run。producer 下界是
-[#757](https://github.com/endaye/lmdj/pull/757) 的 squash，时间仅用于缩小查询；每个
-run 仍单独证明控制修订不早于该 producer 且属于 main 历史。旧控制修订即使新 rerun
-也明确跳过，部署后的启动失败仍可见，未知祖先关系不当作 legacy 吞掉。
-窗口满额明确报错而不冒充恢复完成；手动报告重试默认 `reconcile: false`，只处理指定
-run，不因其他历史失败或满窗口再次失败。需整窗补查时才显式选择 `reconcile: true`。
-报告器重试仅补报告；重做自测须对同一精确目标发起 new dispatch，不能 rerun 原 run
-（当前 producer 拒绝后续 attempt）。产品修复后则明确选择并 dispatch 修复后的 SHA。
+旧来源的 producer 下界是 [#757](https://github.com/endaye/lmdj/pull/757) 的 squash；
+每个 run 单独证明控制修订不早于该 producer 且属于 main 历史。旧控制修订即使新
+rerun 也明确跳过，部署后的启动失败仍可见，未知祖先关系不当作 legacy 吞掉。
+旧扫描和 dispatch 参数只保留在切换前的历史修订，不是当前操作入口。重做自测使用
+上文的 durable node／candidate 请求和新 ID，明确选择固定 SHA；不要 rerun 旧执行。
 
-独立 hosted 检查每天 18:00 UTC 核对当天 16:00 UTC sweep 是否存在，进行中或排队
-也算已触发；该检查运行在 Actions 上，Actions 自身未运行检查的那天仍属未知。
+旧 18:00 UTC 缺批检查已退役，不再发送每日缺测告警。当前报告经过持久 outbox，
+先保存意图和写入 claim，再核验业务 receipt；响应丢失先查证，不盲目重复 POST。
+历史报告重试使用 `batch_operation=report-legacy` 及精确 `review_run_id`／`review_attempt`，
+这两个复用字段在该操作中表示 Core CI 来源。`report_config` 留空使用固定 pair。
+自动 PR Review discovery 保存冻结 inventory 和跨轮 cursor，未解决或过期证据明确保留。
+执行轮不做附带报告扫描；非执行轮做有界报告和发现，积压留待接续，报告重试不重跑测试。
 报告器不合并 PR、不创建版本、不发布或部署。
 
 分配 Product Build 或引入 snapshot 的 Task 在合并后核验实际 introducing SHA 的

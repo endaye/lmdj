@@ -4,6 +4,8 @@ HTTP timing, workflow callback depth and step continue-on-error/needs semantics
 remain platform integration obligations. These fixtures do not enable T5.
 """
 from copy import deepcopy
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import sys
@@ -122,6 +124,66 @@ class EntryTests(unittest.TestCase):
     def test_committed_manifest_ignores_dirty_operator_file(self):
         (self.f.root / entry.STORAGE_PATH).write_text('{"scheduler":"untrusted"}')
         self.assertEqual(entry.load_storage(self.f.root, self.env), self.config)
+
+    def test_authenticated_roots_emit_one_closed_source_witness(self):
+        for kind in ("push", "schedule"):
+            with self.subTest(kind=kind):
+                self.scheduler.runs[17]["event"] = kind
+                payload = self.push() if kind == "push" else {"repository": self.push()["repository"]}
+                payload["private_fixture"] = "must-not-appear"
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    answer = self.make(kind=kind).control(payload)
+                lines = output.getvalue().splitlines()
+                self.assertEqual(len(lines), 1)
+                self.assertEqual(json.loads(lines[0]), {
+                    "schema": "lmdj.ci-source-witness.v1",
+                    "current": {"run_id": 17, "attempt": 1, "control": self.sha, "event": kind},
+                    "source_family": kind, "source_run": None})
+                self.assertEqual(set(answer), {"schema", "action", "reason", "request", "executor", "state"})
+                self.assertNotIn("must-not-appear", output.getvalue())
+
+    def test_authenticated_callback_witness_binds_actual_parent_not_depth(self):
+        self.make().control(self.push())
+        payload = self.finish(17)
+        self.add_run(18)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = self.make(18, "workflow_run").control(payload)
+        self.assertEqual(json.loads(output.getvalue()), {
+            "schema": "lmdj.ci-source-witness.v1",
+            "current": {"run_id": 18, "attempt": 1, "control": self.sha, "event": "workflow_run"},
+            "source_family": "batch", "source_run": {"id": 17, "attempt": 1}})
+        self.assertIsNone(result["state"]["active"])
+        self.assertIn("/repos/endaye/lmdj/actions/runs/17/attempts/1", [path for _, path, _ in self.calls])
+        # An authenticated idle parent is still traceable without inventing
+        # admission or a depth number for the next completed callback.
+        idle_payload = self.finish(18)
+        self.add_run(19)
+        self.calls.clear()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            idle = self.make(19, "workflow_run").control(idle_payload)
+        self.assertEqual(json.loads(output.getvalue())["source_run"], {"id": 18, "attempt": 1})
+        self.assertEqual(idle["action"], "idle")
+        self.assertFalse(self.writes())
+
+    def test_failed_current_or_source_authentication_emits_no_witness(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            with self.assertRaises(Exception):
+                self.make().control(dict(self.push(), deleted=True))
+            self.scheduler.runs[17]["event"] = "workflow_dispatch"
+            with self.assertRaises(Exception):
+                self.make().control(self.push())
+            self.scheduler.runs[17]["event"] = "workflow_run"
+            source = self.source(".github/workflows/ci.yml", 100)
+            payload = self.callback(source)
+            payload["workflow_run"]["head_sha"] = "f" * 40
+            with self.assertRaises(Exception):
+                self.make(kind="workflow_run").control(payload)
+        self.assertEqual(output.getvalue(), "")
+        self.assertFalse(self.writes())
 
     def test_wrong_head_and_missing_committed_manifest_are_rejected(self):
         with self.assertRaises(Exception):
@@ -251,6 +313,8 @@ class EntryTests(unittest.TestCase):
         operations = []
         def run(reporter, operation, **kwargs):
             operations.append(operation)
+            self.assertEqual(kwargs.get("limit"), 1,
+                "why: an automatic report monopolizes the controller; remedy: bound each attempt while preserving durable backlog")
             if operation == "batches":
                 raise OSError("fixture planning failed")
             return actual(reporter, operation, **kwargs)

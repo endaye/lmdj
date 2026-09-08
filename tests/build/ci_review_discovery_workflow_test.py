@@ -95,10 +95,10 @@ class DiscoveryWorkflowTests(unittest.TestCase):
     def test_manual_operation_existing_lock_and_no_output(self):
         condition = field(self.controller, 'if', 4)
         for value in ("github.event_name == 'workflow_dispatch'", "github.ref == 'refs/heads/main'",
-                      "github.run_attempt == '1'", "inputs.batch_operation == 'report-discovery'"):
+                      "github.run_attempt == '1'"):
             self.assertIn(value, condition)
         self.assertIn('group: self-test-report', self.controller)
-        self.assertEqual(self.controller.count('BATCH_WRITER_LOCK: self-test-report'), 5)
+        self.assertEqual(self.controller.count('BATCH_WRITER_LOCK: self-test-report'), 7)
         self.assertNotIn('${{', self.code)
 
 

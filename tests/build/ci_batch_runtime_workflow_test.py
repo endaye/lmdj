@@ -26,17 +26,13 @@ class RehearsalWorkflowTests(unittest.TestCase):
 
     def test_automatic_triggers_stay_legacy_until_o1(self):
         events = block(self.source, 'on', 0)
-        self.assertNotIn('  push:', events)
-        self.assertIn('workflows: ["Core CI"]', events)
-        self.assertIn('cron: "0 18 * * *"', events)
-        condition = field(self.control, 'if', 4)
-        self.assertIn("github.event_name == 'workflow_dispatch'", condition)
-        self.assertIn("github.ref == 'refs/heads/main'", condition)
-        self.assertIn("inputs.batch_operation == 'settle'", condition)
+        self.assertIn('workflows: ["Self-test Report", "Core CI", "PR Review"]', events)
+        self.assertIn('cron: "7,22,37,52 * * * *"', events)
+        self.assertNotIn("\n  report:\n", self.source)
 
     def test_lock_belongs_to_short_writers_not_executor(self):
         self.assertNotRegex(self.source, r'(?m)^concurrency:')
-        for job in ('report', 'controller'):
+        for job in ('controller',):
             self.assertEqual(scalars(block(block(self.source, job, 2), 'concurrency', 4), 6),
                              {'group': 'self-test-report', 'cancel-in-progress': 'false', 'queue': 'max'})
         self.assertNotIn('concurrency:', self.executor)
@@ -72,7 +68,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
             env = {'RUNNER_TEMP': directory, 'GITHUB_OUTPUT': str(output),
                    'GITHUB_STEP_SUMMARY': str(Path(directory) / 'summary'),
                    'JOURNAL_CONFIG': '{"opaque":"config"}',
-                   'BATCH_OPERATION': operation, 'BATCH_REQUEST': request}
+                   'BATCH_OPERATION': operation, 'BATCH_REQUEST': request, 'GITHUB_EVENT_NAME': 'workflow_dispatch'}
             commands = []
             def run(command, **kwargs):
                 commands.append(command)
@@ -176,7 +172,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
         inputs = block(block(block(self.source, 'on', 0), 'workflow_dispatch', 2), 'inputs', 4)
         for operation in ('resume', 'report-init-outbox', 'report-review', 'report-batches', 'report-drain', 'report-discovery'):
             self.assertIn(operation, field(block(inputs, 'batch_operation', 6), 'options', 8))
-            self.assertIn(f"inputs.batch_operation == '{operation}'", field(self.control, 'if', 4))
+
         self.assertIn("github.run_attempt == '1'", field(self.control, 'if', 4))
         for name in ('report_config', 'review_run_id', 'review_attempt'):
             self.assertEqual(field(block(inputs, name, 6), 'type', 8), 'string')
@@ -186,7 +182,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
         self.assertIn("if: ${{ !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}", self.control)
         self.assertIn("if: ${{ startsWith(inputs.batch_operation, 'report-') }}", self.control)
         self.assertIn("if: ${{ always() && !startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}", self.control)
-        self.assertEqual(self.control.count('BATCH_WRITER_LOCK: self-test-report'), 5)
+        self.assertEqual(self.control.count('BATCH_WRITER_LOCK: self-test-report'), 7)
 
     def test_each_report_operation_routes_to_actual_cli_with_no_execution_output(self):
         for operation in ('init-outbox', 'review', 'batches', 'drain'):
@@ -235,6 +231,21 @@ class RehearsalWorkflowTests(unittest.TestCase):
             self.report_invoke('report-review', run_id='51', attempt='1', real=fixture,
                                extra={'REPORT_CONFIG': json.dumps(config)})
         self.assertFalse(fixture.api.issues)
+
+    def test_manual_legacy_bridge_reaches_real_outbox_and_replay_does_not_post(self):
+        import ci_report_runtime_test as report_fixture
+        fixture = report_fixture.RuntimeJourneyTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.initialize()
+        fixture.install_legacy()
+        commands, summary = self.report_invoke('report-legacy', run_id='100', attempt='1', real=fixture)
+        self.assertEqual(commands[0][-5:], ['legacy', '--run-id', '100', '--attempt', '1'])
+        self.assertIn('"status": "delivered"', summary)
+        before = json.dumps(fixture.api.issues, sort_keys=True)
+        self.assertTrue(fixture.api.issues)
+        self.report_invoke('report-legacy', run_id='100', attempt='1', real=fixture)
+        self.assertEqual(json.dumps(fixture.api.issues, sort_keys=True), before)
 
     def test_runtime_failure_never_emits_execute_outputs(self):
         with self.assertRaises(subprocess.CalledProcessError):

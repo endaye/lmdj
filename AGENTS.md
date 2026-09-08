@@ -198,8 +198,10 @@ stress tier; run it explicitly when changing lock-free or concurrent code.
 `proof` also excludes the stress tier. The `core-asan` CI job runs `full` then
 `stress`, and `core-asan-macos` selects the `native` label. These belong to
 selected incremental main batches and explicit complete self-tests, not a Pull
-Request merge gate. There is no daily product-test requirement in the target
-strategy; legacy automatic triggers remain until the authorized T5 switch.
+Request merge gate. Main pushes and completed batches wake the incremental
+controller; later changes accumulate behind one fixed-target active batch.
+There is no daily product test. Lightweight health ticks recover pending work,
+not date-based test requests; idle ticks execute no product tests.
 `core-asan-macos` covers native tests only: the
 Python-hosted tests preload the sanitizer runtime into CPython, which does not
 work on arm64 macOS, so Linux `core-asan` owns that coverage.

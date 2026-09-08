@@ -50,10 +50,10 @@ Those remain separate authorization and verification boundaries.
 
 ## Self-test triage
 
-The approved incremental main-only strategy replaces daily product tests, not
-manual exact-candidate full verification. Its automatic T5 switch is not yet
-enabled by these governance edits: current manual controller/report operations
-coexist with legacy automatic triggers until the authorized cutover.
+Incremental main-only testing replaces daily product tests, not manual
+exact-candidate full verification. Main pushes, relevant completion callbacks
+and lightweight health ticks enter the same authenticated controller. The tick
+recovers existing work without creating date-based product-test requests.
 
 The incremental report runtime consumes authenticated selected batch results
 and all-backend review-infrastructure failures through a durable outbox.
@@ -97,43 +97,57 @@ does not execute product tests, mutate old results or change result colors.
 If the storage API itself is unavailable, persistence cannot be promised:
 keep the error visible and do not advance scheduler state on fabricated data.
 
-### Legacy reporter during the trigger transition
+### Historical legacy reporter
 
-The retained legacy adapter is not the incremental reporting policy. Until T5
-retires the old schedule and daily-missing alert together, a legacy
-`self-test-missing` Issue means the daily batch did not start; the check that
-files it runs on GitHub Actions and cannot report a day on which Actions did
-not run it, so a day with no `Self-test Report` run at all is unchecked, not
-clean.
+The old daily product schedule and daily-missing alert are retired. Keep old
+Issues and source records; absence of a historical daily run was unchecked,
+never proof of success. Historical implementation details remain in the
+revision before trigger cutover, not as current dispatch instructions.
 
-That legacy reporter is a bounded recovery tool, not an infinite event store. Main
-completion callbacks and daily checks reconcile retained runs since the later
-of the 30-day retention boundary and the verified producer's scan floor.
+The legacy source reader retains the verified producer's scan floor.
 The first producer is PR #757's squash `22247897e9163a3f34e15f564bec133419d1f177`;
 its committer time, `2026-09-07T12:20:36Z`, conservatively precedes the PR's
 `merged_at` by one second. Time only narrows queries: each run independently
 proves control ancestry from that producer and membership in main history.
 Older control revisions, including their recent reruns, are explicitly legacy;
 post-deployment startup failures remain visible, and unknown/diverged ancestry
-fails closed. Non-main queue completion callbacks do not start this reporter.
+fails closed. A selected legacy request without a verdict is an infrastructure
+observation; old sweeps that never selected that protocol are not relabelled
+as failed self-tests. Incremental journal progress and debt must not expire
+with artifacts. The historical adapter is not a second automatic product-test
+path; only the exact-source recovery entry below remains supported.
 
-The scan is capped at 100 per allowed event; reaching the cap is a visible
-`reporting-error`, not proof of recovery. A maintainer must explicitly retry
-affected run IDs after an outage or overflow. Manual reporter dispatch defaults
-to `reconcile: false`, processing only that run so unrelated history or a full
-scan window cannot block its recovery; set `reconcile: true` only to request
-the wider scan. A run whose selected request has no verdict is an
-infrastructure observation; legacy sweeps that have not selected the new
-self-test path are not relabelled as failed self-tests. Verify the configured
-`self-test` label and default assignee during rollout before enabling reports.
-To repeat a self-test, start a new dispatch for the same exact target; do not
-rerun the old run because the current producer rejects later attempts. After
-a product fix, explicitly choose and dispatch the fixed target. Reporter-only
-retries still reference the original run ID and do not execute tests again.
-These retention, scan-floor and legacy dispatch rules describe only that
-adapter; incremental journal progress/debt must not expire with artifacts.
-The T5 switch must verify its own main wakeup, completion recovery and idle
-behavior before this legacy automatic path is retired.
+### Current bounded recovery
+
+PR Review discovery retains a frozen run inventory and metadata cursor across
+bounded scans; new runs join a later round instead of replacing unfinished
+work. Every observation authenticates its exact source/run/attempt before outbox
+admission; delivery separately requires a verified receipt. Unresolved identity,
+incomplete pagination and expired
+evidence stay visible, not clean reviews or proven all-backend failures.
+
+Execution admission and outputs precede ancillary reporting. Execution rounds
+release the short lock without report scans. Non-execution rounds perform
+bounded report/discovery work and retain backlog for later callbacks or health
+ticks. The limit bounds observations, not a guaranteed HTTP duration; Actions
+outages and scheduling delays cannot be hidden by an availability promise.
+
+At cutover, inventory old Core CI runs/attempts, wait for in-flight runs, and
+retain delivery, no-report, unresolved or retention-lost dispositions. Do not
+erase uncertain history to declare migration complete. Historical exact-run
+report retries use `self-test-report.yml` on ref `main`,
+`batch_operation=report-legacy`, and exact `review_run_id` / `review_attempt`
+(shared UI fields identifying the legacy Core CI source in this operation).
+Leave `report_config` empty for the authenticated fixed scheduler/outbox pair.
+The legacy reader preserves source authentication but does not restore direct
+business writes or execute tests. Manual reruns of historical workflow snapshots
+are exceptions requiring exact-identity inspection, not new supported full-test
+requests assumed to be automatically covered.
+
+Fresh diagnostics and candidates use explicit durable node/candidate requests
+with a new ID and exact main-history target; see `version-management.md` §12.1.
+Reporter retries keep the original source run/attempt and cannot recolor results
+or start another product-test batch.
 
 ## Migration and history
 

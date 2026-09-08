@@ -1,5 +1,5 @@
 name: Core CI
-run-name: Core CI / ${{ inputs.queue_ticket || (github.event_name == 'schedule' && 'sweep main') || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && format('self-test {0}', inputs.target || github.sha)) || github.ref_name }}
+run-name: Core CI / admitted batch
 
 on:
   workflow_call:
@@ -16,56 +16,6 @@ on:
       SELF_HOSTED_RUNNER_READ_TOKEN:
         description: Existing optional read-only runner inventory credential.
         required: false
-  # Optimistic merge cutover: product verification no longer runs for PRs or
-  # ordinary pushes. PR Review supplies independent advisory feedback.
-  # Both entries below use one fixed-target, complete 16-suite self-test.
-  schedule:
-    - cron: "0 16 * * *"
-  workflow_dispatch:
-    inputs:
-      lanes:
-        description: >-
-          Comma-separated lanes to run, e.g. "web_toolchain,creator". Leave
-          empty to run every lane; an empty dispatch on the exact main SHA is
-          the authorized way to produce full release evidence for a SHA whose
-          own push classified focused. A lane selection is never full evidence.
-        required: false
-        default: ""
-      target:
-        description: >-
-          Exact 40-hex main SHA the self-test batch checks out and judges.
-          Empty means the dispatched ref's tip. Only meaningful with no lane
-          selection and no queue ticket: that is a self-test batch, and the
-          dispatch ref must still be main because workflow_dispatch cannot
-          take a SHA as its ref.
-        required: false
-        default: ""
-      request_kind:
-        description: >-
-          Why an operator dispatched a self-test batch: node (an important
-          milestone) or candidate (a release candidate). Both run to a
-          conclusion even when the target already has one. Only routine
-          scheduled requests may reuse an existing complete conclusion.
-        required: false
-        default: node
-        type: choice
-        options: [node, candidate]
-      queue_ticket:
-        description: Retired compatibility field; nonempty queue tickets are rejected.
-        required: false
-        default: ""
-      queue_pr_number:
-        description: Retired queue compatibility field; leave empty.
-        required: false
-        default: ""
-      queue_base_sha:
-        description: Retired queue compatibility field; leave empty.
-        required: false
-        default: ""
-      queue_head_sha:
-        description: Retired queue compatibility field; leave empty.
-        required: false
-        default: ""
 
 permissions:
   contents: read
@@ -90,21 +40,18 @@ jobs:
     outputs:
       batch-mode: ${{ steps.entry.outputs.batch-mode }}
       batch-execution: ${{ steps.batch.outputs.execution }}
-      manifest: ${{ steps.batch.outputs.execution || steps.scope.outputs.manifest }}
-      trusted-head: ${{ steps.batch.outputs.trusted-head || steps.scope.outputs.trusted-head }}
-      queue-mode: ${{ steps.scope.outputs.queue-mode }}
-      pull-request-body: ${{ steps.scope.outputs.pull-request-body }}
-      resolved-base-sha: ${{ steps.batch.outputs.base || steps.scope.outputs.resolved-base-sha }}
-      resolved-head-sha: ${{ steps.batch.outputs.target || steps.scope.outputs.resolved-head-sha }}
-      # Self-test batch identity (scripts/ci/self_test.py). `self-test` is
-      # true for a schedule or an empty operator dispatch; every formal job
-      # of a batch then checks out
-      # `self-test-target` instead of the ref's tip, and the verdict job
-      # judges the batch under `self-test-identity`.
-      self-test: ${{ steps.batch.outputs.fixed-target || steps.resolve.outputs.self-test }}
-      self-test-action: ${{ steps.batch.outputs.action || steps.resolve.outputs.self-test-action }}
-      self-test-target: ${{ steps.batch.outputs.target || steps.resolve.outputs.self-test-target }}
-      self-test-identity: ${{ steps.resolve.outputs.self-test-identity }}
+      manifest: ${{ steps.batch.outputs.execution }}
+      trusted-head: ${{ steps.batch.outputs.trusted-head }}
+      # Product documentation checks do not consume PR declarations or queue authority.
+      queue-mode: 'false'
+      pull-request-body: ''
+      resolved-base-sha: ${{ steps.batch.outputs.base }}
+      resolved-head-sha: ${{ steps.batch.outputs.target }}
+      # Keep the fixed-target checkout interface for every product job.
+      # Full and focused selection both come from the admitted frozen request.
+      self-test: ${{ steps.batch.outputs.fixed-target }}
+      self-test-action: ${{ steps.batch.outputs.action }}
+      self-test-target: ${{ steps.batch.outputs.target }}
     steps:
       # Reusable workflows inherit the caller's github event/context, not an
       # event_name of workflow_call. A foreign caller with empty batch strings
@@ -118,11 +65,13 @@ jobs:
         run: |
           python3 - <<'PYEOF'
           import json, os, re
-          native = f"{os.environ['GITHUB_REPOSITORY']}/.github/workflows/ci.yml@{os.environ['GITHUB_REF']}"
+          caller = f"{os.environ['GITHUB_REPOSITORY']}/.github/workflows/self-test-report.yml@refs/heads/main"
           request, executor = os.environ['BATCH_REQUEST'], os.environ['BATCH_EXECUTOR']
-          batch = os.environ['CALLER_WORKFLOW_REF'] != native or bool(request) or bool(executor)
+          batch = True
           try:
               if batch:
+                  if os.environ['CALLER_WORKFLOW_REF'] != caller:
+                      raise ValueError('caller is not the durable controller')
                   def unique(pairs):
                       result = {}
                       for key, value in pairs:
@@ -231,182 +180,6 @@ jobs:
           print('action=run')
           print('trusted-head=true')
           PYEOF
-      # Main ref and ancestry are checked before testing a fixed event target.
-      # Partial Actions reruns inherit old successful jobs, so this initial
-      # protocol accepts only attempt 1; retry via a new explicit dispatch.
-      - name: Record the self-test request
-        if: ${{ steps.entry.outputs.batch-mode == 'false' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '')) }}
-        env:
-          REQUEST_KIND: ${{ github.event_name == 'schedule' && 'schedule' || inputs.request_kind || 'node' }}
-          TARGET_INPUT: ${{ inputs.target }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/self-test-request"
-          python3 - "$RUNNER_TEMP/self-test-request/request.json" <<'PYEOF'
-          import json, os, sys
-          json.dump({"evidence_schema": "lmdj.ci-self-test-request.v1",
-                     "request_kind": os.environ["REQUEST_KIND"],
-                     "control_revision": os.environ["GITHUB_SHA"],
-                     "target_revision": os.environ.get("TARGET_INPUT") or os.environ["GITHUB_SHA"],
-                     "target_verified": False,
-                     "run_id": int(os.environ["GITHUB_RUN_ID"]),
-                     "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"])},
-                    open(sys.argv[1], "w"), sort_keys=True)
-          PYEOF
-      - name: Retain the request before validation
-        if: ${{ steps.entry.outputs.batch-mode == 'false' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.lanes == '' && inputs.queue_ticket == '')) }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: self-test-request-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/self-test-request/request.json
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Resolve the self-test target
-        id: resolve
-        if: ${{ steps.entry.outputs.batch-mode == 'false' }}
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          REQUESTED_LANES: ${{ inputs.lanes }}
-          QUEUE_TICKET: ${{ inputs.queue_ticket }}
-          TARGET_INPUT: ${{ inputs.target }}
-          REQUEST_KIND: ${{ github.event_name == 'schedule' && 'schedule' || inputs.request_kind || 'node' }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WORK: ${{ runner.temp }}/self-test
-        run: |
-          set -euo pipefail
-          mkdir -p "$WORK"
-          if [[ -n "${QUEUE_TICKET:-}" ]]; then
-            echo 'why: integration queue admission is retired; remedy: use an authorized ordinary PR merge, or dispatch a self-test without queue inputs' >&2
-            exit 1
-          fi
-          if [[ "$EVENT_NAME" == "schedule" || ( "$EVENT_NAME" == "workflow_dispatch" && -z "${REQUESTED_LANES:-}" && -z "${QUEUE_TICKET:-}" ) ]]; then
-            self_test=true
-          else
-            self_test=false
-          fi
-          {
-            echo "self-test=$self_test"
-          } >>"$GITHUB_OUTPUT"
-          if [[ "$self_test" != "true" ]]; then
-            if [[ -n "${TARGET_INPUT:-}" ]]; then
-              echo 'why: target is only valid for a complete manual self-test; remedy: omit lanes and queue inputs' >&2
-              exit 1
-            fi
-            {
-              echo "self-test-action=none"
-              echo "self-test-target="
-              echo "self-test-identity="
-              echo "self-test-skip-reason="
-            } >>"$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ "$GITHUB_REF" != "refs/heads/main" || "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
-            echo 'why: self-tests require main and a fresh run (attempt 1); remedy: create a new workflow_dispatch on main with the same target, not Re-run jobs' >&2
-            exit 1
-          fi
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
-          git rev-list refs/remotes/origin/main >"$WORK/main-history.txt"
-          history_args=()
-          if [[ "$EVENT_NAME" == "schedule" ]]; then
-            if ! timeout 90s python3 scripts/ci/self_test_history.py \
-              --repository "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --run-id "$GITHUB_RUN_ID" --main-history "$WORK/main-history.txt" \
-              --out "$WORK/last-conclusion.json"; then
-              echo 'why: history lookup exceeded its budget or failed; remedy: run this batch normally and inspect the lookup logs' >&2
-              printf 'null\n' >"$WORK/last-conclusion.json"
-            fi
-            history_args=(--last-conclusion "$WORK/last-conclusion.json")
-          fi
-          python3 - "$WORK/request.json" <<'PYEOF'
-          import json, os, sys
-          json.dump({"kind": os.environ["REQUEST_KIND"],
-                     "target_revision": os.environ.get("TARGET_INPUT") or os.environ["GITHUB_SHA"],
-                     "requested_by": os.environ["GITHUB_ACTOR"]}, open(sys.argv[1], "w"))
-          PYEOF
-          python3 scripts/ci/self_test.py resolve \
-            --request "$WORK/request.json" \
-            --tip "$GITHUB_SHA" \
-            --main-history "$WORK/main-history.txt" \
-            --control-revision "$GITHUB_SHA" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            "${history_args[@]}" \
-            --out "$WORK/resolution.json"
-          python3 - "$WORK/resolution.json" >>"$GITHUB_OUTPUT" <<'PYEOF'
-          import json, sys
-          resolution = json.load(open(sys.argv[1]))
-          identity = resolution["identity"] or {}
-          print("self-test-action=" + resolution["action"])
-          print("self-test-target=" + identity.get("target_revision", ""))
-          print("self-test-identity=" + json.dumps(identity, sort_keys=True, separators=(",", ":")))
-          reason = resolution["diagnostics"][0] if resolution["action"] == "skip" and resolution["diagnostics"] else ""
-          print("self-test-skip-reason=" + reason.replace("\n", " "))
-          PYEOF
-          echo "self-test batch: action=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["action"])' "$WORK/resolution.json")"
-      - name: Classify the complete change inventory
-        id: scope
-        if: ${{ steps.entry.outputs.batch-mode == 'false' }}
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ inputs.queue_base_sha || (steps.resolve.outputs.self-test == 'true' && steps.resolve.outputs.self-test-target) || github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
-          HEAD_SHA: ${{ inputs.queue_head_sha || (steps.resolve.outputs.self-test == 'true' && steps.resolve.outputs.self-test-target) || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-          SELF_TEST_SKIP: ${{ steps.resolve.outputs.self-test-action == 'skip' && steps.resolve.outputs.self-test-skip-reason || '' }}
-          REPOSITORY: ${{ github.repository }}
-          HEAD_REPOSITORY: ${{ inputs.queue_ticket != '' && github.repository || github.event.pull_request.head.repo.full_name }}
-          PR_NUMBER: ${{ inputs.queue_pr_number || github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MANIFEST_PATH: ${{ runner.temp }}/ci-scope.json
-          QUEUE_VALIDATION_PATH: ${{ runner.temp }}/queue-validation.json
-          REQUESTED_LANES: ${{ inputs.lanes }}
-          QUEUE_TICKET: ${{ inputs.queue_ticket }}
-          QUEUE_PR_NUMBER: ${{ inputs.queue_pr_number }}
-          QUEUE_BASE_SHA: ${{ inputs.queue_base_sha }}
-          QUEUE_HEAD_SHA: ${{ inputs.queue_head_sha }}
-        run: |
-          set -euo pipefail
-          python3 scripts/ci/change_scope.py \
-            --policy scripts/ci/scope_policy.json \
-            --event "$EVENT_NAME" \
-            --base-sha "$BASE_SHA" \
-            --head-sha "$HEAD_SHA" \
-            --repository "$REPOSITORY" \
-            --head-repository "$HEAD_REPOSITORY" \
-            --pr-number "$PR_NUMBER" \
-            --manifest-out "$MANIFEST_PATH" \
-            --github-output "$GITHUB_OUTPUT" \
-            --summary "$GITHUB_STEP_SUMMARY" \
-            --lanes "${REQUESTED_LANES:-}" \
-            --queue-ticket "${QUEUE_TICKET:-}" \
-            --queue-pr-number "${QUEUE_PR_NUMBER:-}" \
-            --queue-base-sha "${QUEUE_BASE_SHA:-}" \
-            --queue-head-sha "${QUEUE_HEAD_SHA:-}" \
-            --queue-validation-out "$QUEUE_VALIDATION_PATH" \
-            --self-test-skip "${SELF_TEST_SKIP:-}"
-      - name: Retain the queue validation classification
-        if: ${{ always() && steps.entry.outputs.batch-mode == 'false' && inputs.queue_ticket != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: queue-validation-${{ github.run_id }}
-          path: ${{ runner.temp }}/queue-validation.json
-          if-no-files-found: error
-          retention-days: 14
-      # Release authority reads this artifact: `tools/release/ci_evidence.py`
-      # accepts a target only while its exact run still retains a `full`
-      # manifest for that SHA, so the retention below is a prospective evidence
-      # lifetime rather than a diagnostic, and a failed upload must fail the
-      # producer job instead of leaving the run without scope evidence.
-      - name: Retain the scope manifest
-        if: ${{ steps.entry.outputs.batch-mode == 'false' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-scope-${{ (steps.resolve.outputs.self-test == 'true' && steps.resolve.outputs.self-test-target) || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
-          path: ${{ runner.temp }}/ci-scope.json
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 14
 
   docs-static:
     # First of the five general Linux jobs on the dual-node trusted role. That
@@ -910,39 +683,6 @@ jobs:
           ccache --show-log-stats
           || echo 'warning: ccache statistics are unavailable' >&2
 
-  pr-gate:
-    name: PR Gate
-    needs: [change-scope, pre-heavy-gate, docs-static, portal, ci-contract, select-macos-runner, macos-primary, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package]
-    if: ${{ always() && !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Adjudicate the same-run formal lane results
-        env:
-          FORMAL_RESULTS_JSON: >-
-            {"docs-static":{"result":"${{ needs.docs-static.result }}"},"portal":{"result":"${{ needs.portal.result }}"},"ci-contract":{"result":"${{ needs.ci-contract.result }}"},"select-macos-runner":{"result":"${{ needs.select-macos-runner.result }}"},"macos-primary":{"result":"${{ needs.macos-primary.result }}"},"core-ubuntu":{"result":"${{ needs.core-ubuntu.result }}"},"core-asan":{"result":"${{ needs.core-asan.result }}"},"core-coverage":{"result":"${{ needs.core-coverage.result }}"},"core-macos":{"result":"${{ needs.core-macos.result }}"},"core-asan-macos":{"result":"${{ needs.core-asan-macos.result }}"},"web-toolchain-conformance":{"result":"${{ needs.web-toolchain-conformance.result }}"},"web-runtime-host":{"result":"${{ needs.web-runtime-host.result }}"},"creator-web":{"result":"${{ needs.creator-web.result }}"},"web-runtime-lab":{"result":"${{ needs.web-runtime-lab.result }}"},"deploy-contract":{"result":"${{ needs.deploy-contract.result }}"},"chameleon-lab":{"result":"${{ needs.chameleon-lab.result }}"},"package":{"result":"${{ needs.package.result }}"}}
-          SCOPE_MANIFEST: ${{ needs.change-scope.outputs.manifest }}
-          CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
-          PRE_HEAVY_GATE_RESULT: ${{ needs.pre-heavy-gate.result }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          python3 scripts/ci/pr_gate.py
-          --policy scripts/ci/scope_policy.json
-          --manifest-json "$SCOPE_MANIFEST"
-          --results-json "$FORMAL_RESULTS_JSON"
-          --change-scope-result "$CHANGE_SCOPE_RESULT"
-          --pre-heavy-gate-result "$PRE_HEAVY_GATE_RESULT"
-          --base-sha "${{ needs.change-scope.outputs.resolved-base-sha }}"
-          --head-sha "${{ needs.change-scope.outputs.resolved-head-sha }}"
-          --queue-ticket "${{ inputs.queue_ticket }}"
-          --queue-pr-number "${{ inputs.queue_pr_number }}"
-          --queue-base-sha "${{ inputs.queue_base_sha }}"
-          --queue-head-sha "${{ inputs.queue_head_sha }}"
-          --summary "$GITHUB_STEP_SUMMARY"
-
   select-macos-runner:
     name: Select macOS runner
     needs: change-scope
@@ -1382,91 +1122,6 @@ jobs:
     with:
       suite: stress
       target_revision: ${{ needs.change-scope.outputs.self-test-target }}
-
-  # One verdict per self-test batch (scripts/ci/self_test.py aggregate):
-  # every job of scripts/ci/self_test_policy.json is read from `needs`, the
-  # batch passes only when every suite passed, and the document is retained
-  # as `self-test-verdict-<target>-<run>-<attempt>` for the reporter and,
-  # after T7, for release authority. A future scheduled skipped batch retains
-  # a `self-test-skip-<target>-<run>-<attempt>`
-  # record instead. Hosted control plane, like PR Gate: it must outlive the
-  # pool it judges, and it runs the control revision's scripts, never the
-  # target's.
-  self-test-verdict:
-    name: Self-test verdict
-    needs: [change-scope, pre-heavy-gate, docs-static, portal, ci-contract, select-macos-runner, macos-primary, macos-fallback, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package, nightly-tsan, nightly-stress]
-    if: ${{ always() && !cancelled() && needs.change-scope.outputs.batch-mode == 'false' && needs.change-scope.outputs.self-test == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-      - name: Judge the batch
-        id: judge
-        shell: bash
-        env:
-          ACTION: ${{ needs.change-scope.outputs.self-test-action }}
-          IDENTITY: ${{ needs.change-scope.outputs.self-test-identity }}
-          TARGET: ${{ needs.change-scope.outputs.self-test-target }}
-          NEEDS_JSON: ${{ toJSON(needs) }}
-          WORK: ${{ runner.temp }}/self-test
-        run: |
-          set -euo pipefail
-          mkdir -p "$WORK/out"
-          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
-            echo 'why: partial reruns can inherit results from another attempt; remedy: create a new workflow_dispatch on main with the same target, not Re-run jobs' >&2
-            exit 1
-          fi
-          printf '%s\n' "$IDENTITY" >"$WORK/identity.json"
-          printf '%s\n' "$NEEDS_JSON" >"$WORK/needs.json"
-          if [[ "$ACTION" == "skip" ]]; then
-            python3 - "$WORK/identity.json" "$WORK/out/skip.json" <<'PYEOF'
-          import json, sys
-          identity = json.load(open(sys.argv[1]))
-          json.dump({"evidence_schema": identity["evidence_schema"], "action": "skip", "identity": identity},
-                    open(sys.argv[2], "w"), sort_keys=True, indent=2)
-          PYEOF
-            echo "artifact=self-test-skip-$TARGET-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >>"$GITHUB_OUTPUT"
-            echo "self-test batch for $TARGET skipped: its target already has a complete conclusion"
-            exit 0
-          fi
-          # Dependencies mirror each job's `needs:` upstream of it, upstream
-          # first, so a skip behind a failed predecessor is `blocked`, not
-          # `missing`; tests/build/ci_self_test_workflow_test.py pins this
-          # list to the needs graph above.
-          python3 scripts/ci/self_test.py observations \
-            --identity "$WORK/identity.json" \
-            --needs "$WORK/needs.json" \
-            --alias core-tsan=nightly-tsan \
-            --alias core-stress=nightly-stress \
-            --dependency portal=pre-heavy-gate \
-            --dependency core-ubuntu=pre-heavy-gate,portal \
-            --dependency package=pre-heavy-gate,portal,core-ubuntu \
-            --dependency core-coverage=pre-heavy-gate,portal,core-ubuntu,package \
-            --dependency core-asan=pre-heavy-gate,portal,core-ubuntu,package,core-coverage \
-            --dependency macos-primary=select-macos-runner \
-            --dependency core-macos=select-macos-runner,macos-primary,macos-fallback \
-            --dependency core-asan-macos=select-macos-runner,macos-primary,macos-fallback \
-            --dependency core-tsan=pre-heavy-gate \
-            --dependency core-stress=pre-heavy-gate \
-            --out "$WORK/observations.json"
-          echo "artifact=self-test-verdict-$TARGET-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >>"$GITHUB_OUTPUT"
-          python3 scripts/ci/self_test.py aggregate \
-            --identity "$WORK/identity.json" \
-            --observations "$WORK/observations.json" \
-            --out "$WORK/out/verdict.json"
-      # Evidence lifetime, not a diagnostic: the resolver of the next batch
-      # and the reporter read it, and a failed upload must fail this job so a
-      # batch never ends without a retained record.
-      - name: Retain the batch record
-        if: ${{ always() && steps.judge.outputs.artifact != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.judge.outputs.artifact }}
-          path: ${{ runner.temp }}/self-test/out/
-          if-no-files-found: error
-          retention-days: 30
 
   # New incremental evidence is deliberately not named self-test-verdict or
   # ci-scope: neither focused nor a new-source full is legacy release evidence.

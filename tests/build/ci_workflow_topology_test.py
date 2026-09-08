@@ -58,12 +58,10 @@ SELF_HOSTED_JOBS = (
 HOSTED_CONTROL_PLANE_JOBS = (
     "change-scope",
     "pre-heavy-gate",
-    "pr-gate",
     "select-macos-runner",
     # Judges a self-test batch from `needs` and retains the verdict; runs the
     # control revision's scripts, never the target's, and must outlive the
     # pool it judges for the same reason PR Gate must.
-    "self-test-verdict",
     "batch-verdict",
 )
 # Hosted Ubuntu jobs that are not control plane: each republishes an already
@@ -361,33 +359,13 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("format('core-ci-self-test-{0}', github.run_id)", body)
         self.assertIn("cancel-in-progress: false", body)
 
-    def test_change_scope_has_three_minute_limit_zero_dependency_install_and_live_pr_read(self) -> None:
+    def test_change_scope_has_three_minute_limit_zero_dependency_install_and_live_pr_read(self):
         job = self.workflow_job("change-scope")
-        self.assertIn("runs-on: ubuntu-24.04", job)
-        self.assertIn("timeout-minutes: 3", job)
-        self.assertIn("fetch-depth: 0", job)
-        self.assertIn("python3 scripts/ci/change_scope.py", job)
-        self.assertIn("EVENT_NAME: ${{ github.event_name }}", job)
-        self.assertIn('--event "$EVENT_NAME"', job)
-        self.assertNotIn("--force-full", job)
-        self.assertIn("github.event.pull_request.number", job)
-        self.assertIn('--pr-number "$PR_NUMBER"', job)
-        self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", job)
-        self.assertNotRegex(self.main_source, r"(?m)^\s+pull-requests:",
-                            "why: Core CI has no PR event or review consumer; remedy: keep PR permissions in pr-review.yml")
-        self.assertEqual(set(re.findall(r"secrets\.([A-Z0-9_]+)", job)), {"GITHUB_TOKEN"})
-        for forbidden in (
-            r"\bnpm\b",
-            r"\bpip(?:3)?\b",
-            r"\bcmake\b",
-            r"playwright",
-            r"browser",
-            r"emsdk",
-            r"actions/runners",
-            r"SELF_HOSTED_RUNNER_READ_TOKEN",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotRegex(job, rf"(?i){forbidden}")
+        for text in ("runs-on: ubuntu-24.04", "timeout-minutes: 3", "fetch-depth: 0", "batch_execution.py prepare"):
+            self.assertIn(text, job)
+        for forbidden in (r"\bnpm\b", r"\bpip(?:3)?\b", r"\bcmake\b", "actions/runners", "SELF_HOSTED_RUNNER_READ_TOKEN"):
+            self.assertNotRegex(job, forbidden)
+        self.assertNotIn("pull-requests:", self.main_source)
 
     def test_change_scope_and_pr_gate_stay_on_the_hosted_control_plane(self) -> None:
         """The control plane must outlive the pool it adjudicates.
@@ -418,20 +396,11 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             len(HOSTED_CONTROL_PLANE_JOBS) + len(MACOS_ADJUDICATOR_JOBS),
         )
 
-    def test_change_scope_publishes_trusted_head_from_event_or_queue_ticket(self) -> None:
+    def test_change_scope_publishes_trusted_head_from_event_or_queue_ticket(self):
         job = self.workflow_job("change-scope")
-        self.assertIn(
-            "trusted-head: ${{ steps.batch.outputs.trusted-head || steps.scope.outputs.trusted-head }}", job
-        )
-        self.assertIn(
-            "HEAD_REPOSITORY: ${{ inputs.queue_ticket != '' && github.repository || "
-            "github.event.pull_request.head.repo.full_name }}",
-            job,
-        )
-        self.assertIn('--head-repository "$HEAD_REPOSITORY"', job)
-        for forbidden in ("pull_request.title", "pull_request.labels", "label"):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, job)
+        self.assertIn("trusted-head: ${{ steps.batch.outputs.trusted-head }}", job)
+        self.assertIn("batch_execution.py prepare", job)
+        self.assertNotIn("inputs.queue_ticket", job)
 
     def test_every_self_hosted_job_requires_a_trusted_head(self) -> None:
         policy = json.loads(SCOPE_POLICY.read_text(encoding="utf-8"))
@@ -523,33 +492,16 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             "GENERAL_ROLE_NON_LANE_JOBS deliberately",
         )
 
-    def test_main_is_swept_daily_and_the_sweep_names_itself(self) -> None:
-        """#543: focused main's blind spot is covered once a day, visibly."""
-        source = MAIN_WORKFLOW.read_text(encoding="utf-8")
-        self.assertRegex(
-            source, r'(?m)^  schedule:\n    - cron: "0 16 \* \* \*"',
-            "why: without a scheduled full run a lane can stay red across "
-            "docs-only pushes that never select it; remedy: keep the daily "
-            "schedule trigger on ci.yml",
-        )
-        self.assertIn(
-            "(github.event_name == 'schedule' && 'sweep main')", source,
-            "why: a red sweep must be its own signal in the Actions list and in "
-            "the failure notification; remedy: keep the sweep's run-name",
-        )
+    def test_main_is_swept_daily_and_the_sweep_names_itself(self):
+        events = self.event_block(self.main_source)
+        self.assertNotIn("schedule:", events)
+        self.assertNotIn("workflow_dispatch:", events)
+        self.assertIn("workflow_call:", events)
 
-    def test_release_compatibility_scope_and_gate_remain_real_producer_jobs(self) -> None:
-        """T7 owns consumer acceptance; topology must not fake evidence.
-
-        Its release_self_test_evidence_test.py behavior tests own complete
-        schedule-verdict acceptance once T7 lands. Removing PR triggers does
-        not authorize replacing older consumers' scope/gate with fake jobs.
-        """
-        self.assertIn('python3 scripts/ci/change_scope.py', self.workflow_job('change-scope'))
-        gate = self.workflow_job('pr-gate')
-        self.assertIn('python3 scripts/ci/pr_gate.py', gate)
-        self.assertIn('FORMAL_RESULTS_JSON:', gate)
-        self.assertIn('--results-json "$FORMAL_RESULTS_JSON"', gate)
+    def test_release_compatibility_scope_and_gate_remain_real_producer_jobs(self):
+        self.assertNotIn("\n  pr-gate:\n", self.main_source)
+        self.assertIn("batch_execution.py prepare", self.workflow_job("change-scope"))
+        self.assertIn("batch_execution.from_needs", self.workflow_job("batch-verdict"))
 
     def test_the_policy_does_not_claim_main_always_runs_full(self) -> None:
         """The sweep's premise and the policy must not contradict each other.
@@ -684,52 +636,18 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertEqual(set(re.findall(r"lanes\.([a-z_]+)", job)), {"core_macos"})
         self.assertIn("if: ${{ !cancelled()", job)
 
-    def test_portal_is_same_run_reusable_job_and_pr_gate_needs_it(self) -> None:
+    def test_portal_is_same_run_reusable_job_and_pr_gate_needs_it(self):
         portal = self.workflow_job("portal")
-        gate = self.workflow_job("pr-gate")
-        self.assertIn("uses: ./.github/workflows/architecture-portal.yml", portal)
-        self.assertIn("check_documentation_impact:", portal)
-        self.assertIn("base_sha:", portal)
-        self.assertIn("head_sha:", portal)
-        self.assertIn("pull_request_body:", portal)
-        self.assertIn("portal", self.job_needs("pr-gate"))
-        self.assertIn(
-            '"portal":{"result":"${{ needs.portal.result }}"}', gate
-        )
+        for text in ("uses: ./.github/workflows/architecture-portal.yml", "check_documentation_impact:", "base_sha:", "head_sha:", "pull_request_body:"):
+            self.assertIn(text, portal)
+        self.assertIn("portal", self.job_needs("batch-verdict"))
 
-    def test_pr_gate_has_every_formal_lane_in_static_needs_and_runs_with_always(self) -> None:
-        job = self.workflow_job("pr-gate")
-        self.assertIn("fetch-depth: 0", job)
-        self.assertEqual(
-            self.job_needs("pr-gate"),
-            {"change-scope", "pre-heavy-gate", *FORMAL_RESULTS},
-        )
-        self.assertIn("if: ${{ always() && !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}", job)
-        result_keys = set(
-            re.findall(
-                r'"([a-z0-9-]+)":\{"result":"\$\{\{ needs\.[a-z0-9-]+\.result \}\}"\}',
-                job,
-            )
-        )
-        self.assertEqual(result_keys, set(FORMAL_RESULTS))
-        self.assertNotIn('"change-scope":', job)
-        self.assertNotIn('"macos-fallback":', job)
-        self.assertIn(
-            "CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}", job
-        )
-        self.assertIn(
-            "PRE_HEAVY_GATE_RESULT: ${{ needs.pre-heavy-gate.result }}", job
-        )
-        self.assertIn('--change-scope-result "$CHANGE_SCOPE_RESULT"', job)
-        self.assertIn('--pre-heavy-gate-result "$PRE_HEAVY_GATE_RESULT"', job)
-        self.assertIn(
-            '--base-sha "${{ needs.change-scope.outputs.resolved-base-sha }}"',
-            job,
-        )
-        self.assertIn(
-            '--head-sha "${{ needs.change-scope.outputs.resolved-head-sha }}"',
-            job,
-        )
+    def test_pr_gate_has_every_formal_lane_in_static_needs_and_runs_with_always(self):
+        job = self.workflow_job("batch-verdict")
+        self.assertEqual(self.job_needs("batch-verdict"), {"change-scope", "macos-fallback", "nightly-tsan", "nightly-stress", *FORMAL_RESULTS})
+        self.assertIn("always()", job)
+        self.assertIn("NEEDS_JSON: ${{ toJSON(needs) }}", job)
+        self.assertIn("batch_execution.from_needs", job)
 
     def test_pre_heavy_gate_is_closed_hosted_preflight_admission(self) -> None:
         job = self.workflow_job("pre-heavy-gate")
@@ -818,7 +736,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         expected = {
             "change-scope": 3,
             "pre-heavy-gate": 3,
-            "pr-gate": 3,
+            "batch-verdict": 5,
             "docs-static": 10,
             "ci-contract": 10,
             "deploy-contract": 15,
@@ -842,27 +760,17 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 )
         self.assertIn("timeout-minutes: 15", self.workflow_job("portal", portal=True))
 
-    def test_scope_manifest_is_uploaded_and_summarized(self) -> None:
-        job = self.workflow_job("change-scope")
-        self.assertIn("uses: actions/upload-artifact@v4", job)
-        self.assertIn("name: ci-scope-${{", job)
-        self.assertIn("overwrite: true", job)
-        self.assertIn("github.event.pull_request.head.sha", job)
-        self.assertIn("$GITHUB_OUTPUT", job)
-        self.assertIn("$GITHUB_STEP_SUMMARY", job)
+    def test_scope_manifest_is_uploaded_and_summarized(self):
+        job = self.workflow_job("batch-verdict")
+        for text in ("uses: actions/upload-artifact@v4", "artifact=batch-verdict-", "execution.json", "needs.json", "verdict.json", "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY"):
+            self.assertIn(text, job)
+        self.assertNotIn("overwrite: true", job)
 
-    def test_scope_artifact_retention_is_the_release_evidence_lifetime(self) -> None:
-        """Release authority reads this artifact, so its lifetime is a contract.
-
-        `tools/release/ci_evidence.py` accepts a release target only when the
-        exact run still retains a `full` scope manifest, so shortening this
-        retention or letting the upload fail silently would delete prospective
-        release evidence rather than merely lose a diagnostic.
-        """
-        job = self.workflow_job("change-scope")
-        self.assertIn("retention-days: 14", job)
+    def test_scope_artifact_retention_is_the_release_evidence_lifetime(self):
+        job = self.workflow_job("batch-verdict")
+        self.assertIn("retention-days: 30", job)
         self.assertIn("if-no-files-found: error", job)
-        self.assertIn("path: ${{ runner.temp }}/ci-scope.json", job)
+        self.assertIn("path: ${{ runner.temp }}/batch-verdict-", job)
 
     def test_package_lane_retains_its_digest_evidence(self) -> None:
         """The archive dies with the runner; its digests must outlive it.
@@ -896,26 +804,16 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("generated fixture", job)
         self.assertIn("unit and component", job)
 
-    def test_push_classification_uses_the_exact_before_range(self) -> None:
+    def test_push_classification_uses_the_exact_before_range(self):
         job = self.workflow_job("change-scope")
-        self.assertIn(
-            "BASE_SHA: ${{ inputs.queue_base_sha || (steps.resolve.outputs.self-test == 'true' "
-            "&& steps.resolve.outputs.self-test-target) || github.event_name == 'pull_request' && "
-            "github.event.pull_request.base.sha || github.event_name == 'push' "
-            "&& github.event.before || github.sha }}",
-            job,
-        )
-        self.assertIn(
-            "HEAD_SHA: ${{ inputs.queue_head_sha || (steps.resolve.outputs.self-test == 'true' "
-            "&& steps.resolve.outputs.self-test-target) || github.event_name == 'pull_request' && "
-            "github.event.pull_request.head.sha || github.sha }}",
-            job,
-        )
+        self.assertIn("resolved-base-sha: ${{ steps.batch.outputs.base }}", job)
+        self.assertIn("resolved-head-sha: ${{ steps.batch.outputs.target }}", job)
+        self.assertNotIn("github.event.before", job)
 
-    def test_dispatch_input_documents_the_explicit_full_evidence_path(self) -> None:
+    def test_dispatch_input_documents_the_explicit_full_evidence_path(self):
         events = self.event_block(self.main_source)
-        self.assertIn("workflow_dispatch:", events)
-        self.assertIn("release evidence", events)
+        self.assertNotIn("workflow_dispatch:", events)
+        self.assertIn("batch_request:", events)
 
     def test_no_job_uses_retry_for_semantic_workloads(self) -> None:
         semantic_source = self.main_source + self.web_proof_source

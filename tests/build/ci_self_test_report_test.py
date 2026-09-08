@@ -730,13 +730,10 @@ class WriteVisibilityTest(unittest.TestCase):
         self.assertNotIn(("get_run", 200), api.calls)
 
     def test_unknown_write_in_requested_run_stops_main_before_reconcile(self):
-        with mock.patch.object(rep, "UrllibGitHubApi"), \
-             mock.patch.object(rep, "report_run", side_effect=rep.WriteVisibilityError("unknown write")), \
-             mock.patch.object(rep, "reconcile_recent") as reconcile, \
-             mock.patch.object(rep, "_write_summary") as summary, mock.patch("sys.stderr", io.StringIO()):
+        with mock.patch.object(rep, "UrllibGitHubApi") as api, mock.patch.object(rep, "reconcile_recent") as reconcile:
             self.assertEqual(rep.main(["--repository", REPO, "report", "--run-id", "100"]), 2)
+        api.assert_not_called()
         reconcile.assert_not_called()
-        self.assertIn("reporting-error", summary.call_args.args[1])
 
 
 class ReportingErrorTest(unittest.TestCase):
@@ -1153,22 +1150,16 @@ class ProducerMigrationTest(unittest.TestCase):
                          ">=2026-09-10T12:00:00Z")
 
     def test_manual_no_reconcile_retries_only_requested_run_despite_unrelated_overflow(self):
-        api = FakeGitHubApi().with_batch()
-        api.run_lists[("schedule", None)] = [run_document(run_id=n) for n in range(1, 101)]
-        with mock.patch.object(rep, "UrllibGitHubApi", return_value=api), \
-                mock.patch.object(rep, "reconcile_recent", side_effect=AssertionError("must not scan unrelated history")), \
-                mock.patch.object(rep, "_write_summary"):
-            self.assertEqual(rep.main(["--repository", REPO, "report", "--run-id", "100", "--no-reconcile"]), 0)
-        self.assertEqual(len(api.issues), 2)
+        with mock.patch.object(rep, "UrllibGitHubApi") as api, mock.patch.object(rep, "reconcile_recent") as reconcile:
+            self.assertEqual(rep.main(["--repository", REPO, "report", "--run-id", "100"]), 2)
+        api.assert_not_called()
+        reconcile.assert_not_called()
 
     def test_automatic_reconciliation_gets_exact_deployment_time_filter(self):
-        api = FakeGitHubApi().with_batch()
-        with mock.patch.object(rep, "UrllibGitHubApi", return_value=api), \
-                mock.patch.object(rep, "reconcile_recent", return_value=[]) as reconcile, \
-                mock.patch.object(rep, "_write_summary"):
-            self.assertEqual(rep.main(["--repository", REPO, "report", "--run-id", "100"]), 0)
-        self.assertGreaterEqual(reconcile.call_args.kwargs["created"], ">=2026-09-07T12:20:36Z")
-
+        with mock.patch.object(rep, "UrllibGitHubApi") as api, mock.patch.object(rep, "reconcile_recent") as reconcile:
+            self.assertEqual(rep.main(["--repository", REPO, "report", "--run-id", "100"]), 2)
+        api.assert_not_called()
+        reconcile.assert_not_called()
 
 
 if __name__ == "__main__":

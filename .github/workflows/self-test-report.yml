@@ -1,44 +1,31 @@
 name: Self-test Report
 
-# A self-test batch (a `Core CI` schedule or dispatch run that retains a
-# `self-test-verdict-<sha>-<run>-<attempt>` artifact) ends in a verdict, not in an alert. This
-# workflow collects that verdict in one deduplicated Issue per suite/class,
-# from default-branch code, after the batch has finished -- so the batch itself
-# never holds `issues: write`, and nothing the tested revision produced is
-# executed here; its verdict is read as data.
-#
-# `workflow_run` only subscribes to main control runs; queue dispatches on task
-# branches must not start reporters that rescan unrelated main history. The
-# job-level `if` also requires a self-test-capable event. The daily `schedule`
-# here is the "expected a batch, none started"
-# check; it runs on Actions and therefore cannot fire on a day Actions did not
-# run it -- the Issue it files says so.
+# Single durable controller; the health tick recovers pending work, not daily tests.
 
 on:
-  workflow_run:
-    workflows: ["Core CI"]
-    types: [completed]
+  push:
     branches: [main]
+  workflow_run:
+    workflows: ["Self-test Report", "Core CI", "PR Review"]
+    types: [completed]
   schedule:
-    # Two hours after the 16:00 UTC sweep: long enough for a batch to have
-    # started, early enough that a missing one is noticed the same day.
-    - cron: "0 18 * * *"
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       run_id:
-        description: Core CI run id to report (explicit retry after a reporting-error).
+        description: Retired input; use report-legacy with review_run_id and review_attempt.
         required: false
       reconcile:
-        description: Also reconcile recent batches (off by default to isolate the requested retry).
+        description: Retired input; leave false.
         type: boolean
         default: false
       batch_operation:
-        description: Isolated incremental rehearsal only; legacy preserves the existing reporter.
+        description: Durable manual controls; exact full uses reconcile with an explicit node/candidate request.
         type: choice
-        options: [legacy, init, reconcile, settle, resume, report-init-outbox, report-review, report-batches, report-drain, report-discovery, recovery-probe, claim-probe, cancel-probe]
-        default: legacy
+        options: [report-legacy, init, reconcile, settle, resume, report-init-outbox, report-review, report-batches, report-drain, report-discovery, recovery-probe, claim-probe, cancel-probe]
+        default: reconcile
       journal_config:
-        description: Exact isolated journal identity JSON; no automatic Issue creation or baseline.
+        description: Optional isolated journal JSON; empty uses the committed production scheduler. Init requires explicit config.
         type: string
         required: false
       batch_request:
@@ -46,15 +33,15 @@ on:
         type: string
         required: false
       report_config:
-        description: Closed scheduler/outbox JSON with two distinct fixed Issue identities; each uses the six-field runtime config.
+        description: Optional isolated scheduler/outbox JSON; empty uses the committed production pair. Init requires explicit config.
         type: string
         required: false
       review_run_id:
-        description: Exact completed PR Review run ID for report-review only.
+        description: Exact completed source run ID for report-review, report-legacy or paired report-discovery retry.
         type: string
         required: false
       review_attempt:
-        description: Exact PR Review attempt for report-review only; no implicit latest attempt.
+        description: Exact source attempt paired with review_run_id; never implicit latest attempt.
         type: string
         required: false
       report_limit:
@@ -78,72 +65,12 @@ permissions: {}
 # the reusable product DAG must not hold the lock needed by its next observer.
 
 jobs:
-  report:
-    name: Self-test report
-    if: >-
-      (inputs.batch_operation == '' || inputs.batch_operation == 'legacy') &&
-      (github.event_name != 'workflow_run'
-      || (github.event.workflow_run.head_branch == 'main'
-          && (github.event.workflow_run.event == 'schedule'
-              || github.event.workflow_run.event == 'workflow_dispatch')))
-    # Hosted, as scripts/ci/hosted_runner_policy.json records: this is the
-    # check that must run when the self-hosted hosts that run the batches are
-    # the thing that went missing.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    concurrency:
-      group: self-test-report
-      cancel-in-progress: false
-      queue: max
-    permissions:
-      contents: read
-      actions: read
-      issues: write
-    steps:
-      # Default-branch code only. `workflow_run` and `schedule` already run in
-      # the default branch's context; the explicit ref keeps a dispatch from a
-      # branch from substituting its own reporter.
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          fetch-depth: 1
-          persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - name: Report the completed batch
-        if: github.event_name != 'schedule'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.run_id }}
-          RECONCILE: ${{ github.event_name != 'workflow_dispatch' || inputs.reconcile }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          report_args=()
-          if [[ "$RECONCILE" != "true" ]]; then report_args+=(--no-reconcile); fi
-          python3 scripts/ci/self_test_report.py \
-            --repository "${{ github.repository }}" \
-            --summary "$GITHUB_STEP_SUMMARY" \
-            report --run-id "$RUN_ID" "${report_args[@]}"
-      - name: Check that today's batch started
-        if: github.event_name == 'schedule'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          python3 scripts/ci/self_test_report.py
-          --repository "${{ github.repository }}"
-          --summary "$GITHUB_STEP_SUMMARY"
-          missing --date "$(date -u +%Y-%m-%d)"
-
   controller:
     name: Incremental batch controller
     if: >-
-      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.run_attempt == '1' &&
-      (inputs.batch_operation == 'init' || inputs.batch_operation == 'reconcile' || inputs.batch_operation == 'settle' ||
-       inputs.batch_operation == 'resume' || inputs.batch_operation == 'report-init-outbox' ||
-       inputs.batch_operation == 'report-review' || inputs.batch_operation == 'report-batches' || inputs.batch_operation == 'report-drain' || inputs.batch_operation == 'report-discovery' ||
-       inputs.batch_operation == 'recovery-probe' || inputs.batch_operation == 'claim-probe' || inputs.batch_operation == 'cancel-probe')
+      github.ref == 'refs/heads/main' && github.run_attempt == '1' &&
+      (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_run' ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
@@ -177,6 +104,13 @@ jobs:
           BATCH_OPERATION: ${{ inputs.batch_operation }}
           JOURNAL_CONFIG: ${{ inputs.journal_config }}
           BATCH_REQUEST: ${{ inputs.batch_request }}
+          REPORT_CONFIG: ${{ inputs.report_config }}
+          PROBE_REQUEST: ${{ inputs.probe_request }}
+          LEGACY_RUN_ID: ${{ inputs.run_id }}
+          LEGACY_RECONCILE: ${{ inputs.reconcile }}
+          REVIEW_RUN_ID: ${{ inputs.review_run_id }}
+          REVIEW_ATTEMPT: ${{ inputs.review_attempt }}
+          REPORT_LIMIT: ${{ inputs.report_limit }}
         shell: bash
         run: |
           set -euo pipefail
@@ -187,9 +121,27 @@ jobs:
           directory = Path(os.environ['RUNNER_TEMP']) / 'incremental-controller'
           directory.mkdir(exist_ok=True)
           config, output = directory / 'config.json', directory / 'result.json'
-          config.write_text(os.environ['JOURNAL_CONFIG'])
           operation = os.environ['BATCH_OPERATION']
-          command = ['python3', 'scripts/ci/batch_runtime.py', operation,
+          if os.environ['GITHUB_EVENT_NAME'] != 'workflow_dispatch':
+              command = ['python3', 'scripts/ci/incremental_entry.py', 'control',
+                         '--root', str(Path.cwd()), '--output', str(output)]
+          else:
+              if not operation:
+                  raise SystemExit('why: missing manual operation; remedy: select reconcile or a recovery command')
+              if (any(os.environ.get(key) for key in ('REPORT_CONFIG', 'PROBE_REQUEST', 'LEGACY_RUN_ID', 'REVIEW_RUN_ID', 'REVIEW_ATTEMPT'))
+                  or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')
+                  or os.environ.get('REPORT_LIMIT', '8') != '8'):
+                  raise SystemExit('why: scheduler command mixed with another operation; remedy: use only journal_config and batch_request')
+              if os.environ.get('JOURNAL_CONFIG'):
+                  config.write_text(os.environ['JOURNAL_CONFIG'])
+              else:
+                  import sys
+                  sys.path.insert(0, 'scripts/ci')
+                  from incremental_entry import load_storage
+                  if operation == 'init':
+                      raise SystemExit('why: initialization requires explicit isolated storage; remedy: never initialize the fixed production journal')
+                  config.write_text(json.dumps(load_storage(Path.cwd(), os.environ)['scheduler']))
+              command = ['python3', 'scripts/ci/batch_runtime.py', operation,
                      '--config', str(config), '--output', str(output)]
           if os.environ.get('BATCH_REQUEST'):
               if operation not in ('reconcile', 'resume'):
@@ -205,8 +157,36 @@ jobs:
                   handle.write(f'{key}={value}\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as handle:
               handle.write('Incremental rehearsal: ' + result['action'] + '\n')
-              handle.write('This operation is not release evidence or automatic trigger cutover.\n')
+              handle.write('Processed progress is not full health or release authority.\n')
           PY
+      - name: Report durable observations independently
+        id: automatic-report
+        if: ${{ always() && github.event_name != 'workflow_dispatch' && steps.control.outcome == 'success' && steps.control.outputs.action != 'execute' }}
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATCH_WRITER_LOCK: self-test-report
+        run: |
+          status=0
+          python3 scripts/ci/incremental_entry.py reports --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/incremental-reports-$GITHUB_RUN_ID.json" || status=$?
+          if test -f "$RUNNER_TEMP/incremental-reports-$GITHUB_RUN_ID.json"; then
+            cat "$RUNNER_TEMP/incremental-reports-$GITHUB_RUN_ID.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+      - name: Recover missed review observations independently
+        id: automatic-discovery
+        if: ${{ always() && github.event_name != 'workflow_dispatch' && (github.event_name != 'workflow_run' || github.event.workflow_run.path == '.github/workflows/pr-review.yml') && steps.control.outcome == 'success' && steps.control.outputs.action != 'execute' }}
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATCH_WRITER_LOCK: self-test-report
+        run: |
+          python3 scripts/ci/review_discovery_runtime.py --root "$GITHUB_WORKSPACE" --summary "$GITHUB_STEP_SUMMARY" --limit 1
+      - name: Keep unresolved reporting visible
+        if: ${{ always() && (steps.automatic-report.outcome == 'failure' || steps.automatic-discovery.outcome == 'failure') }}
+        run: |
+          echo 'why: a bounded report or discovery attempt is unresolved; remedy: inspect its durable backlog and restore evidence; no product rerun was requested' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
       - name: Report through the isolated outbox under the short writer lock
         if: ${{ startsWith(inputs.batch_operation, 'report-') }}
         env:
@@ -229,7 +209,7 @@ jobs:
           import os, subprocess
           from pathlib import Path
           operations = {'report-init-outbox': 'init-outbox', 'report-review': 'review',
-                        'report-batches': 'batches', 'report-drain': 'drain'}
+                        'report-batches': 'batches', 'report-drain': 'drain', 'report-legacy': 'legacy'}
           if os.environ['REPORT_OPERATION'] == 'report-discovery':
               import re
               if (any(os.environ.get(key) for key in ('REPORT_CONFIG', 'JOURNAL_CONFIG', 'BATCH_REQUEST', 'PROBE_REQUEST', 'LEGACY_RUN_ID'))
@@ -248,16 +228,25 @@ jobs:
               # Incomplete discovery remains red; never run the old mapping too.
               raise SystemExit(subprocess.run(command, check=False).returncode)
           operation = operations.get(os.environ['REPORT_OPERATION'])
-          if operation is None or os.environ.get('BATCH_REQUEST') or os.environ.get('JOURNAL_CONFIG'):
+          if (operation is None or any(os.environ.get(key) for key in ('BATCH_REQUEST', 'JOURNAL_CONFIG', 'PROBE_REQUEST', 'LEGACY_RUN_ID'))
+              or os.environ.get('LEGACY_RECONCILE', '') not in ('', 'false')):
               raise SystemExit('why: report command is unknown or mixed with scheduler inputs; remedy: use only report_config and the selected report arguments')
           directory = Path(os.environ['RUNNER_TEMP']) / 'incremental-report'
           directory.mkdir(exist_ok=True)
           config = directory / 'config.json'
-          config.write_text(os.environ['REPORT_CONFIG'])
+          if os.environ.get('REPORT_CONFIG'):
+              config.write_text(os.environ['REPORT_CONFIG'])
+          else:
+              import json, sys
+              sys.path.insert(0, 'scripts/ci')
+              from incremental_entry import load_storage
+              if operation == 'init-outbox':
+                  raise SystemExit('why: initialization requires explicit isolated storage; remedy: never initialize the fixed production outbox')
+              config.write_text(json.dumps(load_storage(Path.cwd(), os.environ)))
           command = ['python3', 'scripts/ci/report_runtime.py', '--config', str(config),
                      '--root', str(Path.cwd()), '--summary', os.environ['GITHUB_STEP_SUMMARY'], operation]
           run_id, attempt = os.environ.get('REVIEW_RUN_ID', ''), os.environ.get('REVIEW_ATTEMPT', '')
-          if operation == 'review':
+          if operation in ('review', 'legacy'):
               if not run_id or not attempt:
                   raise SystemExit('why: review report lacks exact run/attempt; remedy: supply both review_run_id and review_attempt')
               command += ['--run-id', run_id, '--attempt', attempt]

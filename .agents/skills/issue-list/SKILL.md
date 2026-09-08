@@ -83,8 +83,8 @@ landed patch; protect post-merge local commits not covered by that evidence.
 
 Being behind main without conflict, or having red/in-flight incremental or
 explicit full self-tests, does not make a PR abandoned or unmergeable under
-project policy. The target strategy has no daily product-test requirement;
-legacy automatic triggers remain until the separately authorized T5 cutover.
+project policy. Daily product tests and daily-missing alerts are retired;
+lightweight health ticks recover pending work, not date-based tests.
 AI review failures need visible current-head takeover, not automatic approval.
 An unmerged draft does not override live main governance or branch protection.
 Report processed progress, selected results, unresolved failures and unexecuted

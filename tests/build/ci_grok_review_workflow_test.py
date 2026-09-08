@@ -138,8 +138,8 @@ class GrokReviewWorkflowTest(unittest.TestCase):
                          "why: retired model job keeps product write permissions; remedy: use the independent PR Review entry")
         self.assertNotIn("grok", str(self.policy["lane_jobs"]))
         self.assertNotIn("grok-review", self.policy["self_hosted_jobs"])
-        pr_gate = core.split("\n  pr-gate:\n", 1)[1].split("\n  select-macos-runner:", 1)[0]
-        self.assertNotIn("grok", pr_gate)
+        self.assertNotIn("\n  pr-gate:\n", core)
+        self.assertNotIn("grok-review", core)
         self.assertNotIn("grok-review.yml", queue)
         self.assertNotIn(".github/scripts/grok_review.py", queue)
 
