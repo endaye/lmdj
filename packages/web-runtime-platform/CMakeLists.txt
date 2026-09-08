@@ -359,7 +359,10 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
       Threads::Threads
   )
   target_compile_definitions(
-    lmdj_web_control_runtime_tests PRIVATE LMDJ_WEB_RUNTIME_TESTING=1
+    lmdj_web_control_runtime_tests
+    PRIVATE
+      LMDJ_WEB_RUNTIME_TESTING=1
+      LMDJ_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
   )
   lmdj_target_warnings(lmdj_web_control_runtime_tests)
   lmdj_target_sanitizers(lmdj_web_control_runtime_tests)

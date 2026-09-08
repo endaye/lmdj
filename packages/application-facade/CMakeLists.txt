@@ -7,6 +7,7 @@ add_library(
     src/performance_engine_adapter.cpp
     src/performance_replay.cpp
     src/performance_runtime.cpp
+    src/soundset_catalog.cpp
 )
 add_library(lmdj::application ALIAS lmdj_application)
 

@@ -569,6 +569,22 @@ promotion.
       map.preview → install keep → install replace, each with far-side
       revision/Lineage/Set Store assertions. The Browser journey additionally
       drives the Web fetch transport against a local fixture server.
+- [ ] **Acceptance gap recorded by Task 5.** `apps/creator-web/` has no Browser
+      proof harness, so Task 5 shipped no Browser journey. Two things are
+      therefore unproven end to end in a real browser and belong here: the
+      Creator Sound Set surface driven through a live Runtime, and the Web
+      Host's fetch `CatalogTransport` against
+      `tools/soundset-fixtures/catalog_fixture_server.py`. Task 5 proved each
+      half separately — the transport against the real fixture server in
+      `packages/web-runtime-platform/test/soundset_catalog.test.mjs`, the
+      Core-side acquisition against the real fixture corpus in
+      `packages/web-runtime-platform/test/control_runtime_test.cpp`, and the
+      surface against a fake session in
+      `apps/creator-web/test/soundset_surface.test.tsx` — but never the whole
+      chain in one process. A Browser journey sets the Catalog endpoint with
+      `window.__LMDJ_SOUNDSET_CATALOG__` or the `lmdj-soundset-catalog` meta
+      tag in `apps/creator-web/index.html`. Do not read Task 5's green suites
+      as Browser coverage.
 - [ ] Catalog unreachable: cached Set still inspectable and installable.
 - [ ] Physical/manual Safari/iPadOS catalog browse is listed as remaining
       human verification if no Browser fixture covers it; do not claim it

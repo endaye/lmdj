@@ -1,10 +1,16 @@
-export type CreatorMode = "project" | "sample" | "sequence" | "perform";
+export type CreatorMode =
+  | "project"
+  | "sample"
+  | "sequence"
+  | "perform"
+  | "soundset";
 
 interface ModeRailProps {
   activeMode: CreatorMode;
   onSelect: (mode: CreatorMode) => void;
   sequenceEnabled?: boolean;
   performEnabled?: boolean;
+  soundSetEnabled?: boolean;
 }
 
 export function ModeRail({
@@ -12,6 +18,7 @@ export function ModeRail({
   onSelect,
   sequenceEnabled = false,
   performEnabled = false,
+  soundSetEnabled = false,
 }: ModeRailProps) {
   return (
     <nav className="mode-rail" aria-label="Creator modes">
@@ -43,6 +50,19 @@ export function ModeRail({
       >
         <span className="mode-glyph" aria-hidden="true">∿</span>
         <span className="mode-label">Sample</span>
+      </button>
+      <button
+        className={`mode-button${activeMode === "soundset" ? " is-active" : ""}`}
+        type="button"
+        disabled={!soundSetEnabled}
+        aria-current={activeMode === "soundset" ? "page" : undefined}
+        aria-label={soundSetEnabled
+          ? "Sound Sets"
+          : "Sound Sets — wait for the Runtime to start"}
+        onClick={() => onSelect("soundset")}
+      >
+        <span className="mode-glyph" aria-hidden="true">◈</span>
+        <span className="mode-label">Sound Sets</span>
       </button>
       <button
         className={`mode-button${activeMode === "perform" ? " is-active" : ""}`}

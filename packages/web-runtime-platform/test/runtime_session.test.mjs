@@ -30,17 +30,21 @@ const API = [
   "disarmSequenceCapture",
   "flushSequence",
   "importProject",
+  "installSoundSet",
   "importAssignSample",
   "inspectSample",
+  "inspectSoundSet",
   "inspectPerformance",
   "inspectProject",
   "listPerformanceRecovery",
   "listPerformances",
   "listLocalProjects",
   "listSequenceRecovery",
+  "listSoundSets",
   "openProject",
   "performanceMasterCaptureStatus",
   "movePatternSlot",
+  "previewSoundSetMap",
   "queryPerformanceRecordingStatus",
   "queryPerformanceReplayStatus",
   "querySampleQuota",
@@ -172,6 +176,7 @@ function fixture({
   preflight,
   now,
   inputOwnership,
+  soundsetCatalog,
   manifestSource = {
     resourceLimits: RESOURCE_LIMITS,
   },
@@ -234,6 +239,7 @@ function fixture({
     },
     inputConfiguration,
     inputOwnership,
+    soundsetCatalog,
     seams: {
       ...(capabilities === undefined ? {} : {capabilities}),
       ...(capabilityProbeTimeoutMs === undefined
@@ -4688,4 +4694,405 @@ test("lists and imports Projects through the public typed surface", async () => 
     "project.import.entry",
     "project.import.commit",
   ]);
+});
+
+const SET_ID = "11111111-1111-4111-8111-111111111111";
+const MANIFEST_SHA = "a1".repeat(32);
+const BLOB_SHA = "b2".repeat(32);
+const DEMO_SHA = "c3".repeat(32);
+
+// A Host stand-in for the Core loop `soundset.catalog.list` really drives:
+// the index names a Set by its manifest hash, the manifest names its blobs,
+// and each read that cannot be served is recorded as one address.
+function soundsetHost({blobBytes = 8, indexReadable = true, cached = []} = {}) {
+  const staged = new Map();
+  const partial = new Map();
+  const pending = [];
+  const supplied = [];
+  const indexCalls = [];
+  let indexStaged = false;
+  let indexPending = false;
+  const want = (kind, sha256) => {
+    if (staged.has(`${kind}/${sha256}`)) return true;
+    if (!pending.some((entry) => entry.object_kind === kind &&
+      entry.sha256 === sha256)) {
+      pending.push({object_kind: kind, sha256});
+    }
+    return false;
+  };
+  return {
+    supplied,
+    indexCalls,
+    send(envelope) {
+      const {operation, payload} = envelope;
+      if (operation === "soundset.catalog.index") {
+        indexCalls.push(payload.available);
+        indexStaged = payload.available === true;
+        if (indexStaged) indexPending = false;
+        return {staged: indexStaged};
+      }
+      if (operation === "soundset.catalog.pending") {
+        const objects = [...pending];
+        pending.length = 0;
+        const index = indexPending;
+        indexPending = false;
+        return {index, objects};
+      }
+      if (operation === "soundset.catalog.supply") {
+        supplied.push({...payload});
+        const key = `${payload.object_kind}/${payload.sha256}`;
+        const held = payload.offset === 0 ? 0 : partial.get(key);
+        if (held !== payload.offset) {
+          throw new Error(`out of order supply at ${payload.offset}`);
+        }
+        const next = payload.offset + (envelope.sidecarBytes ?? 0);
+        partial.set(key, next);
+        if (next < payload.byte_length) return {staged: false};
+        partial.delete(key);
+        staged.set(key, payload.byte_length);
+        return {staged: true};
+      }
+      if (operation !== "soundset.catalog.list") {
+        return null;
+      }
+      if (!indexStaged || !indexReadable) {
+        indexPending = true;
+        // S11-D7: the Set Store is the Workspace's, not the Catalog's. What it
+        // already published lists whether or not the Catalog answers.
+        return {catalog_available: false, sets: [...cached], refused: [],
+          project_revision: 0};
+      }
+      const complete = want("manifest", MANIFEST_SHA) &&
+        want("blob", BLOB_SHA) && want("blob", DEMO_SHA);
+      return {
+        catalog_available: true,
+        project_revision: 0,
+        refused: [],
+        sets: complete
+          ? [...cached, {
+              set_id: SET_ID,
+              version: "1.0.0",
+              manifest_sha256: MANIFEST_SHA,
+              name: "Fixture Attribution Kit",
+              publisher: "Bea Waveform",
+              description: null,
+              bpm: 128,
+              key: "Fm",
+              total_bytes: 34_788,
+              has_demo: true,
+              license: {
+                spdx_id: "CC-BY-4.0",
+                rights_holder: "Bea Waveform",
+                copyright: "(c) 2026 Bea Waveform",
+                attribution: "Fixture Attribution Kit by Bea Waveform",
+              },
+              occupied_slots: [{slot: 0, role: "kick", name: "Kick"}],
+            }]
+          : [...cached],
+      };
+    },
+    blobBytes,
+  };
+}
+
+function soundsetFixture({host, catalog}) {
+  return fixture({
+    soundsetCatalog: catalog,
+    send(envelope, transportOptions) {
+      const handled = host.send({
+        ...envelope,
+        sidecarBytes: transportOptions?.sidecar?.byteLength ?? 0,
+      });
+      return success(
+        envelope,
+        handled ?? defaultResult(envelope.operation),
+      );
+    },
+  });
+}
+
+test("acquires Sound Sets by resolving exactly the addresses Core asks for", async () => {
+  const host = soundsetHost({blobBytes: 1_200_000});
+  const asked = [];
+  const catalog = {
+    readIndex: async () => new Uint8Array(16),
+    readObject: async (request) => {
+      assert.deepEqual(Object.keys(request).sort(), ["object_kind", "sha256"]);
+      asked.push(`${request.object_kind}/${request.sha256}`);
+      return new Uint8Array(
+        request.object_kind === "manifest" ? 32 : host.blobBytes);
+    },
+  };
+  const {session} = soundsetFixture({host, catalog});
+  assert.equal(await session.start(), true);
+
+  const listed = await session.listSoundSets();
+
+  assert.deepEqual(asked, [
+    `manifest/${MANIFEST_SHA}`,
+    `blob/${BLOB_SHA}`,
+    `blob/${DEMO_SHA}`,
+  ]);
+  assert.equal(listed.catalogAvailable, true);
+  assert.equal(listed.sets.length, 1);
+  // The CC-BY-4.0 attribution string reaches the surface verbatim.
+  assert.equal(
+    listed.sets.at(-1).license.attribution,
+    "Fixture Attribution Kit by Bea Waveform",
+  );
+  assert.equal(listed.sets.at(-1).hasDemo, true);
+  assert.deepEqual(host.indexCalls, [true]);
+
+  // A blob larger than one bridge message crosses in order, in as many
+  // messages as it needs, and is only readable once whole.
+  const blob = host.supplied.filter((entry) => entry.sha256 === BLOB_SHA);
+  assert.equal(blob.length, 3);
+  assert.deepEqual(blob.map((entry) => entry.offset), [0, 524_288, 1_048_576]);
+  assert.ok(blob.every((entry) => entry.byte_length === 1_200_000));
+  assert.ok(host.supplied.every((entry) =>
+    Object.keys(entry).sort().join() ===
+      "byte_length,object_kind,offset,sha256"));
+});
+
+// One Set the Workspace Set Store already published, so "still lists" has
+// something to be true of.
+const CACHED_SET = Object.freeze({
+  set_id: "44444444-4444-4444-8444-444444444444",
+  version: "2.0.0",
+  manifest_sha256: "d4".repeat(32),
+  name: "Already In This Workspace",
+  publisher: "LMDJ Fixtures",
+  description: null,
+  bpm: null,
+  key: null,
+  total_bytes: 2_048,
+  has_demo: false,
+  license: {
+    spdx_id: "CC0-1.0",
+    rights_holder: "LMDJ Fixtures",
+    copyright: "(c) 2026 LMDJ Fixtures",
+    attribution: "",
+  },
+  occupied_slots: [{slot: 0, role: "kick", name: "Kick"}],
+});
+
+test("an unreachable Catalog still lists what the Set Store holds", async () => {
+  const host = soundsetHost({cached: [CACHED_SET]});
+  const catalog = {
+    readIndex: async () => {
+      const error = new Error("offline");
+      error.code = "IO_ERROR";
+      error.details = {reason: "catalog_unavailable"};
+      throw error;
+    },
+    readObject: async () => {
+      throw new Error("no object read is expected while the Catalog is down");
+    },
+  };
+  const {session} = soundsetFixture({host, catalog});
+  assert.equal(await session.start(), true);
+
+  const listed = await session.listSoundSets();
+
+  assert.equal(listed.catalogAvailable, false);
+  // The cached Set is still listed, with everything inspect and install need.
+  assert.deepEqual(listed.sets.map((set) => set.name), [
+    "Already In This Workspace",
+  ]);
+  assert.equal(listed.sets[0].manifestSha256, CACHED_SET.manifest_sha256);
+  // The Host withdrew its index rather than leaving a stale one readable, and
+  // the acquisition loop stopped instead of spinning.
+  assert.deepEqual(host.indexCalls, [false]);
+  assert.deepEqual(host.supplied, []);
+});
+
+test("an address that cannot be resolved leaves the loop and the other Sets", async () => {
+  const host = soundsetHost({cached: [CACHED_SET]});
+  let reads = 0;
+  const catalog = {
+    readIndex: async () => new Uint8Array(16),
+    readObject: async () => {
+      reads += 1;
+      const error = new Error("gone");
+      error.code = "IO_ERROR";
+      error.details = {reason: "catalog_unavailable"};
+      throw error;
+    },
+  };
+  const {session} = soundsetFixture({host, catalog});
+  assert.equal(await session.start(), true);
+
+  const listed = await session.listSoundSets();
+
+  assert.equal(listed.catalogAvailable, true);
+  // The Set whose objects could not be resolved is absent; the one the Set
+  // Store already holds is untouched by that failure.
+  assert.deepEqual(listed.sets.map((set) => set.name), [
+    "Already In This Workspace",
+  ]);
+  // One pass that resolves nothing ends the loop: no round bound is reached
+  // and no address is re-asked forever.
+  assert.equal(reads, 1);
+});
+
+test("refuses a Sound Set request the Locked Facade Surface cannot express", async () => {
+  const host = soundsetHost();
+  const {session} = soundsetFixture({
+    host,
+    catalog: {readIndex: async () => new Uint8Array(0), readObject: async () => {
+      throw new Error("unused");
+    }},
+  });
+  assert.equal(await session.start(), true);
+
+  const identity = {
+    setId: SET_ID,
+    version: "1.0.0",
+    manifestSha256: MANIFEST_SHA,
+  };
+  await assert.rejects(
+    session.inspectSoundSet({...identity, workspacePath: "/tmp/workspace"}),
+    (error) => error.code === "INVALID_ARGUMENT",
+  );
+  await assert.rejects(
+    session.inspectSoundSet({...identity, manifestSha256: MANIFEST_SHA.toUpperCase()}),
+    (error) => error.code === "INVALID_ARGUMENT",
+  );
+  await assert.rejects(
+    session.previewSoundSetMap({...identity, bankId: 4}),
+    (error) => error.code === "INVALID_ARGUMENT",
+  );
+  await assert.rejects(
+    session.installSoundSet({
+      ...identity,
+      bankId: 0,
+      commandId: "00000000-0000-4000-8000-000000000900",
+      expectedRevision: 1,
+      occupiedPadPolicy: "overwrite",
+    }),
+    (error) => error.code === "INVALID_ARGUMENT",
+  );
+});
+
+test("forwards the occupied Pad policy only when the caller chose one", async () => {
+  const host = soundsetHost();
+  const installs = [];
+  const {session} = fixture({
+    soundsetCatalog: null,
+    send(envelope) {
+      if (envelope.operation === "soundset.install") {
+        installs.push(envelope.payload);
+        return success(envelope, {
+          bank_id: envelope.payload.bank_id,
+          set_id: SET_ID,
+          version: "1.0.0",
+          manifest_sha256: MANIFEST_SHA,
+          installed: [{slot_index: 0, pad: 0}],
+          collisions: [],
+          kept: [],
+          replayed: false,
+          project_revision: 7,
+        });
+      }
+      return success(envelope, host.send(envelope) ??
+        defaultResult(envelope.operation));
+    },
+  });
+  assert.equal(await session.start(), true);
+
+  const identity = {
+    setId: SET_ID,
+    version: "1.0.0",
+    manifestSha256: MANIFEST_SHA,
+    bankId: 2,
+    expectedRevision: 6,
+  };
+  const bare = await session.installSoundSet({
+    ...identity,
+    commandId: "00000000-0000-4000-8000-000000000901",
+  });
+  assert.equal(bare.committedRevision, 7);
+  assert.deepEqual(bare.installed, [{slotIndex: 0, pad: 0}]);
+  await session.installSoundSet({
+    ...identity,
+    commandId: "00000000-0000-4000-8000-000000000902",
+    occupiedPadPolicy: "replace",
+  });
+
+  assert.ok(!Object.hasOwn(installs[0], "occupied_pad_policy"));
+  assert.equal(installs[1].occupied_pad_policy, "replace");
+  assert.deepEqual(Object.keys(installs[1]).sort(), [
+    "bank_id",
+    "command_id",
+    "expected_revision",
+    "manifest_sha256",
+    "occupied_pad_policy",
+    "set_id",
+    "version",
+  ]);
+});
+
+test("a Set slot that disagrees with itself about being empty is refused", async () => {
+  const slots = (override) => Array.from({length: 16}, (_, slot) =>
+    slot === 0 ? override : {slot, occupied: false});
+  const inspectWith = (slot0) => fixture({
+    soundsetCatalog: null,
+    send(envelope) {
+      if (envelope.operation !== "soundset.inspect") {
+        return success(envelope, defaultResult(envelope.operation));
+      }
+      return success(envelope, {
+        set_id: SET_ID,
+        version: "1.0.0",
+        manifest_sha256: MANIFEST_SHA,
+        name: "Inconsistent Kit",
+        publisher: "LMDJ Fixtures",
+        description: null,
+        bpm: null,
+        key: null,
+        total_bytes: 1_024,
+        has_demo: false,
+        license: {
+          spdx_id: "CC0-1.0",
+          rights_holder: "LMDJ Fixtures",
+          copyright: "(c) 2026 LMDJ Fixtures",
+          attribution: "",
+        },
+        occupied_slots: [],
+        slots: slots(slot0),
+        demo: null,
+        project_revision: 0,
+      });
+    },
+  });
+  const identity = {
+    setId: SET_ID,
+    version: "1.0.0",
+    manifestSha256: MANIFEST_SHA,
+  };
+  const artifact = {
+    sha256: BLOB_SHA,
+    media_type: "audio/wav",
+    byte_length: 64,
+  };
+
+  // S11-D12 turns on emptiness, so the two ways Core states it must agree
+  // before a surface reads either. A slot that claims to be occupied and names
+  // no Artifact is a protocol fault, not an empty slot the Creator may quietly
+  // present as one.
+  const {session: missing} = inspectWith({slot: 0, occupied: true});
+  assert.equal(await missing.start(), true);
+  await assert.rejects(
+    missing.inspectSoundSet(identity),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+
+  // And the reverse: an Artifact under a slot that calls itself empty must
+  // never be silently dropped into "nothing here".
+  const {session: stray} = inspectWith({slot: 0, occupied: false, artifact});
+  assert.equal(await stray.start(), true);
+  await assert.rejects(
+    stray.inspectSoundSet(identity),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
 });

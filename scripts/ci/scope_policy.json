@@ -104,6 +104,7 @@
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/runtime_session.test.mjs"}, "lanes": ["portal", "web_toolchain", "web_runtime_host"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/state_machine.test.mjs"}, "lanes": ["portal", "web_toolchain", "web_runtime_host"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/source_boundary_test.py"}, "lanes": ["portal", "web_toolchain", "web_runtime_host"]},
+    {"match": {"kind": "exact", "value": "packages/web-runtime-platform/test/soundset_catalog.test.mjs"}, "lanes": ["portal", "web_toolchain", "web_runtime_host"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/CMakeLists.txt"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_toolchain", "web_runtime_host"]},
     {"match": {"kind": "exact", "value": "packages/web-runtime-platform/module.json"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_toolchain", "web_runtime_host"]},
     {"match": {"kind": "prefix", "value": "packages/web-runtime-platform/include/"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_toolchain", "web_runtime_host"]},

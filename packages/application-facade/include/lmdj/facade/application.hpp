@@ -139,6 +139,91 @@ struct LocalSoundSetCatalog {
 LocalSoundSetCatalog make_workspace_soundset_catalog(
     const std::filesystem::path &workspace_root);
 
+// The Catalog for a Host that resolves the objects itself -- a browser `fetch`
+// against a Host-configured endpoint, say. Core still ships no network code
+// and still owns every Contract, hash and eligibility decision; the Host only
+// moves bytes in.
+//
+// This is the whole of the Host-facing surface, and it is deliberately
+// narrower than `CatalogTransport`: an object is named by its kind and its
+// lowercase sha256 and by nothing else, so a Host cannot widen the S11-D6
+// transport surface, and a Host never spells a `project_io` type to use it.
+class SuppliedSoundSetCatalog {
+public:
+  // One address Core asked for and the Host has not supplied.
+  struct PendingObject {
+    // Exactly `"manifest"` or `"blob"`.
+    std::string object_kind;
+    std::string sha256;
+  };
+
+  struct PendingReads {
+    // Core asked for the Catalog index and it was not supplied.
+    bool index = false;
+    // The object addresses, in the order Core asked for them, each once.
+    std::vector<PendingObject> objects;
+  };
+
+  virtual ~SuppliedSoundSetCatalog() = default;
+
+  SuppliedSoundSetCatalog(const SuppliedSoundSetCatalog &) = delete;
+  SuppliedSoundSetCatalog &operator=(const SuppliedSoundSetCatalog &) = delete;
+  SuppliedSoundSetCatalog(SuppliedSoundSetCatalog &&) = delete;
+  SuppliedSoundSetCatalog &operator=(SuppliedSoundSetCatalog &&) = delete;
+
+  // Supply one object. `object_kind` is `"manifest"` or `"blob"` and `sha256`
+  // is 64 lowercase hex characters; anything else is refused without staging.
+  // An object larger than one Host message arrives in order as a run of calls
+  // carrying the same address and rising `offset`, and becomes readable only
+  // once `byte_length` bytes have arrived; there is at most one incomplete
+  // object at a time. Returns whether the object is now complete.
+  //
+  // The bytes are not hash-checked on the way in, because a Catalog that
+  // answered with the wrong bytes must reach Core as
+  // `soundset_content_mismatch` rather than disappear into a retry.
+  virtual foundation::Result<bool> supply(
+      std::string_view object_kind,
+      std::string_view sha256,
+      std::uint64_t offset,
+      std::uint64_t byte_length,
+      std::span<const std::byte> bytes) = 0;
+
+  // Replace the supplied `lmdj.soundset-catalog.v1` index.
+  virtual foundation::Result<void> supply_index(
+      std::span<const std::byte> bytes) = 0;
+
+  // Forget it. A Host whose own Catalog read failed calls this so that an
+  // earlier pass's index cannot report a Catalog that is no longer reachable.
+  virtual void forget_index() = 0;
+
+  // Read and clear what Core asked for and could not be served, so one drain
+  // reports the whole of the last pass and never repeats it.
+  virtual PendingReads drain_pending() = 0;
+
+  // Drop every supplied object. The Set Store owns what it published; this is
+  // only the crossing point.
+  virtual void clear_staged() = 0;
+
+protected:
+  SuppliedSoundSetCatalog() = default;
+};
+
+// The same object in its three roles: Core's transport, Core's index source,
+// and the Host's control surface.
+struct SuppliedSoundSetCatalogHandle {
+  std::shared_ptr<project_io::CatalogTransport> transport;
+  std::shared_ptr<SoundSetCatalogSource> source;
+  std::shared_ptr<SuppliedSoundSetCatalog> control;
+};
+
+// `maximum_staged_bytes` bounds everything the Host has supplied and Core has
+// not yet published, and `maximum_staged_objects` bounds how many addresses
+// that may span. Both are Host capacity decided before an allocation: a
+// supply that would cross either bound is refused whole and stages nothing.
+SuppliedSoundSetCatalogHandle make_supplied_soundset_catalog(
+    std::uint64_t maximum_staged_bytes,
+    std::size_t maximum_staged_objects);
+
 struct ApplicationConfig {
   std::filesystem::path workspace_root;
   std::shared_ptr<provider::Registry> providers;

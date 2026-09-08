@@ -3,6 +3,8 @@ import {createRuntimeSession} from
   "@lmdj/web-runtime-platform/runtime_session.mjs";
 import {createPerformanceMasterTap} from
   "@lmdj/web-runtime-platform/performance_master_capture.mjs";
+import {createFetchCatalogClient} from
+  "@lmdj/web-runtime-platform/soundset_catalog.mjs";
 import performanceMasterTapUrl from
   "@lmdj/web-runtime-platform/performance_master_tap_worklet.js?url&no-inline";
 import {WEB_RUNTIME_IDENTITY} from
@@ -27,6 +29,44 @@ Object.defineProperty(window, "__LMDJ_CREATOR_BUILD__", {
   enumerable: false,
   writable: false,
 });
+
+// S11-D6: the Catalog endpoint is Workspace/Host settings and never Project
+// Truth, so it is configured on the Host page and nowhere else. A Host that
+// configures none browses whatever its Workspace Set Store already holds; the
+// Creator invents no default endpoint of its own.
+function soundSetCatalogEndpoint(): string | null {
+  const injected = (
+    window as Window & {__LMDJ_SOUNDSET_CATALOG__?: unknown}
+  ).__LMDJ_SOUNDSET_CATALOG__;
+  if (typeof injected === "string" && injected.length > 0) {
+    return injected;
+  }
+  const configured = document
+    .querySelector('meta[name="lmdj-soundset-catalog"]')
+    ?.getAttribute("content");
+  return configured !== null && configured !== undefined && configured !== ""
+    ? configured
+    : null;
+}
+
+function createSoundSetCatalog(): ReturnType<
+  typeof createFetchCatalogClient
+> | null {
+  const endpoint = soundSetCatalogEndpoint();
+  if (endpoint === null) {
+    return null;
+  }
+  try {
+    return createFetchCatalogClient({
+      endpoint,
+      fetch: window.fetch.bind(window),
+    });
+  } catch {
+    // A malformed endpoint is a Host configuration fault, not a reason to
+    // refuse to start: the Workspace Set Store is still browsable.
+    return null;
+  }
+}
 
 function createCreatorRuntimeSession(): CreatorRuntimeSession {
   const host = WEB_RUNTIME_IDENTITY.hosts["creator-web"];
@@ -61,6 +101,7 @@ function createCreatorRuntimeSession(): CreatorRuntimeSession {
       expectedAssets: host.expected_assets,
     },
     inputOwnership: "host",
+    soundsetCatalog: createSoundSetCatalog(),
     seams: {
       createPerformanceMasterTap,
       ...seams,

@@ -1026,6 +1026,9 @@ struct ControlRuntime::Impl {
       audio::RuntimePreparationLimits owned_limits)
       : workspace_root(std::move(root)),
         limits(owned_limits),
+        host_catalog(
+            std::dynamic_pointer_cast<facade::SuppliedSoundSetCatalog>(
+                config.soundset_catalog_transport)),
         performance_publication_failure(
             std::make_shared<std::atomic<bool>>(false)),
         performance_service(),
@@ -1935,6 +1938,11 @@ struct ControlRuntime::Impl {
 
   std::filesystem::path workspace_root;
   audio::RuntimePreparationLimits limits;
+  // The browser side of the Web Host's `CatalogTransport`, when the Host wired
+  // one. Held so the three Host-local Catalog operations can stage bytes and
+  // read back the addresses Core asked for; it is the same object the
+  // Application holds as its transport and its index source.
+  std::shared_ptr<facade::SuppliedSoundSetCatalog> host_catalog;
   audio::RealtimeEngine engine;
   std::shared_ptr<std::atomic<bool>> performance_publication_failure;
   std::function<void()> performance_service;
@@ -2078,6 +2086,70 @@ Json ControlRuntime::dispatch(
         {"performance.replay.status", true},
         {"performance.resample.commit", false},
     };
+    // The browser half of the Web Host's `CatalogTransport`. These three are
+    // Host-local plumbing, not Facade operations: they never reach
+    // `Application`, they carry no Project and no revision, and they exist only
+    // so the browser side can `fetch` the two locked object kinds from the
+    // Host-configured Catalog endpoint and hand the bytes to Core. Core keeps
+    // every Contract, hash and eligibility decision.
+    if (operation == "soundset.catalog.supply" ||
+        operation == "soundset.catalog.index" ||
+        operation == "soundset.catalog.pending") {
+      if (impl_->host_catalog == nullptr) {
+        return state_error("Host Catalog transport is unavailable");
+      }
+      if (operation == "soundset.catalog.pending") {
+        require(exact_keys(payload, {}));
+        require(sidecar.empty());
+        const auto reads = impl_->host_catalog->drain_pending();
+        auto objects = Json::array();
+        for (const auto& object : reads.objects) {
+          objects.push_back({
+              {"object_kind", object.object_kind},
+              {"sha256", object.sha256},
+          });
+        }
+        return success({{"index", reads.index}, {"objects", std::move(objects)}});
+      }
+      if (operation == "soundset.catalog.index") {
+        require(exact_keys(payload, {"available"}));
+        // The index read opens a listing pass, and supplied objects live for
+        // exactly one pass: Core publishes what it accepted into the Workspace
+        // Set Store, and the crossing buffer owns nothing after that. Without
+        // this the two Host bounds would be lifetime totals rather than
+        // high-water marks, and a long session would quietly stop being able
+        // to acquire anything.
+        impl_->host_catalog->clear_staged();
+        if (!bool_field(payload, "available")) {
+          require(sidecar.empty());
+          impl_->host_catalog->forget_index();
+          return success({{"staged", false}});
+        }
+        const auto staged = impl_->host_catalog->supply_index(sidecar);
+        if (!staged.has_value()) {
+          return normalized_error(staged.error());
+        }
+        return success({{"staged", true}});
+      }
+      // `soundset.catalog.supply` carries the locked address plus the framing
+      // one object needs to cross more than one bridge message. There is no
+      // path, name, URL or archive member here, so a browser side that
+      // resolved something other than `{object_kind, sha256}` has no way to
+      // say so.
+      require(
+          exact_keys(
+              payload, {"object_kind", "sha256", "offset", "byte_length"}));
+      const auto object_kind = string_field(payload, "object_kind");
+      const auto sha256 = string_field(payload, "sha256");
+      const auto offset = unsigned_field(payload, "offset");
+      const auto byte_length = unsigned_field(payload, "byte_length");
+      const auto staged = impl_->host_catalog->supply(
+          object_kind, sha256, offset, byte_length, sidecar);
+      if (!staged.has_value()) {
+        return normalized_error(staged.error());
+      }
+      return success({{"staged", staged.value()}});
+    }
     static const std::map<std::string_view, bool> soundset_operations{
         {"soundset.audition", true},
         {"soundset.catalog.list", true},

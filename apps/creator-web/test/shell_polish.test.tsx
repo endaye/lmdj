@@ -98,7 +98,7 @@ test("mode rail glyphs never reuse Pad keyboard letters", () => {
     document.querySelectorAll(".mode-glyph"),
     (glyph) => glyph.textContent ?? "",
   );
-  expect(glyphs).toHaveLength(4);
+  expect(glyphs).toHaveLength(5);
   for (const glyph of glyphs) expect(glyph).not.toMatch(/^[A-Za-z]$/);
 });
 
