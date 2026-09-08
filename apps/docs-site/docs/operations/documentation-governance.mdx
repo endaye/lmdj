@@ -37,7 +37,7 @@ schema-2 快照把 37 页 current source、versioned sidebar、十张图的 20 �
 ## 发布规则
 正式入口为 [产品说明书](https://docs.lmdj.workers.dev)。页面 canonical、Open Graph
 地址及 sitemap 使用该固定入口；版本 Preview 仍引用正式 canonical。此变更不修改
-自有域名或旧 Netlify 入口，冻结快照的源码和来源记录保持原样。
+自有域名；旧 Netlify 入口已退役删除，冻结快照的源码和来源记录保持原样。
 Git 合入 main 触发 Cloudflare 构建；先通过完整 Portal check，再验证同一 Git SHA 的版本 Preview，发布同一个 version ID 并验证生产 smoke。手工本地上传不能替代 Git 生产流程。
 
 ## CI 影响检查
@@ -51,7 +51,9 @@ npm 10.9.3 执行安装与完整 Portal check；`static/_headers` 保留现有�
 试点以 `wrangler versions upload` 创建版本预览，不修改活动部署。
 配置存在和本地检查通过不代表已恢复 GitHub PR Preview；仍需记录实际版本 URL、
 源码 SHA 和线上 smoke。当前生产入口由固定 Cloudflare 配置和 deploy-cloudflare-portal.yml 管理。
-Netlify 专用构建、依赖和 smoke 已移除；外部 Netlify GitHub App 须单独断开本仓库。
+Netlify 专用 Portal 构建、依赖和 smoke 已移除；三个旧站点的 Git 连接和旧 Worker
+构建触发器已停用，旧 `lmdj` Worker 与三个 Netlify 站点随后获授权删除。
+上面的根配置仅保留历史试点用途，不应重建已退役目标。
 历史失败与快照保留；Cloudflare 版本 Preview 不等于已启用逐 PR Preview。
 Cloudflare 控制台须按部署手册显式设置构建命令；不能仅依赖 Wrangler custom build。
 
@@ -75,6 +77,8 @@ Environment 凭据以及现场验收。代码合并和本地测试不代表试�
 达到 90% 时停止接纳新尝试。这是人工监督台账，尚非自动账单告警。
 试点结束并等待最后一个发布任务终止后，移除试点变量；全量 Preview 尚未授权。
 
-稳定观察期为验收通过后的连续七天；旧部署和导出的恢复证据至少保留到切换后
-30 天，不能依赖仅保留七天的构建 artifact。Creator 旧 origin 和本地编辑数据
-继续保留，跨 origin 的正式 Project 导出/导入另由 #961 设计。
+稳定观察期为验收通过后的连续七天。2026-09-08 用户追加授权删除旧站点和托管
+数据，替代此前旧部署保留 30 天及保留 Creator 旧 origin 的决定。私有恢复证据
+仍按原期限保存，不能依赖仅保留七天的构建 artifact。删除远端站点不会清除用户
+浏览器的 IndexedDB/OPFS；本次没有读取或删除浏览器本地 Project，也不声称完成
+跨 origin 数据迁移。正式 Project 导出/导入仍由 #961 设计。

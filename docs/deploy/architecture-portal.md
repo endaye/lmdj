@@ -4,7 +4,7 @@
 
 用户已选定 `https://docs.lmdj.workers.dev/`。独立配置位于
 `apps/docs-site/deploy/wrangler.json`；配置存在不表示已经发布。
-`lmdj` Worker 继续保留既有试点，`docs` 通过 Git 构建部署。
+旧 `lmdj` Worker 已退役删除；`docs` 通过 Git 构建部署。
 
 `.github/workflows/deploy-cloudflare-portal.yml` 由 `main` push 触发，在现有
 `ci-general` 自托管 runner 构建和验证精确 Git SHA。生产并发组串行化发布，排队的
@@ -15,7 +15,8 @@
 `scripts/cloudflare-portal-deploy.py` 先上传版本 Preview 并验证同一 Git SHA，再发布
 同一个 version ID；初始 Worker 在 Preview 通过前关闭主路由。生产 HTTP smoke
 有界重试等待路由传播，失败后核对活动版本并恢复 exact prior 或关闭首次部署入口。
-操作观察保留为 workflow artifact。自有域名、旧 Netlify 地址与 `lmdj` 试点保持原状。
+操作观察保留为 workflow artifact。自有域名未修改；旧资源删除记录见
+[退役记录](2026-09-08-retired-site-deletion.md)。
 正常发布由 Git 触发；本地目录不能作为手动生产上传输入。
 
 ## 当前 CI 和部署证据
@@ -28,11 +29,14 @@
 
 用户已停用 Netlify。仓库移除旧构建配置、Netlify CLI 依赖和 deployment-status smoke workflow。Cloudflare 的构建、Preview 与生产 smoke 继续执行。
 
-GitHub 上的 netlify/lmdj/deploy-preview、Header rules、Redirect rules 和 Pages changed 由外部 Netlify 集成生成。站点管理员需在 Netlify 断开本仓库的 Git 集成，或在 GitHub 的 Netlify App 授权中移除本仓库。不要卸载其他仓库仍使用的集成，不删除历史 deploy 或 CheckRun。仓库变更不能代替这一步；用后续新 PR 检查清单确认不再出现旧检查。
+GitHub 上的 netlify/lmdj/deploy-preview、Header rules、Redirect rules 和 Pages changed 由外部 Netlify 集成生成。三个旧站点的 Git 连接已断开，旧 Worker 构建触发器已删除；随后按用户追加授权删除四个旧资源。新 PR 已验证不再出现旧检查。GitHub 历史 CheckRun 和归档证据保留，共享 App 授权未卸载。
 
 #867 的旧失败证据保留。目标是退役旧服务，不是恢复 Netlify Preview；Cloudflare 逐 PR Preview 是否启用须另以真实 PR URL、SHA 和线上内容确认。
 
-## Cloudflare Portal pilot (#873)
+## 历史 Cloudflare Portal pilot (#873)
+
+以下保留原试点配置说明，目标 `lmdj` 已删除，不能再按此操作。当前 PR Preview
+使用独立的 `portal-preview` Worker 和可信 publisher；生产使用 `docs`。
 
 The observed LMDJ account is `0b62b8881c07f48f7935f5380a1f55db`; the user-created
 Worker is `lmdj`, with workers.dev subdomain `lmdj`. The observed Worker has

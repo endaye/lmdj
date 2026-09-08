@@ -1,5 +1,10 @@
 # Creator Web Host 公共部署运行手册
 
+> 2026-09-08 退役更新：旧 Netlify 站点已按用户授权删除，对应 GitHub 手动部署
+> workflow 已停用。下述 Netlify 路径仅供历史审计，不再是可用的生产或回滚入口。
+> 当前部署与恢复使用 [Cloudflare Host 手册](cloudflare-hosts.md)，
+> 资源及数据边界见 [退役记录](2026-09-08-retired-site-deletion.md)。
+
 ## Cloudflare 迁移目标（2026-09-08）
 
 用户已选择固定地址 `https://creator.lmdj.workers.dev/`，对应 LMDJ account
@@ -24,7 +29,7 @@ Netlify deployment evidence Contract。浏览器测试仍使用原有 Creator de
 本次固定入口的 HTTP、浏览器和签名包身份观察记录在
 [`2026-09-08-cloudflare-creator-observation.json`](2026-09-08-cloudflare-creator-observation.json)。
 禁止用源码重建产物冒充同一个 Release。只有候选验证通过后才启用固定访问地址；
-首次上线验证失败时关闭该路由。现有 Netlify 事务与下述历史生产路径继续保留。
+首次上线验证失败时关闭该路由。下述 Netlify 事务源码保留供历史审计，旧站点已删除。
 
 本手册定义 Creator Web Host 的受控生产部署路径。它是操作契约，不是执行记录；文档、
 workflow 或本地 Proof 的存在都不表示 Netlify Site 已创建，也不授权 Release publication、
