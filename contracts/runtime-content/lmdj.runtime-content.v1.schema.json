@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/runtime-content/lmdj.runtime-content.v1.schema.json",
+  "x-lmdj-contract-version": "1.0.0",
+  "title": "Runtime Content semantic metadata projection",
+  "description": "Decoded metadata only. README.md defines the normative binary encoding and cross-field, body and complete-identity validation; this JSON is not the wire format.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "contract_version", "identity", "required_capabilities", "source", "pattern", "pads", "samples"],
+  "properties": {
+    "contract": {"const": "lmdj.runtime-content.v1"},
+    "contract_version": {"const": "1.0.0"},
+    "identity": {"$ref": "#/$defs/identity"},
+    "required_capabilities": {"const": ["pattern", "live-pad", "pcm16le"]},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "pattern_id", "revision"],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/uuid"},
+        "pattern_id": {"$ref": "#/$defs/uuid"},
+        "revision": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+      }
+    },
+    "pattern": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bpm", "bars", "ppq", "loop_length_ticks", "events"],
+      "properties": {
+        "bpm": {"type": "integer", "minimum": 40, "maximum": 240},
+        "bars": {"enum": [1, 2, 4, 8]},
+        "ppq": {"const": 960},
+        "loop_length_ticks": {"enum": [3840, 7680, 15360, 30720]},
+        "events": {
+          "type": "array",
+          "maxItems": 4294967295,
+          "items": {"$ref": "#/$defs/event"}
+        }
+      }
+    },
+    "pads": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/pad"}
+    },
+    "samples": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/sample"}
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "byte_length"],
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "byte_length": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}
+      }
+    },
+    "slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "pad"],
+      "properties": {
+        "bank": {"type": "integer", "minimum": 0, "maximum": 3},
+        "pad": {"type": "integer", "minimum": 0, "maximum": 15}
+      }
+    },
+    "pad": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot", "sample_index", "start_frame", "end_frame", "trigger_mode", "linear_gain", "muted"],
+      "properties": {
+        "slot": {"$ref": "#/$defs/slot"},
+        "sample_index": {"type": "integer", "minimum": 0, "maximum": 63},
+        "start_frame": {"type": "integer", "minimum": 0, "maximum": 4294967294},
+        "end_frame": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+        "trigger_mode": {"enum": ["one-shot", "gate", "loop-gate", "loop-toggle"]},
+        "linear_gain": {"type": "number", "minimum": 0, "maximum": 2},
+        "muted": {"type": "boolean"}
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot", "onset_tick", "duration_tick", "velocity"],
+      "properties": {
+        "slot": {"$ref": "#/$defs/slot"},
+        "onset_tick": {"type": "integer", "minimum": 0, "maximum": 30719},
+        "duration_tick": {"type": "integer", "minimum": 1, "maximum": 30720},
+        "velocity": {"type": "integer", "minimum": 1, "maximum": 127}
+      }
+    },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "sample_rate", "channels", "frame_count", "pcm_byte_length"],
+      "properties": {
+        "identity": {"$ref": "#/$defs/identity"},
+        "sample_rate": {"const": 48000},
+        "channels": {"enum": [1, 2]},
+        "frame_count": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+        "pcm_byte_length": {"type": "integer", "minimum": 2, "maximum": 17179869180}
+      }
+    }
+  }
+}

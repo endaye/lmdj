@@ -104,6 +104,24 @@ lmdj_target_sanitizers(lmdj_core_c)
 
 if(BUILD_TESTING)
   add_executable(
+    lmdj_facade_runtime_content_export_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/runtime_content_export_test.cpp"
+  )
+  target_include_directories(
+    lmdj_facade_runtime_content_export_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_facade_runtime_content_export_tests PRIVATE lmdj::application
+  )
+  lmdj_target_warnings(lmdj_facade_runtime_content_export_tests)
+  lmdj_target_sanitizers(lmdj_facade_runtime_content_export_tests)
+  lmdj_add_test(
+    NAME facade.runtime_content_export
+    TIER component
+    COMMAND lmdj_facade_runtime_content_export_tests
+  )
+
+  add_executable(
     lmdj_facade_performance_runtime_consumer_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/performance_runtime_consumer_test.cpp"
   )

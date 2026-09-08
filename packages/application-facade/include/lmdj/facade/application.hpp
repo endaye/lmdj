@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include <lmdj/audio/runtime_preparation_limits.hpp>
+#include <lmdj/cooker/runtime_content.hpp>
 #include <lmdj/cooker/runtime_snapshot.hpp>
 #include <lmdj/cooker/sample_analysis.hpp>
 #include <lmdj/domain/command_handler.hpp>
@@ -195,6 +196,17 @@ struct RuntimeSnapshotRequest {
   std::filesystem::path project_path;
   foundation::PatternId pattern_id;
   std::optional<audio::RuntimePreparationLimits> limits = std::nullopt;
+};
+
+// Computer-side derived export; codec limits do not bound source WAV cooking.
+// Never persists the selected Pad closure or publishes a runtime generation.
+struct RuntimeContentExportRequest {
+  std::filesystem::path project_path;
+  foundation::ProjectId project_id;
+  foundation::PatternId pattern_id;
+  std::uint64_t expected_revision;
+  std::vector<domain::PadSlotId> live_pad_slots;
+  cooker::RuntimeContentLimits limits;
 };
 
 struct InitialProjectRequest {
@@ -490,6 +502,8 @@ class Application {
   nlohmann::json query(const nlohmann::json& request) const;
   foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>
   prepare_runtime_snapshot(const RuntimeSnapshotRequest& request);
+  foundation::Result<cooker::EncodedRuntimeContent> export_runtime_content(
+      const RuntimeContentExportRequest& request);
   foundation::Result<RuntimeProjectWriterLease> acquire_project_writer(
       const std::filesystem::path& project_path);
   foundation::Result<domain::ProjectState> create_initial_project(

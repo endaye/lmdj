@@ -4133,6 +4133,66 @@ struct Application::Impl {
         request.limits);
   }
 
+  foundation::Result<cooker::EncodedRuntimeContent> export_runtime_content(
+      const RuntimeContentExportRequest& request) {
+    using ExportResult = foundation::Result<cooker::EncodedRuntimeContent>;
+    if (!valid_host_project_path(request.project_path) ||
+        !domain::is_valid_uuid(request.project_id.value()) ||
+        !domain::is_valid_uuid(request.pattern_id.value()) ||
+        request.live_pad_slots.size() > 64) {
+      return ExportResult::failure(
+          {ErrorCode::invalid_argument, "runtime content export request is invalid"});
+    }
+    std::array<std::array<bool, 16>, 4> selected{};
+    for (const auto slot : request.live_pad_slots) {
+      if (!domain::is_valid_slot(slot) || selected[slot.bank][slot.pad]) {
+        return ExportResult::failure(
+            {ErrorCode::invalid_argument, "live Pad selection is invalid or duplicated"});
+      }
+      selected[slot.bank][slot.pad] = true;
+    }
+    auto loaded = projects.load(request.project_path);
+    if (!loaded.has_value()) return ExportResult::failure(loaded.error());
+    // Freeze one loaded value. Later authoring writes cannot retarget this
+    // export; artifact identity verification still guards every source read.
+    auto project = std::move(loaded.value());
+    if (project.id != request.project_id) {
+      return ExportResult::failure(
+          {ErrorCode::invalid_argument, "runtime content source Project ID differs"});
+    }
+    if (project.revision != request.expected_revision) {
+      return ExportResult::failure(
+          {ErrorCode::revision_conflict, "runtime content source revision differs"});
+    }
+    const auto pattern = project.patterns.find(request.pattern_id);
+    if (pattern == project.patterns.end()) {
+      return ExportResult::failure(
+          {ErrorCode::not_found, "runtime content source Pattern was not found"});
+    }
+    for (const auto slot : request.live_pad_slots) {
+      if (!project.banks[slot.bank][slot.pad].asset_id.has_value()) {
+        return ExportResult::failure(
+            {ErrorCode::missing_asset, "selected live Pad has no assigned material"});
+      }
+    }
+    for (const auto& event : pattern->second.events) {
+      if (!domain::is_valid_slot(event.slot)) {
+        return ExportResult::failure(
+            {ErrorCode::invalid_project, "runtime content Pattern Slot is invalid"});
+      }
+      selected[event.slot.bank][event.slot.pad] = true;
+    }
+    // Only this detached value is narrowed. Do not save it or mutate Truth.
+    for (std::size_t bank = 0; bank < project.banks.size(); ++bank) {
+      for (std::size_t pad = 0; pad < project.banks[bank].size(); ++pad) {
+        if (!selected[bank][pad]) project.banks[bank][pad].asset_id.reset();
+      }
+    }
+    const auto cooked = cook_project(request.project_path, project, request.pattern_id);
+    if (!cooked.has_value()) return ExportResult::failure(cooked.error());
+    return cooker::encode_runtime_content(*cooked.value(), request.limits);
+  }
+
   foundation::Result<std::unique_ptr<project_io::ProjectWriterLease>>
   acquire_project_writer(const std::filesystem::path& project_path) {
     if (!valid_host_project_path(project_path)) {
@@ -8531,6 +8591,18 @@ Application::prepare_runtime_snapshot(
             ErrorCode::internal_error,
             "unexpected Application Facade Host API failure",
         });
+  }
+}
+
+foundation::Result<cooker::EncodedRuntimeContent>
+Application::export_runtime_content(const RuntimeContentExportRequest& request) {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->export_runtime_content(request);
+  } catch (...) {
+    return foundation::Result<cooker::EncodedRuntimeContent>::failure(
+        {ErrorCode::internal_error,
+         "unexpected Application Facade Host API failure"});
   }
 }
 
