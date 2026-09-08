@@ -155,8 +155,27 @@ class ReleaseSkillTest(unittest.TestCase):
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, source)
-        self.assertIn("`main` with `target` equal to the candidate SHA", source)
-        self.assertNotIn("`main` with `target_revision`", source)
+
+    def test_skill_routes_fresh_full_candidates_through_the_durable_main_controller(self) -> None:
+        source = self.read(SKILL)
+        remedy = "remedy: document the current main controller and closed exact-target candidate request"
+        for expected in (
+            "`self-test-report.yml` on ref `main`",
+            "`batch_operation=reconcile`",
+            "Leave `journal_config` empty",
+            "Both kinds request all 16 suites",
+            "neither moves automatic processing progress or authorizes a release",
+            "Redelivering the same ID and target reconciles the original request",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, source, f"why: missing candidate boundary {expected!r}; {remedy}")
+        requests = re.findall(r"`batch_request=(\{[^`]+\})`", source)
+        self.assertEqual(len(requests), 1, f"why: candidate request example is missing or ambiguous; {remedy}")
+        self.assertEqual(
+            json.loads(requests[0]),
+            {"id": "<stable-request-id>", "kind": "candidate", "target": "<exact-main-SHA>"},
+            f"why: candidate request fields or exact target differ; {remedy}",
+        )
 
     def test_governance_binds_release_authority_to_full_exact_main_evidence(self) -> None:
         git_workflow = self.read(GIT_WORKFLOW)
