@@ -45,11 +45,19 @@
 //     surface lists on mount and this leg then clicks Refresh Catalog. The
 //     assertion now pins two, and pins that the second listing re-fetched no
 //     object at all -- which proves the Workspace Set Store answered it.
-//   * leg 5 expected Bank B to hold 11 occupied Pads after installing an
-//     11-slot Set into it. The proof fixture fills all 64 Pads, so Bank B
+//   * the last leg expected Bank B to hold 11 occupied Pads after installing
+//     an 11-slot Set into it. The proof fixture fills all 64 Pads, so Bank B
 //     holds 16 before and after; 11 move and 5 are left alone. The assertion
 //     now pins that, which is the S11-D12 statement the leg was reaching for
 //     and is stronger than the count it replaced.
+//
+// A `keep` leg was also missing and is now leg 4. Because the proof fixture
+// fills every Bank, every occupied Set slot collides and `keep` can only ever
+// write zero Pads here; that degenerate case is asserted for what it is -- the
+// Host accepts the policy, answers, and moves neither a Pad nor the revision.
+// A `keep` that writes some Pads and spares others needs a Bank with a free
+// Pad under an occupied Set slot, which this Bundle does not contain, and is
+// proved natively in `tests/host/cli_test.py::soundset_acceptance_journey`.
 import {spawn} from "node:child_process";
 import {writeFileSync} from "node:fs";
 import {dirname, resolve} from "node:path";
@@ -367,11 +375,6 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   const install = page.getByRole("button", {name: /^Install /});
   await expect(install).toBeDisabled();
 
-  // Leg 4 -- install replace. Far side: the receipt names the committed
-  // revision, and the Project the Host reads back afterwards shows the four
-  // Pads replaced with typed `soundset` Lineage while the twelve Pads under
-  // empty Set slots still hold the Asset they held before (S11-D12), and the
-  // Assets the install replaced are still Project Truth (S8-D5).
   const before = await occupancyOf(page, 0);
   expect(
     before,
@@ -379,10 +382,55 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     "no project.inspect reached the tap -- fix that before reading the rest",
   ).not.toBeNull();
   expect(Object.keys(before.pads)).toHaveLength(16);
+
+  // Leg 4 -- install `keep`. The 64-Pad proof fixture fills every Bank, so
+  // every one of this Set's four occupied slots collides and `keep` has
+  // nothing left to write. That degenerate shape is the only `keep` this
+  // fixture can produce -- a Bank with a free Pad under an occupied Set slot
+  // does not exist in it -- and it is worth a leg anyway, because it is the
+  // strongest possible statement of what `keep` means: the Host accepts the
+  // policy, answers, and changes nothing at all. A non-degenerate `keep`,
+  // where some Pads are written and the occupied ones are spared, is proved
+  // natively in `tests/host/cli_test.py::soundset_acceptance_journey` and is
+  // not reachable here without a second Bundle fixture.
+  await page.getByRole("radio", {name: "Keep the Pads I already have"})
+    .check();
+  await expect(install).toBeEnabled();
+  await expect(install).toHaveText("Install 0 of 16 into Bank A");
+  await install.click();
+  const receipt = page.locator(".soundset-receipt");
+  await expect(receipt).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
+  await expect(receipt).toContainText("Installed 0 Pads into Bank A");
+  const kept = await page.evaluate(() =>
+    window.__soundsetInstalls?.at(-1) ?? null);
+  expect(kept.ok).toBe(true);
+  expect(kept.payload.occupied_pad_policy).toBe("keep");
+  expect(kept.result.installed).toEqual([]);
+  expect(kept.result.collisions).toEqual([0, 1, 2, 3]);
+  expect(kept.result.kept).toEqual([
+    4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+  ]);
+  // The far side that matters: Project Truth did not move. A commit that
+  // writes nothing must not advance the revision, and no Pad may change.
+  expect(kept.result.project_revision).toBe(kept.payload.expected_revision);
+  const afterKeep = await occupancyOf(page, 0);
+  for (let pad = 0; pad < 16; pad += 1) {
+    expect(afterKeep.pads[pad]).toBe(before.pads[pad]);
+  }
+
+  // Leg 5 -- install replace, over the same collisions `keep` just spared.
+  // Far side: the receipt names the committed revision, and the Project the
+  // Host reads back afterwards shows the four Pads replaced with typed
+  // `soundset` Lineage while the twelve Pads under empty Set slots still hold
+  // the Asset they held before (S11-D12), and the Assets the install replaced
+  // are still Project Truth (S8-D5).
+  await page.getByRole("button", {name: "Preview mapping into Bank A"})
+    .click();
+  await expect(preview).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
+  await expect(install).toBeDisabled();
   await page.getByRole("radio", {name: "Replace them with this Set"}).check();
   await expect(install).toBeEnabled();
   await install.click();
-  const receipt = page.locator(".soundset-receipt");
   await expect(receipt).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
   await expect(receipt).toContainText("Installed 4 Pads into Bank A");
 
@@ -395,6 +443,9 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   expect(committed.result.kept).toEqual([
     4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
   ]);
+  // Unlike `keep` above, this one really committed.
+  expect(committed.result.project_revision)
+    .toBe(committed.payload.expected_revision + 1);
 
   // Yield the pre-install Asset id, not `null`, while no Project has been read
   // back: `null` is never equal to an Asset id, so a `null` here would satisfy
@@ -417,7 +468,7 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     expect(after.pads[pad]).toBe(before.pads[pad]);
   }
 
-  // Leg 5 -- the Catalog goes away. Far side: the cached Sets are still
+  // Leg 6 -- the Catalog goes away. Far side: the cached Sets are still
   // listed and still installable, and the surface says so rather than
   // emptying itself.
   await stopCatalogServer(catalog);
