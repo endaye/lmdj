@@ -18,8 +18,12 @@ from urllib.parse import urlsplit
 from urllib.request import build_opener
 
 
-def validate_target(host_id: str, base_url: str, preview: bool, recovery_target: bool) -> str:
+def validate_target(host_id: str, base_url: str, preview: bool, recovery_target: bool, initialization_target: bool = False) -> str:
     worker = {"creator-web": "creator", "web-runtime-host": "lab"}[host_id]
+    if recovery_target and initialization_target:
+        raise ValueError("select only one isolated target kind")
+    if initialization_target:
+        worker += "-initialization"
     if recovery_target:
         worker += "-recovery"
     host = urlsplit(base_url).hostname
@@ -27,17 +31,17 @@ def validate_target(host_id: str, base_url: str, preview: bool, recovery_target:
         return worker
     if preview and host and re.fullmatch(r"[0-9a-f]{8}-" + re.escape(worker) + r"\.lmdj\.workers\.dev", host):
         return worker
-    raise ValueError("unexpected Host target; use the configured workers.dev hostname and explicit recovery target flag")
+    raise ValueError("unexpected Host target; use the configured workers.dev hostname and explicit isolated target flag")
 
 
-def smoke(dist: Path, base_url: str, preview: bool = False, recovery_target: bool = False) -> dict:
+def smoke(dist: Path, base_url: str, preview: bool = False, recovery_target: bool = False, initialization_target: bool = False) -> dict:
     tool = Path(__file__).resolve().parents[2] / "web-runtime-host/tools/deployment_smoke.py"
     spec = importlib.util.spec_from_file_location("cloudflare_host_http", tool)
     shared = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(shared)
     manifest = json.loads((dist / "host-manifest.json").read_text())
     host_id = manifest["host_id"]
-    validate_target(host_id, base_url, preview, recovery_target)
+    validate_target(host_id, base_url, preview, recovery_target, initialization_target)
     host = urlsplit(base_url).hostname
     if preview:
         shared.REQUIRED_ROBOTS_DIRECTIVES = frozenset({"noindex"})
@@ -100,7 +104,7 @@ def smoke(dist: Path, base_url: str, preview: bool = False, recovery_target: boo
                                  path=path, timeout_seconds=30)
     return {"url": base_url, "product_build": manifest["product_build"],
             "host_version": manifest["host_version"], "preview": preview,
-            "recovery_target": recovery_target,
+            "recovery_target": recovery_target, "initialization_target": initialization_target,
             "file_digests": digests, "unknown_paths": "404",
             "encoded_dot_segments": traversal,
             "status": "passed"}
@@ -111,6 +115,8 @@ if __name__ == "__main__":
     parser.add_argument("verified_dist", type=Path)
     parser.add_argument("base_url")
     parser.add_argument("--preview", action="store_true")
-    parser.add_argument("--recovery-target", action="store_true", help="require creator-recovery or lab-recovery instead of the official Worker")
+    targets = parser.add_mutually_exclusive_group()
+    targets.add_argument("--initialization-target", action="store_true", help="require the fixed Host initialization test Worker")
+    targets.add_argument("--recovery-target", action="store_true", help="require creator-recovery or lab-recovery instead of the official Worker")
     args = parser.parse_args()
-    print(json.dumps(smoke(args.verified_dist, args.base_url, args.preview, args.recovery_target), indent=2))
+    print(json.dumps(smoke(args.verified_dist, args.base_url, args.preview, args.recovery_target, args.initialization_target), indent=2))
