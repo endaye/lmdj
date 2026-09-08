@@ -255,6 +255,23 @@ chmod +x "$7"
     def test_runtime_timeout_records_infrastructure(self):
         self.assert_infrastructure(*self.prerequisite(startup_code=124))
 
+    def test_startup_diagnostics_name_only_the_attempts_actually_started(self):
+        for startup_code, fail_at, count in ((0, 1, 10), (139, 1, 1), (66, 10, 10)):
+            with self.subTest(startup_code=startup_code, fail_at=fail_at):
+                result, flags = self.prerequisite(startup_code=startup_code, fail_at=fail_at)
+                actual = [line for line in result.stdout.splitlines()
+                          if line.startswith("TSan runtime startup ")]
+                self.assertEqual(actual, [f"TSan runtime startup {i}/10" for i in range(1, count + 1)],
+                                 "why: startup diagnostics lost the exact attempted sequence; "
+                                 "remedy: log each loop index immediately before its required start")
+                self.assertEqual(self.starts, count)
+                if startup_code:
+                    self.assert_infrastructure(result, flags)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(flags, {})
+                    self.assertIn("BUILD_REACHED", result.stdout)
+
     def test_ten_successful_starts_retain_build_and_test_path(self):
         result, flags = self.prerequisite()
         self.assertEqual(result.returncode, 0, result.stderr)
