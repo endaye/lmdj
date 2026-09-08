@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "scripts/ci"), str(ROOT / "tests/build")]
 import review_failure_report as consumer
 import review_scope
+import review_merge_map as mapping
 import test_scope
 from ci_self_test_report_test import FakeGitHubApi
 
@@ -127,6 +128,191 @@ class ConsumerTests(unittest.TestCase):
         self.jobs[-1]["conclusion"] = "failure"
         self.jobs[-1]["steps"][0]["conclusion"] = "failure"
         self.assertIsNone(self.collect())
+
+    def historical_mapping(self):
+        self.test_closed_mapping_is_explicitly_not_applicable()
+        self.run['conclusion'] = 'success'
+        self.jobs[-1]['steps'] += [dict(name='Publish exact-head review and scope', conclusion='skipped'),
+            dict(name='Run actions/upload-artifact@v4', conclusion='success')]
+        self.map = mapping.build_map(repository='endaye/lmdj', repository_id=5, workflow_id=42,
+            pr_number=7, head_sha=A, merge_sha=B, control_sha=B, run_id=51, run_attempt=1,
+            changed_paths=['docs/notes/a.md'], scope_records=[], complete=False, gaps=['review unavailable; retain full'])
+        self.artifacts = [dict(id=9, name=f'pr-review-merge-map-{B}-51-1', expired=False, workflow_run={'id':51})]
+        self.documents = {'map.json': self.map}
+        self.comparison = {'status':'ahead','merge_base_commit':{'sha':B},'total_commits':1,
+                           'commits':[{'sha':C,'parents':[{'sha':B}]}]}
+        self.commit = {'sha':B,'parents':[{'sha':A}], 'files':[{'filename':'docs/notes/a.md','status':'added'}]}
+        original = self.get
+        def historical(method, path):
+            if '/compare/' in path:
+                self.reads.append(path)
+                return self.comparison
+            if '/commits/' in path:
+                self.reads.append(path)
+                return self.commit
+            result = original(method, path)
+            if path.endswith('pr-review.yml?ref=' + C):
+                return {'encoding':'base64','content':base64.b64encode(b'new main workflow').decode()}
+            return result
+        self.api._request = historical
+
+    def test_historical_successful_mapping_is_not_a_backend_review_failure(self):
+        self.historical_mapping()
+        self.assertIsNone(self.collect())
+        self.assertFalse(self.map['complete'])  # Not a valid-AI or scope-complete declaration.
+        self.assertFalse(self.api.issues)
+
+    def remap(self, **changes):
+        values = {k:v for k,v in self.map.items() if k not in {'schema', 'changed_path_digest', 'digest'}}
+        self.map = mapping.build_map(**{**values, **changes})
+        self.documents = {'map.json': self.map}
+
+    def test_historical_map_rejects_wrong_map_identity(self):
+        for changes in ({'repository_id':6}, {'workflow_id':43}, {'run_id':52}, {'run_attempt':2},
+                        {'merge_sha':C}, {'head_sha':C}, {'control_sha':'d'*40}):
+            with self.subTest(changes=changes):
+                self.setUp(); self.historical_mapping(); self.remap(**changes); self.rejected()
+
+    def test_merge_between_historical_control_and_main(self):
+        self.historical_mapping()
+        merge = 'd' * 40
+        self.remap(merge_sha=merge)
+        self.artifacts[0]['name'] = f'pr-review-merge-map-{merge}-51-1'
+        self.commit.update(sha=merge, parents=[{'sha':B}])
+        self.comparison.update(total_commits=2, commits=[
+            {'sha':merge, 'parents':[{'sha':B}]},
+            {'sha':C, 'parents':[{'sha':merge}]}])
+        self.assertIsNone(self.collect())
+
+    def test_merge_before_historical_control_requires_first_parent_chain(self):
+        for side_branch in (False, True):
+            with self.subTest(side_branch=side_branch):
+                self.setUp(); self.historical_mapping()
+                merge = 'd' * 40
+                self.remap(merge_sha=merge)
+                self.artifacts[0]['name'] = f'pr-review-merge-map-{merge}-51-1'
+                self.commit.update(sha=merge, parents=[{'sha':A}])
+                original = self.api._request
+                def earlier(method, path):
+                    if f'/compare/{merge}...{B}?' in path:
+                        parents = [{'sha':merge}]
+                        if side_branch:
+                            parents = [{'sha':'e'*40}, {'sha':merge}]
+                        return {'status':'ahead', 'merge_base_commit':{'sha':merge},
+                                'total_commits':1, 'commits':[{'sha':B, 'parents':parents}]}
+                    return original(method, path)
+                self.api._request = earlier
+                if side_branch:
+                    self.rejected()
+                else:
+                    self.assertIsNone(self.collect())
+
+    def test_historical_map_rejects_wrong_nonempty_pr_association(self):
+        self.historical_mapping()
+        self.run['pull_requests'] = [{'number':8,'head':{'sha':A}}]
+        self.rejected()
+
+    def test_historical_map_rejects_missing_ambiguous_expired_or_foreign_artifact(self):
+        for failure in ('missing','ambiguous','expired','foreign','truncated'):
+            with self.subTest(failure=failure):
+                self.setUp(); self.historical_mapping()
+                if failure=='missing': self.artifacts=[]
+                elif failure=='ambiguous': self.artifacts*=2
+                elif failure=='expired': self.artifacts[0]['expired']=True
+                elif failure=='foreign': self.artifacts[0]['workflow_run']['id']=52
+                else:
+                    original=self.api._request
+                    self.api._request=lambda method,path: {'total_count':2,'artifacts':self.artifacts} if '/artifacts?' in path else original(method,path)
+                self.rejected()
+
+    def test_historical_map_rejects_failed_mapper_or_missing_upload(self):
+        for failure in ('run','publisher','mapper','upload','publish-ran'):
+            with self.subTest(failure=failure):
+                self.setUp(); self.historical_mapping()
+                if failure=='run': self.run['conclusion']='failure'
+                elif failure=='publisher': self.jobs[-1]['conclusion']='failure'
+                elif failure=='mapper': self.jobs[-1]['steps'][0]['conclusion']='failure'
+                elif failure=='upload': self.jobs[-1]['steps'][-1]['conclusion']='skipped'
+                else: self.jobs[-1]['steps'][1]['conclusion']='success'
+                self.rejected()
+
+    def test_historical_map_archive_schema_is_closed(self):
+        self.historical_mapping()
+        self.documents['untrusted.json']={}
+        self.rejected()
+
+    def test_historical_control_workflow_must_equal_actual_source(self):
+        self.historical_mapping()
+        original=self.api._request
+        def changed(method,path):
+            if path.endswith('pr-review.yml?ref='+B):
+                return {'encoding':'base64','content':base64.b64encode(b'other historical source').decode()}
+            return original(method,path)
+        self.api._request=changed
+        self.rejected()
+
+    def test_compare_count_truncation_duplicate_and_unknown_parent_reject(self):
+        for failure in ('truncated','duplicate','missing-parent','side-parent','count-type'):
+            with self.subTest(failure=failure):
+                self.setUp(); self.historical_mapping()
+                if failure=='truncated': self.comparison['total_commits']=2
+                elif failure=='duplicate': self.comparison.update(total_commits=2,commits=self.comparison['commits']*2)
+                elif failure=='missing-parent': self.comparison['commits'][0]['parents']=[]
+                elif failure=='side-parent': self.comparison['commits'][0]['parents']=[{'sha':'d'*40},{'sha':B}]
+                else: self.comparison['total_commits']=True
+                self.rejected()
+
+    def test_complete_compare_pagination_preserves_actual_parent_chain(self):
+        self.historical_mapping()
+        chain=[B]+[format(i,'040x') for i in range(1,101)]+[C]
+        commits=[{'sha':sha,'parents':[{'sha':chain[i]}]} for i,sha in enumerate(chain[1:])]
+        original=self.api._request
+        def paged(method,path):
+            if '/compare/' in path:
+                page=int(path.rsplit('page=',1)[1])
+                return {**self.comparison,'total_commits':len(commits),'commits':commits[(page-1)*100:page*100]}
+            return original(method,path)
+        self.api._request=paged
+        self.assertIsNone(self.collect())
+
+    def test_actual_merge_paths_include_rename_origin(self):
+        self.historical_mapping()
+        self.remap(changed_paths=['docs/notes/a.md','docs/notes/old.md'])
+        self.commit['files']=[{'filename':'docs/notes/a.md','previous_filename':'docs/notes/old.md','status':'renamed'}]
+        self.assertIsNone(self.collect())
+        del self.commit['files'][0]['previous_filename']
+        self.rejected()
+
+    def test_actual_merge_paths_cannot_differ_from_map(self):
+        self.historical_mapping()
+        self.commit['files'][0]['filename']='docs/notes/other.md'
+        self.rejected()
+
+    def test_actual_merge_files_paginate_without_duplicate_or_silent_cap(self):
+        self.historical_mapping()
+        files=[{'filename':f'docs/notes/{i}.md','status':'added'} for i in range(101)]
+        self.remap(changed_paths=[f['filename'] for f in files])
+        original=self.api._request
+        def paged(method,path):
+            if '/commits/' in path:
+                page=int(path.rsplit('page=',1)[1])
+                return {**self.commit,'files':files[(page-1)*100:page*100]}
+            return original(method,path)
+        self.api._request=paged
+        self.assertIsNone(self.collect())
+        files[-1]=files[0]
+        self.rejected()
+
+    def test_actual_merge_files_at_api_cap_are_not_claimed_complete(self):
+        self.historical_mapping()
+        original=self.api._request
+        def capped(method,path):
+            if '/commits/' in path:
+                page=int(path.rsplit('page=',1)[1])
+                return {**self.commit,'files':[{'filename':f'docs/{page}-{i}.md','status':'added'} for i in range(100)]}
+            return original(method,path)
+        self.api._request=capped
+        self.rejected()
 
     def test_untrusted_actual_workflow_source_is_rejected(self):
         original = self.get
