@@ -23,6 +23,13 @@ Cloudflare 响应头；`cloudflare_smoke.py VERIFIED_DIST URL [--preview]` 验�
 signed tag、受保护 `main` ancestry、Release 三资产、workflow run 与 deployment evidence；
 不得从该快照、本地同名 tag、Portal 页面或先前命令输出推断当前状态。
 
+隔离恢复演练使用显式 `--recovery-target`：Creator 对应
+`creator-recovery.lmdj.workers.dev`，Runtime 对应 `lab-recovery.lmdj.workers.dev`。
+使用该标志时拒绝正式 Worker 地址，默认模式也拒绝恢复地址；版本预览还需
+`--preview`，且前缀必须是实际版本 ID 的八位十六进制短前缀。
+检查仍逐文件比对已独立验证的 Release 字节，并保留 MIME、缓存、安全头和
+未知路径要求。这个只读检查命令不会创建、部署或切换 Worker。
+
 ## 当前双 Host Release 边界
 
 历史 `1.0.15.2` 三资产 Runtime Release 与已公开的 `1.0.40.0` tag、Release、部署证据均保持
