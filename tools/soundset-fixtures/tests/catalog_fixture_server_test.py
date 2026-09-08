@@ -254,4 +254,60 @@ with CatalogFixtureServer(corpus_root) as server:
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
+# The default surface carries no cross-origin opt-in, and `--cross-origin`
+# carries exactly the two headers a cross-origin-isolated Creator page needs.
+# Task 7 measured a bare fixture server: a page served with
+# `Cross-Origin-Embedder-Policy: require-corp` cannot read it, and the failure
+# reaches the Host transport as `catalog_unavailable` rather than as a
+# configuration fault, so the opt-in is what makes a Browser journey possible
+# at all.
+CROSS_ORIGIN_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+}
+
+with CatalogFixtureServer(corpus_root) as server:
+    for target in (
+        "/catalog/index.json",
+        f"/object/manifest/{manifest_sha256}",
+        f"/object/blob/{blob_sha256}",
+    ):
+        status, _, headers = fetch(server, target)
+        assert status == 200, (target, status)
+        for name in CROSS_ORIGIN_HEADERS:
+            assert name not in headers, (
+                f"why: the default fixture server answered {target} with "
+                f"{name}, so a same-origin proof would silently also pass "
+                f"cross-origin. remedy: keep cross_origin defaulting to False "
+                f"in catalog_fixture_server.py."
+            )
+
+with CatalogFixtureServer(corpus_root, cross_origin=True) as server:
+    for target in (
+        "/catalog/index.json",
+        f"/object/manifest/{manifest_sha256}",
+        f"/object/blob/{blob_sha256}",
+    ):
+        status, body, headers = fetch(server, target)
+        assert status == 200, (target, status)
+        for name, value in CROSS_ORIGIN_HEADERS.items():
+            assert headers.get(name) == value, (
+                f"why: {target} answered {name}={headers.get(name)!r} under "
+                f"--cross-origin, and a cross-origin-isolated Creator page "
+                f"needs both CORS and CORP to read a Catalog on another "
+                f"origin. remedy: send both headers from "
+                f"CatalogFixtureRequestHandler._send when cross_origin is set."
+            )
+    # The opt-in adds headers and nothing else: the admitted surface, the
+    # bytes and the refusals are the same three shapes.
+    status, body, _ = fetch(server, f"/object/blob/{blob_sha256}")
+    assert body == blob_bytes
+    for target in refused_targets:
+        status, body, headers = fetch(server, target)
+        assert status == 404, (target, status)
+        assert body == b"", target
+    for method in refused_methods:
+        status, _, _ = fetch(server, "/catalog/index.json", method=method)
+        assert status == 405, (method, status)
+
 print("soundset catalog fixture server tests: PASS")

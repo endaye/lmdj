@@ -734,6 +734,14 @@ class MCPProcess:
         return self.process.returncode, stdout or b"", stderr or b""
 
 
+FOUNDRY_SET_ID = "11111111-1111-4111-8111-111111111111"
+FOUNDRY_MANIFEST = (
+    "33175f66912a9add3e4e551d19d85072adcd1f0331fcc9fed80ab0bc18dd9111"
+)
+ATTRIBUTION_SET_ID = "22222222-2222-4222-8222-222222222222"
+UNSUPPORTED_SET_ID = "33333333-3333-4333-8333-333333333333"
+
+
 def assert_error(response: dict, identifier: object, code: int, message: str) -> None:
     assert response == {
         "jsonrpc": "2.0",
@@ -1911,6 +1919,150 @@ def result_contract(library: Path, temp_root: Path) -> None:
         c_api.ctypes.CDLL = original_cdll
 
 
+def soundset_c_abi_journey(library: Path, temp_root: Path) -> None:
+    """A Sound Set reaches Project Truth through the C ABI's own Catalog.
+
+    `make_workspace_soundset_catalog` has three production call sites:
+    `apps/core-cli/src/main.cpp:392`,
+    `packages/application-facade/src/c_api.cpp:265` and
+    `apps/native-host/src/main.cpp:511`. The second is the only Catalog an MCP
+    Host has, and nothing else in the repository drives it with a real Set, so
+    a Set installed here is the whole evidence that the C ABI wiring exists.
+    The policy matrix itself is proved once in the CLI journey; the fact under
+    test here is the second Host's Catalog, not `keep` vs `replace`.
+
+    ACCEPTANCE GAP: the third call site has no coverage. `apps/native-host`
+    registers all five Sound Set operations
+    (`apps/native-host/src/main.cpp:129-136`) and wires its own Workspace
+    Catalog, and `tests/host/native_host_test.py` never mentions a Sound Set.
+    Recorded rather than papered over; see issue #674's acceptance report.
+    """
+    workspace = temp_root / "soundset-c-abi-workspace"
+    catalog = workspace / ".lmdj-host/soundset-catalog/objects"
+    catalog.mkdir(parents=True)
+    fixtures = REPO_ROOT / "tests/fixtures/soundset"
+    for kind in ("manifest", "blob"):
+        for source in sorted((fixtures / kind).iterdir()):
+            if source.is_file():
+                (catalog / source.name).write_bytes(source.read_bytes())
+    (workspace / ".lmdj-host/soundset-catalog/index.json").write_bytes(
+        (fixtures / "catalog/index.json").read_bytes()
+    )
+
+    host = MCPProcess(library, workspace)
+    host.initialize()
+
+    listed = assert_tool_result(
+        host.tool_call(1, "lmdj.soundset.catalog.list", {}), 1
+    )["structuredContent"]
+    assert listed["ok"] is True
+    assert listed["result"]["catalog_available"] is True
+    assert {
+        entry["set_id"] for entry in listed["result"]["sets"]
+    } == {FOUNDRY_SET_ID, ATTRIBUTION_SET_ID, UNSUPPORTED_SET_ID}
+
+    inspected = assert_tool_result(
+        host.tool_call(
+            2,
+            "lmdj.soundset.inspect",
+            {
+                "set_id": FOUNDRY_SET_ID,
+                "version": "1.0.0",
+                "manifest_sha256": FOUNDRY_MANIFEST,
+            },
+        ),
+        2,
+    )["structuredContent"]
+    assert inspected["ok"] is True
+    assert len(inspected["result"]["slots"]) == 16
+
+    project = temp_root / "soundset-c-abi.lmdj"
+    created = assert_tool_result(
+        host.tool_call(
+            3,
+            "lmdj.project.create",
+            {
+                "project_path": str(project),
+                "project_id": "00000000-0000-4000-8000-000000000940",
+                "bpm": 120,
+            },
+        ),
+        3,
+    )["structuredContent"]
+    assert created["ok"] is True
+    assert created["project_revision"] == 0
+
+    previewed = assert_tool_result(
+        host.tool_call(
+            4,
+            "lmdj.soundset.map.preview",
+            {
+                "project_path": str(project),
+                "bank_id": 3,
+                "set_id": FOUNDRY_SET_ID,
+                "version": "1.0.0",
+                "manifest_sha256": FOUNDRY_MANIFEST,
+            },
+        ),
+        4,
+    )["structuredContent"]
+    assert previewed["ok"] is True
+    assert previewed["project_revision"] == 0
+    assert [
+        entry["pad"] for entry in previewed["result"]["proposed"]
+    ] == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+    assert previewed["result"]["collisions"] == []
+    assert previewed["result"]["kept"] == [10, 11, 13, 14, 15]
+
+    installed = assert_tool_result(
+        host.tool_call(
+            5,
+            "lmdj.soundset.install",
+            {
+                "project_path": str(project),
+                "command_id": "00000000-0000-4000-8000-000000000941",
+                "expected_revision": 0,
+                "bank_id": 3,
+                "set_id": FOUNDRY_SET_ID,
+                "version": "1.0.0",
+                "manifest_sha256": FOUNDRY_MANIFEST,
+            },
+        ),
+        5,
+    )["structuredContent"]
+    assert installed["ok"] is True
+    assert installed["project_revision"] == 1
+
+    # Far side: the Project this Host wrote, read back through the same ABI.
+    truth = assert_tool_result(
+        host.tool_call(
+            6, "lmdj.project.inspect", {"project_path": str(project)}
+        ),
+        6,
+    )["structuredContent"]
+    assert truth["ok"] is True
+    assert truth["project_revision"] == 1
+    pads = {
+        pad["pad"]: pad["asset_id"]
+        for pad in truth["result"]["project"]["banks"][3]["pads"]
+        if pad["asset_id"]
+    }
+    assert sorted(pads) == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+    assets = truth["result"]["project"]["assets"]
+    for pad, asset_id in pads.items():
+        lineage = assets[asset_id]["lineage"]
+        assert lineage["derivation"] == {"kind": "soundset_install"}
+        assert lineage["source"]["kind"] == "soundset"
+        assert lineage["source"]["set_id"] == FOUNDRY_SET_ID
+        assert lineage["source"]["manifest_sha256"] == FOUNDRY_MANIFEST
+        assert lineage["source"]["slot_index"] == pad
+    # The Set Store the C ABI created is the Workspace one, not a Project one.
+    assert (
+        workspace / ".lmdj-host/soundsets" / FOUNDRY_MANIFEST / "manifest.json"
+    ).is_file()
+
+    assert host.close() == (0, b"", b"")
+
 def bounded_transport(library: Path, temp_root: Path) -> None:
     workspace = temp_root / "bounded-workspace"
     workspace.mkdir()
@@ -2027,6 +2179,7 @@ def main() -> int:
         tools_list,
         tools_call_validation,
         result_contract,
+        soundset_c_abi_journey,
         bounded_transport,
         stdout_purity_and_shutdown,
     )
@@ -2034,8 +2187,8 @@ def main() -> int:
         temp_root = Path(temp).resolve()
         for fixture in fixtures:
             fixture(library, temp_root)
-    assert len(fixtures) == 10
-    print("mcp stdio fixtures: 10 passed")
+    assert len(fixtures) == 11
+    print("mcp stdio fixtures: 11 passed")
     return 0
 
 
