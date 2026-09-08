@@ -517,6 +517,70 @@ class RuntimeTests(unittest.TestCase):
         self.assertIsNone(done["state"]["active"])
         self.assertIsNone(done["state"]["blocked"])
 
+    def test_policy_only_candidate_drift_settles_missing_and_replays_without_clearing_auto_debt(self):
+        self.check_candidate_policy_settlement(old_evidence=True)
+
+    def test_policy_preflight_terminal_without_artifact_settles_and_replays(self):
+        self.check_candidate_policy_settlement(old_evidence=False)
+
+    def check_candidate_policy_settlement(self, *, old_evidence):
+        start = self.start()
+        self.api.add_run(18)
+        explicit = {"id": "obsolete-policy-candidate", "kind": "candidate", "target": self.sha}
+        queued = self.make(18).reconcile(execute=True, explicit=explicit)
+        self.assertEqual(queued["state"]["queue"], [explicit["id"]])
+        self.evidence(start["request"], missing_job="core-asan-macos", failed_job="docs-static")
+        path = self.root / "scripts/ci/scope_policy.json"
+        policy = json.loads(path.read_text())
+        policy["rules"].append({"match": {"kind": "exact", "value": "docs/policy-fixture.md"}, "lanes": ["portal"]})
+        path.write_text(json.dumps(policy))
+        self.git("add", str(path))
+        self.git("commit", "-qm", "policy only executor drift")
+        self.api.sha = self.git("rev-parse", "HEAD")
+        self.env["GITHUB_SHA"] = self.api.sha
+        self.assertTrue(runtime.compatible_sources(self.make().git, self.sha, self.api.sha))
+        self.api.add_run(19)
+        admitted = self.make(19).reconcile(execute=True)
+        self.assertEqual(admitted["request"], queued["state"]["requests"][explicit["id"]])
+        self.assertEqual(admitted["state"]["active"]["executor_run"], {"run_id": 19, "attempt": 1})
+        instance = self.make(19)
+        instance.inputs.main = self.api.sha
+        self.assertEqual(instance.result_for(admitted["request"], {"run_id": 19, "attempt": 1}),
+                         {"status": "pending"}, "why: live executor cannot be settled; remedy: wait for actual terminal identity")
+        if old_evidence:
+            # Even a complete old-policy artifact is not acceptable evidence.
+            self.evidence(admitted["request"], run=19)
+        else:
+            # Actual inline no-heavy preflight is exercised by WorkflowScripts;
+            # this HTTP fixture supplies its terminal executor boundary.
+            self.api.runs[19].update(status="completed", conclusion="failure")
+            self.api.jobs[19][0].update(status="completed", conclusion="success")
+        original = instance.inputs.policy_at
+        def unavailable(revision):
+            if revision == self.api.sha:
+                raise OSError("policy read unavailable")
+            return original(revision)
+        with mock.patch.object(instance.inputs, "policy_at", side_effect=unavailable):
+            with self.assertRaises(OSError):
+                instance.result_for(admitted["request"], {"run_id": 19, "attempt": 1})
+        self.api.add_run(20)
+        settled = self.make(20).reconcile(execute=False)
+        state = settled["state"]
+        result = state["results"][explicit["id"]]
+        self.assertEqual(set(result["outcomes"].values()), {"missing"},
+            "why: obsolete policy has no acceptable candidate coverage; remedy: settle missing, never manufacture pass")
+        self.assertEqual(set(result["outcomes"]), set(self.policy.suite_ids))
+        self.assertEqual(result["reference"], "missing:" + explicit["id"])
+        self.assertIsNone(state["active"])
+        self.assertIsNone(state["blocked"])
+        self.assertTrue(state["debts"])
+        self.assertTrue(state["failures"])
+        for key in ("processed", "debts", "failures"):
+            self.assertEqual(state[key], admitted["state"][key])
+        self.api.add_run(21)
+        replayed = self.make(21).reconcile(execute=False)
+        self.assertEqual(replayed["state"], state)
+
     def test_branch_context_is_rejected(self):
         self.env["GITHUB_REF"] = "refs/heads/task"
         with self.assertRaisesRegex(batch.BatchError, "main workflow"):

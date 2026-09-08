@@ -214,6 +214,48 @@ class WorkflowScripts(unittest.TestCase):
         self.assertEqual(execution["identity"]["control_sha"], self.control)
         self.assertEqual(execution["identity"]["target_sha"], self.target)
 
+    def test_policy_only_candidate_drift_blocks_before_heavy_outputs(self):
+        self.check_policy_drift("candidate", rejected=True)
+
+    def test_candidate_with_matching_policy_on_new_commit_is_executable(self):
+        self.check_policy_drift("candidate", rejected=False, changed=False)
+
+    def test_policy_only_node_drift_preserves_frozen_execution(self):
+        self.check_policy_drift("node", rejected=False)
+
+    def test_policy_only_auto_drift_preserves_frozen_execution(self):
+        self.check_policy_drift("auto", rejected=False)
+
+    def check_policy_drift(self, kind, *, rejected, changed=True):
+        request = self.request(POLICY.suite_ids)
+        request["kind"] = kind
+        if kind != "auto":
+            request["base"] = None
+        read_result, _ = self.invoke("change-scope", "Read the frozen policy checkout", FROZEN_CONTROL=self.control)
+        self.assertEqual(read_result.returncode, 0, read_result.stderr)
+        if changed:
+            path = self.root / "scripts/ci/scope_policy.json"
+            policy = json.loads(path.read_text())
+            policy["rules"].append({"match": {"kind": "exact", "value": "docs/policy-fixture.md"}, "lanes": ["portal"]})
+            path.write_text(json.dumps(policy))
+            self.git("add", str(path))
+            self.git("commit", "-qm", "policy only executor drift")
+        executor = self.git("rev-parse", "HEAD")
+        result, outputs = self.invoke("change-scope", "Prepare the admitted fixed-target execution",
+            GITHUB_SHA=executor, BATCH_REQUEST=json.dumps(request),
+            BATCH_EXECUTOR=json.dumps({"run_id": 51, "attempt": 1}))
+        if rejected:
+            self.assertNotEqual(result.returncode, 0, "why: obsolete candidate policy admitted heavy work; remedy: reject before outputs")
+            self.assertIn("candidate policy", result.stderr)
+            self.assertIn("remedy:", result.stderr)
+            self.assertEqual(outputs, {})
+        else:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            execution = json.loads(outputs["execution"])
+            self.assertEqual(execution["identity"]["policy_digest"], POLICY.digest)
+            self.assertEqual(execution["identity"]["request_kind"], kind)
+            self.assertEqual(execution["selection"], request["selection"])
+
     def test_native_entry_remains_explicitly_legacy(self):
         result, values = self.invoke("change-scope", "Resolve the execution entry", BATCH_REQUEST="", BATCH_EXECUTOR="",
             CALLER_WORKFLOW_REF="endaye/lmdj/.github/workflows/ci.yml@refs/heads/main")

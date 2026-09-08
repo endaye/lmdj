@@ -199,6 +199,19 @@ jobs:
                       raise ValueError('source changed')
           except (KeyError, ValueError, subprocess.CalledProcessError):
               raise SystemExit('why: batch workflow sources are incompatible or unavailable; remedy: retain verification debt and enqueue a request under compatible trusted control')
+          # Candidate acceptance already requires the executor's current
+          # policy. Avoid spending full-suite capacity on obsolete evidence;
+          # automatic and node requests retain their historical policy rules.
+          if request['kind'] == 'candidate':
+              import test_scope
+              try:
+                  documents = [json.loads(git('show', actual + ':scripts/ci/' + name),
+                                          object_pairs_hook=change_scope.reject_duplicates)
+                               for name in ('scope_policy.json', 'self_test_policy.json', 'test_scope_policy.json')]
+                  if test_scope.parse_policy(*documents).digest != request['policy']:
+                      raise ValueError('candidate policy changed')
+              except (KeyError, ValueError, subprocess.CalledProcessError):
+                  raise SystemExit('why: candidate policy is incompatible or unavailable at the actual executor; remedy: retain this request and enqueue a new candidate under current trusted control')
           # The detached data worktree shares this exact fetched object store;
           # do not issue another network fetch with a different main boundary.
           document = dict(request=request, executor=executor, run_id=int(os.environ['GITHUB_RUN_ID']),
