@@ -84,8 +84,10 @@ Both transport download and inner extraction are bounded; current head is fetche
 again after download before exposing the inner archive. The caller must still
 invoke `extract_static`, run trusted content smoke, and revalidate current head
 at publication/status time. No archive execution or platform mutation occurs.
-Six focused transport tests cover authenticated identity selection, absent
+The initial six transport tests cover authenticated identity selection, absent
 storage credentials, moving head, foreign-run rejection before download, unsafe
 outer member, bounded streaming and preservation of pre-existing output.
-This brings the combined Preview helper suite to 23 tests. Actual workflow/API
+The subsequent review added nine API/redirect and missing-parent tests, bringing
+the committed helper suite to 32 tests (17 archive/producer and 15 download/API).
+Actual workflow/API
 artifact acceptance remains pending; synthetic API fixtures are not live proof.
