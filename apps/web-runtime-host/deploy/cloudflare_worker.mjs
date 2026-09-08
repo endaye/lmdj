@@ -236,15 +236,18 @@ async function proxyCatalog(request, env, url) {
   // underscores and takes only the first duplicate. Neither bound was ever
   // unenforced, but the two answered differently, which is the divergence the
   // check itself was added to close.
-  const declared = upstream.headers.get("content-length");
-  if (declared !== null) {
-    if (!/^[0-9]+$/.test(declared)) return new Response(null, { status: 502 });
-    if (Number(declared) > target.maximumBytes) {
-      return new Response(null, { status: 502 });
-    }
-  }
   let body;
   try {
+    // Inside the guard with the read: a `headers` accessor that throws is not
+    // something the runtime produces, but it costs nothing to not depend on
+    // that.
+    const declared = upstream.headers.get("content-length");
+    if (declared !== null) {
+      if (!/^[0-9]+$/.test(declared)) return new Response(null, { status: 502 });
+      if (Number(declared) > target.maximumBytes) {
+        return new Response(null, { status: 502 });
+      }
+    }
     body = await readBounded(upstream, target.maximumBytes);
   } catch {
     return new Response(null, { status: 502 });

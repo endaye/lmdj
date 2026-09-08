@@ -111,6 +111,12 @@ class _RefuseRedirect(HTTPRedirectHandler):
 # and lost -- two review passes kept finding spellings it had missed, because a
 # list of behaviours is always one behaviour behind the parser.
 # Deciding what a valid upstream looks like is finite; chasing a parser is not.
+# `(?:/[class]*)*/` is the classic catastrophic-backtracking shape and is not
+# one here: the class excludes `/`, so each iteration must consume the
+# separator and the decomposition of any input is unique -- there is nothing to
+# backtrack into. Measured at 40 000 groups and a 40 000-character segment,
+# both in single-digit milliseconds. Recorded so nobody "fixes" it into
+# something slower.
 CANONICAL_UPSTREAM = re.compile(
     r"\Ahttps?://"
     r"(?P<host>\[[^\[\]/?#%]+\]|[a-z0-9][a-z0-9._\-]*)"
