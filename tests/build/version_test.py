@@ -309,6 +309,7 @@ expected_contract_sources = {
     "contracts/project/lmdj.project-bundle.v1.schema.json": "1.2.0",
     "contracts/soundset/lmdj.soundset.v1.schema.json": "1.1.0",
     "contracts/soundset-catalog/lmdj.soundset-catalog.v1.schema.json": "1.0.0",
+    "contracts/runtime-content/lmdj.runtime-content.v1.schema.json": "1.0.0",
     "contracts/version/lmdj.product-version.v1.schema.json": "1.0.0",
 }
 actual_contract_sources = sorted(

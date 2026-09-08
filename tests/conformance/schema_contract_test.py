@@ -35,6 +35,9 @@ schema_paths = {
     "soundset_catalog": (
         contract_root / "soundset-catalog" / "lmdj.soundset-catalog.v1.schema.json"
     ),
+    "runtime_content": (
+        contract_root / "runtime-content" / "lmdj.runtime-content.v1.schema.json"
+    ),
 }
 
 

@@ -37,6 +37,20 @@ Host 或 Web Runtime Platform 请求 → Facade → Domain/I/O/Cooker/Runtime/Pr
 ## 5. API 与 Contract 边界
 C++ typed API 与严格 JSON/C API/MCP/CLI parity 保持跨 Host 边界；`sample.quota` 请求恰含 `operation/project_path/slot`，成功结果中的 `project_revision` 必须作为后续 `sample.import.begin.expected_revision`。Bundle/Sample streaming API 不暴露 Project internals；Assembly Loader 校验锁定身份。
 ## 6. 状态、错误与并发
+当前 source 追加 typed `export_runtime_content(RuntimeContentExportRequest)`：Host
+提供绝对 Project 路径、期望 Project ID/revision、一个 Pattern ID、额外 live Pad 列表
+及显式 codec limits，只得到不透明字节和完整 SHA-256/byte length identity。
+Facade 对一次加载的确定版本取事件 Pad 与 live Pad 的并集，在 detached Project value
+上清除无关绑定后 Cook/encode，不写回该选择、不发布 Runtime generation。
+重复 live Pad、未分配素材、ID/revision 不符、无效内容或超限均拒绝。
+
+ProjectStore 仍先检查所有 source Asset 的完整性，损坏的未选素材也会使加载失败；
+codec limits 不限制此前电脑端 source load/WAV Cook 的内存峰值。
+`facade.runtime_content_export` 通过真实 Facade 建 Project/导入/分配验证闭包、来源、
+重复身份、重开、损坏拒绝及恢复重试，并逐文件比较 Truth 未被导出改写。
+这项 API 未增加 CLI/UI、JSON/C API 或设备 Runtime Facade；MINOR 与 Assembly lock
+在后续 B2 集成分配，新 Contract 尚未代表 desktop Assembly 已选择的能力。
+
 错误翻译保留公共类别与配额详情；查询和 Sample commit 共用 Audio Runtime 的 overflow-checked Bank/generation 账本，较小的 remaining 约束生效、相等时 Bank 优先。提交恰好允许 effective remaining frames，超一 mono frame 确定性返回 `BANK_QUOTA_EXHAUSTED` 或 `PROJECT_QUOTA_EXHAUSTED`；revision 漂移先返回 `REVISION_CONFLICT`，拒绝不会修改 Project Truth 或已发布 generation。Runtime Snapshot 准备复用同一账本，publication residency 仍是独立瞬态 Host/Attempt 状态。本地 Sequence mutex 只负责进程内 admission 排序，Project I/O 仍在 writer lease 内重判持久 authority；C API stress 验证并发生命周期。
 ## 7. 产品使用方
 CLI、MCP、Native Host，以及通过 Web Runtime Platform 接入的 Creator/Diagnostic Web Host。
@@ -50,7 +64,8 @@ Facade 不授权 Host 绕过 Project/Provider/Assembly 不变量。Performance �
 Provider SDK include roots。现有 bridge/adapter 测试也使用窄目标，完整 Application、
 Replay、Sequence 与 C API 消费者保留旧目标，验证单向传递链接兼容。
 这项隔离只解决现有 Performance 的依赖组合：下层 archive 仍可能包含 offline 或文件
-路径，engine adapter 仍暴露 Core 类型；不得宣称 wire Contract、设备 admission、
-无文件系统闭包、资源预算或 ESP32 编译已经实现。
+路径，engine adapter 仍暴露 Core 类型；单凭这项隔离不得宣称 wire Contract、设备
+admission、无文件系统闭包、资源预算或 ESP32 编译已经实现。另行实现的 T2 内容
+编码/电脑导出也不完成上述设备侧门禁。
 ## 10. 版本身份
 版本和完整依赖集由模块清单与 Product Assembly 固定。

@@ -6,6 +6,7 @@ add_library(
     src/sample_analysis.cpp
     src/project_cooker.cpp
     src/performance_replay.cpp
+    src/runtime_content.cpp
 )
 add_library(lmdj::project_cooker ALIAS lmdj_project_cooker)
 
@@ -18,11 +19,34 @@ target_link_libraries(
   lmdj_project_cooker
   PUBLIC
     lmdj::authoring_domain
+  PRIVATE
+    lmdj_picosha2
 )
 lmdj_target_warnings(lmdj_project_cooker)
 lmdj_target_sanitizers(lmdj_project_cooker)
 
 if(BUILD_TESTING)
+  add_executable(
+    lmdj_runtime_content_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/cooker/runtime_content_test.cpp"
+  )
+  target_include_directories(
+    lmdj_runtime_content_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_runtime_content_tests PRIVATE lmdj::project_cooker lmdj_picosha2
+  )
+  target_compile_definitions(
+    lmdj_runtime_content_tests PRIVATE LMDJ_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_target_warnings(lmdj_runtime_content_tests)
+  lmdj_target_sanitizers(lmdj_runtime_content_tests)
+  lmdj_add_test(
+    NAME cooker.runtime_content
+    TIER unit
+    COMMAND lmdj_runtime_content_tests
+  )
+
   add_executable(
     lmdj_project_cooker_sample_analysis_tests
     "${CMAKE_SOURCE_DIR}/tests/core/cooker/sample_analysis_test.cpp"

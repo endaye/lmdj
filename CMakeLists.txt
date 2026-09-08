@@ -111,6 +111,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_project_store_tests
     lmdj_project_storage_platform_tests
     lmdj_project_bundle_transfer_tests
+    lmdj_runtime_content_tests
     lmdj_project_cooker_sample_analysis_tests
     lmdj_project_cooker_performance_replay_tests
     lmdj_project_cooker_wav_selection_tests
@@ -133,6 +134,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_provider_spec_regression_tests
     lmdj_facade_performance_runtime_consumer_tests
     lmdj_application_facade_tests
+    lmdj_facade_runtime_content_export_tests
     lmdj_application_facade_failure_tests
     lmdj_facade_sequence_surface_tests
     lmdj_facade_performance_operation_contract_tests
@@ -527,6 +529,15 @@ lmdj_add_test(
   TIER contract
   COMMAND
     "${Python3_EXECUTABLE}" tests/conformance/project_bundle_contract_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+lmdj_add_test(
+  NAME conformance.runtime_content
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}" tests/conformance/runtime_content_contract_test.py
+    --consumer $<TARGET_FILE:lmdj_runtime_content_tests>
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 

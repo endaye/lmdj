@@ -1,0 +1,36 @@
+{
+  "contract": "lmdj.runtime-content.v1",
+  "contract_version": "1.0.0",
+  "identity": {
+    "sha256": "5e441b59ea4a75e3a1a91f0ea10cb8e893a8b542f5923545e1d89596d8e65705",
+    "byte_length": 248
+  },
+  "required_capabilities": ["pattern", "live-pad", "pcm16le"],
+  "source": {
+    "project_id": "00000000-0000-4000-8000-000000000001",
+    "pattern_id": "00000000-0000-4000-8000-000000000010",
+    "revision": 7
+  },
+  "pattern": {
+    "bpm": 120,
+    "bars": 1,
+    "ppq": 960,
+    "loop_length_ticks": 3840,
+    "events": [
+      {"slot": {"bank": 0, "pad": 1}, "onset_tick": 120, "duration_tick": 240, "velocity": 100}
+    ]
+  },
+  "pads": [
+    {"slot": {"bank": 4, "pad": 1}, "sample_index": 0, "start_frame": 0, "end_frame": 4, "trigger_mode": "gate", "linear_gain": 1, "muted": false},
+    {"slot": {"bank": 2, "pad": 3}, "sample_index": 0, "start_frame": 1, "end_frame": 4, "trigger_mode": "loop-toggle", "linear_gain": 0.5, "muted": true}
+  ],
+  "samples": [
+    {
+      "identity": {"sha256": "6efad44c91c9cb32ec10f5fc58f6c442ea871bf8f31e7212fbd30a0cf0dfe79d", "byte_length": 20},
+      "sample_rate": 48000,
+      "channels": 1,
+      "frame_count": 4,
+      "pcm_byte_length": 8
+    }
+  ]
+}
