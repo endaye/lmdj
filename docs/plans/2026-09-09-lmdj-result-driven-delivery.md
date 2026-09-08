@@ -112,6 +112,16 @@ This unactivated adapter does not authenticate remote input, prove OS isolation
 or persist the Issue intent. Real provider acceptance, durable outbox/wake-up
 integration and the complete version PR coordinator remain outstanding.
 
+The [T2e assessment journal](2026-09-09-lmdj-canary-assessment-journal.md)
+persists complete chunked input and terminal results through the existing
+authenticated Journal protocol. Separate claim/execute/complete phases prevent
+an observer from repeating a previously claimed model execution. Blocked
+results reconstruct deterministic failure reports for the existing outbox,
+including restart after an uncertain Issue write. This adds actual storage and
+report-adapter composition, not a new database or live storage configuration.
+The independent assessment Issue, authenticated workflow phases and retained-
+result discovery/reconciliation still need configuration and remote acceptance.
+
 ## Acceptance ledger
 
 - Local reduction/failure behavior: 55 journal tests pass, including six new
