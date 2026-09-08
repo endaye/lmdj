@@ -145,8 +145,9 @@ class Entry:
         hint = payload["workflow_run"]
         if hint.get("path") == incremental_completion.WORKFLOW:
             # The relay is only an authenticated parent association, never
-            # a new executor or a generic permission to reconcile. Preserve
-            # the exact active-parent check below and the Runtime's stable
+            # a new executor or generic settlement permission. Preserve
+            # active-parent ownership and independently check idle main below,
+            # along with the Runtime's stable
             # writer workflow identity.
             parent, self.relay_witness = incremental_completion.resolve(self.runtime, hint)
             return "batch", parent
@@ -219,6 +220,14 @@ class Entry:
                 # Includes none: its previous idle answer still held a claim.
                 self.diagnostic_stage = "reconcile"
                 return self.runtime.reconcile(execute=True)
+            if state["active"] is None:
+                # Coalescing can cancel a push before it claims a batch. Its
+                # authenticated completion is still a wakeup, not test evidence.
+                # Recover only independently observed new main; unchanged idle
+                # callbacks must not write or generate another execution chain.
+                self.diagnostic_stage = "reconcile"
+                if self.runtime.read_main() != state["processed"]:
+                    return self.runtime.reconcile(execute=True)
             return self.runtime.answer("idle", "callback is not the authenticated active executor", None, state)
         return self.runtime.answer("idle", "report-only source cannot authorize execution", None, None)
 

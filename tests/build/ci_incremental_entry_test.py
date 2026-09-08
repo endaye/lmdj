@@ -434,6 +434,113 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(adapter.state(), before)
         self.assertFalse(self.writes())
 
+    def advance_main(self, path):
+        changed = self.f.root / path
+        changed.parent.mkdir(parents=True, exist_ok=True)
+        changed.write_text("new main input\n")
+        self.f.git("add", path)
+        self.f.git("commit", "-qm", "advance main " + path)
+        self.sha = self.f.git("rev-parse", "HEAD")
+        self.env["GITHUB_SHA"] = self.sha
+        for http in self.http.values():
+            http.sha = self.sha
+        return self.sha
+
+    def settled_baseline(self):
+        original = self.make().control(self.push())
+        self.f.api = self.scheduler
+        self.f.evidence(original["request"])
+        self.add_run(18)
+        settled = self.make(18, "workflow_run").control(self.callback(self.scheduler.runs[17]))
+        self.assertIsNone(settled["state"]["active"])
+        self.assertEqual(settled["state"]["processed"], self.sha)
+        return self.sha
+
+    def test_idle_cancelled_push_relay_recovers_entire_new_main_interval(self):
+        # Real Git and journal transitions; the relay seam is authenticated by
+        # ci_incremental_completion_test. Actual cancellation/delivery ordering,
+        # chain depth and heavy execution are not reproduced by this fixture.
+        base = self.settled_baseline()
+        middle = self.advance_main("tests/build/ci_recovered_fixture.py")
+        self.add_run(19, event="push")
+        self.finish(19)
+        self.scheduler.runs[19]["conclusion"] = "cancelled"
+        parent = deepcopy(self.scheduler.runs[19])  # Cancelled before any claim.
+        target = self.advance_main("docs/plans/recovered-fixture.md")
+        self.add_run(20)
+        payload = self.callback({"path": entry.incremental_completion.WORKFLOW})
+        relay = {"run_id": 71, "attempt": 1, "control": target}
+        with mock.patch.object(entry.incremental_completion, "resolve", return_value=(parent, relay)):
+            recovered = self.make(20, "workflow_run").control(payload)
+        self.assertEqual(recovered["action"], "execute",
+            "why: cancelled push left new main unobserved; remedy: reconcile idle callbacks against fresh main")
+        request = recovered["request"]
+        self.assertEqual((request["base"], request["target"]), (base, target))
+        self.assertNotEqual(request["target"], middle)
+        self.assertEqual(request["selection"]["suites"], ["ci_contract"])
+        reader = self.make(20, "workflow_run")
+        reader.authenticate()
+        replay = reader.state()
+        self.assertEqual(replay["active"]["request_id"], request["id"])
+        self.assertEqual(replay["requests"][request["id"]], request)
+        self.assertEqual(replay["active"]["claim"], {"run_id": 20, "attempt": 1})
+        self.assertEqual(replay["processed"], base)
+        # A repeated parent cannot settle or replace the newly claimed owner.
+        self.add_run(21)
+        self.calls.clear()
+        with mock.patch.object(entry.incremental_completion, "resolve", return_value=(parent, relay)):
+            duplicate = self.make(21, "workflow_run").control(payload)
+        self.assertEqual(duplicate["action"], "idle")
+        self.assertEqual(duplicate["state"], replay)
+        self.assertFalse(self.writes())
+
+    def test_idle_cancelled_parent_without_new_main_has_no_writes(self):
+        self.settled_baseline()
+        self.add_run(19, event="push")
+        self.finish(19)
+        self.scheduler.runs[19]["conclusion"] = "cancelled"
+        self.add_run(20)
+        self.calls.clear()
+        answer = self.make(20, "workflow_run").control(self.callback(self.scheduler.runs[19]))
+        self.assertEqual(answer["action"], "idle")
+        self.assertIsNone(answer["request"])
+        self.assertFalse(self.writes())
+
+    def test_unrelated_parent_with_new_main_cannot_steal_active_owner(self):
+        original = self.make().control(self.push())
+        self.advance_main("tests/build/ci_recovered_fixture.py")
+        self.add_run(19, event="push")
+        payload = self.finish(19)
+        self.add_run(20)
+        adapter = self.make(20, "workflow_run")
+        adapter.authenticate()
+        before = adapter.state()
+        self.calls.clear()
+        answer = adapter.control(payload)
+        self.assertEqual(answer["action"], "idle")
+        self.assertEqual(answer["state"], before)
+        self.assertEqual(answer["state"]["active"], original["state"]["active"])
+        self.assertFalse(self.writes())
+
+    def test_idle_recovery_main_read_failure_cannot_write_or_claim(self):
+        self.settled_baseline()
+        self.advance_main("tests/build/ci_recovered_fixture.py")
+        self.add_run(19, event="push")
+        payload = self.finish(19)
+        self.add_run(20)
+        adapter = self.make(20, "workflow_run")
+        read_state = adapter.state
+        def fail_after_authenticated_state():
+            result = read_state()
+            self.scheduler.fail = ("GET", "/repos/endaye/lmdj/git/ref/heads/main")
+            return result
+        self.calls.clear()
+        with mock.patch.object(adapter, "state", side_effect=fail_after_authenticated_state):
+            with self.assertRaisesRegex(entry.batch.BatchError, "why:.*remedy:"):
+                adapter.control(payload)
+        self.assertEqual(adapter.diagnostic_stage, "reconcile")
+        self.assertFalse(self.writes())
+
     def test_missing_relay_association_cannot_write_or_emit_a_source_witness(self):
         self.scheduler.runs[17]["event"] = "workflow_run"
         payload = self.callback({"path": entry.incremental_completion.WORKFLOW})
