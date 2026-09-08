@@ -1,5 +1,28 @@
 # Architecture Portal 部署、验证与回滚
 
+## Cloudflare 固定地址配置（2026-09-08）
+
+用户已选定 `https://docs.lmdj.workers.dev/`。独立配置位于
+`apps/architecture-portal/deploy/wrangler.json`；配置存在不表示已经发布。
+`lmdj` Worker 继续保留既有试点，`docs` 通过 Git 构建部署。
+
+在 Cloudflare 为 Worker `docs` 连接 `endaye/lmdj`，仓库根目录 `/`，
+Node 使用根目录 `.node-version`。构建命令为：
+
+```sh
+npx --yes npm@10.9.3 --prefix apps/architecture-portal ci && npx --yes npm@10.9.3 --prefix apps/architecture-portal run check
+```
+
+生产部署命令为：
+
+```sh
+npx --yes wrangler@4.129.1 deploy --config apps/architecture-portal/deploy/wrangler.json
+```
+
+上述配置必须先进入被 Cloudflare 构建的 Git 分支；本地目录不能作为手动生产上传输入。
+发布后从相同 Git revision 运行 Portal smoke 并记录 Cloudflare version ID。
+自有域名与 Netlify 地址保持原状。
+
 日期：2026-08-04
 
 状态：已生效

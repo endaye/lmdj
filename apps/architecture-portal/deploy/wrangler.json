@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "docs",
+  "account_id": "0b62b8881c07f48f7935f5380a1f55db",
+  "compatibility_date": "2026-09-08",
+  "workers_dev": true,
+  "preview_urls": true,
+  "assets": {
+    "directory": "../build",
+    "not_found_handling": "404-page"
+  }
+}

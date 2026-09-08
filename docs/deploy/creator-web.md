@@ -1,5 +1,31 @@
 # Creator Web Host 公共部署运行手册
 
+## Cloudflare 迁移目标（2026-09-08）
+
+用户已选择固定地址 `https://creator.lmdj.workers.dev/`，对应 LMDJ account
+`0b62b8881c07f48f7935f5380a1f55db` 的 Worker `creator`。
+配置位于 `apps/creator-web/deploy/wrangler.json`，默认关闭主访问路由，启用版本
+Preview；这份配置本身不是上线证据。部署输入必须来自经签名验证的 Release，放在
+`build/deploy/cloudflare/creator/dist`，附加由已验证 manifest 生成的 `_headers`。
+使用 `python3 apps/creator-web/deploy/cloudflare_headers.py VERIFIED_DIST` 生成
+响应头；除既有安全与精确资产缓存规则外，显式声明 HTML/JS/CSS 的 UTF-8 charset。
+Cloudflare 版本 Preview 会覆盖 `X-Robots-Tag` 为 `noindex`，仅 Preview 检查接受此
+平台差异；固定地址检查要求完整 robots directives。
+`cloudflare_worker.mjs` 只处理 `/` 到 `index.html` 的内部映射，保持两者均直接返回
+相同的已签名 HTML；其余路径直接由静态资产服务响应。响应头生成器消除 Netlify
+规则迁移后产生的重复值，并为精确 manifest 资产重置默认缓存。
+
+使用 `python3 apps/creator-web/deploy/cloudflare_smoke.py VERIFIED_DIST URL`
+验证固定地址，版本 Preview 额外传入 `--preview`。此检查要求响应逐字节匹配经签名验证
+的输入，并检查 MIME、安全响应头、精确缓存规则和未知路径 404。编码的 `..` 路径
+在远端边缘可被拒绝，在本地模拟器可被规范化；该探针要求有效的 400/404 拒绝，
+或内容严格等于已验证的公开 index。输出是迁移观察，不冒充原有
+Netlify deployment evidence Contract。浏览器测试仍使用原有 Creator deployment suite。
+本次固定入口的 HTTP、浏览器和签名包身份观察记录在
+[`2026-09-08-cloudflare-creator-observation.json`](2026-09-08-cloudflare-creator-observation.json)。
+禁止用源码重建产物冒充同一个 Release。只有候选验证通过后才启用固定访问地址；
+首次上线验证失败时关闭该路由。现有 Netlify 事务与下述历史生产路径继续保留。
+
 本手册定义 Creator Web Host 的受控生产部署路径。它是操作契约，不是执行记录；文档、
 workflow 或本地 Proof 的存在都不表示 Netlify Site 已创建，也不授权 Release publication、
 Creator deployment、Runtime deployment 或 Channel promotion。
