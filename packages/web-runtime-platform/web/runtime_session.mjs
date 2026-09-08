@@ -4696,11 +4696,22 @@ function createRuntimeSessionController(options = {}) {
       throw typedError(
         "HOST_PROTOCOL_MISMATCH", "Sound Set audition geometry is invalid");
     }
+    const slotIndex = result.slot_index ?? null;
+    // A slot audition always names the Artifact it played; only a set-level
+    // demo may answer without one. Accepting `null` here would hand the
+    // surface a result the type says cannot occur, and `normalizeSoundSetSlot`
+    // already treats the same inconsistency as a protocol fault for an
+    // occupied slot.
+    if (slotIndex !== null && (result.artifact ?? null) === null) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH",
+        "Sound Set slot audition named no Artifact");
+    }
     return Object.freeze({
       setId: result.set_id,
       version: result.version,
       manifestSha256: result.manifest_sha256,
-      slotIndex: result.slot_index ?? null,
+      slotIndex,
       artifact: normalizeSoundSetArtifact(result.artifact ?? null),
       audio: Object.freeze({
         sampleRate: audio.sample_rate,
