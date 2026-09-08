@@ -3,6 +3,9 @@
 This repository contains the clean-break LMDJ core redesign. New Headless Core
 is the only active product source.
 
+Root `CLAUDE.md` is a byte-identical copy of this file; when editing either,
+update both in the same change.
+
 ## Git workflow
 
 `main` is the protected integration branch; it may temporarily contain defects.
@@ -185,8 +188,8 @@ prohibited.
 The stable Core entry point is:
 
 ```bash
-scripts/core.sh configure dev
-scripts/core.sh build dev
+scripts/core.sh configure [dev|release|asan|tsan]
+scripts/core.sh build [dev|release|asan|tsan]
 scripts/core.sh test dev [fast|full|stress]
 scripts/core.sh coverage [report|check]
 scripts/core.sh proof
@@ -214,6 +217,24 @@ work on arm64 macOS, so Linux `core-asan` owns that coverage.
 `unit` and `component` tiers, then packages, and it refuses to package a
 modified working tree because the recorded Git revision would not describe the
 contents. It also writes a detached `<archive>.sha256`.
+
+Web Host proofs run through their own entry points (CI runs both lanes) and
+require the pinned Emscripten `6.0.5`, Node 22, and the locked Playwright
+browsers:
+
+```bash
+scripts/web-runtime-host.sh proof
+scripts/creator-web.sh proof
+```
+
+`scripts/local-ci.sh` runs the same CI lanes this working tree selects, on the
+local machine. It reuses `scripts/ci/change_scope.py`, so it cannot disagree
+with CI lane selection, and it reports not-runnable-here for lanes this
+platform cannot execute. It is advisory only: a green local run authorizes no
+push, Pull Request, or later state transition. `--list` resolves the lane plan
+without running, and `--pr-body body.md` checks a Pull Request body's
+`Documentation impact:` declaration in milliseconds instead of a full portal
+lane run.
 
 Direct verification commands:
 
