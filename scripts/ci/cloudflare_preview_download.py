@@ -69,6 +69,7 @@ def download_verified(github, pr_number, run_id, artifact_id, destination, downl
             'invalid GitHub object ID')
     destination = Path(destination)
     require(not destination.exists(), 'download target already exists')
+    require(destination.parent.is_dir(), 'download parent directory is missing')
     base = f'/repos/{REPOSITORY}'
     pr = github.metadata(f'{base}/pulls/{pr_number}')
     run = github.metadata(f'{base}/actions/runs/{run_id}')
