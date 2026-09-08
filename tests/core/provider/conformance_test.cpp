@@ -228,7 +228,7 @@ void test_module_manifests_are_exact() {
        nlohmann::json{
            {"api_version", 2},
            {"contract", "lmdj.module.v1"},
-           {"dependencies", {{"foundation", "0.3.0"}}},
+           {"dependencies", {{"foundation", "0.4.0"}}},
            {"module", "provider-sdk"},
            {"version", "1.1.4"},
        }));

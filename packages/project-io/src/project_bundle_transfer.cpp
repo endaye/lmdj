@@ -187,9 +187,15 @@ struct BundleEntry {
   std::string sha256;
 };
 
+// The container version this Build writes. A Bundle index at an older
+// readable version keeps its own value, because the digest is computed over
+// the index and must reproduce exactly what its packer wrote.
+constexpr std::string_view kBundleContractVersion = "1.2.0";
+
 struct ParsedIndex {
   foundation::ProjectId project_id;
   std::string bundle_digest;
+  std::string contract_version;
   std::vector<BundleEntry> entries;
 };
 
@@ -213,12 +219,14 @@ foundation::Result<ParsedIndex> parse_index(std::string_view encoded) {
            "uncompressed_bytes"}) ||
       index.at("contract") != "lmdj.project-bundle.v1" ||
       (index.at("contract_version") != "1.0.0" &&
-       index.at("contract_version") != "1.1.0") ||
+       index.at("contract_version") != "1.1.0" &&
+       index.at("contract_version") != kBundleContractVersion) ||
       index.at("compression") != "none" ||
       !index.at("project_contract").is_string() ||
       (index.at("project_contract") != "lmdj.project.v1" &&
        index.at("project_contract") != "lmdj.project.v2" &&
-       index.at("project_contract") != "lmdj.project.v3") ||
+       index.at("project_contract") != "lmdj.project.v3" &&
+       index.at("project_contract") != "lmdj.project.v4") ||
       !index.at("project_id").is_string() ||
       !index.at("bundle_digest").is_string() ||
       !index.at("entries").is_array()) {
@@ -306,6 +314,7 @@ foundation::Result<ParsedIndex> parse_index(std::string_view encoded) {
       ParsedIndex{
           foundation::ProjectId{project_id},
           declared_digest,
+          index.at("contract_version").get<std::string>(),
           std::move(entries),
       });
 }
@@ -379,10 +388,41 @@ foundation::Result<void> collect_inventory(
   return foundation::Result<void>::success();
 }
 
+std::string_view project_contract_id(domain::ProjectContract contract) {
+  switch (contract) {
+    case domain::ProjectContract::v1:
+      return "lmdj.project.v1";
+    case domain::ProjectContract::v2:
+      return "lmdj.project.v2";
+    case domain::ProjectContract::v3:
+      return "lmdj.project.v3";
+    case domain::ProjectContract::v4:
+      return "lmdj.project.v4";
+  }
+  return "lmdj.project.v4";
+}
+
+// The digest a Bundle index of this Project must declare.
+//
+// `project_contract` is recomputed from the Project on disk rather than copied
+// from an incoming index, so an index that misstates its Contract level fails
+// the comparison -- but only at the granularity the loader preserves. `load`
+// collapses v1, v2 and v3 to `ProjectContract::v3` (see `parse_project` in
+// project_store.cpp), so this distinguishes v4 from not-v4 and nothing finer,
+// and a truthful v1 or v2 index therefore still fails. That gap predates this
+// Build: before the Contract moved to 1.2.0 the level here was the constant
+// `lmdj.project.v3`, so a v1 or v2 Bundle never imported either.
+//
+// `contract_version` describes the container an older packer wrote, so it is
+// the index's own value and is consequently NOT authenticated by this digest.
+// What still constrains it is `parse_index`'s allowlist of readable container
+// versions, and nothing else.
 foundation::Result<std::string> project_digest(
     const ProjectStoragePlatform& platform,
     const std::filesystem::path& path,
-    const foundation::ProjectId& project_id) {
+    const foundation::ProjectId& project_id,
+    domain::ProjectContract contract,
+    std::string_view contract_version) {
   const auto tree = platform.validate_managed_tree(path);
   if (!tree.has_value()) {
     return foundation::Result<std::string>::failure(
@@ -417,9 +457,9 @@ foundation::Result<std::string> project_digest(
   nlohmann::json index{
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.1.0"},
+      {"contract_version", contract_version},
       {"entries", std::move(encoded_entries)},
-      {"project_contract", "lmdj.project.v3"},
+      {"project_contract", project_contract_id(contract)},
       {"project_id", project_id.value()},
       {"uncompressed_bytes", offset},
   };
@@ -461,7 +501,8 @@ namespace {
 
 foundation::Result<LocalProjectSummary> summarize_project(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
-    const std::filesystem::path& path) {
+    const std::filesystem::path& path,
+    std::string_view contract_version = kBundleContractVersion) {
   ProjectStore store{platform};
   const auto loaded = store.load(path);
   if (!loaded.has_value()) {
@@ -474,7 +515,8 @@ foundation::Result<LocalProjectSummary> summarize_project(
     return foundation::Result<LocalProjectSummary>::failure(
         invalid_bundle("Project has no playable Pattern"));
   }
-  const auto digest = project_digest(*platform, path, state.id);
+  const auto digest = project_digest(
+      *platform, path, state.id, state.contract, contract_version);
   if (!digest.has_value()) {
     return foundation::Result<LocalProjectSummary>::failure(digest.error());
   }
@@ -792,7 +834,8 @@ foundation::Result<LocalProjectSummary> ProjectBundleTransfer::commit(
     cleanup();
     return foundation::Result<LocalProjectSummary>::failure(error);
   }
-  auto staged_summary = summarize_project(impl_->platform, session.bundle);
+  auto staged_summary = summarize_project(
+      impl_->platform, session.bundle, session.index->contract_version);
   if (!staged_summary.has_value()) {
     const auto error = staged_summary.error();
     cleanup();
@@ -831,7 +874,8 @@ foundation::Result<LocalProjectSummary> ProjectBundleTransfer::commit(
     return foundation::Result<LocalProjectSummary>::failure(error);
   }
   if (present.value()) {
-    const auto existing = summarize_project(impl_->platform, destination);
+    const auto existing = summarize_project(
+        impl_->platform, destination, session.index->contract_version);
     if (!existing.has_value()) {
       const auto error = existing.error();
       cleanup();

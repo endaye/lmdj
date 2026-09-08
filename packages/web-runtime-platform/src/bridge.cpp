@@ -2864,6 +2864,15 @@ int main() {
       LMDJ_WEB_LIMIT_GENERATION_BYTES,
       LMDJ_WEB_LIMIT_RESIDENT_BYTES,
   };
+  // S11-D7: the Web Host's Sound Set bounds come from the same validated
+  // distribution manifest as every other resource limit, so the Host injects
+  // them rather than falling back to the Facade's shared default.
+  constexpr lmdj::facade::SoundSetStoreLimits soundset_limits{
+      LMDJ_WEB_LIMIT_SOUNDSET_MANIFEST_BYTES,
+      LMDJ_WEB_LIMIT_SOUNDSET_BLOB_BYTES,
+      LMDJ_WEB_LIMIT_SOUNDSET_UNIQUE_BYTES,
+      LMDJ_WEB_LIMIT_SOUNDSET_STAGING_BYTES,
+  };
   // S11-D6: the Web Host's Catalog is a network endpoint, and Core ships no
   // network code, so the browser side performs the `fetch` and stages the
   // bytes here. The same object is Core's `CatalogTransport` and its Catalog
@@ -2887,6 +2896,7 @@ int main() {
           nullptr,
           std::move(catalog.transport),
           std::move(catalog.source),
+          soundset_limits,
       },
       limits);
   if (!created.has_value()) {

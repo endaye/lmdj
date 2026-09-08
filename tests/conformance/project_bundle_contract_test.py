@@ -22,8 +22,14 @@ SCHEMA_PATH = (
 PROJECT_V3_SCHEMA_PATH = (
     REPO_ROOT / "contracts" / "project" / "lmdj.project.v3.schema.json"
 )
+PROJECT_SCHEMA_ROOT = REPO_ROOT / "contracts" / "project"
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "contracts"
 PROJECT_ID = "12345678-1234-4123-8123-123456789abc"
+# The Contract level Project I/O writes for every Project this Build creates
+# and persists (`persisted_projection` in packages/project-io/src/
+# project_store.cpp). A Bundle that cannot name this level cannot pack any
+# Project the product produced, which is what #784 reported.
+WRITER_PROJECT_CONTRACT = "lmdj.project.v4"
 
 assert TOOL_PATH.is_file(), f"missing Project Bundle tool: {TOOL_PATH}"
 assert SCHEMA_PATH.is_file(), f"missing Project Bundle Contract: {SCHEMA_PATH}"
@@ -44,7 +50,9 @@ def load_json(path: Path) -> dict:
     return value
 
 
-def write_project(source: Path) -> None:
+def write_project(
+    source: Path, contract: str = WRITER_PROJECT_CONTRACT
+) -> None:
     (source / "assets").mkdir(parents=True)
     (source / "history" / "checkpoints").mkdir(parents=True)
     (source / "history" / "transactions").mkdir(parents=True)
@@ -57,7 +65,7 @@ def write_project(source: Path) -> None:
         "transactions": [],
     }
     checkpoint = {
-        "contract": "lmdj.project.v3",
+        "contract": contract,
         "project_id": PROJECT_ID,
     }
     (source / "manifest.json").write_bytes(
@@ -74,9 +82,9 @@ def make_index(entries: list[dict], total: int) -> dict:
         "bundle_digest": "0" * 64,
         "compression": "none",
         "contract": "lmdj.project-bundle.v1",
-        "contract_version": "1.1.0",
+        "contract_version": project_bundle.CONTRACT_VERSION,
         "entries": entries,
-        "project_contract": "lmdj.project.v3",
+        "project_contract": WRITER_PROJECT_CONTRACT,
         "project_id": PROJECT_ID,
         "uncompressed_bytes": total,
     }
@@ -167,7 +175,8 @@ def test_pack_header_digest_payload_and_determinism(root: Path) -> None:
     ).hexdigest()
     assert index["bundle_digest"] == first_digest
     assert index["project_id"] == PROJECT_ID
-    assert index["project_contract"] == "lmdj.project.v3"
+    assert index["project_contract"] == WRITER_PROJECT_CONTRACT
+    assert index["contract_version"] == project_bundle.CONTRACT_VERSION
     assert [item["path"] for item in index["entries"]] == sorted(
         item["path"] for item in index["entries"]
     )
@@ -219,7 +228,9 @@ def test_index_and_payload_rejections(root: Path) -> None:
     valid_entries = [entry("a", b"a", 0), entry("b", b"b", 1)]
     valid_index = make_index(valid_entries, len(payload))
 
-    for contract in ("lmdj.project.v1", "lmdj.project.v2"):
+    for contract in (
+        "lmdj.project.v1", "lmdj.project.v2", "lmdj.project.v3"
+    ):
         legacy = copy.deepcopy(valid_index)
         legacy["project_contract"] = contract
         legacy["bundle_digest"] = project_bundle.bundle_digest(legacy)
@@ -227,11 +238,27 @@ def test_index_and_payload_rejections(root: Path) -> None:
         write_bundle(path, legacy, payload)
         assert project_bundle.read_bundle(path)[0]["project_contract"] == contract
 
+    for version in sorted(project_bundle.READABLE_CONTRACT_VERSIONS):
+        older = copy.deepcopy(valid_index)
+        older["contract_version"] = version
+        older["bundle_digest"] = project_bundle.bundle_digest(older)
+        path = root / f"valid-container-{version}.lmdj"
+        write_bundle(path, older, payload)
+        assert project_bundle.read_bundle(path)[0]["contract_version"] == version
+
     cases: list[tuple[str, dict, bytes, str]] = []
     unsupported = copy.deepcopy(valid_index)
-    unsupported["project_contract"] = "lmdj.project.v4"
+    unsupported["project_contract"] = "lmdj.project.v5"
     unsupported["bundle_digest"] = project_bundle.bundle_digest(unsupported)
     cases.append(("project-contract", unsupported, payload, "unsupported"))
+    unsupported_container = copy.deepcopy(valid_index)
+    unsupported_container["contract_version"] = "2.0.0"
+    unsupported_container["bundle_digest"] = project_bundle.bundle_digest(
+        unsupported_container
+    )
+    cases.append(
+        ("contract-version", unsupported_container, payload, "unsupported")
+    )
     invalid_paths = {
         "absolute": "/manifest.json",
         "dotdot": "history/../manifest.json",
@@ -402,12 +429,90 @@ def test_pack_rejects_unsafe_tree(root: Path) -> None:
         raise AssertionError("expected resolved output-parent rejection")
 
 
+def test_contract_enumerates_every_project_contract_level() -> None:
+    """A new Project Contract level must reach the Bundle enum in the same cut.
+
+    #784 shipped because nothing coupled the Bundle Contract to the set of
+    Project Contracts the repository defines: `lmdj.project.v4` was added, the
+    writer moved to it, and the Bundle enum was never widened, so no Project
+    the product created could be packed. This binds the two inventories.
+    """
+    schema = load_json(SCHEMA_PATH)
+    declared = set(schema["properties"]["project_contract"]["enum"])
+    on_disk = {
+        path.name[: -len(".schema.json")]
+        for path in PROJECT_SCHEMA_ROOT.glob("lmdj.project.v*.schema.json")
+    }
+    assert on_disk, PROJECT_SCHEMA_ROOT
+    assert declared == on_disk, (
+        "why: contracts/project/lmdj.project-bundle.v1.schema.json names "
+        f"{sorted(declared)} but the repository defines {sorted(on_disk)}, so "
+        "a Project at an unnamed level cannot be packed as a Bundle. "
+        "Remedy: widen the Bundle enum as an additive Contract MINOR in the "
+        "same cut that adds the Project Contract, and move "
+        "project_bundle.PROJECT_CONTRACTS and Project I/O's parse_index "
+        "allowlist with it."
+    )
+    assert WRITER_PROJECT_CONTRACT in declared
+    assert set(project_bundle.PROJECT_CONTRACTS) == declared
+
+
+def test_packs_a_project_at_the_level_the_writer_produces(root: Path) -> None:
+    """Pack the shape Project I/O persists, not a shape this test invented.
+
+    The suite used to write a synthetic `lmdj.project.v3` checkpoint, which is
+    why it stayed green while every Project the product created was unpackable.
+    """
+    source = root / "writer-level.lmdj"
+    source.mkdir()
+    write_project(source, WRITER_PROJECT_CONTRACT)
+    output = root / "writer-level-bundle.lmdj"
+    project_bundle.pack_directory(source, output)
+    index, _ = project_bundle.read_bundle(output)
+    assert index["project_contract"] == WRITER_PROJECT_CONTRACT
+    assert index["contract_version"] == project_bundle.CONTRACT_VERSION
+
+
+def test_promoted_project_packs_at_its_head_level(root: Path) -> None:
+    """A Project promoted on persist packs at its head, not its birth level.
+
+    Project I/O promotes an existing Project to the writer's level on its first
+    persist and leaves checkpoint 0 alone, and its import path recomputes the
+    digest from the head checkpoint. Reading the initial checkpoint here would
+    make the packed index and that recomputation disagree.
+    """
+    source = root / "promoted.lmdj"
+    source.mkdir()
+    write_project(source, "lmdj.project.v3")
+    head = source / "history" / "checkpoints" / "1.json"
+    head.write_bytes(
+        project_bundle.canonical_json(
+            {"contract": WRITER_PROJECT_CONTRACT, "project_id": PROJECT_ID}
+        )
+        + b"\n"
+    )
+    manifest_path = source / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["head_checkpoint"] = "history/checkpoints/1.json"
+    manifest["head_revision"] = 1
+    manifest_path.write_bytes(
+        project_bundle.canonical_json(manifest) + b"\n"
+    )
+    output = root / "promoted-bundle.lmdj"
+    project_bundle.pack_directory(source, output)
+    index, _ = project_bundle.read_bundle(output)
+    assert index["project_contract"] == WRITER_PROJECT_CONTRACT
+
+
 def main() -> None:
     test_schema_and_fixtures()
     test_v3_project_truth_fixture_is_canonical_and_tick_native()
+    test_contract_enumerates_every_project_contract_level()
     with tempfile.TemporaryDirectory(prefix="lmdj-project-bundle-test-") as raw:
         root = Path(raw)
         test_pack_header_digest_payload_and_determinism(root)
+        test_packs_a_project_at_the_level_the_writer_produces(root)
+        test_promoted_project_packs_at_its_head_level(root)
         test_cli(root)
         test_index_and_payload_rejections(root)
         test_limit_rejections(root)

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lmdj.dev/contracts/project/lmdj.project-bundle.v1.schema.json",
-  "x-lmdj-contract-version": "1.1.0",
+  "x-lmdj-contract-version": "1.2.0",
   "title": "LMDJ Portable Project Bundle Index v1",
   "type": "object",
   "required": [
@@ -25,7 +25,7 @@
       "const": "lmdj.project-bundle.v1"
     },
     "contract_version": {
-      "const": "1.1.0"
+      "const": "1.2.0"
     },
     "entries": {
       "type": "array",
@@ -37,7 +37,12 @@
       "uniqueItems": true
     },
     "project_contract": {
-      "enum": ["lmdj.project.v1", "lmdj.project.v2", "lmdj.project.v3"]
+      "enum": [
+        "lmdj.project.v1",
+        "lmdj.project.v2",
+        "lmdj.project.v3",
+        "lmdj.project.v4"
+      ]
     },
     "project_id": {
       "$ref": "#/$defs/uuid"

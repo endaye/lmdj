@@ -1,7 +1,7 @@
 {
   "contract": "lmdj.module.v1",
   "module": "foundation",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "api_version": 1,
   "dependencies": {}
 }

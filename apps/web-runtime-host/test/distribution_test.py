@@ -199,10 +199,18 @@ class DistributionTest(unittest.TestCase):
             self.module.verify_distribution(self.root, REPO_ROOT)
 
     def test_index_identity_metadata_is_exactly_bound_to_manifest(self) -> None:
+        # Read the Host version the distribution actually declares rather than
+        # naming one: a literal here silently stops tampering with anything the
+        # moment the Host version moves, and the case then passes vacuously.
+        host_version = json.loads(
+            (self.root / "host-manifest.json").read_text(encoding="utf-8")
+        )["host_version"]
         index_path = self.root / "index.html"
-        index = index_path.read_text(encoding="utf-8").replace(
-            'content="3.0.0"', 'content="999.0.0"', 1
+        original = index_path.read_text(encoding="utf-8")
+        index = original.replace(
+            f'content="{host_version}"', 'content="999.0.0"', 1
         )
+        self.assertNotEqual(index, original, host_version)
         index_path.write_text(index, encoding="utf-8", newline="\n")
         with self.assertRaises(self.module.DistributionError):
             self.module.verify_distribution(self.root, REPO_ROOT)

@@ -507,6 +507,17 @@ lmdj_add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
+# The Project Bundle Contract suite existed but was never registered, so it
+# never ran and #784 shipped: the Bundle enum stayed at v3 while the writer
+# moved to v4.
+lmdj_add_test(
+  NAME conformance.project_bundle
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}" tests/conformance/project_bundle_contract_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
 lmdj_add_test(
   NAME conformance.module_graph
   TIER contract
@@ -539,6 +550,20 @@ lmdj_add_test(
     "${Python3_EXECUTABLE}" tests/e2e/proof_path_safety_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   LABELS persistence
+)
+
+lmdj_add_test(
+  NAME e2e.project_bundle_writer_level
+  TIER e2e
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/e2e/project_bundle_writer_level_test.py
+    "$<TARGET_FILE:lmdj_core_cli>"
+    "${CMAKE_SOURCE_DIR}/products/lmdj/assembly.json"
+    "${CMAKE_BINARY_DIR}/bundle-writer-level"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS assembly
+  TIMEOUT 60
 )
 
 lmdj_add_test(

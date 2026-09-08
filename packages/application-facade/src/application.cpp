@@ -119,13 +119,18 @@ constexpr audio::RuntimePreparationLimits kDefaultSampleLimits{
     134'217'728,
     268'435'456,
 };
-// Task 6 writes each Host's real Sound Set limits into its manifest. Until
-// then a Host that injects none gets these, which are the sample limits'
-// shape one order of magnitude apart: one manifest object, one blob, one
-// Set's deduplicated total, and the whole staging area.
+// The native Hosts' Sound Set limits. Unlike the Web Host, `core-cli`,
+// `core-mcp` and `native-host` carry no distribution manifest, so this shared
+// default is their injection site and these four numbers are their declared
+// capacity, not a placeholder. They are the same four the Web Host's manifest
+// declares (tools/web-runtime/runtime-identity.json): a Set that installs on
+// one Host installs on every other, which cross-Host Sound Set acceptance
+// requires. One manifest object, one blob bounded by the same 65 MiB a Host
+// already accepts for an imported WAV, one Set's deduplicated total, and the
+// whole staging area.
 constexpr project_io::SoundSetStoreLimits kDefaultSoundSetStoreLimits{
     1'048'576,
-    67'108'864,
+    68'157'440,
     268'435'456,
     536'870'912,
 };

@@ -35,12 +35,27 @@ _ROOT_KEYS = {
     "uncompressed_bytes",
 }
 _ENTRY_KEYS = {"bytes", "offset", "path", "sha256"}
+# The container version this tool writes, and every container version it
+# still reads. Widening the Project Contract enum is an additive Contract
+# MINOR, so a 1.2.0 reader accepts every 1.0.0 and 1.1.0 index unchanged.
+CONTRACT_VERSION = "1.2.0"
+READABLE_CONTRACT_VERSIONS = frozenset({"1.0.0", "1.1.0", CONTRACT_VERSION})
+# Every Project Contract level a Bundle may name. `lmdj.project.v4` is the
+# only level this Build writes, so omitting it made every new Project
+# unpackable (#784).
+PROJECT_CONTRACTS = frozenset({
+    "lmdj.project.v1",
+    "lmdj.project.v2",
+    "lmdj.project.v3",
+    "lmdj.project.v4",
+})
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
 )
 _PATH = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\Z")
+_CHECKPOINT = re.compile(r"history/checkpoints/(?:0|[1-9][0-9]*)\.json\Z")
 
 
 class BundleError(ValueError):
@@ -137,13 +152,11 @@ def _validate_index(index: dict) -> list[dict]:
         )
     if index["contract"] != "lmdj.project-bundle.v1":
         raise BundleError("bundle contract is not lmdj.project-bundle.v1")
-    if index["contract_version"] not in {"1.0.0", "1.1.0"}:
+    if index["contract_version"] not in READABLE_CONTRACT_VERSIONS:
         raise BundleError("bundle contract version is unsupported")
     if index["compression"] != "none":
         raise BundleError("bundle compression must be none")
-    if index["project_contract"] not in {
-        "lmdj.project.v1", "lmdj.project.v2", "lmdj.project.v3"
-    }:
+    if index["project_contract"] not in PROJECT_CONTRACTS:
         raise BundleError("bundle project contract is unsupported")
     if not isinstance(index["project_id"], str) or _UUID.fullmatch(
         index["project_id"]
@@ -414,14 +427,36 @@ def _load_project_identity(source: Path, files: list[_SourceFile]) -> tuple[str,
     project_id = checkpoint.get("project_id") if isinstance(checkpoint, dict) else None
     if (
         not isinstance(checkpoint, dict)
-        or checkpoint.get("contract") not in {
-            "lmdj.project.v1", "lmdj.project.v2", "lmdj.project.v3"
-        }
+        or checkpoint.get("contract") not in PROJECT_CONTRACTS
         or not isinstance(project_id, str)
         or _UUID.fullmatch(project_id) is None
     ):
         raise BundleError("managed Project initial checkpoint identity is invalid")
-    return project_id, checkpoint["contract"]
+    # The head checkpoint, not the initial one, states the Contract level a
+    # reader of this Bundle actually receives: Project I/O promotes a Project
+    # on its first persist and leaves checkpoint 0 at the level it was created
+    # with. Project I/O's own import derives the same value from the head, so
+    # reading the initial checkpoint here would make the packed index and the
+    # importer's recomputed digest disagree on a promoted Project.
+    head_relative = manifest.get("head_checkpoint")
+    if not isinstance(head_relative, str) or _CHECKPOINT.fullmatch(
+        head_relative
+    ) is None:
+        raise BundleError("managed Project head checkpoint path is invalid")
+    try:
+        head_item = inventory[head_relative]
+    except KeyError as error:
+        raise BundleError(
+            f"managed Project identity file is missing: {error}"
+        ) from error
+    head = _read_source_json(head_item)
+    if (
+        not isinstance(head, dict)
+        or head.get("contract") not in PROJECT_CONTRACTS
+        or head.get("project_id") != project_id
+    ):
+        raise BundleError("managed Project head checkpoint identity is invalid")
+    return project_id, head["contract"]
 
 
 def _copy_source(item: _SourceFile, output: BinaryIO, expected_hash: str) -> None:
@@ -487,7 +522,7 @@ def pack_directory(
         "bundle_digest": "0" * 64,
         "compression": "none",
         "contract": "lmdj.project-bundle.v1",
-        "contract_version": "1.1.0",
+        "contract_version": CONTRACT_VERSION,
         "entries": entries,
         "project_contract": project_contract,
         "project_id": project_id,

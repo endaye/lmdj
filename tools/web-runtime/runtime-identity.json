@@ -130,6 +130,10 @@
     "ingest_decoded_frames": 43200000,
     "ingest_channels": 2,
     "imported_wav_bytes": 68157440,
+    "maximum_soundset_manifest_bytes": 1048576,
+    "maximum_soundset_blob_bytes": 68157440,
+    "maximum_soundset_unique_bytes": 268435456,
+    "maximum_soundset_staging_bytes": 536870912,
     "perform_recording_frames": 86400000,
     "perform_recording_queue_batches": 32
   }

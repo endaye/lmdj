@@ -423,6 +423,13 @@ function snapshotDocumentPath(sourcePath, version) {
   return `versioned_docs/version-${version}/${sourcePath.slice(prefix.length)}`;
 }
 
+// Every current documentation page must reach the snapshot, so the count is
+// pinned rather than derived from the same directory it checks -- deriving it
+// would make the check vacuous. It moves whenever the current page set moves:
+// this Build added one page per newly active Sound Set Contract, which the
+// portal's one-page-per-active-Contract rule requires.
+const SOURCE_DOCUMENT_COUNT = 39;
+
 export async function createSnapshotMetadata({
   repoRoot,
   portalRoot,
@@ -431,7 +438,7 @@ export async function createSnapshotMetadata({
   revision,
   facts,
   now = () => new Date(),
-  expectedDocCount = 37,
+  expectedDocCount = SOURCE_DOCUMENT_COUNT,
   diagramIds = DIAGRAM_IDS,
   projectionPaths,
 }) {
@@ -619,7 +626,7 @@ export async function verifySnapshotProvenance({
   portalRoot,
   metadata,
   headRevision,
-  expectedDocCount = 37,
+  expectedDocCount = SOURCE_DOCUMENT_COUNT,
   diagramIds = DIAGRAM_IDS,
   projectionPaths,
   readFactsAtRevision: factsReader = readRepoFactsAtRevision,

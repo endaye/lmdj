@@ -1,0 +1,54 @@
+---
+title: Sound Set Contract
+area: contracts
+status: implemented
+owners: [core, product, hosts]
+contracts: [lmdj.soundset.v1]
+source_paths:
+  - contracts/soundset/lmdj.soundset.v1.schema.json
+  - packages/foundation
+  - packages/project-io
+  - packages/application-facade
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="contracts" id="lmdj.soundset.v1" />
+
+## 权威内容
+
+`lmdj.soundset.v1 · 1.1.0` 是一个 Sound Set 的清单：`set_id`、`version`、`name`、
+`publisher`、`license` 与 `slots` 必填，`description`、`bpm`、`key` 与 `demo` 可选。
+`slots` 恰好覆盖一个 Bank 的 16 个槽位地址，每个槽位要么只带 `slot`（空槽），要么另
+带 `role`、`name` 与内容寻址的 `artifact`；`role` 是封闭枚举。清单本身是内容寻址的：
+Catalog 与 Set Store 都以其规范化字节的 SHA-256 指认它。
+
+`1.1.0` 相对 `1.0.0` 只追加可选的 `demo` Artifact——一整个 Set 的试听素材，与槽位
+Artifact 同为 `artifact_ref`，因此可以复用某个槽位已有的哈希；这是向后兼容的追加。
+
+## 与 Project Truth 的关系
+
+Set 不是 Project Truth。安装把槽位内容写成普通 Asset 与普通 Pad 指派，来源记录在既有
+的 Asset Lineage 载体上：`source.kind = soundset` 携带 `set_id`、`set_version`、
+`manifest_sha256`、`slot_index` 与 `artifact_sha256`，`derivation.kind =
+soundset_install` 不带负载。安装之后再编辑 Pad 是普通的创作动作，Set Store 的字节不
+随之改变。Catalog endpoint、缓存与 Set Store 是 Workspace/Host 状态，永不进入 Project
+Truth。
+
+## 安全与发布
+
+清单在成为可见的 Set 之前完整校验：Contract 形状、每个 Artifact 的哈希、`license` 的
+SPDX 允许清单与署名要求，以及四项 Host 容量上限——单个清单对象、单个 Artifact blob、
+一个 Set 去重后的总量，以及整个暂存区。任何一项不通过，该 Set 都不会变为可见，也不会
+产生任何分配或下载。哈希不符的字节以 `soundset_content_mismatch` 上报，不会退化为静默
+重试。
+
+## 使用方与证据
+
+Application Facade 暴露 `soundset.catalog.list`、`soundset.inspect`、
+`soundset.map.preview`、`soundset.install` 与 `soundset.audition`。前四个在五个 Host
+上都可达；**`soundset.audition` 目前只由三个原生 Host 服务**，Web Host 的 bridge 与
+protocol 尚未注册它，Creator 也还没有试听控制，两者都是已记录的后续工作。Host 只传递
+字节与展示 typed result，Core 保留全部 Contract、哈希与准入判定。Schema conformance、
+Set Store 单元测试、Facade 写集测试与 Creator surface 测试固定该边界；Safari 与
+iPadOS 上的目录浏览尚无物理验收。

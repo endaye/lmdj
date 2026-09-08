@@ -155,6 +155,25 @@ TransferFixture build_fixture(
             });
       });
 
+  // Read the Contract level the Store actually persisted rather than naming
+  // one here. A hardcoded level silently stops describing the Project when the
+  // writer moves, which is how #784 shipped.
+  const auto entry_text = [&](std::string_view relative) {
+    const auto found = std::find_if(
+        source_entries.begin(),
+        source_entries.end(),
+        [&](const auto& item) { return item.path == relative; });
+    LMDJ_CHECK(found != source_entries.end());
+    return std::string{
+        reinterpret_cast<const char*>(found->data.data()),
+        found->data.size()};
+  };
+  const auto manifest = nlohmann::json::parse(entry_text("manifest.json"));
+  const auto head_checkpoint =
+      manifest.at("head_checkpoint").get<std::string>();
+  const auto head = nlohmann::json::parse(entry_text(head_checkpoint));
+  const auto project_contract = head.at("contract").get<std::string>();
+
   auto encoded_entries = nlohmann::json::array();
   std::uint64_t offset = 0;
   std::vector<std::vector<std::byte>> payloads;
@@ -173,9 +192,9 @@ TransferFixture build_fixture(
       {"bundle_digest", std::string(64, '0')},
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.1.0"},
+      {"contract_version", "1.2.0"},
       {"entries", std::move(encoded_entries)},
-      {"project_contract", "lmdj.project.v3"},
+      {"project_contract", project_contract},
       {"project_id", project_id},
       {"uncompressed_bytes", offset},
   };
