@@ -46,7 +46,7 @@ class RecoveryStorageTests(unittest.TestCase):
         expected = {
             'scheduler': (824, 'I_kwDOTK_1fs8AAAABQJ5ORQ', 'o1-recovery-scheduler-20260908-issue824'),
             'outbox': (825, 'I_kwDOTK_1fs8AAAABQJ5UMQ', 'o1-recovery-outbox-20260908-issue825'),
-            'claim': (840, 'I_kwDOTK_1fs8AAAABQKYSiQ', 'o1-claim-cancel-20260908-issue840'),
+            'claim': (857, 'I_kwDOTK_1fs8AAAABQLLT3w', 'o1-claim-cancel-live-20260908-issue857'),
         }
         actual = {role: (item['issue_number'], item['issue_node_id'], item['epoch']) for role, item in self.config.items()}
         self.assertEqual(actual, expected, 'why: role differs from independently verified reservation; remedy: explicitly review any replacement inventory')
