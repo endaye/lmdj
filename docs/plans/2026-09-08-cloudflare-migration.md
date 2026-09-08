@@ -187,3 +187,20 @@ JSON parsing, staged ownership and Portal check for documented source facts.
 Version impact: none; no generated identity or snapshot is edited.
 Documentation impact: none for current Portal pages; the change is design
 and planning evidence only. Current-page corrections remain assigned to #923.
+
+
+## Approved pilot operations documentation Task — 2026-09-08
+
+Declared files: this plan, the migration design, and
+`apps/docs-site/docs/operations/documentation-governance.mdx`.
+Record the owner's accepted 60-minute pilot, Issue notification thresholds,
+seven-day observation, 30-day minimum retention and separate Creator export
+scope (#961). This Task records operational authority; live Preview acceptance
+and elapsed stability remain separate evidence in #921–#927.
+
+Verification: `scripts/docs-site.sh check`, exact-path staged diff check and
+final range classification. No new required gate or test is introduced.
+Version impact: none; no Product, Assembly, Module or Contract identity changes.
+Documentation impact: required.
+Affected portal pages: /operations/documentation-governance
+Pitfall impact: none — this records an owner decision, not a new defect.

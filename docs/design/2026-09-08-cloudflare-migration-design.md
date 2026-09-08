@@ -484,12 +484,49 @@ Access-protected, and provides no Preview runtime logs. Alias retention is not
 a duration guarantee for version URLs or rollback evidence. Export build,
 identity and smoke records separately; revalidate retained versions before use.
 
-Budget/retention proposal sent to the owner: no new paid service; 50/75/90 percent
-capacity notifications, seven days of stable observation and at least 30 days
-of old deployment/recovery evidence retention. This proposal is pending an
-explicit response. A numeric monthly runner allocation and notification delivery
-mechanism are also not yet configured. No completed alert mechanism is claimed.
-Keep old sites and evidence while these decisions and acceptance are pending.
+### Owner-approved pilot and retention decision — 2026-09-08
+
+The owner approved one same-repository PR pilot with at most 60 standard
+GitHub-hosted Linux execution minutes, including possible package billing.
+This does not approve a paid plan upgrade, general monthly allocation or broad
+Preview activation. The build job is bounded at 20 minutes, so the operator
+admits at most three attempts (including reruns, cancellations and failures),
+reserving 20 minutes before each attempt. Missing timing is charged the full
+reservation. Keep the pilot variable absent outside the supervised trial;
+remove it after the final publisher completes. More attempts require a new
+budget decision, even if prior attempts were shorter.
+
+The owner also approved 50/75/90 percent budget notifications through a GitHub
+operations Issue, seven days of stable observation and at least 30 days of old
+deployment and recovery-evidence retention. For this pilot the denominator is
+60 minutes: notify in #921 when cumulative observed execution reaches 30, 45
+and 54 minutes; report all crossed thresholds when a completed run spans more
+than one. Record run ID, attempt, job start/end, measured minutes, outstanding
+reservations and remaining budget after each run. This is an operator-owned
+pilot ledger, not a deployed automatic or account-wide billing monitor. Unknown
+usage stops new admissions. At 90 percent stop new attempts; already admitted
+work retains its bounded reservation. Broader activation remains blocked until
+monthly allocation and automated monitoring are accepted and implemented.
+
+Seven-day observation begins only once the Preview pilot and each fixed site's
+required acceptance pass. Record dated HTTP/identity observations and incidents
+in #923, #925 and #926; a recovery or unresolved incident restarts that site's
+window after verification. No historical deployment age substitutes for this
+window. Keep old deployments and export sanitized build/identity/smoke receipts
+for at least 30 days after the eventual cutover; seven-day workflow artifact
+retention alone does not satisfy this requirement. Do not remove the original
+resource until retained evidence and rollback usability have been verified.
+
+The owner chose to preserve the old Creator origin and browser-local data.
+Formal Project export/import and migration of edited work are a separate design
+Task, #961. Re-importing original files cannot preserve later edits. Retain that
+origin beyond the minimum period until an accepted migration preserves the
+user's work. Physical browser/audio acceptance remains outstanding.
+
+The old `lmdj` Workers Builds integration's two repository triggers were deleted
+sequentially on 2026-09-08, with positive API receipts and an independently read
+empty trigger list (#927). The old Worker and shared repository connection are
+retained. A fresh pilot PR must still demonstrate absence of the retired check.
 
 ### Completion matrix
 
