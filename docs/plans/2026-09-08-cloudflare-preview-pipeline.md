@@ -25,7 +25,7 @@ recompute its contents. Base checkout is provenance, not a sandbox boundary.
 The producer is discarded before any separate token-bearing publisher runs.
 
 Validation: four workflow boundary tests, hosted-runner-policy tests, staged
-scope tests and the existing 23 helper tests. These tests cover declared settings
+scope tests and the existing 32 helper tests. These tests cover declared settings
 only. Actual ephemeral runner behavior, artifacts and head identity require a
 live opt-in pilot after the consumer is ready.
 
