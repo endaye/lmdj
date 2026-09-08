@@ -528,6 +528,39 @@ sequentially on 2026-09-08, with positive API receipts and an independently read
 empty trigger list (#927). The old Worker and shared repository connection are
 retained. A fresh pilot PR must still demonstrate absence of the retired check.
 
+### First real pilot measurement — 2026-09-08
+
+PR #963 exact head `511ce2da8ac6e61974bcd62b97211743fab1f11a` ran isolated
+build 34224803448, attempt 1, from 12:12:42Z to 12:15:41Z: 179 seconds
+(2.9833 hosted execution minutes). Its trusted publisher 34225091683 used
+self-hosted `contabo-lmdj-linux-02` for 340 seconds, including 81 seconds of
+credential-free tool installation. These are job timestamps, not an invoice,
+queue measurement, included-minutes balance or timing percentile.
+
+The artifact contained 3,764 files, 57,451,440 expanded bytes and a largest
+file of 1,392,502 bytes; GitHub reported a 7,261,931-byte artifact. Current
+local safety limits remain 20,000 files, 25 MiB/file and 256 MiB expanded/archive.
+No cap was relaxed. The artifact expires after seven days, so authenticated
+static bytes and publication/reconciliation receipts are retained separately
+in the local persistent migration archive for the approved retention window.
+
+For capacity planning only, applying this one 179-second sample to the historical
+543 Preview attempts/week yields approximately 6,943 hosted execution minutes
+per 30 days. Actual filtering, failures and cache effects change demand; this is
+not a monthly allocation. The same-PR build group cancels superseded builds,
+while the trusted publication group serializes publications. The single branch
+pilot does not demonstrate or authorize broad dependency-trigger rollout.
+
+The first upload produced version `5ec59841-b6e1-436d-b457-fdda264521a6`, but
+immediate routes/resources returned 404 and the publisher correctly posted
+failure status 53733384829 on that exact head. A later unchanged full smoke
+verified all 42 routes and all 3,764 files on the same immutable version, without
+reupload. API reconciliation confirmed the stable route stayed disabled and
+previews enabled. #965/#966 track bounded entry readiness; the original failed
+run is retained. Final corrected-publisher and stale-head acceptance remain
+in #922. Budget ledger #921 records 179 seconds consumed, one of three attempts
+admitted and no threshold crossed at this measurement.
+
 ### Completion matrix
 
 | Requirement | Evidence / owner | State |
