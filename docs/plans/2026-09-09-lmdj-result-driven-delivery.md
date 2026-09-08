@@ -87,6 +87,14 @@ Live adapters, authenticated PR review collection, chunking, durable outbox
 integration and version preparation remain outstanding. This independent
 library work does not close the main testing/reporting acceptance gaps below.
 
+The [T2b Host preparation inputs](2026-09-09-lmdj-canary-host-preparation.md)
+recollect pinned Git input, compute independent compatible Host bumps and
+consume adequate pre-bumps, returning escaped append-only prepared changelog
+and manifest edits with complete byte witnesses. No active manifest is changed
+by this tooling Task. Canonical Product/Assembly/lock/identity/snapshot generation,
+occupancy/fencing, version PR/cut reconciliation and post-squash verification
+remain necessary before these Host inputs become a complete allocation.
+
 ## Acceptance ledger
 
 - Local reduction/failure behavior: 55 journal tests pass, including six new
@@ -101,9 +109,29 @@ library work does not close the main testing/reporting acceptance gaps below.
   not authenticated replay, timing or workflow-token request measurements. They
   confirm repeated controls exist; do not extrapolate the fixture's 66% saving.
 - Real main admission → execution → terminal persistence → next interval:
-  still requires exact post-merge observations.
+  run `34256523536/1`, target `e12a810108dc30e2115cffefb2e89ba5593b21e9`,
+  completed with 15 suites passed and Creator failed. Verdict artifact
+  `10071823906` retains the complete result. Main controller `34266309491/1`
+  persisted result generation 137 and advance generation 138 in scheduler
+  Issue 807. These are live event/producer observations, not independent full
+  journal replay. Controller artifact `10072142780` then records action
+  `execute`, processed `e12a8101`, and request generation 139 (claim 140) for
+  `e12a810108dc30e2115cffefb2e89ba5593b21e9` →
+  `b208e9afb837ea6f3cec2fde65cd22207e5adc2a`. The exact Git first-parent
+  interval contains seven commits; its full 16-suite scope includes changed
+  Facade/Audio Runtime and control-plane inputs. Actual new product jobs began.
+  The prior Creator failure is retained and debts are empty, not overall health.
 - Product failure → durable Issue → external repair PR → relevant revalidation:
-  not yet exercised by this Task. No synthetic product defect on main.
+  Creator log identifies URL upstream parity for `https://catalog.example.test/a^b/`.
+  The exact new observation's receipt in the Creator failure Issue, external
+  repair and revalidation remain unverified. No synthetic defect or CI repair.
+  An older missing-evidence report has an observed outbox ack/delivered and
+  matching bot comment `5590141663` in Issue 889; it is not this Creator failure.
+  Manual outbox-only run `34263950671/1` succeeded with no product execution,
+  but has no new delivery receipt and cannot prove the global backlog empty.
+  A single default-budget `report-batches` exercise, run `34267534129/1`, is
+  in progress; it neither requests nor reruns product tests. Keep its handle
+  until a terminal result and exact new business receipt are observed.
 - Remote request rate, queued-job recovery and end-to-end latency: unverified;
   inspect actual control results after merge, not only workflow conclusions.
 - Version assessment, candidate delivery, Netcup isolation and formal promotion:
