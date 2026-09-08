@@ -1,0 +1,219 @@
+# LMDJ does not need the Vercel skill catalog by default.
+# Local skill paths target the installed Vercel 0.21.4 bundle; refresh after upgrades.
+# Remove these overrides to enable the skills again.
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/agent-browser/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/agent-browser-verify/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/ai-elements/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/ai-gateway/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/ai-generation-persistence/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/ai-sdk/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/auth/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/bootstrap/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/cdn-caching/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/chat-sdk/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/cms/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/cron-jobs/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/deployments-cicd/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/email/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/env-vars/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/eve/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/geist/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/geistdocs/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/investigation-mode/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/json-render/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/knowledge-update/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/marketplace/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/micro/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/microfrontends/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/ncc/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/next-cache-components/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/next-forge/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/next-upgrade/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/nextjs/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/observability/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/payments/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/react-best-practices/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/routing-middleware/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/runtime-cache/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/satori/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/shadcn/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/sign-in-with-vercel/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/swr/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/turbopack/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/turborepo/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/v0-dev/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-agent/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-api/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-cli/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-connect/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-firewall/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-flags/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-functions/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-queues/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-sandbox/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-services/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/vercel-storage/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/verification/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/home/endaye/.codex/plugins/cache/openai-curated-remote/vercel/0.21.4/skills/workflow/SKILL.md"
+enabled = false
