@@ -338,6 +338,11 @@ ambiguous inventory is potentially an executor and must hold bootstrap back.
             return {"status": "missing"}
         self.inputs.verify_target(request["target"])
         policy = self.inputs.policy_at(request["control"])
+        if (request["kind"] == "candidate"
+                and self.inputs.policy_at(run["head_sha"]).digest != request["policy"]):
+            # Same terminal missing/advance path as workflow incompatibility.
+            # A policy read/authentication error remains an error, not missing.
+            return {"status": "missing"}
         jobs = self.pages(f"/actions/runs/{run['id']}/attempts/1/jobs", "jobs")
         require(all(type(j.get("run_id")) is int and j["run_id"] == run["id"] and type(j.get("run_attempt")) is int and j["run_attempt"] == 1
                     and j.get("status") == "completed" for j in jobs), "executor jobs are not all terminal in this attempt")
