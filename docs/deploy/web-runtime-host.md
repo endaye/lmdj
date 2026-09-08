@@ -1,5 +1,19 @@
 # Web Runtime Host 公共发布运行手册
 
+## Cloudflare 固定诊断入口
+
+本次三站点迁移将现有诊断 Web Runtime Host 放在 `https://lab.lmdj.workers.dev/`；
+独立的 `apps/web-runtime-lab` Audio Lab 不在本次部署范围。配置位于
+`apps/web-runtime-host/deploy/wrangler.json`，输入是独立验证签名后的 Runtime Release
+资产，暂存于 `build/deploy/cloudflare/lab/dist`。Worker 默认关闭主路由，候选验证后
+才启用固定地址。Creator 与 Runtime 使用同一 Product tag 的各自签名资产。
+
+共享工具 `apps/web-runtime-host/tools/cloudflare_headers.py VERIFIED_DIST` 生成
+Cloudflare 响应头；`cloudflare_smoke.py VERIFIED_DIST URL [--preview]` 验证签名输入
+的响应字节、安全/MIME/缓存规则和未知路径。平台差异与首次发布恢复方法见
+[Creator 迁移运行手册](creator-web.md)。浏览器仍运行原有 Runtime deployment suite。
+这些配置与迁移观察不改写下述 Netlify 事务，也不创建新的 Product Release 或 Channel。
+
 本运行手册描述正式 Web Runtime Host 的受控发布路径。它是操作说明，**不是**
 执行记录，也不授权创建远端资源、写入 secret、发布 Release、运行 workflow 或部署。
 最初的 pre-deploy 证据快照见

@@ -1,0 +1,49 @@
+name: Deploy Cloudflare Portal
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-portal-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'endaye/lmdj'
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 60
+    environment: portal-cloudflare
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.16.0'
+      - name: Build and verify the Git source
+        timeout-minutes: 15
+        run: |
+          npx --yes npm@10.9.3 --prefix apps/architecture-portal ci
+          npx --yes npm@10.9.3 --prefix apps/architecture-portal run check
+      - name: Install pinned deploy CLI without deployment credentials
+        timeout-minutes: 5
+        run: npm install --prefix "$RUNNER_TEMP/portal-wrangler-$GITHUB_RUN_ID" --no-audit --no-fund wrangler@4.129.1
+      - name: Verify version Preview and publish the same version
+        timeout-minutes: 30
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          WRANGLER_SEND_METRICS: 'false'
+          WRANGLER_JS: ${{ runner.temp }}/portal-wrangler-${{ github.run_id }}/node_modules/wrangler/bin/wrangler.js
+        run: python3 scripts/cloudflare-portal-deploy.py
+      - name: Retain deployment and recovery observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-portal-${{ github.sha }}
+          path: ${{ runner.temp }}/cloudflare-portal-${{ github.run_id }}.json
+          if-no-files-found: ignore

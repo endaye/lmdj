@@ -19,7 +19,7 @@
     "package": ["package"]
   },
   "self_hosted_jobs": ["docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan", "core-coverage", "web-toolchain-conformance", "web-runtime-host", "creator-web", "web-runtime-lab", "deploy-contract", "chameleon-lab", "package"],
-  "known_top_levels": [".agents", ".claude", ".codex", ".gitattributes", ".github", ".gitignore", "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "LICENSE", "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml", "output", "packages", "packaging", "products", "providers", "references", "scripts", "testdata", "tests", "third_party", "tools", "workers"],
+  "known_top_levels": [".agents", ".claude", ".codex", ".gitattributes", ".github", ".gitignore", "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "LICENSE", "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml", "wrangler.json", ".node-version", "output", "packages", "packaging", "products", "providers", "references", "scripts", "testdata", "tests", "third_party", "tools", "workers"],
   "full_rules": [
     {"match": {"kind": "exact", "value": ".gitignore"}, "reason": "shared repository metadata"},
     {"match": {"kind": "exact", "value": "CMakeLists.txt"}, "reason": "root CMake"},
@@ -132,6 +132,8 @@
     {"match": {"kind": "exact", "value": ".agents/skills/lmdj-release/SKILL.md"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "prefix", "value": "output/playwright/"}, "lanes": ["portal"]},
     {"match": {"kind": "exact", "value": "netlify.toml"}, "lanes": ["portal", "ci_contract"]},
+    {"match": {"kind": "exact", "value": "wrangler.json"}, "lanes": ["portal", "ci_contract"]},
+    {"match": {"kind": "exact", "value": ".node-version"}, "lanes": ["portal", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".gitattributes"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_runtime_host", "creator", "package", "ci_contract"]},
     {"match": {"kind": "exact", "value": "AGENTS.md"}, "lanes": ["docs_static", "portal"]},
     {"match": {"kind": "exact", "value": "CLAUDE.md"}, "lanes": ["docs_static", "portal"]},
@@ -211,6 +213,9 @@
     {"match": {"kind": "exact", "value": ".github/workflows/pr-review.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-self-hosted-benchmark.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-self-hosted-core-benchmark.yml"}, "lanes": ["ci_contract"]},
+    {"match": {"kind": "exact", "value": ".github/workflows/deploy-cloudflare-portal.yml"}, "lanes": ["portal", "ci_contract"]},
+    {"match": {"kind": "exact", "value": "scripts/cloudflare-portal-deploy.py"}, "lanes": ["portal", "ci_contract"]},
+    {"match": {"kind": "exact", "value": "tests/build/ci_cloudflare_portal_deploy_test.py"}, "lanes": ["portal", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/architecture-portal.yml"}, "lanes": ["portal", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/architecture-portal-smoke.yml"}, "lanes": ["portal", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/deploy-web-runtime-host.yml"}, "lanes": ["deploy_contract", "ci_contract"]},
