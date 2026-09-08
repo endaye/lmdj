@@ -129,3 +129,11 @@ Vitest 覆盖长素材容器嗅探、pre/post-decode boundary、单一缓冲、�
 ## 非能力
 
 当前不宣称离线安装/PWA、云同步、协作、素材智能、生产部署已执行、`beta`/`stable` 或未执行的物理设备体验已完成。Sequence recording 已交付，但通用 Sequence event editor、Undo/redo、持久化 Asset DSP 与自动 slicing 仍不在当前能力内。Perform surface 已进入 `1.0.42.0` 源码，但 Stage 10 尚无任何物理验收：没有 Perform 的实体听感、实体输入或延迟结论，自动化只证明状态机、authority 归属与分发身份边界。同样不宣称当前 Product Build `1.0.44.0` 已获得 tag、Release、部署或 Channel promotion——匹配该 Build 的不可变门户快照随分配在同一 Pull Request 内冻结，而 tag、Release、部署与 Channel promotion 各自仍是独立的后续授权与验证边界。历史 `1.0.42.0` 自身的 tag、Release、快照、部署与 `dev` 晋级证据不自动升级为当前 Build 的结论。
+
+## Cloudflare 隔离恢复验证
+
+共享 HTTP 检查工具支持显式 `--recovery-target`，分别限制到
+`creator-recovery` 和 `lab-recovery` 的 workers.dev 地址。版本 URL 同时要求
+`--preview` 与实际版本短前缀；正式地址和恢复地址不会因标志缺省而混用。
+输入仍须先独立验证 Release 签名，检查包含完整已验证文件字节与响应规则。
+该命令只读取远端响应，不代表恢复演练或物理浏览器验收已经完成。

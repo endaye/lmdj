@@ -136,3 +136,11 @@ Formal Web Runtime Host 已进入 Assembly；自动化结果不升级物理体�
 | macOS Chrome physical MIDI | `passed on 1.0.40.0 local source`；tested revision `1869a925`，Akai MPD218，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md) |
 | iPadOS Safari Touch | `passed on 1.0.40.0 local source`；tested revision `e2cd0cf9`，iPad Air 13-inch (M3) model `A3268`，[500-trigger evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md) |
 | iPadOS Safari lifecycle | `passed on 1.0.40.0 local source`；tested revision `67a7ac03`，iPad Air 13-inch (M3) model `A3268`，Voice Memos route interruption，[lifecycle evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-web-runtime-l5-ipados-safari-lifecycle-1.0.40.0.md) |
+
+## Cloudflare 隔离恢复验证
+
+共享 HTTP 检查工具支持显式 `--recovery-target`，分别限制到
+`creator-recovery` 和 `lab-recovery` 的 workers.dev 地址。版本 URL 同时要求
+`--preview` 与实际版本短前缀；正式地址和恢复地址不会因标志缺省而混用。
+输入仍须先独立验证 Release 签名，检查包含完整已验证文件字节与响应规则。
+该命令只读取远端响应，不代表恢复演练或物理浏览器验收已经完成。

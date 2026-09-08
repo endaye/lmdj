@@ -30,6 +30,13 @@ Netlify deployment evidence Contract。浏览器测试仍使用原有 Creator de
 workflow 或本地 Proof 的存在都不表示 Netlify Site 已创建，也不授权 Release publication、
 Creator deployment、Runtime deployment 或 Channel promotion。
 
+隔离恢复演练使用显式 `--recovery-target`：Creator 对应
+`creator-recovery.lmdj.workers.dev`，Runtime 对应 `lab-recovery.lmdj.workers.dev`。
+使用该标志时拒绝正式 Worker 地址，默认模式也拒绝恢复地址；版本预览还需
+`--preview`，且前缀必须是实际版本 ID 的八位十六进制短前缀。
+检查仍逐文件比对已独立验证的 Release 字节，并保留 MIME、缓存、安全头和
+未知路径要求。这个只读检查命令不会创建、部署或切换 Worker。
+
 ## 当前交付边界
 
 - 当前标准 Release profile 是 `web-hosts`：同一个 Product tag 的 canonical Release 精确包含

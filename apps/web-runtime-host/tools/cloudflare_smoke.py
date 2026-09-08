@@ -11,25 +11,34 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import re
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import build_opener
 
 
-def smoke(dist: Path, base_url: str, preview: bool = False) -> dict:
+def validate_target(host_id: str, base_url: str, preview: bool, recovery_target: bool) -> str:
+    worker = {"creator-web": "creator", "web-runtime-host": "lab"}[host_id]
+    if recovery_target:
+        worker += "-recovery"
+    host = urlsplit(base_url).hostname
+    if host in {f"{worker}.lmdj.workers.dev", "127.0.0.1"}:
+        return worker
+    if preview and host and re.fullmatch(r"[0-9a-f]{8}-" + re.escape(worker) + r"\.lmdj\.workers\.dev", host):
+        return worker
+    raise ValueError("unexpected Host target; use the configured workers.dev hostname and explicit recovery target flag")
+
+
+def smoke(dist: Path, base_url: str, preview: bool = False, recovery_target: bool = False) -> dict:
     tool = Path(__file__).resolve().parents[2] / "web-runtime-host/tools/deployment_smoke.py"
     spec = importlib.util.spec_from_file_location("cloudflare_host_http", tool)
     shared = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(shared)
     manifest = json.loads((dist / "host-manifest.json").read_text())
     host_id = manifest["host_id"]
-    worker = {"creator-web": "creator", "web-runtime-host": "lab"}[host_id]
+    validate_target(host_id, base_url, preview, recovery_target)
     host = urlsplit(base_url).hostname
-    if host not in {f"{worker}.lmdj.workers.dev", "127.0.0.1"} and not (
-        preview and host and host.endswith(f"-{worker}.lmdj.workers.dev")
-    ):
-        raise ValueError("unexpected Host target; use the configured workers.dev hostname")
     if preview:
         shared.REQUIRED_ROBOTS_DIRECTIVES = frozenset({"noindex"})
         shared.REQUIRED_SECURITY_HEADERS["x-robots-tag"] = "noindex"
@@ -91,6 +100,7 @@ def smoke(dist: Path, base_url: str, preview: bool = False) -> dict:
                                  path=path, timeout_seconds=30)
     return {"url": base_url, "product_build": manifest["product_build"],
             "host_version": manifest["host_version"], "preview": preview,
+            "recovery_target": recovery_target,
             "file_digests": digests, "unknown_paths": "404",
             "encoded_dot_segments": traversal,
             "status": "passed"}
@@ -101,5 +111,6 @@ if __name__ == "__main__":
     parser.add_argument("verified_dist", type=Path)
     parser.add_argument("base_url")
     parser.add_argument("--preview", action="store_true")
+    parser.add_argument("--recovery-target", action="store_true", help="require creator-recovery or lab-recovery instead of the official Worker")
     args = parser.parse_args()
-    print(json.dumps(smoke(args.verified_dist, args.base_url, args.preview), indent=2))
+    print(json.dumps(smoke(args.verified_dist, args.base_url, args.preview, args.recovery_target), indent=2))
