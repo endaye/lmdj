@@ -1,6 +1,8 @@
 # Netlify → Cloudflare migration: evidence and proposed design
 
-Status: proposed; P0 partially verified, P1 awaiting design review.
+Status: design approved by the user on 2026-09-08; P0 account verification
+and pilot evidence remain pending. Implementation plan:
+[Cloudflare migration](../plans/2026-09-08-cloudflare-migration.md).
 Umbrella: https://github.com/endaye/lmdj/issues/873
 Incident: https://github.com/endaye/lmdj/issues/867
 Repository audit baseline: `3903e122` (origin/main on 2026-09-08).
@@ -285,9 +287,9 @@ Every Task retains exact-path changes and relevant local verification. Live
 Preview, real browser and production acceptance cannot be replaced by a local
 build or fake API test.
 
-## 8. Decisions needed before implementation
+## 8. Decision status and remaining prerequisites
 
-1. Approve the proposed three-site sequence and conditional Workers-first pilot.
+1. Approved: the three-site sequence and conditional Workers-first pilot.
 2. Establish account/repository access and demonstrate Preview credential
    isolation. The pilot may use assigned workers.dev URLs; choose final domains
    before P3/P4 cutover.
@@ -296,7 +298,11 @@ build or fake API test.
 4. Approve any Host evidence Contract or origin-storage migration policy changes
    before the affected Host implementation.
 
-P0 cloud-specific checks remain incomplete until access exists; P1 is proposed.
+The user approved this design and identified the Cloudflare login on 2026-09-08.
+The email is not an account ID. P0 cloud-specific checks remain incomplete until
+authenticated access exists; the three-site scope and conditional Workers-first
+pilot direction are approved. Actual budget/domain/Contract decisions remain
+subject to their stated evidence and authorization boundaries.
 No deployment, DNS, paid-plan change, Issue closeout or release operation has
 been executed by this document.
 
