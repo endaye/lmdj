@@ -8,6 +8,7 @@ import http.server
 import importlib.util
 import json
 import os
+import random
 from pathlib import Path
 import shutil
 import subprocess
@@ -732,6 +733,58 @@ process.stdout.write(JSON.stringify(
                 expected = self.python_outcome(upstream)
                 self.assertEqual(expected[0], "accept", "proof server")
                 self.assertEqual(self.worker_outcome(upstream), expected)
+
+    def test_soundness_over_a_generated_corpus(self) -> None:
+        """Every value this side accepts, the Worker accepts with the same base.
+
+        This, not "the grammar is faithful", is the property that matters, and
+        it is the one that is reachable. Three adversarial rounds produced 27
+        then 49 divergences and the gap did not close, because "would `new URL`
+        rewrite this?" has no finite hand-written answer -- a list of parser
+        behaviours is always one behaviour behind the parser.
+
+        So the direction is what is asserted. **Soundness** is required: an
+        upstream this side accepts must reach the same place in production, or
+        the acceptance journey proves something the deployment does not do.
+        **Incompleteness is free**: refusing a value the Worker would accept
+        costs only that an exotic Catalog cannot be proof-tested, and the
+        operator gets a clear refusal saying so.
+
+        The corpus is generated from this grammar's own alphabet, so it probes
+        inside what this side admits rather than sampling the whole string
+        space. The fixed lists above stay as regression pins for the values two
+        reviewers found by hand; this covers what neither of us thought of.
+        """
+        rng = random.Random(901)
+        alphabet = "abcdefghijklmnopqrstuvwxyz0123456789.-_"
+        path_alphabet = "abcXYZ019!$%&'()*+,-.:;=@[]_|~"
+        corpus = []
+        for _ in range(400):
+            host = "".join(
+                rng.choice(alphabet) for _ in range(rng.randint(1, 12))
+            )
+            port = "" if rng.random() < 0.7 else f":{rng.randint(1, 65535)}"
+            segments = "".join(
+                "/" + "".join(
+                    rng.choice(path_alphabet) for _ in range(rng.randint(0, 6))
+                )
+                for _ in range(rng.randint(0, 3))
+            )
+            corpus.append(f"https://{host}{port}{segments}/")
+        accepted = 0
+        for upstream in corpus:
+            kind, base = self.python_outcome(upstream)
+            self.assertNotEqual(kind, "crash", f"{upstream}: {base}")
+            if kind != "accept":
+                continue
+            accepted += 1
+            self.assertEqual(
+                self.worker_outcome(upstream), ("accept", base),
+                f"UNSOUND: the proof server accepts {upstream!r} and the "
+                f"deployment does not compose the same base for it",
+            )
+        # A corpus that accepted nothing would assert nothing.
+        self.assertGreater(accepted, 50, "the corpus exercises too few accepts")
 
     def test_the_proof_server_is_the_stricter_side_where_they_differ(self) -> None:
         for upstream in UPSTREAM_PARITY_PROOF_SERVER_STRICTER:

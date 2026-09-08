@@ -9,7 +9,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { readFileSync } from "node:fs";
+
 import worker from "../deploy/cloudflare_worker.mjs";
+import { createFetchCatalogClient } from
+  "../../../packages/web-runtime-platform/web/soundset_catalog.mjs";
 
 const UPSTREAM = "https://catalog.example.test/sets/";
 const DIGEST = "a".repeat(64);
@@ -225,6 +229,62 @@ test("a normalised alias resolves to the same target, never a different one", as
     } else {
       assert.deepEqual(calls, [], alias);
     }
+  }
+});
+
+test("the endpoint the shipped index.html configures reaches this Worker", async () => {
+  // The seam. `index.html` tells an operator what to configure, the transport
+  // composes a URL from it, and this Worker decides whether that URL is a
+  // Catalog path. Those three live in two languages and two deployment units,
+  // and nothing asserted they agreed -- the agreement was only ever checked by
+  // reading. This composes the real request from the real instruction and the
+  // real transport, so it fails if any of the three moves.
+  //
+  // It does NOT cover Cloudflare's own routing: `run_worker_first` decides
+  // whether the request reaches this Worker at all, and whether its `*` glob
+  // spans multiple path segments is unverified from here. See the runbook.
+  const html = readFileSync(
+    new URL("../../creator-web/index.html", import.meta.url), "utf8",
+  );
+  const configured = html.match(
+    /content="(https:\/\/[^"]*soundset-catalog[^"]*)"/,
+  )?.[1];
+  assert.ok(
+    configured,
+    "index.html no longer shows an operator a soundset-catalog endpoint",
+  );
+
+  const asked = [];
+  const client = createFetchCatalogClient({
+    endpoint: configured,
+    fetch: async (target) => {
+      asked.push(target);
+      return new Response("{}", { status: 200 });
+    },
+  });
+  await client.readIndex();
+  await client.readObject({ object_kind: "manifest", sha256: DIGEST });
+  assert.equal(asked.length, 2);
+
+  for (const target of asked) {
+    const servedAsAsset = [];
+    const { result, calls } = await withUpstream(
+      () => new Response("{}", {
+        status: 200,
+        headers: { "content-length": "2" },
+      }),
+      () => worker.fetch(
+        new Request(target),
+        { ASSETS: assetsBinding(servedAsAsset), CATALOG_UPSTREAM: UPSTREAM },
+      ),
+    );
+    assert.equal(result.status, 200, `${target} was not forwarded`);
+    assert.deepEqual(
+      servedAsAsset, [],
+      `${target} fell through to the asset store instead of the forward`,
+    );
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].target.startsWith(UPSTREAM), calls[0].target);
   }
 });
 

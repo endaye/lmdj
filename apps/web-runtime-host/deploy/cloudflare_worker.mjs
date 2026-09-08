@@ -230,11 +230,16 @@ async function proxyCatalog(request, env, url) {
   // trust domain -- could exhaust the isolate before the check ran. The
   // declared length is refused first, then the stream is read with a running
   // total and abandoned the moment it exceeds the bound.
+  // One strict token or nothing. `Number()` reads `0x10` as 16 and ` 2 ` as 2,
+  // and `headers.get` joins duplicate headers with ", " -- so a lenient parse
+  // disagreed with the proof server's `int()`, which instead honours PEP 515
+  // underscores and takes only the first duplicate. Neither bound was ever
+  // unenforced, but the two answered differently, which is the divergence the
+  // check itself was added to close.
   const declared = upstream.headers.get("content-length");
   if (declared !== null) {
-    const length = Number(declared);
-    if (!Number.isSafeInteger(length) || length < 0 ||
-        length > target.maximumBytes) {
+    if (!/^[0-9]+$/.test(declared)) return new Response(null, { status: 502 });
+    if (Number(declared) > target.maximumBytes) {
       return new Response(null, { status: 502 });
     }
   }

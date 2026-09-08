@@ -85,6 +85,7 @@ CATALOG_OBJECT_CONTENT_TYPES = {
 MAXIMUM_CATALOG_OBJECT_BYTES = 8 * 1024 * 1024
 MAXIMUM_CATALOG_INDEX_BYTES = 1024 * 1024
 CATALOG_TIMEOUT_SECONDS = 30
+CONTENT_LENGTH_TOKEN = re.compile(r"\A[0-9]+\Z")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -118,35 +119,43 @@ CANONICAL_UPSTREAM = re.compile(
 )
 
 
-def _host_is_canonical(host: str) -> bool:
-    """True when `new URL()` would leave this host spelling untouched.
+def _ends_in_a_number(host: str) -> bool:
+    """WHATWG's `endsInANumber`, which is not "the whole host looks numeric".
 
-    A character grammar cannot decide this on its own: `2130706433`,
-    `0x7f.0.0.1`, `127.1` and `127.000.000.1` are all lowercase alphanumerics
-    and dots, and every one of them is a spelling of 127.0.0.1 that WHATWG
-    rewrites and `urlsplit` does not. So numeric-looking hosts must round-trip
-    through `ipaddress`, and a bracketed host must already be the compressed
-    IPv6 form.
+    The distinction is the defect this replaced. A `numeric_like` test over the
+    whole host missed `foo.1`, `example.1`, `foo.0x7f`, `a.0777` and `a.123`:
+    WHATWG asks only whether the LAST LABEL is a number, and when it is, runs
+    the IPv4 parser over the whole host and throws when that fails. So the
+    Worker refused those and this side accepted and forwarded them verbatim --
+    the unsound direction. A fuzz over hosts drawn from this grammar's own
+    alphabet hit the class at roughly 1.7 percent, so it was not a corner.
     """
+    labels = host.split(".")
+    if len(labels) > 1 and labels[-1] == "":
+        labels = labels[:-1]
+    last = labels[-1]
+    if last.isascii() and last.isdigit():
+        return True
+    lowered = last.lower()
+    if lowered.startswith("0x"):
+        rest = lowered[2:]
+        return rest == "" or all(c in "0123456789abcdef" for c in rest)
+    return False
+
+
+def _host_is_canonical(host: str) -> bool:
+    """True when `new URL()` would leave this host spelling untouched."""
     if host.startswith("["):
-        if not host.endswith("]"):
-            return False
-        # `ipaddress` has understood IPv6 scope identifiers since 3.9 and
-        # round-trips `fe80::1%eth0`; WHATWG has no zone-ID concept at all and
-        # throws. The grammar already excludes `%` from a bracketed host so
-        # this cannot be reached, and it is restated here because the round
-        # trip alone would accept what production cannot express.
-        if "%" in host:
+        # WHATWG forbids a zone identifier in an IPv6 host and throws;
+        # `ipaddress` has supported scope ids since 3.9 and round-trips them,
+        # so the round trip alone would accept a base production cannot express.
+        if not host.endswith("]") or "%" in host:
             return False
         try:
             return f"[{ipaddress.IPv6Address(host[1:-1]).compressed}]" == host
         except ValueError:
             return False
-    numeric_like = (
-        all(character in "0123456789." for character in host)
-        or host.startswith("0x")
-    )
-    if numeric_like:
+    if _ends_in_a_number(host):
         try:
             return str(ipaddress.IPv4Address(host)) == host
         except ValueError:
@@ -300,13 +309,15 @@ def read_catalog_object(
             # bounded read was added, which made the remedy for one divergence
             # a sibling of it: the same upstream answered 502 in production and
             # 200 here.
+            # One strict token or nothing, matching the Worker. `int()` honours
+            # PEP 515 underscores, so `5_0` parsed as 50 here and as NaN there;
+            # `email.message` returns only the first of duplicate headers while
+            # `headers.get` joins them. Same bound, different answers.
             declared = response.headers.get("Content-Length")
             if declared is not None:
-                try:
-                    length = int(declared)
-                except (TypeError, ValueError):
+                if not CONTENT_LENGTH_TOKEN.fullmatch(declared):
                     return 502, b""
-                if length < 0 or length > maximum_bytes:
+                if int(declared) > maximum_bytes:
                     return 502, b""
             payload = response.read(maximum_bytes + 1)
     except HTTPError as error:
