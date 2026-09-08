@@ -6,10 +6,13 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/pull/918#issuecomment-5581492704
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/issues/980
+    observed_by: Claude Code (Opus 5)
 exit: none
 ---
 
-# Before reporting an absence, say how the search would have looked had the thing been present -- if the answer is "the same", the search is not evidence
+# Before reporting an absence, say how the search would have looked had the thing been present -- if the answer is "the same", the search is not evidence; and before accepting a reported presence, check it at the site where it would have to exist
 
 ## Why
 
@@ -76,6 +79,45 @@ missing ``Core MCP `3.0.0` `` because of the backticks, an unregistered test
 file reading as coverage, and this. The rule is not area-specific even though
 this entry's example is.
 
+### The same rule, from the other side
+
+An unchecked report costs the same as an unchecked search, and arrives with more
+authority because it reads like an observation. A Host operation surface is a
+closed, enumerable list: `packages/web-runtime-platform/src/control_runtime.cpp`
+dispatches on exact operation strings and each handler declares its exact
+payload keys through `require(exact_keys(payload, {...}))`. So "the Host
+answered X to operation Y with argument Z" is refutable in about a minute,
+before a line of storage code is read.
+
+A report filed as the blocker for Stage 11's Web half claimed
+`project.import.begin`, `project.import.chunk` and `project.import.commit` all
+returned `ok: true`, then `project.inspect` "on that exact id" returned
+`NOT_FOUND` with the Project directory absent from OPFS beside a present
+`imports/` and `catalog/`. `project.import.chunk` is not an operation -- the
+chunked legs are `project.import.index` and `project.import.entry`.
+`project.inspect` declares `exact_keys(payload, {})` and inspects the session's
+retained path, so it cannot be addressed by a Project ID and answers
+`state_error` with no session open; the id-addressed operation is
+`project.open`. Neither `imports/` nor `catalog/` is a directory this product
+creates: the staging root is `.lmdj-host/import-staging`, the Set Store root is
+`soundsets`, and the OPFS mount drops the leading `lmdj-workspace` segment
+(`pathParts` in `packages/project-io/src/web/library_opfs_storage.js`), so the
+browser-visible tree is not the path Core names. Driving the real sequence
+against the packaged Host in Chromium showed the whole journey working.
+
+Reading the implementation first is what makes this expensive. Storage code read
+in search of a defect that was never described will always yield something that
+*could* go wrong, and that reading then becomes the report's corroboration.
+
+The investigation of that report also reproduced the absence side within the
+hour: a grep of `apps/creator-web/src` for
+`importProjectBundle|projectImport|project.open` returned nothing and was
+reported as "the Creator has no Project Bundle import UI". It has one --
+`app.tsx` wires `onImport` to `importProjectJourney` in
+`src/runtime/project_actions.ts`, and four tracked Creator specs drive it -- and
+the grep would have printed the same nothing either way. Knowing the rule is not
+applying it.
+
 ## How to apply
 
 - Before writing down that something is absent, answer one question: **what
@@ -99,12 +141,20 @@ this entry's example is.
 - Report absences with their method attached: "no call site assigns X, verified
   by reading both Hosts' initialiser lists" is a finding; "grep finds no
   assignment" is not.
+- Before opening a lane from a report, check the report the same way. For every
+  operation it names, `grep 'operation == "<name>"'` in `control_runtime.cpp`;
+  for every argument it says it passed, read that handler's
+  `require(exact_keys(payload, {...}))` line; for every path it says it
+  inspected, find the literal in Core that writes it. Do this before reading the
+  implementation. A report that fails the check has not observed a defect, and
+  the honest outcome is a withdrawal pinned to an `origin/main` SHA.
 
-`exit: none`. The invariant is a research habit, and no gate can read it: what
-went wrong was an inference from a correct observation, not an artifact any
-check could inspect. A checker could flag "`ApplicationConfig` gained a member
-without every construction site changing", but that catches a missed call site,
-which is a different defect; it would not have caught this one, and shipping it
-as this entry's exit would put a mechanism in the ledger that does not enforce
-the rule it claims to. Revisit if a later recurrence turns out to be
-mechanically decidable.
+`exit: none`, escalated at recurrence 2 to
+https://github.com/endaye/lmdj/issues/980. The invariant is a research habit,
+and no gate can read it: what went wrong was an inference from a correct
+observation, not an artifact any check could inspect. A checker could flag
+"`ApplicationConfig` gained a member without every construction site changing",
+but that catches a missed call site, which is a different defect; it would not
+have caught this one, and shipping it as this entry's exit would put a mechanism
+in the ledger that does not enforce the rule it claims to. Revisit if a later
+recurrence turns out to be mechanically decidable.

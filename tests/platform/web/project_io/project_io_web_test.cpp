@@ -7,6 +7,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -20,6 +21,7 @@
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/foundation/soundset_manifest.hpp>
+#include <lmdj/project_io/project_bundle_transfer.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/soundset_catalog_transport.hpp>
 #include <lmdj/project_io/soundset_store.hpp>
@@ -617,7 +619,213 @@ nlohmann::json publication_lease_scope(
   };
 }
 
+// A Project Bundle import driven end to end against real OPFS. Every other
+// Project Bundle test runs on the native platform, so the commit's last step
+// -- an OPFS directory publication under a writer lease on the destination --
+// had no coverage at all, and "the commit acknowledged but no Project landed"
+// was a claim about this platform that no run in the repository could answer.
+// The report records what the Workspace actually holds after the receipt,
+// rather than trusting the receipt.
+void collect_bundle_entries(
+    const lmdj::project_io::ProjectStoragePlatform& platform,
+    const std::filesystem::path& root,
+    const std::string& prefix,
+    std::vector<std::pair<std::string, std::vector<std::byte>>>& out) {
+  for (const auto& name :
+       value(platform.list_names(root), "bundle fixture names")) {
+    out.emplace_back(
+        prefix + name,
+        value(platform.read_complete(root / name), "bundle fixture bytes"));
+  }
+  for (const auto& directory :
+       value(platform.list_directories(root), "bundle fixture directories")) {
+    collect_bundle_entries(
+        platform, root / directory, prefix + directory + "/", out);
+  }
+}
+
+nlohmann::json project_bundle_import(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    bool transfer_phase) {
+  using namespace lmdj;
+  const std::filesystem::path workspace{"/lmdj-workspace"};
+  const auto project_id = uuid("977");
+  const auto pattern_id = uuid("978");
+  const auto import_token = uuid("979");
+  const auto fixture_root = workspace / ".lmdj-host/import-fixture";
+  const auto source = fixture_root / (project_id + ".lmdj");
+  const auto projects_root = workspace / "projects";
+  const auto destination = projects_root / (project_id + ".lmdj");
+
+  project_io::ProjectBundleTransfer transfer{platform};
+  std::optional<Result<project_io::LocalProjectSummary>> committed;
+  if (transfer_phase) {
+    project_io::ProjectStore store{platform};
+    auto initial = value(
+        domain::create_project(foundation::ProjectId{project_id}, 120),
+        "bundle fixture Project state");
+    success(store.create(source, initial), "bundle fixture Project create");
+    const domain::CreatePattern create_pattern{
+        domain::CommandMeta{foundation::CommandId{uuid("980")}, 0},
+        domain::Pattern{foundation::PatternId{pattern_id}, 1, {}},
+    };
+    require(
+        store.execute(source, domain::Command{create_pattern}).has_value(),
+        "bundle fixture Pattern create");
+
+    std::vector<std::pair<std::string, std::vector<std::byte>>> entries;
+    collect_bundle_entries(*platform, source, "", entries);
+    std::sort(
+        entries.begin(),
+        entries.end(),
+        [](const auto& left, const auto& right) {
+          return std::lexicographical_compare(
+              left.first.begin(),
+              left.first.end(),
+              right.first.begin(),
+              right.first.end(),
+              [](char l, char r) {
+                return static_cast<unsigned char>(l) <
+                       static_cast<unsigned char>(r);
+              });
+        });
+    const auto entry_text = [&](std::string_view relative) {
+      const auto found = std::find_if(
+          entries.begin(),
+          entries.end(),
+          [&](const auto& item) { return item.first == relative; });
+      require(found != entries.end(), "bundle fixture entry is missing");
+      return text(found->second);
+    };
+    const auto manifest = nlohmann::json::parse(entry_text("manifest.json"));
+    const auto head = nlohmann::json::parse(
+        entry_text(manifest.at("head_checkpoint").get<std::string>()));
+
+    auto encoded_entries = nlohmann::json::array();
+    std::uint64_t offset = 0;
+    for (const auto& item : entries) {
+      encoded_entries.push_back({
+          {"bytes", item.second.size()},
+          {"offset", offset},
+          {"path", item.first},
+          {"sha256", sha256_hex(text(item.second))},
+      });
+      offset += item.second.size();
+    }
+    nlohmann::json index{
+        {"bundle_digest", std::string(64, '0')},
+        {"compression", "none"},
+        {"contract", "lmdj.project-bundle.v1"},
+        {"contract_version", "1.2.0"},
+        {"entries", std::move(encoded_entries)},
+        {"project_contract", head.at("contract").get<std::string>()},
+        {"project_id", project_id},
+        {"uncompressed_bytes", offset},
+    };
+    auto digest_source = index;
+    digest_source.erase("bundle_digest");
+    index["bundle_digest"] =
+        sha256_hex(foundation::canonical_json(digest_source));
+    const auto encoded_index = foundation::canonical_json(index);
+
+    const auto begun = transfer.begin(
+        workspace,
+        import_token,
+        encoded_index.size(),
+        sha256_hex(encoded_index));
+    require(begun.has_value(), "Project Bundle import did not begin");
+    const auto identity =
+        transfer.append_index(import_token, 0, bytes(encoded_index), true);
+    require(
+        identity.has_value() && identity.value().has_value(),
+        "Project Bundle index was not accepted");
+    for (std::size_t entry_index = 0; entry_index < entries.size();
+         ++entry_index) {
+      const auto& payload = entries.at(entry_index).second;
+      const auto appended = transfer.append_entry(
+          import_token,
+          static_cast<std::uint32_t>(entry_index),
+          0,
+          std::span<const std::byte>{payload.data(), payload.size()},
+          true);
+      require(appended.has_value(), "Project Bundle entry was not accepted");
+    }
+    committed = transfer.commit(import_token);
+  }
+
+  const bool projects_root_present = value(
+      platform->directory_exists(projects_root), "Project root presence");
+  const auto listed = transfer.list_local_projects(workspace);
+  // The shape `project.open` takes: a writer lease on the published Project
+  // path, then a load through the Project Store.
+  auto reopen_lease = platform->acquire_writer(destination);
+  project_io::ProjectStore reopen_store{platform};
+  const auto reopened = reopen_store.load(destination);
+  if (reopen_lease.has_value()) {
+    reopen_lease.value().reset();
+  }
+  return {
+      {"commit",
+       committed.has_value()
+           ? mutation_result(*committed)
+           : nlohmann::json{{"status", "skipped"}, {"errorCode", ""},
+                            {"storageCondition", ""}}},
+      {"commitProjectId",
+       committed.has_value() && committed->has_value()
+           ? nlohmann::json(committed->value().project_id.value())
+           : nlohmann::json(nullptr)},
+      {"workspaceDirectories",
+       value(platform->list_directories(workspace), "Workspace inventory")},
+      {"projectsRootPresent", projects_root_present},
+      {"projectsRootDirectories",
+       projects_root_present
+           ? nlohmann::json(value(
+                 platform->list_directories(projects_root),
+                 "Project root inventory"))
+           : nlohmann::json::array()},
+      {"destinationPresent",
+       value(platform->directory_exists(destination), "destination presence")},
+      {"destinationManifestPresent",
+       value(
+           platform->exists(destination / "manifest.json"),
+           "destination manifest presence")},
+      {"stagingPresent",
+       value(
+           platform->directory_exists(
+               workspace / ".lmdj-host/import-staging" / import_token),
+           "import staging presence")},
+      {"listLocalProjects", mutation_result(listed)},
+      {"listedProjectIds",
+       [&]() {
+         auto ids = nlohmann::json::array();
+         if (listed.has_value()) {
+           for (const auto& summary : listed.value()) {
+             ids.push_back(summary.project_id.value());
+           }
+         }
+         return ids;
+       }()},
+      {"reopenLease", mutation_result(reopen_lease)},
+      {"reopen", mutation_result(reopened)},
+      {"reopenProjectId",
+       reopened.has_value() ? nlohmann::json(reopened.value().id.value())
+                            : nlohmann::json(nullptr)},
+      {"reopenPatternCount",
+       reopened.has_value() ? nlohmann::json(reopened.value().patterns.size())
+                            : nlohmann::json(nullptr)},
+      {"storageIntents", storage_intent_inventory(*platform)},
+  };
+}
+
 std::optional<nlohmann::json> run_soundset_store_action() {
+  if (query("action") == "project_bundle_import") {
+    auto platform = lmdj::project_io::make_web_project_storage_platform();
+    require(platform != nullptr, "Web platform factory returned null");
+    return nlohmann::json{
+        {"complete", true},
+        {"result", project_bundle_import(platform, query("phase") != "reopen")},
+    };
+  }
   if (query("action") == "publication_lease_scope") {
     auto platform = lmdj::project_io::make_web_project_storage_platform();
     require(platform != nullptr, "Web platform factory returned null");
