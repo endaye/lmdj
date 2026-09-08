@@ -255,6 +255,41 @@ class CreatorServerTest(unittest.TestCase):
             )
 
 
+# Every value parsing would silently reinterpret, or that neither forwarder
+# will forward to. `cloudflare_worker.test.mjs` holds the same list, and
+# `CatalogUpstreamParityTest` below drives both implementations over it: a
+# value one accepts and the other rewrites is how a proof server quietly stops
+# standing in for production, which is the defect class that
+# `URL.origin`-drops-userinfo already was.
+UPSTREAM_PARITY_REFUSED = (
+    "ftp://catalog.example.test/",
+    "not-a-url",
+    "",
+    "https://catalog.example.test/?query=1",
+    "https://catalog.example.test/#fragment",
+    "https://catalog.example.test//double/",
+    "https://user:pass@catalog.example.test/",
+    "https://user@catalog.example.test/",
+    "https://@catalog.example.test/",
+    "https://:@catalog.example.test/",
+    "https://evil.test\\@catalog.example.test/",
+    "https://catalog.example.test/a/../b/",
+    "https://catalog.example.test/a/%2e%2e/b/",
+    "https://exämple.test/b/",
+    "https://CATALOG.Example.Test/b/",
+    "  https://catalog.example.test/b/  ",
+    "https://catalog.example.test:443/b/",
+    "https://catalog.example.test",
+)
+# Accepted by both, and composed identically by both.
+UPSTREAM_PARITY_ACCEPTED = (
+    "https://catalog.example.test/",
+    "https://catalog.example.test/sets/",
+    "https://catalog.example.test:8443/b/",
+    "https://catalog.example.test/%41/",
+)
+
+
 class CatalogUpstreamFixture(http.server.BaseHTTPRequestHandler):
     """A programmable stand-in for a Sound Set Catalog.
 
@@ -470,22 +505,98 @@ class CreatorCatalogProxyTest(CreatorServerTest):
         # tearDown shuts an already-stopped server down again, which is safe.
 
     def test_a_refused_upstream_configuration_never_starts_the_server(self) -> None:
-        for upstream in (
-            "http://catalog.invalid/",
-            "ftp://127.0.0.1/",
-            "not-a-url",
-            "https://catalog.invalid/?query=1",
-            "https://catalog.invalid/#fragment",
-            "https://catalog.invalid//double/",
-            "https://user:pass@catalog.invalid/",
-            "https://user@catalog.invalid/",
-        ):
+        for upstream in UPSTREAM_PARITY_REFUSED:
             with self.subTest(upstream=upstream):
                 with self.assertRaises(self.module.ServerError):
                     self.module.make_server(
                         self.dist, self.verifier, self.repo, "127.0.0.1", 0,
                         catalog_upstream=upstream,
                     )
+
+    def test_the_index_shape_carries_the_transports_own_smaller_bound(self) -> None:
+        # One bound for both shapes would leave this eight times more
+        # permissive than its only client for the index, whose bound in
+        # `soundset_catalog.mjs` is 1 MiB against the object's 8 MiB.
+        oversize = b"x" * (self.module.MAXIMUM_CATALOG_INDEX_BYTES + 1)
+        CatalogUpstreamFixture.response_body = oversize
+        status, _, _ = self.request("GET", "/soundset-catalog/catalog/index.json")
+        self.assertEqual(status, 502)
+        CatalogUpstreamFixture.received = []
+        CatalogUpstreamFixture.response_content_type = "application/octet-stream"
+        status, _, _ = self.request(
+            "GET", f"/soundset-catalog/object/blob/{self.DIGEST}"
+        )
+        self.assertEqual(status, 200)
+
+
+class CatalogUpstreamParityTest(unittest.TestCase):
+    """The Worker and the proof server must agree about every configured value.
+
+    Not a style point. The proof server exists so the browser acceptance
+    journey drives the deployment's topology; a value the two read differently
+    means the journey proves something production does not do. `URL.origin`
+    silently dropping userinfo was one such value, and an adversarial review of
+    this change found seven more before this test existed.
+    """
+
+    WORKER = REPO_ROOT / "apps/web-runtime-host/deploy/cloudflare_worker.mjs"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = load_module("lmdj_shared_web_server_parity", SERVER_TOOL)
+
+    def worker_base(self, upstream: str) -> str | None:
+        """The base the Worker composes, or None when it refuses the value."""
+        script = """
+import worker from %s;
+const configured = JSON.parse(process.argv[1]);
+let target = null;
+globalThis.fetch = async (t) => {
+  target = t;
+  return new Response("{}", {status: 200, headers: {"content-length": "2"}});
+};
+const response = await worker.fetch(
+  new Request("https://creator.lmdj.workers.dev/soundset-catalog/catalog/index.json"),
+  {ASSETS: {fetch: () => new Response("a")}, CATALOG_UPSTREAM: configured},
+);
+process.stdout.write(JSON.stringify(
+  response.status === 200 ? target.slice(0, -"catalog/index.json".length) : null,
+));
+""" % json.dumps(str(self.WORKER))
+        completed = subprocess.run(
+            ["node", "--input-type=module", "-e", script, json.dumps(upstream)],
+            capture_output=True, text=True, timeout=60, check=True,
+        )
+        return json.loads(completed.stdout)
+
+    def python_base(self, upstream: str) -> str | None:
+        try:
+            return self.module.normalize_catalog_upstream(upstream)
+        except self.module.ServerError:
+            return None
+
+    def test_both_refuse_every_value_parsing_would_reinterpret(self) -> None:
+        for upstream in UPSTREAM_PARITY_REFUSED:
+            with self.subTest(upstream=upstream):
+                self.assertIsNone(self.python_base(upstream), "proof server")
+                self.assertIsNone(self.worker_base(upstream), "Worker")
+
+    def test_both_compose_the_same_base_for_every_accepted_value(self) -> None:
+        for upstream in UPSTREAM_PARITY_ACCEPTED:
+            with self.subTest(upstream=upstream):
+                expected = self.python_base(upstream)
+                self.assertIsNotNone(expected, "proof server")
+                self.assertEqual(self.worker_base(upstream), expected)
+
+    def test_the_one_intended_difference_is_plaintext_loopback(self) -> None:
+        # The proof server admits a loopback `http` Catalog because the
+        # acceptance fixture is one; the Worker admits `https` alone. This is
+        # the only disagreement, and it is asserted so it stays the only one.
+        loopback = "http://127.0.0.1:8099/"
+        self.assertEqual(self.python_base(loopback), loopback)
+        self.assertIsNone(self.worker_base(loopback))
+        self.assertIsNone(self.python_base("http://catalog.example.test/"))
+        self.assertIsNone(self.worker_base("http://catalog.example.test/"))
 
 
 class CreatorNoCatalogTest(CreatorServerTest):

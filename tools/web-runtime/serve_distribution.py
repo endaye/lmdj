@@ -74,8 +74,10 @@ CATALOG_OBJECT_CONTENT_TYPES = {
     "blob": "application/octet-stream",
 }
 MAXIMUM_CATALOG_OBJECT_BYTES = 8 * 1024 * 1024
+MAXIMUM_CATALOG_INDEX_BYTES = 1024 * 1024
 CATALOG_TIMEOUT_SECONDS = 30
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 class _RefuseRedirect(HTTPRedirectHandler):
@@ -92,29 +94,68 @@ def normalize_catalog_upstream(upstream: str) -> str:
     parameterised forwarder. `http` is admitted only for a loopback Catalog,
     which is what the acceptance fixture is; the Worker admits `https` alone.
     """
+    # The Worker refuses any value that is not already the base it composes,
+    # because WHATWG parsing silently normalises. `urlsplit` normalises almost
+    # nothing, so the same rules are spelled out here instead; without them the
+    # two disagree about where a given configured value forwards, which is the
+    # class of defect that `URL.origin` silently dropping userinfo already was.
+    if upstream != upstream.strip() or any(c.isspace() for c in upstream):
+        raise ServerError("catalog upstream carries whitespace")
+    if not upstream.isascii():
+        raise ServerError("catalog upstream must be ASCII; use punycode")
+    if "\\" in upstream:
+        raise ServerError("catalog upstream carries a backslash")
     parts = urlsplit(upstream)
     if parts.scheme not in {"http", "https"}:
         raise ServerError("catalog upstream must be an http or https URL")
     if parts.scheme == "http" and parts.hostname not in LOOPBACK_HOSTS:
         raise ServerError("a plaintext catalog upstream must be loopback")
-    if not parts.netloc or parts.query or parts.fragment:
+    if not parts.netloc:
+        raise ServerError("catalog upstream has no host")
+    if parts.query or parts.fragment:
         raise ServerError("catalog upstream carries a query or fragment")
     # Refused rather than forwarded. The Worker's `URL.origin` drops userinfo
     # silently; keeping it here would send credentials the deployment would
-    # not, so both sides refuse and an operator gets a signal instead of a
-    # surprise.
-    if parts.username is not None or parts.password is not None:
+    # not. `@` is tested rather than `parts.username`, because an empty
+    # userinfo (`https://@host/`) leaves that None while the Worker's canonical
+    # form drops the `@` -- the same disagreement one spelling over.
+    if "@" in parts.netloc:
         raise ServerError("catalog upstream carries credentials")
-    path = parts.path if parts.path.endswith("/") else f"{parts.path}/"
+    if parts.netloc != parts.netloc.lower():
+        raise ServerError("catalog upstream host is not lowercase")
+    if parts.port is not None and parts.port == DEFAULT_PORTS[parts.scheme]:
+        raise ServerError("catalog upstream states its scheme's default port")
+    # The base is used by concatenation, so it must already end in `/`. The
+    # Worker refuses a value it would have to complete, rather than completing
+    # it, so this refuses too instead of appending one.
+    if not parts.path.endswith("/"):
+        raise ServerError("catalog upstream base does not end in /")
+    path = parts.path
     if "//" in path:
         raise ServerError("catalog upstream path is not normalised")
+    if any(segment in {".", ".."} for segment in path.split("/")):
+        raise ServerError("catalog upstream path carries a dot segment")
+    # `new URL` decodes `%2e` and then resolves it, so an encoded dot segment
+    # moves the Worker's base and would not move this one.
+    if "%2e" in path.lower():
+        raise ServerError("catalog upstream path carries an encoded dot segment")
     return f"{parts.scheme}://{parts.netloc}{path}"
 
 
-def catalog_target(base: str, suffix: str) -> tuple[str, str, bool] | None:
-    """Compose `(url, content_type, immutable)`, or None for an unadmitted shape."""
+def catalog_target(base: str, suffix: str) -> tuple[str, str, bool, int] | None:
+    """Compose `(url, content_type, immutable, maximum_bytes)`, or None.
+
+    The bound is per shape, matching `soundset_catalog.mjs`: one bound for both
+    would leave this eight times more permissive than its only client for the
+    index.
+    """
     if suffix == CATALOG_INDEX_SUFFIX:
-        return f"{base}{CATALOG_INDEX_SUFFIX}", "application/json", False
+        return (
+            f"{base}{CATALOG_INDEX_SUFFIX}",
+            "application/json",
+            False,
+            MAXIMUM_CATALOG_INDEX_BYTES,
+        )
     match = CATALOG_OBJECT_SUFFIX.match(suffix)
     if match is None:
         return None
@@ -128,6 +169,7 @@ def catalog_target(base: str, suffix: str) -> tuple[str, str, bool] | None:
         f"{base}object/{kind}/{digest}",
         CATALOG_OBJECT_CONTENT_TYPES[kind],
         True,
+        MAXIMUM_CATALOG_OBJECT_BYTES,
     )
 
 
@@ -168,7 +210,9 @@ def read_catalog_upstream_file(path: Path) -> str | None:
         return None
 
 
-def read_catalog_object(url: str, content_type: str) -> tuple[int, bytes]:
+def read_catalog_object(
+    url: str, content_type: str, maximum_bytes: int
+) -> tuple[int, bytes]:
     """Fetch one admitted target and return `(status, payload)` for the page.
 
     A missing object stays a missing object; every other upstream outcome --
@@ -184,12 +228,12 @@ def read_catalog_object(url: str, content_type: str) -> tuple[int, bytes]:
         with opener.open(request, timeout=CATALOG_TIMEOUT_SECONDS) as response:
             if response.status != 200:
                 return 502, b""
-            payload = response.read(MAXIMUM_CATALOG_OBJECT_BYTES + 1)
+            payload = response.read(maximum_bytes + 1)
     except HTTPError as error:
         return (404, b"") if error.code == 404 else (502, b"")
     except (URLError, OSError, ValueError):
         return 502, b""
-    if len(payload) > MAXIMUM_CATALOG_OBJECT_BYTES:
+    if len(payload) > maximum_bytes:
         return 502, b""
     return 200, payload
 
@@ -366,8 +410,8 @@ class ProofHandler(BaseHTTPRequestHandler):
         if target is None:
             self._status(404, include_body)
             return
-        url, content_type, immutable = target
-        status, payload = read_catalog_object(url, content_type)
+        url, content_type, immutable, maximum_bytes = target
+        status, payload = read_catalog_object(url, content_type, maximum_bytes)
         if status != 200:
             self._status(status, include_body)
             return

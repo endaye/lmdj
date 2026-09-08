@@ -41,6 +41,18 @@ Catalog a deployment forwards to must be diffable, reviewable in a Pull
 Request, and auditable afterwards. It must be an absolute `https` base with no
 query or fragment; anything else fails closed and the prefix answers 404.
 
+Configuring the Worker is only half of it: the page has to be told to use the
+prefix. That is the `lmdj-soundset-catalog` meta in `apps/creator-web/index.html`
+(or `window.__LMDJ_SOUNDSET_CATALOG__`), and its value must be **this
+deployment's own origin plus `/soundset-catalog/`** — absolute, because
+`normalizeCatalogEndpoint` refuses a relative endpoint rather than resolve it
+against whatever page is loaded, and same-origin, because `connect-src 'self'`
+still stands. An off-origin value there is #901 again. Note that the meta lives
+inside the signed Release archive, so changing it is a Product Build; the
+Worker's `CATALOG_UPSTREAM` is not, which is the point of splitting them — the
+page names a stable same-origin prefix once, and which Catalog that prefix
+reaches is a deploy-time variable.
+
 **No Catalog is configured today, and that is deliberate**: there is no
 production LMDJ Catalog, so `vars` carries no `CATALOG_UPSTREAM` and every
 prefixed path answers 404. That is S11-D6's "a Host that offers no Catalog

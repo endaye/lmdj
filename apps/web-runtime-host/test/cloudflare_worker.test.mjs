@@ -215,6 +215,11 @@ test("only GET is admitted", async () => {
 });
 
 test("a malformed or non-https upstream fails closed", async () => {
+  // Every value here is one that parsing would silently reinterpret, or that
+  // this Worker will not forward to at all. `UPSTREAM_PARITY_REFUSED` in
+  // `apps/creator-web/test/server_test.py` is the same list: the two
+  // implementations must refuse the same set, because a value one accepts and
+  // the other rewrites is how a proof server stops standing in for production.
   const rejected = [
     "http://catalog.example.test/",
     "ftp://catalog.example.test/",
@@ -223,9 +228,23 @@ test("a malformed or non-https upstream fails closed", async () => {
     "https://catalog.example.test/?query=1",
     "https://catalog.example.test/#fragment",
     "https://catalog.example.test//double/",
-    // Credentials are refused, not silently dropped by `URL.origin`.
+    // Credentials, including an empty userinfo that `URL.origin` would drop.
     "https://user:pass@catalog.example.test/",
     "https://user@catalog.example.test/",
+    "https://@catalog.example.test/",
+    "https://:@catalog.example.test/",
+    // A backslash terminates the authority, so this resolves to `evil.test`.
+    "https://evil.test\\@catalog.example.test/",
+    // Normalisations: dot segments, encoded dot segments, non-ASCII host,
+    // uppercase host, surrounding whitespace, a default port, and a base that
+    // does not already end in `/`.
+    "https://catalog.example.test/a/../b/",
+    "https://catalog.example.test/a/%2e%2e/b/",
+    "https://exämple.test/b/",
+    "https://CATALOG.Example.Test/b/",
+    "  https://catalog.example.test/b/  ",
+    "https://catalog.example.test:443/b/",
+    "https://catalog.example.test",
   ];
   for (const upstream of rejected) {
     const { result, calls } = await withUpstream(
@@ -260,6 +279,56 @@ test("an upstream that redirects, errors or oversizes is not passed through", as
     );
     assert.equal(result.status, expected);
   }
+});
+
+test("each shape carries its own bound, and the body is bounded before it is held", async () => {
+  // One 8 MiB bound for both shapes would leave this eight times more
+  // permissive than the transport for the index, whose own bound is 1 MiB.
+  const oversizeIndex = new Uint8Array(1024 * 1024 + 1);
+  const { result: indexResult } = await withUpstream(
+    () => new Response(oversizeIndex, { status: 200 }),
+    () => worker.fetch(get("/soundset-catalog/catalog/index.json"), creatorEnv()),
+  );
+  assert.equal(indexResult.status, 502);
+  // The same body is inside the object bound.
+  const { result: objectResult } = await withUpstream(
+    () => new Response(oversizeIndex, { status: 200 }),
+    () => worker.fetch(get(`/soundset-catalog/object/blob/${DIGEST}`), creatorEnv()),
+  );
+  assert.equal(objectResult.status, 200);
+
+  // A declared length past the bound is refused before the body is read at all.
+  let bodyWasRead = false;
+  const { result: declared } = await withUpstream(
+    () => new Response(new Uint8Array(4), {
+      status: 200,
+      headers: { "content-length": String(9 * 1024 * 1024) },
+    }),
+    () => worker.fetch(get(`/soundset-catalog/object/blob/${DIGEST}`), creatorEnv()),
+  );
+  assert.equal(declared.status, 502);
+  assert.equal(bodyWasRead, false);
+
+  // And an undeclared body that runs past the bound is abandoned mid-stream
+  // rather than buffered whole: the reader is cancelled and never drained.
+  let cancelled = false;
+  let chunksServed = 0;
+  const endless = new ReadableStream({
+    pull(controller) {
+      chunksServed += 1;
+      controller.enqueue(new Uint8Array(1024 * 1024));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const { result: streamed } = await withUpstream(
+    () => new Response(endless, { status: 200 }),
+    () => worker.fetch(get(`/soundset-catalog/object/blob/${DIGEST}`), creatorEnv()),
+  );
+  assert.equal(streamed.status, 502);
+  assert.equal(cancelled, true);
+  assert.ok(chunksServed <= 12, `read ${chunksServed} MiB before stopping`);
 });
 
 test("the upstream's own content type never reaches the page", async () => {
