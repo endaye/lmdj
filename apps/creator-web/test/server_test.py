@@ -477,6 +477,8 @@ class CreatorCatalogProxyTest(CreatorServerTest):
             "https://catalog.invalid/?query=1",
             "https://catalog.invalid/#fragment",
             "https://catalog.invalid//double/",
+            "https://user:pass@catalog.invalid/",
+            "https://user@catalog.invalid/",
         ):
             with self.subTest(upstream=upstream):
                 with self.assertRaises(self.module.ServerError):
@@ -563,6 +565,7 @@ class CreatorCatalogUpstreamFileTest(CreatorCatalogProxyTest):
             "wrong-scheme": "ftp://127.0.0.1/",
             "non-loopback-plaintext": "http://catalog.invalid/",
             "query": "https://catalog.invalid/?query=1",
+            "credentials": "https://user:pass@catalog.invalid/",
         }.items():
             with self.subTest(content=label):
                 self.upstream_file.write_text(content, encoding="utf-8")

@@ -223,6 +223,9 @@ test("a malformed or non-https upstream fails closed", async () => {
     "https://catalog.example.test/?query=1",
     "https://catalog.example.test/#fragment",
     "https://catalog.example.test//double/",
+    // Credentials are refused, not silently dropped by `URL.origin`.
+    "https://user:pass@catalog.example.test/",
+    "https://user@catalog.example.test/",
   ];
   for (const upstream of rejected) {
     const { result, calls } = await withUpstream(

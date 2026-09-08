@@ -64,6 +64,11 @@ function upstreamBase(env) {
   }
   if (parsed.protocol !== "https:") return null;
   if (parsed.search !== "" || parsed.hash !== "") return null;
+  // Refused rather than dropped. `URL.origin` discards userinfo silently, so
+  // an operator who believed they had configured credentials would get
+  // unauthenticated forwards and no signal; the proof server would keep them
+  // and behave unlike this. Neither half of that is worth having.
+  if (parsed.username !== "" || parsed.password !== "") return null;
   const path = parsed.pathname.endsWith("/")
     ? parsed.pathname
     : `${parsed.pathname}/`;

@@ -99,6 +99,12 @@ def normalize_catalog_upstream(upstream: str) -> str:
         raise ServerError("a plaintext catalog upstream must be loopback")
     if not parts.netloc or parts.query or parts.fragment:
         raise ServerError("catalog upstream carries a query or fragment")
+    # Refused rather than forwarded. The Worker's `URL.origin` drops userinfo
+    # silently; keeping it here would send credentials the deployment would
+    # not, so both sides refuse and an operator gets a signal instead of a
+    # surprise.
+    if parts.username is not None or parts.password is not None:
+        raise ServerError("catalog upstream carries credentials")
     path = parts.path if parts.path.endswith("/") else f"{parts.path}/"
     if "//" in path:
         raise ServerError("catalog upstream path is not normalised")
