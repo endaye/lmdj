@@ -103,10 +103,13 @@ class CloudflareClient:
         version = self.require_version(version)
         self._expect(expected_deployment)
         # The same operation restores a retained version; it never rebuilds it.
-        self._request("deployments", {"strategy": "percentage", "versions": [{"version_id": version, "percentage": 100}]})
+        receipt = self._request("deployments", {"strategy": "percentage", "versions": [{"version_id": version, "percentage": 100}]})
         try:
+            if not isinstance(receipt, dict):
+                raise CloudflareError("invalid publication identity receipt")
+            receipt_id = version_id(receipt.get("id"))
             current = self.deployment()
-            if current["version_id"] != version:
+            if current != {"id": receipt_id, "version_id": version}:
                 raise CloudflareError("publication was superseded or unconfirmed")
             return current
         except CloudflareError:
