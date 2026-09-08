@@ -1145,47 +1145,8 @@ def recovery_created_filter(now: datetime) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--assignee", default=DEFAULT_ASSIGNEE)
-    parser.add_argument("--summary", default=None)
-    sub = parser.add_subparsers(dest="command", required=True)
-    rep = sub.add_parser("report", help="report one completed run, then reconcile recent ones")
-    rep.add_argument("--run-id", type=int, required=True)
-    rep.add_argument("--no-reconcile", action="store_true")
-    mis = sub.add_parser("missing", help="file self-test-missing when no scheduled batch exists for a date")
-    mis.add_argument("--date", required=True)
-    args = parser.parse_args(argv)
-
-    import time  # the only wall-clock use, and only for retry back-off
-    sleep = time.sleep
-    try:
-        api = UrllibGitHubApi(args.repository, os.environ.get("GITHUB_TOKEN", ""))
-        recovery_window = recovery_created_filter(datetime.now(timezone.utc))
-        reports: list[RunReport] = []
-        missing: Outcome | None = None
-        if args.command == "report":
-            try:
-                reports.append(report_run(api, args.run_id, repository=args.repository,
-                                          assignee=args.assignee, sleep=sleep))
-            except WriteVisibilityError:
-                raise  # outer handler records the error and stops before reconciliation
-            except (ReportingError, GitHubApiError, ValueError, TypeError, KeyError) as error:
-                reports.append(RunReport(args.run_id, error=sanitize(str(error))))
-            if not args.no_reconcile:
-                reports.extend(reconcile_recent(api, repository=args.repository, assignee=args.assignee,
-                                                sleep=sleep, exclude=(args.run_id,), created=recovery_window))
-        else:
-            missing = check_missing(api, date=args.date, assignee=args.assignee, sleep=sleep)
-            reports.extend(reconcile_recent(api, repository=args.repository, assignee=args.assignee,
-                                            sleep=sleep, created=recovery_window))
-    except (ReportingError, GitHubApiError, ValueError, TypeError, KeyError) as error:
-        text = render_summary([], None, error=str(error))
-        _write_summary(args.summary, text)
-        print(f"::error::reporting-error: {error}", file=sys.stderr)
-        return 2
-    _write_summary(args.summary, render_summary(reports, missing, error=None))
-    return 2 if any(report.error for report in reports) else 0
+    print("why: direct self-test Issue writer and daily missing checks are retired; remedy: use the authenticated report_runtime legacy command and durable outbox")
+    return 2
 
 
 if __name__ == "__main__":

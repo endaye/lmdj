@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, docs/deploy/creator-web.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md, .github/workflows/self-test-report.yml, scripts/ci/batch_runtime.py, scripts/ci/incremental_storage.json, tools/release/batch_evidence.py, tools/release/batch_reference.py]
 ---
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
@@ -22,11 +22,11 @@ Product Build `1.0.24.0 · canary · g<short-sha>` 曾是 source candidate。那
 
 ## Release cut
 
-Product Build 从 `main` 切出，不在分支上组装。功能、Host、Provider、deploy workflow 与发布脚本先各自经 Integration Queue 合入 `main`；control-plane 改动（`ci.yml`、`scope_policy.json`、queue 与 gate 脚本）单独更早合入，因为它们不能进队列。切版 PR 只携带分配材料：`version.json` Build 分配、必要时的 `assembly.json` 与 `assembly.lock.json`、该 Build 的 immutable Portal snapshot 与 release-evidence 文档，因此可以进队列由控制器同步并 squash 合入。squash 产生的精确 `main` SHA 就是该 Build 唯一合法的 release target；之后的 `main` 提交不进入该 Build。发布后的修复走 PATCH：从已发布 tag 拉短命 `fix/<task>`，分配下一 PATCH，同一修复经普通 PR 回 `main`；仓库不设 `release/*` 或 `hotfix/*` 长期分支。规则全文见 `docs/governance/git-workflow.md` §6。
+Product Build 从 `main` 切出，不在分支上组装。功能、Host、Provider、deploy workflow 与发布脚本先各自经普通 PR 当前 head 评审合入 `main`；control-plane 按可评审性和真实依赖拆分，不再要求 Integration Queue。切版 PR 只携带分配材料：`version.json` Build 分配、必要时的 `assembly.json` 与 `assembly.lock.json`、该 Build 的 immutable Portal snapshot 与 release-evidence 文档，经评审后 squash 合入。squash 产生的精确 `main` SHA 就是该 Build 唯一合法的 release target；之后的 `main` 提交不进入该 Build。发布后的修复走 PATCH：从已发布 tag 拉短命 `fix/<task>`，分配下一 PATCH，同一修复经普通 PR 回 `main`；仓库不设 `release/*` 或 `hotfix/*` 长期分支。规则全文见 `docs/governance/git-workflow.md` §6。
 
 ## Channel promotion
 
-晋级只改发布记录，不改 GitHub Release。ledger 里 Product intent 的 `channel` 固定为发布时的 Channel，发布后不可变并继续决定 `prerelease` 与 `latest`；晋级写入可选的 `promotions` 列表，每条记录目标 Channel、UTC 时间、证据路径、各 Host 部署 run 与其 `evidence.json` 的 SHA-256。当前 Channel 等于最后一条记录。晋级严格向前、一次一档、不超过 policy 的 `promotion.max_channel`（M1 为 `dev`）。`dev` 的门禁是可判定的：intent 已发布、full exact-main CI 成立、profile 的每个部署 Host 各有一次成功的 `workflow_dispatch` 部署 run 且其保留证据记录同一 tag、target revision、Product Build 并全部 `passed`。`beta` 另需人工验收文档。`stable` 被工具拒绝，因为 D8 禁止切换已发布 Release 的 `prerelease`；这是开放问题。入口是 `scripts/release.sh promote TAG CHANNEL --deployment-run HOST=RUN_ID ...`，只向工作区写一份证据文档和一条 ledger 记录，再作为 docs PR 经队列合入。规则全文见 `docs/governance/version-management.md` §3.1。
+晋级只改发布记录，不改 GitHub Release。ledger 里 Product intent 的 `channel` 固定为发布时的 Channel，发布后不可变并继续决定 `prerelease` 与 `latest`；晋级写入可选的 `promotions` 列表，每条记录目标 Channel、UTC 时间、证据路径、各 Host 部署 run 与其 `evidence.json` 的 SHA-256。当前 Channel 等于最后一条记录。晋级严格向前、一次一档、不超过 policy 的 `promotion.max_channel`（M1 为 `dev`）。`dev` 的门禁是可判定的：intent 已发布、full exact-main CI 成立、profile 的每个部署 Host 各有一次成功的 `workflow_dispatch` 部署 run 且其保留证据记录同一 tag、target revision、Product Build 并全部 `passed`。`beta` 另需人工验收文档。`stable` 被工具拒绝，因为 D8 禁止切换已发布 Release 的 `prerelease`；这是开放问题。入口是 `scripts/release.sh promote TAG CHANNEL --deployment-run HOST=RUN_ID ...`，只向工作区写一份证据文档和一条 ledger 记录，再作为 docs PR 经当前 head 评审 squash 合入。规则全文见 `docs/governance/version-management.md` §3.1。
 
 ## Product Build 权威与诊断
 
@@ -82,8 +82,8 @@ Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，�
 当前 `complete-test-v2` 要求 Owner 在 reviewed intent 中恰好引用一种来源：旧
 `self-test-v1` 的 `self_test_evidence`，或增量 full 批次的 `batch_test_evidence`。
 两者都必须是 exact target 的完整 16-suite passed verdict，包括 TSan 与 Release stress。旧 14-lane
-`full` scope 不能再授权 prospective 发布。日测不是日发版，自测不阻碍 PR merge；正式版本
-仍由人手动发布。现成同 SHA 的日测或 node 通过结论可复用，不要求重复补测。
+`full` scope 不能再授权 prospective 发布。自测不阻碍 PR merge；正式版本仍由人手动发布。
+现成同 SHA 的完整通过结论（包括有效历史日测或 node 证据）可复用，不要求重复补测。
 
 证据同时绑定稳定 workflow ID / path、canonical repository、control 与 target 各自的 main
 历史、run / attempt、全部 required 结果、适用 policy 和摘要；动态展示名不是 authority。
@@ -100,15 +100,22 @@ frozen control、actual executor 的 policy 必须一致。focused/none、债务
 证明新增 batch 引用。旧 markers 与 intent 不迁移、不自动补填。
 
 Verdict artifact 保留 30 天。缺失、过期、错误 SHA、失败、skip 或混合 attempt 一律不能
-通过候选验证。恢复须另行授权在 ref `main` 上以 `ci.yml` 的 `target` 指定同一 candidate 新
-dispatch，再独立更新 intent；不使用 SHA 作为 dispatch ref，不 Re-run jobs（当前只允许
-attempt 1）。旧兼容入口退休前仍须新 producer + consumer 的真实演练，不能以本地测试冒充。
+通过候选验证。恢复须另行授权在 ref `main` 上 dispatch `self-test-report.yml`，选择
+`batch_operation=reconcile`，输入闭合
+`batch_request={"id":"<new-stable-request-id>","kind":"candidate","target":"<exact-main-SHA>"}`，
+`journal_config` 留空使用可信源码固定调度器，再独立更新 intent。
+显式诊断改用 `kind=node`，同样强制完整 16-suite。两种请求共享重型预算，固定目标
+不会被持续合入替换，也不推进自动 processed。重送同 ID 同目标恢复原请求；真正重测
+需要新 ID。不使用 SHA 作为 ref，不 Re-run jobs（当前只允许 attempt 1）。
+旧 `ci.yml` 手动／每日 producer 退役以新 producer + consumer 真实演练为前置条件，
+不能以本地测试冒充；历史来源 reader 保留。
 已 published 的新旧协议均保留只读历史，继续核验不可变 tag、签名、Release、asset 与
 plan marker；artifact 到期不改写历史。完整字段与切换规则见版本治理。
 新协议 published 审计读取 recorded attempt；后续 rerun 不会覆盖历史，但新候选仍检查 latest。
 仅实际 `Disposition.PUBLISHED` 可使用增量历史 provenance 路径；仍须 tag、signer、Release、
 assets 与 v3 marker 全部通过，不把 allocated/abandoned/superseded 当作已发布。
-消费者支持不是一次真实全量通过证明；不改变自动触发或取消手动 full 兼容入口。
+消费者支持不是一次真实全量通过证明。手动精确 full 能力保留在统一增量控制器入口，
+每日产品测试和每日缺测告警则退役；轻量健康巡检不按日期生成产品请求。
 
 签名发生在可信本地边界；GitHub workflow 只持有 public trust anchors。公开 publication 必须由
 精确输入的 workflow dispatch 显式授权，并通过受保护的 `release` Environment。当前单人维护者

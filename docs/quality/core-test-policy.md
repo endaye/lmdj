@@ -112,22 +112,21 @@ substitutes and must be controlled or injected.
 ## Optimistic PR Integration and Incremental Main Self-tests
 
 PR integration no longer requires the retired full-CI/strict-update gate.
-The incremental automatic trigger switch remains a separate authorized T5
-transition after O1 acceptance. Manual incremental controls are implemented;
-legacy automatic triggers still exist until that switch. This policy states
-the approved target, not a claim that automatic incremental scheduling is live.
+The T5 automatic trigger switch requires O1 acceptance. The controller uses
+main updates, relevant completion callbacks and independent health ticks;
+manual exact-target full requests share its durable execution budget.
 Task-specific tests still belong to implementation. Current-head AI review or
 visible authorized takeover, real conflict handling, required conversations and
 explicit merge permission belong to PR shipping. Full Core/Web Proof, sanitizer,
 coverage, packaging and portal suites no longer gate PR merge or run on every
 main push. A non-conflicting PR need not update only because main advanced.
 
-There is no daily automatic product-test requirement. After the T5 switch, main
+There is no daily automatic product test. Main
 updates and completion wake the lightweight controller; an independent bounded
 control-plane health check may recover existing work but must not start product
 tests merely because a date changed. No new changes or explicit eligible work
-means no heavy run. Keep legacy automatic entrypoints until the authorized
-switch removes their product schedules and daily-missing alert together.
+means no heavy run. The old product schedules and daily-missing alert are
+retired together; retained historical readers do not restore those triggers.
 
 For each automatic batch, enumerate every commit in the complete main
 first-parent interval from processed SHA to the frozen latest target, including

@@ -87,7 +87,7 @@ REGISTERED_RUNNER_LABELS = (
 )
 HOSTED_CONTROL_PLANE_JOBS = (
     "change-scope",
-    "pr-gate",
+    "batch-verdict",
     "select-macos-runner",
 )
 

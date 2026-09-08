@@ -27,18 +27,6 @@
     },
     {
       "workflow": "ci.yml",
-      "job": "pr-gate",
-      "category": "control-plane",
-      "reason": "The single aggregate verdict. It must adjudicate a workload without depending on that workload's host."
-    },
-    {
-      "workflow": "ci.yml",
-      "job": "self-test-verdict",
-      "category": "control-plane",
-      "reason": "Judges a self-test batch from its needs context and retains the verdict artifact that the next batch's resolver and the failure reporter read. It runs the control revision's scripts, never the target's, and must remain available when every self-hosted runner is offline, exactly as PR Gate must."
-    },
-    {
-      "workflow": "ci.yml",
       "job": "batch-verdict",
       "category": "control-plane",
       "reason": "Retains scoped incremental verdict and actual needs observations even when the self-hosted executors are unavailable. It runs current trusted adapters over frozen policy JSON, not product workloads, and must survive the pool it judges."
@@ -144,12 +132,6 @@
       "job": "cancel-probe-waiter",
       "category": "control-plane",
       "reason": "Offers a bounded manual diagnostic parent-run cancellation window after the short journal writer has finished. It has no write permissions or product work and must not occupy a self-hosted product executor."
-    },
-    {
-      "workflow": "self-test-report.yml",
-      "job": "report",
-      "category": "control-plane",
-      "reason": "Turns a finished self-test verdict into failure Issues and files the daily missing-batch alert. It must run when the self-hosted hosts that execute the batches are the thing that went missing, which is exactly when a self-hosted reporter could not."
     }
   ]
 }

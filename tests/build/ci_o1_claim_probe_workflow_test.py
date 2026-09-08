@@ -124,7 +124,7 @@ class ClaimWorkflowTests(unittest.TestCase):
     def test_manual_only_same_identity_permissions_and_short_lock(self):
         condition = field(self.controller, "if", 4)
         for value in ("github.event_name == 'workflow_dispatch'", "github.ref == 'refs/heads/main'",
-                      "github.run_attempt == '1'", "inputs.batch_operation == 'claim-probe'"):
+                      "github.run_attempt == '1'"):
             self.assertIn(value, condition)
         self.assertEqual(scalars(block(self.controller, "permissions", 4), 6), {"contents": "read", "actions": "read", "issues": "write"})
         self.assertIn("group: self-test-report", block(self.controller, "concurrency", 4))
@@ -148,13 +148,13 @@ class ClaimWorkflowTests(unittest.TestCase):
 
     def test_legacy_automatic_triggers_and_default_remain(self):
         events = block(self.source, "on", 0)
-        self.assertIn('workflows: ["Core CI"]', events)
-        self.assertIn('cron: "0 18 * * *"', events)
-        self.assertNotIn("  push:", events)
+        self.assertIn('workflows: ["Self-test Report", "Core CI", "PR Review"]', events)
+        self.assertIn('cron: "7,22,37,52 * * * *"', events)
+        self.assertIn("  push:", events)
         inputs = block(block(events, "workflow_dispatch", 2), "inputs", 4)
-        self.assertIn("default: legacy", inputs)
+        self.assertIn("default: reconcile", inputs)
         self.assertIn("claim-probe", field(block(inputs, "batch_operation", 6), "options", 8))
-        self.assertIn("inputs.batch_operation == '' || inputs.batch_operation == 'legacy'", block(self.source, "report", 2))
+        self.assertNotIn("\n  report:\n", self.source)
 
 
 if __name__ == "__main__":

@@ -58,18 +58,15 @@ class WorkflowContracts(unittest.TestCase):
         self.assertNotRegex(SOURCE, r"(?m)^\s+(?:issues|pull-requests|actions|contents): write\s*$")
 
     def test_original_schedule_and_manual_entry_remain(self):
-        self.assertIn('- cron: "0 16 * * *"', SOURCE)
-        self.assertIn("  workflow_dispatch:", SOURCE)
         events = SOURCE.split("\npermissions:", 1)[0]
-        self.assertNotRegex(events, r"(?m)^  (?:push|pull_request|workflow_run):")
+        self.assertNotRegex(events, r"(?m)^  (?:schedule|workflow_dispatch|push|pull_request|workflow_run):")
+        self.assertIn("  workflow_call:", events)
 
     def test_legacy_artifacts_require_explicit_nonbatch_entry(self):
-        for name in ("Record the self-test request", "Retain the request before validation",
-                     "Resolve the self-test target", "Classify the complete change inventory", "Retain the scope manifest"):
-            self.assertIn("steps.entry.outputs.batch-mode == 'false'", step("change-scope", name),
-                          "why: malformed batch can become legacy full; remedy: require explicit native entry")
-        for job in ("self-test-verdict", "pr-gate", "pre-heavy-gate"):
-            self.assertIn("needs.change-scope.outputs.batch-mode == 'false'", job_body(SOURCE, job))
+        for job in ("self-test-verdict", "pr-gate"):
+            self.assertNotIn("\n  " + job + ":\n", SOURCE)
+        self.assertNotIn("self_test.py resolve", SOURCE)
+        self.assertNotIn("inputs.queue_ticket", SOURCE)
 
     def test_stress_is_selected_per_suite_not_per_batch(self):
         for job, suite in (("nightly-tsan", "core_tsan_stress"), ("nightly-stress", "core_release_stress")):
@@ -259,13 +256,21 @@ class WorkflowScripts(unittest.TestCase):
     def test_native_entry_remains_explicitly_legacy(self):
         result, values = self.invoke("change-scope", "Resolve the execution entry", BATCH_REQUEST="", BATCH_EXECUTOR="",
             CALLER_WORKFLOW_REF="endaye/lmdj/.github/workflows/ci.yml@refs/heads/main")
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(values["batch-mode"], "false")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(values, {})
 
     def test_both_empty_call_inputs_do_not_become_legacy_full(self):
         result, values = self.invoke("change-scope", "Resolve the execution entry", BATCH_REQUEST="", BATCH_EXECUTOR="")
         self.assertNotEqual(result.returncode, 0)
         self.assertNotEqual(values.get("batch-mode"), "false")
+
+    def test_foreign_workflow_cannot_call_product_dag_with_forged_valid_json(self):
+        result, values = self.invoke("change-scope", "Resolve the execution entry",
+            BATCH_REQUEST=json.dumps({'control': self.control}),
+            BATCH_EXECUTOR=json.dumps({'run_id': 51, 'attempt': 1}),
+            CALLER_WORKFLOW_REF="endaye/lmdj/.github/workflows/foreign.yml@refs/heads/main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(values, {})
         self.assertIn("why:", result.stderr)
 
     def test_one_missing_input_never_falls_back(self):

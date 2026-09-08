@@ -1,9 +1,9 @@
 name: Core Nightly
 
-# Reusable stress implementation for the complete daily/manual self-test batch.
+# Reusable stress implementation for selected incremental and explicit full batches.
 # A manual suite probe remains diagnostic, not a substitute for that batch.
 on:
-  # Automatic stress coverage belongs to Core CI's 16:00 UTC self-test batch.
+  # Automatic coverage belongs to an admitted fixed-target batch, not a daily cron.
   workflow_dispatch:
     inputs:
       suite:
