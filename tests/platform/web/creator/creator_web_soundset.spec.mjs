@@ -217,6 +217,11 @@ async function installProjectTap(page, catalogEndpoint) {
             }
             if (request?.operation === "project.inspect" && response?.ok) {
               window.__lastProjectTruth = response.result?.project ?? null;
+              // Counted so a leg can wait for a Project read that is newer
+              // than the commit it just made. Without it, an install that
+              // writes nothing is indistinguishable from reading the snapshot
+              // taken before it.
+              window.__projectTruthReads = (window.__projectTruthReads ?? 0) + 1;
             }
             return response;
           },
@@ -397,6 +402,8 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     .check();
   await expect(install).toBeEnabled();
   await expect(install).toHaveText("Install 0 of 16 into Bank A");
+  const readsBeforeKeep = await page.evaluate(() =>
+    window.__projectTruthReads ?? 0);
   await install.click();
   const receipt = page.locator(".soundset-receipt");
   await expect(receipt).toBeVisible({timeout: REQUEST_TIMEOUT_MS});
@@ -413,6 +420,13 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   // The far side that matters: Project Truth did not move. A commit that
   // writes nothing must not advance the revision, and no Pad may change.
   expect(kept.result.project_revision).toBe(kept.payload.expected_revision);
+  // Read a Project the Host produced *after* the commit, not the snapshot
+  // taken before it. The Creator refreshes its Pad projection on every
+  // install, zero-write ones included, so this always advances -- and without
+  // waiting for it, "no Pad changed" would be satisfied by a stale read.
+  await expect.poll(async () =>
+    await page.evaluate(() => window.__projectTruthReads ?? 0),
+  {timeout: REQUEST_TIMEOUT_MS}).toBeGreaterThan(readsBeforeKeep);
   const afterKeep = await occupancyOf(page, 0);
   for (let pad = 0; pad < 16; pad += 1) {
     expect(afterKeep.pads[pad]).toBe(before.pads[pad]);
