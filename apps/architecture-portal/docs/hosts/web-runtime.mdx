@@ -40,7 +40,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Formal Web Runtime Host `3.0.0` 已进入 Product Build `1.0.43.0` Assembly。Host 只依赖 Web Runtime Platform `3.0.0`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。`sample.import.begin.byte_length` 接受 manifest 约束内的完整选区 WAV，`sample.import.chunk` 继续把每个 sidecar 限制为 1 MiB。Diagnostic flow 继续覆盖 revision-bound `sample.quota`、Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。
+<StatusBadge status="implemented" /> Formal Web Runtime Host `4.0.0` 已进入 Product Build `1.0.44.0` Assembly。Host 只依赖 Web Runtime Platform `4.0.0`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。`sample.import.begin.byte_length` 接受 manifest 约束内的完整选区 WAV，`sample.import.chunk` 继续把每个 sidecar 限制为 1 MiB。Diagnostic flow 继续覆盖 revision-bound `sample.quota`、Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。
 Formal Web Runtime Host `1.2.10` 已进入 Product Build `1.0.24.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.3.1`。
 
 ControlBridge 先于 audio readiness 发布；Host 只转发 Runtime Session authority state。它不解析 Project/bundle/journal、不执行 quantization/fingerprint，也没有 JavaScript fallback sequencer。
@@ -51,7 +51,7 @@ Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用�
 
 ## 分发与身份门禁
 
-`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：内容哈希资产与 canonical manifest 绑定 Product Build `1.0.43.0`、Host `3.0.0`、Platform `3.0.0`、私有协议 `1`、固定 heap 与九项资源上限、Emscripten 身份及精确 inventory。资源上限在既有七项（`decoded_float_pcm_bytes_per_bank` 64 MiB、`decoded_float_pcm_bytes_total` 128 MiB、`decoded_float_pcm_bytes_resident` 256 MiB、`imported_wav_bytes` 65 MiB、`ingest_channels` 2、`ingest_decoded_frames` 43,200,000、`ingest_source_bytes` 100 MiB）之外新增 Stage 10 的 `perform_recording_frames` 86,400,000 与 `perform_recording_queue_batches` 32，两项都按正 safe integer 校验，多余默认值被拒绝。诊断 Host 的 distribution manifest 仍声明十五个 expected asset，并且明确不含 `perform_master_tap_worklet`：共享 native manifest gate 要求声明 `compatible_hosts` 的 Creator manifest 恰好带一个 tap 资产，诊断 Host manifest 带零个，重复或多余条目按 inventory 缺陷 fail closed。Browser Main 与 shared native gate 在创建 runtime owner 前双重校验这些身份，漂移、重复或迟到初始化均 fail closed。
+`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：内容哈希资产与 canonical manifest 绑定 Product Build `1.0.44.0`、Host `4.0.0`、Platform `4.0.0`、私有协议 `1`、固定 heap 与十三项资源上限、Emscripten 身份及精确 inventory。资源上限在既有七项（`decoded_float_pcm_bytes_per_bank` 64 MiB、`decoded_float_pcm_bytes_total` 128 MiB、`decoded_float_pcm_bytes_resident` 256 MiB、`imported_wav_bytes` 65 MiB、`ingest_channels` 2、`ingest_decoded_frames` 43,200,000、`ingest_source_bytes` 100 MiB）与 Stage 10 的 `perform_recording_frames` 86,400,000、`perform_recording_queue_batches` 32 之外，本 Build 新增四项 Sound Set Set Store 上限：`maximum_soundset_manifest_bytes` 1 MiB、`maximum_soundset_blob_bytes` 65 MiB、`maximum_soundset_unique_bytes` 256 MiB 与 `maximum_soundset_staging_bytes` 512 MiB。四项与原生 Host 的共享默认值逐一相同，因此一个能在某个 Host 安装的 Set 在其余 Host 同样能安装。每一项都按正 safe integer 校验并逐值比对，多余默认值被拒绝；这也是 Host 本次取 MAJOR 的依据——`1.0.43.0` 的分发清单在本 Build 的 gate 下不再合法。诊断 Host 的 distribution manifest 仍声明十五个 expected asset，并且明确不含 `perform_master_tap_worklet`：共享 native manifest gate 要求声明 `compatible_hosts` 的 Creator manifest 恰好带一个 tap 资产，诊断 Host manifest 带零个，重复或多余条目按 inventory 缺陷 fail closed。Browser Main 与 shared native gate 在创建 runtime owner 前双重校验这些身份，漂移、重复或迟到初始化均 fail closed。
 
 proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
 
@@ -68,7 +68,7 @@ Runtime Host Release 使用同一个四段控制面：`scripts/release.sh prepar
 单人维护者模式不设置 reviewer，但 Environment 仍只允许 exact `main`。它不触发下方
 Runtime deployment：该部署仍是 manual-only exact-tag dispatch，使用独立 Environment、凭据、
 smoke/recovery 与 evidence；Channel promotion 继续是后续独立边界。因此 release/deploy tooling
-已经 implemented 也不表示当前 Product Build `1.0.43.0` 已经 released、deployed 或 promoted。
+已经 implemented 也不表示当前 Product Build `1.0.44.0` 已经 released、deployed 或 promoted。
 
 ## 公共发布边界
 
@@ -97,7 +97,7 @@ reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior�
 evidence v1。official site response 的 `disabled: true` 被规范化为 `state: disabled` 并在
 smoke/Draft 前拒绝自动 enable；publication projection 接受并保留 Netlify UTC `Z`
 时间戳中的可选小数秒。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
-自动证明当前 Product Build `1.0.43.0` 或任何历史 Product Build 已获得 remote verified tag、Release、Deploy ID、
+自动证明当前 Product Build `1.0.44.0` 或任何历史 Product Build 已获得 remote verified tag、Release、Deploy ID、
 immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
 工具测试或 PR Preview 上升为当前候选的公开部署结论。
 

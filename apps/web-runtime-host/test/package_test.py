@@ -50,6 +50,17 @@ def current_product_build() -> str:
     )
 
 
+def current_module_version(relative: str) -> str:
+    """The version a module declares, read from source.
+
+    Pinning the literal here bought nothing and cost a cycle on every bump,
+    exactly as the Product Build literal did before it became a helper.
+    """
+    return json.loads(
+        (REPO_ROOT / relative / "module.json").read_text(encoding="utf-8")
+    )["version"]
+
+
 class PackageTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="lmdj-web-package-")
@@ -458,8 +469,14 @@ class PackageTest(unittest.TestCase):
         self.assertEqual(manifest["manifest_version"], 1)
         self.assertEqual(manifest["product_build"], current_product_build())
         self.assertEqual(manifest["host_id"], "web-runtime-host")
-        self.assertEqual(manifest["host_version"], "3.0.0")
-        self.assertEqual(manifest["platform_version"], "3.0.0")
+        self.assertEqual(
+            manifest["host_version"],
+            current_module_version("apps/web-runtime-host"),
+        )
+        self.assertEqual(
+            manifest["platform_version"],
+            current_module_version("packages/web-runtime-platform"),
+        )
         self.assertEqual(manifest["protocol_version"], 1)
         self.assertEqual(manifest["heap_bytes"], 536_870_912)
         self.assertEqual(
@@ -472,6 +489,10 @@ class PackageTest(unittest.TestCase):
                 "ingest_decoded_frames": 43_200_000,
                 "ingest_channels": 2,
                 "imported_wav_bytes": 68_157_440,
+                "maximum_soundset_manifest_bytes": 1_048_576,
+                "maximum_soundset_blob_bytes": 68_157_440,
+                "maximum_soundset_unique_bytes": 268_435_456,
+                "maximum_soundset_staging_bytes": 536_870_912,
                 "perform_recording_frames": 86_400_000,
                 "perform_recording_queue_batches": 32,
             },
@@ -575,10 +596,13 @@ class PackageTest(unittest.TestCase):
             '<meta name="lmdj-host-id" content="web-runtime-host">', index
         )
         self.assertIn(
-            '<meta name="lmdj-host-version" content="3.0.0">', index
+            '<meta name="lmdj-host-version" content="'
+            f'{current_module_version("apps/web-runtime-host")}">',
+            index,
         )
         self.assertIn(
-            '<meta name="lmdj-web-runtime-platform-version" content="3.0.0">',
+            '<meta name="lmdj-web-runtime-platform-version" content="'
+            f'{current_module_version("packages/web-runtime-platform")}">',
             index,
         )
         self.assertIn(

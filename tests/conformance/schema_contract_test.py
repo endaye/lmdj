@@ -59,8 +59,11 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
 contract_versions = {
     name: (
+        "1.2.0"
+        if name == "project_bundle"
+        else (
         "1.1.0"
-        if name in {"project_bundle", "error", "soundset"}
+        if name in {"error", "soundset"}
         else (
             "4.1.0"
             if name == "project_v4"
@@ -73,6 +76,7 @@ contract_versions = {
                     else "1.0.0"
                 )
             )
+        )
         )
     )
     for name in schemas
@@ -633,12 +637,15 @@ assert set(project_bundle["required"]) == {
 assert project_bundle["properties"]["contract"]["const"] == (
     "lmdj.project-bundle.v1"
 )
-assert project_bundle["properties"]["contract_version"]["const"] == "1.1.0"
+assert project_bundle["properties"]["contract_version"]["const"] == "1.2.0"
 assert project_bundle["properties"]["compression"]["const"] == "none"
+# S11/#784: every Project Contract level the repository defines must be
+# nameable, or a Project the writer produces cannot be packed at all.
 assert project_bundle["properties"]["project_contract"]["enum"] == [
     "lmdj.project.v1",
     "lmdj.project.v2",
     "lmdj.project.v3",
+    "lmdj.project.v4",
 ]
 assert project_bundle["properties"]["entries"]["maxItems"] == 4096
 assert project_bundle["$defs"]["entry"]["properties"]["bytes"]["maximum"] == (
@@ -760,7 +767,7 @@ foundation_manifest = load_json(
 assert foundation_manifest == {
     "contract": "lmdj.module.v1",
     "module": "foundation",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "api_version": 1,
     "dependencies": {},
 }

@@ -11,6 +11,7 @@ source_paths:
   - packages/application-facade
   - packages/project-cooker
   - packages/project-io
+  - docs/plans/2026-09-06-lmdj-stage11-sound-set.md
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -32,6 +33,19 @@ Creator 的录音会话是视口锚定的模态面板：固定几何（宽度 `m
 ## 长素材摄入与选区提交
 
 Creator 按内容嗅探 WAV、MP3、M4A/AAC、FLAC，在浏览器 Host 堆中以 48 kHz 解码完整来源；100 MiB 源、15 分钟 normalized frames 和双声道门禁在可判定的最早边界 fail closed。波形、试听和裁剪共享唯一 `AudioBuffer`。`sample.quota` 把目标 Pad 当前占用排除后返回 revision-bound Bank/Project effective headroom，选区提交复用既有 PCM16 WAV streaming mutation；恰好 headroom 成功，+1 mono frame 由 Core 以 quota 类别拒绝。Sample 本身不携带 BPM，实时路径不做 time-stretch。
+
+## Sound Set 目录与安装
+
+浏览 Catalog、检查一个 Set、预览映射、安装到用户选定的 Bank，是自 Product Build
+`1.0.44.0` 起的产品工作流。Catalog 索引由拥有 endpoint 的 Host 取回并交给 Core：原生
+Host 读 Workspace 本地的内容寻址目录，Web Host 在浏览器侧 `fetch` 并把字节暂存，Core
+不含网络代码。清单的 Contract 形状、每个 Artifact 的哈希、SPDX 允许清单与署名要求，以及
+四项 Host 容量上限，都在一个 Set 变为可见之前判定；任何一项不通过都不产生分配或下载。
+安装把槽位内容写成普通 Asset 与普通 Pad 指派，一次修订、一张收据；`keep` 只写空 Pad，
+`replace` 写下每一个 proposed Pad，Set 的空槽永不清除已占用的 Pad，被替换的 Asset 不被
+删除。来源记录在既有 Asset Lineage 载体上，安装之后再编辑 Pad 是普通的创作动作。Catalog
+不可达不是致命错误：已发布进 Set Store 的 Set 仍可列出、检查与安装。Set 内音频的试听是
+Facade 的第五个操作，目前只由三个原生 Host 服务，Creator 尚无试听控制。
 
 ## Cook 与演奏
 

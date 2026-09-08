@@ -284,6 +284,14 @@ def read_policy(repo_root: Path, components: dict[str, dict], toolchain: dict) -
         "imported_wav_bytes",
         "perform_recording_frames",
         "perform_recording_queue_batches",
+        # S11-D7: the four Sound Set Set Store bounds. The Web Host's limits
+        # live in this manifest, so these are the Host capacity facts the
+        # bridge injects; native Hosts inject the shared default in
+        # packages/application-facade/src/application.cpp.
+        "maximum_soundset_manifest_bytes",
+        "maximum_soundset_blob_bytes",
+        "maximum_soundset_unique_bytes",
+        "maximum_soundset_staging_bytes",
     }
     if not isinstance(limits, dict) or set(limits) != expected_limit_keys or any(
         type(value) is not int or value < 1 for value in limits.values()

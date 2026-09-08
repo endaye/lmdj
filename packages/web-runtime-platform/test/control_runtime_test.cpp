@@ -285,6 +285,23 @@ ProjectBundleFixture build_project_bundle_fixture(
             });
       });
 
+  // Read the Contract level the Store persisted instead of naming one here;
+  // a hardcoded level stops describing the Project when the writer moves.
+  const auto entry_text = [&](std::string_view relative) {
+    const auto found = std::find_if(
+        source_entries.begin(),
+        source_entries.end(),
+        [&](const auto& item) { return item.path == relative; });
+    LMDJ_CHECK(found != source_entries.end());
+    return std::string{
+        reinterpret_cast<const char*>(found->bytes.data()),
+        found->bytes.size()};
+  };
+  const auto manifest = Json::parse(entry_text("manifest.json"));
+  const auto head = Json::parse(
+      entry_text(manifest.at("head_checkpoint").get<std::string>()));
+  const auto project_contract = head.at("contract").get<std::string>();
+
   auto encoded_entries = Json::array();
   std::uint64_t offset = 0;
   std::vector<std::vector<std::byte>> payloads;
@@ -302,9 +319,9 @@ ProjectBundleFixture build_project_bundle_fixture(
       {"bundle_digest", std::string(64, '0')},
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.1.0"},
+      {"contract_version", "1.2.0"},
       {"entries", std::move(encoded_entries)},
-      {"project_contract", "lmdj.project.v3"},
+      {"project_contract", project_contract},
       {"project_id", project_id},
       {"uncompressed_bytes", offset},
   };

@@ -274,7 +274,8 @@ must not invent a second Lineage model.
 - [ ] Commit `feat(contracts): add Sound Set and Catalog v1 schemas`.
 
 **Version Management:** allocate `lmdj.soundset.v1` / `1.0.0` and
-`lmdj.soundset-catalog.v1` / `1.0.0`. `foundation` stays at the protected-main
+`lmdj.soundset-catalog.v1` / `1.0.0`. (`lmdj.soundset.v1` later moved to
+`1.1.0` at #751, which is the version that entered Assembly at Task 6.) `foundation` stays at the protected-main
 patch unless the new headers force a MINOR; if so, bump at Task 6 with the
 cascade, not in this Task's manifests. This Task does not edit Product
 Assembly or Host manifests.
@@ -402,12 +403,20 @@ Dependency Order.)
 in the Schema `x-lmdj-contract-version` and the conformance test. The Contract
 ID does not change; a `4.0.0` reader rejects a `soundset` lineage by design,
 which is the backward-compatible-addition rule of
-`docs/governance/version-management.md` §7. The Assembly lock records the new
-Contract version at Task 6, not here. `authoring-domain` and `project-io`
-SemVer are paid at Task 6. Never add a second Lineage field or a Project
-Contract with a new ID.
+`docs/governance/version-management.md` §7. **Corrected at execution:** this
+Task cannot defer the Assembly lock to Task 6. The lock pins each Contract's
+schema sha256, so editing the Schema forces `products/lmdj/assembly.lock.json`
+in the same commit, the lock forces a Product Build, and the Build forces
+`Documentation impact: required`. Task 3 therefore cut the Contract, the
+Assembly, the lock and Product Build `1.0.43.0` together (`ee5a9a18`, #761).
+`authoring-domain` and `project-io` SemVer are still paid at Task 6. Never add
+a second Lineage field or a Project Contract with a new ID.
 
-**Documentation impact:** none in this Task.
+**Documentation impact:** **required.** The line above originally read `none`;
+execution disproved it. A Contract Schema edit forces the Assembly lock, which
+forces a Product Build allocation, and
+`docs/governance/architecture-portal.md` forbids a Product Build or Assembly
+change from declaring `none`.
 
 ## Task 4: Facade
 
@@ -519,9 +528,13 @@ current Architecture Portal pages and source diagrams named below.
       Assembly lock, snapshots, tags, Releases, open Issues/PRs,
       `release-intents.json`). Allocate the next unoccupied Product Build.
       If that target has been consumed, stop and refresh this table.
-- [ ] Write Contract identities `lmdj.soundset.v1` / `1.0.0` and
-      `lmdj.soundset-catalog.v1` / `1.0.0` into Assembly, and record
-      `lmdj.project.v4` at `4.1.0` in Assembly and the Assembly lock. Pay
+- [ ] Write Contract identities `lmdj.soundset.v1` / **`1.1.0`** (corrected
+      at execution: #751 moved it when it added the S11-D5 `demo` carrier) and
+      `lmdj.soundset-catalog.v1` / `1.0.0` into Assembly. `lmdj.project.v4` is
+      already recorded at `4.1.0` in Assembly and the Assembly lock, cut with
+      Product Build `1.0.43.0` at Task 3; do not repeat it. Also move
+      `lmdj.project-bundle.v1` `1.1.0` → `1.2.0` so a Bundle can name
+      `lmdj.project.v4` (#784). Pay
       SemVer for modules/Hosts whose public surface actually changed in Tasks
       1–5 (`authoring-domain` and `project-io` gained public types,
       `application-facade` gained operations and config, `web-runtime-platform`
@@ -542,19 +555,36 @@ substitute a guessed Product Build. Baseline at this revision of the plan is
 Product `1.0.42.0`, consumed by #436; the next unoccupied Build is decided by
 the audit, not by this document.
 
-**Documentation impact:** required at this Task:
+**Documentation impact:** required at this Task. The eight routes below were
+the plan's estimate; execution reached eighteen, because every page that names
+a Module, Host or Contract version asserts current truth and this Task moves
+ten of them:
 
 - `/contracts/overview/`
+- `/contracts/project-bundle/`
+- `/contracts/soundset/` (new)
+- `/contracts/soundset-catalog/` (new)
+- `/core/modules/foundation/`
 - `/core/modules/application-facade/`
 - `/core/modules/project-io/`
 - `/core/modules/authoring-domain/`
+- `/core/modules/web-runtime-platform/`
+- `/hosts/overview/`
+- `/hosts/core-cli/`
+- `/hosts/core-mcp/`
+- `/hosts/native-host/`
 - `/hosts/creator-web/`
+- `/hosts/web-runtime/`
+- `/platform/web-runtime/`
 - `/assembly/lmdj/`
+- `/operations/testing-and-proof/`
+- `/operations/version-and-release/`
+- `/overview/`
 - `/product/workflows/`
 - `/product/capability-map/`
 
-Add Contract pages only if Task 6's Portal generator requires one page per
-active Contract; do not hand-enter identities.
+The Portal generator does require one page per active Contract, so the two
+Sound Set Contracts each get one; do not hand-enter identities.
 
 Immutable snapshot is a follow-up of this Task on a clean commit, not Channel
 promotion.
@@ -605,11 +635,12 @@ Module, Host, Provider, Contract, Assembly, Channel, or snapshot identity.
 
 | Component | When allocated | Rule |
 | --- | --- | --- |
-| `lmdj.soundset.v1` | Task 1 schema, Task 6 Assembly | initial `1.0.0` |
+| `lmdj.soundset.v1` | Task 1 schema, Task 6 Assembly | initial `1.0.0`; **corrected at execution:** it enters Assembly at `1.1.0`, because #751 moved it when it added the S11-D5 `demo` carrier |
 | `lmdj.soundset-catalog.v1` | Task 1 schema, Task 6 Assembly | initial `1.0.0` |
-| `lmdj.project.v4` | Task 3 schema + conformance, Task 6 Assembly/lock | Contract MINOR `4.0.0` → `4.1.0` for exactly the S11-D9 `soundset` source and `soundset_install` derivation variants; same Contract ID; never a second Lineage field |
+| `lmdj.project-bundle.v1` | Task 6 | **added at execution:** Contract MINOR `1.1.0` → `1.2.0` widening `project_contract` to name `lmdj.project.v4`. Since #842 every Project this Build persists is v4, so the narrower enum made every new Project unpackable (#784); a Contract move is what a Build cut carries |
+| `lmdj.project.v4` | Task 3 schema, conformance, Assembly **and lock** | Contract MINOR `4.0.0` → `4.1.0` for exactly the S11-D9 `soundset` source and `soundset_install` derivation variants; same Contract ID; never a second Lineage field. **Corrected at execution:** the Assembly and lock could not be deferred to Task 6, because the lock pins each Contract's schema sha256 |
 | `foundation` / `project-io` / `authoring-domain` / `application-facade` / `web-runtime-platform` / Hosts | Task 6 | pay SemVer only for surfaces Tasks 1–5 actually changed |
-| Product Build | Task 6 | next unoccupied after `1.0.42.0`; audit immediately before mutation |
+| Product Build | Task 3, then Task 6 | Task 3 consumed `1.0.43.0` with the `lmdj.project.v4` cut; Task 6 allocates the next unoccupied Build. Audit immediately before mutation, never after |
 
 ## Documentation Impact
 

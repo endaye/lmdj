@@ -12,7 +12,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 <BuildIdentity kind="hosts" id="native-host" />
 
 ## 目的
-Native Host `3.0.0` 是正式无界面 Host（binary `lmdj-native-host`）：从真实 Project v4 经 Application Facade `3.0.0` 进入控制面，并用 Audio Runtime `3.0.0` 的 frame clock、CaptureWriter 与实时数据面执行 Sequence recording 和设备验证；不承担产品 UI。固定 Project 会话同时暴露 Facade 原样的 `sample.quota` 查询，用于取得 revision-bound Bank/Project headroom。它随每个分发包发出，分发成员资格受 `docs/governance/distribution-contents.md` 约束。
+Native Host `3.1.0` 是正式无界面 Host（binary `lmdj-native-host`）：从真实 Project v4 经 Application Facade `3.1.0` 进入控制面，并用 Audio Runtime `3.0.0` 的 frame clock、CaptureWriter 与实时数据面执行 Sequence recording 和设备验证；不承担产品 UI。本 Build 起它另外转发五个 Sound Set 操作，并保持独立于 Performance 操作表，使 P10-D20 的 Performance 清单仍然只是 Performance 清单。固定 Project 会话同时暴露 Facade 原样的 `sample.quota` 查询，用于取得 revision-bound Bank/Project headroom。它随每个分发包发出，分发成员资格受 `docs/governance/distribution-contents.md` 约束。
 ## 数据流
 Pad input → Audio Runtime frame stamp → bounded CaptureWriter → Application Facade Sequence session/receipt；`sample.quota` → Application Facade → Project Truth ledger；Snapshot/Voice 数据面独立进入设备输出。Native Host 不解析 Bundle 或复制配额公式。
 ## Performance 接入

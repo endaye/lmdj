@@ -479,6 +479,25 @@ FacadeBundleFixture facade_bundle_fixture(
             });
       });
 
+  // Read the Contract level the Store persisted instead of naming one here;
+  // a hardcoded level stops describing the Project when the writer moves.
+  const auto entry_text = [&](std::string_view relative) {
+    const auto found = std::find_if(
+        entries.begin(),
+        entries.end(),
+        [&](const auto& item) { return item.path == relative; });
+    LMDJ_CHECK(found != entries.end());
+    return std::string{
+        reinterpret_cast<const char*>(found->bytes.data()),
+        found->bytes.size()};
+  };
+  const auto bundle_manifest =
+      nlohmann::json::parse(entry_text("manifest.json"));
+  const auto bundle_head = nlohmann::json::parse(
+      entry_text(bundle_manifest.at("head_checkpoint").get<std::string>()));
+  const auto project_contract =
+      bundle_head.at("contract").get<std::string>();
+
   auto encoded_entries = nlohmann::json::array();
   std::vector<std::vector<std::byte>> payloads;
   std::uint64_t offset = 0;
@@ -496,9 +515,9 @@ FacadeBundleFixture facade_bundle_fixture(
   nlohmann::json index{
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.1.0"},
+      {"contract_version", "1.2.0"},
       {"entries", std::move(encoded_entries)},
-      {"project_contract", "lmdj.project.v3"},
+      {"project_contract", project_contract},
       {"project_id", std::move(declared_project_id)},
       {"uncompressed_bytes", offset},
   };
@@ -1015,20 +1034,20 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "3.0.0"},
+           {"version", "3.1.0"},
            {"api_version", 2},
            {"dependencies",
             {
-                {"foundation", "0.3.0"},
-                {"authoring-domain", "2.0.0"},
-                {"project-io", "2.0.0"},
+                {"foundation", "0.4.0"},
+                {"authoring-domain", "3.0.0"},
+                {"project-io", "3.0.0"},
                 {"project-cooker", "1.1.0"},
                 {"audio-runtime", "3.0.0"},
                 {"provider-sdk", "1.1.4"},
             }},
        }));
   LMDJ_CHECK(project_io.at("module") == "project-io");
-  LMDJ_CHECK(project_io.at("version") == "2.0.0");
+  LMDJ_CHECK(project_io.at("version") == "3.0.0");
 }
 
 void test_all_operations_share_one_facade_and_revision_contract() {

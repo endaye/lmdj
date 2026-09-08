@@ -163,6 +163,10 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
               "ingest_channels",
               "ingest_decoded_frames",
               "ingest_source_bytes",
+              "maximum_soundset_blob_bytes",
+              "maximum_soundset_manifest_bytes",
+              "maximum_soundset_staging_bytes",
+              "maximum_soundset_unique_bytes",
               "perform_recording_frames",
               "perform_recording_queue_batches",
           }) ||
@@ -183,7 +187,18 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
       !limits.at("ingest_decoded_frames").is_number_unsigned() ||
       limits.at("ingest_decoded_frames") != 43'200'000 ||
       !limits.at("ingest_channels").is_number_unsigned() ||
-      limits.at("ingest_channels") != 2) {
+      limits.at("ingest_channels") != 2 ||
+      // S11-D7: the four Set Store bounds are Host capacity facts and are
+      // pinned exactly, like every other limit above. A distribution that
+      // omits one, or ships a different number, is a manifest drift.
+      !limits.at("maximum_soundset_manifest_bytes").is_number_unsigned() ||
+      limits.at("maximum_soundset_manifest_bytes") != 1'048'576 ||
+      !limits.at("maximum_soundset_blob_bytes").is_number_unsigned() ||
+      limits.at("maximum_soundset_blob_bytes") != 68'157'440 ||
+      !limits.at("maximum_soundset_unique_bytes").is_number_unsigned() ||
+      limits.at("maximum_soundset_unique_bytes") != 268'435'456 ||
+      !limits.at("maximum_soundset_staging_bytes").is_number_unsigned() ||
+      limits.at("maximum_soundset_staging_bytes") != 536'870'912) {
     return false;
   }
   const auto& emscripten = value.at("emscripten");

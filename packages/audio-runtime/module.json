@@ -4,7 +4,7 @@
   "version": "3.0.0",
   "api_version": 1,
   "dependencies": {
-    "foundation": "0.3.0",
+    "foundation": "0.4.0",
     "project-cooker": "1.1.0"
   }
 }

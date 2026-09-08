@@ -54,7 +54,7 @@ Publication job 在显式 dispatch 进入 exact-main-only `release` Environment 
 exact Draft；当前单人维护者模式没有 required reviewer，人工授权边界就是这次独立 dispatch。
 workflow 成功也不自动触发 Runtime deployment。Runtime deployment 保持 manual-only exact-tag
 dispatch，部署 evidence 与 Channel promotion 再分别验证。测试、workflow 或工具已进入仓库，
-都不表示当前 Product Build `1.0.43.0` 已经 released、deployed 或 promoted。
+都不表示当前 Product Build `1.0.44.0` 已经 released、deployed 或 promoted。
 
 ## PR review 与乐观合并
 
@@ -145,7 +145,7 @@ Product Build `1.0.41.0` 的 Creator 自动化覆盖长素材格式嗅探、浏�
 
 Product Build `1.0.42.0` 曾在同一入口上叠加 Stage 10 Perform：`test` 增加 `apps/creator-web/test/master_tap.test.ts`、`performance_recording_store.test.ts`、`wav_stream_writer.test.ts` 与 `perform_surface.test.tsx`；Capture 专项证明初始全选时 Start/End 均可操作、两个端点独立、最少一帧、midpoint 命中区与 grab offset 无跳变、middle inert、键盘/辅助技术秒值、只读 Duration，以及提交后的精确 Project Truth artifact 长度；`package` 增加第六个 Creator 资产 `perform_master_tap_worklet` 的哈希与主 bundle 绑定门禁；`proof` 从 Git tracked inventory 选择全部 `tests/platform/web/creator/*.spec.mjs`，因此 `creator_web_perform.spec.mjs` 的打包 Chromium 旅程自动进入稳定 Creator Proof。Core gates 的写入契约同时从 `lmdj.project.v3` 换成 `lmdj.project.v4`，v3 与 v1/v2 一样只剩迁移读取。完整边界见下文 Stage 10 小节；该 Build 至今没有任何 Perform 物理验收。
 
-当前 Product Build `1.0.43.0` 只做 `lmdj.project.v4` 的 Contract cut，不新增 Creator、Platform 或 Host 自动化边界：Contract MINOR 由 `4.0.0` 升到 `4.1.0`，`asset_lineage` 的 `source` 与 `derivation` 各成为一组由常量 `kind` 判别的封闭 `oneOf`，新增 `soundset` source 与 `soundset_install` derivation 两个变体。`python3 tests/conformance/schema_contract_test.py` 因此新增 `project-v4-soundset-lineage-valid.json` 与 `project-v4-soundset-lineage-invalid.json` 两个 fixture：前者证明六个必填 soundset source 字段与空负载 derivation 通过校验，后者证明缺 `manifest_sha256` 一律拒绝；逐字段负例另覆盖 malformed set UUID、非 SemVer `set_version`、大写 SHA-256、越界与负 `slot_index`、未知 source/derivation kind，并断言四个 lineage 变体全部保持 `additionalProperties: false` 与常量 `kind`。既有 `asset_artifact` / `resample` fixture 不变。该 Build 同样没有任何物理验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
+当前 Product Build `1.0.44.0` 装配 Stage 11 的 Sound Set 能力，并新增两处自动化边界。其一，`lmdj.project-bundle.v1` 由 `1.1.0` 升到 `1.2.0` 以命名 `lmdj.project.v4`：`tests/conformance/project_bundle_contract_test.py` 此前**从未在 CTest 注册**，因此从未运行，也因此没人发现自 Build 43 起本 Build 写出的每一个 Project 都无法打包为 Bundle。该套件现注册为 `conformance.project_bundle`（contract 层），并新增一条把 Bundle 枚举与仓库内 `contracts/project/lmdj.project.v*.schema.json` 清单绑定的用例——下一次 Project Contract 级别移动会先让套件变红，而不是先发布。其二，新增 e2e 用例 `e2e.project_bundle_writer_level`：它驱动真实的 `lmdj-core` 创建一个 Project，再打包它自己写到磁盘上的那棵树，而不是套件自造的形状；旧套件正是因为自造一个 `lmdj.project.v3` checkpoint 才一直是绿的。`python3 tests/conformance/schema_contract_test.py` 继续覆盖 Build 43 引入的 `project-v4-soundset-lineage-valid.json` 与 `project-v4-soundset-lineage-invalid.json` 两个 fixture，并把 Bundle 的 `contract_version` 与四级 `project_contract` 枚举一并钉住。Web 侧 manifest gate 的资源上限由九项增至十三项，Creator 与 Diagnostic 两份分发清单都必须逐值携带四项 Sound Set 上限。该 Build 同样没有任何物理验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
 
 [#239](https://github.com/endaye/lmdj/issues/239) 在 `1.0.40.0` exact packaged Creator 上完成了 macOS Chrome M2 人耳旅程：严格非零裁剪边界、One Shot、Gate release、Loop Gate、Loop Toggle、Volume/Mute、Bank A 16 Pads、Replace 与 reload 全部通过。约 40 ms 选区的快速重复纹理一度被误判为接缝咔哒；同一候选复听后，操作者明确确认没有明显独立爆音，声音来自短片段的高速循环。精确设备、浏览器、fixture/package 哈希、逐步观察与修正轨迹由 [M2 evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md) 保留；该 `PASS` 不外推到 Safari、iPadOS、Release、部署或 Channel。
 

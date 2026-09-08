@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 提供 Artifact、JSON、Sequence session/receipt 强类型身份和共享基础类型；不拥有 Project 规则、持久化或产品接线。
 ## 2. 当前实现状态
-Foundation `0.3.0` 已实现，Artifact、JSON、Sequence session 与 commit receipt 身份有单元测试。
+Foundation `0.4.0` 已实现，Artifact、JSON、Sequence session 与 commit receipt 身份有单元测试。本版新增 `lmdj/foundation/soundset_manifest.hpp`：`lmdj.soundset.v1` 清单的解析、规范化与 Artifact 身份校验；这是纯追加的公开能力，因此是 MINOR。
 ## 3. 所有权与依赖
 Core 团队所有；模块清单无下游依赖。
 ## 4. 架构与数据流

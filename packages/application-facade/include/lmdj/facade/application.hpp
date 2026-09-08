@@ -224,6 +224,11 @@ SuppliedSoundSetCatalogHandle make_supplied_soundset_catalog(
     std::uint64_t maximum_staged_bytes,
     std::size_t maximum_staged_objects);
 
+// Hosts configure the Set Store through the Facade, so the limit type is
+// named here too: a Host that reached for `project_io::SoundSetStoreLimits`
+// would be using Project I/O directly, which the Host source boundary forbids.
+using SoundSetStoreLimits = project_io::SoundSetStoreLimits;
+
 struct ApplicationConfig {
   std::filesystem::path workspace_root;
   std::shared_ptr<provider::Registry> providers;
