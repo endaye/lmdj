@@ -1,0 +1,116 @@
+# Result-driven testing, Issue reporting and canary delivery
+
+Status: implementation in progress; no deployment activation or release.
+
+## Settled scope and order
+
+This plan supersedes the daily deployment trigger proposed in the September 8
+canary design. Keep ordinary PR review, relevant Task verification, conflicts and
+conversation protection without strict/full-CI merge gates. CI reports failures;
+external people/tools repair them through ordinary PRs. No autonomous repair,
+repair-PR merger or OpenClaw orchestration is part of CI.
+
+1. Verify main incremental execution, terminal persistence and next-batch
+   coverage. Diagnose pending/failed controllers before adding delivery work.
+2. Verify durable Issue reporting, unavailable-versus-failed results and scoped
+   revalidation after an external repair. A green unrelated suite cannot erase
+   defects/debt; reporting retries never rerun product tests or blindly repeat
+   an uncertain Issue POST. CI does not automatically close defect Issues.
+3. Reuse the read-only canary planner for independent version-accounted/site/
+   formal progress. Add bounded GLM→Kimi→Grok version advice, deterministic
+   validation and normal version/changelog PR preparation. Final merged
+   candidates need applicable evidence, not a pre-version-commit green result.
+4. Successful result persistence wakes conditional delivery; manual requests
+   and lightweight recovery share the same coordinator. No date-based tests
+   or deployments. Coalesce pending work, pin candidates and verify all required
+   scopes/debt before delivery. Missing events are recovered from durable
+   state; metadata-only preparation cannot recursively allocate versions.
+5. Deploy changed sites to independent canary addresses only. Build complete
+   same-candidate Host assets, verify/sign/publish, then accept each fixed site
+   before advancing its own progress. docs-only needs no Product allocation.
+6. Owner-selected exact canary promotion requires applicable complete 16-suite
+   evidence and artifact/compatibility acceptance. Reuse tested bytes and tag;
+   promotion never rebuilds main or silently deploys a formal site. Resolve the
+   existing stable-policy question before enabling its mutation.
+
+The existing Netcup instance must first prove a deployment isolation boundary
+separate from ordinary CI/AI execution. Users, labels or ordinary containers
+alone are not acceptance. If suitable isolation is unavailable, keep delivery
+disabled; do not buy a host, move keys or expose privileged credentials as an
+implicit fallback. Retain the authorized macOS hosted recovery exception and
+measure it separately. No zero-total-cost claim.
+
+Cut over docs first, Product canary second, formal promotion last; disable old
+overlapping triggers with each replacement. Preserve in-flight operations and
+pause/reconcile rollback, never reset journals or restore daily full CI.
+
+## Task 1 — Bound repeated journal provenance reads
+
+Declared files: this plan, `scripts/ci/batch_github_journal.py`,
+`tests/build/ci_batch_github_journal_test.py`, and supersession notices in the
+September 8 canary design and implementation plan.
+
+Observed run `34251372817`, attempt 1, failed at `auth-current-run` with HTTP
+403 and `remaining=0`; it did not execute product tests. Run `34247801891` had
+a cancelled controller after approximately ten minutes. These observations do
+not establish one universal cause for all pending runs. The fixed-Issue reader
+also repeats workflow/main-ancestry/source verification per distinct historical
+writer even when multiple writers share the exact same control identity.
+
+Deduplicate only these already-required control proofs inside one page read,
+using bounded concurrent readers and a shared single-flight result. Keep every
+writer's exact run and complete job inventory independently verified. Publish
+the existing writer trust set only after all page readers succeed. Do not cache
+Issue bodies/comments, mutable run/job responses or failures across page reads.
+Do not persist proof shortcuts across processes or change journal schemas.
+
+Start with failing request-count regressions, then retain source identity,
+malformed ancestry, job mismatch, failed concurrent page, original ordering,
+fresh metadata/reopen and unknown-write recovery tests. A 100-writer single-
+control page should use 204 REST reads instead of 600 (plus the same GraphQL
+page), with all 100 run and 100 job reads preserved. This is fixture request
+accounting, not a measured production speedup or proof that rate limiting is
+fully resolved.
+
+Verification: journal suite, controller/runtime/entry/report suites, complete
+`ci_*_test.py` discovery, staged ownership, Portal check, final range and PR
+declarations. Do not lower limits, substitute credentials, cancel external runs
+or weaken authentication to make the observation green.
+
+## Acceptance ledger
+
+- Local reduction/failure behavior: 55 journal tests pass, including six new
+  regressions and preserved per-run/jobs, four-reader, atomic page-trust and
+  fresh metadata checks. Three initial regressions failed before the fix.
+- Complete CI contract discovery: 1,863 tests, OK with one optional actionlint
+  semantic check skipped (`LMDJ_ACTIONLINT` unavailable). Staged ownership:
+  66 tests pass. Portal verification is recorded in the shipping evidence.
+- Read-only live inventory on September 9 (Shanghai): scheduler Issue 807 had
+  127 events, 61 distinct writers and 49 control identities; report Issue 817
+  had 440 events, 76 writers and 40 controls. These are payload inventory counts,
+  not authenticated replay, timing or workflow-token request measurements. They
+  confirm repeated controls exist; do not extrapolate the fixture's 66% saving.
+- Real main admission → execution → terminal persistence → next interval:
+  still requires exact post-merge observations.
+- Product failure → durable Issue → external repair PR → relevant revalidation:
+  not yet exercised by this Task. No synthetic product defect on main.
+- Remote request rate, queued-job recovery and end-to-end latency: unverified;
+  inspect actual control results after merge, not only workflow conclusions.
+- Version assessment, candidate delivery, Netcup isolation and formal promotion:
+  later Tasks, disabled/unimplemented as applicable.
+
+## Version Management
+
+Version impact: none
+
+Reason: internal control-plane request deduplication and tests; no Product,
+Host, Module, Contract, Assembly, version or snapshot allocation changes.
+
+## Documentation Impact
+
+Documentation impact: none
+
+Reason: Task 1 changes an internal transport optimization, not operator commands,
+selection policy or current Portal facts. Later behavior cutovers must update
+`/operations/testing-and-proof/` and `/operations/version-and-release/`, their
+source diagrams, and the older daily-deployment proposal before activation.

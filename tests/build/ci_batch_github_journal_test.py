@@ -250,6 +250,92 @@ class GitHubJournalTest(unittest.TestCase):
         self.assertEqual(sum(path.endswith("/attempts/1") for _, path, _ in self.api.calls), 2,
                          "why: duplicate records repeat provenance reads; remedy: deduplicate complete writer identities")
 
+    def test_hundred_writers_share_control_proof_but_not_run_or_job_proof(self):
+        self.multiple_writers(range(17, 117))
+        page = self.transport.page(782, None)
+        reads = [path for method, path, _ in self.api.calls if method == 'GET']
+        self.assertEqual(len(page['comments']), 100)
+        self.assertEqual(sum(path.endswith('/attempts/1') for path in reads), 100)
+        self.assertEqual(sum('/jobs?' in path for path in reads), 100)
+        self.assertEqual(len(reads), 204,
+                         'why: shared control reread per writer; remedy: share only the four control proof reads')
+
+    def test_failed_shared_control_is_not_retried_within_page_or_retained(self):
+        request = self.multiple_writers([17, 18, 19, 20])
+        comparisons = []
+        def failing(method, path, **kwargs):
+            if '/compare/' in path:
+                comparisons.append(path)
+                raise OSError('unavailable control metadata')
+            return request(method, path, **kwargs)
+        self.api._request = failing
+        with self.assertRaises(JournalBlocked):
+            self.transport.page(782, None)
+        self.assertEqual(len(comparisons), 1,
+                         'why: one unavailable control caused duplicate requests; remedy: share the failed page result')
+        self.assertFalse(self.transport._checked_writers)
+        self.api._request = request
+        self.assertEqual(len(self.transport.page(782, None)['comments']), 4)
+
+    def test_new_page_does_not_reuse_shared_control_from_failed_writer_page(self):
+        request = self.multiple_writers([17, 18])
+        def wrong_job(method, path, **kwargs):
+            result = request(method, path, **kwargs)
+            if '/runs/18/attempts/1/jobs?' in path:
+                result['jobs'][0]['name'] = 'untrusted job'
+            return result
+        self.api._request = wrong_job
+        with self.assertRaises(JournalBlocked):
+            self.transport.page(782, None)
+        self.assertFalse(self.transport._checked_writers)
+        before = len(self.api.calls)
+        self.api._request = request
+        self.transport.page(782, None)
+        self.assertEqual(sum('/compare/' in path for _, path, _ in self.api.calls[before:]), 1,
+                         'why: failed page retained control proof; remedy: reauthenticate the next page attempt')
+
+    def test_different_controls_do_not_share_source_or_ancestry_proof(self):
+        request = self.multiple_writers([17, 18])
+        other = 'c' * 40
+        self.api.comments[1]['body'] = wrapped('event', {'id': 'second'},
+                                              {**WRITER, 'run_id': 18, 'control_sha': other})
+        seen = []
+        def distinct(method, path, **kwargs):
+            seen.append(path)
+            normalized = path.replace(other, 'a' * 40)
+            result = request(method, normalized, **kwargs)
+            if path.endswith('/runs/18/attempts/1'):
+                result['head_sha'] = other
+            if '/compare/' in path and other in path:
+                result['base_commit']['sha'] = other
+                result['merge_base_commit']['sha'] = other
+            return result
+        self.api._request = distinct
+        self.transport.page(782, None)
+        self.assertEqual(sum('/compare/' in path for path in seen), 2)
+        self.assertEqual(sum('/contents/' in path for path in seen), 2)
+        self.assertTrue(any('/compare/' + other in path for path in seen))
+
+    def test_later_page_with_new_writer_rechecks_control_source(self):
+        self.multiple_writers([17, 18])
+        self.api.comment_pages = 1
+        first = self.transport.page(782, None)
+        self.api.compare_status = 'diverged'
+        with self.assertRaisesRegex(JournalBlocked, 'main history'):
+            self.transport.page(782, first['next'])
+        self.assertEqual(len(self.transport._checked_writers), 1)
+
+    def test_reopened_transport_reauthenticates_previously_shared_proof(self):
+        self.multiple_writers([17, 18])
+        self.transport.page(782, None)
+        self.api.compare_status = 'diverged'
+        fresh = github.GitHubJournalTransport(repository='endaye/lmdj', issue_number=782,
+                    issue_node_id='fixed-issue-node', bot_node_id=BOT['id'],
+                    workflows={PATH:7}, writer=WRITER, api=self.api, lock_held=lambda:True)
+        with self.assertRaisesRegex(JournalBlocked, 'main history'):
+            fresh.page(782, None)
+        self.assertFalse(fresh._checked_writers)
+
     def test_same_run_different_writer_identity_cannot_reuse_proof(self):
         self.multiple_writers([17, 17])
         self.api.comments[1]["body"] = wrapped("event", {"id": "other"},
