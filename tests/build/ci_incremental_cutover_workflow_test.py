@@ -98,14 +98,28 @@ class CutoverTests(unittest.TestCase):
         discovery = field(step('Recover missed review observations independently'), 'if', 8)
         self.assertIn("github.event_name != 'workflow_run' || github.event.workflow_run.path == '.github/workflows/pr-review.yml'", discovery)
 
-    def test_health_tick_is_not_a_daily_product_request_and_review_branches_are_not_filtered(self):
+    def test_review_wakeups_are_coalesced_into_main_and_health_observations(self):
         events = block(SOURCE, 'on', 0)
         self.assertEqual(field(block(events, 'push', 2), 'branches', 4), '[main]')
         callbacks = block(events, 'workflow_run', 2)
         self.assertNotIn('branches:', callbacks)
-        self.assertEqual(field(callbacks, 'workflows', 4), '["Incremental Completion", "Core CI", "PR Review"]')
+        self.assertEqual(field(callbacks, 'workflows', 4), '["Incremental Completion", "Core CI"]',
+                         'why: PR-only review activity must not start a scheduler/relay chain; remedy: discover retained review evidence on main/health observations and keep product completion callbacks')
         self.assertIn('"7,22,37,52 * * * *"', block(events, 'schedule', 2))
         self.assertNotIn('self_test_report.py', SOURCE)
+
+    def test_coalesced_review_discovery_preserves_reporting_and_exact_manual_recovery(self):
+        discovery = step('Recover missed review observations independently')
+        self.assertIn('scripts/ci/review_discovery_runtime.py', discovery)
+        self.assertIn('--limit 1', discovery)
+        self.assertIn("steps.control.outputs.action != 'execute'", field(discovery, 'if', 8))
+        manual = step('Report through the isolated outbox under the short writer lock')
+        self.assertIn("'report-discovery'", manual)
+        self.assertIn("['--run-id', run_id, '--attempt', attempt]", manual)
+        # Immediate review callbacks are retired, not their authenticated
+        # compatibility handler or recovery of already durable review records.
+        self.assertIn('Report durable observations independently', SOURCE)
+        self.assertIn("'report-review': 'review'", manual)
 
     def test_actual_discovery_condition_excludes_idle_completion_scans(self):
         condition = field(step('Recover missed review observations independently'), 'if', 8)[3:-2].strip()

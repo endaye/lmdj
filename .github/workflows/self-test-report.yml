@@ -6,7 +6,10 @@ on:
   push:
     branches: [main]
   workflow_run:
-    workflows: ["Incremental Completion", "Core CI", "PR Review"]
+    # Review records are discovered by coalesced main/health observations.
+    # PR-only activity must not allocate another scheduler + relay chain.
+    # Keep actual batch completion immediate; the health tick recovers gaps.
+    workflows: ["Incremental Completion", "Core CI"]
     types: [completed]
   schedule:
     - cron: "7,22,37,52 * * * *"
