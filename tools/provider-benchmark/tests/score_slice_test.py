@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -67,10 +68,13 @@ class ScoreSliceTest(unittest.TestCase):
             score_slice.score(MANIFEST, self.write_predictions(bad))
 
     def test_result_is_deterministic_and_has_no_host_path(self):
-        result = score_slice.score(MANIFEST, self.write_predictions(valid_predictions()))
-        encoded = json.dumps(result, sort_keys=True, separators=(",", ":"))
-        self.assertEqual(encoded, json.dumps(result, sort_keys=True, separators=(",", ":")))
-        self.assertNotIn(str(ROOT), encoded)
+        predictions = self.write_predictions(valid_predictions())
+        command = ["python3", str(ROOT / "tools/provider-benchmark/score_slice.py"),
+                   "--manifest", str(MANIFEST), "--predictions", str(predictions)]
+        first = subprocess.check_output(command, cwd=ROOT)
+        second = subprocess.check_output(command, cwd=ROOT)
+        self.assertEqual(first, second)
+        self.assertNotIn(str(ROOT).encode(), first)
 
 if __name__ == "__main__":
     unittest.main()
