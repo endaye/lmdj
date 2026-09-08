@@ -104,6 +104,7 @@ jobs:
             "$probe_dir/probe.cpp" -o "$probe_dir/probe" || fail_prerequisite
           # All ten starts must succeed; this is a startup check, not retries.
           for attempt in {1..10}; do
+            printf 'TSan runtime startup %s/10\n' "$attempt"
             timeout 10s "$probe_dir/probe" || fail_prerequisite
           done
       - name: Verify the TSan toolchain
