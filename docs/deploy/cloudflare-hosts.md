@@ -67,16 +67,36 @@ nor the `run_worker_first` route, so it forwards nothing -- the gate is closed
 by absence at both ends rather than by a condition in the shared Worker that
 someone could delete.
 
-The forward is not a relay, and both reasons are structural rather than
-checked. The destination is composed from `CATALOG_UPSTREAM` plus tokens the
-Worker re-derives -- a literal, an element read back out of a frozen pair, and
-a digest re-matched against `[0-9a-f]{64}` -- so no request text is
-concatenated into the target and no header, query or path segment can move it
-to another host. And the admitted grammar is exactly `catalog/index.json` and
-`object/(manifest|blob)/<64 hex>`, which is the whole of what
-`packages/web-runtime-platform/web/soundset_catalog.mjs` can spell. What that
-leaves a compromised page bundle is the choice of which object is fetched from
-the one configured Catalog: 64 hex characters per GET to a fixed host.
+The forward is not a relay, and two things keep it that way. They are not the
+same kind of thing, and an earlier version of this page said they were.
+
+**The destination is structural.** It is composed from `CATALOG_UPSTREAM` plus
+a literal, an element read back out of a frozen pair, and a digest re-matched
+against `[0-9a-f]{64}`. That alphabet carries no `/ \ . : @ % ? #` and no
+control character, so the only request-derived bytes in the target cannot
+terminate a path segment, introduce an authority, or change the scheme or port.
+Two independent adversarial reviews attacked this and neither could move the
+destination off the configured host, by any path, query, header or encoding, on
+either implementation. This is the constraint carrying the security property.
+
+**The admitted grammar is a check, not a composition.** It is an equality, a
+frozen-kind lookup and a regex, kept deliberately equal to the two shapes
+`packages/web-runtime-platform/web/soundset_catalog.mjs` can spell. It is
+tempting to borrow that module's refusal and call the grammar closed by
+construction, but the threat this whole design is built against is a
+compromised dependency running in the page, and such code never calls the
+transport: it calls `fetch("/soundset-catalog/…")` directly, which
+`connect-src 'self'` permits. Under that threat model the transport contributes
+nothing and the Worker's own check is the only thing in the way, so widening it
+widens the residual channel.
+
+**The residual channel** is therefore the choice of which of three admitted
+targets is fetched from the one configured Catalog, and for two of them a
+64-hex digest — repeatable at whatever rate the page likes, since nothing here
+throttles and the transport asks for `no-store`. It is readable by whoever
+operates that Catalog and by anyone terminating TLS in front of it. It is not
+readable by an origin the attacker chooses, which is the whole difference from
+naming a Catalog in `connect-src`.
 
 ## Candidate, verify, promote and recover
 

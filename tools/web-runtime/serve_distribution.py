@@ -56,12 +56,20 @@ CONTENT_TYPES = {
 # acceptance journey drives that same topology instead of a shape production
 # does not use.
 #
-# The two properties that make this a forwarder rather than a relay are the
-# Worker's, and they are structural here for the same reason: the destination is
-# composed from the configured upstream plus tokens this module re-derives -- a
-# literal, a member of a frozen pair, and a re-matched 64-hex digest -- so no
-# request text is concatenated into the target, and the admitted grammar is
-# exactly the two shapes `soundset_catalog.mjs` can spell.
+# The two properties that keep this a forwarder rather than a relay are the
+# Worker's, and they are not the same kind of property.
+#
+# The destination is structural: it is composed from the configured upstream
+# plus a literal, a member of a frozen pair, and a re-matched 64-hex digest.
+# That alphabet carries no `/ \ . : @ % ? #` and no control character, so the
+# only request-derived bytes in the target cannot terminate a path segment,
+# introduce an authority, or change the scheme or port.
+#
+# The admitted grammar is a check, not a composition, and calling it structural
+# would be wrong. Borrowing `catalogObjectPath`'s throw does not close it: the
+# threat this design is built against is a compromised dependency in the page,
+# and such code calls the prefix directly without ever reaching the transport.
+# The check below is what holds in that case.
 #
 # With no `--catalog-upstream` the prefix answers 404 and this server behaves
 # exactly as it did before, which is what every existing proof still asserts.
