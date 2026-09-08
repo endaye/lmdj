@@ -1,8 +1,11 @@
 """Real local processes, not proof of provider or deployment isolation."""
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
 import signal
+import shlex
+import subprocess
 import sys
 import tempfile
 import time
@@ -15,9 +18,30 @@ from tools.canary import assessment_runtime as runtime, records as r
 import ci_canary_assessment_test as fixture
 
 
+@lru_cache(maxsize=16)
+def standalone_python(candidates):
+    """The parent setup-python binary may require stripped loader variables."""
+    for index, candidate in enumerate(candidates):
+        try:
+            result = subprocess.run([candidate, "-I", "-c",
+                "import argparse,json,pathlib,subprocess; print('lmdj-fixture-python-ready')"],
+                env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+                capture_output=True, timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0 and result.stdout == b"lmdj-fixture-python-ready\n":
+            if index:
+                print(f"Process fixture uses independently verified interpreter: {candidate}", file=sys.stderr)
+            return candidate
+    raise RuntimeError("why: no fixture Python starts with the sanitized environment; "
+                       "remedy: provide a standalone system Python; do not forward loader variables or skip process tests")
+
+
 @unittest.skipUnless(os.name == "posix", "assessment process adapter requires POSIX")
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
+        self.child_python = standalone_python(tuple(dict.fromkeys(
+            (sys.executable, "/usr/bin/python3", "/usr/local/bin/python3"))))
         self.fixture = fixture.AssessmentTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
@@ -49,7 +73,7 @@ class RuntimeTests(unittest.TestCase):
         else:
             preflight += "assert os.environ.get('ANTHROPIC_API_KEY'), 'bare requires an explicit API key'\n"
         preflight += "args=p.parse_args()\nassert args.output_format=='json'\n"
-        path.write_text("#!" + sys.executable + "\n" + preflight + body)
+        path.write_text("#!" + self.child_python + "\n" + preflight + body)
         path.chmod(0o700)
 
     def answer(self, backend="glm", advice=None):
@@ -164,7 +188,7 @@ class RuntimeTests(unittest.TestCase):
                     runtime.execute(self.context, config=config, credentials=self.credentials)
 
     def process(self, body, **kwargs):
-        return runtime.run_process([sys.executable, "-c", body], cwd=self.root,
+        return runtime.run_process([self.child_python, "-c", body], cwd=self.root,
                                    env={"PATH": "/usr/bin:/bin"}, prompt=b"input", **kwargs)
 
     def test_real_timeout_is_bounded(self):
@@ -276,6 +300,29 @@ class RuntimeTests(unittest.TestCase):
 
         with patch.object(runtime, "_invocation", side_effect=invalid):
             self.assertEqual(self.execute()["attempts"][0]["error_class"], "runtime_failure")
+
+    def test_interpreter_selection_refuses_parent_environment_dependency(self):
+        wrapper = self.root / "dependent-python"
+        wrapper.write_text('#!/bin/sh\n[ "$LMDJ_FIXTURE_DEPENDENCY" = available ] || exit 127\n'
+                           + 'exec ' + shlex.quote(self.child_python) + ' "$@"\n')
+        wrapper.chmod(0o700)
+        available = subprocess.run([str(wrapper), "-c", "print('with-dependency')"],
+            env={"PATH": "/usr/bin:/bin", "LMDJ_FIXTURE_DEPENDENCY": "available"},
+            capture_output=True, timeout=5, check=True)
+        self.assertEqual(available.stdout, b"with-dependency\n")
+        with patch.dict(os.environ, {"LMDJ_FIXTURE_DEPENDENCY": "available"}):
+            self.assertEqual(standalone_python((str(wrapper), self.child_python)), self.child_python)
+
+    def test_missing_standalone_interpreter_is_a_failure_not_a_skip(self):
+        with self.assertRaisesRegex(RuntimeError, "why:.*remedy:"):
+            standalone_python((str(self.root / "missing-python"),))
+
+    def test_interpreter_probe_requires_exact_stdlib_identity_response(self):
+        fake = self.root / "not-python"
+        fake.write_text('#!/bin/sh\nprintf "unrelated successful executable\\n"\n')
+        fake.chmod(0o700)
+        with self.assertRaisesRegex(RuntimeError, "why:.*remedy:"):
+            standalone_python((str(fake),))
 
 
 if __name__ == "__main__":
