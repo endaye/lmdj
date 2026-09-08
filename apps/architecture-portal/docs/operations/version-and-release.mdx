@@ -94,7 +94,7 @@ reference 由已验证事实写入独立 reviewed intent，并纳入 release pla
 （不是重放最新 journal），以及 verdict/execution/needs 三文件与真实 API jobs；current、
 frozen control、actual executor 的 policy 必须一致。focused/none、债务、未知来源、过期
 或跨 SHA 拼接不能作为候选证据。完整 batch reference 与真实 `executor_event` 永久写入
-`lmdj.release-plan-marker.v3`；不能从 request kind 推断 event，也不能用 v1/v2 marker
+内部发布元数据 `release plan marker v3`（不是产品 Contract）；不能从 request kind 推断 event，也不能用 v1/v2 marker
 证明新增 batch 引用。旧 markers 与 intent 不迁移、不自动补填。
 
 Verdict artifact 保留 30 天。缺失、过期、错误 SHA、失败、skip 或混合 attempt 一律不能
