@@ -573,6 +573,98 @@ the current Task-scoped policy, no fresh Portal run is required or claimed;
 the historical result below is unchanged. Pitfall impact: none — existing
 whole-journey, failure visibility and exact-source guidance is applied.
 
+### Three completed report rounds after automatic batch 38
+
+This subsequent evidence-only Task uses `docs/ci-o1-report-delivery-evidence`
+from `3903e122c511bd9ea6df4ce63891d49cec9309f0`. Its only declared file is
+this ledger. The entire earlier ledger is preserved, including the accurately
+timed observation that the first report was still running at 02:17Z. The
+following actual terminal evidence extends that observation; it does not
+rewrite it or claim a result for the still-running second candidate.
+
+Root dispatched the three report rounds. Independent Codex audit
+`scheduler_storage_probe` authenticated their actual Issue transport, complete
+pagination, writer/run/attempt/workflow/source and author/editor identities,
+checkpoint/digest chain and pure outbox replay. This documentation Task also
+recomputed all three complete reducer states, compared original prefixes and
+both terminal reads, and matched the twenty newly delivered business receipts
+below to the actual retained HTTP objects. These evidence checks performed no
+remote mutation and did not redispatch reports.
+
+| Actual report run (attempt 1) | Frozen control | Terminal API update (UTC) | Outbox generation | Delivery state after the round |
+| --- | --- | --- | --- | --- |
+| [34179303196](https://github.com/endaye/lmdj/actions/runs/34179303196/attempts/1) | `bc23b4882276c54a8e30c6f1c2e8001fc4a00eb8` | 2026-09-08 02:19:32 | 58 → 93 | 24 queued identities in total: 23 delivered, 1 still queued |
+| [34179870307](https://github.com/endaye/lmdj/actions/runs/34179870307/attempts/1) | `3903e122c511bd9ea6df4ce63891d49cec9309f0` | 2026-09-08 02:31:29 | 93 → 128 | 32 queued identities in total, all delivered |
+| [34180577915](https://github.com/endaye/lmdj/actions/runs/34180577915/attempts/1) | `3903e122c511bd9ea6df4ce63891d49cec9309f0` | 2026-09-08 02:38:04 | 128 → 136 | 34 queued identities in total, all delivered |
+
+All three actual parents and their `Incremental batch controller` jobs
+completed successfully. Each complete four-job inventory had the legacy
+reporter, product execution and cancellation waiter skipped. Reporting did
+not run or rerun products. Success alone was not taken as delivery proof:
+each round's complete terminal Issue snapshot equalled its independent reread,
+and the authenticated records and frozen payloads from previous rounds remained
+unchanged.
+
+The three checkpoint heads, each with pending null, were respectively:
+
+- generation 93: `ccf48bac06407547dbcb7b32dac294b22cdfbebbc9bc71afa977b6ffadd1d5b7`;
+- generation 128: `324600ddfc6b6aa1bc8e36678ed21b52174eed9ceb6a3e1b768f9962544d8325`;
+- generation 136: `e724d6166206f08bf1a50e7a0dfea57ec4f3e0d08caa583153e4c209e6e30003`.
+
+The first two rounds each appended eight queue events and nine complete
+claim/ack/delivered sequences, including one already-queued review observation.
+The final round appended two queue events and two complete delivery sequences.
+The resulting twenty new deliveries were:
+
+- Automatic batch 38's CI contract failure: existing
+  [Issue 820 comment 5578078418](https://github.com/endaye/lmdj/issues/820#issuecomment-5578078418).
+  Its Creator failure: existing
+  [Issue 865 comment 5578082869](https://github.com/endaye/lmdj/issues/865#issuecomment-5578082869).
+  Both frozen bodies identify request 38, exact target/control `fe043fd3…`,
+  executor `34175405275/1`, policy and actual failed suite. They retain failure
+  evidence even though a later code repair may exist.
+- Sixteen separate missing-verification suite buckets for candidate
+  `o1-full-candidate-0fedd-20260908-01`: Issues 874–879 and 881–890. These are
+  the complete canonical selected inventory, not sixteen inferred product
+  failures. Each actual Issue body, label set and assignee matches the frozen
+  outbox payload and retains the old candidate's target `0fedd726…`, control
+  `fe043fd3…`, executor `34179012035/1` and missing evidence classification.
+  The sixteen suites map in canonical order to chameleon_lab, ci_contract,
+  core_asan, core_coverage, core_macos, core_release_stress, core_tsan_stress,
+  core_ubuntu, creator, deploy_contract, docs_static, package, portal,
+  web_runtime_host, web_runtime_lab and web_toolchain.
+- Two older, already-queued review observations were delivered to
+  [Issue 819 comment 5578114527](https://github.com/endaye/lmdj/issues/819#issuecomment-5578114527)
+  (PR 805, review run `34154919386/1`) and
+  [comment 5578212206](https://github.com/endaye/lmdj/issues/819#issuecomment-5578212206)
+  (PR 806, review run `34155139978/1`). Their exact frozen comment bodies and
+  Issue targets were checked against the actual HTTP receipts; they were not
+  replaced with new observations or another AI review.
+
+At generation 136, all **34 already-queued observations** were delivered, with
+no queued or claimed-but-unresolved entry in that snapshot. This is not a claim
+that every possible source has been discovered, that every future candidate
+result is already reported, or that a later unknown POST can be blindly retried.
+Candidate 02 was still executing at this evidence boundary; no all-passed
+candidate, C3 execution-enabled recovery, T5/O2 activation or release is claimed.
+The scheduler's failed/missing outcomes are not recolored by successful delivery.
+
+Complete original API objects, authenticated journal records, reducer states,
+two-read snapshots and exact business receipts are retained in
+`/tmp/lmdj-o1-report38-independent.tM9Urs`,
+`/tmp/lmdj-o1-report38-tail-independent.jo4FiI`, and
+`/tmp/lmdj-o1-report38-final-independent.GB8MPT`. These investigation copies do
+not extend GitHub artifact retention or constitute independent signatures.
+
+Task verification: complete retained-state and twenty-receipt assertions,
+staged ownership, cached whitespace and nonempty committed-range docs-static;
+the final PR records their results. Version impact: none — no version identity
+or release operation. Documentation impact: none — only historical evidence,
+not a Portal page, diagram, tooling, projected identity or documented product
+source fact. No fresh Portal run is required or claimed under the current
+Task-scoped policy. Pitfall impact: none — existing complete-journey and exact
+receipt guidance applies; this appendix introduces no new protocol or process.
+
 ## Ledger verification
 
 Check linked actual run/Issue identities against the API and download actual
