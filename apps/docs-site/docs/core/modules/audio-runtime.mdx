@@ -31,6 +31,15 @@ atomic32 claimed marker 管理 callback ownership，外部 authority 仍校验�
 发布按 current/pending/retiring/reclaimable 状态转移：实时线程只读不可变 Bank，最后一个 Voice 结束后才允许控制线程回收。publication owner 按 reclaim → reserve → publish 顺序核算 live、pending、retiring bytes。准备阶段按剩余字节的较小约束判定失败，约束相等时稳定返回 Bank failure；Bank、generation 与 transient residency 三类失败不互相冒充。Web Audio 的每个有效 callback（包括 paused callback）以 lock-free `uint32` heartbeat 表示活性；Browser Main 在 `AudioContext.resume()` 后必须先观察 heartbeat 前进，才请求打开 realtime gate。激活只在 accepted generation 已成为 current 且无 pending publication 时开启 gate；激活前锁存的 generation 由首个 open-gate callback 精确确认，避免 stop/start 或 suspend/resume 把旧的非零 acknowledgement 当作当前 Bank。
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
+
+Runtime-only Facade 的 T3 source 使用 `PreparedPatternView::from_canonical_snapshot`：
+严格拒绝重复或乱序 event key，保留全部 timing/material 验证，不建立桌面 overlay
+merge 的 map workspace；既有 `from_snapshot` 和 overlay 规范化语义不变。
+`consumed_controls_audio` 只允许音频消费者或 quiescent owner 读取，供 Facade 在
+render 后发布精确消费序号，不是任意线程遥测，也不把消费次数当作已发声次数。
+Facade 自有 OPEN/BUSY admission 屏障排空 Core render 后才调用 Engine stop/unload；
+Engine 原来的 quiescence 前置条件没有弱化。该窄路径只准备 Pattern/Pad，不调用
+Master FX prepare；嵌入 Engine 的固定 FX 对象仍计入固定成本。
 ## 8. 测试与证据
 Realtime、same-boundary overlay supersession、apply-point 精确 switch/Stop replacement authority、queued/audio-owned/stop cancellation、two-pending `accepted = applied + superseded + canceled + pending_publications` conservation stress、offline、sample bank、queue 与 CoreAudio output 测试；`audio.realtime_engine` 覆盖 16,777,216 帧高位 trim/loop/ramp，`audio.long_sample_publication_stress` 在并发渲染下覆盖 64 MiB 单 Pad、128 MiB generation、256 MiB resident 边界与字节精确回收。Web Audio conformance 还覆盖 live Bank exact acknowledgement 与最新 generation 的 suspend/reactivate acknowledgement。master FX 由 `audio.master_fx`、`audio.master_fx_determinism` 与 `audio.master_fx_allocation_guard` 覆盖链顺序、值域、HOLD、Bar 相对周期、相同输入相同输出与实时路径的无分配保证；`audio.master_fx_stress` 属于 stress tier，覆盖控制通道在并发渲染下的有界行为。该 busy-spin 用例仅属于 stress tier，并从 coverage preset 排除。`audio.value_channel` 验证 64 位进位、读者半途暂停时连续发布与重置、最终值及多读者串行；Realtime component 的确定性交错覆盖 Q/P/C 占用、Pad 0/63 handoff、同槽高位 generation 复用、无下一 callback 的取消结果及 admission 重算边界。Snapshot stress 同时运行四个观察者并覆盖 start/stop 写者交接。物理延迟与 Safari 内存验收单列。
 ## 9. 限制与下一门禁

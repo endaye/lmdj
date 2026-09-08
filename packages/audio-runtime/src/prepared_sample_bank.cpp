@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include <lmdj/domain/project.hpp>
@@ -134,7 +135,8 @@ bool valid_bpm(std::uint16_t bpm) noexcept {
 
 foundation::Result<PreparedPatternView> PreparedPatternView::prepare(
     const cooker::RuntimeSnapshot& snapshot,
-    std::span<const domain::PatternEvent> journal_overlay) {
+    std::span<const domain::PatternEvent> journal_overlay,
+    bool canonical) {
   if (!domain::is_valid_uuid(snapshot.project_id.value()) ||
       !domain::is_valid_uuid(snapshot.pattern_id.value()) ||
       !valid_bpm(snapshot.bpm) || snapshot.ppq != kTransportPpq ||
@@ -188,6 +190,14 @@ foundation::Result<PreparedPatternView> PreparedPatternView::prepare(
   std::vector<domain::PatternEvent> base;
   base.reserve(snapshot.events.size());
   for (const auto& event : snapshot.events) {
+    if (canonical && !base.empty()) {
+      const auto& prior = base.back();
+      if (std::tie(prior.onset_tick, prior.slot.bank, prior.slot.pad) >=
+          std::tie(event.onset_tick, event.slot.bank, event.slot.pad)) {
+        return foundation::Result<PreparedPatternView>::failure(
+            invalid_timing("runtime snapshot events are not canonical"));
+      }
+    }
     base.push_back(domain::PatternEvent{
         event.slot,
         event.onset_tick,
@@ -197,7 +207,8 @@ foundation::Result<PreparedPatternView> PreparedPatternView::prepare(
   }
   std::vector<domain::PatternEvent> overlay{
       journal_overlay.begin(), journal_overlay.end()};
-  auto merged = domain::merge_pattern_events(base, overlay);
+  auto merged = canonical ? std::move(base)
+                          : domain::merge_pattern_events(base, overlay);
 
   auto loop_frames = tick_boundary_frame(
       snapshot.loop_length_ticks, snapshot.bpm, snapshot.ppq);
@@ -262,6 +273,12 @@ foundation::Result<PreparedPatternView> PreparedPatternView::prepare(
           std::move(material_owners),
           !journal_overlay.empty(),
       });
+}
+
+foundation::Result<PreparedPatternView>
+PreparedPatternView::from_canonical_snapshot(
+    const cooker::RuntimeSnapshot& snapshot) {
+  return prepare(snapshot, {}, true);
 }
 
 foundation::Result<std::uint64_t> tick_numerator_at(

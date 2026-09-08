@@ -36,8 +36,14 @@ using Bytes = std::vector<std::byte>;
 constexpr RuntimeContentLimits kLimits{1'048'576, 262'144, 65'536, 64, 1024};
 thread_local std::size_t fail_allocation_at = 0;
 thread_local std::size_t rejected_allocations = 0;
+thread_local bool count_allocations = false;
+thread_local std::size_t allocation_count = 0;
+thread_local std::size_t fail_at = 0;
 
 void* allocate(std::size_t count) {
+  if (count_allocations && ++allocation_count == fail_at) {
+    throw std::bad_alloc{};
+  }
   if (fail_allocation_at != 0 && count >= fail_allocation_at) {
     ++rejected_allocations;
     throw std::bad_alloc{};
@@ -106,6 +112,9 @@ void expect_decode_error(const Bytes& bytes, std::string_view condition,
   const auto decoded = cooker::decode_runtime_content(bytes, identity(bytes), limits);
   LMDJ_CHECK(!decoded.has_value());
   LMDJ_CHECK(decoded.error().code == foundation::ErrorCode::invalid_argument);
+  const auto inspected = cooker::inspect_runtime_content(bytes, identity(bytes), limits);
+  LMDJ_CHECK(!inspected.has_value());
+  LMDJ_CHECK(inspected.error().details.at("runtime_content_condition") == condition);
   test::check(decoded.error().details.at("runtime_content_condition") == condition,
               std::string{"expected condition "} + std::string{condition} +
                   ", got " + decoded.error().message);
@@ -427,6 +436,18 @@ void complete_validation_precedes_pcm_allocation() {
   snapshot.pads[0].playback.end_frame = 30'000;
   snapshot.events[0].sample = snapshot.pads[0].sample;
   const auto encoded = encode(snapshot);
+  const auto inspected = without_large_allocations([&] {
+    return cooker::inspect_runtime_content(encoded.bytes, encoded.identity, kLimits);
+  });
+  LMDJ_CHECK(inspected.has_value());
+  LMDJ_CHECK(rejected_allocations == 0);
+  LMDJ_CHECK(inspected.value().encoded_bytes == encoded.bytes.size());
+  LMDJ_CHECK(inspected.value().pcm_bytes == 60'008);
+  LMDJ_CHECK(inspected.value().prepared_float_bytes == 120'016);
+  LMDJ_CHECK(inspected.value().largest_float_sample_bytes == 120'000);
+  LMDJ_CHECK(inspected.value().pads == 2);
+  LMDJ_CHECK(inspected.value().samples == 2);
+  LMDJ_CHECK(inspected.value().events == 1);
   auto corrupt = encoded.bytes;
   corrupt.back() ^= std::byte{1};
   const auto corrupt_identity = identity(corrupt);
@@ -453,6 +474,25 @@ void complete_validation_precedes_pcm_allocation() {
   LMDJ_CHECK(encode_failure.error().code == foundation::ErrorCode::internal_error);
   LMDJ_CHECK(rejected_allocations == 1);
   LMDJ_CHECK(cooker::decode_runtime_content(encoded.bytes, encoded.identity, kLimits).has_value());
+}
+
+void identity_construction_is_all_or_nothing() {
+  const auto source = fixture();
+  const auto encoded = encode(source);
+  allocation_count = 0; fail_at = 0; count_allocations = true;
+  const auto measured = cooker::decode_runtime_content(encoded.bytes, encoded.identity, kLimits);
+  count_allocations = false;
+  const auto sites = allocation_count;
+  LMDJ_CHECK(measured.has_value() && sites > 0);
+  for (std::size_t site = 1; site <= sites; ++site) {
+    allocation_count = 0; fail_at = site; count_allocations = true;
+    const auto decoded = cooker::decode_runtime_content(encoded.bytes, encoded.identity, kLimits);
+    count_allocations = false; fail_at = 0;
+    // In particular, a swallowed stream allocation failure must never return
+    // a Snapshot carrying a truncated sample Artifact digest.
+    test::check(!decoded.has_value(), "decode allocation site " + std::to_string(site));
+    LMDJ_CHECK(decoded.error().code == foundation::ErrorCode::internal_error);
+  }
 }
 
 }  // namespace
@@ -482,5 +522,6 @@ int main(int argc, char** argv) {
   budgets_are_exact_and_arithmetic_does_not_wrap();
   noncanonical_sample_and_event_tables_are_rejected();
   complete_validation_precedes_pcm_allocation();
+  identity_construction_is_all_or_nothing();
   return 0;
 }

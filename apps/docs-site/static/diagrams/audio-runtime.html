@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Audio Runtime Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="bbab04de5ca77452e52ab4d726cbd0ee17be8e2aaa59dc960af2da0950279e86">
+<html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Audio Runtime Module</title><style>html,body{margin:0}body{background:#f7fafb}@media(prefers-color-scheme:dark){body{background:#071011}}body[data-theme=light]{background:#f7fafb}body[data-theme=dark]{background:#071011}main{min-width:760px}svg{display:block;width:100%;height:auto}</style></head><body><main><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="9b2138a21533033553a20285cc2da8f60713df6dae3d180f98ef7adaa8b6d484">
   <title id="title">Audio Runtime Module</title><desc id="description">不可变快照、pending overlay、整数 transport、固定 master FX 链与有界实时输出</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -22,7 +22,7 @@
       <rect class="node-mask" x="36" y="166" width="218" height="104" rx="18"/>
       <rect class="node" x="40" y="170" width="210" height="96" rx="14"/>
       <text class="node-title" x="56" y="202">Prepared Pattern</text>
-      <text class="node-detail" x="56" y="228">snapshot + overlay</text>
+      <text class="node-detail" x="56" y="228">canonical snapshot / overlay</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="326" y="166" width="238" height="104" rx="18"/>
@@ -55,7 +55,7 @@
       <text class="node-detail" x="296" y="438">bounded gesture + tempo</text>
     </g>
   <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Concurrency</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Atomic32 claim; full 64-bit authority. Only control reclaims slots; admission bounds interference without audio waiting.</div></foreignObject></g>
-<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Telemetry</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Audio/control value snapshots; only non-realtime readers lock. Transport has a separate control reader. Drain callbacks before lifecycle handoff.</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Telemetry</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Audio/control value snapshots; only non-realtime readers lock. Transport has a separate control reader. Drain callbacks before lifecycle handoff. Runtime-only Facade owns OPEN/BUSY drain; its audio-only consumed counter is not proof of a started Voice.</div></foreignObject></g>
 <g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Master FX</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Fixed order filter, delay, reverb, stutter, gate, reverse, crush, cutter; values are 0..1000 and every period derives from the Bar, not wall clock.</div></foreignObject></g>
 <g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Forbidden boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No allocation, destruction, lock, Project mutation, quantization, journal I/O or production test hook on the realtime thread.</div></foreignObject></g>
 </svg>

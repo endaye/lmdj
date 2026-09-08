@@ -372,6 +372,11 @@ class RealtimeEngine final {
   FxEnqueueResult enqueue_master_fx_tempo(std::uint16_t bpm) noexcept;
   // Audio thread only.
   void render(float* left, float* right, std::uint32_t frames) noexcept;
+  // Sole audio consumer or quiescent caller only. Exact consumed control count
+  // for a narrow owner to publish after render; not evidence of audible voices.
+  std::uint64_t consumed_controls_audio() const noexcept {
+    return dequeued_events_;
+  }
   // Any non-realtime thread (including control), not the audio callback.
   // Counters are exact after quiescence and a best-effort snapshot while running.
   RealtimeTelemetry telemetry() const noexcept;

@@ -97,7 +97,16 @@ Digest hash(std::span<const std::byte> bytes) {
 }
 
 std::string hex(const Digest& digest) {
-  return picosha2::bytes_to_hex_string(digest.begin(), digest.end());
+  // ostream-based conversion can swallow bad_alloc and return a truncated
+  // identity. A single fixed-size string either completes or propagates the
+  // allocation failure to the codec's all-or-nothing construction boundary.
+  constexpr std::string_view digits = "0123456789abcdef";
+  std::string result(digest.size() * 2, '0');
+  for (std::size_t index = 0; index < digest.size(); ++index) {
+    result[index * 2] = digits[digest[index] >> 4];
+    result[index * 2 + 1] = digits[digest[index] & 15];
+  }
+  return result;
 }
 
 class Reader {
@@ -381,7 +390,8 @@ struct ParsedSample {
 
 std::shared_ptr<const RuntimeSnapshot> decode(
     std::span<const std::byte> bytes, const RuntimeContentIdentity& expected,
-    const RuntimeContentLimits& limits) {
+    const RuntimeContentLimits& limits,
+    RuntimeContentFootprint* inspection = nullptr) {
   require(bytes.size() <= limits.maximum_encoded_bytes, "encoded_limit",
           "runtime content input exceeds the encoded byte allowance");
   require(bytes.size() >= kHeaderBytes && bytes.size() == expected.byte_length,
@@ -509,6 +519,21 @@ std::shared_ptr<const RuntimeSnapshot> decode(
     validate_playback(pads[index].playback, samples[pads[index].sample_index].frames);
   }
 
+  if (inspection != nullptr) {
+    RuntimeContentFootprint footprint{
+        bytes.size(), total_pcm, 0, 0, pad_count, event_count, sample_count};
+    for (std::uint32_t index = 0; index < pad_count; ++index) {
+      const auto float_bytes = multiply(
+          samples[pads[index].sample_index].frames, sizeof(float));
+      footprint.prepared_float_bytes = add(
+          footprint.prepared_float_bytes, float_bytes);
+      footprint.largest_float_sample_bytes = std::max(
+          footprint.largest_float_sample_bytes, float_bytes);
+    }
+    *inspection = footprint;
+    return {};
+  }
+
   // No PCM allocation occurs until the complete candidate passed all checks.
   std::array<std::shared_ptr<const PcmSample>, 64> owners{};
   for (std::uint32_t index = 0; index < sample_count; ++index) {
@@ -570,6 +595,20 @@ Result<std::shared_ptr<const RuntimeSnapshot>> decode_runtime_content(
     return Result<std::shared_ptr<const RuntimeSnapshot>>::failure(content_error(error));
   } catch (...) {
     return Result<std::shared_ptr<const RuntimeSnapshot>>::failure(construction_error());
+  }
+}
+
+Result<RuntimeContentFootprint> inspect_runtime_content(
+    std::span<const std::byte> bytes, const RuntimeContentIdentity& expected,
+    const RuntimeContentLimits& limits) {
+  try {
+    RuntimeContentFootprint footprint;
+    (void)decode(bytes, expected, limits, &footprint);
+    return Result<RuntimeContentFootprint>::success(footprint);
+  } catch (InvalidContent error) {
+    return Result<RuntimeContentFootprint>::failure(content_error(error));
+  } catch (...) {
+    return Result<RuntimeContentFootprint>::failure(construction_error());
   }
 }
 

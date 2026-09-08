@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="36935dcebcace7ae9aa453395b298b649b9bec950eb8ced014145d17226b5d0a">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="16db363c482db247aa22e5d4dc3d6312b28ef33efecb4507ebe4d97ee7e532ce">
   <title id="title">Project Cooker Module</title><desc id="description">Project Truth 派生 Snapshot、Replay 与有界 runtime content</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -58,10 +58,10 @@
       <rect class="node-mask" x="1286" y="376" width="258" height="104" rx="18"/>
       <rect class="node" x="1290" y="380" width="250" height="96" rx="14"/>
       <text class="node-title" x="1306" y="412">Bounded Reader</text>
-      <text class="node-detail" x="1306" y="438">identity · validate · own PCM</text>
+      <text class="node-detail" x="1306" y="438">inspect · validate · own PCM</text>
     </g>
   <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation + Authoring Domain; private vendored SHA-256.</div></foreignObject></g>
-<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Evidence</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Independent Python and C++ read a retained wire vector; malformed framing, limits and allocation order are tested.</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Evidence</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Independent Python and C++ read a retained wire vector. Inspect and decode share complete validation before PCM allocation; malformed framing, limits, footprint and allocation order are tested. Hex identity construction cannot silently truncate on allocation failure.</div></foreignObject></g>
 <g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Derived only</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Replay projection and portable content never become Project Truth. New source Contract is not yet Assembly-selected.</div></foreignObject></g>
 <g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Forbidden boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No persistence or device I/O. Codec limits are not complete Engine, FX, SDK or DMA admission.</div></foreignObject></g>
 </svg>

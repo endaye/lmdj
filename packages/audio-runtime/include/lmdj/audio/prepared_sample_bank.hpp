@@ -128,6 +128,10 @@ class PreparedPatternView final {
 
   static foundation::Result<PreparedPatternView> from_snapshot(
       const cooker::RuntimeSnapshot& snapshot);
+  // Strict canonical event order, no overlay/map merge workspace. Invalid or
+  // duplicate keys are rejected rather than normalized.
+  static foundation::Result<PreparedPatternView> from_canonical_snapshot(
+      const cooker::RuntimeSnapshot& snapshot);
   static foundation::Result<PreparedPatternView> from_snapshot_with_overlay(
       const cooker::RuntimeSnapshot& snapshot,
       std::span<const domain::PatternEvent> journal_overlay);
@@ -146,7 +150,8 @@ class PreparedPatternView final {
  private:
   static foundation::Result<PreparedPatternView> prepare(
       const cooker::RuntimeSnapshot& snapshot,
-      std::span<const domain::PatternEvent> journal_overlay);
+      std::span<const domain::PatternEvent> journal_overlay,
+      bool canonical = false);
   PreparedPatternView(
       foundation::ProjectId project_id,
       foundation::PatternId pattern_id,

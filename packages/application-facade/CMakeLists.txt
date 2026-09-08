@@ -1,5 +1,13 @@
 find_package(Threads REQUIRED)
 
+add_library(lmdj_runtime_facade STATIC src/runtime_facade.cpp)
+add_library(lmdj::runtime_facade ALIAS lmdj_runtime_facade)
+target_include_directories(lmdj_runtime_facade PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(lmdj_runtime_facade PRIVATE lmdj::audio_runtime Threads::Threads
+                      PUBLIC lmdj::project_cooker)
+lmdj_target_warnings(lmdj_runtime_facade)
+lmdj_target_sanitizers(lmdj_runtime_facade)
+
 add_library(
   lmdj_performance_runtime
   STATIC
@@ -41,6 +49,7 @@ target_link_libraries(
   lmdj_application
   PUBLIC
     lmdj::performance_runtime
+    lmdj::runtime_facade
     lmdj::authoring_domain
     lmdj::project_io
     lmdj::project_cooker
@@ -103,6 +112,37 @@ lmdj_target_warnings(lmdj_core_c)
 lmdj_target_sanitizers(lmdj_core_c)
 
 if(BUILD_TESTING)
+  add_executable(lmdj_runtime_facade_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/runtime_facade_test.cpp")
+  target_include_directories(lmdj_runtime_facade_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_runtime_facade_tests PRIVATE lmdj::runtime_facade lmdj::audio_runtime)
+  lmdj_target_warnings(lmdj_runtime_facade_tests)
+  lmdj_target_sanitizers(lmdj_runtime_facade_tests)
+  lmdj_add_test(NAME facade.runtime_facade TIER component COMMAND lmdj_runtime_facade_tests)
+
+  # Compile the same Facade against the existing Engine-only hook variant.
+  # The packaged narrow library above has no hook symbols or fake callback.
+  add_executable(lmdj_runtime_facade_concurrency_tests
+    src/runtime_facade.cpp
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/runtime_facade_stress_test.cpp")
+  target_include_directories(lmdj_runtime_facade_concurrency_tests PRIVATE
+    "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  target_link_libraries(lmdj_runtime_facade_concurrency_tests PRIVATE
+    lmdj_audio_runtime_testable Threads::Threads)
+  target_compile_definitions(lmdj_runtime_facade_concurrency_tests PRIVATE LMDJ_AUDIO_RUNTIME_TESTING=1)
+  lmdj_target_warnings(lmdj_runtime_facade_concurrency_tests)
+  lmdj_target_sanitizers(lmdj_runtime_facade_concurrency_tests)
+  lmdj_add_test(NAME facade.runtime_facade_quiescence TIER component
+    COMMAND lmdj_runtime_facade_concurrency_tests LABELS concurrency)
+  add_executable(lmdj_runtime_facade_stress_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/runtime_facade_stress_test.cpp")
+  target_include_directories(lmdj_runtime_facade_stress_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_runtime_facade_stress_tests PRIVATE lmdj::runtime_facade Threads::Threads)
+  lmdj_target_warnings(lmdj_runtime_facade_stress_tests)
+  lmdj_target_sanitizers(lmdj_runtime_facade_stress_tests)
+  lmdj_add_test(NAME facade.runtime_facade_stress TIER stress
+    COMMAND lmdj_runtime_facade_stress_tests --stress LABELS concurrency)
+
   add_executable(
     lmdj_facade_runtime_content_export_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/runtime_content_export_test.cpp"
