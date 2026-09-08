@@ -49,3 +49,38 @@ Contract changes.
 Documentation impact: none for this inactive producer preparation. Current
 Portal behavior is unchanged; activation must update its runbook and operations
 page with actual source/version/status evidence.
+
+
+## Trusted publisher implementation Task
+
+Additional declared files: `.github/workflows/cloudflare-preview-publish.yml`,
+`scripts/ci/cloudflare_preview_publish.py`, its ci-prefixed test,
+`apps/architecture-portal/scripts/cloudflare-preview-smoke.mjs`, its Portal test,
+the workflow boundary test, scope policy, the current documentation-governance
+Portal page and this plan.
+
+The default-branch workflow uses its own workflow SHA, installs trusted tools
+before injecting credentials, validates the successful build/PR/artifact and
+creates fixed configuration for `portal-preview`. No uploaded Worker/config
+executes; stable routing must remain off. First target creation may use deploy
+with workers_dev false; later candidates use versions upload. No production
+promotion API is called. A foreign or newly live stable target stops publication.
+
+Trusted smoke uses the API-sourced Product manifest and SHA, checks current and
+snapshot pages plus headers and every artifact file's digest/length. It never
+receives GitHub or Cloudflare credentials. The publisher rereads head immediately
+before upload and status; superseded runs produce retained superseded evidence.
+A status POST with an unknown receipt is not blindly retried or overwritten.
+Failed build/smoke can only report failure on its still-current source head.
+
+Validation: publisher transaction tests (same version URL, first target,
+failed build/smoke, stale completion, live stable route and unknown status
+receipt), workflow credential-boundary tests, artifact HTTP tests, hosted runner
+policy, staged scope ownership and full Portal check. No live upload is claimed.
+The runner budget, pilot variable, protected Environment setup and real artifact
+pilot remain outstanding before activation. Both workflows default to no job
+while the variable is absent.
+
+Documentation impact: required for this publisher Task.
+Affected portal pages: /operations/documentation-governance
+Version impact: none; internal pilot receipts are not production Contracts.

@@ -39,5 +39,27 @@ class BuildBoundaryTest(unittest.TestCase):
         self.assertEqual(upload['with']['if-no-files-found'], 'error')
 
 
+class PublisherBoundaryTest(unittest.TestCase):
+    def setUp(self):
+        self.workflow = yaml.load((ROOT / '.github/workflows/cloudflare-preview-publish.yml').read_text(), Loader=yaml.BaseLoader)
+        self.job = self.workflow['jobs']['publish']
+
+    def test_only_default_branch_workflow_run_control(self):
+        self.assertEqual(set(self.workflow['on']), {'workflow_run'})
+        checkout = next(s for s in self.job['steps'] if s.get('uses', '').startswith('actions/checkout@'))
+        self.assertEqual(checkout['with']['ref'], '${{ github.workflow_sha }}')
+        self.assertEqual(checkout['with']['persist-credentials'], 'false')
+        self.assertIn("vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH != ''", self.job['if'])
+
+    def test_deploy_secret_only_enters_trusted_publish_step(self):
+        holders = [s for s in self.job['steps'] if 'CLOUDFLARE_API_TOKEN' in s.get('env', {})]
+        self.assertEqual(len(holders), 1)
+        self.assertEqual(holders[0]['run'], 'python3 scripts/ci/cloudflare_preview_publish.py')
+        self.assertEqual(self.job['environment'], 'portal-cloudflare-preview')
+        install = next(s for s in self.job['steps'] if s.get('name', '').startswith('Install trusted'))
+        self.assertNotIn('env', install)
+        self.assertEqual(self.workflow['concurrency']['cancel-in-progress'], 'false')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -51,3 +51,16 @@ npm 10.9.3 执行安装与完整 Portal check；`static/_headers` 保留现有�
 Netlify 专用构建、依赖和 smoke 已移除；外部 Netlify GitHub App 须单独断开本仓库。
 历史失败与快照保留；Cloudflare 版本 Preview 不等于已启用逐 PR Preview。
 Cloudflare 控制台须按部署手册显式设置构建命令；不能仅依赖 Wrangler custom build。
+
+
+## Cloudflare PR Preview 试点
+
+PR Preview 使用隔离构建和独立可信发布两个 workflow。构建绑定 PR head，
+不接收部署凭据；发布端从 GitHub API 核实 run、artifact 和当前 head，验证
+静态归档后生成固定配置，只上传到 `portal-preview` 的版本地址，并在页面、
+响应头和文件摘要检查通过后回写 `Cloudflare Portal Preview` 状态。
+
+试点默认关闭。仓库变量 `CLOUDFLARE_PREVIEW_PILOT_BRANCH` 必须显式指定一个
+同仓库分支；启用前需落实临时 runner 预算、`portal-cloudflare-preview`
+Environment 凭据以及现场验收。代码合并和本地测试不代表试点已启用或验收通过。
+旧 Netlify 检查的退役仍由迁移清单单独追踪。
