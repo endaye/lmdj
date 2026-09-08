@@ -265,8 +265,13 @@ def main(argv=None):
                     if client.route()['enabled'] and prior['version_id'] != args.version:
                         if not args.prior_tag:
                             raise CommandError('enabled production requires its signed prior tag for recovery verification')
-                        old_workspace = workspace/'prior'; old_workspace.mkdir(mode=0o700)
-                        old, old_receipt = stage(args.prior_tag, HOSTS[args.target], old_workspace)
+                        if args.prior_tag == args.tag:
+                            # One verified signed release can bind multiple CF versions;
+                            # both URLs still receive independent exact-byte checks.
+                            old, old_receipt = staged, receipt
+                        else:
+                            old_workspace = workspace/'prior'; old_workspace.mkdir(mode=0o700)
+                            old, old_receipt = stage(args.prior_tag, HOSTS[args.target], old_workspace)
                         distributions[prior['version_id']] = old/'dist'
                         store.observe({'event': 'signed-prior-input', 'tag': args.prior_tag,
                                        'source': old_receipt['source'], 'version': prior['version_id'], 'stage': str(old)})

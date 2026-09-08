@@ -284,6 +284,21 @@ class HostCommandTest(unittest.TestCase):
             write_diagnostic(self.root/'wrangler.log', b'cf-fixture network failed', None)
         self.assertEqual((self.root/'wrangler.log').read_text(), '[REDACTED] network failed')
 
+    def test_same_signed_release_is_staged_once_but_both_versions_are_checked(self):
+        self.client.routing['enabled'] = True
+        dist = self.root/'verified'; dist.mkdir()
+        receipt = {'tag':'lmdj-v1.0.42.0','source':'a'*40,'archive':{'sha256':'b'*64,'bytes':4}}
+        with patch('cloudflare_host.CloudflareClient', return_value=self.client), patch('cloudflare_host.stage', return_value=(dist,receipt)) as staged, patch('cloudflare_host.smoke', return_value={}) as http, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            code = main(['promote','lmdj-v1.0.42.0','--target','creator-recovery','--state-root',str(self.root/'state'),
+                         '--version',B,'--prior-tag','lmdj-v1.0.42.0'])
+        self.assertEqual(code, 0)
+        self.assertEqual(staged.call_count, 1)
+        self.assertEqual([c.args[1] for c in http.call_args_list], [
+            f'https://{A[:8]}-creator-recovery.lmdj.workers.dev',
+            'https://creator-recovery.lmdj.workers.dev',
+            f'https://{B[:8]}-creator-recovery.lmdj.workers.dev',
+            'https://creator-recovery.lmdj.workers.dev'])
+
     def test_provider_credentials_do_not_cross_child_boundaries(self):
         with patch.dict(os.environ, {'GITHUB_TOKEN':'github-fixture', 'CLOUDFLARE_API_TOKEN':'cf-fixture',
                                     'GH_TOKEN':'other-gh', 'NETLIFY_AUTH_TOKEN':'netlify-fixture'}, clear=True):
