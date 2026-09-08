@@ -5,12 +5,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <type_traits>
 #include <vector>
 
 #include <lmdj/audio/detail/fixed_spsc_queue.hpp>
+#include <lmdj/audio/detail/value_channel.hpp>
 #include <lmdj/audio/master_fx.hpp>
 #include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/foundation/error.hpp>
@@ -29,6 +31,11 @@ inline constexpr std::size_t kRealtimeVoiceCapacity = 128;
 inline constexpr std::size_t kRealtimeBankCapacity = 4;
 inline constexpr std::size_t kRealtimePublishQueueCapacity = 4;
 inline constexpr std::size_t kRealtimePatternCapacity = 4;
+// Occupancy includes the full ring, one producer reservation and one entry
+// popped but not yet subtracted. Bank reservations each own a distinct slot.
+static_assert(kRealtimeQueueCapacity <= std::numeric_limits<std::uint32_t>::max() - 2);
+static_assert(kRealtimeBankCapacity <= std::numeric_limits<std::uint32_t>::max());
+static_assert(kRealtimeVoiceCapacity <= std::numeric_limits<std::uint32_t>::max());
 inline constexpr std::size_t kRealtimeCaptureCapacity = 4'096;
 inline constexpr std::size_t kRealtimeTriggerOutcomeCapacity = 4'096;
 // A legacy one-shot can publish both started and completed edges. Keep room
@@ -233,6 +240,8 @@ struct RuntimeVoiceStateTelemetry {
 
 namespace detail {
 
+struct RealtimeEngineAudioAccess;
+
 template <typename TryPop>
 std::size_t drain_voice_states_fail_closed(
     std::atomic<RuntimeVoiceStateStreamState>& state,
@@ -257,10 +266,12 @@ std::size_t drain_voice_states_fail_closed(
 
 // Threading contract. Violating it is undefined behavior, not a runtime error.
 //
-// Exactly two threads may touch one RealtimeEngine:
+// One audio thread and one serialized control thread own mutable state:
 //
 //   Audio thread   calls `render` and nothing else.
-//   Control thread calls everything else, serialized against itself.
+//   Control thread calls the other non-telemetry methods, serialized against itself.
+//   Observer threads may call telemetry methods concurrently. They serialize
+//   with one another using a reader-only mutex; render never touches that mutex.
 //
 // `render` is the sole audio-thread entry point. It never allocates, frees,
 // locks, blocks, or throws, and it never destroys a PreparedSampleBank.
@@ -361,7 +372,7 @@ class RealtimeEngine final {
   FxEnqueueResult enqueue_master_fx_tempo(std::uint16_t bpm) noexcept;
   // Audio thread only.
   void render(float* left, float* right, std::uint32_t frames) noexcept;
-  // Any thread.
+  // Any non-realtime thread (including control), not the audio callback.
   // Counters are exact after quiescence and a best-effort snapshot while running.
   RealtimeTelemetry telemetry() const noexcept;
   BankTelemetry bank_telemetry() const noexcept;
@@ -373,9 +384,14 @@ class RealtimeEngine final {
 #if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
   // Test-only overflow seam. The engine must be stopped.
   void set_start_epoch_for_testing(std::uint64_t epoch) noexcept;
+  void set_next_pattern_generation_for_testing(std::uint64_t generation) noexcept;
+  // Test-only writer handoff: no render may execute or begin during this call.
+  void set_rendered_frames_quiescent_for_testing(std::uint64_t frames) noexcept;
+  std::uint32_t queued_host_input_events_for_testing() const noexcept;
 #endif
 
  private:
+  friend struct detail::RealtimeEngineAudioAccess;
   enum class BankState : std::uint8_t {
     empty,
     current,
@@ -514,69 +530,157 @@ class RealtimeEngine final {
   std::array<Voice, kRealtimeVoiceCapacity> voices_{};
   std::array<cooker::ResolvedPlayback, kRealtimeSampleSlots> previews_{};
   std::uint64_t preview_mask_ = 0;
-  std::atomic<std::uint64_t> availability_mask_{0};
+  // Full 64-Pad mask, read only by control after acquire pending == 0. The
+  // serialized control producer cannot start another publication during that
+  // read; audio writes before release-subtracting the final pending Bank.
+  std::uint64_t availability_mask_ = 0;
   std::atomic<std::uint8_t> current_bank_slot_{kLegacyBankSlot};
   std::atomic<std::uint8_t> current_pattern_slot_{kNoPatternSlot};
   std::uint64_t next_bank_generation_ = 1;
   std::uint64_t next_pattern_generation_ = 1;
-  std::atomic<std::uint64_t> pattern_origin_frame_{0};
+  std::uint64_t pattern_origin_frame_ = 0;
   std::size_t pattern_event_index_ = 0;
   std::atomic<RealtimeState> state_{RealtimeState::stopped};
-  std::atomic<std::uint64_t> start_epoch_{0};
-  std::atomic<std::uint64_t> enqueued_events_{0};
-  std::atomic<std::uint64_t> queued_host_input_events_{0};
-  std::atomic<std::uint64_t> dequeued_events_{0};
-  std::atomic<std::uint64_t> cancelled_events_{0};
-  std::atomic<std::uint64_t> started_voices_{0};
-  std::atomic<std::uint64_t> completed_voices_{0};
-  std::atomic<std::uint64_t> active_voices_{0};
-  std::atomic<std::uint64_t> cancelled_voices_{0};
-  std::atomic<std::uint64_t> invalid_events_{0};
-  std::atomic<std::uint64_t> stopped_rejections_{0};
-  std::atomic<std::uint64_t> queue_drops_{0};
-  std::atomic<std::uint64_t> voice_drops_{0};
-  std::atomic<std::uint64_t> callback_count_{0};
-  std::atomic<std::uint64_t> rendered_frames_{0};
-  std::atomic<std::uint64_t> max_callback_frames_{0};
-  std::atomic<std::uint64_t> current_bank_generation_{0};
-  std::atomic<std::uint64_t> pending_publications_{0};
-  std::atomic<std::uint64_t> accepted_publications_{0};
-  std::atomic<std::uint64_t> applied_publications_{0};
-  std::atomic<std::uint64_t> reclaimed_banks_{0};
-  std::atomic<std::uint64_t> bank_slot_rejections_{0};
-  std::atomic<std::uint64_t> publish_queue_drops_{0};
-  // A generation-valued single-slot mailbox is the pattern publication
-  // linearization point. The control thread may replace an unclaimed
-  // generation; render marks it claimed with CAS before touching the slot.
-  std::atomic<std::uint64_t> queued_pattern_generation_{0};
-  std::atomic<std::uint64_t> audio_pending_pattern_generation_{0};
-  std::atomic<std::uint64_t> accepted_pattern_publications_{0};
-  std::atomic<std::uint64_t> applied_pattern_publications_{0};
-  std::atomic<std::uint64_t> superseded_pattern_publications_{0};
-  std::atomic<std::uint64_t> canceled_pattern_publications_{0};
-  std::atomic<std::uint64_t> reclaimed_patterns_{0};
-  std::atomic<std::uint64_t> pattern_publication_rejections_{0};
+  std::uint64_t start_epoch_ = 0;
+  std::uint64_t enqueued_events_ = 0;
+  std::atomic<std::uint32_t> queued_host_input_events_{0};
+  std::uint64_t dequeued_events_ = 0;
+  std::uint64_t cancelled_events_ = 0;
+  std::uint64_t started_voices_ = 0;
+  std::uint64_t completed_voices_ = 0;
+  std::uint32_t active_voices_ = 0;
+  std::uint64_t cancelled_voices_ = 0;
+  std::uint64_t invalid_events_ = 0;
+  std::uint64_t audio_invalid_events_ = 0;
+  std::uint64_t stopped_rejections_ = 0;
+  std::uint64_t queue_drops_ = 0;
+  std::uint64_t voice_drops_ = 0;
+  std::uint64_t callback_count_ = 0;
+  std::uint64_t rendered_frames_ = 0;
+  std::uint32_t max_callback_frames_ = 0;
+  std::uint64_t current_bank_generation_ = 0;
+  std::atomic<std::uint32_t> pending_publications_{0};
+  std::uint64_t accepted_publications_ = 0;
+  std::uint64_t applied_publications_ = 0;
+  std::uint64_t reclaimed_banks_ = 0;
+  std::uint64_t bank_slot_rejections_ = 0;
+  std::uint64_t publish_queue_drops_ = 0;
+  // 0 = empty, 1..4 = slot + 1, bit 31 = claimed. Payload retains the full
+  // non-reused 64-bit generation. Only the serialized control thread reuses
+  // slots; audio-owned cancellation does not release the audio-local owner.
+  std::atomic<std::uint32_t> pattern_claim_closed_{0};
+  std::atomic<std::uint32_t> queued_pattern_generation_{0};
+  std::atomic<std::uint32_t> audio_pending_pattern_generation_{0};
+  std::uint64_t accepted_pattern_publications_ = 0;
+  std::uint64_t applied_pattern_publications_ = 0;
+  std::uint64_t superseded_pattern_publications_ = 0;
+  std::uint64_t canceled_pattern_publications_ = 0;
+  std::uint64_t reclaimed_patterns_ = 0;
+  std::uint64_t pattern_publication_rejections_ = 0;
   std::atomic<CaptureState> capture_state_{CaptureState::idle};
-  std::atomic<std::uint64_t> captured_events_{0};
-  std::atomic<std::uint64_t> drained_events_{0};
-  std::atomic<std::uint64_t> capture_drops_{0};
-  std::atomic<std::uint64_t> capture_origin_frame_{0};
-  std::atomic<std::uint64_t> published_outcomes_{0};
-  std::atomic<std::uint64_t> drained_outcomes_{0};
-  std::atomic<std::uint64_t> runtime_outcome_drops_{0};
+  std::uint64_t captured_events_ = 0;
+  std::uint64_t drained_events_ = 0;
+  std::uint64_t capture_drops_ = 0;
+  std::uint64_t capture_origin_frame_ = 0;
+  std::uint64_t published_outcomes_ = 0;
+  std::uint64_t drained_outcomes_ = 0;
+  std::uint64_t runtime_outcome_drops_ = 0;
   std::atomic<RuntimeVoiceStateStreamState> voice_state_stream_state_{
       RuntimeVoiceStateStreamState::healthy};
-  std::atomic<std::uint64_t> published_voice_states_{0};
-  std::atomic<std::uint64_t> drained_voice_states_{0};
-  std::atomic<std::uint64_t> voice_state_drops_{0};
-  std::atomic<std::uint64_t> enqueued_fx_gestures_{0};
-  std::atomic<std::uint64_t> dequeued_fx_gestures_{0};
-  std::atomic<std::uint64_t> fx_queue_drops_{0};
-  std::atomic<std::uint64_t> master_fx_processed_frames_{0};
-  std::atomic<std::uint64_t> queued_fx_gestures_{0};
-  std::atomic<std::uint64_t> enqueued_tempo_updates_{0};
-  std::atomic<std::uint64_t> applied_tempo_updates_{0};
+  std::uint64_t published_voice_states_ = 0;
+  std::uint64_t drained_voice_states_ = 0;
+  std::uint64_t voice_state_drops_ = 0;
+  std::uint64_t enqueued_fx_gestures_ = 0;
+  std::uint64_t dequeued_fx_gestures_ = 0;
+  std::uint64_t fx_queue_drops_ = 0;
+  std::uint64_t master_fx_processed_frames_ = 0;
+  std::atomic<std::uint32_t> queued_fx_gestures_{0};
+  std::uint64_t enqueued_tempo_updates_ = 0;
+  std::uint64_t applied_tempo_updates_ = 0;
   std::atomic<std::uint16_t> current_master_fx_bpm_{0};
+  struct PatternObservation {
+    std::uint64_t generation = 0;
+    std::uint64_t activation_frame = 0;
+  };
+  struct AudioObservation {
+    std::uint64_t pattern_origin_frame_ = 0;
+    std::uint64_t dequeued_events_ = 0;
+    std::uint64_t started_voices_ = 0;
+    std::uint64_t completed_voices_ = 0;
+    std::uint32_t active_voices_ = 0;
+    std::uint64_t cancelled_voices_ = 0;
+    std::uint64_t audio_invalid_events_ = 0;
+    std::uint64_t voice_drops_ = 0;
+    std::uint64_t callback_count_ = 0;
+    std::uint64_t rendered_frames_ = 0;
+    std::uint32_t max_callback_frames_ = 0;
+    std::uint64_t current_bank_generation_ = 0;
+    std::uint64_t applied_publications_ = 0;
+    std::uint64_t applied_pattern_publications_ = 0;
+    std::uint64_t captured_events_ = 0;
+    std::uint64_t capture_drops_ = 0;
+    std::uint64_t capture_origin_frame_ = 0;
+    std::uint64_t published_outcomes_ = 0;
+    std::uint64_t runtime_outcome_drops_ = 0;
+    std::uint64_t published_voice_states_ = 0;
+    std::uint64_t voice_state_drops_ = 0;
+    std::uint64_t dequeued_fx_gestures_ = 0;
+    std::uint64_t master_fx_processed_frames_ = 0;
+    std::uint64_t applied_tempo_updates_ = 0;
+    std::uint64_t start_epoch_ = 0;
+    std::uint64_t claimed_through = 0;
+    std::uint64_t current_pattern_generation = 0;
+    PatternObservation pending{};
+  };
+  struct ControlObservation {
+    std::uint64_t start_epoch_ = 0;
+    std::uint64_t enqueued_events_ = 0;
+    std::uint64_t cancelled_events_ = 0;
+    std::uint64_t invalid_events_ = 0;
+    std::uint64_t stopped_rejections_ = 0;
+    std::uint64_t queue_drops_ = 0;
+    std::uint64_t accepted_publications_ = 0;
+    std::uint64_t reclaimed_banks_ = 0;
+    std::uint64_t bank_slot_rejections_ = 0;
+    std::uint64_t publish_queue_drops_ = 0;
+    std::uint64_t accepted_pattern_publications_ = 0;
+    std::uint64_t superseded_pattern_publications_ = 0;
+    std::uint64_t canceled_pattern_publications_ = 0;
+    std::uint64_t reclaimed_patterns_ = 0;
+    std::uint64_t pattern_publication_rejections_ = 0;
+    std::uint64_t drained_events_ = 0;
+    std::uint64_t drained_outcomes_ = 0;
+    std::uint64_t drained_voice_states_ = 0;
+    std::uint64_t enqueued_fx_gestures_ = 0;
+    std::uint64_t fx_queue_drops_ = 0;
+    std::uint64_t enqueued_tempo_updates_ = 0;
+    PatternObservation last_queued{};
+    std::uint64_t last_audio_cancel = 0;
+  };
+  struct TransportDecision {
+    std::uint64_t rendered_frames = 0;
+    std::uint64_t pattern_origin_frame = 0;
+  };
+  // Writer-private authority is separate from the recycled output slots.
+  PatternObservation observed_audio_pending_{};
+  PatternObservation observed_last_queued_{};
+  std::uint64_t observed_claimed_through_ = 0;
+  std::uint64_t observed_current_pattern_generation_ = 0;
+  std::uint64_t observed_last_audio_cancel_ = 0;
+  detail::ValueChannel<AudioObservation> audio_observation_;
+  detail::ValueChannel<ControlObservation> control_observation_;
+  detail::ValueChannel<TransportDecision> transport_decision_;
+  mutable std::mutex observation_reader_mutex_;
+  void publish_audio_observation() noexcept;
+  void publish_control_observation() noexcept;
+  void publish_transport_decision() noexcept;
+  std::uint64_t pattern_token_generation(std::uint32_t token) const noexcept;
+  struct PublishOnReturn {
+    RealtimeEngine& engine;
+    void (RealtimeEngine::*publish)() noexcept;
+    ~PublishOnReturn() { (engine.*publish)(); }
+  };
+
 };
 
 }  // namespace lmdj::audio

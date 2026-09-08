@@ -536,7 +536,10 @@ class NativeHost final {
     if (writer_ != nullptr) {
       const auto state = engine_.capture_telemetry().state;
       if (state == CaptureState::active) {
-        (void)engine_.disarm_capture();
+        {
+          std::lock_guard lock(facade_mutex_);
+          (void)engine_.disarm_capture();
+        }
         drive_no_device_once();
       }
       writer_->request_stop();
@@ -780,6 +783,7 @@ class NativeHost final {
   }
 
   Result<void> start_backend() {
+    std::lock_guard lock(facade_mutex_);
     if (running_) {
       return host_failure(
           ErrorCode::invalid_argument, "Native Host is already running");
@@ -801,6 +805,7 @@ class NativeHost final {
   }
 
   Result<void> stop_backend() {
+    std::lock_guard lock(facade_mutex_);
     if (!running_) {
       return Result<void>::success();
     }
@@ -882,11 +887,14 @@ class NativeHost final {
     const auto global_slot =
         static_cast<std::uint8_t>(*bank * 16U + *pad);
     const auto sequence = next_sequence_++;
-    const auto result = engine_.enqueue(lmdj::audio::TriggerEvent{
-        sequence,
-        global_slot,
-        static_cast<std::uint8_t>(*velocity),
-    });
+    const auto result = [&] {
+      std::lock_guard lock(facade_mutex_);
+      return engine_.enqueue(lmdj::audio::TriggerEvent{
+          sequence,
+          global_slot,
+          static_cast<std::uint8_t>(*velocity),
+      });
+    }();
     if (result != EnqueueResult::accepted) {
       return error_response(
           result == EnqueueResult::sample_unavailable
@@ -922,8 +930,11 @@ class NativeHost final {
     const auto deadline = std::chrono::steady_clock::now() + kControlDeadline;
     PublishResult published = PublishResult::events_pending;
     while (std::chrono::steady_clock::now() < deadline) {
-      (void)engine_.reclaim_retired_banks();
-      published = engine_.publish_sample_bank(std::move(bank.value()));
+      {
+        std::lock_guard lock(facade_mutex_);
+        (void)engine_.reclaim_retired_banks();
+        published = engine_.publish_sample_bank(std::move(bank.value()));
+      }
       if (published == PublishResult::accepted) {
         break;
       }
@@ -1012,13 +1023,17 @@ class NativeHost final {
           "INTERNAL_ERROR", "Capture Writer failed to start");
     }
     capture_baseline_ = engine_.capture_telemetry().captured_events;
-    const auto armed = engine_.arm_capture();
+    const auto armed = [&] {
+      std::lock_guard lock(facade_mutex_);
+      return engine_.arm_capture();
+    }();
     const auto reached_capture_state =
         armed.has_value() &&
         wait_for_capture(CaptureState::active, CaptureState::corrupted);
     const auto capture_state = engine_.capture_telemetry().state;
     if (!reached_capture_state || capture_state != CaptureState::active) {
       if (capture_state == CaptureState::active) {
+        std::lock_guard lock(facade_mutex_);
         (void)engine_.disarm_capture();
       }
       const auto pending_state = engine_.capture_telemetry().state;
@@ -1045,7 +1060,10 @@ class NativeHost final {
       return invalid_request("no recording is active");
     }
     const auto session_id = *active_session_;
-    const auto disarmed = engine_.disarm_capture();
+    const auto disarmed = [&] {
+      std::lock_guard lock(facade_mutex_);
+      return engine_.disarm_capture();
+    }();
     const auto reached_terminal =
         disarmed.has_value() &&
         wait_for_capture(CaptureState::idle, CaptureState::corrupted);

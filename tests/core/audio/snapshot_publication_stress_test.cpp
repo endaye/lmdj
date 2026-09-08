@@ -54,6 +54,42 @@ using lmdj::foundation::PatternId;
 constexpr auto kProjectId = "00000000-0000-4000-8000-000000000001";
 constexpr std::uint64_t kPublications = 2'000;
 
+// Observers never touch Pattern slots or call control methods. Their lifetime
+// spans publication, callback claim/apply and control-thread reclamation.
+class ConcurrentObservers {
+ public:
+  explicit ConcurrentObservers(RealtimeEngine& engine) {
+    for (auto& reader : readers_) {
+      reader = std::thread([this, &engine] {
+        do {
+          const auto pattern = engine.pattern_telemetry();
+          LMDJ_CHECK(pattern.pending_publications <= 2);
+          if (pattern.pending_generation == 0) {
+            LMDJ_CHECK(pattern.pending_activation_frame == 0);
+          }
+          const auto runtime = engine.telemetry();
+          LMDJ_CHECK(runtime.active_voices <= lmdj::audio::kRealtimeVoiceCapacity);
+          static_cast<void>(engine.bank_telemetry());
+          static_cast<void>(engine.capture_telemetry());
+          static_cast<void>(engine.trigger_outcome_telemetry());
+          static_cast<void>(engine.voice_state_telemetry());
+          static_cast<void>(engine.master_fx_telemetry());
+        } while (!stop_.load(std::memory_order_acquire));
+      });
+    }
+  }
+  ~ConcurrentObservers() {
+    stop_.store(true, std::memory_order_release);
+    for (auto& reader : readers_) {
+      reader.join();
+    }
+  }
+
+ private:
+  std::atomic<bool> stop_{false};
+  std::array<std::thread, 4> readers_;
+};
+
 PreparedSampleBank bank_at(std::uint64_t revision) {
   static constexpr std::array<float, 1> kSample{0.25F};
   auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, revision);
@@ -94,6 +130,7 @@ struct Outcomes {
 // for. Publication and reclamation both belong to the control thread; render
 // belongs to the audio thread.
 Outcomes race_publication_against_render(RealtimeEngine& engine) {
+  ConcurrentObservers observers{engine};
   std::atomic<bool> rendering{true};
   std::thread audio_thread([&engine, &rendering]() {
     std::array<float, 1> left{};
@@ -285,6 +322,7 @@ void test_pattern_publication_switches_are_conserved_under_concurrency() {
   const auto initial = engine.publish_pattern_view(pattern_at(1));
   LMDJ_CHECK(initial.result == PatternPublishResult::accepted);
   LMDJ_CHECK(engine.start().has_value());
+  ConcurrentObservers observers{engine};
 
   std::atomic<bool> rendering{true};
   std::thread audio_thread([&] {
@@ -337,6 +375,7 @@ void test_same_boundary_pattern_supersession_is_conserved_under_concurrency() {
   const auto initial = engine.publish_pattern_view(pattern_at(2));
   LMDJ_CHECK(initial.result == PatternPublishResult::accepted);
   LMDJ_CHECK(engine.start().has_value());
+  ConcurrentObservers observers{engine};
 
   std::atomic<bool> rendering{true};
   std::thread audio_thread([&] {
@@ -402,6 +441,24 @@ void test_same_boundary_pattern_supersession_is_conserved_under_concurrency() {
   LMDJ_CHECK(telemetry.canceled_publications > 0);
 }
 
+void test_observers_remain_valid_across_quiescent_writer_handoffs() {
+  RealtimeEngine engine;
+  ConcurrentObservers observers{engine};
+  for (std::uint64_t epoch = 1; epoch <= 100; ++epoch) {
+    LMDJ_CHECK(engine.start().has_value());
+    std::thread audio([&] {
+      std::array<float, 2> left{}, right{};
+      engine.render(left.data(), right.data(), 2);
+    });
+    audio.join();
+    engine.stop();
+    const auto final = engine.telemetry();
+    LMDJ_CHECK(final.start_epoch == epoch);
+    LMDJ_CHECK(final.rendered_frames == 2);
+    LMDJ_CHECK(final.callback_count == 1);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -410,6 +467,7 @@ int main() {
     test_publish_queue_full_is_unreachable_at_equal_capacities();
     test_pattern_publication_switches_are_conserved_under_concurrency();
     test_same_boundary_pattern_supersession_is_conserved_under_concurrency();
+    test_observers_remain_valid_across_quiescent_writer_handoffs();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

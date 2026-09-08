@@ -11,6 +11,7 @@
 #include <iostream>
 #include <iterator>
 #include <new>
+#include <regex>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -53,6 +54,72 @@ void* aligned_allocation(std::size_t size, std::size_t alignment) {
   throw std::bad_alloc{};
 }
 
+std::string read_code(const char* path) {
+  std::ifstream source(path);
+  LMDJ_CHECK(source.is_open());
+  const std::string text{std::istreambuf_iterator<char>{source}, {}};
+  // Explanatory comments must not trip an absence check on code syntax.
+  return std::regex_replace(text, std::regex{R"(/\*[\s\S]*?\*/|//[^\n]*)"}, "");
+}
+
+std::string without_observation_methods(std::string source) {
+  // The approved reader-only mutex is confined to these non-realtime APIs.
+  // Keep scanning every other Engine function, not just the top-level render.
+  for (const auto method : {
+           "telemetry", "bank_telemetry", "pattern_telemetry",
+           "capture_telemetry", "trigger_outcome_telemetry",
+           "voice_state_telemetry", "master_fx_telemetry"}) {
+    const auto begin = source.find(std::string{"RealtimeEngine::"} + method + "()");
+    LMDJ_CHECK(begin != std::string::npos);
+    const auto body = source.find('{', begin);
+    LMDJ_CHECK(body != std::string::npos);
+    std::size_t depth = 1;
+    auto end = body + 1;
+    for (; end < source.size() && depth != 0; ++end) {
+      if (source[end] == '{') ++depth;
+      if (source[end] == '}') --depth;
+    }
+    LMDJ_CHECK(depth == 0);
+    source.erase(begin, end - begin);
+  }
+  return source;
+}
+
+void check_no_lock(const std::string& source, const char* boundary) {
+  for (const auto forbidden : {
+           "std::mutex", "std::lock_guard", "std::unique_lock",
+           "std::scoped_lock", "observation_reader_mutex_"}) {
+    if (source.find(forbidden) != std::string::npos) {
+      std::cerr << "why: " << boundary << " contains forbidden lock syntax "
+                << forbidden << ".\nremedy: keep the reader-only lock in the "
+                   "seven non-realtime observation methods; audio adapters "
+                   "must use their audio-owned value access.\n";
+      LMDJ_CHECK(false);
+    }
+  }
+}
+
+void lock_syntax_is_confined_to_non_realtime_observers() {
+  check_no_lock(read_code("packages/audio-runtime/src/master_fx.cpp"), "Master FX");
+  check_no_lock(without_observation_methods(read_code(
+      "packages/audio-runtime/src/realtime_engine.cpp")), "Engine writer paths");
+  check_no_lock(read_code("packages/audio-runtime/src/realtime_engine_audio_access.hpp"),
+                "audio-owned adapter access");
+  const auto worklet = read_code(
+      "packages/audio-runtime/src/web/realtime_audio_worklet.cpp");
+  const auto begin = worklet.find("static bool process(");
+  const auto end = worklet.find("void signal_quiescence_waiters()", begin);
+  LMDJ_CHECK(begin != std::string::npos && end != std::string::npos);
+  const auto callback = worklet.substr(begin, end - begin);
+  check_no_lock(callback, "Web Audio callback");
+  if (callback.find("_telemetry(") != std::string::npos ||
+      callback.find(".telemetry(") != std::string::npos) {
+    std::cerr << "why: Web Audio callback calls a reader-locking observation API.\n"
+                 "remedy: read the adapter's audio-owned status after render.\n";
+    LMDJ_CHECK(false);
+  }
+}
+
 void full_chain_render_is_noexcept_allocation_free_and_lock_free() {
   using lmdj::audio::EnqueueResult;
   using lmdj::audio::FxEnqueueResult;
@@ -66,19 +133,6 @@ void full_chain_render_is_noexcept_allocation_free_and_lock_free() {
       static_cast<float*>(nullptr), static_cast<float*>(nullptr), 0)));
   static_assert(noexcept(std::declval<RealtimeEngine&>().render(
       static_cast<float*>(nullptr), static_cast<float*>(nullptr), 0)));
-
-  std::ifstream master_fx_source("packages/audio-runtime/src/master_fx.cpp");
-  std::ifstream engine_source("packages/audio-runtime/src/realtime_engine.cpp");
-  const std::string master_fx_text{
-      std::istreambuf_iterator<char>{master_fx_source}, {}};
-  const std::string engine_text{
-      std::istreambuf_iterator<char>{engine_source}, {}};
-  for (const auto forbidden : {
-           "std::mutex", "std::lock_guard", "std::unique_lock",
-           "std::scoped_lock"}) {
-    LMDJ_CHECK(master_fx_text.find(forbidden) == std::string::npos);
-    LMDJ_CHECK(engine_text.find(forbidden) == std::string::npos);
-  }
 
   RealtimeEngine engine;
   RealtimeEngine dry_engine;
@@ -161,6 +215,7 @@ void operator delete[](
 
 int main() {
   try {
+    lock_syntax_is_confined_to_non_realtime_observers();
     full_chain_render_is_noexcept_allocation_free_and_lock_free();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
