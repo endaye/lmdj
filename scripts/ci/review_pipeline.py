@@ -221,8 +221,10 @@ def finalize(directory):
     save(directory / "result.json", result)
     if result["failure"]:
         save(directory / "failure.json", result["failure"])
-    # Producer job succeeds in producing an honest result even when no model
-    # reviewed. The separate publisher turns not-reviewed into visible failure.
+    # Receipts are written before the status is judged, so a not-reviewed run
+    # still uploads its evidence -- the artifact is how a dropped review is
+    # recovered later, and #939 showed one sitting intact for hours.
+    return result["status"]
 
 
 def authenticate(identity):
@@ -352,9 +354,47 @@ def main():
     try:
         if args.command == "capture":
             capture(args.directory, args.backend)
+        elif args.command == "finalize":
+            status = finalize(args.directory)
+            if status != "reviewed":
+                # The job is named `Review fallback` and its conclusion is what
+                # a reader scanning job names sees. Reporting success here for a
+                # run where no model reviewed makes that name a lie -- a check
+                # whose passing condition is met without the thing it exists to
+                # produce. The lane as a whole never lost the distinction: the
+                # publisher refuses a not-reviewed result and the workflow's own
+                # `Manual takeover` step is guarded on `failure()` and says "NOT
+                # REVIEWED", so it was written expecting this exit and did not
+                # get it. Receipts are already saved above; only the verdict
+                # changes.
+                print(f"why: no model reviewed this head (status={status}); "
+                      "remedy: rerun the review, restore a backend, or record an "
+                      "authorized current-head human/agent review",
+                      file=sys.stderr)
+                return 1
         else:
             globals()[args.command](args.directory)
-    except Exception:
+    except Exception as error:
+        if args.command == "publish" and isinstance(error, review_scope.ReviewScopeError):
+            # `publish` only, and its refusals are the ones nobody can
+            # diagnose. Every `review_scope.require` in `publish()` carries an
+            # authored message -- "artifact identity differs from publisher
+            # context", "artifact changed inventory mismatch", "producer result
+            # is inconsistent with actual input and validated history" -- and
+            # the generic line below was discarding all of them. #939: the
+            # publisher drops roughly one review in four and no log says which
+            # precondition fired, so no remedy can be designed honestly. The
+            # messages did not need writing; they needed to stop being
+            # destroyed.
+            #
+            # This deliberately does not extend to the other commands. `grok`
+            # raises `ReviewScopeError` from positions that describe provider
+            # output, and two tests exist to keep those generic. `publish` runs
+            # after the model is gone -- it reads its own artifacts and the
+            # GitHub API -- so its refusals are authored literals about
+            # identity and inventory, with no provider text in scope to leak.
+            print(str(error), file=sys.stderr)
+            return 1
         # CLI/provider exceptions can contain credentials or raw model text.
         print("why: review pipeline operation failed; remedy: inspect bounded structured receipts and retry or review manually", file=sys.stderr)
         return 1
