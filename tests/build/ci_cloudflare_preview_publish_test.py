@@ -45,6 +45,7 @@ class PublisherTest(unittest.TestCase):
         self.requests = []
         self.statuses = []
         self.commands = []
+        self.downloads = 0
         self.fail_smoke = False
         self.move_during_smoke = False
         self.live_route = False
@@ -95,10 +96,14 @@ class PublisherTest(unittest.TestCase):
             raise TimeoutError('receipt lost')
         return 100
 
+    def download(self, *args):
+        self.downloads += 1
+        return {'head_sha': self.github.head}
+
     def invoke(self):
         with patch.dict(os.environ, self.env, clear=True), patch.object(publisher, 'GitHub', return_value=self.github), \
              patch.object(publisher, 'build_opener', return_value=self), \
-             patch.object(publisher, 'download_verified', return_value={'head_sha': self.github.head}), \
+             patch.object(publisher, 'download_verified', side_effect=self.download), \
              patch.object(publisher, 'extract_static', side_effect=self.extract), \
              patch.object(publisher.subprocess, 'run', side_effect=self.command), \
              patch.object(publisher, 'post_status', side_effect=self.post):
@@ -124,6 +129,38 @@ class PublisherTest(unittest.TestCase):
         self.invoke()
         self.assertEqual(self.statuses, [])
         self.assertEqual(self.evidence()['status'], 'superseded')
+
+    def test_updated_run_association_is_superseded_without_external_writes(self):
+        # The real Actions API updates pull_requests[].head when the PR moves,
+        # while the build run's own head_sha remains the original source.
+        self.github.pr['head']['sha'] = 'b' * 40
+        self.github.run['pull_requests'][0]['head']['sha'] = 'b' * 40
+        self.invoke()
+        self.assertEqual(self.evidence()['status'], 'superseded')
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.downloads, 0)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.statuses, [])
+
+    def test_current_head_still_requires_matching_run_association(self):
+        self.github.run['pull_requests'][0]['head']['sha'] = 'b' * 40
+        with self.assertRaisesRegex(RuntimeError, 'Preview failed'):
+            self.invoke()
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.downloads, 0)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.statuses, [])
+
+    def test_stale_foreign_repository_is_not_accepted_as_superseded(self):
+        self.github.pr['head']['sha'] = 'b' * 40
+        self.github.run['head_repository'] = {'full_name': 'foreign/repository'}
+        with self.assertRaisesRegex(RuntimeError, 'Preview failed'):
+            self.invoke()
+        self.assertEqual(self.evidence()['status'], 'failed')
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.downloads, 0)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.statuses, [])
 
     def test_live_stable_route_prevents_upload(self):
         self.live_route = True
