@@ -7,6 +7,8 @@ No fixture claims hosted permissions, pagination atomicity or remote recovery.
 """
 from copy import deepcopy
 from datetime import datetime, timezone
+import contextlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -462,11 +464,113 @@ class RuntimeTests(unittest.TestCase):
 
     def test_cli_has_no_execute_output_and_errors_are_sanitized(self):
         summary = self.core.root / "summary.md"
-        with mock.patch.object(module, "DiscoveryRuntime", side_effect=OSError("SECRET-TOKEN")):
+        output = io.StringIO()
+        with mock.patch.object(module, "DiscoveryRuntime", side_effect=OSError("SECRET-TOKEN")), contextlib.redirect_stdout(output):
             self.assertEqual(1, module.main(["--root", str(self.core.root), "--summary", str(summary)]))
+        self.assertEqual(json.loads(output.getvalue())["status"], "blocked")
+        self.assertNotIn("SECRET-TOKEN", output.getvalue())
         self.assertNotIn("SECRET-TOKEN", summary.read_text())
         self.assertIn("why:", summary.read_text())
         self.assertFalse((self.core.root / "result.json").exists())
+
+    def invoke_cli(self, result, *flags):
+        summary, output = self.core.root / "cli-summary.md", io.StringIO()
+        runtime = mock.Mock()
+        runtime.run.return_value = deepcopy(result)
+        with mock.patch.object(module, "DiscoveryRuntime", return_value=runtime), contextlib.redirect_stdout(output):
+            status = module.main(["--root", str(self.core.root), "--summary", str(summary), *flags])
+        return status, json.loads(output.getvalue()), summary.read_text(), runtime
+
+    def healthy_result(self):
+        result = self.run_adapter()
+        self.assertEqual("inventoried-only", result["status"])
+        return result
+
+    def test_real_bounded_round_is_pending_not_evidence_failure(self):
+        self.inventory_override = lambda _: {"total_count": 2, "workflow_runs": [
+            {**self.review.run, "id": n} for n in (51, 52)]}
+        result = self.run_adapter(limit=1)
+        before = deepcopy(self.make().load())
+        self.assertEqual("incomplete", result["status"])
+        diagnostic = module.progress_diagnostic(result)
+        self.assertEqual(diagnostic["status"], "pending")
+        self.assertEqual(diagnostic["metadata_remaining"], 1)
+        self.assertEqual(diagnostic["pending_attempts"], 1)
+        code, actual, summary, runtime = self.invoke_cli(result, "--background")
+        self.assertEqual(code, 0)
+        self.assertEqual(actual, diagnostic)
+        self.assertIn('"status": "incomplete"', summary)
+        runtime.run.assert_called_once_with(8, None, None)
+        self.assertEqual(self.make().load(), before)
+        self.assertFalse(self.api.issues)
+
+    def test_later_windows_background_pending_but_manual_still_nonzero(self):
+        result = self.make().run(now=datetime(2026, 9, 10, tzinfo=timezone.utc))
+        self.assertTrue(result["inventory_pending"])
+        self.assertEqual(self.invoke_cli(result, "--background")[0], 0)
+        self.assertEqual(self.invoke_cli(result)[0], 1)
+
+    def test_finished_inventory_stays_ready_without_health_authority(self):
+        code, diagnostic, _, _ = self.invoke_cli(self.healthy_result(), "--background")
+        self.assertEqual(code, 0)
+        self.assertEqual(diagnostic["status"], "ready")
+        self.assertFalse(diagnostic["admission_evidence"])
+
+    def test_real_metadata_error_is_blocked_in_background(self):
+        self.metadata_error = True
+        result = self.run_adapter()
+        self.assertTrue(result["state"]["metadata_scan"]["errors"])
+        code, diagnostic, _, _ = self.invoke_cli(result, "--background")
+        self.assertEqual(code, 1)
+        self.assertEqual(diagnostic["status"], "blocked")
+        self.assertNotIn("SECRET-TOKEN", json.dumps(diagnostic))
+
+    def test_real_missing_artifact_is_not_ordinary_pending(self):
+        self.review.artifacts.clear()
+        code, diagnostic, _, _ = self.invoke_cli(self.run_adapter(), "--background")
+        self.assertEqual(code, 1)
+        self.assertGreater(diagnostic["unresolved_attempts"], 0)
+
+    def test_real_retention_loss_stays_blocked(self):
+        self.review.artifacts[0]["expired"] = True
+        code, diagnostic, _, _ = self.invoke_cli(self.run_adapter(), "--background")
+        self.assertEqual(code, 1)
+        self.assertEqual(diagnostic["retention_lost"], 1)
+
+    def test_inventory_error_and_gap_stay_blocked(self):
+        good = self.healthy_result()
+        for field in ("errors", "inventory_gaps"):
+            with self.subTest(field=field):
+                result = deepcopy(good)
+                result["status"] = "incomplete"
+                if field == "errors":
+                    result[field] = ["PRIVATE error details"]
+                else:
+                    result["state"][field] = [{"start": START, "end": END, "reasons": ["PRIVATE details"]}]
+                code, diagnostic, _, _ = self.invoke_cli(result, "--background")
+                self.assertEqual(code, 1)
+                self.assertEqual(diagnostic["status"], "blocked")
+                self.assertNotIn("PRIVATE", json.dumps(diagnostic))
+
+    def test_unknown_or_inconsistent_result_cannot_be_ready(self):
+        good = self.healthy_result()
+        for mutate in (lambda r: r.update(status="unknown"),
+                       lambda r: r.update(inventory_pending="false"),
+                       lambda r: r.update(status="incomplete"),
+                       lambda r: r["state"].pop("metadata_scan"),
+                       lambda r: r["state"].update(unresolved={"1/1": {"status": "new-kind"}})):
+            with self.subTest(mutate=mutate):
+                result = deepcopy(good)
+                mutate(result)
+                code, diagnostic, _, _ = self.invoke_cli(result, "--background")
+                self.assertEqual(code, 1)
+                self.assertEqual(diagnostic["status"], "blocked")
+
+    def test_exact_manual_attempt_cannot_use_background(self):
+        result = self.healthy_result()
+        code, _, _, runtime = self.invoke_cli(result, "--background", "--run-id", "51", "--attempt", "1")
+        self.assertEqual(code, 1)
+        runtime.run.assert_not_called()
 
 
 if __name__ == "__main__":

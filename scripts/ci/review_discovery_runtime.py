@@ -344,6 +344,50 @@ class DiscoveryRuntime:
                 or protocol.summary(self.state)["unresolved"] else "inventoried-only"}
 
 
+DIAGNOSTIC_SCHEMA = "lmdj.ci-review-discovery-diagnostic.v1"
+
+
+def progress_diagnostic(result):
+    """Classify persisted discovery progress, never product or delivery health."""
+    require(isinstance(result, dict) and set(result) == {
+        "schema", "state", "errors", "inventory_pending", "status"}
+        and result["schema"] == "lmdj.ci-review-discovery-report.v1", "unknown discovery report")
+    state = result["state"]
+    require(isinstance(state, dict) and isinstance(result["errors"], list)
+            and type(result["inventory_pending"]) is bool, "invalid discovery report fields")
+    gaps, unresolved, lost = state["inventory_gaps"], state["unresolved"], state["retention_lost"]
+    scan = state["metadata_scan"]
+    require(isinstance(gaps, list) and isinstance(unresolved, dict) and isinstance(lost, list)
+            and isinstance(scan, dict) and isinstance(scan["errors"], dict), "invalid discovery obligations")
+    counts = dict.fromkeys(protocol.UNRESOLVED, 0)
+    for record in unresolved.values():
+        require(isinstance(record, dict) and isinstance(record.get("status"), str)
+                and record["status"] in counts, "unknown discovery obligation")
+        counts[record["status"]] += 1
+    require(lost == [key for key, record in unresolved.items() if record["status"] == "retention-lost"]
+            and type(state["inventoried_attempts_resolved"]) is bool
+            and state["inventoried_attempts_resolved"] == (not unresolved), "inconsistent discovery obligations")
+    active, remaining = scan["active"], 0
+    if active is not None:
+        require(isinstance(active, dict) and set(active) == {"run_ids", "position"}
+                and isinstance(active["run_ids"], list) and bool(active["run_ids"])
+                and type(active["position"]) is int
+                and 0 <= active["position"] < len(active["run_ids"]), "invalid discovery cursor")
+        require(all(type(number) is int and number > 0 for number in active["run_ids"])
+                and len(set(active["run_ids"])) == len(active["run_ids"]), "invalid discovery round")
+        remaining = len(active["run_ids"]) - active["position"]
+    blocked = bool(result["errors"] or gaps or scan["errors"] or counts["unresolved"] or lost)
+    pending = bool(remaining or result["inventory_pending"] or counts["pending"])
+    require(result["status"] == ("incomplete" if blocked or pending else "inventoried-only"),
+            "inconsistent discovery status")
+    return {"schema": DIAGNOSTIC_SCHEMA, "admission_evidence": False,
+            "status": "blocked" if blocked else "pending" if pending else "ready",
+            "inventory_errors": len(result["errors"]), "inventory_gaps": len(gaps),
+            "metadata_errors": len(scan["errors"]), "metadata_remaining": remaining,
+            "inventory_pending": result["inventory_pending"], "pending_attempts": counts["pending"],
+            "unresolved_attempts": counts["unresolved"], "retention_lost": len(lost)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
@@ -351,13 +395,23 @@ def main(argv=None):
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--run-id", type=int)
     parser.add_argument("--attempt", type=int)
+    parser.add_argument("--background", action="store_true",
+                        help="Allow persisted pending inventory; evidence errors still fail")
     args = parser.parse_args(argv)
     try:
+        require(not args.background or (args.run_id is None and args.attempt is None),
+                "exact manual attempts cannot use background mode")
         result = DiscoveryRuntime(args.root).run(args.limit, args.run_id, args.attempt)
+        diagnostic = progress_diagnostic(result)
         with args.summary.open("a") as stream:
             stream.write("Review discovery (not scheduler execution):\n```json\n" + json.dumps(result, sort_keys=True) + "\n```\n")
+        print(json.dumps(diagnostic, sort_keys=True), flush=True)
+        if args.background:
+            return 1 if diagnostic["status"] == "blocked" else 0
         return 1 if result["status"] == "incomplete" else 0
     except Exception:
+        print(json.dumps({"schema": DIAGNOSTIC_SCHEMA, "admission_evidence": False,
+                          "status": "blocked", "reason": "runtime_or_summary_error"}, sort_keys=True), flush=True)
         with args.summary.open("a") as stream:
             stream.write("why: review discovery is unresolved; remedy: inspect fixed storage and exact receipts; do not retry a business POST\n")
         return 1

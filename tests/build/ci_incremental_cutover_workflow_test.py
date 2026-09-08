@@ -111,10 +111,13 @@ class CutoverTests(unittest.TestCase):
     def test_coalesced_review_discovery_preserves_reporting_and_exact_manual_recovery(self):
         discovery = step('Recover missed review observations independently')
         self.assertIn('scripts/ci/review_discovery_runtime.py', discovery)
-        self.assertIn('--limit 1', discovery)
+        self.assertIn('--limit 1 --background', discovery)
         self.assertIn("steps.control.outputs.action != 'execute'", field(discovery, 'if', 8))
         manual = step('Report through the isolated outbox under the short writer lock')
         self.assertIn("'report-discovery'", manual)
+        manual_directives = '\n'.join(line for line in manual.splitlines() if not line.lstrip().startswith('#'))
+        self.assertNotIn('--background', manual_directives,
+                         'why: manual discovery must remain strict; remedy: allow pending only in automatic scans')
         self.assertIn("['--run-id', run_id, '--attempt', attempt]", manual)
         # Immediate review callbacks are retired, not their authenticated
         # compatibility handler or recovery of already durable review records.
