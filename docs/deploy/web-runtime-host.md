@@ -312,3 +312,19 @@ Deploy ID，不得把当前 draft 或未知 ID 冒充 prior。
    Environment audit trail；恢复必须走新的明确授权。
 
 轮换或回滚不会使 Creator URL、PWA、Channel promotion 或物理设备验收自动成立。
+
+## 保留已验签的 Cloudflare 暂存输入
+
+在已有 GitHub 只读认证环境下，使用：
+
+```bash
+scripts/web-runtime-deploy.sh stage TAG /absolute/path/to/new-stage
+```
+
+该命令复用 `verify TAG` 的远端 tag、签名、Release 元数据和 Host 包检查，
+然后保留 `dist/`、原始发布包及校验和/签名、精确源码 `source.tar` 和
+逐文件 SHA-256/字节数记录 `stage.json`。目标目录必须不存在；失败目录不得
+当作成功暂存复用。命令不会上传、发布或修改 Cloudflare 路由。
+
+`stage.json` 是内部暂存记录，不是部署证据或发布授权。后续部署命令仍须
+重新验证保留的签名和资源，并核对实时目标、版本及操作记录；不能仅凭此文件发布。

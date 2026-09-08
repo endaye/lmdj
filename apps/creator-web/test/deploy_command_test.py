@@ -1137,6 +1137,7 @@ def verify_distribution(dist_root, repo_root):
             completed.stderr,
             "usage:\n"
             "  scripts/creator-web-deploy.sh verify TAG\n"
+            "  scripts/creator-web-deploy.sh stage TAG ABSOLUTE_OUTPUT_DIRECTORY\n"
             "  scripts/creator-web-deploy.sh deploy TAG\n"
             "  scripts/creator-web-deploy.sh smoke BASE_URL PRODUCT_BUILD HOST_VERSION\n",
         )
@@ -1488,6 +1489,21 @@ def verify_distribution(dist_root, repo_root):
         self.assertFalse(invocation["credential_in_argv"])
         self.assertNotIn(GITHUB_TOKEN, self.details_path.read_text(encoding="utf-8"))
         self.assert_no_secret_output(completed)
+
+    def test_stage_rejects_invalid_signature_before_retaining_files(self) -> None:
+        output = self.root / "retained-stage"
+        completed = self.run_command("stage", TAG, str(output), environment={"FAKE_WRONG_SIGNATURE": "1"})
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("verification failed", completed.stderr)
+        self.assertFalse(output.exists())
+        self.assertNotIn("netlify create-draft", self.command_log())
+
+    def test_cloudflare_token_is_removed_before_git_verification(self) -> None:
+        command = self.bin / "git"
+        first, rest = command.read_text().split("\n", 1)
+        command.write_text(first + "\nimport os\nif os.environ.get('CLOUDFLARE_API_TOKEN'): raise SystemExit('unexpected Cloudflare credential')\n" + rest)
+        completed = self.run_command("verify", TAG, environment={"CLOUDFLARE_API_TOKEN": "test-only-cf-credential"})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_verify_missing_github_token_fails_before_tag_work(self) -> None:
         completed = self.run_command(
