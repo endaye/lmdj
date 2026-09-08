@@ -3,6 +3,9 @@ import {readFile} from "node:fs/promises";
 
 import {expect, test} from "@playwright/test";
 
+import {WEB_RUNTIME_IDENTITY} from
+  "../../../../products/lmdj/generated/web-runtime-identity.mjs";
+
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
@@ -129,9 +132,9 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   const manifestBytes = await manifestResponse.body();
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   expect(manifest.distribution_contract).toBe("lmdj.creator-web.distribution.v1");
-  expect(manifest.compatible_hosts).toEqual([
-    {host_id: "web-runtime-host", host_version: "3.0.0"},
-  ]);
+  expect(manifest.compatible_hosts).toEqual(
+    WEB_RUNTIME_IDENTITY.hosts["creator-web"].compatible_hosts,
+  );
   // capture_worklet ships as its own same-origin asset because the CSP below
   // (script-src 'self') rejects blob:/data: AudioWorklet module URLs.
   // perform_master_tap_worklet joins the inventory at Product Build 1.0.42.0 and
