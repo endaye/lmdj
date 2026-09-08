@@ -49,6 +49,28 @@ def script(job, name):
 
 
 class WorkflowContracts(unittest.TestCase):
+    def test_portal_main_interval_mode_is_selected_only_by_authenticated_preparation(self):
+        portal = job_body(SOURCE, "portal")
+        self.assertIn("snapshot_mode: ${{ needs.change-scope.outputs.self-test == 'true' && 'main-interval' || 'own-tree' }}", portal,
+                      "why: Portal interval mode is not bound to prepared self-test identity; remedy: select it only from authenticated change-scope output")
+        self.assertIn("checkout_ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}", portal)
+        workflow = (ROOT / ".github/workflows/architecture-portal.yml").read_text()
+        self.assertRegex(workflow, r"snapshot_mode:[\s\S]*?default: own-tree")
+        self.assertIn("PORTAL_SNAPSHOT_MODE: ${{ inputs.snapshot_mode }}", workflow)
+        self.assertIn('run: test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"', workflow)
+
+    def test_empty_candidate_interval_still_runs_complete_current_build_provenance(self):
+        workflow = (ROOT / ".github/workflows/architecture-portal.yml").read_text()
+        verification = workflow.split("      - name: Verify architecture portal\n", 1)[1]
+        self.assertIn("run: scripts/architecture-portal.sh check", verification)
+        self.assertNotRegex(verification, r"(?m)^\s*if:",
+                            "why: empty interval cannot skip candidate provenance; remedy: keep complete Portal verification unconditional")
+        package = json.loads((ROOT / "apps/architecture-portal/package.json").read_text())
+        self.assertIn("npm run check:release-docs", package["scripts"]["check"])
+        provenance = (ROOT / "apps/architecture-portal/scripts/check-release-docs.mjs").read_text()
+        for expression in ("facts.product.version", "verifySnapshotProvenance({", "headRevision: stdout.trim()"):
+            self.assertIn(expression, provenance)
+
     def test_call_requires_both_inputs_and_only_existing_read_secret(self):
         call = SOURCE.split("  workflow_call:\n", 1)[1].split("  schedule:\n", 1)[0]
         for key in ("batch_request", "batch_executor"):

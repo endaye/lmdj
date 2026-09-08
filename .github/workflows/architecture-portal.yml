@@ -27,6 +27,11 @@ on:
         required: false
         type: string
         default: ""
+      snapshot_mode:
+        description: Authenticated self-test main interval, or strict PR own-tree (default).
+        required: false
+        type: string
+        default: own-tree
 
 permissions:
   contents: read
@@ -59,7 +64,7 @@ jobs:
           cache-dependency-path: apps/architecture-portal/package-lock.json
       - name: Install locked portal dependencies
         run: scripts/architecture-portal.sh install
-      # Both checks below measure this change from its merge base, which the
+      # The PR checks measure this change from its merge base, which the
       # checkers resolve themselves from the two revisions. `base_sha` is the
       # base branch tip at event time, so a two-dot range would additionally
       # report, in reverse, everything that landed on `main` after the branch
@@ -80,11 +85,16 @@ jobs:
       # after it, which is what issue #296 was about. Only added snapshots are
       # its subject: a landed divergence may be authorized by a squash witness,
       # and a witness names the introducing commit, so a snapshot introduced
-      # here cannot have one.
+      # here cannot have one. Authenticated main batches instead enumerate
+      # every introducing commit in their first-parent interval; subsequent
+      # mutable page changes are not attributed to an earlier introduction.
       - name: Check snapshot projection against the merge target
         env:
+          PORTAL_SNAPSHOT_MODE: ${{ inputs.snapshot_mode }}
           PORTAL_BASE_SHA: ${{ inputs.base_sha }}
           PORTAL_HEAD_SHA: ${{ inputs.head_sha }}
         run: npm --prefix apps/architecture-portal run check:snapshot-projection
+      # This remains unconditional even for an empty main interval/candidate:
+      # it verifies the current Build's complete canonical snapshot provenance.
       - name: Verify architecture portal
         run: scripts/architecture-portal.sh check

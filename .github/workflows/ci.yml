@@ -242,6 +242,7 @@ jobs:
       base_sha: ${{ needs.change-scope.outputs.resolved-base-sha }}
       head_sha: ${{ needs.change-scope.outputs.resolved-head-sha }}
       checkout_ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
+      snapshot_mode: ${{ needs.change-scope.outputs.self-test == 'true' && 'main-interval' || 'own-tree' }}
       pull_request_body: ${{ needs.change-scope.outputs.pull-request-body }}
 
   ci-contract:

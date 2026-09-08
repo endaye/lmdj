@@ -4,7 +4,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 
 import {projectionManifest} from './lib/snapshot-provenance.mjs';
-import {resolveChangedFiles} from './lib/changed-files.mjs';
+import {requireRevision, resolveChangedFiles} from './lib/changed-files.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -75,27 +75,16 @@ export async function checkSnapshotProjection({addedFiles, readMetadata, readPro
   return errors;
 }
 
-async function main() {
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-  const baseSha = process.env.PORTAL_BASE_SHA ?? '';
-  const headSha = process.env.PORTAL_HEAD_SHA || 'HEAD';
-  let addedFiles = (process.env.PORTAL_ADDED_FILES ?? '').split(/\r?\n/).filter(Boolean);
-  if (!addedFiles.length) {
-    try {
-      addedFiles = await resolveChangedFiles(repoRoot, {baseSha, headSha, diffFilter: 'A'});
-    } catch (error) {
-      console.error(`the added-file range cannot be measured: ${error.message}`);
-      process.exitCode = 1;
-      return;
-    }
-  }
-
-  const errors = await checkSnapshotProjection({
+async function checkAtRevision(repoRoot, headSha, addedFiles, {allowMissing = true} = {}) {
+  return checkSnapshotProjection({
     addedFiles,
     readMetadata: async (file) => {
       const exists = await execFileAsync('git', ['cat-file', '-e', `${headSha}:${file}`], {cwd: repoRoot})
         .then(() => true, () => false);
-      if (!exists) return null;
+      if (!exists) {
+        if (!allowMissing) throw new Error('an introduced metadata blob is unavailable');
+        return null;
+      }
       const {stdout} = await execFileAsync('git', ['show', `${headSha}:${file}`], {
         cwd: repoRoot,
         maxBuffer: 64 * 1024 * 1024,
@@ -104,12 +93,70 @@ async function main() {
     },
     readProjection: (paths) => projectionManifest(repoRoot, headSha, paths),
   });
+}
+
+// main-interval is selected by the authenticated batch caller, not PR input.
+// Local refs prove Git topology only; GitHub source/claim authority belongs to
+// that caller. Never substitute the newest target for an introducing tree.
+export async function checkRevisionProjection({repoRoot, mode = 'own-tree', baseSha = '', headSha = 'HEAD', addedFiles = []}) {
+  try {
+    if (!['own-tree', 'main-interval'].includes(mode)) throw new Error('unknown snapshot comparison mode');
+    if (mode === 'own-tree') {
+      const files = addedFiles.length ? addedFiles : await resolveChangedFiles(repoRoot, {baseSha, headSha, diffFilter: 'A'});
+      return {errors: await checkAtRevision(repoRoot, headSha, files), checked: new Set(files.filter((file) => METADATA_PATTERN.test(file))).size};
+    }
+    if (addedFiles.length) throw new Error('main interval cannot accept an added-file override');
+    requireRevision(baseSha, 'base'); requireRevision(headSha, 'head');
+    const git = async (...args) => (await execFileAsync('git', args, {cwd: repoRoot, maxBuffer: 64 * 1024 * 1024})).stdout.trim();
+    if (await git('rev-parse', '--is-shallow-repository') !== 'false') throw new Error('main history is shallow');
+    for (const revision of [baseSha, headSha]) {
+      if (await git('cat-file', '-t', revision) !== 'commit') throw new Error('revision is not an available commit');
+    }
+    const mainHistory = (await git('rev-list', '--first-parent', 'refs/remotes/origin/main')).split('\n');
+    if (!mainHistory.includes(headSha)) throw new Error('target is outside main first-parent history');
+    const history = (await git('rev-list', '--first-parent', headSha)).split('\n');
+    const baseIndex = history.indexOf(baseSha);
+    if (baseIndex < 0) throw new Error('base is outside target first-parent history');
+    const revisions = history.slice(0, baseIndex).reverse();
+    const errors = [];
+    let checked = 0;
+    for (const revision of revisions) {
+      // Diff against the first parent, not the endpoint net diff. This also
+      // sees introductions subsequently deleted, renamed, reverted or fixed.
+      const {stdout} = await execFileAsync('git', ['diff', '--no-renames', '--name-only', '-z', '--diff-filter=A', `${revision}^1`, revision], {cwd: repoRoot});
+      const files = stdout.split('\0').filter((file) => METADATA_PATTERN.test(file));
+      checked += files.length;
+      errors.push(...(await checkAtRevision(repoRoot, revision, files, {allowMissing: false})).map((error) =>
+        `why: introducing commit ${revision}: ${error.split('; re-run ')[0]}; remedy: investigate this exact introduction and repair provenance through its authorized workflow; never rewrite a frozen snapshot to match later mutable pages`));
+    }
+    return {errors, checked};
+  } catch (error) {
+    throw new Error(`why: snapshot comparison cannot be established (${error.message.replace(/\s+/g, ' ')}); remedy: supply a supported mode and exact authenticated main range with complete Git history; do not skip projection validation`);
+  }
+}
+
+async function main() {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+  const mode = process.env.PORTAL_SNAPSHOT_MODE || 'own-tree';
+  let result;
+  try {
+    result = await checkRevisionProjection({repoRoot, mode,
+      baseSha: process.env.PORTAL_BASE_SHA ?? '', headSha: process.env.PORTAL_HEAD_SHA || 'HEAD',
+      addedFiles: (process.env.PORTAL_ADDED_FILES ?? '').split(/\r?\n/).filter(Boolean)});
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+    return;
+  }
+  const {errors, checked} = result;
 
   if (errors.length) {
     console.error(errors.join('\n'));
     process.exitCode = 1;
   } else {
-    console.log('portal snapshot projection: valid');
+    console.log(mode === 'main-interval' && checked === 0
+      ? 'portal snapshot projection: no snapshot introductions in interval; complete candidate provenance remains the full Portal check'
+      : `portal snapshot projection: valid (${checked} introductions checked)`);
   }
 }
 
