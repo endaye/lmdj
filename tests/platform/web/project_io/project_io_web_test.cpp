@@ -486,12 +486,6 @@ class WebCatalogTransport final : public lmdj::project_io::CatalogTransport {
   int reads_ = 0;
 };
 
-std::string error_reason(const lmdj::foundation::Error& error) {
-  return error.details.is_object()
-             ? error.details.value("reason", std::string{})
-             : std::string{};
-}
-
 nlohmann::json soundset_store_publish(
     const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform) {
   using namespace lmdj;
@@ -539,8 +533,6 @@ nlohmann::json soundset_store_publish(
 
   return {
       {"acquire", mutation_result(acquired)},
-      {"acquireReason",
-       acquired.has_value() ? std::string{} : error_reason(acquired.error())},
       {"acquireTotalBytes",
        acquired.has_value() ? nlohmann::json(acquired.value().total_bytes)
                             : nlohmann::json(nullptr)},
@@ -576,7 +568,55 @@ nlohmann::json soundset_store_publish(
   };
 }
 
+// The precondition `publish_directory_if_absent` declares, stated as a
+// refusal: a lease on a covering ancestor is not a lease on the destination.
+// Without this, the `lease.projectPath !== destinationPath` guard could be
+// deleted and every suite would still pass, because every real call site
+// happens to lease the exact destination.
+nlohmann::json publication_lease_scope(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform) {
+  const auto root =
+      std::filesystem::path{"/lmdj-workspace/.lmdj-host/publication-scope"};
+  const auto staging = root / "staging";
+  const auto destination = root / "published";
+  success(platform->ensure_directory(staging), "publication scope staging");
+  auto ancestor = value(
+      platform->acquire_writer(root), "publication scope ancestor lease");
+  success(
+      platform->create_immutable(staging / "payload.bin", bytes("scoped")),
+      "publication scope payload");
+  const auto refused =
+      platform->publish_directory_if_absent(staging, destination);
+  const bool destination_after = value(
+      platform->directory_exists(destination),
+      "publication scope destination after refusal");
+  ancestor.reset();
+
+  auto exact = value(
+      platform->acquire_writer(destination), "publication scope exact lease");
+  const auto admitted =
+      platform->publish_directory_if_absent(staging, destination);
+  exact.reset();
+  return {
+      {"ancestorLease", mutation_result(refused)},
+      {"destinationAfterRefusal", destination_after},
+      {"exactLease", mutation_result(admitted)},
+      {"destinationAfterPublish",
+       value(
+           platform->directory_exists(destination),
+           "publication scope destination after publish")},
+  };
+}
+
 std::optional<nlohmann::json> run_soundset_store_action() {
+  if (query("action") == "publication_lease_scope") {
+    auto platform = lmdj::project_io::make_web_project_storage_platform();
+    require(platform != nullptr, "Web platform factory returned null");
+    return nlohmann::json{
+        {"complete", true},
+        {"result", publication_lease_scope(platform)},
+    };
+  }
   if (query("action") != "soundset_store_publish") {
     return std::nullopt;
   }

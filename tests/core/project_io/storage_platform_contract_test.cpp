@@ -753,10 +753,6 @@ void test_directory_transfer_primitives_are_atomic_and_path_safe() {
   LMDJ_CHECK(
       platform->list_directories(root).value() == expected_directories);
 
-  // Native latitude: publication here renames atomically and never reads the
-  // lease, so the ancestor lease above is enough. A platform that publishes by
-  // copy requires the lease on the destination path itself; the Web
-  // conformance suite is where that obligation is exercised.
   const auto staging = root / "staging";
   const auto destination = root / "published";
   LMDJ_CHECK(platform->ensure_directory(staging / "nested").has_value());
@@ -764,6 +760,12 @@ void test_directory_transfer_primitives_are_atomic_and_path_safe() {
       platform->create_immutable(
           staging / "nested/payload.bin", bytes("complete"))
           .has_value());
+  // Publication is leased on the destination path itself, not on the ancestor
+  // leased above. This platform renames atomically and does not read the
+  // lease, but the interface requires it of every caller, so the contract test
+  // states the discipline rather than relying on the latitude.
+  auto destination_lease = platform->acquire_writer(destination);
+  LMDJ_CHECK(destination_lease.has_value());
   LMDJ_CHECK(
       platform->publish_directory_if_absent(staging, destination)
           .has_value());
@@ -781,6 +783,7 @@ void test_directory_transfer_primitives_are_atomic_and_path_safe() {
           .has_value());
   const auto collision = platform->publish_directory_if_absent(
       collision_staging, destination);
+  destination_lease.value().reset();
   LMDJ_CHECK(!collision.has_value());
   LMDJ_CHECK(collision.error().code == ErrorCode::io_error);
   LMDJ_CHECK(

@@ -634,6 +634,30 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
 // handing the storage platform a staged directory; on OPFS that publish is a
 // bounded copy that only a writer lease held on the destination may perform,
 // and the Set Store took its lease on the staging directory alone.
+// `publish_directory_if_absent` requires the lease on the destination path
+// itself. Every real call site satisfies that, so without a negative case the
+// guard enforcing it could be deleted and every suite would stay green.
+test("Web Project I/O refuses a directory publication leased on an ancestor", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+  trackRuntimeErrors(page);
+  await page.goto(
+      "/project_io/project_io_web_test.html?action=publication_lease_scope");
+  const result = await waitForResult(page);
+
+  expect(result.ancestorLease).toEqual({
+    status: "failed",
+    errorCode: "IO_ERROR",
+    storageCondition: "invalid_state",
+  });
+  expect(result.destinationAfterRefusal).toBe(false);
+  expect(result.exactLease).toEqual({
+    status: "succeeded",
+    errorCode: "",
+    storageCondition: "",
+  });
+  expect(result.destinationAfterPublish).toBe(true);
+});
+
 const SOUNDSET_PUBLISHED = Object.freeze({
   status: "succeeded",
   errorCode: "",

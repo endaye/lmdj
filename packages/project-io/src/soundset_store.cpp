@@ -315,6 +315,13 @@ struct SoundSetStore::Impl {
   // commit record the directory holds every file and is still uncommitted.
   // Only enumeration knows the difference, and answering from the directory
   // alone would report a Set as installed that `list` refuses to show.
+  //
+  // Every failure answers false, including a listing that could not be read.
+  // That sends a genuinely published Set down the leased path, which loads it
+  // and returns it anyway; the cost is one writer lease this Host would not
+  // otherwise have taken. `acquire` is the only entry point that owns
+  // recovery, so it is the only one gated: `read` and `read_artifact` answer
+  // from hash-verified bytes and take no lease that could recover anything.
   bool enumerated(const std::string& manifest_sha256) const {
     const auto root = sets_root();
     const auto present = platform->directory_exists(root);
