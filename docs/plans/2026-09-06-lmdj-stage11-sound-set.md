@@ -168,10 +168,72 @@ prepared bytes into a Host's audio engine today: the Facade owns no engine and
 emits no binary channel, and the engine's preview control is a Pad-slot
 override on the bank cooked from a Project, which holds no Set. Delivering the
 bytes needs either an audition sink on the Facade or an audition bank in the
-Runtime, and the second answers a product question this plan has not settled —
-whether auditioning a Set displaces the open Project's bank. Until that is
-decided and built, a Host can browse, inspect, gate and describe an audition
-but cannot hear one, and S11-D5 stays open.
+Runtime. A Host can browse, inspect, gate and describe an audition but cannot
+hear one, and S11-D5 stays open.
+
+**The product question that blocked the second option is now settled.** This
+plan previously recorded it as unsettled — whether auditioning a Set displaces
+the open Project's bank. Decided by the product owner on 2026-09-08: **a bank
+slot is reserved for auditions**, so a Set preview never touches the bank the
+open Project plays from. Recorded on #799 and #470 with the two rejected
+options: displacing the Project's bank was refused because the restore path
+must survive a mid-audition failure, and cooking the Set into the Project's
+bank at a scratch pad slot was refused because it mutates a bank derived from
+Project Truth for something explicitly outside the Project, contradicting this
+Stage's own rule that audition creates no Asset, touches no Pad and leaves the
+revision unchanged.
+
+One correction belongs with the decision, because #799 described the engine
+inaccurately and the difference changes what the chosen option costs. The
+engine has **four** bank slots, not one: `kRealtimeBankCapacity = 4`
+(`packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp:31`),
+`current_bank_slot_` names the live one, and `publish_sample_bank`
+(`packages/audio-runtime/src/realtime_engine.cpp:571-579`) allocates whichever
+slot is `BankState::empty`, returning `PublishResult::bank_slots_full` only
+when none is. "One current bank and 64 pad slots with no spare" is true of
+**pad** slots.
+
+**The reserved audition pool sits beside the four, and holds two.** The
+decision was first priced as "hot-swap headroom four down to three", and that
+number was wrong: the audition Banks live beside `bank_slots_`, so
+`kRealtimeBankCapacity` stays 4 and **every existing publication path keeps its
+exact arithmetic**.
+
+Two rather than one, because replace is the chosen overlap policy and replacing
+a ringing audition must publish the incoming Bank while draining voices are
+still reading the outgoing one. With a single slot there is nowhere to put the
+incoming Bank that is not the buffer a voice is mid-render on — the same reason
+the Project pool is larger than one. A third publication while both drain is
+refused, and that refusal is deliberately not counted against
+`bank_slot_rejections_`, which measures Project pressure. Both slots are
+outside `kRealtimeBankCapacity`, so this changes the implementation's shape and
+not the decision or its cost. Carving one of the four was rejected for a reason the
+original pricing missed — it forces rewriting
+`tests/core/audio/realtime_engine_test.cpp:1169-1190`, which publishes four
+banks, asserts the fifth is `bank_slots_full`, and asserts
+`reclaim_retired_banks() == 3`. Those constants measure real realtime headroom,
+so editing them to go green is a threshold edit of the kind the Minimization
+Principle forbids. It would also leave
+`snapshot_publication_stress_test.cpp:244-262` numerically true at 4 == 4 while
+the prose argument behind its `static_assert` quietly stopped holding.
+
+**Holding a slot is not by itself audible, and that cost is real.**
+`current_sample` (`packages/audio-runtime/src/realtime_engine.cpp:297`) reads
+`bank_slots_[current_bank_slot_]` unconditionally, so every byte a voice plays
+comes from the *current* bank. Making the reserved slot current would be the
+rejected displacement option under another name, so the engine instead gains a
+voice-start path that reads the reserved slot explicitly. `Voice` already
+carries `bank_slot` and `release_voice_bank` already refcounts the drain, with
+`pattern_slot` as precedent for a voice sourcing off a non-current slot;
+`apply_published_bank` must not be reused, because it retires the current bank,
+writes `current_bank_slot_` and overwrites `availability_mask_`. The decision
+therefore costs an engine change rather than a held slot — which does not
+revive either rejected option, since both were rejected on correctness rather
+than on cost.
+
+The decision is recorded here; the mechanism is not built. #799 carries the
+byte path, and until it lands S11-D5 stays open on delivery alone rather than
+on an unanswered product question.
 
 `soundset.map.preview` is the pure function
 `map(manifest, bank occupancy) → {proposed, collisions, kept}` and mutates
