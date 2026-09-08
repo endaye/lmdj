@@ -26,6 +26,46 @@ to manufacture an empty target. The standalone HTTP verifier requires
 `--initialization-target` for these addresses. Select the tag from
 the verified release audit and take version/deployment IDs from exact receipts.
 
+## Sound Set Catalog forwarding
+
+The Creator reaches its Sound Set Catalog through the same-origin prefix
+`/soundset-catalog/`, and `apps/web-runtime-host/deploy/cloudflare_worker.mjs`
+forwards it. The page is never given a foreign origin, so `connect-src 'self'`
+-- the exfiltration barrier around the Projects and captured audio the Creator
+holds in OPFS -- stays exactly as it is. Nothing about the Content Security
+Policy changes when a Catalog is configured.
+
+Pin the Catalog in `vars.CATALOG_UPSTREAM` in the tracked
+`apps/creator-web/deploy/wrangler.json`, never in a dashboard variable: the
+Catalog a deployment forwards to must be diffable, reviewable in a Pull
+Request, and auditable afterwards. It must be an absolute `https` base with no
+query or fragment; anything else fails closed and the prefix answers 404.
+
+**No Catalog is configured today, and that is deliberate**: there is no
+production LMDJ Catalog, so `vars` carries no `CATALOG_UPSTREAM` and every
+prefixed path answers 404. That is S11-D6's "a Host that offers no Catalog
+browses only the Sets its Workspace Set Store already holds", and it is also
+why the deployed smoke's "unknown paths return 404" assertion needs no
+exception. Configuring a Catalog changes that answer for exactly the two paths
+the transport can spell, and the smoke expectation has to be extended in the
+same change.
+
+The diagnostic Lab has no Sound Set surface. It sets neither `CATALOG_UPSTREAM`
+nor the `run_worker_first` route, so it forwards nothing -- the gate is closed
+by absence at both ends rather than by a condition in the shared Worker that
+someone could delete.
+
+The forward is not a relay, and both reasons are structural rather than
+checked. The destination is composed from `CATALOG_UPSTREAM` plus tokens the
+Worker re-derives -- a literal, an element read back out of a frozen pair, and
+a digest re-matched against `[0-9a-f]{64}` -- so no request text is
+concatenated into the target and no header, query or path segment can move it
+to another host. And the admitted grammar is exactly `catalog/index.json` and
+`object/(manifest|blob)/<64 hex>`, which is the whole of what
+`packages/web-runtime-platform/web/soundset_catalog.mjs` can spell. What that
+leaves a compromised page bundle is the choice of which object is fetched from
+the one configured Catalog: 64 hex characters per GET to a fixed host.
+
 ## Candidate, verify, promote and recover
 
 Candidate upload requires Node 22.16.0 and Wrangler 4.129.1 installed beforehand.

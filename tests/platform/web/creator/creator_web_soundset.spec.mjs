@@ -9,36 +9,39 @@
 // the one chain Task 5 could not prove -- browser fetch -> Host transport ->
 // Core acquisition -> Set Store -> install -> Project Truth.
 //
-// The Catalog fixture server runs with `--cross-origin`. That is not a
-// convenience: a Creator page is served with
-// `Cross-Origin-Embedder-Policy: require-corp`, and a cross-origin response
-// carrying neither CORS nor `Cross-Origin-Resource-Policy` is blocked by the
-// browser before the transport sees a status, in Chromium and in WebKit
-// alike. Any real deployment of a Catalog on another origin has to answer the
-// same way.
+// The Catalog fixture server runs WITHOUT `--cross-origin`, and that is
+// load-bearing rather than an omission. Since #901 the page never reaches a
+// Catalog directly: it fetches the same-origin `/soundset-catalog/` prefix and
+// the Host forwards. A fixture answering with no CORS header is unreadable by
+// any direct browser fetch, so if this journey were ever rewired back to one,
+// these legs would fail rather than quietly prove a topology the deployment
+// does not use.
 //
-// BOTH CASES CARRY `test.fail()` TODAY. Three pre-existing defects, each
-// measured during the #674 acceptance run and each filed rather than
-// shortened away, stop this journey before it can finish:
+// BOTH CASES STILL CARRY `test.fail()`. Of the three pre-existing defects
+// measured during the #674 acceptance run and filed rather than shortened
+// away, two are fixed and #900 still stops this journey at its first wall:
 //
-//   #900  the browser Bundle reader allowlists only container 1.0.0/1.1.0 and
-//         lmdj.project.v1..v3, so no Project this Build creates can be
-//         imported at all. This is the first wall, and the only one the
-//         journey has actually reached unaided.
-//   #901  the packaged Creator's `connect-src 'self'` CSP blocks every
-//         cross-origin Catalog, and every real Catalog is cross-origin.
-//   #902  with #900 and #901 patched locally the transport fetched the whole
-//         fixture corpus correctly -- 1 index, 7 manifests, 19 blobs, all 200,
-//         one request per unique hash -- and the Workspace Set Store then
-//         refused to publish every eligible Set with a bare IO_ERROR.
+//   #900  OPEN. The browser Bundle reader allowlists only container
+//         1.0.0/1.1.0 and lmdj.project.v1..v3, so no Project this Build
+//         creates can be imported at all. This is the first wall, and the only
+//         one the journey has actually reached unaided.
+//   #901  FIXED. The packaged Creator's `connect-src 'self'` blocked every
+//         cross-origin Catalog, and every real Catalog is cross-origin. The
+//         Creator now reaches its Catalog through a same-origin prefix that
+//         the Host forwards, so that directive -- the exfiltration barrier
+//         around the Projects and audio held in OPFS -- was left untouched.
+//   #902  FIXED. With #900 and #901 patched locally the transport fetched the
+//         whole fixture corpus correctly -- 1 index, 7 manifests, 19 blobs,
+//         all 200, one request per unique hash -- and the Workspace Set Store
+//         then refused to publish every eligible Set with a bare IO_ERROR.
 //
 // `test.fail()` rather than `skip` or `fixme` on purpose. The journey still
 // runs in full, every leg and every far-side assertion stays exactly as
 // strict as it is written, and Playwright turns the lane RED the moment the
 // journey starts passing -- so the annotation cannot outlive the defects.
 // Removing a leg to make this green would be the `acceptance-journey-
-// truncation` pitfall; removing the annotation without fixing #900, #901 and
-// #902 just makes the lane red again.
+// truncation` pitfall. **Whoever lands #900 removes both annotations**, and
+// should expect to debug legs 2 to 5 rather than watch them pass.
 //
 // HOW FAR THIS HAS ACTUALLY RUN, so nobody reads more into it than was
 // measured: unaided, leg 1 stops at the Bundle import (#900). With #900 and
@@ -46,9 +49,9 @@
 // there (#902). **Legs 2 to 5 have never executed.** Their selectors and
 // expected counts were checked by hand against
 // `apps/creator-web/src/components/soundset_surface.tsx` and the 64-Pad proof
-// fixture, not by running them; expect to debug them when the three defects
-// land.
+// fixture, not by running them; expect to debug them when #900 lands.
 import {spawn} from "node:child_process";
+import {writeFileSync} from "node:fs";
 import {dirname, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
 
@@ -56,6 +59,19 @@ import {expect, test} from "@playwright/test";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
+
+// #901: the Creator reaches its Catalog through a same-origin prefix the Host
+// forwards, so this lane tells the proof server which Catalog to forward to.
+// The lane owns the server it drives; without this path there is nothing to
+// point at, and the run fails closed rather than proving itself against
+// whatever the server was last told.
+const upstreamFile = process.env.LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE;
+if (!upstreamFile) {
+  throw new Error("LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE is required");
+}
+
+// The page's endpoint, and the prefix every recorded target is relative to.
+const CATALOG_PREFIX = "/soundset-catalog";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const fixtureRoot = resolve(repoRoot, "tests/fixtures/soundset");
@@ -82,7 +98,7 @@ let catalog = null;
 async function startCatalogServer() {
   const child = spawn(
     "python3",
-    [serverPath, "--root", fixtureRoot, "--port", "0", "--cross-origin"],
+    [serverPath, "--root", fixtureRoot, "--port", "0"],
     {stdio: ["ignore", "pipe", "pipe"]},
   );
   const baseUrl = await new Promise((resolveUrl, rejectUrl) => {
@@ -125,19 +141,30 @@ async function stopCatalogServer(server) {
 // a corpse and calling it a pass.
 test.beforeEach(async () => {
   catalog = await startCatalogServer();
+  // Written after the fixture has a port and before the page is opened. Leg 5
+  // stops the fixture and deliberately leaves this pointing at the dead port:
+  // a Catalog that goes away is exactly what that leg is about, and the
+  // forward then fails the way a real outage would.
+  writeFileSync(upstreamFile, `${catalog.baseUrl}/`, {encoding: "utf8"});
 });
 
 test.afterEach(async () => {
   await stopCatalogServer(catalog);
   catalog = null;
+  writeFileSync(upstreamFile, "", {encoding: "utf8"});
 });
 
 // Every Catalog request the page makes, recorded rather than intercepted.
-function recordCatalogTraffic(page, baseUrl) {
+// The page's Catalog traffic is same-origin now, so this watches the forwarding
+// prefix. Slicing the origin and the prefix leaves the two S11-D6 shapes --
+// `/catalog/index.json` and `/object/<kind>/<hash>` -- which is what the wire
+// assertions below are written against and what the Host forwards upstream.
+function recordCatalogTraffic(page, origin) {
+  const prefix = `${origin}${CATALOG_PREFIX}`;
   const targets = [];
   page.on("request", (request) => {
-    if (request.url().startsWith(baseUrl)) {
-      targets.push(request.url().slice(baseUrl.length));
+    if (request.url().startsWith(prefix)) {
+      targets.push(request.url().slice(prefix.length));
     }
   });
   return targets;
@@ -246,15 +273,15 @@ async function occupancyOf(page, bank) {
   }, bank);
 }
 
-test("Sound Sets browse, inspect, preview and install through the Web fetch transport", async ({page, browserName}) => {
+test("Sound Sets browse, inspect, preview and install through the Web fetch transport", async ({page, browserName, baseURL}) => {
   test.skip(browserName !== "chromium");
-  // Remove together with the `test.fail()` in the case below, once #900, #901
-  // and #902 are fixed. Playwright fails the run if this ever passes.
+  // Remove together with the `test.fail()` in the case below, once #900 is
+  // fixed. Playwright fails the run if this ever passes.
   test.fail();
   test.setTimeout(300_000);
-  const {baseUrl} = catalog;
-  const targets = recordCatalogTraffic(page, baseUrl);
-  await installProjectTap(page, `${baseUrl}/`);
+  const origin = new URL(baseURL).origin;
+  const targets = recordCatalogTraffic(page, origin);
+  await installProjectTap(page, `${origin}${CATALOG_PREFIX}/`);
   await page.goto("/index.html");
   await importProject(page);
   await openSoundSets(page);
@@ -414,13 +441,13 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
 // Safari on macOS or iPadOS: it proves the fetch transport and the surface
 // work on the WebKit engine, and it says nothing about a real Safari or a real
 // iPad, which stay human verification.
-test("Sound Set capability boundary: the fetch transport reaches a cross-origin Catalog", async ({page}) => {
+test("Sound Set capability boundary: the fetch transport reaches a Catalog through the same-origin forward", async ({page, baseURL}) => {
   // Blocked by the same #900 import wall. See the `test.fail()` note above.
   test.fail();
   test.setTimeout(300_000);
-  const {baseUrl} = catalog;
-  const targets = recordCatalogTraffic(page, baseUrl);
-  await installProjectTap(page, `${baseUrl}/`);
+  const origin = new URL(baseURL).origin;
+  const targets = recordCatalogTraffic(page, origin);
+  await installProjectTap(page, `${origin}${CATALOG_PREFIX}/`);
   await page.goto("/index.html");
   await importProject(page);
   await openSoundSets(page);

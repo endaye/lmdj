@@ -16,7 +16,9 @@ from socketserver import TCPServer
 import stat
 import sys
 from types import ModuleType
+from urllib.error import HTTPError, URLError
 from urllib.parse import unquote_to_bytes, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 CSP = (
@@ -45,6 +47,145 @@ CONTENT_TYPES = {
     ".mjs": "text/javascript; charset=utf-8",
     ".wasm": "application/wasm",
 }
+
+# #901, the S11-D6 Catalog proxy, kept in step with
+# `apps/web-runtime-host/deploy/cloudflare_worker.mjs`. The deployed Creator
+# reaches its Catalog through a same-origin prefix so that `connect-src 'self'`
+# -- the exfiltration barrier around the Projects and audio the Creator holds in
+# OPFS -- never has to name a foreign origin. This server exists so the browser
+# acceptance journey drives that same topology instead of a shape production
+# does not use.
+#
+# The two properties that make this a forwarder rather than a relay are the
+# Worker's, and they are structural here for the same reason: the destination is
+# composed from the configured upstream plus tokens this module re-derives -- a
+# literal, a member of a frozen pair, and a re-matched 64-hex digest -- so no
+# request text is concatenated into the target, and the admitted grammar is
+# exactly the two shapes `soundset_catalog.mjs` can spell.
+#
+# With no `--catalog-upstream` the prefix answers 404 and this server behaves
+# exactly as it did before, which is what every existing proof still asserts.
+CATALOG_PREFIX = "soundset-catalog/"
+CATALOG_INDEX_SUFFIX = "catalog/index.json"
+CATALOG_OBJECT_SUFFIX = re.compile(r"\Aobject/([a-z]+)/([0-9a-f]{64})\Z")
+CATALOG_OBJECT_KINDS = ("manifest", "blob")
+CATALOG_OBJECT_CONTENT_TYPES = {
+    "manifest": "application/json",
+    "blob": "application/octet-stream",
+}
+MAXIMUM_CATALOG_OBJECT_BYTES = 8 * 1024 * 1024
+CATALOG_TIMEOUT_SECONDS = 30
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+class _RefuseRedirect(HTTPRedirectHandler):
+    """Keeps a redirecting Catalog from turning one forward into another fetch."""
+
+    def redirect_request(self, *_arguments, **_keywords):
+        return None
+
+
+def normalize_catalog_upstream(upstream: str) -> str:
+    """Return the upstream base, or raise for one this server will not forward to.
+
+    A misconfigured upstream fails closed rather than becoming a plaintext or
+    parameterised forwarder. `http` is admitted only for a loopback Catalog,
+    which is what the acceptance fixture is; the Worker admits `https` alone.
+    """
+    parts = urlsplit(upstream)
+    if parts.scheme not in {"http", "https"}:
+        raise ServerError("catalog upstream must be an http or https URL")
+    if parts.scheme == "http" and parts.hostname not in LOOPBACK_HOSTS:
+        raise ServerError("a plaintext catalog upstream must be loopback")
+    if not parts.netloc or parts.query or parts.fragment:
+        raise ServerError("catalog upstream carries a query or fragment")
+    path = parts.path if parts.path.endswith("/") else f"{parts.path}/"
+    if "//" in path:
+        raise ServerError("catalog upstream path is not normalised")
+    return f"{parts.scheme}://{parts.netloc}{path}"
+
+
+def catalog_target(base: str, suffix: str) -> tuple[str, str, bool] | None:
+    """Compose `(url, content_type, immutable)`, or None for an unadmitted shape."""
+    if suffix == CATALOG_INDEX_SUFFIX:
+        return f"{base}{CATALOG_INDEX_SUFFIX}", "application/json", False
+    match = CATALOG_OBJECT_SUFFIX.match(suffix)
+    if match is None:
+        return None
+    if match.group(1) not in CATALOG_OBJECT_KINDS:
+        return None
+    # Read back out of the frozen pair rather than taken from the match, so the
+    # host and every path segment but the digest are this module's own literals.
+    kind = CATALOG_OBJECT_KINDS[CATALOG_OBJECT_KINDS.index(match.group(1))]
+    digest = match.group(2)
+    return (
+        f"{base}object/{kind}/{digest}",
+        CATALOG_OBJECT_CONTENT_TYPES[kind],
+        True,
+    )
+
+
+def read_catalog_upstream_file(path: Path) -> str | None:
+    """Read the upstream a proof run configured, or None when there is none.
+
+    The acceptance journey owns its Catalog fixture on a kernel-assigned port
+    and stops it mid-run on purpose, so the proof server cannot be told the
+    upstream before it starts the way a deployment's binding tells the Worker.
+    It reads it here instead, per request, from a file the lane writes.
+
+    This is the proof server's own affordance and has no production analogue --
+    but it does not weaken either property the proxy rests on. The destination
+    still comes from this server's configuration and never from the request,
+    and the admitted grammar is untouched.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        raw = os.read(descriptor, 4096)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+    try:
+        candidate = raw.decode("utf-8", errors="strict").strip()
+    except UnicodeDecodeError:
+        return None
+    if not candidate:
+        return None
+    try:
+        return normalize_catalog_upstream(candidate)
+    except ServerError:
+        return None
+
+
+def read_catalog_object(url: str, content_type: str) -> tuple[int, bytes]:
+    """Fetch one admitted target and return `(status, payload)` for the page.
+
+    A missing object stays a missing object; every other upstream outcome --
+    unreachable, redirecting, erroring, oversized -- is the single failure the
+    transport reports as `catalog_unavailable`.
+    """
+    # A fresh request: none of the page's headers, cookies or credentials travel
+    # upstream. The opener refuses redirects rather than following them.
+    opener = build_opener(_RefuseRedirect())
+    opener.addheaders = []
+    request = Request(url, method="GET", headers={"Accept": content_type})
+    try:
+        with opener.open(request, timeout=CATALOG_TIMEOUT_SECONDS) as response:
+            if response.status != 200:
+                return 502, b""
+            payload = response.read(MAXIMUM_CATALOG_OBJECT_BYTES + 1)
+    except HTTPError as error:
+        return (404, b"") if error.code == 404 else (502, b"")
+    except (URLError, OSError, ValueError):
+        return 502, b""
+    if len(payload) > MAXIMUM_CATALOG_OBJECT_BYTES:
+        return 502, b""
+    return 200, payload
 
 
 class ServerError(RuntimeError):
@@ -126,11 +267,15 @@ class ProofHandler(BaseHTTPRequestHandler):
         *args,
         root: Path,
         expected_hashes: dict[str, str],
+        catalog_upstream: str | None = None,
+        catalog_upstream_file: Path | None = None,
         verbose: bool = False,
         **kwargs,
     ) -> None:
         self.root = root
         self.expected_hashes = expected_hashes
+        self.catalog_upstream = catalog_upstream
+        self.catalog_upstream_file = catalog_upstream_file
         self.verbose = verbose
         super().__init__(*args, **kwargs)
 
@@ -182,9 +327,64 @@ class ProofHandler(BaseHTTPRequestHandler):
             return None
         return relative
 
+    def _catalog_suffix(self) -> str | None:
+        """The admitted-prefix suffix, or None when this is not a Catalog path.
+
+        The raw target is matched, never a percent-decoded one. `URL.pathname`
+        in the Worker keeps its encoding, so decoding here would admit shapes
+        production refuses -- `catalog%2findex.json` being the obvious one --
+        and a proof server more permissive than the deployment proves nothing.
+        The transport percent-encodes nothing: its targets are literals and hex.
+        """
+        split = urlsplit(self.path)
+        relative = split.path.removeprefix("/")
+        if not relative.startswith(CATALOG_PREFIX):
+            return None
+        # The transport issues one shape: GET, no query, no fragment. Anything
+        # else under the prefix is a Catalog path this server does not admit.
+        if split.query or split.fragment:
+            return ""
+        return relative[len(CATALOG_PREFIX):]
+
+    def _serve_catalog(self, suffix: str, include_body: bool) -> None:
+        if self.command != "GET":
+            self._status(405, include_body)
+            return
+        upstream = self.catalog_upstream
+        if upstream is None and self.catalog_upstream_file is not None:
+            upstream = read_catalog_upstream_file(self.catalog_upstream_file)
+        if upstream is None:
+            self._status(404, include_body)
+            return
+        target = catalog_target(upstream, suffix)
+        if target is None:
+            self._status(404, include_body)
+            return
+        url, content_type, immutable = target
+        status, payload = read_catalog_object(url, content_type)
+        if status != 200:
+            self._status(status, include_body)
+            return
+        self.send_response(200)
+        # This server's content type for the shape it resolved, never the
+        # upstream's: a Catalog does not get to decide how the page reads bytes.
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header(
+            "Cache-Control",
+            "public, max-age=31536000, immutable" if immutable else "no-store",
+        )
+        self.end_headers()
+        if include_body and payload:
+            self.wfile.write(payload)
+
     def _serve(self, include_body: bool) -> None:
         if self.headers.get("Range") is not None:
             self._status(404, include_body)
+            return
+        suffix = self._catalog_suffix()
+        if suffix is not None:
+            self._serve_catalog(suffix, include_body)
             return
         relative = self._select_relative()
         if relative is None:
@@ -232,6 +432,8 @@ def make_server(
     host: str = "127.0.0.1",
     port: int = 4175,
     verbose: bool = False,
+    catalog_upstream: str | None = None,
+    catalog_upstream_file: Path | None = None,
 ) -> ProofServer:
     requested_root = root.expanduser()
     if not requested_root.is_absolute():
@@ -247,6 +449,12 @@ def make_server(
         raise ServerError("the proof server is loopback-only")
     if port < 0 or port > 65_535:
         raise ServerError("port must be between 0 and 65535")
+    if catalog_upstream is not None and catalog_upstream_file is not None:
+        raise ServerError("configure one catalog upstream, not two")
+    catalog_base = (
+        None if catalog_upstream is None
+        else normalize_catalog_upstream(catalog_upstream)
+    )
     try:
         verifier.verify_distribution(root, repo_root)
     except verifier.DistributionError as error:
@@ -270,6 +478,8 @@ def make_server(
             ProofHandler,
             root=root,
             expected_hashes=expected_hashes,
+            catalog_upstream=catalog_base,
+            catalog_upstream_file=catalog_upstream_file,
             verbose=verbose,
         ),
     )
@@ -283,6 +493,23 @@ def parse_arguments(argv: list[str], require_verifier: bool) -> argparse.Namespa
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=4175, type=int)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--catalog-upstream",
+        help=(
+            "absolute http(s) base of the Sound Set Catalog this server "
+            "forwards to under /soundset-catalog/; omitted means the "
+            "deployment offers no Catalog and the prefix answers 404"
+        ),
+    )
+    parser.add_argument(
+        "--catalog-upstream-file",
+        type=Path,
+        help=(
+            "path a proof run writes the Catalog upstream into, read per "
+            "request; for a lane whose fixture port is not known until after "
+            "this server is listening"
+        ),
+    )
     parser.add_argument("--ready-file", type=Path)
     parser.add_argument("--ready-nonce")
     return parser.parse_args(argv)
@@ -318,6 +545,8 @@ def main(
             options.host,
             options.port,
             options.verbose,
+            options.catalog_upstream,
+            options.catalog_upstream_file,
         )
     except (OSError, ServerError) as error:
         print(f"web proof server error: {error}", file=sys.stderr)

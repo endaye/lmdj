@@ -10,7 +10,8 @@
     "directory": "../../../build/deploy/cloudflare/creator/dist",
     "binding": "ASSETS",
     "run_worker_first": [
-      "/"
+      "/",
+      "/soundset-catalog/*"
     ],
     "html_handling": "none",
     "not_found_handling": "none"
