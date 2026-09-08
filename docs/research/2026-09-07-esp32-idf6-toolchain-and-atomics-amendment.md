@@ -686,3 +686,110 @@ bash capture-final.sh RECORDED_TASK_SHA evidence/replay-step-a
 2026-08-27 评估的历史正文。完整 Core、Facade、Host、存储及资源预算仍未获适配证明。
 **没有 callback deadline、jitter、underrun、voice count、音频输出或真机运行证据。**
 Step B1 只在本 Step A 独立交付后开始；B2、新 Contract、Embedded Profile 均不在授权内。
+
+## 9. 2026-09-08 Step B1：现有 Facade 完整依赖尝试，停在 native storage
+
+**B1 编译尝试已得到失败裁决，不是 B1 固件构建通过。** Step A 已通过
+[PR #957](https://github.com/endaye/lmdj/pull/957) 独立合入
+`59a5c638d8a9d19601e161f1eb37c8001eeeb6a1`，之后才从该基线创建
+`feat/esp32-facade-probe-b1` 隔离 Orca worktree；没有从未合入的 A 堆叠 B。
+本 Task 的仓库文件只有本研究附录。Version impact: none；Documentation impact: none；
+不改变 Product/Module/Contract/Assembly 身份、Portal 投影或实现行为。
+
+### 9.1 As-is 闭包与逐文件裁决
+
+仓库外独立工程为 `/Users/endaye/esp/lmdj-spike/lmdj-facade-probe-b1/`，保留 A 工程不动。
+继续使用同一 EIM IDF v6.1、Xtensa GCC 15.2.0、ESP32-S3、Picolibc、`-Og`、gnu++20、
+严格四项警告、probe-local exceptions、关闭 RTTI/PSRAM。所有 31 条 Core 编译命令
+（含失败的文件）均审计过展开后的 response file；未加入警告豁免、平台假宏或源码补丁。
+
+| 范围 | 按当前 CMake 清单直接引用的源码 | 编译对象结果 |
+| --- | --- | --- |
+| Step A | §7.2 的全部 14 个文件 | 14/14 |
+| lmdj_application | `application.cpp`、`assembly_loader.cpp`、`mutation_publish_scope.cpp`、`performance_engine_adapter.cpp`、`performance_replay.cpp`、`performance_runtime.cpp`、`soundset_catalog.cpp` | 7/7 |
+| project_io | `project_store.cpp`、`workspace_cache.cpp`、`project_bundle_transfer.cpp`、`sequence_journal.cpp`、`soundset_store.cpp` | 5/5 |
+| project_io 平台源 | 现有非 Emscripten 分支 `src/native/storage_platform.cpp` | 失败 |
+| provider_sdk | `capability.cpp`、`registry.cpp`、`attempt_store.cpp`、`durable_file.cpp` | 4/4 |
+
+总计 **30/31 个对象生成**。两个指定 performance 文件及其现有头文件确实编译了，
+但没有只选这两个文件来规避 `application.hpp` 的依赖。`c_api.cpp` 属于另一独立
+SHARED target `lmdj_core_c`，不是 `lmdj_application` 清单；没有引入这个 Host C ABI
+包装、Apple/Web Host、Provider 实现或产品 Assembly。
+
+### 9.2 精确阻断，不把替代语义装成兼容
+
+第一份未过滤的 `evidence/build-01.log` 来自 `idf.py build`，退出码 **2**。
+随后 `cmake --build build-b1 -- -k 0` 尽量执行剩余目标，完整日志为
+`evidence/build-02-keep-going.log`，退出码 **1**；只为覆盖所有编译单元，不把失败改成成功。
+全部 5 个 error 均属于 `packages/project-io/src/native/storage_platform.cpp`：
+
+- 393–396 行：`rename_directory_no_replace` 的 `source_parent`、`source_name`、
+  `destination_parent`、`destination_name` 四个参数触发 `-Werror=unused-parameter`。
+  现有实现只有 Apple `renameatx_np(RENAME_EXCL)` 和 Linux `renameat2` 路径；
+  ESP32 走 `errno = ENOTSUP` 的既有分支，参数没有被消费。
+- 1735 行：`'::renameat' has not been declared; did you mean 'rename'?`。
+  这是当前 SDK/header 配置下的编译阻断，不能采纳编译器文字建议直接换成 `rename`，
+  因为现有实现依赖相对父目录 descriptor 的发布与身份校验语义。
+
+没有关闭 `-Werror`、标假 `__linux__`、添加手写 `renameat` 声明或提供成功空桩。
+没有改 Project IO、Provider SDK、Facade，也没有用另一个 storage 实现替换 native 源。
+缺少支持既有 descriptor-relative replace 与 no-replace directory publication 语义的
+平台路径，不能通过增减 C++ 标准选项解决。这是后续独立平台适配 Task 的输入，
+不是本 probe 内批准新 Contract 或 Embedded Runtime Profile。
+
+### 9.3 链接/尺寸与依赖边界
+
+**B1 没有 app ELF、linker map 或最终 `idf.py size`/Flash/IRAM/DRAM/BSS 归因。**
+阻断发生在链接前；A 的 map 不能填作 B 的 map，未解析引用不能记为最终零计数。
+`lmdj_application` 的 7 个对象已生成，但依赖失败使正常 archive target 未完成；
+`project_io` 少一个对象，archive 同样未生成。不手工拼凑“成功的”替代 archive。
+
+新增 archive 的初次 `build-b1` 状态：
+
+| Archive | 结果 | 可报告的尺寸 |
+| --- | --- | --- |
+| lmdj_application | 对象 7/7，正常 archive 未生成 | 最终链接归因不可获取 |
+| lmdj_project_io | 对象 5/6，archive 未生成 | 最终链接归因不可获取 |
+| lmdj_provider_sdk | archive 已生成 | 文件 17,710,988 字节（含 debug）；`size --totals` text 316,890 / data 4 / bss 60 |
+
+最后一行是 **未链接 archive 的对象节合计**，含尚未 GC/COMDAT 去重的重复实现与元数据，
+不是固件占用或独立增量预算。最终 commit 的重放记录另存该轮 archive 的真实字节数与
+节统计，不假定不同 build 目录的调试信息、路径字符串和填充完全相同。
+
+新对象的 `nm -uC` 明确列出 Facade 的 `pthread_mutex_*`、文件系统路径与 stream 调用；
+Provider SDK 的 durable-file 路径还引用 `open`、`fsync`、create-hard-link、rename。
+native storage 源依赖 thread/condition-variable/mutex、`flock`、`openat`、`fstatat`、
+`linkat`、`unlinkat`、`fdopendir` 等。除上述真实编译错误外，不把这些正常对象级 undefined
+entries 都判成“平台缺少此符号”；完整链接及 VFS/线程/持久化语义仍不可裁决。
+
+`provider-sdk/src/attempt_store.cpp.obj` 有 **1 个** `__atomic_fetch_add_8` undefined
+entry；对应 `temporary_sibling` 为临时文件序号递增的 `temporary_file_sequence`。
+其代码/literal 各一条 relocation 描述同一调用，不算两次运行时调用。这不推翻 A 的
+结论：Provider SDK 不在 A 子集，此处也不是已证实的 Audio Thread 路径。B 未链接，
+不能宣称该 helper 已保留到最终 B 镜像。
+
+### 9.4 验证、重放与停止范围
+
+主机使用 B1 独立 checkout 配置并构建。A 的 12 项 audio 选择加 `facade.application`
+为 13/13 PASS，另跑 `facade.performance_runtime_bridge` 与
+`facade.performance_engine_adapter` 为 2/2 PASS；没有以主机结果替代 ESP32 编译失败。
+最终 docs-only commit 后再次执行同一 15 项选择、`scripts/docs-site.sh check` 和 diff
+检查。精确 revision、未过滤日志、编译清单、对象存在性、源文件摘要、符号与 relocation
+记录在仓库外 `evidence/final-step-b1/`；`SHA256SUMS` 随本机证据包提供。
+
+```bash
+# 固定 checkout 到证据 source-revision.txt 记录的完整 Task SHA 后，在仓库外工程：
+bash capture-final-failure.sh RECORDED_TASK_SHA evidence/replay-step-b1
+# 在已构建对应测试目标的 LMDJ checkout：
+ctest --preset dev --output-on-failure -R '^(audio\.(value_channel|realtime_queue|prepared_sample_bank|realtime_engine|snapshot_publication_invariant|master_fx|master_fx_determinism|master_fx_allocation_guard|realtime_spsc_stress|snapshot_publication_stress|long_sample_publication_stress|master_fx_stress)|facade\.(application|performance_runtime_bridge|performance_engine_adapter))$'
+scripts/docs-site.sh check
+```
+
+capture 脚本成功只表示“已复现并验证这份失败裁决”；它分别保存真实非零 build 退出码，
+要求 31 个声明源、30 个对象、唯一失败文件及 5 条诊断匹配，绝不输出 firmware build PASS。
+证据仅保存在本机，未发布 Release 或公共资产。
+
+**到这里结束已授权的 B1 as-is 探针。** 若后续选择移植现有 storage 语义，应另开独立
+Task；若选择裁切 `application.hpp` 或设计新 Runtime Artifact/Contract/Profile，则属于
+未授权的 B2，必须先有产品决策。本轮没有 callback deadline、jitter、underrun、voice count、
+音频输出、文件系统实际运行或任何真机证据。
