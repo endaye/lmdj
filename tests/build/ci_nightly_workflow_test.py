@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -190,6 +191,27 @@ class CoreNightlyWorkflowTest(unittest.TestCase):
         self.assertNotIn("contents: write", self.source, message)
 
     def prerequisite(self, *, compile_code=0, startup_code=0, fail_at=1, directory_code=0, source_code=0):
+        # The extracted script runs the probe under `timeout`, which is GNU
+        # coreutils and is absent on macOS. Without it the loop dies at attempt
+        # one with 127 and every assertion below reads a probe that never
+        # started -- six of them fail while naming the TSan runtime and the
+        # host ASLR cap, neither of which is involved, and
+        # `test_runtime_timeout_records_infrastructure` *passes*, because 127
+        # is as non-zero as 124. Refuse to measure rather than report either.
+        # The `ci_contract` lane runs on Linux (ci.yml, `runs-on: [self-hosted,
+        # Linux, X64, ...]`), where the binary is present and these run for
+        # real; this only distinguishes "cannot measure here" from "measured
+        # and found a defect".
+        if shutil.which("timeout") is None:
+            raise unittest.SkipTest(
+                "why: the Nightly prerequisite script runs the probe under "
+                "`timeout`, which is not on PATH on this host, so the probe "
+                "cannot start and nothing below measures the workflow; "
+                "remedy: install GNU coreutils (`brew install coreutils` "
+                "provides `gtimeout`; link or alias it as `timeout`), or read "
+                "this contract from the Linux `ci_contract` lane, which is "
+                "where it is enforced"
+            )
         step = self.job("core-tsan").split("      - name: Verify the TSan host prerequisite\n", 1)[1]
         script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("      - name:", 1)[0])
         with tempfile.TemporaryDirectory() as directory:
@@ -254,6 +276,18 @@ chmod +x "$7"
 
     def test_runtime_timeout_records_infrastructure(self):
         self.assert_infrastructure(*self.prerequisite(startup_code=124))
+        # Without this the case cannot fail for the reason it exists: any
+        # non-zero exit satisfies `assert_infrastructure`, so a host where the
+        # probe never ran at all reports the same pass as a host where it ran
+        # and timed out. Its five sibling cases all pin `starts`; this one did
+        # not.
+        self.assertEqual(
+            self.starts, 1,
+            "why: the timeout case passed without the probe starting, so it "
+            "measured an exit code rather than timeout handling; remedy: "
+            "check that the extracted script reached `timeout 10s "
+            '"$probe_dir/probe"` at all',
+        )
 
     def test_startup_diagnostics_name_only_the_attempts_actually_started(self):
         for startup_code, fail_at, count in ((0, 1, 10), (139, 1, 1), (66, 10, 10)):
