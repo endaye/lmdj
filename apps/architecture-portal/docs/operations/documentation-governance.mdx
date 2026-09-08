@@ -10,9 +10,10 @@ source_paths:
   - docs/governance/architecture-portal.md
   - docs/governance/pitfall-ledger.md
   - .github/workflows/architecture-portal.yml
-  - .github/workflows/architecture-portal-smoke.yml
+  - .github/workflows/deploy-cloudflare-portal.yml
+  - scripts/cloudflare-portal-deploy.py
+  - apps/architecture-portal/deploy/wrangler.json
   - docs/deploy/architecture-portal.md
-  - netlify.toml
   - wrangler.json
   - .node-version
 ---
@@ -34,7 +35,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 本地构建、普通 CI 和 PR Preview 只校验 current 页面，不创建永久快照。任何已分配并交付团队测试的 `canary`、`dev`、`beta` Product Build，以及 `stable` 发布，都必须冻结匹配的不可变快照；current main 始终标明非正式快照。
 schema-2 快照把 37 页 current source、versioned sidebar、十张图的 20 个 HTML/SVG 资产和自认证 Git/source projection 元数据作为一个生成边界。版本页的卡片按 active doc ID 解析，图表按版本资产根解析；缺失、重复、越界、符号链接或哈希漂移都 fail closed。已有 schema-1 快照保持只读兼容，不回写为 schema 2。若 squash introducing tree 还包含冻结后的 mutable current/non-projection 更新，必须用 `scripts/architecture-portal.sh witness PRODUCT_BUILD INTRODUCING_REVISION` 生成反向差异；验证器只在临时 Git index 精确重建 raw source commit 已认证的 tree/commit 后才接受，不能重建、身份不匹配或被篡改的 witness 继续 fail closed，且不能改写不可变快照。
 ## 发布规则
-Git 合并触发 Netlify 构建，构建必须先通过事实、元数据、链接、路由和 smoke 门禁；手工 API 上传仅用于诊断。
+Git 合入 main 触发 Cloudflare 构建；先通过完整 Portal check，再验证同一 Git SHA 的版本 Preview，发布同一个 version ID 并验证生产 smoke。手工本地上传不能替代 Git 生产流程。
 
 ## CI 影响检查
 Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要更新时，changed files 必须包含 current 门户页；无需更新时必须给出具体理由且不能制造空文档 churn。完整检查还要求当前 Product Build 的快照与 source revision、source-rebuilt Product/Assembly facts、37 页清单、sidebar、版本图表、Channel、freeze time 和 introducing commit 一致；来源关系只接受 direct-parent、byte-identical squash projection，或能精确重建已认证 source tree/commit 的显式 squash witness。
@@ -46,5 +47,7 @@ Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要�
 npm 10.9.3 执行安装与完整 Portal check；`static/_headers` 保留现有安全响应头。
 试点以 `wrangler versions upload` 创建版本预览，不修改活动部署。
 配置存在和本地检查通过不代表已恢复 GitHub PR Preview；仍需记录实际版本 URL、
-源码 SHA 和线上 smoke。正式 Portal 仍由 Netlify 托管，切换及旧集成退役另行验收。
+源码 SHA 和线上 smoke。当前生产入口由固定 Cloudflare 配置和 deploy-cloudflare-portal.yml 管理。
+Netlify 专用构建、依赖和 smoke 已移除；外部 Netlify GitHub App 须单独断开本仓库。
+历史失败与快照保留；Cloudflare 版本 Preview 不等于已启用逐 PR Preview。
 Cloudflare 控制台须按部署手册显式设置构建命令；不能仅依赖 Wrangler custom build。

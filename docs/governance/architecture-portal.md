@@ -130,11 +130,11 @@ validation，再把该 ID 对应的 HTML/SVG 输出精确复制到
 `none`。完整门户检查同时验证
 当前 Product Build 存在匹配的 `versions.json` 条目、快照源码和冻结元数据，并比对
 Product、Assembly Lock、Module、Host、Provider、Contract、Channel、完整 Git 来源、
-source projection、版本文档/sidebar/图表 inventory 与冻结/introducing 时间。正常生产发布只能由合入后的 Git/Netlify 构建触发；禁止把本地目录或
+source projection、版本文档/sidebar/图表 inventory 与冻结/introducing 时间。正常生产发布只能由合入后的 Git/Cloudflare 构建触发；禁止把本地目录或
 单个 HTML 通过 API/拖拽手工上传到生产站点。手工 deploy 仅可用于明确标记的临时
 诊断站点。
 
-发布验证必须记录 Git SHA、Netlify deploy ID/URL、HTTP 200、`Content-Type: text/html`、current Product Build/revision、正式快照路由及关键页面/图。回滚使用 Netlify 的先前不可变 deploy，并重新运行相同 smoke；回滚不删除失败 deploy 或改写 Git/快照历史。
+发布验证必须记录 Git SHA、Cloudflare version ID、deployment ID/URL、HTTP 200、`Content-Type: text/html`、current Product Build/revision、正式快照路由及关键页面/图。回滚恢复 Cloudflare 的先前版本分配和路由状态，并重新运行相同 smoke；回滚不删除失败 deploy 或改写 Git/快照历史。
 
 ## 8. 公开内容边界
 
