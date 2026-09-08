@@ -75,6 +75,10 @@ SELF_HOSTED_JOBS = [
 ]
 
 CASES = {
+    "demos/README.md": {"docs_static"},
+    "demos/protocol-proof/main.cpp": {"docs_static"},
+    "demos/lmdj-song-pipeline/song_pipeline/cli.py": {"docs_static"},
+    "demos/ascii-matrix-camera/index.html": {"docs_static"},
     ".github/ISSUE_TEMPLATE/feature.yml": {"docs_static", "ci_contract"},
     "docs/guide.md": {"docs_static"},
     # release_skill_test.py asserts on this page, so the release-facing
@@ -194,7 +198,7 @@ TOP_LEVELS = {
     "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "LICENSE",
     "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml", "wrangler.json", ".node-version",
     "output", "packages", "packaging", "products", "providers", "references",
-    "scripts", "testdata", "tests", "third_party", "tools", "workers",
+    "scripts", "testdata", "tests", "third_party", "tools", "workers", "demos",
 }
 
 CONCURRENCY_STRESS_SOURCES = (

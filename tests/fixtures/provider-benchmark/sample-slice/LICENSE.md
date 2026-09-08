@@ -9,7 +9,7 @@ Those files are original, purely synthetic test material created from fixed
 integer parameters by
 `tools/provider-benchmark/generate_sample_slice_smoke.py`. They contain no
 recording, downloaded audio, third-party sample, model output, or material from
-`references/demos/`.
+`demos/`.
 
 The generator source, tests, documentation, and every other repository file
 remain governed by the repository root `LICENSE`; this CC0 dedication does not
