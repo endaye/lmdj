@@ -55,7 +55,7 @@ class ClientTest(unittest.TestCase):
             with self.assertRaises(api.CloudflareError): client.deployment()
 
     def test_publish_same_verified_version(self):
-        client, requests = self.client([{'id': B}, deployment(), {}, deployment(E, B)])
+        client, requests = self.client([{'id': B}, deployment(), {'id': E}, deployment(E, B)])
         self.assertEqual(client.publish(version=B, expected_deployment=D), {'id': E, 'version_id': B})
         writes = [r for r in requests if r.data]
         self.assertEqual(len(writes), 1)
@@ -90,7 +90,7 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(client.set_route(enabled=False, expected_deployment=D), {'enabled': False, 'previews_enabled': True})
 
     def test_superseded_publication_is_unknown(self):
-        client, _ = self.client([{'id': B}, deployment(), {}, deployment(E, A)])
+        client, _ = self.client([{'id': B}, deployment(), {'id': E}, deployment(E, A)])
         with self.assertRaises(api.CloudflareError) as caught: client.publish(version=B, expected_deployment=D)
         self.assertTrue(caught.exception.outcome_unknown)
 
@@ -105,6 +105,20 @@ class ClientTest(unittest.TestCase):
         client, requests = self.client([])
         with self.assertRaises(api.CloudflareError): client.require_version('../subdomain')
         self.assertEqual(requests, [])
+
+    def test_same_version_from_another_deployment_is_not_our_receipt(self):
+        client, requests = self.client([{'id': B}, deployment(), {'id': E}, deployment(D, B)])
+        with self.assertRaises(api.CloudflareError) as caught:
+            client.publish(version=B, expected_deployment=D)
+        self.assertTrue(caught.exception.outcome_unknown)
+        self.assertEqual(sum(bool(r.data) for r in requests), 1)
+
+    def test_missing_post_deployment_identity_is_unknown(self):
+        client, requests = self.client([{'id': B}, deployment(), {}])
+        with self.assertRaises(api.CloudflareError) as caught:
+            client.publish(version=B, expected_deployment=D)
+        self.assertTrue(caught.exception.outcome_unknown)
+        self.assertEqual(len(requests), 3)
 
 
 if __name__ == '__main__': unittest.main()
