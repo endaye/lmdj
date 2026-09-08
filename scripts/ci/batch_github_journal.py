@@ -10,6 +10,7 @@ protocol. API failures never mean absence and never include response bodies.
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import json
 import re
@@ -127,7 +128,7 @@ class GitHubJournalTransport:
         else:
             require(self._bot(node["author"]), "checkpoint author is not the trusted bot")
 
-    def _writer(self, writer):
+    def _writer(self, writer, *, remember=True):
         require(isinstance(writer, dict) and set(writer) == {
             "repository", "issue_number", "run_id", "run_attempt", "control_sha", "workflow_path", "workflow_id", "job_name"},
             "writer identity schema is not closed")
@@ -207,7 +208,8 @@ class GitHubJournalTransport:
                     and (job["status"] == "in_progress" or job.get("conclusion") in {
                         "success", "failure", "cancelled", "timed_out", "action_required", "neutral", "stale"}),
                     "waiting parent has no proven started writer")
-        self._checked_writers.add(cache_key)
+        if remember:
+            self._checked_writers.add(cache_key)
         return deepcopy(writer)
 
     def _unpack(self, node, kind):
@@ -246,12 +248,30 @@ class GitHubJournalTransport:
             require(isinstance(node, dict), "null or malformed comment node")
             raw_id = node.get("fullDatabaseId")
             require(isinstance(raw_id, str) and re.fullmatch(r"[1-9][0-9]*", raw_id), "comment BigInt identity is not decimal text")
-            payload, writer = self._unpack(node, "event")
+            # Parse the whole page before starting independent provenance GETs.
+            # Metadata, pagination and returned record order stay on this thread.
+            self._metadata(node, comment=True)
+            document = decode(node["body"])
+            require(document["kind"] == "event", "journal object is stored in the wrong location")
+            payload, writer = document["payload"], document["writer"]
             comments.append({"id": int(raw_id), "edited": False, "envelope": payload, "provenance": writer})
-        session["count"] += len(comments)
-        require(session["count"] <= session["total"], "comment inventory exceeds total")
-        require(info["hasNextPage"] or session["count"] == session["total"], "comment inventory is truncated")
-        require(not info["hasNextPage"] or comments and session["count"] < session["total"], "comment continuation contradicts total")
+        count = session["count"] + len(comments)
+        require(count <= session["total"], "comment inventory exceeds total")
+        require(info["hasNextPage"] or count == session["total"], "comment inventory is truncated")
+        require(not info["hasNextPage"] or comments and count < session["total"], "comment continuation contradicts total")
+        writers = {json.dumps(row["provenance"], sort_keys=True): row["provenance"] for row in comments}
+        unchecked = {key: value for key, value in writers.items() if key not in self._checked_writers}
+        if unchecked:
+            # The production HTTP client creates a separate Request/opener/response
+            # per call. Workers use only _writer's GET path, never pagination,
+            # anchors, writes or the trust-cache mutation. No mutable API caching.
+            # Exiting the context joins all readers even when one future fails.
+            with ThreadPoolExecutor(max_workers=min(4, len(unchecked))) as readers:
+                futures = [readers.submit(self._writer, writer, remember=False) for writer in unchecked.values()]
+                for future in futures:
+                    future.result()
+            self._checked_writers.update(unchecked)
+        session["count"] = count
         session["next"] = next_cursor
         session["seen"].add(next_cursor)
         return {"comments": comments, "next": next_cursor}

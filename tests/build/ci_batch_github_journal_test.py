@@ -5,7 +5,9 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import sys
+import threading
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
@@ -109,6 +111,177 @@ class GitHubJournalTest(unittest.TestCase):
             writer=WRITER, api=self.api, lock_held=lambda: self.lock)
         self.anchor = IssueBodyAnchor(782, self.transport, self.transport.authenticate, lambda: self.lock)
         self.journal = Journal(782, self.transport, self.anchor, self.transport.authenticate, lambda: self.lock)
+
+    def multiple_writers(self, ids):
+        self.api.comment_pages = 100
+        for index, run_id in enumerate(ids):
+            node = self.api.comment({"id": str(index)})
+            node["body"] = wrapped("event", {"id": str(index)}, {**WRITER, "run_id": run_id})
+            self.api.comments.append(node)
+        original = self.api._request
+        mutex = threading.Lock()
+
+        def request(method, path, **kwargs):
+            import re
+            match = re.search(r"/actions/runs/(\d+)/attempts/1", path)
+            normalized = path if match is None else path.replace(match.group(0), "/actions/runs/17/attempts/1")
+            with mutex:
+                result = original(method, normalized, **kwargs)
+            if match is not None:
+                run_id = int(match[1])
+                if "jobs?" in path:
+                    for job in result["jobs"]:
+                        job.update(run_id=run_id, id=1000 + run_id)
+                else:
+                    result["id"] = run_id
+            return result
+
+        self.api._request = request
+        return request
+
+    def test_page_authentication_overlaps_four_readers_and_keeps_record_order(self):
+        request = self.multiple_writers([17, 18, 19, 20, 21, 22, 23, 24])
+        barrier = threading.Barrier(4, timeout=5)
+        mutex = threading.Lock()
+        active = peak = 0
+
+        def synchronized(method, path, **kwargs):
+            nonlocal active, peak
+            if path.endswith("/attempts/1"):
+                with mutex:
+                    active += 1
+                    peak = max(peak, active)
+                try:
+                    barrier.wait()
+                    return request(method, path, **kwargs)
+                finally:
+                    with mutex:
+                        active -= 1
+            return request(method, path, **kwargs)
+
+        self.api._request = synchronized
+        owner = threading.get_ident()
+        test = self
+
+        class OwnerOnlyCache(set):
+            def add(self, value):
+                test.assertEqual(threading.get_ident(), owner,
+                                 "why: worker changed trust cache; remedy: commit proofs on the caller thread")
+                super().add(value)
+
+            def update(self, values):
+                test.assertEqual(threading.get_ident(), owner,
+                                 "why: worker changed trust cache; remedy: commit proofs on the caller thread")
+                super().update(values)
+
+        self.transport._checked_writers = OwnerOnlyCache()
+        with patch.object(github, "ThreadPoolExecutor", wraps=github.ThreadPoolExecutor) as pool:
+            page = self.transport.page(782, None)
+        pool.assert_called_once_with(max_workers=4)
+        self.assertEqual(peak, 4, "why: reads are serialized or unbounded; remedy: exactly four bounded workers")
+        self.assertEqual([row["provenance"]["run_id"] for row in page["comments"]], list(range(17, 25)),
+                         "why: completion order changed journal order; remedy: return original page order")
+        self.assertEqual(active, 0, "why: authentication escaped the page boundary; remedy: join every reader")
+
+    def test_duplicate_page_writers_are_authenticated_once(self):
+        self.multiple_writers([17, 17, 18, 18])
+        self.transport.page(782, None)
+        self.assertEqual(sum(path.endswith("/attempts/1") for _, path, _ in self.api.calls), 2,
+                         "why: duplicate records repeat provenance reads; remedy: deduplicate complete writer identities")
+
+    def test_same_run_different_writer_identity_cannot_reuse_proof(self):
+        self.multiple_writers([17, 17])
+        self.api.comments[1]["body"] = wrapped("event", {"id": "other"},
+                                             {**WRITER, "job_name": "Unstarted writer"})
+        with self.assertRaisesRegex(JournalBlocked, "writer job is missing"):
+            self.transport.page(782, None)
+        self.assertFalse(self.transport._checked_writers,
+                         "why: run-only dedup trusted another job; remedy: key proofs by the complete writer identity")
+
+    def test_concurrent_completion_cannot_reorder_page(self):
+        request = self.multiple_writers([17, 18, 19, 20])
+        last_completed = threading.Event()
+        completion = []
+
+        def reordered(method, path, **kwargs):
+            if "/runs/17/attempts/1/jobs?" in path:
+                self.assertTrue(last_completed.wait(5),
+                                "why: independent readers did not overlap; remedy: finish other writers concurrently")
+            result = request(method, path, **kwargs)
+            if "/jobs?" in path:
+                completion.append(result["jobs"][0]["run_id"])
+                if "/runs/20/" in path:
+                    last_completed.set()
+            return result
+
+        self.api._request = reordered
+        page = self.transport.page(782, None)
+        self.assertLess(completion.index(20), completion.index(17),
+                        "why: fixture did not reverse completion; remedy: synchronize actual GET completion")
+        self.assertEqual([r["provenance"]["run_id"] for r in page["comments"]], [17, 18, 19, 20],
+                         "why: journal sorted by network timing; remedy: preserve original record order")
+
+    def test_failed_concurrent_writer_returns_no_page_and_joins_without_writes(self):
+        request = self.multiple_writers([17, 18, 19, 20])
+        barrier = threading.Barrier(4, timeout=5)
+        finished = set()
+        jobs_finished = set()
+        mutex = threading.Lock()
+
+        def failing(method, path, **kwargs):
+            if path.endswith("/attempts/1"):
+                barrier.wait()
+                result = request(method, path, **kwargs)
+                if "/runs/18/" in path:
+                    result["head_branch"] = "untrusted"
+                with mutex:
+                    finished.add(path)
+                return result
+            result = request(method, path, **kwargs)
+            if "/jobs?" in path:
+                with mutex:
+                    jobs_finished.add(path)
+            return result
+
+        self.api._request = failing
+        with self.assertRaisesRegex(JournalBlocked, "control provenance"):
+            self.transport.page(782, None)
+        self.assertEqual(len(finished), 4, "why: failed page left active readers; remedy: join all futures before returning")
+        self.assertEqual(len(jobs_finished), 3,
+                         "why: failed page returned before other writer proofs completed; remedy: join all futures")
+        self.assertFalse(self.transport._checked_writers,
+                         "why: partial failed page committed trust cache; remedy: publish authentication only after all succeed")
+        self.assertFalse(any(method == "PATCH" or path.endswith("/comments") for method, path, _ in self.api.calls),
+                         "why: failed provenance caused mutation; remedy: fail before replay or append")
+
+    def test_cached_writer_does_not_cache_comment_edits_or_anchor(self):
+        self.journal.append({"id": "one"})
+        self.assertEqual(self.journal.load(), [{"id": "one"}])
+        self.api.comments[0]["editor"] = {"__typename": "User", "id": "human"}
+        with self.assertRaisesRegex(JournalBlocked, "comment was edited"):
+            self.journal.load()
+        self.api.comments[0]["editor"] = None
+        self.api.issue["editor"] = {"__typename": "User", "id": "human"}
+        with self.assertRaisesRegex(JournalBlocked, "last editor"):
+            self.journal.load()
+
+    def test_append_reads_fresh_page_and_checkpoint_after_prior_authentication(self):
+        self.journal.append({"id": "one"})
+        prior = len(self.api.calls)
+        self.journal.append({"id": "two"})
+        self.assertEqual(self.journal.load(), [{"id": "one"}, {"id": "two"}],
+                         "why: append reused a stale page; remedy: read complete new journal")
+        queries = [body["query"] for method, path, body in self.api.calls[prior:] if path == "/graphql"]
+        self.assertIn(github.COMMENTS_QUERY, queries, "why: no fresh comments; remedy: retain post-write reads")
+        self.assertIn(github.BODY_QUERY, queries, "why: no fresh anchor; remedy: retain post-write reads")
+
+    def test_incomplete_multiwriter_page_is_rejected_before_authentication(self):
+        self.multiple_writers([17, 18, 19, 20])
+        self.api.truncated = True
+        with self.assertRaisesRegex(JournalBlocked, "truncated"):
+            self.transport.page(782, None)
+        self.assertFalse(any(method == "GET" for method, _, _ in self.api.calls),
+                         "why: malformed inventory reached readers; remedy: validate complete page first")
 
     def test_append_checkpoint_read_and_reopen(self):
         self.journal.append({"id": "one", "payload": "state"})
