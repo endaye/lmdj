@@ -17,6 +17,7 @@ Every failure names the file, the rule, and the remedy.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 import tempfile
@@ -49,6 +50,23 @@ OCCURRENCE = re.compile(
 # which would let a recurrence-2 entry pass with no Issue behind it. Only the
 # full Issue URL counts -- the form every current recurrence-2 entry uses.
 ESCALATION_LINK = re.compile(r"github\.com/[^/\s]+/[^/\s]+/issues/\d+")
+
+
+def iso_calendar_date(value: str) -> bool:
+    """True when `value` is YYYY-MM-DD *and* names a real day.
+
+    The shape and the calendar are separate questions and only the first was
+    ever asked here. `9999-13-99` matches the pattern, so anything downstream
+    that treats a shape-valid date as a date -- including the ahead-of-UTC
+    comparison below -- was operating on a string that is not one.
+    """
+    if not ISO_DATE.match(value):
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -98,6 +116,10 @@ def lint_entry(path: Path, repo_root: Path = ROOT) -> list[str]:
     """Return every rule this entry violates, each with file, rule and remedy."""
     problems: list[str] = []
     name = path.name
+    # Read per call rather than at import: the value is compared against dates
+    # a human just typed, and a process that outlives a UTC midnight would
+    # otherwise judge today's entries against yesterday.
+    utc_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     def fail(rule: str, why: str, remedy: str) -> None:
         problems.append(f"{name}: {rule} -- why: {why}; remedy: {remedy}")
@@ -156,9 +178,32 @@ def lint_entry(path: Path, repo_root: Path = ROOT) -> list[str]:
             if not item.get(key):
                 fail("recurrence-fields", f"recurrence {index} lacks `{key}`",
                      "each recurrence carries date, occurrence and observed_by")
-        if item.get("date") and not ISO_DATE.match(item["date"]):
-            fail("recurrence-date", f"recurrence {index} date {item['date']!r} is not ISO",
-                 "write the date as YYYY-MM-DD")
+        if item.get("date") and not iso_calendar_date(item["date"]):
+            # `ISO_DATE` alone is a shape check, so it admits `9999-13-99`.
+            # The comparison below is a string comparison, which would then
+            # call a nonsense date "later than today" and send the reader
+            # after a timezone bug that is not there. Parse before comparing.
+            fail("recurrence-date",
+                 f"recurrence {index} date {item['date']!r} is not an ISO "
+                 "calendar date",
+                 "write a real date as YYYY-MM-DD")
+        # An observation cannot have happened tomorrow. The shape check above
+        # passes any well-formed date, so a `date:` taken from a machine east
+        # of UTC after its local midnight lands one day ahead of the
+        # `occurrence:` URL sitting beside it and nothing notices. The rule is
+        # deliberately one-sided: a date *earlier* than its occurrence is
+        # legitimate and common, because `date` is when the pitfall was
+        # observed and an occurrence can predate that by days. Comparing the
+        # two would fail correct entries, so this compares only against now.
+        elif item.get("date") and item["date"] > utc_today:
+            fail("recurrence-date-ahead",
+                 f"recurrence {index} date {item['date']!r} is later than "
+                 f"{utc_today}, the current UTC date",
+                 "an observation cannot be dated in the future; the date most "
+                 "likely came from local time on a machine ahead of UTC -- "
+                 "take it from a repository artefact instead, with "
+                 "`date -u +%F`, `git log -1 --format=%cI` or the "
+                 "occurrence's `created_at`")
         if item.get("occurrence") and not OCCURRENCE.match(item["occurrence"]):
             fail("recurrence-occurrence",
                  f"recurrence {index} occurrence {item['occurrence']!r} is not a "
@@ -288,6 +333,33 @@ class LedgerLintFixtureTest(unittest.TestCase):
         good = self.GOOD.format(id="sample-entry", status="open", exit="none", extra="", body="text")
         problems = self.raw_entry(good.replace("recurrences:\n", "recurrences: foo\n", 1))
         self.assert_rule(problems, "frontmatter")
+
+    def test_a_recurrence_cannot_be_dated_ahead_of_utc(self) -> None:
+        # The defect this catches: this repository is worked from UTC+8, so
+        # between local midnight and 16:00Z a `date:` taken from the machine
+        # reads one day ahead of the `occurrence:` URL beside it. The ISO
+        # shape check passes it and nothing else looks.
+        today = datetime.now(timezone.utc).date()
+        ahead = (today + timedelta(days=1)).isoformat()
+        entry = self.GOOD.format(id="sample-entry", status="open", exit="none",
+                                 extra="", body="text")
+        self.assert_rule(self.raw_entry(entry.replace("2026-09-01", ahead, 1)),
+                         "recurrence-date-ahead")
+        # Today is the boundary and must pass: an entry written now is not
+        # ahead of now, and a gate that refused it would be unusable.
+        self.assertEqual(
+            self.raw_entry(entry.replace("2026-09-01", today.isoformat(), 1)), [])
+        # One-sided on purpose. `date` is when the pitfall was observed and an
+        # occurrence can predate that by days, so an entry dated later than its
+        # occurrence is legitimate; only the future is impossible.
+        self.assertEqual(
+            self.raw_entry(entry.replace("2026-09-01", "2020-01-01", 1)), [])
+        # A malformed date is still reported as malformed, not as ahead: the
+        # comparison must not run on a string the shape check already rejected.
+        problems = self.raw_entry(entry.replace("2026-09-01", "9999-13-99", 1))
+        self.assert_rule(problems, "recurrence-date")
+        self.assertFalse([x for x in problems if "recurrence-date-ahead" in x],
+                         f"a malformed date must not also read as ahead: {problems}")
 
     def test_two_recurrences_open_none_needs_an_escalation_link(self) -> None:
         second = ("  - date: 2026-09-02\n"
