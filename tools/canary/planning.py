@@ -20,6 +20,8 @@ if str(_CI_ROOT) not in sys.path:
     sys.path.insert(0, str(_CI_ROOT))
 
 import batch_controller
+import batch_runtime
+import batch_verdict
 import incremental_batch
 import test_scope
 
@@ -77,7 +79,7 @@ def _host(inputs, target, site, policy):
 
 
 def plan_batch(repository_path, *, main_sha, target_sha, control_sha, progress,
-               request_id, kind="daily", sites=None, force=False):
+               request_id, kind="manual", sites=None, force=False):
     """Return a deterministic preview and leave all input/progress records alone.
 
 main_sha is an externally authenticated observation, not read from a mutable
@@ -89,15 +91,14 @@ canonical policy floor; no AI advice or debt clearance is represented here.
     r.identifier(request_id)
     for revision in (main_sha, target_sha, control_sha):
         r.exact_sha(revision)
-    r.require(isinstance(kind, str) and kind in {"daily", "manual"}, "request kind is invalid")
+    r.require(kind == "manual", "direct preview is manual only",
+              "use plan_after_result with authenticated persisted evidence for result/recovery; daily requests are retired")
     r.require(type(force) is bool, "force must be boolean")
     requested = list(r.SITES) if sites is None else sites
     r.require(isinstance(requested, (list, tuple)) and len(requested) > 0
               and all(isinstance(site, str) and site in r.SITES for site in requested)
               and len(set(requested)) == len(requested), "requested site inventory is invalid")
     requested = sorted(requested)
-    r.require(kind == "manual" or (not force and requested == list(r.SITES)),
-              "daily request cannot be forced or site-filtered")
     try:
         return _plan(repository_path, main_sha, target_sha, control_sha, progress,
                      request_id, kind, requested, force)
@@ -107,6 +108,74 @@ canonical policy floor; no AI advice or debt clearance is represented here.
         if isinstance(error, r.CanaryError):
             raise
         raise r.CanaryError("why: complete pinned planner inputs unavailable; remedy: restore trusted Git/policy inputs") from None
+
+
+def plan_after_result(repository_path, *, scheduler, source_request_id, main_sha,
+                      control_sha, progress, wakeup="result"):
+    """Consume caller-authenticated journal replay, never an Actions conclusion.
+
+The retained verdict is semantically revalidated, not remotely authenticated
+here. Recovery is transport, not a new request identity. Successful focused
+tests wake planning only: they do not cover every site's older interval or
+grant admission. This function leaves scheduler and independent progress alone.
+"""
+    r.require(wakeup in ("result", "recovery"), "unsupported result wakeup",
+              "use result or recovery with the original persisted request; direct previews are manual")
+    r.require(isinstance(source_request_id, str) and bool(source_request_id)
+              and isinstance(scheduler, dict) and scheduler.get("schema") == incremental_batch.SCHEMA
+              and all(isinstance(scheduler.get(key), dict) and source_request_id in scheduler[key]
+                      for key in ("requests", "results")), "persisted request or terminal result is unavailable")
+    try:
+        request = scheduler["requests"][source_request_id]
+        terminal = scheduler["results"][source_request_id]
+        inputs = batch_controller.GitInputs(repository_path, control_sha, lambda: main_sha)
+        inputs.refresh()
+        test_scope.collect_interval(repository_path, request["control"], main_sha)
+        policy = inputs.policy_at(request["control"])
+        incremental_batch._request(policy, request)
+        test_scope.collect_interval(repository_path, request["target"], main_sha)
+        if request["base"] is not None:
+            test_scope.collect_interval(repository_path, request["base"], request["target"])
+        r.require(isinstance(terminal, dict) and set(terminal) == {
+            "request_id", "run", "target", "policy", "outcomes", "reference", "terminal"}
+            and terminal["terminal"] is True, "terminal result schema or completion differs")
+        run = incremental_batch.identity(terminal["run"])
+        r.require(request["id"] == terminal["request_id"] == source_request_id
+                  and terminal["target"] == request["target"] and terminal["policy"] == request["policy"],
+                  "terminal result is not bound to the persisted request")
+        identity = dict(request_id=source_request_id, request_kind=request["kind"], base_sha=request["base"],
+            target_sha=request["target"], control_sha=request["control"], policy_digest=request["policy"],
+            run_id=run["run_id"], run_attempt=run["attempt"])
+        reference = terminal["reference"]
+        if reference == "missing:" + source_request_id:
+            r.require(bool(request["selection"]["suites"]) and terminal["outcomes"] == {
+                suite: "missing" for suite in request["selection"]["suites"]}, "missing evidence contradicts selected outcomes")
+            status, evidence = "missing", None
+        elif reference == "not-required:" + source_request_id:
+            r.require(not request["selection"]["suites"] and terminal["outcomes"] == {},
+                      "not-required evidence claims selected work")
+            status, evidence = "not-required", None
+        else:
+            verdict = batch_verdict.validate(batch_runtime.decode_reference(reference), policy, identity, request["selection"])
+            outcomes = batch_verdict.scheduler_outcomes(verdict, policy, identity, request["selection"])
+            r.require(terminal["outcomes"] == outcomes, "persisted outcomes differ from retained verdict")
+            status, evidence = verdict["status"], verdict["evidence_digest"]
+        source = {**identity, "status": status, "evidence_digest": evidence}
+        if status != "passed" or request["kind"] not in ("auto", "bootstrap"):
+            return {"action": "ignore", "source_role": "wakeup-only", "source": source, "plan": None}
+        plan = plan_batch(repository_path, main_sha=main_sha, target_sha=request["target"],
+            control_sha=control_sha, progress=progress, request_id="canary-result:" + r.digest(source))
+        # The wakeup's run/attempt and evidence are bound into planning inputs,
+        # but result vs recovery never changes the durable operation identity.
+        plan.update(kind="result", test_source=source,
+                    input_digest=r.digest({"kind": "result", "planning_inputs": plan["input_digest"], "test_source": source}))
+        return {"action": "plan", "source_role": "wakeup-only", "source": source, "plan": r.seal(plan)}
+    except (incremental_batch.BatchError, batch_verdict.VerdictError, test_scope.ScopeError) as error:
+        raise r.CanaryError(str(error)) from error
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        if isinstance(error, r.CanaryError):
+            raise
+        raise r.CanaryError("why: complete persisted test source is unavailable; remedy: restore authenticated request/verdict history; never infer success from processed progress") from None
 
 
 def _plan(root, main, target, control, progress, request_id, kind, requested, force):
@@ -153,7 +222,7 @@ def _plan(root, main, target, control, progress, request_id, kind, requested, fo
     version_interval, version_scope = interval(progress["version_accounted"])
     selections.append(version_scope)
     # Formal summary history is retained, but old formal changes do not rerun
-    # every daily test. Formal promotion owns a fresh full-candidate gate.
+    # every result-driven test. Formal promotion owns a fresh full-candidate gate.
     formal_interval, _ = interval(progress["formal"])
     site_intervals, site_scopes, affected = {}, {}, set()
     for site in r.SITES:

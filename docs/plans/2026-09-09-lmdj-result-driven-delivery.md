@@ -124,6 +124,14 @@ result discovery/reconciliation still need configuration and remote acceptance.
 
 ## Acceptance ledger
 
+The [result-driven planner entry](2026-09-09-lmdj-canary-result-wakeups.md)
+replaces the internal daily default with manual previews and a separate
+persisted-result/recovery consumer. It revalidates the retained complete verdict
+and binds the source into a fixed-target plan; recovery reuses the same identity.
+The waking verdict cannot reduce the cumulative planning floor or replace
+independent version/site progress. This consumer still requires authenticated
+scheduler/progress readers and workflow integration before live activation.
+
 - Local reduction/failure behavior: 55 journal tests pass, including six new
   regressions and preserved per-run/jobs, four-reader, atomic page-trust and
   fresh metadata checks. Three initial regressions failed before the fix.
