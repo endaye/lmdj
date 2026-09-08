@@ -8081,6 +8081,108 @@ struct Application::Impl {
   // with respect to Project Truth — no Asset, no Pad, no revision — and it
   // resolves the Set Store from the Workspace, so a `workspace_path` fails
   // `exact_keys` like any other extra field.
+  // `soundset.audition` (#799), in full. The JSON operation below validates its
+  // request shape and then delegates here for everything else, so the bytes a
+  // Host is handed and the geometry the envelope reports are measured from the
+  // same decode and the refusal order exists once. Keep it that way: two copies
+  // of the S11-D12 empty-slot answer would agree only as long as a fixture kept
+  // checking that they did.
+  foundation::Result<SoundSetAuditionAudio> audition_soundset(
+      const SoundSetAuditionRequest& request) {
+    using Result = foundation::Result<SoundSetAuditionAudio>;
+    nlohmann::json identity{
+        {"operation", "soundset.audition"},
+        {"set_id", request.set_id},
+        {"version", request.version},
+        {"manifest_sha256", request.manifest_sha256},
+    };
+    auto resolved = resolve_soundset(identity);
+    if (!resolved.has_value()) {
+      return Result::failure(resolved.error());
+    }
+    // S11-D3 is a property of the Set, so this refuses exactly what `inspect`,
+    // `soundset.map.preview` and `install` refuse, in the same order.
+    const auto decoded = decode_soundset_audio(
+        resolved.value().stored, resolved.value().manifest_sha256);
+    if (!decoded.has_value()) {
+      return Result::failure(decoded.error());
+    }
+    const auto& manifest = resolved.value().stored.manifest;
+    foundation::ArtifactRef artifact{};
+    std::span<const std::byte> bytes;
+    if (request.slot_index.has_value()) {
+      const auto slot = std::ranges::find_if(
+          manifest.slots,
+          [index = *request.slot_index](const auto& candidate) {
+            return candidate.index == index;
+          });
+      // S11-D12: an empty slot is the author's silence, keyed off the absence
+      // of an `artifact`. The existing MISSING_ASSET with no reason, exactly as
+      // the JSON operation answers it -- auditions widen no vocabulary.
+      if (slot == manifest.slots.end() || !slot->occupied.has_value()) {
+        return Result::failure(Error{
+            ErrorCode::missing_asset,
+            "Sound Set slot is empty",
+        });
+      }
+      artifact = slot->occupied.value().artifact;
+      bytes = decoded.value().slots.at(*request.slot_index).value().bytes;
+    } else {
+      if (!manifest.demo.has_value()) {
+        return Result::failure(Error{
+            ErrorCode::missing_asset,
+            "Sound Set declares no demo",
+        });
+      }
+      artifact = manifest.demo.value();
+      auto demo_bytes = soundset_sets.read_artifact(
+          resolved.value().manifest_sha256, manifest.demo->sha256);
+      if (!demo_bytes.has_value()) {
+        return Result::failure(soundset_artifact_error(demo_bytes.error()));
+      }
+      return prepared_audition(artifact, demo_bytes.value());
+    }
+    return prepared_audition(artifact, bytes);
+  }
+
+  // `decode_soundset_audio` already proved these bytes are S8-D6 audio; this
+  // re-decodes to retain the PCM it measures and discards. The second decode is
+  // the cost of keeping that function a measurement, and it is one Artifact
+  // rather than the sixteen the gate reads.
+  foundation::Result<SoundSetAuditionAudio> prepared_audition(
+      const foundation::ArtifactRef& artifact,
+      std::span<const std::byte> bytes) const {
+    using Result = foundation::Result<SoundSetAuditionAudio>;
+    const auto decoded = cooker::decode_wav(bytes);
+    if (!decoded.has_value()) {
+      return Result::failure(decoded.error());
+    }
+    auto prepared = decoded.value();
+    if (prepared->sample_rate != 48'000) {
+      auto resampled = cooker::prepare_runtime_pcm(*decoded.value());
+      if (!resampled.has_value()) {
+        return Result::failure(resampled.error());
+      }
+      prepared = resampled.value();
+    }
+    if (prepared == nullptr || prepared->channels == 0 ||
+        prepared->interleaved.empty() ||
+        prepared->interleaved.size() % prepared->channels != 0) {
+      return Result::failure(Error{
+          ErrorCode::cook_failed,
+          "prepared Sample PCM shape is invalid",
+      });
+    }
+    return Result::success(SoundSetAuditionAudio{
+        artifact,
+        decoded.value()->sample_rate,
+        decoded.value()->channels,
+        static_cast<std::uint64_t>(
+            decoded.value()->interleaved.size() / decoded.value()->channels),
+        std::move(prepared),
+    });
+  }
+
   nlohmann::json soundset_audition(const nlohmann::json& request) {
     require(
         exact_keys(
@@ -8095,69 +8197,49 @@ struct Application::Impl {
       slot_index = static_cast<std::uint8_t>(
           unsigned_field(request, "slot_index", 15));
     }
-    auto resolved = resolve_soundset(request);
-    if (!resolved.has_value()) {
-      return error_envelope(resolved.error());
+    // Everything below the request shape is `audition_soundset`'s, so the
+    // geometry reported here is measured from the same bytes a Host is handed.
+    // This delegation is the invariant: resolution, S11-D3's whole-Set audio
+    // decision, the refusal order and the S11-D12 empty-slot answer exist once,
+    // and the two surfaces cannot drift because there is only one of each.
+    // Re-implementing the lookup and refusals here would leave the agreement
+    // pinned by fixtures rather than by structure.
+    auto audio = audition_soundset(SoundSetAuditionRequest{
+        string_field(request, "set_id"),
+        string_field(request, "version"),
+        string_field(request, "manifest_sha256"),
+        slot_index,
+    });
+    if (!audio.has_value()) {
+      return error_envelope(audio.error());
     }
-    // S11-D3 is a property of the Set, so the audition refuses exactly what
-    // `inspect`, `soundset.map.preview` and `install` refuse, in the same
-    // order: a Set carrying one blob that is not S8-D6 is not auditionable
-    // through any of its slots. That costs a whole-Set read and decode per
-    // request, which is the price of one audio decision rather than sixteen;
-    // an interactive surface that auditions slot after slot should cache the
-    // Set it is browsing rather than weaken the decision to per-slot.
-    const auto decoded = decode_soundset_audio(
-        resolved.value().stored, resolved.value().manifest_sha256);
-    if (!decoded.has_value()) {
-      return error_envelope(decoded.error());
-    }
-    const auto& manifest = resolved.value().stored.manifest;
-    foundation::ArtifactRef artifact{};
-    DecodedAudio audio{};
-    if (slot_index.has_value()) {
-      const auto slot = std::ranges::find_if(
-          manifest.slots,
-          [index = *slot_index](const auto& candidate) {
-            return candidate.index == index;
-          });
-      // S11-D12: an empty slot is the author's silence, keyed off the absence
-      // of an `artifact` and never off a flag. There is nothing to audition,
-      // and inventing a reason token for it would widen the locked error
-      // vocabulary, so this is the existing MISSING_ASSET with no reason.
-      if (slot == manifest.slots.end() || !slot->occupied.has_value()) {
-        return error_envelope(Error{
-            ErrorCode::missing_asset,
-            "Sound Set slot is empty",
-        });
-      }
-      artifact = slot->occupied.value().artifact;
-      audio = decoded.value().slots.at(*slot_index).value().audio;
-    } else {
-      if (!manifest.demo.has_value()) {
-        return error_envelope(Error{
-            ErrorCode::missing_asset,
-            "Sound Set declares no demo",
-        });
-      }
-      artifact = manifest.demo.value();
-      audio = decoded.value().demo.value();
+    const auto prepared_frames = static_cast<std::uint64_t>(
+        audio.value().prepared->interleaved.size() /
+        audio.value().prepared->channels);
+    const auto prepared_bytes = audio::checked_mono_float_bytes(
+        prepared_frames);
+    if (!prepared_bytes.has_value()) {
+      return error_envelope(Error{
+          ErrorCode::invalid_argument,
+          "prepared Sample PCM byte length overflowed",
+      });
     }
     return success_envelope(
         {
-            {"set_id", manifest.set_id},
-            {"version", manifest.version},
-            {"manifest_sha256", resolved.value().manifest_sha256},
+            {"set_id", string_field(request, "set_id")},
+            {"version", string_field(request, "version")},
+            {"manifest_sha256", string_field(request, "manifest_sha256")},
             {"slot_index",
              slot_index.has_value() ? nlohmann::json(*slot_index)
                                     : nlohmann::json(nullptr)},
-            {"artifact", soundset_artifact_json(artifact)},
+            {"artifact", soundset_artifact_json(audio.value().artifact)},
             {"audio",
              {
-                 {"sample_rate", audio.sample_rate},
-                 {"channels", audio.channels},
-                 {"source_frames", audio.source_frames},
-                 {"prepared_bytes", audio.prepared.bytes},
-                 {"prepared_frames", audio.prepared.frames},
+                 {"sample_rate", audio.value().sample_rate},
+                 {"channels", audio.value().channels},
+                 {"source_frames", audio.value().source_frames},
+                 {"prepared_bytes", *prepared_bytes},
+                 {"prepared_frames", prepared_frames},
              }},
         },
         std::nullopt);
@@ -8749,6 +8831,19 @@ foundation::Result<void> Application::abort_project_bundle_import(
             ErrorCode::internal_error,
             "unexpected Application Facade Host API failure",
         });
+  }
+}
+
+foundation::Result<SoundSetAuditionAudio> Application::audition_soundset(
+    const SoundSetAuditionRequest& request) const {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->audition_soundset(request);
+  } catch (...) {
+    return foundation::Result<SoundSetAuditionAudio>::failure(Error{
+        ErrorCode::internal_error,
+        "Sound Set audition failed",
+    });
   }
 }
 

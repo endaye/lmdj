@@ -286,6 +286,39 @@ struct SampleInspectResult {
   std::optional<std::string> waveform_cache_identity;
 };
 
+// S11-D5 audition audio, typed (#799). The JSON `soundset.audition` operation
+// reports the geometry of the bytes a Runtime would play and stops there,
+// because the Application Facade owns no audio engine. A Runtime Host does own
+// one, and calls this in-process to obtain the bytes themselves -- the same
+// shape as `sample.preview.set` obtaining its Pad through `inspect_sample`.
+//
+// This is what keeps audition inside the architecture invariant. The Host never
+// reads the Set Store: the Facade resolves the Set, applies S11-D3's whole-Set
+// audio decision and the same refusal order as its sibling Set-reading
+// operations, decodes, and hands back prepared PCM. The Host only publishes
+// what it is given into its own engine.
+struct SoundSetAuditionRequest {
+  std::string set_id;
+  std::string version;
+  std::string manifest_sha256;
+  // Absent auditions the set-level `demo`; present auditions that slot's
+  // Artifact. Identical addressing to the JSON operation.
+  std::optional<std::uint8_t> slot_index;
+};
+
+struct SoundSetAuditionAudio {
+  foundation::ArtifactRef artifact;
+  // Source geometry, as the JSON operation reports it.
+  std::uint32_t sample_rate;
+  std::uint16_t channels;
+  std::uint64_t source_frames;
+  // Runtime-ready PCM at the fixed 48 kHz rate: the decoded sample when the
+  // source is already 48 kHz, otherwise the resampled one. Never null on
+  // success. This is the same shape `RuntimeSnapshot` Pads carry, so a Host
+  // prepares an audition Bank exactly as it prepares a Project one.
+  std::shared_ptr<const cooker::PcmSample> prepared;
+};
+
 struct SampleWaveformRequest {
   std::filesystem::path project_path;
   domain::PadSlotId slot;
@@ -532,6 +565,8 @@ class Application {
       std::string_view token);
   foundation::Result<SampleInspectResult> inspect_sample(
       const SampleInspectRequest& request) const;
+  foundation::Result<SoundSetAuditionAudio> audition_soundset(
+      const SoundSetAuditionRequest& request) const;
   foundation::Result<cooker::WaveformEnvelope> query_sample_waveform(
       const SampleWaveformRequest& request);
   foundation::Result<SampleQuotaResult> query_sample_quota(

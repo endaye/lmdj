@@ -1039,6 +1039,97 @@ void test_install_policies_write_the_three_write_sets() {
 // change. The set-level `demo` and a slot's own Artifact answer through one
 // operation, and Foundry CC0's slot 12 reusing slot 0's Artifact makes the
 // audition source content-addressed rather than slot-addressed.
+// #799. The typed `audition_soundset` is what a Runtime Host calls to obtain
+// the bytes themselves; the JSON operation reports their geometry. The defect
+// this catches is the two disagreeing -- a Host playing audio whose shape the
+// envelope misdescribes, which no per-surface test can see because each is
+// self-consistent. Both go through one resolve/gate/decode path so they cannot
+// drift, and this pins that they answer about the same audio.
+void test_typed_audition_audio_matches_the_reported_geometry() {
+  TempDirectory temp("audition-typed");
+  auto source = std::make_shared<FakeCatalogSource>();
+  source->publish(fixture_catalog_index());
+  Application application(config(
+      temp.path(),
+      lmdj::project_io::make_local_directory_catalog_transport(
+          flatten_fixture_corpus(temp)),
+      source));
+  LMDJ_CHECK(catalog_list(application).at("ok").get<bool>());
+
+  const auto frames_of =
+      [](const lmdj::facade::SoundSetAuditionAudio& audio) {
+        return static_cast<std::uint64_t>(
+            audio.prepared->interleaved.size() / audio.prepared->channels);
+      };
+
+  // Layer one, the set-level demo: already at the Runtime rate.
+  const auto demo_envelope =
+      audition_set(application, kFoundrySetId, kFoundryManifest);
+  LMDJ_CHECK(demo_envelope.at("ok").get<bool>());
+  const auto demo = application.audition_soundset(
+      lmdj::facade::SoundSetAuditionRequest{
+          std::string{kFoundrySetId}, std::string{kSetVersion},
+          std::string{kFoundryManifest}, std::nullopt});
+  LMDJ_CHECK(demo.has_value());
+  LMDJ_CHECK(demo.value().prepared != nullptr);
+  LMDJ_CHECK(demo.value().prepared->sample_rate == 48'000);
+  LMDJ_CHECK(demo.value().artifact.sha256 == kFoundryDemoArtifact);
+  // The bytes carry exactly the geometry the envelope reports.
+  LMDJ_CHECK(
+      demo.value().sample_rate ==
+      demo_envelope.at("result").at("audio").at("sample_rate")
+          .get<std::uint32_t>());
+  LMDJ_CHECK(
+      demo.value().source_frames ==
+      demo_envelope.at("result").at("audio").at("source_frames")
+          .get<std::uint64_t>());
+  LMDJ_CHECK(
+      frames_of(demo.value()) ==
+      demo_envelope.at("result").at("audio").at("prepared_frames")
+          .get<std::uint64_t>());
+
+  // Layer two, a slot whose Artifact is 44.1 kHz: the typed path must hand back
+  // the *resampled* PCM, not the source, or a Host would publish 2'646 frames
+  // of 44.1 kHz audio into a 48 kHz engine and play it sharp.
+  const auto slot_envelope =
+      audition_set(application, kFoundrySetId, kFoundryManifest, 0);
+  LMDJ_CHECK(slot_envelope.at("ok").get<bool>());
+  const auto slot_zero = application.audition_soundset(
+      lmdj::facade::SoundSetAuditionRequest{
+          std::string{kFoundrySetId}, std::string{kSetVersion},
+          std::string{kFoundryManifest}, std::optional<std::uint8_t>{0}});
+  LMDJ_CHECK(slot_zero.has_value());
+  LMDJ_CHECK(slot_zero.value().prepared->sample_rate == 48'000);
+  LMDJ_CHECK(slot_zero.value().sample_rate == 44'100);
+  LMDJ_CHECK(slot_zero.value().source_frames == 2'646);
+  LMDJ_CHECK(frames_of(slot_zero.value()) == 2'880);
+  LMDJ_CHECK(
+      frames_of(slot_zero.value()) ==
+      slot_envelope.at("result").at("audio").at("prepared_frames")
+          .get<std::uint64_t>());
+  LMDJ_CHECK(slot_zero.value().artifact.sha256 == kFoundrySlotZeroArtifact);
+
+  // The typed path refuses what the JSON operation refuses, with the same
+  // code: S11-D12's empty slot is the author's silence, and auditions widen no
+  // error vocabulary.
+  const auto empty_slot = application.audition_soundset(
+      lmdj::facade::SoundSetAuditionRequest{
+          std::string{kFoundrySetId}, std::string{kSetVersion},
+          std::string{kFoundryManifest}, std::optional<std::uint8_t>{10}});
+  LMDJ_CHECK(!empty_slot.has_value());
+  LMDJ_CHECK(
+      empty_slot.error().code == lmdj::foundation::ErrorCode::missing_asset);
+  LMDJ_CHECK(empty_slot.error().details.empty());
+  // That refusal is also what pins slot addressing: an implementation ignoring
+  // `slot_index` would answer slot 10 with slot 0's audio instead of refusing.
+  //
+  // What this does not distinguish: two *occupied* slots carrying different
+  // Artifacts are never compared here, so a mapping that transposed two
+  // occupied indices would pass. Foundry CC0's slot 12 deliberately reuses
+  // slot 0's Artifact, so the fixture cannot express that case; catching it
+  // needs a Set whose occupied slots all differ.
+}
+
 void test_audition_reaches_both_s11_d5_layers() {
   TempDirectory temp("audition");
   auto source = std::make_shared<FakeCatalogSource>();
@@ -1291,6 +1382,7 @@ int main() {
     test_map_preview_is_index_identity_and_changes_nothing();
     test_install_policies_write_the_three_write_sets();
     test_audition_reaches_both_s11_d5_layers();
+    test_typed_audition_audio_matches_the_reported_geometry();
     test_audition_refuses_a_set_that_declares_no_demo();
     test_audition_refuses_a_set_whose_audio_is_not_s8_d6();
     test_the_workspace_local_catalog_serves_a_host_with_no_injection();
