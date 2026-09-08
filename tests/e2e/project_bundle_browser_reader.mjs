@@ -47,8 +47,18 @@ async function main() {
   // Bundle itself, so a reader that read a different index fails there rather
   // than reaching this line. The values are still the driver's, so the
   // load-bearing signals for the caller are the exit status and the operation
-  // order, not these fields. The entry count is omitted outright: the stub
-  // echoes it and nothing would cross-check it.
+  // order, not these fields.
+  //
+  // The entry count is omitted for the opposite reason to the one this comment
+  // used to give. It said "the stub echoes it and nothing would cross-check
+  // it", and the second half is false: the stub returns `request.identity`,
+  // which carries `entry_count`, and `validateIdentity`
+  // (packages/web-runtime-platform/web/project_bundle_reader.mjs:235-247)
+  // compares it against `index.entries.length` and raises
+  // `HOST_PROTOCOL_MISMATCH` on a mismatch. The cross-check is real; it is
+  // just against the reader's own parse rather than against anything this
+  // driver produced. Echoing it here would therefore add a field that agrees
+  // with the reader by construction, which is why it stays out.
   process.stdout.write(JSON.stringify({
     operations,
     project_id: summary.projectId,
