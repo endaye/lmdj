@@ -193,12 +193,21 @@ slot is `BankState::empty`, returning `PublishResult::bank_slots_full` only
 when none is. "One current bank and 64 pad slots with no spare" is true of
 **pad** slots.
 
-**The reserved slot is a dedicated member, not one of the four.** The decision
-was first priced as "hot-swap headroom four down to three", and that number was
-wrong: the audition slot lives beside `bank_slots_` as its own
-`std::optional<PreparedSampleBank>` plus a sentinel index, so
+**The reserved audition pool sits beside the four, and holds two.** The
+decision was first priced as "hot-swap headroom four down to three", and that
+number was wrong: the audition Banks live beside `bank_slots_`, so
 `kRealtimeBankCapacity` stays 4 and **every existing publication path keeps its
-exact arithmetic**. Carving one of the four was rejected for a reason the
+exact arithmetic**.
+
+Two rather than one, because replace is the chosen overlap policy and replacing
+a ringing audition must publish the incoming Bank while draining voices are
+still reading the outgoing one. With a single slot there is nowhere to put the
+incoming Bank that is not the buffer a voice is mid-render on — the same reason
+the Project pool is larger than one. A third publication while both drain is
+refused, and that refusal is deliberately not counted against
+`bank_slot_rejections_`, which measures Project pressure. Both slots are
+outside `kRealtimeBankCapacity`, so this changes the implementation's shape and
+not the decision or its cost. Carving one of the four was rejected for a reason the
 original pricing missed — it forces rewriting
 `tests/core/audio/realtime_engine_test.cpp:1169-1190`, which publishes four
 banks, asserts the fifth is `bank_slots_full`, and asserts
