@@ -130,6 +130,16 @@ edits and rejects stale canonical inputs. The explicit proposed BUILD is not
 allocated or proven free. Snapshot creation, authenticated coordinator phases,
 fenced occupancy, version PR and post-squash acceptance remain outstanding.
 
+The [T2g authenticated assessment handoff](2026-09-09-lmdj-canary-assessment-handoff.md)
+connects the real Actions Runtime and independent assessment Journal to exact
+producer/job/artifact verification, durable terminal persistence, canonical
+metadata preparation and existing Issue outbox delivery. Recovery retains the
+original claim; active/invisible output is pending, and terminal missing or
+invalid output reports a reconciliation obligation without fabricating advice.
+An already persisted terminal result survives artifact expiry. Independent live
+storage, the matching reviewed executor workflow/binaries and automatic/manual
+coordinator wiring still require implementation and remote acceptance.
+
 The [Host changelog Portal Task](2026-09-09-lmdj-host-changelog-portal.md), merged
 in PR #1024 at `262985b6d340b10abe7a978ba3c0ce0174c0619d`, adds independent
 Creator and Runtime current pages generated from their own manifests/history.
