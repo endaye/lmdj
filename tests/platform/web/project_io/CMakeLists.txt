@@ -27,7 +27,12 @@ add_subdirectory("${LMDJ_REPO_ROOT}/packages/project-io" project-io)
 target_compile_definitions(lmdj_project_io PRIVATE LMDJ_PROJECT_IO_TESTING=1)
 
 add_executable(project_io_web_test project_io_web_test.cpp)
-target_link_libraries(project_io_web_test PRIVATE lmdj::project_io)
+target_link_libraries(
+  project_io_web_test
+  PRIVATE
+    lmdj::project_io
+    lmdj_picosha2
+)
 target_compile_options(
   project_io_web_test
   PRIVATE

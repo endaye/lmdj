@@ -309,6 +309,35 @@ struct SoundSetStore::Impl {
     return foundation::Result<void>::success();
   }
 
+  // Whether the Set Store *enumerates* this Set. A destination directory that
+  // exists is not the same fact as a published Set: a platform that cannot
+  // rename publishes by copying, so between the last copied byte and the
+  // commit record the directory holds every file and is still uncommitted.
+  // Only enumeration knows the difference, and answering from the directory
+  // alone would report a Set as installed that `list` refuses to show.
+  //
+  // Every failure answers false, including a listing that could not be read.
+  // That sends a genuinely published Set down the leased path, which loads it
+  // and returns it anyway; the cost is one writer lease this Host would not
+  // otherwise have taken, and a refusal if another Host is holding it.
+  // `acquire` is the only entry point gated this way because it is the only
+  // one that owns recovery. `read` and `read_artifact` are read-only and
+  // content-authenticated, and a Host reaches them with a hash `list` has
+  // already answered for.
+  bool enumerated(const std::string& manifest_sha256) const {
+    const auto root = sets_root();
+    const auto present = platform->directory_exists(root);
+    if (!present.has_value() || !present.value()) {
+      return false;
+    }
+    const auto names = platform->list_directories(root);
+    if (!names.has_value()) {
+      return false;
+    }
+    return std::find(names.value().begin(), names.value().end(),
+                     manifest_sha256) != names.value().end();
+  }
+
   // Load a published Set from its own directory. A Set that is not there, or
   // whose bytes no longer answer to their own hash, is simply not published.
   foundation::Result<StoredSoundSet> load(
@@ -494,18 +523,52 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
         invalid_argument("Catalog entry identity is not well formed"));
   }
 
-  // A Set already in the store is the answer; the Catalog is not consulted.
   const auto destination = impl_->sets_root() / entry.manifest_sha256;
-  const auto already_present = impl_->platform->directory_exists(destination);
-  const auto published = impl_->load(entry.manifest_sha256);
-  if (published.has_value()) {
-    if (published.value().manifest.set_id != entry.set_id ||
-        published.value().manifest.version != entry.version) {
+  const auto answer = [&entry](
+                          const foundation::Result<StoredSoundSet>& stored) {
+    if (stored.value().manifest.set_id != entry.set_id ||
+        stored.value().manifest.version != entry.version) {
       return Result::failure(
           content_mismatch(
               "Stored Sound Set identity does not match the Catalog entry"));
     }
-    return published;
+    return stored;
+  };
+
+  // A Set the store already enumerates is the answer; the Catalog is not
+  // consulted and no writer lease is taken. A published Set is immutable, so
+  // reading it needs no exclusion, and taking a lease here would make one
+  // Host's routine Catalog refresh refuse an installed Set to every other Host
+  // on the same Workspace. The enumeration check is what keeps that shortcut
+  // honest: an interrupted copy can leave a destination that reads perfectly
+  // and is not published, and this path never takes the lease that would
+  // recover it.
+  if (impl_->enumerated(entry.manifest_sha256)) {
+    const auto cached = impl_->load(entry.manifest_sha256);
+    if (cached.has_value()) {
+      return answer(cached);
+    }
+  }
+
+  // Nothing readable is published, so this acquisition may have to write.
+  // Lease the destination before deciding anything else about it, exactly as
+  // ProjectBundleTransfer::commit leases the Project it is about to publish.
+  // A platform that cannot rename atomically publishes by copy, and the
+  // destination lease is what makes that copy safe: it excludes every other
+  // writer from the half-built destination, and acquiring it is what recovers
+  // a publication an earlier run interrupted. That recovery has to happen
+  // before the verdict below, or the leftovers of an interrupted copy would be
+  // reported as a corrupted Set forever. The native platform publishes with an
+  // atomic rename and does not consult the lease; taking it on both keeps one
+  // publication discipline instead of two.
+  auto destination_lease = impl_->platform->acquire_writer(destination);
+  if (!destination_lease.has_value()) {
+    return Result::failure(destination_lease.error());
+  }
+  const auto already_present = impl_->platform->directory_exists(destination);
+  const auto published = impl_->load(entry.manifest_sha256);
+  if (published.has_value()) {
+    return answer(published);
   }
   // A Set whose directory is there but unreadable must say so. Re-downloading
   // it would only collide with the occupant at publication time and report the

@@ -75,6 +75,17 @@ class ProjectStoragePlatform {
             "recursive storage removal is not implemented",
         });
   }
+  // Publishes a staged directory at a destination that must not already
+  // exist. The caller must hold a writer lease on the *destination path
+  // itself* -- a lease on a covering ancestor does not satisfy this -- and
+  // must have acquired it before it decided the destination was absent: a
+  // platform that cannot rename atomically publishes by copy, and that lease
+  // is both what excludes other writers from the half-built destination and
+  // what recovers an interrupted publication -- recovery runs when the lease
+  // is acquired, so a caller that inspects the destination first sees the
+  // leftovers instead of the recovered state. A platform that renames
+  // atomically ignores the lease, so the requirement is invisible on native
+  // and fails closed on the Web.
   virtual foundation::Result<void> publish_directory_if_absent(
       const std::filesystem::path&,
       const std::filesystem::path&) {

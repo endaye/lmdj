@@ -760,6 +760,12 @@ void test_directory_transfer_primitives_are_atomic_and_path_safe() {
       platform->create_immutable(
           staging / "nested/payload.bin", bytes("complete"))
           .has_value());
+  // Publication is leased on the destination path itself, not on the ancestor
+  // leased above. This platform renames atomically and does not read the
+  // lease, but the interface requires it of every caller, so the contract test
+  // states the discipline rather than relying on the latitude.
+  auto destination_lease = platform->acquire_writer(destination);
+  LMDJ_CHECK(destination_lease.has_value());
   LMDJ_CHECK(
       platform->publish_directory_if_absent(staging, destination)
           .has_value());
@@ -782,6 +788,7 @@ void test_directory_transfer_primitives_are_atomic_and_path_safe() {
   LMDJ_CHECK(
       collision.error().details.at("storage_condition") ==
       "already_exists");
+  destination_lease.value().reset();
   LMDJ_CHECK(platform->directory_exists(collision_staging).value());
   LMDJ_CHECK(
       text(platform->read_complete(destination / "nested/payload.bin").value()) ==
