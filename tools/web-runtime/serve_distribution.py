@@ -96,16 +96,23 @@ class _RefuseRedirect(HTTPRedirectHandler):
         return None
 
 
+# The host class is deliberately narrower than WHATWG's: `new URL()` leaves
+# `!"$&'()*+,;=`{}~` and a leading `.` or `-` untouched in a host, and none of
+# them belongs in a Catalog address. `_` is admitted because some internal
+# names really are spelled `a_b.example`. Narrower means this side refuses a
+# few values production would accept, which is the safe direction and is
+# asserted rather than assumed -- see `UPSTREAM_PARITY_REFUSED`.
+#
 # The one grammar a configured upstream must match, derived by measurement
 # rather than from spec recall: the path class is exactly the ASCII characters
 # `new URL()` leaves untouched inside a path, so anything the Worker would
 # rewrite is outside it. Enumerating WHATWG's normalisations instead was tried
-# and lost -- two review passes found 27 more spellings the enumeration missed,
-# because a list of behaviours is always one behaviour behind the parser.
+# and lost -- two review passes kept finding spellings it had missed, because a
+# list of behaviours is always one behaviour behind the parser.
 # Deciding what a valid upstream looks like is finite; chasing a parser is not.
 CANONICAL_UPSTREAM = re.compile(
     r"\Ahttps?://"
-    r"(?P<host>\[[^\[\]/?#]+\]|[a-z0-9][a-z0-9.\-]*)"
+    r"(?P<host>\[[^\[\]/?#%]+\]|[a-z0-9][a-z0-9._\-]*)"
     r"(?::(?P<port>[1-9][0-9]{0,4}))?"
     r"(?P<path>(?:/[A-Za-z0-9!$%&'()*+,\-.:;=@\[\]_|~]*)*/)\Z"
 )
@@ -123,6 +130,13 @@ def _host_is_canonical(host: str) -> bool:
     """
     if host.startswith("["):
         if not host.endswith("]"):
+            return False
+        # `ipaddress` has understood IPv6 scope identifiers since 3.9 and
+        # round-trips `fe80::1%eth0`; WHATWG has no zone-ID concept at all and
+        # throws. The grammar already excludes `%` from a bracketed host so
+        # this cannot be reached, and it is restated here because the round
+        # trip alone would accept what production cannot express.
+        if "%" in host:
             return False
         try:
             return f"[{ipaddress.IPv6Address(host[1:-1]).compressed}]" == host

@@ -56,7 +56,14 @@
 //
 // What is still true, and is the whole reason this is narrower than naming a
 // Catalog in `connect-src`: the far end is one host the deployment chose, not
-// an origin the attacker chose, and the request grammar reaching it is closed.
+// an origin the attacker chose, and the request grammar reaching it is the
+// narrow check below rather than anything a caller can widen.
+//
+// One thing the canonical-form rule buys beyond request-derived bytes, worth
+// claiming because it is easy to miss: `CATALOG_UPSTREAM` is now pinned to its
+// own canonical WHATWG serialization, so the configured base cannot be a
+// spelling the parser silently rewrites into a different host. That closes
+// operator-configuration surprise, not just caller influence.
 //
 // Whether the Workers runtime attaches the viewer's IP to a subrequest is NOT
 // established here and must not be assumed either way; if it does, that is a
@@ -102,6 +109,10 @@ function upstreamBase(env) {
   // unauthenticated forwards and no signal; the proof server would keep them
   // and behave unlike this. Neither half of that is worth having.
   if (parsed.username !== "" || parsed.password !== "") return null;
+  // WHATWG accepts port 0 and `origin` keeps it, so the canonical-form rule
+  // below would admit it. It is not a port anything listens on, and the proof
+  // server's grammar refuses it, so refusing here keeps the two in step.
+  if (parsed.port === "0") return null;
   const path = parsed.pathname.endsWith("/")
     ? parsed.pathname
     : `${parsed.pathname}/`;
@@ -121,7 +132,8 @@ function upstreamBase(env) {
   // same question with a closed grammar, and the two agree only as far as that
   // grammar is faithful. `CatalogUpstreamParityTest` drives both over one list
   // for exactly that reason; enumerating WHATWG's behaviours instead was tried
-  // here and two review passes found 27 spellings the enumeration missed.
+  // here first and two review passes kept finding spellings the enumeration
+  // had missed, which is what a list of parser behaviours always does.
   if (configured !== base) return null;
   return base;
 }

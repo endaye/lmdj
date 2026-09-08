@@ -316,6 +316,15 @@ UPSTREAM_PARITY_REFUSED = (
     "https://[0:0:0:0:0:0:0:1]/b/",
     "https://[::0:1]/b/",
     "https://[0000::1]/b/",
+    # Zone identifiers. `ipaddress` round-trips them; WHATWG has no such
+    # concept and throws, so the proof server would have accepted a base the
+    # deployment cannot express -- the permissive direction, and the last of it.
+    "https://[fe80::1%25eth0]/",
+    "https://[fe80::1%eth0]/",
+    "https://[::1%25]/",
+    # Port 0. WHATWG keeps it and `origin` round-trips it, so the Worker needs
+    # its own refusal to stay in step with this side's grammar.
+    "https://catalog.example.test:0/b/",
     # Path bytes WHATWG percent-encodes, measured rather than recalled.
     'https://catalog.example.test/a"b/',
     "https://catalog.example.test/a<b>/",
@@ -325,6 +334,21 @@ UPSTREAM_PARITY_REFUSED = (
     "https://catalog.example.test/a\x00b/",
     "https://catalog.example.test/a\x01b/",
     "https://catalog.example.test/a\x7fb/",
+)
+# Values where the two deliberately disagree in the SAFE direction: the proof
+# server refuses what the Worker would accept, so the lane can never be
+# configured with something production cannot serve. Listed and asserted rather
+# than left implicit, because an unasserted disagreement is indistinguishable
+# from one nobody noticed -- and because the direction is the whole point. If
+# one of these ever flips, the proof server has become the permissive side.
+UPSTREAM_PARITY_PROOF_SERVER_STRICTER = (
+    # Host bytes `new URL()` leaves untouched that a Catalog address has no
+    # business carrying. `_` is deliberately NOT here: it is admitted by both.
+    "https://catalog!example.test/b/",
+    "https://catalog~example.test/b/",
+    "https://catalog{example}.test/b/",
+    "https://.catalog.example.test/b/",
+    "https://-catalog.example.test/b/",
 )
 # Accepted by both, and composed identically by both. The `%2e` bases are here
 # on purpose: a substring test for `%2e` refused five legitimate bases that the
@@ -341,6 +365,8 @@ UPSTREAM_PARITY_ACCEPTED = (
     "https://catalog.example.test/a|b/",
     "https://127.0.0.1/b/",
     "https://[::1]/b/",
+    # Underscore hosts are real internal names, and both sides accept them.
+    "https://a_b.example.test/b/",
 )
 
 
@@ -679,7 +705,11 @@ process.stdout.write(JSON.stringify(
         # A crash is not a refusal. Through `--catalog-upstream-file` an
         # escaping exception is an empty response on every request rather than
         # a 404, and it is the acceptance lane's own configuration path.
-        for upstream in UPSTREAM_PARITY_REFUSED + UPSTREAM_PARITY_ACCEPTED:
+        for upstream in (
+            UPSTREAM_PARITY_REFUSED
+            + UPSTREAM_PARITY_ACCEPTED
+            + UPSTREAM_PARITY_PROOF_SERVER_STRICTER
+        ):
             with self.subTest(upstream=upstream):
                 python_kind, python_detail = self.python_outcome(upstream)
                 self.assertNotEqual(python_kind, "crash", python_detail)
@@ -702,6 +732,18 @@ process.stdout.write(JSON.stringify(
                 expected = self.python_outcome(upstream)
                 self.assertEqual(expected[0], "accept", "proof server")
                 self.assertEqual(self.worker_outcome(upstream), expected)
+
+    def test_the_proof_server_is_the_stricter_side_where_they_differ(self) -> None:
+        for upstream in UPSTREAM_PARITY_PROOF_SERVER_STRICTER:
+            with self.subTest(upstream=upstream):
+                self.assertEqual(
+                    self.python_outcome(upstream), ("refuse", None),
+                    "the proof server must be the stricter side",
+                )
+                self.assertEqual(
+                    self.worker_outcome(upstream)[0], "accept",
+                    "if the Worker also refuses, move this to REFUSED",
+                )
 
     def test_the_one_intended_difference_is_plaintext_loopback(self) -> None:
         # The proof server admits a loopback `http` Catalog because the
