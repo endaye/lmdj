@@ -499,12 +499,18 @@ and would land a Host-only operation in the `attempt_inspect` fallthrough.
 
 ### Task 4b — the Creator control, parity table and acceptance leg
 
-- **Files:** `packages/web-runtime-platform/src/control_runtime.cpp`,
-  `bridge.cpp`, `web/protocol.mjs`, `apps/native-host/src/main.cpp`,
-  `apps/core-mcp/lmdj_core_mcp/server.py`,
-  `apps/creator-web/src/components/soundset_surface.tsx`, and the tests
-  pinning those tables (`tests/host/performance_cli_test.py`,
-  `packages/web-runtime-platform/test/protocol.test.mjs`)
+- **Files:** `apps/creator-web/src/components/soundset_surface.tsx` and the
+  tests for the parity case and the acceptance leg.
+
+  **Not the Host tables.** `control_runtime.cpp`, `bridge.cpp` and
+  `web/protocol.mjs` are Task 4a's and are already delivered in
+  [#1009](https://github.com/endaye/lmdj/pull/1009);
+  `apps/native-host/src/main.cpp` and `apps/core-mcp/lmdj_core_mcp/server.py`
+  are **unchanged** by any Task here, for the reason §4.3 gives — both forward
+  to a Facade that does not serve the stop operation. An earlier revision
+  re-listed all five here, which left no way to tell which Task owned them;
+  that is the same amendment-did-not-propagate defect this plan is named after,
+  found by review in the document that names it.
 - **Tests (component + platform):** the Creator's two audition controls
   dispatch and stop; the cross-Host parity case below; the acceptance leg
   below.
