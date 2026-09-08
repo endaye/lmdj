@@ -1,0 +1,74 @@
+{
+  "observed_at": "2026-09-08T02:53:06.586623+00:00",
+  "window_start": "2026-09-01T02:53:06.586623+00:00",
+  "window_end": "2026-09-08T02:53:06.586623+00:00",
+  "boundary_reached": true,
+  "page_count": 8,
+  "unique_records_in_window": 792,
+  "states": {
+    "error": 670,
+    "ready": 122
+  },
+  "contexts": {
+    "production": 249,
+    "deploy-preview": 543
+  },
+  "daily_utc": {
+    "2026-09-01": 62,
+    "2026-09-02": 95,
+    "2026-09-03": 74,
+    "2026-09-04": 54,
+    "2026-09-05": 104,
+    "2026-09-06": 177,
+    "2026-09-07": 195,
+    "2026-09-08": 31
+  },
+  "quota_errors": 163,
+  "ready_duration_count": 122,
+  "ready_duration_median_seconds": 122.0,
+  "ready_duration_max_seconds": 602,
+  "http": [
+    {
+      "url": "https://lmdj.netlify.app/",
+      "final_url": "https://lmdj.netlify.app/",
+      "status": 200,
+      "bytes": 24216,
+      "headers": {
+        "Content-Type": "text/html; charset=UTF-8",
+        "Cache-Control": "public,max-age=0,must-revalidate",
+        "Cross-Origin-Opener-Policy": null,
+        "Cross-Origin-Embedder-Policy": null,
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin"
+      }
+    },
+    {
+      "url": "https://lmdj-creator.netlify.app/",
+      "final_url": "https://lmdj-creator.netlify.app/",
+      "status": 200,
+      "bytes": 1039,
+      "headers": {
+        "Content-Type": "text/html; charset=UTF-8",
+        "Cache-Control": "no-store",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": null
+      }
+    },
+    {
+      "url": "https://lmdj-runtime.netlify.app/",
+      "final_url": "https://lmdj-runtime.netlify.app/",
+      "status": 200,
+      "bytes": 10409,
+      "headers": {
+        "Content-Type": "text/html; charset=UTF-8",
+        "Cache-Control": "no-store",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": null
+      }
+    }
+  ]
+}
