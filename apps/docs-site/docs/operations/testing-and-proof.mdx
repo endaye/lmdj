@@ -142,6 +142,14 @@ rerun 也明确跳过，部署后的启动失败仍可见，未知祖先关系�
 历史报告重试使用 `batch_operation=report-legacy` 及精确 `review_run_id`／`review_attempt`，
 这两个复用字段在该操作中表示 Core CI 来源。`report_config` 留空使用固定 pair。
 自动 PR Review discovery 保存冻结 inventory 和跨轮 cursor，未解决或过期证据明确保留。
+PR Review 完成不再直接唤醒自测控制器；已发布的 findings 与 scope 仍由审查发布器保存，
+main push、15 分钟 health tick 的非执行轮合并恢复报告，实际批次完成 relay 保持及时通知。
+每次 discovery 保留完整历史 metadata 轮扫，另给至多一个新／未解决 attempt 公平机会：
+按持久注册或最近 disposition 的 generation 轮转，永久错误和仍运行的 review 也消耗其轮次，
+不会独占优先路径。历史成功记录不占这个额外预算；历史重扫仍负责发现旧 run 的 later attempt。
+这不是 15 分钟投递保证：inventory 缺口、不可读来源、控制池不可用或积压仍明确报错；
+过期 evidence 不冒充成功。精确 `report-review`／`report-discovery` 手动恢复入口保持可用。
+旧终态 run 的未知 rerun 仍由与历史 ID 数量相关的完整轮扫发现，不承诺全局 artifact 保留期内送达。
 执行轮不做附带报告扫描；非执行轮做有界报告和发现，积压留待接续，报告重试不重跑测试。
 报告器不合并 PR、不创建版本、不发布或部署。
 
