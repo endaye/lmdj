@@ -149,6 +149,25 @@ if(BUILD_TESTING)
   )
 
   add_executable(
+    lmdj_audio_value_channel_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/value_channel_test.cpp"
+  )
+  target_include_directories(
+    lmdj_audio_value_channel_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_audio_value_channel_tests PRIVATE lmdj::audio_runtime Threads::Threads
+  )
+  lmdj_target_warnings(lmdj_audio_value_channel_tests)
+  lmdj_target_sanitizers(lmdj_audio_value_channel_tests)
+  lmdj_add_test(
+    NAME audio.value_channel
+    TIER unit
+    COMMAND lmdj_audio_value_channel_tests
+    LABELS audio concurrency
+  )
+
+  add_executable(
     lmdj_master_fx_tests
     "${CMAKE_SOURCE_DIR}/tests/core/audio/master_fx_test.cpp"
   )

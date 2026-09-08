@@ -59,7 +59,14 @@ CaptureWriter::failure_after_join() const noexcept {
 void CaptureWriter::run() {
   std::array<audio::CapturedTriggerEvent, 64> captured{};
   while (true) {
-    const auto count = engine_.drain_capture(captured);
+    std::size_t count;
+    {
+      // The writer is another physical control caller, not another logical
+      // producer: serialize its Engine mutation with Host/Facade operations.
+      // Never retain this lock across sleeps or a writer join.
+      std::lock_guard lock(facade_mutex_);
+      count = engine_.drain_capture(captured);
+    }
     if (count == 0) {
       const auto state = engine_.capture_telemetry().state;
       if (stop_requested_.load(std::memory_order_acquire) &&

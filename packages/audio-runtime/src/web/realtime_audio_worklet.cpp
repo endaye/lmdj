@@ -2,6 +2,8 @@
 
 #include <lmdj/audio/prepared_sample_bank.hpp>
 
+#include "../realtime_engine_audio_access.hpp"
+
 static_assert(lmdj::audio::kTickDenominator == 2'880'000);
 static_assert(lmdj::audio::integrate_tick_numerator(0, 62, 192).value() ==
               11'427'840);
@@ -137,7 +139,9 @@ struct RealtimeAudioWorklet::Impl {
     auto* left = outputs[0].data;
     auto* right = outputs[0].data + outputs[0].samplesPerChannel;
     self.engine.render(left, right, kRequiredFrames);
-    if (self.engine.voice_state_telemetry().state ==
+    const auto render_status =
+        lmdj::audio::detail::RealtimeEngineAudioAccess::status(self.engine);
+    if (render_status.voice_state ==
         RuntimeVoiceStateStreamState::corrupted) {
       self.latch_fatal(RealtimeAudioWorkletFatal::processor_error);
       self.in_flight.store(false, std::memory_order_release);
@@ -171,8 +175,7 @@ struct RealtimeAudioWorklet::Impl {
     auto acknowledged_generation = self.activation_generation.exchange(
         0, std::memory_order_acq_rel);
     if (acknowledged_generation == 0) {
-      acknowledged_generation =
-          self.engine.bank_telemetry().current_generation;
+      acknowledged_generation = render_status.bank_generation;
     }
     self.acknowledged.store(
         acknowledged_generation, std::memory_order_release);
