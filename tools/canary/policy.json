@@ -1,0 +1,18 @@
+{
+  "schema": "lmdj.canary-planning-policy.v1",
+  "repository": "endaye/lmdj",
+  "sites": {
+    "creator": {
+      "suites": ["creator", "deploy_contract", "package"],
+      "host_manifest": "apps/creator-web/module.json"
+    },
+    "docs": {
+      "suites": ["docs_static", "portal", "deploy_contract"],
+      "host_manifest": null
+    },
+    "runtime": {
+      "suites": ["web_runtime_host", "web_runtime_lab", "deploy_contract", "package"],
+      "host_manifest": "apps/web-runtime-host/module.json"
+    }
+  }
+}

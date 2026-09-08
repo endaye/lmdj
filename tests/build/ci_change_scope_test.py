@@ -176,6 +176,9 @@ CASES = {
         "core_ubuntu", "core_asan", "core_coverage", "core_macos"
     },
     "tools/release/model.py": {"deploy_contract", "ci_contract"},
+    "tools/canary/planning.py": {"ci_contract"},
+    "tools/canary/records.py": {"ci_contract"},
+    "tools/canary/policy.json": {"ci_contract"},
     "packaging/core/CMakeLists.txt": {"core_ubuntu", "package"},
     "netlify.toml": {"portal", "ci_contract"},
     "wrangler.json": {"portal", "ci_contract"},
