@@ -6,7 +6,8 @@
 #include <optional>
 
 #include <lmdj/audio/realtime_engine.hpp>
-#include <lmdj/facade/application.hpp>
+#include <lmdj/facade/performance_ports.hpp>
+#include <lmdj/facade/performance_replay.hpp>
 
 namespace lmdj::facade {
 

@@ -1,12 +1,31 @@
+find_package(Threads REQUIRED)
+
+add_library(
+  lmdj_performance_runtime
+  STATIC
+    src/performance_engine_adapter.cpp
+    src/performance_replay.cpp
+    src/performance_runtime.cpp
+)
+add_library(lmdj::performance_runtime ALIAS lmdj_performance_runtime)
+target_include_directories(
+  lmdj_performance_runtime
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(
+  lmdj_performance_runtime
+  PUBLIC lmdj::audio_runtime
+  PRIVATE Threads::Threads
+)
+lmdj_target_warnings(lmdj_performance_runtime)
+lmdj_target_sanitizers(lmdj_performance_runtime)
+
 add_library(
   lmdj_application
   STATIC
     src/application.cpp
     src/assembly_loader.cpp
     src/mutation_publish_scope.cpp
-    src/performance_engine_adapter.cpp
-    src/performance_replay.cpp
-    src/performance_runtime.cpp
     src/soundset_catalog.cpp
 )
 add_library(lmdj::application ALIAS lmdj_application)
@@ -21,6 +40,7 @@ target_include_directories(
 target_link_libraries(
   lmdj_application
   PUBLIC
+    lmdj::performance_runtime
     lmdj::authoring_domain
     lmdj::project_io
     lmdj::project_cooker
@@ -83,7 +103,25 @@ lmdj_target_warnings(lmdj_core_c)
 lmdj_target_sanitizers(lmdj_core_c)
 
 if(BUILD_TESTING)
-  find_package(Threads REQUIRED)
+  add_executable(
+    lmdj_facade_performance_runtime_consumer_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/performance_runtime_consumer_test.cpp"
+  )
+  target_include_directories(
+    lmdj_facade_performance_runtime_consumer_tests
+    PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_facade_performance_runtime_consumer_tests
+    PRIVATE lmdj::performance_runtime Threads::Threads
+  )
+  lmdj_target_warnings(lmdj_facade_performance_runtime_consumer_tests)
+  lmdj_target_sanitizers(lmdj_facade_performance_runtime_consumer_tests)
+  lmdj_add_test(
+    NAME facade.performance_runtime_consumer
+    TIER component
+    COMMAND lmdj_facade_performance_runtime_consumer_tests
+  )
 
   add_executable(
     lmdj_application_facade_tests
@@ -213,7 +251,7 @@ if(BUILD_TESTING)
   target_link_libraries(
     lmdj_facade_performance_runtime_bridge_tests
     PRIVATE
-      lmdj::application
+      lmdj::performance_runtime
   )
   lmdj_target_warnings(lmdj_facade_performance_runtime_bridge_tests)
   lmdj_target_sanitizers(lmdj_facade_performance_runtime_bridge_tests)
@@ -236,7 +274,7 @@ if(BUILD_TESTING)
   target_link_libraries(
     lmdj_facade_performance_engine_adapter_tests
     PRIVATE
-      lmdj::application
+      lmdj::performance_runtime
   )
   lmdj_target_warnings(lmdj_facade_performance_engine_adapter_tests)
   lmdj_target_sanitizers(lmdj_facade_performance_engine_adapter_tests)

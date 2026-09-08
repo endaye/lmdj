@@ -131,6 +131,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_provider_attempt_ledger_invariant_tests
     lmdj_provider_host_settings_invariant_tests
     lmdj_provider_spec_regression_tests
+    lmdj_facade_performance_runtime_consumer_tests
     lmdj_application_facade_tests
     lmdj_application_facade_failure_tests
     lmdj_facade_sequence_surface_tests
