@@ -9,6 +9,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/980
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/pull/974
+    observed_by: Claude Code (Opus 5)
 exit: none
 ---
 
@@ -118,6 +121,100 @@ reported as "the Creator has no Project Bundle import UI". It has one --
 the grep would have printed the same nothing either way. Knowing the rule is not
 applying it.
 
+### Three more instruments, and the same rule already covered them
+
+#974 produced three more instances in one Task, none of them a search:
+
+- **A parity harness that could not express a crash.**
+  `CatalogUpstreamParityTest` classified every value as accept-or-refuse, so an
+  input that made one implementation raise `ValueError` was recorded as parity
+  with an input the other side merely declined. The shared list therefore
+  contained none of the crashing values. Fixed by giving it a third outcome.
+- **A corpus that could not generate the class it was sampling for.** One
+  reviewer's 531-input sweep reported zero divergences in the dangerous
+  direction; another's fuzz, generated from the implementation's own grammar,
+  hit that class at roughly 1.7 percent of hosts. Two adversarial reviewers
+  disagreed about whether a whole class of defect existed, and the clean report
+  was the one whose corpus could not produce the shape.
+- **A diff filter that could not see prose.** A reviewer verifying a change
+  that was partly comment used a delta check filtering comment lines out of the
+  diff. The missing comment was invisible by construction, and the null result
+  was read as confirmation.
+
+**None of this is a new rule.** "How to apply" below already asks what the
+check would have printed had the thing been present, and already says to prove
+it can fire at all; the examples above already include a `-t` filter and a
+misparsed payload, so the entry was never search-only. Both parties in that
+review restated the entry's own rule to each other as though it were a finding,
+which is worth recording only because of *why*: neither had read
+`.agents/pitfalls/` before concluding, and the entry's own check — look at what
+a search for this would return before claiming it is new — is the one that
+would have caught it.
+
+What the three instances do add is a phrasing that fits an instrument rather
+than a search, and is answerable while the instrument is being built:
+
+> For this check, name the class it cannot express. If you cannot name one,
+> that is the finding.
+
+The harness could not express `crash`, the corpus could not express `numeric
+last label`, the filter could not express `comment`.
+
+The eighth instance arrived while a reviewer was verifying the seventh. Asked
+to confirm the cross-links added below, they grepped and got `0 referrers` for
+all three -- true of the tree they were standing in, which was `main`, and
+false of the commit under review, which was on a branch. What stopped them was
+that `0, 0, 0` looked too clean for three files they had just read; had only
+two of the three been linked, the wrong-tree grep and the real gap would have
+printed the same number and nothing would have looked odd.
+
+That instance is worth more than its size, because it is where the two shapes
+in this entry turn out to be one. A stale pointer and a blind instrument are
+usually distinguishable -- the first is a fact that went out of date, the
+second a check that could not have reported otherwise -- but a grep against the
+wrong tree is both at once, and the symptom is a number that is correct for
+what was measured and wrong for what was asked. **Whoever verifies a commit is
+the person most likely to be standing somewhere else**, so re-resolve the tree
+before reading a zero, and prefer `git show <sha>:<path>` over reading the
+working copy.
+
+### The same defect has three entries and no cross-references
+
+This is the part that is actually new, and it is a fact about the ledger rather
+than about any instrument.
+
+- [`audit-axis-cannot-fire`](audit-axis-cannot-fire.md) — `area: ci-release`.
+  An occupancy axis reading a path that does not exist reports `clear` on every
+  input, "indistinguishable from a clean audit".
+- [`gh-authorization-failure-reads-as-absence`](gh-authorization-failure-reads-as-absence.md)
+  — `area: ci-release`. A failed authorization returning an empty list.
+- this entry — `area: core`.
+
+One defect, three entries, **zero cross-references in either direction**
+(verified by grep, both ways), and this chain's instances belong to a fourth
+surface again — Host test tooling. The ledger contract says to find prior art
+by searching open entries by the Task's `area:*` labels, so a defect whose
+instances are spread across four areas is precisely what that lookup cannot
+reach. The discovery mechanism has a blind spot of the shape these three
+entries warn about.
+
+Cross-linked here in all three directions as the cheap half of the remedy;
+whether they should be folded into one entry is
+[#983](https://github.com/endaye/lmdj/issues/983). That is a finding about the
+ledger's structure, not this entry's escalation — the escalation is #980, in the
+closing paragraph, where the contract looks for it.
+
+**This section's own evidence arrived while it was being written.** Two lanes
+bumped this entry within seven minutes: one with the presence side above, from
+a Web import report, and one with the instruments above. Each opened an
+escalation Issue, so the entry briefly had two. The timestamps are the point --
+#980 at 15:12:01Z, then #983 at 15:18:57Z by a lane that had been editing this
+very file since 15:12:35Z. The second was opened against an entry that already
+had an escalation, by someone with the file open, because an `area:core` search
+does not surface an Issue and the contract's retrieval clause does not mention
+open Issues at all. Neither agent was careless; the retrieval step could not
+express the question.
+
 ## How to apply
 
 - Before writing down that something is absent, answer one question: **what
@@ -148,6 +245,13 @@ applying it.
   inspected, find the literal in Core that writes it. Do this before reading the
   implementation. A report that fails the check has not observed a defect, and
   the honest outcome is a withdrawal pinned to an `origin/main` SHA.
+
+- When the instrument is a **test harness, a sampling corpus or a review tool**
+  rather than a search, name the class it cannot express before trusting a
+  clean run from it. A harness with fewer outcomes than the question has
+  answers, a corpus drawn from a space that cannot produce the failing shape,
+  and a filter defined by excluding the thing under review are all the same
+  defect, and all three reported clean.
 
 `exit: none`, escalated at recurrence 2 to
 https://github.com/endaye/lmdj/issues/980. The invariant is a research habit,

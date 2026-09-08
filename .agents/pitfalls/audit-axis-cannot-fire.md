@@ -62,3 +62,18 @@ script's own input paths.
 - The same applies to any check guarding a step with no CI safety net. This one
   guarded a Product Build allocation, which reaches `main` immediately and can
   never be reused.
+
+## Same defect, other areas
+
+A clean result from an instrument that could not have reported otherwise. The
+same shape is recorded under three `area:` labels, none of which reaches the
+others through the contract's `area:*` prior-art search:
+
+- [`blind-search-reads-as-absence`](blind-search-reads-as-absence.md) — `core`.
+  Searches, test filters, parsers, test harnesses and review tooling.
+- [`audit-axis-cannot-fire`](audit-axis-cannot-fire.md) — `ci-release`. An
+  audit axis pointed at a path that does not exist.
+- [`gh-authorization-failure-reads-as-absence`](gh-authorization-failure-reads-as-absence.md)
+  — `ci-release`. A failed authorization returning an empty list.
+
+Whether these should be one entry is [#983](https://github.com/endaye/lmdj/issues/983).
