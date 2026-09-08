@@ -232,10 +232,14 @@ with a comment naming the traded headroom.
 
 Two requests, one reserved slot. The second **replaces** the first.
 
-- Refusing breaks the primary interaction. The Facade's own comment
-  (`application.cpp:8046-8048`) anticipates "an interactive surface that
-  auditions slot after slot"; a user clicking preview down a 16-slot list must
-  not have click *n+1* refused because click *n* is still ringing.
+- Refusing breaks the primary interaction. A user clicking preview down a
+  16-slot list must not have click *n+1* refused because click *n* is still
+  ringing. An earlier revision of this plan supported that with a quoted
+  Facade comment at `application.cpp:8046-8048`; **the quotation was false** —
+  those lines are `soundset_inspect`'s `exact_keys` require, and no comment
+  anywhere in the Facade says anything of the kind. The argument stands on the
+  interaction, which is checkable by using the surface; the citation never
+  existed and has been removed rather than re-pointed.
 - Queueing makes a browsing user hear a backlog of sounds they have already
   moved past — the wrong behaviour for a preview, and it needs a queue the
   engine does not have.
@@ -253,7 +257,7 @@ Four clearing paths, all required:
 
 1. **Natural end.** A one-shot audition voice completes; the bank goes
    `retiring` and is reclaimed by the existing sweep. No Host action.
-2. **Explicit stop.** A new Facade operation `soundset.audition.stop`,
+2. **Explicit stop.** A new **Host** operation `soundset.audition.stop`,
    payload `{}` — Set identity is not needed because there is only ever one
    audition. Idempotent: stopping when nothing plays succeeds with
    `{"accepted": true}`. Idempotency is what keeps this inside the frozen
@@ -263,9 +267,11 @@ Four clearing paths, all required:
    slot with the Project bank. Without this the slot outlives the session that
    created it.
 
-`soundset.audition.stop` is the additive public-surface change. It is a
-`command` with respect to the Host and a query with respect to Project Truth —
-no Asset, no Pad, no revision — the same standing `soundset.audition` has.
+`soundset.audition.stop` is **not** a Facade surface change. It resolves
+nothing, gates nothing and touches no Set Store, so the Facade has nothing to
+do; it is answered in `control_runtime` the way `sample.preview.clear` is, and
+is paid as `web-runtime-platform` SemVer. See Task 4a. It remains a query with
+respect to Project Truth — no Asset, no Pad, no revision.
 
 ### 3.4 Headroom: confirmed, with a named regression test
 
@@ -289,10 +295,13 @@ later "reclaimed" the reserved slot into the pool.
 The playback side effect attaches to the existing `soundset.audition` in the
 two Hosts that own an engine, rather than to a new `soundset.audition.play`.
 Its identity, refusal order and error vocabulary are unchanged — a request
-that is refused today is refused identically and plays nothing. The Facade's
-own comment at `application.cpp:8010-8015` describes carrying the bytes as the
-outstanding half of *this* operation, not as a sibling. Hosts with no engine
-keep returning metadata only.
+that is refused today is refused identically and plays nothing. An earlier
+revision cited `application.cpp:8010-8015` as a Facade comment describing the
+bytes as this operation's outstanding half; **that citation was false too** —
+those lines are a `#465 Q1 case 3` eligibility comment inside
+`soundset_catalog_list`. Carrying the bytes belongs to this operation because
+#773 decided the audition surface is Set-scoped and #796 built it that way, not
+because a comment says so. Hosts with no engine keep returning metadata only.
 
 ## 4. Mechanism
 
@@ -364,8 +373,9 @@ becomes `current_bank_slot_` and never moves Pad availability.
   decoded PCM alongside the geometry the JSON envelope already reports, on the
   `inspect_sample` precedent of §2.6. Today `measure_decoded_audio`
   (`application.cpp:4396`) decodes and discards; this retains.
-- `soundset.audition.stop` registered in the operation table
-  (beside `application.cpp:212`) and dispatched (beside `:3953`).
+- **No Facade registration for `soundset.audition.stop`.** It is Host-owned
+  (Task 4a), so adding it to the Facade table or dispatch would be wrong. The
+  Facade's part of this Task is the typed method alone.
 
 **Registration hazard, called out because it fails quietly.** `dispatch()`
 ends with a bare `return attempt_inspect(request);` (`application.cpp:3968`).
@@ -383,8 +393,8 @@ that its own entry is present.
 | `control_runtime.cpp:367` | payload validator for the stop operation (`exact_keys(payload, {})`) |
 | `control_runtime.cpp:2154` | add stop to `soundset_operations`, not project-scoped |
 | `bridge.cpp:209-219` `operation_deadline` | both audition operations join the 1-second interactive tier beside `sample.preview.set` — a preview is an interactive gesture, not a 30-second query |
-| `apps/native-host/src/main.cpp:130` | `kSoundSetOperations` 5 → 6 |
-| `apps/core-mcp/.../server.py` | stop operation registered; audition stays metadata-only |
+| `apps/native-host/src/main.cpp:130` | **unchanged.** `kSoundSetOperations` maps each name to a `FacadeSurface`, so a Host-only operation entered here forwards to a Facade that does not serve it and lands in the `attempt_inspect` fallthrough |
+| `apps/core-mcp/.../server.py` | **unchanged**, for the same reason; core-mcp owns no engine at all |
 
 ### 4.4 Creator
 
@@ -471,8 +481,9 @@ Facade has nothing to do. See Task 4a.
   header, `tests/core/facade/soundset_facade_test.cpp`
 - **Tests (component):** the typed method returns PCM whose frame count equals
   the geometry the JSON envelope reports for the same source — one decode,
-  two consistent answers; the stop operation is idempotent; and the **exact**
-  operation set is asserted, per the §4.2 fallthrough hazard.
+  two consistent answers; and the **exact** operation set is asserted, per the
+  §4.2 fallthrough hazard. Stop-operation idempotency is **not** tested here —
+  it is Host-owned and belongs to Task 4a's tests.
 - **Defect it catches:** a stop operation that reaches a Host table but not
   Facade dispatch, silently answering as `attempt_inspect`.
 
@@ -536,7 +547,7 @@ Version impact: **required**, and paid once in Task 5.
 | Domain | From | To | Reason |
 | --- | --- | --- | --- |
 | `audio-runtime` | `3.0.0` | `3.1.0` | additive public API: audition publish, control kinds, sentinel |
-| `application-facade` | `3.1.0` | `3.2.0` | additive: typed audition audio method + `soundset.audition.stop` |
+| `application-facade` | `3.1.0` | `3.2.0` | additive: the typed audition audio method. **Not** `soundset.audition.stop`, which is Host-owned — see Task 4a |
 | `web-runtime-platform` | `4.0.0` | `4.1.0` | additive operation surface; dependency pins follow |
 | Hosts (`native-host`, `core-mcp`, `web-runtime-host`, `creator-web`) | per `assembly.json` | MINOR | new operation in their tables |
 | Contracts | — | **none** | no schema changes; `lmdj.soundset.v1` stays `1.1.0`. The audition carries no new persisted or cross-process shape |
