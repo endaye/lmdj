@@ -1,0 +1,65 @@
+name: Cloudflare Preview Build
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-preview-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Empty by default. Setting this repository variable is a separately
+    # budgeted pilot activation, not an effect of merging this workflow.
+    if: >-
+      github.repository == 'endaye/lmdj' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH != '' &&
+      github.head_ref == vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out trusted artifact tooling
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: control
+          persist-credentials: false
+      - name: Check out the exact PR source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.16.0'
+      - name: Build without deployment credentials
+        timeout-minutes: 15
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          PORTAL_REVISION: ${{ github.event.pull_request.head.sha }}
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          npx --yes npm@10.9.3 --prefix apps/architecture-portal ci
+          npx --yes npm@10.9.3 --prefix apps/architecture-portal run check
+      - name: Package the static artifact
+        run: |
+          mkdir -p "$RUNNER_TEMP/portal-preview-output"
+          python3 control/scripts/ci/cloudflare_preview_artifact.py \
+            --source source/apps/architecture-portal/build \
+            --archive "$RUNNER_TEMP/portal-preview-output/static.zip"
+      - name: Retain the exact-head artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portal-preview-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/portal-preview-output/static.zip
+          if-no-files-found: error
+          retention-days: 7

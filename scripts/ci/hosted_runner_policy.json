@@ -132,6 +132,12 @@
       "job": "cancel-probe-waiter",
       "category": "control-plane",
       "reason": "Offers a bounded manual diagnostic parent-run cancellation window after the short journal writer has finished. It has no write permissions or product work and must not occupy a self-hosted product executor."
+    },
+    {
+      "workflow": "cloudflare-preview-build.yml",
+      "job": "build",
+      "category": "platform",
+      "reason": "Untrusted PR build code must not persist on reusable privileged self-hosted runners. A fresh standard Linux runner provides the isolated build boundary. Disabled unless an exact pilot branch variable is explicitly configured after budget approval; no broad activation or paid upgrade is authorized by this entry."
     }
   ]
 }

@@ -1,0 +1,54 @@
+name: Cloudflare Preview Publish
+
+on:
+  workflow_run:
+    workflows: [Cloudflare Preview Build]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: cloudflare-preview-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'endaye/lmdj' &&
+      vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH != '' &&
+      github.event.workflow_run.head_branch == vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 30
+    environment: portal-cloudflare-preview
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.16.0'
+      - name: Install trusted tools without deployment credentials
+        run: |
+          npx --yes npm@10.9.3 --prefix apps/architecture-portal ci
+          npm install --prefix "$RUNNER_TEMP/preview-cli-$GITHUB_RUN_ID" --no-audit --no-fund wrangler@4.129.1
+      - name: Verify and publish only a version Preview
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PREVIEW_RUN_ID: ${{ github.event.workflow_run.id }}
+          PREVIEW_PILOT_BRANCH: ${{ vars.CLOUDFLARE_PREVIEW_PILOT_BRANCH }}
+          WRANGLER_JS: ${{ runner.temp }}/preview-cli-${{ github.run_id }}/node_modules/wrangler/bin/wrangler.js
+          WRANGLER_SEND_METRICS: 'false'
+        run: python3 scripts/ci/cloudflare_preview_publish.py
+      - name: Retain sanitized publication observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloudflare-preview-${{ github.run_id }}.json
+          if-no-files-found: ignore
