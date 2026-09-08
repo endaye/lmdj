@@ -9,16 +9,17 @@ remote receipts before another operation can begin.
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import uuid
 
-from cloudflare_api import TARGETS
+from cloudflare_api import TARGETS, version_id, CloudflareError
 
 MAX_RECORD = 65536
 MAX_JOURNAL = 16 * 1024 * 1024
 TERMINAL = frozenset({'passed', 'recovered', 'disabled-first-publication',
-                      'failed-before-publication'})
+                      'failed-before-publication', 'reconciled'})
 
 
 class StoreError(RuntimeError):
@@ -169,6 +170,44 @@ class RunStore:
                 or data.get('worker', self.worker) != self.worker):
             raise StoreError('observation identity is invalid')
         self._append(data)
+
+    def reconcile_absent(self, *, run_id, sequence):
+        """Record an explicit positive-absence audit without creating a Worker."""
+        if (self._active is not None or not self._rows
+                or self._rows[-1]['data']['event'] == 'run-finished'
+                or self._rows[-1]['run_id'] != run_id
+                or type(sequence) is not int or self._rows[-1]['sequence'] != sequence):
+            raise StoreError('absence reconciliation does not match the pending journal position')
+        self._active = run_id
+        self._append({'event': 'reconciled', 'absent': True, 'reconciled_sequence': sequence})
+        self.finish()
+
+    def reconcile(self, *, run_id, sequence, deployment, route, tag):
+        """Explicit operator reconciliation, after fresh signed/HTTP/live checks.
+
+        The caller must bind both the pending journal position and live state;
+        this method records that decision, never performs a cloud write/retry.
+        """
+        if (self._active is not None or not self._rows
+                or self._rows[-1]['data']['event'] == 'run-finished'
+                or self._rows[-1]['run_id'] != run_id
+                or type(sequence) is not int or self._rows[-1]['sequence'] != sequence):
+            raise StoreError('reconciliation does not match the pending journal position')
+        try:
+            if not isinstance(deployment, dict) or set(deployment) != {'id', 'version_id'}:
+                raise StoreError('reconciliation deployment identity is malformed')
+            version_id(deployment['id']); version_id(deployment['version_id'])
+        except CloudflareError:
+            raise StoreError('reconciliation deployment identity is malformed') from None
+        if (not isinstance(route, dict) or set(route) != {'enabled', 'previews_enabled'}
+                or any(type(value) is not bool for value in route.values())
+                or route['previews_enabled'] is not True
+                or not isinstance(tag, str) or not re.fullmatch(r'lmdj-v\d+\.\d+\.\d+\.\d+', tag)):
+            raise StoreError('reconciliation route or signed tag is malformed')
+        self._active = run_id
+        self._append({'event': 'reconciled', 'deployment': deployment, 'route': route,
+                      'tag': tag, 'reconciled_sequence': sequence})
+        self.finish()
 
     def finish(self):
         if not self._rows or self._rows[-1]['data']['event'] not in TERMINAL:

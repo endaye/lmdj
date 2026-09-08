@@ -137,3 +137,19 @@ Vitest 覆盖长素材容器嗅探、pre/post-decode boundary、单一缓冲、�
 `--preview` 与实际版本短前缀；正式地址和恢复地址不会因标志缺省而混用。
 输入仍须先独立验证 Release 签名，检查包含完整已验证文件字节与响应规则。
 该命令只读取远端响应，不代表恢复演练或物理浏览器验收已经完成。
+
+## Cloudflare operator workflow
+
+The stable `scripts/cloudflare-host.sh` entry point provides signed candidate
+upload, exact-version HTTP verification, promotion, recovery and explicit
+reconciliation. Operations are requested by an operator; these Hosts do not
+automatically deploy on main pushes. The shared runbook at
+`docs/deploy/cloudflare-hosts.md` records command inputs, the common private
+journal directory, credential isolation and unknown-outcome handling.
+
+Promotion rechecks candidate and prior signed bytes. Recovery selects the exact
+retained prior version, while first publication failure disables its stable
+route. Reconciliation checks current live state and closes the pending local
+operation without a cloud write. Local locks require one coordinated operator
+host and do not lock dashboard changes. These HTTP checks do not establish
+browser, audio, storage migration or manual acceptance.

@@ -14,6 +14,7 @@ ACCOUNT = "0b62b8881c07f48f7935f5380a1f55db"
 TARGETS = {"creator-web": "creator", "web-runtime-host": "lab",
            "creator-recovery": "creator-recovery", "runtime-recovery": "lab-recovery"}
 MAX_RESPONSE = 1024 * 1024
+_ABSENT = object()
 
 
 class CloudflareError(RuntimeError):
@@ -44,7 +45,7 @@ class CloudflareClient:
         self._base = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}/workers/scripts/{self.worker}/"
         self._opener = build_opener(NoRedirect())
 
-    def _request(self, endpoint, payload=None):
+    def _request(self, endpoint, payload=None, *, allow_absent=False):
         # Only callers below select literal endpoints or validated UUID suffixes.
         mutation = payload is not None
         req = Request(self._base + endpoint, headers={"Authorization": "Bearer " + self._token,
@@ -63,8 +64,28 @@ class CloudflareClient:
                 return envelope["result"]
         except (HTTPError, URLError, OSError, ValueError) as error:
             if isinstance(error, HTTPError):
-                error.close()
+                try:
+                    if allow_absent and not mutation and error.code == 404:
+                        raw = error.read(MAX_RESPONSE + 1)
+                        body = json.loads(raw) if len(raw) <= MAX_RESPONSE else None
+                        errors = body.get('errors') if isinstance(body, dict) else None
+                        if (body.get('success') is False and isinstance(errors, list)
+                                and len(errors) == 1 and isinstance(errors[0], dict)
+                                and errors[0].get('code') == 10007):
+                            return _ABSENT
+                except (ValueError, OSError, AttributeError):
+                    pass
+                finally:
+                    error.close()
             raise CloudflareError("Cloudflare API receipt unavailable or invalid", outcome_unknown=mutation) from None
+
+    def exists(self):
+        result = self._request('settings', allow_absent=True)
+        if result is _ABSENT:
+            return False
+        if not isinstance(result, dict):
+            raise CloudflareError('invalid Worker settings receipt')
+        return True
 
     def deployment(self):
         result = self._request("deployments")

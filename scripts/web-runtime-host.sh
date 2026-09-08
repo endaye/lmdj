@@ -308,6 +308,7 @@ run_nonbrowser_tests() {
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_release_stage_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_transaction_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_run_store_test.py"
+  python3 "$repo_root/apps/web-runtime-host/test/cloudflare_host_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/cloudflare_smoke_target_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/deployment_smoke_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/manifest_asset_role_parity_test.py"
