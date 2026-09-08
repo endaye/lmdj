@@ -1,6 +1,6 @@
 # ASCII Matrix Camera
 
-Reference visual prototype for the LMDJ interaction style. This demo lives under `references/demos/` and is not part of the formal product source boundary.
+Reference visual prototype for the LMDJ interaction style. This demo lives under `demos/` and is not part of the formal product source boundary.
 
 The screen is a black/green ASCII matrix surface. The idle state renders a cat image as ASCII characters over a falling-character background. Pressing `CAM` requests webcam access and switches the central subject to a live ASCII camera feed.
 

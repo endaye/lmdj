@@ -97,7 +97,7 @@ Project bundle path。Provider failure 只能更新 Attempt/Workspace State，�
 - Runtime Snapshot 不持久化为 Project Truth，也不把 Runtime state 反写 Project。
 - Pattern event 指向 Pad Slot，不直接指向 Asset。
 - Provider selection 属于 Workspace/Host settings，不属于 Project Truth。
-- `references/demos/` 是冻结参考材料，不属于 active product runtime。
+- `demos/` 统一存放纳入版本管理、可持续迭代和长期保留的独立 demo、实验与原型，不属于 active product runtime，也不是正式构建或发布输入。
 - `lmdj.patch.v1` 与 `lmdj.materials.v1` 已退役，不属于当前链路。
 
 ## 当前证明边界
@@ -120,7 +120,7 @@ Web Runtime Lab 是独立实验工具，不属于 Product Assembly，也不替�
   Audio Runtime 与 Provider SDK 的当前实现；
 - Architecture Portal 的 current pages 和 Portal-owned source diagrams。
 
-历史计划、旧生成图和 `references/demos/` 不作为 current truth。
+历史计划、旧生成图和 `demos/` 不作为 current truth。
 
 重新渲染与校验：
 

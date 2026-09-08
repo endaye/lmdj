@@ -49,7 +49,9 @@ contracts/  versioned cross-language Contracts
 workers/    future out-of-process Provider Hosts
 ```
 
-Reference demos under `references/demos/` are frozen and are not product code.
+Standalone demos, experiments and prototypes live under [`demos/`](demos/README.md).
+Their source is version-controlled and may evolve or be retained indefinitely;
+they are not formal product code or product build/release inputs.
 
 ## Build
 

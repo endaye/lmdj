@@ -19,7 +19,7 @@
     "package": ["package"]
   },
   "self_hosted_jobs": ["docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan", "core-coverage", "web-toolchain-conformance", "web-runtime-host", "creator-web", "web-runtime-lab", "deploy-contract", "chameleon-lab", "package"],
-  "known_top_levels": [".agents", ".claude", ".codex", ".gitattributes", ".github", ".gitignore", "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "LICENSE", "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml", "wrangler.json", ".node-version", "output", "packages", "packaging", "products", "providers", "references", "scripts", "testdata", "tests", "third_party", "tools", "workers"],
+  "known_top_levels": ["demos", ".agents", ".claude", ".codex", ".gitattributes", ".github", ".gitignore", "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "LICENSE", "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml", "wrangler.json", ".node-version", "output", "packages", "packaging", "products", "providers", "references", "scripts", "testdata", "tests", "third_party", "tools", "workers"],
   "full_rules": [
     {"match": {"kind": "exact", "value": ".gitignore"}, "reason": "shared repository metadata"},
     {"match": {"kind": "exact", "value": "CMakeLists.txt"}, "reason": "root CMake"},
@@ -126,6 +126,7 @@
     {"match": {"kind": "prefix", "value": "packaging/core/"}, "lanes": ["core_ubuntu", "package"], "note": "packages/** is deliberately not routed to package; the lane's Core Module coverage comes from tests/distribution/package_acceptance_test.py running inside scripts/core.sh proof on the core lanes, so moving that test out of proof must add a packages/** route here"},
     {"match": {"kind": "prefix", "value": "testdata/"}, "lanes": ["docs_static"]},
     {"match": {"kind": "prefix", "value": "references/"}, "lanes": ["docs_static"]},
+    {"match": {"kind": "prefix", "value": "demos/"}, "lanes": ["docs_static"]},
     {"match": {"kind": "prefix", "value": ".claude/"}, "lanes": ["docs_static"]},
     {"match": {"kind": "prefix", "value": ".agents/"}, "lanes": ["docs_static", "ci_contract"]},
     {"match": {"kind": "prefix", "value": ".claude/"}, "lanes": ["docs_static", "ci_contract"]},

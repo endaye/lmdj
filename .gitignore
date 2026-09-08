@@ -85,7 +85,7 @@ tests/platform/web/playwright-report/
 lmdj-creator-web-*.json
 
 # Reference demo run artifacts (pipeline output packages)
-references/demos/lmdj-song-pipeline/output/
+demos/lmdj-song-pipeline/output/
 
 # Local manual/e2e audio corpus (see testdata/audio/suno/README.md)
 testdata/audio/suno/**/*.mp3

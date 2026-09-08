@@ -9,7 +9,7 @@
 
 `apps/architecture-portal/` 是 LMDJ 内部产品说明书的唯一发布源码。网站公开可读，但主要服务内部产品、工程、质量和发布协作。Product Build、Git revision、Module/Host/Provider/Contract 版本与 Assembly Lock hash 必须从 active manifests 生成，不得手填或猜测。
 
-旧的独立 HTML、截图和 `references/demos/` 可以作为历史证据，但不是 current 产品说明书，也不是正常发布输入。
+旧的独立 HTML、截图和 `demos/` 可以作为历史证据，但不是 current 产品说明书，也不是正常发布输入。
 
 ## 2. 强制文档影响声明
 

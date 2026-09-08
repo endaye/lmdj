@@ -1,7 +1,7 @@
 # Launchpad Pad 爆炸机构图
 
-Reference prototype under `references/demos/`. It is frozen reference
-material and is not part of the formal product source boundary.
+Standalone prototype under `demos/`. It may evolve and is not part of the
+formal product source boundary.
 
 一个可交互的 3D 页面，用来理解主流 pad 控制器（Akai MPC、Novation Launchpad、
 Ableton Push 3、NI Maschine）的 pad 是怎么做出来的：分层机构、传感方案、
@@ -57,7 +57,7 @@ python3 tools/bundle.py
 ## 运行
 
 ```bash
-cd references/demos/launchpad-pad-exploded
+cd demos/launchpad-pad-exploded
 python3 -m http.server 4173
 ```
 

@@ -103,7 +103,10 @@ silently coupling publication to deployment.
 - `products/` contains Product Assembly and version identity.
 - `contracts/` contains versioned cross-language Contracts.
 - `workers/` is reserved for future out-of-process Provider Hosts.
-- `references/demos/` is frozen reference material, never active product code.
+- `demos/` contains version-controlled standalone demos, experiments and prototypes.
+  They may evolve and be retained indefinitely, but are not active product code
+  or formal build/release inputs. Keep them independent of product internals;
+  product code must not depend on them. See `demos/README.md`.
 
 `lmdj.patch.v1` and `lmdj.materials.v1` must not be used by new code. Do not
 restore, wrap, translate, or emit the retired contracts.
