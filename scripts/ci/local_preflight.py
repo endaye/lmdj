@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = ROOT / "scripts/ci/scope_policy.json"
 CLASSIFIER_PATH = ROOT / "scripts/ci/change_scope.py"
 LANE_COMMANDS_PATH = ROOT / "scripts/ci/local_lanes.json"
-DOC_IMPACT_CHECKER = ROOT / "apps/architecture-portal/scripts/check-doc-impact.mjs"
+DOC_IMPACT_CHECKER = ROOT / "apps/docs-site/scripts/check-doc-impact.mjs"
 
 LANE_COMMANDS_SCHEMA = "lmdj.ci-local-lanes.v1"
 _LANE_KEYS = {"requires", "commands", "ci_only"}

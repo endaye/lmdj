@@ -114,7 +114,7 @@ test('Stage 7 current closure audit accounts for every review finding exactly on
 
 test('release governance forbids PATCH assembly drift and binds release evidence', async () => {
   const governance = await readRepo('docs/governance/version-management.md');
-  const release = await readRepo('apps/architecture-portal/docs/operations/version-and-release.mdx');
+  const release = await readRepo('apps/docs-site/docs/operations/version-and-release.mdx');
 
   for (const body of [governance, release]) {
     assert.match(body, /PATCH may not change Product Assembly identity or `assembly\.lock`/);
@@ -126,10 +126,10 @@ test('release governance forbids PATCH assembly drift and binds release evidence
 });
 
 test('current Portal maps the corrected Creator lifecycle and automated evidence limits', async () => {
-  const creator = await readRepo('apps/architecture-portal/docs/hosts/creator-web.mdx');
-  const runtime = await readRepo('apps/architecture-portal/docs/platform/web-runtime.mdx');
-  const storage = await readRepo('apps/architecture-portal/docs/platform/storage.mdx');
-  const proof = await readRepo('apps/architecture-portal/docs/operations/testing-and-proof.mdx');
+  const creator = await readRepo('apps/docs-site/docs/hosts/creator-web.mdx');
+  const runtime = await readRepo('apps/docs-site/docs/platform/web-runtime.mdx');
+  const storage = await readRepo('apps/docs-site/docs/platform/storage.mdx');
+  const proof = await readRepo('apps/docs-site/docs/operations/testing-and-proof.mdx');
 
   assert.match(creator, /persisted `pagehide`[^\n]+retains the shared Runtime/);
   assert.match(creator, /non-persisted terminal `pagehide`[^\n]+close/);

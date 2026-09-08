@@ -263,7 +263,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("PORTAL_BASE_SHA: ${{ inputs.base_sha }}", step)
         self.assertIn("PORTAL_HEAD_SHA: ${{ inputs.head_sha }}", step)
         self.assertIn(
-            "run: npm --prefix apps/architecture-portal run check:impact", step
+            "run: npm --prefix apps/docs-site run check:impact", step
         )
         self.assertNotIn("github.event.pull_request.base.sha", step)
         self.assertNotIn("github.event.pull_request.head.sha", step)
@@ -290,7 +290,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         additionally reports, in reverse, everything that landed on the base
         branch after the branch was cut. Issue #531 is a branch that was merely
         behind inheriting portal pages it never touched. The workflow therefore
-        computes no range at all: `apps/architecture-portal/test/changed-files.test.mjs`
+        computes no range at all: `apps/docs-site/test/changed-files.test.mjs`
         owns the behaviour, where a behind-base branch is expressible as a test.
         """
         self.assertNotRegex(
@@ -302,8 +302,8 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_portal_reusable_job_keeps_fetch_depth_zero_node_22_and_full_check(self) -> None:
         self.assertIn("fetch-depth: 0", self.portal_source)
         self.assertIn('node-version: "22"', self.portal_source)
-        self.assertIn("scripts/architecture-portal.sh install", self.portal_source)
-        self.assertIn("scripts/architecture-portal.sh check", self.portal_source)
+        self.assertIn("scripts/docs-site.sh install", self.portal_source)
+        self.assertIn("scripts/docs-site.sh check", self.portal_source)
 
     def test_release_contract_consumers_checkout_complete_history_and_tags(self) -> None:
         for job_name in RELEASE_HISTORY_CONSUMERS:

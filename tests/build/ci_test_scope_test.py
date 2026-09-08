@@ -36,7 +36,7 @@ class ScopeTests(unittest.TestCase):
 
     def test_suffix_alone_is_not_none(self):
         for path in ["AGENTS.md", "README.md", "docs/governance/git-workflow.md",
-                     "apps/architecture-portal/docs/operations/testing-and-proof.md",
+                     "apps/docs-site/docs/operations/testing-and-proof.md",
                      "docs/notes/generator.json", "contracts/example.md"]:
             with self.subTest(path=path):
                 self.assertNotEqual(scope.select(self.policy, [path])["kind"], "none")

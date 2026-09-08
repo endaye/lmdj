@@ -15,9 +15,9 @@ ACCEPTANCE = REPO_ROOT / "docs/quality/2026-08-08-web-runtime-public-deployment-
 DESIGN = REPO_ROOT / "docs/design/2026-08-08-web-runtime-public-deployment-design.md"
 PLAN = REPO_ROOT / "docs/plans/2026-08-08-web-runtime-public-deployment.md"
 PORTAL_CURRENT_PAGES = (
-    REPO_ROOT / "apps/architecture-portal/docs/operations/version-and-release.mdx",
-    REPO_ROOT / "apps/architecture-portal/docs/operations/testing-and-proof.mdx",
-    REPO_ROOT / "apps/architecture-portal/docs/hosts/web-runtime.mdx",
+    REPO_ROOT / "apps/docs-site/docs/operations/version-and-release.mdx",
+    REPO_ROOT / "apps/docs-site/docs/operations/testing-and-proof.mdx",
+    REPO_ROOT / "apps/docs-site/docs/hosts/web-runtime.mdx",
 )
 TAG = "lmdj-v1.0.15.2"
 TAG_TARGET = "72ae40074620cc5681c462ba04a31a666449734f"

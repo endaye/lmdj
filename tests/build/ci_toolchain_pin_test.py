@@ -33,7 +33,7 @@ WORKFLOW_FILES = sorted(
 PROSE_FILES = (
     REPO_ROOT / "docs/quality/core-test-policy.md",
     REPO_ROOT / "scripts/ci/local_lanes.json",
-    REPO_ROOT / "apps/architecture-portal/docs/operations/testing-and-proof.mdx",
+    REPO_ROOT / "apps/docs-site/docs/operations/testing-and-proof.mdx",
 )
 
 TOOL_MAJOR = re.compile(

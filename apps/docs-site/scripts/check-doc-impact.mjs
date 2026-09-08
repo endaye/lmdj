@@ -8,7 +8,7 @@ export function checkDocumentationImpact({body, changedFiles}) {
   const impact = body.match(/^Documentation impact:\s*(required|none)\s*$/im)?.[1]?.toLowerCase();
   const reason = body.match(/^Reason:\s*(.*)$/im)?.[1]?.trim();
   const pages = body.match(/^Affected portal pages:\s*(.*)$/im)?.[1]?.trim();
-  const currentPortalChanged = changedFiles.some((file) => /^apps\/architecture-portal\/docs\/.+\.mdx?$/.test(file));
+  const currentPortalChanged = changedFiles.some((file) => /^apps\/docs-site\/docs\/.+\.mdx?$/.test(file));
   const productIdentityChanged = changedFiles.some((file) =>
     /^products\/lmdj\/(?:version\.json|assembly(?:\.lock)?\.json|CMakeLists\.txt|src\/)/.test(file));
 
@@ -21,9 +21,9 @@ export function checkDocumentationImpact({body, changedFiles}) {
     if (!pages || !pages.split(/[\s,]+/).filter(Boolean).every((route) => route.startsWith('/'))) {
       errors.push('affected portal pages must list one or more absolute routes — add an "Affected portal pages:" line whose entries each start with "/" (space- or comma-separated)');
     }
-    if (!currentPortalChanged) errors.push('documentation impact is required but no current portal page changed — update the affected pages under apps/architecture-portal/docs/ in this PR, or declare "Documentation impact: none" with a reason if no portal truth changes');
+    if (!currentPortalChanged) errors.push('documentation impact is required but no current portal page changed — update the affected pages under apps/docs-site/docs/ in this PR, or declare "Documentation impact: none" with a reason if no portal truth changes');
   } else if (currentPortalChanged) {
-    errors.push('documentation impact is none but current portal pages changed — either declare "Documentation impact: required" with "Affected portal pages:" routes, or drop the apps/architecture-portal/docs/ edits from this PR');
+    errors.push('documentation impact is none but current portal pages changed — either declare "Documentation impact: required" with "Affected portal pages:" routes, or drop the apps/docs-site/docs/ edits from this PR');
   }
   return errors;
 }

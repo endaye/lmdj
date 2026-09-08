@@ -41,7 +41,7 @@ def publish():
     def smoke(url):
         env = {k: v for k, v in os.environ.items() if k not in {"CLOUDFLARE_API_TOKEN", "GITHUB_TOKEN"}}
         env["PORTAL_REVISION"] = revision
-        subprocess.run(["node", "scripts/smoke.mjs", url], cwd=ROOT / "apps/architecture-portal",
+        subprocess.run(["node", "scripts/smoke.mjs", url], cwd=ROOT / "apps/docs-site",
                        env=env, check=True, timeout=240)
 
     exists = WORKER in {s["id"] for s in api("scripts")}
@@ -53,9 +53,9 @@ def publish():
     promoted = False
     try:
         with tempfile.TemporaryDirectory(prefix="portal-upload-") as directory:
-            config = json.loads((ROOT / "apps/architecture-portal/deploy/wrangler.json").read_text())
+            config = json.loads((ROOT / "apps/docs-site/deploy/wrangler.json").read_text())
             config["workers_dev"] = False
-            config["assets"]["directory"] = str(ROOT / "apps/architecture-portal/build")
+            config["assets"]["directory"] = str(ROOT / "apps/docs-site/build")
             config_path = Path(directory) / "wrangler.json"
             config_path.write_text(json.dumps(config))
             command = ["node", os.environ["WRANGLER_JS"]]

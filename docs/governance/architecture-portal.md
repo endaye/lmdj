@@ -7,7 +7,7 @@
 
 ## 1. 目的与 Source of Truth
 
-`apps/architecture-portal/` 是 LMDJ 内部产品说明书的唯一发布源码。网站公开可读，但主要服务内部产品、工程、质量和发布协作。Product Build、Git revision、Module/Host/Provider/Contract 版本与 Assembly Lock hash 必须从 active manifests 生成，不得手填或猜测。
+`apps/docs-site/` 是 LMDJ 内部产品说明书的唯一发布源码。网站公开可读，但主要服务内部产品、工程、质量和发布协作。Product Build、Git revision、Module/Host/Provider/Contract 版本与 Assembly Lock hash 必须从 active manifests 生成，不得手填或猜测。
 
 旧的独立 HTML、截图和 `demos/` 可以作为历史证据，但不是 current 产品说明书，也不是正常发布输入。
 
@@ -58,14 +58,14 @@ Assembly Lock 中每个 Module、Host、Provider 和 Contract 必须恰好映射
 ## 5. 稳定命令与 Task 所有权
 
 ```bash
-scripts/architecture-portal.sh install
-scripts/architecture-portal.sh dev
-scripts/architecture-portal.sh check
-scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL
-scripts/architecture-portal.sh smoke BASE_URL
+scripts/docs-site.sh install
+scripts/docs-site.sh dev
+scripts/docs-site.sh check
+scripts/docs-site.sh version PRODUCT_BUILD CHANNEL
+scripts/docs-site.sh smoke BASE_URL
 ```
 
-实现 Task 的负责人同时负责相关 current 页面和源图。影响页面、源图、门户工具、投影身份或已记载源码事实的 Task，在提交前运行 `scripts/architecture-portal.sh check`，覆盖单测、元数据、current truth、确定性图、类型、生产构建、路由、身份和站内链接。无关 Task 不强制运行门户重构建，也不把它搬成所有 PR 的 pre-push 门禁；全量增量批次与显式完整候选／节点自测仍保留该 suite。
+实现 Task 的负责人同时负责相关 current 页面和源图。影响页面、源图、门户工具、投影身份或已记载源码事实的 Task，在提交前运行 `scripts/docs-site.sh check`，覆盖单测、元数据、current truth、确定性图、类型、生产构建、路由、身份和站内链接。无关 Task 不强制运行门户重构建，也不把它搬成所有 PR 的 pre-push 门禁；全量增量批次与显式完整候选／节点自测仍保留该 suite。
 
 ## 6. 构建与快照分级
 
@@ -79,7 +79,7 @@ current 路由跟随 `main` 并明确标为非正式快照。任何已经分配 
 交付给测试者或正式发布的构建，都必须在同一版本 Task 中运行：
 
 ```bash
-scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
+scripts/docs-site.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
 ```
 
 `CHANNEL` 只能是 `canary`、`dev`、`beta` 或 `stable`；省略时仅为兼容旧流程而按
@@ -104,7 +104,7 @@ Product Build 条目必须唯一。既有 schema-1 快照保持只读兼容，�
 
 若 squash introducing tree 合法包含冻结之后的 mutable current/non-projection
 更新，因而不能逐字等同 source projection，必须另行提交由
-`scripts/architecture-portal.sh witness PRODUCT_BUILD [INTRODUCING_REVISION]`
+`scripts/docs-site.sh witness PRODUCT_BUILD [INTRODUCING_REVISION]`
 生成的 source-tree witness。省略 INTRODUCING_REVISION 时，命令按验证器同一套解析
 逻辑从当前 HEAD 推导 introducing revision，推导不出即 fail closed 并拒绝写入；
 显式传入的 revision 仍按原有规则校验。验证器在报告 witness 缺失时也会直接给出这条

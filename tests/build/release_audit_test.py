@@ -480,7 +480,7 @@ class ReleaseAuditFixture:
         )
 
     def install_glob_importing_release_docs(self) -> None:
-        path = self.root / "apps/architecture-portal/scripts/check-release-docs.mjs"
+        path = self.root / "apps/docs-site/scripts/check-release-docs.mjs"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("import {glob} from 'glob';\n", encoding="utf-8")
 
@@ -874,7 +874,7 @@ class ReleaseAuditTest(ReleaseAuditFixture, unittest.TestCase):
         self.assertEqual(self.git.mutations + self.github.mutations, [])
 
     def test_remote_audit_still_reports_portal_provenance_command_failure(self) -> None:
-        path = self.root / "apps/architecture-portal/scripts/check-release-docs.mjs"
+        path = self.root / "apps/docs-site/scripts/check-release-docs.mjs"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             "console.error("

@@ -61,9 +61,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: apps/architecture-portal/package-lock.json
+          cache-dependency-path: apps/docs-site/package-lock.json
       - name: Install locked portal dependencies
-        run: scripts/architecture-portal.sh install
+        run: scripts/docs-site.sh install
       # The PR checks measure this change from its merge base, which the
       # checkers resolve themselves from the two revisions. `base_sha` is the
       # base branch tip at event time, so a two-dot range would additionally
@@ -76,7 +76,7 @@ jobs:
           PORTAL_PR_BODY: ${{ inputs.pull_request_body }}
           PORTAL_BASE_SHA: ${{ inputs.base_sha }}
           PORTAL_HEAD_SHA: ${{ inputs.head_sha }}
-        run: npm --prefix apps/architecture-portal run check:impact
+        run: npm --prefix apps/docs-site run check:impact
       # A squash merge never keeps the branch commit a snapshot records as its
       # revision, so on `main` the snapshot is only provable when its recorded
       # projection matches the introducing commit's tree -- and that commit is
@@ -93,8 +93,8 @@ jobs:
           PORTAL_SNAPSHOT_MODE: ${{ inputs.snapshot_mode }}
           PORTAL_BASE_SHA: ${{ inputs.base_sha }}
           PORTAL_HEAD_SHA: ${{ inputs.head_sha }}
-        run: npm --prefix apps/architecture-portal run check:snapshot-projection
+        run: npm --prefix apps/docs-site run check:snapshot-projection
       # This remains unconditional even for an empty main interval/candidate:
       # it verifies the current Build's complete canonical snapshot provenance.
       - name: Verify architecture portal
-        run: scripts/architecture-portal.sh check
+        run: scripts/docs-site.sh check

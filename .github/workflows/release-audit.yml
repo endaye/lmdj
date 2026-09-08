@@ -33,7 +33,7 @@ jobs:
           python-version: "3.11"
 
       # The static audit validates the exact Product target through
-      # apps/architecture-portal/scripts/check-release-docs.mjs, so the job must
+      # apps/docs-site/scripts/check-release-docs.mjs, so the job must
       # pin the same Node toolchain every other Node-consuming job pins instead
       # of inheriting whatever the runner image happens to expose.
       - name: Set up Node

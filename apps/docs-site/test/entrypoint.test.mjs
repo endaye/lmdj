@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const portalRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(portalRoot, '../..');
-const wrapper = path.join(repoRoot, 'scripts/architecture-portal.sh');
+const wrapper = path.join(repoRoot, 'scripts/docs-site.sh');
 
 test('wrapper rejects an unsupported command with usage status', () => {
   const result = spawnSync(wrapper, ['unknown'], {encoding: 'utf8'});
@@ -14,9 +14,18 @@ test('wrapper rejects an unsupported command with usage status', () => {
   assert.match(result.stderr, /usage:/);
 });
 
+test('legacy wrapper forwards arguments to the renamed command', () => {
+  const legacy = spawnSync(path.join(repoRoot, 'scripts/architecture-portal.sh'), ['unknown'], {encoding: 'utf8'});
+  const current = spawnSync(wrapper, ['unknown'], {encoding: 'utf8'});
+  assert.equal(legacy.status, current.status);
+  assert.equal(legacy.stderr, current.stderr);
+  assert.match(current.stderr, /scripts\/docs-site\.sh/);
+});
+
 test('portal package is private and pins the Node and npm toolchain', async () => {
   const manifest = (await import('../package.json', {with: {type: 'json'}})).default;
   assert.equal(manifest.private, true);
+  assert.equal(manifest.name, '@lmdj/docs-site');
   assert.equal(manifest.engines.node, '>=22.13.0');
   assert.equal(manifest.packageManager, 'npm@10.9.3');
 });

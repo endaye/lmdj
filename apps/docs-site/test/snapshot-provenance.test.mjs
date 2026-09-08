@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {promisify} from 'node:util';
 import {execFile} from 'node:child_process';
-import {mkdtemp, mkdir, readFile, rm, symlink, writeFile, cp} from 'node:fs/promises';
+import {mkdtemp, mkdir, readFile, rm, symlink, writeFile, cp, rename} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {createHash} from 'node:crypto';
@@ -109,7 +109,7 @@ async function generateWorkingSnapshot(fixture) {
     now: () => new Date(FREEZE_DATE),
     expectedDocCount: 2,
     diagramIds: DIAGRAMS,
-    projectionPaths: PROJECTION_PATHS,
+    projectionPaths: fixture.projectionPaths ?? PROJECTION_PATHS,
   });
   await put(repoRoot, `apps/architecture-portal/versioned_metadata/version-${VERSION}.json`, `${JSON.stringify(metadata, null, 2)}\n`);
   return metadata;
@@ -133,7 +133,7 @@ async function copyWitnessEntrypoint(fixture) {
   ]) {
     const destination = path.join(fixture.portalRoot, relative);
     await mkdir(path.dirname(destination), {recursive: true});
-    await cp(path.join(REPO_ROOT, 'apps/architecture-portal', relative), destination);
+    await cp(path.join(REPO_ROOT, 'apps/docs-site', relative), destination);
   }
 }
 
@@ -162,6 +162,66 @@ function verifierOptions(fixture, metadata, headRevision) {
 }
 
 const METADATA_PATH = `apps/architecture-portal/versioned_metadata/version-${VERSION}.json`;
+
+test('new snapshots authenticate renamed source while retaining stable archive paths', async () => {
+  const fixture = await initializeFixture();
+  try {
+    const oldRoot = fixture.portalRoot;
+    const newRoot = path.join(fixture.repoRoot, 'apps/docs-site');
+    await mkdir(path.join(newRoot, 'static'), {recursive: true});
+    for (const item of ['docs', 'sidebars.ts', 'static/diagrams']) {
+      await rename(path.join(oldRoot, item), path.join(newRoot, item));
+    }
+    for (const item of ['versioned_docs', 'versioned_metadata', 'versioned_sidebars']) {
+      await mkdir(path.join(oldRoot, item), {recursive: true});
+      await symlink(`../architecture-portal/${item}`, path.join(newRoot, item));
+    }
+    await mkdir(path.join(oldRoot, 'static/versions'), {recursive: true});
+    await symlink('../../architecture-portal/static/versions', path.join(newRoot, 'static/versions'));
+    await put(fixture.repoRoot, 'apps/architecture-portal/versions.json', '[]\n');
+    await symlink('../architecture-portal/versions.json', path.join(newRoot, 'versions.json'));
+    fixture.portalRoot = newRoot;
+    fixture.projectionPaths = PROJECTION_PATHS.map((entry) => entry.replace('apps/architecture-portal/', 'apps/docs-site/'));
+    fixture.revision = await commit(fixture.repoRoot, 'rename source', SOURCE_DATE);
+    const metadata = await generateWorkingSnapshot(fixture);
+    assert.equal(metadata.source_sidebar.path, 'apps/docs-site/sidebars.ts');
+    const options = {...verifierOptions(fixture, metadata, fixture.revision), projectionPaths: fixture.projectionPaths};
+    assert.deepEqual(await verifySnapshotProvenance(options), [], 'new snapshots must validate at the exact precommit archive boundary');
+    const head = await commit(fixture.repoRoot, 'freeze renamed source', INTRO_DATE);
+    assert.deepEqual(await verifySnapshotProvenance({...options, headRevision: head}), []);
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});
+
+test('renamed active site verifies unchanged legacy snapshot provenance', async () => {
+  const fixture = await initializeFixture();
+  try {
+    const metadata = await generateWorkingSnapshot(fixture);
+    await commit(fixture.repoRoot, 'freeze', INTRO_DATE);
+    const newRoot = path.join(fixture.repoRoot, 'apps/docs-site');
+    await mkdir(path.join(newRoot, 'static'), {recursive: true});
+    for (const item of ['docs', 'sidebars.ts', 'static/diagrams']) {
+      await rename(path.join(fixture.portalRoot, item), path.join(newRoot, item));
+    }
+    for (const item of ['versioned_docs', 'versioned_metadata', 'versioned_sidebars', 'versions.json']) {
+      await symlink(`../architecture-portal/${item}`, path.join(newRoot, item));
+    }
+    await symlink('../../architecture-portal/static/versions', path.join(newRoot, 'static/versions'));
+    const head = await commit(fixture.repoRoot, 'rename active docs site', '2026-08-04T00:03:00Z');
+    assert.deepEqual(await verifySnapshotProvenance({
+      ...verifierOptions(fixture, metadata, head), portalRoot: newRoot,
+    }), [], 'renaming active source must not invalidate unchanged authenticated snapshots');
+    const projection = await projectionManifest(fixture.repoRoot, head);
+    assert.ok(projection.files.some((entry) => entry.path === 'apps/docs-site/docs/core/overview.mdx'));
+    await writeFile(path.join(newRoot, `versioned_docs/version-${VERSION}/core/overview.mdx`), 'tampered\n');
+    assert.ok((await verifySnapshotProvenance({
+      ...verifierOptions(fixture, metadata, head), portalRoot: newRoot,
+    })).some((error) => error.includes('hash or size')), 'archive aliases must not bypass content verification');
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});
 
 async function squashOnto(fixture, headRevision, baseRevision) {
   const tree = (await git(fixture.repoRoot, ['rev-parse', `${headRevision}^{tree}`])).stdout.trim();

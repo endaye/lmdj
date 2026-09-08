@@ -153,7 +153,7 @@ contract is [`docs/governance/pitfall-ledger.md`](../../../docs/governance/pitfa
   [`squash-witness-provenance`](../../pitfalls/squash-witness-provenance.md).
   A squash rewrites the introducing commit, so a snapshot frozen from a branch
   SHA loses its provenance. Generate the witness for the exact post-squash
-  `main` SHA with `scripts/architecture-portal.sh witness PRODUCT_BUILD
+  `main` SHA with `scripts/docs-site.sh witness PRODUCT_BUILD
   INTRODUCING_REVISION` and verify it; never hand-edit an immutable snapshot to
   make provenance agree.
 - Before running any audit from a fresh clone or workspace —

@@ -8,8 +8,9 @@ Active Headless Core Hosts:
 - `core-mcp` — MCP stdio Host over the same C ABI.
 
 Other Core-dependent applications are `native-host`, `web-runtime-host` and
-`creator-web`. `architecture-portal` is the repository's documentation site;
-it reads product manifests but does not run Core.
+`creator-web`. [`docs-site`](docs-site/README.md) is the repository's documentation
+site; it reads product manifests but does not run Core. `architecture-portal`
+retains only immutable historical snapshot storage, not an active application.
 
 Independent experiments live in [`demos/`](../demos/README.md):
 [`web-runtime-lab`](../demos/web-runtime-lab/README.md) and

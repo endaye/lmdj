@@ -12,7 +12,7 @@ import {checkDocumentationImpact} from '../scripts/check-doc-impact.mjs';
 
 const execFileAsync = promisify(execFile);
 const SCRIPTS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../scripts');
-const PORTAL_PAGE = 'apps/architecture-portal/docs/operations/git-workflow.mdx';
+const PORTAL_PAGE = 'apps/docs-site/docs/operations/git-workflow.mdx';
 const BRANCH_FILE = 'docs/research/esp32.md';
 const HONEST_NONE = 'Documentation impact: none\nReason: research note only, no portal truth changed';
 
@@ -44,7 +44,7 @@ async function behindBaseFixture({alsoTouchPortal = false} = {}) {
   await git(root, ['config', 'user.email', 'portal@example.test']);
   await git(root, ['config', 'user.name', 'Portal Test']);
   await put(root, 'README.md', 'base\n');
-  await put(root, 'apps/architecture-portal/docs/overview/index.mdx', 'overview\n');
+  await put(root, 'apps/docs-site/docs/overview/index.mdx', 'overview\n');
   await commit(root, 'base');
 
   await git(root, ['checkout', '-b', 'docs/task']);
@@ -54,7 +54,7 @@ async function behindBaseFixture({alsoTouchPortal = false} = {}) {
 
   await git(root, ['checkout', 'main']);
   await put(root, PORTAL_PAGE, 'landed by another Pull Request\n');
-  await put(root, 'apps/architecture-portal/docs/overview/index.mdx', 'overview, revised\n');
+  await put(root, 'apps/docs-site/docs/overview/index.mdx', 'overview, revised\n');
   const baseSha = await commit(root, 'unrelated portal work lands on main');
 
   return {root, baseSha, headSha};
@@ -74,8 +74,8 @@ test('a behind-base branch reports only its own files', async (t) => {
   // the branch for both pages `main` changed after the branch was cut.
   const {stdout} = await git(root, ['diff', '--name-only', baseSha, headSha]);
   assert.deepEqual(stdout.split('\n').filter(Boolean).sort(), [
-    'apps/architecture-portal/docs/operations/git-workflow.mdx',
-    'apps/architecture-portal/docs/overview/index.mdx',
+    'apps/docs-site/docs/operations/git-workflow.mdx',
+    'apps/docs-site/docs/overview/index.mdx',
     BRANCH_FILE,
   ]);
 });
@@ -100,7 +100,7 @@ test('base drift does not excuse a portal page the branch really edited', async 
   const changedFiles = await resolveChangedFiles(root, {baseSha, headSha});
   assert.deepEqual(changedFiles.sort(), [PORTAL_PAGE, BRANCH_FILE].sort());
   assert.deepEqual(checkDocumentationImpact({body: HONEST_NONE, changedFiles}), [
-    'documentation impact is none but current portal pages changed — either declare "Documentation impact: required" with "Affected portal pages:" routes, or drop the apps/architecture-portal/docs/ edits from this PR',
+    'documentation impact is none but current portal pages changed — either declare "Documentation impact: required" with "Affected portal pages:" routes, or drop the apps/docs-site/docs/ edits from this PR',
   ]);
 });
 

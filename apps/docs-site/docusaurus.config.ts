@@ -16,7 +16,7 @@ const versions = Object.fromEntries([
 ]);
 
 const config: Config = {
-  title: 'LMDJ Product Manual',
+  title: 'LMDJ Docs',
   tagline: 'LMDJ 产品、架构与交付说明书',
   favicon: 'img/logo.svg',
   url: 'https://lmdj.netlify.app',
@@ -24,6 +24,12 @@ const config: Config = {
   future: {v4: true},
   onBrokenLinks: 'throw',
   onBrokenAnchors: 'throw',
+  // Keep archive module IDs aligned with Docusaurus' logical versioned paths.
+  // Frozen content lives outside the renamed active project via relative links.
+  plugins: [() => ({
+    name: 'stable-snapshot-module-paths',
+    configureWebpack: () => ({resolve: {symlinks: false}}),
+  })],
   i18n: {defaultLocale: 'zh-Hans', locales: ['zh-Hans']},
   presets: [
     [
@@ -48,7 +54,7 @@ const config: Config = {
     ],
     docs: {sidebar: {hideable: true, autoCollapseCategories: true}},
     navbar: {
-      title: 'LMDJ Manual',
+      title: 'LMDJ Docs',
       logo: {alt: 'LMDJ', src: 'img/logo.svg'},
       items: [
         {type: 'docSidebar', sidebarId: 'manual', label: '产品说明书', position: 'left'},

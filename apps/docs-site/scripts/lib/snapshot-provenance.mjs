@@ -347,6 +347,8 @@ async function listRevisionPaths(repoRoot, revision) {
 }
 
 function isProjectionPath(relative) {
+  // Normalize only for classification, never change authenticated evidence paths.
+  relative = relative.replace(/^apps\/docs-site\//, 'apps/architecture-portal/');
   if (relative.startsWith('apps/architecture-portal/docs/') && relative.endsWith('.mdx')) return true;
   if (relative === 'apps/architecture-portal/sidebars.ts' || relative === 'apps/architecture-portal/docusaurus.config.ts') return true;
   if (relative.startsWith('apps/architecture-portal/src/components/')) return true;
@@ -414,11 +416,17 @@ export async function freezeDiagramAssets({portalRoot, version, diagramIds = DIA
 
 async function sourceDocumentPaths(repoRoot, revision) {
   return (await listRevisionPaths(repoRoot, revision))
-    .filter((relative) => relative.startsWith('apps/architecture-portal/docs/') && relative.endsWith('.mdx'));
+    .filter((relative) => /^apps\/(?:docs-site|architecture-portal)\/docs\/.+\.mdx$/.test(relative));
+}
+
+async function sourceSiteRoot(repoRoot, revision) {
+  const paths = await listRevisionPaths(repoRoot, revision);
+  return paths.includes('apps/docs-site/sidebars.ts') ? 'apps/docs-site' : 'apps/architecture-portal';
 }
 
 function snapshotDocumentPath(sourcePath, version) {
-  const prefix = 'apps/architecture-portal/docs/';
+  const prefix = sourcePath.startsWith('apps/docs-site/')
+    ? 'apps/docs-site/docs/' : 'apps/architecture-portal/docs/';
   if (!sourcePath.startsWith(prefix)) throw new Error(`invalid source document path ${sourcePath}`);
   return `versioned_docs/version-${version}/${sourcePath.slice(prefix.length)}`;
 }
@@ -464,7 +472,8 @@ export async function createSnapshotMetadata({
       sha256: source.sha256,
     });
   }
-  const sourceSidebar = await revisionEvidence(repoRoot, revision, 'apps/architecture-portal/sidebars.ts');
+  const sourceRoot = await sourceSiteRoot(repoRoot, revision);
+  const sourceSidebar = await revisionEvidence(repoRoot, revision, `${sourceRoot}/sidebars.ts`);
   const snapshotSidebar = await worktreeEvidence(
     portalRoot,
     `versioned_sidebars/version-${version}-sidebars.json`,
@@ -474,7 +483,7 @@ export async function createSnapshotMetadata({
   const assets = [];
   for (const id of ids) {
     for (const extension of ['html', 'svg']) {
-      const sourcePath = `apps/architecture-portal/static/diagrams/${id}.${extension}`;
+      const sourcePath = `${sourceRoot}/static/diagrams/${id}.${extension}`;
       const versionedPath = `static/versions/${version}/diagrams/${id}.${extension}`;
       const source = await revisionEvidence(repoRoot, revision, sourcePath);
       const versioned = await worktreeEvidence(portalRoot, versionedPath, 'versioned diagram asset');
@@ -725,14 +734,15 @@ export async function verifySnapshotProvenance({
   } catch (error) {
     errors.push(`source document inventory cannot be verified: ${error.message}`);
   }
-  if (metadata.source_sidebar?.path !== 'apps/architecture-portal/sidebars.ts' ||
+  const sourceRoot = await sourceSiteRoot(repoRoot, contentRevision);
+  if (metadata.source_sidebar?.path !== `${sourceRoot}/sidebars.ts` ||
       metadata.snapshot_sidebar?.path !== `versioned_sidebars/version-${version}-sidebars.json`) {
     errors.push('source and snapshot sidebar inventory is invalid');
   }
   const expectedAssets = expectedIds.flatMap((id) => ['html', 'svg'].map((format) => ({
     id,
     format,
-    source_path: `apps/architecture-portal/static/diagrams/${id}.${format}`,
+    source_path: `${sourceRoot}/static/diagrams/${id}.${format}`,
     versioned_path: `static/versions/${version}/diagrams/${id}.${format}`,
   })));
   const actualAssets = (metadata.diagrams?.assets ?? []).map(({id, format, source_path, versioned_path}) => ({
