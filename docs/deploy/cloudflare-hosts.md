@@ -41,6 +41,15 @@ Catalog a deployment forwards to must be diffable, reviewable in a Pull
 Request, and auditable afterwards. It must be an absolute `https` base with no
 query or fragment; anything else fails closed and the prefix answers 404.
 
+A Catalog configured this way reaches only the deployment whose `wrangler.json`
+carries the variable. **The `creator-recovery`, `creator-initialization` and
+version-preview Workers are separate deployments**, so a Release archive that
+names `https://creator.lmdj.workers.dev/soundset-catalog/` in its meta has no
+Catalog when served from any of them: the page asks a prefix those Workers do
+not forward, and the surface reports an unreachable Catalog. That is safe, and
+it is also invisible unless you are looking for it — do not read an empty
+Sound Set surface on a recovery or preview address as a Catalog outage.
+
 Configuring the Worker is only half of it: the page has to be told to use the
 prefix. That is the `lmdj-soundset-catalog` meta in `apps/creator-web/index.html`
 (or `window.__LMDJ_SOUNDSET_CATALOG__`), and its value must be **this
@@ -90,13 +99,32 @@ transport: it calls `fetch("/soundset-catalog/…")` directly, which
 nothing and the Worker's own check is the only thing in the way, so widening it
 widens the residual channel.
 
-**The residual channel** is therefore the choice of which of three admitted
-targets is fetched from the one configured Catalog, and for two of them a
-64-hex digest — repeatable at whatever rate the page likes, since nothing here
-throttles and the transport asks for `no-store`. It is readable by whoever
-operates that Catalog and by anyone terminating TLS in front of it. It is not
-readable by an origin the attacker chooses, which is the whole difference from
-naming a Catalog in `connect-src`.
+**The residual channel runs both ways.** Outbound it is the choice of which of
+three admitted targets is fetched from the one configured Catalog, and for two
+of them a 64-hex digest — repeatable at whatever rate the page likes, since
+nothing throttles and the transport asks for `no-store`, and readable by
+whoever operates that Catalog and by anyone terminating TLS in front of it.
+Inbound, the Catalog's answer comes back into the page: 404-versus-200 per
+request plus up to the shape's bound of bytes of the Catalog's choosing. So
+`connect-src 'self'` is a command-and-control barrier as well as an
+exfiltration barrier, and the forward punches through it in both directions for
+one fixed host. Anyone who can place content in the configured Catalog can feed
+a compromised bundle attacker-chosen bytes same-origin.
+
+What remains true, and is why this is still narrower than naming a Catalog in
+`connect-src`: the far end is one host the deployment chose rather than an
+origin the attacker chose, and the request grammar reaching it is closed.
+
+Whether the Workers runtime attaches the viewer's IP to a subrequest is **not
+established** and must not be assumed either way; if it does, that is a further
+request-derived component reaching the Catalog.
+
+One behaviour worth knowing before reading a log: `new URL` resolves dot
+segments and maps `\` to `/`, so several request spellings reach the Worker as
+one admitted path and appear as distinct entries in an edge cache. Every alias
+resolves to the same target — the Worker suite pins that — and the proof server
+refuses them outright, which is a deliberate, recorded difference rather than
+an oversight.
 
 ## Candidate, verify, promote and recover
 

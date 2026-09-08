@@ -8,6 +8,7 @@ import hashlib
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -95,59 +96,97 @@ class _RefuseRedirect(HTTPRedirectHandler):
         return None
 
 
+# The one grammar a configured upstream must match, derived by measurement
+# rather than from spec recall: the path class is exactly the ASCII characters
+# `new URL()` leaves untouched inside a path, so anything the Worker would
+# rewrite is outside it. Enumerating WHATWG's normalisations instead was tried
+# and lost -- two review passes found 27 more spellings the enumeration missed,
+# because a list of behaviours is always one behaviour behind the parser.
+# Deciding what a valid upstream looks like is finite; chasing a parser is not.
+CANONICAL_UPSTREAM = re.compile(
+    r"\Ahttps?://"
+    r"(?P<host>\[[^\[\]/?#]+\]|[a-z0-9][a-z0-9.\-]*)"
+    r"(?::(?P<port>[1-9][0-9]{0,4}))?"
+    r"(?P<path>(?:/[A-Za-z0-9!$%&'()*+,\-.:;=@\[\]_|~]*)*/)\Z"
+)
+
+
+def _host_is_canonical(host: str) -> bool:
+    """True when `new URL()` would leave this host spelling untouched.
+
+    A character grammar cannot decide this on its own: `2130706433`,
+    `0x7f.0.0.1`, `127.1` and `127.000.000.1` are all lowercase alphanumerics
+    and dots, and every one of them is a spelling of 127.0.0.1 that WHATWG
+    rewrites and `urlsplit` does not. So numeric-looking hosts must round-trip
+    through `ipaddress`, and a bracketed host must already be the compressed
+    IPv6 form.
+    """
+    if host.startswith("["):
+        if not host.endswith("]"):
+            return False
+        try:
+            return f"[{ipaddress.IPv6Address(host[1:-1]).compressed}]" == host
+        except ValueError:
+            return False
+    numeric_like = (
+        all(character in "0123456789." for character in host)
+        or host.startswith("0x")
+    )
+    if numeric_like:
+        try:
+            return str(ipaddress.IPv4Address(host)) == host
+        except ValueError:
+            return False
+    return True
+
+
 def normalize_catalog_upstream(upstream: str) -> str:
     """Return the upstream base, or raise for one this server will not forward to.
 
-    A misconfigured upstream fails closed rather than becoming a plaintext or
-    parameterised forwarder. `http` is admitted only for a loopback Catalog,
-    which is what the acceptance fixture is; the Worker admits `https` alone.
+    The Worker refuses any value that is not already the base it composes,
+    which is a property of having a WHATWG parser. This side has none, so it
+    decides the same question with a closed grammar instead. The two agree
+    exactly as far as that grammar is faithful, and
+    `CatalogUpstreamParityTest` is what keeps them honest about it.
+
+    Every rejection is a `ServerError`. Nothing here may raise anything else:
+    an escaping exception is not a refusal, it is a crash the proof server's
+    own configuration path turns into an empty response on every request.
     """
-    # The Worker refuses any value that is not already the base it composes,
-    # because WHATWG parsing silently normalises. `urlsplit` normalises almost
-    # nothing, so the same rules are spelled out here instead; without them the
-    # two disagree about where a given configured value forwards, which is the
-    # class of defect that `URL.origin` silently dropping userinfo already was.
-    if upstream != upstream.strip() or any(c.isspace() for c in upstream):
-        raise ServerError("catalog upstream carries whitespace")
-    if not upstream.isascii():
-        raise ServerError("catalog upstream must be ASCII; use punycode")
-    if "\\" in upstream:
-        raise ServerError("catalog upstream carries a backslash")
-    parts = urlsplit(upstream)
-    if parts.scheme not in {"http", "https"}:
-        raise ServerError("catalog upstream must be an http or https URL")
-    if parts.scheme == "http" and parts.hostname not in LOOPBACK_HOSTS:
+    if not isinstance(upstream, str):
+        raise ServerError("catalog upstream must be a string")
+    match = CANONICAL_UPSTREAM.fullmatch(upstream)
+    if match is None:
+        raise ServerError("catalog upstream is not a canonical https base")
+    host = match.group("host")
+    if not _host_is_canonical(host):
+        raise ServerError("catalog upstream host is not in canonical form")
+    scheme, _, _ = upstream.partition("://")
+    # `http` is admitted only for a loopback Catalog, which is what the
+    # acceptance fixture is; the Worker admits `https` alone, and that is the
+    # single intended disagreement between the two.
+    if scheme == "http" and host not in LOOPBACK_HOSTS:
         raise ServerError("a plaintext catalog upstream must be loopback")
-    if not parts.netloc:
-        raise ServerError("catalog upstream has no host")
-    if parts.query or parts.fragment:
-        raise ServerError("catalog upstream carries a query or fragment")
-    # Refused rather than forwarded. The Worker's `URL.origin` drops userinfo
-    # silently; keeping it here would send credentials the deployment would
-    # not. `@` is tested rather than `parts.username`, because an empty
-    # userinfo (`https://@host/`) leaves that None while the Worker's canonical
-    # form drops the `@` -- the same disagreement one spelling over.
-    if "@" in parts.netloc:
-        raise ServerError("catalog upstream carries credentials")
-    if parts.netloc != parts.netloc.lower():
-        raise ServerError("catalog upstream host is not lowercase")
-    if parts.port is not None and parts.port == DEFAULT_PORTS[parts.scheme]:
-        raise ServerError("catalog upstream states its scheme's default port")
-    # The base is used by concatenation, so it must already end in `/`. The
-    # Worker refuses a value it would have to complete, rather than completing
-    # it, so this refuses too instead of appending one.
-    if not parts.path.endswith("/"):
-        raise ServerError("catalog upstream base does not end in /")
-    path = parts.path
+    path = match.group("path")
     if "//" in path:
         raise ServerError("catalog upstream path is not normalised")
-    if any(segment in {".", ".."} for segment in path.split("/")):
-        raise ServerError("catalog upstream path carries a dot segment")
-    # `new URL` decodes `%2e` and then resolves it, so an encoded dot segment
-    # moves the Worker's base and would not move this one.
-    if "%2e" in path.lower():
-        raise ServerError("catalog upstream path carries an encoded dot segment")
-    return f"{parts.scheme}://{parts.netloc}{path}"
+    # WHATWG treats a segment as a dot segment when the whole segment is `.`
+    # or `..`, in either encoded or literal form -- so `/a%2eb/` is an ordinary
+    # segment and `/%2e/` is not. A substring test for `%2e` refused five
+    # legitimate bases the Worker accepts.
+    for segment in path.split("/"):
+        if segment.lower().replace("%2e", ".") in {".", ".."}:
+            raise ServerError("catalog upstream path carries a dot segment")
+    port = match.group("port")
+    if port is not None:
+        # The grammar admits five digits, so the range is checked here rather
+        # than spelled into the pattern. `int()` cannot raise: the group is
+        # `[1-9][0-9]{0,4}` and nothing else reaches it.
+        if not 1 <= int(port) <= 65_535:
+            raise ServerError("catalog upstream port is out of range")
+        if int(port) == DEFAULT_PORTS[scheme]:
+            raise ServerError("catalog upstream states its scheme's default port")
+    return upstream
 
 
 def catalog_target(base: str, suffix: str) -> tuple[str, str, bool, int] | None:
@@ -216,6 +255,12 @@ def read_catalog_upstream_file(path: Path) -> str | None:
         return normalize_catalog_upstream(candidate)
     except ServerError:
         return None
+    except Exception:  # noqa: BLE001
+        # `normalize_catalog_upstream` promises `ServerError` and nothing else.
+        # If that promise ever breaks, a configured value must still be a 404
+        # here rather than an exception escaping into the handler, where it
+        # becomes an empty response on every request instead of a refusal.
+        return None
 
 
 def read_catalog_object(
@@ -236,6 +281,19 @@ def read_catalog_object(
         with opener.open(request, timeout=CATALOG_TIMEOUT_SECONDS) as response:
             if response.status != 200:
                 return 502, b""
+            # The declared length is refused before the body is read, matching
+            # the Worker. This check existed on the Worker side alone when the
+            # bounded read was added, which made the remedy for one divergence
+            # a sibling of it: the same upstream answered 502 in production and
+            # 200 here.
+            declared = response.headers.get("Content-Length")
+            if declared is not None:
+                try:
+                    length = int(declared)
+                except (TypeError, ValueError):
+                    return 502, b""
+                if length < 0 or length > maximum_bytes:
+                    return 502, b""
             payload = response.read(maximum_bytes + 1)
     except HTTPError as error:
         return (404, b"") if error.code == 404 else (502, b"")

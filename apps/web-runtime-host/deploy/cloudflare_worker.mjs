@@ -36,16 +36,31 @@
 //      `catalogObjectPath` contributes nothing and the check below is the only
 //      thing in the way. Widening it widens the residual channel.
 //
-// THE RESIDUAL CHANNEL, stated without flattery. A compromised bundle can
-// choose which of three admitted targets is fetched from the one configured
-// Catalog, and for two of them a 64-hex digest -- so 256 bits plus roughly 1.6,
-// repeatable at whatever rate the page likes, since nothing here throttles and
-// the transport asks for `no-store`. It is readable by whoever operates that
-// Catalog and by anyone terminating TLS in front of it. It is not readable by
-// an origin the attacker chooses, which is the difference from naming a Catalog
-// in `connect-src`. Whether the Workers runtime attaches the viewer's IP to a
-// subrequest is not established here; if it does, that is a further
-// request-derived component reaching the Catalog.
+// THE RESIDUAL CHANNEL, stated without flattery, and it runs BOTH WAYS.
+//
+// Outbound: a compromised bundle can choose which of three admitted targets is
+// fetched from the one configured Catalog, and for two of them a 64-hex digest
+// -- 256 bits plus roughly 1.6 -- repeatable at whatever rate the page likes,
+// since nothing here throttles and the transport asks for `no-store`. It is
+// readable by whoever operates that Catalog and by anyone terminating TLS in
+// front of it.
+//
+// Inbound, which an earlier version of this comment missed: the Catalog's
+// answer comes back into the page. That is 404-versus-200 per request plus up
+// to the shape's bound of bytes of the Catalog's choosing, at a content type
+// this Worker sets. So under this threat model `connect-src 'self'` is a
+// command-and-control barrier as well as an exfiltration barrier, and the
+// forward punches through it in both directions for one fixed host. Anyone who
+// can place content in the configured Catalog can feed a compromised bundle
+// attacker-chosen bytes same-origin.
+//
+// What is still true, and is the whole reason this is narrower than naming a
+// Catalog in `connect-src`: the far end is one host the deployment chose, not
+// an origin the attacker chose, and the request grammar reaching it is closed.
+//
+// Whether the Workers runtime attaches the viewer's IP to a subrequest is NOT
+// established here and must not be assumed either way; if it does, that is a
+// further request-derived component reaching the Catalog.
 //
 // A deployment that offers no Catalog sets no `CATALOG_UPSTREAM`, and every
 // prefixed path answers 404 -- S11-D6's "browses only the Sets its Workspace
@@ -94,13 +109,19 @@ function upstreamBase(env) {
   const base = `${parsed.origin}${path}`;
   // The configured value must already be the base this composes, or it is
   // refused. Parsing normalises -- it resolves dot segments, maps `\` to `/`,
-  // lowercases and punycodes the host, drops a default port, trims whitespace,
-  // and terminates the authority at a backslash so `https://a\@b/` becomes
-  // host `a`. Every one of those is a way for the deployment to forward
-  // somewhere the operator did not write, and for this Worker and the proof
-  // server to disagree about where. Requiring the canonical form makes the two
-  // agree by construction instead of by matching validation lists, and turns a
-  // silent reinterpretation into a visible refusal.
+  // lowercases and punycodes the host, rewrites numeric host spellings, drops
+  // a default port, trims whitespace, percent-encodes a dozen path bytes, and
+  // terminates the authority at a backslash so `https://a\@b/` becomes host
+  // `a`. Every one of those is a way for the deployment to forward somewhere
+  // the operator did not write.
+  //
+  // On THIS side that is by construction: there is a WHATWG parser here, so
+  // the rule is one comparison and cannot fall behind the parser. The proof
+  // server has no such parser and cannot mirror it that way -- it decides the
+  // same question with a closed grammar, and the two agree only as far as that
+  // grammar is faithful. `CatalogUpstreamParityTest` drives both over one list
+  // for exactly that reason; enumerating WHATWG's behaviours instead was tried
+  // here and two review passes found 27 spellings the enumeration missed.
   if (configured !== base) return null;
   return base;
 }

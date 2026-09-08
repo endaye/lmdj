@@ -199,6 +199,35 @@ test("the admitted grammar is exactly the two shapes the transport can spell", a
   }
 });
 
+test("a normalised alias resolves to the same target, never a different one", async () => {
+  // `new URL` resolves dot segments and maps `\` to `/`, so several spellings
+  // reach the Worker as one admitted path. The proof server matches the raw
+  // target and refuses them, and that divergence is left open on purpose:
+  // closing it means refusing requests the runtime normalised, which cannot be
+  // tested against the real edge and would risk refusing the two legitimate
+  // shapes. What is pinned instead is that an alias can only ever resolve to
+  // the SAME target -- so a future edit cannot turn one into a different fetch.
+  const canonical = `${UPSTREAM}object/manifest/${DIGEST}`;
+  for (const alias of [
+    `/soundset-catalog/x/../object/manifest/${DIGEST}`,
+    `/soundset-catalog/object/./manifest/${DIGEST}`,
+    `/soundset-catalog/object\\manifest\\${DIGEST}`,
+    `/soundset-catalog/a/%2e%2e/object/manifest/${DIGEST}`,
+    `/soundset-catalog/object/manifest/../manifest/${DIGEST}`,
+  ]) {
+    const { result, calls } = await withUpstream(
+      () => new Response(new Uint8Array([1]), { status: 200 }),
+      () => worker.fetch(get(alias), creatorEnv()),
+    );
+    if (result.status === 200) {
+      assert.equal(calls.length, 1, alias);
+      assert.equal(calls[0].target, canonical, alias);
+    } else {
+      assert.deepEqual(calls, [], alias);
+    }
+  }
+});
+
 test("only GET is admitted", async () => {
   for (const method of ["POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]) {
     const { result, calls } = await withUpstream(

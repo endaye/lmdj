@@ -262,31 +262,85 @@ class CreatorServerTest(unittest.TestCase):
 # standing in for production, which is the defect class that
 # `URL.origin`-drops-userinfo already was.
 UPSTREAM_PARITY_REFUSED = (
+    # Not an http(s) base at all.
     "ftp://catalog.example.test/",
     "not-a-url",
     "",
+    "https:///b/",
+    # Carries something the base may not.
     "https://catalog.example.test/?query=1",
     "https://catalog.example.test/#fragment",
     "https://catalog.example.test//double/",
+    # Credentials, including an empty userinfo `URL.origin` would drop.
     "https://user:pass@catalog.example.test/",
     "https://user@catalog.example.test/",
     "https://@catalog.example.test/",
     "https://:@catalog.example.test/",
+    # A backslash terminates the authority, so this resolves to `evil.test`.
     "https://evil.test\\@catalog.example.test/",
+    # Dot segments, literal and encoded.
     "https://catalog.example.test/a/../b/",
     "https://catalog.example.test/a/%2e%2e/b/",
+    "https://catalog.example.test/%2e/b/",
+    "https://catalog.example.test/a/.%2E/b/",
+    # Host and scheme spellings WHATWG rewrites.
     "https://exämple.test/b/",
     "https://CATALOG.Example.Test/b/",
+    "HTTPS://catalog.example.test/",
+    "HtTpS://catalog.example.test/b/",
     "  https://catalog.example.test/b/  ",
-    "https://catalog.example.test:443/b/",
     "https://catalog.example.test",
+    # Empty query and fragment markers, which `urlsplit` silently drops.
+    "https://catalog.example.test/b/?",
+    "https://catalog.example.test/b/#",
+    # Port forms. The last three reached `parts.port` and raised `ValueError`
+    # rather than `ServerError`, which the previous harness could not express
+    # -- see `worker_outcome`.
+    "https://catalog.example.test:443/b/",
+    "https://catalog.example.test:/b/",
+    "https://catalog.example.test:08443/b/",
+    "https://catalog.example.test:8443./b/",
+    "https://catalog.example.test:x/b/",
+    "https://catalog.example.test:65536/b/",
+    "https://catalog.example.test:-1/b/",
+    "https://catalog.example.test:99999999999999/b/",
+    # Numeric host spellings that resolve to 127.0.0.1. `getaddrinfo` accepts
+    # every one of them, so the proof server would have connected where
+    # production refuses outright.
+    "https://127.000.000.1/b/",
+    "https://0x7f.0.0.1/b/",
+    "https://0177.0.0.1/b/",
+    "https://2130706433/b/",
+    "https://127.1/b/",
+    # IPv6 spellings that are not the compressed form.
+    "https://[0:0:0:0:0:0:0:1]/b/",
+    "https://[::0:1]/b/",
+    "https://[0000::1]/b/",
+    # Path bytes WHATWG percent-encodes, measured rather than recalled.
+    'https://catalog.example.test/a"b/',
+    "https://catalog.example.test/a<b>/",
+    "https://catalog.example.test/a`b/",
+    "https://catalog.example.test/a{b}/",
+    "https://catalog.example.test/a^b/",
+    "https://catalog.example.test/a\x00b/",
+    "https://catalog.example.test/a\x01b/",
+    "https://catalog.example.test/a\x7fb/",
 )
-# Accepted by both, and composed identically by both.
+# Accepted by both, and composed identically by both. The `%2e` bases are here
+# on purpose: a substring test for `%2e` refused five legitimate bases that the
+# Worker accepts, because WHATWG treats a segment as a dot segment only when
+# the whole segment is `.` or `..`.
 UPSTREAM_PARITY_ACCEPTED = (
     "https://catalog.example.test/",
     "https://catalog.example.test/sets/",
     "https://catalog.example.test:8443/b/",
     "https://catalog.example.test/%41/",
+    "https://catalog.example.test/a%2eb/",
+    "https://catalog.example.test/v1%2e0/",
+    "https://catalog.example.test/sets%2ejson/",
+    "https://catalog.example.test/a|b/",
+    "https://127.0.0.1/b/",
+    "https://[::1]/b/",
 )
 
 
@@ -304,6 +358,7 @@ class CatalogUpstreamFixture(http.server.BaseHTTPRequestHandler):
     response_body = b'{"catalog":"fixture"}'
     response_content_type = "application/json"
     response_location: str | None = None
+    declared_length: int | None = None
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         return
@@ -322,7 +377,10 @@ class CatalogUpstreamFixture(http.server.BaseHTTPRequestHandler):
         if type(self).response_location is not None:
             self.send_header("Location", type(self).response_location)
         self.send_header("Content-Type", type(self).response_content_type)
-        self.send_header("Content-Length", str(len(body)))
+        declared = type(self).declared_length
+        self.send_header(
+            "Content-Length", str(len(body) if declared is None else declared)
+        )
         self.end_headers()
         if include_body and body:
             self.wfile.write(body)
@@ -355,6 +413,7 @@ class CreatorCatalogProxyTest(CreatorServerTest):
         CatalogUpstreamFixture.response_body = b'{"catalog":"fixture"}'
         CatalogUpstreamFixture.response_content_type = "application/json"
         CatalogUpstreamFixture.response_location = None
+        CatalogUpstreamFixture.declared_length = None
         self.upstream = http.server.ThreadingHTTPServer(
             ("127.0.0.1", 0), CatalogUpstreamFixture
         )
@@ -491,6 +550,30 @@ class CreatorCatalogProxyTest(CreatorServerTest):
         )
         self.assertEqual(status, 502)
 
+    def test_a_declared_length_past_the_bound_is_refused_before_the_body(self) -> None:
+        # The Worker gained this check with the bounded read and this side did
+        # not, so for one commit the same upstream answered 502 in production
+        # and 200 here -- a divergence the remedy for a divergence introduced.
+        CatalogUpstreamFixture.declared_length = 9 * 1024 * 1024
+        status, _, _ = self.request(
+            "GET", f"/soundset-catalog/object/blob/{self.DIGEST}"
+        )
+        self.assertEqual(status, 502)
+        # An upstream that *under*-declares cannot use that to smuggle a large
+        # body past the bound: HTTP framing is authoritative, so the read stops
+        # at the declared length and the rest never enters this process. The
+        # page gets the truncated bytes and Core rejects them on hash, which is
+        # the layer that owns that decision.
+        CatalogUpstreamFixture.declared_length = 2
+        CatalogUpstreamFixture.response_body = b"y" * (
+            self.module.MAXIMUM_CATALOG_OBJECT_BYTES + 1
+        )
+        status, _, body = self.request(
+            "GET", f"/soundset-catalog/object/blob/{self.DIGEST}"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body), 2)
+
     def test_the_upstream_content_type_never_reaches_the_page(self) -> None:
         CatalogUpstreamFixture.response_content_type = "text/html; charset=utf-8"
         _, headers, _ = self.request("GET", "/soundset-catalog/catalog/index.json")
@@ -545,8 +628,19 @@ class CatalogUpstreamParityTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.module = load_module("lmdj_shared_web_server_parity", SERVER_TOOL)
 
-    def worker_base(self, upstream: str) -> str | None:
-        """The base the Worker composes, or None when it refuses the value."""
+    def worker_outcome(self, upstream: str) -> tuple[str, str | None]:
+        """`("accept", base)`, `("refuse", None)` or `("crash", detail)`.
+
+        Three outcomes, not two, and that is the point. The first version of
+        this harness collapsed anything that was not an accept into a refusal,
+        so a value that made an implementation *crash* was recorded as parity
+        with a value the other side declined. Class D was exactly that: reading
+        `parts.port` raised `ValueError`, the harness could not represent it,
+        and the shared list therefore did not contain it -- a parity test
+        blind to the class it exists to catch. Ask of any such harness: if a
+        divergence existed that it cannot express, would its report look
+        different? Here, now, it would.
+        """
         script = """
 import worker from %s;
 const configured = JSON.parse(process.argv[1]);
@@ -565,38 +659,60 @@ process.stdout.write(JSON.stringify(
 """ % json.dumps(str(self.WORKER))
         completed = subprocess.run(
             ["node", "--input-type=module", "-e", script, json.dumps(upstream)],
-            capture_output=True, text=True, timeout=60, check=True,
+            capture_output=True, text=True, timeout=60, check=False,
         )
-        return json.loads(completed.stdout)
+        if completed.returncode != 0:
+            return ("crash", completed.stderr.strip()[:300])
+        base = json.loads(completed.stdout)
+        return ("accept", base) if base is not None else ("refuse", None)
 
-    def python_base(self, upstream: str) -> str | None:
+    def python_outcome(self, upstream: str) -> tuple[str, str | None]:
+        """The same three outcomes for the proof server. See `worker_outcome`."""
         try:
-            return self.module.normalize_catalog_upstream(upstream)
+            return ("accept", self.module.normalize_catalog_upstream(upstream))
         except self.module.ServerError:
-            return None
+            return ("refuse", None)
+        except Exception as error:  # noqa: BLE001 - a crash is its own outcome
+            return ("crash", f"{type(error).__name__}: {error}")
+
+    def test_neither_implementation_crashes_on_any_reviewed_value(self) -> None:
+        # A crash is not a refusal. Through `--catalog-upstream-file` an
+        # escaping exception is an empty response on every request rather than
+        # a 404, and it is the acceptance lane's own configuration path.
+        for upstream in UPSTREAM_PARITY_REFUSED + UPSTREAM_PARITY_ACCEPTED:
+            with self.subTest(upstream=upstream):
+                python_kind, python_detail = self.python_outcome(upstream)
+                self.assertNotEqual(python_kind, "crash", python_detail)
+                worker_kind, worker_detail = self.worker_outcome(upstream)
+                self.assertNotEqual(worker_kind, "crash", worker_detail)
 
     def test_both_refuse_every_value_parsing_would_reinterpret(self) -> None:
         for upstream in UPSTREAM_PARITY_REFUSED:
             with self.subTest(upstream=upstream):
-                self.assertIsNone(self.python_base(upstream), "proof server")
-                self.assertIsNone(self.worker_base(upstream), "Worker")
+                self.assertEqual(
+                    self.python_outcome(upstream), ("refuse", None), "proof server"
+                )
+                self.assertEqual(
+                    self.worker_outcome(upstream), ("refuse", None), "Worker"
+                )
 
     def test_both_compose_the_same_base_for_every_accepted_value(self) -> None:
         for upstream in UPSTREAM_PARITY_ACCEPTED:
             with self.subTest(upstream=upstream):
-                expected = self.python_base(upstream)
-                self.assertIsNotNone(expected, "proof server")
-                self.assertEqual(self.worker_base(upstream), expected)
+                expected = self.python_outcome(upstream)
+                self.assertEqual(expected[0], "accept", "proof server")
+                self.assertEqual(self.worker_outcome(upstream), expected)
 
     def test_the_one_intended_difference_is_plaintext_loopback(self) -> None:
         # The proof server admits a loopback `http` Catalog because the
         # acceptance fixture is one; the Worker admits `https` alone. This is
         # the only disagreement, and it is asserted so it stays the only one.
         loopback = "http://127.0.0.1:8099/"
-        self.assertEqual(self.python_base(loopback), loopback)
-        self.assertIsNone(self.worker_base(loopback))
-        self.assertIsNone(self.python_base("http://catalog.example.test/"))
-        self.assertIsNone(self.worker_base("http://catalog.example.test/"))
+        self.assertEqual(self.python_outcome(loopback), ("accept", loopback))
+        self.assertEqual(self.worker_outcome(loopback), ("refuse", None))
+        for elsewhere in ("http://catalog.example.test/", "http://127.0.0.2/"):
+            self.assertEqual(self.python_outcome(elsewhere), ("refuse", None))
+            self.assertEqual(self.worker_outcome(elsewhere), ("refuse", None))
 
 
 class CreatorNoCatalogTest(CreatorServerTest):
