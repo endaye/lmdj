@@ -2,8 +2,10 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -12,10 +14,15 @@
 
 #include <emscripten.h>
 #include <nlohmann/json.hpp>
+#include <picosha2.h>
 
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/foundation/artifact.hpp>
+#include <lmdj/foundation/json.hpp>
+#include <lmdj/foundation/soundset_manifest.hpp>
 #include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/soundset_catalog_transport.hpp>
+#include <lmdj/project_io/soundset_store.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 #include <lmdj/project_io/workspace_cache.hpp>
@@ -377,6 +384,195 @@ std::optional<nlohmann::json> run_sample_cache_action() {
   return nlohmann::json{
       {"complete", true},
       {"result", reopen_sample_cache(platform, bundle, requested_bundle)},
+  };
+}
+
+// #902: the Workspace Sound Set Store publishing onto OPFS. The native Set
+// Store tests prove Core's download, verification and eligibility; nothing
+// exercised the atomic publication step on the Web storage platform, where a
+// directory publish is a bounded copy under a writer lease held on the
+// destination rather than a rename.
+constexpr std::string_view kSoundSetId = "10000000-0000-4000-8000-000000000001";
+constexpr std::string_view kSoundSetVersion = "1.0.0";
+
+std::string sha256_hex(std::string_view input) {
+  picosha2::hash256_one_by_one hasher;
+  if (!input.empty()) {
+    const auto* begin = reinterpret_cast<const unsigned char*>(input.data());
+    hasher.process(begin, begin + input.size());
+  }
+  hasher.finish();
+  return picosha2::get_hash_hex_string(hasher);
+}
+
+// One occupied slot, the same canonical shape the native Set Store test
+// builds, so a Web refusal cannot be blamed on a differently shaped manifest.
+std::string soundset_manifest_bytes(const std::string& payload) {
+  auto manifest = nlohmann::json::object();
+  manifest["contract"] = "lmdj.soundset.v1";
+  manifest["set_id"] = std::string{kSoundSetId};
+  manifest["version"] = std::string{kSoundSetVersion};
+  manifest["name"] = "Web Kit";
+  manifest["publisher"] = "LMDJ";
+  manifest["license"] = nlohmann::json{
+      {"spdx_id", "CC-BY-4.0"},
+      {"rights_holder", "Alice"},
+      {"copyright", "Copyright 2026 Alice"},
+      {"attribution", "Alice"},
+  };
+  auto slots = nlohmann::json::array();
+  for (int index = 0; index < 16; ++index) {
+    if (index != 0) {
+      slots.push_back(nlohmann::json{{"slot", index}});
+      continue;
+    }
+    slots.push_back(nlohmann::json{
+        {"slot", index},
+        {"role", "kick"},
+        {"name", "Slot 0"},
+        {"artifact",
+         nlohmann::json{
+             {"sha256", sha256_hex(payload)},
+             {"media_type", "audio/wav"},
+             {"byte_length", payload.size()},
+         }},
+    });
+  }
+  manifest["slots"] = std::move(slots);
+  return lmdj::foundation::canonical_json(manifest);
+}
+
+// Serves exactly the objects it was given. There is no network here: this
+// proof is about the storage half, so the Catalog half is a lookup table.
+class WebCatalogTransport final : public lmdj::project_io::CatalogTransport {
+ public:
+  void publish(std::string object) {
+    objects_.emplace(sha256_hex(object), std::move(object));
+  }
+
+  int reads() const { return reads_; }
+
+  lmdj::foundation::Result<std::vector<std::byte>> read_object(
+      const lmdj::project_io::CatalogObjectRef& object,
+      std::uint64_t maximum_bytes) override {
+    using ObjectResult = lmdj::foundation::Result<std::vector<std::byte>>;
+    ++reads_;
+    const auto found = objects_.find(object.sha256);
+    if (found == objects_.end()) {
+      return ObjectResult::failure(
+          lmdj::foundation::Error{
+              lmdj::foundation::ErrorCode::not_found,
+              "web catalog fixture has no such object"});
+    }
+    if (found->second.size() > maximum_bytes) {
+      return ObjectResult::failure(
+          lmdj::foundation::Error{
+              lmdj::foundation::ErrorCode::io_error,
+              "web catalog fixture object exceeds the bound"});
+    }
+    const auto* begin =
+        reinterpret_cast<const std::byte*>(found->second.data());
+    return ObjectResult::success(
+        std::vector<std::byte>{begin, begin + found->second.size()});
+  }
+
+ private:
+  std::map<std::string, std::string> objects_;
+  int reads_ = 0;
+};
+
+std::string error_reason(const lmdj::foundation::Error& error) {
+  return error.details.is_object()
+             ? error.details.value("reason", std::string{})
+             : std::string{};
+}
+
+nlohmann::json soundset_store_publish(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform) {
+  using namespace lmdj;
+  const std::string payload = "RIFF-web-soundset-blob";
+  const auto manifest = soundset_manifest_bytes(payload);
+  const auto manifest_sha256 = sha256_hex(manifest);
+  const auto blob_sha256 = sha256_hex(payload);
+  WebCatalogTransport transport;
+  transport.publish(manifest);
+  transport.publish(payload);
+
+  const auto workspace = std::filesystem::path{"/lmdj-workspace"};
+  const auto sets_root = workspace / ".lmdj-host" / "soundsets";
+  const auto staging_root = workspace / ".lmdj-host" / "soundset-staging";
+  project_io::SoundSetStore store{
+      workspace,
+      project_io::SoundSetStoreLimits{
+          .maximum_soundset_manifest_bytes = 1u << 20,
+          .maximum_soundset_blob_bytes = 1u << 20,
+          .maximum_soundset_unique_bytes = 1u << 20,
+          .maximum_soundset_staging_bytes = 1u << 22,
+      },
+      platform};
+  const project_io::SoundSetCatalogEntry entry{
+      std::string{kSoundSetId},
+      std::string{kSoundSetVersion},
+      manifest_sha256,
+      manifest.size() + payload.size(),
+      foundation::CatalogLicenseSummary{"CC-BY-4.0", "Alice"},
+  };
+
+  const auto acquired = store.acquire(transport, entry);
+  const auto reads_after_acquire = transport.reads();
+  const auto again = store.acquire(transport, entry);
+  const auto reads_after_second = transport.reads();
+  const auto listed = store.list();
+  const auto artifact = store.read_artifact(manifest_sha256, blob_sha256);
+  const auto staging_present =
+      value(platform->directory_exists(staging_root), "staging root presence");
+
+  return {
+      {"acquire", mutation_result(acquired)},
+      {"acquireReason",
+       acquired.has_value() ? std::string{} : error_reason(acquired.error())},
+      {"acquireTotalBytes",
+       acquired.has_value() ? nlohmann::json(acquired.value().total_bytes)
+                            : nlohmann::json(nullptr)},
+      {"secondAcquire", mutation_result(again)},
+      // A published Set answers from the store: the Catalog is untouched.
+      {"catalogReadsAfterAcquire", reads_after_acquire},
+      {"catalogReadsAfterSecondAcquire", reads_after_second},
+      {"publishedSets",
+       value(platform->directory_exists(sets_root), "Set Store root presence")
+           ? nlohmann::json(
+                 value(platform->list_directories(sets_root),
+                       "Set Store inventory"))
+           : nlohmann::json::array()},
+      {"expectedManifestSha256", manifest_sha256},
+      {"listedCount",
+       listed.has_value() ? listed.value().size() : std::size_t{0}},
+      {"listedSetId",
+       listed.has_value() && !listed.value().empty()
+           ? nlohmann::json(listed.value().front().manifest.set_id)
+           : nlohmann::json(nullptr)},
+      {"artifactBytes",
+       artifact.has_value() ? nlohmann::json(text(artifact.value()))
+                            : nlohmann::json(nullptr)},
+      {"stagingRootPresent", staging_present},
+      {"stagingDirectories",
+       staging_present
+           ? nlohmann::json(
+                 value(platform->list_directories(staging_root),
+                       "staging inventory"))
+           : nlohmann::json::array()},
+  };
+}
+
+std::optional<nlohmann::json> run_soundset_store_action() {
+  if (query("action") != "soundset_store_publish") {
+    return std::nullopt;
+  }
+  auto platform = lmdj::project_io::make_web_project_storage_platform();
+  require(platform != nullptr, "Web platform factory returned null");
+  return nlohmann::json{
+      {"complete", true},
+      {"result", soundset_store_publish(platform)},
   };
 }
 
@@ -1123,8 +1319,11 @@ int main() {
   nlohmann::json report;
   try {
     report_progress("native-suite-start");
-    auto sample_cache = run_sample_cache_action();
-    report = sample_cache.has_value() ? std::move(*sample_cache) : run_suite();
+    auto action = run_soundset_store_action();
+    if (!action.has_value()) {
+      action = run_sample_cache_action();
+    }
+    report = action.has_value() ? std::move(*action) : run_suite();
     report_progress("native-report-ready");
   } catch (const std::exception& error) {
     report = {{"complete", true}, {"result", {{"error", error.what()}}}};

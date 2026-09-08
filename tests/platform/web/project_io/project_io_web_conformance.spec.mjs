@@ -355,6 +355,60 @@ async function writeStorageIntentBody(page, bundle, body) {
   }, {scope, replacement, body});
 }
 
+// The bytes a published Sound Set actually holds, read straight out of OPFS
+// so the content address the Set Store chose can be checked against them
+// rather than against another number the same report produced.
+async function readPublishedSoundSetManifest(page, manifestSha256) {
+  return page.evaluate(async ({manifestSha256}) => {
+    const root = await navigator.storage.getDirectory();
+    const host = await root.getDirectoryHandle(".lmdj-host");
+    const sets = await host.getDirectoryHandle("soundsets");
+    const set = await sets.getDirectoryHandle(manifestSha256);
+    return (await (await set.getFileHandle("manifest.json")).getFile()).text();
+  }, {manifestSha256});
+}
+
+// Exactly what an interrupted directory publication leaves behind: a
+// destination that exists but does not hold every file yet, hidden from
+// enumeration by a pending `lmdj.storage.directory-publication.v1` intent.
+// Only acquiring the destination writer lease clears it.
+async function wedgeInterruptedSoundSetPublication(page, manifestSha256) {
+  return page.evaluate(async ({manifestSha256}) => {
+    const destination =
+        `/lmdj-workspace/.lmdj-host/soundsets/${manifestSha256}`;
+    const source =
+        `/lmdj-workspace/.lmdj-host/soundset-staging/${manifestSha256}`;
+    const digest = new Uint8Array(await crypto.subtle.digest(
+        "SHA-256", new TextEncoder().encode(destination)));
+    const scope = [...digest]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+    const root = await navigator.storage.getDirectory();
+    const host = await root.getDirectoryHandle(".lmdj-host");
+    const sets = await host.getDirectoryHandle("soundsets");
+    const set = await sets.getDirectoryHandle(manifestSha256);
+    await set.removeEntry("manifest.json");
+    const intents = await host.getDirectoryHandle(
+        "storage-intents", {create: true});
+    const directory = await intents.getDirectoryHandle(scope, {create: true});
+    const marker = await directory.getFileHandle(
+        "directory-publication.json", {create: true});
+    const writable = await marker.createWritable({keepExistingData: false});
+    await writable.write(JSON.stringify({
+      contract: "lmdj.storage.directory-publication.v1",
+      destination,
+      source,
+      state: "pending",
+    }));
+    await writable.close();
+    const remaining = [];
+    for await (const entry of set.values()) {
+      remaining.push(entry.name);
+    }
+    return remaining;
+  }, {manifestSha256});
+}
+
 async function snapshotLeaseEntries(page) {
   await page.evaluate(async () => {
     const root = await navigator.storage.getDirectory();
@@ -551,6 +605,76 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
     corruptCachePresent: false,
   });
   await reopen.close();
+});
+
+// #902: with the Catalog half working, every eligible Set still failed to
+// install in the browser with a bare IO_ERROR. The Set Store publishes by
+// handing the storage platform a staged directory; on OPFS that publish is a
+// bounded copy that only a writer lease held on the destination may perform,
+// and the Set Store took its lease on the staging directory alone.
+const SOUNDSET_PUBLISHED = Object.freeze({
+  status: "succeeded",
+  errorCode: "",
+  storageCondition: "",
+});
+
+test("Web Project I/O publishes a verified Sound Set into the Workspace Set Store", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+  trackRuntimeErrors(page);
+  await page.goto(
+      "/project_io/project_io_web_test.html?action=soundset_store_publish");
+  const result = await waitForResult(page);
+
+  expect(result.acquire).toEqual(SOUNDSET_PUBLISHED);
+  expect(result.acquireReason).toBe("");
+  // Idempotent, and answered without touching the Catalog again.
+  expect(result.secondAcquire).toEqual(SOUNDSET_PUBLISHED);
+  expect(result.catalogReadsAfterAcquire).toBe(2);
+  expect(result.catalogReadsAfterSecondAcquire).toBe(2);
+  expect(result.publishedSets).toEqual([result.expectedManifestSha256]);
+  expect(result.listedCount).toBe(1);
+  expect(result.listedSetId).toBe("10000000-0000-4000-8000-000000000001");
+  expect(result.artifactBytes).toBe("RIFF-web-soundset-blob");
+  // The Set directory is named by the hash of the bytes it holds.
+  const manifest = await readPublishedSoundSetManifest(
+      page, result.expectedManifestSha256);
+  expect(createHash("sha256").update(manifest, "utf8").digest("hex"))
+      .toBe(result.publishedSets[0]);
+  expect(result.acquireTotalBytes).toBe(
+      Buffer.byteLength(manifest, "utf8") + "RIFF-web-soundset-blob".length);
+  // Staging exists and is empty: bytes are not left behind in it.
+  expect(result.stagingRootPresent).toBe(true);
+  expect(result.stagingDirectories).toEqual([]);
+});
+
+// Recovery is what makes the destination lease worth acquiring before the
+// store decides whether the Set is already there. An interrupted copy leaves
+// a destination directory that exists but is unreadable; a store that
+// inspected it before leasing would call that a corrupted Set forever.
+test("Web Project I/O recovers an interrupted Sound Set publication", async ({context, browserName}) => {
+  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+  const first = await trackedPage(context);
+  await first.goto(
+      "/project_io/project_io_web_test.html?action=soundset_store_publish");
+  const published = await waitForResult(first);
+  expect(published.acquire).toEqual(SOUNDSET_PUBLISHED);
+  const manifestSha256 = published.expectedManifestSha256;
+  expect(await wedgeInterruptedSoundSetPublication(first, manifestSha256))
+      .toHaveLength(1);
+  await first.close();
+
+  const retry = await trackedPage(context);
+  await retry.goto(
+      "/project_io/project_io_web_test.html?action=soundset_store_publish");
+  const recovered = await waitForResult(retry);
+  expect(recovered.acquire).toEqual(SOUNDSET_PUBLISHED);
+  expect(recovered.acquireReason).toBe("");
+  // The leftovers were cleared and the Set was fetched and published again.
+  expect(recovered.catalogReadsAfterAcquire).toBe(2);
+  expect(recovered.publishedSets).toEqual([manifestSha256]);
+  expect(recovered.artifactBytes).toBe("RIFF-web-soundset-blob");
+  expect(recovered.stagingDirectories).toEqual([]);
+  await retry.close();
 });
 
 test("Web Project I/O runs common parity and interruption recovery", async ({page, context, browserName}, testInfo) => {
