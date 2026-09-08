@@ -57,7 +57,7 @@ expected_modules = {
     ),
     "packages/audio-runtime/module.json": (
         "audio-runtime",
-        "3.0.0",
+        "3.1.0",
         1,
         {
             "foundation": "0.4.0",
@@ -66,58 +66,58 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "3.1.0",
+        "3.2.0",
         2,
         {
             "foundation": "0.4.0",
             "authoring-domain": "3.0.0",
             "project-io": "3.0.0",
             "project-cooker": "1.1.0",
-            "audio-runtime": "3.0.0",
+            "audio-runtime": "3.1.0",
             "provider-sdk": "1.1.4",
         },
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "4.0.0",
+        "4.1.0",
         1,
         {
-            "application-facade": "3.1.0",
-            "audio-runtime": "3.0.0",
+            "application-facade": "3.2.0",
+            "audio-runtime": "3.1.0",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "3.1.0",
+        "3.2.0",
         2,
-        {"application-facade": "3.1.0"},
+        {"application-facade": "3.2.0"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "3.1.0",
+        "3.2.0",
         2,
-        {"application-facade": "3.1.0"},
+        {"application-facade": "3.2.0"},
     ),
     "apps/native-host/module.json": (
         "native-host",
-        "3.1.0",
+        "3.2.0",
         2,
         {
-            "application-facade": "3.1.0",
-            "audio-runtime": "3.0.0",
+            "application-facade": "3.2.0",
+            "audio-runtime": "3.1.0",
         },
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "4.0.0",
+        "4.1.0",
         2,
-        {"web-runtime-platform": "4.0.0"},
+        {"web-runtime-platform": "4.1.0"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "4.0.0",
+        "4.1.0",
         2,
-        {"web-runtime-platform": "4.0.0"},
+        {"web-runtime-platform": "4.1.0"},
     ),
 }
 for relative, (
