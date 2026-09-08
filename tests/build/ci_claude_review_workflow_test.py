@@ -69,9 +69,9 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
                              "why: substitution must not consume unrelated Anthropic credentials; remedy: use configured GLM/Kimi credentials")
 
     def test_glm_and_kimi_models_and_effort_are_pinned(self):
-        self.assertIn("ANTHROPIC_MODEL: glm-4.7", self.model)
-        self.assertIn("ANTHROPIC_DEFAULT_OPUS_MODEL: glm-4.7", self.model)
-        self.assertIn("ANTHROPIC_DEFAULT_SONNET_MODEL: glm-4.7", self.model)
+        self.assertIn("ANTHROPIC_MODEL: glm-5.1", self.model)
+        self.assertIn("ANTHROPIC_DEFAULT_OPUS_MODEL: glm-5.1", self.model)
+        self.assertIn("ANTHROPIC_DEFAULT_SONNET_MODEL: glm-5.1", self.model)
         self.assertIn("ANTHROPIC_DEFAULT_HAIKU_MODEL: glm-4.5-air", self.model)
         self.assertIn("ANTHROPIC_MODEL: k3-256k", self.model)
         self.assertIn("ANTHROPIC_DEFAULT_OPUS_MODEL: k3-256k", self.model)

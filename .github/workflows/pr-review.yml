@@ -105,9 +105,9 @@ jobs:
         env:
           ANTHROPIC_BASE_URL: https://api.z.ai/api/anthropic
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.ZAI_CODING_KEY }}
-          ANTHROPIC_MODEL: glm-4.7
-          ANTHROPIC_DEFAULT_OPUS_MODEL: glm-4.7
-          ANTHROPIC_DEFAULT_SONNET_MODEL: glm-4.7
+          ANTHROPIC_MODEL: glm-5.1
+          ANTHROPIC_DEFAULT_OPUS_MODEL: glm-5.1
+          ANTHROPIC_DEFAULT_SONNET_MODEL: glm-5.1
           ANTHROPIC_DEFAULT_HAIKU_MODEL: glm-4.5-air
           CLAUDE_CODE_EFFORT_LEVEL: medium
           API_TIMEOUT_MS: "300000"
