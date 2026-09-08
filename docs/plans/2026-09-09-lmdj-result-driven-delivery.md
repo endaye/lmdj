@@ -95,6 +95,14 @@ by this tooling Task. Canonical Product/Assembly/lock/identity/snapshot generati
 occupancy/fencing, version PR/cut reconciliation and post-squash verification
 remain necessary before these Host inputs become a complete allocation.
 
+The [T2c moving-main coverage check](2026-09-09-lmdj-canary-cut-coverage.md)
+compares actual reviewed and squash deltas (including paths, modes and Git
+objects) and collects every intervening first-parent change under historical
+and current scope policy. It distinguishes byte coverage from complete
+allocation admission: reviewed GitHub identity, canonical allocation output
+proof, fenced occupancy/three-attempt coordinator and snapshot witness are
+still required. No live version PR is created by this internal library.
+
 ## Acceptance ledger
 
 - Local reduction/failure behavior: 55 journal tests pass, including six new
@@ -129,9 +137,15 @@ remain necessary before these Host inputs become a complete allocation.
   matching bot comment `5590141663` in Issue 889; it is not this Creator failure.
   Manual outbox-only run `34263950671/1` succeeded with no product execution,
   but has no new delivery receipt and cannot prove the global backlog empty.
-  A single default-budget `report-batches` exercise, run `34267534129/1`, is
-  in progress; it neither requests nor reruns product tests. Keep its handle
-  until a terminal result and exact new business receipt are observed.
+  The single default-budget `report-batches` exercise, run `34267534129/1`,
+  terminated cancelled after approximately ten minutes, with product execution
+  skipped. Three deliveries reached durable ack/delivered (Issues 890, 820 and
+  865); Creator comment `5590556319` is an older batch 105 observation, not the
+  latest batch 131 failure. Check-run `102200575280` annotations explicitly
+  report exceeding the 10-minute execution limit; this is not an inferred cause
+  from timing. Do not call it a successful complete drain or widen the timeout.
+  Preserve the delivered receipts and reconcile outstanding work before another
+  bounded report attempt. No blind business POST retry or product rerun.
 - Remote request rate, queued-job recovery and end-to-end latency: unverified;
   inspect actual control results after merge, not only workflow conclusions.
 - Version assessment, candidate delivery, Netcup isolation and formal promotion:
