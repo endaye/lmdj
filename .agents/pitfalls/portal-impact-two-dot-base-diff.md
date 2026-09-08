@@ -9,7 +9,7 @@ recurrences:
   - date: 2026-09-01
     occurrence: https://github.com/endaye/lmdj/pull/530
     observed_by: claude-opus-5
-exit: gate:apps/architecture-portal/test/changed-files.test.mjs
+exit: gate:apps/docs-site/test/changed-files.test.mjs
 ---
 
 # The portal impact gate diffed `PORTAL_BASE_SHA..PORTAL_HEAD_SHA` two-dot, so a branch behind `main` inherited every portal page merged after its base as "changed by this PR" and a truthful `Documentation impact: none` failed.
@@ -26,11 +26,11 @@ Neither touched a portal page.
 
 ## How to apply
 
-Absorbed by #531. `apps/architecture-portal/scripts/lib/changed-files.mjs`
+Absorbed by #531. `apps/docs-site/scripts/lib/changed-files.mjs`
 resolves both the documentation-impact and snapshot-projection ranges from the
 merge base, which is the range `scripts/ci/local_preflight.py` already measured
 locally, and `.github/workflows/architecture-portal.yml` computes no range of
-its own. `apps/architecture-portal/test/changed-files.test.mjs` pins the
+its own. `apps/docs-site/test/changed-files.test.mjs` pins the
 behind-base branch, and
 `tests/build/ci_workflow_topology_test.py::test_portal_never_measures_a_two_dot_range_between_the_inputs`
 keeps the range out of the workflow.
