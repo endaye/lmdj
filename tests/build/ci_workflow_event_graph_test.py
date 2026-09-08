@@ -4,7 +4,7 @@
 This scans the repository's explicit YAML layout using the existing workflow
 contract helpers. It does not claim to replace GitHub's server validation.
 """
-import ast
+import json
 from pathlib import Path
 import re
 import sys
@@ -16,9 +16,46 @@ from ci_self_test_report_workflow_test import block, field, scalars
 from workflow_inventory import jobs_in
 
 
+def unsupported():
+    raise AssertionError('why: workflow name is outside the explicit YAML string subset; remedy: use a plain or quoted string name without nested values')
+
+
 def scalar(value):
+    """Explicit names only; not a general YAML scalar resolver."""
     value = value.strip()
-    return ast.literal_eval(value) if value.startswith(('"', "'")) else value
+    if value.startswith('"'):
+        try:
+            value = json.loads(value)  # JSON escapes are a YAML string subset.
+        except ValueError:
+            unsupported()
+    elif value.startswith("'"):
+        if not re.fullmatch(r"'(?:[^']|'')*'", value):
+            unsupported()
+        value = value[1:-1].replace("''", "'")
+    elif (not re.fullmatch(r"[A-Za-z_][A-Za-z0-9 _./()'-]*", value)
+          or value.lower() in {'null', 'true', 'false', 'yes', 'no', 'on', 'off'}):
+        unsupported()
+    if not isinstance(value, str) or not value or any(ord(c) < 32 for c in value):
+        unsupported()
+    return value
+
+
+def flow_names(value):
+    """Parse only single-line flow lists of supported string names."""
+    if not value.endswith(']'):
+        unsupported()
+    remainder, names = value[1:-1].strip(), []
+    while remainder:
+        match = re.match(r'''"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^,\[\]{}]+''', remainder)
+        if match is None:
+            unsupported()
+        names.append(scalar(match.group()))
+        remainder = remainder[match.end():].strip()
+        if remainder:
+            if not remainder.startswith(',') or not remainder[1:].strip():
+                unsupported()
+            remainder = remainder[1:].strip()
+    return names
 
 
 def subscriptions(source):
@@ -28,7 +65,7 @@ def subscriptions(source):
     value = block(callbacks, 'workflows', 4)
     first, _, rest = value.partition('\n')
     if first.startswith('['):
-        names = ast.literal_eval(first)
+        names = flow_names(first)
     elif first:
         names = [scalar(first)]
     else:
@@ -48,6 +85,40 @@ def assert_no_self_subscription(source):
 
 
 class EventGraphTests(unittest.TestCase):
+    def test_flow_lists_support_explicit_quoted_and_plain_names(self):
+        for declaration, expected in (
+            ('[Cloudflare Preview Build]', ['Cloudflare Preview Build']),
+            ('["A", B, \'C\']', ['A', 'B', 'C']),
+            ('["A, B", \'Author\'\'s build\']', ['A, B', "Author's build"]),
+            ('["A\\\" B"]', ['A" B']),
+        ):
+            with self.subTest(declaration=declaration):
+                self.assertEqual(subscriptions(f'on:\n  workflow_run:\n    workflows: {declaration}\n'), expected)
+
+    def test_own_name_and_subscription_share_yaml_string_decoding(self):
+        for name, subscription in (("'Author''s build'", '"Author\'s build"'),
+                                   ('"A, B"', "'A, B'"),
+                                   ('Cloudflare Preview Build', 'Cloudflare Preview Build')):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(AssertionError, 'GitHub rejects'):
+                    assert_no_self_subscription(f'name: {name}\non:\n  workflow_run:\n    workflows: [{subscription}]\n')
+
+    def test_unsupported_flow_and_nonstring_subscription_values_fail_closed(self):
+        for declaration in ('[]', '[ ]', '[A,]', '[,A]', '[A,,B]', '[A', '[A] junk',
+                            '[[A]]', '[{name: A}]', '[1]', '[null]', '[true]',
+                            '["A" "B"]', "['A' 'B']", '["A\\x41"]',
+                            '1', 'null', 'false', '{name: A}', '*alias', '!!str A',
+                            '[""]', "['']"):
+            with self.subTest(declaration=declaration):
+                with self.assertRaisesRegex(AssertionError, 'why:.*remedy:'):
+                    subscriptions(f'on:\n  workflow_run:\n    workflows: {declaration}\n')
+
+    def test_nonstring_own_name_cannot_hide_self_subscription(self):
+        for name in ('null', 'true', '123', '[A]', '{name: A}'):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(AssertionError, 'why:.*remedy:'):
+                    assert_no_self_subscription(f'name: {name}\non:\n  workflow_run:\n    workflows: [A]\n')
+
     def test_actual_workflows_never_subscribe_to_their_own_exact_name(self):
         for path in sorted((ROOT / '.github/workflows').glob('*.y*ml')):
             with self.subTest(workflow=path.name):
