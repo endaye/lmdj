@@ -12,6 +12,8 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+import contextlib
+import io
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
@@ -111,6 +113,59 @@ class PipelineTests(unittest.TestCase):
                 self.assertRaises(subprocess.TimeoutExpired):
             pipeline.grok(self.directory)
         self.assertFalse((self.directory / "grok-auth/auth.json").exists())
+
+    def assert_grok_diagnostic(self, category, *, returncode=None, stdout="RAW_PROVIDER_SECRET",
+                               error=None, credential="PRIVATE_AUTH_SECRET"):
+        (self.directory / "pr-body.md").write_text("PRIVATE_BODY_SECRET")
+        (self.directory / "pr.diff").write_text("PRIVATE_DIFF_SECRET")
+        output, errors = io.StringIO(), io.StringIO()
+        process = subprocess.CompletedProcess(["grok"], returncode or 0, stdout, "RAW_STDERR_SECRET")
+        with mock.patch.dict(os.environ, {"GROK_AUTH_JSON": credential, "XAI_API_KEY": ""}), \
+                mock.patch.object(sys, "argv", ["review_pipeline.py", "grok", "--directory", str(self.directory)]), \
+                mock.patch.object(pipeline.subprocess, "run", return_value=process, side_effect=error) as run, \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            self.assertEqual(pipeline.main(), 1)
+        if category == "credential_unavailable":
+            run.assert_not_called()
+        else:
+            run.assert_called_once()
+        self.assertEqual(output.getvalue(), "")
+        lines = errors.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(json.loads(lines[0]), {"schema": "lmdj.ci-review-diagnostic.v1", "backend": "grok",
+                                              "category": category, "returncode": returncode})
+        self.assertIn("why: review pipeline operation failed; remedy:", lines[1])
+        self.assertNotIn("SECRET", errors.getvalue(),
+                         "why: failure diagnostics leaked raw data; remedy: emit finite local categories only")
+        self.assertFalse((self.directory / "grok-auth/auth.json").exists())
+        self.assertFalse((self.directory / "grok.json").exists())
+
+    def test_grok_missing_credential_is_visible_before_process_launch(self):
+        self.assert_grok_diagnostic("credential_unavailable", credential="")
+
+    def test_grok_launch_failure_never_prints_exception(self):
+        self.assert_grok_diagnostic("launch_failure", error=OSError("PRIVATE_LAUNCH_SECRET"))
+
+    def test_grok_timeout_never_prints_partial_output(self):
+        self.assert_grok_diagnostic("timeout", error=subprocess.TimeoutExpired(
+            "PRIVATE_COMMAND_SECRET", 300, output="PARTIAL_OUTPUT_SECRET", stderr="PARTIAL_STDERR_SECRET"))
+
+    def test_grok_process_failure_retains_actual_exit_code(self):
+        self.assert_grok_diagnostic("process_failure", returncode=17)
+
+    def test_grok_non_json_envelope_does_not_expose_parse_input(self):
+        self.assert_grok_diagnostic("invalid_envelope", returncode=0)
+
+    def test_grok_array_envelope_remains_invalid(self):
+        self.assert_grok_diagnostic("invalid_envelope", returncode=0, stdout='["PRIVATE_ENVELOPE_SECRET"]')
+
+    def test_grok_error_envelope_does_not_expose_provider_message(self):
+        self.assert_grok_diagnostic("error_envelope", returncode=0,
+                                   stdout=json.dumps({"type": "error", "message": "PRIVATE_ERROR_SECRET"}))
+
+    def test_grok_invalid_review_remains_failure_without_echoing_model_text(self):
+        self.assert_grok_diagnostic("invalid_review", returncode=0,
+                                   stdout=json.dumps({"text": "PRIVATE_MODEL_SECRET"}))
 
     def test_git_failure_does_not_echo_credentials(self):
         with mock.patch.object(pipeline.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"", b"secret")), \

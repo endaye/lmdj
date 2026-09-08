@@ -123,15 +123,47 @@ def grok(directory):
     env = {k: v for k, v in os.environ.items() if k not in {"GITHUB_TOKEN", "GH_TOKEN", "GROK_AUTH_JSON"}}
     env["GROK_HOME"] = str(directory / "grok-auth")
     env["GROK_DISABLE_AUTOUPDATER"] = "1"
+
+    def failed(category, returncode=None):
+        # Categories are fixed at the local failure boundary, never inferred from
+        # provider text. Keep stdout/stderr, exception strings and credentials private.
+        print(json.dumps({"schema": "lmdj.ci-review-diagnostic.v1", "backend": "grok",
+                          "category": category, "returncode": returncode}), file=sys.stderr)
+
+    if not auth.strip() and not env.get("XAI_API_KEY", "").strip():
+        failed("credential_unavailable")
+        raise review_scope.ReviewScopeError("why: Grok credential unavailable; remedy: restore the configured review credential")
     if auth:
         grok_review.write_auth_json(auth, directory / "grok-auth/auth.json")
     try:
-        result = subprocess.run(grok_review.grok_command(prompt_path, ROOT), env=env, capture_output=True,
-                                text=True, timeout=review_scope.MAX_BACKEND_SECONDS)
-        review_scope.require(result.returncode == 0, "Grok process failed")
-        envelope = json.loads(result.stdout)
-        review_scope.require(isinstance(envelope, dict) and envelope.get("type") != "error", "Grok returned runtime error")
-        model = review_scope.parse_review(policy, envelope.get("text"))
+        try:
+            result = subprocess.run(grok_review.grok_command(prompt_path, ROOT), env=env, capture_output=True,
+                                    text=True, timeout=review_scope.MAX_BACKEND_SECONDS)
+        except subprocess.TimeoutExpired:
+            failed("timeout")
+            raise
+        except OSError:
+            failed("launch_failure")
+            raise
+        if result.returncode != 0:
+            failed("process_failure", result.returncode)
+            raise review_scope.ReviewScopeError("why: Grok process failed; remedy: inspect bounded diagnostics")
+        try:
+            envelope = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            failed("invalid_envelope", result.returncode)
+            raise
+        if not isinstance(envelope, dict):
+            failed("invalid_envelope", result.returncode)
+            raise review_scope.ReviewScopeError("why: Grok envelope is not an object; remedy: restore the pinned CLI output contract")
+        if envelope.get("type") == "error":
+            failed("error_envelope", result.returncode)
+            raise review_scope.ReviewScopeError("why: Grok returned an error envelope; remedy: inspect the provider through controlled diagnostics")
+        try:
+            model = review_scope.parse_review(policy, envelope.get("text"))
+        except review_scope.ReviewScopeError:
+            failed("invalid_review", result.returncode)
+            raise
         save(directory / "grok.json", model)
     finally:
         auth_path = directory / "grok-auth/auth.json"
