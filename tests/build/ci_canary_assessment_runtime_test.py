@@ -312,6 +312,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(available.stdout, b"with-dependency\n")
         with patch.dict(os.environ, {"LMDJ_FIXTURE_DEPENDENCY": "available"}):
             self.assertEqual(standalone_python((str(wrapper), self.child_python)), self.child_python)
+        self.assertEqual(standalone_python((self.child_python, str(self.root / "missing-python"))),
+                         self.child_python)
 
     def test_missing_standalone_interpreter_is_a_failure_not_a_skip(self):
         with self.assertRaisesRegex(RuntimeError, "why:.*remedy:"):
@@ -319,7 +321,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_interpreter_probe_requires_exact_stdlib_identity_response(self):
         fake = self.root / "not-python"
-        fake.write_text('#!/bin/sh\nprintf "unrelated successful executable\\n"\n')
+        fake.write_text('#!/bin/sh\nprintf "lmdj-fixture-python-ready extra-output\\n"\n')
         fake.chmod(0o700)
         with self.assertRaisesRegex(RuntimeError, "why:.*remedy:"):
             standalone_python((str(fake),))

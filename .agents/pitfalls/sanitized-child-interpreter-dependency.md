@@ -31,6 +31,9 @@ Probe candidate fixture interpreters with the exact sanitized environment and a
 fixed stdlib response before using their shebangs. Fail with a concrete prerequisite
 message when none runs; do not silently skip process tests or weaken the production
 allowlist. Keep synthetic dependency probes distinct from actual CI evidence.
+The current partial mechanism is `standalone_python` in
+`tests/build/ci_canary_assessment_runtime_test.py`; inspect that helper before
+adding another suite-specific probe.
 
 `exit: none`: the focused test helper verifies this suite's child interpreter,
 not every subprocess fixture in the repository. Remote acceptance of the repair
