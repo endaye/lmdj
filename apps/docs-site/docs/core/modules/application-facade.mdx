@@ -26,7 +26,9 @@ Application Facade `3.1.0` 提供 Host-neutral Sequence begin/event/flush/stop/s
 完整的 `lmdj::application` 单向 PUBLIC 链接它，保留旧调用方的链接入口；实现没有在
 两个 archive 中重复编译。窄目标通过 Audio Runtime 依赖 Cooker、Authoring Domain
 和 Foundation，不链接 Project IO / Provider SDK；这些仍属于完整 Facade 的依赖。
-它不是新增的独立 Module，也不是已完成的 ESP32 Runtime Facade。
+它不是新增的独立 Module；T3 的 `lmdj::runtime_facade` 是另一个同 Module 内的
+窄目标，直接链接 Cooker/Audio Runtime，不依赖 Performance、Project IO 或 Provider。
+完整 `lmdj::application` 单向链接两个窄目标，保留既有桌面入口。
 
 `performance_ports.hpp` 提供原有 clock、input sequencer、Pattern launch 与 gesture
 协作者声明，`application.hpp` 继续包含它，保持原 namespace、签名及配置布局。
@@ -48,8 +50,40 @@ ProjectStore 仍先检查所有 source Asset 的完整性，损坏的未选素�
 codec limits 不限制此前电脑端 source load/WAV Cook 的内存峰值。
 `facade.runtime_content_export` 通过真实 Facade 建 Project/导入/分配验证闭包、来源、
 重复身份、重开、损坏拒绝及恢复重试，并逐文件比较 Truth 未被导出改写。
-这项 API 未增加 CLI/UI、JSON/C API 或设备 Runtime Facade；MINOR 与 Assembly lock
+这项导出 API 未增加 CLI/UI 或 JSON/C API；MINOR 与 Assembly lock
 在后续 B2 集成分配，新 Contract 尚未代表 desktop Assembly 已选择的能力。
+
+### Runtime-only 生命周期（T3 source）
+
+`runtime_facade.hpp` 只暴露不透明字节、完整内容身份、资源配置、进程内 opaque
+epoch、Pad 命令和回执，不暴露 Snapshot、Engine、Project 路径或 Provider 对象。
+一个串行控制调用方负责 `load/start/submit/poll/request_stop/finish_stop/stop/unload/reset`；
+一个音频调用方调用 `render`。生命周期为 empty → ready → running → draining →
+stopped → empty；stopped 也可重启同一内容，running/draining 不接受 load/unload。
+替换使用 stop → unload → load；坏内容、预算或分配失败不会发布半成品，保持 empty
+并允许正确内容重试。`reset` 先停再卸载，不重置 epoch 耗尽计数。
+`content_identity` 返回 Core 保存的完整 SHA-256/byte length 副本，成功 load 才存在，
+卸载/reset 后为空；不是 Host 对最近一次请求的预测。该控制侧值复制可分配内存。
+
+每次成功 start 产生独立 epoch；命令必须带当前 epoch 和从 1 开始的精确下一序号。
+旧 epoch、重复、跳号、非法命令与计数耗尽明确拒绝，既不重放也不绕回。
+`accepted` 只表示已入队，`poll` 才报告 render 消费后的 applied、voice_started、
+voice_capacity，或停止时未消费的 cancelled。applied 不等于可听声音：mute、release
+和 stop 命令可能无新 Voice。队列/待取回执额度满不消耗序号，原命令可重试；回执
+有界且按序只取一次，未取回执跨 unload/reset 保留，新 start 必须先取完。
+opaque epoch 不是持久化或设备传输协议，跨 Facade 实例也不能复用。
+
+Facade 用同一个 lock-free atomic32 的 OPEN/BUSY 位关闭回调 admission 并观察活跃
+Core render 退出；`finish_stop` 在 BUSY 清除前只返回 draining，不调用 Engine stop
+或回收内存。`stop` 在控制线程等待这个屏障；回调不等待，关闭或重入时输出静音。
+Host 仍须负责自己的设备/DMA 回调生命周期，并在析构 Facade 前停止再次调用 render。
+
+load 在分配 PCM 前复用完整内容校验，报告固定对象（含 Engine）、借入 encoded
+bytes、去重 PCM、per-Pad float 展开、metadata 和准备临时空间，溢出或超总额度拒绝。
+配置还必须显式提供 platform reserve，覆盖 allocator/control-block/capacity rounding、
+平台 stack、Host buffers 等；数值必须由平台测量，不是 Core 推断的可用 RAM。
+已取走并由 Host 保留的历史 epoch/回执内存属于 Host。此入口不准备 Master FX 动态
+缓冲，不提供 FX 命令；资源报告不是 ESP32 map/stack/heap、DMA 或实时性能验收。
 
 错误翻译保留公共类别与配额详情；查询和 Sample commit 共用 Audio Runtime 的 overflow-checked Bank/generation 账本，较小的 remaining 约束生效、相等时 Bank 优先。提交恰好允许 effective remaining frames，超一 mono frame 确定性返回 `BANK_QUOTA_EXHAUSTED` 或 `PROJECT_QUOTA_EXHAUSTED`；revision 漂移先返回 `REVISION_CONFLICT`，拒绝不会修改 Project Truth 或已发布 generation。Runtime Snapshot 准备复用同一账本，publication residency 仍是独立瞬态 Host/Attempt 状态。本地 Sequence mutex 只负责进程内 admission 排序，Project I/O 仍在 writer lease 内重判持久 authority；C API stress 验证并发生命周期。
 ## 7. 产品使用方
@@ -66,6 +100,15 @@ Replay、Sequence 与 C API 消费者保留旧目标，验证单向传递链接�
 这项隔离只解决现有 Performance 的依赖组合：下层 archive 仍可能包含 offline 或文件
 路径，engine adapter 仍暴露 Core 类型；单凭这项隔离不得宣称 wire Contract、设备
 admission、无文件系统闭包、资源预算或 ESP32 编译已经实现。另行实现的 T2 内容
-编码/电脑导出也不完成上述设备侧门禁。
+编码/电脑导出也不完成上述设备侧门禁。T3 另行提供了上述主机可验证的设备中立
+admission/lifecycle，但 T4 exact-revision ESP-IDF 完整闭包和静态预算探针、T5 真机
+仍未由这些测试完成。
+
+`facade.runtime_facade` 链接生产窄目标，覆盖完整生命周期、每个 load 分配点的失败
+与重试、预算 exact/-1、回执和计数边界，并在 render 禁止普通及 aligned new/delete。
+`facade.runtime_facade_quiescence` 使用既有 Engine-only 测试 seam 暂停已 admission
+的真实 render，验证 stop/drain/unload 屏障；生产目标没有该 hook。
+`facade.runtime_facade_stress` 则链接生产目标，让音频调用持续穿过 300 代
+load/start/stop/reset；该压力注册不进入 coverage，确定性交错注册仍进入 coverage。
 ## 10. 版本身份
 版本和完整依赖集由模块清单与 Product Assembly 固定。

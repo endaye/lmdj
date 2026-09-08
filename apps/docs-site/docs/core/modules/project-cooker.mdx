@@ -31,6 +31,15 @@ Pad playback 和未压缩 PCM16；按包含格式描述的 sample body 完整身
 完整内容身份、精确版本/能力、表顺序与引用、全部 sample body、playback 和调用方限额，
 再构造自有 PCM 的不可变 Snapshot。`RuntimeContentLimits` 的零值是零额度，不是无限。
 这不是 Project parser、实时回调 API 或设备的 Engine/FX/DMA 总内存预算。
+
+`inspect_runtime_content` 与 decode 共享完整校验器，在分配 PCM 或 count-sized 表前
+返回 encoded/unique PCM/per-Pad float 字节、最大 float 临时样本及 Pad/event/sample
+数量。`runtime_content_types.hpp` 单独提供纯值身份/额度/footprint，窄 Facade 公共
+头不必暴露 Runtime Snapshot。inspection 不跳过摘要、规范顺序、能力或引用检查；
+输入在调用期间必须保持有效且不可变。摘要 hex 转换使用一次固定大小 string 分配，
+分配异常直接传播到失败边界，不通过可能吞掉异常的流返回截断身份。
+这些兼容追加不改变 wire Contract 版本，完整 Engine/准备/平台资源 admission 属于
+Runtime Facade，真实设备内存仍须测量。
 ## 6. 状态、错误与生命周期
 相同输入必须产生相同结果；快照与 Project 生命周期分离。`PerformanceReplayProjection` 同样只是派生状态：它由 Cook 现算、随消费者生命周期释放，绝不是 Project Truth，也绝不被持久化或回写创作真相。
 ## 7. 产品使用方

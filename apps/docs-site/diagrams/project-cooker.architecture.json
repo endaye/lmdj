@@ -9,7 +9,7 @@
     {"id": "runtime", "label": "Audio Runtime", "detail": "read-only consumer", "kind": "host", "x": 1290, "y": 190, "width": 210, "height": 96},
     {"id": "replay", "label": "Replay Projection", "detail": "additive · derived only", "kind": "core", "x": 470, "y": 380, "width": 250, "height": 96},
     {"id": "content", "label": "Runtime Content", "detail": "Pattern + live Pads + PCM16", "kind": "core", "x": 880, "y": 380, "width": 250, "height": 96},
-    {"id": "reader", "label": "Bounded Reader", "detail": "identity · validate · own PCM", "kind": "core", "x": 1290, "y": 380, "width": 250, "height": 96}
+    {"id": "reader", "label": "Bounded Reader", "detail": "inspect · validate · own PCM", "kind": "core", "x": 1290, "y": 380, "width": 250, "height": 96}
   ],
   "connections": [
     {"from": "inputs", "to": "cooker"},
@@ -21,7 +21,7 @@
   ],
   "cards": [
     {"title": "Dependencies", "body": "Foundation + Authoring Domain; private vendored SHA-256."},
-    {"title": "Evidence", "body": "Independent Python and C++ read a retained wire vector; malformed framing, limits and allocation order are tested."},
+    {"title": "Evidence", "body": "Independent Python and C++ read a retained wire vector. Inspect and decode share complete validation before PCM allocation; malformed framing, limits, footprint and allocation order are tested. Hex identity construction cannot silently truncate on allocation failure."},
     {"title": "Derived only", "body": "Replay projection and portable content never become Project Truth. New source Contract is not yet Assembly-selected."},
     {"title": "Forbidden boundary", "body": "No persistence or device I/O. Codec limits are not complete Engine, FX, SDK or DMA admission."}
   ]
