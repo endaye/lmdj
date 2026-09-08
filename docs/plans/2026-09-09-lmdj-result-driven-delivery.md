@@ -77,6 +77,16 @@ Verification: journal suite, controller/runtime/entry/report suites, complete
 declarations. Do not lower limits, substitute credentials, cancel external runs
 or weaken authentication to make the observation green.
 
+## Task 2 — Read-only Host assessment protocol
+
+The [focused T2a protocol Task](2026-09-09-lmdj-canary-assessment-protocol.md)
+adds complete bounded Git input collection, input-bound GLM→Kimi→Grok attempt
+records, strict Host/changelog advice validation and stable failure-report
+intents. It has no workflow, model invocation, version write or Issue POST.
+Live adapters, authenticated PR review collection, chunking, durable outbox
+integration and version preparation remain outstanding. This independent
+library work does not close the main testing/reporting acceptance gaps below.
+
 ## Acceptance ledger
 
 - Local reduction/failure behavior: 55 journal tests pass, including six new
