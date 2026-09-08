@@ -20,6 +20,7 @@
 | 项目 | 用途 | 说明 |
 | --- | --- | --- |
 | `32bit-observation` | 保留 64 位值、读者串行化三缓冲的独立并发验证原型 | [README](32bit-observation/README.md) |
+| `32bit-pattern-mailbox` | Pattern claim 争用及取消/激活/回收竞态的有限模型 | [README](32bit-pattern-mailbox/README.md) |
 | `chameleon-lab` | 不依赖 Core 的程序化变色龙视觉实验 | [README](chameleon-lab/README.md) |
 | `web-runtime-lab` | 不依赖 Core 的浏览器音频、WASM、共享内存、MIDI 与延迟实验 | [README](web-runtime-lab/README.md) |
 | `ascii-matrix-camera` | 黑绿 ASCII、摄像头输入与视觉互动探索 | [README](ascii-matrix-camera/README.md) |
