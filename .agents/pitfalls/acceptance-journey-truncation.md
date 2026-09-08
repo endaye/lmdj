@@ -44,3 +44,8 @@ crash/retry, failure→discard/abort, stop, reload/reopen, and persisted-truth
 transition, including complete content identity rather than only its type; this
 remains a judgment-based skill check because general journey completeness is
 not mechanically decidable from the repository.
+
+Recording a gap is where this entry's remedy ends and
+[`declared-gap-is-not-discharged`](declared-gap-is-not-discharged.md) begins: a
+gap named honestly is still open, and a defect can land in one that everybody
+read and nobody closed.
