@@ -122,12 +122,6 @@
       "reason": "Performs the deployment and holds its credentials. Same boundary as the preflight above."
     },
     {
-      "workflow": "architecture-portal-smoke.yml",
-      "job": "smoke",
-      "category": "deploy-authority",
-      "reason": "Exercises the published Portal deployment from outside. A smoke test of a public deployment should not run on a host that participates in producing it."
-    },
-    {
       "workflow": "self-test-report.yml",
       "job": "controller",
       "category": "control-plane",
