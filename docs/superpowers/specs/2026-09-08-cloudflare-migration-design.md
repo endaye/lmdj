@@ -53,6 +53,57 @@ approximately 12,400 build minutes. Even 3,000 free minutes would require roughl
 76% fewer attempts at that proxy duration. Obtain a seven-day distribution and
 actual Cloudflare timing before treating any budget as demonstrated sufficient.
 
+### Seven-day follow-up and HTTP baseline
+
+Follow-up observed at `2026-09-08T02:53:06.586623Z`, covering exactly the previous
+seven days. Eight API pages reached the lower time boundary. Records were
+deduplicated by deploy ID and filtered to the fixed start/end timestamps;
+pagination remains non-atomic. The resulting inventory contains 792 attempts:
+543 previews, 249 production, 122 ready and 670 error records. Exactly 163 error
+messages contain `usage exceeded`; the other errors were not diagnosed by this
+aggregate audit and must not be called quota failures.
+
+UTC daily counts (first and last dates are partial days):
+
+| Date | Attempts |
+| --- | ---: |
+| 2026-09-01 | 62 |
+| 2026-09-02 | 95 |
+| 2026-09-03 | 74 |
+| 2026-09-04 | 54 |
+| 2026-09-05 | 104 |
+| 2026-09-06 | 177 |
+| 2026-09-07 | 195 |
+| 2026-09-08 | 31 |
+
+All 122 ready records provide deploy_time: median 122 seconds, maximum 602.
+This supersedes the shorter sample as the planning baseline: 792 / 7 * 30 is
+approximately 3,394 attempts/month, or about 6,902 minutes using 122 seconds as
+a proxy. A 3,000-minute budget would need about a 57% reduction at that duration.
+This projection still substitutes successful Netlify deploy duration for
+Cloudflare build time; it is neither a bill nor proof of filter savings. The
+recent three-day burst remains relevant for queue capacity and peak demand.
+
+Fresh GET requests to the three root URLs returned 200 and
+`Content-Type: text/html; charset=UTF-8`, without changing the final URL:
+
+| Site | HTML response bytes | Cache-Control | COOP | COEP |
+| --- | ---: | --- | --- | --- |
+| Portal | 24,216 | public,max-age=0,must-revalidate | absent | absent |
+| Creator | 1,039 | no-store | same-origin | require-corp |
+| Runtime | 10,409 | no-store | same-origin | require-corp |
+
+All three returned `X-Content-Type-Options: nosniff`. Portal also returned
+`Referrer-Policy: strict-origin-when-cross-origin`; that header was absent on
+the two Host root responses. This is an observed baseline, not a new requirement
+to add headers to the Hosts. Root HTTP success does not verify hashed assets,
+Product identity, audio/browser behavior, deep routes or complete smoke.
+Production root availability and Preview build recovery are separate assertions.
+
+The sanitized aggregate is retained alongside this design as
+[`2026-09-08-cloudflare-seven-day-audit.json`](2026-09-08-cloudflare-seven-day-audit.json).
+No token, account profile, or raw deploy body is included.
+
 ### Deployed asset inventory
 
 The files API for the exact published deploys above reports:
