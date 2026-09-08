@@ -125,6 +125,7 @@
     {"match": {"kind": "prefix", "value": "tools/project-bundle/"}, "lanes": ["creator"]},
     {"match": {"kind": "prefix", "value": "tools/provider-benchmark/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
     {"match": {"kind": "prefix", "value": "tools/release/"}, "lanes": ["deploy_contract", "ci_contract"]},
+    {"match": {"kind": "prefix", "value": "tools/canary/"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "prefix", "value": "tools/web_deploy/"}, "lanes": ["deploy_contract"]},
     {"match": {"kind": "prefix", "value": "tools/needle-spike/"}, "lanes": ["docs_static"]},
     {"match": {"kind": "prefix", "value": "tools/soundset-fixtures/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
