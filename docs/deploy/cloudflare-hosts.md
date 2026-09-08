@@ -41,6 +41,27 @@ Catalog a deployment forwards to must be diffable, reviewable in a Pull
 Request, and auditable afterwards. It must be an absolute `https` base with no
 query or fragment; anything else fails closed and the prefix answers 404.
 
+A Catalog configured this way reaches only the deployment whose `wrangler.json`
+carries the variable. **The `creator-recovery`, `creator-initialization` and
+version-preview Workers are separate deployments**, so a Release archive that
+names `https://creator.lmdj.workers.dev/soundset-catalog/` in its meta has no
+Catalog when served from any of them: the page asks a prefix those Workers do
+not forward, and the surface reports an unreachable Catalog. That is safe, and
+it is also invisible unless you are looking for it — do not read an empty
+Sound Set surface on a recovery or preview address as a Catalog outage.
+
+Configuring the Worker is only half of it: the page has to be told to use the
+prefix. That is the `lmdj-soundset-catalog` meta in `apps/creator-web/index.html`
+(or `window.__LMDJ_SOUNDSET_CATALOG__`), and its value must be **this
+deployment's own origin plus `/soundset-catalog/`** — absolute, because
+`normalizeCatalogEndpoint` refuses a relative endpoint rather than resolve it
+against whatever page is loaded, and same-origin, because `connect-src 'self'`
+still stands. An off-origin value there is #901 again. Note that the meta lives
+inside the signed Release archive, so changing it is a Product Build; the
+Worker's `CATALOG_UPSTREAM` is not, which is the point of splitting them — the
+page names a stable same-origin prefix once, and which Catalog that prefix
+reaches is a deploy-time variable.
+
 **No Catalog is configured today, and that is deliberate**: there is no
 production LMDJ Catalog, so `vars` carries no `CATALOG_UPSTREAM` and every
 prefixed path answers 404. That is S11-D6's "a Host that offers no Catalog
@@ -55,16 +76,55 @@ nor the `run_worker_first` route, so it forwards nothing -- the gate is closed
 by absence at both ends rather than by a condition in the shared Worker that
 someone could delete.
 
-The forward is not a relay, and both reasons are structural rather than
-checked. The destination is composed from `CATALOG_UPSTREAM` plus tokens the
-Worker re-derives -- a literal, an element read back out of a frozen pair, and
-a digest re-matched against `[0-9a-f]{64}` -- so no request text is
-concatenated into the target and no header, query or path segment can move it
-to another host. And the admitted grammar is exactly `catalog/index.json` and
-`object/(manifest|blob)/<64 hex>`, which is the whole of what
-`packages/web-runtime-platform/web/soundset_catalog.mjs` can spell. What that
-leaves a compromised page bundle is the choice of which object is fetched from
-the one configured Catalog: 64 hex characters per GET to a fixed host.
+The forward is not a relay, and two things keep it that way. They are not the
+same kind of thing, and an earlier version of this page said they were.
+
+**The destination is structural.** It is composed from `CATALOG_UPSTREAM` plus
+a literal, an element read back out of a frozen pair, and a digest re-matched
+against `[0-9a-f]{64}`. That alphabet carries no `/ \ . : @ % ? #` and no
+control character, so the only request-derived bytes in the target cannot
+terminate a path segment, introduce an authority, or change the scheme or port.
+Two independent adversarial reviews attacked this and neither could move the
+destination off the configured host, by any path, query, header or encoding, on
+either implementation. This is the constraint carrying the security property.
+
+**The admitted grammar is a check, not a composition.** It is an equality, a
+frozen-kind lookup and a regex, kept deliberately equal to the two shapes
+`packages/web-runtime-platform/web/soundset_catalog.mjs` can spell. It is
+tempting to borrow that module's refusal and call the grammar closed by
+construction, but the threat this whole design is built against is a
+compromised dependency running in the page, and such code never calls the
+transport: it calls `fetch("/soundset-catalog/…")` directly, which
+`connect-src 'self'` permits. Under that threat model the transport contributes
+nothing and the Worker's own check is the only thing in the way, so widening it
+widens the residual channel.
+
+**The residual channel runs both ways.** Outbound it is the choice of which of
+three admitted targets is fetched from the one configured Catalog, and for two
+of them a 64-hex digest — repeatable at whatever rate the page likes, since
+nothing throttles and the transport asks for `no-store`, and readable by
+whoever operates that Catalog and by anyone terminating TLS in front of it.
+Inbound, the Catalog's answer comes back into the page: 404-versus-200 per
+request plus up to the shape's bound of bytes of the Catalog's choosing. So
+`connect-src 'self'` is a command-and-control barrier as well as an
+exfiltration barrier, and the forward punches through it in both directions for
+one fixed host. Anyone who can place content in the configured Catalog can feed
+a compromised bundle attacker-chosen bytes same-origin.
+
+What remains true, and is why this is still narrower than naming a Catalog in
+`connect-src`: the far end is one host the deployment chose rather than an
+origin the attacker chose, and the request grammar reaching it is closed.
+
+Whether the Workers runtime attaches the viewer's IP to a subrequest is **not
+established** and must not be assumed either way; if it does, that is a further
+request-derived component reaching the Catalog.
+
+One behaviour worth knowing before reading a log: `new URL` resolves dot
+segments and maps `\` to `/`, so several request spellings reach the Worker as
+one admitted path and appear as distinct entries in an edge cache. Every alias
+resolves to the same target — the Worker suite pins that — and the proof server
+refuses them outright, which is a deliberate, recorded difference rather than
+an oversight.
 
 ## Candidate, verify, promote and recover
 

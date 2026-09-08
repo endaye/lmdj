@@ -6,10 +6,21 @@
     <meta name="theme-color" content="#101216" />
     <!-- S11-D6: the Sound Set Catalog endpoint is Workspace/Host
          settings and never Project Truth. A deployment that offers a
-         Catalog sets it here, as an absolute http(s) origin with an
-         optional path prefix; one that offers none browses only the
+         Catalog sets it here; one that offers none browses only the
          Sets its Workspace Set Store already holds.
-         <meta name="lmdj-soundset-catalog" content="https://…/" /> -->
+
+         Set it to THIS DEPLOYMENT'S OWN ORIGIN plus /soundset-catalog/,
+         which the Host forwards to the Catalog named by the deployment's
+         CATALOG_UPSTREAM. It must be absolute, because the transport
+         refuses a relative endpoint rather than resolve it against
+         whatever page is loaded -- but it must be same-origin, because
+         the distribution is served `connect-src 'self'` and that
+         directive is the exfiltration barrier around the Projects and
+         audio this Creator holds in OPFS. An off-origin value here is
+         #901 again: the browser refuses it before the transport runs and
+         the surface reports an unreachable Catalog.
+         <meta name="lmdj-soundset-catalog"
+              content="https://creator.lmdj.workers.dev/soundset-catalog/" /> -->
     <title>LMDJ Creator</title>
   </head>
   <body>

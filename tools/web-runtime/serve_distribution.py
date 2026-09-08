@@ -8,6 +8,7 @@ import hashlib
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -56,12 +57,20 @@ CONTENT_TYPES = {
 # acceptance journey drives that same topology instead of a shape production
 # does not use.
 #
-# The two properties that make this a forwarder rather than a relay are the
-# Worker's, and they are structural here for the same reason: the destination is
-# composed from the configured upstream plus tokens this module re-derives -- a
-# literal, a member of a frozen pair, and a re-matched 64-hex digest -- so no
-# request text is concatenated into the target, and the admitted grammar is
-# exactly the two shapes `soundset_catalog.mjs` can spell.
+# The two properties that keep this a forwarder rather than a relay are the
+# Worker's, and they are not the same kind of property.
+#
+# The destination is structural: it is composed from the configured upstream
+# plus a literal, a member of a frozen pair, and a re-matched 64-hex digest.
+# That alphabet carries no `/ \ . : @ % ? #` and no control character, so the
+# only request-derived bytes in the target cannot terminate a path segment,
+# introduce an authority, or change the scheme or port.
+#
+# The admitted grammar is a check, not a composition, and calling it structural
+# would be wrong. Borrowing `catalogObjectPath`'s throw does not close it: the
+# threat this design is built against is a compromised dependency in the page,
+# and such code calls the prefix directly without ever reaching the transport.
+# The check below is what holds in that case.
 #
 # With no `--catalog-upstream` the prefix answers 404 and this server behaves
 # exactly as it did before, which is what every existing proof still asserts.
@@ -74,8 +83,11 @@ CATALOG_OBJECT_CONTENT_TYPES = {
     "blob": "application/octet-stream",
 }
 MAXIMUM_CATALOG_OBJECT_BYTES = 8 * 1024 * 1024
+MAXIMUM_CATALOG_INDEX_BYTES = 1024 * 1024
 CATALOG_TIMEOUT_SECONDS = 30
+CONTENT_LENGTH_TOKEN = re.compile(r"\A[0-9]+\Z")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 class _RefuseRedirect(HTTPRedirectHandler):
@@ -85,36 +97,141 @@ class _RefuseRedirect(HTTPRedirectHandler):
         return None
 
 
+# The host class is deliberately narrower than WHATWG's: `new URL()` leaves
+# `!"$&'()*+,;=`{}~` and a leading `.` or `-` untouched in a host, and none of
+# them belongs in a Catalog address. `_` is admitted because some internal
+# names really are spelled `a_b.example`. Narrower means this side refuses a
+# few values production would accept, which is the safe direction and is
+# asserted rather than assumed -- see `UPSTREAM_PARITY_REFUSED`.
+#
+# The one grammar a configured upstream must match, derived by measurement
+# rather than from spec recall: the path class is exactly the ASCII characters
+# `new URL()` leaves untouched inside a path, so anything the Worker would
+# rewrite is outside it. Enumerating WHATWG's normalisations instead was tried
+# and lost -- two review passes kept finding spellings it had missed, because a
+# list of behaviours is always one behaviour behind the parser.
+# Deciding what a valid upstream looks like is finite; chasing a parser is not.
+# `(?:/[class]*)*/` is the classic catastrophic-backtracking shape and is not
+# one here: the class excludes `/`, so each iteration must consume the
+# separator and the decomposition of any input is unique -- there is nothing to
+# backtrack into. Measured at 40 000 groups and a 40 000-character segment,
+# both in single-digit milliseconds. Recorded so nobody "fixes" it into
+# something slower.
+CANONICAL_UPSTREAM = re.compile(
+    r"\Ahttps?://"
+    r"(?P<host>\[[^\[\]/?#%]+\]|[a-z0-9][a-z0-9._\-]*)"
+    r"(?::(?P<port>[1-9][0-9]{0,4}))?"
+    r"(?P<path>(?:/[A-Za-z0-9!$%&'()*+,\-.:;=@\[\]_|~]*)*/)\Z"
+)
+
+
+def _ends_in_a_number(host: str) -> bool:
+    """WHATWG's `endsInANumber`, which is not "the whole host looks numeric".
+
+    The distinction is the defect this replaced. A `numeric_like` test over the
+    whole host missed `foo.1`, `example.1`, `foo.0x7f`, `a.0777` and `a.123`:
+    WHATWG asks only whether the LAST LABEL is a number, and when it is, runs
+    the IPv4 parser over the whole host and throws when that fails. So the
+    Worker refused those and this side accepted and forwarded them verbatim --
+    the unsound direction. A fuzz over hosts drawn from this grammar's own
+    alphabet hit the class at roughly 1.7 percent, so it was not a corner.
+    """
+    labels = host.split(".")
+    if len(labels) > 1 and labels[-1] == "":
+        labels = labels[:-1]
+    last = labels[-1]
+    if last.isascii() and last.isdigit():
+        return True
+    lowered = last.lower()
+    if lowered.startswith("0x"):
+        rest = lowered[2:]
+        return rest == "" or all(c in "0123456789abcdef" for c in rest)
+    return False
+
+
+def _host_is_canonical(host: str) -> bool:
+    """True when `new URL()` would leave this host spelling untouched."""
+    if host.startswith("["):
+        # WHATWG forbids a zone identifier in an IPv6 host and throws;
+        # `ipaddress` has supported scope ids since 3.9 and round-trips them,
+        # so the round trip alone would accept a base production cannot express.
+        if not host.endswith("]") or "%" in host:
+            return False
+        try:
+            return f"[{ipaddress.IPv6Address(host[1:-1]).compressed}]" == host
+        except ValueError:
+            return False
+    if _ends_in_a_number(host):
+        try:
+            return str(ipaddress.IPv4Address(host)) == host
+        except ValueError:
+            return False
+    return True
+
+
 def normalize_catalog_upstream(upstream: str) -> str:
     """Return the upstream base, or raise for one this server will not forward to.
 
-    A misconfigured upstream fails closed rather than becoming a plaintext or
-    parameterised forwarder. `http` is admitted only for a loopback Catalog,
-    which is what the acceptance fixture is; the Worker admits `https` alone.
+    The Worker refuses any value that is not already the base it composes,
+    which is a property of having a WHATWG parser. This side has none, so it
+    decides the same question with a closed grammar instead. The two agree
+    exactly as far as that grammar is faithful, and
+    `CatalogUpstreamParityTest` is what keeps them honest about it.
+
+    Every rejection is a `ServerError`. Nothing here may raise anything else:
+    an escaping exception is not a refusal, it is a crash the proof server's
+    own configuration path turns into an empty response on every request.
     """
-    parts = urlsplit(upstream)
-    if parts.scheme not in {"http", "https"}:
-        raise ServerError("catalog upstream must be an http or https URL")
-    if parts.scheme == "http" and parts.hostname not in LOOPBACK_HOSTS:
+    if not isinstance(upstream, str):
+        raise ServerError("catalog upstream must be a string")
+    match = CANONICAL_UPSTREAM.fullmatch(upstream)
+    if match is None:
+        raise ServerError("catalog upstream is not a canonical https base")
+    host = match.group("host")
+    if not _host_is_canonical(host):
+        raise ServerError("catalog upstream host is not in canonical form")
+    scheme, _, _ = upstream.partition("://")
+    # `http` is admitted only for a loopback Catalog, which is what the
+    # acceptance fixture is; the Worker admits `https` alone, and that is the
+    # single intended disagreement between the two.
+    if scheme == "http" and host not in LOOPBACK_HOSTS:
         raise ServerError("a plaintext catalog upstream must be loopback")
-    if not parts.netloc or parts.query or parts.fragment:
-        raise ServerError("catalog upstream carries a query or fragment")
-    # Refused rather than forwarded. The Worker's `URL.origin` drops userinfo
-    # silently; keeping it here would send credentials the deployment would
-    # not, so both sides refuse and an operator gets a signal instead of a
-    # surprise.
-    if parts.username is not None or parts.password is not None:
-        raise ServerError("catalog upstream carries credentials")
-    path = parts.path if parts.path.endswith("/") else f"{parts.path}/"
+    path = match.group("path")
     if "//" in path:
         raise ServerError("catalog upstream path is not normalised")
-    return f"{parts.scheme}://{parts.netloc}{path}"
+    # WHATWG treats a segment as a dot segment when the whole segment is `.`
+    # or `..`, in either encoded or literal form -- so `/a%2eb/` is an ordinary
+    # segment and `/%2e/` is not. A substring test for `%2e` refused five
+    # legitimate bases the Worker accepts.
+    for segment in path.split("/"):
+        if segment.lower().replace("%2e", ".") in {".", ".."}:
+            raise ServerError("catalog upstream path carries a dot segment")
+    port = match.group("port")
+    if port is not None:
+        # The grammar admits five digits, so the range is checked here rather
+        # than spelled into the pattern. `int()` cannot raise: the group is
+        # `[1-9][0-9]{0,4}` and nothing else reaches it.
+        if not 1 <= int(port) <= 65_535:
+            raise ServerError("catalog upstream port is out of range")
+        if int(port) == DEFAULT_PORTS[scheme]:
+            raise ServerError("catalog upstream states its scheme's default port")
+    return upstream
 
 
-def catalog_target(base: str, suffix: str) -> tuple[str, str, bool] | None:
-    """Compose `(url, content_type, immutable)`, or None for an unadmitted shape."""
+def catalog_target(base: str, suffix: str) -> tuple[str, str, bool, int] | None:
+    """Compose `(url, content_type, immutable, maximum_bytes)`, or None.
+
+    The bound is per shape, matching `soundset_catalog.mjs`: one bound for both
+    would leave this eight times more permissive than its only client for the
+    index.
+    """
     if suffix == CATALOG_INDEX_SUFFIX:
-        return f"{base}{CATALOG_INDEX_SUFFIX}", "application/json", False
+        return (
+            f"{base}{CATALOG_INDEX_SUFFIX}",
+            "application/json",
+            False,
+            MAXIMUM_CATALOG_INDEX_BYTES,
+        )
     match = CATALOG_OBJECT_SUFFIX.match(suffix)
     if match is None:
         return None
@@ -128,6 +245,7 @@ def catalog_target(base: str, suffix: str) -> tuple[str, str, bool] | None:
         f"{base}object/{kind}/{digest}",
         CATALOG_OBJECT_CONTENT_TYPES[kind],
         True,
+        MAXIMUM_CATALOG_OBJECT_BYTES,
     )
 
 
@@ -166,9 +284,17 @@ def read_catalog_upstream_file(path: Path) -> str | None:
         return normalize_catalog_upstream(candidate)
     except ServerError:
         return None
+    except Exception:  # noqa: BLE001
+        # `normalize_catalog_upstream` promises `ServerError` and nothing else.
+        # If that promise ever breaks, a configured value must still be a 404
+        # here rather than an exception escaping into the handler, where it
+        # becomes an empty response on every request instead of a refusal.
+        return None
 
 
-def read_catalog_object(url: str, content_type: str) -> tuple[int, bytes]:
+def read_catalog_object(
+    url: str, content_type: str, maximum_bytes: int
+) -> tuple[int, bytes]:
     """Fetch one admitted target and return `(status, payload)` for the page.
 
     A missing object stays a missing object; every other upstream outcome --
@@ -184,12 +310,34 @@ def read_catalog_object(url: str, content_type: str) -> tuple[int, bytes]:
         with opener.open(request, timeout=CATALOG_TIMEOUT_SECONDS) as response:
             if response.status != 200:
                 return 502, b""
-            payload = response.read(MAXIMUM_CATALOG_OBJECT_BYTES + 1)
+            # The declared length is refused before the body is read, matching
+            # the Worker. This check existed on the Worker side alone when the
+            # bounded read was added, which made the remedy for one divergence
+            # a sibling of it: the same upstream answered 502 in production and
+            # 200 here.
+            # Reproduce Fetch's `Headers.get` rather than match its rule.
+            # It normalises each value and joins repeats with ", ";
+            # `email.message.get` does neither, keeping trailing whitespace and
+            # returning only the first of a repeated header. A strict token on
+            # both sides made the two agree on the RULE while they still
+            # disagreed about the STRING the rule runs on, so `  2  ` answered
+            # 200 there and 502 here -- a divergence created by the commit that
+            # closed two others. Third time in this work that matching a rule
+            # across two runtimes failed and reproducing the other side's view
+            # worked.
+            values = response.headers.get_all("Content-Length")
+            if values:
+                declared = ", ".join(value.strip() for value in values)
+                if not CONTENT_LENGTH_TOKEN.fullmatch(declared):
+                    return 502, b""
+                if int(declared) > maximum_bytes:
+                    return 502, b""
+            payload = response.read(maximum_bytes + 1)
     except HTTPError as error:
         return (404, b"") if error.code == 404 else (502, b"")
     except (URLError, OSError, ValueError):
         return 502, b""
-    if len(payload) > MAXIMUM_CATALOG_OBJECT_BYTES:
+    if len(payload) > maximum_bytes:
         return 502, b""
     return 200, payload
 
@@ -366,8 +514,8 @@ class ProofHandler(BaseHTTPRequestHandler):
         if target is None:
             self._status(404, include_body)
             return
-        url, content_type, immutable = target
-        status, payload = read_catalog_object(url, content_type)
+        url, content_type, immutable, maximum_bytes = target
+        status, payload = read_catalog_object(url, content_type, maximum_bytes)
         if status != 200:
             self._status(status, include_body)
             return

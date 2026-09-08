@@ -9,7 +9,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { readFileSync } from "node:fs";
+
 import worker from "../deploy/cloudflare_worker.mjs";
+import { createFetchCatalogClient } from
+  "../../../packages/web-runtime-platform/web/soundset_catalog.mjs";
 
 const UPSTREAM = "https://catalog.example.test/sets/";
 const DIGEST = "a".repeat(64);
@@ -199,6 +203,91 @@ test("the admitted grammar is exactly the two shapes the transport can spell", a
   }
 });
 
+test("a normalised alias resolves to the same target, never a different one", async () => {
+  // `new URL` resolves dot segments and maps `\` to `/`, so several spellings
+  // reach the Worker as one admitted path. The proof server matches the raw
+  // target and refuses them, and that divergence is left open on purpose:
+  // closing it means refusing requests the runtime normalised, which cannot be
+  // tested against the real edge and would risk refusing the two legitimate
+  // shapes. What is pinned instead is that an alias can only ever resolve to
+  // the SAME target -- so a future edit cannot turn one into a different fetch.
+  const canonical = `${UPSTREAM}object/manifest/${DIGEST}`;
+  for (const alias of [
+    `/soundset-catalog/x/../object/manifest/${DIGEST}`,
+    `/soundset-catalog/object/./manifest/${DIGEST}`,
+    `/soundset-catalog/object\\manifest\\${DIGEST}`,
+    `/soundset-catalog/a/%2e%2e/object/manifest/${DIGEST}`,
+    `/soundset-catalog/object/manifest/../manifest/${DIGEST}`,
+  ]) {
+    const { result, calls } = await withUpstream(
+      () => new Response(new Uint8Array([1]), { status: 200 }),
+      () => worker.fetch(get(alias), creatorEnv()),
+    );
+    if (result.status === 200) {
+      assert.equal(calls.length, 1, alias);
+      assert.equal(calls[0].target, canonical, alias);
+    } else {
+      assert.deepEqual(calls, [], alias);
+    }
+  }
+});
+
+test("the endpoint the shipped index.html configures reaches this Worker", async () => {
+  // The seam. `index.html` tells an operator what to configure, the transport
+  // composes a URL from it, and this Worker decides whether that URL is a
+  // Catalog path. Those three live in two languages and two deployment units,
+  // and nothing asserted they agreed -- the agreement was only ever checked by
+  // reading. This composes the real request from the real instruction and the
+  // real transport, so it fails if any of the three moves.
+  //
+  // It does NOT cover Cloudflare's own routing: `run_worker_first` decides
+  // whether the request reaches this Worker at all, and whether its `*` glob
+  // spans multiple path segments is unverified from here. See the runbook.
+  const html = readFileSync(
+    new URL("../../creator-web/index.html", import.meta.url), "utf8",
+  );
+  const configured = html.match(
+    /content="(https:\/\/[^"]*soundset-catalog[^"]*)"/,
+  )?.[1];
+  assert.ok(
+    configured,
+    "index.html no longer shows an operator a soundset-catalog endpoint",
+  );
+
+  const asked = [];
+  const client = createFetchCatalogClient({
+    endpoint: configured,
+    fetch: async (target) => {
+      asked.push(target);
+      return new Response("{}", { status: 200 });
+    },
+  });
+  await client.readIndex();
+  await client.readObject({ object_kind: "manifest", sha256: DIGEST });
+  assert.equal(asked.length, 2);
+
+  for (const target of asked) {
+    const servedAsAsset = [];
+    const { result, calls } = await withUpstream(
+      () => new Response("{}", {
+        status: 200,
+        headers: { "content-length": "2" },
+      }),
+      () => worker.fetch(
+        new Request(target),
+        { ASSETS: assetsBinding(servedAsAsset), CATALOG_UPSTREAM: UPSTREAM },
+      ),
+    );
+    assert.equal(result.status, 200, `${target} was not forwarded`);
+    assert.deepEqual(
+      servedAsAsset, [],
+      `${target} fell through to the asset store instead of the forward`,
+    );
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].target.startsWith(UPSTREAM), calls[0].target);
+  }
+});
+
 test("only GET is admitted", async () => {
   for (const method of ["POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]) {
     const { result, calls } = await withUpstream(
@@ -215,6 +304,11 @@ test("only GET is admitted", async () => {
 });
 
 test("a malformed or non-https upstream fails closed", async () => {
+  // Every value here is one that parsing would silently reinterpret, or that
+  // this Worker will not forward to at all. `UPSTREAM_PARITY_REFUSED` in
+  // `apps/creator-web/test/server_test.py` is the same list: the two
+  // implementations must refuse the same set, because a value one accepts and
+  // the other rewrites is how a proof server stops standing in for production.
   const rejected = [
     "http://catalog.example.test/",
     "ftp://catalog.example.test/",
@@ -223,9 +317,23 @@ test("a malformed or non-https upstream fails closed", async () => {
     "https://catalog.example.test/?query=1",
     "https://catalog.example.test/#fragment",
     "https://catalog.example.test//double/",
-    // Credentials are refused, not silently dropped by `URL.origin`.
+    // Credentials, including an empty userinfo that `URL.origin` would drop.
     "https://user:pass@catalog.example.test/",
     "https://user@catalog.example.test/",
+    "https://@catalog.example.test/",
+    "https://:@catalog.example.test/",
+    // A backslash terminates the authority, so this resolves to `evil.test`.
+    "https://evil.test\\@catalog.example.test/",
+    // Normalisations: dot segments, encoded dot segments, non-ASCII host,
+    // uppercase host, surrounding whitespace, a default port, and a base that
+    // does not already end in `/`.
+    "https://catalog.example.test/a/../b/",
+    "https://catalog.example.test/a/%2e%2e/b/",
+    "https://exämple.test/b/",
+    "https://CATALOG.Example.Test/b/",
+    "  https://catalog.example.test/b/  ",
+    "https://catalog.example.test:443/b/",
+    "https://catalog.example.test",
   ];
   for (const upstream of rejected) {
     const { result, calls } = await withUpstream(
@@ -260,6 +368,56 @@ test("an upstream that redirects, errors or oversizes is not passed through", as
     );
     assert.equal(result.status, expected);
   }
+});
+
+test("each shape carries its own bound, and the body is bounded before it is held", async () => {
+  // One 8 MiB bound for both shapes would leave this eight times more
+  // permissive than the transport for the index, whose own bound is 1 MiB.
+  const oversizeIndex = new Uint8Array(1024 * 1024 + 1);
+  const { result: indexResult } = await withUpstream(
+    () => new Response(oversizeIndex, { status: 200 }),
+    () => worker.fetch(get("/soundset-catalog/catalog/index.json"), creatorEnv()),
+  );
+  assert.equal(indexResult.status, 502);
+  // The same body is inside the object bound.
+  const { result: objectResult } = await withUpstream(
+    () => new Response(oversizeIndex, { status: 200 }),
+    () => worker.fetch(get(`/soundset-catalog/object/blob/${DIGEST}`), creatorEnv()),
+  );
+  assert.equal(objectResult.status, 200);
+
+  // A declared length past the bound is refused before the body is read at all.
+  let bodyWasRead = false;
+  const { result: declared } = await withUpstream(
+    () => new Response(new Uint8Array(4), {
+      status: 200,
+      headers: { "content-length": String(9 * 1024 * 1024) },
+    }),
+    () => worker.fetch(get(`/soundset-catalog/object/blob/${DIGEST}`), creatorEnv()),
+  );
+  assert.equal(declared.status, 502);
+  assert.equal(bodyWasRead, false);
+
+  // And an undeclared body that runs past the bound is abandoned mid-stream
+  // rather than buffered whole: the reader is cancelled and never drained.
+  let cancelled = false;
+  let chunksServed = 0;
+  const endless = new ReadableStream({
+    pull(controller) {
+      chunksServed += 1;
+      controller.enqueue(new Uint8Array(1024 * 1024));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const { result: streamed } = await withUpstream(
+    () => new Response(endless, { status: 200 }),
+    () => worker.fetch(get(`/soundset-catalog/object/blob/${DIGEST}`), creatorEnv()),
+  );
+  assert.equal(streamed.status, 502);
+  assert.equal(cancelled, true);
+  assert.ok(chunksServed <= 12, `read ${chunksServed} MiB before stopping`);
 });
 
 test("the upstream's own content type never reaches the page", async () => {
