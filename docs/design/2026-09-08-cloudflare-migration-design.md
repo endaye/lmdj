@@ -484,12 +484,82 @@ Access-protected, and provides no Preview runtime logs. Alias retention is not
 a duration guarantee for version URLs or rollback evidence. Export build,
 identity and smoke records separately; revalidate retained versions before use.
 
-Budget/retention proposal sent to the owner: no new paid service; 50/75/90 percent
-capacity notifications, seven days of stable observation and at least 30 days
-of old deployment/recovery evidence retention. This proposal is pending an
-explicit response. A numeric monthly runner allocation and notification delivery
-mechanism are also not yet configured. No completed alert mechanism is claimed.
-Keep old sites and evidence while these decisions and acceptance are pending.
+### Owner-approved pilot and retention decision — 2026-09-08
+
+The owner approved one same-repository PR pilot with at most 60 standard
+GitHub-hosted Linux execution minutes, including possible package billing.
+This does not approve a paid plan upgrade, general monthly allocation or broad
+Preview activation. The build job is bounded at 20 minutes, so the operator
+admits at most three attempts (including reruns, cancellations and failures),
+reserving 20 minutes before each attempt. Missing timing is charged the full
+reservation. Keep the pilot variable absent outside the supervised trial;
+remove it after the final publisher completes. More attempts require a new
+budget decision, even if prior attempts were shorter.
+
+The owner also approved 50/75/90 percent budget notifications through a GitHub
+operations Issue, seven days of stable observation and at least 30 days of old
+deployment and recovery-evidence retention. For this pilot the denominator is
+60 minutes: notify in #921 when cumulative observed execution reaches 30, 45
+and 54 minutes; report all crossed thresholds when a completed run spans more
+than one. Record run ID, attempt, job start/end, measured minutes, outstanding
+reservations and remaining budget after each run. This is an operator-owned
+pilot ledger, not a deployed automatic or account-wide billing monitor. Unknown
+usage stops new admissions. At 90 percent stop new attempts; already admitted
+work retains its bounded reservation. Broader activation remains blocked until
+monthly allocation and automated monitoring are accepted and implemented.
+
+Seven-day observation begins only once the Preview pilot and each fixed site's
+required acceptance pass. Record dated HTTP/identity observations and incidents
+in #923, #925 and #926; a recovery or unresolved incident restarts that site's
+window after verification. No historical deployment age substitutes for this
+window. Keep old deployments and export sanitized build/identity/smoke receipts
+for at least 30 days after the eventual cutover; seven-day workflow artifact
+retention alone does not satisfy this requirement. Do not remove the original
+resource until retained evidence and rollback usability have been verified.
+
+The owner chose to preserve the old Creator origin and browser-local data.
+Formal Project export/import and migration of edited work are a separate design
+Task, #961. Re-importing original files cannot preserve later edits. Retain that
+origin beyond the minimum period until an accepted migration preserves the
+user's work. Physical browser/audio acceptance remains outstanding.
+
+The old `lmdj` Workers Builds integration's two repository triggers were deleted
+sequentially on 2026-09-08, with positive API receipts and an independently read
+empty trigger list (#927). The old Worker and shared repository connection are
+retained. A fresh pilot PR must still demonstrate absence of the retired check.
+
+### First real pilot measurement — 2026-09-08
+
+PR #963 exact head `511ce2da8ac6e61974bcd62b97211743fab1f11a` ran isolated
+build 34224803448, attempt 1, from 12:12:42Z to 12:15:41Z: 179 seconds
+(2.9833 hosted execution minutes). Its trusted publisher 34225091683 used
+self-hosted `contabo-lmdj-linux-02` for 340 seconds, including 81 seconds of
+credential-free tool installation. These are job timestamps, not an invoice,
+queue measurement, included-minutes balance or timing percentile.
+
+The artifact contained 3,764 files, 57,451,440 expanded bytes and a largest
+file of 1,392,502 bytes; GitHub reported a 7,261,931-byte artifact. Current
+local safety limits remain 20,000 files, 25 MiB/file and 256 MiB expanded/archive.
+No cap was relaxed. The artifact expires after seven days, so authenticated
+static bytes and publication/reconciliation receipts are retained separately
+in the local persistent migration archive for the approved retention window.
+
+For capacity planning only, applying this one 179-second sample to the historical
+543 Preview attempts/week yields approximately 6,943 hosted execution minutes
+per 30 days. Actual filtering, failures and cache effects change demand; this is
+not a monthly allocation. The same-PR build group cancels superseded builds,
+while the trusted publication group serializes publications. The single branch
+pilot does not demonstrate or authorize broad dependency-trigger rollout.
+
+The first upload produced version `5ec59841-b6e1-436d-b457-fdda264521a6`, but
+immediate routes/resources returned 404 and the publisher correctly posted
+failure status 53733384829 on that exact head. A later unchanged full smoke
+verified all 42 routes and all 3,764 files on the same immutable version, without
+reupload. API reconciliation confirmed the stable route stayed disabled and
+previews enabled. #965/#966 track bounded entry readiness; the original failed
+run is retained. Final corrected-publisher and stale-head acceptance remain
+in #922. Budget ledger #921 records 179 seconds consumed, one of three attempts
+admitted and no threshold crossed at this measurement.
 
 ### Completion matrix
 
