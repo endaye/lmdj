@@ -44,6 +44,21 @@ clean build/package outputs for byte reproducibility, runs local tests, and
 executes packaged Chromium journeys plus the WebKit capability boundary.
 Capability-limited automated cases are not physical device verification.
 
+## What the CI lane runs
+
+The `creator-web` job in [Core CI](../../.github/workflows/ci.yml) selects
+`creator` in the shared [Web CI proof action](../../.github/actions/web-ci-proof/action.yml).
+That action installs locked Web dependencies and the matching Chromium/WebKit
+browsers, prepares the pinned Emscripten toolchain, and invokes
+`scripts/creator-web.sh proof`, not just `test`. The job also rehydrates the
+deterministic audio fixtures with Git LFS before proof. A missing toolchain,
+browser or fixture is not evidence that the omitted journey passed.
+
+Use the local `test` command for its narrower feedback, but retain the complete
+proof result when comparing with this CI lane. A Creator lane result covers
+this Host's proof; it does not substitute for another selected Host's tests or
+for complete-project candidate verification.
+
 `scripts/creator-web.sh clean` removes only the validated `build/web/creator`
 subtree, not source or another Host's build directory. Proof also rebuilds this
 subtree; do not run conflicting local builds against it concurrently.
