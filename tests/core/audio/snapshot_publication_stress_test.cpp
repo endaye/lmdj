@@ -322,6 +322,13 @@ void test_pattern_publication_switches_are_conserved_under_concurrency() {
   const auto initial = engine.publish_pattern_view(pattern_at(1));
   LMDJ_CHECK(initial.result == PatternPublishResult::accepted);
   LMDJ_CHECK(engine.start().has_value());
+  // A rejected past-frame request consumes an allocation without an accepted
+  // publication. Make the generation/count distinction deterministic before
+  // exercising the same concurrent publication and final-state journey.
+  std::array<float, 128> warmup_left{}, warmup_right{};
+  engine.render(warmup_left.data(), warmup_right.data(), 128);
+  const auto rejected = engine.publish_pattern_view(pattern_at(2), 0);
+  LMDJ_CHECK(rejected.result == PatternPublishResult::publish_queue_full);
   ConcurrentObservers observers{engine};
 
   std::atomic<bool> rendering{true};
@@ -337,6 +344,7 @@ void test_pattern_publication_switches_are_conserved_under_concurrency() {
   });
 
   std::uint64_t accepted = 1;
+  auto last_accepted_generation = initial.generation;
   for (std::uint64_t revision = 2;
        revision <= kPatternPublications;
        ++revision) {
@@ -348,6 +356,7 @@ void test_pattern_publication_switches_are_conserved_under_concurrency() {
     auto publication = engine.publish_pattern_view(pattern_at(revision));
     LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
     ++accepted;
+    last_accepted_generation = publication.generation;
   }
   while (engine.pattern_telemetry().pending_generation != 0) {
     engine.reclaim_retired_patterns();
@@ -361,8 +370,9 @@ void test_pattern_publication_switches_are_conserved_under_concurrency() {
   LMDJ_CHECK(telemetry.accepted_publications == accepted);
   LMDJ_CHECK(telemetry.applied_publications == accepted);
   LMDJ_CHECK(telemetry.pending_generation == 0);
-  LMDJ_CHECK(telemetry.current_generation == accepted);
-  LMDJ_CHECK(telemetry.publication_rejections == 0);
+  LMDJ_CHECK(last_accepted_generation > accepted);
+  LMDJ_CHECK(telemetry.current_generation == last_accepted_generation);
+  LMDJ_CHECK(telemetry.publication_rejections == 1);
   LMDJ_CHECK(telemetry.superseded_publications == 0);
   LMDJ_CHECK(engine.current_pattern_id() ==
              PatternId{"30000000-0000-4000-8000-000000000001"});
