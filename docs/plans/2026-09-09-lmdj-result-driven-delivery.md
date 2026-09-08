@@ -122,6 +122,20 @@ report-adapter composition, not a new database or live storage configuration.
 The independent assessment Issue, authenticated workflow phases and retained-
 result discovery/reconciliation still need configuration and remote acceptance.
 
+The [T2f canonical metadata proposal](2026-09-09-lmdj-canary-canonical-metadata.md)
+composes the existing Host preparer with actual Product/Assembly/lock/compiled
+Assembly, Runtime identity and static changelog generators against pinned Git
+data in scratch storage. It returns complete file witnesses, preserves caller
+edits and rejects stale canonical inputs. The explicit proposed BUILD is not
+allocated or proven free. Snapshot creation, authenticated coordinator phases,
+fenced occupancy, version PR and post-squash acceptance remain outstanding.
+
+The [Host changelog Portal Task](2026-09-09-lmdj-host-changelog-portal.md), merged
+in PR #1024 at `262985b6d340b10abe7a978ba3c0ce0174c0619d`, adds independent
+Creator and Runtime current pages generated from their own manifests/history.
+Prepared entries are not publication/deployment/promotion evidence. Authenticated
+state addenda and older-canary promotion presentation remain later T4 work.
+
 ## Acceptance ledger
 
 The [result-driven planner entry](2026-09-09-lmdj-canary-result-wakeups.md)
@@ -158,8 +172,18 @@ scheduler/progress readers and workflow integration before live activation.
   The prior Creator failure is retained and debts are empty, not overall health.
 - Product failure → durable Issue → external repair PR → relevant revalidation:
   Creator log identifies URL upstream parity for `https://catalog.example.test/a^b/`.
-  The exact new observation's receipt in the Creator failure Issue, external
-  repair and revalidation remain unverified. No synthetic defect or CI repair.
+  The batch 131 Creator receipt is now verified: outbox-only run
+  `34283375314/1` on control `c5cbf6161320d2ddec1d8e3f76d051e591590726`
+  persisted queue/claim/ack/delivered generations 496–499 in Issue 817.
+  Its exact bot comment `5592457267` in open Issue 865 matches both queued and
+  POST bodies: 1,286 UTF-8 bytes, SHA256
+  `f484fe81e289f767de27dfcdcaec20fb0d6ccfcc84b41bff66ce1c790b643ab3`.
+  The matched observation is
+  `batch/1667437b6496d1dbf93343bf2a53b0c819f7c1133fa64d04d3549e10d2d43938`;
+  retained evidence is PR #1022 comment `5592566626`. This is one historical
+  delivery, not a complete backlog drain or a receipt for later batch 164.
+  External repair and relevant revalidation remain unverified. No synthetic
+  defect or CI repair.
   An older missing-evidence report has an observed outbox ack/delivered and
   matching bot comment `5590141663` in Issue 889; it is not this Creator failure.
   Manual outbox-only run `34263950671/1` succeeded with no product execution,
