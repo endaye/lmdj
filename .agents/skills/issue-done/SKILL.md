@@ -34,6 +34,10 @@ Before starting the shipping pipeline:
    # or, for a Task whose verification calls for fast core tests:
    scripts/core.sh test dev fast
    ```
+   When the Task is already committed, inspect
+   `git diff --diff-filter=A --name-only origin/main...HEAD`. If it adds files,
+   run `python3 tests/build/ci_change_scope_test.py` before push even when the
+   staged diff is empty. Confirm both path ownership and top-level admission.
 3. **Inspect Working Tree**: Ensure there are no uncommitted or untracked changes left behind unintentionally.
    ```bash
    git status --short

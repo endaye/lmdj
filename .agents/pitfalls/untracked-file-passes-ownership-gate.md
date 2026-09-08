@@ -15,6 +15,9 @@ recurrences:
   - date: 2026-09-04
     occurrence: https://github.com/endaye/lmdj/pull/631
     observed_by: Codex GPT-5
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/commit/76f59af8a99ef72a3256a14ce2a58edcbbd5b23a
+    observed_by: Codex
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -77,3 +80,9 @@ name does not match an existing prefix rule.
   full-rule reason because it safely selects every lane. The absorbed exit is
   the mandatory staged ownership and range preflight in
   `.agents/skills/issue-done/SKILL.md`; repair or replace it if this recurs.
+
+The Codex project configuration Task committed `.codex/config.toml` after
+Task-specific checks without running the ownership suite. Shipping preflight
+caught both missing path ownership and missing top-level admission before push.
+The skill now explicitly checks added paths in an already committed Task range;
+an empty staged diff is not evidence that the Task introduces no files.

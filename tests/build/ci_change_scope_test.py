@@ -188,7 +188,7 @@ CASES = {
 }
 
 TOP_LEVELS = {
-    ".agents", ".claude", ".gitattributes", ".github", ".gitignore",
+    ".agents", ".claude", ".codex", ".gitattributes", ".github", ".gitignore",
     "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "LICENSE",
     "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml",
     "output", "packages", "packaging", "products", "providers", "references",
