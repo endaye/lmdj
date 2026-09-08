@@ -103,6 +103,15 @@ allocation admission: reviewed GitHub identity, canonical allocation output
 proof, fenced occupancy/three-attempt coordinator and snapshot witness are
 still required. No live version PR is created by this internal library.
 
+The [T2d assessment runtime](2026-09-09-lmdj-canary-assessment-runtime.md)
+executes explicitly configured GLM→Kimi→Grok CLI attempts with complete input,
+process-group deadlines, bounded output, private temporary config and a
+constructed credential environment. Successful advice and compatibility stops
+reuse the protocol; all unavailable backends return a stable report intent.
+This unactivated adapter does not authenticate remote input, prove OS isolation
+or persist the Issue intent. Real provider acceptance, durable outbox/wake-up
+integration and the complete version PR coordinator remain outstanding.
+
 ## Acceptance ledger
 
 - Local reduction/failure behavior: 55 journal tests pass, including six new
@@ -146,6 +155,12 @@ still required. No live version PR is created by this internal library.
   from timing. Do not call it a successful complete drain or widen the timeout.
   Preserve the delivered receipts and reconcile outstanding work before another
   bounded report attempt. No blind business POST retry or product rerun.
+  The subsequent single-report recovery `34269085233/1`, control
+  `f1c3f8e4682d55b0c2ce7667ebb91b1302383844`, succeeded with product execution
+  skipped. Outbox ack `5590694834` and delivered `5590702337` identify Issue 944
+  comment `5590692171`, which was read and matched to the older batch 105
+  `web_runtime_host` failure. This is one durable historical delivery, not a
+  complete drain or the latest Creator failure receipt.
 - Remote request rate, queued-job recovery and end-to-end latency: unverified;
   inspect actual control results after merge, not only workflow conclusions.
 - Version assessment, candidate delivery, Netcup isolation and formal promotion:
