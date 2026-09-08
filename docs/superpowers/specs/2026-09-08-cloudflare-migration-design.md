@@ -154,6 +154,43 @@ not prove the user has no account or browser session. Account ID, effective plan
 repository installation, zone ownership, actual token scope, Preview behavior
 and cloud upload limits have not been authenticated or exercised.
 
+### Authenticated Cloudflare follow-up
+
+On 2026-09-08, the user supplied a locally stored API token. GET
+`/user/tokens/verify` returned `status: active`; GET `/user` returned the exact
+login email the user had specified. The token was not written to Git or printed.
+The earlier missing-credential observation above is historical and now resolved.
+
+The login can access several accounts. The dedicated candidate `LMDJ` has actual
+account ID `0b62b8881c07f48f7935f5380a1f55db`, with account creation timestamp
+`2026-09-08T03:20:20.386343Z`. The account selection question was presented to the
+user; read-only discovery is not an authorization to provision into this account.
+Unrelated accounts and their resources are deliberately omitted from this record.
+
+Authenticated GET results for the LMDJ candidate:
+
+| Endpoint suffix after account ID | Result | Interpretation |
+| --- | --- | --- |
+| `/workers/scripts` | empty list | No existing scripts visible to this credential |
+| `/pages/projects` | empty list | No existing Pages projects visible to this credential |
+| `/workers/subdomain` | 404, code 10007 | workers.dev subdomain has not been initialized |
+| `/subscriptions` | empty list | No subscriptions returned; does not prove a specific free allowance |
+| `/workers/account-settings` | default_usage_model=standard | Observed usage model, not a complete entitlement report |
+| `/builds/account/limits` | 403 | Effective Builds limit cannot be verified with this credential |
+
+The missing subdomain response directs the account operator to open Workers &
+Pages, which initializes it. Do not invent or claim a workers.dev hostname before
+observing the assigned result. API token authentication resolves the OAuth
+connectivity problem; it does not supply deployment write authority. T1 still
+needs selected target, effective build limit and proven publisher isolation.
+
+Workers Builds API setup also requires a Cloudflare GitHub App installation.
+Its production and preview triggers use deployment build tokens; merely changing
+the preview command to versions upload does not prove production isolation.
+Preserve the approved trusted-publisher fallback until the actual permission
+boundary is demonstrated. Reference:
+https://developers.cloudflare.com/workers/ci-cd/builds/api-reference/
+
 ## 2. Options and recommendation
 
 | Option | Benefit | Cost / unresolved concern | Proposed disposition |
