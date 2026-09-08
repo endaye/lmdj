@@ -433,10 +433,18 @@ function snapshotDocumentPath(sourcePath, version) {
 
 // Every current documentation page must reach the snapshot, so the count is
 // pinned rather than derived from the same directory it checks -- deriving it
-// would make the check vacuous. It moves whenever the current page set moves:
-// this Build added one page per newly active Sound Set Contract, which the
-// portal's one-page-per-active-Contract rule requires.
-const SOURCE_DOCUMENT_COUNT = 39;
+// would make the check vacuous. It moves whenever the current page set moves.
+//
+// 37 -> 39 at Build 44, one page per newly active Sound Set Contract.
+//
+// 39 -> 41 here, for `operations/creator-changelog.mdx` and
+// `operations/runtime-changelog.mdx`, added by #1024. That PR did not move
+// this constant, and nothing caught it: the pin only fires when a snapshot is
+// cut, and none was cut between #1024 and Build 45. So `main` carried a state
+// in which no Product Build could be allocated at all, for as long as nobody
+// tried. That is the cost of a pin whose only trigger is a rare operation --
+// worth remembering before adding another one.
+const SOURCE_DOCUMENT_COUNT = 41;
 
 export async function createSnapshotMetadata({
   repoRoot,

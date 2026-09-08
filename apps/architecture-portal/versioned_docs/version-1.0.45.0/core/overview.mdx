@@ -1,0 +1,29 @@
+---
+title: Headless Core 总览
+area: core
+status: implemented
+owners: [core]
+source_paths:
+  - packages
+  - apps/README.md
+  - products/lmdj/assembly.lock.json
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity />
+
+## 八个产品中立 Module
+
+<DiagramFrame title="LMDJ Headless Core" diagramId="lmdj-core" />
+
+Foundation 提供基础与 Sequence identity；Authoring Domain 通过 `lmdj.project.v4` 拥有 tick-native Project Truth；Project I/O 读取旧 Project 并只写 v4——打开不改写，首次持久化时提升——原子发布 Sample/Sequence mutation、receipt 与 portable Bundle；Project Cooker 生成不可变 Runtime Snapshot；Audio Runtime 消费 prepared bank 并发布整数 transport；Provider SDK 隔离 Capability/Attempt；Application Facade 是 Host 唯一 Core 入口；Web Runtime Platform 复用 frame-stamped input、Sequence、Voice/Bar state 与 AudioWorklet 接线。
+
+## 边界不变量
+
+Hosts 不解析 Project Bundle；Bundle 是 transfer-only；Provider 不接收可变 Project；Product-specific wiring 只在 Product Assembly；Runtime Snapshot 永不反写成 Project Truth。
+
+## 验证范围
+
+模块单元/组件、Host parity、Provider conformance、Assembly Lock 与 Headless Proof 提供自动化证据；物理设备体验另行验收。

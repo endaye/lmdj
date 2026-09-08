@@ -1,0 +1,26 @@
+---
+title: Native Host
+area: hosts
+status: implemented
+owners: [hosts, audio]
+host: native-host
+source_paths: [apps/native-host, tests/host/native_host_test.py]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="hosts" id="native-host" />
+
+## 目的
+Native Host `3.1.0` 是正式无界面 Host（binary `lmdj-native-host`）：从真实 Project v4 经 Application Facade `3.1.0` 进入控制面，并用 Audio Runtime `3.0.0` 的 frame clock、CaptureWriter 与实时数据面执行 Sequence recording 和设备验证；不承担产品 UI。本 Build 起它另外转发五个 Sound Set 操作，并保持独立于 Performance 操作表，使 P10-D20 的 Performance 清单仍然只是 Performance 清单。固定 Project 会话同时暴露 Facade 原样的 `sample.quota` 查询，用于取得 revision-bound Bank/Project headroom。它随每个分发包发出，分发成员资格受 `docs/governance/distribution-contents.md` 约束。
+## 数据流
+Pad input → Audio Runtime frame stamp → bounded CaptureWriter → Application Facade Sequence session/receipt；`sample.quota` → Application Facade → Project Truth ledger；Snapshot/Voice 数据面独立进入设备输出。Native Host 不解析 Bundle 或复制配额公式。
+## Performance 接入
+Host 用 `make_engine_performance_adapter(engine, make_engine_pattern_publication_gateway(engine))` 把 Facade 的 Performance 协作者接到真实设备数据面：adapter 提供的 clock、input sequencer、launch acknowledger 与 replay controller 直接写入 `ApplicationConfig`，因此 Performance 时间与 Pattern launch acknowledgement 来自 Audio Runtime，而不是 wall clock。命令边界上 Host 先 `performance_adapter_.service()`（并 drain trigger outcomes），再 `application_.service_performance()`；后者的失败被粘住并原样上报，不在 Host 侧掩盖。
+Host 转发 23 个 Facade 操作：`pattern.slot.assign` / `slot.clear` / `slot.move`，以及二十个 `performance.*` 操作——`performance.record.begin` / `record.event` / `record.launch-request` / `record.flush` / `record.stop` / `record.status`、`performance.save` / `discard` / `recording.bind`、`performance.list` / `inspect` / `rename` / `delete`、`performance.replay.begin` / `replay.status` / `replay.stop`、`performance.recovery.list` / `recovery.apply` / `recovery.discard` 与 `performance.resample.commit`。每个名字只决定 command/query surface，请求内容按原样交给 Facade；revision、authority、acknowledged launch 与 Project Truth 全部由 Core 决定。
+## 生命周期
+Host 管理设备开启、停止和 capture 文件；实时引擎所有权仍在 Audio Runtime。
+## 测试与证据
+Native host 测试验证协议、与 CLI 一致的 Sample quota 输出及设备输出；物理听感和端到端延迟单独验收。Performance 接入当前只有自动化状态与边界证据，没有物理演奏验收。
+## 限制
+它是薄 Host，不应扩展为隐藏的产品专属 Core。Performance adapter 已接入设备数据面不等于已完成物理演奏、听感或延迟验收，也不表示 tag、Release、部署或 Channel promotion 已发生。

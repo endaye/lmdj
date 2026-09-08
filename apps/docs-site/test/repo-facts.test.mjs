@@ -66,11 +66,11 @@ test('facts match the current locked product composition', async () => {
     'web-runtime-platform',
   ]);
   assert.deepEqual(facts.hosts.map(({id, version}) => ({id, version})), [
-    {id: 'core-cli', version: '3.1.0'},
-    {id: 'core-mcp', version: '3.1.0'},
-    {id: 'creator-web', version: '4.0.0'},
-    {id: 'native-host', version: '3.1.0'},
-    {id: 'web-runtime-host', version: '4.0.0'},
+    {id: 'core-cli', version: '3.2.0'},
+    {id: 'core-mcp', version: '3.2.0'},
+    {id: 'creator-web', version: '4.1.0'},
+    {id: 'native-host', version: '3.2.0'},
+    {id: 'web-runtime-host', version: '4.1.0'},
   ]);
   assert.equal(facts.providers.length, 2);
   assert.equal(facts.contracts.length, 10);
