@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
 
+import { WEB_RUNTIME_IDENTITY } from
+  "../../../../products/lmdj/generated/web-runtime-identity.mjs";
+
 
 const baseURL = process.env.LMDJ_WEB_HOST_BASE_URL ?? "http://127.0.0.1:4175";
 const productVersion = JSON.parse(await readFile(
@@ -12,6 +15,7 @@ const productVersion = JSON.parse(await readFile(
 const currentProductBuild = ["milestone", "minor", "build", "patch"]
   .map((name) => productVersion[name])
   .join(".");
+const currentHostVersion = WEB_RUNTIME_IDENTITY.hosts["web-runtime-host"].version;
 const wrongProductParts = currentProductBuild.split(".").map(Number);
 wrongProductParts[3] += 1;
 const wrongProductBuild = wrongProductParts.join(".");
@@ -45,7 +49,7 @@ test("packaged index binds exact canonical manifest bytes without inline script"
   expect(index).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/i);
   expect(manifest).toMatchObject({
     product_build: currentProductBuild,
-    host_version: "3.0.0",
+    host_version: currentHostVersion,
     protocol_version: 1,
     heap_bytes: 536_870_912,
   });
@@ -58,7 +62,7 @@ test("packaged host starts through the real Window and Dedicated Worker realms",
   const diagnostics = JSON.parse(await page.locator("#diagnostics").textContent());
   expect(diagnostics).toMatchObject({
     product_build: currentProductBuild,
-    host_version: "3.0.0",
+    host_version: currentHostVersion,
     protocol_version: 1,
   });
   expect(diagnostics.error_code ?? null).toBeNull();
