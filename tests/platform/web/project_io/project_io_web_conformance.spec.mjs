@@ -654,6 +654,64 @@ test("Web Project I/O refuses a directory publication leased on an ancestor", as
   expect(result.publishedBytes).toBe("scoped");
 });
 
+const STORAGE_SUCCEEDED = Object.freeze({
+  status: "succeeded",
+  errorCode: "",
+  storageCondition: "",
+});
+
+// A Project Bundle import ends in the same OPFS directory publication the
+// Sound Set Store uses, and nothing covered that end of it: every Project
+// Bundle test ran on the native platform. Without this case, "commit
+// acknowledged but no Project landed" is a claim about the Web platform that
+// no run in the repository can answer. The reopen page is a second Core
+// instance over the same persistent OPFS, which is the shape `project.open`
+// takes after an import.
+test("Web Project I/O publishes an imported Project Bundle into the Workspace", async ({context, browserName}) => {
+  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+  const projectId = "00000000-0000-4000-8000-000000000977";
+  const imported = await trackedPage(context);
+  await imported.goto(
+      "/project_io/project_io_web_test.html?action=project_bundle_import");
+  const afterCommit = await waitForResult(imported);
+  await imported.close();
+
+  expect(afterCommit.commit).toEqual(STORAGE_SUCCEEDED);
+  expect(afterCommit.commitProjectId).toBe(projectId);
+  // The receipt is worth nothing unless the bytes are where it says they are.
+  expect(afterCommit.workspaceDirectories).toContain("projects");
+  expect(afterCommit.projectsRootPresent).toBe(true);
+  expect(afterCommit.projectsRootDirectories).toEqual([`${projectId}.lmdj`]);
+  expect(afterCommit.destinationPresent).toBe(true);
+  expect(afterCommit.destinationManifestPresent).toBe(true);
+  // Published, not merely staged: the import staging directory is gone and no
+  // publication intent is left to hide the destination from enumeration.
+  expect(afterCommit.stagingPresent).toBe(false);
+  expect(afterCommit.storageIntents.filter(([, record]) => record !== ""))
+      .toEqual([]);
+  expect(afterCommit.listLocalProjects).toEqual(STORAGE_SUCCEEDED);
+  expect(afterCommit.listedProjectIds).toEqual([projectId]);
+  expect(afterCommit.reopenLease).toEqual(STORAGE_SUCCEEDED);
+  expect(afterCommit.reopen).toEqual(STORAGE_SUCCEEDED);
+  expect(afterCommit.reopenProjectId).toBe(projectId);
+  expect(afterCommit.reopenPatternCount).toBe(1);
+
+  const reopened = await trackedPage(context);
+  await reopened.goto(
+      "/project_io/project_io_web_test.html" +
+      "?action=project_bundle_import&phase=reopen");
+  const afterReload = await waitForResult(reopened);
+  await reopened.close();
+
+  expect(afterReload.commit.status).toBe("skipped");
+  expect(afterReload.projectsRootDirectories).toEqual([`${projectId}.lmdj`]);
+  expect(afterReload.listedProjectIds).toEqual([projectId]);
+  expect(afterReload.reopenLease).toEqual(STORAGE_SUCCEEDED);
+  expect(afterReload.reopen).toEqual(STORAGE_SUCCEEDED);
+  expect(afterReload.reopenProjectId).toBe(projectId);
+  expect(afterReload.reopenPatternCount).toBe(1);
+});
+
 const SOUNDSET_PUBLISHED = Object.freeze({
   status: "succeeded",
   errorCode: "",
