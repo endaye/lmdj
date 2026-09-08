@@ -386,6 +386,7 @@ class CatalogUpstreamFixture(http.server.BaseHTTPRequestHandler):
     response_content_type = "application/json"
     response_location: str | None = None
     declared_length: int | None = None
+    declared_header: dict | None = None
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         return
@@ -404,13 +405,28 @@ class CatalogUpstreamFixture(http.server.BaseHTTPRequestHandler):
         if type(self).response_location is not None:
             self.send_header("Location", type(self).response_location)
         self.send_header("Content-Type", type(self).response_content_type)
-        declared = type(self).declared_length
-        self.send_header(
-            "Content-Length", str(len(body) if declared is None else declared)
-        )
+        spelling = type(self).declared_header
+        if spelling is None:
+            declared = type(self).declared_length
+            self.send_header(
+                "Content-Length", str(len(body) if declared is None else declared)
+            )
+        elif spelling.get("omit") is not True:
+            if "duplicate" in spelling:
+                self.send_header("Content-Length", "2")
+                self.send_header("Content-Length", spelling["duplicate"])
+            elif "value" in spelling:
+                self.send_header("Content-Length", spelling["value"])
+            else:
+                self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if include_body and body:
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except BrokenPipeError:
+                # A refused response makes the client close before the body is
+                # written. Expected, and its traceback would drown a real one.
+                pass
 
     def do_GET(self) -> None:
         self._record_and_reply(include_body=True)
@@ -441,6 +457,7 @@ class CreatorCatalogProxyTest(CreatorServerTest):
         CatalogUpstreamFixture.response_content_type = "application/json"
         CatalogUpstreamFixture.response_location = None
         CatalogUpstreamFixture.declared_length = None
+        CatalogUpstreamFixture.declared_header = None
         self.upstream = http.server.ThreadingHTTPServer(
             ("127.0.0.1", 0), CatalogUpstreamFixture
         )
@@ -808,6 +825,101 @@ process.stdout.write(JSON.stringify(
         for elsewhere in ("http://catalog.example.test/", "http://127.0.0.2/"):
             self.assertEqual(self.python_outcome(elsewhere), ("refuse", None))
             self.assertEqual(self.worker_outcome(elsewhere), ("refuse", None))
+
+
+# The upstream RESPONSE surface, the second place the two implementations must
+# agree and the one that had no parity coverage at all. Two consecutive commits
+# that were closing divergences elsewhere each introduced one here -- the
+# declared-length pre-check landing on one side only, then a strict token that
+# made both sides agree on the rule while still disagreeing about the string it
+# ran on. Enumerable, unlike the configured-value surface, so it is enumerated:
+# status, every Content-Length spelling that behaves differently, the body
+# bound at each shape, and the emitted content type.
+#
+# `expected` is the status the PAGE sees, which is what both must produce.
+RESPONSE_SURFACE_CASES = (
+    ("plain 200", {}, 200, b"{}", None, 200),
+    ("upstream 404", {}, 404, b"", None, 404),
+    ("upstream 204", {}, 204, b"", None, 502),
+    ("upstream 500", {}, 500, b"", None, 502),
+    ("upstream 302", {}, 302, b"", "https://elsewhere.test/", 502),
+    ("length absent", {"omit": True}, 200, b"{}", None, 200),
+    ("length valid", {"value": "2"}, 200, b"{}", None, 200),
+    # Fetch trims each value; `email.message` keeps the padding.
+    ("length padded", {"value": "  2  "}, 200, b"{}", None, 200),
+    # Fetch joins repeats with ", "; `email.message` returns the first.
+    ("length duplicated", {"duplicate": "2"}, 200, b"{}", None, 502),
+    ("length duplicated unequal", {"duplicate": "99999999"}, 200, b"{}", None, 502),
+    # `int()` honours PEP 515; `Number()` reads hex.
+    ("length underscored", {"value": "5_0"}, 200, b"{}", None, 502),
+    ("length hex", {"value": "0x10"}, 200, b"{}", None, 502),
+    ("length signed", {"value": "+2"}, 200, b"{}", None, 502),
+    ("length negative", {"value": "-1"}, 200, b"{}", None, 502),
+    ("length words", {"value": "abc"}, 200, b"{}", None, 502),
+    ("length empty", {"value": ""}, 200, b"{}", None, 502),
+)
+
+
+class CatalogResponseSurfaceParityTest(CreatorCatalogProxyTest):
+    """Both implementations must answer the page identically for one upstream.
+
+    Inherits the proxy fixture so the Python side is driven through the real
+    handler over HTTP, and drives the Worker over the same case list in node.
+    """
+
+    WORKER = REPO_ROOT / "apps/web-runtime-host/deploy/cloudflare_worker.mjs"
+
+    def worker_status(self, header: dict, status: int, body: bytes,
+                      location: str | None) -> int:
+        script = """
+import worker from %s;
+const [header, status, body, location] = JSON.parse(process.argv[1]);
+const entries = [["content-type", "application/json"]];
+if (location !== null) entries.push(["location", location]);
+if (header.omit !== true) {
+  if (header.duplicate !== undefined) {
+    entries.push(["content-length", "2"], ["content-length", header.duplicate]);
+  } else if (header.value !== undefined) {
+    entries.push(["content-length", header.value]);
+  } else {
+    entries.push(["content-length", String(body.length)]);
+  }
+}
+globalThis.fetch = async () => new Response(
+  status === 204 || status === 302 ? null : body,
+  {status, headers: new Headers(entries)},
+);
+const response = await worker.fetch(
+  new Request("https://creator.lmdj.workers.dev/soundset-catalog/catalog/index.json"),
+  {ASSETS: {fetch: () => new Response("a")}, CATALOG_UPSTREAM: "https://catalog.example/base/"},
+);
+process.stdout.write(String(response.status));
+""" % json.dumps(str(self.WORKER))
+        completed = subprocess.run(
+            ["node", "--input-type=module", "-e", script,
+             json.dumps([header, status, body.decode(), location])],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        if completed.returncode != 0:
+            self.fail(f"the Worker crashed: {completed.stderr.strip()[:300]}")
+        return int(completed.stdout)
+
+    def test_both_answer_the_page_identically_for_one_upstream(self) -> None:
+        for label, header, status, body, location, expected in RESPONSE_SURFACE_CASES:
+            with self.subTest(case=label):
+                CatalogUpstreamFixture.received = []
+                CatalogUpstreamFixture.response_status = status
+                CatalogUpstreamFixture.response_body = body
+                CatalogUpstreamFixture.response_location = location
+                CatalogUpstreamFixture.declared_header = header
+                observed, _, _ = self.request(
+                    "GET", "/soundset-catalog/catalog/index.json"
+                )
+                self.assertEqual(observed, expected, "proof server")
+                self.assertEqual(
+                    self.worker_status(header, status, body, location),
+                    expected, "Worker",
+                )
 
 
 class CreatorNoCatalogTest(CreatorServerTest):

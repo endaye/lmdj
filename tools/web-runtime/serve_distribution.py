@@ -315,12 +315,19 @@ def read_catalog_object(
             # bounded read was added, which made the remedy for one divergence
             # a sibling of it: the same upstream answered 502 in production and
             # 200 here.
-            # One strict token or nothing, matching the Worker. `int()` honours
-            # PEP 515 underscores, so `5_0` parsed as 50 here and as NaN there;
-            # `email.message` returns only the first of duplicate headers while
-            # `headers.get` joins them. Same bound, different answers.
-            declared = response.headers.get("Content-Length")
-            if declared is not None:
+            # Reproduce Fetch's `Headers.get` rather than match its rule.
+            # It normalises each value and joins repeats with ", ";
+            # `email.message.get` does neither, keeping trailing whitespace and
+            # returning only the first of a repeated header. A strict token on
+            # both sides made the two agree on the RULE while they still
+            # disagreed about the STRING the rule runs on, so `  2  ` answered
+            # 200 there and 502 here -- a divergence created by the commit that
+            # closed two others. Third time in this work that matching a rule
+            # across two runtimes failed and reproducing the other side's view
+            # worked.
+            values = response.headers.get_all("Content-Length")
+            if values:
+                declared = ", ".join(value.strip() for value in values)
                 if not CONTENT_LENGTH_TOKEN.fullmatch(declared):
                     return 502, b""
                 if int(declared) > maximum_bytes:
