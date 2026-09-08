@@ -17,7 +17,7 @@ Every failure names the file, the rule, and the remedy.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import re
 import tempfile
@@ -112,14 +112,19 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     return data, body
 
 
-def lint_entry(path: Path, repo_root: Path = ROOT) -> list[str]:
-    """Return every rule this entry violates, each with file, rule and remedy."""
+def lint_entry(path: Path, repo_root: Path = ROOT,
+               utc_today: str | None = None) -> list[str]:
+    """Return every rule this entry violates, each with file, rule and remedy.
+
+    `utc_today` is injectable so a test can pin the boundary. Left to the clock
+    it is read per call rather than at import, because the value is compared
+    against dates a human just typed and a process outliving a UTC midnight
+    would otherwise judge today's entries against yesterday.
+    """
     problems: list[str] = []
     name = path.name
-    # Read per call rather than at import: the value is compared against dates
-    # a human just typed, and a process that outlives a UTC midnight would
-    # otherwise judge today's entries against yesterday.
-    utc_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if utc_today is None:
+        utc_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     def fail(rule: str, why: str, remedy: str) -> None:
         problems.append(f"{name}: {rule} -- why: {why}; remedy: {remedy}")
@@ -314,11 +319,11 @@ class LedgerLintFixtureTest(unittest.TestCase):
         for rule in ("recurrence-fields", "recurrence-date", "recurrence-occurrence"):
             self.assert_rule(problems, rule)
 
-    def raw_entry(self, text: str) -> list[str]:
+    def raw_entry(self, text: str, utc_today: str | None = None) -> list[str]:
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "sample-entry.md"
             p.write_text(text, encoding="utf-8")
-            return lint_entry(p, ROOT)
+            return lint_entry(p, ROOT, utc_today)
 
     def test_a_bare_scalar_key_fails_by_name_instead_of_crashing(self) -> None:
         good = self.GOOD.format(id="sample-entry", status="open", exit="none", extra="", body="text")
@@ -339,24 +344,35 @@ class LedgerLintFixtureTest(unittest.TestCase):
         # between local midnight and 16:00Z a `date:` taken from the machine
         # reads one day ahead of the `occurrence:` URL beside it. The ISO
         # shape check passes it and nothing else looks.
-        today = datetime.now(timezone.utc).date()
-        ahead = (today + timedelta(days=1)).isoformat()
+        # The clock is pinned rather than read twice. Computing `ahead` here
+        # and letting `lint_entry` read its own `utc_today` leaves a window one
+        # test-setup wide, once a day: a UTC midnight between the two makes
+        # `today + 1` equal the lint's idea of today, `>` stops firing, and the
+        # case fails for the calendar rather than for the code. A test about
+        # date boundaries must not have one.
+        pinned = date(2026, 9, 8)
+        ahead = (pinned + timedelta(days=1)).isoformat()
         entry = self.GOOD.format(id="sample-entry", status="open", exit="none",
                                  extra="", body="text")
-        self.assert_rule(self.raw_entry(entry.replace("2026-09-01", ahead, 1)),
-                         "recurrence-date-ahead")
+        self.assert_rule(
+            self.raw_entry(entry.replace("2026-09-01", ahead, 1),
+                           utc_today=pinned.isoformat()),
+            "recurrence-date-ahead")
         # Today is the boundary and must pass: an entry written now is not
         # ahead of now, and a gate that refused it would be unusable.
         self.assertEqual(
-            self.raw_entry(entry.replace("2026-09-01", today.isoformat(), 1)), [])
+            self.raw_entry(entry.replace("2026-09-01", pinned.isoformat(), 1),
+                           utc_today=pinned.isoformat()), [])
         # One-sided on purpose. `date` is when the pitfall was observed and an
         # occurrence can predate that by days, so an entry dated later than its
         # occurrence is legitimate; only the future is impossible.
         self.assertEqual(
-            self.raw_entry(entry.replace("2026-09-01", "2020-01-01", 1)), [])
+            self.raw_entry(entry.replace("2026-09-01", "2020-01-01", 1),
+                           utc_today=pinned.isoformat()), [])
         # A malformed date is still reported as malformed, not as ahead: the
         # comparison must not run on a string the shape check already rejected.
-        problems = self.raw_entry(entry.replace("2026-09-01", "9999-13-99", 1))
+        problems = self.raw_entry(entry.replace("2026-09-01", "9999-13-99", 1),
+                                  utc_today=pinned.isoformat())
         self.assert_rule(problems, "recurrence-date")
         self.assertFalse([x for x in problems if "recurrence-date-ahead" in x],
                          f"a malformed date must not also read as ahead: {problems}")
