@@ -665,6 +665,98 @@ source fact. No fresh Portal run is required or claimed under the current
 Task-scoped policy. Pitfall impact: none — existing complete-journey and exact
 receipt guidance applies; this appendix introduces no new protocol or process.
 
+### Candidate 02: full result, canonical acceptance and isolated settlement
+
+This evidence-only Task uses `docs/ci-o1-candidate2-complete-evidence`, based on
+`77e84e086298430d94be9135929a5ebdac1eba17`. Its only declared file is this
+ledger. All earlier bytes remain unchanged, including the earlier correctly
+timed pending observations. These evidence checks did not execute products,
+redispatch a workflow, write a journal or perform a release operation.
+
+[Candidate executor 34179165063/1](https://github.com/endaye/lmdj/actions/runs/34179165063/attempts/1)
+actually completed with success; its terminal API record was updated at
+`2026-09-08T03:02:16Z`. The request remains
+`o1-full-candidate-0fedd-20260908-02`, with origin `34177534122/1`, null base,
+target `0fedd7268e5f0f9a27390c3d8085387083f46e86`, control
+`bc23b4882276c54a8e30c6f1c2e8001fc4a00eb8`, and policy
+`874064884b84235f6e8337369001923975a6e63742308728bd9bedfa10ace961`.
+Original artifact `10039248329`, named
+`batch-verdict-0fedd7268e5f0f9a27390c3d8085387083f46e86-34179165063-1`,
+has ZIP SHA-256
+`424442acd3b1f3183b6344f43bf707c07c829ae8a480f1fdd7e89d6e987c29c2`.
+The complete original `needs.json`, `execution.json` and `verdict.json` bind
+that exact request. All sixteen canonical selected suites passed, including
+both stress suites. Verdict evidence digest is
+`ac2112426f2f0e06ff82b97c535a2f487ec1436acc1b5c4e64023180121b083b`.
+No missing, blocked, infrastructure or unselected suite was substituted for pass.
+
+Root ran the actual canonical `BatchEvidenceConsumer.verify_run` complete
+verification, with actual GET responses and the original origin/admission/verdict
+artifacts. It returned `canonical-consumer-accepted`, status passed, executor
+success and `release_authorized=false`. The origin attestation artifact
+`10037779077` has ZIP SHA-256
+`c6d33219f9db37aef526a459368fa6f51b2c1a5c039544e999073a7f1c085b7c`;
+the admission artifact `10038301423` retains the earlier recorded
+`c0bab42f…d66fd` hash. This consumer verifies the original durable-claim
+attestation; it does not use the latest journal replay as a replacement claim
+proof. Its reference retains origin/admission record digests, executor event,
+policy, target and evidence digest.
+
+The audit recorded local consumer head
+`eea13220a1b62b1aaf88b350afffe3e722f10a5b` and actual main
+`77e84e086298430d94be9135929a5ebdac1eba17`. This Task independently compared
+the consumer and imported evidence-validation/protocol source blobs against
+that actual main and found byte equality; it did not silently certify a newer
+unreviewed consumer. The canonical accepted verdict also equals the separately
+downloaded independent verdict in full, not only its pass count.
+
+[Ordinary settlement 34182221147/1](https://github.com/endaye/lmdj/actions/runs/34182221147/attempts/1)
+then completed successfully under control `77e84e08…`; terminal API update was
+`2026-09-08T03:05:35Z`. Original controller artifact `10039310386` has ZIP
+SHA-256 `cacaec1f35821cfbadc7f5b10ba194e7c28786bd82a824054a51b2dbc57a46f2`.
+Independent Codex audit `scheduler_storage_probe` authenticated the complete
+actual transport/writer/source/editor evidence, replayed all 54 events, and
+compared the whole state to the original controller artifact. The original
+51 complete comment objects were unchanged. The only additional events were
+51 observe, 52 result and 53 advance; result preceded candidate-slot advance and retained
+all sixteen passed outcomes for this exact executor and candidate.
+
+Both full GraphQL reads were byte identical (SHA-256
+`136422c1b5faeef1d58a39595e7dedb97385b103cc36f56cf406a76fa0b4f8f4`),
+with checkpoint head
+`762f0cd5f2dfdafe82995f4e62ae92eb265d4cc2837713d574f3e19cfa422414`
+and pending null. The result was idle/request null, active null and queue empty;
+all four jobs were terminal, only the controller succeeded and the other three
+were skipped. Automatic processed remained the newer `fe043fd3…`; its empty
+debts and all seven failure objects were unchanged. Existing requests and
+recovery-request state were also unchanged. Pending observed main `77e84e08…`
+without treating it as tested. A passed historical candidate did not rewind
+automatic progress or erase newer defects.
+
+The accepted original evidence and GET inventory are retained in
+`/tmp/lmdj-candidate2-canonical-accepted-34179165063`; the independent terminal
+run/jobs and original verdict ZIP are in
+`/tmp/lmdj-candidate2-terminal-independent.xtnd1f4b`. Complete before/after
+settlement evidence is in `/tmp/lmdj-o1-candidate2-settle-independent.pyPfZO`
+and `/tmp/lmdj-o1-candidate2-postsettle.qXvFeh`. The actual verdict artifact
+expires at `2026-10-08T03:02:12Z`; local copies do not extend platform retention
+or waive freshness and source checks at any later use.
+
+This establishes an actual complete accepted candidate only for fixed target
+`0fedd726…`, not current-main full health. It does not establish C3 execution-
+enabled debt recovery, T5/O2 activation, or a successful future report. No
+release intent, tag, Release, version allocation, deployment or publication
+was created. Those remain separate boundaries.
+
+Task verification: original candidate/verdict and settlement identity checks,
+source-blob equality, actual retained-state/prefix/two-read assertions, staged
+ownership, whitespace and nonempty committed-range docs-static. The final PR
+records results. Version impact: none — evidence-only, no identity allocation.
+Documentation impact: none — no Portal page, diagram, tooling, projected
+identity or documented product source fact changes. No new Portal run is
+required or claimed. Pitfall impact: none — existing complete-evidence and
+historical-candidate isolation rules applied; no implementation changed.
+
 ## Ledger verification
 
 Check linked actual run/Issue identities against the API and download actual
