@@ -6,6 +6,8 @@ tests do not turn a mocked write into evidence of platform permissions.
 """
 import json
 import os
+import re
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -37,6 +39,64 @@ class PipelineTests(unittest.TestCase):
     def capture(self, backend, **env):
         with mock.patch.dict(os.environ, {**self.env, **env}):
             pipeline.capture(self.directory, backend)
+
+    def test_schema_vocabulary_matches_every_label_the_validator_accepts(self):
+        policy = test_scope.load_policy(ROOT)
+        labels = pipeline.response_schema(policy)["properties"]["test_scope"]["properties"]["labels"]
+        self.assertEqual(labels["minItems"], 1,
+                         "why: empty advice is rejected downstream; remedy: require a label during generation")
+        allowed = labels["items"]["enum"]
+        self.assertCountEqual(allowed, ["test:none", "test:full"] + [f"test:{s}" for s in policy.suite_ids],
+                              "why: model and validator vocabularies differ; remedy: derive all labels from policy")
+        for label in allowed:
+            with self.subTest(label=label):
+                model = dict(self.model, test_scope={"labels": [label], "reason": "Scope rationale."})
+                self.assertEqual(review_scope.validate_review(policy, model), model)
+
+    def test_observed_bare_kimi_labels_still_trigger_fallback(self):
+        self.capture("glm", BACKEND_OUTCOME="failure")
+        malformed = dict(self.model, test_scope={"labels": ["creator", "docs_static", "portal"],
+                                                "reason": "Observed malformed labels from PR #855."})
+        self.capture("kimi", REVIEW_JSON=json.dumps(malformed))
+        history = pipeline.read(self.directory / "history.json")
+        self.assertEqual(history[-1]["error_class"], "invalid_output")
+        self.assertEqual(review_scope.next_backend(test_scope.load_policy(ROOT), history), "grok")
+        self.assertFalse((self.directory / "review.json").exists())
+
+    def test_collected_schema_reaches_both_claude_argument_lists(self):
+        target = {"review": "true", "head_sha": "a" * 40, "base_sha": "b" * 40,
+                  "body": "untrusted $(echo forged) body\nreview_schema=forged"}
+        expected = {
+            ("rev-parse", "HEAD"): b"c" * 40,
+            ("merge-base", "b" * 40, "a" * 40): b"b" * 40,
+            ("diff", "--no-ext-diff", "--no-textconv", "b" * 40, "a" * 40, "--"): b"untrusted diff",
+            ("diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames",
+             "b" * 40, "a" * 40, "--"): b"M\0docs/notes/a.md\0",
+        }
+        env = {**self.env, "GITHUB_REPOSITORY": "endaye/lmdj", "PR_NUMBER": "7", "HEAD_SHA": "a" * 40,
+               "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1"}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(pipeline.pr_review_target, "resolve_target", return_value=target), \
+                mock.patch.object(pipeline, "fetch") as fetch, \
+                mock.patch.object(pipeline, "git", side_effect=lambda *args: expected[args]):
+            pipeline.collect(self.directory)
+        fetch.assert_called_once_with("b" * 40, "a" * 40)
+        output = (self.directory / "output").read_text().splitlines()
+        self.assertEqual(len(output), 1, "why: schema output has extra records; remedy: serialize only trusted policy")
+        name, schema = output[0].split("=", 1)
+        self.assertEqual(name, "review_schema")
+        source = (ROOT / ".github/workflows/pr-review.yml").read_text()
+        arguments = re.findall(r"          claude_args: >-\n(.*?)(?=\n      -)", source, re.S)
+        self.assertEqual(len(arguments), 2)
+        for args in arguments:
+            parsed = shlex.split(args.replace("${{ steps.input.outputs.review_schema }}", schema))
+            actual = json.loads(parsed[parsed.index("--json-schema") + 1])
+            self.assertEqual(actual, pipeline.response_schema(test_scope.load_policy(ROOT)),
+                             "why: Claude did not receive trusted policy schema; remedy: wire the collect output")
+            allowed = actual["properties"]["test_scope"]["properties"]["labels"]["items"]["enum"]
+            for bare in ("creator", "docs_static", "portal", "test:unknown"):
+                self.assertNotIn(bare, allowed)
+        self.assertEqual((self.directory / "pr-body.md").read_text(), target["body"])
 
     def test_glm_success_persists_full_original_model(self):
         self.capture("glm")

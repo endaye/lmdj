@@ -61,6 +61,40 @@ def pages(path, key=None):
     raise review_scope.ReviewScopeError("why: GitHub pagination limit reached; remedy: explicitly reconcile the complete inventory")
 
 
+def response_schema(policy):
+    """Constrain generation to the same vocabulary the trusted validator accepts."""
+    return {
+        "type": "object", "additionalProperties": False,
+        "required": ["schema", "summary", "findings", "test_scope"],
+        "properties": {
+            "schema": {"const": review_scope.REVIEW_SCHEMA},
+            "summary": {"type": "string"},
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["path", "line", "body"],
+                    "properties": {"path": {"type": "string"},
+                                   "line": {"type": "integer", "minimum": 1},
+                                   "body": {"type": "string"}},
+                },
+            },
+            "test_scope": {
+                "type": "object", "additionalProperties": False,
+                "required": ["labels", "reason"],
+                "properties": {
+                    "labels": {
+                        "type": "array", "minItems": 1,
+                        "items": {"type": "string", "enum": ["test:none", "test:full"]
+                                  + [f"test:{suite}" for suite in policy.suite_ids]},
+                    },
+                    "reason": {"type": "string"},
+                },
+            },
+        },
+    }
+
+
 def collect(directory):
     directory.mkdir(parents=True, exist_ok=True)
     repo, number = os.environ["GITHUB_REPOSITORY"], int(os.environ["PR_NUMBER"])
@@ -82,6 +116,10 @@ def collect(directory):
     (directory / "pr.diff").write_bytes(diff)
     (directory / "pr-body.md").write_text(target["body"])
     save(directory / "history.json", [])
+    # Only trusted policy enters this single-line action argument; never PR/model text.
+    schema = json.dumps(response_schema(test_scope.load_policy(ROOT)), separators=(",", ":"))
+    with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+        output.write("review_schema=" + schema + "\n")
 
 
 def capture(directory, backend):

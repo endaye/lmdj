@@ -117,13 +117,15 @@ jobs:
             Return schema lmdj.ci-review-output.v1, nonempty summary, findings
             (path, RIGHT-side changed line, body; [] if clean), and test_scope
             with labels and reason. Read scripts/ci/self_test_policy.json for
-            allowed test:<suite-id> labels. test:full means every suite;
+            allowed suite IDs. Emit labels with the test: prefix, for example
+            test:creator, test:docs_static, test:portal. Bare suite IDs are invalid.
+            test:full means every suite;
             test:none only for pure explanatory docs without consumers.
             Include consumers, behavioral tests and concurrency risks. The
             deterministic file-rule floor will be unioned with your suggestions.
           claude_args: >-
             --tools "Read" --allowedTools "Read" --disable-slash-commands
-            --json-schema '{"type":"object","additionalProperties":false,"required":["schema","summary","findings","test_scope"],"properties":{"schema":{"const":"lmdj.ci-review-output.v1"},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{"path":{"type":"string"},"line":{"type":"integer","minimum":1},"body":{"type":"string"}}}},"test_scope":{"type":"object","additionalProperties":false,"required":["labels","reason"],"properties":{"labels":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}}}}}'
+            --json-schema '${{ steps.input.outputs.review_schema }}'
       - name: Validate glm result before considering fallback
         id: capture-glm
         if: ${{ !cancelled() && steps.input.outcome == 'success' }}
@@ -164,13 +166,15 @@ jobs:
             Return schema lmdj.ci-review-output.v1, nonempty summary, findings
             (path, RIGHT-side changed line, body; [] if clean), and test_scope
             with labels and reason. Read scripts/ci/self_test_policy.json for
-            allowed test:<suite-id> labels. test:full means every suite;
+            allowed suite IDs. Emit labels with the test: prefix, for example
+            test:creator, test:docs_static, test:portal. Bare suite IDs are invalid.
+            test:full means every suite;
             test:none only for pure explanatory docs without consumers.
             Include consumers, behavioral tests and concurrency risks. The
             deterministic file-rule floor will be unioned with your suggestions.
           claude_args: >-
             --tools "Read" --allowedTools "Read" --disable-slash-commands
-            --json-schema '{"type":"object","additionalProperties":false,"required":["schema","summary","findings","test_scope"],"properties":{"schema":{"const":"lmdj.ci-review-output.v1"},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{"path":{"type":"string"},"line":{"type":"integer","minimum":1},"body":{"type":"string"}}}},"test_scope":{"type":"object","additionalProperties":false,"required":["labels","reason"],"properties":{"labels":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}}}}}'
+            --json-schema '${{ steps.input.outputs.review_schema }}'
       - name: Validate kimi result before considering fallback
         id: capture-kimi
         if: ${{ !cancelled() && steps.input.outcome == 'success' && steps.capture-glm.outputs.reviewed != 'true' }}
