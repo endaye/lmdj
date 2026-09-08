@@ -71,7 +71,7 @@ jobs:
       github.ref == 'refs/heads/main' && github.run_attempt == '1' &&
       (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_run' ||
        github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     timeout-minutes: 10
     concurrency:
       group: self-test-report
@@ -425,7 +425,7 @@ jobs:
       inputs.batch_operation == 'cancel-probe' && needs.controller.result == 'success' &&
       needs.controller.outputs.diagnostic_ready == 'true'
     permissions: {}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     timeout-minutes: 5
     steps:
       - name: Wait for separately authorized exact-run cancellation

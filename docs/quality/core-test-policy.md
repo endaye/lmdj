@@ -285,9 +285,14 @@ named test no longer exists, so a rename cannot silently return them to the
 parallel phase. Widening a timing budget to buy parallelism would weaken the
 assertion; giving those two tests an idle machine does not.
 
-### Hosted control and untrusted code
+### Self-hosted control and untrusted code
 
-Trusted control must retain evidence even when self-hosted workloads are down.
+Trusted control uses the Contabo general pool, separate from the Netcup heavy
+executors. It can retain evidence when those heavy executors are down; it does
+not promise availability when all self-hosted control capacity is down. In that
+case work queues without buying Linux capacity, and existing durable state is
+retained until recovery. The control pool shares general jobs, not an exclusive
+reserved listener, and a host-wide Contabo outage remains a recovery gap.
 A verdict or reviewer publisher must not run PR-authored control code with
 write credentials. Fork or PR content is untrusted; title, label or changed
 paths do not grant trust. Carrying a reviewed external patch onto an authorized
@@ -300,15 +305,27 @@ decisions, and `tests/build/ci_hosted_runner_policy_test.py` enforces it. The
 test enumerates every job in `.github/workflows` whose `runs-on` can resolve to
 a GitHub-hosted label — a `runs-on` built from an expression counts, because it
 may resolve to one — and requires each to carry an entry naming a category and a
-reason. Four categories admit a job: `control-plane` for scope, trust, admission
-or verdict evidence that must survive a self-hosted outage; `adjudicator` for a
-job that republishes an already produced result and executes no workload;
-`deploy-authority` for deployment, signing or publication authority the CI runner
-users are deliberately denied; and `platform` for a recorded incompatibility. A
-fifth, `temporary`, admits a job that is *not* justified on the merits and must
+reason. Routine Linux control, adjudication and product execution must use
+literal self-hosted labels, even if someone adds a hosted allowlist entry.
+The controller, completion relay, scope, verdicts, Mac selector, read-only audit
+and retired queue diagnostics use `ci-general` plus `contabo`; they never run
+on the busy `ci-core` / `ci-web-heavy` executors merely to publish a result.
+Remaining categories are `deploy-authority` for credentials deliberately denied
+to CI users and `platform` for a recorded exception. `temporary` admits a job
+that is *not* justified on the merits and must
 name the Issue that removes it. The test also rejects entries whose job no longer
 exists or no longer runs hosted, so the list cannot outlive what it describes,
 and it separately requires every `ci-core` job to stay off hosted runners.
+
+The Owner explicitly retains paid GitHub-hosted macOS availability recovery:
+the MacBook being offline or the selected runner failing to publish a terminal
+result may use hosted macOS. Busy alone queues; a published product test failure
+is final, not grounds for another paid run. Preserve the existing runner-status
+unknown/fork safety behavior. Hosted publication/deployment authority and the
+disabled, separately budget-approved untrusted Preview pilot are not migrated
+to privileged persistent CI users in the name of cost. This is therefore
+**zero routine Linux hosted compute**, not a promise of zero account charges:
+macOS recovery, explicit privileged operations and storage remain separate.
 
 This exists because prose drifts. Historical watchdog polling spent hosted
 minutes without producing evidence; a workload's short runtime alone does not
@@ -418,8 +435,8 @@ against 16-19 GitHub-hosted; its netcup timings are not yet recorded, so its
 75-minute limit stays a hang detector with headroom rather than a performance
 budget.
 
-Linux CI routes by role label rather than by the shared `contabo` origin label,
-which is no longer a selection condition anywhere. The Contabo Singapore host,
+Linux product CI routes by role label; short control also pins the `contabo` origin.
+Product lanes do not select a host by that origin label. The Contabo Singapore host,
 which also runs LMDJ staging, keeps `shared-with-staging` and carries the
 `ci-general` role only, under a resource slice that reserves at least about
 2 vCPU and 8 GiB for the application and the OS. The CI-only netcup node
@@ -440,10 +457,11 @@ burst ramps one service per cooldown interval rather than jumping to the
 ceiling; that ramp latency is the accepted cost of keeping credentials off the
 hosts, not a defect. Routing splits two ways:
 
-- **Hosted control plane, the declared exception.** Trust, self-test verdict
-  and macOS selection remain independent of workload-host availability.
+- **Self-hosted control on Contabo.** Trust, self-test verdict and macOS
+  selection use the general pool pinned to Contabo, separate from Netcup heavy
+  workloads. There is no Linux hosted fallback if that control pool is offline.
   Retired Pre-heavy/PR Gate jobs are not PR admission or merge authority.
-  The explicit hosted policy records each current job's justification.
+  The hosted policy retains macOS recovery and separately privileged exceptions.
 - **Self-hosted workload, addressed by role.** The four Web lanes — Web
   Toolchain, Web Runtime Host, Creator and Web Runtime Lab — name
   `ci-web-heavy` literally. The five general Linux jobs — Docs / static,
