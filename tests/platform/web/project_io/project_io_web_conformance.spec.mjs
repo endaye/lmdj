@@ -368,12 +368,16 @@ async function readPublishedSoundSetManifest(page, manifestSha256) {
   }, {manifestSha256});
 }
 
-// Exactly what an interrupted directory publication leaves behind: a
-// destination that exists but does not hold every file yet, hidden from
-// enumeration by a pending `lmdj.storage.directory-publication.v1` intent.
-// Only acquiring the destination writer lease clears it.
-async function wedgeInterruptedSoundSetPublication(page, manifestSha256) {
-  return page.evaluate(async ({manifestSha256}) => {
+// What an interrupted directory publication leaves behind at one of the fault
+// points `PUBLICATION_FAULT_POINTS` enumerates: the staging source (only
+// removed after the commit), a destination that exists, and a pending
+// `lmdj.storage.directory-publication.v1` intent hiding it from enumeration.
+// `during_directory_copy` leaves the destination incomplete;
+// `after_directory_copy` leaves it complete and still uncommitted, which reads
+// perfectly and is not published. Only acquiring the destination writer lease
+// clears either.
+async function wedgeInterruptedSoundSetPublication(page, manifestSha256, point) {
+  return page.evaluate(async ({manifestSha256, point}) => {
     const destination =
         `/lmdj-workspace/.lmdj-host/soundsets/${manifestSha256}`;
     const source =
@@ -387,7 +391,21 @@ async function wedgeInterruptedSoundSetPublication(page, manifestSha256) {
     const host = await root.getDirectoryHandle(".lmdj-host");
     const sets = await host.getDirectoryHandle("soundsets");
     const set = await sets.getDirectoryHandle(manifestSha256);
-    await set.removeEntry("manifest.json");
+    // The staging source a real interruption always leaves, copied out of the
+    // published Set so its bytes are the Set's own.
+    const staging = await host.getDirectoryHandle(
+        "soundset-staging", {create: true});
+    const orphan = await staging.getDirectoryHandle(
+        manifestSha256, {create: true});
+    for await (const entry of set.values()) {
+      const copy = await orphan.getFileHandle(entry.name, {create: true});
+      const writable = await copy.createWritable({keepExistingData: false});
+      await writable.write(await (await entry.getFile()).arrayBuffer());
+      await writable.close();
+    }
+    if (point === "during_directory_copy") {
+      await set.removeEntry("manifest.json");
+    }
     const intents = await host.getDirectoryHandle(
         "storage-intents", {create: true});
     const directory = await intents.getDirectoryHandle(scope, {create: true});
@@ -405,8 +423,12 @@ async function wedgeInterruptedSoundSetPublication(page, manifestSha256) {
     for await (const entry of set.values()) {
       remaining.push(entry.name);
     }
-    return remaining;
-  }, {manifestSha256});
+    const staged = [];
+    for await (const entry of orphan.values()) {
+      staged.push(entry.name);
+    }
+    return {remaining: remaining.length, staged: staged.length};
+  }, {manifestSha256, point});
 }
 
 async function snapshotLeaseEntries(page) {
@@ -626,7 +648,6 @@ test("Web Project I/O publishes a verified Sound Set into the Workspace Set Stor
   const result = await waitForResult(page);
 
   expect(result.acquire).toEqual(SOUNDSET_PUBLISHED);
-  expect(result.acquireReason).toBe("");
   // Idempotent, and answered without touching the Catalog again.
   expect(result.secondAcquire).toEqual(SOUNDSET_PUBLISHED);
   expect(result.catalogReadsAfterAcquire).toBe(2);
@@ -642,40 +663,48 @@ test("Web Project I/O publishes a verified Sound Set into the Workspace Set Stor
       .toBe(result.publishedSets[0]);
   expect(result.acquireTotalBytes).toBe(
       Buffer.byteLength(manifest, "utf8") + "RIFF-web-soundset-blob".length);
-  // Staging exists and is empty: bytes are not left behind in it.
+  // A publication that ran to the end cleans up after itself.
+  expect(result.publicationIntentPresent).toBe(false);
   expect(result.stagingRootPresent).toBe(true);
   expect(result.stagingDirectories).toEqual([]);
 });
 
 // Recovery is what makes the destination lease worth acquiring before the
-// store decides whether the Set is already there. An interrupted copy leaves
-// a destination directory that exists but is unreadable; a store that
-// inspected it before leasing would call that a corrupted Set forever.
-test("Web Project I/O recovers an interrupted Sound Set publication", async ({context, browserName}) => {
-  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
-  const first = await trackedPage(context);
-  await first.goto(
-      "/project_io/project_io_web_test.html?action=soundset_store_publish");
-  const published = await waitForResult(first);
-  expect(published.acquire).toEqual(SOUNDSET_PUBLISHED);
-  const manifestSha256 = published.expectedManifestSha256;
-  expect(await wedgeInterruptedSoundSetPublication(first, manifestSha256))
-      .toHaveLength(1);
-  await first.close();
+// store decides whether the Set is already there. Both interruptions below
+// leave a destination the store must not accept: the first unreadable, the
+// second complete but uncommitted and therefore invisible to `list`.
+for (const point of ["during_directory_copy", "after_directory_copy"]) {
+  test(`Web Project I/O recovers a Sound Set publication interrupted at ${point}`, async ({context, browserName}) => {
+    test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+    const first = await trackedPage(context);
+    await first.goto(
+        "/project_io/project_io_web_test.html?action=soundset_store_publish");
+    const published = await waitForResult(first);
+    expect(published.acquire).toEqual(SOUNDSET_PUBLISHED);
+    const manifestSha256 = published.expectedManifestSha256;
+    expect(await wedgeInterruptedSoundSetPublication(
+        first, manifestSha256, point)).toEqual({
+      remaining: point === "during_directory_copy" ? 1 : 2,
+      staged: 2,
+    });
+    await first.close();
 
-  const retry = await trackedPage(context);
-  await retry.goto(
-      "/project_io/project_io_web_test.html?action=soundset_store_publish");
-  const recovered = await waitForResult(retry);
-  expect(recovered.acquire).toEqual(SOUNDSET_PUBLISHED);
-  expect(recovered.acquireReason).toBe("");
-  // The leftovers were cleared and the Set was fetched and published again.
-  expect(recovered.catalogReadsAfterAcquire).toBe(2);
-  expect(recovered.publishedSets).toEqual([manifestSha256]);
-  expect(recovered.artifactBytes).toBe("RIFF-web-soundset-blob");
-  expect(recovered.stagingDirectories).toEqual([]);
-  await retry.close();
-});
+    const retry = await trackedPage(context);
+    await retry.goto(
+        "/project_io/project_io_web_test.html?action=soundset_store_publish");
+    const recovered = await waitForResult(retry);
+    expect(recovered.acquire).toEqual(SOUNDSET_PUBLISHED);
+    // The leftovers were cleared and the Set was fetched and published again,
+    // so it is enumerated rather than merely present on disk.
+    expect(recovered.catalogReadsAfterAcquire).toBe(2);
+    expect(recovered.publishedSets).toEqual([manifestSha256]);
+    expect(recovered.listedCount).toBe(1);
+    expect(recovered.artifactBytes).toBe("RIFF-web-soundset-blob");
+    expect(recovered.publicationIntentPresent).toBe(false);
+    expect(recovered.stagingDirectories).toEqual([]);
+    await retry.close();
+  });
+}
 
 test("Web Project I/O runs common parity and interruption recovery", async ({page, context, browserName}, testInfo) => {
   test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);

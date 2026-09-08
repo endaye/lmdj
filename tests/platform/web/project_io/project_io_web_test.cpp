@@ -458,17 +458,22 @@ class WebCatalogTransport final : public lmdj::project_io::CatalogTransport {
     using ObjectResult = lmdj::foundation::Result<std::vector<std::byte>>;
     ++reads_;
     const auto found = objects_.find(object.sha256);
-    if (found == objects_.end()) {
-      return ObjectResult::failure(
-          lmdj::foundation::Error{
-              lmdj::foundation::ErrorCode::not_found,
-              "web catalog fixture has no such object"});
-    }
-    if (found->second.size() > maximum_bytes) {
+    // The refusal shape soundset_catalog_transport.hpp locks: an object that
+    // cannot be resolved and one that is over the bound are the same fact.
+    const auto unavailable = [](std::string message) {
       return ObjectResult::failure(
           lmdj::foundation::Error{
               lmdj::foundation::ErrorCode::io_error,
-              "web catalog fixture object exceeds the bound"});
+              std::move(message),
+              {{"reason",
+                std::string{
+                    lmdj::project_io::kSoundSetReasonCatalogUnavailable}}}});
+    };
+    if (found == objects_.end()) {
+      return unavailable("web catalog fixture has no such object");
+    }
+    if (found->second.size() > maximum_bytes) {
+      return unavailable("web catalog fixture object exceeds the bound");
     }
     const auto* begin =
         reinterpret_cast<const std::byte*>(found->second.data());
@@ -501,6 +506,11 @@ nlohmann::json soundset_store_publish(
   const auto workspace = std::filesystem::path{"/lmdj-workspace"};
   const auto sets_root = workspace / ".lmdj-host" / "soundsets";
   const auto staging_root = workspace / ".lmdj-host" / "soundset-staging";
+  // A publication that ran to the end owns its own cleanup: the pending
+  // intent that hides a half-built destination from enumeration must be gone.
+  const auto publication_intent = workspace / ".lmdj-host" / "storage-intents" /
+      sha256_hex(sets_root.generic_string() + "/" + manifest_sha256) /
+      "directory-publication.json";
   project_io::SoundSetStore store{
       workspace,
       project_io::SoundSetStoreLimits{
@@ -554,6 +564,8 @@ nlohmann::json soundset_store_publish(
       {"artifactBytes",
        artifact.has_value() ? nlohmann::json(text(artifact.value()))
                             : nlohmann::json(nullptr)},
+      {"publicationIntentPresent",
+       value(platform->exists(publication_intent), "publication intent")},
       {"stagingRootPresent", staging_present},
       {"stagingDirectories",
        staging_present

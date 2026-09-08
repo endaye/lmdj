@@ -309,6 +309,26 @@ struct SoundSetStore::Impl {
     return foundation::Result<void>::success();
   }
 
+  // Whether the Set Store *enumerates* this Set. A destination directory that
+  // exists is not the same fact as a published Set: a platform that cannot
+  // rename publishes by copying, so between the last copied byte and the
+  // commit record the directory holds every file and is still uncommitted.
+  // Only enumeration knows the difference, and answering from the directory
+  // alone would report a Set as installed that `list` refuses to show.
+  bool enumerated(const std::string& manifest_sha256) const {
+    const auto root = sets_root();
+    const auto present = platform->directory_exists(root);
+    if (!present.has_value() || !present.value()) {
+      return false;
+    }
+    const auto names = platform->list_directories(root);
+    if (!names.has_value()) {
+      return false;
+    }
+    return std::find(names.value().begin(), names.value().end(),
+                     manifest_sha256) != names.value().end();
+  }
+
   // Load a published Set from its own directory. A Set that is not there, or
   // whose bytes no longer answer to their own hash, is simply not published.
   foundation::Result<StoredSoundSet> load(
@@ -506,14 +526,19 @@ foundation::Result<StoredSoundSet> SoundSetStore::acquire(
     return stored;
   };
 
-  // A Set already in the store is the answer; the Catalog is not consulted
-  // and no writer lease is taken. A published Set is immutable, so reading it
-  // needs no exclusion, and taking a lease here would make one Host's routine
-  // Catalog refresh refuse an installed Set to every other Host on the same
-  // Workspace.
-  const auto cached = impl_->load(entry.manifest_sha256);
-  if (cached.has_value()) {
-    return answer(cached);
+  // A Set the store already enumerates is the answer; the Catalog is not
+  // consulted and no writer lease is taken. A published Set is immutable, so
+  // reading it needs no exclusion, and taking a lease here would make one
+  // Host's routine Catalog refresh refuse an installed Set to every other Host
+  // on the same Workspace. The enumeration check is what keeps that shortcut
+  // honest: an interrupted copy can leave a destination that reads perfectly
+  // and is not published, and this path never takes the lease that would
+  // recover it.
+  if (impl_->enumerated(entry.manifest_sha256)) {
+    const auto cached = impl_->load(entry.manifest_sha256);
+    if (cached.has_value()) {
+      return answer(cached);
+    }
   }
 
   // Nothing readable is published, so this acquisition may have to write.

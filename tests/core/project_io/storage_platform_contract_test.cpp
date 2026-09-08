@@ -753,6 +753,10 @@ void test_directory_transfer_primitives_are_atomic_and_path_safe() {
   LMDJ_CHECK(
       platform->list_directories(root).value() == expected_directories);
 
+  // Native latitude: publication here renames atomically and never reads the
+  // lease, so the ancestor lease above is enough. A platform that publishes by
+  // copy requires the lease on the destination path itself; the Web
+  // conformance suite is where that obligation is exercised.
   const auto staging = root / "staging";
   const auto destination = root / "published";
   LMDJ_CHECK(platform->ensure_directory(staging / "nested").has_value());

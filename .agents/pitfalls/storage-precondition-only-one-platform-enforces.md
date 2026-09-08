@@ -62,3 +62,14 @@ platform.
   not noise: it means the refusal came from the platform rather than from a
   named Core check. Read `details.storage_condition` at the Core boundary
   before it is dropped, rather than guessing from the public refusal.
+
+`exit: none` because no eligible mechanism exists yet. "This Task added a
+storage write path" is not mechanically decidable from a diff: the write can
+arrive through a helper, a new platform method, or an existing call whose
+arguments changed, so any gate would be a keyword scan that both misses real
+cases and blocks innocent ones. The invariant is also not settled — the Web
+platform's preconditions are being written onto `storage_platform.hpp` as they
+are discovered, one at a time, and a gate cannot enforce a contract that is
+still being recovered from the implementation. Revisit when the interface
+states its full precondition set; until then this entry and the header comments
+are the mechanism.

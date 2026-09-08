@@ -76,8 +76,9 @@ class ProjectStoragePlatform {
         });
   }
   // Publishes a staged directory at a destination that must not already
-  // exist. The caller must hold a writer lease on the *destination*, and must
-  // have acquired it before it decided that the destination was absent: a
+  // exist. The caller must hold a writer lease on the *destination path
+  // itself* -- a lease on a covering ancestor does not satisfy this -- and
+  // must have acquired it before it decided the destination was absent: a
   // platform that cannot rename atomically publishes by copy, and that lease
   // is both what excludes other writers from the half-built destination and
   // what recovers an interrupted publication -- recovery runs when the lease
