@@ -121,7 +121,11 @@ main push 只唤醒轻量调度器，不直接展开矩阵；批次完成也唤�
 完成接续不得让 workflow 直接订阅自己的 `workflow_run`：实际平台已拒绝该配置。
 既有 `self-test-report.yml` 保持唯一有状态控制器与执行调用者；只读
 `incremental-completion.yml` 中继其真实终态，保留精确父 run／attempt 的认证收据。
-控制器验证中继本身、原父运行及其与 durable active executor 的关联后才结算／接续；
+控制器验证中继本身、原父运行及其与 durable active executor 的关联后才结算；
+没有 active 时，已认证批次完成回调还须独立读取 main：main 不同于 durable processed
+才复用原调度器恢复完整未处理区间。被取消且未取得 claim 的 push 也可能有此唤醒价值，
+其 conclusion 不是测试证据。无变化的空闲回调不写 journal、不创建新请求；无关父运行
+不能结算或抢占已有 active。main 读取失败阻断此次恢复，不把读取失败当作空闲。
 artifact 只是可核验关联，不是调度状态、执行请求或测试通过证据。中继不写 journal、
 不启动产品任务，也不迁移现有 writer／workflow 身份。
 调度器采用可信 main control revision，重新读取真实 main 和持久状态，不按事件顺序推进：
@@ -130,6 +134,9 @@ artifact 只是可核验关联，不是调度状态、执行请求或测试通�
 2. 空闲且有变化：固定最新 T，先持久化不可变批次请求，再启动执行。
 3. 有有效免测区间且无待补测范围：记录 `not-required` 及理由、推进进度，不启动测试。
 4. 终态结果持久化后推进进度，再次读取 main；有变化接下一轮，否则退出。
+
+若 push 在取得 claim 前取消，而完成回调到达时已经空闲，执行同一第 2 步，
+不是把被取消的父运行补记为已测。固定目标取重新读取的最新 main，不取父运行旧 head。
 
 状态至少含 generation、processed SHA、active batch／request ID、pending target、
 启动状态、结果引用、未覆盖 suite 债务和未解决失败引用。持久化介质、写者认证、
