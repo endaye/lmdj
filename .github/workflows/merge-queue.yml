@@ -17,7 +17,7 @@ permissions: {}
 jobs:
   route:
     if: ${{ github.event_name != 'schedule' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     timeout-minutes: 1
     permissions: {}
     outputs:
@@ -59,7 +59,7 @@ jobs:
     # It does not qualify for the hosted-control-plane exception. That
     # exception protects scope, trust, admission and verdict evidence, and this
     # job publishes none of it -- `route` above makes the admission decision
-    # and stays hosted, which is the half that is evidence. And the failure
+    # and now uses the separate Contabo control pool. And the failure
     # mode it would guard against does not exist here: when every self-hosted
     # runner is down, the validation this job waits for cannot run either, so
     # there is nothing for it to wait on.
@@ -127,7 +127,7 @@ jobs:
   finalize:
     needs: [route, queue-item]
     if: ${{ always() && needs.route.result == 'success' && needs.route.outputs.mode == 'controller' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     timeout-minutes: 10
     permissions:
       actions: read

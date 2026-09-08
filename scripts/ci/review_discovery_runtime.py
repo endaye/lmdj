@@ -181,6 +181,34 @@ class DiscoveryRuntime:
             return
         self.persist("disposition", {"identity": ident, "status": status, "proof": proof})
 
+    def next_obligation(self):
+        """Least recently registered/visited live obligation, from durable events.
+
+        Reuse closed v1 records; terminal history never occupies this budget.
+        New registrations enter behind older obligations, not ahead of retries.
+        """
+        order = {}
+        for event in self.state['seen_events'].values():
+            data, generation = event['data'], event['generation']
+            if event['type'] == 'inventory':
+                for record in data['runs']:
+                    order[protocol.identity(record['identity'])] = generation
+            elif event['type'] in {'attempt', 'disposition'}:
+                order[protocol.identity(data['identity'])] = generation
+        pending = [row for row in self.state['runs'].values() if row['status'] in protocol.UNRESOLVED]
+        if not pending:
+            return None
+        row = min(pending, key=lambda row: (order[protocol.identity(row['identity'])],
+                  row['identity']['run_id'], row['identity']['attempt']))
+        return deepcopy(row['identity'])
+
+    def rotate_obligation(self, ident):
+        row = self.state['runs'][protocol.identity(ident)]
+        if row['status'] in protocol.UNRESOLVED:
+            # Even unchanged/unavailable/live evidence consumes its fair turn.
+            # The original disposition/proof is retained, never made successful.
+            self.persist('disposition', {key: deepcopy(row[key]) for key in ('identity', 'status', 'proof')})
+
     def process_attempt(self, run_id, attempt):
         ident = {"run_id": run_id, "attempt": attempt}
         prior = self.state["runs"][protocol.identity(ident)]
@@ -271,6 +299,8 @@ class DiscoveryRuntime:
             require(attempt <= observed["run_attempt"], "callback names an unobserved future attempt")
             self.register_attempts(observed)
             self.process_attempt(run_id, attempt)
+        obligation = self.next_obligation()
+        visited = set()
         if self.state["runs"] and self.state["metadata_scan"]["active"] is None:
             self.persist("metadata-start", {"round": self.state["metadata_scan"]["round"],
                 "run_ids": sorted({r["identity"]["run_id"] for r in self.state["runs"].values()})})
@@ -294,6 +324,18 @@ class DiscoveryRuntime:
             if outcome["status"] == "observed":
                 for current in range(1, observed["run_attempt"] + 1):
                     self.process_attempt(number, current)
+                    visited.add(f'{number}/{current}')
+        if obligation is not None:
+            key = protocol.identity(obligation)
+            if key not in visited:
+                try:
+                    observed = self.observe_run(obligation['run_id'])
+                except Exception:
+                    observed = None  # Exact-attempt authentication still runs below.
+                if observed is not None:
+                    self.register_attempts(observed)
+                self.process_attempt(obligation['run_id'], obligation['attempt'])
+            self.rotate_obligation(obligation)
         inventory_pending = protocol.summary(self.state)["latest_inventory_end"] < utc(now - timedelta(minutes=2))
         return {"schema": "lmdj.ci-review-discovery-report.v1", "state": protocol.summary(self.state), "errors": errors,
                 "inventory_pending": inventory_pending,

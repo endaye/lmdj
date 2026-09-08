@@ -145,7 +145,8 @@ RELEASE_NODE_CONSUMERS = (
 )
 FORMAL_RESULTS = FORMAL_LANE_JOBS + SUPPORT_JOBS
 # Review is exclusively in pr-review.yml; Core CI has no non-lane reviewers.
-GENERAL_ROLE_NON_LANE_JOBS = ()
+GENERAL_ROLE_NON_LANE_JOBS = ("change-scope", "pre-heavy-gate", "select-macos-runner",
+                              "core-macos", "core-asan-macos", "batch-verdict")
 GATING_PREFLIGHT_JOBS = (
     "docs-static", "ci-contract", "deploy-contract", "chameleon-lab",
     "web-toolchain-conformance", "web-runtime-host", "creator-web",
@@ -361,39 +362,25 @@ class CiWorkflowTopologyTest(unittest.TestCase):
 
     def test_change_scope_has_three_minute_limit_zero_dependency_install_and_live_pr_read(self):
         job = self.workflow_job("change-scope")
-        for text in ("runs-on: ubuntu-24.04", "timeout-minutes: 3", "fetch-depth: 0", "batch_execution.py prepare"):
+        for text in ("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", "timeout-minutes: 3", "fetch-depth: 0", "batch_execution.py prepare"):
             self.assertIn(text, job)
         for forbidden in (r"\bnpm\b", r"\bpip(?:3)?\b", r"\bcmake\b", "actions/runners", "SELF_HOSTED_RUNNER_READ_TOKEN"):
             self.assertNotRegex(job, forbidden)
         self.assertNotIn("pull-requests:", self.main_source)
 
-    def test_change_scope_and_pr_gate_stay_on_the_hosted_control_plane(self) -> None:
-        """The control plane must outlive the pool it adjudicates.
-
-        Change Scope publishes what runs and whether the head is trusted;
-        Pre-heavy Gate admits the native-heavy sequence; PR Gate decides
-        whether the run passed. These four must not follow Linux workload, or a
-        self-hosted outage would take the scope and trust evidence down with
-        the jobs it governs.
-        """
+    def test_control_plane_stays_on_contabo_separate_from_heavy_executors(self) -> None:
+        """Paid Linux is not an automatic control-availability fallback."""
         for job_name in HOSTED_CONTROL_PLANE_JOBS:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn("runs-on: ubuntu-24.04", job)
-                self.assertNotRegex(job, r"(?m)^    runs-on: (?!ubuntu-24\.04$)")
-                self.assertNotIn("ci-general", job)
+                self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", job)
                 self.assertNotIn("ci-web-heavy", job)
                 self.assertNotIn("ci-core", job)
-                self.assertNotIn("lmdj-linux-pool", job)
-        # The only other Hosted Ubuntu jobs are the two macOS adjudicators,
-        # which publish the required check names from an already-produced
-        # result and run no workload at all. Counting them closes the set: any
-        # new `ubuntu-24.04` job is an automatic Hosted workload until proven
-        # otherwise.
+        # macOS adjudication also uses Contabo; only actual Mac recovery is paid.
         hosted = re.findall(r"(?m)^    runs-on: ubuntu-24\.04$", self.main_source)
         self.assertEqual(
             len(hosted),
-            len(HOSTED_CONTROL_PLANE_JOBS) + len(MACOS_ADJUDICATOR_JOBS),
+            0,
         )
 
     def test_change_scope_publishes_trusted_head_from_event_or_queue_ticket(self):
@@ -649,7 +636,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("NEEDS_JSON: ${{ toJSON(needs) }}", job)
         self.assertIn("batch_execution.from_needs", job)
 
-    def test_pre_heavy_gate_is_closed_hosted_preflight_admission(self) -> None:
+    def test_pre_heavy_gate_is_closed_self_hosted_preflight_admission(self) -> None:
         job = self.workflow_job("pre-heavy-gate")
         self.assertIn("fetch-depth: 0", job)
         self.assertEqual(
@@ -659,10 +646,10 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                  "remedy: keep only actual product dependencies in pre-heavy-gate"),
         )
         self.assertIn("if: ${{ !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}", job)
-        self.assertIn("runs-on: ubuntu-24.04", job)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", job)
         self.assertIn("timeout-minutes: 3", job)
         for forbidden in (
-            "ci-general", "ci-web-heavy", "ci-core", "lmdj-linux-pool",
+            "ci-web-heavy", "ci-core", "runs-on: ubuntu-24.04",
             "permissions:",
         ):
             with self.subTest(forbidden=forbidden):

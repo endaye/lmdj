@@ -145,7 +145,7 @@ class EventGraphTests(unittest.TestCase):
         assert_no_self_subscription('name: A\non:\n  push:\njobs:\n  job:\n    name: A\n')
         assert_no_self_subscription('name: A\non:\n  workflow_run:\n    workflows: ["A completion"]\n')
 
-    def test_relay_is_one_readonly_hosted_job_without_product_or_dispatch_authority(self):
+    def test_relay_is_one_readonly_control_job_without_product_or_dispatch_authority(self):
         path = ROOT / '.github/workflows/incremental-completion.yml'
         source = path.read_text()
         self.assertEqual(scalar(field(source, 'name', 0)), 'Incremental Completion')
@@ -159,7 +159,7 @@ class EventGraphTests(unittest.TestCase):
         job = block(source, jobs[0].job_id, 2)
         self.assertEqual(scalars(block(job, 'permissions', 4), 6), {'contents': 'read', 'actions': 'read'})
         self.assertIsNotNone(jobs[0].runs_on)
-        self.assertNotIn('self-hosted', jobs[0].runs_on)
+        self.assertEqual(jobs[0].runs_on, '[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]')
         self.assertNotIn('concurrency:', source)
         for forbidden in ('issues: write', 'contents: write', 'actions: write', 'pull-requests:',
                           'id-token:', 'scripts/core.sh', 'scripts/release.sh',

@@ -86,3 +86,19 @@ Sources:
 - https://developers.cloudflare.com/workers/ci-cd/builds/build-image/
 - https://developers.cloudflare.com/workers/ci-cd/builds/configuration/
 - https://developers.cloudflare.com/workers/wrangler/custom-builds/
+
+
+## First-version Preview readiness
+
+The trusted PR publisher waits up to 60 seconds for `index.html` to match the
+verified artifact byte length and SHA-256 before starting full route/header/file
+smoke. Each readiness request is bounded at 10 seconds and the loop remains
+inside the existing 600-second smoke process limit. A successful upload receipt
+alone does not establish HTTP readiness. Missing, late or wrong entry bytes fail
+closed; inspect the retained exact version and artifact before retrying. All
+final route, snapshot, header and artifact checks still run.
+
+Pilot #963 first version uploaded successfully but immediate HTTP returned 404;
+the publisher correctly wrote failure on the exact head (run 34225091683).
+Subsequent same-version HTTP availability is separate reconciliation evidence,
+not a rewrite of that failed run. #965 tracks this readiness correction.

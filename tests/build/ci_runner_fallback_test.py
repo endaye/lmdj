@@ -52,7 +52,8 @@ GENERAL_JOBS = {
 # path verbatim. Pinning the command per job keeps the cutover a change of
 # where they run and not of what they run.
 # Reviews use a separate workflow and are not product jobs on this role.
-GENERAL_ROLE_NON_LANE_JOBS = ()
+GENERAL_ROLE_NON_LANE_JOBS = ("change-scope", "pre-heavy-gate", "select-macos-runner",
+                              "core-macos", "core-asan-macos", "batch-verdict")
 GENERAL_PROOFS = {
     "docs-static": 'run: git diff --check "$BASE_SHA...$HEAD_SHA"',
     "ci-contract": "run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'",
@@ -279,23 +280,14 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertNotIn("ubuntu-24.04", called)
         self.assertEqual(called.count("ci-general"), 1)
 
-    def test_hosted_control_plane_never_carries_a_self_hosted_role(self) -> None:
-        """Scope and trust evidence must survive a self-hosted outage.
-
-        Change Scope decides what runs and whether the head is trusted, the
-        macOS selector decides where that lane runs, and PR Gate decides
-        whether the run passed. Putting any of them on the pool would make the
-        evidence depend on the infrastructure it exists to adjudicate, so they
-        stay on paid Ubuntu now that no Linux workload is left beside them.
-        """
+    def test_control_plane_uses_contabo_separate_from_heavy_executors(self) -> None:
+        """Control availability is independent of Netcup, not of all self-hosts."""
         for job_name in HOSTED_CONTROL_PLANE_JOBS:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn("runs-on: ubuntu-24.04", job)
-                self.assertNotIn("ci-general", job)
+                self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", job)
                 self.assertNotIn("ci-web-heavy", job)
                 self.assertNotIn("ci-core", job)
-                self.assertNotIn("lmdj-linux-pool", job)
 
     def test_ci_contract_lints_with_a_checksum_pinned_binary_not_a_container(self) -> None:
         """The trusted Linux role cannot run a Docker container action.
