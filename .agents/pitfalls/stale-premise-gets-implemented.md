@@ -4,10 +4,10 @@ area: core
 status: open
 recurrences:
   - date: 2026-09-08
-    occurrence: https://github.com/endaye/lmdj/pull/995#discussion_r0
+    occurrence: https://github.com/endaye/lmdj/pull/978
     observed_by: Claude Code (Opus 5)
   - date: 2026-09-08
-    occurrence: https://github.com/endaye/lmdj/pull/995
+    occurrence: https://github.com/endaye/lmdj/pull/995#discussion_r3960687318
     observed_by: Claude Code (Opus 5)
 exit: none
 ---
@@ -58,6 +58,20 @@ The asymmetry that makes this class expensive:
 - **The window is the review latency.** Anything that merges between drafting
   and review can invalidate a premise, and long-lived documents — plans,
   pitfalls, Issue bodies — have the longest windows.
+
+**This entry's own first citation was an instance of it.** The recurrence above
+was originally recorded as `pull/995#discussion_r0`. GitHub review anchors are
+`discussion_r<numeric-id>`; `r0` is a placeholder, so the link rendered as a
+precise citation and resolved to the top of a Pull Request. The ledger lint's
+`OCCURRENCE` pattern accepted it, because that expression validates the shape of
+a URL and not whether it points at anything — the same distinction that let
+`ISO_DATE` accept `9999-13-99` until #1002 parsed the date before comparing it.
+
+So the citation documenting the defect contained the defect, and the gate that
+should have caught it could not express the question. It was found by review,
+recovered from a dropped artefact, and is recorded here rather than quietly
+repaired, because an entry that hides its own instance is worth less than one
+that carries it.
 
 ## How to apply
 
