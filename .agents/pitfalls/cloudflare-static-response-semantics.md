@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/873
     observed_by: Codex
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/issues/965
+    observed_by: Codex
 exit: none
 ---
 
@@ -30,3 +33,10 @@ identity before rollback and use bounded readiness retries. Retain provider
 differences explicitly instead of weakening existing Netlify checks. No offline
 gate can establish the live provider's routing propagation or edge behavior,
 so this entry remains open pending a durable live-acceptance mechanism.
+
+
+The second occurrence is the isolated PR Preview's first deployment: API upload
+and route state passed while early HTTP returned 404. #965 is the escalation
+Issue and implements exact-entry readiness before unchanged full smoke. Live
+edge propagation remains provider evidence; the deterministic retry tests do
+not turn an upload receipt into HTTP acceptance. This entry remains open.

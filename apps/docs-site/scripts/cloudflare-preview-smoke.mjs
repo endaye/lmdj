@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {smokePortal} from './lib/smoke.mjs';
 
-export async function verifyArtifactFiles(receipt, fetchImpl = fetch) {
+export async function verifyArtifactFiles(receipt, fetchImpl = fetch, signal) {
   const errors = [];
   let cursor = 0;
   await Promise.all(Array.from({length: 8}, async () => {
@@ -11,7 +11,7 @@ export async function verifyArtifactFiles(receipt, fetchImpl = fetch) {
       const file = receipt.files[cursor++];
       const path = file.path.split('/').map(encodeURIComponent).join('/');
       try {
-        const response = await fetchImpl(`${receipt.url}/${path}`);
+        const response = await fetchImpl(`${receipt.url}/${path}`, {signal});
         if (new URL(response.url).origin !== receipt.url || response.status !== 200) {
           throw new Error('unexpected response target/status');
         }
@@ -33,10 +33,34 @@ export async function verifyArtifactFiles(receipt, fetchImpl = fetch) {
   return errors;
 }
 
+// A first upload receipt can precede edge asset availability. Readiness only
+// waits for the authenticated entry bytes; the complete smoke below still owns
+// every route, header and artifact. This runs inside the publisher's unchanged
+// 600-second process timeout, not as an extension of that timeout.
+export async function waitForArtifactReadiness(receipt, {
+  fetchImpl = fetch, now = Date.now,
+  delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  const entry = receipt.files.find((file) => file.path === 'index.html');
+  if (!entry) throw new Error('Readiness requires verified index.html; reconcile the retained artifact before retry');
+  const deadline = now() + 60_000;
+  while (true) {
+    const requestBudget = deadline - now();
+    if (requestBudget <= 0) break;
+    const signal = AbortSignal.timeout(Math.min(10_000, requestBudget));
+    const errors = await verifyArtifactFiles({...receipt, files: [entry]}, fetchImpl, signal);
+    if (!errors.length && now() <= deadline) return;
+    const remaining = deadline - now();
+    if (remaining > 0) await delay(Math.min(2_000, remaining));
+  }
+  throw new Error('Preview artifact did not become ready within 60000 ms; reconcile the retained version and exact artifact before retry');
+}
+
 export async function main(receipt) {
   if (!/^https:\/\/[0-9a-f]{8}-portal-preview\.lmdj\.workers\.dev$/.test(receipt.url)) {
     throw new Error('unexpected Preview origin');
   }
+  await waitForArtifactReadiness(receipt);
   const errors = await smokePortal({baseUrl: receipt.url, productBuild: receipt.product_build,
     revision: receipt.head_sha.slice(0, 12)});
   const root = await fetch(receipt.url, {redirect: 'error'});
