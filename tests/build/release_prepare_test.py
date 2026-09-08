@@ -560,7 +560,7 @@ class ReleasePrepareTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="lmdj-target-glob-") as directory:
             root = Path(directory)
             self._product_target_tree(root)
-            script = root / "apps/architecture-portal/scripts/check-release-docs.mjs"
+            script = root / "apps/docs-site/scripts/check-release-docs.mjs"
             script.parent.mkdir(parents=True, exist_ok=True)
             script.write_text("import {glob} from 'glob';\n", encoding="utf-8")
 
@@ -580,7 +580,7 @@ class ReleasePrepareTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="lmdj-target-provenance-") as directory:
             root = Path(directory)
             self._product_target_tree(root)
-            script = root / "apps/architecture-portal/scripts/check-release-docs.mjs"
+            script = root / "apps/docs-site/scripts/check-release-docs.mjs"
             script.parent.mkdir(parents=True, exist_ok=True)
             script.write_text(
                 "console.error("
@@ -657,7 +657,7 @@ class ReleasePrepareTest(unittest.TestCase):
                 [
                     "node", "--experimental-loader", loader.as_uri(),
                     "--input-type=module", "--eval",
-                    f"import({json.dumps((ROOT / 'apps/architecture-portal/scripts/lib/repo-facts.mjs').as_uri())})",
+                    f"import({json.dumps((ROOT / 'apps/docs-site/scripts/lib/repo-facts.mjs').as_uri())})",
                 ],
                 cwd=ROOT,
                 check=True,

@@ -3,7 +3,7 @@
 ## Cloudflare 固定地址配置（2026-09-08）
 
 用户已选定 `https://docs.lmdj.workers.dev/`。独立配置位于
-`apps/architecture-portal/deploy/wrangler.json`；配置存在不表示已经发布。
+`apps/docs-site/deploy/wrangler.json`；配置存在不表示已经发布。
 `lmdj` Worker 继续保留既有试点，`docs` 通过 Git 构建部署。
 
 `.github/workflows/deploy-cloudflare-portal.yml` 由 `main` push 触发，在现有
@@ -45,8 +45,8 @@ handling. `.node-version` pins Node 22.16.0; npm is explicitly 10.9.3. From the
 repository root, run the following without a deployment credential:
 
 ```bash
-npx --yes npm@10.9.3 --prefix apps/architecture-portal ci
-npx --yes npm@10.9.3 --prefix apps/architecture-portal run check
+npx --yes npm@10.9.3 --prefix apps/docs-site ci
+npx --yes npm@10.9.3 --prefix apps/docs-site run check
 ```
 
 For Workers Builds, keep root directory `/` and explicitly set those two commands

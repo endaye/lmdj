@@ -6,10 +6,10 @@
   "workers_dev": false,
   "preview_urls": true,
   "assets": {
-    "directory": "./apps/architecture-portal/build",
+    "directory": "./apps/docs-site/build",
     "not_found_handling": "404-page"
   },
   "build": {
-    "command": "npx --yes npm@10.9.3 --prefix apps/architecture-portal ci && npx --yes npm@10.9.3 --prefix apps/architecture-portal run check"
+    "command": "npx --yes npm@10.9.3 --prefix apps/docs-site ci && npx --yes npm@10.9.3 --prefix apps/docs-site run check"
   }
 }

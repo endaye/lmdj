@@ -471,7 +471,7 @@ Product Build 并准备交付团队测试（`canary`、`dev`、`beta`）或正�
 （`stable`）的构建，在对应发布/晋级门禁前必须冻结匹配的架构门户快照：
 
 ```bash
-scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
+scripts/docs-site.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
 ```
 
 快照必须来自干净工作区，Product Build 与 `version.json` 精确一致，并记录完整 Git

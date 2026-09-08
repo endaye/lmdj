@@ -14,7 +14,7 @@ test('affected implementation accepts required routes', () => {
     body: 'Documentation impact: required\nAffected portal pages: /core/modules/audio-runtime/\nReason: trigger state changed',
     changedFiles: [
       'packages/audio-runtime/src/engine.cpp',
-      'apps/architecture-portal/docs/core/modules/audio-runtime.mdx',
+      'apps/docs-site/docs/core/modules/audio-runtime.mdx',
     ],
   }), []);
 });
@@ -22,12 +22,12 @@ test('affected implementation accepts required routes', () => {
 test('none rejects unrelated portal churn and required needs a portal page', () => {
   assert.deepEqual(checkDocumentationImpact({
     body: 'Documentation impact: none\nReason: internal comment only',
-    changedFiles: ['packages/audio-runtime/src/engine.cpp', 'apps/architecture-portal/docs/product/workflows.mdx'],
-  }), ['documentation impact is none but current portal pages changed — either declare "Documentation impact: required" with "Affected portal pages:" routes, or drop the apps/architecture-portal/docs/ edits from this PR']);
+    changedFiles: ['packages/audio-runtime/src/engine.cpp', 'apps/docs-site/docs/product/workflows.mdx'],
+  }), ['documentation impact is none but current portal pages changed — either declare "Documentation impact: required" with "Affected portal pages:" routes, or drop the apps/docs-site/docs/ edits from this PR']);
   assert.deepEqual(checkDocumentationImpact({
     body: 'Documentation impact: required\nAffected portal pages: /core/modules/audio-runtime/\nReason: public behavior changed',
     changedFiles: ['packages/audio-runtime/src/engine.cpp'],
-  }), ['documentation impact is required but no current portal page changed — update the affected pages under apps/architecture-portal/docs/ in this PR, or declare "Documentation impact: none" with a reason if no portal truth changes']);
+  }), ['documentation impact is required but no current portal page changed — update the affected pages under apps/docs-site/docs/ in this PR, or declare "Documentation impact: none" with a reason if no portal truth changes']);
 });
 
 test('product build and assembly changes cannot opt out of current documentation', () => {
@@ -51,7 +51,7 @@ test('product build and assembly changes cannot opt out of current documentation
     changedFiles: [
       'products/lmdj/version.json',
       'products/lmdj/assembly.lock.json',
-      'apps/architecture-portal/docs/assembly/lmdj.mdx',
+      'apps/docs-site/docs/assembly/lmdj.mdx',
     ],
   }), []);
 });

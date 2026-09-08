@@ -16,9 +16,9 @@ VERSION_POLICY = REPO_ROOT / "docs/governance/version-management.md"
 CURRENT_DOCS = (
     VERSION_POLICY,
     REPO_ROOT / "docs/design/2026-08-13-lmdj-standard-release-pipeline-design.md",
-    REPO_ROOT / "apps/architecture-portal/docs/hosts/creator-web.mdx",
-    REPO_ROOT / "apps/architecture-portal/docs/operations/version-and-release.mdx",
-    REPO_ROOT / "apps/architecture-portal/docs/operations/testing-and-proof.mdx",
+    REPO_ROOT / "apps/docs-site/docs/hosts/creator-web.mdx",
+    REPO_ROOT / "apps/docs-site/docs/operations/version-and-release.mdx",
+    REPO_ROOT / "apps/docs-site/docs/operations/testing-and-proof.mdx",
 )
 
 

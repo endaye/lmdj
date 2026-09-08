@@ -48,13 +48,13 @@ jobs:
         working-directory: source
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          npx --yes npm@10.9.3 --prefix apps/architecture-portal ci
-          npx --yes npm@10.9.3 --prefix apps/architecture-portal run check
+          npx --yes npm@10.9.3 --prefix apps/docs-site ci
+          npx --yes npm@10.9.3 --prefix apps/docs-site run check
       - name: Package the static artifact
         run: |
           mkdir -p "$RUNNER_TEMP/portal-preview-output"
           python3 control/scripts/ci/cloudflare_preview_artifact.py \
-            --source source/apps/architecture-portal/build \
+            --source source/apps/docs-site/build \
             --archive "$RUNNER_TEMP/portal-preview-output/static.zip"
       - name: Retain the exact-head artifact
         uses: actions/upload-artifact@v4

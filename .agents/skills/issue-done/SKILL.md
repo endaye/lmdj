@@ -299,7 +299,7 @@ lint reads the text you give it and cannot see a directive added afterwards.
 
    `Documentation impact` means **Architecture Portal pages**, not any file
    under `docs/`. Declare `required` when this change edits a page under
-   `apps/architecture-portal/docs/`, and list routes on a line reading exactly
+   `apps/docs-site/docs/`, and list routes on a line reading exactly
    `Affected portal pages:` with each entry starting with `/`. One case admits
    no `none` at all: a Product Build or Assembly change — `products/lmdj/`
    `version.json`, `assembly(.lock).json`, `CMakeLists.txt` or `src/` — must
@@ -349,7 +349,7 @@ lint reads the text you give it and cannot see a directive added afterwards.
    Build or introduced a snapshot, verify provenance against the actual merged
    introducing SHA; retain the source object until that proof is complete.
    A missing squash witness must be generated with the official
-   `scripts/architecture-portal.sh witness PRODUCT_BUILD [INTRODUCING_REVISION]`
+   `scripts/docs-site.sh witness PRODUCT_BUILD [INTRODUCING_REVISION]`
    and shipped in a separate commit/PR within applicable authorization; never
    hand-edit frozen metadata. Report the gap until repaired. This obligation
    does not run the full portal for ordinary unrelated Tasks and grants no

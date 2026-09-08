@@ -56,7 +56,7 @@ class ReleaseAuditWorkflowTest(unittest.TestCase):
         target_validation = (ROOT / "tools/release/target_validation.py").read_text(encoding="utf-8")
         self.assertIn('"python3", "scripts/version.py", "verify"', target_validation)
         self.assertIn(
-            '"node", "apps/architecture-portal/scripts/check-release-docs.mjs"',
+            '"node", "apps/docs-site/scripts/check-release-docs.mjs"',
             target_validation,
         )
         self.assertIn("uses: actions/setup-python@", source)

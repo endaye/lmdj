@@ -62,12 +62,12 @@ class WorkflowContracts(unittest.TestCase):
     def test_empty_candidate_interval_still_runs_complete_current_build_provenance(self):
         workflow = (ROOT / ".github/workflows/architecture-portal.yml").read_text()
         verification = workflow.split("      - name: Verify architecture portal\n", 1)[1]
-        self.assertIn("run: scripts/architecture-portal.sh check", verification)
+        self.assertIn("run: scripts/docs-site.sh check", verification)
         self.assertNotRegex(verification, r"(?m)^\s*if:",
                             "why: empty interval cannot skip candidate provenance; remedy: keep complete Portal verification unconditional")
-        package = json.loads((ROOT / "apps/architecture-portal/package.json").read_text())
+        package = json.loads((ROOT / "apps/docs-site/package.json").read_text())
         self.assertIn("npm run check:release-docs", package["scripts"]["check"])
-        provenance = (ROOT / "apps/architecture-portal/scripts/check-release-docs.mjs").read_text()
+        provenance = (ROOT / "apps/docs-site/scripts/check-release-docs.mjs").read_text()
         for expression in ("facts.product.version", "verifySnapshotProvenance({", "headRevision: stdout.trim()"):
             self.assertIn(expression, provenance)
 

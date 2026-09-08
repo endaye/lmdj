@@ -880,7 +880,7 @@ class DeclarationCheckTest(unittest.TestCase):
         "**Documentation impact: required.** Affected portal routes:\n"
         "`operations/testing-and-proof` — frontmatter only.\n"
     )
-    PORTAL_PAGE = "apps/architecture-portal/docs/operations/testing-and-proof.mdx"
+    PORTAL_PAGE = "apps/docs-site/docs/operations/testing-and-proof.mdx"
 
     def setUp(self) -> None:
         self.preflight = load_module("local_preflight_declaration", PREFLIGHT_PATH)
@@ -940,7 +940,7 @@ class DeclarationCheckTest(unittest.TestCase):
         self.assertTrue(self.preflight.DOC_IMPACT_CHECKER.is_file())
         self.assertEqual(
             self.preflight.DOC_IMPACT_CHECKER,
-            ROOT / "apps/architecture-portal/scripts/check-doc-impact.mjs",
+            ROOT / "apps/docs-site/scripts/check-doc-impact.mjs",
         )
         workflow = (
             ROOT / ".github/workflows/architecture-portal.yml"
@@ -982,7 +982,7 @@ class DeclarationCheckTest(unittest.TestCase):
         """`--lanes` says what to run here, never what CI would select."""
         repository = TemporaryRepository()
         self.addCleanup(repository.close)
-        repository.write("apps/architecture-portal/docs/product/thing.mdx", "x\n")
+        repository.write("apps/docs-site/docs/product/thing.mdx", "x\n")
         repository.commit("portal page")
         with tempfile.TemporaryDirectory() as directory:
             body = Path(directory) / "body.md"
@@ -1205,7 +1205,7 @@ class AdvisoryBoundaryTest(unittest.TestCase):
         import io
         from unittest import mock
         plan = {"mode": "full", "selected": ["portal"], "ci_lanes": ["portal"], "base_sha": "a" * 40, "head_sha": "b" * 40,
-                "pr_body": "body", "changed_paths": ["apps/architecture-portal/docs/x.mdx"]}
+                "pr_body": "body", "changed_paths": ["apps/docs-site/docs/x.mdx"]}
         for verdict, expected in ((self.preflight.PASS, 0), (self.preflight.FAIL, 1)):
             with mock.patch.object(self.preflight, "build_plan", return_value=plan), \
                     mock.patch.object(self.preflight, "check_declaration", return_value=self.preflight.DeclarationResult(verdict, "test")), \

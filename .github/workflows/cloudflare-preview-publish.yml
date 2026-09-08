@@ -34,7 +34,7 @@ jobs:
           node-version: '22.16.0'
       - name: Install trusted tools without deployment credentials
         run: |
-          npx --yes npm@10.9.3 --prefix apps/architecture-portal ci
+          npx --yes npm@10.9.3 --prefix apps/docs-site ci
           npm install --prefix "$RUNNER_TEMP/preview-cli-$GITHUB_RUN_ID" --no-audit --no-fund wrangler@4.129.1
       - name: Verify and publish only a version Preview
         env:

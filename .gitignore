@@ -51,8 +51,8 @@ node_modules/
 dist/
 *.tsbuildinfo
 .docusaurus/
-apps/architecture-portal/build/
-apps/architecture-portal/src/generated/
+apps/docs-site/build/
+apps/docs-site/src/generated/
 
 ### Python
 __pycache__/

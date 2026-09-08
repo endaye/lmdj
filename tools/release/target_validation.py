@@ -90,8 +90,10 @@ def validate_current_product_snapshot(
             raise TargetValidationError(
                 "Product Portal snapshot does not match the exact Assembly lock"
             )
+        # Exact historical releases still contain the original active site.
+        site_root = "apps/docs-site" if (root / "apps/docs-site").is_dir() else "apps/architecture-portal"
         selected_runner.run(
-            ["node", "apps/architecture-portal/scripts/check-release-docs.mjs"],
+            ["node", f"{site_root}/scripts/check-release-docs.mjs"],
             cwd=root,
         )
     except TargetValidationError:

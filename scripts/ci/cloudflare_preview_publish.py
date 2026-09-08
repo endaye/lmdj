@@ -132,7 +132,7 @@ def publish():
             manifest.write_text(json.dumps({'url': url, 'product_build': build,
                                            'head_sha': run['head_sha'], 'files': files}))
             smoke_env = {k: v for k, v in os.environ.items() if k not in {'GITHUB_TOKEN', 'CLOUDFLARE_API_TOKEN'}}
-            subprocess.run(['node', str(ROOT / 'apps/architecture-portal/scripts/cloudflare-preview-smoke.mjs'),
+            subprocess.run(['node', str(ROOT / 'apps/docs-site/scripts/cloudflare-preview-smoke.mjs'),
                             str(manifest)], env=smoke_env, check=True, timeout=600)
             if current_pr(github, run, number, pilot) is None:
                 evidence['status'] = 'superseded'

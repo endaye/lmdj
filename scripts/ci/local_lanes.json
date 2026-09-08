@@ -13,11 +13,11 @@
         "commands": ["node", "npm"]
       },
       "commands": [
-        "scripts/architecture-portal.sh install",
-        "scripts/architecture-portal.sh check"
+        "scripts/docs-site.sh install",
+        "scripts/docs-site.sh check"
       ],
       "ci_only": [
-        "npm --prefix apps/architecture-portal run check:impact reads the Pull Request body, which these lane commands do not supply; scripts/local-ci.sh --pr-body FILE runs that same check locally, outside the lane and its cache"
+        "npm --prefix apps/docs-site run check:impact reads the Pull Request body, which these lane commands do not supply; scripts/local-ci.sh --pr-body FILE runs that same check locally, outside the lane and its cache"
       ]
     },
     "ci_contract": {

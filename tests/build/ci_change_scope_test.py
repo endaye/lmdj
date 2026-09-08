@@ -726,7 +726,7 @@ class ChangeScopeTest(unittest.TestCase):
             "apps/creator-web/src/editor.ts",
         ])
         focused = self.classify([
-            "docs/guide.md", "apps/architecture-portal/src/main.js",
+            "docs/guide.md", "apps/docs-site/src/main.js",
             "apps/web-runtime-host/src/main.mjs",
         ])
         self.assertEqual(full["mode"], "full")

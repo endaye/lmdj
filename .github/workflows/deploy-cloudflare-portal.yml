@@ -28,8 +28,8 @@ jobs:
       - name: Build and verify the Git source
         timeout-minutes: 15
         run: |
-          npx --yes npm@10.9.3 --prefix apps/architecture-portal ci
-          npx --yes npm@10.9.3 --prefix apps/architecture-portal run check
+          npx --yes npm@10.9.3 --prefix apps/docs-site ci
+          npx --yes npm@10.9.3 --prefix apps/docs-site run check
       - name: Install pinned deploy CLI without deployment credentials
         timeout-minutes: 5
         run: npm install --prefix "$RUNNER_TEMP/portal-wrangler-$GITHUB_RUN_ID" --no-audit --no-fund wrangler@4.129.1

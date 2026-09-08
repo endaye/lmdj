@@ -53,7 +53,7 @@ Product Assembly 负责锁定 Module、Host、Provider、Contract 和 policy 的
 | Core Module | Authoring Domain | Project Truth、命令规则、revision 与 Pad/Pattern/Sample 语义 | `packages/authoring-domain/` |
 | Core Module | Project I/O | 原子 Project store、Take recovery、portable Bundle transfer 与 Workspace cache | `packages/project-io/` |
 | Core Module | Project Cooker | 校验 Project 与 Artifact，派生 Runtime Snapshot | `packages/project-cooker/` |
-| Derived state | Runtime Snapshot | 不可变、可丢弃、可重建的 Audio Runtime 输入 | `packages/project-cooker/`、`apps/architecture-portal/docs/contracts/runtime-snapshot.mdx` |
+| Derived state | Runtime Snapshot | 不可变、可丢弃、可重建的 Audio Runtime 输入 | `packages/project-cooker/`、`apps/docs-site/docs/contracts/runtime-snapshot.mdx` |
 | Core Module | Audio Runtime | prepared sample bank、离线渲染、实时 Engine、Voice 与 preview | `packages/audio-runtime/` |
 | Core Module | Provider SDK | Capability、Registry、Attempt Store 和 Artifact output sink | `packages/provider-sdk/` |
 | Provider | Local Proof Providers | 当前装配的成功/失败隔离证明，不代表生产模型或云服务 | `providers/local-proof-success/`、`providers/local-proof-failure/` |
@@ -139,7 +139,7 @@ node "$ARCHIFY_ROOT/bin/archify.mjs" deliver architecture \
 node "$ARCHIFY_ROOT/bin/archify.mjs" visual-check \
   docs/architecture/assets/lmdj-current-runtime-architecture.html --json
 
-scripts/architecture-portal.sh check
+scripts/docs-site.sh check
 ```
 
 不得手改生成的 HTML。任何组件、依赖或权威性边界变化，都先修改 JSON 图源和本文，再重新运行

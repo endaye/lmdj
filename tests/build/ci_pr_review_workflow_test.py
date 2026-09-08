@@ -32,7 +32,7 @@ WORKFLOW = REPO_ROOT / ".github/workflows/pr-review.yml"
 CI = REPO_ROOT / ".github/workflows/ci.yml"
 SCRIPT = REPO_ROOT / ".github/scripts/pr_review_target.py"
 SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
-PORTAL_PAGE = REPO_ROOT / "apps/architecture-portal/docs/operations/testing-and-proof.mdx"
+PORTAL_PAGE = REPO_ROOT / "apps/docs-site/docs/operations/testing-and-proof.mdx"
 
 HEAD = "a" * 40
 OTHER = "b" * 40

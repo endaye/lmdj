@@ -117,7 +117,7 @@
       "size": [170, 76],
       "sources": [
         {"path": "packages/project-cooker/src/project_cooker.cpp", "label": "Snapshot producer"},
-        {"path": "apps/architecture-portal/docs/contracts/runtime-snapshot.mdx", "label": "Current contract"}
+        {"path": "apps/docs-site/docs/contracts/runtime-snapshot.mdx", "label": "Current contract"}
       ]
     },
     {
