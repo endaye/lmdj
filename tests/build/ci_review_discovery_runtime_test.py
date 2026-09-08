@@ -90,6 +90,118 @@ class RuntimeTests(unittest.TestCase):
     def run_adapter(self, **kwargs):
         return self.make().run(now=NOW, **kwargs)
 
+    def seed_terminal_backlog(self):
+        adapter = self.make()
+        adapter.load()
+        records = [{"identity": {"run_id": n, "attempt": 1}, "created_at": "2026-09-08T00:00:10Z"}
+                   for n in range(1, 21)]
+        adapter.persist('inventory', {'start': START, 'end': '2026-09-08T00:00:30Z',
+            'runs': records, 'total_count': len(records), 'inventory_digest': protocol.digest(records), 'complete': True})
+        for record in records:
+            adapter.disposition(record['identity'], 'valid-review', {'identity': record['identity'],
+                'control_sha': self.core.sha, 'receipt_digest': 'a' * 64})
+        adapter.persist('metadata-start', {'round': 0, 'run_ids': list(range(1, 21))})
+        return deepcopy(self.fixture.scheduler_http.comments)
+
+    def test_old_terminal_backlog_does_not_delay_new_failure_queue_and_drain(self):
+        prefix = self.seed_terminal_backlog()
+        reads, original = [], self.api._request
+        def request(method, path, **kwargs):
+            reads.append((method, path))
+            return original(method, path, **kwargs)
+        self.api._request = request
+        result = self.run_adapter(limit=1)
+        state = self.make().load()
+        self.assertEqual('failure-queued', state['runs']['51/1']['status'],
+            'why: old terminal metadata scan delays new failure; remedy: reserve a fair unresolved opportunity')
+        self.assertEqual(1, result['state']['metadata_scan']['active']['position'])
+        self.assertTrue(any('/actions/workflows/42/runs?' in path for _, path in reads))
+        self.assertIn(('GET', '/repos/endaye/lmdj/actions/runs/51'), reads)
+        self.assertIn(('GET', '/repos/endaye/lmdj/actions/runs/51/attempts/1'), reads)
+        self.assertEqual(prefix, self.fixture.scheduler_http.comments[:len(prefix)])
+        key = state['runs']['51/1']['proof']['outbox_key']
+        self.assertEqual('queued', self.make().outbox.load()['deliveries'][key]['status'])
+        self.assertFalse(self.api.issues)
+        delivered = self.fixture.make().execute('drain')
+        self.assertEqual('delivered', delivered['status'])
+        self.assertEqual('delivered', self.make().outbox.load()['deliveries'][key]['status'])
+        self.assertEqual(1, len(self.api.issues))
+        self.assertIn('was **not reviewed**', self.api.issues[0]['body'])
+        self.assertEqual({'status': 'idle'}, self.fixture.make().execute('drain'))
+        self.assertEqual(1, len(self.api.issues))
+
+    def two_new_obligations(self, *, live=False):
+        self.seed_terminal_backlog()
+        values = [{**self.review.run, 'id': n} for n in (50, 51)]
+        self.inventory_override = lambda _: {'total_count': len(values), 'workflow_runs': values}
+        original = self.api._request
+        def request(method, path, **kwargs):
+            if live and method == 'GET' and path in ('/repos/endaye/lmdj/actions/runs/50',
+                                                    '/repos/endaye/lmdj/actions/runs/50/attempts/1'):
+                return {**values[0], 'status': 'in_progress', 'conclusion': None}
+            return original(method, path, **kwargs)
+        self.api._request = request
+
+    def test_unavailable_obligation_rotates_durably_before_new_failure(self):
+        self.two_new_obligations()
+        first = self.run_adapter(limit=1)
+        self.assertEqual('unresolved', first['state']['unresolved']['50/1']['status'])
+        self.assertEqual('51/1', protocol.identity(self.make().load()['runs']['51/1']['identity']))
+        self.assertFalse(self.make().outbox.load()['deliveries'])
+        second = self.run_adapter(limit=1)  # Fresh adapter restores ordering from journal.
+        self.assertEqual('failure-queued', self.make().load()['runs']['51/1']['status'])
+        self.assertEqual('unresolved', second['state']['unresolved']['50/1']['status'])
+        self.assertEqual(2, second['state']['metadata_scan']['active']['position'])
+
+    def test_still_running_obligation_rotates_without_inventing_failure(self):
+        self.two_new_obligations(live=True)
+        self.run_adapter(limit=1)
+        state = self.make().load()
+        self.assertEqual('pending', state['runs']['50/1']['status'])
+        self.run_adapter(limit=1)
+        state = self.make().load()
+        self.assertEqual('failure-queued', state['runs']['51/1']['status'])
+        self.assertEqual('pending', state['runs']['50/1']['status'])
+
+    def test_priority_metadata_registers_attempt_two_without_jumping_older_pending(self):
+        self.two_new_obligations(live=True)
+        original, reads = self.api._request, []
+        def request(method, path, **kwargs):
+            reads.append((method, path))
+            if method == 'GET' and path in ('/repos/endaye/lmdj/actions/runs/50',
+                                           '/repos/endaye/lmdj/actions/runs/50/attempts/2'):
+                return {**self.review.run, 'id': 50, 'run_attempt': 2,
+                        'status': 'in_progress', 'conclusion': None}
+            return original(method, path, **kwargs)
+        self.api._request = request
+        self.run_adapter(limit=1)
+        adapter = self.make()
+        state = adapter.load()
+        self.assertEqual('pending', state['runs']['50/2']['status'])
+        self.assertEqual({'run_id': 51, 'attempt': 1}, adapter.next_obligation(),
+            'why: later registered attempt must not jump older obligations; remedy: order by durable generation')
+        self.run_adapter(limit=1)
+        self.assertEqual('failure-queued', self.make().load()['runs']['51/1']['status'])
+        self.run_adapter(limit=1)
+        self.assertIn(('GET', '/repos/endaye/lmdj/actions/runs/50/attempts/2'), reads)
+        self.assertEqual('pending', self.make().load()['runs']['50/2']['status'])
+
+    def test_committed_rotation_survives_lost_caller_response(self):
+        self.two_new_obligations(live=True)
+        adapter = self.make()
+        persist = adapter.persist
+        def lost(kind, data):
+            persist(kind, data)
+            if kind == 'disposition' and data['identity']['run_id'] == 50:
+                raise OSError('response lost after durable rotation')
+        with mock.patch.object(adapter, 'persist', lost), self.assertRaises(OSError):
+            adapter.run(limit=1, now=NOW)
+        self.run_adapter(limit=1)
+        state = self.make().load()
+        self.assertEqual('failure-queued', state['runs']['51/1']['status'])
+        self.assertEqual('pending', state['runs']['50/1']['status'])
+        self.assertFalse(self.api.issues)
+
     def test_complete_http_to_real_collector_to_durable_outbox_queue_only(self):
         result = self.run_adapter()
         state = self.make().load()
