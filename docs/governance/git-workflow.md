@@ -8,10 +8,12 @@ the retired full-CI/strict-update gate; read live protection before each merge.
 The incremental main-only automatic trigger switch is a separate T5 transition,
 not an ordinary PR permission. The trigger patch landed in PR #898, but its
 controller self-subscription was rejected by GitHub before any job could run.
-Completion-relay repair and real automatic recovery acceptance are distinct
-from that merge; neither an installed trigger nor a local fix proves operation.
-Retain the recorded persistent state and in-flight inventory while repairing
-the entry; do not restore retired daily tests or claim O2 completion.
+PR #904 merged the completion-relay repair. Its actual main-push run
+`34188723712/1` started the controller, which subsequently succeeded; this is
+entry-start evidence, not proof of the complete automatic recovery chain.
+Relay callback, chain-limit recovery and O2 acceptance remain separate checks.
+Retain persistent state and in-flight inventory; do not restore retired daily
+tests or turn controller startup into a full-product or O2 pass.
 
 ## 1. Model
 
