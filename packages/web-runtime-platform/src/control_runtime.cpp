@@ -2212,6 +2212,15 @@ Json ControlRuntime::dispatch(
       }
       return success({{"staged", staged.value()}});
     }
+    // The value is `is_query`, read only by the Facade forwarding at the end
+    // of this block. Membership is load-bearing for every entry -- it gates
+    // `require(sidecar.empty())` and the payload validation -- but the value
+    // is inert for an operation answered before the forwarding is reached.
+    // `soundset.audition.stop` is the one such entry: it returns below without
+    // consulting this bool, so neither `true` nor `false` describes it. Read
+    // `true` here as "not a command", never as "the Facade serves it" -- it
+    // does not, which is why the operation is deliberately absent from the
+    // Native Host's `kSoundSetOperations` and from core-mcp.
     static const std::map<std::string_view, bool> soundset_operations{
         {"soundset.audition", true},
         {"soundset.audition.stop", true},
