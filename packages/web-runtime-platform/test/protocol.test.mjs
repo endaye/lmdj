@@ -170,6 +170,7 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "sequence.recovery.apply",
     "sequence.recovery.discard",
     "soundset.audition",
+    "soundset.audition.stop",
     "soundset.catalog.list",
     "soundset.catalog.index",
     "soundset.catalog.supply",

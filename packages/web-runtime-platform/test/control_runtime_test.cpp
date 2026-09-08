@@ -4160,6 +4160,25 @@ void test_soundset_operations_route_at_the_workspace_and_the_project() {
       runtime->dispatch("soundset.audition", audition_with_project, {}),
       "HOST_PROTOCOL_MISMATCH");
 
+  // #799. Stopping is a Host operation: it addresses this Host's engine, not a
+  // Set, so it takes an empty payload and never reaches the Facade -- which has
+  // no such operation and would answer it through `attempt_inspect`.
+  //
+  // Idempotent by design. Stopping with nothing auditioning succeeds, which is
+  // what keeps it inside the frozen error vocabulary: there is no "nothing to
+  // stop" condition, so no reason token is needed for one.
+  const auto stopped = runtime->dispatch("soundset.audition.stop", Json::object(), {});
+  LMDJ_CHECK(stopped.at("ok").get<bool>());
+  LMDJ_CHECK(stopped.at("result").at("accepted").get<bool>());
+  const auto stopped_again = runtime->dispatch("soundset.audition.stop", Json::object(), {});
+  LMDJ_CHECK(stopped_again.at("ok").get<bool>());
+
+  // It addresses no Set, so any identity field is a protocol error rather than
+  // an ignored extra -- the same exact-keys discipline as its siblings.
+  check_error(
+      runtime->dispatch("soundset.audition.stop", identity, {}),
+      "HOST_PROTOCOL_MISMATCH");
+
   auto install = preview;
   install["command_id"] = uuid(4101);
   install["expected_revision"] = 0;
