@@ -25,6 +25,216 @@ import ci_batch_runtime_test as fixtures
 
 
 class EntryTests(unittest.TestCase):
+    def test_numeric_http_diagnostic_preserves_only_known_bounded_context(self):
+        headers = entry.HTTPMessage()
+        for key, value in (('X-RateLimit-Remaining', '0'), ('X-RateLimit-Reset', '1234567890'),
+                           ('Retry-After', '15'), ('Authorization', 'SECRET')):
+            headers[key] = value
+        http = entry.HTTPError('https://SECRET', 403, 'SECRET', headers, None)
+        wrapped = entry.GitHubApiError(403, 'SECRET')
+        wrapped.__context__ = http
+        outer = entry.batch.BatchError('SECRET')
+        outer.__context__ = wrapped
+        self.assertEqual(entry.diagnostic('control', 'auth-main-refresh', outer)['http'],
+            {'status': 403, 'remaining': 0, 'reset': 1234567890, 'retry_after': 15})
+        self.assertNotIn('SECRET', json.dumps(entry.diagnostic('control', 'auth-main-refresh', outer)))
+        unknown = RuntimeError('SECRET')
+        unknown.__context__ = http
+        self.assertEqual(entry.http_diagnostic(unknown), {})
+        wrapped.__context__ = outer
+        self.assertEqual(entry.http_diagnostic(outer), {})
+        deep = http
+        for _ in range(4):
+            wrapper = entry.batch.BatchError('SECRET')
+            wrapper.__context__ = deep
+            deep = wrapper
+        self.assertEqual(entry.http_diagnostic(deep), {})
+
+    def test_numeric_http_diagnostic_rejects_malformed_and_duplicate_headers(self):
+        for value in ('SECRET', '-1', '+1', ' 0', '1.0', '０', '9' * 13, True, None):
+            with self.subTest(value=value):
+                headers = entry.HTTPMessage()
+                headers['X-RateLimit-Remaining'] = value
+                error = entry.HTTPError('SECRET', True, 'SECRET', headers, None)
+                self.assertEqual(entry.http_diagnostic(error), {})
+        headers = entry.HTTPMessage()
+        headers['Retry-After'] = '0'
+        headers['Retry-After'] = '1'
+        self.assertEqual(entry.http_diagnostic(entry.HTTPError('SECRET', -1, 'SECRET', headers, None)), {})
+        self.assertEqual(entry.http_diagnostic(entry.HTTPError('SECRET', 600, 'SECRET', {'Retry-After': 'SECRET'}, None)), {})
+
+    def test_cli_refresh_failure_exposes_numeric_status_not_raw_context(self):
+        for operation in ('control', 'reports'):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                controller = self.make()
+                event, output = Path(directory) / 'event', Path(directory) / 'output'
+                event.write_text(json.dumps(self.push()))
+                controller.env['GITHUB_EVENT_PATH'] = str(event)
+                headers = entry.HTTPMessage()
+                headers['X-RateLimit-Remaining'] = '0'
+                def fail():
+                    try:
+                        try:
+                            raise entry.HTTPError('https://SECRET', 403, 'SECRET', headers, None)
+                        except entry.HTTPError:
+                            raise entry.GitHubApiError(403, 'SECRET') from None
+                    except entry.GitHubApiError:
+                        raise entry.batch.BatchError('SECRET') from None
+                log = io.StringIO()
+                with mock.patch.object(entry, 'Entry', return_value=controller), \
+                     mock.patch.object(controller.runtime.inputs, 'refresh', fail), redirect_stdout(log):
+                    self.assertEqual(entry.main([operation, '--root', str(self.f.root), '--output', str(output)]), 1)
+                row = self.diagnostic_rows(log)[0]
+                self.assertEqual(row['stage'], 'auth-main-refresh')
+                self.assertEqual(row['http'], {'status': 403, 'remaining': 0})
+                self.assertNotIn('SECRET', log.getvalue())
+                self.assertFalse(self.writes())
+
+    def diagnostic_rows(self, log):
+        return [json.loads(line) for line in log.getvalue().splitlines()
+                if line.startswith('{') and json.loads(line).get('schema') == 'lmdj.ci-entry-diagnostic.v1']
+
+    def test_diagnostic_never_formats_dynamic_exception_or_unknown_values(self):
+        class SECRET_URL_CREDENTIAL(Exception):
+            def __str__(self):
+                raise AssertionError("must not format exception")
+        for value in ('https://SECRET', {'SECRET': 'token'}, True, None):
+            answer = entry.diagnostic(value, value, SECRET_URL_CREDENTIAL())
+            self.assertEqual(answer, {'schema': 'lmdj.ci-entry-diagnostic.v1',
+                'operation': 'unknown', 'stage': 'unknown', 'error_kind': 'unknown'})
+        for error, kind in ((entry.JournalBlocked('SECRET'), 'journal-blocked'),
+                            (entry.batch.BatchError('SECRET'), 'batch-error'),
+                            (entry.ScopeError('SECRET'), 'scope-error'),
+                            (json.JSONDecodeError('SECRET', 'SECRET', 0), 'json-error'),
+                            (entry.GitHubApiError(403, 'SECRET'), 'github-api-error'),
+                            (entry.HTTPError('SECRET', 403, 'SECRET', None, None), 'http-error'),
+                            (OSError('https://SECRET'), 'os-error')):
+            self.assertEqual(entry.diagnostic('reports', 'report', error)['error_kind'], kind)
+            self.assertNotIn('SECRET', json.dumps(entry.diagnostic('reports', 'report', error)))
+
+    def test_cli_authentication_failure_diagnostics_for_both_operations(self):
+        for operation in ('control', 'reports'):
+            for method, expected in (('lock_held', 'auth-lock'), ('git', 'auth-checkout'),
+                                     ('run_state', 'auth-current-run'), ('pages', 'auth-current-job')):
+                with self.subTest(operation=operation, method=method), tempfile.TemporaryDirectory() as directory:
+                    controller = self.make()
+                    event, output = Path(directory) / 'event', Path(directory) / 'output'
+                    event.write_text(json.dumps(self.push()))
+                    controller.env['GITHUB_EVENT_PATH'] = str(event)
+                    log = io.StringIO()
+                    with mock.patch.object(entry, 'Entry', return_value=controller), \
+                         mock.patch.object(controller.runtime, method, side_effect=OSError('SECRET')), redirect_stdout(log):
+                        self.assertEqual(entry.main([operation, '--root', str(self.f.root), '--output', str(output)]), 1)
+                    self.assertEqual(self.diagnostic_rows(log), [{'schema': 'lmdj.ci-entry-diagnostic.v1',
+                        'operation': operation, 'stage': expected, 'error_kind': 'os-error'}])
+                    self.assertIn('why: automatic entry could not authenticate or persist its result; remedy:', log.getvalue())
+                    self.assertNotIn('SECRET', log.getvalue())
+                    self.assertFalse(self.writes())
+                    if operation == 'control':
+                        self.assertFalse(output.exists())
+                    else:
+                        self.assertEqual(json.loads(output.read_text())['status'], 'error')
+
+    def test_post_auth_journal_failure_is_not_auth_phase(self):
+        controller = self.make()
+        with tempfile.TemporaryDirectory() as directory:
+            event, output = Path(directory) / 'event', Path(directory) / 'output'
+            event.write_text(json.dumps(self.push()))
+            controller.env['GITHUB_EVENT_PATH'] = str(event)
+            log = io.StringIO()
+            with mock.patch.object(entry, 'Entry', return_value=controller), \
+                 mock.patch.object(controller.runtime, 'reconcile', side_effect=entry.JournalBlocked('SECRET')), redirect_stdout(log):
+                self.assertEqual(entry.main(['control', '--root', str(self.f.root), '--output', str(output)]), 1)
+            self.assertEqual(self.diagnostic_rows(log)[0]['stage'], 'reconcile')
+            self.assertEqual(self.diagnostic_rows(log)[0]['error_kind'], 'journal-blocked')
+            self.assertIsNone(controller.runtime.diagnostic_stage)
+            self.assertFalse(output.exists())
+
+    def test_cli_untrusted_phase_and_exception_names_cannot_leak(self):
+        class SECRET(Exception):
+            def __str__(self):
+                raise AssertionError('exception must never be formatted')
+        for operation in ('control', 'reports'):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                controller = self.make()
+                event, output = Path(directory) / 'event', Path(directory) / 'output'
+                event.write_text('{}')
+                controller.env['GITHUB_EVENT_PATH'] = str(event)
+                def fail(payload):
+                    controller.diagnostic_stage = {'SECRET': 'https://private'}
+                    controller.runtime.diagnostic_stage = 'https://SECRET'
+                    raise SECRET()
+                log = io.StringIO()
+                with mock.patch.object(entry, 'Entry', return_value=controller), \
+                     mock.patch.object(controller, operation, fail), redirect_stdout(log):
+                    self.assertEqual(entry.main([operation, '--root', str(self.f.root), '--output', str(output)]), 1)
+                self.assertEqual(self.diagnostic_rows(log), [{'schema': 'lmdj.ci-entry-diagnostic.v1',
+                    'operation': operation, 'stage': 'unknown', 'error_kind': 'unknown'}])
+                self.assertNotIn('SECRET', log.getvalue())
+                self.assertNotIn('https://', log.getvalue())
+
+    def test_cli_pre_operation_failures_have_closed_phase(self):
+        for operation in ('control', 'reports'):
+            for stage in ('entry-construction', 'event-read'):
+                with self.subTest(operation=operation, stage=stage), tempfile.TemporaryDirectory() as directory:
+                    controller = self.make()
+                    controller.env['GITHUB_EVENT_PATH'] = str(Path(directory) / 'missing')
+                    output = Path(directory) / 'result'
+                    log = io.StringIO()
+                    options = {'side_effect': OSError('SECRET')} if stage == 'entry-construction' else {'return_value': controller}
+                    with mock.patch.object(entry, 'Entry', **options), redirect_stdout(log):
+                        self.assertEqual(entry.main([operation, '--root', str(self.f.root), '--output', str(output)]), 1)
+                    self.assertEqual(self.diagnostic_rows(log)[0]['stage'], stage)
+                    self.assertNotIn('SECRET', log.getvalue())
+
+    def test_cli_writer_and_event_auth_failures_keep_exact_stage(self):
+        for operation in ('control', 'reports'):
+            for stage in ('auth-journal-writer', 'auth-event'):
+                with self.subTest(operation=operation, stage=stage), tempfile.TemporaryDirectory() as directory:
+                    controller = self.make()
+                    event, output = Path(directory) / 'event', Path(directory) / 'output'
+                    event.write_text(json.dumps(self.push()))
+                    controller.env['GITHUB_EVENT_PATH'] = str(event)
+                    if stage == 'auth-event':
+                        controller.env['GITHUB_EVENT_NAME'] = 'schedule'
+                    target = controller.runtime.transport
+                    original = target._writer
+                    def writer(value):
+                        if stage == 'auth-journal-writer':
+                            raise entry.JournalBlocked('SECRET')
+                        return original(value)
+                    log = io.StringIO()
+                    with mock.patch.object(entry, 'Entry', return_value=controller), \
+                         mock.patch.object(target, '_writer', writer), redirect_stdout(log):
+                        self.assertEqual(entry.main([operation, '--root', str(self.f.root), '--output', str(output)]), 1)
+                    self.assertEqual(self.diagnostic_rows(log)[0]['stage'], stage)
+                    self.assertFalse(self.writes())
+                    self.assertNotIn('SECRET', log.getvalue())
+
+    def test_output_write_failure_is_not_last_successful_authentication(self):
+        controller = self.make()
+        with tempfile.TemporaryDirectory() as directory:
+            event, output = Path(directory) / 'event', Path(directory) / 'missing' / 'output'
+            event.write_text(json.dumps(self.push()))
+            controller.env['GITHUB_EVENT_PATH'] = str(event)
+            log = io.StringIO()
+            with mock.patch.object(entry, 'Entry', return_value=controller), \
+                 mock.patch.object(controller.runtime, 'reconcile', return_value={'action': 'idle'}), redirect_stdout(log):
+                self.assertEqual(entry.main(['control', '--root', str(self.f.root), '--output', str(output)]), 1)
+            self.assertEqual(self.diagnostic_rows(log)[0]['stage'], 'output-write')
+            self.assertFalse(output.exists())
+
+    def test_internal_report_catches_keep_closed_diagnostics_and_drain(self):
+        controller = self.make()
+        log = io.StringIO()
+        with mock.patch.object(controller, 'event', side_effect=entry.batch.BatchError('SECRET')), \
+             mock.patch.object(report_runtime.ReportRuntime, 'execute', side_effect=OSError('SECRET')) as execute, redirect_stdout(log):
+            answer = controller.reports(self.push())
+        self.assertEqual(answer['status'], 'error')
+        self.assertEqual([row['stage'] for row in self.diagnostic_rows(log)], ['event-authenticate', 'report'])
+        execute.assert_called_once_with('drain', limit=1)
+        self.assertNotIn('SECRET', log.getvalue())
+
     def setUp(self):
         self.f = fixtures.RuntimeTests()
         self.f.setUp()
@@ -381,8 +591,13 @@ class EntryTests(unittest.TestCase):
             real_entry = entry.Entry
             def factory(**kwargs):
                 return real_entry(**kwargs, environment={**self.env, "GITHUB_EVENT_PATH": str(event)}, api=self.api)
-            with mock.patch.object(entry, "Entry", factory):
+            log = io.StringIO()
+            with mock.patch.object(entry, "Entry", factory), redirect_stdout(log):
                 self.assertEqual(entry.main(["control", "--root", str(self.f.root), "--output", str(output)]), 1)
+            diagnostic = [json.loads(line) for line in log.getvalue().splitlines() if line.startswith('{')]
+            self.assertEqual(diagnostic, [{"schema": "lmdj.ci-entry-diagnostic.v1", "operation": "control",
+                "stage": "event-authenticate", "error_kind": "batch-error"}],
+                "why: failed control hides its stage; remedy: emit closed diagnostic without raw error")
             self.assertFalse(output.exists())
             self.assertFalse(self.writes())
 

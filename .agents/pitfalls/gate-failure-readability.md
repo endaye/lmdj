@@ -39,6 +39,9 @@ recurrences:
   - date: 2026-09-07
     occurrence: https://github.com/endaye/lmdj/issues/740
     observed_by: Claude Code (Opus 5)
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/actions/runs/34199071822
+    observed_by: Codex
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 

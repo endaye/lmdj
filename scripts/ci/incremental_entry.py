@@ -8,15 +8,21 @@ errors must not turn a durably claimed execution into a skipped heavy DAG.
 from __future__ import annotations
 
 import argparse
+import json
+from http.client import HTTPMessage
 import os
 from pathlib import Path
 import subprocess
+from urllib.error import HTTPError
 
 import batch_runtime
 import incremental_completion
 import incremental_batch as batch
 import report_runtime
 import self_test
+from incremental_batch_journal import JournalBlocked
+from test_scope import ScopeError
+from self_test_report import GitHubApiError
 
 STORAGE_PATH = "scripts/ci/incremental_storage.json"
 REPORT_SCHEMA = "lmdj.ci-incremental-entry-report.v1"
@@ -26,6 +32,57 @@ WORKFLOWS = {
     ".github/workflows/pr-review.yml": "review",
 }
 EVENTS = {"push", "schedule", "workflow_run"}
+DIAGNOSTIC_STAGES = frozenset({
+    "output-preflight", "entry-construction", "event-read", "output-write",
+    "authenticate", "auth-lock", "auth-checkout", "auth-main-refresh",
+    "auth-current-run", "auth-journal-writer", "auth-current-job", "auth-event",
+    "event-authenticate", "reconcile", "scheduler-read", "report-construction", "report",
+})
+
+
+def http_diagnostic(error):
+    """Bounded known-wrapper inspection, numeric metadata only; no text/URL."""
+    seen = set()
+    for _ in range(4):
+        if id(error) in seen:
+            break
+        seen.add(id(error))
+        if type(error) is HTTPError:
+            result = {}
+            if type(error.code) is int and 100 <= error.code <= 599:
+                result['status'] = error.code
+            if type(error.headers) is HTTPMessage:
+                for header, key in (('x-ratelimit-remaining', 'remaining'),
+                                    ('x-ratelimit-reset', 'reset'), ('retry-after', 'retry_after')):
+                    values = error.headers.get_all(header, [])
+                    if len(values) == 1:
+                        value = values[0]
+                        if type(value) is str and 1 <= len(value) <= 12 and value.isascii() and value.isdecimal():
+                            result[key] = int(value)
+            return result
+        if type(error) not in (batch.BatchError, JournalBlocked, GitHubApiError):
+            break
+        error = error.__context__
+    return {}
+
+
+def diagnostic(operation, stage, error):
+    """Closed diagnostic only. Never inspect exception text or dynamic names."""
+    kinds = {JournalBlocked: "journal-blocked", batch.BatchError: "batch-error",
+             ScopeError: "scope-error", json.JSONDecodeError: "json-error", OSError: "os-error",
+             GitHubApiError: "github-api-error", HTTPError: "http-error"}
+    answer = {"schema": "lmdj.ci-entry-diagnostic.v1",
+            "operation": operation if type(operation) is str and operation in {"control", "reports"} else "unknown",
+            "stage": stage if type(stage) is str and stage in DIAGNOSTIC_STAGES else "unknown",
+            "error_kind": kinds.get(type(error), "unknown")}
+    http = http_diagnostic(error)
+    if http:
+        answer['http'] = http
+    return answer
+
+
+def emit_diagnostic(operation, stage, error):
+    print(self_test.canonical_json(diagnostic(operation, stage, error)), flush=True)
 
 
 def require(ok, why):
@@ -127,12 +184,15 @@ class Entry:
         return report_runtime.scheduler_state(self.runtime)
 
     def authenticate(self):
+        self.diagnostic_stage = "authenticate"
         self.runtime.authenticate_current()
+        self.diagnostic_stage = "auth-event"
         run = self.runtime.get_run(self.runtime.current["run_id"], 1)
         require(run.get("event") == self.env.get("GITHUB_EVENT_NAME"), "current API event differs from workflow context")
 
     def control(self, payload):
         self.authenticate()
+        self.diagnostic_stage = "event-authenticate"
         source, run = self.event(payload)
         # Read-only provenance for actual callback-chain audits. This proves
         # authenticated source identity, not admission, health or chain depth.
@@ -149,12 +209,15 @@ class Entry:
             witness.update(schema="lmdj.ci-source-witness.v2", relay=self.relay_witness)
         print(self_test.canonical_json(witness), flush=True)
         if source in {"push", "schedule"}:
+            self.diagnostic_stage = "reconcile"
             return self.runtime.reconcile(execute=True)
         if source == "batch":
+            self.diagnostic_stage = "scheduler-read"
             state = self.state()
             identity = {"run_id": run["id"], "attempt": run["run_attempt"]}
             if state["active"] is not None and state["active"]["executor_run"] == identity:
                 # Includes none: its previous idle answer still held a claim.
+                self.diagnostic_stage = "reconcile"
                 return self.runtime.reconcile(execute=True)
             return self.runtime.answer("idle", "callback is not the authenticated active executor", None, state)
         return self.runtime.answer("idle", "report-only source cannot authorize execution", None, None)
@@ -163,8 +226,10 @@ class Entry:
         self.authenticate()
         outcomes = []
         try:
+            self.diagnostic_stage = "event-authenticate"
             source, run = self.event(payload)
             if source == "batch":
+                self.diagnostic_stage = "scheduler-read"
                 state = self.state()
                 identity = {"run_id": run["id"], "attempt": run["run_attempt"]}
                 active = state["active"] is not None and state["active"]["executor_run"] == identity
@@ -172,7 +237,8 @@ class Entry:
                 if not (active or settled):
                     return {"schema": REPORT_SCHEMA, "status": "ignored", "source": source, "outcomes": []}
             operations = [source] if source in {"legacy", "review"} else ["batches"]
-        except Exception:
+        except Exception as error:
+            emit_diagnostic("reports", self.diagnostic_stage, error)
             # Current writer/config were authenticated above. Unknown source
             # cannot queue a new report, but must not strand an old durable
             # outbox payload. A definite unrelated callback still exits above.
@@ -180,14 +246,17 @@ class Entry:
             outcomes.append({"operation": "source", "result": {"status": "error",
                 "why": "callback source or authenticated scheduler history is unresolved",
                 "remedy": "restore exact source evidence; existing outbox recovery is independent"}})
+        self.diagnostic_stage = "report-construction"
         reporter = report_runtime.ReportRuntime(self.config, root=self.root, environment=self.env, api=self.runtime.api)
         # A source-planning failure must not strand an already frozen outbox
         # payload. Each operation has its own visible result; no execute path.
         for operation in [*operations, "drain"]:
             try:
+                self.diagnostic_stage = "report"
                 result = reporter.execute(operation, limit=1, **({"run_id": run["id"], "attempt": run["run_attempt"]}
                     if operation in {"legacy", "review"} else {}))
-            except Exception:
+            except Exception as error:
+                emit_diagnostic("reports", self.diagnostic_stage, error)
                 result = {"status": "error", "why": "authenticated report source or outbox state is unresolved",
                           "remedy": "inspect exact source and durable pending record; do not replay a claimed POST"}
             outcomes.append({"operation": operation, "result": result})
@@ -201,15 +270,27 @@ def main(argv=None):
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
+    entry = None
+    stage = "output-preflight"
     try:
         require(not args.output.exists(), "output exists; stale execution or report output must not be reused")
+        stage = "entry-construction"
         entry = Entry(root=args.root)
+        stage = "event-read"
         payload = batch_runtime.strict_json(Path(entry.env["GITHUB_EVENT_PATH"]).read_bytes())
+        stage = "operation"
         answer = getattr(entry, args.operation)(payload)
+        stage = "output-write"
         with args.output.open("x") as stream:
             stream.write(self_test.canonical_json(answer) + "\n")
         return 1 if args.operation == "reports" and answer["status"] == "error" else 0
-    except Exception:
+    except Exception as error:
+        if stage == "operation":
+            stage = getattr(entry, "diagnostic_stage", None)
+            runtime_stage = getattr(getattr(entry, "runtime", None), "diagnostic_stage", None)
+            if runtime_stage is not None:
+                stage = runtime_stage
+        emit_diagnostic(args.operation, stage, error)
         print("why: automatic entry could not authenticate or persist its result; remedy: retain exact source and reconcile; never reuse an old execute output")
         if args.operation == "reports" and not args.output.exists():
             # A report error is a separate diagnostic, never a replacement
