@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "$script_dir/.." && pwd -P)"
-lab_root="$repo_root/apps/web-runtime-lab"
+lab_root="$repo_root/demos/web-runtime-lab"
 
 usage() {
   cat <<'EOF'

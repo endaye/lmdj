@@ -75,7 +75,7 @@ SELF_HOSTED_JOBS = [
 ]
 
 CASES = {
-    "demos/README.md": {"docs_static"},
+    "demos/README.md": {"docs_static", "web_runtime_lab"},
     "demos/protocol-proof/main.cpp": {"docs_static"},
     "demos/lmdj-song-pipeline/song_pipeline/cli.py": {"docs_static"},
     "demos/ascii-matrix-camera/index.html": {"docs_static"},
@@ -104,7 +104,10 @@ CASES = {
     "apps/web-runtime-host/tools/release_bundle.py": {
         "portal", "web_runtime_host", "deploy_contract"
     },
+    "demos/chameleon-lab/src/main.js": {"docs_static", "portal", "chameleon_lab"},
+    "demos/web-runtime-lab/src/worklet.js": {"docs_static", "portal", "web_runtime_lab"},
     "apps/chameleon-lab/src/main.js": {"portal", "chameleon_lab"},
+    "apps/web-runtime-lab/src/worklet.js": {"portal", "web_runtime_lab"},
     "tests/core/audio/render_test.cpp": {
         "core_ubuntu", "core_asan", "core_coverage", "core_macos"
     },

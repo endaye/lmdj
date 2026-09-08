@@ -571,9 +571,9 @@ class ManifestReuseTest(unittest.TestCase):
         self.assertIn("full rule: central CI control plane", plan["reasons"], message)
 
     def test_untracked_new_file_is_not_silently_ignored(self) -> None:
-        self.repository.write("apps/chameleon-lab/src/main.js", "// new\n")
+        self.repository.write("demos/chameleon-lab/src/main.js", "// new\n")
         plan = self.plan()
-        self.assertEqual(set(plan["selected"]), {"portal", "chameleon_lab"})
+        self.assertEqual(set(plan["selected"]), {"docs_static", "portal", "chameleon_lab"})
 
     def test_control_plane_change_upgrades_to_full_mode(self) -> None:
         self.repository.write(".github/workflows/ci.yml", "name: CI\n")
