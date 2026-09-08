@@ -58,6 +58,7 @@ class CatalogFixtureRequestHandler(BaseHTTPRequestHandler):
     # Set by the server factory below.
     corpus_root: Path
     verbose: bool = False
+    cross_origin: bool = False
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         if self.verbose:
@@ -126,6 +127,18 @@ class CatalogFixtureRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
+        if self.cross_origin:
+            # A Creator page is cross-origin isolated
+            # (`Cross-Origin-Embedder-Policy: require-corp`), so a Catalog on
+            # another origin is unreachable from it unless the response opts
+            # in twice: CORS to let the page read the bytes, and CORP to let
+            # an isolated document embed a cross-origin resource at all.
+            # Without both, the browser refuses before the transport sees a
+            # status and the failure arrives as `catalog_unavailable`,
+            # indistinguishable from a Catalog that is genuinely down. Off by
+            # default so the same-origin surface stays exactly S11-D6's.
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
         self.end_headers()
         if with_body and payload:
             self.wfile.write(payload)
@@ -171,12 +184,17 @@ class CatalogFixtureServer:
         host: str = "127.0.0.1",
         port: int = 0,
         verbose: bool = False,
+        cross_origin: bool = False,
     ) -> None:
         self.root = Path(root).resolve()
         handler = type(
             "BoundCatalogFixtureRequestHandler",
             (CatalogFixtureRequestHandler,),
-            {"corpus_root": self.root, "verbose": verbose},
+            {
+                "corpus_root": self.root,
+                "verbose": verbose,
+                "cross_origin": cross_origin,
+            },
         )
         self._server = ThreadingHTTPServer((host, port), handler)
         self._server.daemon_threads = True
@@ -228,6 +246,15 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--cross-origin",
+        action="store_true",
+        help=(
+            "answer with Access-Control-Allow-Origin and "
+            "Cross-Origin-Resource-Policy so a cross-origin-isolated browser "
+            "page can read the corpus"
+        ),
+    )
     arguments = parser.parse_args(argv)
 
     if not arguments.root.is_dir():
@@ -239,6 +266,7 @@ def main(argv: list[str]) -> int:
         host=arguments.host,
         port=arguments.port,
         verbose=arguments.verbose,
+        cross_origin=arguments.cross_origin,
     )
     print(f"serving {server.root} at {server.base_url}", flush=True)
     server.start()

@@ -1,8 +1,10 @@
 import hashlib
+import importlib.util
 import json
 import os
 import re
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -909,6 +911,83 @@ FOUNDRY_SET_ID = "11111111-1111-4111-8111-111111111111"
 FOUNDRY_MANIFEST = (
     "33175f66912a9add3e4e551d19d85072adcd1f0331fcc9fed80ab0bc18dd9111"
 )
+ATTRIBUTION_SET_ID = "22222222-2222-4222-8222-222222222222"
+ATTRIBUTION_MANIFEST = (
+    "ae578e4f6a383994fb15fd984d7906e346ee7bcb6d7add763c8da9317a313bb4"
+)
+# S11-D5: Foundry's set-level demo is a blob no slot references, so the Set
+# Store holds it as a twelfth object.
+FOUNDRY_DEMO_ARTIFACT = (
+    "644fe37aef9fcb3d645b87105461b040453523784ce115cf38fd4c539e8813a2"
+)
+UNSUPPORTED_SET_ID = "33333333-3333-4333-8333-333333333333"
+UNSUPPORTED_MANIFEST = (
+    "57ab3bf8e01efe6a044639a53ee2e339627e3c3ee5a53b04e387ed640df2e64c"
+)
+# The Sets the Catalog publishes but the Set Store must refuse, and the token
+# each refusal carries. Task 7 asserts the whole partition, not just that the
+# happy path is listed: a Set silently promoted from this side of the line
+# would be an eligibility regression no positive assertion can see.
+INELIGIBLE_SETS = {
+    "44444444-4444-4444-8444-444444444444": (
+        "IO_ERROR", "soundset_content_mismatch",
+    ),
+    "55555555-5555-4555-8555-555555555555": (
+        "PERMISSION_DENIED", "soundset_license_ineligible",
+    ),
+    "66666666-6666-4666-8666-666666666666": (
+        "PERMISSION_DENIED", "soundset_license_ineligible",
+    ),
+    "77777777-7777-4777-8777-777777777777": (
+        "PERMISSION_DENIED", "soundset_license_ineligible",
+    ),
+}
+
+
+def project_bundle_module():
+    """Load the repository's own Bundle packer, once.
+
+    Export is a tool, not a Facade operation, so the acceptance journey drives
+    exactly the packer the product ships rather than reimplementing its
+    container format here.
+    """
+    cached = getattr(project_bundle_module, "module", None)
+    if cached is not None:
+        return cached
+    path = REPO_ROOT / "tools/project-bundle/project_bundle.py"
+    spec = importlib.util.spec_from_file_location("project_bundle", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    project_bundle_module.module = module
+    return module
+
+
+def workspace_catalog_root(workspace: Path) -> Path:
+    return workspace / ".lmdj-host/soundset-catalog"
+
+
+def workspace_set_store(workspace: Path) -> Path:
+    return workspace / ".lmdj-host/soundsets"
+
+
+def publish_workspace_catalog(workspace: Path) -> None:
+    """Point a Workspace at the offline fixture Catalog, byte for byte.
+
+    Nothing is injected and nothing is rewritten: the Host wires its own
+    Workspace-local Catalog, so a Host process here reads exactly the objects
+    `tests/fixtures/soundset` publishes.
+    """
+    catalog = workspace_catalog_root(workspace) / "objects"
+    catalog.mkdir(parents=True)
+    fixtures = REPO_ROOT / "tests/fixtures/soundset"
+    for kind in ("manifest", "blob"):
+        for source in sorted((fixtures / kind).iterdir()):
+            if source.is_file():
+                (catalog / source.name).write_bytes(source.read_bytes())
+    (workspace_catalog_root(workspace) / "index.json").write_bytes(
+        (fixtures / "catalog/index.json").read_bytes()
+    )
 
 
 def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
@@ -919,16 +998,7 @@ def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
     all take, one fresh process per request.
     """
     workspace = temp_root / "soundset-workspace"
-    catalog = workspace / ".lmdj-host/soundset-catalog/objects"
-    catalog.mkdir(parents=True)
-    fixtures = REPO_ROOT / "tests/fixtures/soundset"
-    for kind in ("manifest", "blob"):
-        for source in sorted((fixtures / kind).iterdir()):
-            if source.is_file():
-                (catalog / source.name).write_bytes(source.read_bytes())
-    (workspace / ".lmdj-host/soundset-catalog/index.json").write_bytes(
-        (fixtures / "catalog/index.json").read_bytes()
-    )
+    publish_workspace_catalog(workspace)
 
     listed = run_request(
         executable, workspace, "query", {"operation": "soundset.catalog.list"}
@@ -1101,6 +1171,526 @@ def soundset_facade_contract(executable: Path, temp_root: Path) -> None:
     )
     check_success(reinspected, None)
 
+def project_state(
+    executable: Path, workspace: Path, project: Path, bank: int
+) -> tuple[int, dict[int, str], dict[str, dict]]:
+    """The far side of a leg: revision, this Bank's occupancy, every Asset.
+
+    A Sound Set leg is only proved by what the Project looks like afterwards,
+    so every leg below reads this rather than trusting the command's own
+    receipt.
+    """
+    inspected = run_request(
+        executable,
+        workspace,
+        "query",
+        {"operation": "project.inspect", "project_path": str(project)},
+    )
+    assert inspected["ok"] is True
+    truth = inspected["result"]["project"]
+    occupancy = {
+        pad["pad"]: pad["asset_id"]
+        for pad in truth["banks"][bank]["pads"]
+        if pad["asset_id"]
+    }
+    return inspected["project_revision"], occupancy, truth["assets"]
+
+
+def assert_soundset_lineage(
+    assets: dict[str, dict],
+    asset_id: str,
+    set_id: str,
+    manifest_sha256: str,
+    slot_index: int,
+) -> None:
+    """S11-D9: one typed `soundset` Lineage, never a second carrier."""
+    lineage = assets[asset_id]["lineage"]
+    assert lineage["derivation"] == {"kind": "soundset_install"}
+    assert lineage["source"]["kind"] == "soundset"
+    assert lineage["source"]["set_id"] == set_id
+    assert lineage["source"]["manifest_sha256"] == manifest_sha256
+    assert lineage["source"]["set_version"] == "1.0.0"
+    assert lineage["source"]["slot_index"] == slot_index
+
+
+def stored_set_objects(workspace: Path, manifest_sha256: str) -> list[str]:
+    published = workspace_set_store(workspace) / manifest_sha256
+    return sorted(entry.name for entry in published.iterdir())
+
+
+def soundset_acceptance_journey(executable: Path, temp_root: Path) -> None:
+    """Stage 11 acceptance: the Catalog journey a first-run user takes.
+
+    list -> inspect -> map.preview -> install keep -> install replace, one
+    fresh CLI process per request, and every leg asserted on its far side --
+    the Project revision, the Bank's Pad occupancy, the Asset table and the
+    Workspace Set Store -- never on a success code alone. The Project is the
+    one `project.create` just made: since #769 that is `lmdj.project.v4` from
+    its first persist, so no preparatory command stands between creating a
+    Project and installing a Set. A leg that needs one is a regression.
+    """
+    workspace = temp_root / "acceptance-workspace"
+    publish_workspace_catalog(workspace)
+    bank = 0
+
+    # Leg 1 -- list. Far side: the Catalog is reachable, exactly the Sets that
+    # may be published are published, every other one is refused with its
+    # locked token, and the Set Store on disk holds one object per unique
+    # Artifact hash (S11-D7). The Attribution Kit's `demo` declares its slot 0
+    # hash, so four occupied slots plus a demo are four blobs, not five.
+    # Publishable is not installable: S11-D3 keeps the Unsupported Audio Kit
+    # on the published side here and refuses it at install, in leg 9.
+    listed = run_request(
+        executable, workspace, "query", {"operation": "soundset.catalog.list"}
+    )
+    check_success(listed, None)
+    assert listed["result"]["catalog_available"] is True
+    published = {entry["set_id"] for entry in listed["result"]["sets"]}
+    assert published == {
+        FOUNDRY_SET_ID, ATTRIBUTION_SET_ID, UNSUPPORTED_SET_ID
+    }
+    refused = {
+        entry["set_id"]: (entry["code"], entry["reason"])
+        for entry in listed["result"]["refused"]
+    }
+    assert refused == INELIGIBLE_SETS
+    attribution = next(
+        entry for entry in listed["result"]["sets"]
+        if entry["set_id"] == ATTRIBUTION_SET_ID
+    )
+    assert attribution["license"]["spdx_id"] == "CC-BY-4.0"
+    assert attribution["license"]["attribution"] == (
+        "Fixture Attribution Kit by Bea Waveform (CC BY 4.0)"
+    )
+    assert attribution["total_bytes"] == 34788
+    assert len(stored_set_objects(workspace, ATTRIBUTION_MANIFEST)) == 5
+    # Foundry declares twelve Artifact references -- eleven slots plus a
+    # standalone demo -- across eleven unique hashes, because slot 12 reuses
+    # slot 0's Artifact.
+    assert len(stored_set_objects(workspace, FOUNDRY_MANIFEST)) == 12
+
+    # Leg 2 -- inspect. Far side: the whole 16-slot layout, and a Set Store
+    # the query did not touch.
+    store_before = stored_set_objects(workspace, FOUNDRY_MANIFEST)
+    inspected = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.inspect",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        },
+    )
+    check_success(inspected, None)
+    slots = inspected["result"]["slots"]
+    assert len(slots) == 16
+    assert [
+        slot["slot"] for slot in slots if slot["occupied"]
+    ] == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+    # S11-D12 begins here: an empty slot carries no Artifact at all, so a Host
+    # has nothing to render as an action on the target Pad.
+    for slot in slots:
+        assert ("artifact" in slot) is slot["occupied"]
+    assert inspected["result"]["demo"]["sha256"] == FOUNDRY_DEMO_ARTIFACT
+    assert stored_set_objects(workspace, FOUNDRY_MANIFEST) == store_before
+
+    project = temp_root / "acceptance-beat.lmdj"
+    created = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "project.create",
+            "project_path": str(project),
+            "project_id": uuid(920),
+            "bpm": 120,
+            "initial_pattern": {
+                "pattern_id": uuid(921), "bars": 1, "events": [],
+            },
+        },
+    )
+    check_success(created, 0)
+    revision, occupancy, assets = project_state(
+        executable, workspace, project, bank
+    )
+    assert (revision, occupancy, assets) == (0, {}, {})
+
+    # Leg 3 -- install the CC-BY Set into an empty Bank. Nothing collides, so
+    # `occupied_pad_policy` is legitimately absent. Far side: revision 0 -> 1,
+    # four Pads, four Assets, each carrying typed `soundset` Lineage.
+    installed = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "soundset.install",
+            "project_path": str(project),
+            "command_id": uuid(922),
+            "expected_revision": 0,
+            "bank_id": bank,
+            "set_id": ATTRIBUTION_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": ATTRIBUTION_MANIFEST,
+        },
+    )
+    check_success(installed, 1)
+    assert installed["result"]["collisions"] == []
+    assert [
+        entry["pad"] for entry in installed["result"]["installed"]
+    ] == [0, 1, 2, 3]
+    revision, attribution_pads, assets = project_state(
+        executable, workspace, project, bank
+    )
+    assert revision == 1
+    assert sorted(attribution_pads) == [0, 1, 2, 3]
+    assert len(assets) == 4
+    for pad, asset_id in attribution_pads.items():
+        assert_soundset_lineage(
+            assets, asset_id, ATTRIBUTION_SET_ID, ATTRIBUTION_MANIFEST, pad
+        )
+
+    # Leg 4 -- map.preview the second Set into the same Bank. Far side: the
+    # index-identity mapping with its collisions and its S11-D12 kept list,
+    # and a Project the query left exactly where it was.
+    previewed = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.map.preview",
+            "project_path": str(project),
+            "bank_id": bank,
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        },
+    )
+    check_success(previewed, 1)
+    assert [
+        entry["pad"] for entry in previewed["result"]["proposed"]
+    ] == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+    for entry in previewed["result"]["proposed"]:
+        assert entry["pad"] == entry["slot_index"]
+    assert previewed["result"]["collisions"] == [0, 1, 2, 3]
+    assert previewed["result"]["kept"] == [10, 11, 13, 14, 15]
+    assert project_state(executable, workspace, project, bank) == (
+        1, attribution_pads, assets
+    )
+
+    # Leg 5 -- install with collisions and no policy. Far side: the locked
+    # refusal naming every colliding Pad, and zero Project change: same
+    # revision, same Pads, same Assets.
+    conflicted = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "soundset.install",
+            "project_path": str(project),
+            "command_id": uuid(923),
+            "expected_revision": 1,
+            "bank_id": bank,
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        },
+        expected_exit=2,
+    )
+    check_error(conflicted, "INVALID_ARGUMENT")
+    assert conflicted["error"]["details"] == {
+        "reason": "soundset_occupied_conflict",
+        "collisions": [0, 1, 2, 3],
+    }
+    assert project_state(executable, workspace, project, bank) == (
+        1, attribution_pads, assets
+    )
+
+    # Leg 6 -- install keep. Far side: revision 1 -> 2, only the
+    # non-colliding proposals written, and the four colliding Pads still
+    # holding the exact Asset ids leg 3 gave them.
+    kept_install = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "soundset.install",
+            "project_path": str(project),
+            "command_id": uuid(924),
+            "expected_revision": 1,
+            "bank_id": bank,
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+            "occupied_pad_policy": "keep",
+        },
+    )
+    check_success(kept_install, 2)
+    assert [
+        entry["pad"] for entry in kept_install["result"]["installed"]
+    ] == [4, 5, 6, 7, 8, 9, 12]
+    assert kept_install["result"]["collisions"] == [0, 1, 2, 3]
+    assert kept_install["result"]["kept"] == [10, 11, 13, 14, 15]
+    revision, keep_pads, keep_assets = project_state(
+        executable, workspace, project, bank
+    )
+    assert revision == 2
+    assert sorted(keep_pads) == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+    for pad, asset_id in attribution_pads.items():
+        assert keep_pads[pad] == asset_id
+    assert len(keep_assets) == 11
+    for pad in (4, 5, 6, 7, 8, 9, 12):
+        assert_soundset_lineage(
+            keep_assets, keep_pads[pad], FOUNDRY_SET_ID, FOUNDRY_MANIFEST, pad
+        )
+
+    # Leg 7 -- install replace. Far side: revision 2 -> 3, every proposal
+    # written, and S8-D5: the four Assets the install replaced are still
+    # Project Truth, so eleven new Assets bring the table to twenty-two.
+    replaced_install = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "soundset.install",
+            "project_path": str(project),
+            "command_id": uuid(925),
+            "expected_revision": 2,
+            "bank_id": bank,
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+            "occupied_pad_policy": "replace",
+        },
+    )
+    check_success(replaced_install, 3)
+    assert [
+        entry["pad"] for entry in replaced_install["result"]["installed"]
+    ] == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+    revision, replace_pads, replace_assets = project_state(
+        executable, workspace, project, bank
+    )
+    assert revision == 3
+    assert len(replace_assets) == 22
+    for pad, asset_id in attribution_pads.items():
+        assert replace_pads[pad] != asset_id
+        assert asset_id in replace_assets
+    for pad in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12):
+        assert_soundset_lineage(
+            replace_assets,
+            replace_pads[pad],
+            FOUNDRY_SET_ID,
+            FOUNDRY_MANIFEST,
+            pad,
+        )
+    # Slot 12 reuses slot 0's Artifact. One stored blob, but two Pads and two
+    # Assets: S11-D7 deduplicates bytes, never Pad occupancy.
+    assert replace_pads[0] != replace_pads[12]
+    assert (
+        replace_assets[replace_pads[0]]["lineage"]["source"]["artifact_sha256"]
+        == replace_assets[
+            replace_pads[12]
+        ]["lineage"]["source"]["artifact_sha256"]
+    )
+
+    # Leg 8 -- S11-D12. Reinstalling the four-slot Set over the same Bank with
+    # the most destructive policy there is must still leave every Pad under an
+    # empty Set slot exactly as it was: an empty slot is not a wipe.
+    d12_install = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "soundset.install",
+            "project_path": str(project),
+            "command_id": uuid(926),
+            "expected_revision": 3,
+            "bank_id": bank,
+            "set_id": ATTRIBUTION_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": ATTRIBUTION_MANIFEST,
+            "occupied_pad_policy": "replace",
+        },
+    )
+    check_success(d12_install, 4)
+    assert [
+        entry["pad"] for entry in d12_install["result"]["installed"]
+    ] == [0, 1, 2, 3]
+    assert d12_install["result"]["kept"] == [
+        4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+    ]
+    revision, d12_pads, d12_assets = project_state(
+        executable, workspace, project, bank
+    )
+    assert revision == 4
+    assert sorted(d12_pads) == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+    # The four Pads the Set does occupy really moved -- otherwise every
+    # assertion below would also hold for an install that wrote nothing.
+    for pad in (0, 1, 2, 3):
+        assert d12_pads[pad] != replace_pads[pad]
+        assert_soundset_lineage(
+            d12_assets,
+            d12_pads[pad],
+            ATTRIBUTION_SET_ID,
+            ATTRIBUTION_MANIFEST,
+            pad,
+        )
+    # ...and the Pads under the Set's twelve empty slots did not.
+    for pad in (4, 5, 6, 7, 8, 9, 12):
+        assert d12_pads[pad] == replace_pads[pad]
+    assert len(d12_assets) == 26
+
+    # Leg 9 -- S11-D3. A Set the Catalog publishes can still carry audio that
+    # is not S8-D6, and the Facade decides that at install, not at download.
+    # Far side: the locked refusal, and a Project that did not move.
+    unsupported = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "soundset.install",
+            "project_path": str(project),
+            "command_id": uuid(928),
+            "expected_revision": 4,
+            "bank_id": 2,
+            "set_id": UNSUPPORTED_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": UNSUPPORTED_MANIFEST,
+        },
+        expected_exit=2,
+    )
+    check_error(unsupported, "UNSUPPORTED_AUDIO")
+    # Slot 0 of that Set is 22.05 kHz, and the refusal names it.
+    assert unsupported["error"]["details"] == {
+        "reason": "soundset_audio_unsupported",
+        "slot_index": 0,
+    }
+    assert project_state(executable, workspace, project, bank) == (
+        4, d12_pads, d12_assets
+    )
+    assert project_state(executable, workspace, project, 2)[1] == {}
+
+    soundset_offline_and_export_journey(
+        executable, workspace, temp_root, project
+    )
+
+
+def soundset_offline_and_export_journey(
+    executable: Path, workspace: Path, temp_root: Path, project: Path
+) -> None:
+    """An unreachable Catalog hides nothing, and the result is exportable.
+
+    The Catalog directory is removed outright, which is the strongest form of
+    unreachable a Workspace-local Host can suffer: no index, no objects. What
+    is already in the Set Store must survive it all the way through install.
+    """
+    shutil.rmtree(workspace_catalog_root(workspace))
+
+    offline = run_request(
+        executable, workspace, "query", {"operation": "soundset.catalog.list"}
+    )
+    check_success(offline, None)
+    assert offline["result"]["catalog_available"] is False
+    assert offline["result"]["refused"] == []
+    assert {entry["set_id"] for entry in offline["result"]["sets"]} == {
+        FOUNDRY_SET_ID, ATTRIBUTION_SET_ID, UNSUPPORTED_SET_ID
+    }
+
+    inspected = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "soundset.inspect",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        },
+    )
+    check_success(inspected, None)
+    assert len(inspected["result"]["slots"]) == 16
+
+    # A cached Set installs with the Catalog gone: the Set Store is the source
+    # of the bytes, and Bank 1 is empty, so nothing collides.
+    offline_install = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "soundset.install",
+            "project_path": str(project),
+            "command_id": uuid(927),
+            "expected_revision": 4,
+            "bank_id": 1,
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        },
+    )
+    check_success(offline_install, 5)
+    revision, offline_pads, offline_assets = project_state(
+        executable, workspace, project, 1
+    )
+    assert revision == 5
+    assert sorted(offline_pads) == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+    for pad, asset_id in offline_pads.items():
+        assert_soundset_lineage(
+            offline_assets, asset_id, FOUNDRY_SET_ID, FOUNDRY_MANIFEST, pad
+        )
+
+    # Export. Until #784 widened `lmdj.project-bundle.v1`, no Project this
+    # Build creates could be packed at all, so this is the first journey that
+    # can carry an installed Sound Set out of the product.
+    bundle = temp_root / "acceptance-beat-bundle.lmdj"
+    packed = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools/project-bundle/project_bundle.py"),
+            "pack",
+            "--source",
+            str(project),
+            "--output",
+            str(bundle),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert packed.returncode == 0, packed.stderr
+    verified = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools/project-bundle/project_bundle.py"),
+            "verify",
+            str(bundle),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert verified.returncode == 0, verified.stderr
+    assert verified.stdout.strip() == packed.stdout.strip()
+
+    index, _ = project_bundle_module().read_bundle(bundle)
+    assert index["project_contract"] == "lmdj.project.v4"
+    payloads = sorted(
+        entry["path"] for entry in index["entries"]
+        if entry["path"].endswith(".wav")
+    )
+    # Every Asset in the Project came from a Sound Set slot, and the Bundle is
+    # content-addressed: the two Sets contribute fourteen unique Artifact
+    # hashes and the export carries exactly fourteen WAV payloads for the
+    # thirty-seven Assets that reference them.
+    assert len(offline_assets) == 37
+    assert payloads == sorted({
+        f"assets/{asset['lineage']['source']['artifact_sha256']}.wav"
+        for asset in offline_assets.values()
+    })
+    assert len(payloads) == 14
+
 
 def host_boundary_and_identity(executable: Path) -> None:
     version = json.loads(
@@ -1253,13 +1843,15 @@ def main() -> int:
         passed += 1
         soundset_facade_contract(executable, temp_root)
         passed += 1
+        soundset_acceptance_journey(executable, temp_root)
+        passed += 1
         host_boundary_and_identity(executable)
         passed += 1
         timeout_policy_contract()
         passed += 1
 
-    assert passed == 13
-    print("cli behavior fixtures: 13 passed")
+    assert passed == 14
+    print("cli behavior fixtures: 14 passed")
     return 0
 
 

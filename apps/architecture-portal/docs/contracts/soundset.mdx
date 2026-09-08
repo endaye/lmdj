@@ -47,8 +47,18 @@ SPDX 允许清单与署名要求，以及四项 Host 容量上限——单个清
 
 Application Facade 暴露 `soundset.catalog.list`、`soundset.inspect`、
 `soundset.map.preview`、`soundset.install` 与 `soundset.audition`。前四个在五个 Host
-上都可达；**`soundset.audition` 目前只由三个原生 Host 服务**，Web Host 的 bridge 与
-protocol 尚未注册它，Creator 也还没有试听控制，两者都是已记录的后续工作。Host 只传递
+上都**已注册**；**`soundset.audition` 目前只由三个原生 Host 服务**，Web Host 的 bridge
+与 protocol 尚未注册它，Creator 也还没有试听控制，两者都是已记录的后续工作。Host 只传递
 字节与展示 typed result，Core 保留全部 Contract、哈希与准入判定。Schema conformance、
-Set Store 单元测试、Facade 写集测试与 Creator surface 测试固定该边界；Safari 与
-iPadOS 上的目录浏览尚无物理验收。
+Set Store 单元测试、Facade 写集测试与 Creator surface 测试固定该边界。
+
+**已注册不等于产品内可达。** Task 7 的验收在真实浏览器中对打包后的 Creator 实测：三个
+缺陷各自阻断链路上的一段，因此当前 Build 的 Web Host 无法浏览或安装任何 Sound Set。
+[#900](https://github.com/endaye/lmdj/issues/900) 使本 Build 产出的任何 Project 都无法
+导入浏览器；[#901](https://github.com/endaye/lmdj/issues/901) 的 `connect-src 'self'`
+CSP 拦截一切跨源 Catalog，而真实 Catalog 必然跨源；
+[#902](https://github.com/endaye/lmdj/issues/902) 在前两者被本地绕过后，字节全部取回并
+校验通过，Workspace Set Store 仍以裸 `IO_ERROR` 拒绝发布每一个合格 Set。三者都是既有
+缺陷，不是本 Build 引入。原生 Host 与 C ABI 侧的 list → inspect → map.preview →
+install `keep`/`replace` journey 已有跨 Host 黑盒验收；Safari 与 iPadOS 上的目录浏览
+仍无物理验收。

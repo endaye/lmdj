@@ -60,6 +60,15 @@ non-lowercase digest, and a manifest hash requested under `blob`. It never
 emits a redirect and never follows a symlinked basename.
 `tools/soundset-fixtures/tests/catalog_fixture_server_test.py` pins that.
 
+Add `--cross-origin` when a browser page must read the corpus. A Creator page
+is served cross-origin isolated (`Cross-Origin-Embedder-Policy: require-corp`),
+so a Catalog on another origin is unreachable from it unless the response
+carries both `Access-Control-Allow-Origin` and
+`Cross-Origin-Resource-Policy: cross-origin`; without them the browser blocks
+the fetch before the Host transport sees a status and the refusal arrives as
+`catalog_unavailable`. The flag is off by default so the same-origin surface
+stays exactly the S11-D6 one.
+
 ## The Sets
 
 | Set | `set_id` | `manifest_sha256` | License | Occupied slots | What it exercises |
