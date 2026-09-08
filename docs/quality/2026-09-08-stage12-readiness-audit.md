@@ -93,11 +93,11 @@ new closure evidence and record a qualifying recurrence with that repair.
 
 | Goal requirement | Reviewable artifact / evidence |
 | --- | --- |
-| Revised first Capability / byte boundary | [design §10](../superpowers/specs/2026-08-31-lmdj-stage12-capability-artifactsource-design.md#10-2026-09-08-源码评审与待确认修订), field table, lifecycle/budget/error matrix and C-Q1–C-Q5 |
-| SDK difference, all existing Providers/mocks/dependencies | [Capability plan](../superpowers/plans/2026-09-08-lmdj-stage12-capability-implementation.md), migration inventory and Version Management |
+| Revised first Capability / byte boundary | [design §10](../design/2026-08-31-lmdj-stage12-capability-artifactsource-design.md#10-2026-09-08-源码评审与待确认修订), field table, lifecycle/budget/error matrix and C-Q1–C-Q5 |
+| SDK difference, all existing Providers/mocks/dependencies | [Capability plan](../plans/2026-09-08-lmdj-stage12-capability-implementation.md), migration inventory and Version Management |
 | Separate implementation Tasks and verification | K1 Contracts, K2 ABI migration, K3 reference Provider, K4 registration/identity, K5 owner/Host wiring; exact remaining decision/allocation gates stated |
-| Independent benchmark Tasks | [B1/B2 plan](../superpowers/plans/2026-09-08-lmdj-stage12-benchmark-tools.md), closed format, zone semantics, exact matching/null policy and independent oracle tests |
-| Local Issue drafts | [seven drafts and three correction proposals](../superpowers/plans/2026-09-08-lmdj-stage12-issue-drafts.md); no fabricated remote numbers |
+| Independent benchmark Tasks | [B1/B2 plan](../plans/2026-09-08-lmdj-stage12-benchmark-tools.md), closed format, zone semantics, exact matching/null policy and independent oracle tests |
+| Local Issue drafts | [seven drafts and three correction proposals](../plans/2026-09-08-lmdj-stage12-issue-drafts.md); no fabricated remote numbers |
 | #466 state/remaining acceptance | This audit's live evidence and acceptance matrix |
 | No product feature implementation | Declared five-file documentation diff only; verify staged paths before commit |
 | No unapproved decisions | All new product-level choices remain C-Q1–C-Q5; design is not relabeled approved |
@@ -132,7 +132,7 @@ separate. Stage 10 physical acceptance is not a new blocker for these tool Tasks
 - Local Markdown target/fence checks: PASS for all five changed documents;
   all implementation-plan files contain Version Management/Documentation Impact.
 - `python3 tests/build/ci_pr_body_lint.py --body-file
-  docs/superpowers/plans/2026-09-08-lmdj-stage12-issue-drafts.md`: PASS.
+  docs/plans/2026-09-08-lmdj-stage12-issue-drafts.md`: PASS.
 - Scratch mathematical verification of B2's proposed matching rule against an
   independent brute-force matcher: 9,747 small cases agree. This validates the
   written rule, not an implemented scorer (none is added in this Task).

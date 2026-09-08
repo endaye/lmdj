@@ -15,14 +15,14 @@
 ## 1. 权威与边界
 
 - 生命周期：GitHub Issue [#522](https://github.com/endaye/lmdj/issues/522)
-- 现役壳：Stage 7 S7-D3，见 `docs/superpowers/specs/2026-08-07-lmdj-stage7-creator-editor-design.md`
+- 现役壳：Stage 7 S7-D3，见 `docs/design/2026-08-07-lmdj-stage7-creator-editor-design.md`
 - 现役实现：`apps/creator-web`（`#101216`、薄荷绿 `#b7ffc5`、Inter、圆角卡；Pad 仅显示地址 / Assigned|Empty / 键帽）
 - 历史输入，**不当标本**：
-  - `docs/superpowers/specs/2026-07-24-stage1-creator-workspace-ui-design.md`
-  - `docs/superpowers/specs/2026-07-27-polanyi-living-instrument-ui-design.md`
-  - `docs/superpowers/specs/2026-07-24-stage1-creator-workspace-ui-references/`
+  - `docs/design/2026-07-24-stage1-creator-workspace-ui-design.md`
+  - `docs/design/2026-07-27-polanyi-living-instrument-ui-design.md`
+  - `docs/design/2026-07-24-stage1-creator-workspace-ui-references/`
   - `docs/research/2026-07-26-kumaleon-visual-technology-study.md`
-- 变色龙是独立层：`docs/prd/assets/chameleon/`、`docs/superpowers/specs/2026-08-05-chameleon-lab-design.md`
+- 变色龙是独立层：`docs/prd/assets/chameleon/`、`docs/design/2026-08-05-chameleon-lab-design.md`
 
 本文不改变 Core、Contract、Runtime、Project Truth 或 Architecture Portal 当前页。
 
@@ -118,7 +118,7 @@
 | 阶段 | 出口 | 仍禁止 |
 | --- | --- | --- |
 | 2 方向 | 2–3 个命名方向里选出一个；改产品规则先写 `docs/prd/decisions/` | 产品 CSS |
-| 3 设计 | `docs/superpowers/specs/` 下的批准 spec + 视觉稿；点名 Portal 路由 | 产品 CSS |
+| 3 设计 | `docs/design/` 下的批准 spec + 视觉稿；点名 Portal 路由 | 产品 CSS |
 | 4 落地 | 有边界的实现 Issue；不与 Stage 10 Perform（#435）混在同一分支 | 改 Runtime / Contract |
 
 ## 6. 版本与文档

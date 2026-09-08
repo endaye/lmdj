@@ -12,7 +12,7 @@ Treat every transition as a separate authorization and verification boundary.
 Before responding, read `docs/governance/git-workflow.md`,
 `docs/governance/version-management.md`,
 `docs/release-evidence/release-intents.json`, and
-`docs/superpowers/specs/2026-08-13-lmdj-standard-release-pipeline-design.md`.
+`docs/design/2026-08-13-lmdj-standard-release-pipeline-design.md`.
 Identify one exact tag from the request and ledger.
 
 For any initial, multi-transition, or blanket request, the entire response/action is exactly:

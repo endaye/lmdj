@@ -192,7 +192,7 @@ report recovery does not rerun product tests. Explicit exact-target full request
 remain available and cannot be displaced by automatic pending work. Historical
 candidate results do not move automatic progress or clear newer debt.
 Testing does not allocate a version or select/release a candidate. See
-[the incremental spec](../superpowers/specs/2026-09-08-lmdj-ci-incremental-batches.md)
+[the incremental spec](../design/2026-09-08-lmdj-ci-incremental-batches.md)
 for the activation and recovery requirements; legacy automatic triggers are
 retired only by the separately verified T5 switch.
 

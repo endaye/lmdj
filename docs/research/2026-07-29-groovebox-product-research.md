@@ -566,7 +566,7 @@ Ableton 官方说明，支持 Ableton Export 的 iOS App 可以生成：
 这让 Groovebox 可以把自身限制在快速创作，而不用承担完整 DAW 的混音、插件和交付。
 
 LMDJ 当前的
-[Stage 1 Creator Core 设计](../superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md)
+[Stage 1 Creator Core 设计](../design/2026-07-24-stage1-creator-core-slice-design.md)
 选择通用 Creator Export ZIP，而不直接生成 `.als`。Groovebox 证明“一键进入 Live”
 有明显用户价值，但不意味着 LMDJ 应立即采用私有工程格式。对 LMDJ 当前 Stage 1，
 更重要的是：

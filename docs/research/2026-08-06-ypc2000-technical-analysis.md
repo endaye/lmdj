@@ -8,7 +8,7 @@
 >
 > 相关产品研究：[YPC 产品分析](./2026-08-06-ypc2000-product-analysis.md)
 >
-> LMDJ 对照基线：[Playable Beat Instrument Core Redesign](../superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
+> LMDJ 对照基线：[Playable Beat Instrument Core Redesign](../design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
 >
 > 状态：公开客户端技术档案与工程推断；不代表 YPC 私有开发环境、源码仓库、部署流水线或法律状态的完整事实
 

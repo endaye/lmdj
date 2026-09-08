@@ -396,7 +396,7 @@ Documentation impact: none。本文位于 `docs/research/`，不改变 Architect
 ### LMDJ 权威输入
 
 - [Creator 产品视觉语言 Brief](./2026-09-01-creator-visual-language-brief.md)
-- [Stage 7 Creator Editor Design](../superpowers/specs/2026-08-07-lmdj-stage7-creator-editor-design.md)
+- [Stage 7 Creator Editor Design](../design/2026-08-07-lmdj-stage7-creator-editor-design.md)
 - `apps/creator-web/package.json`
 - `apps/creator-web/src/components/pad_surface.tsx`
 - `apps/creator-web/src/runtime/input_controller.ts`

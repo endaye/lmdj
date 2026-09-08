@@ -8,7 +8,7 @@
   的修正案（amendment）：不推翻 D1 的产品语义，只补齐 D1 未指明的
   所有权域、发布记账、Facade 精确表面、Web 解码内存包络与物理验收
   阈值。实施计划
-  [`2026-08-27-lmdj-long-material-quota.md`](../../superpowers/plans/2026-08-27-lmdj-long-material-quota.md)
+  [`2026-08-27-lmdj-long-material-quota.md`](../../plans/2026-08-27-lmdj-long-material-quota.md)
   的 "Provisional Quota and Ingest Inputs" 全部由本文件定死。
 - 结论：
 

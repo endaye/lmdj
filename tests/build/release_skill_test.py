@@ -65,7 +65,7 @@ class ReleaseSkillTest(unittest.TestCase):
             "docs/governance/git-workflow.md",
             "docs/governance/version-management.md",
             "docs/release-evidence/release-intents.json",
-            "docs/superpowers/specs/2026-08-13-lmdj-standard-release-pipeline-design.md",
+            "docs/design/2026-08-13-lmdj-standard-release-pipeline-design.md",
         ):
             self.assertIn(authority, source)
         self.assertIn("at most one authorized mutation", source)

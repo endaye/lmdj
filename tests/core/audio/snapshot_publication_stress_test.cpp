@@ -1,6 +1,6 @@
 // Concurrent runtime invariant for Snapshot publication accounting.
 //
-// Completes Task 3 of docs/superpowers/plans/2026-08-19-lmdj-runtime-invariant-harness.md:
+// Completes Task 3 of docs/plans/2026-08-19-lmdj-runtime-invariant-harness.md:
 // the stress-tier case. It also settles what that plan left open about
 // PublishResult::publish_queue_full -- see finding G5 on the second test: the
 // path is unreachable while the Bank and publish-queue capacities are equal, so

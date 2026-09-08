@@ -209,7 +209,7 @@ class EntryTests(unittest.TestCase):
         original = self.make().control(self.push())
         self.f.api = self.scheduler
         self.f.evidence(original["request"])
-        docs = self.f.root / "docs/superpowers/plans/fixture.md"
+        docs = self.f.root / "docs/plans/fixture.md"
         docs.parent.mkdir(parents=True)
         docs.write_text("documentation-only interval\n")
         self.f.git("add", str(docs.relative_to(self.f.root)))

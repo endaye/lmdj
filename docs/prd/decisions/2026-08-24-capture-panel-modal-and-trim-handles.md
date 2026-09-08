@@ -2,7 +2,7 @@
 
 - 日期：2026-08-24
 - 结论：落地 Creator 补救计划
-  [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md)
+  [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../../plans/2026-08-17-lmdj-creator-capture-ui-remediation.md)
   Task 1 的设计门（P2）。四条子决策：P2-D1 Capture 面板从 Sample 面板
   末尾的流式元素改为视口锚定的模态对话框，固定几何，进入 `recording`
   不改变外框；P2-D2 焦点随各阶段主操作走，关闭时恢复既有

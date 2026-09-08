@@ -212,7 +212,7 @@
   可单次自动展开，其他处理阶段停留在 Dock。Web 不读取 Material、stem、lane
   或 MIDI 内部文件，2D / SVG / 3D 失败也不得阻断 Creator Core。产品版本继续
   作为右下角 SemVer 展签。详细设计见
-  [LMDJ Chameleon 展览式工作台设计](../superpowers/specs/2026-07-26-chameleon-exhibition-workbench-design.md)。
+  [LMDJ Chameleon 展览式工作台设计](../design/2026-07-26-chameleon-exhibition-workbench-design.md)。
 
 ## 2026-07-27
 
@@ -246,7 +246,7 @@
   歌曲”，Workbench 提供“返回我的歌曲”和独立“上传新歌”。页面必须说明记录
   仅属于此浏览器；这不是 Stage 2 Asset Library、账号级历史或跨设备同步。详细
   设计见
-  [Stage 1「我的歌曲」与上传入口设计](../superpowers/specs/2026-07-27-stage1-my-songs-navigation-design.md)。
+  [Stage 1「我的歌曲」与上传入口设计](../design/2026-07-27-stage1-my-songs-navigation-design.md)。
 
 ## 2026-07-30
 
@@ -259,7 +259,7 @@
   Pads 并亲手录下 Beat，而不是等待 AI 生成成品歌曲。
 - 影响：Creator 使用 A–D 四个 16-Pad Bank，共 64 Pad；主结构固定为顶部全局
   控制、中部状态化 Surface、底部 4×4 演奏面。详细设计见
-  [Playable Beat Instrument 与新内核设计](../superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)。
+  [Playable Beat Instrument 与新内核设计](../design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)。
 
 ### 已确认：新内核与 Patch / Materials 完全不兼容
 
@@ -298,7 +298,7 @@
   仍是扁平 Artifact 数组；两个端口允许相同类型或可选/多值时，顺序和类型推断
   都无法提供无歧义语义。
 - 影响：Project Truth、Provider 选择和失败隔离边界不变。实现按
-  [Capability v2 端口绑定实施计划](../superpowers/plans/2026-08-01-lmdj-capability-v2-port-bindings.md)
+  [Capability v2 端口绑定实施计划](../plans/2026-08-01-lmdj-capability-v2-port-bindings.md)
   独立进入新 Product Build；完整决策与实施门禁见
   [Provider 多端口 Capability Contract 决策](../architecture/2026-08-01-provider-multi-port-contract-decision.md)。
 - 限制：当前 `ArtifactRef` 没有 Schema provenance，v2 先验证 binding 选择的
@@ -412,7 +412,7 @@ Time-stretch、Artifact GC 与 Stage 8B capture lifecycle 仍按各自开放边�
 
 ### 已批准：Stage 8B Pad Capture 设计（S8B-D1–D10）
 
-来自 [2026-08-15 Stage 8B Pad Capture 设计](../superpowers/specs/2026-08-15-lmdj-stage8b-pad-capture-design.md)
+来自 [2026-08-15 Stage 8B Pad Capture 设计](../design/2026-08-15-lmdj-stage8b-pad-capture-design.md)
 评审，解决 S8-D13 留下的 capture lifecycle 开放边界。Capture 完全在 Creator
 与 Web Runtime Host 层实现，Core Modules、Facade 表面、传输协议、活动
 manifest 与全部 Contract 零变更。

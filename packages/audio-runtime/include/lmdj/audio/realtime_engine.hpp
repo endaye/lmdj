@@ -278,7 +278,7 @@ std::size_t drain_voice_states_fail_closed(
 // `stopped` state check does not establish quiescence by itself.
 //
 // The remaining control-thread methods are safe to call while `render` runs.
-// See docs/superpowers/specs/2026-08-02-lmdj-formal-native-realtime-host-design.md
+// See docs/design/2026-08-02-lmdj-formal-native-realtime-host-design.md
 // for the full model.
 class RealtimeEngine final {
  public:

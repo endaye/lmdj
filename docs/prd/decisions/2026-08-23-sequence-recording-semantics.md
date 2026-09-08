@@ -6,7 +6,7 @@
   在本决策的同一个 Task 删除），GitHub Issue
   [#238](https://github.com/endaye/lmdj/issues/238)（D4 + D5），落地 Task
   [#266](https://github.com/endaye/lmdj/issues/266)。完整设计与逐条批准记录见
-  [2026-08-22 Sequence 录音语义设计](../../superpowers/specs/2026-08-22-sequence-recording-semantics-design.md)
+  [2026-08-22 Sequence 录音语义设计](../../design/2026-08-22-sequence-recording-semantics-design.md)
   （SR-D1–D28），本文只固化产品权威结论，不重复全部细节。
 - 结论：
   1. **Take 范围（D5）：只有事件，没有 Take。** Project Truth 只保存 Pattern
@@ -52,9 +52,9 @@
 - 影响：本决策为纯文档权威，不改活动 manifest、Contract 工件、模块版本或
   Product Build。版本影响在实施时支付：`lmdj.project.v3`、相关 Core Module
   与 Host 的 SemVer 主版本、Product Build `1.0.37.0`，精确分配见
-  [实施计划](../../superpowers/plans/2026-08-23-lmdj-stage9-sequence-recording.md)
+  [实施计划](../../plans/2026-08-23-lmdj-stage9-sequence-recording.md)
   的 Version Management。重设计规格
-  [§6.2 / §6.5 勘误](../../superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
+  [§6.2 / §6.5 勘误](../../design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
   与 `products/lmdj/README.md` 的 Proof-only 并发说明在同一 Task 更新；
   Quantize / Swing 由「非破坏」改为录入时破坏性烘焙进之后的新事件。实施
   工作项：umbrella [#265](https://github.com/endaye/lmdj/issues/265) 与

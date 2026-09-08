@@ -1,7 +1,7 @@
 # Application Facade Coverage Gate — Measurement Record, 2026-08-18
 
 Evidence for triage item C1. Produced by Task 1 of
-[`2026-08-18-lmdj-facade-coverage-gate-stabilization.md`](../superpowers/plans/2026-08-18-lmdj-facade-coverage-gate-stabilization.md).
+[`2026-08-18-lmdj-facade-coverage-gate-stabilization.md`](../plans/2026-08-18-lmdj-facade-coverage-gate-stabilization.md).
 
 The measurement **invalidated that plan's premise, its proposed fix, and
 finally the triage item itself**. No floor was changed and no source was
@@ -131,7 +131,7 @@ occurrences of the per-API catch-all message "unexpected Application Facade
 Host API failure" across 24 catch blocks.
 
 Full tiering and the resulting work plan live in
-[`2026-08-18-lmdj-facade-coverage-raise.md`](../superpowers/plans/2026-08-18-lmdj-facade-coverage-raise.md):
+[`2026-08-18-lmdj-facade-coverage-raise.md`](../plans/2026-08-18-lmdj-facade-coverage-raise.md):
 Tier A (~200 lines, ordinary bad inputs), Tier B (~180 lines, fault hooks per
 the project-io precedent), Tier C (~50–80 lines of deep defence, deliberately
 not chased). 90% needs +242 lines; Tier A plus a throw-injection hook crosses

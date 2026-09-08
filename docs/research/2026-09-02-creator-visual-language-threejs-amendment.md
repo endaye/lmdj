@@ -14,7 +14,7 @@
 | --- | --- |
 | `apps/creator-web/package.json` | 只有 React 19 与 Vite。没有 `three`。 |
 | `apps/chameleon-lab` | 现役是 2D Canvas 程序化变色龙，无 Three.js 依赖。 |
-| `docs/superpowers/specs/2026-08-05-chameleon-lab-design.md` | 曾规划 Vite + React + 原生 Three.js + `CanvasTexture` 茶壶实验；未按该规格落地到现役 Lab。 |
+| `docs/design/2026-08-05-chameleon-lab-design.md` | 曾规划 Vite + React + 原生 Three.js + `CanvasTexture` 茶壶实验；未按该规格落地到现役 Lab。 |
 | Kumaleon 研究 | 可借鉴的结构是 Canvas 2D → `THREE.CanvasTexture` → 稳定 3D 轮廓；不可借模型、字体、皮肤。 |
 | 实时 3D ASCII 研究 | Three.js 适合短时、非关键品牌/状态反馈，不适合盖住 Pad、波形、错误信息。 |
 

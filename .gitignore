@@ -91,7 +91,7 @@ references/demos/lmdj-song-pipeline/output/
 testdata/audio/suno/**/*.mp3
 
 # Agent session scratch (SDD ledger, task briefs, review packages)
-.superpowers/
+.local/handoffs/
 .orchestration/
 
 # Local isolated git worktrees

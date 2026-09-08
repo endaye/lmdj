@@ -1,6 +1,6 @@
 // Runtime invariant harness for the Attempt ledger.
 //
-// Track 3 Task 1 of docs/superpowers/plans/2026-08-19-lmdj-runtime-invariant-harness.md.
+// Track 3 Task 1 of docs/plans/2026-08-19-lmdj-runtime-invariant-harness.md.
 //
 // Everything here checks relations across a *completed sequence* of
 // operations, which is what separates a runtime invariant from the load-time

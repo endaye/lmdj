@@ -3,7 +3,7 @@
 - **来源**：`docs/quality/2026-08-01-core-review.md` 与
   `2026-08-03-build-1.0.7.0-review.md` ~ `2026-08-03-build-1.0.11.0-review.md`
 - **性质**：这是**分诊文档**，不是实施计划。每个工作单元真正动手前，
-  仍需按 `CLAUDE.md` 在 `docs/superpowers/plans/` 下写独立计划，
+  仍需按 `CLAUDE.md` 在 `docs/plans/` 下写独立计划，
   并各自包含 `## Version Management` 段落。
 - **口径更正**：1.0.11.0 报告正文写"未处理中危 11 项"，
   但该表同时包含 11 条 `⬜` 与 1 条新提出的 `🆕`。

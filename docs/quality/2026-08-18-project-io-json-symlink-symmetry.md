@@ -32,7 +32,7 @@ prescribed when it **withdrew** the in-`read_json` `O_NOFOLLOW` edit
 during review: the guard belongs inside the POSIX platform, next to
 `validate_managed_tree`, because `project_store.cpp` must stay
 backend-neutral
-([plan, "Withdrawn: the `O_NOFOLLOW` change"](../superpowers/plans/2026-08-03-lmdj-foundation-input-hardening.md)).
+([plan, "Withdrawn: the `O_NOFOLLOW` change"](../plans/2026-08-03-lmdj-foundation-input-hardening.md)).
 Implementing C4 literally today — a raw `::open(..., O_NOFOLLOW)` inside
 `project_store.cpp` — would reintroduce what was withdrawn and break the
 non-POSIX backend.
@@ -69,7 +69,7 @@ is now identical for JSON and artifact reads, since they share one
 C4 is **closed by verification**: the requested symmetry exists at the
 platform layer where the withdrawn 2026-08-03 plan deliberately placed
 it, and the file-level test gap is filled. Implementation plan:
-[`2026-08-18-lmdj-project-io-json-nofollow-symmetry.md`](../superpowers/plans/2026-08-18-lmdj-project-io-json-nofollow-symmetry.md).
+[`2026-08-18-lmdj-project-io-json-nofollow-symmetry.md`](../plans/2026-08-18-lmdj-project-io-json-nofollow-symmetry.md).
 
 Verification run 2026-08-19, worktree `fix/project-io-json-symlink-symmetry`:
 `lmdj_project_store_tests`, `lmdj_project_storage_platform_tests`,

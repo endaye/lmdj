@@ -9,7 +9,7 @@
 相关研究：
 
 - [Patatap 与同类视听音乐产品调研](./2026-08-02-patatap-and-visual-music-product-research.md)
-- [Playable Beat Instrument 与新内核设计](../superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
+- [Playable Beat Instrument 与新内核设计](../design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
 - [LMDJ 产品决策日志](../prd/decision-log.md)
 - [Koala Sampler 产品研究与 LMDJ 启示](./2026-07-28-koala-sampler-product-research.md)
 
@@ -529,7 +529,7 @@ LMDJ
 
 ### 17.4 LMDJ 当前权威资料
 
-- [Playable Beat Instrument 与新内核设计](../superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
+- [Playable Beat Instrument 与新内核设计](../design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
 - [LMDJ 产品决策日志](../prd/decision-log.md)
 - [LMDJ Version Management](../governance/version-management.md)
 - [LMDJ Preset / Sound Pack 采购与授权研究](./2026-07-30-sound-pack-sourcing-and-licensing.md)

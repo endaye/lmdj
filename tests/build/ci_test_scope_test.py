@@ -42,7 +42,7 @@ class ScopeTests(unittest.TestCase):
                 self.assertNotEqual(scope.select(self.policy, [path])["kind"], "none")
 
     def test_document_consumer_overrides_exemption(self):
-        path = "docs/superpowers/plans/2026-08-07-lmdj-stage7-creator-editor.md"
+        path = "docs/plans/2026-08-07-lmdj-stage7-creator-editor.md"
         self.assertIn("portal", scope.select(self.policy, [path])["suites"])
 
     def test_host_includes_behavior_and_consumers(self):

@@ -13,7 +13,7 @@
 校验该绑定。
 
 本决策本身不修改现有 Contract、Provider SDK 或 Product Assembly。实现必须按
-[Capability v2 端口绑定实施计划](../superpowers/plans/2026-08-01-lmdj-capability-v2-port-bindings.md)
+[Capability v2 端口绑定实施计划](../plans/2026-08-01-lmdj-capability-v2-port-bindings.md)
 独立执行、验证和分配版本。
 
 ## 当前事实

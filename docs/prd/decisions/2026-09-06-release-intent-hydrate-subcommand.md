@@ -30,7 +30,7 @@
   与"audit 保持只读"。
 
   1. **audit 内部 fetch-on-miss（自愈）**——否决。标准发行流水线设计
-     [§12 Read-only audit](../../superpowers/specs/2026-08-13-lmdj-standard-release-pipeline-design.md)
+     [§12 Read-only audit](../../design/2026-08-13-lmdj-standard-release-pipeline-design.md)
      原文写的是 `Audit 不创建、push、编辑或删除任何 Git/GitHub 状态`。
      `git fetch` 会把新对象写进本地 Git object store，也就是创建 Git 状态，
      所以 fetch-on-miss 直接违反 audit 自己的只读契约。要说清楚的是：

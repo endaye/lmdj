@@ -222,9 +222,9 @@ python3 scripts/version.py verify --version-file products/lmdj/version.json
 ## Design authority
 
 - Core redesign:
-  `docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md`
+  `docs/design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md`
 - Current implementation plan:
-  `docs/superpowers/plans/2026-07-30-lmdj-headless-core-proof.md`
+  `docs/plans/2026-07-30-lmdj-headless-core-proof.md`
 - Version policy: `docs/governance/version-management.md`
 - Product decisions: `docs/prd/decision-log.md`
 - Open product questions: `docs/prd/open-questions.md`

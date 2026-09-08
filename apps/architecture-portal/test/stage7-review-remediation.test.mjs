@@ -12,8 +12,8 @@ async function readRepo(relativePath) {
 }
 
 test('Stage 7 retrospective closes every documented design drift', async () => {
-  const plan = await readRepo('docs/superpowers/plans/2026-08-07-lmdj-stage7-creator-editor.md');
-  const spec = await readRepo('docs/superpowers/specs/2026-08-07-lmdj-stage7-creator-editor-design.md');
+  const plan = await readRepo('docs/plans/2026-08-07-lmdj-stage7-creator-editor.md');
+  const spec = await readRepo('docs/design/2026-08-07-lmdj-stage7-creator-editor-design.md');
 
   assert.match(plan, /Retrospective correction addendum/);
   for (let finding = 1; finding <= 10; finding += 1) {
@@ -59,8 +59,8 @@ test('Stage 7 current closure audit accounts for every review finding exactly on
   const review = await readRepo('docs/quality/2026-08-12-stage7-creator-editor-review.md');
   const evidence = await readRepo('docs/release-evidence/2026-08-13-stage7-remediation-canary.md');
   const mappingEvidence = await readRepo('docs/release-evidence/2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md');
-  const remediationDesign = await readRepo('docs/superpowers/specs/2026-08-13-lmdj-stage7-review-remediation-design.md');
-  const remediationPlan = await readRepo('docs/superpowers/plans/2026-08-13-lmdj-stage7-review-remediation.md');
+  const remediationDesign = await readRepo('docs/design/2026-08-13-lmdj-stage7-review-remediation-design.md');
+  const remediationPlan = await readRepo('docs/plans/2026-08-13-lmdj-stage7-review-remediation.md');
   const audit = review.match(
     /### Final finding closure audit\n(?<body>[\s\S]+?)\n### Remaining integration gates/,
   )?.groups?.body;

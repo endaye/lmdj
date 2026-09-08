@@ -30,5 +30,5 @@
   Product Build。为 [#357](https://github.com/endaye/lmdj/issues/357) 提供
   「total 约束单代全 Bank 总和」的明确输入；#357 的记账决策不得推翻本条的
   全驻留结论，除非经新决策文件明确替代。Stage 10 设计规格草稿
-  （`docs/superpowers/specs/2026-08-28-lmdj-stage10-perform-design.md`
+  （`docs/design/2026-08-28-lmdj-stage10-perform-design.md`
   P10-D4）在同一 Task 去除待决标注。关闭 #386。
