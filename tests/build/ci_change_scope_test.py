@@ -170,6 +170,8 @@ CASES = {
     "tools/release/model.py": {"deploy_contract", "ci_contract"},
     "packaging/core/CMakeLists.txt": {"core_ubuntu", "package"},
     "netlify.toml": {"portal", "ci_contract"},
+    "wrangler.json": {"portal", "ci_contract"},
+    ".node-version": {"portal", "ci_contract"},
     "scripts/release.sh": {"deploy_contract", "ci_contract"},
     "docs/release-evidence/release-intents.json": {
         "docs_static", "deploy_contract", "ci_contract"
@@ -190,7 +192,7 @@ CASES = {
 TOP_LEVELS = {
     ".agents", ".claude", ".codex", ".gitattributes", ".github", ".gitignore",
     "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "LICENSE",
-    "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml",
+    "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml", "wrangler.json", ".node-version",
     "output", "packages", "packaging", "products", "providers", "references",
     "scripts", "testdata", "tests", "third_party", "tools", "workers",
 }

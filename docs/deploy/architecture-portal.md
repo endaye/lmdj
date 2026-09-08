@@ -76,3 +76,58 @@ Verifier:
 5. 另起修复 Task/PR 修复 `main`，使 Git Source of Truth 与生产重新收敛。
 
 回滚只切换 Netlify production alias，不移动 Product tag、不改写正式文档快照、不伪造新的 Product Build，也不隐含 Channel promotion。
+
+## Cloudflare Portal pilot (#873)
+
+The observed LMDJ account is `0b62b8881c07f48f7935f5380a1f55db`; the user-created
+Worker is `lmdj`, with workers.dev subdomain `lmdj`. The observed Worker has
+its main workers.dev route disabled; the pilot keeps that route disabled and
+enables version Preview URLs only. These are cloud resource
+identities, not Product identities. Production Portal remains on Netlify.
+
+The root `wrangler.json` selects the complete static build with generated 404
+handling. `.node-version` pins Node 22.16.0; npm is explicitly 10.9.3. From the
+repository root, run the following without a deployment credential:
+
+```bash
+npx --yes npm@10.9.3 --prefix apps/architecture-portal ci
+npx --yes npm@10.9.3 --prefix apps/architecture-portal run check
+```
+
+For Workers Builds, keep root directory `/` and explicitly set those two commands
+joined with `&&` as the build command. Set `SKIP_DEPENDENCY_INSTALL=1` if using
+that explicit install. Workers Builds does not honor Wrangler custom builds in
+all contexts; the root config's custom command supports direct CLI usage and is
+not a replacement for the dashboard build command.
+
+Use pinned `npx --yes wrangler@4.129.1 versions upload` for the pilot upload,
+including when the dashboard labels the branch production. Do not use the default
+`wrangler deploy` to promote this pilot. Before activating broader branch builds,
+prove the build token is isolated from production mutation; a command choice alone
+is not a security boundary. A trusted publisher must never execute PR build
+scripts with its deployment credential. The production Git/Netlify path and
+Creator/Runtime release paths are unchanged by this pilot configuration.
+
+```mermaid
+flowchart LR
+  Git[Exact checkout SHA] --> Check[Credential-free Portal check]
+  Check --> Assets[Static build and headers]
+  Assets --> Upload[Trusted version upload]
+  Upload --> Preview[Version Preview URL]
+  Preview --> Smoke[SHA and content smoke]
+```
+
+A trusted operator may upload the verified static output using a temporary
+upload config derived from the root config with `build` omitted and the assets
+path made absolute. This prevents executing build commands with the upload token. Record the prior active
+version before upload and re-read deployments afterwards to prove it did not
+change. Keep local credentials outside the repository. Verify the version URL's
+current SHA, Product Build, snapshot routes, HTML MIME, security headers and
+unknown-path 404 using the existing smoke entry point plus HTTP assertions.
+A version URL is not a permanent snapshot. Do not report a local upload as a
+Git-triggered PR deployment or a successful GitHub status check.
+
+Sources:
+- https://developers.cloudflare.com/workers/ci-cd/builds/build-image/
+- https://developers.cloudflare.com/workers/ci-cd/builds/configuration/
+- https://developers.cloudflare.com/workers/wrangler/custom-builds/
