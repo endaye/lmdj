@@ -1,0 +1,26 @@
+---
+title: Native Audio
+area: platform
+status: partial
+owners: [audio, platform]
+source_paths:
+  - packages/audio-runtime
+  - tests/core/audio/coreaudio_output_test.cpp
+  - docs/design/2026-08-02-native-realtime-coreaudio-probe-design.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 已实现范围
+<StatusBadge status="partial" /> 实时引擎、Pattern origin、整数 transport anchor、Bar-boundary SPSC、CoreAudio output 自动化 Probe 与 Native Host Sequence capture 已实现。
+## 实时边界
+非实时线程准备 Snapshot/样本；实时回调只推进整数 transport、发布有界 Bar/Voice 状态并写设备 buffer。Project mutation、journal 与 quantization 永不进入回调。
+## 自动化证据
+单元、stress 与 CoreAudio output 测试验证算法、队列和平台接线。
+## 物理验收
+声卡/扬声器、主观手感、端到端延迟和长时间设备生命周期必须单列证据，自动化结果不能代替。
+## 下一门禁
+正式产品 Host 需要保留设备矩阵、测量数据与可复核录制。

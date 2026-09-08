@@ -1,0 +1,37 @@
+---
+title: Audio Runtime
+area: core
+status: implemented
+owners: [core, audio]
+module: audio-runtime
+source_paths: [packages/audio-runtime, tests/core/audio]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity kind="modules" id="audio-runtime" />
+
+<DiagramFrame title="Audio Runtime Module" diagramId="audio-runtime" />
+
+## 1. 目的与非职责
+准备样本、调度 Pattern/Pad 事件并离线或实时渲染；不修改 Project Truth。
+## 2. 当前实现状态
+Audio Runtime `3.0.0` 已实现 Prepared Sample Bank、per-Pad playback、四种触发模式、Voice state、Realtime Engine、Offline Renderer，以及整数 BPM transport anchor、Bar-boundary notification 和 Pattern origin。Prepared PCM 不再设置单 Pad 帧数上限：64 个 Pad Slot 各自持有独立的可变长 `std::vector<float>`，每个 16-Pad user Bank 使用独立字节账本，同时受 generation 总账本约束；无需 PCM arena 或 offset table。resident bytes 由 publication owner 另行核算。当前 source 以 atomic generation mailbox 线性化 immutable Pattern publication：control 只取代尚未被 callback claim 的同 Project/Pattern/next-Bar view；不同 Pattern 默认拒绝，只有同时匹配 pending generation、源 Pattern 与 activation frame 的 Sequence switch/Stop authority 才可替换或取消。已 claim 的 view 保留原 boundary，较新的 view 从 claimed activation/BPM Bar length 重算到下一 Bar；bit 63 专用于 claimed marker，generation 在进入该范围前 fail closed。实时线程只消费不可变 Runtime Snapshot 与固定队列，不执行 quantization、Project mutation 或 journal I/O。本版新增固定八段 master FX 链：`kFxChainOrder` 的顺序恒为 filter → delay → reverb → stutter → gate → reverse → crush → cutter，每段状态是 `{value, engaged, frozen}`，链级另有一个 HOLD 位冻结全链当前形态。所有 FX 取值共享 0..1000 的整数值域（`kMasterFxValueMaximum = 1000`）。`MasterFxChain` 暴露 `prepare / reset / set_bpm(bpm) / apply_gesture(FxGesture) / process(left, right, frames)`；stutter、cutter 与 delay 的周期全部由 `master_fx_bar_frames(sample_rate, bpm)` 与各自的 divisor 表从 Bar 推导，因此 FX 时值跟随整数 BPM transport anchor，而不是墙钟时间。`RealtimeEngine` 相应新增 `prepare_master_fx(bpm)`（控制线程、quiescent，一次性分配全部 FX 渲染存储）、`enqueue_fx_gesture`/`enqueue_master_fx_tempo(bpm)`、有界的 `MasterFxControlKind {gesture, tempo}` 控制通道、`FxEnqueueResult`（`accepted`、`invalid_fx`、`invalid_value`、`invalid_bpm`、`not_prepared`、`not_running`、`queue_full`）与 `master_fx_telemetry()`、`master_fx_processed_frames_`。既有实时不变量完全不变：实时回调仍不分配、不加锁、不修改 Project、不做量化、不做 journal I/O；FX 缓冲在准备阶段一次分配完毕，手势与 tempo 只经由有界控制通道到达。
+## 3. 所有权与依赖
+依赖 Foundation 与 Project Cooker；平台输出位于适配边界。
+## 4. 架构与数据流
+Runtime Snapshot + 可选 pending overlay → immutable Prepared Pattern slot → atomic generation mailbox claim → fixed SPSC control 与 Voice-state/Bar-boundary 队列 → Bar-boundary apply → master FX 链 → 输出 sink；preview、overlay、transport anchor 与 master FX 状态只属于 Runtime，不进入 Project Truth。FX 手势与 tempo 更新走同一条独立的有界 master FX 控制通道，与 trigger/control 通道同为单生产者单消费者；tempo 更新与手势保持顺序，并在下一个渲染量子边界生效。
+## 5. API 与 Artifact 边界
+消费不可变快照、resolved playback 与已准备样本，不在实时回调解析 Project/WAV、分配内存、加锁或调用 Host。`kRealtimeMaximumSampleFrames` 明确实时样本、playback 与 Voice-state 共用的无符号 32 位帧域；批准的 16,777,216 帧单 Pad 在 trim、loop、ramp 和事件回报中不发生中间收窄。master FX 只接受 trivially copyable 的 `FxGesture`（`kind` ∈ engage/move/release/hold_on/hold_off、`fx`、`value`），不接受 Project、Performance 或 Host 对象；`MasterFxTelemetry` 只回报 enqueued/dequeued/queued gesture、queue drop、processed frames、tempo 更新计数与 current BPM，不回报创作真相。
+## 6. 状态、错误与并发
+atomic claimed marker 消除 generation 更新与 callback ownership 之间的竞态窗口；queued、audio-owned 与 apply-point mailbox 都先剥离 marker 再解析 generation，不会把已 claim 的合法 authority 误报为 publication pending。不同 BPM 的 claimed view 仍是后续 boundary 的 transport authority。固定 SPSC 队列和压力测试覆盖 control/Voice 并发，旧 Pattern slot 只由 control thread reclaim，callback 不析构 view，overflow fail closed，实时路径避免无界工作。`pending_publications` 显式计数 audio-owned A 与同时 queued B 两个不同 generation；每个 accepted Pattern publication 恰好落入 applied、superseded、canceled 或 pending。取消后的 audio-owned slot 后续被 callback 回收时不会重复计为 superseded；quiescent `stop()` 将 queued-only、audio-owned-only 或两者各计一次 canceled，且这些累计 counter 跨 `start()` 保留。deterministic race hooks 只存在于 private testable library；production archive/callback 无 hook symbol、marker、pointer atomic 或 branch。master FX 沿用同一纪律：控制线程是 FX 控制通道的唯一生产者，队列满时确定性返回 `queue_full` 而非阻塞或增长；`prepare_master_fx` 之前 enqueue 返回 `not_prepared`，未运行时返回 `not_running`。BPM 更新只改变周期推导的 rate，不在实时线程重新分配缓冲。
+发布按 current/pending/retiring/reclaimable 状态转移：实时线程只读不可变 Bank，最后一个 Voice 结束后才允许控制线程回收。publication owner 按 reclaim → reserve → publish 顺序核算 live、pending、retiring bytes。准备阶段按剩余字节的较小约束判定失败，约束相等时稳定返回 Bank failure；Bank、generation 与 transient residency 三类失败不互相冒充。Web Audio 的每个有效 callback（包括 paused callback）以 lock-free `uint32` heartbeat 表示活性；Browser Main 在 `AudioContext.resume()` 后必须先观察 heartbeat 前进，才请求打开 realtime gate。激活只在 accepted generation 已成为 current 且无 pending publication 时开启 gate；激活前锁存的 generation 由首个 open-gate callback 精确确认，避免 stop/start 或 suspend/resume 把旧的非零 acknowledgement 当作当前 Bank。
+## 7. 产品使用方
+Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
+## 8. 测试与证据
+Realtime、same-boundary overlay supersession、apply-point 精确 switch/Stop replacement authority、queued/audio-owned/stop cancellation、two-pending `accepted = applied + superseded + canceled + pending_publications` conservation stress、offline、sample bank、queue 与 CoreAudio output 测试；`audio.realtime_engine` 覆盖 16,777,216 帧高位 trim/loop/ramp，`audio.long_sample_publication_stress` 在并发渲染下覆盖 64 MiB 单 Pad、128 MiB generation、256 MiB resident 边界与字节精确回收。Web Audio conformance 还覆盖 live Bank exact acknowledgement 与最新 generation 的 suspend/reactivate acknowledgement。master FX 由 `audio.master_fx`、`audio.master_fx_determinism` 与 `audio.master_fx_allocation_guard` 覆盖链顺序、值域、HOLD、Bar 相对周期、相同输入相同输出与实时路径的无分配保证；`audio.master_fx_stress` 属于 stress tier，覆盖控制通道在并发渲染下的有界行为。该 busy-spin 用例仅属于 stress tier，并从 coverage preset 排除。物理延迟与 Safari 内存验收单列。
+## 9. 限制与下一门禁
+自动化绿色不证明 MIDI/iPad/扬声器体验；需保留设备视频和测量证据。
+## 10. 版本身份
+Module 版本由清单生成，Product Build 由 Assembly 固定。
