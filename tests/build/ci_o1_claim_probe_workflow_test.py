@@ -148,7 +148,7 @@ class ClaimWorkflowTests(unittest.TestCase):
 
     def test_legacy_automatic_triggers_and_default_remain(self):
         events = block(self.source, "on", 0)
-        self.assertIn('workflows: ["Self-test Report", "Core CI", "PR Review"]', events)
+        self.assertIn('workflows: ["Incremental Completion", "Core CI", "PR Review"]', events)
         self.assertIn('cron: "7,22,37,52 * * * *"', events)
         self.assertIn("  push:", events)
         inputs = block(block(events, "workflow_dispatch", 2), "inputs", 4)

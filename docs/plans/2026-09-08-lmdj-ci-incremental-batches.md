@@ -110,12 +110,16 @@ workflow inventory tests、AGENTS／CLAUDE、相关 issue-done／issue-list skil
 - 复用 `self-test-report.yml` 作为唯一调度控制器和 reusable 执行调用者，不另建
   dispatcher workflow 或迁移 workflow ID。保留现有固定 writer／controller 身份；
   main push、整次执行完成通知、手动恢复都进入同一短写锁，重型子任务不持有该锁。
+  完成通知经只读 `.github/workflows/incremental-completion.yml` 中继，不允许控制器
+  直接订阅自己。中继收据绑定原父 run／attempt，控制器独立核验父身份及 active
+  executor；中继不成为第二调度器，不写状态，不授予产品执行权限。
 - 独立 `schedule` 的轻量控制面健康巡检为有界完成链提供恢复入口：读取已有请求、
   未处理 main 变化和报告状态，不依赖前一条 `workflow_run` 继续触发。它不是每日
   产品测试，不因日期变化运行产品测试；无未处理变化、待执行请求或显式恢复时
   不启动重型任务。
-- 完成通知只唤醒应结算或接续的工作；纯报告／idle 运行完成不能无条件制造新的
-  同类运行。GitHub 的 `workflow_run` 最多链接三层，不能承诺无限即时接续；巡检
+- 完成通知只唤醒应结算或接续的工作；平台可能投递有界轻量中继／idle 外壳，但
+  纯报告／无关父运行不能据此生成新的 admission 或重型执行。
+  GitHub 的 `workflow_run` 最多链接三层，不能承诺无限即时接续；巡检
   的频率与最坏接续延迟须在接线 Task 中声明，Actions 全局不可用时保留人工入口。
 - 保留 PR／冲突／对话和非 strict 状态，本计划不授权修改远端保护。
 - 回退停 admission，保留进度、在途结果和手动 full，不自动恢复日测或旧队列。
@@ -125,6 +129,11 @@ main 唤醒与完成接续真实发生、无变化不启动重型 run、没有�
 O2 还必须保留真实“完成通知链达到平台上限 → 独立健康巡检恢复已有尾部工作 →
 进度追平”的逐腿证据，以及无变化巡检不启动重型任务的证据；本地模拟不能替代
 该平台恢复验收。此要求不取消前述 O1 前置条件。
+实际自订阅失效与后续中继修复见
+[`2026-09-08-lmdj-ci-completion-relay.md`](2026-09-08-lmdj-ci-completion-relay.md)。
+拟验证 controller A→relay B→controller C→relay D 后的下一 controller 受链深度限制，
+再由独立真实 schedule 接回已有尾部；该顺序是待验收路径，不是对跨 workflow 环
+已经可用的声明。保留每腿真实关联／状态证据，不用任意三次 callback 或 mock 替代。
 Documentation impact: required
 Affected portal pages: /operations/testing-and-proof/ /operations/version-and-release/
 Reason: 触发、范围和结果语义改变，current 页面与治理必须同步。

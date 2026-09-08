@@ -103,7 +103,7 @@ class CutoverTests(unittest.TestCase):
         self.assertEqual(field(block(events, 'push', 2), 'branches', 4), '[main]')
         callbacks = block(events, 'workflow_run', 2)
         self.assertNotIn('branches:', callbacks)
-        self.assertEqual(field(callbacks, 'workflows', 4), '["Self-test Report", "Core CI", "PR Review"]')
+        self.assertEqual(field(callbacks, 'workflows', 4), '["Incremental Completion", "Core CI", "PR Review"]')
         self.assertIn('"7,22,37,52 * * * *"', block(events, 'schedule', 2))
         self.assertNotIn('self_test_report.py', SOURCE)
 
@@ -114,6 +114,7 @@ class CutoverTests(unittest.TestCase):
             ('schedule', '', 'idle', 'success', True),
             ('push', '', 'execute', 'success', False),
             ('workflow_run', '.github/workflows/self-test-report.yml', 'idle', 'success', False),
+            ('workflow_run', '.github/workflows/incremental-completion.yml', 'idle', 'success', False),
             ('workflow_run', '.github/workflows/ci.yml', 'idle', 'success', False),
             ('workflow_run', '.github/workflows/pr-review.yml', 'idle', 'success', True),
             ('workflow_run', '.github/workflows/forged.yml', 'idle', 'success', False),

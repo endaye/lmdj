@@ -6,10 +6,12 @@ human contributors and coding agents.
 Ordinary PR integration uses current-head review and Task verification without
 the retired full-CI/strict-update gate; read live protection before each merge.
 The incremental main-only automatic trigger switch is a separate T5 transition,
-not an ordinary PR permission. At this document's update, manual incremental
-controls exist but legacy automatic triggers remain. The approved target below
-does not claim that switch is complete; it requires O1 acceptance and an
-authorized window accounting for old in-flight runs and persistent state.
+not an ordinary PR permission. The trigger patch landed in PR #898, but its
+controller self-subscription was rejected by GitHub before any job could run.
+Completion-relay repair and real automatic recovery acceptance are distinct
+from that merge; neither an installed trigger nor a local fix proves operation.
+Retain the recorded persistent state and in-flight inventory while repairing
+the entry; do not restore retired daily tests or claim O2 completion.
 
 ## 1. Model
 

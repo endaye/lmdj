@@ -185,6 +185,55 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "")
         self.assertFalse(self.writes())
 
+    def test_verified_relay_preserves_active_parent_match_and_immediate_edge(self):
+        # Only the protocol seam is doubled here. Its real API/job/artifact
+        # checks are exercised in ci_incremental_completion_test; actual
+        # GitHub delivery and chain exhaustion remain O2 obligations.
+        self.make().control(self.push())
+        parent = self.finish(17)["workflow_run"]
+        self.add_run(18)
+        relay = {"run_id": 71, "attempt": 1, "control": self.sha}
+        payload = self.callback({"path": entry.incremental_completion.WORKFLOW})
+        output = io.StringIO()
+        with mock.patch.object(entry.incremental_completion, "resolve", return_value=(parent, relay)) as resolve:
+            with redirect_stdout(output):
+                answer = self.make(18, "workflow_run").control(payload)
+        resolve.assert_called_once()
+        witness = json.loads(output.getvalue())
+        self.assertEqual(witness["schema"], "lmdj.ci-source-witness.v2")
+        self.assertEqual(witness["relay"], relay)
+        self.assertEqual(witness["source_run"], {"id": 17, "attempt": 1})
+        self.assertIsNone(answer["state"]["active"])
+
+    def test_verified_relay_for_unrelated_parent_cannot_settle_or_admit(self):
+        self.make().control(self.push())
+        self.add_run(18)
+        unrelated = self.finish(18)["workflow_run"]
+        self.add_run(19)
+        adapter = self.make(19, "workflow_run")
+        adapter.authenticate()
+        before = adapter.state()
+        self.calls.clear()
+        payload = self.callback({"path": entry.incremental_completion.WORKFLOW})
+        relay = {"run_id": 71, "attempt": 1, "control": self.sha}
+        with mock.patch.object(entry.incremental_completion, "resolve", return_value=(unrelated, relay)):
+            answer = adapter.control(payload)
+            report = adapter.reports(payload)
+        self.assertEqual(answer["action"], "idle")
+        self.assertEqual(report["status"], "ignored")
+        self.assertEqual(adapter.state(), before)
+        self.assertFalse(self.writes())
+
+    def test_missing_relay_association_cannot_write_or_emit_a_source_witness(self):
+        self.scheduler.runs[17]["event"] = "workflow_run"
+        payload = self.callback({"path": entry.incremental_completion.WORKFLOW})
+        output = io.StringIO()
+        with mock.patch.object(entry.incremental_completion, "resolve", side_effect=ValueError("missing receipt")):
+            with redirect_stdout(output), self.assertRaises(ValueError):
+                self.make(kind="workflow_run").control(payload)
+        self.assertEqual(output.getvalue(), "")
+        self.assertFalse(self.writes())
+
     def test_wrong_head_and_missing_committed_manifest_are_rejected(self):
         with self.assertRaises(Exception):
             entry.load_storage(self.f.root, {**self.env, "GITHUB_SHA": "f" * 40})

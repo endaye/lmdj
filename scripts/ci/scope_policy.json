@@ -206,6 +206,7 @@
     {"match": {"kind": "exact", "value": ".github/scripts/pr_review_target.py"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/advisory-review-liveness.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/self-test-report.yml"}, "lanes": ["ci_contract"]},
+    {"match": {"kind": "exact", "value": ".github/workflows/incremental-completion.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-host-inventory.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/pr-review.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-self-hosted-benchmark.yml"}, "lanes": ["ci_contract"]},

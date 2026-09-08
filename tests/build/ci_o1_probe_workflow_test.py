@@ -101,7 +101,7 @@ class ProbeWorkflowTests(unittest.TestCase):
         self.assertIn("if: ${{ inputs.batch_operation == 'recovery-probe' }}", self.step)
         self.assertIn("!startsWith(inputs.batch_operation, 'report-') && inputs.batch_operation != 'recovery-probe'", self.controller)
         events = block(self.source, 'on', 0)
-        self.assertIn('workflows: ["Self-test Report", "Core CI", "PR Review"]', events)
+        self.assertIn('workflows: ["Incremental Completion", "Core CI", "PR Review"]', events)
         self.assertIn('cron: "7,22,37,52 * * * *"', events)
         self.assertIn('  push:', events)
         inputs = block(block(events, 'workflow_dispatch', 2), 'inputs', 4)

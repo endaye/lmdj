@@ -26,7 +26,7 @@ class RehearsalWorkflowTests(unittest.TestCase):
 
     def test_automatic_triggers_stay_legacy_until_o1(self):
         events = block(self.source, 'on', 0)
-        self.assertIn('workflows: ["Self-test Report", "Core CI", "PR Review"]', events)
+        self.assertIn('workflows: ["Incremental Completion", "Core CI", "PR Review"]', events)
         self.assertIn('cron: "7,22,37,52 * * * *"', events)
         self.assertNotIn("\n  report:\n", self.source)
 
