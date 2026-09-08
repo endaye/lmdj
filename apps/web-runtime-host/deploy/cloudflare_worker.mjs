@@ -230,12 +230,26 @@ async function proxyCatalog(request, env, url) {
   // trust domain -- could exhaust the isolate before the check ran. The
   // declared length is refused first, then the stream is read with a running
   // total and abandoned the moment it exceeds the bound.
-  // One strict token or nothing. `Number()` reads `0x10` as 16 and ` 2 ` as 2,
-  // and `headers.get` joins duplicate headers with ", " -- so a lenient parse
-  // disagreed with the proof server's `int()`, which instead honours PEP 515
-  // underscores and takes only the first duplicate. Neither bound was ever
-  // unenforced, but the two answered differently, which is the divergence the
-  // check itself was added to close.
+  // One strict token or nothing, because `Number()` reads `0x10` as 16 while
+  // the proof server's `int()` reads `5_0` as 50 under PEP 515. That much this
+  // check does close.
+  //
+  // What it does NOT close, and what an earlier version of this comment
+  // wrongly claimed it did, is the two cases where the two sides never see the
+  // same string at all. Measured:
+  //
+  //     header                          this Worker sees   proof server sees
+  //     Content-Length:   2             "2"                "2  "
+  //     Content-Length: 2 (twice)       "2, 2"             "2"
+  //
+  // Fetch's `Headers` normalises each value and joins repeats with ", " before
+  // `get` is ever called, so this side cannot be lenient about padding -- the
+  // padding is gone by then -- and cannot see only the first of a repeat.
+  // `email.message.get` does neither. A rule applied to two different strings
+  // is not one rule, so the proof server reproduces this view rather than
+  // matching this rule; see `read_catalog_object`. Both bounds were always
+  // authoritative on both sides -- what differed was the answer, not the
+  // enforcement.
   let body;
   try {
     // Inside the guard with the read: a `headers` accessor that throws is not
