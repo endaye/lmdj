@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -83,6 +84,25 @@ def upload_receipt(path, worker, *, initialize=False):
     return value
 
 
+def run_upload_process(command, *, cwd, env, timeout=180):
+    # Wrangler's launcher spawns the uploader. Killing only the launcher lets
+    # that child mutate the target after the journal lock has been released.
+    process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except BaseException as error:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
+        if isinstance(error, subprocess.TimeoutExpired):
+            error.output, error.stderr = stdout, stderr
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def upload(args, dist, workspace, worker):
     node = Path(args.node).resolve(strict=True)
     wrangler = Path(args.wrangler).resolve(strict=True)
@@ -108,9 +128,8 @@ def upload(args, dist, workspace, worker):
     env['WRANGLER_OUTPUT_FILE_PATH'] = str(output)
     try:
         command = ['deploy'] if args.initialize else ['versions', 'upload']
-        result = subprocess.run([str(node), str(wrangler), *command, '--config', str(config)],
-                                cwd=workspace, env=env, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, timeout=180)
+        result = run_upload_process([str(node), str(wrangler), *command, '--config', str(config)],
+                                    cwd=workspace, env=env)
     except subprocess.TimeoutExpired as error:
         write_diagnostic(workspace/'wrangler.log', error.stdout, error.stderr)
         raise CommandError('upload outcome unknown; inspect retained wrangler.log') from None

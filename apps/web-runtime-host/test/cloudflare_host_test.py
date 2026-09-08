@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -47,6 +48,37 @@ class HostCommandTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.client = Client()
+
+    def test_upload_timeout_stops_delayed_descendant_write(self):
+        import cloudflare_host
+        marker = self.root/'late-write'
+        child = "import time,pathlib; time.sleep(2); pathlib.Path(" + repr(str(marker)) + ").touch()"
+        launcher = "import subprocess,sys; subprocess.Popen([sys.executable,'-c'," + repr(child) + "]); print('ready',flush=True); import time; time.sleep(10)"
+        with self.assertRaises(subprocess.TimeoutExpired):
+            cloudflare_host.run_upload_process([sys.executable, '-c', launcher],
+                                              cwd=self.root, env=os.environ.copy(), timeout=1)
+        time.sleep(1.5)
+        self.assertFalse(marker.exists(), 'timed-out upload descendant must not keep writing')
+
+    def test_upload_cancellation_stops_delayed_descendant_write(self):
+        import cloudflare_host
+        marker = self.root/'late-write'
+        child = "import time,pathlib; time.sleep(2); pathlib.Path(" + repr(str(marker)) + ").touch()"
+        launcher = "import subprocess,sys; subprocess.Popen([sys.executable,'-c'," + repr(child) + "]); print('ready',flush=True); import time; time.sleep(10)"
+        original = subprocess.Popen.communicate
+        calls = []
+        def cancelled(process, *args, **kwargs):
+            if not calls:
+                calls.append(True)
+                self.assertEqual(process.stdout.readline().strip(), 'ready')
+                raise KeyboardInterrupt()
+            return original(process, *args, **kwargs)
+        with patch.object(subprocess.Popen, 'communicate', cancelled):
+            with self.assertRaises(KeyboardInterrupt):
+                cloudflare_host.run_upload_process([sys.executable, '-c', launcher],
+                                                  cwd=self.root, env=os.environ.copy(), timeout=10)
+        time.sleep(2.5)
+        self.assertFalse(marker.exists(), 'cancelled upload descendant must not keep writing')
 
     def receipt(self, **overrides):
         row = {'type': 'version-upload', 'version': 1, 'worker_name': self.client.worker,
