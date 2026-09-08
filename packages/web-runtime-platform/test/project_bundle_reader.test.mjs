@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import {webcrypto} from "node:crypto";
+import {readFileSync} from "node:fs";
 import test from "node:test";
+import {fileURLToPath} from "node:url";
 
 import {HostProtocolError} from "../web/protocol.mjs";
 import {
+  BUNDLE_CONTRACT,
   importProjectBundle,
+  READABLE_CONTRACT_VERSIONS,
+  READABLE_PROJECT_CONTRACTS,
   validBundlePath,
 } from "../web/project_bundle_reader.mjs";
 
@@ -13,6 +18,32 @@ const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const PATTERN_ID = "22222222-2222-4222-8222-222222222222";
 const IMPORT_TOKEN = "33333333-3333-4333-8333-333333333333";
 const MAX_CHUNK_BYTES = 1_048_576;
+const BUNDLE_SCHEMA = JSON.parse(readFileSync(
+  fileURLToPath(new URL(
+    "../../../contracts/project/lmdj.project-bundle.v1.schema.json",
+    import.meta.url,
+  )),
+  "utf-8",
+));
+// The levels the packer this Build ships writes, both read off the Contract
+// rather than retyped. Every case below that is not explicitly about backward
+// reading uses them, so this suite never validates a container shape the
+// product cannot produce -- the habit that kept #784 and #900 green.
+const WRITER_CONTRACT_VERSION =
+  BUNDLE_SCHEMA.properties.contract_version.const;
+const projectContractLevel = (contract) =>
+  Number(contract.slice("lmdj.project.v".length));
+const WRITER_PROJECT_CONTRACT = BUNDLE_SCHEMA.properties.project_contract.enum
+  .reduce((highest, level) =>
+    projectContractLevel(level) > projectContractLevel(highest)
+      ? level
+      : highest);
+// One past the highest level the Contract declares, so the refusal case below
+// can never end up pinning a level the repository has since adopted -- the
+// exact trap `tests/conformance/project_bundle_contract_test.py` and
+// `apps/creator-web/test/project_actions.test.ts` set by naming `v5` outright.
+const UNDECLARED_PROJECT_CONTRACT =
+  `lmdj.project.v${projectContractLevel(WRITER_PROJECT_CONTRACT) + 1}`;
 
 function canonicalJson(value) {
   if (Array.isArray(value)) {
@@ -35,7 +66,10 @@ async function sha256(bytes) {
 async function bundleFixture(payloads = [
   new TextEncoder().encode("manifest"),
   new Uint8Array(MAX_CHUNK_BYTES + 17).fill(7),
-]) {
+], {
+  contractVersion = WRITER_CONTRACT_VERSION,
+  projectContract = WRITER_PROJECT_CONTRACT,
+} = {}) {
   let offset = 0;
   const entries = [];
   for (const [index, payload] of payloads.entries()) {
@@ -52,9 +86,9 @@ async function bundleFixture(payloads = [
   const digestSource = {
     compression: "none",
     contract: "lmdj.project-bundle.v1",
-    contract_version: "1.1.0",
+    contract_version: contractVersion,
     entries,
-    project_contract: "lmdj.project.v3",
+    project_contract: projectContract,
     project_id: PROJECT_ID,
     uncompressed_bytes: offset,
   };
@@ -118,6 +152,60 @@ test("validates Bundle paths by complete segment", () => {
   assert.equal(validBundlePath("foo/../sample.wav"), false);
   assert.equal(validBundlePath("./sample.wav"), false);
   assert.equal(validBundlePath("foo/./sample.wav"), false);
+});
+
+test("accepts exactly the Bundle levels the Contract declares", () => {
+  // The Contract document is the single source; this reader is a hand-written
+  // copy of it. #784 moved the Contract, the packer and the C++ importer to
+  // `lmdj.project.v4` and left this copy behind, so the browser refused every
+  // Project the product created (#900). Binding the copy to the source here
+  // makes the next Contract level move fail this suite instead of shipping.
+  assert.equal(BUNDLE_CONTRACT, BUNDLE_SCHEMA.properties.contract.const);
+  assert.deepEqual(
+    [...READABLE_PROJECT_CONTRACTS].sort(),
+    [...BUNDLE_SCHEMA.properties.project_contract.enum].sort(),
+  );
+  // Older container versions stay readable, so the reader's set is a superset;
+  // what it may never omit is the version the packer writes today.
+  assert.equal(
+    READABLE_CONTRACT_VERSIONS.includes(WRITER_CONTRACT_VERSION),
+    true,
+  );
+});
+
+test("refuses a Project Contract level the Contract does not declare", async () => {
+  const fixture = await bundleFixture(
+    [new TextEncoder().encode("manifest")],
+    {projectContract: UNDECLARED_PROJECT_CONTRACT},
+  );
+  const calls = [];
+  await assert.rejects(
+    importProjectBundle(trackedFile(fixture.bytes), {
+      crypto: {subtle: webcrypto.subtle, randomUUID: () => IMPORT_TOKEN},
+      send: async (...args) => calls.push(args),
+    }),
+    (error) => error.code === "INVALID_PROJECT",
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("still reads the container versions earlier Builds wrote", async () => {
+  for (const [contractVersion, projectContract] of [
+    ["1.0.0", "lmdj.project.v1"],
+    ["1.1.0", "lmdj.project.v3"],
+  ]) {
+    const fixture = await bundleFixture(
+      [new TextEncoder().encode("manifest")],
+      {contractVersion, projectContract},
+    );
+    const calls = [];
+    const result = await importProjectBundle(trackedFile(fixture.bytes), {
+      crypto: {subtle: webcrypto.subtle, randomUUID: () => IMPORT_TOKEN},
+      send: successfulSend(calls, fixture.index),
+    });
+    assert.equal(result.projectId, PROJECT_ID);
+    assert.equal(calls.at(-1).operation, "project.import.commit");
+  }
 });
 
 test("streams a validated bundle in bounded ordered chunks and returns a summary", async () => {
