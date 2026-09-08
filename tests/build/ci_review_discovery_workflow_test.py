@@ -36,7 +36,13 @@ class DiscoveryWorkflowTests(unittest.TestCase):
                 if actual:
                     module = importlib.import_module('review_discovery_runtime')
                     instance = mock.Mock()
-                    instance.run.return_value = {'status': 'incomplete' if code else 'inventoried-only'}
+                    state = module.protocol.new_state(epoch='test-epoch', repository='endaye/lmdj', workflow_id=42,
+                        source_floor={'control_sha': 'a' * 40, 'created_at': '2026-09-09T00:00:00Z'})
+                    instance.run.return_value = {
+                        'schema': 'lmdj.ci-review-discovery-report.v1',
+                        'state': module.protocol.summary(state), 'errors': [],
+                        'inventory_pending': bool(code),
+                        'status': 'incomplete' if code else 'inventoried-only'}
                     with mock.patch.object(module, 'DiscoveryRuntime', return_value=instance):
                         outcome = module.main(command[2:])
                     instance.run.assert_called_once_with(int(env['REPORT_LIMIT']),

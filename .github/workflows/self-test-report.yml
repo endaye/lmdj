@@ -192,7 +192,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATCH_WRITER_LOCK: self-test-report
         run: |
-          python3 scripts/ci/review_discovery_runtime.py --root "$GITHUB_WORKSPACE" --summary "$GITHUB_STEP_SUMMARY" --limit 1
+          python3 scripts/ci/review_discovery_runtime.py --root "$GITHUB_WORKSPACE" --summary "$GITHUB_STEP_SUMMARY" --limit 1 --background
       - name: Keep unresolved reporting visible
         if: ${{ always() && (steps.automatic-report.outcome == 'failure' || steps.automatic-discovery.outcome == 'failure') }}
         run: |

@@ -161,7 +161,11 @@ main push、15 分钟 health tick 的非执行轮合并恢复报告，实际批�
 每次 discovery 保留完整历史 metadata 轮扫，另给至多一个新／未解决 attempt 公平机会：
 按持久注册或最近 disposition 的 generation 轮转，永久错误和仍运行的 review 也消耗其轮次，
 不会独占优先路径。历史成功记录不占这个额外预算；历史重扫仍负责发现旧 run 的 later attempt。
-这不是 15 分钟投递保证：inventory 缺口、不可读来源、控制池不可用或积压仍明确报错；
+自动发现使用 `--background`：已持久保存、仅剩待扫描窗口／轮次或 pending attempt 时，
+日志诊断为 `pending`，步骤成功但完整报告仍为 `incomplete`；保留义务等待接续。
+日志只输出有限状态与计数，不输出来源正文。它不证明产品健康、完整覆盖或 Issue 已送达。
+手动发现仍严格：任何 incomplete 返回非零，精确 attempt 不允许 background 模式。
+这不是 15 分钟投递保证：inventory 缺口、不可读来源、metadata 错误、控制池不可用仍明确报错；
 过期 evidence 不冒充成功。精确 `report-review`／`report-discovery` 手动恢复入口保持可用。
 旧终态 run 的未知 rerun 仍由与历史 ID 数量相关的完整轮扫发现，不承诺全局 artifact 保留期内送达。
 执行轮不做附带报告扫描；非执行轮做有界报告和发现，积压留待接续，报告重试不重跑测试。
