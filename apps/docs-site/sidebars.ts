@@ -26,6 +26,7 @@ const sidebars: SidebarsConfig = {
     ]},
     {type: 'category', label: 'Operations', items: [
       'operations/testing-and-proof', 'operations/version-and-release',
+      'operations/creator-changelog', 'operations/runtime-changelog',
       'operations/documentation-governance',
     ]},
     {type: 'category', label: 'History', items: ['history/legacy-patch-architecture']},

@@ -11,6 +11,18 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 四条版本轴
 Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 SemVer；Contract 使用稳定 ID + Contract SemVer。
+
+## Host changelogs
+
+[Creator 独立日志](./creator-changelog.mdx) 与
+[Web Runtime / Lab 独立日志](./runtime-changelog.mdx) 从各 Host manifest 和结构化
+`CHANGELOG.md` 生成。没有日志时显示暂无记录，不补写历史版本。条目只说明 prepared，
+不说明已经测试通过、部署、发布或晋级；认证回执展示仍待接入。
+
+版本准备 PR 修改 Host 输入后，在 `apps/docs-site` 运行 `npm run changelogs`，
+将静态页面一起提交，再按 Product 分配规则冻结快照。构建仅检查投影是否一致，
+不会自动改写源码或历史快照。此展示功能不启动版本准备、部署或发布。
+
 ## Assembly Lock
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
 当前 source candidate 是 Product Build `1.0.44.0 · canary · g<short-sha>`，在 Build 43 之上装配 Stage 11 的 Sound Set 能力。Contract 侧新增 `lmdj.soundset.v1 · 1.1.0` 与 `lmdj.soundset-catalog.v1 · 1.0.0`，并把 `lmdj.project-bundle.v1` 由 `1.1.0` 升到 `1.2.0`——`project_contract` 枚举补齐 `lmdj.project.v4`，这是 backward-compatible addition，也是必需的：自 Build 43 起本 Build 写出的每一个 Project 都是 v4，枚举不补齐则它们全都无法打包为 Bundle。`lmdj.project.v4` 保持 `4.1.0`，active Contract 由八个增至十个。Module 侧 Foundation `0.4.0`、Authoring Domain `3.0.0`、Project I/O `3.0.0`、Application Facade `3.1.0`、Web Runtime Platform `4.0.0`；Project Cooker `1.1.0`、Audio Runtime `3.0.0` 与 Provider SDK `1.1.4` 不变。Host 侧 CLI/MCP/Native Test Host `3.1.0`，Formal Web Runtime Host 与 Creator Web `4.0.0`。`resource_limits` 由九项增至十三项，两个本地 Proof Provider、Provider policy、Bank 共享配额与两份分发清单的资产计数都不动。这些身份同时写入 `products/lmdj/assembly.json`，因此 Assembly source hash 与 Assembly Lock hash 一并改变，本 Build 的不可变门户快照按 Build-cut 规则随分配在同一 Pull Request 内冻结。当前 source 可以没有 active Product intent；candidate、快照、tag、Release、部署与 Channel promotion 仍是独立状态。

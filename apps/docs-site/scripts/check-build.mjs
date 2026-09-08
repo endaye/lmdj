@@ -18,6 +18,7 @@ const requiredRoutes = [
   '/contracts/assembly/', '/contracts/error-module-version/', '/assembly/lmdj/',
   '/platform/native-audio/', '/platform/web-runtime/', '/platform/storage/', '/platform/input/',
   '/operations/testing-and-proof/', '/operations/version-and-release/',
+  '/operations/creator-changelog/', '/operations/runtime-changelog/',
   '/operations/documentation-governance/', '/history/legacy-patch-architecture/',
   '/diagrams/lmdj-product.html', '/diagrams/lmdj-product.svg', '/diagrams/lmdj-core.html',
   '/diagrams/web-runtime-platform.html', '/diagrams/web-runtime-platform.svg',
