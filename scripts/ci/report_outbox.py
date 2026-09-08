@@ -130,12 +130,18 @@ class Outbox:
         self.journal, self.lock_held, self.epoch = journal, lock_held, epoch
         self.state = None
 
+    def _replay(self, events):
+        require(self.lock_held() is True, "outbox replay lacks shared short writer lock")
+        require(isinstance(events, list), "outbox requires complete authenticated journal events")
+        state = new_state(self.epoch)
+        for event in events:
+            state = reduce(state, event)
+        return state
+
     def load(self):
         require(self.lock_held() is True, "outbox lacks shared short writer lock")
         try:
-            state = new_state(self.epoch)
-            for event in self.journal.load():
-                state = reduce(state, event)
+            state = self._replay(self.journal.load())
             self.state = state
             return state
         except Exception as error:
@@ -147,9 +153,13 @@ class Outbox:
                  "generation": self.state["generation"], "type": kind, "data": deepcopy(data)}
         expected = reduce(self.state, event)
         try:
-            self.journal.append(event)
-            committed = self.load()
+            # Journal.append returns its authenticated, checkpoint-confirmed
+            # full history after the write, not the attempted event or POST
+            # response. Replay that far-side proof, as Controller does; retain
+            # all Journal pre/post reads without a redundant third history read.
+            committed = self._replay(self.journal.append(event))
             require(committed == expected, "outbox commit did not confirm the validated transition")
+            self.state = committed
         except Exception as error:
             raise OutboxBlocked("why: outbox write outcome unresolved; remedy: reload authenticated intent without repeating business POST") from error
 
