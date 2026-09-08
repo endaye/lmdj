@@ -783,3 +783,215 @@ not allocated product revisions or a release snapshot.
 
 Pitfall impact: none — existing whole-journey and actual-platform evidence
 guidance applied; unfinished transitions remain explicit.
+
+## C3 execution-enabled recovery, settlement, replay and reporting
+
+This evidence-only Task uses `docs/ci-o1-c3-recovery-evidence`, based on
+`3c2211c8336791956107aa67fe4ff9f1e40b3944`. Its only declared file is
+`docs/plans/2026-09-08-lmdj-ci-incremental-o1-evidence.md`. All preceding
+historical text is retained byte-for-byte, including the earlier C2 expiry race
+and the separate C3 real interruption proof. The following observations extend
+that proof through real recovery execution, settlement, fresh replay and final
+failure reporting. They do not declare all O1 scenarios or T5/O2 complete.
+
+### Preserved debt and a real execution-enabled admission
+
+The authenticated pre-admission snapshot of isolated scheduler Issue 857,
+epoch `o1-claim-cancel-live-20260908-issue857`, was generation 5 with no active
+request. Processed and pending both remained
+`fe043fd3a2a06dfbca4088cc59e0e8ef6997f336`. All sixteen suites retained
+`missing` debt with attempt 1, paused false, and the exact reference
+`missing:batch:o1-claim-cancel-live-20260908-issue857:1`; failures were empty.
+That was missing verification following cancellation, not sixteen product bugs.
+
+[Recovery run 34182418092/1](https://github.com/endaye/lmdj/actions/runs/34182418092/attempts/1)
+retained request `batch:o1-claim-cancel-live-20260908-issue857:6`, kind `auto`,
+base `fe043fd3a2a06dfbca4088cc59e0e8ef6997f336`, target/control
+`77e84e086298430d94be9135929a5ebdac1eba17`, and policy
+`874064884b84235f6e8337369001923975a6e63742308728bd9bedfa10ace961`.
+Original controller artifact `10039362368` has ZIP SHA-256
+`a609d7b1d202f9b8b90b402a20d1e1ea4baaeabbd3e8a7fa2ff84c63a572e4d5`.
+Its action was `execute`, and generation 8 contained the exact executor and
+claim `34182418092/1`. The original missing result and all sixteen debt objects
+remained unchanged at admission; a claim was not mistaken for coverage.
+
+Independent Git/policy selection already required full sixteen-suite coverage
+for the intervening changes. The actual request also recorded
+`carry executable verification debt`. Thus this admission exercises debt
+carriage with a genuinely full interval; it is not evidence that debt alone
+upgraded an otherwise none/focused selection. Incomplete review suggestions did
+not reduce the deterministic floor. Root authenticated the pre-state and
+original admission; the independent read-only audit subsequently authenticated
+all eight scheduler records and replayed the same generation-8 state. The
+documentation Task also checked the original ZIP digest and retained identities.
+
+Evidence copies: `/tmp/lmdj-C3-debt-before-auth.1gf4hvnh`,
+`/tmp/lmdj-C3-debt-admission-auth.0r0dathi`, and
+`/tmp/lmdj-o1-C3-report-before.JtCygm`. These are local investigation copies,
+not permanent artifact-retention guarantees or independent signatures.
+
+### The original cancelled execution's sixteen missing observations delivered
+
+While that recovery was not yet settled, ordinary reporting used scheduler 857
+and the existing outbox 817, without initializing either journal or executing
+products. The actual pure report projection of the authenticated scheduler
+produced exactly sixteen observations from the original settled request `:1`,
+executor `34175087273/1`, target/control `fe043fd3…`, historical policy
+`bc6834ca…ea1c6`, and evidence digest
+`9acf943399cec02f748ba96fd4e1164490075ea5f38f9b520ad2768f4ab8457a`.
+The active recovery `:6` had no result and contributed no report. The later
+documentation/policy migration did not replace the original result's policy.
+
+| Report run (attempt 1) | Control | Terminal API update (UTC) | Outbox generation | Original cancellation observations delivered |
+| --- | --- | --- | --- | --- |
+| [34183541684](https://github.com/endaye/lmdj/actions/runs/34183541684/attempts/1) | `3c2211c8336791956107aa67fe4ff9f1e40b3944` | 2026-09-08 03:34:29 | 136 → 168 | First 8 of 16; remaining 8 not yet queued |
+| [34184208131](https://github.com/endaye/lmdj/actions/runs/34184208131/attempts/1) | `3c2211c8336791956107aa67fe4ff9f1e40b3944` | 2026-09-08 03:45:39 | 168 → 200 | All 16 of 16 delivered |
+
+Each run completed successfully with only its controller successful and all
+three other jobs skipped. The reporting limit remained 8 and the controller
+timeout was not increased. Each round added exactly eight
+queue → claim → ack → delivered sequences. Actual HTTP comment bodies matched
+both the frozen outbox payload and the precomputed original-result report:
+
+| Suite | Actual receipt |
+| --- | --- |
+| chameleon_lab | [874 / 5578661263](https://github.com/endaye/lmdj/issues/874#issuecomment-5578661263) |
+| ci_contract | [875 / 5578667273](https://github.com/endaye/lmdj/issues/875#issuecomment-5578667273) |
+| core_asan | [876 / 5578673062](https://github.com/endaye/lmdj/issues/876#issuecomment-5578673062) |
+| core_coverage | [877 / 5578679482](https://github.com/endaye/lmdj/issues/877#issuecomment-5578679482) |
+| core_macos | [878 / 5578685765](https://github.com/endaye/lmdj/issues/878#issuecomment-5578685765) |
+| core_release_stress | [879 / 5578692107](https://github.com/endaye/lmdj/issues/879#issuecomment-5578692107) |
+| core_tsan_stress | [881 / 5578698385](https://github.com/endaye/lmdj/issues/881#issuecomment-5578698385) |
+| core_ubuntu | [882 / 5578705891](https://github.com/endaye/lmdj/issues/882#issuecomment-5578705891) |
+| creator | [883 / 5578771262](https://github.com/endaye/lmdj/issues/883#issuecomment-5578771262) |
+| deploy_contract | [884 / 5578778770](https://github.com/endaye/lmdj/issues/884#issuecomment-5578778770) |
+| docs_static | [885 / 5578785567](https://github.com/endaye/lmdj/issues/885#issuecomment-5578785567) |
+| package | [886 / 5578791734](https://github.com/endaye/lmdj/issues/886#issuecomment-5578791734) |
+| portal | [887 / 5578798105](https://github.com/endaye/lmdj/issues/887#issuecomment-5578798105) |
+| web_runtime_host | [888 / 5578804521](https://github.com/endaye/lmdj/issues/888#issuecomment-5578804521) |
+| web_runtime_lab | [889 / 5578810290](https://github.com/endaye/lmdj/issues/889#issuecomment-5578810290) |
+| web_toolchain | [890 / 5578816442](https://github.com/endaye/lmdj/issues/890#issuecomment-5578816442) |
+
+Independent audits authenticated all historical writer/run/attempt/workflow,
+source/main-history and author/editor bindings, full pagination, checkpoint and
+digest chain, then replayed the outbox. The first round retained all original
+136 complete comment objects; the second retained all 168. Each round's complete
+two-page terminal snapshot equalled an independent reread byte-for-byte. Root
+separately checked the retained prefixes, both snapshots and all sixteen actual
+receipts against the planned/frozen bodies.
+
+The generation-168 head was
+`956485c5b6eebfd9b19cd4458306eb5574c147ba2d0c86db6aa59041719d0006`;
+generation 200 was
+`b2c1342c63b5f00efc6397f14be2efb05fe6902a020956198865d7860b133d38`.
+Both checkpoint pending fields were null. At generation 200 all fifty already
+queued observations were delivered; this includes earlier unrelated observations,
+not fifty C3 failures. It does not mean every future source is discovered or
+reported, nor does report success clear scheduler debt or prove product health.
+
+Complete evidence is retained in `/tmp/lmdj-o1-C3-report-round1.oOlGfC` and
+`/tmp/lmdj-o1-C3-report-round2.0sBGQe`. The latter's complete snapshot SHA-256 is
+`991e8c176773aeb40172fa1873fec3f59d1293d158474cf651bc4b046071311e`.
+
+### Complete recovery result, ordinary settlement and fresh replay
+
+Recovery executor `34182418092/1` completed with `failure` at the terminal API
+observation updated `2026-09-08T04:01:52Z`. The complete actual inventory had
+30 jobs. Original scoped verdict artifact `10040353988` was 4,711 ZIP bytes,
+SHA-256 `2f08cd256d1b11a4e1e52bce66e6a57a0db81dd3361c1dcd15fd62ff789a16fb`,
+with evidence digest
+`63c8a24d690c0f0dc6cf695b90c3a0953129cf3205c6be0aa04c143070ece4f7`.
+All sixteen suites had verification debt false: fifteen passed, and only Creator
+failed. Both stress suites, sanitizers, coverage and package passed. Producer
+`101932955121` successfully judged and uploaded the original scoped evidence;
+its final visibility step retained the actual failed outcome. No missing or
+blocked selected suite was disguised as a pass.
+
+Independent GET-only `Runtime.result_for` accepted the original
+`execution.json`, `needs.json` and `verdict.json` against the frozen request,
+historical policy and actual terminal jobs. Root separately inspected the original
+ZIP and result. This documentation Task checked the same ZIP byte length/digest
+and complete suite outcomes. Evidence copies are
+`/tmp/lmdj-C3-terminal-independent.uvp4iziv` and
+`/tmp/lmdj-C3-root-verdict.2E3z6O`. A full-scope result containing a failure is
+not an all-passed release candidate.
+
+[Ordinary settlement 34185676231/1](https://github.com/endaye/lmdj/actions/runs/34185676231/attempts/1)
+used control `557019405e1ef833d4750e9411f83a92e492c7cf` and succeeded.
+Controller artifact `10040411432` has ZIP SHA-256
+`fde6e1fd0d0157c7e875b14650398974f6a05dd1b84359bed467ae4b56f5763d`.
+The authenticated journal retained all original eight envelopes, then appended
+generation 8 observe, 9 result, and 10 advance, reaching generation 11.
+Its anchored head was
+`d379f0af88f1e725efb305dbe73954f98ddde4d88353a7d55ae3fd2386a9f2fa`,
+with checkpoint pending null. Processed advanced to the frozen execution target
+`77e84e086298430d94be9135929a5ebdac1eba17`, while scheduler pending reflected
+newer main `ed42b46faa539f0ead8c161d5ee54b70b2193c40`. Active became null,
+debt became empty because every selected suite had actual coverage, and the
+single Creator failure was retained at the exact target. `history_unknown`
+remained true; neither coverage nor a new checkpoint invented earlier history.
+
+[Fresh settlement replay 34185995655/1](https://github.com/endaye/lmdj/actions/runs/34185995655/attempts/1)
+used control `ed42b46faa539f0ead8c161d5ee54b70b2193c40`, succeeded, and retained
+artifact `10040509790`, ZIP SHA-256
+`d0bba114d72729658d637d1c9c39db5af65e7a76b28dcf6396d010120206fa64`.
+Both original artifact states equalled the complete independently authenticated
+settled state. The replay's two complete chain and anchor reads also agreed,
+with no new event, generation, debt or failure. Both operations returned idle
+without a request; this was settlement-only replay, not a claim that a fresh
+execution-enabled reconcile had no remaining main work. No product job ran in
+either operation.
+
+The documentation Task independently repeated the original eight-envelope
+prefix, both artifact-state equalities, whole-state replay equality and complete
+chain/anchor equality assertions from
+`/tmp/lmdj-C3-settle-independent.wx08lgj5` and
+`/tmp/lmdj-C3-replay-independent.3g_e_6zo`. The independent runtime audit and
+root checked full journal authentication; hashes were not used as signatures.
+
+### The recovery's actual Creator failure delivered without duplicate missing reports
+
+[Report run 34186045987/1](https://github.com/endaye/lmdj/actions/runs/34186045987/attempts/1)
+used control `ed42b46faa539f0ead8c161d5ee54b70b2193c40` and succeeded.
+Controller `101934467376` succeeded; all three other jobs were skipped.
+The outbox retained all 200 earlier complete comment objects and all fifty
+existing delivery objects, adding only one queue → claim → ack → delivered
+sequence. The original cancellation's sixteen observations were not reposted.
+
+The new exact observation
+`batch/f613c3552b39ec4d6ad6d03da89228680f183605d7cdb18a987f2b9f356bd1d1`
+was delivered to existing
+[Issue 865 comment 5579060281](https://github.com/endaye/lmdj/issues/865#issuecomment-5579060281).
+Its actual stable-Bot HTTP comment body equalled both the frozen payload and the
+actual reporter's pure projection of settled request `:6`, executor
+`34182418092/1`, target `77e84e08…`, and its original failed verdict. This is
+a product/test failure observation with no verification debt, distinct from
+the earlier missing-verification reports. No Issue was automatically closed.
+
+Full historical writer authentication, all three comment pages, checkpoint and
+digest chain, and pure outbox replay reached generation 204 with all 51
+already-queued observations delivered. Head was
+`3b32b21990e05a542cfab0bbb9209514351c17fe7bf875dd62e9a0ae0173eb49`,
+checkpoint pending null. Both complete terminal snapshots were byte-identical.
+The original 200-comment prefix and fifty delivery objects were checked in full,
+not only by count. Evidence is retained in
+`/tmp/lmdj-o1-C3-final-report.br7HM7`, including actual HTTP receipt, projected
+report, authenticated records, replayed state and original run/job/log snapshots.
+
+This completes the recorded C3 path from retained cancellation debt through
+actual selected execution, coverage-aware debt settlement, stable fresh replay
+and failure delivery. It does not prove current main is full-green or globally
+caught up: newer pending work remains, Creator failed, historical unknown status
+remains, and T5/O2 authorization and actual automatic-chain recovery are separate.
+No version, release, deployment, additional dispatch or product execution was
+performed by this documentation Task.
+
+Task verification: complete retained-evidence and old-ledger-prefix assertions
+passed, alongside the 66 ownership tests and whitespace checks. Nonempty
+committed-range docs-static from base `3c2211c8336791956107aa67fe4ff9f1e40b3944`
+passed after the local commit; an empty pre-commit range was not counted.
+Version impact: none — no version or release action.
+Documentation impact: none — explanatory evidence only, not Portal pages,
+diagrams, tooling, projected identities or documented product source facts.
+No fresh Portal run is required or claimed. Pitfall impact: none — existing
+complete-journey and exact-receipt guidance applies; no new protocol or gate.
