@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import http.client
+import http.server
 import importlib.util
 import json
 import os
@@ -37,6 +38,11 @@ def load_module(name: str, path: Path):
 
 
 class CreatorServerTest(unittest.TestCase):
+    # A Creator deployment that offers no Catalog, which is every one today.
+    # `CreatorCatalogProxyTest` re-runs this whole suite with one configured, so
+    # the static surface and the CSP are asserted unchanged either way.
+    catalog_upstream: str | None = None
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="lmdj-creator-server-")
         self.root = Path(self.temporary.name)
@@ -147,7 +153,8 @@ class CreatorServerTest(unittest.TestCase):
             if entry["role"] == "runtime_wasm"
         )
         self.server = self.module.make_server(
-            self.dist, self.verifier, self.repo, "127.0.0.1", 0
+            self.dist, self.verifier, self.repo, "127.0.0.1", 0,
+            catalog_upstream=self.catalog_upstream,
         )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -245,6 +252,338 @@ class CreatorServerTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module.ServerError, "loopback-only"):
             self.module.make_server(
                 self.dist, self.verifier, self.repo, "0.0.0.0", 0
+            )
+
+
+class CatalogUpstreamFixture(http.server.BaseHTTPRequestHandler):
+    """A programmable stand-in for a Sound Set Catalog.
+
+    Records the exact target every forward asked for, so a case can assert that
+    an attempt to move the destination never reached a Catalog at all rather
+    than merely that the page saw an error.
+    """
+
+    protocol_version = "HTTP/1.1"
+    received: list[tuple[str, str, dict[str, str]]] = []
+    response_status = 200
+    response_body = b'{"catalog":"fixture"}'
+    response_content_type = "application/json"
+    response_location: str | None = None
+
+    def log_message(self, format: str, *args) -> None:  # noqa: A002
+        return
+
+    def _record_and_reply(self, include_body: bool) -> None:
+        type(self).received.append(
+            (
+                self.command,
+                self.path,
+                {key.lower(): value for key, value in self.headers.items()},
+            )
+        )
+        status = type(self).response_status
+        body = type(self).response_body if status == 200 else b""
+        self.send_response(status)
+        if type(self).response_location is not None:
+            self.send_header("Location", type(self).response_location)
+        self.send_header("Content-Type", type(self).response_content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if include_body and body:
+            self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        self._record_and_reply(include_body=True)
+
+    def do_HEAD(self) -> None:
+        self._record_and_reply(include_body=False)
+
+    do_POST = do_GET
+    do_PUT = do_GET
+    do_DELETE = do_GET
+
+
+class CreatorCatalogProxyTest(CreatorServerTest):
+    """#901: the Creator reaches its Catalog same-origin, so `connect-src 'self'`
+    never has to name a foreign origin.
+
+    This subclass re-runs every inherited case with a Catalog configured, which
+    is how the suite asserts that turning the proxy on changes neither the
+    static surface nor the Content Security Policy.
+    """
+
+    DIGEST = "a" * 64
+
+    def setUp(self) -> None:
+        CatalogUpstreamFixture.received = []
+        CatalogUpstreamFixture.response_status = 200
+        CatalogUpstreamFixture.response_body = b'{"catalog":"fixture"}'
+        CatalogUpstreamFixture.response_content_type = "application/json"
+        CatalogUpstreamFixture.response_location = None
+        self.upstream = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), CatalogUpstreamFixture
+        )
+        self.upstream.daemon_threads = True
+        self.upstream_thread = threading.Thread(
+            target=self.upstream.serve_forever, daemon=True
+        )
+        self.upstream_thread.start()
+        host, port = self.upstream.server_address[:2]
+        self.catalog_upstream = f"http://{host}:{port}/sets/"
+        super().setUp()
+
+    def tearDown(self) -> None:
+        super().tearDown()
+        self.upstream.shutdown()
+        self.upstream.server_close()
+        self.upstream_thread.join(timeout=5)
+
+    def test_index_and_objects_forward_to_the_configured_upstream(self) -> None:
+        status, headers, body = self.request(
+            "GET", "/soundset-catalog/catalog/index.json"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b'{"catalog":"fixture"}')
+        self.assertEqual(headers["content-type"], "application/json")
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(
+            [entry[1] for entry in CatalogUpstreamFixture.received],
+            ["/sets/catalog/index.json"],
+        )
+
+        for kind, expected_type in (
+            ("manifest", "application/json"),
+            ("blob", "application/octet-stream"),
+        ):
+            CatalogUpstreamFixture.received = []
+            status, headers, _ = self.request(
+                "GET", f"/soundset-catalog/object/{kind}/{self.DIGEST}"
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["content-type"], expected_type)
+            self.assertEqual(
+                headers["cache-control"], "public, max-age=31536000, immutable"
+            )
+            self.assertEqual(
+                [entry[1] for entry in CatalogUpstreamFixture.received],
+                [f"/sets/object/{kind}/{self.DIGEST}"],
+            )
+
+    def test_nothing_in_the_request_reaches_a_second_origin(self) -> None:
+        # Each of these tries to move the destination. None may reach the
+        # configured Catalog, and none may reach anything else: the target is
+        # composed from the upstream plus tokens this server re-derives, so
+        # there is no request text in it to subvert.
+        for attempt in (
+            "/soundset-catalog/http://127.0.0.1:1/steal",
+            "/soundset-catalog//127.0.0.1:1/steal",
+            "/soundset-catalog/../steal",
+            "/soundset-catalog/%2e%2e/steal",
+            f"/soundset-catalog/object/manifest/{self.DIGEST}?to=http://127.0.0.1:1/",
+            "/soundset-catalog/catalog/index.json?to=http://127.0.0.1:1/",
+            "/soundset-catalog/catalog%2findex.json",
+        ):
+            with self.subTest(attempt=attempt):
+                status, _, _ = self.request("GET", attempt)
+                self.assertEqual(status, 404)
+                self.assertEqual(CatalogUpstreamFixture.received, [])
+
+    def test_the_admitted_grammar_is_the_two_transport_shapes(self) -> None:
+        for path in (
+            "/soundset-catalog/",
+            "/soundset-catalog/catalog/index.jsonx",
+            "/soundset-catalog/catalog/other.json",
+            f"/soundset-catalog/object/archive/{self.DIGEST}",
+            f"/soundset-catalog/object/manifest/{self.DIGEST.upper()}",
+            f"/soundset-catalog/object/manifest/{self.DIGEST[:63]}",
+            f"/soundset-catalog/object/manifest/{self.DIGEST}extra",
+            f"/soundset-catalog/object/manifest/{self.DIGEST}/again",
+            "/soundset-catalog/object/manifest",
+        ):
+            with self.subTest(path=path):
+                status, _, _ = self.request("GET", path)
+                self.assertEqual(status, 404)
+                self.assertEqual(CatalogUpstreamFixture.received, [])
+
+    def test_only_get_is_admitted(self) -> None:
+        for method in ("HEAD", "POST", "PUT", "DELETE"):
+            with self.subTest(method=method):
+                status, _, _ = self.request(
+                    method, "/soundset-catalog/catalog/index.json"
+                )
+                self.assertEqual(status, 405)
+                self.assertEqual(CatalogUpstreamFixture.received, [])
+
+    def test_page_headers_and_credentials_do_not_travel_upstream(self) -> None:
+        self.request(
+            "GET",
+            "/soundset-catalog/catalog/index.json",
+            headers={
+                "Cookie": "session=must-not-leak",
+                "Authorization": "Bearer must-not-leak",
+                "X-Forwarded-Host": "attacker.invalid",
+            },
+        )
+        self.assertEqual(len(CatalogUpstreamFixture.received), 1)
+        forwarded = CatalogUpstreamFixture.received[0][2]
+        for name in ("cookie", "authorization", "x-forwarded-host"):
+            self.assertNotIn(name, forwarded)
+
+    def test_upstream_outcomes_collapse_to_missing_or_unavailable(self) -> None:
+        for status_code, location, expected in (
+            (404, None, 404),
+            (500, None, 502),
+            (403, None, 502),
+            (204, None, 502),
+            (302, "http://127.0.0.1:1/elsewhere", 502),
+        ):
+            with self.subTest(upstream=status_code):
+                CatalogUpstreamFixture.received = []
+                CatalogUpstreamFixture.response_status = status_code
+                CatalogUpstreamFixture.response_location = location
+                status, _, _ = self.request(
+                    "GET", "/soundset-catalog/catalog/index.json"
+                )
+                self.assertEqual(status, expected)
+
+    def test_an_oversized_object_is_not_passed_through(self) -> None:
+        CatalogUpstreamFixture.response_body = b"x" * (
+            self.module.MAXIMUM_CATALOG_OBJECT_BYTES + 1
+        )
+        CatalogUpstreamFixture.response_content_type = "application/octet-stream"
+        status, _, _ = self.request(
+            "GET", f"/soundset-catalog/object/blob/{self.DIGEST}"
+        )
+        self.assertEqual(status, 502)
+
+    def test_the_upstream_content_type_never_reaches_the_page(self) -> None:
+        CatalogUpstreamFixture.response_content_type = "text/html; charset=utf-8"
+        _, headers, _ = self.request("GET", "/soundset-catalog/catalog/index.json")
+        self.assertEqual(headers["content-type"], "application/json")
+
+    def test_an_unreachable_catalog_is_unavailable_not_a_crash(self) -> None:
+        self.upstream.shutdown()
+        self.upstream.server_close()
+        self.upstream_thread.join(timeout=5)
+        status, _, _ = self.request("GET", "/soundset-catalog/catalog/index.json")
+        self.assertEqual(status, 502)
+        # tearDown shuts an already-stopped server down again, which is safe.
+
+    def test_a_refused_upstream_configuration_never_starts_the_server(self) -> None:
+        for upstream in (
+            "http://catalog.invalid/",
+            "ftp://127.0.0.1/",
+            "not-a-url",
+            "https://catalog.invalid/?query=1",
+            "https://catalog.invalid/#fragment",
+            "https://catalog.invalid//double/",
+            "https://user:pass@catalog.invalid/",
+            "https://user@catalog.invalid/",
+        ):
+            with self.subTest(upstream=upstream):
+                with self.assertRaises(self.module.ServerError):
+                    self.module.make_server(
+                        self.dist, self.verifier, self.repo, "127.0.0.1", 0,
+                        catalog_upstream=upstream,
+                    )
+
+
+class CreatorNoCatalogTest(CreatorServerTest):
+    """A deployment that configures no Catalog forwards nothing at all."""
+
+    def test_the_prefix_is_inert_without_a_configured_upstream(self) -> None:
+        for path in (
+            "/soundset-catalog/catalog/index.json",
+            f"/soundset-catalog/object/manifest/{'a' * 64}",
+            "/soundset-catalog/",
+        ):
+            with self.subTest(path=path):
+                status, _, _ = self.request("GET", path)
+                self.assertEqual(status, 404)
+
+
+class CreatorCatalogUpstreamFileTest(CreatorCatalogProxyTest):
+    """The lane writes its Catalog upstream after this server is listening.
+
+    Same proxy, same grammar, same refusals -- the whole inherited suite runs
+    again -- with the upstream arriving through a file instead of a flag,
+    because the acceptance journey's fixture port is not known until after the
+    proof server has started.
+    """
+
+    def setUp(self) -> None:
+        self.upstream_file_root = tempfile.TemporaryDirectory(
+            prefix="lmdj-catalog-upstream-"
+        )
+        self.upstream_file = Path(self.upstream_file_root.name) / "upstream"
+        super().setUp()
+        # `super().setUp()` set `self.catalog_upstream` and started a server
+        # with it; restart on the file path so the whole suite runs that way.
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        self.upstream_file.write_text(self.catalog_upstream, encoding="utf-8")
+        self.server = self.module.make_server(
+            self.dist, self.verifier, self.repo, "127.0.0.1", 0,
+            catalog_upstream_file=self.upstream_file,
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.host, self.port = self.server.server_address
+
+    def tearDown(self) -> None:
+        super().tearDown()
+        self.upstream_file_root.cleanup()
+
+    def test_a_rewritten_file_moves_the_upstream_without_a_restart(self) -> None:
+        self.request("GET", "/soundset-catalog/catalog/index.json")
+        self.assertEqual(len(CatalogUpstreamFixture.received), 1)
+        # A Catalog that goes away mid-run is the journey's unreachable leg.
+        self.upstream_file.write_text("", encoding="utf-8")
+        status, _, _ = self.request("GET", "/soundset-catalog/catalog/index.json")
+        self.assertEqual(status, 404)
+        self.assertEqual(len(CatalogUpstreamFixture.received), 1)
+        self.upstream_file.write_text(self.catalog_upstream, encoding="utf-8")
+        status, _, _ = self.request("GET", "/soundset-catalog/catalog/index.json")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(CatalogUpstreamFixture.received), 2)
+
+    def test_an_unusable_upstream_file_forwards_nothing(self) -> None:
+        symlink = Path(self.upstream_file_root.name) / "symlinked"
+        symlink.symlink_to(self.upstream_file)
+        cases = {
+            "missing": Path(self.upstream_file_root.name) / "absent",
+            "symlink": symlink,
+            "directory": Path(self.upstream_file_root.name),
+        }
+        for label, path in cases.items():
+            with self.subTest(source=label):
+                self.assertIsNone(self.module.read_catalog_upstream_file(path))
+        for label, content in {
+            "empty": "",
+            "not-a-url": "not-a-url",
+            "wrong-scheme": "ftp://127.0.0.1/",
+            "non-loopback-plaintext": "http://catalog.invalid/",
+            "query": "https://catalog.invalid/?query=1",
+            "credentials": "https://user:pass@catalog.invalid/",
+        }.items():
+            with self.subTest(content=label):
+                self.upstream_file.write_text(content, encoding="utf-8")
+                self.assertIsNone(
+                    self.module.read_catalog_upstream_file(self.upstream_file)
+                )
+                status, _, _ = self.request(
+                    "GET", "/soundset-catalog/catalog/index.json"
+                )
+                self.assertEqual(status, 404)
+                self.assertEqual(CatalogUpstreamFixture.received, [])
+
+    def test_two_configured_upstreams_are_refused(self) -> None:
+        with self.assertRaises(self.module.ServerError):
+            self.module.make_server(
+                self.dist, self.verifier, self.repo, "127.0.0.1", 0,
+                catalog_upstream=self.catalog_upstream,
+                catalog_upstream_file=self.upstream_file,
             )
 
 

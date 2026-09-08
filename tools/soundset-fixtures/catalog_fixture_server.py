@@ -128,15 +128,21 @@ class CatalogFixtureRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         if self.cross_origin:
-            # A Creator page is cross-origin isolated
-            # (`Cross-Origin-Embedder-Policy: require-corp`), so a Catalog on
-            # another origin is unreachable from it unless the response opts
-            # in twice: CORS to let the page read the bytes, and CORP to let
-            # an isolated document embed a cross-origin resource at all.
-            # Without both, the browser refuses before the transport sees a
-            # status and the failure arrives as `catalog_unavailable`,
-            # indistinguishable from a Catalog that is genuinely down. Off by
-            # default so the same-origin surface stays exactly S11-D6's.
+            # For a Catalog meant to be read *directly* by a page. CORS is what
+            # actually decides it: measured in Chromium and WebKit on a
+            # cross-origin-isolated page, `Access-Control-Allow-Origin` alone
+            # is sufficient and `Cross-Origin-Resource-Policy` alone is still
+            # blocked, because the CORP check is skipped for a request whose
+            # mode is not `no-cors` and `fetch` is `cors` by default. CORP is
+            # sent anyway: it costs nothing and a `no-cors` consumer would need
+            # it. Without CORS the browser refuses before the transport sees a
+            # status, and the failure arrives as `catalog_unavailable`,
+            # indistinguishable from a Catalog that is genuinely down.
+            #
+            # Off by default, and the LMDJ Creator does not need it at all: it
+            # reaches its Catalog through a same-origin prefix the Host
+            # forwards (#901), so the request the Catalog sees is server-side
+            # and no browser policy applies to it.
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Cross-Origin-Resource-Policy", "cross-origin")
         self.end_headers()

@@ -36,6 +36,10 @@ def load_distribution_verifier():
     return _shared.load_verifier(PACKAGE_TOOL)
 
 
+# No `catalog_upstream` parameter, on purpose. The diagnostic Host has no Sound
+# Set surface, so its entry point cannot configure a Catalog to forward to --
+# the same gate the Lab's `wrangler.json` closes by carrying neither the
+# variable nor the route (#901).
 def make_server(
     root: Path,
     host: str = "127.0.0.1",

@@ -386,11 +386,19 @@ run_browser_gate() {
   proof_server_ready_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-creator-server.XXXXXX")"
   ready_file="$proof_server_ready_root/ready.json"
   ready_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  # #901: the Creator reaches its Catalog through a same-origin prefix, so the
+  # proof server forwards the way the deployed Worker does. The Sound Set lane
+  # owns its Catalog fixture on a kernel-assigned port and stops it mid-run on
+  # purpose, so it writes the upstream here after this server is listening
+  # rather than the server being told it up front.
+  LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE="$proof_server_ready_root/catalog-upstream"
+  export LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE
   python3 "$repo_root/tools/web-runtime/serve_distribution.py" \
     --root "$dist_root" \
     --verifier "$creator_root/tools/package.py" \
     --repo-root "$repo_root" \
     --port "$requested_port" \
+    --catalog-upstream-file "$LMDJ_SOUNDSET_CATALOG_UPSTREAM_FILE" \
     --ready-file "$ready_file" \
     --ready-nonce "$ready_nonce" >"$build_root/proof-server.log" 2>&1 &
   proof_server_pid=$!

@@ -52,13 +52,14 @@ Application Facade 暴露 `soundset.catalog.list`、`soundset.inspect`、
 字节与展示 typed result，Core 保留全部 Contract、哈希与准入判定。Schema conformance、
 Set Store 单元测试、Facade 写集测试与 Creator surface 测试固定该边界。
 
-**已注册不等于产品内可达。** Task 7 的验收在真实浏览器中对打包后的 Creator 实测：三个
-缺陷各自阻断链路上的一段，因此当前 Build 的 Web Host 无法浏览或安装任何 Sound Set。
-[#900](https://github.com/endaye/lmdj/issues/900) 使本 Build 产出的任何 Project 都无法
-导入浏览器；[#901](https://github.com/endaye/lmdj/issues/901) 的 `connect-src 'self'`
-CSP 拦截一切跨源 Catalog，而真实 Catalog 必然跨源；
-[#902](https://github.com/endaye/lmdj/issues/902) 在前两者被本地绕过后，字节全部取回并
-校验通过，Workspace Set Store 仍以裸 `IO_ERROR` 拒绝发布每一个合格 Set。三者都是既有
-缺陷，不是本 Build 引入。原生 Host 与 C ABI 侧的 list → inspect → map.preview →
-install `keep`/`replace` journey 已有跨 Host 黑盒验收；Safari 与 iPadOS 上的目录浏览
-仍无物理验收。
+**已注册不等于产品内可达。** Task 7 的验收在真实浏览器中对打包后的 Creator 实测出三个
+缺陷，各自阻断链路上的一段；其中两个已修复，[#900](https://github.com/endaye/lmdj/issues/900)
+仍使本 Build 产出的任何 Project 都无法导入浏览器，因此当前 Build 的 Web Host 仍无法浏览
+或安装任何 Sound Set。[#901](https://github.com/endaye/lmdj/issues/901) 的
+`connect-src 'self'` 曾拦截一切跨源 Catalog，而真实 Catalog 必然跨源：现在 Creator 通过
+同源前缀 `/soundset-catalog/` 取用 Catalog，由 Host 转发，该指令不再需要写入任何外部
+origin。它保护的不是 Creator 自己那两个同源 fetch，而是 OPFS 中 Project 与音频的外泄
+边界，因此保持原样。[#902](https://github.com/endaye/lmdj/issues/902) 使 Workspace Set
+Store 以裸 `IO_ERROR` 拒绝发布每一个合格 Set，也已修复。三者都是既有缺陷，不是本 Build
+引入。原生 Host 与 C ABI 侧的 list → inspect → map.preview → install `keep`/`replace`
+journey 已有跨 Host 黑盒验收；Safari 与 iPadOS 上的目录浏览仍无物理验收。
