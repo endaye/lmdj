@@ -78,3 +78,18 @@ same reason.
 violation is decidable, but the check would have to run inside every agent's ad
 hoc `gh` invocation, which no repository gate reaches; a wrapper that re-asserts
 the account before each call is the plausible mechanism and does not exist.
+
+## Same defect, other areas
+
+A clean result from an instrument that could not have reported otherwise. The
+same shape is recorded under three `area:` labels, none of which reaches the
+others through the contract's `area:*` prior-art search:
+
+- [`blind-search-reads-as-absence`](blind-search-reads-as-absence.md) — `core`.
+  Searches, test filters, parsers, test harnesses and review tooling.
+- [`audit-axis-cannot-fire`](audit-axis-cannot-fire.md) — `ci-release`. An
+  audit axis pointed at a path that does not exist.
+- [`gh-authorization-failure-reads-as-absence`](gh-authorization-failure-reads-as-absence.md)
+  — `ci-release`. A failed authorization returning an empty list.
+
+Whether these should be one entry is [#983](https://github.com/endaye/lmdj/issues/983).

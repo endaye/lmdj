@@ -236,11 +236,14 @@ async function proxyCatalog(request, env, url) {
   //
   // What it does NOT close, and what an earlier version of this comment
   // wrongly claimed it did, is the two cases where the two sides never see the
-  // same string at all. Measured:
+  // same string at all. Measured, with every spelling quoted rather than laid
+  // out in columns -- the padded case is about trailing spaces, and a
+  // space-aligned table cannot show trailing spaces at all:
   //
-  //     header                          this Worker sees   proof server sees
-  //     Content-Length:   2             "2"                "2  "
-  //     Content-Length: 2 (twice)       "2, 2"             "2"
+  //   * a single header whose value is `  2  ` (padded both sides):
+  //       this Worker sees `2`     the proof server sees `2  `
+  //   * two `Content-Length: 2` headers on one response:
+  //       this Worker sees `2, 2`  the proof server sees `2`
   //
   // Fetch's `Headers` normalises each value and joins repeats with ", " before
   // `get` is ever called, so this side cannot be lenient about padding -- the
