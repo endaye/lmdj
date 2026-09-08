@@ -319,9 +319,11 @@ struct SoundSetStore::Impl {
   // Every failure answers false, including a listing that could not be read.
   // That sends a genuinely published Set down the leased path, which loads it
   // and returns it anyway; the cost is one writer lease this Host would not
-  // otherwise have taken. `acquire` is the only entry point that owns
-  // recovery, so it is the only one gated: `read` and `read_artifact` answer
-  // from hash-verified bytes and take no lease that could recover anything.
+  // otherwise have taken, and a refusal if another Host is holding it.
+  // `acquire` is the only entry point gated this way because it is the only
+  // one that owns recovery. `read` and `read_artifact` are read-only and
+  // content-authenticated, and a Host reaches them with a hash `list` has
+  // already answered for.
   bool enumerated(const std::string& manifest_sha256) const {
     const auto root = sets_root();
     const auto present = platform->directory_exists(root);

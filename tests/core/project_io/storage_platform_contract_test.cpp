@@ -783,12 +783,12 @@ void test_directory_transfer_primitives_are_atomic_and_path_safe() {
           .has_value());
   const auto collision = platform->publish_directory_if_absent(
       collision_staging, destination);
-  destination_lease.value().reset();
   LMDJ_CHECK(!collision.has_value());
   LMDJ_CHECK(collision.error().code == ErrorCode::io_error);
   LMDJ_CHECK(
       collision.error().details.at("storage_condition") ==
       "already_exists");
+  destination_lease.value().reset();
   LMDJ_CHECK(platform->directory_exists(collision_staging).value());
   LMDJ_CHECK(
       text(platform->read_complete(destination / "nested/payload.bin").value()) ==

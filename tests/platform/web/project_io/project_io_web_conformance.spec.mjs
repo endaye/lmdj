@@ -629,11 +629,6 @@ test("Web Project I/O persists Sample staging and Workspace cache behavior", asy
   await reopen.close();
 });
 
-// #902: with the Catalog half working, every eligible Set still failed to
-// install in the browser with a bare IO_ERROR. The Set Store publishes by
-// handing the storage platform a staged directory; on OPFS that publish is a
-// bounded copy that only a writer lease held on the destination may perform,
-// and the Set Store took its lease on the staging directory alone.
 // `publish_directory_if_absent` requires the lease on the destination path
 // itself. Every real call site satisfies that, so without a negative case the
 // guard enforcing it could be deleted and every suite would stay green.
@@ -655,7 +650,8 @@ test("Web Project I/O refuses a directory publication leased on an ancestor", as
     errorCode: "",
     storageCondition: "",
   });
-  expect(result.destinationAfterPublish).toBe(true);
+  expect(result.stagingAfterPublish).toBe(false);
+  expect(result.publishedBytes).toBe("scoped");
 });
 
 const SOUNDSET_PUBLISHED = Object.freeze({
@@ -664,6 +660,11 @@ const SOUNDSET_PUBLISHED = Object.freeze({
   storageCondition: "",
 });
 
+// #902: with the Catalog half working, every eligible Set still failed to
+// install in the browser with a bare IO_ERROR. The Set Store publishes by
+// handing the storage platform a staged directory; on OPFS that publish is a
+// bounded copy only a writer lease on the destination may perform, and the Set
+// Store took its lease on the staging directory alone.
 test("Web Project I/O publishes a verified Sound Set into the Workspace Set Store", async ({page, browserName}) => {
   test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
   trackRuntimeErrors(page);

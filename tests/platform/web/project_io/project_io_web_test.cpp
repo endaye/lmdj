@@ -600,11 +600,20 @@ nlohmann::json publication_lease_scope(
   return {
       {"ancestorLease", mutation_result(refused)},
       {"destinationAfterRefusal", destination_after},
+      // The refusal must leave the staged bytes untouched, so the same
+      // publication under the right lease is a real success and not a
+      // republication of whatever the refused attempt left behind.
       {"exactLease", mutation_result(admitted)},
-      {"destinationAfterPublish",
+      {"stagingAfterPublish",
        value(
-           platform->directory_exists(destination),
-           "publication scope destination after publish")},
+           platform->directory_exists(staging),
+           "publication scope staging after publish")},
+      {"publishedBytes",
+       admitted.has_value()
+           ? nlohmann::json(text(value(
+                 platform->read_complete(destination / "payload.bin"),
+                 "publication scope published payload")))
+           : nlohmann::json(nullptr)},
   };
 }
 
