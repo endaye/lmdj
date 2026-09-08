@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,7 +70,7 @@ class ScoreSliceTest(unittest.TestCase):
 
     def test_result_is_deterministic_and_has_no_host_path(self):
         predictions = self.write_predictions(valid_predictions())
-        command = ["python3", str(ROOT / "tools/provider-benchmark/score_slice.py"),
+        command = [sys.executable, str(ROOT / "tools/provider-benchmark/score_slice.py"),
                    "--manifest", str(MANIFEST), "--predictions", str(predictions)]
         first = subprocess.check_output(command, cwd=ROOT)
         second = subprocess.check_output(command, cwd=ROOT)

@@ -37,6 +37,19 @@ def _manifest(path):
     manifest = _object(_json(path), "manifest", {"schema", "capability", "generator", "license", "scenarios"})
     if manifest.get("schema") != "lmdj.provider-benchmark-fixtures.v1":
         raise ScoreError("manifest.schema: why: unsupported fixture manifest; remedy: use the retained sample.slice manifest")
+    scenarios = manifest.get("scenarios")
+    if not isinstance(scenarios, list) or not scenarios:
+        raise ScoreError("manifest.scenarios: why: fixture inventory is missing; remedy: use a complete retained manifest")
+    for index, scenario in enumerate(scenarios):
+        row = _object(scenario, f"manifest.scenarios[{index}]", {"id", "class", "path", "sha256", "byte_length", "expected", "generation", "origin", "spdx_license", "sample_rate", "channels"})
+        if not isinstance(row.get("id"), str) or row.get("class") not in {"success", "input_failure"}:
+            raise ScoreError(f"manifest.scenarios[{index}]: why: invalid scenario identity; remedy: use the retained fixture manifest")
+        expected = row.get("expected")
+        generation = row.get("generation")
+        if not isinstance(expected, dict) or not isinstance(generation, dict):
+            raise ScoreError(f"manifest.scenarios[{index}]: why: expected and generation metadata are required; remedy: use the retained fixture manifest")
+        if row["class"] == "success" and (not isinstance(row.get("path"), str) or not isinstance(row.get("sha256"), str) or not isinstance(row.get("byte_length"), int) or not isinstance(expected.get("onset_frames"), list) or not isinstance(expected.get("tolerance_frames"), int) or not isinstance(generation.get("frame_count"), int)):
+            raise ScoreError(f"manifest.scenarios[{index}]: why: incomplete success metadata; remedy: use the retained fixture manifest")
     return manifest, _digest(raw)
 
 def _repo_path(relative):

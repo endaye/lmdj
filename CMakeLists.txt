@@ -61,7 +61,7 @@ lmdj_add_test(
     tools/provider-benchmark/tests/score_slice_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   LABELS provider benchmark
-)
+  )
 
 add_subdirectory(apps/web-runtime-host)
 add_subdirectory(packages/web-runtime-platform)
