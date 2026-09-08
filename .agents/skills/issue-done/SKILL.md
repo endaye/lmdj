@@ -336,11 +336,22 @@ is absent.` This is a read-only skill inspection, not a new required CI check,
 and it does not infer intent from fuzzy prose or authorize closing unrelated
 Issues. Retain the postmerge live Issue-state audit below.
 
-1. **Push branch to origin**:
+1. **Check the upstream, then push the branch to origin**:
    ```bash
    BRANCH=$(git branch --show-current)
+   UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || true)
+   if [ "$UPSTREAM" = "origin/main" ] || [ "$UPSTREAM" = "main" ]; then
+     echo "Error: task branch tracks main as upstream. Run: git branch --unset-upstream" >&2
+     exit 1
+   fi
    git push -u origin "$BRANCH"
    ```
+   If the upstream resolves to `origin/main`, run `git branch --unset-upstream`
+   first. A branch created tracking `origin/main` pushes the Task to `main`
+   whenever a tool syncs to upstream without a Pull Request — which is how
+   `eb09b2c2` landed. `git push -u origin "$BRANCH"` sets the same-named
+   upstream on first push. See
+   [`task-branch-upstream-tracks-main`](../../pitfalls/task-branch-upstream-tracks-main.md).
 
 2. **Write and validate the Pull Request body before opening it**:
    Use the repository template and a unique temporary file outside the worktree.
