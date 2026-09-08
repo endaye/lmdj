@@ -12,7 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "scripts/ci"), str(ROOT / "tests/build")]
-from ci_self_test_report_workflow_test import block, field, scalars
+from ci_self_test_report_workflow_test import block, field, scalars, wakeup_group
 
 
 class ClaimWorkflowTests(unittest.TestCase):
@@ -131,7 +131,11 @@ class ClaimWorkflowTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", self.controller)
         self.assertIn("BATCH_WRITER_LOCK: self-test-report", self.step)
         self.assertIn("ref: ${{ github.sha }}", self.controller)
-        self.assertNotRegex(self.source, r"(?m)^concurrency:")
+        self.assertNotEqual(wakeup_group(self.source, 'workflow_dispatch', 17), 'self-test-report',
+                            'why: probe would retain the shared journal lock; remedy: keep outer admission distinct')
+        self.assertNotEqual(wakeup_group(self.source, 'workflow_dispatch', 17),
+                            wakeup_group(self.source, 'workflow_dispatch', 18),
+                            'why: pending manual claims could replace each other; remedy: retain per-run admission')
 
     def test_c1_excludes_scheduler_report_artifact_and_other_probe(self):
         self.assertIn("inputs.batch_operation != 'recovery-probe' && inputs.batch_operation != 'claim-probe' && inputs.batch_operation != 'cancel-probe' }}", self.controller)

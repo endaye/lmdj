@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,10 +53,91 @@ def scalars(source: str, indent: int) -> dict[str, str]:
     return dict(re.findall(rf"(?m)^{' ' * indent}([\w-]+): (.+)$", source))
 
 
+def wakeup_group(source, event, run_id):
+    group = field(block(source, "concurrency", 0), "group", 2)
+    prefix, expression = group.split("${{", 1)
+    expression = expression.removesuffix("}}").strip()
+    expression = expression.replace("github.event_name", repr(event)).replace("github.run_id", str(run_id))
+    expression = expression.replace("&&", "and").replace("||", "or")
+    # Repository-owned scalar expression, never model text. This models the
+    # documented platform key, not actual remote scheduling/locking.
+    return prefix + str(eval(expression, {"__builtins__": {}}, {}))
+
+
 class SelfTestReportWorkflowTest(unittest.TestCase):
     def setUp(self):
         self.source = WORKFLOW.read_text()
         self.job = block(self.source, "controller", 2)
+
+    def wakeup_group(self, event, run_id):
+        return wakeup_group(self.source, event, run_id)
+
+    def test_automatic_admission_has_one_replaceable_pending_slot(self):
+        admission = block(self.source, "concurrency", 0)
+        self.assertEqual(field(admission, "queue", 2), "single",
+                         "why: automatic wakeups accumulate as commands; remedy: coalesce only pending automatic observations")
+        self.assertEqual(field(admission, "cancel-in-progress", 2), "false",
+                         "why: a running batch could be cancelled by a new merge; remedy: retain in-progress work")
+        groups = {self.wakeup_group(event, run_id) for event in ("push", "schedule", "workflow_run")
+                  for run_id in (101, 102)}
+        self.assertEqual(groups, {"self-test-report-wakeup-automatic"})
+
+    def test_each_manual_command_has_an_independent_admission_group(self):
+        groups = {self.wakeup_group("workflow_dispatch", run_id) for run_id in range(1, 51)}
+        self.assertEqual(len(groups), 50,
+                         "why: manual commands may replace each other; remedy: isolate manual admission by immutable run ID")
+        self.assertNotIn(self.wakeup_group("push", 99), groups)
+        self.assertNotIn("self-test-report", groups)
+
+    def test_automatic_burst_replaces_pending_but_not_running_or_manual(self):
+        # Pending cancellation may itself emit relay callbacks on GitHub.
+        # This local queue model omits that platform effect; the Task plan
+        # retains relay fanout/chain-limit behavior as remote acceptance gaps.
+        running, pending = {}, {}
+        for event, run_id in [("push", 1)] + [(("push", "workflow_run", "schedule")[n % 3], n)
+                                              for n in range(2, 51)] + [
+                ("workflow_dispatch", n) for n in range(51, 61)]:
+            group = self.wakeup_group(event, run_id)
+            if group in running:
+                pending[group] = run_id
+            else:
+                running[group] = run_id
+        auto = self.wakeup_group("push", 1)
+        self.assertEqual(running[auto], 1)
+        self.assertEqual(pending, {auto: 50})
+        self.assertTrue(set(range(51, 61)) <= set(running.values()))
+
+    def test_outer_admission_never_owns_the_shared_journal_lock(self):
+        for event in ("push", "schedule", "workflow_run", "workflow_dispatch"):
+            self.assertNotEqual(self.wakeup_group(event, 101), "self-test-report",
+                                "why: product work would hold the journal lock; remedy: keep wakeup admission and short writer groups distinct")
+        self.assertNotIn("concurrency:", block(self.source, "execute-batch", 2))
+
+    def test_retained_latest_observation_still_collects_every_commit(self):
+        sys.path.insert(0, str(ROOT / "scripts/ci"))
+        from test_scope import collect_interval
+        with tempfile.TemporaryDirectory() as directory:
+            def git(*args):
+                return subprocess.run(["git", "-C", directory, *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("init", "-b", "main")
+            git("config", "user.name", "Fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            git("config", "commit.gpgsign", "false")
+            git("commit", "--allow-empty", "-m", "processed baseline")
+            base = git("rev-parse", "HEAD")
+            paths = ["first.md", "second.md", "third.md"]
+            commits = []
+            for path in paths:
+                (Path(directory) / path).write_text(path)
+                git("add", path)
+                git("commit", "-m", path)
+                commits.append(git("rev-parse", "HEAD"))
+            # The first two wakeups are replaced, not the commits they refer
+            # to. Use the real canonical collector with only the last target.
+            interval = collect_interval(directory, base, commits[-1])
+            self.assertEqual([commit["sha"] for commit in interval["commits"]], commits)
+            self.assertEqual(interval["paths"], paths)
 
     def test_permissions_are_minimal_and_only_controller_writes_issues(self):
         self.assertEqual(field(self.source, "permissions", 0), "{}")
@@ -72,7 +154,8 @@ class SelfTestReportWorkflowTest(unittest.TestCase):
         self.assertNotIn("download-artifact", self.job)
 
     def test_short_single_writer_and_complete_job_inventory(self):
-        self.assertNotRegex(self.source, r"(?m)^concurrency:")
+        # Workflow admission may coalesce redundant automatic observations,
+        # but only this short job may hold the shared journal writer group.
         self.assertEqual(scalars(block(self.job, "concurrency", 4), 6),
                          {"group": "self-test-report", "cancel-in-progress": "false", "queue": "max"})
         self.assertEqual([job.job_id for job in jobs_in(WORKFLOW)],

@@ -60,11 +60,19 @@ on:
 # writes Issues; it holds no pull-request, contents-write or deploy authority.
 permissions: {}
 
-# One short writer at a time; retain up to the platform queue limit instead
-# of replacing pending completions. Automatic entries reconcile recent
+# Coalesce automatic observations before they enter the writer queue. This is
+# a distinct admission group, NOT the journal lock. Every manual command keeps
+# its own admission group; no running controller or product DAG is cancelled.
+concurrency:
+  group: self-test-report-wakeup-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'automatic' }}
+  cancel-in-progress: false
+  queue: single
+
+# One short writer at a time; retain manual commands up to the platform queue
+# limit. Automatic entries reconcile recent
 # producer-era batches. Manual retries are isolated unless explicitly opted
 # into reconciliation, so unrelated errors cannot block a run-id retry.
-# The shared lock belongs to short writer jobs, never to the parent workflow:
+# The shared journal lock belongs to short writer jobs, never to the workflow:
 # the reusable product DAG must not hold the lock needed by its next observer.
 
 jobs:

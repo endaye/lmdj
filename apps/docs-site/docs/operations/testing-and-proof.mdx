@@ -94,6 +94,20 @@ head／policy 绑定的 AI 建议取并集，标签仅展示；合入后不再�
 共享重型锁继续保护真实资源容量；短控制器锁不得跨重型执行持有。
 processed 只是处理进度：none／focused 成功不能清除历史失败或未覆盖债务。
 
+自动 push／完成回调／健康检查只是一条“重新观察持久状态”的通知，不是独立测试命令。
+它们在 workflow 层共用 `self-test-report-wakeup-automatic`，保留当前运行和最新一个
+pending；后续通知只替换尚未运行的通知，不取消正在执行的控制器或产品测试。
+每次手动 dispatch 用独立 run ID 构成入口组，因此不会与自动通知或其他手动命令互相替换。
+所有实际写入仍经过 job 层的 `self-test-report` 短锁，保留 `queue: max` 及平台队列上限；
+入口合并组不是写锁，不能阻止手动 settle／report 在重型执行期间获取短锁。
+自动报告／评审发现通知会等待当前自动 workflow（包括其产品 DAG）结束；这是减少
+重复后台读取的取舍，并不承诺长批次期间的自动报告延迟不变，必要时可使用手动报告。
+遗漏或无关回调仍由独立健康检查恢复，不提升回调权限、不丢弃未处理提交或验证债务。
+替换 pending 在平台上属于取消，也可能产生既有 completion relay；这些回调同样合并，
+但不宣称 relay 工作量归零，远端验收需同时观察回调数量与写锁队列。
+切换前已创建的运行按旧配置排空，不因新策略手动取消；本地队列模型不等于远端
+突发通知、手动请求保留或完整测试→报告闭环已通过验收。
+
 手动诊断／候选使用同一 workflow 的 `batch_operation=reconcile` 与闭合
 `batch_request={"id":"<stable-request-id>","kind":"candidate","target":"<exact-main-SHA>"}`；
 诊断改用 `kind=node`，ref 保持 `main`，`journal_config` 留空使用可信固定配置。
