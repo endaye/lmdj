@@ -42,6 +42,7 @@ class FakeApi:
         self.transport_error = False
         self.lose_post = False
         self.compare_status = "ahead"
+        self.main_sha = "b" * 40
         self.extra_jobs = []
         self.comment_pages = 1
 
@@ -79,8 +80,8 @@ class FakeApi:
         if method == "GET" and path == prefix + "/actions/workflows/7":
             return {"id": 7, "path": PATH}
         if method == "GET" and path == prefix + "/git/ref/heads/main":
-            return {"object": {"sha": "b" * 40}}
-        if method == "GET" and path == prefix + f"/compare/{'a' * 40}...{'b' * 40}":
+            return {"object": {"sha": self.main_sha}}
+        if method == "GET" and path == prefix + f"/compare/{'a' * 40}...{self.main_sha}?per_page=1&page=2":
             return {"status": self.compare_status, "base_commit": {"sha": "a" * 40}, "merge_base_commit": {"sha": "a" * 40}}
         if method == "GET" and path == prefix + f"/contents/{PATH}?ref={'a' * 40}":
             return {"type": "file", "path": PATH, "encoding": "base64", "content": base64.b64encode(b"name: Trusted control\n").decode()}
@@ -111,6 +112,66 @@ class GitHubJournalTest(unittest.TestCase):
             writer=WRITER, api=self.api, lock_held=lambda: self.lock)
         self.anchor = IssueBodyAnchor(782, self.transport, self.transport.authenticate, lambda: self.lock)
         self.journal = Journal(782, self.transport, self.anchor, self.transport.authenticate, lambda: self.lock)
+
+    def test_writer_ancestry_uses_metadata_page_not_changed_files(self):
+        self.assertEqual(self.transport._writer(WRITER), WRITER)
+        comparisons = [path for method, path, _ in self.api.calls if '/compare/' in path]
+        self.assertEqual(comparisons, [f"/repos/endaye/lmdj/compare/{'a'*40}...{'b'*40}?per_page=1&page=2"])
+        self.assertTrue(all(method == 'GET' for method, _, _ in self.api.calls))
+
+    def test_empty_commit_page_preserves_ahead_and_identical_metadata(self):
+        for status in ('ahead', 'identical'):
+            with self.subTest(status=status):
+                self.setUp()
+                if status == 'identical':
+                    self.api.main_sha = WRITER['control_sha']
+                original = self.api._request
+                def request(method, path, **kwargs):
+                    value = original(method, path, **kwargs)
+                    if '/compare/' in path:
+                        value.update(status=status, commits=[])
+                    return value
+                self.api._request = request
+                self.assertEqual(self.transport._writer(WRITER), WRITER)
+
+    def test_metadata_page_rejects_invalid_ancestry_without_caching(self):
+        for failure in ('behind', 'diverged', 'unknown', 'missing-status',
+                        'missing-base', 'wrong-base', 'missing-merge-base', 'wrong-merge-base'):
+            with self.subTest(failure=failure):
+                self.setUp()
+                original = self.api._request
+                def request(method, path, **kwargs):
+                    value = original(method, path, **kwargs)
+                    if '/compare/' in path:
+                        if failure == 'missing-status': value.pop('status')
+                        elif failure == 'missing-base': value.pop('base_commit')
+                        elif failure == 'wrong-base': value['base_commit']['sha'] = 'c'*40
+                        elif failure == 'missing-merge-base': value.pop('merge_base_commit')
+                        elif failure == 'wrong-merge-base': value['merge_base_commit']['sha'] = 'c'*40
+                        else: value['status'] = failure
+                    return value
+                self.api._request = request
+                with self.assertRaisesRegex(JournalBlocked, 'why:.*remedy:'):
+                    self.transport._writer(WRITER)
+                self.assertFalse(self.transport._checked_writers)
+                self.assertTrue(all(method == 'GET' for method, _, _ in self.api.calls))
+
+    def test_failed_metadata_get_is_not_cached_or_retried(self):
+        original = self.api._request
+        failed = []
+        def request(method, path, **kwargs):
+            if '/compare/' in path:
+                failed.append(path)
+                raise OSError('private diagnostic')
+            return original(method, path, **kwargs)
+        self.api._request = request
+        with self.assertRaisesRegex(JournalBlocked, 'why:.*remedy:'):
+            self.transport._writer(WRITER)
+        self.assertEqual(len(failed), 1)
+        self.assertFalse(self.transport._checked_writers)
+        self.api._request = original
+        self.assertEqual(self.transport._writer(WRITER), WRITER)
+        self.assertTrue(all(method == 'GET' for method, _, _ in self.api.calls))
 
     def multiple_writers(self, ids):
         self.api.comment_pages = 100
