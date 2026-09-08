@@ -5,7 +5,7 @@ behind, gathered in one place so each item can be settled or scheduled before
 Stage 9 begins.
 
 This is a **triage document, not an implementation plan**. Each item that gets
-worked needs its own plan under `docs/superpowers/plans/` with its own
+worked needs its own plan under `docs/plans/` with its own
 `## Version Management` section, per `CLAUDE.md`.
 
 Two working lists split this record by who can act on each item:
@@ -101,7 +101,7 @@ container, not an implementation defect.
 detached sibling asset, the archive keeps payload only, and the Contract and
 fields are unchanged. **Implemented the same day** as machine task A3
 ([#286](https://github.com/endaye/lmdj/issues/286), plan
-[`../superpowers/plans/2026-08-24-lmdj-detached-build-manifest.md`](../superpowers/plans/2026-08-24-lmdj-detached-build-manifest.md)):
+[`../plans/2026-08-24-lmdj-detached-build-manifest.md`](../plans/2026-08-24-lmdj-detached-build-manifest.md)):
 the packager ships `<package-name>.build-manifest.json` beside the archive, two
 clean packagings produce byte-identical ZIPs, and the release inventory gates
 are profile-aware (core-package four assets, web-runtime-host three). This
@@ -177,7 +177,7 @@ allowlist via `module_graph_test`, and the two Host fixtures). The rest remain
 literal.
 
 **Fixed** in `4312a6de` (#226), against
-[`2026-08-21-product-version-identity-derivation-design.md`](../superpowers/specs/2026-08-21-product-version-identity-derivation-design.md)
+[`2026-08-21-product-version-identity-derivation-design.md`](../design/2026-08-21-product-version-identity-derivation-design.md)
 §12 rather than the historical seven-location count. Current consumers derive
 from committed `products/lmdj/version.json`; `assembly.json`, release intents,
 and immutable snapshots stay explicit exact records; pure behavior tests use
@@ -236,7 +236,7 @@ same place. Stage 8b hit conflicts in both on its final sync.
 convention that keeps concurrent additions apart.
 
 **Fixed** in `5a9c11a7` (plan
-[`2026-08-18-lmdj-prd-append-structure.md`](../superpowers/plans/2026-08-18-lmdj-prd-append-structure.md)):
+[`2026-08-18-lmdj-prd-append-structure.md`](../plans/2026-08-18-lmdj-prd-append-structure.md)):
 one entry per file, deliberately **without** an index — an index file edited
 on every addition is itself a shared append point and would recreate this
 defect. New decisions are dated files under `docs/prd/decisions/`; each open
@@ -398,12 +398,12 @@ normal short-loop playback. The resulting #511 report records that superseded
 interpretation, not a reproducible product defect.
 
 F1, F2, F3 and F5 are Creator front-end defects and are scoped together in
-[`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
+[`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
 F4 and F6 each needed a product decision and were explicitly excluded from
 that plan; both decisions landed 2026-08-24, F4 is implemented in
-[`2026-08-24-lmdj-capture-input-gate-and-identity.md`](../superpowers/plans/2026-08-24-lmdj-capture-input-gate-and-identity.md)
+[`2026-08-24-lmdj-capture-input-gate-and-identity.md`](../plans/2026-08-24-lmdj-capture-input-gate-and-identity.md)
 and F6 in
-[`2026-08-24-lmdj-render-path-amplitude-ramp.md`](../superpowers/plans/2026-08-24-lmdj-render-path-amplitude-ramp.md).
+[`2026-08-24-lmdj-render-path-amplitude-ramp.md`](../plans/2026-08-24-lmdj-render-path-amplitude-ramp.md).
 
 ### ~~F1. The capture panel has no styling and opens below the fold~~ — fixed in `1.0.36.0`
 
@@ -508,7 +508,7 @@ fix by hand stays open in `2026-08-17-manual-verification-todo.md`
 (remediation plan Task 5).
 
 Scoped in
-[`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md)
+[`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../plans/2026-08-17-lmdj-creator-capture-ui-remediation.md)
 with F1–F3.
 
 ### ~~F6. The render path has no amplitude ramp anywhere~~ — fixed in `1.0.36.0`

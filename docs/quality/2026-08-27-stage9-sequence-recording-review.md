@@ -1,9 +1,9 @@
 # Stage 9 Sequence Recording Review — 2026-08-27
 
 - 审查对象：Stage 9 Sequence 录音的设计与交付，包括设计规格
-  `docs/superpowers/specs/2026-08-22-sequence-recording-semantics-design.md`
+  `docs/design/2026-08-22-sequence-recording-semantics-design.md`
   （SR-D1–D28）、实施计划
-  `docs/superpowers/plans/2026-08-23-lmdj-stage9-sequence-recording.md`
+  `docs/plans/2026-08-23-lmdj-stage9-sequence-recording.md`
   （Task 1–10）、PRD 决策
   `docs/prd/decisions/2026-08-23-sequence-recording-semantics.md`，以及实现范围
   `contracts/project/lmdj.project.v3.schema.json`、`packages/authoring-domain`、

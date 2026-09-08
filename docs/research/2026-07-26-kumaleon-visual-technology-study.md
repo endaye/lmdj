@@ -433,7 +433,7 @@ LMDJ 的 3D 变色龙建议采用明确命名的材质与轻量动画契约：
 - 动态：由 BPM、播放状态和置信度控制；
 - 限制：必须保持品牌轮廓、可读性与无障碍对比度。
 
-现有 [Stage 1 Creator Workspace UI 设计](../superpowers/specs/2026-07-24-stage1-creator-workspace-ui-design.md)已经定义了确定性 Pad Signature，和这一方法高度一致。3D 角色应复用同一个 `VisualSignature`，避免 Pad 是一套视觉算法、角色又是另一套随机皮肤。
+现有 [Stage 1 Creator Workspace UI 设计](../design/2026-07-24-stage1-creator-workspace-ui-design.md)已经定义了确定性 Pad Signature，和这一方法高度一致。3D 角色应复用同一个 `VisualSignature`，避免 Pad 是一套视觉算法、角色又是另一套随机皮肤。
 
 ## 9. Web3 与 NFT 架构
 
@@ -971,4 +971,4 @@ KUMALEON 最成熟的地方，是把技术藏在清晰的艺术概念后面。LM
 - [OpenProcessing sketches public dataset snapshot](https://huggingface.co/datasets/t14n/openprocessing-sketches)
 - [Three.js Fundamentals](https://threejs.org/manual/en/fundamentals.html)
 - [LMDJ Working PRD](../prd/working-prd.md)
-- [LMDJ Stage 1 Creator Workspace UI Design](../superpowers/specs/2026-07-24-stage1-creator-workspace-ui-design.md)
+- [LMDJ Stage 1 Creator Workspace UI Design](../design/2026-07-24-stage1-creator-workspace-ui-design.md)

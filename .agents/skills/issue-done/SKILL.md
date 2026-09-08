@@ -306,7 +306,7 @@ lint reads the text you give it and cannot see a directive added afterwards.
    declare `required` and update the portal pages and snapshot obligation in
    the same Task, whether or not a portal page is in the diff.
    `check-doc-impact.mjs` enforces this independently of any page edit. Editing
-   `docs/quality/`, `docs/governance/`, `docs/prd/` or `docs/superpowers/` is
+   `docs/quality/`, `docs/governance/`, `docs/prd/`, `docs/design/`, `docs/plans/` or `docs/handoffs/` is
    `Documentation impact: none` with a reason. See
    [`documentation-impact-means-portal-pages`](../../pitfalls/documentation-impact-means-portal-pages.md),
    which repeated seven times because six of those Pull Requests were merged by

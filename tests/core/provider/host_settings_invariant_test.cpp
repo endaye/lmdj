@@ -1,6 +1,6 @@
 // Runtime invariant harness for Workspace Host settings.
 //
-// Track 3 Task 2 of docs/superpowers/plans/2026-08-19-lmdj-runtime-invariant-harness.md.
+// Track 3 Task 2 of docs/plans/2026-08-19-lmdj-runtime-invariant-harness.md.
 //
 // read_host_settings already re-checks byte-identity on every read, so a
 // single successful read proves nothing new. What only a sequence can show is

@@ -25,7 +25,7 @@
   扫描全部测试对 `docs/**` 的真实读取点，有 3 个测试共 11 处读取的文档没有
   路由到该测试所在的 lane。例如
   `tests/build/web_runtime_public_deployment_docs_test.py` 逐条断言
-  `docs/superpowers/specs/2026-08-08-web-runtime-public-deployment-design.md`
+  `docs/design/2026-08-08-web-runtime-public-deployment-design.md`
   的内容，而该文档只路由到 `docs_static`，改它不会触发 `deploy_contract`。
   目前唯一拦住这类漏测的就是队列那次 `full`。先解除强制会拆掉当前唯一的
   安全网，因此排序是本决策的一部分，不是实施细节。

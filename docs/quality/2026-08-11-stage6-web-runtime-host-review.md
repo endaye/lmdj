@@ -1,7 +1,7 @@
 # Stage 6 Formal Web Runtime Host Review — 2026-08-11
 
 - **审查对象**：Stage 6 设计文档
-  `docs/superpowers/specs/2026-08-03-lmdj-formal-web-runtime-host-design.md`
+  `docs/design/2026-08-03-lmdj-formal-web-runtime-host-design.md`
   及其在当前 `main` 上的实现（含 Stage 7 抽取到
   `packages/web-runtime-platform` 之后的形态，以及 2026-08-08
   公开部署设计落地的 deploy 链路）。
@@ -14,7 +14,7 @@
   并复核第一轮发现在 `86b52d4` 上是否仍然成立（全部成立）。
 - **性质**：这是评审记录，不是实施计划。代码问题 F1–F4 的修复已由
   已合并的
-  [`docs/superpowers/plans/2026-08-11-lmdj-web-runtime-hardening.md`](../superpowers/plans/2026-08-11-lmdj-web-runtime-hardening.md)
+  [`docs/plans/2026-08-11-lmdj-web-runtime-hardening.md`](../plans/2026-08-11-lmdj-web-runtime-hardening.md)
   （PR #105）排期，本文档不重复其 Task 与版本决策。
 
 ## 一、总体结论

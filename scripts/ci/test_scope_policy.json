@@ -1,6 +1,6 @@
 {
   "schema": "lmdj.ci-test-scope-policy.v1",
-  "none_prefixes": ["docs/notes/", "docs/superpowers/plans/", "docs/superpowers/specs/"],
+  "none_prefixes": ["docs/notes/", "docs/plans/", "docs/design/"],
   "full_prefixes": ["packages/audio-runtime/", "packages/application-facade/", "packages/foundation/"],
   "dependencies": {
     "core_ubuntu": ["web_toolchain", "web_runtime_host", "creator", "core_tsan_stress", "core_release_stress"],

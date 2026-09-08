@@ -1,8 +1,8 @@
 # Stage 7 Creator Editor Review — 2026-08-12
 
 - 审查对象：Stage 7 Creator Editor 设计与交付，包括设计规格
-  `docs/superpowers/specs/2026-08-07-lmdj-stage7-creator-editor-design.md`、实施计划
-  `docs/superpowers/plans/2026-08-07-lmdj-stage7-creator-editor.md`，以及实现范围
+  `docs/design/2026-08-07-lmdj-stage7-creator-editor-design.md`、实施计划
+  `docs/plans/2026-08-07-lmdj-stage7-creator-editor.md`，以及实现范围
   `packages/web-runtime-platform`、`apps/creator-web`、`packages/project-io` Bundle
   导入路径、`packages/application-facade` 导入能力、
   `contracts/project/lmdj.project-bundle.v1.schema.json`、Stage 7 测试与 Proof、
@@ -340,8 +340,8 @@ RED→GREEN 逻辑验证（14 项断言，修复前文件恰好 5 项针对性�
 | 第三轮更正日期 | 2026-08-13 |
 | 第三轮更正基线 | `main` `d1d8bb6`；证据 run 31327104838 / 31529410253 / 31634688566 |
 | 第二轮 Product Build | `1.0.16.8 · canary`（签名 tag `lmdj-v1.0.16.8` → `336a27c`） |
-| 设计规格 | `docs/superpowers/specs/2026-08-07-lmdj-stage7-creator-editor-design.md`（两轮间零变更） |
-| 实施计划 | `docs/superpowers/plans/2026-08-07-lmdj-stage7-creator-editor.md`（两轮间零变更） |
+| 设计规格 | `docs/design/2026-08-07-lmdj-stage7-creator-editor-design.md`（两轮间零变更） |
+| 实施计划 | `docs/plans/2026-08-07-lmdj-stage7-creator-editor.md`（两轮间零变更） |
 | 验收记录 | `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`（锚定 1.0.16.3，两轮间零变更） |
 | 相关修复分支 | `fix/opfs-publication-recovery`（F1/F2 修复，未合入） |
 | 参照体例 | `docs/quality/2026-08-11-stage6-web-runtime-host-review.md` |

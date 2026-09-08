@@ -8,7 +8,7 @@
 - [working-prd.md](working-prd.md)：当前工作版 PRD 摘要，反映最新 Stage Memo 和已经确认的本地收缩决策。
 - [open-questions.md](open-questions.md)：开放问题约定。已迁移的问题文件提供来源上下文并链接 GitHub Issue；未迁移文件保留现有状态，直至替代 Issue 已创建并完成链接完整性验证。
 - [decision-log.md](decision-log.md)：决策记录入口。2026-08-16 及更早的决策存档在该文件内；自 2026-08-18 起每条新决策是 [decisions/](decisions/) 目录下的一个独立文件，只记录已经确认的结论、原因和影响范围。
-- [Stage 1 Creator Core 首条纵向切片设计](../superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md)：当前下一条可执行产品切片的边界、数据流和验收。
+- [Stage 1 Creator Core 首条纵向切片设计](../design/2026-07-24-stage1-creator-core-slice-design.md)：当前下一条可执行产品切片的边界、数据流和验收。
 
 ## 推荐迭代节奏
 

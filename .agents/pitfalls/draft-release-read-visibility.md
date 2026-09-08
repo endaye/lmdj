@@ -35,7 +35,7 @@ is unavailable`, which reads like an outage, not a permission boundary.
   drafts invisible it reports the releasable tag-without-Release state as ok
   and defers Release metadata/asset checks to the write-scoped stage.
 - Spec amendment 2026-08-26 in
-  `docs/superpowers/specs/2026-08-13-lmdj-standard-release-pipeline-design.md`
+  `docs/design/2026-08-13-lmdj-standard-release-pipeline-design.md`
   §8.4 records the boundary; the workflow contract test asserts preflight has
   no `verify-draft`.
 - No gate exit yet: "which API objects are visible at which token scope" is a

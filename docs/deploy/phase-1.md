@@ -6,7 +6,7 @@ This is the single-node application stack used by the staging delivery workflow:
 - The app image contains separate Python environments for the reference Demucs pipeline and the LMDJ-owned API packages.
 - Docker volumes persist job packages and Caddy certificates across upgrades.
 
-The design is documented in `docs/superpowers/specs/2026-07-10-lmdj-phase1-deploy-design.md`.
+The design is documented in `docs/design/2026-07-10-lmdj-phase1-deploy-design.md`.
 
 ## Prerequisites
 

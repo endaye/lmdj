@@ -12,8 +12,8 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = REPO_ROOT / "docs/deploy/web-runtime-host.md"
 ACCEPTANCE = REPO_ROOT / "docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md"
-DESIGN = REPO_ROOT / "docs/superpowers/specs/2026-08-08-web-runtime-public-deployment-design.md"
-PLAN = REPO_ROOT / "docs/superpowers/plans/2026-08-08-web-runtime-public-deployment.md"
+DESIGN = REPO_ROOT / "docs/design/2026-08-08-web-runtime-public-deployment-design.md"
+PLAN = REPO_ROOT / "docs/plans/2026-08-08-web-runtime-public-deployment.md"
 PORTAL_CURRENT_PAGES = (
     REPO_ROOT / "apps/architecture-portal/docs/operations/version-and-release.mdx",
     REPO_ROOT / "apps/architecture-portal/docs/operations/testing-and-proof.mdx",

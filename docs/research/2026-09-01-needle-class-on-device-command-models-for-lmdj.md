@@ -488,6 +488,6 @@ LMDJ 事实，也不能因为 JSON 合法就把模型放进 Project mutation pat
 
 ### LMDJ 当前权威
 
-- [Playable Beat Instrument Core Redesign](../superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
+- [Playable Beat Instrument Core Redesign](../design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
 - [Version Management](../governance/version-management.md)
 - [`apps/core-mcp` production tool table](../../apps/core-mcp/lmdj_core_mcp/server.py)

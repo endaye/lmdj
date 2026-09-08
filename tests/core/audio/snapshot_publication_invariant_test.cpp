@@ -1,6 +1,6 @@
 // Runtime invariant harness for Snapshot publication accounting.
 //
-// Track 3 Task 3 of docs/superpowers/plans/2026-08-19-lmdj-runtime-invariant-harness.md.
+// Track 3 Task 3 of docs/plans/2026-08-19-lmdj-runtime-invariant-harness.md.
 //
 // The engine's own tests assert specific telemetry values in specific
 // scenarios. What only a sequence can show is whether the counters stay

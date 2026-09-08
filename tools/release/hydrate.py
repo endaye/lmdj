@@ -7,7 +7,7 @@ then correctly reports the intent unverifiable, and every consumer used to carry
 its own inline `git fetch --no-tags origin <sha>` workaround.
 
 Hydration lives here, in one explicit subcommand, rather than inside the audit:
-`docs/superpowers/specs/2026-08-13-lmdj-standard-release-pipeline-design.md`
+`docs/design/2026-08-13-lmdj-standard-release-pipeline-design.md`
 §12 states `Audit 不创建、push、编辑或删除任何 Git/GitHub 状态`, and `git fetch`
 writes new objects into the local object store, which is Git state. A
 self-healing audit would therefore break its own read-only contract. This module

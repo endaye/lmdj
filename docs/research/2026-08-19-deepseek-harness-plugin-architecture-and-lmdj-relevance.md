@@ -8,7 +8,7 @@
 >
 > LMDJ 基线：`7a11821ecf5f2b3eaccdb5338cd44802502df4bd`（Product Build `1.0.23.0`）
 >
-> 配套资料：本次研究产出的采纳决定见 [dsh 派生加固目标](../superpowers/plans/2026-08-19-lmdj-dsh-derived-hardening.md) 及其两份实施计划
+> 配套资料：本次研究产出的采纳决定见 [dsh 派生加固目标](../plans/2026-08-19-lmdj-dsh-derived-hardening.md) 及其两份实施计划
 
 ## 1. 结论先行
 
@@ -312,7 +312,7 @@ Schema 栈共三层：Schemastery 管插件 `Config`（109 个源文件引用）
 
 ### 10.1 三项采纳
 
-采纳理由与约束以 [dsh 派生加固目标](../superpowers/plans/2026-08-19-lmdj-dsh-derived-hardening.md) 为准，此处只记研究侧依据：
+采纳理由与约束以 [dsh 派生加固目标](../plans/2026-08-19-lmdj-dsh-derived-hardening.md) 为准，此处只记研究侧依据：
 
 1. **确定性 Attempt 重放。** LMDJ 的原料**优于** dsh 起点：终态 Attempt 记录已含 provider 身份（id、版本、来源包 sha256、模型身份）、能力身份、`parameters_sha256`、内容寻址的输入输出，且成功的 attempt 在磁盘上保留了 minted 字节。「录制」不是新机制，就是「跑一次真 Provider 并保留目录」。
 

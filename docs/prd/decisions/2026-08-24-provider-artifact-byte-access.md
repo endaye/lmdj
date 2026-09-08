@@ -36,12 +36,12 @@
   6. **选项 B（fixture 字节嵌入 `src/provider.cpp`）获准作为确定性 Attempt
      重放 Provider 的临时方案。** 嵌入字节被 provider source-package 哈希
      覆盖、自验证；仅限小型 proof fixture，正式 Provider 不得沿用。重放计划
-     [`2026-08-19-lmdj-attempt-replay-provider.md`](../../superpowers/plans/2026-08-19-lmdj-attempt-replay-provider.md)
+     [`2026-08-19-lmdj-attempt-replay-provider.md`](../../plans/2026-08-19-lmdj-attempt-replay-provider.md)
      的 Task 0 就此解除阻塞，按 Tasks 1–4 继续；`ArtifactSource` 落地后再
      评估重放 Provider 是否迁移到正式接口。
 - 2026-08-31 触发时点修正（#467 设计评审）：首个真实消费方
   `sample.slice.v1` 已出现，API 形状现已由 retained 设计
-  [`2026-08-31-lmdj-stage12-capability-artifactsource-design.md`](../../superpowers/specs/2026-08-31-lmdj-stage12-capability-artifactsource-design.md)
+  [`2026-08-31-lmdj-stage12-capability-artifactsource-design.md`](../../design/2026-08-31-lmdj-stage12-capability-artifactsource-design.md)
   锁定。输入 custody 是 Artifact owner → SDK 私有 scoped staging → 已校验
   immutable owned bytes → capability-gated `ArtifactSource` → Provider；哈希不
   能定位字节，正式路径不得推导 Host 私有文件路径。由于 Provider 执行签名与

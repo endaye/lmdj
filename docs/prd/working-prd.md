@@ -8,7 +8,7 @@
 
 本文只保留当前开发排序所需的产品摘要。完整叙事、Stage 2–4 和团队协作机制以上游 Memo 为准；已经确认的本地收缩以 [decision-log.md](decision-log.md) 与 [decisions/](decisions/) 目录为准。
 
-注记（2026-08-26）：本文的 Stage/切片排序与 Take 相关表述（§5「Take 录制」、§6「Sampler Edit + Take Recording，并把 Take 纳入 Creator Export」）已被 [2026-07-30 新内核重设计](../superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)与 [2026-08-23 Sequence 录音语义决策](decisions/2026-08-23-sequence-recording-semantics.md)取代：不存在 Take 产品对象，录音只写 Pattern 事件，Export Pack 只从 Project Truth 派生。正文按原样保留为历史摘要，不作为现行路线图。
+注记（2026-08-26）：本文的 Stage/切片排序与 Take 相关表述（§5「Take 录制」、§6「Sampler Edit + Take Recording，并把 Take 纳入 Creator Export」）已被 [2026-07-30 新内核重设计](../design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)与 [2026-08-23 Sequence 录音语义决策](decisions/2026-08-23-sequence-recording-semantics.md)取代：不存在 Take 产品对象，录音只写 Pattern 事件，Export Pack 只从 Project Truth 派生。正文按原样保留为历史摘要，不作为现行路线图。
 
 ## 1. 产品定义
 
@@ -89,7 +89,7 @@ Upload
 - 同一固定测试音频连续运行三次；
 - 非开发者可以在无口头指导下完成 Upload、MIDI 演奏和 Export。
 
-详细设计见 [Stage 1 Creator Core 首条纵向切片设计](../superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md)。
+详细设计见 [Stage 1 Creator Core 首条纵向切片设计](../design/2026-07-24-stage1-creator-core-slice-design.md)。
 
 ## 5. 首条切片不做
 

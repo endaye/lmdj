@@ -3,7 +3,7 @@
 日期：2026-07-30
 
 评审对象：
-[docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md](../specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
+[docs/design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md](../specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
 （commit `047d6a06`，含同批 decision-log 三条新决策）
 
 评审性质：设计文档评审（read-only），不改变设计结论本身。

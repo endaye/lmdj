@@ -94,7 +94,7 @@ retroactively required to carry Stage 10 fields.
 ## Journey coverage against spec §10
 
 The design authority
-`docs/superpowers/specs/2026-08-28-lmdj-stage10-perform-design.md` §10
+`docs/design/2026-08-28-lmdj-stage10-perform-design.md` §10
 enumerates twenty-one journeys. Each row records the far side actually
 asserted by the current source, not the intent.
 
@@ -143,7 +143,7 @@ Release.
 ## Plan deviations
 
 The Task 10 file inventory in
-`docs/superpowers/plans/2026-09-04-lmdj-stage10-creator-master-tap-projection-repair.md`
+`docs/plans/2026-09-04-lmdj-stage10-creator-master-tap-projection-repair.md`
 is incomplete. The following files were required to reach a consistent
 `1.0.42.0` identity but were not declared, and are recorded here rather than
 silently absorbed.

@@ -31,7 +31,7 @@ sees a test.
 
 Three tests had accumulated eleven such documents.
 `tests/build/web_runtime_public_deployment_docs_test.py` asserts on
-`docs/superpowers/specs/2026-08-08-web-runtime-public-deployment-design.md`
+`docs/design/2026-08-08-web-runtime-public-deployment-design.md`
 with `assertIn("Release ZIP 未修改", source)` and similar, while that document
 routed only to `docs_static`; `apps/architecture-portal/test/stage7-review-remediation.test.mjs`
 read six more from the `portal` lane, and `tests/build/release_skill_test.py`

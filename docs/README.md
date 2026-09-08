@@ -13,9 +13,9 @@
 | --- | --- | --- | --- |
 | `governance/` | canonical 治理规范（Git 工作流、版本管理、架构门户、GitHub 工作管理、分发包内容准则） | 持续维护 | 固定主题名 |
 | `prd/` | 产品输入与迭代：素材池、工作版 PRD、开放问题、决策记录 | 活文档；每问题/每决策一个文件 | `questions/`、`decisions/` 见 `prd/README.md` |
-| `superpowers/specs/` | 设计 spec（实施前的边界与验收设计） | 日期产物，完成即冻结，不删不改 | `YYYY-MM-DD-<slug>.md` |
-| `superpowers/plans/` | 实施计划（Task 级步骤与验证） | 同上 | 同上 |
-| `superpowers/sdd/` | 跨会话/跨执行器交接文档 | 用完即删 | `YYYY-MM-DD-<slug>.md` |
+| `design/` | 设计 spec（实施前的边界与验收设计） | 日期产物，完成即冻结，不删不改 | `YYYY-MM-DD-<slug>.md` |
+| `plans/` | 实施计划（Task 级步骤与验证） | 同上 | 同上 |
+| `handoffs/` | 跨会话/跨执行器交接文档 | 用完即删；先核实未完成事项已接续 | `YYYY-MM-DD-<slug>.md` |
 | `quality/` | 验收、评审、proof、测试政策与工作清单 | 政策持续维护；验收记录为日期产物；TODO 完成即删 | 政策固定名；其余 `YYYY-MM-DD-<slug>.md` |
 | `release-evidence/` | 每次发布/canary 的证据与 artifacts | 不可变，只追加 | `YYYY-MM-DD-<slug>.md` |
 | `research/` | 产品与技术调研 | 日期产物，完成即冻结 | 同上 |
@@ -37,10 +37,26 @@
 
 ## 约定
 
-- 日期产物（specs/plans/research/quality 验收/release-evidence）只增不改：
+- 日期产物（design/plans/research/quality 验收/release-evidence）只增不改：
   修正进新文件或对应活文档，Git 历史即归档，不建手工归档目录。
 - 工作清单（TODO/交接）完成即删；阶段 triage 记录保留为日期产物。
 - 检索用日期前缀排序与 `git ls-files 'docs/**/*.md'`，不维护全量索引文件。
 - PR/计划的 `Documentation impact` 声明按
   [`governance/architecture-portal.md`](governance/architecture-portal.md) 执行；
   运维操作看 [`deploy/architecture-portal.md`](deploy/architecture-portal.md)。
+
+## 文档位置迁移（2026-09-08）
+
+设计、实施计划和交接分别归入 `design/`、`plans/`、`handoffs/`，目录不再绑定
+生成文档的 agent 或插件。设计的 HTML 参考素材与原设计一起保留。原 Task 6
+benchmark 完成报告按首次提交日期归入
+[`quality/2026-07-17-separation-phase1c-benchmark-report.md`](quality/2026-07-17-separation-phase1c-benchmark-report.md)。
+
+本次仅整理位置、修正引用和替换已卸载插件的执行提示，不改变历史设计决策、
+任务完成状态或验收结论。旧计划的执行提示不能覆盖当前 `AGENTS.md` 与用户授权。
+发布快照和来源证明保留冻结时路径；审计它们时使用其记录的 Git revision。
+历史 GitHub 链接若引用迁移前路径，可在迁移前 revision 中读取同一文档。
+本地未跟踪的交接材料放在 `.local/handoffs/`，不作为正式验收或提交输入。
+
+Version impact: none — 仅整理文档与路径引用，不变更产品、模块或 Contract 身份。
+Documentation impact: required — 门户 current 页的来源路径和文档治理说明同步更新。

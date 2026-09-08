@@ -1,15 +1,15 @@
 # Sound Set Catalog fixture corpus
 
 A local, offline `lmdj.soundset-catalog.v1` Catalog for Stage 11. It exists so
-[Task 4](../../../docs/superpowers/plans/2026-09-06-lmdj-stage11-sound-set.md),
+[Task 4](../../../docs/plans/2026-09-06-lmdj-stage11-sound-set.md),
 Task 5 and Task 7 can drive inspect, preview and install against real bytes —
 canonical manifests, real PCM16 WAV blobs, a real hash mismatch — without a
 network and without a Marketplace.
 
 Authority is
-[`2026-09-06-lmdj-stage11-sound-set.md`](../../../docs/superpowers/plans/2026-09-06-lmdj-stage11-sound-set.md)
+[`2026-09-06-lmdj-stage11-sound-set.md`](../../../docs/plans/2026-09-06-lmdj-stage11-sound-set.md)
 (Locked Constants, Locked Error Reasons) and
-[`2026-08-31-lmdj-stage11-sound-set-design.md`](../../../docs/superpowers/specs/2026-08-31-lmdj-stage11-sound-set-design.md)
+[`2026-08-31-lmdj-stage11-sound-set-design.md`](../../../docs/design/2026-08-31-lmdj-stage11-sound-set-design.md)
 (S11-D1, S11-D2, S11-D6, S11-D7, S8-D6). This directory invents no manifest
 semantics of its own; a disagreement with those documents is a bug here, or a
 design conflict to raise on the Issue — never a local reinterpretation.

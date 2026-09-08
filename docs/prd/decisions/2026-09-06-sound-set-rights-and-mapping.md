@@ -6,7 +6,7 @@
   行、原状态 *延后*，已按约定在本决策的同一个 Task 删除），GitHub Issue
   [#465](https://github.com/endaye/lmdj/issues/465)（S11-Q1 / S11-Q2 /
   S11-Q3）。机制框架仍以
-  [Stage 11 Sound Set 设计](../../superpowers/specs/2026-08-31-lmdj-stage11-sound-set-design.md)
+  [Stage 11 Sound Set 设计](../../design/2026-08-31-lmdj-stage11-sound-set-design.md)
   为准；本决策只补权利字段、fail-closed 边界、v1 映射表与 stretch 前置裁决。
 - 结论：
 
