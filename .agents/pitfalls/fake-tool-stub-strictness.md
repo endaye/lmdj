@@ -18,6 +18,9 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/pull/802
     observed_by: Codex
+  - date: 2026-09-08
+    occurrence: https://github.com/endaye/lmdj/actions/runs/34124875948/attempts/2
+    observed_by: Codex
 exit: gate:apps/web-runtime-host/test/deploy_command_test.py
 escalation: https://github.com/endaye/lmdj/issues/726
 ---
@@ -118,6 +121,18 @@ reader and final selection, retaining valid extra AI advice. HTTP receipts in
 that regression remain fixtures; this was an independent code/fixture finding,
 not proof of a historical remote lost-advice incident. Escalation #726 remains
 open for the broader polling-double scope.
+
+A later read-only Actions inventory audit found that the exact-attempt API's
+`created_at` need not equal the run-list timestamp: run 34124875948 attempt 2
+is 59 seconds later, and run 34137319062 attempt 1 is one second later. The
+discovery fixture returned the same object for both endpoints and certified an
+equality gate that would strand such receipts. Discovery now preserves original
+run time for inventory/frontier and accepts a valid attempt time at or after
+that origin, without weakening exact run/attempt/repository/workflow/head or
+the real collector's source/receipt authentication. The regression keeps both
+attempts, queue-only persistence and fresh-process deduplication. This was a
+shared Actions API finding using actual Core CI runs, not a claim of an observed
+lost PR Review callback. The broader escalation #726 remains open.
 
 When a test doubles an internal typed interface, the defect to avoid is the
 same — the double resolving something the real implementation never resolves,

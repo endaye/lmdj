@@ -189,7 +189,12 @@ class DiscoveryRuntime:
         evidence = None
         try:
             run = self.metadata(self.get(f"/actions/runs/{run_id}/attempts/{attempt}"), run_id=run_id, attempt=attempt)
-            require(run["created_at"] == prior["created_at"], "attempt creation time changed")
+            # Actions' exact-attempt endpoint can report a later creation time
+            # even for attempt 1. Only the generic run timestamp owns inventory
+            # windows; this timestamp neither rewrites that origin nor proves
+            # source identity (the exact run/attempt and collector still do).
+            require(protocol.timestamp(run["created_at"]) >= protocol.timestamp(prior["created_at"]),
+                    "attempt creation precedes its inventoried run")
             if run["status"] != "completed":
                 return  # Existing pending/unresolved obligation remains durable.
             evidence = EvidenceReads(self.api)
