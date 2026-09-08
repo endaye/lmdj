@@ -1,0 +1,859 @@
+{
+  "type": "object",
+  "properties": {
+    "format": {
+      "const": "provider-benchmark-report",
+      "type": "string"
+    },
+    "format_version": {
+      "const": 1,
+      "type": "integer"
+    },
+    "evidence_kind": {
+      "enum": [
+        "validator_fixture",
+        "measured"
+      ]
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "os": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+        },
+        "kernel": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+        },
+        "architecture": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+        },
+        "cpu": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "accelerator": {
+          "oneOf": [
+            {
+              "const": "none",
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "device": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+                },
+                "driver": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+                }
+              },
+              "required": [
+                "device",
+                "driver"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "toolchain": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+              }
+            },
+            "required": [
+              "name",
+              "version"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "dependency_locks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "path",
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "os",
+        "kernel",
+        "architecture",
+        "cpu",
+        "memory_bytes",
+        "accelerator",
+        "toolchain",
+        "dependency_locks"
+      ],
+      "additionalProperties": false
+    },
+    "identity": {
+      "type": "object",
+      "properties": {
+        "bench_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "harness_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "capability": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+            },
+            "contract_version": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+            },
+            "document_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "id",
+            "contract_version",
+            "document_sha256"
+          ],
+          "additionalProperties": false
+        },
+        "candidate": {
+          "type": "object",
+          "properties": {
+            "publisher": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+            },
+            "provider_id": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+            },
+            "source_revision": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "artifact_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "license_evidence": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "url",
+                "sha256"
+              ],
+              "additionalProperties": false
+            },
+            "determinism": {
+              "enum": [
+                "deterministic",
+                "seeded",
+                "nondeterministic"
+              ]
+            }
+          },
+          "required": [
+            "publisher",
+            "provider_id",
+            "version",
+            "source_revision",
+            "artifact_sha256",
+            "license_evidence",
+            "determinism"
+          ],
+          "additionalProperties": false
+        },
+        "model": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+                },
+                "revision": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                "artifact_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "license_evidence": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  },
+                  "required": [
+                    "url",
+                    "sha256"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "revision",
+                "artifact_sha256",
+                "license_evidence"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "bench_revision",
+        "harness_revision",
+        "capability",
+        "candidate",
+        "model"
+      ],
+      "additionalProperties": false
+    },
+    "measurement_config": {
+      "type": "object",
+      "properties": {
+        "execution_zone": {
+          "enum": [
+            "in_process_reference",
+            "subprocess_sandbox",
+            "remote"
+          ]
+        },
+        "sampler": {
+          "oneOf": [
+            {
+              "const": "not_applicable",
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+                },
+                "revision": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                "cadence_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "scope": {
+                  "enum": [
+                    "process_tree",
+                    "client"
+                  ]
+                },
+                "gpu_attribution": {
+                  "enum": [
+                    "not_applicable",
+                    "exclusive",
+                    "attributable"
+                  ]
+                },
+                "gpu_evidence_sha256": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "id",
+                "revision",
+                "cadence_ms",
+                "scope",
+                "gpu_attribution",
+                "gpu_evidence_sha256"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "deadline_ms": {
+          "oneOf": [
+            {
+              "const": "not_applicable",
+              "type": "string"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          ]
+        },
+        "kill_grace_ms": {
+          "oneOf": [
+            {
+              "const": "not_applicable",
+              "type": "string"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          ]
+        }
+      },
+      "required": [
+        "execution_zone",
+        "sampler",
+        "deadline_ms",
+        "kill_grace_ms"
+      ],
+      "additionalProperties": false
+    },
+    "gates": {
+      "type": "object",
+      "properties": {
+        "policy_version": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "metric": {
+                "enum": [
+                  "elapsed",
+                  "peak_process_tree_rss",
+                  "gpu_peak_bytes"
+                ]
+              },
+              "unit": {
+                "enum": [
+                  "seconds",
+                  "bytes"
+                ]
+              },
+              "maximum": {
+                "type": "number",
+                "minimum": 0
+              },
+              "required": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "metric",
+              "unit",
+              "maximum",
+              "required"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 3
+        }
+      },
+      "required": [
+        "policy_version",
+        "resources"
+      ],
+      "additionalProperties": false
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fixture_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+          },
+          "manifest_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "input": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "absent",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "present",
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "byte_length": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "status",
+                  "sha256",
+                  "byte_length"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "case_kind": {
+            "enum": [
+              "success",
+              "input_failure"
+            ]
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "rejected",
+              "observation_only"
+            ]
+          },
+          "measurements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "metric": {
+                  "enum": [
+                    "elapsed",
+                    "real_time_factor",
+                    "peak_process_tree_rss",
+                    "gpu_peak_bytes",
+                    "precision",
+                    "recall",
+                    "f1",
+                    "tp",
+                    "fp",
+                    "fn"
+                  ]
+                },
+                "execution_zone": {
+                  "enum": [
+                    "in_process_reference",
+                    "subprocess_sandbox",
+                    "remote"
+                  ]
+                },
+                "measurement_source": {
+                  "enum": [
+                    "harness",
+                    "external_sampler",
+                    "tool_scorer"
+                  ]
+                },
+                "unit": {
+                  "enum": [
+                    "seconds",
+                    "bytes",
+                    "ratio",
+                    "count"
+                  ]
+                },
+                "status": {
+                  "enum": [
+                    "measured",
+                    "not_enforceable",
+                    "not_applicable",
+                    "missing"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "metric",
+                "execution_zone",
+                "measurement_source",
+                "unit",
+                "status",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 0,
+            "maxItems": 10
+          },
+          "checks": {
+            "type": "object",
+            "properties": {
+              "determinism": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "pass",
+                      "fail",
+                      "not_applicable",
+                      "not_run"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "minItems": 0,
+                    "maxItems": 16
+                  },
+                  "output_set_sha256": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "minItems": 0,
+                    "maxItems": 2
+                  },
+                  "seed_sha256": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "minItems": 0,
+                    "maxItems": 2
+                  },
+                  "parameters_sha256": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "minItems": 0,
+                    "maxItems": 2
+                  }
+                },
+                "required": [
+                  "status",
+                  "evidence",
+                  "output_set_sha256",
+                  "seed_sha256",
+                  "parameters_sha256"
+                ],
+                "additionalProperties": false
+              },
+              "output_schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "pass",
+                      "fail",
+                      "not_applicable",
+                      "not_run"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "minItems": 0,
+                    "maxItems": 16
+                  }
+                },
+                "required": [
+                  "status",
+                  "evidence"
+                ],
+                "additionalProperties": false
+              },
+              "required_outputs": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "pass",
+                      "fail",
+                      "not_applicable",
+                      "not_run"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "minItems": 0,
+                    "maxItems": 16
+                  }
+                },
+                "required": [
+                  "status",
+                  "evidence"
+                ],
+                "additionalProperties": false
+              },
+              "failed_input_refusal": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "pass",
+                      "fail",
+                      "not_applicable",
+                      "not_run"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "minItems": 0,
+                    "maxItems": 16
+                  }
+                },
+                "required": [
+                  "status",
+                  "evidence"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "determinism",
+              "output_schema",
+              "required_outputs",
+              "failed_input_refusal"
+            ],
+            "additionalProperties": false
+          },
+          "rejection_reasons": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "determinism_violation",
+                "schema_invalid",
+                "required_output_missing",
+                "input_not_refused",
+                "timeout",
+                "memory_limit",
+                "gpu_limit"
+              ]
+            },
+            "minItems": 0,
+            "maxItems": 7,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "fixture_id",
+          "manifest_sha256",
+          "input",
+          "case_kind",
+          "status",
+          "measurements",
+          "checks",
+          "rejection_reasons"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 4096
+    },
+    "rejections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fixture_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+          },
+          "reason": {
+            "enum": [
+              "determinism_violation",
+              "schema_invalid",
+              "required_output_missing",
+              "input_not_refused",
+              "timeout",
+              "memory_limit",
+              "gpu_limit"
+            ]
+          }
+        },
+        "required": [
+          "fixture_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 4096
+    },
+    "supplemental_provider_reported": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fixture_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]{1,512}$"
+          },
+          "metric": {
+            "enum": [
+              "elapsed",
+              "peak_process_tree_rss",
+              "gpu_peak_bytes",
+              "server_completed"
+            ]
+          },
+          "measurement_source": {
+            "const": "provider_reported",
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "number",
+              "boolean",
+              "null"
+            ],
+            "minimum": 0
+          }
+        },
+        "required": [
+          "fixture_id",
+          "metric",
+          "measurement_source",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 256
+    }
+  },
+  "required": [
+    "format",
+    "format_version",
+    "evidence_kind",
+    "environment",
+    "identity",
+    "measurement_config",
+    "gates",
+    "cases",
+    "rejections"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Local provider benchmark report v1 (internal tooling, not a product Contract)"
+}
