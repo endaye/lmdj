@@ -206,6 +206,31 @@ class WorkflowScripts(unittest.TestCase):
         document = json.loads((directory / "verdict.json").read_text()) if (directory / "verdict.json").exists() else None
         return result, values, document, needs
 
+    def test_frozen_policy_checkout_reuses_missing_registration_after_runner_clean(self):
+        first, _ = self.invoke("change-scope", "Read the frozen policy checkout", FROZEN_CONTROL=self.control)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        # actions/checkout cleans the directory but Git keeps worktree metadata.
+        self.git("clean", "-ffdx", "--", ".batch-policy")
+        self.assertFalse((self.root / ".batch-policy").exists())
+        self.assertIn(str(self.root / ".batch-policy"), self.git("worktree", "list", "--porcelain"))
+        second, _ = self.invoke("change-scope", "Read the frozen policy checkout", FROZEN_CONTROL=self.target)
+        self.assertEqual(second.returncode, 0,
+                         "why: persistent runner cannot reopen the frozen policy checkout; "
+                         "remedy: recover only its missing registration without pruning other worktrees\n" + second.stderr)
+        self.assertEqual(self.git("-C", ".batch-policy", "rev-parse", "HEAD"), self.target)
+        self.assertEqual((self.root / ".batch-policy/docs/notes/n.md").read_text(), "fixture")
+
+    def test_frozen_policy_checkout_does_not_override_locked_missing_registration(self):
+        first, _ = self.invoke("change-scope", "Read the frozen policy checkout", FROZEN_CONTROL=self.control)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.git("worktree", "lock", "--reason", "fixture owner lock", ".batch-policy")
+        self.git("clean", "-ffdx", "--", ".batch-policy")
+        second, _ = self.invoke("change-scope", "Read the frozen policy checkout", FROZEN_CONTROL=self.target)
+        self.assertNotEqual(second.returncode, 0,
+                            "why: frozen checkout overwrote a locked worktree; remedy: never double-force registration recovery")
+        self.assertFalse((self.root / ".batch-policy").exists())
+        self.assertIn("locked fixture owner lock", self.git("worktree", "list", "--porcelain"))
+
     def test_changed_executor_workflow_blocks_before_heavy_outputs(self):
         read_result, _ = self.invoke("change-scope", "Read the frozen policy checkout", FROZEN_CONTROL=self.control)
         self.assertEqual(read_result.returncode, 0, read_result.stderr)

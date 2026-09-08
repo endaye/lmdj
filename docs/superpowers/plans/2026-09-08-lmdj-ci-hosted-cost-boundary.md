@@ -21,6 +21,7 @@ Declared files:
 - `.github/workflows/merge-queue.yml`
 - `scripts/ci/hosted_runner_policy.json`
 - `tests/build/ci_hosted_runner_policy_test.py`
+- `tests/build/ci_batch_execution_workflow_test.py`
 - `tests/build/ci_runner_fallback_test.py`
 - `tests/build/ci_self_test_workflow_test.py`
 - `tests/build/ci_self_test_report_workflow_test.py`
@@ -39,6 +40,12 @@ test tiers, artifact retention or macOS routing decisions. Remove obsolete
 hosted exceptions and add an independent invariant so merely re-adding an
 allowlist entry cannot allow routine paid Linux. Keep privileged release/deploy
 and the disabled untrusted Preview pilot outside this migration.
+
+Persistent-checkout compatibility: after Actions checkout removes the temporary
+`.batch-policy` directory, reuse its missing worktree registration with one
+`worktree add --force`, scoped to that exact path. Never prune other worktrees or
+override a locked registration. Exercise the real workflow script across two
+checkout-clean cycles, including frozen revision identity and lock protection.
 
 Verification: focused routing, hosted-policy, self-test workflow and report
 workflow suites; complete `ci_*_test.py` contract discovery; ownership after

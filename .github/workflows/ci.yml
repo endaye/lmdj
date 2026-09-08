@@ -104,7 +104,10 @@ jobs:
         env:
           FROZEN_CONTROL: ${{ steps.entry.outputs.control }}
         run: |
-          git --no-replace-objects worktree add --detach .batch-policy "$FROZEN_CONTROL"
+          # checkout cleans this directory on persistent runners, leaving Git's
+          # registration behind. One --force recovers only this missing path;
+          # locked registrations still fail rather than overriding their owner.
+          git --no-replace-objects worktree add --force --detach .batch-policy "$FROZEN_CONTROL"
       - name: Prepare the admitted fixed-target execution
         id: batch
         if: ${{ steps.entry.outputs.batch-mode == 'true' }}
