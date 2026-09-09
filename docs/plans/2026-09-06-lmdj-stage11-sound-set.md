@@ -231,9 +231,17 @@ therefore costs an engine change rather than a held slot — which does not
 revive either rejected option, since both were rejected on correctness rather
 than on cost.
 
-The decision is recorded here; the mechanism is not built. #799 carries the
-byte path, and until it lands S11-D5 stays open on delivery alone rather than
-on an unanswered product question.
+The decision is recorded here, and the mechanism is now partly built. #799
+carried the byte path: the reserved audition pool and its voice-start path
+landed in `e8c583b4`, the typed Facade method returning resampled PCM in
+`7337ccef`, the Web Host's playback and `soundset.audition.stop` in `27a88b29`,
+and the Creator's two controls in `917decee`.
+
+S11-D5 stays open on two remaining halves, neither of them a product question:
+the Native Host still only forwards the Facade query and plays nothing, and no
+automated check yet observes that a Web audition actually produced sound —
+`play_audition` reports success whether or not the engine accepted the voice.
+Both are tracked on #799.
 
 `soundset.map.preview` is the pure function
 `map(manifest, bank occupancy) → {proposed, collisions, kept}` and mutates
