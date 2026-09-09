@@ -1,5 +1,11 @@
 # Stage 12 Capability / ArtifactSource implementation plan
 
+2026-09-09 status addendum: C-Q1–C-Q5 direction and reference budgets have user
+confirmation. Exact public constants and identities still require R1 closure;
+see the [dated decision and Task split](2026-09-09-stage12-decision-followups.md).
+It supersedes historical readiness below. K2 and Candidate APIs cannot each
+reserve SDK 2.0.0 independently; B1/B2 have merged.
+
 Date: 2026-09-08. Status: **draft for review, not implementation authorization**.
 Relates to #467 and #472. This retained planning Task changes no product code.
 
