@@ -1,0 +1,22 @@
+---
+title: Providers 总览
+area: providers
+status: partial
+owners: [providers, core]
+source_paths: [providers, packages/provider-sdk, products/lmdj/assembly.json]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## Provider Contract
+Provider 通过 Capability 被发现，只接收 Artifact 输入与 Artifact output sink；不得接收可变 Project 或 bundle path。
+## 当前清单
+Product Assembly 包含本地成功/失败 Proof Provider，以及 Slice 参考 Provider。Proof 验证 Attempt 隔离与错误路径；Slice 提供确定性算法基线。
+[Slice 参考实现](./local-sample-slice) 已注册到 Product Assembly，保留 test 平台、不默认选择，默认权限仍仅允许 Proof。实际 Host 接入留给 K5。
+## 状态归属
+Provider 选择属于 Workspace/Host 设置，进行中和失败属于 Attempt state，均不进入 Project Truth。
+Attempt 证据在 native 路径上 durable；Host settings writer 使用 fail-fast kernel advisory lock，并在 owner 进程退出后自动恢复，lock-free reader 继续通过 atomic rename 观察完整设置。Web MEMFS 仍不能运行 Provider。
+## 规划边界
+生产/云 Provider、模型身份、鉴权、计费和数据治理尚未实现。
