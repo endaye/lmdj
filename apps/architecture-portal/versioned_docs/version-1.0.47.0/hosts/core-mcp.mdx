@@ -1,0 +1,29 @@
+---
+title: Core MCP Host
+area: hosts
+status: implemented
+owners: [hosts]
+host: core-mcp
+source_paths: [apps/core-mcp, tests/host/mcp_stdio_test.py, tests/host/mcp_facade_parity_test.py]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="hosts" id="core-mcp" />
+
+## 目的
+Core MCP `3.2.0` 通过 MCP stdio 暴露受控 Core 工具，包括 `lmdj.sample.quota`、Pattern create、Pattern Slot 的 `lmdj.pattern.slot.assign` / `slot.clear` / `slot.move`、Sequence recording/settings/recovery，以及完整的 Performance 工具面，使长生命周期 owner 与 CLI 保持 Facade `3.2.0` parity。本 Build 起另外暴露五个 Sound Set 工具：`lmdj.soundset.catalog.list`、`lmdj.soundset.inspect`、`lmdj.soundset.map.preview`、`lmdj.soundset.install` 与 `lmdj.soundset.audition`；Catalog 是 Workspace 本地的内容寻址目录与索引，MCP Host 不含网络代码。Project Truth 的当前写出契约是 `lmdj.project.v4`。
+## 协议边界
+Host 管理 initialize、工具 schema、structured content 与 JSON-RPC 错误。Performance 工具与 Facade 操作一一对应，共二十个：`lmdj.performance.record.begin` / `record.event` / `record.launch-request` / `record.flush` / `record.stop` / `record.status`、`lmdj.performance.save` / `discard` / `recording.bind`、`lmdj.performance.list` / `inspect` / `rename` / `delete`、`lmdj.performance.replay.begin` / `replay.status` / `replay.stop`、`lmdj.performance.recovery.list` / `recovery.apply` / `recovery.discard` 与 `lmdj.performance.resample.commit`，每个工具都声明精确的 input schema 与 structured output schema（Performance 摘要、record/replay 状态、launch request、recovery 候选与 resample receipt）。`lmdj.sample.quota` 只把 `project_path/slot` 路由到 Facade；Performance 工具同样只转发 `project_path`、`command_id`、`expected_revision`、`session_id`/`performance_id`、事件与 `pattern_slot` 等参数。revision、配额台账、录制 authority、acknowledged launch 与错误详情均不在 MCP 重算。
+## 安全与状态
+输入按请求验证，Host 不持久化 Runtime Snapshot 为 Project Truth。MCP 自身不构造 Performance runtime：它经 Facade C API 进入同一个 headless Performance runtime bridge（steady time source 提供 clock、input sequencer、launch acknowledger 与 replay controller），由 Facade 在请求边界推进；Performance 草稿的生命周期由 Facade 与 Project I/O 的 session-kind journal 拥有，MCP 只观察 `record.status` 返回的 authority。
+## 测试与证据
+stdio 与 Facade parity 测试覆盖工具形状、字节协议、Sample quota 与错误映射。
+## 限制
+MCP 可用性不代表产品 UI 或远程多租户服务已交付。Performance 工具面的可用性只证明控制面与状态边界，不构成物理演奏、听感或延迟验收，也不表示 tag、Release、部署或 Channel promotion 已发生。
+
+当前 Host 随 Facade/Platform 的 owned Provider 字节 ABI 集成更新依赖身份，transport
+操作保持原形状。无绑定 Proof 可运行；带输入绑定的 Provider 请求在 owner 尚未接线时
+返回可查询的 `input_artifact_unavailable` Attempt，Slice 工作流仍待后续集成。
+
+本次集成已为 Audio Runtime 的 Engine ABI 变更及其依赖重建分配匹配版本，当前身份以上方 Build Identity 为准。Slice 参考注册不增加此 Host 的切片操作或默认执行权限。
