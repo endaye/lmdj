@@ -1,6 +1,6 @@
 ---
 id: snapshot-page-pin-only-fires-at-freeze
-area: docs
+area: docs-governance
 status: absorbed
 recurrences:
   - date: 2026-09-09
