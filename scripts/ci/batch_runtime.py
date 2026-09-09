@@ -29,7 +29,8 @@ import incremental_batch as batch
 from incremental_batch_journal import IssueBodyAnchor, Journal
 from review_merge_map_reader import MergeMapReader
 import self_test
-from self_test_report import UrllibGitHubApi
+from self_test_report import RetryBudget, UrllibGitHubApi, with_retry
+import time
 import test_scope
 
 SCHEMA = "lmdj.ci-batch-runtime.v1"
@@ -125,12 +126,15 @@ class Runtime:
         self.current = batch.identity({"run_id": int(self.env["GITHUB_RUN_ID"]), "attempt": 1})
         batch.new_state(config["epoch"])
         self.api = api if api is not None else UrllibGitHubApi(config["repository"], self.env.get("GITHUB_TOKEN", ""))
+        self.retry_budget = RetryBudget()
+        self.clock = time.time
         self.writer = {"repository": config["repository"], "issue_number": config["issue_number"],
                        "run_id": self.current["run_id"], "run_attempt": 1, "control_sha": self.control,
                        "workflow_path": self.workflow, "workflow_id": config["workflow_id"], "job_name": self.controller_job}
         self.transport = storage.GitHubJournalTransport(repository=config["repository"],
             issue_number=config["issue_number"], issue_node_id=config["issue_node_id"], bot_node_id=config["bot_node_id"],
-            workflows={self.workflow: config["workflow_id"]}, writer=self.writer, api=self.api, lock_held=self.lock_held)
+            workflows={self.workflow: config["workflow_id"]}, writer=self.writer, api=self.api,
+            lock_held=self.lock_held, retry_budget=self.retry_budget, clock=self.clock)
         self.inputs = batch_controller.GitInputs(self.root, self.control, self.read_main)
         self.inputs.advice = self.advice
         self.advice_diagnostics = []
@@ -159,9 +163,16 @@ class Runtime:
 
     def call(self, method, path, body=None, *, raw=False):
         try:
-            return self.api._request(method, path, body=body, raw=raw)
-        except Exception:
-            raise batch.BatchError("why: runtime API unavailable or write outcome unknown; remedy: reconcile without replaying the write") from None
+            call = lambda: self.api._request(method, path, body=body, raw=raw)
+            # Reads made while the short writer lock is held must not sleep
+            # through a primary reset; the next health tick will retry them.
+            if method == "GET":
+                if self.lock_held():
+                    return call()
+                return with_retry(call, sleep=time.sleep, clock=self.clock, budget=self.retry_budget)
+            return call()
+        except Exception as error:
+            raise batch.BatchError("why: runtime API unavailable or write outcome unknown; remedy: reconcile without replaying the write") from error
 
     def repo(self, suffix):
         return "/repos/" + self.config["repository"] + suffix

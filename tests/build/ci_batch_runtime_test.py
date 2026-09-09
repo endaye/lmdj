@@ -25,6 +25,7 @@ import batch_execution
 import batch_verdict
 import incremental_batch as batch
 import test_scope
+from self_test_report import GitHubApiError
 
 BOT = {"__typename": "Bot", "id": "MDM6Qm90NDE4OTgyODI="}
 
@@ -150,6 +151,40 @@ class RuntimeTests(unittest.TestCase):
 
     def make(self, run=17):
         return runtime.Runtime(self.config, root=self.root, api=self.api, environment={**self.env, "GITHUB_RUN_ID": str(run)})
+
+    def test_runtime_gets_share_one_primary_reset_wait_budget_across_calls(self):
+        instance = runtime.Runtime(self.config, root=self.root, api=self.api,
+                                   environment={**self.env, "GITHUB_RUN_ID": "17", "BATCH_WRITER_LOCK": ""})
+        clock = [100.0]
+        self.api._request = mock.Mock(side_effect=[
+            GitHubApiError(403, "quota", remaining=0, reset=120),
+            {"ok": True},
+            GitHubApiError(403, "quota", remaining=0, reset=140),
+        ])
+        sleeps = []
+        instance.clock = lambda: clock[0]
+        instance.transport.clock = instance.clock
+        with mock.patch.object(runtime.time, "sleep", side_effect=lambda delay: (sleeps.append(delay), clock.__setitem__(0, clock[0] + delay))):
+            self.assertEqual(instance.call("GET", "/first"), {"ok": True})
+            with self.assertRaises(runtime.storage.JournalBlocked):
+                instance.transport._call("GET", "/second")
+        self.assertEqual(sleeps, [20.0])
+        self.assertLess(instance.retry_budget.remaining, 25.0)
+        self.assertEqual(self.api._request.call_count, 3)
+
+    def test_runtime_forbidden_and_malformed_reset_are_not_retried(self):
+        instance = runtime.Runtime(self.config, root=self.root, api=self.api,
+                                   environment={**self.env, "GITHUB_RUN_ID": "17", "BATCH_WRITER_LOCK": ""})
+        self.api._request = mock.Mock(side_effect=[
+            GitHubApiError(403, "auth", remaining=10, reset=110),
+            GitHubApiError(403, "malformed", remaining=0),
+        ])
+        with self.assertRaises(batch.BatchError):
+            instance.call("GET", "/auth")
+        with self.assertRaises(batch.BatchError):
+            instance.call("GET", "/malformed")
+        self.assertEqual(self.api._request.call_count, 2)
+        self.assertEqual(instance.retry_budget.remaining, 25.0)
 
     def test_authentication_failure_retains_only_current_phase(self):
         for stage, owner, method in (
