@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <lmdj/cooker/wav_selection.hpp>
+#include <lmdj/cooker/wav_reader.hpp>
 
 #include "tests/core/support/test.hpp"
 
@@ -113,10 +114,47 @@ void test_rejects_invalid_ranges_and_encodings() {
   check_rejected(trailing, 0, 1);
 }
 
+void test_slice_profile_preserves_exact_pcm_and_rate() {
+  for (const std::uint16_t channels : {std::uint16_t{1}, std::uint16_t{2}}) {
+    for (const std::uint32_t rate : {44100U, 48000U}) {
+      const auto source = wav(1, channels, rate);
+      const auto selected = lmdj::cooker::select_pcm16_wav(source, 1, 3);
+      LMDJ_CHECK(selected.has_value());
+      const auto pcm = lmdj::cooker::decode_wav(selected.value());
+      LMDJ_CHECK(pcm.has_value());
+      LMDJ_CHECK(pcm.value()->channels == channels && pcm.value()->sample_rate == rate);
+      LMDJ_CHECK(pcm.value()->interleaved == (channels == 1
+          ? std::vector<std::int16_t>{-100, 200}
+          : std::vector<std::int16_t>{200, -200, 300, -300}));
+      LMDJ_CHECK(source == wav(1, channels, rate));
+    }
+  }
+}
+void test_slice_profile_bound_and_materialization_refusals() {
+  const auto source = wav();
+  LMDJ_CHECK(!lmdj::cooker::select_pcm16_wav(source, 0, 5).has_value());
+  LMDJ_CHECK(!lmdj::cooker::select_pcm16_wav(source, 1, 1).has_value());
+  LMDJ_CHECK(!lmdj::cooker::select_pcm16_wav(wav(3), 0, 1).has_value());
+  auto maximum = source;
+  maximum.resize(16777216, std::byte{0});
+  const auto put_u32 = [&](std::size_t offset, std::uint32_t value) {
+    for (unsigned byte = 0; byte < 4; ++byte)
+      maximum.at(offset + byte) = static_cast<std::byte>(value >> (8 * byte));
+  };
+  put_u32(4, 16777216U - 8U); put_u32(40, 16777216U - 44U);
+  LMDJ_CHECK(lmdj::cooker::select_pcm16_wav(maximum, 0, 1).has_value());
+  maximum.push_back(std::byte{0});
+  const auto refused = lmdj::cooker::select_pcm16_wav(maximum, 0, 1);
+  LMDJ_CHECK(!refused.has_value());
+  LMDJ_CHECK(refused.error().code == lmdj::foundation::ErrorCode::invalid_argument);
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_slice_profile_preserves_exact_pcm_and_rate();
+    test_slice_profile_bound_and_materialization_refusals();
     test_selects_exact_half_open_frame_range();
     test_rejects_invalid_ranges_and_encodings();
     std::cout << "wav selection tests passed\n";

@@ -64,9 +64,13 @@ class ObservedStorage final : public ProjectStoragePlatform {
   mutable std::size_t owner_reads = 0;
   std::size_t writes = 0;
   std::function<void(const std::filesystem::path&, bool)> replace_hook;
+  std::function<void(const std::filesystem::path&)> acquire_hook;
+  std::function<bool(const std::filesystem::path&)> fail_replace;
+  std::function<bool(const std::filesystem::path&)> fail_create;
   std::function<void(const std::filesystem::path&)> read_hook;
   Result<std::unique_ptr<ProjectWriterLease>> acquire_writer(const std::filesystem::path& p) override {
     if (p == owner) ++owner_leases;
+    if (acquire_hook) acquire_hook(p);
     return inner->acquire_writer(p);
   }
   Result<void> ensure_directory(const std::filesystem::path& p) override { ++writes; return inner->ensure_directory(p); }
@@ -78,9 +82,14 @@ class ObservedStorage final : public ProjectStoragePlatform {
     if (p.generic_string().starts_with(owner.generic_string() + "/")) ++owner_reads;
     return inner->read_complete(p);
   }
-  Result<void> create_immutable(const std::filesystem::path& p, std::span<const std::byte> b) override { ++writes; return inner->create_immutable(p, b); }
+  Result<void> create_immutable(const std::filesystem::path& p, std::span<const std::byte> b) override {
+    ++writes;
+    if (fail_create && fail_create(p)) return Result<void>::failure(Error{ErrorCode::io_error, "injected immutable write failure"});
+    return inner->create_immutable(p, b);
+  }
   Result<void> replace_complete(const std::filesystem::path& p, std::span<const std::byte> b) override {
     ++writes;
+    if (fail_replace && fail_replace(p)) return Result<void>::failure(Error{ErrorCode::io_error, "injected replacement failure"});
     if (replace_hook) replace_hook(p, false);
     auto result = inner->replace_complete(p, b);
     if (result.has_value() && replace_hook) replace_hook(p, true);
@@ -102,13 +111,14 @@ struct Fixture {
   std::shared_ptr<ObservedStorage> storage = std::make_shared<ObservedStorage>();
   std::unique_ptr<lmdj::facade::Application> app;
   Json source;
-  Fixture() {
+  std::optional<lmdj::audio::RuntimePreparationLimits> limits;
+  explicit Fixture(const std::string& audio = wav()) {
     std::filesystem::create_directories(root);
     storage->owner = project;
     restart();
     ok(app->command({{"operation", "project.create"}, {"project_path", project.generic_string()},
                      {"project_id", project_id}, {"bpm", 120}}));
-    const auto bytes = wav();
+    const auto& bytes = audio;
     const auto imported = app->import_artifact_bytes({project,
         {CommandId{"00000000-0000-4000-8000-000000000003"}, 0}, AssetId{asset_id}, "audio/wav",
         std::as_bytes(std::span{bytes.data(), bytes.size()})});
@@ -128,6 +138,7 @@ struct Fixture {
     config.providers = loaded.value().providers;
     config.provider_policy = loaded.value().provider_policy;
     config.storage_platform = storage;
+    config.runtime_preparation_limits = limits;
     config.performance_replay_controller = lmdj::facade::make_unavailable_performance_replay_controller();
     app = std::make_unique<lmdj::facade::Application>(std::move(config));
   }

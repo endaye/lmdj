@@ -157,6 +157,27 @@ if(BUILD_TESTING)
     TIER unit
     COMMAND lmdj_domain_soundset_install_tests
   )
+  add_executable(
+    lmdj_domain_candidate_adoption_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/domain/candidate_adoption_test.cpp"
+  )
+  target_include_directories(
+    lmdj_domain_candidate_adoption_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_domain_candidate_adoption_tests
+    PRIVATE
+      lmdj::authoring_domain
+  )
+  lmdj_target_warnings(lmdj_domain_candidate_adoption_tests)
+  lmdj_target_sanitizers(lmdj_domain_candidate_adoption_tests)
+  lmdj_add_test(
+    NAME domain.candidate_adoption
+    TIER unit
+    COMMAND lmdj_domain_candidate_adoption_tests
+  )
 
   add_executable(
     lmdj_domain_model_sequence_tests

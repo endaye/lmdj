@@ -9,6 +9,12 @@
 
 namespace lmdj::cooker {
 
+// Bounded Slice profile, preserving channels and source frame rate.
+foundation::Result<std::vector<std::byte>> select_pcm16_wav(
+    std::span<const std::byte> source,
+    std::uint64_t start_frame,
+    std::uint64_t end_frame);
+
 foundation::Result<std::vector<std::byte>> select_pcm16_stereo_wav(
     std::span<const std::byte> source,
     std::uint64_t start_frame,

@@ -21,6 +21,10 @@ class CandidateStore {
     std::unique_lock<std::mutex> lock;
     std::unique_ptr<project_io::ProjectWriterLease> writer;
   };
+  struct Eligibility {
+    Lease mutation;
+    nlohmann::json candidate_set;
+  };
   struct Run {
     Lease execution;
     std::string job_id;
@@ -38,6 +42,10 @@ class CandidateStore {
                                            const provider::AttemptStore& attempts);
   foundation::Result<nlohmann::json> inspect(const std::string& job_id,
                                             const provider::AttemptStore& attempts);
+
+  // Pure eligibility: retain ownership through Project commit; no recovery.
+  foundation::Result<Eligibility> lease_active(const std::string& job_id,
+      const std::string& set_id, const provider::AttemptStore& attempts);
 
  private:
   foundation::Result<Lease> acquire(const std::filesystem::path& path) const;
