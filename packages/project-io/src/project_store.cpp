@@ -138,6 +138,11 @@ bool valid_sha256(std::string_view value) {
              });
 }
 
+bool valid_candidate_source_profile(
+    std::string_view media_type, std::uint64_t byte_length) {
+  return media_type == "audio/wav" && byte_length <= 16777216U;
+}
+
 Error invalid_project(
     std::string message,
     const std::filesystem::path& path,
@@ -1839,9 +1844,11 @@ foundation::Result<PersistedCommand> parse_command(
           !exact_object_keys(source, {"sha256", "media_type", "byte_length"}) ||
           !source.at("sha256").is_string() ||
           !valid_sha256(source.at("sha256").get<std::string>()) ||
-          source.at("media_type") != "audio/wav" ||
+          !source.at("media_type").is_string() ||
           !nonnegative_integer(source.at("byte_length")) ||
-          source.at("byte_length").get<std::uint64_t>() > 16777216U ||
+          !valid_candidate_source_profile(
+              source.at("media_type").get_ref<const std::string&>(),
+              source.at("byte_length").get<std::uint64_t>()) ||
           input.at("assignments").size() > 64)
         return foundation::Result<PersistedCommand>::failure(
             invalid_project("AdoptCandidates source identity is invalid", path));
@@ -6788,6 +6795,13 @@ foundation::Result<domain::AppliedCommand> ProjectStore::adopt_candidates(
   if (!fresh.has_value())
     return foundation::Result<domain::AppliedCommand>::failure(fresh.error());
   // Revalidate actual bytes while the Project writer excludes source mutation.
+  if (!valid_candidate_source_profile(
+          request.source_artifact.media_type, request.source_artifact.byte_length)) {
+    return foundation::Result<domain::AppliedCommand>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Candidate source must be audio/wav and at most 16 MiB",
+    });
+  }
   const auto source_bytes = describe_artifact(*platform_,
       bundle / "assets" / (request.source_artifact.sha256 + ".wav"),
       request.source_artifact.media_type);

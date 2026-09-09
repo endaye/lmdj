@@ -52,6 +52,9 @@ Project/Asset/revision 绑定，再通过上述 verified owner read 获取音频
 ## Atomic Candidate adoption
 
 `ProjectStore::adopt_candidates` accepts a distinct `CandidateAdoptionRequest`.
+The public writer and persisted reader share the source profile check:
+`audio/wav`, at most 16 MiB. Unsupported but accurately bound sources refuse
+before publication, leaving the original Project readable.
 Under the Project writer it checks current Project/revision/source identity and
 source bytes, then applies one `AdoptCandidates` command and stages every derived
 artifact through the existing atomic publication pipeline. The persisted command

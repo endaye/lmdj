@@ -158,3 +158,26 @@ and the rebuilt facade.application test passed. ASan/UBSan adoption, recovery
 and 100-iteration process stress pass 5/5 (43.43 seconds). New-file staged
 ownership passes 70 tests. Full Core and immutable-snapshot validation remain
 for the clean generated snapshot head.
+
+## Independent review corrections
+
+Review of head 1365569a found a public ProjectIO write/read profile mismatch:
+an accurately bound non-WAV or over-16-MiB source could be persisted although
+the adoption transaction reader rejects it. Reduce this in the already declared
+ProjectIO adoption test, then share source-profile validation between the writer
+and parser and document the refusal before publication. Also declare
+`tests/host/native_host_source_boundary_test.py` to synchronize its exact
+Facade/Audio dependency fixture; preserve every source/link boundary assertion.
+The final Core run at that head passed 145/146 with only this Native fixture red.
+These corrections complete the same unpublished additive API; no additional
+version identity or frozen snapshot rewrite is required. Retain the official
+1.0.52.0 snapshot and verify its post-squash source provenance, adding the
+official witness if the mutable-source corrections require it.
+
+The reduced ProjectIO regression failed on the old writer accepting the
+unsupported source. Shared profile validation now follows full source freshness
+under the writer, preserving the existing mismatch error order and refusing
+before publication. Both accurately bound unsupported profiles reopen the
+original state after refusal. Focused ProjectIO/Facade adoption plus Native Host
+source-boundary checks pass 3/3 (12.28 seconds); full portal check again passes
+116 tests and 44 routes. Frozen snapshot files are unchanged.

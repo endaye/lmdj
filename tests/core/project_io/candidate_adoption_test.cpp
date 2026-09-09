@@ -33,10 +33,12 @@ struct Fixture {
   ProjectStore::CandidateAdoptionRequest request{{CommandId{uuid(3)}, 1},
       ProjectId{uuid(1)}, AssetId{uuid(2)}, {digest(source), "audio/wav", source.size()}, {}};
   ProjectState before = create_project(ProjectId{uuid(1)}, 120).value();
-  Fixture() {
+  Fixture(std::string media_type = "audio/wav", std::size_t source_bytes = 3) {
+    source.resize(source_bytes, std::byte{1});
+    request.source_artifact = {digest(source), media_type, source.size()};
     LMDJ_CHECK(store.create(root, create_project(ProjectId{uuid(1)}, 120).value()).has_value());
     const auto imported = store.import_artifact_bytes(root,
-        {{CommandId{uuid(6)}, 0}, AssetId{uuid(2)}, "audio/wav", source});
+        {{CommandId{uuid(6)}, 0}, AssetId{uuid(2)}, media_type, source});
     LMDJ_CHECK(imported.has_value());
     before = imported.value().state;
     for (std::size_t i = 0; i < payloads.size(); ++i)
@@ -84,6 +86,16 @@ Result<void> inject(FaultPoint observed, const std::filesystem::path&) {
   if (crash) _exit(71);
 #endif
   return Result<void>::failure(Error{ErrorCode::io_error, "adoption fault"});
+}
+void unsupported_source_is_atomic() {
+  for (const bool oversized : {false, true}) {
+    Fixture f(oversized ? "audio/wav" : "application/octet-stream",
+        oversized ? 16777217U : 3U);
+    const auto result = f.store.adopt_candidates(f.root, f.request);
+    LMDJ_CHECK(!result.has_value());
+    LMDJ_CHECK(result.error().code == ErrorCode::invalid_argument);
+    f.unchanged();
+  }
 }
 void success_and_explicit_repeat() {
   Fixture f;
@@ -202,7 +214,7 @@ void tampered_identity_rejected() {
 }
 }
 int main() {
-  try { success_and_explicit_repeat(); writer_source_checks(); failures(); crash_recovery(); legacy_promotion_and_model_evidence(); tampered_identity_rejected(); }
+  try { unsupported_source_is_atomic(); success_and_explicit_repeat(); writer_source_checks(); failures(); crash_recovery(); legacy_promotion_and_model_evidence(); tampered_identity_rejected(); }
   catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
   std::cout << "candidate adoption ProjectIO: PASS\n";
 }
