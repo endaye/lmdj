@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -53,6 +54,10 @@ inline constexpr std::size_t kRealtimeTriggerOutcomeCapacity = 4'096;
 // remains observable to callers that do not yet consume the Stage 8 stream.
 inline constexpr std::size_t kRealtimeVoiceStateCapacity =
     (kRealtimeCaptureCapacity + kRealtimeQueueCapacity) * 2;
+// Receipt-bounded callers drain states before retiring consumed commands.
+// At most two edges per pending command, plus one terminal per existing Voice.
+inline constexpr std::size_t kRealtimeReceiptVoiceStateCapacity =
+    kRealtimeQueueCapacity * 2 + kRealtimeVoiceCapacity;
 
 enum class RealtimeState : std::uint8_t { stopped, running };
 enum class EnqueueResult : std::uint8_t {
@@ -295,6 +300,35 @@ class RuntimeVoiceStateQueue {
   FixedSpscQueue<Cell, Capacity> queue_;
 };
 
+// Construct once on the control side; selection and pointees never change.
+// Both alternatives retain the same SPSC publication and compact-cell format.
+class RuntimeVoiceStateStorage {
+ public:
+  using Full = RuntimeVoiceStateQueue<kRealtimeVoiceStateCapacity>;
+  using ReceiptBounded = RuntimeVoiceStateQueue<kRealtimeReceiptVoiceStateCapacity>;
+
+  explicit RuntimeVoiceStateStorage(bool receipt_bounded = false)
+      : full_(receipt_bounded ? nullptr : std::make_unique<Full>()),
+        bounded_(receipt_bounded ? std::make_unique<ReceiptBounded>() : nullptr) {}
+
+  bool try_push(const RuntimeVoiceStateEvent& event) noexcept {
+    return full_ ? full_->try_push(event) : bounded_->try_push(event);
+  }
+  bool try_pop(RuntimeVoiceStateEvent& event) noexcept {
+    return full_ ? full_->try_pop(event) : bounded_->try_pop(event);
+  }
+  std::size_t size_approx() const noexcept {
+    return full_ ? full_->size_approx() : bounded_->size_approx();
+  }
+  std::size_t clear_quiescent() noexcept {
+    return full_ ? full_->clear_quiescent() : bounded_->clear_quiescent();
+  }
+
+ private:
+  std::unique_ptr<Full> full_;
+  std::unique_ptr<ReceiptBounded> bounded_;
+};
+
 struct RealtimeEngineAudioAccess;
 
 template <typename TryPop>
@@ -348,6 +382,17 @@ std::size_t drain_voice_states_fail_closed(
 // for the full model.
 class RealtimeEngine final {
  public:
+  // Construction allocates the complete Voice-state queue, before publication
+  // to audio. Default callers retain the full Capture-backlog capacity.
+  RealtimeEngine() = default;
+  // Opt-in only for a caller retaining <= kRealtimeQueueCapacity commands until
+  // receipt retirement. It must acquire audio consumption, drain Voice states,
+  // then retire receipts, in that order. No switching after construction.
+  struct ReceiptBoundedVoiceStates {};
+  explicit RealtimeEngine(ReceiptBoundedVoiceStates) : voice_state_ring_(true) {}
+  static constexpr std::size_t receipt_bounded_voice_state_storage_bytes() noexcept {
+    return sizeof(detail::RuntimeVoiceStateStorage::ReceiptBounded);
+  }
   // Control thread, quiescent. May reallocate sample storage.
   foundation::Result<void> load_sample(
       std::uint8_t slot, std::span<const float> mono_pcm);
@@ -633,8 +678,7 @@ class RealtimeEngine final {
       RuntimeTriggerOutcomeEvent,
       kRealtimeTriggerOutcomeCapacity>
       trigger_outcome_ring_;
-  detail::RuntimeVoiceStateQueue<kRealtimeVoiceStateCapacity>
-      voice_state_ring_;
+  detail::RuntimeVoiceStateStorage voice_state_ring_;
   std::array<Voice, kRealtimeVoiceCapacity> voices_{};
   std::array<cooker::ResolvedPlayback, kRealtimeSampleSlots> previews_{};
   std::uint64_t preview_mask_ = 0;

@@ -43,6 +43,42 @@ void voice_state_storage_uses_compact_cells() {
              24 * (capacity + 1) + 192);
 }
 
+void engine_does_not_embed_the_voice_backlog() {
+  using namespace lmdj::audio;
+  // A small-profile Engine must not still contain the default backlog inline.
+  LMDJ_CHECK(sizeof(RealtimeEngine) <
+             sizeof(detail::RuntimeVoiceStateQueue<kRealtimeVoiceStateCapacity>));
+}
+
+void selected_voice_storage_preserves_capacity_and_events(bool bounded) {
+  using namespace lmdj::audio;
+  static_assert(kRealtimeReceiptVoiceStateCapacity == 2176);
+  const auto capacity = bounded ? kRealtimeReceiptVoiceStateCapacity
+                                : kRealtimeVoiceStateCapacity;
+  detail::RuntimeVoiceStateStorage queue(bounded);
+  auto actual = voice_event(99);
+  LMDJ_CHECK(!queue.try_pop(actual));
+  check_same_event(actual, voice_event(99));
+  for (std::size_t index = 0; index < capacity; ++index) {
+    LMDJ_CHECK(queue.try_push(voice_event(index)));
+  }
+  LMDJ_CHECK(!queue.try_push(voice_event(capacity)));
+  LMDJ_CHECK(queue.size_approx() == capacity);
+  // Keep the queue full across two whole wraparounds, with a rejected push at
+  // each boundary proving that failure did not overwrite the oldest event.
+  for (std::size_t index = 0; index < capacity * 2; ++index) {
+    LMDJ_CHECK(queue.try_pop(actual));
+    check_same_event(actual, voice_event(index));
+    LMDJ_CHECK(queue.try_push(voice_event(index + capacity)));
+    LMDJ_CHECK(!queue.try_push(voice_event(99)));
+  }
+  LMDJ_CHECK(queue.clear_quiescent() == capacity);
+  LMDJ_CHECK(queue.size_approx() == 0);
+  LMDJ_CHECK(queue.try_push(voice_event(7)));
+  LMDJ_CHECK(queue.try_pop(actual));
+  check_same_event(actual, voice_event(7));
+}
+
 void voice_state_transport_preserves_boundary_values() {
   constexpr auto max64 = std::numeric_limits<std::uint64_t>::max();
   constexpr auto max32 = std::numeric_limits<std::uint32_t>::max();
@@ -148,6 +184,9 @@ void clear_requires_quiescence_and_reports_count() {
 }  // namespace
 
 int main() {
+  engine_does_not_embed_the_voice_backlog();
+  selected_voice_storage_preserves_capacity_and_events(false);
+  selected_voice_storage_preserves_capacity_and_events(true);
   voice_state_storage_uses_compact_cells();
   voice_state_transport_preserves_boundary_values();
   voice_state_exact_capacity_and_fifo();

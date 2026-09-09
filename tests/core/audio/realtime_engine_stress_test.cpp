@@ -14,10 +14,9 @@
 
 namespace {
 
-void preserves_compact_voice_states_under_spsc_contention() {
+template <typename Queue>
+void check_voice_state_contention(Queue& queue) {
   constexpr std::uint64_t kEvents = 1'000'000;
-  // A small ring forces repeated wraparound under producer/consumer overlap.
-  lmdj::audio::detail::RuntimeVoiceStateQueue<7> queue;
   std::thread producer([&] {
     for (std::uint64_t index = 0; index < kEvents; ++index) {
       const lmdj::audio::RuntimeVoiceStateEvent event{
@@ -49,6 +48,16 @@ void preserves_compact_voice_states_under_spsc_contention() {
   }
   producer.join();
   LMDJ_CHECK(queue.size_approx() == 0);
+}
+
+void preserves_compact_voice_states_under_spsc_contention() {
+  // Retain the tiny-ring test and also exercise both actual storage branches.
+  lmdj::audio::detail::RuntimeVoiceStateQueue<7> small;
+  check_voice_state_contention(small);
+  lmdj::audio::detail::RuntimeVoiceStateStorage full;
+  check_voice_state_contention(full);
+  lmdj::audio::detail::RuntimeVoiceStateStorage bounded(true);
+  check_voice_state_contention(bounded);
 }
 
 void preserves_all_trigger_events_under_spsc_contention() {

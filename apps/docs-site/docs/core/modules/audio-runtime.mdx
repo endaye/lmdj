@@ -32,8 +32,8 @@ atomic32 claimed marker 管理 callback ownership，外部 authority 仍校验�
 Voice-state ring 内部使用自然对齐的紧凑 cell，入队／出队按字段复制，保留公开
 `RuntimeVoiceStateEvent` 的成员顺序和完整 64-bit sequence/runtime frame、32-bit
 source frame。容量仍为 10,240；通用 SPSC 索引与内存序、满队列损坏状态、拒绝新
-Voice 和 fail-closed drain 语义不变。只减少固定存储，不删除事件能力，也不分配
-动态队列。`RealtimeEngine` 的 C++ 对象大小变化要求所有二进制消费者一致重编；
+Voice 和 fail-closed drain 语义不变。当前队列存储在 Engine 构造时独立分配，
+不是 render 中的动态扩容。`RealtimeEngine` 的 C++ 对象大小变化要求所有二进制消费者一致重编；
 公开事件 ABI 不变不代表 Engine ABI 不变，后续 Package 分配须处理 MAJOR 影响。
 
 ## 7. 产品使用方
@@ -47,6 +47,27 @@ render 后发布精确消费序号，不是任意线程遥测，也不把消费�
 Facade 自有 OPEN/BUSY admission 屏障排空 Core render 后才调用 Engine stop/unload；
 Engine 原来的 quiescence 前置条件没有弱化。该窄路径只准备 Pattern/Pad，不调用
 Master FX prepare；嵌入 Engine 的固定 FX 对象仍计入固定成本。
+
+### Voice-state 的回执有界存储
+
+默认 Engine 构造仍保留 10240 条 Voice-state 容量。显式
+`ReceiptBoundedVoiceStates` 构造选择固定 2176 条，仅供满足回执约束的调用方：
+最多 1024 条命令从接收直到回执取走一直占用 pending 名额；先 acquire render
+消费位置，再 drain Voice states，最后归还名额。每条命令至多两个状态事件，
+加上最多 128 个既有 Voice 的结束事件，得到 `2 × 1024 + 128` 的上界。
+Pattern/replay/audition 不进入此状态流；release tail 不重复发布结束事件。
+
+Runtime Facade 显式采用该模式；桌面/Performance 调用方默认不变。两个模式都在
+控制侧构造时一次分配完整固定 SPSC 队列，期间不切换、不截断、不缩窄字段；
+资源不足可以使构造抛出异常，Facade load 将其转为 allocation_failed 并保留 empty。
+回调不分配、不释放、不加锁；析构仍要求 quiescence。预算必须同时计入 Engine
+对象和独立队列，allocator overhead 另属平台 reserve。选用较小模式但违反回执
+约束的 Core 调用方仍会触发原有 corrupted/fail-closed，不会静默覆盖事件。
+
+单元测试锁定两种精确容量和全宽字段；组件测试覆盖 128 个旧 Voice 结束加
+1024 次短音的恰好 2176 条未读状态、队列满重试和部分回执。并发测试覆盖实际
+存储分支以及 render 与满额命令/部分 poll 的交错。这些源码测试不代表真机音频验收。
+
 ### Capture 缓冲按需准备
 
 当前 source 的 Capture ring 不再嵌入 Engine；未请求录制时没有 ring allocation。

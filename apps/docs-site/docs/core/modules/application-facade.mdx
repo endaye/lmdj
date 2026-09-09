@@ -78,12 +78,20 @@ Core render 退出；`finish_stop` 在 BUSY 清除前只返回 draining，不调
 或回收内存。`stop` 在控制线程等待这个屏障；回调不等待，关闭或重入时输出静音。
 Host 仍须负责自己的设备/DMA 回调生命周期，并在析构 Facade 前停止再次调用 render。
 
-load 在分配 PCM 前复用完整内容校验，报告固定对象（含 Engine）、借入 encoded
+load 在分配 PCM 前复用完整内容校验，报告固定对象（含 Engine 与独立 Voice-state 队列）、借入 encoded
 bytes、去重 PCM、per-Pad float 展开、metadata 和准备临时空间，溢出或超总额度拒绝。
 配置还必须显式提供 platform reserve，覆盖 allocator/control-block/capacity rounding、
 平台 stack、Host buffers 等；数值必须由平台测量，不是 Core 推断的可用 RAM。
 已取走并由 Host 保留的历史 epoch/回执内存属于 Host。此入口不准备 Master FX 动态
 缓冲，不提供 FX 命令；资源报告不是 ESP32 map/stack/heap、DMA 或实时性能验收。
+
+Runtime-only 显式选择 2176-entry Voice-state 存储，不改桌面默认 10240-entry 队列。
+最多 1024 条 accepted 命令直到回执取走才释放名额；`poll` 必须先 acquire 消费位置，
+再 drain 事件，最后取回执，从而把未读状态限制为 `2 × 1024 + 128`（命令的
+started/terminal 加既有 Voice 的 terminal）。空/部分回执 span 也保持该顺序。
+128 Voice、控制/结果队列容量、完整事件、命令结果和 stop/drain/unload/reset
+语义不变。独立存储在 load 构造 Engine 时分配并计入 fixed_bytes；不是把占用移出
+sizeof 后省略。分配失败的 empty/静音/重试以及满额并发回执由组件和 stress 测试覆盖。
 
 错误翻译保留公共类别与配额详情；查询和 Sample commit 共用 Audio Runtime 的 overflow-checked Bank/generation 账本，较小的 remaining 约束生效、相等时 Bank 优先。提交恰好允许 effective remaining frames，超一 mono frame 确定性返回 `BANK_QUOTA_EXHAUSTED` 或 `PROJECT_QUOTA_EXHAUSTED`；revision 漂移先返回 `REVISION_CONFLICT`，拒绝不会修改 Project Truth 或已发布 generation。Runtime Snapshot 准备复用同一账本，publication residency 仍是独立瞬态 Host/Attempt 状态。本地 Sequence mutex 只负责进程内 admission 排序，Project I/O 仍在 writer lease 内重判持久 authority；C API stress 验证并发生命周期。
 ## 7. 产品使用方

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <lmdj/audio/prepared_sample_bank.hpp>
+#include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/cooker/runtime_content.hpp>
 #include "tests/core/support/test.hpp"
 
@@ -253,6 +254,79 @@ void every_load_allocation_failure_stays_empty() {
   }
 }
 
+void load_uses_and_accounts_for_the_receipt_bounded_storage() {
+  const auto bytes = content();
+  RuntimeFacade runtime(config());
+  // Reject a default 10240-entry allocation (and the original inline Engine).
+  // The receipt-bounded Engine and queue must each fit below this size.
+  fail_size = sizeof(audio::detail::RuntimeVoiceStateStorage::Full);
+  const auto loaded = runtime.load(bytes.bytes, bytes.identity);
+  fail_size = 0;
+  LMDJ_CHECK(loaded == RuntimeResult::ok);
+  LMDJ_CHECK(runtime.budget().fixed_bytes >=
+      sizeof(RuntimeFacade) + sizeof(audio::RealtimeEngine) +
+      audio::RealtimeEngine::receipt_bounded_voice_state_storage_bytes());
+}
+
+void old_voice_terminals_and_full_pending_batch_preserve_receipts() {
+  auto source = snapshot(false);
+  auto short_pcm = std::make_shared<const cooker::PcmSample>(
+      cooker::PcmSample{48'000, 1, {16384, 16384, 16384, 16384}});
+  source.pads.push_back({{0, 1}, {}, short_pcm,
+                        {0, 4, domain::TriggerMode::one_shot, 1.0F, false}});
+  const auto encoded = cooker::encode_runtime_content(source, config().content_limits);
+  LMDJ_CHECK(encoded.has_value());
+  const auto& bytes = encoded.value();
+  auto limits = config(); limits.maximum_pending_commands = 1024;
+  RuntimeFacade runtime(limits);
+  LMDJ_CHECK(runtime.load(bytes.bytes, bytes.identity) == RuntimeResult::ok);
+  RuntimeEpoch epoch;
+  LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
+  for (std::uint32_t sequence = 1; sequence <= 128; ++sequence) {
+    LMDJ_CHECK(runtime.submit({epoch, sequence}) == RuntimeResult::accepted);
+  }
+  Output output; output.render(runtime);
+  std::array<RuntimeReceipt, 128> initial;
+  LMDJ_CHECK(runtime.poll(initial) == initial.size());
+  for (std::size_t index = 0; index < initial.size(); ++index) {
+    LMDJ_CHECK(initial[index].sequence == index + 1);
+    LMDJ_CHECK(initial[index].outcome == RuntimeCommandOutcome::voice_started);
+  }
+  // The starts have been acknowledged/drained. All 128 old voices now end
+  // without another poll, accounting for the + Voices term of 2*N + Voices.
+  for (int block = 0; block < 15; ++block) output.render(runtime);
+  std::array<float, 4> left{}, right{};
+  const auto render_short = [&] {
+    forbid_allocation = true;
+    runtime.render(left.data(), right.data(), left.size());
+    forbid_allocation = false;
+    LMDJ_CHECK(left[1] > 0 && right[1] > 0);
+  };
+  for (std::uint32_t sequence = 129; sequence <= 1152; ++sequence) {
+    LMDJ_CHECK(runtime.submit({epoch, sequence, RuntimeCommandKind::press, 1}) ==
+               RuntimeResult::accepted);
+    render_short();
+  }
+  // 128 terminals + 1024 * (started, completed) = exactly 2176 unread states.
+  const RuntimeCommand retry{epoch, 1153, RuntimeCommandKind::press, 1};
+  LMDJ_CHECK(runtime.submit(retry) == RuntimeResult::queue_full);
+  std::array<RuntimeReceipt, 1> receipt;
+  LMDJ_CHECK(runtime.poll(receipt) == 1);
+  LMDJ_CHECK(receipt[0].sequence == 129 && receipt[0].epoch == epoch);
+  LMDJ_CHECK(receipt[0].outcome == RuntimeCommandOutcome::voice_started);
+  LMDJ_CHECK(runtime.submit(retry) == RuntimeResult::accepted);
+  render_short();
+  for (std::uint32_t sequence = 130; sequence <= 1153; ++sequence) {
+    LMDJ_CHECK(runtime.poll(receipt) == 1);
+    LMDJ_CHECK(receipt[0].epoch == epoch && receipt[0].sequence == sequence);
+    LMDJ_CHECK(receipt[0].outcome == RuntimeCommandOutcome::voice_started);
+  }
+  LMDJ_CHECK(runtime.poll(receipt) == 0);
+  runtime.stop();
+  LMDJ_CHECK(runtime.unload() == RuntimeResult::ok);
+  output.render(runtime); LMDJ_CHECK(output.silent());
+}
+
 void canonical_preparation_rejects_duplicate_order() {
   auto source = snapshot();
   LMDJ_CHECK(audio::PreparedPatternView::from_canonical_snapshot(source).has_value());
@@ -389,6 +463,8 @@ void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept { op
 void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept { operator delete(pointer); }
 
 int main() {
+  load_uses_and_accounts_for_the_receipt_bounded_storage();
+  old_voice_terminals_and_full_pending_batch_preserve_receipts();
   lifecycle_journey();
   receipts_and_retry();
   budget_and_allocation_retry();
