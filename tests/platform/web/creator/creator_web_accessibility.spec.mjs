@@ -151,10 +151,14 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   // no reference: the browser never fetches it. Matching the raw bytes
   // conflated the two and read the worked example inside index.html's own
   // CSP commentary as a live reference (#1064). Strip comments first, and
-  // assert separately that stripping actually happened -- otherwise a change
-  // to the comment syntax would silently turn this into a no-op check.
+  // assert separately that stripping actually worked -- otherwise a change to
+  // the comment syntax would silently turn this into a no-op check. Guarding
+  // on a comment being present keeps two situations apart: a document that
+  // carries no comment at all is fine and the raw-bytes check below is exact
+  // for it, whereas a document that carries one the strip did not remove is
+  // the no-op hazard, and it now says so rather than reporting a byte count.
   const liveIndex = index.replace(/<!--[\s\S]*?-->/g, "");
-  expect(liveIndex.length).toBeLessThan(index.length);
+  if (index.includes("<!--")) expect(liveIndex).not.toContain("<!--");
   expect(liveIndex).not.toMatch(/https?:\/\//i);
   for (const asset of manifest.assets) {
     expect(asset.path).toMatch(/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|wasm)$/);
