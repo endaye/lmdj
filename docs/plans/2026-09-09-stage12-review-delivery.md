@@ -1,7 +1,9 @@
 # Stage 12 R1/R2 review delivery and implementation handoff
 
 Date: 2026-09-09. Relates to #467 and #471.
-Status: complete proposal for review; product decisions remain unapproved.
+Status: R1 and R2-A–F confirmed by the user; see the
+[dated decision](../prd/decisions/2026-09-09-stage12-contract-candidate.md).
+Historical review wording below is retained; K1 may now implement this inventory.
 Authority: [review packet](../design/2026-09-09-stage12-contract-candidate-review.md).
 
 ## This Task

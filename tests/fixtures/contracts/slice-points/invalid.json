@@ -1,0 +1,607 @@
+{
+  "cases": [
+    {
+      "name": "EOF is not an onset",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 1000
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "context",
+      "expected_error": "frame outside source"
+    },
+    {
+      "name": "negative frame",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": -1
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "below minimum"
+    },
+    {
+      "name": "fractional frame",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0.5
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "expected type"
+    },
+    {
+      "name": "boolean frame",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": true
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "expected type"
+    },
+    {
+      "name": "unsafe integer frame",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 9007199254740992
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "above maximum"
+    },
+    {
+      "name": "duplicate frames",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0
+          },
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "context",
+      "expected_error": "frames not strictly increasing"
+    },
+    {
+      "name": "descending frames",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 10
+          },
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "context",
+      "expected_error": "frames not strictly increasing"
+    },
+    {
+      "name": "wrong source binding",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "context",
+      "expected_error": "source hash mismatch"
+    },
+    {
+      "name": "wrong rate binding",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 44100,
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "context",
+      "expected_error": "source rate mismatch"
+    },
+    {
+      "name": "zero rate",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 0,
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "below minimum"
+    },
+    {
+      "name": "boolean rate",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": true,
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "expected type"
+    },
+    {
+      "name": "malformed hash",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "does not match pattern"
+    },
+    {
+      "name": "wrong contract",
+      "payload": {
+        "contract": "lmdj.slice-points.v2",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "expected const"
+    },
+    {
+      "name": "extra root key",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0
+          }
+        ],
+        "path": "/source.wav"
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "'path' is not allowed"
+    },
+    {
+      "name": "extra point key",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0,
+            "seconds": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "'seconds' is not allowed"
+    },
+    {
+      "name": "missing frame",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {}
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "missing required property 'frame'"
+    },
+    {
+      "name": "missing points",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "missing required property 'points'"
+    },
+    {
+      "name": "empty label",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0,
+            "label": ""
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "shorter than minLength"
+    },
+    {
+      "name": "boolean confidence",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0,
+            "confidence": true
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "expected type"
+    },
+    {
+      "name": "negative confidence",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0,
+            "confidence": -0.1
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "below minimum"
+    },
+    {
+      "name": "confidence above one",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0,
+            "confidence": 1.01
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "above maximum"
+    },
+    {
+      "name": "non-string label",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0,
+            "label": 3
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "expected type"
+    },
+    {
+      "name": "duplicate JSON keys",
+      "raw_json": "{\"contract\":\"lmdj.slice-points.v1\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"frame_rate\":48000,\"frame_rate\":48000,\"points\":[{\"frame\":0}]}",
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "syntax"
+    },
+    {
+      "name": "NaN",
+      "raw_json": "{\"contract\":\"lmdj.slice-points.v1\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"frame_rate\":48000,\"points\":[{\"frame\":0,\"confidence\":NaN}]}",
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "syntax"
+    },
+    {
+      "name": "Infinity",
+      "raw_json": "{\"contract\":\"lmdj.slice-points.v1\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"frame_rate\":48000,\"points\":[{\"frame\":0,\"confidence\":Infinity}]}",
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "syntax"
+    },
+    {
+      "name": "float overflow",
+      "raw_json": "{\"contract\":\"lmdj.slice-points.v1\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"frame_rate\":48000,\"points\":[{\"frame\":0,\"confidence\":1e999}]}",
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "syntax"
+    },
+    {
+      "name": "lone surrogate",
+      "raw_json": "{\"contract\":\"lmdj.slice-points.v1\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"frame_rate\":48000,\"points\":[{\"frame\":0,\"label\":\"\\ud800\"}]}",
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "syntax"
+    },
+    {
+      "name": "truncated JSON",
+      "raw_json": "{\"contract\":\"lmdj.slice-points.v1\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"frame_rate\":48000,\"points\":[{\"frame\":0}]",
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "syntax"
+    },
+    {
+      "name": "BOM",
+      "raw_json": "﻿{\"contract\":\"lmdj.slice-points.v1\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"frame_rate\":48000,\"points\":[{\"frame\":0}]}",
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "syntax"
+    },
+    {
+      "name": "invalid UTF-8",
+      "raw_hex": "7b22636f6e7472616374223a226c6d646a2e736c6963652d706f696e74732e7631222c22736f757263655f736861323536223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161222c226672616d655f72617465223a34383030302c22706f696e7473223a5b7b226672616d65223a302c226c6162656c223a22ff227d5d7d",
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "syntax"
+    },
+    {
+      "name": "missing contract",
+      "payload": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "missing required property 'contract'"
+    },
+    {
+      "name": "missing source_sha256",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "frame_rate": 48000,
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "missing required property 'source_sha256'"
+    },
+    {
+      "name": "missing frame_rate",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "missing required property 'frame_rate'"
+    },
+    {
+      "name": "unsafe integer rate",
+      "payload": {
+        "contract": "lmdj.slice-points.v1",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 9007199254740992,
+        "points": [
+          {
+            "frame": 0
+          }
+        ]
+      },
+      "context": {
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_rate": 48000,
+        "frame_count": 1000
+      },
+      "expected_layer": "schema",
+      "expected_error": "above maximum"
+    }
+  ]
+}
