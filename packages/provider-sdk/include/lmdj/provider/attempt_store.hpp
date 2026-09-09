@@ -97,6 +97,14 @@ class AttemptStore {
   foundation::Result<TerminalAttempt> inspect(
       foundation::AttemptId attempt_id) const;
 
+  // Reads only an exact output binding of a successful immutable terminal.
+  // Checks the caller's allocation bound before reading, then verifies complete
+  // length and digest. Missing/corrupt bytes never alter the terminal ledger.
+  foundation::Result<std::vector<std::byte>> read_candidate_artifact(
+      foundation::AttemptId attempt_id,
+      const foundation::ArtifactRef& artifact,
+      std::uint64_t maximum_bytes) const;
+
   foundation::Result<AttemptResult> execute(
       foundation::AttemptId attempt_id,
       const CapabilityRequest& request,

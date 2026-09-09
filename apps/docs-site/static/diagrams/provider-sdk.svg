@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="6ca39c73a63163baa318f2091b4fe2b324f4a6c65aa34479f6e918aabee10e0c">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="4ad8385081fa6a1d541efba057fd6579032d27f85c978f26957a74cfe200dbfa">
   <title id="title">Provider SDK Module</title><desc id="description">Owned ArtifactSource、共享预算、同步回调与验证后 terminal 可见性</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -39,7 +39,8 @@
       <text class="node-title" x="1226" y="222">Artifact Result</text>
       <text class="node-detail" x="1226" y="248">validator → publish → terminal</text>
     </g>
-  <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependency</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation only.</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Owned state</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Retained input handles keep leases; closed callbacks reject without terminal mutation.</div></foreignObject></g>
-<g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Forbidden boundary</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Provider never receives mutable Project or bundle path.</div></foreignObject></g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependency</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation only.</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Owned state</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Retained input handles keep leases; closed callbacks reject without terminal mutation.</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Forbidden boundary</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Provider never receives mutable Project or bundle path.</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Verified output reader</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Read only a successful terminal output binding under an explicit byte bound. Verify regular file, length and SHA-256; return owned bytes without exposing private paths or modifying terminal evidence.</div></foreignObject></g>
 </svg>

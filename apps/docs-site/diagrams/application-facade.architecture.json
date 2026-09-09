@@ -146,7 +146,7 @@
   "cards": [
     {
       "title": "Dependencies",
-      "body": "Full Facade links Performance Runtime and Runtime-only Facade, two independent narrow targets in the same Module. Runtime-only links Cooker/Audio, never Project IO or Provider SDK. Host owner selector → Facade → SDK policy/binding/budget gates → Project IO verified Asset read under one writer lease → owned source/sink. Session grants reset on restart; durable Attempts never contain Project paths or alter Truth."
+      "body": "Full Facade links Performance Runtime and Runtime-only Facade, two independent narrow targets in the same Module. Runtime-only links Cooker/Audio, never Project IO or Provider SDK. Host owner selector → Facade → SDK policy/binding/budget gates → Project IO verified Asset read under one writer lease → owned source/sink. Session grants reset on restart; durable Attempts never contain Project paths or alter Truth. Persist intent before execute. One live Attempt per Job; short owner lease publishes stable Set, ordered history, active pointer and supersession atomically. Recover only recorded Attempts; verify terminal bytes on each read. Project Truth remains unchanged."
     },
     {
       "title": "Runtime content export",

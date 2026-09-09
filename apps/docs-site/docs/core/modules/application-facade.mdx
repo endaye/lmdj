@@ -151,3 +151,27 @@ Application 会话的 grant。未知或重复权限拒绝且不改变旧策略�
 
 `facade.provider_owner` 与 `host.provider_owner` 覆盖真实导入、输入读取、完整输出
 identity、失败终态和重启；无 owner、错误身份、损坏及 busy 不修改 Project Truth。
+
+## Workspace Slice Candidate Jobs
+
+`candidate.job.run` 接受显式 Job/新 Attempt ID、source Project/Asset、
+`expected_revision`、参数与执行策略。Facade 读取并绑定完整 source Artifact 与原始
+revision，将 intent 和预分配 Set ID 耐久保存后调用已注册的 `sample.slice.v1`。
+`candidate.job.inspect` 返回有序 history、active Set 及其稳定 interval recipe IDs。
+这些记录只属于 Workspace，不写入 Project Truth，也不增加 SDK terminal Candidate 数量。
+
+成功终端的 slice points 经 SDK 校验输出字节、Facade 校验 source/参数/执行上下文后展开：
+无 onset 为成功的空 Set；否则使用去重的 0、onset、EOF 边界生成所有非空相邻区间。
+新 Set、active pointer、history 与旧 Set supersession 在一次 owner-state replacement
+中发布。失败重试保留旧 active Set。每次查询重新核对终端和输出完整身份；损坏、篡改
+配方或不一致状态会拒绝，不能用持久索引绕过验证。
+
+每个 Job 的执行 lease 跨越 Provider run；短 Workspace mutation lease 串行化发布。
+同 Job 并发执行以 `INVALID_ARGUMENT/job_busy` 拒绝。恢复只检查已记录 Attempt，
+不扫描 blob：成功终端可发布一次，缺失终端记为 interrupted，显式重试必须用新 ID。
+进程内互斥补足 storage writer 的可重入语义，跨进程使用既有平台 writer lease。
+
+`facade.candidate_job` 验证真实 Slice Provider、区间、空结果、失败重试、重启及损坏拒绝；
+`facade.candidate_store_recovery` 在独立进程退出后检查 intent/terminal/publication
+三个边界，并验证 live Job 不会被误恢复或重入。全部拒绝路径保持 Project 文件不变。
+采用、持久谱系、取消/丢弃和 Host preview 分别由后续 L2–L5 完成。

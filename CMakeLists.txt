@@ -146,11 +146,14 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_provider_sample_slice_tests
     lmdj_provider_artifact_source_tests
     lmdj_provider_output_validation_tests
+    lmdj_provider_attempt_output_read_tests
     lmdj_provider_execution_crash_tests
     lmdj_facade_performance_runtime_consumer_tests
     lmdj_runtime_facade_tests
     lmdj_runtime_facade_concurrency_tests
     lmdj_application_facade_tests
+    lmdj_facade_candidate_store_tests
+    lmdj_facade_candidate_job_tests
     lmdj_facade_runtime_content_export_tests
     lmdj_application_facade_failure_tests
     lmdj_facade_sequence_surface_tests

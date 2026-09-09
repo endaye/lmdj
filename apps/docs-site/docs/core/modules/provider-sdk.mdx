@@ -30,7 +30,7 @@ ProviderRunContext 按值传递并持有不可变请求；source/sink 只允许 
 Provider 从不接收可变 Project 或 bundle path，只接收 Artifact。
 每个输出端口必须由消费者注册 validator（可声明 scratch 字节预算）；SDK 不解析
 WAV 或 Slice JSON。输出复制、总量/数量校验与所有已产生输出的 schema 验证完成后才发布。
-Provider 仍返回单个 Candidate；Job、CandidateIndex 和 Slice 接线属于后续 Task。
+Provider 仍返回单个 Candidate；Job、CandidateIndex 和 Slice interval 展开由 Facade 的 Workspace owner 拥有。
 ## 6. 状态、错误与生命周期
 Provider failure 属于 Attempt；取消、失败和输出身份均有隔离边界。
 输入拒绝保留 `input_binding_invalid`、`input_artifact_unavailable`、
@@ -63,3 +63,12 @@ SDK 复用既有 Project I/O Web platform factory 创建的 OPFS workspace 挂�
 Web Lock 内串行发布；浏览器销毁 Worker 时释放锁。Web 使用完整文件 move 替代 native
 hard link，Artifact 目录按文件发布后才写 terminal；中断的 reservation 不可复用，
 部分输出不构成成功终态。Native 的原子 hard-link 与 fsync 路径保持原有语义。
+
+## Verified terminal output reader
+
+`AttemptStore::read_candidate_artifact` 只读取成功 terminal 中精确绑定的 Artifact，
+接受调用方的 byte bound，检查文件类型、长度、完整读取与 SHA-256 后返回字节副本。
+它不向调用方暴露 SDK 内部路径，也不修改 terminal 或输出文件；Facade 用它恢复与
+验证 Workspace Candidate Sets。空输出仍按完整 Artifact identity 校验。
+`provider.attempt_output_read` 覆盖绑定、大小限制、空输出、损坏、缺失及符号链接拒绝。
+新 Workspace 尚无 Attempt 目录时，inspect 返回 `NOT_FOUND`，不创建目录或伪造终端。

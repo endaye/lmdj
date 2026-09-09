@@ -32,6 +32,7 @@ add_library(
   lmdj_application
   STATIC
     src/application.cpp
+    src/candidate_store.cpp
     src/assembly_loader.cpp
     src/mutation_publish_scope.cpp
     src/soundset_catalog.cpp
@@ -112,6 +113,27 @@ lmdj_target_warnings(lmdj_core_c)
 lmdj_target_sanitizers(lmdj_core_c)
 
 if(BUILD_TESTING)
+  if(UNIX AND NOT EMSCRIPTEN)
+    add_executable(lmdj_facade_candidate_store_tests
+      "${CMAKE_SOURCE_DIR}/tests/core/facade/candidate_store_test.cpp")
+    target_include_directories(lmdj_facade_candidate_store_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+    target_link_libraries(lmdj_facade_candidate_store_tests PRIVATE lmdj::application)
+    lmdj_target_warnings(lmdj_facade_candidate_store_tests)
+    lmdj_target_sanitizers(lmdj_facade_candidate_store_tests)
+    lmdj_add_test(NAME facade.candidate_store_recovery TIER e2e
+      COMMAND lmdj_facade_candidate_store_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    lmdj_add_test(NAME facade.candidate_store_stress TIER stress
+      COMMAND lmdj_facade_candidate_store_tests --stress WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      LABELS concurrency)
+  endif()
+  add_executable(lmdj_facade_candidate_job_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/candidate_job_test.cpp")
+  target_include_directories(lmdj_facade_candidate_job_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_facade_candidate_job_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_facade_candidate_job_tests)
+  lmdj_target_sanitizers(lmdj_facade_candidate_job_tests)
+  lmdj_add_test(NAME facade.candidate_job TIER component
+    COMMAND lmdj_facade_candidate_job_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
   add_executable(lmdj_facade_provider_owner_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/provider_owner_test.cpp")
   target_include_directories(lmdj_facade_provider_owner_tests PRIVATE "${CMAKE_SOURCE_DIR}")

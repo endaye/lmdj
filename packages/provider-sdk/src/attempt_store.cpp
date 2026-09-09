@@ -1206,7 +1206,7 @@ bool valid_output_bindings(
 }
 
 foundation::Result<std::filesystem::path> existing_attempts_root(
-    const std::filesystem::path& workspace_root) {
+    const std::filesystem::path& workspace_root, bool missing_is_not_found = false) {
   if (workspace_root.empty() ||
       workspace_root.extension() == ".lmdj") {
     return foundation::Result<std::filesystem::path>::failure(
@@ -1224,6 +1224,12 @@ foundation::Result<std::filesystem::path> existing_attempts_root(
     std::error_code status_error;
     const auto status =
         std::filesystem::symlink_status(directory, status_error);
+    if (missing_is_not_found && directory != workspace_root &&
+        status.type() == std::filesystem::file_type::not_found &&
+        (!status_error || status_error == std::errc::no_such_file_or_directory)) {
+      return foundation::Result<std::filesystem::path>::failure(
+          Error{ErrorCode::not_found, "Workspace has no persisted Attempts"});
+    }
     if (status_error || std::filesystem::is_symlink(status) ||
         !std::filesystem::is_directory(status)) {
       return foundation::Result<std::filesystem::path>::failure(
@@ -1450,7 +1456,7 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
     return foundation::Result<TerminalAttempt>::failure(
         invalid_argument("attempt id is not safe for inspection"));
   }
-  const auto attempts = existing_attempts_root(workspace_root_);
+  const auto attempts = existing_attempts_root(workspace_root_, true);
   if (!attempts.has_value()) {
     return foundation::Result<TerminalAttempt>::failure(attempts.error());
   }
@@ -1727,6 +1733,68 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
     return foundation::Result<TerminalAttempt>::failure(
         invalid_argument("terminal Attempt is not valid canonical JSON"));
   }
+}
+
+foundation::Result<std::vector<std::byte>> AttemptStore::read_candidate_artifact(
+    foundation::AttemptId attempt_id,
+    const foundation::ArtifactRef& artifact,
+    std::uint64_t maximum_bytes) const {
+  using Result = foundation::Result<std::vector<std::byte>>;
+  const auto unavailable = [](ErrorCode code, const char* message) {
+    return Result::failure(Error{code, message,
+        {{"reason", "candidate_artifact_unavailable"}}});
+  };
+  if (!valid_artifact(artifact) || artifact.byte_length > maximum_bytes ||
+      artifact.byte_length > std::numeric_limits<std::size_t>::max() ||
+      artifact.byte_length > static_cast<std::uint64_t>(
+          std::numeric_limits<std::streamsize>::max())) {
+    return Result::failure(invalid_argument("Candidate output exceeds the reader byte bound"));
+  }
+  const auto terminal = inspect(attempt_id);
+  if (!terminal.has_value()) return Result::failure(terminal.error());
+  if (terminal.value().status != AttemptStatus::succeeded ||
+      std::none_of(terminal.value().candidate_outputs.begin(),
+                   terminal.value().candidate_outputs.end(),
+                   [&](const auto& binding) { return binding.artifact == artifact; })) {
+    return Result::failure(invalid_argument("Artifact is not a successful Candidate output binding"));
+  }
+  const auto root = existing_attempts_root(workspace_root_);
+  if (!root.has_value()) return Result::failure(root.error());
+  const auto attempt_root = root.value() / attempt_id.value();
+  const auto artifacts = attempt_root / "artifacts";
+  for (const auto& directory : {attempt_root, artifacts}) {
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status(directory, error);
+    if (error || std::filesystem::is_symlink(status) ||
+        !std::filesystem::is_directory(status)) {
+      return unavailable(ErrorCode::not_found, "Candidate output directory is unavailable");
+    }
+  }
+  const auto path = artifacts / artifact.sha256;
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error || std::filesystem::is_symlink(status) ||
+      !std::filesystem::is_regular_file(status)) {
+    return unavailable(ErrorCode::not_found, "Candidate output is unavailable");
+  }
+  if (std::filesystem::file_size(path, error) != artifact.byte_length || error) {
+    return unavailable(ErrorCode::io_error, "Candidate output byte length changed");
+  }
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream) return unavailable(ErrorCode::not_found, "Candidate output cannot be opened");
+  std::vector<std::byte> bytes(static_cast<std::size_t>(artifact.byte_length));
+  stream.read(reinterpret_cast<char*>(bytes.data()),
+              static_cast<std::streamsize>(bytes.size()));
+  if (stream.gcount() != static_cast<std::streamsize>(bytes.size()) ||
+      stream.peek() != std::char_traits<char>::eof() || stream.bad()) {
+    return unavailable(ErrorCode::io_error, "Candidate output could not be read completely");
+  }
+  const unsigned char empty = 0;
+  const auto* begin = bytes.empty() ? &empty : reinterpret_cast<const unsigned char*>(bytes.data());
+  if (picosha2::hash256_hex_string(begin, begin + bytes.size()) != artifact.sha256) {
+    return unavailable(ErrorCode::io_error, "Candidate output digest changed");
+  }
+  return Result::success(std::move(bytes));
 }
 
 foundation::Result<AttemptResult> AttemptStore::execute(
