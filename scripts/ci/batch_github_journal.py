@@ -69,11 +69,12 @@ def decode(body):
 
 
 class _PageControlProofs:
-    """Single-flight proofs, discarded with the page, never raw API responses.
+    """Single-flight proofs, never raw API responses.
 
-    Results are successful identity checks or a validated exact main SHA. Both
-    success and failure are shared for this page; a retry/new page redoes the
-    verification. Individual run/jobs and atomic writer trust remain separate.
+    The caller scopes this helper either to one page (for mutable workflow
+    identity) or to one authenticated read transaction (for immutable control
+    ancestry/source and the pinned main SHA). Individual mutable run/jobs
+    observations and atomic writer trust remain separate.
     """
 
     def __init__(self):
@@ -115,7 +116,17 @@ class GitHubJournalTransport:
         except Exception:
             raise JournalBlocked("why: journal API credentials unavailable; remedy: restore scoped GitHub access") from None
         self._page_session = None
-        self._checked_writers = set()  # one short controller transaction only
+        self._checked_writers = set()  # current page's mutable writer observations
+
+    def _begin_read_transaction(self):
+        """Discard every proof from the previous authenticated read.
+
+        A page sequence is one read transaction. Only immutable control proofs
+        are carried from one page to the next; mutable run/job observations
+        are reset at every page and at every new transaction.
+        """
+        self._page_session = None
+        self._checked_writers = set()
 
     def _call(self, method, path, body=None):
         try:
@@ -182,14 +193,12 @@ class GitHubJournalTransport:
         return main
 
     def _control(self, writer, control_proofs=None):
-        """Prove each control against one page-local main, not writer execution."""
+        """Prove each control against one transaction-pinned main."""
         path, control = writer['workflow_path'], writer['control_sha']
         if control_proofs is None:
             self._workflow(writer)
             main = self._main()
         else:
-            control_proofs.verify(('workflow', self.repository, path, writer['workflow_id']),
-                                  lambda: self._workflow(writer))
             main = control_proofs.verify(('main', self.repository), self._main)
         # Only ancestry metadata is used here. Changed files appear on page 1;
         # page 2 avoids that payload and is never a scope/commit inventory.
@@ -208,7 +217,7 @@ class GitHubJournalTransport:
         except Exception:
             raise JournalBlocked("why: trusted workflow source is malformed; remedy: restore exact-control source visibility") from None
 
-    def _writer(self, writer, *, remember=True, control_proofs=None):
+    def _writer(self, writer, *, remember=True, control_proofs=None, workflow_proofs=None):
         require(isinstance(writer, dict) and set(writer) == {
             "repository", "issue_number", "run_id", "run_attempt", "control_sha", "workflow_path", "workflow_id", "job_name"},
             "writer identity schema is not closed")
@@ -240,6 +249,12 @@ class GitHubJournalTransport:
         if control_proofs is None:
             self._control(writer)
         else:
+            # Workflow identity is a mutable API observation. Recheck it once
+            # per page, while transaction proofs cover only immutable source,
+            # ancestry and the exact main SHA captured by that transaction.
+            (workflow_proofs or control_proofs).verify(
+                ('workflow', self.repository, path, writer['workflow_id']),
+                lambda: self._workflow(writer))
             control_proofs.verify(('control', self.repository, path, writer['workflow_id'], control),
                                   lambda: self._control(writer, control_proofs))
         jobs, total, seen = [], None, set()
@@ -285,15 +300,24 @@ class GitHubJournalTransport:
 
     def read_body(self, issue_id):
         self._fixed(issue_id)
+        self._begin_read_transaction()
         payload, writer = self._unpack(self._query(BODY_QUERY), "checkpoint")
         return {"checkpoint": payload, "provenance": writer}
 
     def page(self, issue_id, cursor):
         self._fixed(issue_id)
         if cursor is None:
-            self._page_session = {"count": 0, "total": None, "next": None, "seen": set()}
+            self._begin_read_transaction()
+            self._page_session = {"count": 0, "total": None, "next": None, "seen": set(),
+                                  "control_proofs": _PageControlProofs(),
+                                  "workflow_proofs": _PageControlProofs()}
         session = self._page_session
         require(session is not None and cursor == session["next"], "comment pagination cursor is out of sequence")
+        if cursor is not None:
+            # A continuation is still the same read transaction for immutable
+            # proofs, but mutable writer state and workflow identity are fresh.
+            self._checked_writers = set()
+            session["workflow_proofs"] = _PageControlProofs()
         issue = self._query(COMMENTS_QUERY, cursor)
         connection = issue.get("comments")
         require(isinstance(connection, dict) and type(connection.get("totalCount")) is int
@@ -330,11 +354,14 @@ class GitHubJournalTransport:
             # per call. Workers use only _writer's GET path, never pagination,
             # anchors, writes or the trust-cache mutation. Only control and
             # common identity proofs are single-flight; no raw mutable
-            # responses are cached. All controls compare to the same page main.
+            # responses are cached. All controls compare to the same
+            # transaction-pinned main.
             # Exiting the context joins all readers even when one future fails.
-            control_proofs = _PageControlProofs()
+            control_proofs = session["control_proofs"]
             with ThreadPoolExecutor(max_workers=min(4, len(unchecked))) as readers:
-                futures = [readers.submit(self._writer, writer, remember=False, control_proofs=control_proofs)
+                futures = [readers.submit(self._writer, writer, remember=False,
+                                           control_proofs=control_proofs,
+                                           workflow_proofs=session["workflow_proofs"])
                            for writer in unchecked.values()]
                 for future in futures:
                     future.result()

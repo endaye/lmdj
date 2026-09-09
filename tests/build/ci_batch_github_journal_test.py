@@ -315,6 +315,29 @@ class GitHubJournalTest(unittest.TestCase):
         self.assertEqual(len(reads), 402,
             'why: different controls reread common page identities; remedy: share only validated main/workflow proofs')
 
+    def test_transaction_reuses_immutable_proofs_across_pages_with_same_history(self):
+        def read_pages(reuse):
+            self.setUp()
+            self.multiple_writers([17, 18, 19, 20])
+            self.api.comment_pages = 2
+            first = self.transport.page(782, None)
+            if not reuse:
+                # Executable baseline for the prior page-local proof scope.
+                self.transport._page_session['control_proofs'] = github._PageControlProofs()
+            second = self.transport.page(782, first['next'])
+            return (first['comments'] + second['comments'], second['next']), len(self.api.calls)
+
+        before_output, before_calls = read_pages(False)
+        after_output, after_calls = read_pages(True)
+        self.assertEqual(before_output, after_output)
+        self.assertIsNone(after_output[1])
+        self.assertEqual([row['provenance']['run_id'] for row in after_output[0]], [17, 18, 19, 20],
+                         'why: proof reuse changed the complete journal history; remedy: preserve every page and record order')
+        self.assertEqual(before_calls, 18,
+                         'why: baseline no longer measures page-local proof requests; remedy: retain the unoptimized comparator')
+        self.assertEqual(after_calls, 15,
+                         'why: immutable control proofs were repeated across one read transaction; remedy: retain only immutable transaction proofs')
+
     def test_shared_main_failure_is_single_attempt_and_retry_reauthenticates_page(self):
         request, _ = self.diverse_controls(4)
         failed = []
@@ -423,13 +446,14 @@ class GitHubJournalTest(unittest.TestCase):
                 self.api._request = request
                 self.assertEqual(len(self.transport.page(782, None)['comments']), 4)
 
-    def test_later_page_rechecks_main_and_workflow_identity(self):
+    def test_later_page_reuses_pinned_main_but_refreshes_workflow_identity(self):
         for endpoint in ('main', 'workflow'):
             with self.subTest(endpoint=endpoint):
                 self.setUp()
                 request, _ = self.diverse_controls(2)
                 self.api.comment_pages = 1
                 first = self.transport.page(782, None)
+                before = len(self.api.calls)
                 def changed(method, path, **kwargs):
                     value = request(method, path, **kwargs)
                     if endpoint == 'main' and path.endswith('/git/ref/heads/main'):
@@ -438,10 +462,16 @@ class GitHubJournalTest(unittest.TestCase):
                         return {'id': 7, 'path': '.github/workflows/renamed.yml'}
                     return value
                 self.api._request = changed
-                with self.assertRaisesRegex(JournalBlocked, 'why:.*remedy:'):
-                    self.transport.page(782, first['next'])
-                self.assertEqual(len(self.transport._checked_writers), 1,
-                    'why: later page reused stale identity; remedy: obtain new common proofs for each page')
+                if endpoint == 'workflow':
+                    with self.assertRaisesRegex(JournalBlocked, 'workflow API identity'):
+                        self.transport.page(782, first['next'])
+                    self.assertEqual(sum('/actions/workflows/' in path for _, path, _ in self.api.calls[before:]), 1)
+                else:
+                    second = self.transport.page(782, first['next'])
+                    self.assertIsNone(second['next'])
+                    self.assertFalse(any(path.endswith('/git/ref/heads/main')
+                                         for _, path, _ in self.api.calls[before:]),
+                                     'why: immutable main proof was repeated; remedy: retain the pinned proof')
 
     def test_one_bad_distinct_control_proof_discards_whole_page_trust(self):
         for endpoint in ('source', 'ancestry'):
@@ -500,14 +530,51 @@ class GitHubJournalTest(unittest.TestCase):
         self.assertEqual(sum('/contents/' in path for path in seen), 2)
         self.assertTrue(any('/compare/' + other in path for path in seen))
 
-    def test_later_page_with_new_writer_rechecks_control_source(self):
+    def test_later_page_with_new_writer_reuses_control_source_proof(self):
         self.multiple_writers([17, 18])
         self.api.comment_pages = 1
         first = self.transport.page(782, None)
+        before = len(self.api.calls)
         self.api.compare_status = 'diverged'
-        with self.assertRaisesRegex(JournalBlocked, 'main history'):
+        second = self.transport.page(782, first['next'])
+        self.assertIsNone(second['next'])
+        self.assertEqual(sum('/actions/workflows/' in path for _, path, _ in self.api.calls[before:]), 1)
+        self.assertFalse(any('/compare/' in path or '/contents/' in path
+                             for _, path, _ in self.api.calls[before:]),
+                         'why: immutable control proof was repeated; remedy: reuse it within this read transaction')
+
+    def test_new_read_transaction_rechecks_mutable_writer_state(self):
+        self.multiple_writers([17, 18])
+        self.api.comment_pages = 1
+        first = self.transport.page(782, None)
+        self.assertIsNone(self.transport.page(782, first['next'])['next'])
+        self.api.run_changes = {'head_branch': 'untrusted'}
+        with self.assertRaisesRegex(JournalBlocked, 'control provenance'):
+            self.transport.page(782, None)
+
+    def test_later_page_rechecks_mutable_writer_state(self):
+        self.multiple_writers([17, 17])
+        self.api.comment_pages = 1
+        first = self.transport.page(782, None)
+        self.api.run_changes = {'head_branch': 'untrusted'}
+        with self.assertRaisesRegex(JournalBlocked, 'control provenance'):
             self.transport.page(782, first['next'])
-        self.assertEqual(len(self.transport._checked_writers), 1)
+
+    def test_later_page_rechecks_mutable_writer_jobs(self):
+        self.multiple_writers([17, 17])
+        self.api.comment_pages = 1
+        first = self.transport.page(782, None)
+        self.api.job_changes = {'name': 'untrusted job'}
+        with self.assertRaisesRegex(JournalBlocked, 'writer job is missing'):
+            self.transport.page(782, first['next'])
+
+    def test_later_page_still_rejects_comment_edit_after_proof_reuse(self):
+        self.multiple_writers([17, 18])
+        self.api.comment_pages = 1
+        first = self.transport.page(782, None)
+        self.api.comments[1]['editor'] = {'__typename': 'User', 'id': 'human'}
+        with self.assertRaisesRegex(JournalBlocked, 'comment was edited'):
+            self.transport.page(782, first['next'])
 
     def test_reopened_transport_reauthenticates_previously_shared_proof(self):
         self.multiple_writers([17, 18])
