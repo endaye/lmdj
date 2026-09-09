@@ -332,18 +332,84 @@ lint reads the text you give it and cannot see a directive added afterwards.
    permission. Read the PR's current head SHA, open/draft state, conflicts,
    unresolved review threads and effective protection. Unknown mergeability is
    not proof of no conflict: reread with a bounded wait or report it.
-2. **Inspect review evidence for that exact head**. Independent AI review is
-   feedback, not a machine verdict granting merge permission. Use the trusted
-   review publisher's head/run/attempt evidence and findings, not empty check
-   lists, NEUTRAL checks, the model's own completion claim, or old-head reviews.
-   Read and address substantive findings; dismissing or resolving a thread
-   requires an actual disposition and applicable authority.
-3. **Handle review failure visibly**. A missing credential, failed backend,
-   timeout, malformed output or stale head is not a clean review. Seek an
-   authorized human/agent takeover that actually inspects the current diff and
-   records reviewer, exact head, findings/disposition, limitations and reason
-   for takeover on the PR. Do not wait forever, forge green evidence or silently
-   treat missing review as approval. A new push invalidates old-head evidence.
+2. **Require independent review evidence for that exact head**. Run the read-only
+   one-shot helper from trusted repository code, using authenticated API access:
+   ```bash
+   GITHUB_TOKEN="$(gh auth token)" python3 scripts/ci/review_wait.py \
+     --repository endaye/lmdj --pr-number <number> --expect-head <full-head-sha>
+   ```
+   Its JSON `eligible: true` and exit 0 establish review evidence eligibility
+   only; `merge_authorized: false` and `conversation_protection: not_evaluated`
+   deliberately leave action authority and conversations to this procedure.
+   Pending, stale, invalid and unavailable observations exit nonzero. Check once
+   or poll for a bounded interval, then report pending and request an independent
+   takeover; elapsed time never becomes approval. Never add this as a required
+   check or change protection under this Task's authority.
+
+   The helper verifies live open/non-draft main-target PR head before and after
+   complete paginated collection, numeric bot identity, exact run/attempt,
+   successful producer and publisher, trusted workflow/control source and actual
+   retained review artifact. It compares published summary and signed inline
+   findings with the authentic model result. A model's own identity claim,
+   unsigned Markdown, old-head COMMENT, check label or NEUTRAL is insufficient.
+   Expired artifacts require takeover, not reconstructed bot approval.
+
+   Read **all** substantive findings and live review threads, including earlier
+   heads and other reviewers. Inspect complete paginated GraphQL `reviewThreads`
+   and their comments, not just `gh pr view reviews` or the helper's findings
+   list. Each finding needs an actual recorded disposition (fix and verification,
+   or reasoned rejection/deferment with applicable authority). Each unresolved
+   thread must be handled under live conversation protection. A resolved flag
+   alone does not prove a disposition, and an eligible automated review with
+   findings is not a clean review. Do not erase failed backend/run evidence.
+3. **Takeover or owner-only exact-head exception**. An independent reviewer must
+   actually inspect the complete current diff and Task verification; the author
+   cannot self-review. A shared GitHub login may represent independent agents,
+   but model self-description does not prove that independence. The trusted
+   repository owner may attest distinct author/reviewer sessions in the exact
+   format below, after verifying them. Only the authenticated repository owner
+   may instead waive independent review, with an exact head and nonempty reason.
+   `review:skipped` is display projection only and never standalone authority.
+
+   Append a fresh PR **issue comment whose entire body is one JSON object**;
+   do not edit an earlier record. The helper resolves repository owner numeric
+   identity from the API (currently a User-owned repository), checks comment
+   author identity and unchanged creation/update timestamps, and resolves the
+   takeover reviewer's login to its numeric API identity. Organization ownership
+   needs an explicitly defined owner policy before such records can be admitted.
+   No arbitrary Markdown or legacy takeover record is retroactively trusted:
+   the owner must explicitly adopt its current-head findings in a fresh record.
+
+   Minimal waiver (replace the SHA and reason with the actual decision):
+   ```json
+   {"schema":"lmdj.owner-review-attestation.v1","kind":"waiver","head_sha":"<40 lowercase hex characters>","reason":"<owner reason for this exact head>"}
+   ```
+   Independent takeover attestation (all shown keys required; no extra keys):
+   ```json
+   {
+     "schema":"lmdj.owner-review-attestation.v1",
+     "kind":"takeover",
+     "head_sha":"<40 lowercase hex characters>",
+     "reason":"<why independent takeover was needed; retain failed run/attempt>",
+     "review":{
+       "reviewer_login":"<verified GitHub login>",
+       "reviewer_id":123,
+       "author_session":"<actual implementation session identity>",
+       "reviewer_session":"<distinct independently verified reviewer session>",
+       "independent":true,
+       "scope":"<complete diff and Task verification actually inspected>",
+       "findings":[{"finding":"<finding and source/thread reference>","disposition":"<actual fix verification or reasoned disposition>"}],
+       "limitations":"<unexercised acceptance and failed automation; none only when true>"
+     }
+   }
+   ```
+   Use `findings: []` for an actually clean independent review. These are owner
+   attestations of human/agent work, not cryptographic proof of separate agents;
+   sharing an account does not authorize the implementing agent to forge owner
+   adoption or reviewer independence. A takeover with unresolved findings is
+   incomplete; a waiver excuses only independent review, never findings,
+   conversations, Task verification, conflicts or live protection.
+   Rerun the helper after a new record. A push invalidates all old-head evidence.
 4. **Merge without the former queue/full-CI loop**. A non-conflicting PR need
    not update just because main advanced. Incremental or explicit full self-test failures,
    in-flight suites, coverage, sanitizer or portal batch results do not block
@@ -353,7 +419,12 @@ lint reads the text you give it and cannot see a directive added afterwards.
    If live protection requires retired gates or strict updates, stop and report
    configuration drift; do not bypass it or
    alter protection under shipping authority. Squash-merge only the head just inspected, using an atomic
-   expected-head guard where supported, and recheck if it changed.
+   expected-head guard. Reread the live head immediately before merging, rerun
+   review eligibility if it changed, and use:
+   ```bash
+   gh pr merge <number> --squash --match-head-commit <full-head-sha>
+   ```
+   Do not arm unguarded auto-merge or bypass live protection.
 5. **Verify the result**. Read PR state, `mergedAt` and `mergeCommit`; report
    the actual merged SHA. A successful request or armed auto-merge is not a
    merged PR. Queries that fail or return no evidence must say so.
