@@ -44,6 +44,90 @@ Cut over docs first, Product canary second, formal promotion last; disable old
 overlapping triggers with each replacement. Preserve in-flight operations and
 pause/reconcile rollback, never reset journals or restore daily full CI.
 
+## Follow-up — Stacked PR compatibility
+
+Status: planned, not implemented or accepted. This is an optional developer
+workflow after the core testing/reporting/delivery chain is connected, not a
+prerequisite for completing the six original steps above. Track its acceptance
+separately; completion of those steps must not imply stacked PR support.
+
+Goal: let dependent changes develop and receive focused review before their
+prerequisites merge. Pilot a same-repository, linear stack of two or three PRs;
+independent work continues to branch directly from main. Do not require Graphite
+or another vendor, introduce a stack-wide full-CI gate, or promise fewer test
+runs merely because PRs belong to one stack.
+
+The current `.github/workflows/pr-review.yml` filters PR targets to `main`, and
+`scripts/ci/review_scope.py` requires a main-target PR when authenticating review
+evidence. Existing temporary stacked development is not proof that an upper PR
+is automatically reviewed. Extend event admission and receipt validation together;
+removing the branch filter alone is not sufficient or an accepted security change.
+
+### Implementation work and boundaries
+
+- **S1 — Layer-aware review.** Bind repository, PR/dependency identities, exact
+  parent base, head, trusted main control and policy to each review input and
+  receipt. Review the layer's own delta with sufficient dependency context, not
+  the cumulative stack as if every layer authored it. Treat unmerged dependency
+  files as untrusted data, never as credential-bearing executable control code.
+  Target files: `.github/workflows/pr-review.yml`,
+  `scripts/ci/review_pipeline.py`, `scripts/ci/review_scope.py`,
+  `tests/build/ci_pr_review_workflow_test.py` and
+  `tests/build/ci_review_scope_test.py`. Declare any necessary codec/consumer
+  migrations and their tests in the focused implementation Task before editing.
+- **S2 — Restack and merge evidence.** Merge bottom-up into main, retargeting and
+  restacking upper PRs after a prerequisite squash merge. Recheck exact current
+  head, conflicts and conversations. A changed head, dependency input or review
+  base invalidates the previous current-input review; the initial implementation
+  obtains fresh review or a documented exact-input takeover. Cross-SHA evidence
+  reuse is deferred, not inferred from similar diffs. Duplicate callbacks for the
+  same authenticated input must not create duplicate review publications; retain
+  original receipts and reject stale publications. Target files:
+  `scripts/ci/review_pipeline.py`, `scripts/ci/review_merge_map.py`,
+  `scripts/ci/review_merge_map_reader.py` and their existing `ci_*_test.py` suites.
+  S1 and S2 share review-pipeline ownership and are sequential, not independent
+  agent workstreams. Reject cyclic, missing or closed-unmerged dependencies;
+  unsupported stack shapes use the ordinary main-target workflow explicitly.
+- **S3 — Main-batch compatibility and pilot.** Preserve the complete first-parent
+  main interval, deterministic scope floor, affected-consumer closure, eligible
+  debt and authenticated review-scope union. Upper-layer advisory scope must not
+  shrink cumulative coverage. Keep the active target fixed; later merges coalesce
+  pending, without requiring an entire stack to finish or creating a second stack
+  test scheduler. Target tests: `tests/build/ci_test_scope_test.py`,
+  `tests/build/ci_review_merge_map_reader_test.py` and the existing incremental
+  controller journey suites. Update `docs/governance/git-workflow.md` and
+  `/operations/testing-and-proof/` with the accepted procedure at implementation.
+
+### Acceptance, not yet exercised
+
+- [ ] Open A against main and B against A: both receive receipts for their exact
+  inputs; B's reviewed delta excludes A's already-owned edits but includes the
+  dependency context. An independent main-target PR remains unaffected.
+- [ ] Change A and restack B: stale receipts cannot publish as current; duplicate
+  callbacks do not duplicate publication. Missing/failed review stays visible,
+  with existing fallback/reporting semantics, never an assumed clean review.
+- [ ] Squash-merge A, retarget/restack B, resolve a real conflict and merge the
+  newly reviewed B: authenticate each actual main commit and its scope. Also
+  exercise A closed without merge and verify B cannot claim dependency completion.
+- [ ] Merge those PRs while a main batch is active: its target does not change;
+  after terminal persistence the next interval covers every intervening change,
+  including rename/delete/revert paths and outstanding debt. If the merges span
+  batches, coverage is complete across them; exactly one batch per stack is not
+  required. Verify retained results and reports without version/deploy activation.
+
+Use real-Git regressions in the named lowest-tier suites, then one bounded GitHub
+pilot with observable receipts after each transition. Record review calls,
+workflow runs, runner time and queue delay; do not claim capacity savings from
+local fixtures. No new required merge check is planned. Each implementation Task
+must declare exact files and tests; protocol validators retain `why`/`remedy`.
+
+Declared files for this planning-only addition: this plan. Verification:
+`git diff --check`, final-diff review against the scope and acceptance above,
+and the `docs_static` lane on the committed range. Version impact: none; no
+identity or allocation changes. Documentation impact: none for this addition;
+it records future work, not implemented Portal behavior. S3 must declare the
+Portal update required when the operator procedure actually changes.
+
 ## Approved first version baseline — September 9
 
 The owner explicitly confirmed the proposed first version baseline in the
