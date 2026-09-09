@@ -76,32 +76,33 @@ Rules the previous coordinator learned the hard way (all observed today):
 
 ## 3. State at last update
 
-Last updated: 2026-09-09 15:40 by Claude.
+Last updated: 2026-09-09 16:10 by Claude.
 
 ### Merged
 
 | PR | Task | Merge SHA | Review evidence | Notes |
 | --- | --- | --- | --- | --- |
 | #1090 | plan | `8d7c79fc` | independent takeover on `fcc874ef` | automated runs 34367092851, 34368503521 failed |
-| #1092 | P1.2 #1088 | `dae1cac2` | none at merge; post-merge independent review being recorded | worker merged before the merge-gate instruction reached it; branch kept `endaye/` prefix |
+| #1092 | P1.2 #1088 | `dae1cac2` | none at merge; post-merge independent review posted 15:47 (one low should-fix: `source_path` also admits `contracts/<family>/README.md`; follow-up P1.2b) | worker merged before the merge-gate instruction reached it; branch kept `endaye/` prefix; coordinator re-ran `ci_canary*` discovery in the worktree: 320 OK, 1 skipped |
+| #1099 | P1.1 #1078 | `9d4bf083` | automated GLM review published on `83d591e8`, no findings | supersedes #1097, which the worker closed while renaming its branch; #1078 closed |
 
 ### Open PRs
 
 | PR | Task | Head | State | Next step |
 | --- | --- | --- | --- | --- |
-| #1095 | P1.4 publish-release verify-published | `ef5e71e4` | worker done, merge held | coordinator re-ran `release_*` discovery, topology, ledger, actionlint (see §4); independent review in progress; then merge with `--match-head-commit` |
-| #1097 | P1.1 #1078 pitfall area | `83d591e8` | worker active, review run 34370145086 in progress | worker asks merge/hold after review evidence |
+| #1095 | P1.4 publish-release verify-published | `ef5e71e4` + P1.4b fix commit pending | independent review done: no must-fix, 4 should-fix (missing `html_url`/missing-Release fixtures; stale pitfall body and no new recurrence; exit should point at `release_publish_workflow_test.py`; SKILL wording inverted) | P1.4b (task_80d177d14ee5, same terminal `term_c6287103-fef3-473d-808c-8e7f89bdf0f7`) applies them, then asks merge/hold; coordinator re-reviews the delta, posts the takeover record, merges |
+| #1098 | this handoff | living | n/a | merge at handoff or a stable milestone |
 
 ### Worktrees and workers
 
 | Task | Orca task | Dispatch | Worktree | Branch | State |
 | --- | --- | --- | --- | --- | --- |
-| P1.1 | task_aed1e9070a16 | ctx_dcd339eb39ac | `/Users/endaye/orca/workspaces/lmdj/fix-pitfall-snapshot-area` | `fix/pitfall-snapshot-area` (renamed on GitHub 15:38) | dispatched |
-| P1.2 | task_5e703ee98cef | ctx_f1d946aa4b92 | `.../fix-canary-fixture-contract-profiles` | `endaye/fix-canary-fixture-contract-profiles` | completed; terminal not yet released |
-| P1.4 | task_3302700a491d | ctx_5f70e14ca726 | `.../fix-publish-release-post-publish-verify` | `fix/publish-release-post-publish-verify` (renamed 15:30) | completed; merge pending coordinator |
-| P2.1 | task_3294ba685655 | ctx_5e43ec6ab4f6 | `.../fix-retire-merge-queue-gates` | `endaye/fix-retire-merge-queue-gates` (rename before push) | dispatched; scope widened, see §5 |
+| P1.1 | task_aed1e9070a16 | ctx_dcd339eb39ac | `/Users/endaye/orca/workspaces/lmdj/fix-pitfall-snapshot-area` | `fix/pitfall-snapshot-area` | completed (merged #1099); terminal released |
+| P1.2 | task_5e703ee98cef | ctx_f1d946aa4b92 | `.../fix-canary-fixture-contract-profiles` | `endaye/fix-canary-fixture-contract-profiles` | completed; terminal released |
+| P1.4 | task_3302700a491d | ctx_5f70e14ca726 | `.../fix-publish-release-post-publish-verify` | `fix/publish-release-post-publish-verify` (renamed 15:30) | completed; P1.4b task_80d177d14ee5 dispatched on the same terminal for review fixes |
+| P2.1 | task_3294ba685655 | ctx_5e43ec6ab4f6 | `.../fix-retire-merge-queue-gates` | `endaye/fix-retire-merge-queue-gates` (rename before push) | dispatched; scope widened, see §5; ruling on four absorbed queue pitfalls: keep entries, add `tests/build/ci_retired_queue_mechanisms_test.py` asserting the removed files stay absent, re-point `gate:` exits to it, append a retirement paragraph |
 | P2.2 | task_abf0a27a954f | ctx_9bc8f6bb130d | `.../fix-remove-pre-heavy-gate` | `endaye/fix-remove-pre-heavy-gate` | completed without shipping (commit `25988d2f`) |
-| P2.2b | task_ce9ed533144d | ctx_a1fcf060ffb4 (terminal `term_b3f2a29d-0b7a-47f1-907a-72ac25091cba`) | same as P2.2 | rename to `fix/remove-pre-heavy-gate` | dispatched: full discovery, ship, ask before merge |
+| P2.2b | task_ce9ed533144d | ctx_a1fcf060ffb4 (terminal `term_b3f2a29d-0b7a-47f1-907a-72ac25091cba`) | same as P2.2 | rename to `fix/remove-pre-heavy-gate` | dispatched: full discovery, ship, ask before merge. Coordinator's own discovery on `25988d2f`: 2208 run, 4 failures, 7 errors (canary, gone after rebase); two failures are in `ci_runner_fallback_test.py` (fork-PR fallback assertion, mac gate routing) and were sent to the worker |
 
 All worker specs were composed from a common rules block plus a per-Task
 section; the per-Task content is reproduced in §5 so a new coordinator can
@@ -118,12 +119,10 @@ the outcome in the plan's decision table via a `docs/` Task.
 
 ### Issue hygiene owed by the coordinator (not workers)
 
-- Post the post-merge independent review on #1092.
-- Close #1088 if the PR's closing keyword did not (check `gh issue view 1088`).
-- Close already-fixed Issues with the proving commit: #906 (`c8736be3`, #909),
-  #988 (`41a5a912`, #991), #944 (`1d72912e`, #984), #744 (gate condition can no
-  longer be true; see plan "Why"), #591 (objective met, closing review comment
-  2026-09-06).
+- Done 16:10: post-merge review on #1092; #1088 and #1078 closed by PR
+  keywords; #906, #988, #944, #744, #591 closed with justification comments.
+- Dispatch P1.2b (restrict `source_path` to `contracts/[^/]+/lmdj\.[^/]+\.v\d+\.md`,
+  exclude README.md, one-reason test) once P1.4/P2.x settle.
 - Label storage Issues #807 #817 #849 #824 #825 #826 #840 #857 `ci:storage`
   (create the label first) and update `.agents/skills/issue-list/SKILL.md` to
   exclude it (P3.3).
@@ -137,10 +136,11 @@ the outcome in the plan's decision table via a `docs/` Task.
   (expected: only the #1078 failure until #1097 merges), pinned actionlint on
   `publish-release.yml` OK, `git diff --check origin/main...HEAD` OK. Counts
   are in the coordinator's transcript; re-run if in doubt.
-- P1.2 worktree at `df7e71cc`: `ci_canary*_test.py` discovery re-run started
-  15:31 (worker reported 320 passed, 1 skipped).
-- P2.2 worktree at `25988d2f`: full `ci_*` discovery started 15:12 with pinned
-  actionlint; result not yet read.
+- P1.4 counts: `release_*` 437 OK; topology 46 OK; change scope 66 OK; pitfall
+  ledger 14/15 (the #1078 entry, now fixed on main).
+- P1.2 worktree at `df7e71cc`: `ci_canary*_test.py` 320 OK, 1 skipped (755 s).
+- P2.2 worktree at `25988d2f`: full `ci_*` discovery with pinned actionlint:
+  2208 run, failures=4, errors=7, skipped=12 (1451 s); see the P2.2b row.
 
 ## 5. Task specs for re-dispatch
 
