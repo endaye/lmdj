@@ -32,6 +32,7 @@
 #include <lmdj/providers/local_proof_success/factory.hpp>
 
 #include "tests/core/support/test.hpp"
+#include "tests/core/provider/byte_fixture.hpp"
 
 #ifndef LMDJ_SUCCESS_SOURCE_PACKAGE_MANIFEST
 #error "success Provider source-package manifest path is required"
@@ -334,7 +335,7 @@ void verify_source_package(
       bytes == lmdj::foundation::canonical_json(manifest) + "\n");
   LMDJ_CHECK(manifest.at("format") == "provider-source-package");
   LMDJ_CHECK(manifest.at("provider_id") == expected_provider_id);
-  LMDJ_CHECK(manifest.at("provider_version") == "1.0.5");
+  LMDJ_CHECK(manifest.at("provider_version") == "2.0.0");
   LMDJ_CHECK(manifest.at("files").size() == 3);
   for (const auto& file : manifest.at("files")) {
     const auto source_path =
@@ -389,10 +390,8 @@ class LeakingProvider final : public Provider {
     return {std::string(kCapability)};
   }
 
-  AttemptResult run(
-      AttemptId attempt_id,
-      const CapabilityRequest&,
-      lmdj::provider::ArtifactSink) override {
+  AttemptResult run(lmdj::provider::ProviderRunContext context) override {
+    const auto attempt_id = context.attempt_id;
     if (mode == Mode::thrown_error) {
       throw std::runtime_error("thrown-secret-sentinel");
     }
@@ -424,10 +423,9 @@ class SinkThenFailProvider final : public Provider {
     return {std::string(kCapability)};
   }
 
-  AttemptResult run(
-      AttemptId attempt_id,
-      const CapabilityRequest&,
-      lmdj::provider::ArtifactSink output) override {
+  AttemptResult run(lmdj::provider::ProviderRunContext context) override {
+    const auto attempt_id = context.attempt_id;
+    auto output = context.output;
     const std::array payload{std::byte{0x2a}};
     const auto artifact =
         output("candidate", payload, "application/x-lmdj-proof");
@@ -470,10 +468,8 @@ class OptionalOutputProvider final : public Provider {
     return {std::string(kCapability)};
   }
 
-  AttemptResult run(
-      AttemptId attempt_id,
-      const CapabilityRequest&,
-      lmdj::provider::ArtifactSink) override {
+  AttemptResult run(lmdj::provider::ProviderRunContext context) override {
+    const auto attempt_id = context.attempt_id;
     return AttemptResult{
         attempt_id,
         lmdj::provider::Candidate{
@@ -494,10 +490,8 @@ class BlockingFailureProvider final : public Provider {
     return {std::string(kCapability)};
   }
 
-  AttemptResult run(
-      AttemptId attempt_id,
-      const CapabilityRequest&,
-      lmdj::provider::ArtifactSink) override {
+  AttemptResult run(lmdj::provider::ProviderRunContext context) override {
+    const auto attempt_id = context.attempt_id;
     const auto call =
         run_count.fetch_add(1, std::memory_order_relaxed) + 1;
     if (call == 1) {
@@ -547,10 +541,8 @@ class MultiCapabilityProvider final : public Provider {
     };
   }
 
-  AttemptResult run(
-      AttemptId attempt_id,
-      const CapabilityRequest&,
-      lmdj::provider::ArtifactSink) override {
+  AttemptResult run(lmdj::provider::ProviderRunContext context) override {
+    const auto attempt_id = context.attempt_id;
     return AttemptResult{
         std::move(attempt_id),
         std::nullopt,
@@ -570,14 +562,14 @@ void test_failed_provider_outputs_are_removed_before_terminal_persistence() {
   Registry registry;
   LMDJ_CHECK(
       registry
-          .add(ProviderRegistration{
+          .add(byte_fixture::opaque(ProviderRegistration{
               implementation,
               "1.0.0",
               "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
               "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
               std::nullopt,
               {std::move(capability)},
-          })
+           {}, {} }))
           .has_value());
   auto store = store_at(temp.path());
   LMDJ_CHECK(
@@ -592,8 +584,7 @@ void test_failed_provider_outputs_are_removed_before_terminal_persistence() {
       ArtifactBinding{
           "inputs",
           ArtifactRef{
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "85638a90a2b6d1e2f6be9814c961764f8a1be74871b15d9b05bc1c4017fd38b1",
               "audio/wav",
               12,
           },
@@ -610,7 +601,7 @@ void test_failed_provider_outputs_are_removed_before_terminal_persistence() {
     const auto attempt_id =
         "attempt-output-cleanup-" + std::to_string(index);
     const auto executed =
-        store.execute(AttemptId{attempt_id}, request, registry);
+        store.execute(AttemptId{attempt_id}, request, registry, byte_fixture::options());
     LMDJ_CHECK(executed.has_value());
     LMDJ_CHECK(executed.value().error.has_value());
     LMDJ_CHECK(
@@ -635,14 +626,14 @@ void test_optional_output_candidate_succeeds_without_staging() {
   Registry registry;
   LMDJ_CHECK(
       registry
-          .add(ProviderRegistration{
+          .add(byte_fixture::opaque(ProviderRegistration{
               implementation,
               "1.0.0",
               "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
               "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
               std::nullopt,
               {std::move(capability)},
-          })
+           {}, {} }))
           .has_value());
   auto store = store_at(temp.path());
   LMDJ_CHECK(
@@ -655,7 +646,7 @@ void test_optional_output_candidate_succeeds_without_staging() {
 
   const auto attempt_id = AttemptId{"attempt-optional-output"};
   const auto executed =
-      store.execute(attempt_id, proof_request(), registry);
+      store.execute(attempt_id, proof_request(), registry, byte_fixture::options());
   LMDJ_CHECK(executed.has_value());
   LMDJ_CHECK(executed.value().candidate.has_value());
   LMDJ_CHECK(executed.value().candidate->outputs.empty());
@@ -680,7 +671,7 @@ void test_optional_output_candidate_succeeds_without_staging() {
       !std::filesystem::exists(attempt_root / "artifacts"));
 
   const auto duplicate =
-      store.execute(attempt_id, proof_request(), registry);
+      store.execute(attempt_id, proof_request(), registry, byte_fixture::options());
   LMDJ_CHECK(!duplicate.has_value());
   LMDJ_CHECK(duplicate.error().code == ErrorCode::duplicate_id);
 }
@@ -692,14 +683,14 @@ void test_attempt_id_is_reserved_before_provider_invocation() {
     Registry registry;
     LMDJ_CHECK(
         registry
-            .add(ProviderRegistration{
+            .add(byte_fixture::opaque(ProviderRegistration{
                 implementation,
                 "1.0.0",
                 "cccccccccccccccccccccccccccccccc"
                 "cccccccccccccccccccccccccccccccc",
                 std::nullopt,
                 {proof_capability()},
-            })
+             {}, {} }))
             .has_value());
     auto first_store = store_at(temp.path());
     auto second_store = store_at(temp.path());
@@ -716,11 +707,11 @@ void test_attempt_id_is_reserved_before_provider_invocation() {
     const auto attempt =
         AttemptId{"attempt-concurrent-" + std::to_string(iteration)};
     std::thread first_thread([&] {
-      first = first_store.execute(attempt, proof_request(), registry);
+      first = first_store.execute(attempt, proof_request(), registry, byte_fixture::options());
     });
     implementation->wait_until_first_entered();
     std::thread second_thread([&] {
-      second = second_store.execute(attempt, proof_request(), registry);
+      second = second_store.execute(attempt, proof_request(), registry, byte_fixture::options());
     });
     second_thread.join();
     implementation->release_first();
@@ -740,7 +731,7 @@ void test_provider_selection_updates_are_serialized() {
   Registry registry;
   LMDJ_CHECK(
       registry
-          .add(ProviderRegistration{
+          .add(byte_fixture::opaque(ProviderRegistration{
               implementation,
               "1.0.0",
               "dddddddddddddddddddddddddddddddd"
@@ -750,7 +741,7 @@ void test_provider_selection_updates_are_serialized() {
                   named_proof_capability("proof.alpha.v1"),
                   named_proof_capability("proof.beta.v1"),
               },
-          })
+           {}, {} }))
           .has_value());
 
   for (int iteration = 0; iteration < 100; ++iteration) {
@@ -838,7 +829,7 @@ void test_maximum_attempt_id_produces_a_valid_candidate_id() {
           .has_value());
   const auto value = std::string(128, 'a');
   const auto executed =
-      store.execute(AttemptId{value}, proof_request(), registry);
+      store.execute(AttemptId{value}, proof_request(), registry, byte_fixture::options());
   LMDJ_CHECK(executed.has_value());
   LMDJ_CHECK(executed.value().candidate.has_value());
   LMDJ_CHECK(!executed.value().error.has_value());
@@ -851,14 +842,14 @@ void test_provider_error_persistence_is_redacted() {
   Registry registry;
   LMDJ_CHECK(
       registry
-          .add(ProviderRegistration{
+          .add(byte_fixture::opaque(ProviderRegistration{
               leaking,
               "1.0.0",
               "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
               "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               std::nullopt,
               {proof_capability()},
-          })
+           {}, {} }))
           .has_value());
   auto store = store_at(temp.path());
   LMDJ_CHECK(
@@ -872,7 +863,7 @@ void test_provider_error_persistence_is_redacted() {
   const auto returned = store.execute(
       AttemptId{"attempt-returned-secret"},
       proof_request(),
-      registry);
+      registry, byte_fixture::options());
   LMDJ_CHECK(returned.has_value());
   LMDJ_CHECK(returned.value().error.has_value());
   LMDJ_CHECK(
@@ -891,7 +882,7 @@ void test_provider_error_persistence_is_redacted() {
   const auto thrown = store.execute(
       AttemptId{"attempt-thrown-secret"},
       proof_request(),
-      registry);
+      registry, byte_fixture::options());
   LMDJ_CHECK(thrown.has_value());
   LMDJ_CHECK(thrown.value().error.has_value());
   LMDJ_CHECK(
@@ -927,7 +918,7 @@ void test_attempt_store_read_api_validates_private_terminal_formats() {
   LMDJ_CHECK(selected.value() == "local.proof.success");
 
   const auto executed = store.execute(
-      AttemptId{"attempt-inspect"}, proof_request(), registry);
+      AttemptId{"attempt-inspect"}, proof_request(), registry, byte_fixture::options());
   LMDJ_CHECK(executed.has_value());
   const auto inspected = store.inspect(AttemptId{"attempt-inspect"});
   LMDJ_CHECK(inspected.has_value());
@@ -1052,7 +1043,7 @@ void test_proof_failure_result_remains_exact_but_record_is_redacted() {
               registry)
           .has_value());
   const auto result = store.execute(
-      AttemptId{"attempt-proof-failure"}, proof_request(), registry);
+      AttemptId{"attempt-proof-failure"}, proof_request(), registry, byte_fixture::options());
   LMDJ_CHECK(result.has_value());
   LMDJ_CHECK(result.value().error.has_value());
   LMDJ_CHECK(
@@ -1130,7 +1121,7 @@ void test_successful_proof_attempt_leaves_inspectable_terminal_record() {
               registry)
           .has_value());
   const auto result = store.execute(
-      AttemptId{"attempt-durable-success"}, proof_request(), registry);
+      AttemptId{"attempt-durable-success"}, proof_request(), registry, byte_fixture::options());
   LMDJ_CHECK(result.has_value());
   LMDJ_CHECK(result.value().candidate.has_value());
   const auto record_path =

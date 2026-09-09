@@ -21,3 +21,7 @@ stdin/参数 → CLI adapter → Facade → 规范 JSON/Artifact 输出。CLI �
 `tests/host/cli_test.py` 覆盖协议、Sample quota、错误和快照输出；版本来自 Host manifest。
 ## 限制
 CLI 是工程 Host，不等同于最终创作者 GUI。headless bridge 使用 steady time source 而非音频设备时钟，Performance 操作在 CLI 上的可用性只证明控制面与状态边界，不构成任何物理演奏、听感或延迟验收，也不表示 tag、Release、部署或 Channel promotion 已发生。
+
+当前 Host 随 Facade/Platform 的 owned Provider 字节 ABI 集成更新依赖身份，transport
+操作保持原形状。无绑定 Proof 可运行；带输入绑定的 Provider 请求在 owner 尚未接线时
+返回可查询的 `input_artifact_unavailable` Attempt，Slice 工作流仍待后续集成。

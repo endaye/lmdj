@@ -112,3 +112,8 @@ admission/lifecycle，但 T4 exact-revision ESP-IDF 完整闭包和静态预算�
 load/start/stop/reset；该压力注册不进入 coverage，确定性交错注册仍进入 coverage。
 ## 10. 版本身份
 版本和完整依赖集由模块清单与 Product Assembly 固定。
+
+Provider 执行已迁移到 owned ProviderRunContext 和显式 ExecutionOptions。当前 Facade
+提供 unavailable input owner：带输入绑定的请求以 `NOT_FOUND/input_artifact_unavailable`
+形成可查询失败 Attempt；无绑定 Proof 继续支持完整成功/失败流程。Workspace 输入 owner
+与 Job/CandidateIndex 接线留给 K5，Host 不解析 Project bundle 来补足输入。

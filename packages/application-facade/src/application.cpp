@@ -7687,7 +7687,10 @@ struct Application::Impl {
             region,
             std::move(permissions),
         },
-        *registry);
+        *registry,
+        provider::ExecutionOptions{
+            {}, 16777216, 262144,
+            std::make_shared<provider::StagingBudget>(67108864)});
     if (!executed.has_value()) {
       return error_envelope(executed.error());
     }

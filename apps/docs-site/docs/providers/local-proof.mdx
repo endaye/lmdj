@@ -21,3 +21,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 Provider conformance、attempt isolation 和 spec regression 测试覆盖两条路径。
 ## 限制
 它们不是生成式生产服务，也不代表云基础设施已存在。
+
+两者使用按值 ProviderRunContext，并为 candidate 端口显式注册仅接受空字节的
+Proof validator。输入绑定现在必须经过 SDK owner 读取和 hash/长度验证；无绑定 Proof
+仍可执行。该迁移不引入 Slice Provider。

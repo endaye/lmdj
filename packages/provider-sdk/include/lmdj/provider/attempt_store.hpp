@@ -21,6 +21,18 @@ struct ProviderPolicy {
 
 using TimestampSource = std::function<std::string()>;
 
+// The owner keeps its buffer stable throughout ingress. The SDK copies it;
+// ownership of a const shared_ptr alone is not an immutability guarantee.
+using ArtifactResolver = std::function<foundation::Result<
+    std::shared_ptr<const std::vector<std::byte>>>(const foundation::ArtifactRef&)>;
+
+struct ExecutionOptions {
+  ArtifactResolver resolve_input;
+  std::uint64_t maximum_input_bytes;
+  std::uint64_t maximum_output_bytes;
+  std::shared_ptr<StagingBudget> staging_budget;
+};
+
 // These typed values expose SDK-owned Workspace state to Hosts. Their
 // persisted JSON is an implementation-private format, not a versioned
 // cross-language Contract.
@@ -88,7 +100,8 @@ class AttemptStore {
   foundation::Result<AttemptResult> execute(
       foundation::AttemptId attempt_id,
       const CapabilityRequest& request,
-      const Registry& registry);
+      const Registry& registry,
+      const ExecutionOptions& options);
 
  private:
   std::filesystem::path workspace_root_;

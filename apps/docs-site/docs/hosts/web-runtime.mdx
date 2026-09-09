@@ -164,3 +164,7 @@ route. Reconciliation checks current live state and closes the pending local
 operation without a cloud write. Local locks require one coordinated operator
 host and do not lock dashboard changes. These HTTP checks do not establish
 browser, audio, storage migration or manual acceptance.
+
+当前 Host 随 Facade/Platform 的 owned Provider 字节 ABI 集成更新依赖身份，transport
+操作保持原形状。无绑定 Proof 可运行；带输入绑定的 Provider 请求在 owner 尚未接线时
+返回可查询的 `input_artifact_unavailable` Attempt，Slice 工作流仍待后续集成。

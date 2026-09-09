@@ -27,8 +27,8 @@ expected_modules = {
     ),
     "packages/provider-sdk/module.json": (
         "provider-sdk",
-        "1.1.4",
-        2,
+        "2.0.0",
+        3,
         {"foundation": "0.4.0"},
     ),
     "packages/authoring-domain/module.json": (
@@ -66,58 +66,58 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "3.2.0",
-        2,
+        "4.0.0",
+        3,
         {
             "foundation": "0.4.0",
             "authoring-domain": "3.0.0",
             "project-io": "3.0.0",
             "project-cooker": "1.1.0",
             "audio-runtime": "3.1.0",
-            "provider-sdk": "1.1.4",
+            "provider-sdk": "2.0.0",
         },
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "4.1.0",
-        1,
+        "5.0.0",
+        2,
         {
-            "application-facade": "3.2.0",
+            "application-facade": "4.0.0",
             "audio-runtime": "3.1.0",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "3.2.0",
+        "3.2.1",
         2,
-        {"application-facade": "3.2.0"},
+        {"application-facade": "4.0.0"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "3.2.0",
+        "3.2.1",
         2,
-        {"application-facade": "3.2.0"},
+        {"application-facade": "4.0.0"},
     ),
     "apps/native-host/module.json": (
         "native-host",
-        "3.2.0",
+        "3.2.1",
         2,
         {
-            "application-facade": "3.2.0",
+            "application-facade": "4.0.0",
             "audio-runtime": "3.1.0",
         },
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "4.1.0",
+        "4.1.1",
         2,
-        {"web-runtime-platform": "4.1.0"},
+        {"web-runtime-platform": "5.0.0"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "4.1.0",
+        "4.1.1",
         2,
-        {"web-runtime-platform": "4.1.0"},
+        {"web-runtime-platform": "5.0.0"},
     ),
 }
 for relative, (
@@ -251,7 +251,7 @@ assert assembly["product"] == {"id": "lmdj", "version": current}
 assert assembly["providers"] == [
     {
         "id": "local.proof.success",
-        "version": "1.0.5",
+        "version": "2.0.0",
         "capabilities": [
             {"id": "proof.candidate.v2", "version": "2.0.0"}
         ],
@@ -259,7 +259,7 @@ assert assembly["providers"] == [
     },
     {
         "id": "local.proof.failure",
-        "version": "1.0.5",
+        "version": "2.0.0",
         "capabilities": [
             {"id": "proof.candidate.v2", "version": "2.0.0"}
         ],
@@ -268,7 +268,7 @@ assert assembly["providers"] == [
 ]
 provider_module = repo_root / "providers/local-proof-success/module.json"
 provider_digest = _provider_source_package_sha256(
-    "local.proof.success", "1.0.5", provider_module,
+    "local.proof.success", "2.0.0", provider_module,
 )
 assert provider_digest == next(
     item["sha256"] for item in tracked_lock["providers"]
@@ -279,7 +279,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     copied_provider = authority_root / "providers/local-proof-success"
     shutil.copytree(provider_module.parent, copied_provider)
     assert _provider_source_package_sha256(
-        "local.proof.success", "1.0.5", copied_provider / "module.json",
+        "local.proof.success", "2.0.0", copied_provider / "module.json",
         repo_root=authority_root,
     ) == provider_digest
 assert assembly["contracts"] == [
@@ -354,16 +354,16 @@ expected_provider_manifests = {
     "providers/local-proof-failure/module.json": {
         "contract": "lmdj.module.v1",
         "module": "local.proof.failure",
-        "version": "1.0.5",
-        "api_version": 2,
-        "dependencies": {"provider-sdk": "1.1.4"},
+        "version": "2.0.0",
+        "api_version": 3,
+        "dependencies": {"provider-sdk": "2.0.0"},
     },
     "providers/local-proof-success/module.json": {
         "contract": "lmdj.module.v1",
         "module": "local.proof.success",
-        "version": "1.0.5",
-        "api_version": 2,
-        "dependencies": {"provider-sdk": "1.1.4"},
+        "version": "2.0.0",
+        "api_version": 3,
+        "dependencies": {"provider-sdk": "2.0.0"},
     },
 }
 actual_provider_manifests = sorted(
