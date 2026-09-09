@@ -112,7 +112,6 @@ void transports_all_voice_starts_to_concurrent_bounded_drains() {
   const std::array<float, 1> sample{0.1F};
   LMDJ_CHECK(engine.load_sample(0, sample).has_value());
   LMDJ_CHECK(engine.start().has_value());
-  LMDJ_CHECK(engine.arm_capture().has_value());
   std::array<float, 1> left{};
   std::array<float, 1> right{};
 
@@ -131,10 +130,18 @@ void transports_all_voice_starts_to_concurrent_bounded_drains() {
     }
   });
 
+  // Exercise the first allocation/publication with an already-running audio
+  // consumer, not merely queue transport after a quiescent preparation.
+  while (engine.telemetry().callback_count == 0) {
+    std::this_thread::yield();
+  }
+  LMDJ_CHECK(engine.arm_capture().has_value());
   while (engine.capture_telemetry().state !=
          lmdj::audio::CaptureState::active) {
     std::this_thread::yield();
   }
+  const auto capture_origin = engine.capture_telemetry().capture_origin_frame;
+  LMDJ_CHECK(capture_origin > 0);
 
   std::uint64_t admitted_count = 0;
   while (admitted_count < kEvents) {
@@ -275,13 +282,14 @@ void transports_all_voice_starts_to_concurrent_bounded_drains() {
         outcomes.at(sequence).outcome ==
         lmdj::audio::RuntimeTriggerOutcome::voice_started);
     LMDJ_CHECK(outcomes.at(sequence).runtime_frame ==
-               captured.at(sequence).frame_offset);
+               capture_origin + captured.at(sequence).frame_offset);
     const auto& started = voice_states.at(sequence * 2);
     const auto& completed = voice_states.at(sequence * 2 + 1);
     LMDJ_CHECK(started.sequence == admitted.at(sequence));
     LMDJ_CHECK(started.slot == 0);
     LMDJ_CHECK(started.state == lmdj::audio::RuntimeVoiceState::started);
-    LMDJ_CHECK(started.runtime_frame == captured.at(sequence).frame_offset);
+    LMDJ_CHECK(started.runtime_frame ==
+               capture_origin + captured.at(sequence).frame_offset);
     LMDJ_CHECK(started.source_frame == 0);
     LMDJ_CHECK(completed.sequence == admitted.at(sequence));
     LMDJ_CHECK(completed.slot == 0);

@@ -406,7 +406,13 @@ class RealtimeEngine final {
   ReclaimedBankTelemetry reclaim_retired_bank_telemetry() noexcept;
   // Compatibility count-only reclaim surface.
   std::size_t reclaim_retired_banks() noexcept;
-  // Control thread, concurrent with render.
+  // Serialized control thread, concurrent with render. Idempotently allocates
+  // the full Capture ring without arming. False means allocation failed; no
+  // state changes or allocating error payload. Retained until destruction.
+  bool prepare_capture() noexcept;
+  // Control thread, concurrent with render. Implicitly prepares for existing
+  // callers. Allocation failure is internal_error with empty message/null
+  // details (allocation-free); Hosts can preflight before opening a session.
   foundation::Result<void> arm_capture() noexcept;
   foundation::Result<void> disarm_capture() noexcept;
   // Control thread, concurrent with render. Sole consumer of the capture ring.
@@ -617,10 +623,12 @@ class RealtimeEngine final {
       publish_queue_;
   std::array<PatternSlot, kRealtimePatternCapacity> pattern_slots_{};
   std::optional<PatternPublishEntry> audio_pending_pattern_;
-  detail::FixedSpscQueue<
-      CapturedTriggerEvent,
-      kRealtimeCaptureCapacity>
-      capture_ring_;
+  using CaptureRing = detail::FixedSpscQueue<
+      CapturedTriggerEvent, kRealtimeCaptureCapacity>;
+  // Initialized once by control before release-publishing arm_pending. Audio
+  // only dereferences after acquiring an admitted CaptureState. Never replaced
+  // or freed on disarm/stop: unread events still belong to the control drain.
+  std::unique_ptr<CaptureRing> capture_ring_;
   detail::FixedSpscQueue<
       RuntimeTriggerOutcomeEvent,
       kRealtimeTriggerOutcomeCapacity>
