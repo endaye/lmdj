@@ -4,7 +4,7 @@ area: core
 status: implemented
 owners: [core, hosts]
 module: application-facade
-source_paths: [packages/application-facade, tests/core/facade]
+source_paths: [packages/application-facade, tests/core/facade, docs/research/2026-09-09-cardputer-audio-hearing.md]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -102,6 +102,17 @@ sizeof 后省略。分配失败的 empty/静音/重试以及满额并发回执�
 CLI、MCP、Native Host，以及通过 Web Runtime Platform 接入的 Creator/Diagnostic Web Host。
 ## 8. 测试与证据
 Application、Sample quota exact/+1-frame、target replacement、revision binding、session/atomicity/cache/privacy/replay、CLI/MCP/Native parity、Bundle round trip/import cancellation、Sequence pending-overlay owner/generation/replace/reject/flush、begin-vs-authoring deterministic gate、orphan-journal seal-before-authoring、armed-Pad Capture commit/rebase、pre-publication abort/disarm、receipt completion、真实子进程 `SIGKILL` 后 acknowledged tail 恢复/identity/order/单 revision gate、inverse completion 后 exact original retry 与 residual 单次 apply、F0(A-old)+tail(A-new+B) 的 unique count/tail-last/apply-once、assembly loader、C API、stress 与 dynamic-load 测试；`performance_operation_contract_test.cpp`、`performance_session_test.cpp`、`performance_gesture_admission_test.cpp`、`performance_replay_test.cpp`、`performance_engine_adapter_test.cpp`、`performance_runtime_bridge_test.cpp`、`performance_rebase_matrix_test.cpp` 与 `resample_performance_test.cpp` 覆盖 Performance 操作形状、录制会话、手势 admission、replay 投影消费、engine adapter/headless bridge 装配、rebase 矩阵与 resample 提交。
+### Cardputer ADV 有界听测证据
+
+2026-09-09 的[独立探针记录](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-09-cardputer-audio-hearing.md)
+绑定被测源码、完整 ELF 与 RuntimeContent identity。两次 1000 Hz／50 ms
+直出／Runtime Facade 对照各通过完整 100 项数字旅程，操作者两次确认三组响度与
+清晰度一致；该素材送入 I2S 前的峰值／RMS 汇总也一致。后续独立长音幅度对照
+获操作者确认符合预期、无刺耳或破音，但不链接 Core。
+这些是指定镜像的人工证据，不是由自动化推断的听感，也不把早期失败镜像改为 PASS。
+未修改 Core 增益或产品默认音量；四次 Core 旅程最小处理余量仅约 48 µs。
+完整 Cardputer Host、新内容替换、传输／断连、正常音乐容量和模拟测量仍未验收。
+
 ## 9. 限制与下一门禁
 Facade 不授权 Host 绕过 Project/Provider/Assembly 不变量。Performance 操作集的自动化绿色只证明状态与边界，不构成任何设备、听感或物理演奏验收。
 

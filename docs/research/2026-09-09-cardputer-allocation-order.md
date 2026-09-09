@@ -1,8 +1,12 @@
 # Cardputer ADV: fixed-first allocation enables the I2S probe
 
-Date: 2026-09-09. Status: **digital I2S journey PASS; human hearing pending**.
+Date: 2026-09-09. Historical checkpoint: **digital I2S journey PASS; human hearing pending at capture**.
 This is the bounded [allocation-order Task](../plans/2026-09-09-cardputer-allocation-order.md),
 not a complete Cardputer Host, normal musical-capacity promise or release.
+
+Later external Host/tone experiments and explicit user confirmations are
+recorded separately in the [bounded audio follow-up](2026-09-09-cardputer-audio-hearing.md).
+They do not retroactively qualify this earlier image or replace its evidence.
 
 ## Result and repair
 
@@ -103,11 +107,11 @@ Each of the four audio journeys across two resets recorded:
   realtime capacity/jitter guarantee. Driver blocking, measured separately,
   reached 5007 µs and paces output outside Core render.
 
-No human hearing response or analog capture has been recorded. Digital writes
+At this checkpoint no human hearing response or analog capture was recorded. Digital writes
 and codec readbacks cannot prove audible speaker output, pitch, clicks, noise
-or listening quality. The board currently retains this diagnostic image: a
+or listening quality. The board retained this diagnostic image at the checkpoint: a
 reset waits five seconds, attempts two four-tone groups, then mutes/cleans up;
-the screen has no product UI.
+the screen has no product UI. The later follow-up records the subsequently installed image.
 
 ## Native verification and retained failures
 
