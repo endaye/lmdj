@@ -44,6 +44,47 @@ Cut over docs first, Product canary second, formal promotion last; disable old
 overlapping triggers with each replacement. Preserve in-flight operations and
 pause/reconcile rollback, never reset journals or restore daily full CI.
 
+## Approved first version baseline — September 9
+
+The owner explicitly confirmed the proposed first version baseline in the
+conversation on September 9: `a81faad3b85d362e3e44541cd28ee21dac6848a4`.
+The confirmation fixes this exact commit, not a moving `main` reference.
+At that revision, `apps/creator-web/module.json` and
+`apps/web-runtime-host/module.json` each declare `4.1.0`; preserve both values.
+Do not manufacture historical changelog entries or retroactively allocate
+versions for changes at or before this baseline. The first automatic version
+assessment covers the complete subsequent first-parent interval to its pinned
+target; later assessments use independently persisted version-accounted progress.
+
+This is a version-history starting decision only. It does not prove that the
+baseline passed tests, was deployed, was released or was promoted. Do not advance
+test, site or formal progress, erase failures/debt, or replace existing scheduler
+history with this SHA. Existing historical changelog entries remain unchanged.
+An assessment target preceding the baseline cannot be treated as a new version
+interval. No new runtime baseline field or live journal entry is created by this
+documentation Task: the durable bootstrap and planning-to-assessment handoff still
+need implementation and acceptance using this approved identity.
+
+The owner also supplied the existing `ssh vienna` access path. Read-only checks
+now connect successfully. `systemd-detect-virt` reports `kvm`, but the guest has
+no `/dev/kvm`, exposes neither `svm` nor `vmx`, and has no loaded KVM module or
+readable nested-virtualization parameter. The command lookup and package query
+found no installed QEMU/Firecracker/libvirt/Cloud Hypervisor tools; `sudo -n true`
+is unavailable for this session. This does not establish that the provider can
+never enable nested virtualization, or that software emulation is impossible.
+The accelerated VM/microVM route is not currently ready; no alternative isolation
+route has been accepted.
+Do not substitute ordinary users/containers or runner labels for the required
+isolation. No host package, service, credential, GitHub Environment, readiness
+switch or live journal was changed. Provisioning authority and an accepted
+isolation route remain prerequisites; deployment and release stay disabled.
+
+Declared files for this decision-record Task: this plan only. Verify the exact
+baseline commit and both manifests with Git, run `docs_static` and the Architecture
+Portal check, and inspect the final one-file diff and PR declarations. This Task
+has no version or Portal-page impact: it records an approved future bootstrap and
+read-only prerequisite evidence, without changing live behavior or active identity.
+
 ## Task 1 — Bound repeated journal provenance reads
 
 Declared files: this plan, `scripts/ci/batch_github_journal.py`,
@@ -163,7 +204,8 @@ The [result discovery integration Task](2026-09-09-lmdj-canary-result-discovery.
 connects bounded automatic/manual discovery to the existing planning entry,
 prioritizing unfinished recovery and retaining complete observations as receipts.
 It adds no model, version or deployment execution; readiness/storage activation,
-first version baseline and downstream claim/progress remain separate work.
+durable adoption of the approved first version baseline and downstream
+claim/progress remain separate work.
 
 The [failed review receipt Task](2026-09-09-lmdj-failed-review-receipts.md)
 repairs the mismatch between the honestly failed all-backend finalizer and its
