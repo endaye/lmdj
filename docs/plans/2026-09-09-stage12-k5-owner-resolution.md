@@ -1,13 +1,15 @@
 # Stage 12 K5: Project Asset owner resolution and Host reference execution
 
-Status: proposed for the owner-API/Host-surface review required by K5.
+Status: owner-API/Host-surface proposal confirmed by the user on 2026-09-09;
+implementation and acceptance pending.
 Relates to #1037, #467, #472. This document does not complete those Issues.
 Observed implementation baseline: `9b404548` after K4 #1084 and #1085.
 Product identity is read from `products/lmdj/version.json`; no Build is reserved.
 
-## Decision to review
+## Confirmed decision
 
-Approve one bounded integration: only an explicitly named, already imported
+The user confirmed this complete proposal ("确认") on 2026-09-09.
+The approved integration is bounded: only an explicitly named, already imported
 Project Asset can own an input. CLI, MCP, Native Host and both Web Hosts forward
 through the Facade. Add explicit, session-local permission configuration; keep
 the Product default policy and Slice's `test` platform descriptor unchanged.
@@ -18,8 +20,8 @@ Job/recipe state or new Project Contract. Those remain later Tasks.
 The prior K5 gate is concrete: the existing plan says “The owner-read API and
 all new production Host wiring remain separately unapproved”. User authority to
 ship an implemented Task does not choose this previously unspecified public
-input-owner or permission surface. Review the complete proposal below once;
-normal commit/push/PR/review/merge need no repeated approval afterward.
+input-owner or permission surface. That separate design decision is now confirmed. Normal
+commit/push/PR/review/merge need no repeated approval.
 
 ## Evidence and why an injected callback alone is insufficient
 
@@ -291,7 +293,8 @@ No frozen snapshot is edited to fit a later source change.
 ## Version Management
 
 Version impact: none for this review-plan Task. No active identity is allocated.
-Reason: the proposed public APIs and Host scope still need the K5 decision.
+Reason: this Task records the confirmed design; implementation has not changed
+active Product or Module identities.
 
 For implementation, allocate against fresh main, then record exact identities
 before K5a edits: Project I/O and Facade MINOR for additive public operations;

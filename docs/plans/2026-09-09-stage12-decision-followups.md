@@ -55,7 +55,8 @@ review deliverable, not a new unbounded architecture project.
 
 K4 is delivered by PR #1084. K5's previously unspecified owner/Host surface is
 now concrete in the [post-K4 review proposal](2026-09-09-stage12-k5-owner-resolution.md);
-its approval and implementation remain separate from the earlier R1/C-Q decisions.
+the user confirmed that complete proposal on 2026-09-09, separately from the
+earlier R1/C-Q decisions. Implementation and acceptance remain pending.
 
 The exact declared files and tests remain in the linked Capability plan.
 The following is the publishable dependency/acceptance summary for child Issues.
@@ -71,8 +72,8 @@ The following is the publishable dependency/acceptance summary for child Issues.
 No current numeric version is hand-allocated by this plan. K2 excludes JobRecord,
 CandidateIndex and plural result changes. If later L1 requires an incompatible
 SDK API, allocate against then-current manifests; do not reuse a version number
-already shipped. K4/K5 are gated planning children until their exact inventories
-are refreshed, not immediately executable Issues.
+already shipped. K4 is delivered; K5 now has an approved exact inventory and
+Host journey plan, with fresh version allocation required before implementation.
 
 ## R2 — reconcile and decide #471 before Candidate implementation
 
