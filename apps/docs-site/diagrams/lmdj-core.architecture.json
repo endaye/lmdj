@@ -7,7 +7,7 @@
     {"id": "web-hosts", "label": "Web Hosts", "detail": "Creator · Diagnostic", "kind": "host", "x": 35, "y": 390, "width": 190, "height": 92},
     {"id": "web-platform", "label": "Web Runtime Platform", "detail": "browser adapter · master tap", "kind": "core", "x": 305, "y": 390, "width": 210, "height": 92},
     {"id": "facade", "label": "Application Facade", "detail": "orchestration", "kind": "core", "x": 305, "y": 150, "width": 210, "height": 92},
-    {"id": "domain", "label": "Authoring Domain", "detail": "Project v4 · Pattern Slot", "kind": "core", "x": 565, "y": 150, "width": 190, "height": 92},
+    {"id": "domain", "label": "Authoring Domain", "detail": "Project v5 · Pattern Slot", "kind": "core", "x": 565, "y": 150, "width": 190, "height": 92},
     {"id": "cooker", "label": "Project Cooker", "detail": "WAV · waveform · replay", "kind": "core", "x": 805, "y": 150, "width": 180, "height": 92},
     {"id": "snapshot", "label": "Runtime Snapshot", "detail": "immutable", "kind": "core", "x": 1035, "y": 150, "width": 190, "height": 92},
     {"id": "audio", "label": "Audio Runtime", "detail": "modes · Voice · master FX", "kind": "core", "x": 1275, "y": 150, "width": 180, "height": 92},
@@ -29,7 +29,7 @@
   ],
   "cards": [
     {"title": "Foundation", "body": "Artifact、JSON、typed error 为所有路径提供共同底座。"},
-    {"title": "Contracts", "body": "Project v1/v2/v3 只读迁移、v4 唯一写入；Bundle 只负责 transfer，Runtime Snapshot 与 replay projection 仍是不可变派生。"},
+    {"title": "Contracts", "body": "Project v1/v2/v3/v4 只读迁移、v5 唯一写入；Bundle 只负责 transfer，Runtime Snapshot 与 replay projection 仍是不可变派生。"},
     {"title": "Perform 组合", "body": "Perform 只叠加在既有八个 Module 上：Pattern Slot 启动、master FX 链、Performance 录制/replay 与 master tap 采集，Host 仍只经 Facade。"},
     {"title": "禁止路径", "body": "Host 不解析 Bundle；Provider 不接收 Project；Snapshot 不反写 Project Truth。"}
   ]

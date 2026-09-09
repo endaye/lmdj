@@ -54,15 +54,17 @@ export const READABLE_CONTRACT_VERSIONS = Object.freeze([
   "1.0.0",
   "1.1.0",
   "1.2.0",
+  "1.3.0",
 ]);
 // Every Project Contract level a Bundle may name. This must stay equal to the
-// Contract's `project_contract` enum; the Build writes `lmdj.project.v4` and
+// Contract's `project_contract` enum; the Build writes the current Project Contract and
 // the older levels remain readable migration inputs.
 export const READABLE_PROJECT_CONTRACTS = Object.freeze([
   "lmdj.project.v1",
   "lmdj.project.v2",
   "lmdj.project.v3",
   "lmdj.project.v4",
+  "lmdj.project.v5",
 ]);
 
 function typedError(code, message) {

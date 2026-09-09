@@ -2,6 +2,7 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <variant>
@@ -651,6 +652,123 @@ void test_asset_pattern_id_and_bank_references_are_rejected() {
   check_rejected(bank_reference);
 }
 
+Json capability_lineage_json() {
+  return Json::parse(R"JSON(
+{
+  "source": {
+    "kind": "asset_artifact",
+    "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "project_revision": 7
+  },
+  "derivation": {
+    "kind": "capability_adoption",
+    "capability": {
+      "id": "sample.slice.v1",
+      "contract": "lmdj.capability.v2",
+      "version": "1.0.0"
+    },
+    "provider": {
+      "id": "local.sample.slice",
+      "version": "1.0.0",
+      "artifact_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "model_identity": null,
+    "parameters_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "attempt_id": "slice-job.attempt_1",
+    "source_asset_id": "20000000-0000-4000-8000-000000000002",
+    "output_artifact": {
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "media_type": "application/json",
+      "byte_length": 128
+    },
+    "recipe": {
+      "kind": "slice_interval_v1",
+      "start_frame": 10,
+      "end_frame": 100,
+      "frame_rate": 48000
+    }
+  }
+}
+)JSON");
+}
+
+void test_capability_lineage_roundtrip_and_closed_evidence() {
+  const auto encoded = capability_lineage_json();
+  const auto parsed = lmdj::domain::asset_lineage_from_json(encoded);
+  LMDJ_CHECK(parsed.has_value());
+  LMDJ_CHECK(lmdj::domain::asset_lineage_derivation_kind(parsed.value()) ==
+             lmdj::domain::AssetLineageDerivationKind::capability_adoption);
+  LMDJ_CHECK(lmdj::domain::asset_lineage_json(parsed.value()) == encoded);
+  auto maximum_revision = encoded;
+  maximum_revision["source"]["project_revision"] = std::numeric_limits<std::uint64_t>::max();
+  const auto parsed_revision = lmdj::domain::asset_lineage_from_json(maximum_revision);
+  LMDJ_CHECK(parsed_revision.has_value());
+  LMDJ_CHECK(lmdj::domain::asset_lineage_json(parsed_revision.value()) == maximum_revision);
+  auto modeled = encoded;
+  modeled["derivation"]["model_identity"] =
+      {{"id", "detector-model"}, {"version", "revision-7"},
+       {"artifact_sha256", std::string(64, 'e')}};
+  const auto parsed_model = lmdj::domain::asset_lineage_from_json(modeled);
+  LMDJ_CHECK(parsed_model.has_value());
+  LMDJ_CHECK(lmdj::domain::asset_lineage_json(parsed_model.value()) == modeled);
+  // Each nested object is closed and every field is required, including null model.
+  for (const auto& path : {"", "/source", "/derivation", "/derivation/capability",
+                           "/derivation/provider", "/derivation/model_identity",
+                           "/derivation/output_artifact", "/derivation/recipe"}) {
+    const Json::json_pointer pointer{path};
+    auto extra = modeled;
+    extra[pointer]["extra"] = true;
+    LMDJ_CHECK(!lmdj::domain::asset_lineage_from_json(extra).has_value());
+    for (const auto& item : modeled.at(pointer).items()) {
+      auto missing = modeled;
+      missing[pointer].erase(item.key());
+      LMDJ_CHECK(!lmdj::domain::asset_lineage_from_json(missing).has_value());
+    }
+  }
+}
+
+void test_capability_lineage_rejects_invalid_evidence() {
+  const auto encoded = capability_lineage_json();
+  const std::vector<std::pair<std::string, Json>> cases{
+      {"/source/artifact_sha256", "bad"},
+      {"/derivation/capability/id", "stem.separate.v1"},
+      {"/derivation/capability/contract", "lmdj.capability.v1"},
+      {"/derivation/capability/version", "01.0.0"},
+      {"/derivation/provider/id", ""},
+      {"/derivation/provider/version", "latest"},
+      {"/derivation/provider/artifact_sha256", "bad"},
+      {"/derivation/model_identity", Json::object()},
+      {"/derivation/parameters_sha256", "bad"},
+      {"/derivation/attempt_id", "../attempt"},
+      {"/derivation/attempt_id", ""},
+      {"/derivation/attempt_id", std::string(129, 'a')},
+      {"/derivation/attempt_id", "attempt\n"},
+      {"/derivation/source_asset_id", "bad"},
+      {"/derivation/output_artifact/sha256", "bad"},
+      {"/derivation/output_artifact/media_type", "audio/wav"},
+      {"/derivation/output_artifact/byte_length", 0},
+      {"/derivation/output_artifact/byte_length", 262145},
+      {"/derivation/output_artifact/byte_length", true},
+      {"/derivation/recipe/kind", "stem_v1"},
+      {"/derivation/recipe/start_frame", -1},
+      {"/derivation/recipe/start_frame", true},
+      {"/derivation/recipe/start_frame", 0.5},
+      {"/derivation/recipe/start_frame", 100},
+      {"/derivation/recipe/end_frame", 0},
+      {"/derivation/recipe/end_frame", 9007199254740992ULL},
+      {"/derivation/recipe/frame_rate", 96000},
+      {"/derivation/recipe/frame_rate", 4295015296ULL},
+  };
+  for (const auto& [path, value] : cases) {
+    auto changed = encoded;
+    changed[Json::json_pointer{path}] = value;
+    LMDJ_CHECK(!lmdj::domain::asset_lineage_from_json(changed).has_value());
+  }
+  auto typed = lmdj::domain::asset_lineage_from_json(encoded).value();
+  typed.source = valid_soundset_lineage().source;
+  LMDJ_CHECK(!lmdj::domain::validate_asset_lineage(typed).has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -659,6 +777,8 @@ int main() {
     test_each_locked_event_shape_round_trips_exactly();
     test_events_are_canonically_ordered_by_tick_kind_and_fx_or_slot();
     test_valid_stream_and_performance_are_accepted();
+    test_capability_lineage_roundtrip_and_closed_evidence();
+    test_capability_lineage_rejects_invalid_evidence();
     test_asset_lineage_round_trips_exactly();
     test_asset_lineage_rejects_invalid_values_and_shapes();
     test_soundset_asset_lineage_round_trips_exactly();

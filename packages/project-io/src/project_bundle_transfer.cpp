@@ -190,7 +190,7 @@ struct BundleEntry {
 // The container version this Build writes. A Bundle index at an older
 // readable version keeps its own value, because the digest is computed over
 // the index and must reproduce exactly what its packer wrote.
-constexpr std::string_view kBundleContractVersion = "1.2.0";
+constexpr std::string_view kBundleContractVersion = "1.3.0";
 
 struct ParsedIndex {
   foundation::ProjectId project_id;
@@ -220,13 +220,15 @@ foundation::Result<ParsedIndex> parse_index(std::string_view encoded) {
       index.at("contract") != "lmdj.project-bundle.v1" ||
       (index.at("contract_version") != "1.0.0" &&
        index.at("contract_version") != "1.1.0" &&
+       index.at("contract_version") != "1.2.0" &&
        index.at("contract_version") != kBundleContractVersion) ||
       index.at("compression") != "none" ||
       !index.at("project_contract").is_string() ||
       (index.at("project_contract") != "lmdj.project.v1" &&
        index.at("project_contract") != "lmdj.project.v2" &&
        index.at("project_contract") != "lmdj.project.v3" &&
-       index.at("project_contract") != "lmdj.project.v4") ||
+       index.at("project_contract") != "lmdj.project.v4" &&
+       index.at("project_contract") != "lmdj.project.v5") ||
       !index.at("project_id").is_string() ||
       !index.at("bundle_digest").is_string() ||
       !index.at("entries").is_array()) {
@@ -396,6 +398,8 @@ std::string_view project_contract_id(domain::ProjectContract contract) {
       return "lmdj.project.v2";
     case domain::ProjectContract::v3:
       return "lmdj.project.v3";
+    case domain::ProjectContract::v5:
+      return "lmdj.project.v5";
     case domain::ProjectContract::v4:
       return "lmdj.project.v4";
   }

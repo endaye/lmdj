@@ -320,7 +320,7 @@ ProjectBundleFixture build_project_bundle_fixture(
       {"bundle_digest", std::string(64, '0')},
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.2.0"},
+      {"contract_version", "1.3.0"},
       {"entries", std::move(encoded_entries)},
       {"project_contract", project_contract},
       {"project_id", project_id},
@@ -2229,7 +2229,7 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
   const auto current = check_exact_success(
       runtime->dispatch("project.inspect", Json::object(), {}),
       {"project", "project_revision"});
-  LMDJ_CHECK(current.at("project").at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(current.at("project").at("contract") == "lmdj.project.v5");
   LMDJ_CHECK(read_bytes(manifest_path) == original_manifest);
 
   auto forbidden_inspect = Json{{"slot", slot(0, 0)}};
@@ -2305,7 +2305,7 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
       reinterpret_cast<const char*>(checkpoint_bytes.data()),
       checkpoint_bytes.size());
   LMDJ_CHECK(
-      Json::parse(checkpoint_text).at("contract") == "lmdj.project.v4");
+      Json::parse(checkpoint_text).at("contract") == "lmdj.project.v5");
 
   const auto inspected = check_exact_success(
       runtime->dispatch("sample.inspect", {{"slot", slot(0, 0)}}, {}),

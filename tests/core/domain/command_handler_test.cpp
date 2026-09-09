@@ -143,7 +143,7 @@ void test_valid_command_increments_revision_once() {
       initial, Command{import_asset(kImportCommand1, 0, kAsset1)});
 
   LMDJ_CHECK(applied.state.revision == 1);
-  LMDJ_CHECK(applied.state.contract == lmdj::domain::ProjectContract::v4);
+  LMDJ_CHECK(applied.state.contract == lmdj::domain::ProjectContract::v5);
   LMDJ_CHECK(applied.state.assets.size() == 1);
   LMDJ_CHECK(!applied.replayed);
   LMDJ_CHECK(applied.event.at("command_id") == kImportCommand1);
@@ -204,7 +204,7 @@ void test_import_assign_sample_is_one_revision_and_resets_playback() {
 
   LMDJ_CHECK(result.has_value());
   const auto& state = result.value().state;
-  LMDJ_CHECK(state.contract == lmdj::domain::ProjectContract::v4);
+  LMDJ_CHECK(state.contract == lmdj::domain::ProjectContract::v5);
   LMDJ_CHECK(state.revision == 1);
   LMDJ_CHECK(state.assets.size() == 1);
   LMDJ_CHECK(state.banks[0][0].asset_id == AssetId{kAsset1});
@@ -223,7 +223,7 @@ void test_update_pad_playback_migrates_an_unassigned_v1_project() {
 
   LMDJ_CHECK(updated.has_value());
   LMDJ_CHECK(updated.value().state.contract ==
-             lmdj::domain::ProjectContract::v4);
+             lmdj::domain::ProjectContract::v5);
   LMDJ_CHECK(updated.value().state.revision == 1);
   LMDJ_CHECK(
       updated.value().state.banks[0][0].playback.trim_start_frame == 10);
@@ -255,7 +255,7 @@ void test_update_pad_playback_accepts_all_modes_bounds_and_nullable_end() {
     LMDJ_CHECK(applied.has_value());
     LMDJ_CHECK(applied.value().state.revision == state.revision + 1);
     LMDJ_CHECK(applied.value().state.contract ==
-               lmdj::domain::ProjectContract::v4);
+               lmdj::domain::ProjectContract::v5);
     LMDJ_CHECK(applied.value().state.banks[0][0].playback == cases[index]);
     state = applied.value().state;
   }

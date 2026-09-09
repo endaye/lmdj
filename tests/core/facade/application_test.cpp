@@ -515,7 +515,7 @@ FacadeBundleFixture facade_bundle_fixture(
   nlohmann::json index{
       {"compression", "none"},
       {"contract", "lmdj.project-bundle.v1"},
-      {"contract_version", "1.2.0"},
+      {"contract_version", "1.3.0"},
       {"entries", std::move(encoded_entries)},
       {"project_contract", project_contract},
       {"project_id", std::move(declared_project_id)},
@@ -1034,20 +1034,20 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "4.2.0"},
+           {"version", "5.0.0"},
            {"api_version", 3},
            {"dependencies",
             {
                 {"foundation", "0.4.0"},
-                {"authoring-domain", "3.0.0"},
-                {"project-io", "3.2.0"},
-                {"project-cooker", "1.1.0"},
-                {"audio-runtime", "4.0.0"},
+                {"authoring-domain", "4.0.0"},
+                {"project-io", "4.0.0"},
+                {"project-cooker", "1.1.1"},
+                {"audio-runtime", "4.0.1"},
                 {"provider-sdk", "2.2.0"},
             }},
        }));
   LMDJ_CHECK(project_io.at("module") == "project-io");
-  LMDJ_CHECK(project_io.at("version") == "3.2.0");
+  LMDJ_CHECK(project_io.at("version") == "4.0.0");
 }
 
 void test_all_operations_share_one_facade_and_revision_contract() {
@@ -1078,7 +1078,7 @@ void test_all_operations_share_one_facade_and_revision_contract() {
           "pattern_slots",
           "performances",
       });
-  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v5");
   LMDJ_CHECK(projected.at("revision") == 5);
   LMDJ_CHECK(projected.at("patterns").at(kPatternId).at("events").size() == 4);
 
@@ -2137,7 +2137,7 @@ void test_project_inspect_projects_v4_lineage_and_recording_revision() {
        "sequence_settings",
        "pattern_slots",
        "performances"});
-  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK(projected.at("contract") == "lmdj.project.v5");
   LMDJ_CHECK(projected.at("assets").at(uuid(702)).at("lineage").is_null());
   LMDJ_CHECK(
       projected.at("performances").at(uuid(705)).at("recording_revision") ==

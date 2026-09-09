@@ -66,14 +66,14 @@ test('facts match the current locked product composition', async () => {
     'web-runtime-platform',
   ]);
   assert.deepEqual(facts.hosts.map(({id, version}) => ({id, version})), [
-    {id: 'core-cli', version: '3.3.1'},
-    {id: 'core-mcp', version: '3.3.1'},
-    {id: 'creator-web', version: '4.2.1'},
-    {id: 'native-host', version: '3.3.1'},
-    {id: 'web-runtime-host', version: '4.2.1'},
+    {id: 'core-cli', version: '3.3.2'},
+    {id: 'core-mcp', version: '3.3.2'},
+    {id: 'creator-web', version: '4.2.2'},
+    {id: 'native-host', version: '3.3.2'},
+    {id: 'web-runtime-host', version: '4.2.2'},
   ]);
   assert.equal(facts.providers.length, 3);
-  assert.equal(facts.contracts.length, 12);
+  assert.equal(facts.contracts.length, 13);
 });
 
 test('facts name each Product Build consumer that mismatches authority', async (t) => {
