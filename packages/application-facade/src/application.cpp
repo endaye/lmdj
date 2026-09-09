@@ -639,7 +639,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   auto assets = nlohmann::json::object();
   for (const auto& [id, asset] : state.assets) {
     auto encoded_asset = nlohmann::json{{"artifact", asset.artifact}};
-    if (state.contract == domain::ProjectContract::v4) {
+    if (state.contract >= domain::ProjectContract::v4) {
       encoded_asset["lineage"] =
           asset.lineage.has_value()
               ? domain::asset_lineage_json(*asset.lineage)
@@ -660,7 +660,9 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   }
   nlohmann::json encoded{
       {"contract",
-       state.contract == domain::ProjectContract::v4
+       state.contract == domain::ProjectContract::v5
+           ? std::string_view{"lmdj.project.v5"}
+           : state.contract == domain::ProjectContract::v4
            ? "lmdj.project.v4"
            : "lmdj.project.v3"},
       {"project_id", state.id.value()},
@@ -673,7 +675,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
       {"assets", std::move(assets)},
       {"patterns", std::move(patterns)},
   };
-  if (state.contract == domain::ProjectContract::v4) {
+  if (state.contract >= domain::ProjectContract::v4) {
     auto pattern_slots = nlohmann::json::array();
     for (const auto& pattern_id : state.pattern_slots) {
       pattern_slots.push_back(

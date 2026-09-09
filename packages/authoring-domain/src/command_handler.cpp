@@ -109,9 +109,7 @@ AppliedCommand applied(
     std::string_view type,
     const CommandMeta& meta,
     ProjectContract contract = ProjectContract::v3) {
-  state.contract = state.contract == ProjectContract::v4
-                       ? ProjectContract::v4
-                       : contract;
+  state.contract = std::max(state.contract, contract);
   ++state.revision;
   const auto committed_revision = state.revision;
   return AppliedCommand{
@@ -226,6 +224,18 @@ foundation::Result<AppliedCommand> apply_new_command(
   if (!valid_artifact(command.asset.artifact)) {
     return invalid("artifact reference is invalid");
   }
+  if (command.asset.lineage) {
+    const auto valid = validate_asset_lineage(*command.asset.lineage);
+    if (!valid.has_value()) {
+      return foundation::Result<AppliedCommand>::failure(valid.error());
+    }
+    if (state.contract < ProjectContract::v4 ||
+        (asset_lineage_derivation_kind(*command.asset.lineage) ==
+             AssetLineageDerivationKind::capability_adoption &&
+         state.contract < ProjectContract::v5)) {
+      return invalid("Asset Lineage is not supported by this Project Contract");
+    }
+  }
   if (state.assets.contains(command.asset.id)) {
     return foundation::Result<AppliedCommand>::failure(
         foundation::Error{
@@ -281,6 +291,18 @@ foundation::Result<AppliedCommand> apply_new_command(
   if (!valid_artifact(command.asset.artifact)) {
     return invalid("artifact reference is invalid");
   }
+  if (command.asset.lineage) {
+    const auto valid = validate_asset_lineage(*command.asset.lineage);
+    if (!valid.has_value()) {
+      return foundation::Result<AppliedCommand>::failure(valid.error());
+    }
+    if (state.contract < ProjectContract::v4 ||
+        (asset_lineage_derivation_kind(*command.asset.lineage) ==
+             AssetLineageDerivationKind::capability_adoption &&
+         state.contract < ProjectContract::v5)) {
+      return invalid("Asset Lineage is not supported by this Project Contract");
+    }
+  }
   if (state.assets.contains(command.asset.id)) {
     return foundation::Result<AppliedCommand>::failure(
         foundation::Error{
@@ -300,7 +322,7 @@ foundation::Result<AppliedCommand> apply_new_command(
 foundation::Result<AppliedCommand> apply_new_command(
     const ProjectState& state,
     const InstallSoundSet& command) {
-  if (state.contract != ProjectContract::v4) {
+  if (state.contract < ProjectContract::v4) {
     return invalid(
         "installing a Sound Set requires lmdj.project.v4 Project Truth");
   }

@@ -438,14 +438,14 @@ domain::ProjectState canonical_projection(
   return projected;
 }
 
-// Every Project this Build persists is written as lmdj.project.v4, so a
+// Every Project this Build persists is written as lmdj.project.v5, so a
 // Project's Contract level never has to be inferred from its command history.
-// An existing v3 Project on disk still loads at v3 and is promoted to v4 the
+// An existing v3/v4 Project retains its Contract on load and is promoted to v5 the
 // first time it is persisted; nothing is rewritten merely by opening it.
 domain::ProjectState persisted_projection(
     const domain::ProjectState& state) {
   auto projected = canonical_projection(state);
-  projected.contract = domain::ProjectContract::v4;
+  projected.contract = domain::ProjectContract::v5;
   return projected;
 }
 
@@ -493,7 +493,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   for (const auto& [id, asset] : state.assets) {
     nlohmann::json encoded_asset{
         {"artifact", asset.artifact}, {"asset_id", id.value()}};
-    if (state.contract == domain::ProjectContract::v4) {
+    if (state.contract >= domain::ProjectContract::v4) {
       encoded_asset["lineage"] =
           asset.lineage.has_value()
               ? domain::asset_lineage_json(*asset.lineage)
@@ -512,8 +512,10 @@ nlohmann::json project_json(const domain::ProjectState& state) {
       {"banks", std::move(banks)},
       {"bpm", state.bpm},
       {"contract",
-       state.contract == domain::ProjectContract::v4
-           ? kProjectWriterContract
+       state.contract == domain::ProjectContract::v5
+           ? std::string_view{"lmdj.project.v5"}
+           : state.contract == domain::ProjectContract::v4
+           ? std::string_view{"lmdj.project.v4"}
            : std::string_view{"lmdj.project.v3"}},
       {"patterns", std::move(patterns)},
       {"project_id", state.id.value()},
@@ -524,7 +526,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
            {"swing_percent", state.swing_percent},
        }},
   };
-  if (state.contract == domain::ProjectContract::v4) {
+  if (state.contract >= domain::ProjectContract::v4) {
     auto pattern_slots = nlohmann::json::array();
     for (const auto& pattern_id : state.pattern_slots) {
       pattern_slots.push_back(
@@ -896,7 +898,8 @@ foundation::Result<domain::ProjectState> parse_project(
     const bool is_v1 = contract == "lmdj.project.v1";
     const bool is_v2 = contract == "lmdj.project.v2";
     const bool is_v3 = contract == "lmdj.project.v3";
-    const bool is_v4 = contract == "lmdj.project.v4";
+    const bool is_v5 = contract == "lmdj.project.v5";
+    const bool is_v4 = contract == "lmdj.project.v4" || is_v5;
     const bool legacy_shape =
         (is_v1 || is_v2) &&
         exact_object_keys(
@@ -980,7 +983,8 @@ foundation::Result<domain::ProjectState> parse_project(
           invalid_project("project metadata is invalid", path));
     }
     auto state = std::move(created.value());
-    state.contract = is_v4 ? domain::ProjectContract::v4
+    state.contract = is_v5 ? domain::ProjectContract::v5
+                           : is_v4 ? domain::ProjectContract::v4
                            : domain::ProjectContract::v3;
     state.revision = *revision;
     if (is_v3 || is_v4) {
@@ -1139,6 +1143,11 @@ foundation::Result<domain::ProjectState> parse_project(
                     "project Asset Lineage is invalid",
                     path,
                     parsed_lineage.error().message));
+          }
+          if (!is_v5 && domain::asset_lineage_derivation_kind(parsed_lineage.value()) ==
+                            domain::AssetLineageDerivationKind::capability_adoption) {
+            return foundation::Result<domain::ProjectState>::failure(
+                invalid_project("capability adoption requires Project v5", path));
           }
           lineage = std::move(parsed_lineage.value());
         }
@@ -2177,7 +2186,7 @@ foundation::Result<domain::AppliedCommand> apply_command(
               event_type = "performance.deleted";
             }
           }
-          next.contract = domain::ProjectContract::v4;
+          next.contract = std::max(next.contract, domain::ProjectContract::v4);
           ++next.revision;
           nlohmann::json event = {
               {"command_id", value.meta.command_id.value()},
@@ -2332,7 +2341,8 @@ foundation::Result<LoadedProject> load_project(
     }
     const bool checkpoint_is_current =
         checkpoint_json.value().at("contract") == "lmdj.project.v3" ||
-        checkpoint_json.value().at("contract") == "lmdj.project.v4";
+        checkpoint_json.value().at("contract") == "lmdj.project.v4" ||
+        checkpoint_json.value().at("contract") == "lmdj.project.v5";
 
     LoadedProject loaded{
         std::move(initial.value()),
@@ -3110,7 +3120,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
   }
 
-  // Every Project this Build persists is written as lmdj.project.v4, so an
+  // Every Project this Build persists is written as lmdj.project.v5, so an
   // existing v3 Project is promoted on its first persist. Promote the state
   // being committed, not just the bytes, so the checkpoint on disk, the state
   // returned to the caller, and the next load all agree on the Contract level.
@@ -3872,7 +3882,7 @@ foundation::Result<void> ProjectStore::create(
         });
   }
   // The Contract level of `initial` does not survive: every Project this Build
-  // persists is written as lmdj.project.v4. A caller that wants a v3 Project on
+  // persists is written as lmdj.project.v5. A caller that wants a v3 Project on
   // disk has to write one, which is what tests/core/support/legacy_project.hpp
   // is for.
   const auto persisted_initial = persisted_projection(initial);
@@ -6564,7 +6574,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
     return foundation::Result<domain::AppliedCommand>::failure(
         loaded.error());
   }
-  if (loaded.value().state.contract != domain::ProjectContract::v4) {
+  if (loaded.value().state.contract < domain::ProjectContract::v4) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -6686,7 +6696,7 @@ ProjectStore::import_assign_sample_bytes(
         loaded.error());
   }
   if (request.lineage.has_value() &&
-      loaded.value().state.contract != domain::ProjectContract::v4) {
+      loaded.value().state.contract < domain::ProjectContract::v4) {
     return foundation::Result<domain::AppliedCommand>::failure(Error{
         ErrorCode::invalid_argument,
         "Asset Lineage requires lmdj.project.v4 Project Truth",

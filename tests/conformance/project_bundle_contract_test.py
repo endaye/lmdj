@@ -29,7 +29,7 @@ PROJECT_ID = "12345678-1234-4123-8123-123456789abc"
 # and persists (`persisted_projection` in packages/project-io/src/
 # project_store.cpp). A Bundle that cannot name this level cannot pack any
 # Project the product produced, which is what #784 reported.
-WRITER_PROJECT_CONTRACT = "lmdj.project.v4"
+WRITER_PROJECT_CONTRACT = "lmdj.project.v5"
 
 assert TOOL_PATH.is_file(), f"missing Project Bundle tool: {TOOL_PATH}"
 assert SCHEMA_PATH.is_file(), f"missing Project Bundle Contract: {SCHEMA_PATH}"
@@ -248,7 +248,7 @@ def test_index_and_payload_rejections(root: Path) -> None:
 
     cases: list[tuple[str, dict, bytes, str]] = []
     unsupported = copy.deepcopy(valid_index)
-    unsupported["project_contract"] = "lmdj.project.v5"
+    unsupported["project_contract"] = "lmdj.project.v6"
     unsupported["bundle_digest"] = project_bundle.bundle_digest(unsupported)
     cases.append(("project-contract", unsupported, payload, "unsupported"))
     unsupported_container = copy.deepcopy(valid_index)

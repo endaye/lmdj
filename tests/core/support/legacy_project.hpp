@@ -24,7 +24,8 @@ namespace lmdj::test {
 // it — the store writes v4 regardless — and a fixture built that way goes on
 // passing while silently testing v4.
 inline nlohmann::json v3_checkpoint(nlohmann::json checkpoint) {
-  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v4");
+  LMDJ_CHECK((checkpoint.at("contract") == "lmdj.project.v4" ||
+              checkpoint.at("contract") == "lmdj.project.v5"));
   checkpoint["contract"] = "lmdj.project.v3";
   checkpoint.erase("pattern_slots");
   checkpoint.erase("performances");

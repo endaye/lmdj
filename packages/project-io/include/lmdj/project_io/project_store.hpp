@@ -19,7 +19,7 @@
 namespace lmdj::project_io {
 
 inline constexpr std::string_view kProjectWriterContract =
-    "lmdj.project.v4";
+    "lmdj.project.v5";
 
 struct SequenceFlushIdentity {
   foundation::SequenceSessionId session_id;

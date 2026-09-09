@@ -3,7 +3,7 @@
   "meta": {"title": "Project Cooker Module", "summary": "Project Truth 派生 Snapshot、Replay 与有界 runtime content"},
   "boundaries": [],
   "components": [
-    {"id": "inputs", "label": "Project + Artifacts", "detail": "Project v4 + WAV", "kind": "host", "x": 70, "y": 190, "width": 250, "height": 96},
+    {"id": "inputs", "label": "Project + Artifacts", "detail": "Project v5 + WAV", "kind": "host", "x": 70, "y": 190, "width": 250, "height": 96},
     {"id": "cooker", "label": "Project Cooker", "detail": "tick Pattern · prepare", "kind": "core", "x": 470, "y": 190, "width": 250, "height": 96},
     {"id": "snapshot", "label": "Runtime Snapshot", "detail": "immutable output", "kind": "core", "x": 880, "y": 190, "width": 250, "height": 96},
     {"id": "runtime", "label": "Audio Runtime", "detail": "read-only consumer", "kind": "host", "x": 1290, "y": 190, "width": 210, "height": 96},

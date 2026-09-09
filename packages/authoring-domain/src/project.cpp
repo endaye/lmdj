@@ -4,6 +4,7 @@
 #include <array>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -199,7 +200,7 @@ foundation::Result<ProjectState> create_project(
   }
 
   ProjectState state{
-      ProjectContract::v4,
+      ProjectContract::v5,
       std::move(id),
       0,
       bpm,
@@ -547,6 +548,9 @@ AssetLineageSourceKind asset_lineage_source_kind(
 
 AssetLineageDerivationKind asset_lineage_derivation_kind(
     const AssetLineage& lineage) noexcept {
+  if (std::holds_alternative<CapabilityAdoptionLineageDerivation>(lineage.derivation)) {
+    return AssetLineageDerivationKind::capability_adoption;
+  }
   return std::holds_alternative<SoundSetInstallLineageDerivation>(
              lineage.derivation)
              ? AssetLineageDerivationKind::soundset_install
@@ -592,6 +596,41 @@ foundation::Result<void> validate_asset_lineage(
     if (resample->range.start_frame >= resample->range.end_frame) {
       return invalid_asset_lineage(
           "asset Lineage frame range must be non-empty and increasing");
+    }
+  }
+  if (const auto* adoption =
+          std::get_if<CapabilityAdoptionLineageDerivation>(&lineage.derivation)) {
+    constexpr std::uint64_t maximum = 9007199254740991ULL;
+    const auto* source = std::get_if<AssetArtifactLineageSource>(&lineage.source);
+    const auto valid_identity = [](const ImplementationLineageIdentity& value) {
+      return !value.id.empty() && !value.version.empty() &&
+             valid_sha256(value.artifact_sha256);
+    };
+    // Attempt IDs come from SDK evidence, whose identifiers are not UUID-only.
+    const auto& attempt_id = adoption->attempt_id.value();
+    const bool valid_attempt = !attempt_id.empty() && attempt_id.size() <= 128 &&
+        std::all_of(attempt_id.begin(), attempt_id.end(), [](unsigned char c) {
+          return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+        });
+    if (source == nullptr ||
+        adoption->capability.id != "sample.slice.v1" ||
+        adoption->capability.contract != "lmdj.capability.v2" ||
+        !valid_soundset_semver(adoption->capability.version) ||
+        !valid_identity(adoption->provider) ||
+        !valid_soundset_semver(adoption->provider.version) ||
+        (adoption->model_identity && !valid_identity(*adoption->model_identity)) ||
+        !valid_sha256(adoption->parameters_sha256) ||
+        !valid_attempt ||
+        !is_valid_uuid(adoption->source_asset_id.value()) ||
+        !valid_sha256(adoption->output_artifact.sha256) ||
+        adoption->output_artifact.media_type != "application/json" ||
+        adoption->output_artifact.byte_length == 0 ||
+        adoption->output_artifact.byte_length > 262144 ||
+        adoption->recipe.start_frame >= adoption->recipe.end_frame ||
+        adoption->recipe.end_frame > maximum ||
+        (adoption->recipe.frame_rate != 44100 && adoption->recipe.frame_rate != 48000)) {
+      return invalid_asset_lineage("capability adoption evidence is invalid");
     }
   }
   return foundation::Result<void>::success();
@@ -692,6 +731,50 @@ foundation::Result<AssetLineage> asset_lineage_from_json(
           {*start_frame, *end_frame},
           PerformanceId{derivation.at("performance_id").get<std::string>()},
       };
+    } else if (derivation_kind == "capability_adoption") {
+      const auto& capability = derivation.at("capability");
+      const auto& output = derivation.at("output_artifact");
+      const auto& recipe = derivation.at("recipe");
+      if (!exact_object_keys(derivation,
+              {"kind", "capability", "provider", "model_identity",
+               "parameters_sha256", "attempt_id", "source_asset_id",
+               "output_artifact", "recipe"}) ||
+          !exact_object_keys(capability, {"id", "contract", "version"}) ||
+          !exact_object_keys(output, {"sha256", "media_type", "byte_length"}) ||
+          !exact_object_keys(recipe, {"kind", "start_frame", "end_frame", "frame_rate"}) ||
+          recipe.at("kind") != "slice_interval_v1") {
+        return invalid_asset_lineage_value("capability adoption shape is invalid");
+      }
+      const auto identity = [](const nlohmann::json& value) {
+        if (!exact_object_keys(value, {"id", "version", "artifact_sha256"})) {
+          throw std::invalid_argument("identity shape is invalid");
+        }
+        return ImplementationLineageIdentity{
+            value.at("id").get<std::string>(), value.at("version").get<std::string>(),
+            value.at("artifact_sha256").get<std::string>()};
+      };
+      const auto start = unsigned_value(recipe.at("start_frame"));
+      const auto end = unsigned_value(recipe.at("end_frame"));
+      const auto rate = bounded_unsigned(recipe.at("frame_rate"), 48000);
+      const auto length = unsigned_value(output.at("byte_length"));
+      if (!start || !end || !rate || !length) {
+        return invalid_asset_lineage_value("capability adoption integer is invalid");
+      }
+      std::optional<ImplementationLineageIdentity> model;
+      if (!derivation.at("model_identity").is_null()) {
+        model = identity(derivation.at("model_identity"));
+      }
+      parsed_derivation = CapabilityAdoptionLineageDerivation{
+          {capability.at("id").get<std::string>(),
+           capability.at("contract").get<std::string>(),
+           capability.at("version").get<std::string>()},
+          identity(derivation.at("provider")), std::move(model),
+          derivation.at("parameters_sha256").get<std::string>(),
+          foundation::AttemptId{derivation.at("attempt_id").get<std::string>()},
+          foundation::AssetId{derivation.at("source_asset_id").get<std::string>()},
+          {output.at("sha256").get<std::string>(),
+           output.at("media_type").get<std::string>(), *length},
+          {*start, *end, static_cast<std::uint32_t>(*rate)}};
     } else if (derivation_kind == "soundset_install") {
       if (!exact_object_keys(derivation, {"kind"})) {
         return invalid_asset_lineage_value(
@@ -749,6 +832,30 @@ nlohmann::json asset_lineage_json(const AssetLineage& lineage) {
           {"end_frame", resample->range.end_frame}}},
         {"performance_id", resample->performance_id.value()},
     };
+  } else if (const auto* adoption =
+                 std::get_if<CapabilityAdoptionLineageDerivation>(&lineage.derivation)) {
+    const auto identity = [](const ImplementationLineageIdentity& value) {
+      return nlohmann::json{{"id", value.id}, {"version", value.version},
+                            {"artifact_sha256", value.artifact_sha256}};
+    };
+    derivation = {
+        {"kind", "capability_adoption"},
+        {"capability", {{"id", adoption->capability.id},
+                        {"contract", adoption->capability.contract},
+                        {"version", adoption->capability.version}}},
+        {"provider", identity(adoption->provider)},
+        {"model_identity", adoption->model_identity
+                               ? identity(*adoption->model_identity) : nlohmann::json(nullptr)},
+        {"parameters_sha256", adoption->parameters_sha256},
+        {"attempt_id", adoption->attempt_id.value()},
+        {"source_asset_id", adoption->source_asset_id.value()},
+        {"output_artifact", {{"sha256", adoption->output_artifact.sha256},
+                            {"media_type", adoption->output_artifact.media_type},
+                            {"byte_length", adoption->output_artifact.byte_length}}},
+        {"recipe", {{"kind", "slice_interval_v1"},
+                    {"start_frame", adoption->recipe.start_frame},
+                    {"end_frame", adoption->recipe.end_frame},
+                    {"frame_rate", adoption->recipe.frame_rate}}}};
   } else {
     derivation = nlohmann::json::object({{"kind", "soundset_install"}});
   }

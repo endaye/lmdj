@@ -1778,7 +1778,7 @@ def soundset_offline_and_export_journey(
     assert verified.stdout.strip() == packed.stdout.strip()
 
     index, _ = project_bundle_module().read_bundle(bundle)
-    assert index["project_contract"] == "lmdj.project.v4"
+    assert index["project_contract"] == "lmdj.project.v5"
     payloads = sorted(
         entry["path"] for entry in index["entries"]
         if entry["path"].endswith(".wav")

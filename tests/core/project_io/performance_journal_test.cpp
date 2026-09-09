@@ -712,7 +712,7 @@ void test_performance_flush_is_durable_before_mutation_and_replays() {
   LMDJ_CHECK(committed.has_value());
   LMDJ_CHECK(!committed.value().replayed);
   LMDJ_CHECK(committed.value().receipt.committed_revision == 1);
-  LMDJ_CHECK(committed.value().state.contract == ProjectContract::v4);
+  LMDJ_CHECK(committed.value().state.contract == ProjectContract::v5);
   LMDJ_CHECK(
       committed.value().state.performances.at(performance.id).events == events);
 
@@ -1000,7 +1000,7 @@ void test_empty_v3_project_creates_performance_then_begins_recording() {
   const auto migrated = store.create_performance(bundle, command);
   LMDJ_CHECK(migrated.has_value());
   LMDJ_CHECK(!migrated.value().replayed);
-  LMDJ_CHECK(migrated.value().state.contract == ProjectContract::v4);
+  LMDJ_CHECK(migrated.value().state.contract == ProjectContract::v5);
   LMDJ_CHECK(migrated.value().state.revision == 1);
   const auto& created =
       migrated.value().state.performances.at(performance_id);

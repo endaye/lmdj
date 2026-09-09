@@ -14,6 +14,7 @@ schema_paths = {
     "project": contract_root / "project" / "lmdj.project.v1.schema.json",
     "project_v2": contract_root / "project" / "lmdj.project.v2.schema.json",
     "project_v3": contract_root / "project" / "lmdj.project.v3.schema.json",
+    "project_v5": contract_root / "project" / "lmdj.project.v5.schema.json",
     "project_v4": contract_root / "project" / "lmdj.project.v4.schema.json",
     "project_bundle": (
         contract_root / "project" / "lmdj.project-bundle.v1.schema.json"
@@ -64,7 +65,8 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
 contract_versions = {
     name: (
-        "1.2.0"
+        "5.0.0" if name == "project_v5" else
+        "1.3.0"
         if name == "project_bundle"
         else (
         "1.1.0"
@@ -642,7 +644,7 @@ assert set(project_bundle["required"]) == {
 assert project_bundle["properties"]["contract"]["const"] == (
     "lmdj.project-bundle.v1"
 )
-assert project_bundle["properties"]["contract_version"]["const"] == "1.2.0"
+assert project_bundle["properties"]["contract_version"]["const"] == "1.3.0"
 assert project_bundle["properties"]["compression"]["const"] == "none"
 # S11/#784: every Project Contract level the repository defines must be
 # nameable, or a Project the writer produces cannot be packed at all.
@@ -651,6 +653,7 @@ assert project_bundle["properties"]["project_contract"]["enum"] == [
     "lmdj.project.v2",
     "lmdj.project.v3",
     "lmdj.project.v4",
+    "lmdj.project.v5",
 ]
 assert project_bundle["properties"]["entries"]["maxItems"] == 4096
 assert project_bundle["$defs"]["entry"]["properties"]["bytes"]["maximum"] == (
@@ -1530,3 +1533,54 @@ print(
     f"{len(negative_cases)} negative cases, "
     f"{len(module_manifests) + 2} Product artifacts validated"
 )
+
+# L3: the successor schema admits only the approved closed Slice evidence.
+project_v5 = schemas["project_v5"]
+valid_project_v5 = load_json(repo_root / "tests/fixtures/contracts/project-v5-valid.json")
+json_schema.check(valid_project_v5, project_v5, "project-v5-valid")
+lineage_v5 = valid_project_v5["assets"][0]["lineage"]
+for path in ((), ("source",), ("derivation",), ("derivation", "capability"),
+             ("derivation", "provider"), ("derivation", "output_artifact"),
+             ("derivation", "recipe")):
+    target = lineage_v5
+    for key in path:
+        target = target[key]
+    for missing in target:
+        changed = json.loads(json.dumps(valid_project_v5))
+        node = changed["assets"][0]["lineage"]
+        for key in path:
+            node = node[key]
+        del node[missing]
+        assert json_schema.validate(changed, project_v5), (path, missing)
+    changed = json.loads(json.dumps(valid_project_v5))
+    node = changed["assets"][0]["lineage"]
+    for key in path:
+        node = node[key]
+    node["extra"] = True
+    assert json_schema.validate(changed, project_v5), path
+for path, bad in [
+    (["derivation", "recipe", "start_frame"], True),
+    (["derivation", "recipe", "end_frame"], 9007199254740992),
+    (["derivation", "recipe", "frame_rate"], 96000),
+    (["derivation", "output_artifact", "byte_length"], 262145),
+    (["derivation", "parameters_sha256"], "bad"),
+    (["derivation", "attempt_id"], "../attempt"),
+    (["derivation", "attempt_id"], ""),
+    (["derivation", "attempt_id"], "a" * 129),
+    (["derivation", "attempt_id"], "attempt\n"),
+    (["derivation", "model_identity"], {}),
+    (["derivation", "capability", "id"], "stem.separate.v1"),
+]:
+    changed = mutated(valid_project_v5, ["assets", 0, "lineage"] + path, bad)
+    assert json_schema.validate(changed, project_v5), path
+old = dict(valid_project_v5, contract="lmdj.project.v4")
+assert json_schema.validate(old, project_v4)
+for old_lineage in (valid_lineage, valid_soundset_lineage_project_v4["assets"][0]["lineage"]):
+    migrated = mutated(valid_project_v5, ["assets", 0, "lineage"], old_lineage)
+    json_schema.check(migrated, project_v5, "legacy-lineage-v5")
+modeled = mutated(valid_project_v5, ["assets", 0, "lineage", "derivation", "model_identity"],
+                  {"id": "model", "version": "revision-7", "artifact_sha256": "e" * 64})
+json_schema.check(modeled, project_v5, "model-lineage-v5")
+opaque_attempt = mutated(valid_project_v5,
+    ["assets", 0, "lineage", "derivation", "attempt_id"], "slice-job.attempt_1")
+json_schema.check(opaque_attempt, project_v5, "sdk-attempt-id-lineage-v5")
