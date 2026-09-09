@@ -1,7 +1,7 @@
 {
   "contract": "lmdj.module.v1",
   "module": "provider-sdk",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "api_version": 3,
   "dependencies": {
     "foundation": "0.4.0"

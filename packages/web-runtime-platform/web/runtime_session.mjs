@@ -4405,6 +4405,17 @@ function createRuntimeSessionController(options = {}) {
         throw error;
       }
       runtime = await loadRuntime(manifest);
+      if (window?.lmdjWebRuntimeHost === runtime) {
+        // The packaged Host already publishes this runtime namespace. Expose
+        // the same session methods for trusted programmatic callers through
+        // its ordinary control lane, with no private Wasm or test-only API.
+        Object.defineProperty(runtime, "providers", {
+          value: Object.freeze({listProviders, configureProviderPermissions,
+            selectProvider, runProvider, inspectAttempt}),
+          configurable: false,
+          writable: false,
+        });
+      }
       machine.transition("storage-ready", { reason: "runtime_loaded" });
       machine.transition("core-ready", { reason: "runtime_ready" });
       machine.transition("audio-suspended", { reason: "activation_required" });
@@ -4821,7 +4832,33 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  // Explicit Host settings and execution share the serialized control lane.
+  // Payloads use the Facade names, except owner filesystem paths are forbidden.
+  function listProviders() {
+    return boundedRequest("provider.list", {});
+  }
+  function configureProviderPermissions(grantedPermissions) {
+    return serializeProjectAction(() => boundedRequest(
+      "provider.permissions.configure", {granted_permissions: grantedPermissions}));
+  }
+  function selectProvider(capability, providerId) {
+    return serializeProjectAction(() => boundedRequest(
+      "provider.select", {capability, provider_id: providerId}));
+  }
+  /** @param {import("./runtime_types.d.ts").ProviderRunRequest} request */
+  function runProvider(request) {
+    return serializeProjectAction(() => boundedRequest("provider.run", request));
+  }
+  function inspectAttempt(attemptId) {
+    return boundedRequest("attempt.inspect", {attempt_id: attemptId});
+  }
+
   const session = Object.freeze({
+    listProviders,
+    configureProviderPermissions,
+    selectProvider,
+    runProvider,
+    inspectAttempt,
     start,
     trigger,
     listLocalProjects,

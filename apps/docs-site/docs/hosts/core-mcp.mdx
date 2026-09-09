@@ -22,8 +22,14 @@ stdio 与 Facade parity 测试覆盖工具形状、字节协议、Sample quota �
 ## 限制
 MCP 可用性不代表产品 UI 或远程多租户服务已交付。Performance 工具面的可用性只证明控制面与状态边界，不构成物理演奏、听感或延迟验收，也不表示 tag、Release、部署或 Channel promotion 已发生。
 
-当前 Host 随 Facade/Platform 的 owned Provider 字节 ABI 集成更新依赖身份，transport
-操作保持原形状。无绑定 Proof 可运行；带输入绑定的 Provider 请求在 owner 尚未接线时
-返回可查询的 `input_artifact_unavailable` Attempt，Slice 工作流仍待后续集成。
+## Provider 输入 owner 与会话权限
 
-本次集成已为 Audio Runtime 的 Engine ABI 变更及其依赖重建分配匹配版本，当前身份以上方 Build Identity 为准。Slice 参考注册不增加此 Host 的切片操作或默认执行权限。
+Host 通过 Facade 提供 `provider.list`、`provider.permissions.configure`、
+`provider.select`、`provider.run` 和 `attempt.inspect`。输入必须先成为 Project Asset；
+owner 绑定完整 Artifact identity，读取与完整性检查由 Core 在 writer lease 内完成。
+权限配置替换当前会话的 grant，重启恢复默认 Proof 权限；选择 Provider 不自动授权。
+Slice 参考运行使用显式 `sample.slice.execute` grant 和既有 `test` 平台 token。
+成功或失败保存在 Attempt，重启后可检查；执行不改写 Project Truth。
+用户切片界面、结果采纳与生产质量选择仍未交付。当前身份由上方 Build Identity 派生。
+
+MCP 工具 schema 严格验证可选 `input_owners` 和权限数组，经同一 C API 转发。

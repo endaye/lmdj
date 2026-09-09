@@ -37,6 +37,36 @@
 
 #include "durable_file.hpp"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+
+// A Web filesystem has no cross-runtime mkdir-exclusive or hard-link primitive.
+// Serialize SDK mutations across cooperating runtimes before touching the
+// workspace. The browser releases this lock if its owning Worker is destroyed.
+EM_ASYNC_JS(int, lmdj_provider_workspace_acquire, (const char* root), {
+  const name = "lmdj-provider-workspace:" + UTF8ToString(root);
+  if (!navigator.locks) return -1;
+  if (!globalThis.lmdjProviderWorkspaceLocks) globalThis.lmdjProviderWorkspaceLocks = {next: 1, releases: new Map()};
+  const state = globalThis.lmdjProviderWorkspaceLocks;
+  return await new Promise((resolve) => {
+    navigator.locks.request(name, {ifAvailable: true}, async (lock) => {
+      if (!lock) { resolve(-1); return; }
+      const token = state.next++;
+      await new Promise((release) => {
+        state.releases.set(token, release);
+        resolve(token);
+      });
+    }).catch(() => resolve(-1));
+  });
+});
+EM_JS(void, lmdj_provider_workspace_release, (int token), {
+  const state = globalThis.lmdjProviderWorkspaceLocks;
+  const release = state?.releases.get(token);
+  state?.releases.delete(token);
+  release?.();
+});
+#endif
+
 namespace lmdj::provider {
 namespace {
 
@@ -202,6 +232,20 @@ bool media_type_allowed(
       });
 }
 
+#ifdef __EMSCRIPTEN__
+class WebWorkspaceLock {
+ public:
+  explicit WebWorkspaceLock(const std::filesystem::path& root)
+      : token_(lmdj_provider_workspace_acquire(root.lexically_normal().c_str())) {}
+  ~WebWorkspaceLock() { if (token_ >= 0) lmdj_provider_workspace_release(token_); }
+  WebWorkspaceLock(const WebWorkspaceLock&) = delete;
+  WebWorkspaceLock& operator=(const WebWorkspaceLock&) = delete;
+  bool acquired() const { return token_ >= 0; }
+ private:
+  int token_;
+};
+#endif
+
 foundation::Result<void> ensure_directory(
     const std::filesystem::path& path) {
   std::error_code status_error;
@@ -246,6 +290,7 @@ foundation::Result<std::filesystem::path> prepare_workspace(
         invalid_argument(
             "workspace root must be a Host workspace parent, not a Project"));
   }
+
   for (const auto& directory : {
            workspace_root,
            workspace_root / ".lmdj-workspace",
@@ -362,8 +407,23 @@ foundation::Result<void> publish_attempt_outputs(
     return available;
   }
   std::error_code rename_error;
+#ifdef __EMSCRIPTEN__
+  // OPFS cannot move directories. This Attempt is uniquely reserved and the
+  // workspace lock excludes other publishers. Publish each complete file, then
+  // publish the terminal last; interruption never exposes a successful prefix.
+  std::filesystem::create_directory(final_artifacts, rename_error);
+  if (!rename_error) {
+    for (const auto& entry : std::filesystem::directory_iterator(staged_artifacts, rename_error)) {
+      if (rename_error) break;
+      std::filesystem::rename(entry.path(), final_artifacts / entry.path().filename(), rename_error);
+      if (rename_error) break;
+    }
+  }
+  if (!rename_error) std::filesystem::remove(staged_artifacts, rename_error);
+#else
   std::filesystem::rename(
       staged_artifacts, final_artifacts, rename_error);
+#endif
   if (rename_error) {
     return foundation::Result<void>::failure(
         io_error(
@@ -1063,6 +1123,16 @@ foundation::Result<void> stage_inputs(
     }
     auto supplied = options.resolve_input(binding.artifact);
     if (!supplied.has_value() || !supplied.value()) {
+      // Only the trusted owner's exact corruption category survives ingress.
+      // Rebuild the error so owner paths/details never enter Attempt state.
+      if (!supplied.has_value() &&
+          supplied.error().code == ErrorCode::io_error &&
+          supplied.error().details.is_object() &&
+          supplied.error().details.value("reason", nlohmann::json{}) ==
+              "input_artifact_mismatch") {
+        return foundation::Result<void>::failure(execution_error(
+            ErrorCode::io_error, "input_artifact_mismatch"));
+      }
       return foundation::Result<void>::failure(execution_error(
           ErrorCode::not_found, "input_artifact_unavailable"));
     }
@@ -1143,6 +1213,7 @@ foundation::Result<std::filesystem::path> existing_attempts_root(
         invalid_argument(
             "workspace root must be a Host workspace parent, not a Project"));
   }
+
   const auto attempts =
       workspace_root / ".lmdj-workspace/attempts";
   for (const auto& directory : {
@@ -1310,6 +1381,11 @@ foundation::Result<void> AttemptStore::set_provider_selection(
   if (!selected.has_value()) {
     return foundation::Result<void>::failure(selected.error());
   }
+#ifdef __EMSCRIPTEN__
+  const WebWorkspaceLock workspace_lock(workspace_root_);
+  if (!workspace_lock.acquired()) return foundation::Result<void>::failure(
+      io_error("Provider workspace is busy or unavailable", workspace_root_));
+#endif
   const auto workspace = prepare_workspace(workspace_root_);
   if (!workspace.has_value()) {
     return foundation::Result<void>::failure(workspace.error());
@@ -1668,6 +1744,11 @@ foundation::Result<AttemptResult> AttemptStore::execute(
     return foundation::Result<AttemptResult>::failure(
         invalid_argument("attempt id is not safe for persistence"));
   }
+#ifdef __EMSCRIPTEN__
+  const WebWorkspaceLock workspace_lock(workspace_root_);
+  if (!workspace_lock.acquired()) return foundation::Result<AttemptResult>::failure(
+      io_error("Provider workspace is busy or unavailable", workspace_root_));
+#endif
   const auto workspace = prepare_workspace(workspace_root_);
   if (!workspace.has_value()) {
     return foundation::Result<AttemptResult>::failure(workspace.error());
@@ -1781,8 +1862,8 @@ foundation::Result<AttemptResult> AttemptStore::execute(
         const auto& capability = state->capability;
         const auto* declared = find_port(capability.output_artifacts, port_name);
         if (!declared || bytes.size() > state->maximum_output_bytes - state->output_bytes ||
-            std::count_if(state->minted.begin(), state->minted.end(),
-                [&](const auto& value) { return value.port == port_name; }) >=
+            static_cast<std::uint64_t>(std::count_if(state->minted.begin(), state->minted.end(),
+                [&](const auto& value) { return value.port == port_name; })) >=
                 declared->max_count) return reject();
         auto lease = state->reserve(bytes.size());
         if (!lease.has_value()) return reject();

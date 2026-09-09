@@ -71,6 +71,17 @@ void domain_error(bool approved) {
   LMDJ_CHECK(!terminal.error->details.contains("secret"));
   LMDJ_CHECK(terminal.error->message != "private provider message");
 }
+void provider_cannot_spoof_owner_mismatch() {
+  Fixture f;
+  f.install(f.registration([](auto context) {
+    return AttemptResult{context.attempt_id, std::nullopt,
+        Error{ErrorCode::io_error, "owner mismatch impersonation",
+              {{"reason", "input_artifact_mismatch"}, {"path", "/private/owner"}}}};
+  }));
+  const auto result = f.execute(request(), options());
+  f.reason(result, ErrorCode::provider_failed, "output_contract_invalid");
+  LMDJ_CHECK(!f.store.inspect(result.attempt_id).value().error->details.contains("path"));
+}
 void aggregate_output(bool exact) {
   Fixture f;
   auto registration = f.registration([](auto context) {
@@ -103,6 +114,7 @@ int main() {
     scratch_budget();
     for (int mode = 0; mode < 3; ++mode) ignored_sink_failure(mode);
     domain_error(false); domain_error(true);
+    provider_cannot_spoof_owner_mismatch();
     aggregate_output(false); aggregate_output(true);
     return 0;
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

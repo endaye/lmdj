@@ -414,3 +414,24 @@ export interface PerformanceRuntimeSession {
     projectRevision: number;
   }>>;
 }
+
+/** Programmatic Provider request; owner paths are supplied by the retained Host. */
+export interface ProviderRunRequest {
+  attempt_id: string;
+  capability: string;
+  inputs: readonly {
+    port: string;
+    artifact: {sha256: string; media_type: string; byte_length: number};
+  }[];
+  input_owners?: readonly {
+    port: string;
+    occurrence: number;
+    project_id: string;
+    asset_id: string;
+  }[];
+  parameters: Record<string, unknown>;
+  data_classification: string;
+  platform: string;
+  region: string;
+  required_permissions: readonly string[];
+}

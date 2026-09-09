@@ -144,7 +144,18 @@ foundation::Result<void> publish_new_link(
     const std::filesystem::path& final_path,
     foundation::ErrorCode existing_code) {
   std::error_code publish_error;
+#ifdef __EMSCRIPTEN__
+  // The caller holds the cross-runtime workspace lock. OPFS supports file
+  // moves, not hard links; inspect before moving so terminal identity remains
+  // immutable under that same lock.
+  if (std::filesystem::exists(final_path, publish_error)) {
+    publish_error = std::make_error_code(std::errc::file_exists);
+  } else if (!publish_error) {
+    std::filesystem::rename(temp_path, final_path, publish_error);
+  }
+#else
   std::filesystem::create_hard_link(temp_path, final_path, publish_error);
+#endif
   if (publish_error) {
     remove_quietly(temp_path);
     std::error_code final_status_error;

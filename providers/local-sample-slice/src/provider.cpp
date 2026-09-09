@@ -89,7 +89,7 @@ class SliceProvider final : public provider::Provider {
 }  // namespace
 
 provider::ProviderRegistration local_sample_slice_registration() {
-  return {std::make_shared<SliceProvider>(), "1.0.0", LMDJ_LOCAL_SAMPLE_SLICE_SOURCE_PACKAGE_SHA256,
+  return {std::make_shared<SliceProvider>(), "1.0.1", LMDJ_LOCAL_SAMPLE_SLICE_SOURCE_PACKAGE_SHA256,
       std::nullopt,
       {{"sample.slice.v1", "1.0.0",
         {{"source_audio", {"audio/wav"}, "lmdj.audio.pcm16-wav.v1", "1.0.0", true, 1}},

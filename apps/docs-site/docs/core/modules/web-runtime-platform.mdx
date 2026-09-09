@@ -39,7 +39,16 @@ C++ manifest/control/realtime tests、Node Runtime Session tests、Chromium/WebK
 ## 10. 版本身份
 版本和依赖由 `module.json` 与 Product Assembly Lock 派生。
 
-ApplicationConfig 中的 Provider 注册随 SDK owned 字节 ABI 更新；Platform 的公开
-C++ 依赖身份相应更新。Host transport 操作未新增，Slice owner 与 Job 接线仍待后续集成。
+## Provider 控制面
 
-本次集成已为 Audio Runtime 的 Engine ABI 变更及其依赖重建分配匹配版本，当前身份以上方 Build Identity 为准。Slice 参考注册不增加此 Host 的切片操作或默认执行权限。
+生产 Wasm 从嵌入的 Product Assembly 与 schema 加载实际注册和默认策略，缺失或漂移
+fail closed。五个 Provider/Attempt 操作通过严格协议和 ControlRuntime 进入 Facade；
+输入 owner 不接受调用方路径，只绑定 retained Project。Provider 操作不接受 sidecar。
+Runtime Session 的公开五个方法共用有界请求，权限、选择与执行使用既有串行 action lane。
+两个 packaged Host 暴露同一 `window.lmdjWebRuntimeHost.providers` namespace。
+
+SDK 读取复用 retained writer lease；跨窗口竞争在 Project open 阶段拒绝，不创建 Attempt。
+拒绝详情只保留可信 owner/ingress reason 与匹配 attempt ID。重启后仍可在打开 Project
+之前检查终态；新运行需要重新显式授权。Slice 的平台声明仍为 `test`。
+
+SDK 的标准文件系统 workspace 与 Project I/O adapter 映射同一 OPFS 根目录；挂载由既有 Project I/O Web platform factory 完成，Host 不直接调用 OPFS。Attempt、输出与 Provider 选择耐久保留，会话 grant 不落盘。

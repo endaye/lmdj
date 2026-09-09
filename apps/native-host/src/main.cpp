@@ -137,6 +137,22 @@ constexpr std::array<std::pair<std::string_view, FacadeSurface>, 5>
         {"soundset.install", FacadeSurface::command},
     }};
 
+constexpr std::array<std::pair<std::string_view, FacadeSurface>, 5>
+    kProviderOperations{{
+        {"provider.list", FacadeSurface::query},
+        {"provider.select", FacadeSurface::command},
+        {"provider.run", FacadeSurface::command},
+        {"provider.permissions.configure", FacadeSurface::command},
+        {"attempt.inspect", FacadeSurface::query},
+    }};
+
+std::optional<FacadeSurface> provider_surface(std::string_view operation) {
+  for (const auto& [name, surface] : kProviderOperations) {
+    if (name == operation) return surface;
+  }
+  return std::nullopt;
+}
+
 std::optional<FacadeSurface> performance_surface(std::string_view operation) {
   for (const auto& [name, surface] : kPerformanceOperations) {
     if (name == operation) {
@@ -606,10 +622,13 @@ class NativeHost final {
         has_operation ? performance_surface(name) : std::nullopt;
     const auto soundset =
         has_operation ? soundset_surface(name) : std::nullopt;
+    const auto provider =
+        has_operation ? provider_surface(name) : std::nullopt;
     const bool query_operation =
         name == "sample.quota" || name == "status" ||
         (performance.has_value() && *performance == FacadeSurface::query) ||
-        (soundset.has_value() && *soundset == FacadeSurface::query);
+        (soundset.has_value() && *soundset == FacadeSurface::query) ||
+        (provider.has_value() && *provider == FacadeSurface::query);
     if (!has_operation || query_operation) {
       service_runtime_once();
     } else {
@@ -633,6 +652,9 @@ class NativeHost final {
       }
       if (soundset.has_value()) {
         return soundset_operation(request, *soundset);
+      }
+      if (provider.has_value()) {
+        return provider_operation(request, *provider);
       }
       if (name == "trigger") {
         return trigger(request);
@@ -699,6 +721,23 @@ class NativeHost final {
     return surface == FacadeSurface::command
                ? application_.command(request)
                : application_.query(request);
+  }
+
+  Json provider_operation(const Json& request, FacadeSurface surface) {
+    if (request.contains("input_owners")) {
+      const auto& owners = request.at("input_owners");
+      if (!owners.is_array()) return invalid_request("input_owners must be an array");
+      for (const auto& owner : owners) {
+        if (!owner.is_object() || !owner.contains("project_path") ||
+            !owner.at("project_path").is_string() ||
+            owner.at("project_path").get<std::string>() != invocation_.project.generic_string()) {
+          return invalid_request("Provider owner must target the Native Host Project");
+        }
+      }
+    }
+    std::lock_guard lock(facade_mutex_);
+    return surface == FacadeSurface::command
+        ? application_.command(request) : application_.query(request);
   }
 
   // Workspace-level Sound Set operations carry no `project_path` at all, and

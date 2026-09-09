@@ -157,8 +157,19 @@ operation without a cloud write. Local locks require one coordinated operator
 host and do not lock dashboard changes. These HTTP checks do not establish
 browser, audio, storage migration or manual acceptance.
 
-当前 Host 随 Facade/Platform 的 owned Provider 字节 ABI 集成更新依赖身份，transport
-操作保持原形状。无绑定 Proof 可运行；带输入绑定的 Provider 请求在 owner 尚未接线时
-返回可查询的 `input_artifact_unavailable` Attempt，Slice 工作流仍待后续集成。
+## Provider 输入 owner 与会话权限
 
-本次集成已为 Audio Runtime 的 Engine ABI 变更及其依赖重建分配匹配版本，当前身份以上方 Build Identity 为准。Slice 参考注册不增加此 Host 的切片操作或默认执行权限。
+Host 通过 Facade 提供 `provider.list`、`provider.permissions.configure`、
+`provider.select`、`provider.run` 和 `attempt.inspect`。输入必须先成为 Project Asset；
+owner 绑定完整 Artifact identity，读取与完整性检查由 Core 在 writer lease 内完成。
+权限配置替换当前会话的 grant，重启恢复默认 Proof 权限；选择 Provider 不自动授权。
+Slice 参考运行使用显式 `sample.slice.execute` grant 和既有 `test` 平台 token。
+成功或失败保存在 Attempt，重启后可检查；执行不改写 Project Truth。
+用户切片界面、结果采纳与生产质量选择仍未交付。当前身份由上方 Build Identity 派生。
+
+可信程序调用方使用 `window.lmdjWebRuntimeHost.providers` 中的 `listProviders()`、
+`configureProviderPermissions(grantedPermissions)`、`selectProvider(capability, providerId)`、
+`runProvider(request)` 与 `inspectAttempt(attemptId)`。
+Web `input_owners` 每项仅接受 `port/occurrence/project_id/asset_id`；路径由 ControlRuntime
+从当前 retained Project 注入，调用方传路径会被拒绝。无打开 Project 或其他窗口持有
+writer lease 时不能取得输入 owner；没有隐式授权或私有 Wasm 调用要求。

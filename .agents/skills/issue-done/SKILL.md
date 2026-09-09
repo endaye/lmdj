@@ -27,6 +27,18 @@ Before starting the shipping pipeline:
    git branch --show-current
    ```
 2. **Local Pre-flight & Tests**:
+   Before interpreting missing paths or `ENOTDIR` in an owned worktree, compare
+   `git ls-files -s` mode `120000` entries with their actual filesystem types.
+   A checkout inheriting `core.symlinks=false` can be Git-clean while storing
+   link targets as ordinary files. On a filesystem supporting links, create
+   new worktrees with command-local `git -c core.symlinks=true worktree add ...`.
+   For an existing owned worktree, verify each affected path is pristine before
+   restoring only those exact entries with command-local
+   `git -c core.symlinks=true checkout-index --force -- <exact paths>`.
+   Never overwrite user edits or change shared Git configuration. Rerun the
+   original failing check; do not copy snapshot trees or relax path assertions.
+   See [`worktree-checkout-flattens-symlinks`](../../pitfalls/worktree-checkout-flattens-symlinks.md).
+
    Run the Task's declared, relevant verification; do not substitute an automatic
    full lane set or an unrelated portal build. For example:
    ```bash

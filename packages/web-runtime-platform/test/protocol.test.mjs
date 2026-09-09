@@ -178,6 +178,11 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "soundset.inspect",
     "soundset.map.preview",
     "soundset.install",
+    "provider.list",
+    "provider.select",
+    "provider.run",
+    "provider.permissions.configure",
+    "attempt.inspect",
     "host.close",
   ]);
   assert.deepEqual(HOST_NOTIFICATIONS, [
@@ -851,4 +856,48 @@ test("duplicate request IDs remain rejected while the first request is in flight
     true,
   );
   await assert.doesNotReject(pending);
+});
+
+function ownerRequest() {
+  return {
+    attempt_id: "owned", capability: "sample.slice.v1",
+    inputs: [{port: "source_audio", artifact: {sha256: "a".repeat(64), media_type: "audio/wav", byte_length: 54}}],
+    input_owners: [{port: "source_audio", occurrence: 0,
+      project_id: "00000000-0000-4000-8000-000000000001", asset_id: "00000000-0000-4000-8000-000000000002"}],
+    parameters: {refractory_frames: 1}, data_classification: "public", platform: "test", region: "local",
+    required_permissions: ["sample.slice.execute"],
+  };
+}
+
+test("Provider owner protocol carries selectors without a filesystem path", () => {
+  const payload = ownerRequest();
+  const envelope = createRequestEnvelope({operation: "provider.run", payload, crypto: webcrypto});
+  assert.deepEqual(decodeRequestEnvelope(encode(envelope)), envelope);
+  delete payload.input_owners;
+  assert.doesNotThrow(() => createRequestEnvelope({operation: "provider.run", payload, crypto: webcrypto}));
+});
+
+for (const [name, mutate] of [
+  ["owner path", (payload) => {payload.input_owners[0].project_path = "/lmdj-workspace/projects/other.lmdj";}],
+  ["extra owner field", (payload) => {payload.input_owners[0].extra = true;}],
+  ["unsafe occurrence", (payload) => {payload.input_owners[0].occurrence = Number.MAX_SAFE_INTEGER + 1;}],
+  ["invalid owner UUID", (payload) => {payload.input_owners[0].asset_id = "other";}],
+  ["malformed Artifact", (payload) => {payload.inputs[0].artifact.byte_length = -1;}],
+]) {
+  test(`Provider protocol rejects ${name} before transport`, () => {
+    const payload = ownerRequest(); mutate(payload);
+    assert.throws(() => createRequestEnvelope({operation: "provider.run", payload, crypto: webcrypto}),
+      (error) => error.code === "HOST_PROTOCOL_MISMATCH");
+  });
+}
+
+test("permission configuration is an exact explicit grant set", () => {
+  for (const payload of [{granted_permissions: []}, {granted_permissions: ["sample.slice.execute"]}]) {
+    assert.doesNotThrow(() => createRequestEnvelope({operation: "provider.permissions.configure", payload, crypto: webcrypto}));
+  }
+  for (const payload of [{granted_permissions: ["sample.slice.execute", "sample.slice.execute"]},
+    {granted_permissions: [], persist: true}, {granted_permissions: "sample.slice.execute"}]) {
+    assert.throws(() => createRequestEnvelope({operation: "provider.permissions.configure", payload, crypto: webcrypto}),
+      (error) => error.code === "HOST_PROTOCOL_MISMATCH");
+  }
 });

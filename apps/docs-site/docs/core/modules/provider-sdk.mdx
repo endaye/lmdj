@@ -51,3 +51,15 @@ execution crash 在 reservation、staging、validation、publication、terminal 
 生产/云 Provider、鉴权和隐私政策尚未实现。
 ## 10. 版本身份
 SDK 与 Provider 各自独立 SemVer，由 Assembly Lock 组合。
+
+## Trusted resolver 完整性错误
+
+输入 resolver 仅可保留精确的 `IO_ERROR/input_artifact_mismatch` 组合；额外详情被清除。
+其他 resolver 错误归一化为 `NOT_FOUND/input_artifact_unavailable`。Provider 自身的错误
+白名单不扩大，不能伪装这一 Core 完整性错误。权限、绑定和预算先于 resolver 执行。
+该修正保留现有 Provider SDK API/ABI；Slice 参考 Provider 同样使用 owned source/sink。
+
+SDK 复用既有 Project I/O Web platform factory 创建的 OPFS workspace 挂载。SDK 选择与执行在 origin-scoped
+Web Lock 内串行发布；浏览器销毁 Worker 时释放锁。Web 使用完整文件 move 替代 native
+hard link，Artifact 目录按文件发布后才写 terminal；中断的 reservation 不可复用，
+部分输出不构成成功终态。Native 的原子 hard-link 与 fsync 路径保持原有语义。

@@ -2274,7 +2274,8 @@ bool safe_relative_path(
 
 foundation::Result<LoadedProject> load_project(
     const ProjectStoragePlatform& platform,
-    const std::filesystem::path& bundle) {
+    const std::filesystem::path& bundle,
+    bool verify_asset_bytes = true) {
   const auto manifest_path = bundle / "manifest.json";
   auto manifest_result = read_json(platform, manifest_path);
   if (!manifest_result.has_value()) {
@@ -2472,6 +2473,11 @@ foundation::Result<LoadedProject> load_project(
               bundle / head_checkpoint));
     }
 
+    // Owner resolution verifies only its selected Artifact after checking
+    // ownership. Every authoring load keeps the complete asset verification.
+    if (!verify_asset_bytes) {
+      return foundation::Result<LoadedProject>::success(std::move(loaded));
+    }
     for (const auto& [asset_id, asset] : loaded.state.assets) {
       (void)asset_id;
       const auto blob =
@@ -3626,6 +3632,73 @@ foundation::Result<domain::AppliedCommand> execute_persisted(
       command,
       std::nullopt,
       nullptr);
+}
+
+foundation::Result<std::vector<std::byte>> read_verified_artifact(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle,
+    const foundation::ArtifactRef& artifact) {
+  const auto path =
+      bundle / "assets" / (artifact.sha256 + ".wav");
+  auto existing = platform.exists(path);
+  if (!existing.has_value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        existing.error());
+  }
+  if (!existing.value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::not_found,
+            "project artifact does not exist",
+            {{"path", path.generic_string()}},
+        });
+  }
+  auto length = platform.byte_length(path);
+  if (!length.has_value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(length.error());
+  }
+  if (length.value() != artifact.byte_length) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::cook_failed,
+            "project artifact byte length does not match its reference",
+            {{"path", path.generic_string()},
+             {"storage_condition", std::string{kStorageConditionArtifactMismatch}}},
+        });
+  }
+  auto read = platform.read_complete(path);
+  if (!read.has_value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(read.error());
+  }
+  auto bytes = std::move(read.value());
+  if (bytes.size() != artifact.byte_length) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::cook_failed,
+            "project artifact byte length changed while it was being read",
+            {{"path", path.generic_string()},
+             {"storage_condition", std::string{kStorageConditionArtifactMismatch}}},
+        });
+  }
+
+  picosha2::hash256_one_by_one hasher;
+  if (!bytes.empty()) {
+    const auto* hash_begin =
+        reinterpret_cast<const unsigned char*>(bytes.data());
+    hasher.process(hash_begin, hash_begin + bytes.size());
+  }
+  hasher.finish();
+  if (picosha2::get_hash_hex_string(hasher) != artifact.sha256) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::cook_failed,
+            "project artifact hash does not match its reference",
+            {{"path", path.generic_string()},
+             {"storage_condition", std::string{kStorageConditionArtifactMismatch}}},
+        });
+  }
+  return foundation::Result<std::vector<std::byte>>::success(
+      std::move(bytes));
 }
 
 }  // namespace
@@ -6872,64 +6945,41 @@ foundation::Result<std::vector<std::byte>> ProjectStore::read_artifact(
         tree.error());
   }
 
-  const auto path =
-      bundle / "assets" / (artifact.sha256 + ".wav");
-  auto existing = platform_->exists(path);
-  if (!existing.has_value()) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        existing.error());
-  }
-  if (!existing.value()) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        Error{
-            ErrorCode::not_found,
-            "project artifact does not exist",
-            {{"path", path.generic_string()}},
-        });
-  }
-  auto length = platform_->byte_length(path);
-  if (!length.has_value()) {
-    return foundation::Result<std::vector<std::byte>>::failure(length.error());
-  }
-  if (length.value() != artifact.byte_length) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        Error{
-            ErrorCode::cook_failed,
-            "project artifact byte length does not match its reference",
-            {{"path", path.generic_string()}},
-        });
-  }
-  auto read = platform_->read_complete(path);
-  if (!read.has_value()) {
-    return foundation::Result<std::vector<std::byte>>::failure(read.error());
-  }
-  auto bytes = std::move(read.value());
-  if (bytes.size() != artifact.byte_length) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        Error{
-            ErrorCode::cook_failed,
-            "project artifact byte length changed while it was being read",
-            {{"path", path.generic_string()}},
-        });
-  }
+  return read_verified_artifact(*platform_, bundle, artifact);
+}
 
-  picosha2::hash256_one_by_one hasher;
-  if (!bytes.empty()) {
-    const auto* hash_begin =
-        reinterpret_cast<const unsigned char*>(bytes.data());
-    hasher.process(hash_begin, hash_begin + bytes.size());
+foundation::Result<std::vector<std::byte>> ProjectStore::read_asset_artifact(
+    const std::filesystem::path& bundle,
+    const foundation::ProjectId& project_id,
+    const foundation::AssetId& asset_id,
+    const foundation::ArtifactRef& artifact) const {
+  using BytesResult = foundation::Result<std::vector<std::byte>>;
+  if (bundle.extension() != ".lmdj" ||
+      !domain::is_valid_uuid(project_id.value()) ||
+      !domain::is_valid_uuid(asset_id.value()) ||
+      !valid_sha256(artifact.sha256) || artifact.media_type.empty() ||
+      artifact.byte_length > kMaximumArtifactBytes) {
+    return BytesResult::failure(
+        Error{ErrorCode::invalid_argument, "Artifact owner selector is invalid"});
   }
-  hasher.finish();
-  if (picosha2::get_hash_hex_string(hasher) != artifact.sha256) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        Error{
-            ErrorCode::cook_failed,
-            "project artifact hash does not match its reference",
-            {{"path", path.generic_string()}},
-        });
+  auto tree = platform_->validate_managed_tree(bundle);
+  if (!tree.has_value()) return BytesResult::failure(tree.error());
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) return BytesResult::failure(lease.error());
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) return BytesResult::failure(tree.error());
+  // The internal reader replays committed metadata only. Public load also
+  // recovers/scavenges authoring state, which owner resolution must not do.
+  const auto loaded = load_project(*platform_, bundle, false);
+  if (!loaded.has_value()) return BytesResult::failure(loaded.error());
+  const auto& state = loaded.value().state;
+  const auto owner = state.assets.find(asset_id);
+  if (state.id != project_id || owner == state.assets.end() ||
+      owner->second.artifact != artifact) {
+    return BytesResult::failure(
+        Error{ErrorCode::not_found, "Project Asset does not own Artifact"});
   }
-  return foundation::Result<std::vector<std::byte>>::success(
-      std::move(bytes));
+  return read_verified_artifact(*platform_, bundle, artifact);
 }
 
 }  // namespace lmdj::project_io

@@ -1034,20 +1034,20 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "4.0.1"},
+           {"version", "4.1.0"},
            {"api_version", 3},
            {"dependencies",
             {
                 {"foundation", "0.4.0"},
                 {"authoring-domain", "3.0.0"},
-                {"project-io", "3.0.0"},
+                {"project-io", "3.1.0"},
                 {"project-cooker", "1.1.0"},
                 {"audio-runtime", "4.0.0"},
-                {"provider-sdk", "2.0.0"},
+                {"provider-sdk", "2.1.0"},
             }},
        }));
   LMDJ_CHECK(project_io.at("module") == "project-io");
-  LMDJ_CHECK(project_io.at("version") == "3.0.0");
+  LMDJ_CHECK(project_io.at("version") == "3.1.0");
 }
 
 void test_all_operations_share_one_facade_and_revision_contract() {
@@ -1882,6 +1882,7 @@ void test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation() {
       "sequence.recovery.apply",
       "sequence.recovery.discard",
       "render.offline",
+      "provider.permissions.configure",
       "provider.select",
       "provider.run",
   };

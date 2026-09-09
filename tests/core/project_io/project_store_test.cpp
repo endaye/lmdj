@@ -88,19 +88,31 @@ class ProjectStoreFaultGuard {
   ProjectStoreFaultGuard& operator=(const ProjectStoreFaultGuard&) = delete;
 };
 
-class MemoryWriterLease final : public ProjectWriterLease {};
+class MemoryWriterLease final : public ProjectWriterLease {
+ public:
+  explicit MemoryWriterLease(bool& held) : held_(held) { held_ = true; }
+  ~MemoryWriterLease() override { held_ = false; }
+ private:
+  bool& held_;
+};
 
 class MemoryStoragePlatform final : public ProjectStoragePlatform {
  public:
   lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>> acquire_writer(
       const std::filesystem::path&) override {
     ++writer_acquisitions;
+    if (writer_held) {
+      return lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>>::failure(
+          {ErrorCode::io_error, "Project is busy",
+           {{"storage_condition", "project_busy"}}});
+    }
     return lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>>::success(
-        std::make_unique<MemoryWriterLease>());
+        std::make_unique<MemoryWriterLease>(writer_held));
   }
 
   lmdj::foundation::Result<void> ensure_directory(
       const std::filesystem::path& path) override {
+    ++write_calls;
     auto current = path.lexically_normal();
     while (!current.empty()) {
       directories_.insert(key(current));
@@ -127,6 +139,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
 
   lmdj::foundation::Result<std::uint64_t> byte_length(
       const std::filesystem::path& path) const override {
+    if (require_read_lease) LMDJ_CHECK(writer_held);
     const auto found = files_.find(key(path));
     if (found == files_.end()) {
       return lmdj::foundation::Result<std::uint64_t>::failure(error(path));
@@ -137,6 +150,8 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
 
   lmdj::foundation::Result<std::vector<std::byte>> read_complete(
       const std::filesystem::path& path) const override {
+    if (require_read_lease) LMDJ_CHECK(writer_held);
+    read_paths.push_back(path);
     const auto found = files_.find(key(path));
     if (found == files_.end()) {
       return lmdj::foundation::Result<std::vector<std::byte>>::failure(
@@ -149,6 +164,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
   lmdj::foundation::Result<void> create_immutable(
       const std::filesystem::path& path,
       std::span<const std::byte> input) override {
+    ++write_calls;
     const auto normalized = key(path);
     if (fail_next_asset_create &&
         path.parent_path().filename() == "assets") {
@@ -168,6 +184,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
   lmdj::foundation::Result<void> replace_complete(
       const std::filesystem::path& path,
       std::span<const std::byte> input) override {
+    ++write_calls;
     files_[key(path)] = {input.begin(), input.end()};
     operation_log.push_back(
         "replace_complete:" + path.lexically_normal().generic_string());
@@ -178,6 +195,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
       const std::filesystem::path& path,
       std::uint64_t valid_prefix_length,
       std::span<const std::byte> input) override {
+    ++write_calls;
     const auto found = files_.find(key(path));
     if (found == files_.end()) {
       return lmdj::foundation::Result<void>::failure(error(path));
@@ -192,6 +210,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
 
   lmdj::foundation::Result<void> remove(
       const std::filesystem::path& path) override {
+    ++write_calls;
     files_.erase(key(path));
     return lmdj::foundation::Result<void>::success();
   }
@@ -237,8 +256,12 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
   }
 
   std::vector<std::string> operation_log;
+  mutable std::vector<std::filesystem::path> read_paths;
   std::size_t writer_acquisitions = 0;
   bool fail_next_asset_create = false;
+  bool writer_held = false;
+  bool require_read_lease = false;
+  std::size_t write_calls = 0;
 
  private:
   static std::string key(const std::filesystem::path& path) {
@@ -1253,6 +1276,114 @@ void test_imported_assets_are_content_addressed_and_deduplicated() {
   LMDJ_CHECK(legacy_replayed.has_value());
   LMDJ_CHECK(legacy_replayed.value().replayed);
   LMDJ_CHECK(legacy_replayed.value().state.revision == 2);
+}
+
+struct OwnedArtifactFixture {
+  std::filesystem::path bundle{"memory/owner.lmdj"};
+  std::shared_ptr<MemoryStoragePlatform> platform =
+      std::make_shared<MemoryStoragePlatform>();
+  ProjectStore store{platform};
+  lmdj::domain::ProjectState project = new_project();
+  AssetId asset{test_uuid("owner-asset")};
+  std::vector<std::byte> bytes{std::byte{'a'}, std::byte{'b'}};
+  lmdj::foundation::ArtifactRef artifact;
+  OwnedArtifactFixture() {
+    LMDJ_CHECK(store.create(bundle, project).has_value());
+    const auto imported = store.import_artifact_bytes(bundle,
+        {meta("owner-import", 0), asset, "audio/wav", bytes});
+    LMDJ_CHECK(imported.has_value());
+    artifact = imported.value().state.assets.at(asset).artifact;
+  }
+};
+
+void test_owner_read_holds_one_lease_and_never_writes() {
+  OwnedArtifactFixture f;
+  const auto writes = f.platform->write_calls;
+  const auto acquisitions = f.platform->writer_acquisitions;
+  f.platform->require_read_lease = true;
+  const auto read = f.store.read_asset_artifact(
+      f.bundle, f.project.id, f.asset, f.artifact);
+  LMDJ_CHECK(read.has_value());
+  LMDJ_CHECK(read.value() == f.bytes);
+  LMDJ_CHECK(f.platform->writer_acquisitions == acquisitions + 1);
+  LMDJ_CHECK(!f.platform->writer_held);
+  LMDJ_CHECK(f.platform->write_calls == writes);
+}
+
+void test_owner_read_refuses_unowned_identity(int field) {
+  OwnedArtifactFixture f;
+  auto project = f.project.id;
+  auto asset = f.asset;
+  auto artifact = f.artifact;
+  if (field == 0) project = ProjectId{test_uuid("other-owner-project")};
+  if (field == 1) asset = AssetId{test_uuid("other-owner-asset")};
+  if (field == 2) artifact.sha256 = std::string(64, 'f');
+  if (field == 3) artifact.media_type = "application/octet-stream";
+  if (field == 4) ++artifact.byte_length;
+  const auto writes = f.platform->write_calls;
+  f.platform->read_paths.clear();
+  const auto read = f.store.read_asset_artifact(f.bundle, project, asset, artifact);
+  LMDJ_CHECK(std::none_of(f.platform->read_paths.begin(), f.platform->read_paths.end(),
+      [](const auto& path) { return path.parent_path().filename() == "assets"; }));
+  LMDJ_CHECK(!read.has_value());
+  LMDJ_CHECK(read.error().code == ErrorCode::not_found);
+  LMDJ_CHECK(f.platform->write_calls == writes);
+}
+
+void test_owner_read_reports_byte_mismatch(bool length) {
+  OwnedArtifactFixture f;
+  if (length) f.bytes.push_back(std::byte{'x'});
+  else f.bytes[0] = std::byte{'x'};
+  LMDJ_CHECK(f.platform->replace_complete(
+      f.bundle / "assets" / (f.artifact.sha256 + ".wav"), f.bytes).has_value());
+  const auto writes = f.platform->write_calls;
+  const auto read = f.store.read_asset_artifact(
+      f.bundle, f.project.id, f.asset, f.artifact);
+  LMDJ_CHECK(!read.has_value());
+  LMDJ_CHECK(read.error().details.at("storage_condition") == "artifact_mismatch");
+  LMDJ_CHECK(f.platform->write_calls == writes);
+}
+
+void test_owner_read_does_not_read_unselected_audio() {
+  OwnedArtifactFixture f;
+  const AssetId other{test_uuid("unselected-asset")};
+  auto other_bytes = f.bytes;
+  other_bytes[0] = std::byte{'c'};
+  const auto imported = f.store.import_artifact_bytes(f.bundle,
+      {meta("unselected-import", 1), other, "audio/wav", other_bytes});
+  LMDJ_CHECK(imported.has_value());
+  const auto other_path = f.bundle / "assets" /
+      (imported.value().state.assets.at(other).artifact.sha256 + ".wav");
+  other_bytes[0] = std::byte{'d'};
+  LMDJ_CHECK(f.platform->replace_complete(other_path, other_bytes).has_value());
+  f.platform->read_paths.clear();
+  const auto selected = f.store.read_asset_artifact(f.bundle, f.project.id, f.asset, f.artifact);
+  LMDJ_CHECK(selected.has_value() && selected.value() == f.bytes);
+  LMDJ_CHECK(std::find(f.platform->read_paths.begin(), f.platform->read_paths.end(), other_path) ==
+      f.platform->read_paths.end());
+  // Normal Project loading still validates all source Assets.
+  LMDJ_CHECK(!f.store.load(f.bundle).has_value());
+}
+
+void test_owner_read_refuses_busy_project() {
+  OwnedArtifactFixture f;
+  auto lease = f.platform->acquire_writer(f.bundle);
+  LMDJ_CHECK(lease.has_value());
+  const auto read = f.store.read_asset_artifact(
+      f.bundle, f.project.id, f.asset, f.artifact);
+  LMDJ_CHECK(!read.has_value());
+  LMDJ_CHECK(read.error().details.at("storage_condition") == "project_busy");
+}
+
+void test_owner_read_preserves_uncommitted_files() {
+  OwnedArtifactFixture f;
+  const auto orphan = f.bundle / "history/checkpoints/2.json";
+  LMDJ_CHECK(f.platform->create_immutable(orphan, f.bytes).has_value());
+  const auto writes = f.platform->write_calls;
+  LMDJ_CHECK(f.store.read_asset_artifact(
+      f.bundle, f.project.id, f.asset, f.artifact).has_value());
+  LMDJ_CHECK(f.platform->exists(orphan).value());
+  LMDJ_CHECK(f.platform->write_calls == writes);
 }
 
 void test_byte_backed_import_publishes_immutable_artifact_without_staging() {
@@ -2414,6 +2545,13 @@ int main() {
     test_create_rejects_mismatched_existing_initial_checkpoint();
     test_committed_transactions_replay_to_manifest_head();
     test_imported_assets_are_content_addressed_and_deduplicated();
+    test_owner_read_holds_one_lease_and_never_writes();
+    for (int field = 0; field < 5; ++field) test_owner_read_refuses_unowned_identity(field);
+    test_owner_read_reports_byte_mismatch(false);
+    test_owner_read_reports_byte_mismatch(true);
+    test_owner_read_does_not_read_unselected_audio();
+    test_owner_read_refuses_busy_project();
+    test_owner_read_preserves_uncommitted_files();
     test_byte_backed_import_publishes_immutable_artifact_without_staging();
     test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly();
     test_asset_lineage_is_refused_on_a_v3_project_on_disk();

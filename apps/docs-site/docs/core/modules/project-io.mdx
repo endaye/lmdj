@@ -34,3 +34,12 @@ Project store、v1/v2/v3→v4 migration、atomic Sample transaction、Sequence j
 云同步和协同冲突策略未批准，不能从本地存储能力推断。持久化正确性由自动化证明，不构成任何设备、听感或物理演奏验收。
 ## 10. 版本身份
 版本和依赖由 `module.json`/Assembly Lock 派生。
+
+## Verified Asset owner read
+
+`ProjectStore::read_asset_artifact` 接受 Project 路径、Project ID、Asset ID 和完整
+ArtifactRef。在一个 writer lease 内检查元数据所有权、完整引用以及选中音频的 SHA-256
+和 byte length，返回独立字节副本；不扫描无关音频，不调用 recovery 或 staging 清理。
+错误身份在读取 Artifact 前拒绝；缺失文件与内容不匹配可区分，后者使用显式 storage
+condition，由 Facade 归一化为 `IO_ERROR/input_artifact_mismatch`。
+既有普通 Project load 仍校验全部 Asset 字节。Host 不直接调用这一存储 API。

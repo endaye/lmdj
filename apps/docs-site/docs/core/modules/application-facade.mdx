@@ -125,9 +125,18 @@ load/start/stop/reset；该压力注册不进入 coverage，确定性交错注�
 ## 10. 版本身份
 版本和完整依赖集由模块清单与 Product Assembly 固定。
 
-Provider 执行已迁移到 owned ProviderRunContext 和显式 ExecutionOptions。当前 Facade
-提供 unavailable input owner：带输入绑定的请求以 `NOT_FOUND/input_artifact_unavailable`
-形成可查询失败 Attempt；无绑定 Proof 继续支持完整成功/失败流程。Workspace 输入 owner
-与 Job/CandidateIndex 接线留给 K5，Host 不解析 Project bundle 来补足输入。
+## Provider owner API
 
-本次集成已为 Audio Runtime 的 Engine ABI 变更及其依赖重建分配匹配版本，当前身份以上方 Build Identity 为准。Slice 参考注册不增加此 Host 的切片操作或默认执行权限。
+`provider.run` 可追加 `input_owners`，每个输入恰有一个
+`{port, occurrence, project_path, project_id, asset_id}`。Facade 在 SDK 完成权限、
+绑定和预算门禁后才调用 Project I/O 的 verified owner read；未提供 owner 的输入仍以
+`NOT_FOUND/input_artifact_unavailable` 形成失败 Attempt。读取的副本进入 SDK source，
+Project 路径不会进入 Provider 参数或 terminal，且不创建持久 owner 索引。
+
+`provider.permissions.configure` 接受严格的 `granted_permissions` 数组，替换当前
+Application 会话的 grant。未知或重复权限拒绝且不改变旧策略；区域和分类保持原值。
+重建 AttemptStore 保留已选择 Provider 和耐久 Attempt，重启不保留显式 grant。
+它是可信 Host settings API，不是多租户鉴权边界。
+
+`facade.provider_owner` 与 `host.provider_owner` 覆盖真实导入、输入读取、完整输出
+identity、失败终态和重启；无 owner、错误身份、损坏及 busy 不修改 Project Truth。

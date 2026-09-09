@@ -82,6 +82,11 @@ export const HOST_OPERATIONS = Object.freeze([
   "soundset.inspect",
   "soundset.map.preview",
   "soundset.install",
+  "provider.list",
+  "provider.select",
+  "provider.run",
+  "provider.permissions.configure",
+  "attempt.inspect",
   "host.close",
 ]);
 
@@ -235,6 +240,50 @@ function validPerformanceName(value) {
   }
   const codePoints = Array.from(value).length;
   return codePoints > 0 && codePoints <= 64;
+}
+
+function requireProviderOperationPayload(operation, payload) {
+  let valid = true;
+  const fileId = (value) => typeof value === "string" &&
+    /^[A-Za-z0-9._-]{1,128}$/.test(value) && value !== "." && value !== "..";
+  const permissions = (value) => Array.isArray(value) && value.every(fileId) &&
+    new Set(value).size === value.length;
+  switch (operation) {
+    case "provider.list":
+      valid = hasExactKeys(payload, []);
+      break;
+    case "provider.select":
+      valid = hasExactKeys(payload, ["capability", "provider_id"]) &&
+        fileId(payload.capability) && fileId(payload.provider_id);
+      break;
+    case "provider.permissions.configure":
+      valid = hasExactKeys(payload, ["granted_permissions"]) && permissions(payload.granted_permissions);
+      break;
+    case "attempt.inspect":
+      valid = hasExactKeys(payload, ["attempt_id"]) && fileId(payload.attempt_id);
+      break;
+    case "provider.run": {
+      const keys = ["attempt_id", "capability", "inputs", "parameters", "data_classification",
+        "platform", "region", "required_permissions"];
+      const owners = Object.hasOwn(payload, "input_owners");
+      valid = hasExactKeys(payload, owners ? [...keys, "input_owners"] : keys) &&
+        ["attempt_id", "capability", "data_classification", "platform", "region"].every((key) => fileId(payload[key])) &&
+        isPlainObject(payload.parameters) && permissions(payload.required_permissions) &&
+        Array.isArray(payload.inputs) && payload.inputs.every((binding) =>
+          hasExactKeys(binding, ["port", "artifact"]) &&
+          typeof binding.port === "string" && /^[a-z][a-z0-9_]*$/.test(binding.port) &&
+          hasExactKeys(binding.artifact, ["sha256", "media_type", "byte_length"]) &&
+          typeof binding.artifact.sha256 === "string" && SHA256_PATTERN.test(binding.artifact.sha256) &&
+          typeof binding.artifact.media_type === "string" && binding.artifact.media_type.length > 0 &&
+          isUnsignedInteger(binding.artifact.byte_length)) &&
+        (!owners || (Array.isArray(payload.input_owners) && payload.input_owners.every((owner) =>
+          hasExactKeys(owner, ["port", "occurrence", "project_id", "asset_id"]) &&
+          typeof owner.port === "string" && /^[a-z][a-z0-9_]*$/.test(owner.port) &&
+          isUnsignedInteger(owner.occurrence) && validUuid(owner.project_id) && validUuid(owner.asset_id))));
+      break;
+    }
+  }
+  if (!valid) throw protocolError("Provider operation payload is invalid", {operation});
 }
 
 function validArtifact(value) {
@@ -667,6 +716,7 @@ function validateRequestObject(
     throw protocolError("Request payload must be an object");
   }
   requireSampleOperationPayload(envelope.operation, envelope.payload);
+  requireProviderOperationPayload(envelope.operation, envelope.payload);
   requirePerformanceOperationPayload(
     envelope.operation,
     envelope.payload,

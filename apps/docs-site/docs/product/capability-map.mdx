@@ -40,6 +40,8 @@ Web Runtime Lab 保持为独立实验工具，不属于 Product Assembly，也�
 
 “已实现”表示 active source 加当前测试；“部分实现”明确缺口；“已设计/规划中”不作为可用功能宣传。
 
-Stage 12 K2 已提供 SDK ArtifactSource、共享 staging budget、受限生命周期回调和
-消费者 output validator。当前 Facade 对有输入绑定的运行显式拒绝 unavailable owner；
-真实 Slice Provider、Workspace Job 与 Host 可用路径仍由 K3–K5 交付。
+Stage 12 提供 SDK ArtifactSource、共享 staging budget、受限生命周期回调、消费者
+output validator 和 Slice 参考实现。Facade 已接通 verified Project Asset owner 与
+显式会话 grant；CLI/MCP/Native 和两个 Web Host 可通过公开控制面运行并检查耐久
+Attempt。默认权限不变，参考运行仍使用 test token；Workspace Job、CandidateIndex、
+用户切片界面与结果采纳不属于这一 owner 接线。

@@ -29,6 +29,7 @@
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/audio/runtime_preparation_limits.hpp>
 #include <lmdj/facade/application.hpp>
+#include <lmdj/facade/assembly_loader.hpp>
 #include <lmdj/facade/mutation_publish_scope.hpp>
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/provider/attempt_store.hpp>
@@ -6003,10 +6004,130 @@ void test_bridge_preserves_error_responses_for_an_externally_failed_runtime() {
   }
 }
 
+std::unique_ptr<ControlRuntime> make_provider_runtime(const std::filesystem::path& root) {
+  auto assembly = lmdj::facade::load_installed_assembly(
+      std::filesystem::path{LMDJ_TEST_ASSEMBLY_PATH});
+  LMDJ_CHECK(assembly.has_value());
+  auto config = make_application_config(root);
+  config.providers = assembly.value().providers;
+  config.provider_policy = assembly.value().provider_policy;
+  auto created = ControlRuntime::create(root, std::move(config), kWebLimits);
+  LMDJ_CHECK(created.has_value());
+  return std::move(created.value());
+}
+
+void test_provider_owner_uses_retained_project_and_survives_restart() {
+  TempDirectory temp;
+  auto runtime = make_provider_runtime(temp.path());
+  const auto listed = check_locked_success_result(runtime->dispatch("provider.list", Json::object(), {}));
+  LMDJ_CHECK(listed.at("providers").size() == 3);
+  check_success(runtime->dispatch("provider.permissions.configure",
+      {{"granted_permissions", Json::array({"sample.slice.execute"})}}, {}));
+  check_success(runtime->dispatch("provider.select",
+      {{"capability", "sample.slice.v1"}, {"provider_id", "local.sample.slice"}}, {}));
+  Json input{{"attempt_id", "web-owner"}, {"capability", "sample.slice.v1"},
+      {"inputs", Json::array({{{"port", "source_audio"}, {"artifact", {
+          {"sha256", std::string(64, 'a')}, {"media_type", "audio/wav"}, {"byte_length", 54}}}}})},
+      {"input_owners", Json::array({{{"port", "source_audio"}, {"occurrence", 0},
+          {"project_id", kProjectId}, {"asset_id", kAssetId}}})},
+      {"parameters", {{"refractory_frames", 1}}}, {"data_classification", "public"},
+      {"platform", "test"}, {"region", "local"}, {"required_permissions", Json::array({"sample.slice.execute"})}};
+  check_error(runtime->dispatch("provider.run", input, {}), "HOST_STATE_INVALID");
+  check_error(runtime->dispatch("attempt.inspect", {{"attempt_id", "web-owner"}}, {}), "NOT_FOUND");
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  auto wav = mono_pcm16_wav(5); write_u16(wav, 46, 5000); write_u16(wav, 50, 8000);
+  const auto imported = check_locked_success_result(runtime->dispatch(
+      "asset.import", import_payload(810, 0, kAssetId, wav), wav));
+  input["inputs"][0]["artifact"] = imported.at("artifact");
+  const auto before = runtime->dispatch("project.inspect", Json::object(), {});
+  auto competing = make_provider_runtime(temp.path());
+  check_error(competing->dispatch("project.open",
+      {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}), "PROJECT_BUSY");
+  check_error(competing->dispatch("provider.run", input, {}), "HOST_STATE_INVALID");
+  check_error(competing->dispatch("attempt.inspect", {{"attempt_id", "web-owner"}}, {}), "NOT_FOUND");
+  check_success(competing->dispatch("host.close", Json::object(), {}));
+  competing.reset();
+  auto injected_path = input;
+  injected_path["input_owners"][0]["project_path"] = "/forbidden/project.lmdj";
+  check_error(runtime->dispatch("provider.run", injected_path, {}), "HOST_PROTOCOL_MISMATCH");
+  check_error(runtime->dispatch("provider.run", input, wav), "HOST_PROTOCOL_MISMATCH");
+  const auto run = check_locked_success_result(runtime->dispatch("provider.run", input, {}));
+  LMDJ_CHECK(run.at("outputs").size() == 1);
+  const auto terminal = runtime->dispatch("attempt.inspect", {{"attempt_id", "web-owner"}}, {});
+  const auto inspected = check_locked_success_result(terminal);
+  LMDJ_CHECK(inspected.at("request").at("inputs") == input.at("inputs"));
+  LMDJ_CHECK(inspected.at("candidate_outputs") == run.at("outputs"));
+  LMDJ_CHECK(inspected.at("status") == "succeeded");
+  LMDJ_CHECK(terminal.dump().find("project_path") == std::string::npos);
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}) == before);
+  check_success(runtime->dispatch("host.close", Json::object(), {})); runtime.reset();
+  runtime = make_provider_runtime(temp.path());
+  LMDJ_CHECK(runtime->dispatch("attempt.inspect", {{"attempt_id", "web-owner"}}, {}) == terminal);
+  check_success(runtime->dispatch("project.open", {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+  input["attempt_id"] = "web-no-regrant";
+  check_error(runtime->dispatch("provider.run", input, {}), "PERMISSION_DENIED");
+  LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}) == before);
+  check_success(runtime->dispatch("host.close", Json::object(), {}));
+}
+
+void test_web_provider_owner_refusals_are_persistent(unsigned mode) {
+  TempDirectory temp;
+  auto runtime = make_provider_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  auto wav = mono_pcm16_wav(5);
+  const auto imported = check_locked_success_result(runtime->dispatch(
+      "asset.import", import_payload(811, 0, kAssetId, wav), wav));
+  const auto before = runtime->dispatch("project.inspect", Json::object(), {});
+  check_success(runtime->dispatch("provider.permissions.configure",
+      {{"granted_permissions", Json::array({"sample.slice.execute"})}}, {}));
+  check_success(runtime->dispatch("provider.select",
+      {{"capability", "sample.slice.v1"}, {"provider_id", "local.sample.slice"}}, {}));
+  Json input{{"attempt_id", "web-refusal"}, {"capability", "sample.slice.v1"},
+      {"inputs", Json::array({{{"port", "source_audio"}, {"artifact", imported.at("artifact")}}})},
+      {"input_owners", Json::array({{{"port", "source_audio"}, {"occurrence", 0},
+          {"project_id", kProjectId}, {"asset_id", kAssetId}}})},
+      {"parameters", Json::object()}, {"data_classification", "public"},
+      {"platform", "test"}, {"region", "local"}, {"required_permissions", Json::array({"sample.slice.execute"})}};
+  auto code = "NOT_FOUND"; auto reason = "input_artifact_unavailable";
+  if (mode == 0) input.erase("input_owners");
+  if (mode == 1) input["input_owners"][0]["project_id"] = uuid(999);
+  if (mode == 2) input["input_owners"][0]["asset_id"] = uuid(999);
+  if (mode == 3) input["inputs"][0]["artifact"]["sha256"] = std::string(64, 'b');
+  const auto blob = temp.path() / "projects" / (std::string(kProjectId) + ".lmdj") /
+      "assets" / (imported.at("artifact").at("sha256").get<std::string>() + ".wav");
+  if (mode == 4 || mode == 5) {
+    auto corrupt = wav;
+    if (mode == 4) corrupt.back() = std::byte{1}; else corrupt.push_back(std::byte{1});
+    std::ofstream file(blob, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(corrupt.data()), static_cast<std::streamsize>(corrupt.size()));
+    LMDJ_CHECK(file.good());
+    code = "IO_ERROR"; reason = "input_artifact_mismatch";
+  }
+  if (mode == 6) std::filesystem::remove(blob);
+  const auto refused = check_error(runtime->dispatch("provider.run", input, {}), code);
+  LMDJ_CHECK(refused.at("details").at("reason") == reason);
+  LMDJ_CHECK(refused.at("details").at("attempt_id") == "web-refusal");
+  const auto terminal = runtime->dispatch("attempt.inspect", {{"attempt_id", "web-refusal"}}, {});
+  LMDJ_CHECK(terminal.at("result").at("status") == "failed");
+  LMDJ_CHECK(terminal.at("result").at("minted_outputs").empty());
+  LMDJ_CHECK(terminal.at("result").at("candidate_outputs").empty());
+  check_success(runtime->dispatch("host.close", Json::object(), {})); runtime.reset();
+  runtime = make_provider_runtime(temp.path());
+  LMDJ_CHECK(runtime->dispatch("attempt.inspect", {{"attempt_id", "web-refusal"}}, {}) == terminal);
+  // Inspect works before any Project is reopened, including with corrupt input.
+  if (mode < 4) {
+    check_success(runtime->dispatch("project.open", {{"project_id", kProjectId}, {"pattern_id", kPatternId}}, {}));
+    LMDJ_CHECK(runtime->dispatch("project.inspect", Json::object(), {}) == before);
+  }
+  check_success(runtime->dispatch("host.close", Json::object(), {}));
+}
+
 }  // namespace
 
 int main() {
   try {
+    test_provider_owner_uses_retained_project_and_survives_restart();
+    for (unsigned mode = 0; mode < 7; ++mode) test_web_provider_owner_refusals_are_persistent(mode);
     test_one_shot_bank_transition_waits_for_accepted_queue_commit();
     test_one_shot_bank_transition_renders_until_target_is_applied();
     test_one_shot_bank_transition_rejects_overlap_until_completion();
