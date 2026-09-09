@@ -285,7 +285,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
         for job_name in HOSTED_CONTROL_PLANE_JOBS:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", job)
+                self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]", job)
                 self.assertNotIn("ci-web-heavy", job)
                 self.assertNotIn("ci-core", job)
 

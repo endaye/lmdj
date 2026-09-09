@@ -2,7 +2,7 @@
   "schema": "lmdj.hosted-runner-policy.v1",
   "rationale": [
     "GitHub bills each job rounded up to a whole minute, so on hosted runners job count costs more than job duration. Self-hosted minutes cost nothing. A hosted job is therefore a spending decision, and this file is where that decision is recorded.",
-    "Routine Linux control, adjudication and product jobs use self-hosted runners. The Contabo general pool is separate from Netcup heavy executors; loss of that control pool queues work, never buys hosted Linux capacity. macOS availability recovery remains an explicitly accepted paid exception.",
+    "Routine Linux control, adjudication and product jobs use self-hosted runners. The ci-general role spans both trusted hosts and is separate from heavy executors; loss of that role queues work, never buys hosted Linux capacity. macOS availability recovery remains an explicitly accepted paid exception.",
     "tests/build/ci_hosted_runner_policy_test.py enumerates every job whose runs-on can resolve to a GitHub-hosted label and requires an entry here, so adding a hosted job is a reviewed act rather than a default."
   ],
   "categories": {

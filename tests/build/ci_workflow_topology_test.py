@@ -356,21 +356,21 @@ class CiWorkflowTopologyTest(unittest.TestCase):
 
     def test_change_scope_has_three_minute_limit_zero_dependency_install_and_live_pr_read(self):
         job = self.workflow_job("change-scope")
-        for text in ("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", "timeout-minutes: 3", "fetch-depth: 0", "batch_execution.py prepare"):
+        for text in (GENERAL_ROLE, "timeout-minutes: 3", "fetch-depth: 0", "batch_execution.py prepare"):
             self.assertIn(text, job)
         for forbidden in (r"\bnpm\b", r"\bpip(?:3)?\b", r"\bcmake\b", "actions/runners", "SELF_HOSTED_RUNNER_READ_TOKEN"):
             self.assertNotRegex(job, forbidden)
         self.assertNotIn("pull-requests:", self.main_source)
 
-    def test_control_plane_stays_on_contabo_separate_from_heavy_executors(self) -> None:
-        """Paid Linux is not an automatic control-availability fallback."""
+    def test_control_plane_uses_the_dual_node_general_role(self) -> None:
+        """Control work can use either trusted general host, never paid Linux."""
         for job_name in HOSTED_CONTROL_PLANE_JOBS:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", job)
+                self.assertIn(GENERAL_ROLE, job)
                 self.assertNotIn("ci-web-heavy", job)
                 self.assertNotIn("ci-core", job)
-        # macOS adjudication also uses Contabo; only actual Mac recovery is paid.
+        # macOS adjudication also uses the general role; only actual Mac recovery is paid.
         hosted = re.findall(r"(?m)^    runs-on: ubuntu-24\.04$", self.main_source)
         self.assertEqual(
             len(hosted),
