@@ -53,11 +53,12 @@ def scalars(source: str, indent: int) -> dict[str, str]:
     return dict(re.findall(rf"(?m)^{' ' * indent}([\w-]+): (.+)$", source))
 
 
-def wakeup_group(source, event, run_id):
+def wakeup_group(source, event, run_id, schedule="7,22,37,52 * * * *"):
     group = field(block(source, "concurrency", 0), "group", 2)
     prefix, expression = group.split("${{", 1)
     expression = expression.removesuffix("}}").strip()
     expression = expression.replace("github.event_name", repr(event)).replace("github.run_id", str(run_id))
+    expression = expression.replace("github.event.schedule", repr(schedule))
     expression = expression.replace("&&", "and").replace("||", "or")
     # Repository-owned scalar expression, never model text. This models the
     # documented platform key, not actual remote scheduling/locking.

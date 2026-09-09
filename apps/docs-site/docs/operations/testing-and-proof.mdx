@@ -162,7 +162,13 @@ rerun 也明确跳过，部署后的启动失败仍可见，未知祖先关系�
 这两个复用字段在该操作中表示 Core CI 来源。`report_config` 留空使用固定 pair。
 自动 PR Review discovery 保存冻结 inventory 和跨轮 cursor，未解决或过期证据明确保留。
 PR Review 完成不再直接唤醒自测控制器；已发布的 findings 与 scope 仍由审查发布器保存，
-main push、15 分钟 health tick 的非执行轮合并恢复报告，实际批次完成 relay 保持及时通知。
+main push、原 scheduler health tick 的非执行轮仍可恢复报告，实际批次完成 relay 保持及时通知。
+另外，UTC 每小时 `9,24,39,54` 分的 report-only health tick 使用独立的合并等待组，
+不再等待长时间运行的产品 workflow 结束；与原 `7,22,37,52` 分的测试恢复巡检分开。
+它沿用同一受信任 controller job 和短写锁，只收集已持久记录的失败及 review 观察，
+不执行 control、不输出测试请求，也不直接启动产品测试。Python 入口校验两种精确 cron，
+并拒绝把报告角色用于产品 control。报告错误只影响这次报告运行，不撤销其他运行已领取的测试。
+这是恢复既有工作的巡检，不是定时全量测试或每日部署。原测试恢复巡检保持不变。
 每次 discovery 保留完整历史 metadata 轮扫，另给至多一个新／未解决 attempt 公平机会：
 按持久注册或最近 disposition 的 generation 轮转，永久错误和仍运行的 review 也消耗其轮次，
 不会独占优先路径。历史成功记录不占这个额外预算；历史重扫仍负责发现旧 run 的 later attempt。
@@ -173,7 +179,13 @@ main push、15 分钟 health tick 的非执行轮合并恢复报告，实际批�
 这不是 15 分钟投递保证：inventory 缺口、不可读来源、metadata 错误、控制池不可用仍明确报错；
 过期 evidence 不冒充成功。精确 `report-review`／`report-discovery` 手动恢复入口保持可用。
 旧终态 run 的未知 rerun 仍由与历史 ID 数量相关的完整轮扫发现，不承诺全局 artifact 保留期内送达。
-执行轮不做附带报告扫描；非执行轮做有界报告和发现，积压留待接续，报告重试不重跑测试。
+执行轮不做附带报告扫描；非执行轮及独立报告巡检做有界报告和发现，积压留待接续。
+`report-drain` 只恢复已入队意图；即使没有 pending，也不能证明 scheduler 中所有失败均已入队。
+每次自动收集至多一条新 batch 观察，但完整历史鉴权的 API 工作并非一条请求。
+新增巡检每小时四次机会，其完成仍经过现有 relay，须统计完整链路的 API 和 runner 成本。
+relay 可以独立恢复真实的新 main 工作；不能把“报告巡检本身不运行测试”解释成整个间接链
+永远不会唤醒 scheduler。调度延迟、runner 或来源不可用时不承诺严格 15 分钟送达。
+源码回归不替代远端调度和完整积压验收。
 报告器不合并 PR、不创建版本、不发布或部署。
 
 分配 Product Build 或引入 snapshot 的 Task 在合并后核验实际 introducing SHA 的

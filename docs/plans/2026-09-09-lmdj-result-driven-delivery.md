@@ -159,6 +159,14 @@ state addenda and older-canary promotion presentation remain later T4 work.
 
 ## Acceptance ledger
 
+The [independent report-progress Task](2026-09-09-lmdj-report-progress.md)
+addresses #1048: continuous execution can skip every opportunistic report step.
+A separate report-only health admission retains scheduler recovery, current writer
+trust and existing outbox semantics. Its scheduled delivery/cost acceptance remains
+outstanding. Manual report-batches(limit=1) `34302347438/1` delivered the historical
+batch139 Creator failure as Issue865/comment5594769827; generations500–503 and the
+complete1286-byte queued/POST/receipt bodies match. This is not a full backlog drain.
+
 The [result-driven planner entry](2026-09-09-lmdj-canary-result-wakeups.md)
 replaces the internal daily default with manual previews and a separate
 persisted-result/recovery consumer. It revalidates the retained complete verdict
