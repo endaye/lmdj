@@ -228,6 +228,7 @@ struct BankTelemetry {
 
 struct ReclaimedBankTelemetry {
   std::size_t count;
+  // Project Bank reservation refund; reserved audition storage is excluded.
   std::uint64_t decoded_pcm_bytes;
 };
 

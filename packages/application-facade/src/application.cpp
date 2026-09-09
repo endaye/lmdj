@@ -161,6 +161,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"attempt.inspect", OperationKind::query},
       {"candidate.job.run", OperationKind::command},
       {"candidate.adopt", OperationKind::command},
+      {"candidate.audition", OperationKind::query},
       {"candidate.job.cancel", OperationKind::command},
       {"candidate.set.discard", OperationKind::command},
       {"candidate.job.inspect", OperationKind::query},
@@ -3955,6 +3956,7 @@ struct Application::Impl {
       return provider_select(request);
     }
     if (operation == "candidate.adopt") return candidate_adopt(request);
+    if (operation == "candidate.audition") return candidate_audition(request);
     if (operation == "candidate.job.cancel") return candidate_job_cancel(request);
     if (operation == "candidate.set.discard") return candidate_set_discard(request);
     if (operation == "candidate.job.run") return candidate_job_run(request);
@@ -7664,6 +7666,103 @@ struct Application::Impl {
         std::nullopt);
   }
 
+  foundation::Result<CandidateAuditionAudio> audition_candidate(
+      const CandidateAuditionRequest& request) {
+    using Result = foundation::Result<CandidateAuditionAudio>;
+    // Apply the same selector validation to typed and JSON callers.
+    const nlohmann::json selector{
+        {"project_path", request.project_path.generic_string()},
+        {"project_id", request.project_id.value()},
+        {"expected_revision", request.expected_revision},
+        {"job_id", request.job_id}, {"set_id", request.set_id},
+        {"candidate_id", request.candidate_id}};
+    const auto path = absolute_path_field(selector, "project_path");
+    (void)uuid_field(selector, "project_id");
+    (void)unsigned_field(selector, "expected_revision");
+    (void)file_id_field(selector, "job_id");
+    (void)file_id_field(selector, "set_id");
+    (void)file_id_field(selector, "candidate_id");
+    // Retain the existing Workspace eligibility ownership until preparation
+    // and the final owner/byte checks finish. lease_active never recovers.
+    auto eligible = candidates.lease_active(request.job_id, request.set_id, attempts);
+    if (!eligible.has_value()) return Result::failure(eligible.error());
+    const auto& set = eligible.value().candidate_set;
+    const auto& source = set.at("source");
+    if (source.at("project_id") != request.project_id.value())
+      return Result::failure(Error{ErrorCode::revision_conflict, "Candidate belongs to another Project"});
+    const auto source_id = foundation::AssetId{source.at("asset_id").get<std::string>()};
+    const auto artifact = source.at("artifact").get<foundation::ArtifactRef>();
+    const auto validate_current = [&]() -> foundation::Result<void> {
+      const auto current = projects.inspect_committed(path);
+      if (!current.has_value()) return foundation::Result<void>::failure(current.error());
+      return domain::validate_candidate_source(current.value(), request.project_id,
+          request.expected_revision, source_id, artifact);
+    };
+    const auto fresh = validate_current();
+    if (!fresh.has_value()) return Result::failure(fresh.error());
+    const auto& recipes = set.at("recipes");
+    const auto recipe = std::find_if(recipes.begin(), recipes.end(), [&](const auto& value) {
+      return value.at("candidate_id") == request.candidate_id;
+    });
+    if (recipe == recipes.end()) return Result::failure(Error{ErrorCode::not_found,
+        "Candidate recipe is unavailable", {{"reason", "candidate_unavailable"}}});
+    if (!sample_limits || artifact.byte_length > 16777216U)
+      return Result::failure(invalid_sample_request("Candidate source exceeds preparation byte limit"));
+    const auto bytes = projects.read_asset_artifact(path, request.project_id, source_id, artifact);
+    if (!bytes.has_value()) return Result::failure(bytes.error());
+    const auto metadata = cooker::inspect_wav(bytes.value());
+    if (!metadata.has_value()) return Result::failure(metadata.error());
+    if (metadata.value().sample_rate != source.at("frame_rate") ||
+        metadata.value().source_frames != source.at("frame_count"))
+      return Result::failure(Error{ErrorCode::revision_conflict, "Candidate source metadata changed",
+          {{"reason", "candidate_source_changed"}}});
+    const auto interval = cooker::select_pcm16_wav(bytes.value(),
+        recipe->at("start_frame").get<std::uint64_t>(),
+        recipe->at("end_frame").get<std::uint64_t>());
+    if (!interval.has_value()) return Result::failure(interval.error());
+    if (!sample_limits->allows_artifact_bytes(interval.value().size()))
+      return Result::failure(invalid_sample_request("Candidate Artifact exceeds preparation byte limit"));
+    const auto decoded = cooker::decode_wav(interval.value());
+    if (!decoded.has_value()) return Result::failure(decoded.error());
+    auto prepared = decoded.value();
+    if (prepared->sample_rate != 48'000) {
+      auto resampled = cooker::prepare_runtime_pcm(*prepared);
+      if (!resampled.has_value()) return Result::failure(resampled.error());
+      prepared = std::move(resampled.value());
+    }
+    // Re-read verified source bytes after preparation, then validate the
+    // current expected revision. Neither Project read performs load recovery.
+    const auto final_bytes = projects.read_asset_artifact(path, request.project_id, source_id, artifact);
+    if (!final_bytes.has_value()) return Result::failure(final_bytes.error());
+    const auto final_current = validate_current();
+    if (!final_current.has_value()) return Result::failure(final_current.error());
+    const auto& selected = interval.value();
+    return Result::success(CandidateAuditionAudio{
+        {canonical_manifest_digest(std::string_view{
+             reinterpret_cast<const char*>(selected.data()), selected.size()}),
+         "audio/wav", static_cast<std::uint64_t>(selected.size())},
+        decoded.value()->sample_rate, decoded.value()->channels,
+        static_cast<std::uint64_t>(decoded.value()->interleaved.size() / decoded.value()->channels),
+        std::move(prepared)});
+  }
+
+  nlohmann::json candidate_audition(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "project_path", "project_id",
+        "expected_revision", "job_id", "set_id", "candidate_id"}),
+        "candidate.audition request shape is invalid");
+    const auto revision = unsigned_field(request, "expected_revision");
+    const CandidateAuditionRequest typed{absolute_path_field(request, "project_path"),
+        foundation::ProjectId{uuid_field(request, "project_id")}, revision,
+        file_id_field(request, "job_id"), file_id_field(request, "set_id"),
+        file_id_field(request, "candidate_id")};
+    const auto audio = audition_candidate(typed);
+    if (!audio.has_value()) return error_envelope(audio.error());
+    return success_envelope({{"job_id", typed.job_id}, {"set_id", typed.set_id},
+        {"candidate_id", typed.candidate_id}, {"artifact", audio.value().artifact},
+        {"sample_rate", audio.value().sample_rate}, {"channels", audio.value().channels},
+        {"source_frames", audio.value().source_frames}}, revision);
+  }
+
   nlohmann::json candidate_adopt(const nlohmann::json& request) {
     require(exact_keys(request, {"operation", "project_path", "project_id",
         "expected_revision", "command_id", "job_id", "set_id", "selections"}),
@@ -8133,7 +8232,8 @@ struct Application::Impl {
       providers.push_back(provider_descriptor_json(descriptor));
     }
     return success_envelope(
-        {{"providers", std::move(providers)}},
+        {{"providers", std::move(providers)},
+         {"granted_permissions", provider_policy.granted_permissions}},
         std::nullopt);
   }
 
@@ -9195,6 +9295,20 @@ foundation::Result<void> Application::abort_project_bundle_import(
             ErrorCode::internal_error,
             "unexpected Application Facade Host API failure",
         });
+  }
+}
+
+foundation::Result<CandidateAuditionAudio> Application::audition_candidate(
+    const CandidateAuditionRequest& request) const {
+  try {
+    testing::invoke_api_entry_hook();
+    return impl_->audition_candidate(request);
+  } catch (const InvalidRequest& error) {
+    return foundation::Result<CandidateAuditionAudio>::failure(
+        Error{ErrorCode::invalid_argument, error.what()});
+  } catch (...) {
+    return foundation::Result<CandidateAuditionAudio>::failure(
+        Error{ErrorCode::internal_error, "Candidate audition failed"});
   }
 }
 

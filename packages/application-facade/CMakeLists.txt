@@ -134,6 +134,14 @@ if(BUILD_TESTING)
   lmdj_target_sanitizers(lmdj_facade_candidate_job_tests)
   lmdj_add_test(NAME facade.candidate_job TIER component
     COMMAND lmdj_facade_candidate_job_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+  add_executable(lmdj_facade_candidate_audition_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/candidate_audition_test.cpp")
+  target_include_directories(lmdj_facade_candidate_audition_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_facade_candidate_audition_tests PRIVATE lmdj::application)
+  lmdj_target_warnings(lmdj_facade_candidate_audition_tests)
+  lmdj_target_sanitizers(lmdj_facade_candidate_audition_tests)
+  lmdj_add_test(NAME facade.candidate_audition TIER component
+    COMMAND lmdj_facade_candidate_audition_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
   add_executable(lmdj_facade_candidate_adoption_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/candidate_adoption_test.cpp")
   target_include_directories(lmdj_facade_candidate_adoption_tests PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/internal")

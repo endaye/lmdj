@@ -377,6 +377,60 @@ void validate_provider_operation_payload(std::string_view operation, const Json&
   }
 }
 
+void validate_candidate_operation_payload(std::string_view operation, const Json& payload) {
+  const auto id = [&payload](std::string_view key) {
+    const auto value = string_field(payload, key);
+    require(!value.empty() && value.size() <= 128 && value != "." && value != ".." &&
+      std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+      }));
+  };
+  if (operation == "candidate.audition.stop") { require(exact_keys(payload, {})); return; }
+  if (operation == "candidate.job.inspect") {
+    require(exact_keys(payload, {"job_id"}));
+  } else if (operation == "candidate.job.cancel") {
+    require(exact_keys(payload, {"job_id", "attempt_id"})); id("attempt_id");
+  } else if (operation == "candidate.set.discard") {
+    require(exact_keys(payload, {"job_id", "set_id"})); id("set_id");
+  } else {
+    if (operation == "candidate.job.run") {
+      require(exact_keys(payload, {"job_id", "attempt_id", "project_id", "asset_id", "expected_revision",
+        "parameters", "data_classification", "platform", "region", "required_permissions"}));
+      id("attempt_id"); id("data_classification"); id("platform"); id("region");
+      (void)uuid_field(payload, "asset_id");
+      require(payload.at("parameters").is_object() && payload.at("required_permissions").is_array());
+      std::set<std::string> permissions;
+      for (const auto& permission : payload.at("required_permissions")) {
+        require(permission.is_string());
+        const auto value = permission.get<std::string>();
+        Json wrapper{{"job_id", value}};
+        validate_candidate_operation_payload("candidate.job.inspect", wrapper);
+        require(permissions.insert(value).second);
+      }
+    } else if (operation == "candidate.audition") {
+      require(exact_keys(payload, {"project_id", "expected_revision", "job_id", "set_id", "candidate_id"}));
+      id("set_id"); id("candidate_id");
+    } else {
+      require(operation == "candidate.adopt" && exact_keys(payload,
+        {"project_id", "expected_revision", "command_id", "job_id", "set_id", "selections"}));
+      id("set_id"); (void)uuid_field(payload, "command_id");
+      const auto& selections = payload.at("selections");
+      require(selections.is_array() && !selections.empty() && selections.size() <= 64);
+      std::set<std::pair<std::uint64_t, std::uint64_t>> targets;
+      for (const auto& selection : selections) {
+        require(exact_keys(selection, {"candidate_id", "bank", "pad"}));
+        Json wrapper{{"job_id", selection.at("candidate_id")}};
+        validate_candidate_operation_payload("candidate.job.inspect", wrapper);
+        require(targets.emplace(safe_unsigned_field(selection, "bank", 3),
+          safe_unsigned_field(selection, "pad", 15)).second);
+      }
+    }
+    (void)uuid_field(payload, "project_id"); (void)safe_unsigned_field(payload, "expected_revision");
+  }
+  id("job_id");
+}
+
 void validate_soundset_operation_payload(
     std::string_view operation,
     const Json& payload) {
@@ -1534,8 +1588,13 @@ struct ControlRuntime::Impl {
       // contract check it is, and deliberately not counted as covered.
       return false;
     }
-    const auto& source = *audio.value().prepared;
-    if (source.channels == 0 || source.interleaved.empty() ||
+    return publish_audition_pcm(audio.value().prepared);
+  }
+
+  [[nodiscard]] bool publish_audition_pcm(const std::shared_ptr<const cooker::PcmSample>& prepared) {
+    if (!prepared) return false;
+    const auto& source = *prepared;
+    if ((source.channels != 1 && source.channels != 2) || source.interleaved.empty() ||
         source.interleaved.size() % source.channels != 0) {
       // Also unreachable through the Facade: `prepared_audition` refuses this
       // exact shape with `cook_failed` before it can return success.
@@ -2262,6 +2321,61 @@ Json ControlRuntime::dispatch(
         return normalized_error(staged.error());
       }
       return success({{"staged", staged.value()}});
+    }
+    static const std::map<std::string_view, bool> candidate_operations{
+        {"candidate.job.run", false}, {"candidate.job.inspect", true},
+        {"candidate.job.cancel", false}, {"candidate.set.discard", false},
+        {"candidate.adopt", false}, {"candidate.audition", true},
+        {"candidate.audition.stop", true},
+    };
+    if (const auto found = candidate_operations.find(operation); found != candidate_operations.end()) {
+      require(sidecar.empty());
+      validate_candidate_operation_payload(operation, payload);
+      if (operation == "candidate.audition.stop") {
+        if (impl_->runtime_ready) {
+          const auto stopped = impl_->engine.enqueue_control(audio::PadControlEvent{
+            0, 0, 0, audio::PadControlKind::audition_stop, {}});
+          if (stopped != audio::EnqueueResult::accepted &&
+              impl_->engine.telemetry().state != audio::RealtimeState::stopped) return state_error();
+        }
+        return success({{"accepted", true}});
+      }
+      auto request = payload;
+      request["operation"] = operation;
+      if (payload.contains("project_id")) {
+        if (!impl_->session_available()) return state_error();
+        if (payload.at("project_id") != *impl_->project_id) {
+          return normalized_error(Error{ErrorCode::revision_conflict, "Candidate belongs to another Project"});
+        }
+        request["project_path"] = impl_->retained_project_path->generic_string();
+      }
+      impl_->service_performance_adapter();
+      if (operation == "candidate.audition") {
+        const auto audio = impl_->application.audition_candidate(facade::CandidateAuditionRequest{
+          *impl_->retained_project_path, foundation::ProjectId{*impl_->project_id},
+          payload.at("expected_revision").get<std::uint64_t>(), payload.at("job_id").get<std::string>(),
+          payload.at("set_id").get<std::string>(), payload.at("candidate_id").get<std::string>()});
+        if (!audio.has_value()) return normalized_error(audio.error());
+        const auto& value = audio.value();
+        return success({{"job_id", payload.at("job_id")}, {"set_id", payload.at("set_id")},
+          {"candidate_id", payload.at("candidate_id")}, {"artifact", value.artifact},
+          {"sample_rate", value.sample_rate}, {"channels", value.channels}, {"source_frames", value.source_frames},
+          {"project_revision", payload.at("expected_revision")},
+          {"played", impl_->runtime_ready && impl_->publish_audition_pcm(value.prepared)}});
+      }
+      auto response = found->second ? impl_->application.query(request) : impl_->application.command(request);
+      if (!response.value("ok", false)) return normalized_facade_error(response);
+      if (response.at("project_revision").is_number_unsigned())
+        impl_->project_revision = response.at("project_revision").get<std::uint64_t>();
+      // The Web projection preserves Facade identities, never filesystem authority.
+      // Only the Host owns these retained paths; the browser cannot round-trip them.
+      if (operation != "candidate.adopt") {
+        for (auto& entry : response.at("result").at("history"))
+          entry.at("intent").at("source").erase("project_path");
+        for (auto& set : response.at("result").at("sets"))
+          set.at("source").erase("project_path");
+      }
+      return normalized_facade_success(response);
     }
     static const std::map<std::string_view, bool> provider_operations{
         {"provider.list", true}, {"provider.select", false},

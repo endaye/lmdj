@@ -11,6 +11,7 @@ import {
   queryWaveformJourney,
   resetSampleJourney,
   retryPrepareJourney,
+  reloadPrepareJourney,
   updateSampleJourney,
 } from "../src/runtime/sample_actions";
 import {CaptureBuffer} from "../src/capture/capture_buffer";
@@ -872,5 +873,24 @@ describe("captureCommitJourney", () => {
       {startFrame: 60, frameCount: 16}, {slot: 1, expectedRevision: 1},
     )).rejects.toThrow(RangeError);
     expect(calls.some(({method}) => method === "importAssignSample")).toBe(false);
+  });
+});
+
+
+describe("reloadPrepareJourney", () => {
+  const patternId = "33333333-3333-4333-8333-333333333333";
+  const response = {project_id: "11111111-1111-4111-8111-111111111111", project_revision: 4,
+    pattern_id: patternId, runtime_ready: true, generation: 2, snapshot_error: null};
+  test("reloads a selected Pattern and normalizes acknowledged publication", async () => {
+    const selected: string[] = [];
+    const session = {reloadSnapshot: async (id: string) => {selected.push(id); return response;}};
+    expect(await reloadPrepareJourney(session, patternId)).toEqual({projectId: response.project_id,
+      projectRevision: 4, patternId, runtimeReady: true, generation: 2, snapshotError: null, runtimeRevision: 4});
+    expect(selected).toEqual([patternId]);
+  });
+  test.each([{generation: 0}, {pattern_id: "44444444-4444-4444-8444-444444444444"},
+    {runtime_ready: false}, {project_revision: -1}, {unexpected: true}])("rejects malformed publication %j", async patch => {
+    const session = {reloadSnapshot: async () => ({...response, ...patch})};
+    await expectProtocolMismatch(reloadPrepareJourney(session, patternId));
   });
 });

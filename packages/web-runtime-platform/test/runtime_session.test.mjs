@@ -9,6 +9,8 @@ import {createRuntimeSession} from "../web/runtime_session.mjs";
 const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const API = [
+  "runCandidateJob", "inspectCandidateJob", "cancelCandidateJob", "discardCandidateSet",
+  "auditionCandidate", "stopCandidateAudition", "adoptCandidates",
   "listProviders",
   "configureProviderPermissions",
   "selectProvider",
@@ -174,6 +176,7 @@ function fixture({
   capabilityProbeTimeoutMs,
   inputConfiguration = {},
   runtimeTransport,
+  publishRuntime = false,
   runtimeTerminator,
   audioCallbackHeartbeat,
   startAudioWorklet,
@@ -253,7 +256,8 @@ function fixture({
         ? {}
         : {capabilityProbeTimeoutMs}),
       createAudioContext: () => context,
-      loadRuntime: async () => ({
+      loadRuntime: async () => {
+        const loaded = {
         registerAudioContext: () => 1,
         registerAudioNode: registerAudioNode ?? (() => 2),
         audioCallbackHeartbeat:
@@ -267,7 +271,10 @@ function fixture({
         ...(runtimeTransport === undefined
           ? {}
           : {transport: runtimeTransport}),
-      }),
+        };
+        if (publishRuntime) browserWindow.lmdjWebRuntimeHost = loaded;
+        return loaded;
+      },
       preflight: preflight ?? (async () => {}),
       ...(createPerformanceMasterTap === undefined
         ? {}
@@ -5221,7 +5228,8 @@ test("Provider commands retain explicit grant-select-run order on the existing l
     if (operation.startsWith("provider.") || operation === "attempt.inspect") {
       operations.push({operation, payload: structuredClone(payload)});
       if (operation === "provider.permissions.configure") await blocked;
-      return success(envelope, {operation});
+      return success(envelope, operation === "provider.list"
+        ? {providers: [], granted_permissions: [], project_revision: null} : {operation});
     }
     return success(envelope, defaultResult(operation));
   }});
@@ -5265,4 +5273,143 @@ test("Provider run does not grant permissions and preserves the owner's safe fai
   });
   assert.deepEqual(operations, ["provider.run"]);
   await session.close();
+});
+
+const CANDIDATE_PROJECT_ID = "00000000-0000-4000-8000-000000000111";
+const CANDIDATE_REQUEST = {project_id: CANDIDATE_PROJECT_ID, expected_revision: 3,
+  job_id: "slice-job", set_id: "set", candidate_id: "recipe"};
+const CANDIDATE_AUDIO = {job_id: "slice-job", set_id: "set", candidate_id: "recipe",
+  artifact: {sha256: "a".repeat(64), media_type: "audio/wav", byte_length: 52},
+  sample_rate: 48000, channels: 1, source_frames: 4, project_revision: 3, played: true};
+const CANDIDATE_ADOPT = {project_id: CANDIDATE_PROJECT_ID, expected_revision: 3,
+  command_id: CANDIDATE_PROJECT_ID, job_id: "slice-job", set_id: "set",
+  selections: [{candidate_id: "recipe", bank: 0, pad: 2}]};
+const CANDIDATE_ADOPTED = {set_id: "set", project_revision: 4,
+  adopted: [{candidate_id: "recipe", bank: 0, pad: 2, asset_id: CANDIDATE_PROJECT_ID}]};
+
+test("Candidate audition and stop serialize and preserve raw result fields", async () => {
+  let release;
+  const blocked = new Promise((resolve) => {release = resolve;});
+  const seen = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation.startsWith("candidate.")) seen.push(envelope.operation);
+    if (envelope.operation === "candidate.audition") {await blocked; return success(envelope, CANDIDATE_AUDIO);}
+    if (envelope.operation === "candidate.audition.stop") return success(envelope, {accepted: true});
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const preview = session.auditionCandidate(CANDIDATE_REQUEST);
+  const stopped = session.stopCandidateAudition();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(seen, ["candidate.audition"]);
+  release(); assert.deepEqual(await preview, CANDIDATE_AUDIO);
+  assert.deepEqual(await stopped, {accepted: true});
+  assert.deepEqual(seen, ["candidate.audition", "candidate.audition.stop"]);
+  await session.close();
+  await assert.rejects(session.auditionCandidate(CANDIDATE_REQUEST), {code: "HOST_STATE_INVALID"});
+  await assert.rejects(session.stopCandidateAudition(), {code: "HOST_STATE_INVALID"});
+  await assert.rejects(session.inspectCandidateJob("slice-job"), {code: "HOST_STATE_INVALID"});
+  assert.equal(seen.length, 2);
+});
+
+test("Candidate audition refuses mismatched identity, revision and malformed playback replies", async () => {
+  for (const change of [{job_id: "other"}, {set_id: "other"}, {candidate_id: "other"},
+    {project_revision: 4}, {played: undefined}]) {
+    const {session} = fixture({send: async (envelope) => success(envelope,
+      envelope.operation === "candidate.audition" ? {...CANDIDATE_AUDIO, ...change} : defaultResult(envelope.operation))});
+    await session.start();
+    await assert.rejects(session.auditionCandidate(CANDIDATE_REQUEST), {code: "HOST_PROTOCOL_MISMATCH"});
+    await session.close();
+  }
+});
+
+test("Candidate adoption validates one revision and every explicit target without retrying unknown commits", async () => {
+  for (const change of [null, {set_id: "other"}, {project_revision: 3},
+    {adopted: [{...CANDIDATE_ADOPTED.adopted[0], pad: 1}]}]) {
+    const seen = [];
+    const {session} = fixture({send: async (envelope) => {
+      if (envelope.operation === "candidate.adopt") {
+        seen.push(structuredClone(envelope.payload));
+        return success(envelope, {...CANDIDATE_ADOPTED, ...change});
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    }});
+    await session.start();
+    if (change === null) assert.deepEqual(await session.adoptCandidates(CANDIDATE_ADOPT), CANDIDATE_ADOPTED);
+    else await assert.rejects(session.adoptCandidates(CANDIDATE_ADOPT), {code: "HOST_PROTOCOL_MISMATCH"});
+    assert.deepEqual(seen, [CANDIDATE_ADOPT]);
+    await session.close();
+  }
+  let calls = 0;
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation === "candidate.adopt") {calls++; throw Object.assign(new Error("lost"), {code: "HOST_TIMEOUT"});}
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  await assert.rejects(session.adoptCandidates(CANDIDATE_ADOPT), {code: "HOST_TIMEOUT"});
+  assert.equal(calls, 1);
+  await session.inspectProject();
+  assert.equal(calls, 1);
+  await session.close();
+});
+
+test("Candidate group extends the retained packaged Host beside providers", async () => {
+  const browserWindow = {};
+  const {session} = fixture({browserWindow, publishRuntime: true});
+  await session.start();
+  const runtime = browserWindow.lmdjWebRuntimeHost;
+  assert.equal(typeof runtime.registerAudioContext, "function");
+  assert.equal(runtime.providers.listProviders, session.listProviders);
+  assert.ok(Object.isFrozen(runtime.candidates));
+  for (const name of ["runCandidateJob", "inspectCandidateJob", "cancelCandidateJob", "discardCandidateSet",
+    "auditionCandidate", "stopCandidateAudition", "adoptCandidates"]) {
+    assert.equal(runtime.candidates[name], session[name]);
+  }
+  await session.close();
+  assert.equal(browserWindow.lmdjWebRuntimeHost, runtime);
+});
+
+test("Candidate Job lifecycle returns validated Facade fields and rejects wrong Job bindings", async () => {
+  const source = {project_id: CANDIDATE_PROJECT_ID,
+    asset_id: CANDIDATE_PROJECT_ID, project_revision: 3, artifact: CANDIDATE_AUDIO.artifact, frame_rate: 48000, frame_count: 4};
+  const intent = {attempt_id: "attempt", source, parameters_sha256: "b".repeat(64), data_classification: "public",
+    platform: "test", region: "local", required_permissions: []};
+  let wrongJob = false;
+  let status = "interrupted";
+  const calls = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation.startsWith("candidate.")) {
+      calls.push(structuredClone(envelope.payload));
+      if (envelope.operation === "candidate.job.cancel") status = "cancelled";
+      return success(envelope, {job_id: wrongJob ? "other" : "slice-job", active_set_id: null,
+        sets: [], history: [{intent, set_id: "set", status}], project_revision: null});
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const request = {job_id: "slice-job", attempt_id: "attempt", project_id: CANDIDATE_PROJECT_ID,
+    asset_id: CANDIDATE_PROJECT_ID, expected_revision: 3, parameters: {}, data_classification: "public",
+    platform: "test", region: "local", required_permissions: []};
+  const result = await session.runCandidateJob(request);
+  assert.equal(result.project_revision, null);
+  assert.deepEqual(result.history[0].intent.source, source);
+  assert.equal((await session.inspectCandidateJob("slice-job")).history[0].status, "interrupted");
+  assert.equal((await session.cancelCandidateJob("slice-job", "attempt")).history[0].status, "cancelled");
+  assert.deepEqual(calls, [request, {job_id: "slice-job"}, {job_id: "slice-job", attempt_id: "attempt"}]);
+  wrongJob = true;
+  await assert.rejects(session.inspectCandidateJob("slice-job"), {code: "HOST_PROTOCOL_MISMATCH"});
+  await assert.rejects(session.runCandidateJob({...request, project_path: "/projects/example.lmdj"}), {code: "HOST_PROTOCOL_MISMATCH"});
+  assert.equal(calls.length, 4);
+  await session.close();
+});
+
+test("Provider permission readback rejects absent or duplicate grants and preserves existing grants", async () => {
+  for (const granted_permissions of [undefined, ["sample.slice.execute", "sample.slice.execute"], ["other.execute"]]) {
+    const {session} = fixture({send: async (envelope) => success(envelope,
+      envelope.operation === "provider.list" ? {providers: [], granted_permissions, project_revision: null} : defaultResult(envelope.operation))});
+    await session.start();
+    if (granted_permissions?.length === 1) assert.deepEqual((await session.listProviders()).granted_permissions, ["other.execute"]);
+    else await assert.rejects(session.listProviders(), {code: "HOST_PROTOCOL_MISMATCH"});
+    await session.close();
+  }
 });

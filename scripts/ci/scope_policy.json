@@ -172,6 +172,7 @@
     {"match": {"kind": "prefix", "value": "tests/platform/web/audio/"}, "lanes": ["web_toolchain", "web_runtime_host"]},
     {"match": {"kind": "prefix", "value": "tests/platform/web/project_io/"}, "lanes": ["web_toolchain"]},
     {"match": {"kind": "exact", "value": "tests/platform/web/provider_owner_journey.mjs"}, "lanes": ["web_runtime_host", "creator"]},
+    {"match": {"kind": "exact", "value": "tests/platform/web/candidate_journey.mjs"}, "lanes": ["web_runtime_host", "creator"]},
     {"match": {"kind": "prefix", "value": "tests/platform/web/host/"}, "lanes": ["web_runtime_host"]},
     {"match": {"kind": "prefix", "value": "tests/platform/web/creator/"}, "lanes": ["creator"]},
     {"match": {"kind": "prefix", "value": "tests/platform/web/deployment/"}, "lanes": ["deploy_contract"]},

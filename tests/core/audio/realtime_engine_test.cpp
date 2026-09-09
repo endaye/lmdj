@@ -1415,6 +1415,34 @@ void replacing_an_audition_drains_the_outgoing_bank() {
              PublishResult::accepted);
 }
 
+// Audition storage comes from its own reserved pool: reclaiming it must not
+// refund bytes charged to the Host's Project Bank reservation.
+void audition_reclamation_preserves_project_pcm_reservations() {
+  RealtimeEngine engine;
+  const std::array<float, 8> samples{0.25F};
+  LMDJ_CHECK(engine.publish_sample_bank(bank_with_sample(1, samples)) == PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.publish_audition_bank(audition_bank_with_sample(samples)) == PublishResult::accepted);
+  std::array<float, 1> left{}, right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(engine.publish_audition_bank(audition_bank_with_sample(samples)) == PublishResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  const auto audition = engine.reclaim_retired_bank_telemetry();
+  LMDJ_CHECK(audition.count == 1);
+  LMDJ_CHECK(audition.decoded_pcm_bytes == 0);
+  LMDJ_CHECK(engine.publish_sample_bank(bank_with_sample(2, samples)) == PublishResult::accepted);
+  LMDJ_CHECK(engine.publish_audition_bank(audition_bank_with_sample(samples)) == PublishResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  const auto mixed = engine.reclaim_retired_bank_telemetry();
+  LMDJ_CHECK(mixed.count == 2);
+  LMDJ_CHECK(mixed.decoded_pcm_bytes == samples.size() * sizeof(float));
+  engine.stop();
+  const auto stopped = engine.reclaim_retired_bank_telemetry();
+  // Stop retains current Banks; it must not emit a second refund.
+  LMDJ_CHECK(stopped.count == 0);
+  LMDJ_CHECK(stopped.decoded_pcm_bytes == 0);
+}
+
 // The defect this catches: an audition leaking into Pad state. It must never
 // become the current Bank, never alter the Pad availability the Host reports,
 // and never be stopped by a Pad stop or by stop-all.
@@ -3226,6 +3254,7 @@ int main() {
   an_audition_publishes_no_voice_state_edge();
   audition_never_consumes_a_project_bank_slot();
   replacing_an_audition_drains_the_outgoing_bank();
+  audition_reclamation_preserves_project_pcm_reservations();
   audition_never_becomes_current_and_never_moves_availability();
   audition_without_a_published_bank_is_refused_at_enqueue();
   reports_exact_bytes_for_non_fifo_heterogeneous_bank_reclaim();

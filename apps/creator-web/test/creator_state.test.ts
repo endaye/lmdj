@@ -40,6 +40,42 @@ function readyState(): CreatorState {
 }
 
 describe("Creator state", () => {
+  test("Candidate commit invalidates playable audio until its revision is published", () => {
+    const before = {...readyState(), sample: {...initialCreatorState.sample,
+      savedRevision: 4, runtimeRevision: 4}};
+    const stale = creatorReducer(before, {type: "candidate-audio-invalidated",
+      projectId: project.projectId, revision: 5});
+    expect(stale.project).toBe(before.project);
+    expect(stale.sample.savedRevision).toBe(5);
+    expect(stale.sample.runtimeRevision).toBe(4);
+    const refreshed = creatorReducer(stale, {type: "project-revision-updated", revision: 5});
+    const ready = creatorReducer(refreshed, {type: "candidate-audio-published",
+      projectId: project.projectId, revision: 5, runtimeRevision: 5});
+    expect(ready.sample.savedRevision).toBe(ready.sample.runtimeRevision);
+  });
+
+  test("Candidate preparation failure retains the known older Runtime revision", () => {
+    const state = {...readyState(), project: {...readyState().project,
+      current: {...project, revision: 5}}, sample: {...initialCreatorState.sample,
+      savedRevision: 5, runtimeRevision: 4}};
+    const failed = creatorReducer(state, {type: "candidate-audio-published",
+      projectId: project.projectId, revision: 5, runtimeRevision: 4});
+    expect(failed.project).toBe(state.project);
+    expect(failed.sample.savedRevision).toBe(5);
+    expect(failed.sample.runtimeRevision).toBe(4);
+  });
+
+  test.each([
+    {projectId: "other", revision: 5, runtimeRevision: 5},
+    {projectId: project.projectId, revision: 4, runtimeRevision: 4},
+    {projectId: project.projectId, revision: 5, runtimeRevision: 6},
+  ])("rejects stale or foreign Candidate publication %j", (publication) => {
+    const state = {...readyState(), project: {...readyState().project,
+      current: {...project, revision: 5}}, sample: {...initialCreatorState.sample,
+      savedRevision: 5, runtimeRevision: 4}};
+    expect(isCreatorActionAllowed(state, {type: "candidate-audio-published", ...publication})).toBe(false);
+  });
+
   test("derives the exact orthogonal phase priority", () => {
     expect(selectCreatorPhase(initialCreatorState)).toBe("booting");
     expect(selectCreatorPhase({

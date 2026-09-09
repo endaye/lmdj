@@ -120,6 +120,8 @@ export type CreatorAction =
       token: ProjectProjectionRefreshToken;
     }
   | {type: "project-revision-updated"; revision: number}
+  | {type: "candidate-audio-invalidated"; projectId: string; revision: number}
+  | {type: "candidate-audio-published"; projectId: string; revision: number; runtimeRevision: number | null}
   | {
       type: "project-sequence-settings-updated";
       revision: number;
@@ -233,6 +235,15 @@ export function isCreatorActionAllowed(
     case "project-revision-updated":
       return hasReadyProject(state) && Number.isSafeInteger(action.revision) &&
         action.revision >= (state.project.current?.revision ?? 0);
+    case "candidate-audio-invalidated":
+      return hasReadyProject(state) && action.projectId === state.project.current?.projectId &&
+        Number.isSafeInteger(action.revision) && action.revision >= state.project.current.revision &&
+        action.revision >= (state.sample.savedRevision ?? 0);
+    case "candidate-audio-published":
+      return hasReadyProject(state) && action.projectId === state.project.current?.projectId &&
+        action.revision === state.project.current.revision && action.revision === state.sample.savedRevision &&
+        (action.runtimeRevision === null || (Number.isSafeInteger(action.runtimeRevision) &&
+          action.runtimeRevision >= 0 && action.runtimeRevision <= action.revision));
     case "project-sequence-settings-updated":
       return hasReadyProject(state) && Number.isSafeInteger(action.revision) &&
         action.revision >= (state.project.current?.revision ?? 0) &&
@@ -450,6 +461,13 @@ export function creatorReducer(
           current: {...state.project.current, revision: action.revision},
         },
       };
+    case "candidate-audio-invalidated":
+      return {...state, sample: Object.freeze({
+        ...preparedSampleState(action.revision),
+        runtimeRevision: state.sample.runtimeRevision,
+      })};
+    case "candidate-audio-published":
+      return {...state, sample: Object.freeze({...state.sample, runtimeRevision: action.runtimeRevision})};
     case "project-sequence-settings-updated":
       return state.project.current === null ? state : {
         ...state,
