@@ -140,7 +140,7 @@ class CutoverTests(unittest.TestCase):
         ):
             with self.subTest(event=event, path=path, action=action, outcome=outcome):
                 expression = condition
-                for key, value in {'github.event_name': event, 'github.event.workflow_run.path': path,
+                for key, value in {'github.event_name': event, 'github.event.workflow_run.path': path, 'github.event.schedule': '',
                                    'steps.control.outputs.action': action, 'steps.control.outcome': outcome}.items():
                     expression = expression.replace(key, repr(value))
                 expression = expression.replace('always()', 'True').replace('&&', ' and ').replace('||', ' or ')

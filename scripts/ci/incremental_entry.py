@@ -32,6 +32,8 @@ WORKFLOWS = {
     ".github/workflows/pr-review.yml": "review",
 }
 EVENTS = {"push", "schedule", "workflow_run"}
+SCHEDULER_HEALTH = "7,22,37,52 * * * *"
+REPORT_HEALTH = "9,24,39,54 * * * *"
 DIAGNOSTIC_STAGES = frozenset({
     "output-preflight", "entry-construction", "event-read", "output-write",
     "authenticate", "auth-lock", "auth-checkout", "auth-main-refresh",
@@ -139,6 +141,11 @@ class Entry:
         if kind == "push":
             require(payload.get("ref") == "refs/heads/main" and payload.get("deleted") is False
                     and payload.get("after") == self.runtime.control, "push is not exact nondeleted main control")
+        if kind == "schedule":
+            schedule = payload.get("schedule")
+            require(type(schedule) is str and schedule in (SCHEDULER_HEALTH, REPORT_HEALTH),
+                    "schedule is not an exact scheduler or report health role")
+            return ("report-health" if schedule == REPORT_HEALTH else kind), None
         if kind != "workflow_run":
             return kind, None
         require(payload.get("action") == "completed" and isinstance(payload.get("workflow_run"), dict), "callback is not a completed run event")
@@ -195,6 +202,7 @@ class Entry:
         self.authenticate()
         self.diagnostic_stage = "event-authenticate"
         source, run = self.event(payload)
+        require(source != "report-health", "report health cannot authorize product control")
         # Read-only provenance for actual callback-chain audits. This proves
         # authenticated source identity, not admission, health or chain depth.
         # Never print the raw event, credentials or unvalidated source hints.
