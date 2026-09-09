@@ -7,6 +7,7 @@ source_paths:
   - products/lmdj/assembly.json
   - products/lmdj/assembly.lock.json
   - docs/prd/decision-log.md
+  - docs/prd/decisions/2026-09-10-cardputer-runtime-host-first-slice.md
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -22,6 +23,21 @@ Project v4 Truth、命令处理、项目存取、portable Bundle 1.1、确定性
 ## 演奏能力
 
 Runtime Snapshot、样本准备、离线渲染、实时引擎、Voice 状态与 Sample preview 具有自动化覆盖。Stage 10 加入固定八级 master FX 链（filter、delay、reverb、stutter、gate、reverse、crush、cutter，取值域 0..1000、周期由 Bar 推导）、master tap 采集、Performance 录制与保存、Cooker replay projection、resample 提交与 Performance recovery，同样只有自动化覆盖。实时不变量未变：实时线程不分配、不加锁、不修改 Project、不做 journal I/O。低延迟手感、MIDI/触控输入、设备生命周期与 Perform 演奏体验需要独立物理验收；Stage 10 的物理行仍是 deferred。
+
+### Cardputer 首版：已设计，尚未成为可用产品
+
+[已批准首版范围](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-09-10-cardputer-runtime-host-first-slice.md)
+采用电脑经 Facade 导出、USB 装载、设备确认接收和本地演奏。供电持续时拔线可继续
+单 Pattern 与实时 Pad；接收失败或复位为 empty，不自动播放、不保存 Project Truth。
+首版目标为 4 个 One Shot Pad、合计 1 秒的不同鼓音、至少 4 个声音实际重叠与
+30 分钟稳定音乐运行。它们是先固定再验证的目标，不是已经测得的硬件容量。
+暂不包含 Wi-Fi、SD 导入、Creator 新界面或设备端编辑/采样。
+
+[实施计划](https://github.com/endaye/lmdj/blob/main/docs/plans/2026-09-10-cardputer-runtime-host.md)
+按设计 → 真实容量 → Driver/Host → 输入/显示与导出/传输 → 测试 Build/不可变快照 →
+完整真机验收推进。现有单音听测不解除容量前置；资源不足保留负结果并修复根因，
+不缩短音乐目标。Cardputer Host 尚未加入 active Assembly，没有可投影的正式 Host
+身份或该闭环的已验收 Product Build。
 
 ## 智能能力
 
