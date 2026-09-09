@@ -159,11 +159,23 @@ state addenda and older-canary promotion presentation remain later T4 work.
 
 ## Acceptance ledger
 
+The [result discovery integration Task](2026-09-09-lmdj-canary-result-discovery.md)
+connects bounded automatic/manual discovery to the existing planning entry,
+prioritizing unfinished recovery and retaining complete observations as receipts.
+It adds no model, version or deployment execution; readiness/storage activation,
+first version baseline and downstream claim/progress remain separate work.
+
 The [failed review receipt Task](2026-09-09-lmdj-failed-review-receipts.md)
 repairs the mismatch between the honestly failed all-backend finalizer and its
 success-only report consumer. Complete authenticated failure receipts can enter
 the existing outbox without treating arbitrary job failures as backend verdicts.
-Actual production recovery and retained Issue delivery remain live acceptance.
+PR #1068 merged the fix. Controlled run `34311394103/1` delivered the exact
+#1061 source `34307707493/1` to Issue #819 comment `5595863850`, with outbox
+queue/claim/ack/delivered generations 524–527 verified against the complete
+source and exact 558-byte body. Follow-up `34311898608/1` persisted its
+`failure-queued` discovery disposition without another target report. Evidence:
+[delivery and recovery](https://github.com/endaye/lmdj/pull/1068#issuecomment-5595983824).
+This verifies one real failure path, not cleared global backlog or backend repair.
 
 The [page-local common proof Task](2026-09-09-lmdj-journal-page-common-proof.md)
 shares validated workflow identity and an exact main SHA within one comment page,

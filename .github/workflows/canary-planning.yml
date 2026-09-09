@@ -1,29 +1,45 @@
 name: Canary Planning
 
-# Manual source entry only. No result subscription, scheduled work or delivery.
+# Result hints and manual recovery share one bounded planner. Automatic entry
+# stays disabled until independent storage/readiness is explicitly accepted.
+# The source's existing health observations recover missed callback chains;
+# no date-based product test, assessment or deployment is requested here.
 on:
+  workflow_run:
+    workflows: ["Self-test Report"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       operation:
-        description: Initialize reserved storage, explicitly bootstrap progress, observe a retained result, or recover its frozen plan.
+        description: Initialize reserved storage, bootstrap progress, observe/recover an exact result, or discover one pending result.
         type: choice
-        options: [init, bootstrap, observe-result, recover]
+        options: [init, bootstrap, observe-result, recover, reconcile-next]
         required: true
       storage:
         description: Reviewed dedicated planning journal JSON with exact Issue, bot, workflow and epoch identities.
         type: string
         required: true
       request:
-        description: Observe/recover requires source_request_id; init/bootstrap requires an empty object. No caller evidence is accepted.
+        description: Observe/recover requires source_request_id; other operations require an empty object. No caller evidence is accepted.
         type: string
         default: "{}"
 
 permissions: {}
 
+# Coalesce automatic hints, not durable work. Explicit manual commands retain
+# separate admission; the controller below owns the only planning writer lock.
+concurrency:
+  group: canary-planning-wakeup-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'automatic' }}
+  cancel-in-progress: false
+  queue: single
+
 jobs:
   controller:
     name: Canary planning controller
-    if: github.ref == 'refs/heads/main' && github.run_attempt == '1'
+    if: >-
+      github.ref == 'refs/heads/main' && github.run_attempt == '1' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' && vars.CANARY_PLANNING_AUTOMATIC_READY == 'true'))
     runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
     timeout-minutes: 10
     concurrency:
@@ -47,9 +63,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATCH_WRITER_LOCK: canary-planning
-          PLANNING_OPERATION: ${{ inputs.operation }}
-          PLANNING_STORAGE: ${{ inputs.storage }}
-          PLANNING_REQUEST: ${{ inputs.request }}
+          CANARY_PLANNING_AUTOMATIC_READY: ${{ vars.CANARY_PLANNING_AUTOMATIC_READY }}
+          PLANNING_OPERATION: ${{ github.event_name == 'workflow_run' && 'reconcile-next' || inputs.operation }}
+          PLANNING_STORAGE: ${{ github.event_name == 'workflow_run' && vars.CANARY_PLANNING_STORAGE || inputs.storage }}
+          PLANNING_REQUEST: ${{ github.event_name == 'workflow_run' && '{}' || inputs.request }}
         run: python3 -m tools.canary.planning_entry --directory "$RUNNER_TEMP/canary-planning-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
       - name: Retain complete planning observation
         uses: actions/upload-artifact@v4

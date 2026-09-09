@@ -1,4 +1,4 @@
-"""Authenticated manual result planning; no execution or delivery authority.
+"""Authenticated bounded result discovery; no execution or delivery authority.
 
 Only the dedicated planning Journal is writable. Scheduler evidence is read
 through the existing complete read-only replay, not caller JSON or an Actions
@@ -17,7 +17,7 @@ import incremental_entry
 import report_runtime
 import test_scope
 
-OPERATIONS = ('init', 'bootstrap', 'observe-result', 'recover')
+OPERATIONS = ('init', 'bootstrap', 'observe-result', 'recover', 'reconcile-next')
 STORAGE_KEYS = {'repository', 'issue_number', 'issue_node_id', 'bot_node_id', 'workflow_id', 'epoch'}
 
 
@@ -95,13 +95,62 @@ def answer(row):
             'admission_evidence': False, **deepcopy(row)}
 
 
+def source_storage(runtime):
+    config = incremental_entry.load_storage(runtime.root, runtime.env)['scheduler']
+    r.require(config['bot_node_id'] == runtime.config['bot_node_id']
+              and config['issue_node_id'] != runtime.config['issue_node_id']
+              and config['workflow_id'] != runtime.config['workflow_id'],
+              'planning and scheduler storage authorities alias or differ')
+    return config
+
+
+def authenticate_wakeup(runtime, operation):
+    kind = runtime.env.get('GITHUB_EVENT_NAME')
+    r.require(runtime.get_run(runtime.current['run_id'], 1).get('event') == kind,
+              'planning API event differs from workflow context')
+    if kind == 'workflow_dispatch':
+        return
+    r.require(kind == 'workflow_run' and operation == 'reconcile-next',
+              'planning writer is not an explicit manual invocation or accepted completion')
+    payload = batch_runtime.strict_json(Path(runtime.env['GITHUB_EVENT_PATH']).read_bytes())
+    r.require(isinstance(payload, dict) and payload.get('action') == 'completed'
+              and isinstance(payload.get('workflow_run'), dict), 'planning callback is not a completed run')
+    hint = payload['workflow_run']
+    r.require(type(hint.get('id')) is int and hint['id'] > 0
+              and type(hint.get('run_attempt')) is int and hint['run_attempt'] == 1,
+              'planning callback is not an exact first attempt')
+    config = source_storage(runtime)
+    reader = SchedulerReader(config, root=runtime.root, environment=runtime.env, api=runtime.api)
+    run = reader.get_run(hint['id'], hint['run_attempt'])
+    r.require(run.get('status') == 'completed' and reader.run_state({'run_id': hint['id'], 'attempt': 1}) == 'terminal',
+              'planning callback source is not actually terminal')
+    for key in ('id', 'run_attempt', 'workflow_id', 'head_sha', 'head_branch', 'path', 'event', 'status', 'conclusion'):
+        r.require(key in hint and type(hint[key]) is type(run.get(key)) and hint[key] == run.get(key),
+                  'planning callback metadata differs from exact source attempt')
+    repository = runtime.call('GET', runtime.repo(''))
+    workflow = runtime.call('GET', runtime.repo(f"/actions/workflows/{config['workflow_id']}"))
+    r.require(isinstance(repository, dict) and type(repository.get('id')) is int and repository['id'] > 0
+              and repository.get('full_name') == config['repository'], 'planning callback repository is unavailable')
+    for source in (payload.get('repository'), hint.get('repository'), hint.get('head_repository'),
+                   run.get('repository'), run.get('head_repository')):
+        r.require(isinstance(source, dict) and type(source.get('id')) is int
+                  and source['id'] == repository['id'] and source.get('full_name') == config['repository'],
+                  'planning callback repository identity differs')
+    r.require(isinstance(workflow, dict) and type(workflow.get('id')) is int
+              and workflow['id'] == config['workflow_id'] and workflow.get('path') == reader.workflow,
+              'planning callback workflow identity differs')
+    test_scope.collect_interval(runtime.root, run['head_sha'], runtime.inputs.main)
+    # Neither callback conclusion nor producer artifacts become test evidence.
+
+
 def control(operation, config, request, *, root, environment, api=None):
     config, request = planning_storage(config), request_for(operation, request)
+    if environment.get('GITHUB_EVENT_NAME') == 'workflow_run':
+        r.require(operation == 'reconcile-next' and environment.get('CANARY_PLANNING_AUTOMATIC_READY') == 'true',
+                  'automatic planning discovery readiness or operation has not been accepted')
     runtime = PlanningRuntime(config, root=root, environment=environment, api=api)
-    # Only a manual first-attempt main workflow may initialize/write this store.
     runtime.authenticate_current()
-    r.require(runtime.get_run(runtime.current['run_id'], 1).get('event') == 'workflow_dispatch',
-              'planning writer is not an explicit manual invocation')
+    authenticate_wakeup(runtime, operation)
     if operation == 'init':
         runtime.initialize()
         return {'action': 'initialized', 'admission_evidence': False}
@@ -109,7 +158,22 @@ def control(operation, config, request, *, root, environment, api=None):
     if operation == 'bootstrap':
         return {'action': 'bootstrapped', 'admission_evidence': False,
                 'progress': plans.bootstrap(config['repository'])}
-    source_id = request['source_request_id']
+    state = source_config = current = None
+    if operation == 'reconcile-next':
+        current = plans.load()
+        r.require(current['progress'] is not None, 'planning progress has not been explicitly bootstrapped')
+        source_id = current['unfinished']
+        if source_id is None:
+            source_config = source_storage(runtime)
+            state = scheduler_state(runtime, source_config)
+            # Admission insertion order comes from complete journal replay,
+            # never lexicographic IDs, callback completion order or main tip.
+            source_id = next((key for key in state['requests']
+                              if key in state['results'] and key not in current['observations']), None)
+            if source_id is None:
+                return {'action': 'idle', 'admission_evidence': False}
+    else:
+        source_id = request['source_request_id']
     row = plans.lookup(source_id)
     if row is not None:
         if row['decision'] is None:
@@ -119,16 +183,12 @@ def control(operation, config, request, *, root, environment, api=None):
         return answer(row)
     r.require(operation != 'recover', 'recovery has no original persisted intent',
               'observe the exact retained result once; recovery cannot invent a new plan')
-    current = plans.load()
+    current = current if current is not None else plans.load()
     r.require(current['progress'] is not None, 'planning progress has not been explicitly bootstrapped')
     r.require(current['unfinished'] is None, 'another planning intent is unfinished',
               'recover the original unfinished source before observing another result')
-    source_config = incremental_entry.load_storage(runtime.root, runtime.env)['scheduler']
-    r.require(source_config['bot_node_id'] == config['bot_node_id']
-              and source_config['issue_node_id'] != config['issue_node_id']
-              and source_config['workflow_id'] != config['workflow_id'],
-              'planning and scheduler storage authorities alias or differ')
-    state = scheduler_state(runtime, source_config)
+    source_config = source_config if source_config is not None else source_storage(runtime)
+    state = state if state is not None else scheduler_state(runtime, source_config)
     decision = planning.plan_after_result(runtime.root, scheduler=state, source_request_id=source_id,
         main_sha=runtime.inputs.main, control_sha=runtime.control, progress=current['progress'])
     target = decision['source']['target_sha']
