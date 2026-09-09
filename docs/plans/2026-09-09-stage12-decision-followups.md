@@ -53,6 +53,10 @@ review deliverable, not a new unbounded architecture project.
 
 ## K1–K5 — preserve the existing implementation boundaries
 
+K4 is delivered by PR #1084. K5's previously unspecified owner/Host surface is
+now concrete in the [post-K4 review proposal](2026-09-09-stage12-k5-owner-resolution.md);
+its approval and implementation remain separate from the earlier R1/C-Q decisions.
+
 The exact declared files and tests remain in the linked Capability plan.
 The following is the publishable dependency/acceptance summary for child Issues.
 

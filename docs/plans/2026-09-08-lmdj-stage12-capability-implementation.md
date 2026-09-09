@@ -302,6 +302,10 @@ verified immutable deployment; never reuse or move allocated identities.
 
 ## Task K5 — real owner resolver wiring and Host acceptance
 
+Post-K4 owner API, permission surface, exact-file proposal and per-Host journey
+review: [K5 owner-resolution proposal](2026-09-09-stage12-k5-owner-resolution.md).
+The proposal is not yet an approved implementation or completed acceptance.
+
 Readiness: K4 plus reviewed ownership API and Stage 11 Facade/Creator file
 coordination. This is a separately planned follow-up, not hidden in K2.
 
