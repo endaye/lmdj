@@ -415,6 +415,13 @@ export interface SoundSetAudition {
   // `null` when the set-level demo was auditioned rather than a slot.
   slotIndex: number | null;
   artifact: Readonly<SoundSetArtifact> | null;
+  // Whether a voice actually started. The geometry above describes bytes the
+  // Facade resolved and decoded, which it does whether or not this Host's
+  // engine was in a state to play them: with audio never activated, or with
+  // both audition Bank slots still held, an audition answers `ok` and makes no
+  // sound. `false` is a normal outcome, not a refusal -- a refusal arrives as a
+  // thrown typed error, and this field adds no reason vocabulary of its own.
+  played: boolean;
   audio: Readonly<SoundSetAuditionGeometry>;
 }
 

@@ -5038,14 +5038,16 @@ test("forwards the occupied Pad policy only when the caller chose one", async ()
 // may answer without one. Accepting `null` would hand the caller a result the
 // documented type says cannot occur -- the same class
 // `normalizeSoundSetSlot` already refuses for an occupied slot.
-test("a slot audition that names no Artifact is refused", async () => {
-  const auditionWith = (artifact, slotIndex) => fixture({
+// `played` has no default on purpose: `undefined` here means the Host sent no
+// outcome at all, and a default would silently repair the case under test.
+function auditionFixture(artifact, slotIndex, played) {
+  return fixture({
     soundsetCatalog: null,
     send(envelope) {
       if (envelope.operation !== "soundset.audition") {
         return success(envelope, defaultResult(envelope.operation));
       }
-      return success(envelope, {
+      const result = {
         set_id: SET_ID,
         version: "1.0.0",
         manifest_sha256: MANIFEST_SHA,
@@ -5058,9 +5060,21 @@ test("a slot audition that names no Artifact is refused", async () => {
           prepared_bytes: 11_520,
           prepared_frames: 2_880,
         },
-      });
+      };
+      // `undefined` stands for a Host that sent no `played` at all, which is
+      // the drift the normaliser refuses; every other value is passed through
+      // so the type check itself can be exercised.
+      if (played !== undefined) {
+        result.played = played;
+      }
+      return success(envelope, result);
     },
   });
+}
+
+test("a slot audition that names no Artifact is refused", async () => {
+  const auditionWith = (artifact, slotIndex) =>
+    auditionFixture(artifact, slotIndex, true);
   const identity = {
     setId: SET_ID,
     version: "1.0.0",
@@ -5088,6 +5102,44 @@ test("a slot audition that names no Artifact is refused", async () => {
     .session.auditionSoundSet({...identity, slotIndex: 0});
   assert.equal(played.artifact.sha256, BLOB_SHA);
   assert.equal(played.audio.preparedFrames, 2_880);
+});
+
+// #799, review finding. The geometry is answered from the bytes the Facade
+// resolved, so it is identical whether or not this Host's engine played them.
+// `played` is the only part of the reply that separates the two, which is why
+// it crosses this boundary and why an absent one is drift rather than `false`.
+test("an audition carries whether a voice actually started", async () => {
+  const identity = {
+    setId: SET_ID,
+    version: "1.0.0",
+    manifestSha256: MANIFEST_SHA,
+  };
+  const artifact = {sha256: BLOB_SHA, media_type: "audio/wav", byte_length: 64};
+
+  const audible = await auditionFixture(artifact, 0, true)
+    .session.auditionSoundSet({...identity, slotIndex: 0});
+  assert.equal(audible.played, true);
+
+  const silent = await auditionFixture(artifact, 0, false)
+    .session.auditionSoundSet({...identity, slotIndex: 0});
+  assert.equal(silent.played, false);
+  // The two differ in exactly one field: everything a caller could otherwise
+  // read is the same, which is the defect stated as an assertion.
+  assert.deepEqual(
+    {...audible, played: null}, {...silent, played: null});
+
+  // A Host that sends no outcome, and one that sends a non-boolean, are both
+  // drift rather than a silence to be assumed.
+  await assert.rejects(
+    auditionFixture(artifact, 0, undefined)
+      .session.auditionSoundSet({...identity, slotIndex: 0}),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+  await assert.rejects(
+    auditionFixture(artifact, 0, "true")
+      .session.auditionSoundSet({...identity, slotIndex: 0}),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
 });
 
 test("a Set slot that disagrees with itself about being empty is refused", async () => {

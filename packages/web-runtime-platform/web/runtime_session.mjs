@@ -4696,6 +4696,17 @@ function createRuntimeSessionController(options = {}) {
       throw typedError(
         "HOST_PROTOCOL_MISMATCH", "Sound Set audition geometry is invalid");
     }
+    // #799, review finding. The Host answers `ok` for an audition it could not
+    // play -- no running engine, an exhausted audition pool -- so the geometry
+    // alone cannot tell a caller whether any sound came out. `played` is that
+    // fact, and it is required rather than defaulted: a missing one means this
+    // session and the Host disagree about the reply, which is the class
+    // `HOST_PROTOCOL_MISMATCH` names. Defaulting it to `false` would report a
+    // silence that never happened, and to `true` the very lie this fixes.
+    if (typeof result.played !== "boolean") {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH", "Sound Set audition outcome is invalid");
+    }
     const slotIndex = result.slot_index ?? null;
     // A slot audition always names the Artifact it played; only a set-level
     // demo may answer without one. Accepting `null` here would hand the
@@ -4713,6 +4724,7 @@ function createRuntimeSessionController(options = {}) {
       manifestSha256: result.manifest_sha256,
       slotIndex,
       artifact: normalizeSoundSetArtifact(result.artifact ?? null),
+      played: result.played,
       audio: Object.freeze({
         sampleRate: audio.sample_rate,
         channels: audio.channels,
