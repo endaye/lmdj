@@ -39,6 +39,15 @@ Voice 和 fail-closed drain 语义不变。当前队列存储在 Engine 构造�
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 
+### Cardputer 紧凑存储提案（未实现）
+
+[设计工作项 #1124](https://github.com/endaye/lmdj/issues/1124) 依据
+[R1 负容量研究 #1127](https://github.com/endaye/lmdj/pull/1127)，拟分别实现
+按回执额度一次配置的控制/结果/Voice-state 存储，以及 live Pad 复用只读 PCM16。
+默认桌面容量和既有 float Bank 路径保持不变，callback 不分配、不释放，原
+publication ownership 与 quiescence 不变。这是待独立评审的设计，不是当前实现。
+设计或修复合并均不能替代同素材、同 reserve 的目标容量复测和完整 Host 验收。
+
 Runtime-only Facade 的 T3 source 使用 `PreparedPatternView::from_canonical_snapshot`：
 严格拒绝重复或乱序 event key，保留全部 timing/material 验证，不建立桌面 overlay
 merge 的 map workspace；既有 `from_snapshot` 和 overlay 规范化语义不变。

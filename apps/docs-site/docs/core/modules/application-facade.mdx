@@ -55,6 +55,12 @@ codec limits 不限制此前电脑端 source load/WAV Cook 的内存峰值。
 
 ### Runtime-only 生命周期（T3 source）
 
+Cardputer 的 [R1 研究 #1127](https://github.com/endaye/lmdj/pull/1127) 得到负容量
+结论：[紧凑存储设计 #1124](https://github.com/endaye/lmdj/issues/1124) 拟让显式
+队列 storage 随既有 pending 准入额度收敛，并复用 Core 拥有的只读 PCM16。
+两项尚未实现；当前预算与 float 展开仍按下文源码行为解释。设计 Closed、native
+测试通过或修复合并都不能解除设备容量门槛，必须取得同口径的正向目标证据。
+
 `runtime_facade.hpp` 只暴露不透明字节、完整内容身份、资源配置、进程内 opaque
 epoch、Pad 命令和回执，不暴露 Snapshot、Engine、Project 路径或 Provider 对象。
 一个串行控制调用方负责 `load/start/submit/poll/request_stop/finish_stop/stop/unload/reset`；
