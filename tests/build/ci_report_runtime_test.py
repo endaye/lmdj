@@ -114,8 +114,17 @@ class ProjectionTests(unittest.TestCase):
         self.adapter.outbox = lambda: report_outbox.Outbox(self.outbox.journal(), lambda: True, "outbox")
 
     def planned(self):
-        state = module.scheduler_state(self.runtime)
+        state = module.report_scheduler_state(self.runtime)
         return module.plan_batch_reports("endaye/lmdj", state, self.inputs)
+
+    def test_scheduler_state_stays_canonical_and_report_order_is_explicit(self):
+        request, _ = result(self.scheduler)
+        canonical = module.scheduler_state(self.runtime)
+        projected = module.report_scheduler_state(self.runtime)
+        self.assertNotIn("_result_order", canonical)
+        self.assertEqual({key: value for key, value in projected.items()
+                          if key != "_result_order"}, canonical)
+        self.assertEqual(projected["_result_order"], [request["id"]])
 
     def validated_common_result(self):
         """Feed the planner the exact reference accepted by the real runtime."""
@@ -150,7 +159,7 @@ class ProjectionTests(unittest.TestCase):
         failure = next(item for item in self.planned() if item.management is not None)
         self.adapter.deliver((failure,), 32)
         result(self.scheduler, kind="auto", base=B, target=C, advance=True)
-        recovery = next(item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recovery = next(item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                         if item.key == failure.key)
         original = self.api.create_comment
 
@@ -223,7 +232,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertIn("not full-release evidence", body)
         self.assertEqual([e["type"] for e in self.outbox.journal().load()], ["queue", "claim", "ack", "delivered"])
         self.assertEqual(before, (self.scheduler.comments, self.scheduler.checkpoint))
-        self.assertIsNotNone(module.scheduler_state(self.runtime)["active"])
+        self.assertIsNotNone(module.report_scheduler_state(self.runtime)["active"])
 
     def test_failed_and_missing_jobs_in_same_suite_produce_two_observations(self):
         suite = next(s for s in POLICY.inventory.suites if len(s.jobs) > 1)
@@ -323,7 +332,7 @@ class ProjectionTests(unittest.TestCase):
 
     def test_wrong_special_reference_is_rejected(self):
         result(self.scheduler)
-        state = module.scheduler_state(self.runtime)
+        state = module.report_scheduler_state(self.runtime)
         item = next(iter(state["results"].values()))
         for reference in (None, "missing:other", "not-required:other", "legacy-verdict", ""):
             with self.subTest(reference=reference):
@@ -333,21 +342,21 @@ class ProjectionTests(unittest.TestCase):
 
     def test_missing_requires_all_selected_outcomes_missing(self):
         request, _ = result(self.scheduler)
-        state = module.scheduler_state(self.runtime)
+        state = module.report_scheduler_state(self.runtime)
         state["results"][request["id"]]["reference"] = "missing:" + request["id"]
         with self.assertRaisesRegex(ValueError, "non-missing outcomes"):
             module.plan_batch_reports("endaye/lmdj", state, self.inputs)
 
     def test_none_cannot_hide_selected_work(self):
         request, _ = result(self.scheduler)
-        state = module.scheduler_state(self.runtime)
+        state = module.report_scheduler_state(self.runtime)
         state["results"][request["id"]]["reference"] = "not-required:" + request["id"]
         with self.assertRaisesRegex(ValueError, "claims selected work"):
             module.plan_batch_reports("endaye/lmdj", state, self.inputs)
 
     def test_result_outcomes_must_equal_scoped_verdict(self):
         request, _ = result(self.scheduler, failed=(POLICY.inventory.suites[0].jobs[0],))
-        state = module.scheduler_state(self.runtime)
+        state = module.report_scheduler_state(self.runtime)
         state["results"][request["id"]]["outcomes"][POLICY.inventory.suites[0].id] = "passed"
         with self.assertRaisesRegex(ValueError, "outcomes differ"):
             module.plan_batch_reports("endaye/lmdj", state, self.inputs)
@@ -355,7 +364,7 @@ class ProjectionTests(unittest.TestCase):
     def test_rehashed_wrong_verdict_identity_is_rejected(self):
         request, verdict = result(self.scheduler)
         verdict["identity"]["target_sha"] = C
-        state = module.scheduler_state(self.runtime)
+        state = module.report_scheduler_state(self.runtime)
         state["results"][request["id"]]["reference"] = batch_runtime.encode_reference(verdict)
         with self.assertRaisesRegex(batch_verdict.VerdictError, "identity"):
             module.plan_batch_reports("endaye/lmdj", state, self.inputs)
@@ -444,12 +453,12 @@ class ProjectionTests(unittest.TestCase):
     def test_later_historical_candidate_failure_does_not_touch_auto_cursor(self):
         result(self.scheduler, advance=True)
         result(self.scheduler, kind="candidate", target=A, failed=(POLICY.inventory.suites[0].jobs[0],))
-        before = module.scheduler_state(self.runtime)
+        before = module.report_scheduler_state(self.runtime)
         self.assertEqual(before["processed"], B)
         report = self.planned()[0]
         self.assertIn("(candidate)", report.summary)
         self.adapter.deliver((report,), 1)
-        self.assertEqual(module.scheduler_state(self.runtime), before)
+        self.assertEqual(module.report_scheduler_state(self.runtime), before)
 
     def test_changed_frozen_body_rejected_without_new_post(self):
         result(self.scheduler, failed=(POLICY.inventory.suites[0].jobs[0],))
@@ -470,7 +479,7 @@ class ProjectionTests(unittest.TestCase):
         issue = self.api.issues[0]
         self.assertIn("managed=v1", issue["body"])
         result(self.scheduler, kind="auto", base=B, target=C)
-        state = module.scheduler_state(self.runtime)
+        state = module.report_scheduler_state(self.runtime)
         recoveries = module.plan_bucket_recoveries(state, self.inputs)
         matching = [item for item in recoveries if item.key == failure.key]
         self.assertTrue(matching)
@@ -575,7 +584,7 @@ class ProjectionTests(unittest.TestCase):
         failure = self.planned()[0]
         self.adapter.deliver((failure,), 32)
         result(self.scheduler, kind="candidate", base=B, target=C)
-        state = module.scheduler_state(self.runtime)
+        state = module.report_scheduler_state(self.runtime)
         recoveries = module.plan_bucket_recoveries(state, self.inputs)
         self.assertFalse([item for item in recoveries if item.key == failure.key])
         self.assertEqual(self.api.issues[0]["state"], "open")
@@ -602,7 +611,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual({report.management["failure_class"] for report in failures}, {"test_failure", "missing"})
         self.adapter.deliver(failures, 32)
         result(self.scheduler, kind="auto", base=B, target=C, selection=selection, advance=True)
-        recoveries = [recovery for recovery in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recoveries = [recovery for recovery in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                       if recovery.key in {report.key for report in failures}]
         self.assertEqual({recovery.failure_class for recovery in recoveries}, {"test_failure", "missing"})
         for _ in recoveries:
@@ -628,7 +637,7 @@ class ProjectionTests(unittest.TestCase):
         issue = self.api.issues[0]
         issue["editor"] = {"login": "maintainer", "type": "User"}
         result(self.scheduler, kind="auto", base=B, target=C)
-        recoveries = module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recoveries = module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
         answer = self.adapter.deliver((), 32, recoveries=[r for r in recoveries if r.key == failure.key])
         self.assertEqual(answer["recoveries"][0]["status"], "not-applicable")
         self.assertEqual(issue["state"], "open")
@@ -641,7 +650,7 @@ class ProjectionTests(unittest.TestCase):
         self.adapter.deliver((failure,), 32)
         expanded = test_scope._selection(POLICY, POLICY.suite_ids, ["expanded scope and new reason"])
         result(self.scheduler, kind="auto", base=B, target=C, selection=expanded)
-        recovery = next(item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recovery = next(item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                         if item.key == failure.key)
         self.assertNotEqual(failure.management["selection"], recovery.selection)
         answer = self.adapter.deliver((), 32, recoveries=(recovery,))
@@ -652,7 +661,7 @@ class ProjectionTests(unittest.TestCase):
         failure = next(item for item in self.planned() if item.management is not None)
         self.adapter.deliver((failure,), 32)
         result(self.scheduler, kind="auto", base=B, target=C)
-        recovery = next(item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recovery = next(item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                         if item.key == failure.key)
         original = self.api.create_comment
         def die(number, body):
@@ -670,7 +679,7 @@ class ProjectionTests(unittest.TestCase):
         failure = next(item for item in self.planned() if item.management is not None)
         self.adapter.deliver((failure,), 32)
         result(self.scheduler, kind="auto", base=B, target=C)
-        recovery = next(item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recovery = next(item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                         if item.key == failure.key)
         original = self.api.set_issue_state
         def die(number, state):
@@ -688,7 +697,7 @@ class ProjectionTests(unittest.TestCase):
         failure = next(item for item in self.planned() if item.management is not None)
         self.adapter.deliver((failure,), 32)
         result(self.scheduler, kind="auto", base=B, target=C, advance=True)
-        recovery = next(item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recovery = next(item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                         if item.key == failure.key)
         original = self.api.set_issue_state
 
@@ -715,7 +724,7 @@ class ProjectionTests(unittest.TestCase):
         recorded = issue["number"]
         issue["number"] = recorded + 100
         result(self.scheduler, kind="auto", base=B, target=C, advance=True)
-        recovery = next(item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recovery = next(item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                         if item.key == failure.key)
         answer = self.adapter.deliver((), 32, recoveries=(recovery,))
         self.assertEqual(answer["recoveries"][0]["status"], "not-applicable")
@@ -726,7 +735,7 @@ class ProjectionTests(unittest.TestCase):
         failure = next(item for item in self.planned() if item.management is not None)
         self.adapter.deliver((failure,), 32)
         result(self.scheduler, kind="auto", base=B, target=C, advance=True)
-        recovery = next(item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recovery = next(item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                         if item.key == failure.key)
         original = self.api.set_issue_state
 
@@ -752,7 +761,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(len(failures), 2)
         self.adapter.deliver(failures, 32)
         result(self.scheduler, kind="auto", base=B, target=C, selection=selection, advance=True)
-        recoveries = [recovery for recovery in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recoveries = [recovery for recovery in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                       if recovery.key in {report.key for report in failures}]
         self.assertEqual(len(recoveries), 2)
         first = recoveries[0]
@@ -778,7 +787,7 @@ class ProjectionTests(unittest.TestCase):
         first_issue = self.api.issues[0]
         first_issue["body"] += "\nmaintainer investigation"
         result(self.scheduler, kind="auto", base=B, target=C, selection=selection, advance=True)
-        recoveries = [recovery for recovery in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recoveries = [recovery for recovery in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                       if recovery.key in {report.key for report in failures}]
         states = []
         results = []
@@ -827,7 +836,7 @@ class ProjectionTests(unittest.TestCase):
         issue = self.api.issues[0]
         issue["body"] += "\nmaintainer note"
         result(self.scheduler, kind="auto", base=B, target=C)
-        recovery = next(item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recovery = next(item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                         if item.key == failure.key)
         before = len([call for call in self.api.calls if call[0] in {"create_comment", "set_issue_state"}])
         answer = self.adapter.deliver((), 32, recoveries=(recovery,))
@@ -840,14 +849,14 @@ class ProjectionTests(unittest.TestCase):
         failure = self.planned()[0]
         self.adapter.deliver((failure,), 32)
         result(self.scheduler, kind="auto", base=B, target=C, advance=True)
-        first_success = next(item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        first_success = next(item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                              if item.key == failure.key)
         self.assertEqual(self.adapter.deliver((), 32, recoveries=(first_success,))["recoveries"][0]["status"], "closed")
         issue = self.api.issues[0]
         comments = len([call for call in self.api.calls if call[0] == "create_comment"])
         d, e = "d" * 40, "e" * 40
         result(self.scheduler, kind="auto", base=C, target=d, advance=True)
-        later_success = max((item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        later_success = max((item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                              if item.key == failure.key), key=lambda item: item.order)
         self.assertEqual(self.adapter.deliver((), 32, recoveries=(later_success,))["recoveries"][0]["status"], "not-applicable")
         self.assertEqual(len([call for call in self.api.calls if call[0] == "create_comment"]), comments)
@@ -858,7 +867,7 @@ class ProjectionTests(unittest.TestCase):
         self.adapter.deliver((recurrence,), 32)
         f = "f" * 40
         result(self.scheduler, kind="auto", base=e, target=f, advance=True)
-        recovered = max((item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recovered = max((item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                          if item.key == failure.key), key=lambda item: item.order)
         self.assertEqual(self.adapter.deliver((), 32, recoveries=(recovered,))["recoveries"][0]["status"], "closed")
         self.assertEqual(len(self.api.issues), 1)
@@ -870,7 +879,7 @@ class ProjectionTests(unittest.TestCase):
         failure = self.planned()[0]
         self.adapter.deliver((failure,), 32)
         result(self.scheduler, kind="auto", base=B, target=C)
-        recovery = next(item for item in module.plan_bucket_recoveries(module.scheduler_state(self.runtime), self.inputs)
+        recovery = next(item for item in module.plan_bucket_recoveries(module.report_scheduler_state(self.runtime), self.inputs)
                         if item.key == failure.key)
         original = self.api.set_issue_state
         def unknown(number, state):
@@ -895,7 +904,7 @@ class ProjectionTests(unittest.TestCase):
         result(self.scheduler, kind="auto", base=C, target=d,
                failed=(POLICY.inventory.suites[0].jobs[0],), advance=True)
         result(self.scheduler, kind="auto", base=d, target=e)
-        state = module.scheduler_state(self.runtime)
+        state = module.report_scheduler_state(self.runtime)
         planned = module.plan_batch_reports("endaye/lmdj", state, self.inputs)
         recovery = next(item for item in module.plan_bucket_recoveries(state, self.inputs)
                         if item.key == first.key)

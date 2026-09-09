@@ -39,7 +39,7 @@ class ReadOnlyAnchor:
         require(False, "scheduler checkpoint has a pending append; only its controller may recover it")
 
 
-def scheduler_state(runtime):
+def _replay_scheduler(runtime):
     """Authenticate the whole journal; reuse historical-policy replay, not reconcile.
 
 Journal.load normally repairs an already visible pending append. Disallow that
@@ -55,12 +55,21 @@ PATCH here as well as all event appends. The outbox has its own writable anchor.
         run_state=forbidden, result_for=forbidden, old_runs_terminal=forbidden,
         lock_held=runtime.lock_held, epoch=runtime.config["epoch"])
     replay.policy = runtime.inputs.policy_at(runtime.control)
-    state = replay._replay(events)
+    return replay._replay(events), events
+
+
+def scheduler_state(runtime):
+    """Return the canonical authenticated scheduler reducer state."""
+    return _replay_scheduler(runtime)[0]
+
+
+def report_scheduler_state(runtime):
+    """Return canonical state plus the authenticated report result projection."""
+    state, events = _replay_scheduler(runtime)
     result_order = [event["data"]["request_id"] for event in events if event.get("type") == "result"]
     require(len(result_order) == len(state["results"]) and set(result_order) == set(state["results"]),
             "scheduler result order is not a complete unique journal projection")
-    state["_result_order"] = result_order
-    return state
+    return {**state, "_result_order": result_order}
 
 
 class ScopedReport(reporting.Report):
@@ -379,7 +388,7 @@ class ReportRuntime:
 
     def _authenticated_causal_floor(self):
         self.scheduler.inputs.refresh()
-        state = scheduler_state(self.scheduler)
+        state = report_scheduler_state(self.scheduler)
         return causal_floor(state, self.scheduler.inputs)
 
     def execute(self, operation, *, run_id=None, attempt=None, limit=8):
@@ -401,7 +410,7 @@ class ReportRuntime:
             # authenticated scheduler projection so a stale queued success
             # cannot close a newer failure while draining old outbox work.
             self.scheduler.inputs.refresh()
-            state = scheduler_state(self.scheduler)
+            state = report_scheduler_state(self.scheduler)
             planned = plan_batch_reports(self.repository, state, self.scheduler.inputs)
             floor = causal_floor(state, self.scheduler.inputs)
             return outbox.drain_once(self.api, causal_floor=floor)
@@ -420,7 +429,7 @@ class ReportRuntime:
         # authenticate_current refreshes the outbox Runtime's inputs; scheduler
         # inputs are a separate object and must independently resolve main.
         self.scheduler.inputs.refresh()
-        state = scheduler_state(self.scheduler)
+        state = report_scheduler_state(self.scheduler)
         return self.deliver(plan_batch_reports(self.repository, state, self.scheduler.inputs), limit,
                             recoveries=plan_bucket_recoveries(state, self.scheduler.inputs),
                             causal_floor=causal_floor(state, self.scheduler.inputs))
