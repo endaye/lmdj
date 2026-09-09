@@ -58,8 +58,17 @@ Facade 写集测试与 Creator surface 测试固定该边界。
 池并起声（[#1001](https://github.com/endaye/lmdj/pull/1001)、
 [#1003](https://github.com/endaye/lmdj/pull/1003)、
 [#1009](https://github.com/endaye/lmdj/pull/1009)）；原生 Host 的播放接线仍未完成，
-[#799](https://github.com/endaye/lmdj/issues/799) 追踪它。在真实浏览器中听到声音这一段的
-自动化验收也仍未建立，不要把"操作已注册"读成"已听到"。
+[#799](https://github.com/endaye/lmdj/issues/799) 追踪它。
+
+Web 侧的自动化验收现在走到了一半，这一半的界线值得写清楚：
+[#1059](https://github.com/endaye/lmdj/pull/1059) 起，`soundset.audition` 的回包带
+`played`，说明这一次试听是否真的起了声；真实浏览器里有一条腿观察这个回包，并钉住
+「会话刚起、音频未激活时 `played` 必须为 `false`」。也就是说，**有自动化检查观察到一次
+Web 试听没有发声，但没有任何自动化检查观察到一次 Web 试听发出了声音。** 驱动可发声的
+那一半时，Host 会在一秒内终止（`played: true` 之后 transport 即断），这是
+[#799](https://github.com/endaye/lmdj/issues/799) 记录的字节通路缺陷，不是 `played`
+这个字段的问题。不要把"操作已注册"读成"已听到"，也不要把 Creator lane 的绿读成试听
+这条腿已经闭合。
 
 **已注册不等于产品内可达。** Task 7 的验收在真实浏览器中对打包后的 Creator 实测出三个
 缺陷，各自阻断链路上的一段；三个都已修复。[#900](https://github.com/endaye/lmdj/issues/900)
