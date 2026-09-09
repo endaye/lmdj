@@ -419,10 +419,11 @@ Linux CI 现按角色标签路由，取代共享的 `contabo` 来源标签：兼
 
 `ci-core` 角色承担四个原生 Core job：Ubuntu Core、Linux ASan、Coverage 与 Core Package，各自以字面标签集合 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`lmdj-linux-pool`、`ci-core` 直接路由。该角色刻意不跨两台主机：持久原生 `ccache` 与预装的 clang-22/llvm-22 覆盖率工具链是共享主机上的机器状态，不是池状态；两台主机现都预装同版本 Clang/LLVM 22 工具链（noble 自带归档止于 18.1.3，22 来自 apt.llvm.org 的精确主版本套件 `llvm-toolchain-noble-22`，由 `scripts/ci/host/install-llvm-toolchain.sh` 以固定密钥指纹与 apt 优先级 100 安装；#693），角色可放在任一台，但同一时刻只注册在一台上。2026-09-06 起该角色由 Contabo 迁至 netcup：同一 revision 的实测（#676，决定记录于 #298）显示四条原生 Core lane 在 netcup 上冷缓存即已快于 Contabo 热缓存（`core_ubuntu` 热 60 s 对 126 s，`package` 318 s 对 566 s），且 netcup 无 staging 共租户。因此三条原生 Core lane 的 `use-ccache` 不再取决于 selector 输出而恒为 `true`，ccache 统计步骤也变为无条件；Coverage 在角色上不安装任何工具链——此前为 hosted fallback 而存在的 `apt-get install` 步骤已删除，保留下来只会在多个 runner service 共享的机器状态上反复写入；每条 Core lane 都只以 `command -v` 校验 pin 存在。Package 依旧禁用 ccache。
 
-Hosted 控制面负责受信证据、结果汇总和必要的平台选择，自建 workload 按
-`ci-web-heavy`、`ci-general`、`ci-core` 角色寻址。角色不是写入、发布或部署权限。
-具体 job 集合与 hosted 豁免由仓库 policy/contract tests 管理；迁移触发器不允许
-绕过 trust、扩张部署权限或把重型工作静默改到付费容量。
+常规受信控制与裁决任务使用现有 Netcup、Contabo 主机上的字面
+self-hosted `ci-general` 角色。角色资格本身不授予写入、发布或部署权限；
+每个 workflow job 仍遵守自身的权限策略，并与 `ci-web-heavy`、`ci-core`
+产品套件角色分离。角色不可用时任务排队，绝不自动回退到付费 Linux；显式的
+macOS 可用性例外仍是唯一的常规平台回退。
 
 CI 不再依赖 Docker：CI-only 主机没有 daemon，共享主机的 runner 用户也不在 `docker` group，CI 因此永远无法触及运行生产的 socket。CI Contract lane 相应改用按 SHA256 校验的 actionlint release 归档而非 container action，版本不变；digest 指定的是确切字节，而它取代的 Docker tag 只指定版本。
 

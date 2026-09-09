@@ -178,7 +178,7 @@ class SelfTestBatchWorkflowTest(unittest.TestCase):
         self.assertIn("change-scope", needs)
         self.assertNotIn("pre-heavy-gate", needs)
         self.assertIn("if: ${{ always() && needs.change-scope.outputs.batch-mode == 'true' && needs.change-scope.outputs.batch-execution != '' }}", body)
-        self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", body)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]", body)
 
     def test_verdict_aliases_and_dependencies_mirror_the_needs_graph(self):
         body = job_body(self.ci, "batch-verdict")
