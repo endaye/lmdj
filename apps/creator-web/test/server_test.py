@@ -331,7 +331,6 @@ UPSTREAM_PARITY_REFUSED = (
     "https://catalog.example.test/a<b>/",
     "https://catalog.example.test/a`b/",
     "https://catalog.example.test/a{b}/",
-    "https://catalog.example.test/a^b/",
     "https://catalog.example.test/a\x00b/",
     "https://catalog.example.test/a\x01b/",
     "https://catalog.example.test/a\x7fb/",
@@ -343,6 +342,8 @@ UPSTREAM_PARITY_REFUSED = (
 # from one nobody noticed -- and because the direction is the whole point. If
 # one of these ever flips, the proof server has become the permissive side.
 UPSTREAM_PARITY_PROOF_SERVER_STRICTER = (
+    # Node 22 preserves a path caret; the proof grammar deliberately excludes it.
+    "https://catalog.example.test/a^b/",
     # Host bytes `new URL()` leaves untouched that a Catalog address has no
     # business carrying. `_` is deliberately NOT here: it is admitted by both.
     "https://catalog!example.test/b/",
@@ -632,7 +633,9 @@ class CreatorCatalogProxyTest(CreatorServerTest):
         # tearDown shuts an already-stopped server down again, which is safe.
 
     def test_a_refused_upstream_configuration_never_starts_the_server(self) -> None:
-        for upstream in UPSTREAM_PARITY_REFUSED:
+        for upstream in (
+            UPSTREAM_PARITY_REFUSED + UPSTREAM_PARITY_PROOF_SERVER_STRICTER
+        ):
             with self.subTest(upstream=upstream):
                 with self.assertRaises(self.module.ServerError):
                     self.module.make_server(
@@ -811,7 +814,7 @@ process.stdout.write(JSON.stringify(
                     "the proof server must be the stricter side",
                 )
                 self.assertEqual(
-                    self.worker_outcome(upstream)[0], "accept",
+                    self.worker_outcome(upstream), ("accept", upstream),
                     "if the Worker also refuses, move this to REFUSED",
                 )
 

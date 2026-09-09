@@ -307,6 +307,25 @@ pass the staged ownership suite; do not silently widen CI scope rules.
 
 ## K5b immutable snapshot
 
+### Creator regression fixture prerequisite
+
+The full Creator proof exposed a baseline test classification error, reproduced
+with both Node 22.16.0 and 22.23.1: WHATWG leaves `^` unchanged in a path, while
+the proof server's intentionally narrower grammar refuses it. This separate
+verification-repair Task declares only
+`apps/creator-web/test/server_test.py`,
+`tests/platform/web/creator/creator_web_capture.spec.mjs` and this plan. Move that input to the
+existing proof-server-stricter corpus, retain server-start refusal for both
+refused corpora, and require the Worker's complete unchanged base in the stricter
+corpus. No input, refusal assertion, or acceptance journey is removed.
+The complete capture journey also exposed a stale expected Asset shape after
+reopen: Project v4 includes `lineage: null` for raw capture. Add that explicit
+field to the complete equality assertion, retaining the full Artifact identity,
+revision, Pattern events and restart boundary checks.
+Verify the complete server suite and both complete Web proofs before freeze.
+Version impact: none; test expectations only, no shipped behavior or identity.
+Documentation impact: none; no Portal fact changes.
+
 After K5a source/tests pass and the one source commit is clean, use
 `scripts/docs-site.sh version PRODUCT_BUILD canary`. Stage only its exact
 generated inventory under `apps/architecture-portal/` in a second Task/commit,
