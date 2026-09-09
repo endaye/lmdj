@@ -126,6 +126,11 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
     if (budget.admitted_bytes > self.config.maximum_admitted_bytes) {
       return RuntimeResult::budget_exceeded;
     }
+    // Reserve large fixed blocks before variable decoded/prepared storage can
+    // fragment a bounded platform heap. Keep the candidate local: any later
+    // failure still destroys it and leaves the Facade empty and retryable.
+    auto engine = std::make_unique<audio::RealtimeEngine>(
+        audio::RealtimeEngine::ReceiptBoundedVoiceStates{});
     auto decoded = cooker::decode_runtime_content(bytes, identity, self.config.content_limits);
     if (!decoded.has_value()) {
       return decoded.error().code == foundation::ErrorCode::internal_error
@@ -152,8 +157,6 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
     }
     auto pattern = audio::PreparedPatternView::from_canonical_snapshot(*snapshot);
     if (!pattern.has_value()) return RuntimeResult::preparation_failed;
-    auto engine = std::make_unique<audio::RealtimeEngine>(
-        audio::RealtimeEngine::ReceiptBoundedVoiceStates{});
     if (engine->publish_sample_bank(std::move(bank)) != audio::PublishResult::accepted ||
         engine->publish_pattern_view(std::move(pattern.value())).result !=
             audio::PatternPublishResult::accepted) {
