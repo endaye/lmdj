@@ -17,6 +17,7 @@ import report_outbox
 import review_discovery as protocol
 import review_failure_report as collector
 import self_test_report as reporting
+from api_observation import observe
 
 CONFIG_PATH = "scripts/ci/review_discovery_storage.json"
 MAX_WINDOW_RUNS = 200  # Leaves headroom under the authenticated journal body limit.
@@ -388,6 +389,7 @@ def progress_diagnostic(result):
             "unresolved_attempts": counts["unresolved"], "retention_lost": len(lost)}
 
 
+@observe('discovery')
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)

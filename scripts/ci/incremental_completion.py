@@ -10,6 +10,7 @@ from pathlib import Path
 import batch_runtime
 import incremental_batch as batch
 import self_test
+from api_observation import observe
 
 WORKFLOW = '.github/workflows/incremental-completion.yml'
 SCRIPT = 'scripts/ci/incremental_completion.py'
@@ -164,6 +165,7 @@ def resolve(runtime, hint):
     return source, document['relay']
 
 
+@observe('relay')
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)

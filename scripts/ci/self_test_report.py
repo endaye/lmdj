@@ -33,6 +33,8 @@ the thing that failed.
 Everything that reaches GitHub goes through one small client so a test can
 stand a strict fake in its place. The retry sleeps through an injected
 callable; nothing here reads a clock.
+Opted-in CLI diagnostics separately measure HTTP attempts and elapsed time;
+those observations never affect reporting decisions or retry policy.
 """
 
 from __future__ import annotations
@@ -56,6 +58,7 @@ import urllib.request
 import zipfile
 
 import self_test
+from api_observation import observed_open
 from self_test_evidence import validate_verdict_document
 
 
@@ -205,7 +208,8 @@ class UrllibGitHubApi:
         })
         try:
             # Never let an API redirect forward the issues-write token.
-            with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
+            with observed_open(urllib.request.build_opener(NoRedirect()), request,
+                               family='graphql' if path == '/graphql' else 'rest', timeout=30) as response:
                 payload = response.read(VERDICT_LIMIT_BYTES * 8 + 1)
         except urllib.error.HTTPError as error:
             if raw and error.code in (301, 302, 303, 307, 308):
@@ -214,7 +218,8 @@ class UrllibGitHubApi:
                     raise ReportingError("artifact download Location must use HTTPS") from error
                 download = urllib.request.Request(location, headers={"User-Agent": "lmdj-self-test-report"})
                 try:
-                    with urllib.request.build_opener(SafeDownloadRedirect()).open(download, timeout=30) as response:
+                    with observed_open(urllib.request.build_opener(SafeDownloadRedirect()), download,
+                                       family='artifact', timeout=30) as response:
                         payload = response.read(VERDICT_LIMIT_BYTES * 8 + 1)
                 except (urllib.error.URLError, TimeoutError, OSError) as failure:
                     raise GitHubApiError(0, "artifact download failed") from failure

@@ -20,6 +20,7 @@ from incremental_batch_journal import Journal
 import report_outbox
 import review_failure_report
 import self_test_report as reporting
+from api_observation import observe
 
 
 def require(ok, why):
@@ -194,6 +195,7 @@ class ReportRuntime:
         return self.deliver(plan_batch_reports(self.repository, state, self.scheduler.inputs), limit)
 
 
+@observe('report')
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
