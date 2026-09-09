@@ -1,0 +1,123 @@
+name: Canary Assessment
+
+# Source-only manual entry. Enabling new claims requires separate live runner,
+# Environment, tool and storage acceptance; this workflow never deploys.
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Initialize one reserved journal, claim an exact interval, or reconcile/report an original claim.
+        type: choice
+        options: [init-assessment, init-outbox, claim, settle, report]
+        required: true
+      storage:
+        description: Explicit independent assessment/outbox JSON with exact Issue, bot and workflow identities.
+        type: string
+        required: true
+      request:
+        description: Claim requires base_sha/target_sha; settle/report requires input_digest; initialization requires empty object.
+        type: string
+        default: "{}"
+
+permissions: {}
+
+jobs:
+  controller:
+    name: Canary assessment controller
+    if: github.ref == 'refs/heads/main' && github.run_attempt == '1'
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
+    timeout-minutes: 10
+    concurrency:
+      group: canary-assessment
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    outputs:
+      action: ${{ steps.control.outputs.action }}
+      input_artifact: ${{ steps.control.outputs.input_artifact }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Reconcile manual assessment under the short writer lock
+        id: control
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATCH_WRITER_LOCK: canary-assessment
+          CANARY_ASSESSMENT_EXECUTION_READY: ${{ vars.CANARY_ASSESSMENT_EXECUTION_READY }}
+          ASSESSMENT_OPERATION: ${{ inputs.operation }}
+          ASSESSMENT_STORAGE: ${{ inputs.storage }}
+          ASSESSMENT_REQUEST: ${{ inputs.request }}
+        run: python3 -m tools.canary.assessment_entry control --directory "$RUNNER_TEMP/canary-assessment-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: Retain complete claimed input
+        if: steps.control.outputs.action == 'execute'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.control.outputs.input_artifact }}
+          path: ${{ runner.temp }}/canary-assessment-${{ github.run_id }}-${{ github.run_attempt }}/input/claim.json
+          if-no-files-found: error
+          retention-days: 30
+
+  executor:
+    name: Canary assessment executor
+    needs: controller
+    if: needs.controller.outputs.action == 'execute'
+    # This dedicated disposable VM/microVM must NOT carry ci-general/pool or
+    # deployment roles. Labels alone do not establish that isolation boundary.
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-ai-isolated]
+    environment: canary-assessment
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      state: ${{ steps.execute.outputs.state }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Read this exact first-attempt controller input
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.controller.outputs.input_artifact }}
+          path: ${{ runner.temp }}/canary-assessment-${{ github.run_id }}-${{ github.run_attempt }}/input
+      - name: Execute bounded Host assessment
+        id: execute
+        env:
+          CANARY_ASSESSMENT_EXECUTION_READY: ${{ vars.CANARY_ASSESSMENT_EXECUTION_READY }}
+          ZAI_CODING_KEY: ${{ secrets.ZAI_CODING_KEY }}
+          KIMI_CODING_KEY: ${{ secrets.KIMI_CODING_KEY }}
+          GROK_AUTH_JSON: ${{ secrets.GROK_AUTH_JSON }}
+        run: python3 -m tools.canary.assessment_entry execute --directory "$RUNNER_TEMP/canary-assessment-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: Retain Host assessment result
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.execute.outputs.result_artifact }}
+          path: ${{ runner.temp }}/canary-assessment-${{ github.run_id }}-${{ github.run_attempt }}/result/assessment.json
+          if-no-files-found: error
+          retention-days: 30
+
+  outcome:
+    name: Keep blocked assessment visible
+    needs: executor
+    if: needs.executor.outputs.state == 'blocked'
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Retained assessment needs independent Issue reporting
+        run: |
+          echo 'why: assessment is blocked; remedy: after this run terminates, settle/report its exact input digest; never repeat a claimed model execution' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
