@@ -177,7 +177,7 @@ revision。先通过 SDK selection/policy 预检，再以不触发恢复清理�
 `facade.candidate_job` 验证真实 Slice Provider、区间、空结果、失败重试、重启及损坏拒绝；
 `facade.candidate_store_recovery` 在独立进程退出后检查 intent/terminal/publication
 三个边界，并验证 live Job 不会被误恢复或重入。全部拒绝路径保持 Project 文件不变。
-采纳与持久谱系已接入下述原子命令；取消/丢弃和 Host preview 仍由后续 L4–L5 完成。
+采纳与持久谱系已接入下述原子命令；取消/丢弃具备持久生命周期，Host preview 由后续 L5 完成。
 
 ## Explicit Candidate adoption
 
@@ -207,5 +207,40 @@ and a fresh command ID. There is no public idempotent replay promise: inspect th
 Project after an unknown commit response before deciding to adopt again.
 
 `candidate_adoption_test.cpp` exercises terminal-to-commit/reopen, identity and quota
-refusals, source changes, storage failures and eligibility ownership. Actual
-cancel/discard-versus-adoption race journeys require L4 integration.
+refusals, source changes, storage failures and eligibility ownership.
+The independent-process lifecycle suite verifies both ownership orders against
+actual adoption, with committed artifacts and lineage checked after reopen.
+
+## Candidate cancellation and discard
+
+`candidate.job.cancel` requires exactly `job_id` and `attempt_id` in addition to
+`operation`. It durably cancels that exact pending Attempt; repeating the same
+cancellation succeeds. A completed succeeded/failed Attempt refuses with
+`INVALID_ARGUMENT/job_already_completed`. Cancellation records an owner decision;
+the Provider may still complete and retain its immutable terminal, but that
+cancelled Attempt never publishes a set. Its live execution lease continues to
+exclude a simultaneous retry until execution ends. A failed or cancelled retry
+preserves the prior active set.
+
+`candidate.set.discard` requires exactly `job_id` and `set_id`. It accepts only
+the current active set and writes its discarded tombstone plus a null active
+pointer in one durable replacement. Old terminal bytes, history and blobs remain;
+there is no GC or automatic TTL. Discard can persist even when output bytes are
+unavailable, while inspection/adoption continues to refuse unverifiable evidence.
+
+Lifecycle publication and adoption share Workspace mutation ownership. If discard
+or successful supersession wins first, old-set adoption refuses with
+`NOT_FOUND/candidate_unavailable`. If adoption wins, competing discard/publication
+refuses with `INVALID_ARGUMENT/job_busy` until the Project commit finishes. A
+successful retry terminal delayed at that boundary remains pending and recovers
+once; a cancelled terminal never replaces the active set. After adoption commits,
+discard changes Workspace state without altering the adopted Project. Failed
+Project publication releases eligibility and permits a later durable discard.
+
+`facade.candidate_store_recovery` checks interruption before/after lifecycle
+replacement, terminal retention, restart and the actual adoption interleavings.
+`facade.candidate_store_stress` repeats synchronized independent-process ownership,
+cancel, discard and retry/adoption cases 100 times. The test fence releases the
+real Project input-reader lease before pausing the Provider, preserving the lock
+behavior exercised by the product. Every completed adoption is reopened with its
+full Artifact identity, retained source and terminal-derived lineage.

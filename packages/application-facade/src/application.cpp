@@ -161,6 +161,8 @@ const std::map<std::string, OperationKind>& operations() {
       {"attempt.inspect", OperationKind::query},
       {"candidate.job.run", OperationKind::command},
       {"candidate.adopt", OperationKind::command},
+      {"candidate.job.cancel", OperationKind::command},
+      {"candidate.set.discard", OperationKind::command},
       {"candidate.job.inspect", OperationKind::query},
       {"pad.assign", OperationKind::command},
       {"pattern.slot.assign", OperationKind::command},
@@ -3953,6 +3955,8 @@ struct Application::Impl {
       return provider_select(request);
     }
     if (operation == "candidate.adopt") return candidate_adopt(request);
+    if (operation == "candidate.job.cancel") return candidate_job_cancel(request);
+    if (operation == "candidate.set.discard") return candidate_set_discard(request);
     if (operation == "candidate.job.run") return candidate_job_run(request);
     if (operation == "candidate.job.inspect") return candidate_job_inspect(request);
     if (operation == "provider.run") {
@@ -7774,6 +7778,24 @@ struct Application::Impl {
         project_id, source_id, artifact, std::move(slots)});
     if (!committed.has_value()) return error_envelope(committed.error());
     return success_envelope({{"set_id", set_id}, {"adopted", std::move(adopted)}}, committed.value().state.revision);
+  }
+
+  nlohmann::json candidate_job_cancel(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "job_id", "attempt_id"}),
+            "candidate.job.cancel request shape is invalid");
+    const auto result = candidates.cancel(file_id_field(request, "job_id"),
+                                           file_id_field(request, "attempt_id"));
+    if (!result.has_value()) return error_envelope(result.error());
+    return success_envelope(result.value(), std::nullopt);
+  }
+
+  nlohmann::json candidate_set_discard(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "job_id", "set_id"}),
+            "candidate.set.discard request shape is invalid");
+    const auto result = candidates.discard(file_id_field(request, "job_id"),
+                                            file_id_field(request, "set_id"));
+    if (!result.has_value()) return error_envelope(result.error());
+    return success_envelope(result.value(), std::nullopt);
   }
 
   nlohmann::json candidate_job_inspect(const nlohmann::json& request) {

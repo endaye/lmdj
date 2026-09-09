@@ -66,7 +66,7 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "5.1.0",
+        "5.2.0",
         3,
         {
             "foundation": "0.4.0",
@@ -79,45 +79,45 @@ expected_modules = {
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "5.2.1",
+        "5.2.2",
         2,
         {
-            "application-facade": "5.1.0",
+            "application-facade": "5.2.0",
             "audio-runtime": "4.0.2",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "3.3.3",
+        "3.3.4",
         2,
-        {"application-facade": "5.1.0"},
+        {"application-facade": "5.2.0"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "3.3.3",
+        "3.3.4",
         2,
-        {"application-facade": "5.1.0"},
+        {"application-facade": "5.2.0"},
     ),
     "apps/native-host/module.json": (
         "native-host",
-        "3.3.3",
+        "3.3.4",
         2,
         {
-            "application-facade": "5.1.0",
+            "application-facade": "5.2.0",
             "audio-runtime": "4.0.2",
         },
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "4.2.3",
+        "4.2.4",
         2,
-        {"web-runtime-platform": "5.2.1"},
+        {"web-runtime-platform": "5.2.2"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "4.2.3",
+        "4.2.4",
         2,
-        {"web-runtime-platform": "5.2.1"},
+        {"web-runtime-platform": "5.2.2"},
     ),
 }
 for relative, (
