@@ -207,10 +207,20 @@ provenance。缺失 squash witness 时用官方 `architecture-portal.sh witness`
 
 ## 测试结果驱动的 Canary 规划入口
 
-`Canary Planning`（`canary-planning.yml`）目前仅支持 main 首次 attempt 的手动
-`workflow_dispatch`。它连接真实 scheduler 的只读历史重放与独立规划 journal，
+`Canary Planning`（`canary-planning.yml`）支持 main 首次 attempt 的手动
+`workflow_dispatch`，以及默认关闭的 `Self-test Report` 完成唤醒。
+它连接真实 scheduler 的只读历史重放与独立规划 journal，
 不运行 AI 或产品测试，不分配版本、不创建版本 PR，也不发布、部署或晋升。
-自动结果唤醒、后续交付协调和真实环境启用仍未完成。
+后续评估／交付协调和真实环境启用仍未完成；入口源码不代表线上自动流程已验收。
+
+自动入口须经独立验收后显式设置 `CANARY_PLANNING_AUTOMATIC_READY=true`，并提供
+`CANARY_PLANNING_STORAGE` 的已审查存储配置。没有开关时不分配 runner；没有配置、
+初始化或 bootstrap 时拒绝写入，不创建 Issue 或猜测首次基线。完成事件只是唤醒提示，
+入口核对真实来源身份后仍读取完整持久 scheduler 结果，不根据 callback 的绿／红状态
+决定部署。重复或漏掉事件由下一次唤醒或手动 `reconcile-next` 恢复；现有报告健康巡检
+也提供后续唤醒机会，但多层 `workflow_run` 链不保证每次投递。没有新增每日测试或部署。
+自动提示只保留最新待处理唤醒且不取消正在运行的工作；手动命令使用独立准入身份，
+不会被自动提示替换。两类入口仍共用 controller 的短写锁，不给产品测试加锁。
 
 手动输入 `operation`、`storage` 和 `request`。`storage` 是事先审查的独立规划
 Issue 六字段配置：`repository`、`issue_number`、`issue_node_id`、`bot_node_id`、
@@ -225,6 +235,10 @@ Issue 六字段配置：`repository`、`issue_number`、`issue_node_id`、`bot_n
   非自动来源不产生计划。成功的局部测试只是唤醒，不能缩减各站点累计测试范围。
 - `recover`：使用同一个 `source_request_id`，恢复已存在的原始 intent；不存在则拒绝，
   不偷偷建立新计划。初始化／bootstrap 都不会自动发生在读取失败的处理分支。
+- `reconcile-next`：`request={}`，与自动入口共用同一逻辑。优先恢复未完成的原始
+  intent；否则从真实 scheduler 的稳定顺序中发现一个尚未记录的终态结果，保存完整
+  观察后才视为已处理。重复唤醒不重写已有观察，后续调用继续下一项；没有工作则返回 idle。
+  失败、缺证据、无需测试及非自动来源保留为忽略观察，不启动 AI，也不伪装成测试通过。
 
 完整决策先通过大小检查，再把 main、control、scheduler 身份、独立进度和预期结果
 摘要写入小 intent，随后保存完整分块计划。中途失败只按冻结输入重建并核对原摘要；
@@ -237,6 +251,8 @@ Issue 六字段配置：`repository`、`issue_number`、`issue_node_id`、`bot_n
 完成 active、推进版本／站点进度的命令，须等后续协调器能验证真实完成证据。
 `planning.json` 保留完整观察且 `admission_evidence=false`；artifact 存在不是交付许可。
 本地重启／丢响应测试不证明线上锁、凭据、配额、存储启用或部署验收已完成。
+空版本基线始终保留 `None` 和 bootstrap/full 范围；不能把某轮测试的 base 当作
+版本已记账的起点，也不能将已有 active 计划直接解释为评估执行许可。
 
 ## Web Runtime Host Proof
 `scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。
