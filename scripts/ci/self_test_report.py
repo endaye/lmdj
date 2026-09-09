@@ -51,6 +51,8 @@ import json
 import os
 import re
 import sys
+import time
+from threading import Lock
 from typing import Protocol
 import urllib.error
 import urllib.parse
@@ -95,6 +97,20 @@ TEXT_LIMIT = 1200
 #: Retry budget for a refused API call. Three tries with the injected sleep;
 #: the delays are seconds and the caller may pass a no-op.
 RETRY_DELAYS = (5.0, 20.0)
+
+
+class RetryBudget:
+    """Cumulative wait allowance shared by one read operation context."""
+    def __init__(self, allowance: float = sum(RETRY_DELAYS)) -> None:
+        self.remaining = float(allowance)
+        self._lock = Lock()
+
+    def consume(self, delay: float) -> bool:
+        with self._lock:
+            if delay < 0 or delay > self.remaining:
+                return False
+            self.remaining -= delay
+            return True
 # Positive list visibility is the condition; elapsed time is never success.
 WRITE_VISIBILITY_DELAYS = (1.0, 4.0, 10.0)
 #: Bounded recovery within the producer's 30-day retention window. Every
@@ -137,9 +153,13 @@ class WriteVisibilityError(ReportingError):
 
 
 class GitHubApiError(RuntimeError):
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(self, status: int, message: str, *, remaining: int | None = None,
+                 reset: int | None = None, retry_after: int | None = None) -> None:
         super().__init__(f"GitHub API {status}: {message}")
         self.status = status
+        self.remaining = remaining
+        self.reset = reset
+        self.retry_after = retry_after
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +246,14 @@ class UrllibGitHubApi:
                 if len(payload) > VERDICT_LIMIT_BYTES * 8:
                     raise ReportingError("artifact download exceeds size limit")
                 return payload
-            raise GitHubApiError(error.code, error.reason or "") from error
+            def header_int(name):
+                value = error.headers.get(name) if error.headers is not None else None
+                return int(value) if (isinstance(value, str) and value.isascii() and value.isdecimal()
+                                      and 1 <= len(value) <= 12) else None
+            raise GitHubApiError(error.code, error.reason or "",
+                                 remaining=header_int("X-RateLimit-Remaining"),
+                                 reset=header_int("X-RateLimit-Reset"),
+                                 retry_after=header_int("Retry-After")) from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise GitHubApiError(0, "GitHub request transport failure") from error
         if len(payload) > VERDICT_LIMIT_BYTES * 8:
@@ -338,17 +365,33 @@ class UrllibGitHubApi:
 
 
 def with_retry(call: Callable[[], object], *, sleep: Callable[[float], None],
-               delays: Sequence[float] = RETRY_DELAYS) -> object:
-    """Retry a refused call on 429 and 5xx only. 403 and 404 are answers."""
+               delays: Sequence[float] = RETRY_DELAYS, clock: Callable[[], float] = time.time,
+               deadline: float | None = None, budget: RetryBudget | None = None) -> object:
+    """Retry idempotent reads on secondary throttling or exhausted primary quota.
+
+    The bounded deadline is deliberately not extended by a reset wait.  A
+    reset beyond it remains an unknown/deferred read for the next health tick.
+    Callers must never use this helper for writes.
+    """
     attempt = 0
+    budget = RetryBudget(sum(delays)) if budget is None else budget
+    started = clock()
+    if deadline is None:
+        deadline = started + sum(delays)
     while True:
         try:
             return call()
         except GitHubApiError as error:
-            retryable = error.status == 429 or error.status >= 500 or error.status == 0
+            primary_exhausted = error.status == 403 and error.remaining == 0 and error.reset is not None
+            retryable = error.status == 429 or error.status >= 500 or error.status == 0 or primary_exhausted
             if not retryable or attempt >= len(delays):
                 raise
-            sleep(delays[attempt])
+            delay = error.retry_after if error.status == 429 and error.retry_after is not None else delays[attempt]
+            if primary_exhausted:
+                delay = max(0.0, float(error.reset) - clock())
+            if clock() + delay > deadline or not budget.consume(delay):
+                raise
+            sleep(delay)
             attempt += 1
 
 
@@ -884,7 +927,9 @@ def _apply_report(api: GitHubApi, report: Report, *, assignee: str,
         return Outcome(report.key, "duplicate", number)
     action = "commented"
     if str(issue.get("state")) == "closed":
-        with_retry(lambda: api.set_issue_state(number, "open"), sleep=sleep)
+        # PATCH has a potentially unknown write outcome. Never replay it via
+        # the read retry helper; reconciliation owns any later retry.
+        api.set_issue_state(number, "open")
         action = "reopened"
     number, acknowledged = _post_once(api, report, state=state, issue_number=number,
                                      assignee=assignee, sleep=sleep)
