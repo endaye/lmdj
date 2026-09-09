@@ -113,3 +113,7 @@ endif()
 if(TARGET lmdj_facade_candidate_store_tests)
   target_link_libraries(lmdj_facade_candidate_store_tests PRIVATE lmdj_product_lmdj_assembly)
 endif()
+
+if(TARGET lmdj_facade_candidate_adoption_tests)
+  target_link_libraries(lmdj_facade_candidate_adoption_tests PRIVATE lmdj_product_lmdj_assembly)
+endif()

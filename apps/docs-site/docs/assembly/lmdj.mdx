@@ -44,5 +44,5 @@ Web Runtime Platform 及依赖 Host 身份；上方身份来自 active manifests
 
 ## Slice 参考注册与依赖重建
 
-当前 Assembly 新增 Slice 参考 Provider、PCM16 WAV profile 与 Slice Points Contract，身份均从清单和完整源字节生成。Provider 保留 test 平台，默认权限与用户选择不变。公开 Host 控制面可以使用已导入 Asset 执行参考 Slice；用户切片界面与结果采纳尚未交付。
+当前 Assembly 新增 Slice 参考 Provider、PCM16 WAV profile 与 Slice Points Contract，身份均从清单和完整源字节生成。Provider 保留 test 平台，默认权限与用户选择不变。公开 Host 控制面可以使用已导入 Asset 执行参考 Slice；Facade 已支持显式目标 Pad 的原子 Candidate 采纳；用户切片界面与 Host 采纳接线由后续 Task 交付。
 同时为已合入的 Audio Runtime ABI 变更分配 MAJOR 身份，并更新 Facade、Platform 与 Host 的精确依赖重建版本；上方 Build Identity 是当前身份依据。

@@ -177,4 +177,35 @@ revision。先通过 SDK selection/policy 预检，再以不触发恢复清理�
 `facade.candidate_job` 验证真实 Slice Provider、区间、空结果、失败重试、重启及损坏拒绝；
 `facade.candidate_store_recovery` 在独立进程退出后检查 intent/terminal/publication
 三个边界，并验证 live Job 不会被误恢复或重入。全部拒绝路径保持 Project 文件不变。
-采用、持久谱系、取消/丢弃和 Host preview 分别由后续 L2–L5 完成。
+采纳与持久谱系已接入下述原子命令；取消/丢弃和 Host preview 仍由后续 L4–L5 完成。
+
+## Explicit Candidate adoption
+
+`candidate.adopt` is a command with exactly `project_path`, `project_id`,
+`expected_revision`, `command_id`, `job_id`, `set_id` and `selections` in addition
+to `operation`. Each selection contains exactly `candidate_id`, `bank` (0–3),
+and `pad` (0–15). The list must be nonempty, all recipes must belong to the one
+active set, and targets must be unique. Targets sort by Bank/Pad before deterministic
+Asset ID allocation. The same recipe on two Pads creates two Assets and incurs
+two prepared-PCM charges; its materialized byte buffer can be shared transiently.
+
+The Workspace mutation lease remains held across source verification,
+materialization, complete final-binding quota preflight and the Project commit.
+Project ID, current revision and source Asset/full ArtifactRef are checked before
+materialization and under the Project writer. A relocated Project remains eligible
+by identity; an unrelated edit requires the caller's current revision but retains
+the original analysis revision in lineage. Every affected Bank and the whole
+generation are checked after removing all replaced target charges. Runtime resident
+publication limits remain a separate boundary.
+
+Success persists exactly one revision, independent PCM16 WAV artifacts and closed
+terminal-authoritative lineage, retaining the source Asset and bytes. Failure before
+manifest publication changes no Project/Pad/Asset state. Adoption writes no Candidate
+Index status and does not consume the set. An old-revision repeat is a conflict even
+when its command receipt exists; a newly confirmed adoption uses the current revision
+and a fresh command ID. There is no public idempotent replay promise: inspect the
+Project after an unknown commit response before deciding to adopt again.
+
+`candidate_adoption_test.cpp` exercises terminal-to-commit/reopen, identity and quota
+refusals, source changes, storage failures and eligibility ownership. Actual
+cancel/discard-versus-adoption race journeys require L4 integration.

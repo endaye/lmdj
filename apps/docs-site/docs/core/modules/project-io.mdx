@@ -48,3 +48,20 @@ condition，由 Facade 归一化为 `IO_ERROR/input_artifact_mismatch`。
 不执行 authoring recovery 或清理未发布文件。Candidate 分析使用这个入口取得
 Project/Asset/revision 绑定，再通过上述 verified owner read 获取音频；成功或拒绝
 都保留中断创作留下的文件，由显式 authoring load 负责处理。
+
+## Atomic Candidate adoption
+
+`ProjectStore::adopt_candidates` accepts a distinct `CandidateAdoptionRequest`.
+Under the Project writer it checks current Project/revision/source identity and
+source bytes, then applies one `AdoptCandidates` command and stages every derived
+artifact through the existing atomic publication pipeline. The persisted command
+includes the full source binding and every target Asset/lineage; replay during load
+validates that complete identity. Legacy inputs promote through the current writer.
+
+The public method checks freshness before any receipt can be returned. Old-revision
+requests fail, including after a committed response was lost. Prepublication failures
+roll back all newly published blobs and metadata; restart follows the manifest and
+retains exactly the committed revision. `candidate_adoption_test.cpp` exercises
+multi-artifact failure points, pre/post-publication crashes, source checks and
+persisted identity tampering. Workspace eligibility remains the Facade owner's
+responsibility and must span this call.

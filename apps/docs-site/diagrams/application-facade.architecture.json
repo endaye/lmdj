@@ -149,8 +149,8 @@
       "body": "Full Facade links Performance Runtime and Runtime-only Facade, two independent narrow targets in the same Module. Runtime-only links Cooker/Audio, never Project IO or Provider SDK. Host owner selector → Facade → SDK policy/binding/budget gates → Project IO verified Asset read under one writer lease → owned source/sink. Session grants reset on restart; durable Attempts never contain Project paths or alter Truth. Persist intent before execute. One live Attempt per Job; short owner lease publishes stable Set, ordered history, active pointer and supersession atomically. Recover only recorded Attempts; verify terminal bytes on each read. Project Truth remains unchanged."
     },
     {
-      "title": "Runtime content export",
-      "body": "Expected Project ID/revision + one Pattern + extra live Pads. Load verified Truth, narrow a detached value, Cook and encode; return opaque bytes plus complete identity. No Project write or runtime publication."
+      "title": "Candidate adoption / runtime export",
+      "body": "One active set, explicit sorted Pad targets. Hold Workspace eligibility through bounded interval materialization, final-binding Bank/generation quota and one Project commit. Recheck Project/source identity under the writer. Retain source and terminal lineage; no Index adopted write and no public receipt replay. Runtime export: Expected Project ID/revision + one Pattern + extra live Pads. Load verified Truth, narrow a detached value, Cook and encode; return opaque bytes plus complete identity. No Project write or runtime publication."
     },
     {
       "title": "Performance authority",

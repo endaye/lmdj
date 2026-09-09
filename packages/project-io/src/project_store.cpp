@@ -99,6 +99,7 @@ using PersistedCommand = std::variant<
     domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
     domain::InstallSoundSet,
+    domain::AdoptCandidates,
     domain::UpdatePadPlayback,
     domain::ResetPadPlayback,
     PerformanceMutation,
@@ -1394,7 +1395,8 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"type", "ImportAssignSample"},
           };
         } else if constexpr (
-            std::is_same_v<Type, domain::InstallSoundSet>) {
+            std::is_same_v<Type, domain::InstallSoundSet> ||
+            std::is_same_v<Type, domain::AdoptCandidates>) {
           auto assignments = nlohmann::json::array();
           for (const auto& assignment : value.assignments) {
             assignments.push_back({
@@ -1411,11 +1413,18 @@ nlohmann::json command_json(const PersistedCommand& command) {
                 {"slot", slot_json(assignment.slot)},
             });
           }
-          return {
+          nlohmann::json encoded{
               {"assignments", std::move(assignments)},
               {"meta", meta_json(value.meta)},
               {"type", "InstallSoundSet"},
           };
+          if constexpr (std::is_same_v<Type, domain::AdoptCandidates>) {
+            encoded["type"] = "AdoptCandidates";
+            encoded["project_id"] = value.project_id.value();
+            encoded["source_asset_id"] = value.source_asset_id.value();
+            encoded["source_artifact"] = value.source_artifact;
+          }
+          return encoded;
         } else if constexpr (
             std::is_same_v<Type, domain::UpdatePadPlayback>) {
           return {
@@ -1814,6 +1823,58 @@ foundation::Result<PersistedCommand> parse_command(
               std::move(assignments),
           }});
     }
+    if (type == "AdoptCandidates") {
+      if (!exact_object_keys(input, {"assignments", "meta", "type", "project_id", "source_asset_id", "source_artifact"}) ||
+          !input.at("assignments").is_array() ||
+          input.at("assignments").empty()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "AdoptCandidates transaction shape is invalid", path));
+      }
+      const auto& source = input.at("source_artifact");
+      if (!input.at("project_id").is_string() ||
+          !domain::is_valid_uuid(input.at("project_id").get<std::string>()) ||
+          !input.at("source_asset_id").is_string() ||
+          !domain::is_valid_uuid(input.at("source_asset_id").get<std::string>()) ||
+          !exact_object_keys(source, {"sha256", "media_type", "byte_length"}) ||
+          !source.at("sha256").is_string() ||
+          !valid_sha256(source.at("sha256").get<std::string>()) ||
+          source.at("media_type") != "audio/wav" ||
+          !nonnegative_integer(source.at("byte_length")) ||
+          source.at("byte_length").get<std::uint64_t>() > 16777216U ||
+          input.at("assignments").size() > 64)
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("AdoptCandidates source identity is invalid", path));
+      std::vector<domain::CandidateAdoptionAssignment> assignments;
+      for (const auto& encoded : input.at("assignments")) {
+        if (!exact_object_keys(encoded, {"asset", "slot"})) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "AdoptCandidates assignment shape is invalid", path));
+        }
+        auto slot = parse_slot(encoded.at("slot"), path);
+        if (!slot.has_value()) {
+          return foundation::Result<PersistedCommand>::failure(slot.error());
+        }
+        auto asset = parse_transaction_asset(encoded.at("asset"));
+        if (!asset.has_value()) {
+          return foundation::Result<PersistedCommand>::failure(asset.error());
+        }
+        assignments.push_back(
+            domain::CandidateAdoptionAssignment{
+                slot.value(),
+                std::move(asset.value()),
+            });
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::AdoptCandidates{
+              std::move(meta.value()),
+              foundation::ProjectId{input.at("project_id").get<std::string>()},
+              foundation::AssetId{input.at("source_asset_id").get<std::string>()},
+              input.at("source_artifact").get<foundation::ArtifactRef>(),
+              std::move(assignments),
+          }});
+    }
     if (type == "UpdatePadPlayback") {
       if (!exact_object_keys(
               input, {"meta", "playback", "slot", "type"})) {
@@ -2206,6 +2267,7 @@ foundation::Result<domain::AppliedCommand> apply_command(
         } else if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample> ||
             std::is_same_v<Type, domain::InstallSoundSet> ||
+            std::is_same_v<Type, domain::AdoptCandidates> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
             std::is_same_v<Type, domain::ResetPadPlayback>) {
           return domain::apply(state, value, receipts);
@@ -2242,6 +2304,7 @@ foundation::Result<domain::Command> legacy_command(
         if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample> ||
             std::is_same_v<Type, domain::InstallSoundSet> ||
+            std::is_same_v<Type, domain::AdoptCandidates> ||
             std::is_same_v<Type, domain::UpdatePadPlayback> ||
             std::is_same_v<Type, domain::ResetPadPlayback> ||
             std::is_same_v<Type, PerformanceMutation> ||
@@ -3111,7 +3174,8 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   // Both families stage bytes and publish blobs before the manifest settles,
   // so they share the same injected fault points; without this a Sound Set
   // install would have no atomicity coverage at all.
-  const bool staged_artifact_commit = sample_import || soundset_install;
+  const bool candidate_adoption = std::holds_alternative<domain::AdoptCandidates>(command);
+  const bool staged_artifact_commit = sample_import || soundset_install || candidate_adoption;
   if (staged_artifact_commit) {
     const auto fault = sample_after_event_preparation_fault(bundle);
     if (!fault.has_value()) {
@@ -3172,7 +3236,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
   } else if (
       std::holds_alternative<domain::ImportAsset>(command) ||
-      sample_import || soundset_install) {
+      sample_import || soundset_install || candidate_adoption) {
     std::vector<const domain::Asset*> assets;
     if (const auto* import = std::get_if<domain::ImportAsset>(&command)) {
       assets.push_back(&import->asset);
@@ -3180,6 +3244,9 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
         const auto* sample =
             std::get_if<domain::ImportAssignSample>(&command)) {
       assets.push_back(&sample->asset);
+    } else if (candidate_adoption) {
+      for (const auto& assignment : std::get<domain::AdoptCandidates>(command).assignments)
+        assets.push_back(&assignment.asset);
     } else {
       for (const auto& assignment :
            std::get<domain::InstallSoundSet>(command).assignments) {
@@ -6617,6 +6684,153 @@ foundation::Result<domain::AppliedCommand> ProjectStore::install_soundset(
       std::nullopt,
       std::nullopt,
       replayed ? std::vector<ArtifactStage>{} : std::move(stages));
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::adopt_candidates(
+    const std::filesystem::path& bundle,
+    const CandidateAdoptionRequest& request) {
+  if (!domain::is_valid_uuid(request.meta.command_id.value())) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "command id must be a lowercase UUID",
+        });
+  }
+  if (request.slots.empty() || request.slots.size() > 64) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "adopting Candidates requires 1 to 64 assignments",
+        });
+  }
+  for (const auto& slot : request.slots) {
+    if (!domain::is_valid_slot(slot.slot)) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "pad slot is invalid",
+          });
+    }
+    if (!domain::is_valid_uuid(slot.asset_id.value())) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "asset id must be a lowercase UUID",
+          });
+    }
+    if (slot.media_type != "audio/wav") {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "adopted artifacts must use audio/wav",
+          });
+    }
+    // Refuse oversized materialized intervals before writer contention.
+    if (slot.bytes.size() > 16777216U) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "candidate artifact exceeds the Slice byte limit",
+              {{"maximum_byte_length", 16777216U}},
+          });
+    }
+    const auto valid_lineage = domain::validate_asset_lineage(slot.lineage);
+    if (!valid_lineage.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          valid_lineage.error());
+    }
+  }
+  // Same ordering point as the byte imports: the cheap bundle check precedes
+  // the full-artifact hashes, so a missing bundle costs no hashing at all.
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  std::vector<domain::CandidateAdoptionAssignment> assignments;
+  std::vector<ArtifactStage> stages;
+  assignments.reserve(request.slots.size());
+  stages.reserve(request.slots.size());
+  for (const auto& slot : request.slots) {
+    const auto artifact = describe_bytes(slot.bytes, slot.media_type);
+    assignments.push_back(
+        domain::CandidateAdoptionAssignment{
+            slot.slot,
+            domain::Asset{slot.asset_id, artifact, slot.lineage},
+        });
+    stages.push_back(ArtifactStage{{}, artifact, slot.bytes, true});
+  }
+  const PersistedCommand command = domain::AdoptCandidates{
+      request.meta,
+      request.project_id,
+      request.source_asset_id,
+      request.source_artifact,
+      std::move(assignments),
+  };
+  auto lock_result = platform_->acquire_writer(bundle);
+  if (!lock_result.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        lock_result.error());
+  }
+  auto lock = std::move(lock_result.value());
+  (void)lock;
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        loaded.error());
+  }
+  const auto fresh = domain::validate_candidate_source(loaded.value().state,
+      request.project_id, request.meta.expected_revision,
+      request.source_asset_id, request.source_artifact);
+  if (!fresh.has_value())
+    return foundation::Result<domain::AppliedCommand>::failure(fresh.error());
+  // Revalidate actual bytes while the Project writer excludes source mutation.
+  const auto source_bytes = describe_artifact(*platform_,
+      bundle / "assets" / (request.source_artifact.sha256 + ".wav"),
+      request.source_artifact.media_type);
+  if (!source_bytes.has_value())
+    return foundation::Result<domain::AppliedCommand>::failure(source_bytes.error());
+  if (source_bytes.value() != request.source_artifact)
+    return foundation::Result<domain::AppliedCommand>::failure(Error{
+        ErrorCode::revision_conflict, "Candidate source bytes changed",
+        {{"reason", "candidate_source_changed"}}});
+  const auto recovered = recover_uncommitted(
+      *platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        recovered.error());
+  }
+  auto performance_admitted =
+      admit_performance_sample_class(platform_, bundle);
+  if (!performance_admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        performance_admitted.error());
+  }
+  auto admitted = admit_sequence_authoring(platform_, bundle);
+  if (!admitted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        admitted.error());
+  }
+  auto scavenged = scavenge_sample_staging(*platform_, bundle);
+  if (!scavenged.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        scavenged.error());
+  }
+  // Freshness was checked before the shared full-command identity check.
+  // Adoption never serves an old-revision receipt at this public boundary.
+  return commit_loaded(
+      platform_,
+      bundle,
+      std::move(loaded.value()),
+      command,
+      std::nullopt,
+      nullptr,
+      std::nullopt,
+      std::nullopt,
+      std::move(stages));
 }
 
 foundation::Result<domain::AppliedCommand>

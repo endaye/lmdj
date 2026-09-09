@@ -375,6 +375,23 @@ Result<Json> CandidateStore::finish(const Run& run, const provider::AttemptStore
   }
   return Result<Json>::success(view(state, run.job_id));
 }
+Result<CandidateStore::Eligibility> CandidateStore::lease_active(
+    const std::string& job_id, const std::string& set_id, const provider::AttemptStore& attempts) {
+  if (!id(job_id) || !id(set_id)) return Result<Eligibility>::failure(invalid("Job or Set ID is invalid"));
+  auto mutation = acquire(root_);
+  if (!mutation.has_value()) return Result<Eligibility>::failure(mutation.error());
+  auto loaded = read_state();
+  if (!loaded.has_value()) return Result<Eligibility>::failure(loaded.error());
+  const auto& state = loaded.value();
+  if (!state.at("jobs").contains(job_id) ||
+      state.at("jobs").at(job_id).at("active_set_id") != set_id)
+    return Result<Eligibility>::failure(Error{ErrorCode::not_found,
+        "Candidate Set is unavailable", {{"reason", "candidate_unavailable"}}});
+  const auto verified = verify_sets(state, job_id, attempts);
+  if (!verified.has_value()) return Result<Eligibility>::failure(verified.error());
+  return Result<Eligibility>::success(Eligibility{
+      std::move(mutation.value()), state.at("sets").at(set_id)});
+}
 Result<Json> CandidateStore::inspect(const std::string& job_id, const provider::AttemptStore& attempts) {
   if (!id(job_id)) return Result<Json>::failure(invalid("Job ID is invalid"));
   // A live execution retains this same lease across Provider execution. Recovery

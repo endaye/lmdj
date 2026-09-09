@@ -34,3 +34,14 @@ Project I/O、Project Cooker 和 Application Facade 使用领域模型。
 通用 Undo/Redo、协同编辑、Time-stretch 与 Artifact GC 不在当前实现声明内。领域层只定义 Performance 的结构与取值域，不声明任何听感、设备或物理演奏验收。
 ## 10. 版本身份
 版本和依赖由模块清单及 Assembly Lock 生成。
+
+## Candidate adoption command
+
+`AdoptCandidates` is a named atomic command and `apply` overload; the existing
+`Command` variant is unchanged. Its Project ID, expected revision, source Asset
+ID and full ArtifactRef bind every assignment. Validation rejects empty or duplicate
+Pad targets, reused Asset IDs, invalid lineage, and mixed analysis identities before
+copying state. All assignments create independent Assets, reset target playback,
+retain source Assets and increment one revision in the current Project Contract.
+Source lineage retains the analysis revision. This command has no public receipt
+replay semantics; a stale revision remains a conflict.

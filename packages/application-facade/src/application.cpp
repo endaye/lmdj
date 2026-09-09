@@ -160,6 +160,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"asset.import", OperationKind::command},
       {"attempt.inspect", OperationKind::query},
       {"candidate.job.run", OperationKind::command},
+      {"candidate.adopt", OperationKind::command},
       {"candidate.job.inspect", OperationKind::query},
       {"pad.assign", OperationKind::command},
       {"pattern.slot.assign", OperationKind::command},
@@ -1642,6 +1643,31 @@ std::string derived_asset_id(
   const auto seed = std::string("lmdj.soundset.install.asset\n") +
                     std::string(command_id) + "\n" +
                     std::string(manifest_sha256) + "\n" +
+                    std::to_string(static_cast<unsigned>(bank)) + "\n" +
+                    std::to_string(static_cast<unsigned>(pad));
+  const auto digest = canonical_manifest_digest(seed);
+  auto value = digest.substr(0, 32);
+  // A lowercase canonical UUID with the version-4 nibble and the RFC variant
+  // bits, so `domain::is_valid_uuid` accepts it like any other Asset id.
+  value.at(12) = '4';
+  constexpr std::string_view variants = "89ab";
+  value.at(16) = variants.at(
+      static_cast<std::size_t>(
+          std::string_view("0123456789abcdef").find(value.at(16))) %
+      variants.size());
+  return value.substr(0, 8) + "-" + value.substr(8, 4) + "-" +
+         value.substr(12, 4) + "-" + value.substr(16, 4) + "-" +
+         value.substr(20, 12);
+}
+
+std::string candidate_asset_id(
+    std::string_view command_id,
+    std::string_view candidate_id,
+    std::uint8_t bank,
+    std::uint8_t pad) {
+  const auto seed = std::string("lmdj.candidate.adopt.asset\n") +
+                    std::string(command_id) + "\n" +
+                    std::string(candidate_id) + "\n" +
                     std::to_string(static_cast<unsigned>(bank)) + "\n" +
                     std::to_string(static_cast<unsigned>(pad));
   const auto digest = canonical_manifest_digest(seed);
@@ -3926,6 +3952,7 @@ struct Application::Impl {
     if (operation == "provider.select") {
       return provider_select(request);
     }
+    if (operation == "candidate.adopt") return candidate_adopt(request);
     if (operation == "candidate.job.run") return candidate_job_run(request);
     if (operation == "candidate.job.inspect") return candidate_job_inspect(request);
     if (operation == "provider.run") {
@@ -7631,6 +7658,122 @@ struct Application::Impl {
             {"provider_id", provider_id},
         },
         std::nullopt);
+  }
+
+  nlohmann::json candidate_adopt(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "project_path", "project_id",
+        "expected_revision", "command_id", "job_id", "set_id", "selections"}),
+        "candidate.adopt request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto project_id = foundation::ProjectId{uuid_field(request, "project_id")};
+    const auto revision = unsigned_field(request, "expected_revision");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto job_id = file_id_field(request, "job_id");
+    const auto set_id = file_id_field(request, "set_id");
+    const auto& selections = request.at("selections");
+    require(selections.is_array() && !selections.empty() && selections.size() <= 64,
+        "adoption requires a nonempty explicit Pad list");
+    std::map<std::pair<std::uint8_t, std::uint8_t>, std::string> targets;
+    for (const auto& selection : selections) {
+      require(exact_keys(selection, {"candidate_id", "bank", "pad"}), "adoption selection shape is invalid");
+      const auto bank = static_cast<std::uint8_t>(unsigned_field(selection, "bank", 3));
+      const auto pad = static_cast<std::uint8_t>(unsigned_field(selection, "pad", 15));
+      require(targets.emplace(std::make_pair(bank, pad), file_id_field(selection, "candidate_id")).second,
+          "adoption targets must be unique");
+    }
+    auto admitted = admit_non_sequence_authoring(path);
+    if (!admitted.has_value()) return error_envelope(admitted.error());
+    auto eligible = candidates.lease_active(job_id, set_id, attempts);
+    if (!eligible.has_value()) return error_envelope(eligible.error());
+    const auto& set = eligible.value().candidate_set;
+    const auto& source = set.at("source");
+    if (source.at("project_id") != project_id.value())
+      return error_envelope(Error{ErrorCode::revision_conflict, "Candidate belongs to another Project"});
+    const auto source_id = foundation::AssetId{source.at("asset_id").get<std::string>()};
+    const auto artifact = source.at("artifact").get<foundation::ArtifactRef>();
+    const auto loaded = projects.inspect_committed(path);
+    if (!loaded.has_value()) return error_envelope(loaded.error());
+    const auto fresh = domain::validate_candidate_source(loaded.value(), project_id,
+        revision, source_id, artifact);
+    if (!fresh.has_value()) return error_envelope(fresh.error());
+    std::map<std::string, nlohmann::json> recipes;
+    for (const auto& recipe : set.at("recipes"))
+      recipes.emplace(recipe.at("candidate_id").get<std::string>(), recipe);
+    for (const auto& [target, id] : targets) {
+      (void)target;
+      if (!recipes.contains(id)) return error_envelope(Error{ErrorCode::not_found,
+          "Candidate recipe is unavailable", {{"reason", "candidate_unavailable"}}});
+    }
+    // All identities and targets were checked before source read/materialization.
+    const auto bytes = projects.read_asset_artifact(path, project_id, source_id, artifact);
+    if (!bytes.has_value()) return error_envelope(bytes.error());
+    const auto metadata = cooker::inspect_wav(bytes.value());
+    if (!metadata.has_value()) return error_envelope(metadata.error());
+    if (metadata.value().sample_rate != source.at("frame_rate") ||
+        metadata.value().source_frames != source.at("frame_count"))
+      return error_envelope(Error{ErrorCode::revision_conflict, "Candidate source metadata changed",
+          {{"reason", "candidate_source_changed"}}});
+    if (!sample_limits) return error_envelope(invalid_sample_request("Sample quota is unavailable"));
+    auto final_baseline = loaded.value();
+    for (const auto& [target, id] : targets) {
+      (void)id;
+      final_baseline.banks.at(target.first).at(target.second).asset_id.reset();
+    }
+    auto ledger = compute_bank_ledger(path, final_baseline, 0, 0);
+    if (!ledger.has_value()) return error_envelope(ledger.error());
+    // Recipes partition the bounded source. Own one buffer per selected
+    // recipe, while every target still receives its own identity and charge.
+    std::map<std::string, std::vector<std::byte>> materialized;
+    std::vector<project_io::ProjectStore::CandidateAdoptionSlotRequest> slots;
+    auto adopted = nlohmann::json::array();
+    for (const auto& [target, id] : targets) {
+      const auto& recipe = recipes.at(id);
+      auto selected = materialized.find(id);
+      if (selected == materialized.end()) {
+        auto interval = cooker::select_pcm16_wav(bytes.value(),
+            recipe.at("start_frame").get<std::uint64_t>(), recipe.at("end_frame").get<std::uint64_t>());
+        if (!interval.has_value()) return error_envelope(interval.error());
+        selected = materialized.emplace(id, std::move(interval.value())).first;
+      }
+      if (!sample_limits->allows_artifact_bytes(selected->second.size()))
+        return error_envelope(invalid_sample_request("Candidate Artifact exceeds preparation byte limit"));
+      const auto measured = measure_prepared_quota(selected->second);
+      if (!measured.has_value()) return error_envelope(measured.error());
+      const auto& usage = measured.value();
+      const auto assessment = audio::assess_runtime_quota(
+          ledger.value().bank_used_bytes.at(target.first), ledger.value().project_used_bytes,
+          usage.bytes, *sample_limits);
+      if (!assessment) return error_envelope(Error{ErrorCode::invalid_project, "Candidate quota ledger is invalid"});
+      if (assessment->constraint == audio::RuntimeQuotaConstraint::user_bank)
+        return error_envelope(runtime_bank_quota_error({target.first, target.second},
+            usage.bytes, usage.frames, assessment->user_bank_remaining_bytes,
+            sample_limits->maximum_user_bank_bytes, {}));
+      if (assessment->constraint == audio::RuntimeQuotaConstraint::generation)
+        return error_envelope(runtime_project_quota_error(usage.bytes, usage.frames,
+            ledger.value().project_used_bytes, assessment->generation_remaining_bytes,
+            sample_limits->maximum_generation_bytes, ledger.value().bank_used_bytes));
+      ledger.value().bank_used_bytes.at(target.first) += usage.bytes;
+      ledger.value().project_used_bytes += usage.bytes;
+      auto lineage_recipe = recipe;
+      lineage_recipe.erase("candidate_id");
+      auto lineage = domain::asset_lineage_from_json({
+          {"source", {{"kind", "asset_artifact"}, {"artifact_sha256", artifact.sha256},
+                      {"project_revision", source.at("project_revision")}}},
+          {"derivation", {{"kind", "capability_adoption"}, {"capability", set.at("capability")},
+              {"provider", set.at("provider")}, {"model_identity", set.at("model_identity")},
+              {"parameters_sha256", set.at("parameters_sha256")}, {"attempt_id", set.at("attempt_id")},
+              {"source_asset_id", source_id.value()}, {"output_artifact", set.at("output_artifact")},
+              {"recipe", std::move(lineage_recipe)}}}});
+      if (!lineage.has_value()) return error_envelope(lineage.error());
+      const auto asset_id = candidate_asset_id(command_id, id, target.first, target.second);
+      slots.push_back({{target.first, target.second}, foundation::AssetId{asset_id}, "audio/wav",
+          selected->second, std::move(lineage.value())});
+      adopted.push_back({{"candidate_id", id}, {"bank", target.first}, {"pad", target.second}, {"asset_id", asset_id}});
+    }
+    const auto committed = projects.adopt_candidates(path, {{foundation::CommandId{command_id}, revision},
+        project_id, source_id, artifact, std::move(slots)});
+    if (!committed.has_value()) return error_envelope(committed.error());
+    return success_envelope({{"set_id", set_id}, {"adopted", std::move(adopted)}}, committed.value().state.revision);
   }
 
   nlohmann::json candidate_job_inspect(const nlohmann::json& request) {

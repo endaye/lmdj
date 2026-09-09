@@ -54,3 +54,13 @@ Assembly；新增兼容 API 的 MINOR 分配与消费者 lock 留给 B2 Assembly
 增量 Cook 和分布式 Cook 不属于当前能力。replay 投影只提供确定性派生素材，不承担实时调度、听感或物理演奏验收。
 ## 10. 版本身份
 版本和 source hash 来自 Assembly Lock。
+
+## Bounded Slice materialization
+
+`select_pcm16_wav` materializes a nonempty half-open interval from a source bounded
+to 16 MiB. It validates PCM16 mono/stereo at 44.1 or 48 kHz and emits an independent
+WAV preserving channel samples and source frame rate. The existing stereo-only
+selection API retains its original restriction. Runtime preparation can subsequently
+resample using the existing rules; materialization itself does not resample or write
+Project state. The WAV selection unit test covers both profile rates/channel counts,
+exact PCM intervals, the byte bound and malformed/range refusal.
