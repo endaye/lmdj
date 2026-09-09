@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/slice-points/lmdj.slice-points.v1.schema.json",
+  "x-lmdj-contract-version": "1.0.0",
+  "title": "LMDJ Slice Points v1",
+  "description": "Onsets in original source frames. Byte readers must reject duplicate JSON keys, invalid UTF-8, nonfinite numbers and a BOM. Context validation binds source_sha256 and frame_rate to decoded source input, requires strictly increasing frames below frame_count, and limits labels to 128 UTF-8 bytes. Empty points are valid; EOF is not an onset. The reference encoder uses sorted keys, compact UTF-8 JSON and no terminal newline, emitting no optional point fields.",
+  "type": "object",
+  "required": [
+    "contract",
+    "source_sha256",
+    "frame_rate",
+    "points"
+  ],
+  "properties": {
+    "contract": {
+      "const": "lmdj.slice-points.v1"
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "frame_rate": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "points": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/point"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "point": {
+      "type": "object",
+      "required": [
+        "frame"
+      ],
+      "properties": {
+        "frame": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

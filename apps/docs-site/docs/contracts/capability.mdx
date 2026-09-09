@@ -4,7 +4,7 @@ area: contracts
 status: implemented
 owners: [core, providers]
 contracts: [lmdj.capability.v2]
-source_paths: [contracts/capability/lmdj.capability.v2.schema.json, packages/provider-sdk]
+source_paths: [contracts/capability/lmdj.capability.v2.schema.json, contracts/capability/sample.slice.v1.json, packages/provider-sdk]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -19,3 +19,18 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 Registry 解析能力；Workspace/Host 做选择；Attempt Store 管理调用状态和失败。
 ## 证据
 Provider SDK conformance 与两个本地 Proof Provider 证明成功/失败路径。
+
+## Slice 消费方定义
+
+Slice 消费方的正式定义已写入 source_paths 指向的文件。集成身份展示随 K4 的
+Assembly 注册更新；当前页不从活跃源码直接导入版本，避免未来快照引用可变身份。
+
+一个 required `source_audio` 输入对应一个 required `slice_points` 输出，各最多一个。
+输入遵循 [PCM16 WAV profile](./artifact-audio.mdx)，输出遵循
+[Slice Points Schema](./slice-points.mdx)。输入 bytes 由 SDK 校验 custody，消费方
+拥有解码与输出上下文校验；输出验证发生在成功 terminal 发布之前。
+
+Contract 和 conformance 已落盘，SDK 新字节接口与实际 Slice Provider 尚未实现，
+Product Assembly 也尚未注册该消费方实现。C++ descriptor 的测试平台与聚合字节
+预算不写入闭合的 Capability JSON。Host 必须显式授予消费方要求的权限；本地
+运行不代表自动授权。参考资源数值是待测起点，不能当成性能或原生平台验收结果。

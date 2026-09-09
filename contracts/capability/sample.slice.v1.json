@@ -1,0 +1,58 @@
+{
+  "contract": "lmdj.capability.v2",
+  "capability_id": "sample.slice.v1",
+  "contract_version": "1.0.0",
+  "input_artifacts": [
+    {
+      "name": "source_audio",
+      "media_types": [
+        "audio/wav"
+      ],
+      "schema_id": "lmdj.audio.pcm16-wav.v1",
+      "schema_version": "1.0.0",
+      "required": true,
+      "max_count": 1
+    }
+  ],
+  "output_artifacts": [
+    {
+      "name": "slice_points",
+      "media_types": [
+        "application/json"
+      ],
+      "schema_id": "lmdj.slice-points.v1",
+      "schema_version": "1.0.0",
+      "required": true,
+      "max_count": 1
+    }
+  ],
+  "determinism": "deterministic",
+  "progress_events": [
+    "analyzing"
+  ],
+  "errors": [
+    "PROVIDER_FAILED",
+    "UNSUPPORTED_AUDIO",
+    "INVALID_ARGUMENT"
+  ],
+  "resources": {
+    "class": "cpu",
+    "memory_mib": 64
+  },
+  "execution": {
+    "timeout_ms": 1000,
+    "max_attempts": 1
+  },
+  "policy": {
+    "data_classifications": [
+      "public",
+      "private"
+    ],
+    "regions": [
+      "local"
+    ],
+    "required_permissions": [
+      "sample.slice.execute"
+    ]
+  }
+}

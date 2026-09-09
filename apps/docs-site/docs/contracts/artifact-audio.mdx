@@ -1,0 +1,34 @@
+---
+title: PCM16 WAV Artifact Profile
+area: contracts
+status: partial
+owners: [core, providers]
+source_paths:
+  - contracts/artifact-audio/lmdj.audio.pcm16-wav.v1.md
+  - contracts/capability/sample.slice.v1.json
+decision_paths:
+  - docs/prd/decisions/2026-09-09-stage12-contract-candidate.md
+---
+
+## 定义与状态
+
+二进制 profile 已定义，生产执行的 WAV validator 与畸形音频矩阵由 K2/K3 实现。
+当前 Product Assembly 尚未注册 Slice Provider；此页不代表可在 Host 中执行切片。
+profile 身份和版本以 source_paths 指向的 Contract 文件为准；K4 注册前不作为
+Assembly Lock 的已集成 Contract 身份展示。
+
+## 音频边界
+
+输入为 little-endian PCM16 RIFF/WAVE，mono/stereo，44.1 或 48 kHz，至少一个完整
+frame。解析遵循 chunk 长度与奇数字节 padding，验证 RIFF 边界、block alignment、
+byte rate 及唯一 fmt/data chunk；不假定固定 44-byte header。未知且完整的 chunk
+可跳过，截断、重复 chunk、浮点、压缩、extensible 与 RF64 格式拒绝。
+
+SDK 先验证 Artifact 绑定、hash、长度与访问权限；消费方负责解码与 profile 校验。
+Provider 只获得已绑定字节和 output sink，不获得 Project、bundle 或 Workspace 路径。
+
+## 相关 Contract
+
+正式输入端口及权限见 [Capability Contract](./capability.mdx)，输出坐标与绑定见
+[Slice Points Contract](./slice-points.mdx)。预算约束聚合 staging 与 handle lease，
+不宣称 direct execution 有 hard timeout 或进程总 RSS 上限。
