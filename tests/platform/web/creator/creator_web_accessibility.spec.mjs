@@ -197,6 +197,12 @@ for (const viewport of [
     }
     await expect(page.getByRole("button", {name: "Sample"})).toBeEnabled();
     await expect(page.getByRole("button", {name: "Sequence"})).toBeEnabled();
+    // The walk below depends on Sound Sets being tabbable, and `mode_rail.tsx`
+    // gives it `disabled={!soundSetEnabled}`. Without this line a regression
+    // that disables it would surface as an off-by-one tab-order diff -- the
+    // very shape that made #977 read as a Creator defect. Assert the
+    // precondition so that failure names itself instead.
+    await expect(page.getByRole("button", {name: "Sound Sets"})).toBeEnabled();
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
     await page.getByRole("button", {name: "Activate audio"}).focus();
     const focusOrder = [];
