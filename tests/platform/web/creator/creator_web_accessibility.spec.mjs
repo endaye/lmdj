@@ -145,7 +145,17 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   ]);
   const index = await (await request.get(`${baseURL}/index.html`)).text();
   expect(index).toContain(createHash("sha256").update(manifestBytes).digest("hex"));
-  expect(index).not.toMatch(/https?:\/\//i);
+  // The property is that the shipped document makes no off-origin reference,
+  // because `connect-src 'self'` is the exfiltration barrier around the
+  // Projects and audio this Creator holds in OPFS. A commented-out tag makes
+  // no reference: the browser never fetches it. Matching the raw bytes
+  // conflated the two and read the worked example inside index.html's own
+  // CSP commentary as a live reference (#1064). Strip comments first, and
+  // assert separately that stripping actually happened -- otherwise a change
+  // to the comment syntax would silently turn this into a no-op check.
+  const liveIndex = index.replace(/<!--[\s\S]*?-->/g, "");
+  expect(liveIndex.length).toBeLessThan(index.length);
+  expect(liveIndex).not.toMatch(/https?:\/\//i);
   for (const asset of manifest.assets) {
     expect(asset.path).toMatch(/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|wasm)$/);
     expect(asset.path).not.toMatch(/(?:fixture|\.map$|test)/i);
