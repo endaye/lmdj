@@ -43,6 +43,7 @@ def source_path(path):
     """Canonical generator data inventory, not an executable source inventory."""
     return (path.startswith('products/lmdj/') or path.startswith('providers/')
             or path.startswith('contracts/') and path.endswith('.schema.json')
+            or re.fullmatch(r'contracts/[^/]+/[^/]+\.md', path)
             or path.startswith(('packages/', 'apps/')) and path.endswith('/module.json')
             or path in HOST_OUTPUTS or path in PAGES
             or path in ('tools/web-runtime/emscripten.lock.json', 'tools/web-runtime/runtime-identity.json'))
