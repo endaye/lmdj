@@ -144,7 +144,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("needs.select-macos-runner.outputs.runner", source)
         self.assertIn("needs.macos-primary.outputs.completed != 'true'", source)
         self.assertIn("timeout-minutes: 30", source)
-        self.assertIn("github.event.pull_request.head.repo.full_name", source)
+        self.assertNotIn("github.event.pull_request.head.repo.full_name", source)
         self.assertEqual(source.count("Runner selection candidates:"), 1)
         self.assertEqual(source.count("Runner selection inventory:"), 1)
         self.assertEqual(source.count("TARGET_RUNNER_NAME:"), 1)
@@ -404,7 +404,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
             "select_hosted 'self-hosted runner is offline, missing, or mislabeled'",
             macos,
         )
-        self.assertIn("untrusted fork pull request", macos)
+        self.assertNotIn("untrusted fork pull request", macos)
         self.assertIn("runner status token is unavailable", macos)
         source = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(source.count("select_hosted"), macos.count("select_hosted"))
