@@ -71,6 +71,16 @@ findings 处置和未覆盖范围；处理 thread 不等于未经检查自动清
 这不是模型对 merge 的自动裁决，clean review 不应产生阻塞用的 inline thread。
 实际 merge SHA、review 证据和动作授权分别核验；空 check 列表和 NEUTRAL 不是通过。
 
+`pr-contract.yml` 是 PR 的 advisory contract：只有非 Draft、同仓库的 PR 才会在受信
+self-hosted `ci-general` 上运行。它在每个 job checkout 并核验事件提供的完整 head SHA；
+Change Scope 按确定性规则选择 `ci_contract` 与 `docs_static`，AI 只能增加建议，不能缩小
+这个下限，也不会展开完整产品 DAG 或 Creator parity。选中的 `ci_contract` 运行完整
+`ci_*_test.py` discovery 和 SHA 固定的 actionlint 1.7.12，`docs_static` 检查 exact
+three-dot revision range；Documentation impact 则使用 API 读取的实际 PR body、正确的
+base/head 和现有 checker。Fork 与 Draft 在 runner 分配前跳过，不是通过证据；该 workflow
+不新增 required check、不修改 branch protection，也没有 hosted fallback。编辑 PR body 会
+触发新的 advisory run，使声明修正能够重新验证。
+
 合并前必须有独立的 current-head review，或由仓库 owner 明确给出的 exact-SHA exception。
 只读命令 `python3 scripts/ci/review_wait.py --repository endaye/lmdj --pr-number NUMBER --expect-head FULL_SHA`
 使用 `GITHUB_TOKEN`，单次输出结构化 JSON；pending、stale、invalid、unavailable 均非零退出。
@@ -112,6 +122,8 @@ head／policy 绑定的 AI 建议取并集，标签仅展示；合入后不再�
 processed 只是处理进度：none／focused 成功不能清除历史失败或未覆盖债务。
 
 增量批次的 Scoped batch verdict 只在实际 `needs` 证明某个非产品控制依赖失败、且选中的 suite job 因该精确依赖被阻断时，生成带 exact request/run/attempt/cause 身份的 source-bound common event；它不从同时发生的产品失败或时间相关性推断 quota 或其他根因。artifact 校验器从保留的 raw `needs` 重建该事件；历史 v1 verdict 仍按 v1 模式重放，不因新事件协议被改写。报告 planner 对同一事件生成一个 durable common-infrastructure report，并列出所有受影响 suite 的未执行债务；同一 suite 中独立的 test failure、cancellation、missing 或 infrastructure debt 仍分别报告，不被共有原因吞并。该行为和报告链的测试通过不等于当前远端 CI、runner 或完整 Product Proof 已验收。
+
+自动恢复只处理由同一 report runtime 以 scheduler epoch、policy、suite、class 稳定身份创建、并保留独立创建 provenance 的新 managed bucket；历史同键 Issue、人工评论或编辑过的 bucket，以及显式 candidate／node 结果，都不会被采用。后续结果必须来自完整认证的 scheduler journal 顺序，并在相同 policy 下实际覆盖该 suite 的 required jobs／dependencies、selected PASS 且无 verification debt；selection digest 仅作 provenance，不阻断合法扩展 scope。恢复先持久化并确认 success comment，再持久化并确认 close PATCH；未知写入只读协调、不重放，新的失败按 journal 因果顺序重新打开 bucket。绿色但 skipped、missing 或有 debt 的 suite 不会 discharge debt。
 
 自动 push／完成回调／健康检查只是一条“重新观察持久状态”的通知，不是独立测试命令。
 它们在 workflow 层共用 `self-test-report-wakeup-automatic`，保留当前运行和最新一个
