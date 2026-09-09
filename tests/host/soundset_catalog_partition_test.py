@@ -357,8 +357,15 @@ def main() -> int:
         publish_workspace_catalog(native_workspace)
         native_project = temp_root / "native.lmdj"
         # The Native Host holds the Project open and announces the revision it
-        # opened at. Guessing one instead would make this leg fail on a
-        # revision conflict rather than on the audio decision it compares.
+        # opened at, and each session's requests are built from its own banner.
+        # Note what that does NOT buy: perturbing the revision does not fail
+        # this leg. With the Set Store populated, install answers
+        # UNSUPPORTED_AUDIO for revision 5 and for 104 alike, so audio
+        # eligibility is decided before the revision is checked and this leg
+        # does not pin that ordering. Reading the banner is still right -- the
+        # next leg that does depend on the revision would otherwise inherit a
+        # cross-session coupling that only holds because `author_project`
+        # lands every fresh Project on the same number.
         _, native_listed = native_requests(
             host, cli, native_workspace, assembly, native_project,
             ({"operation": "soundset.catalog.list"},),
