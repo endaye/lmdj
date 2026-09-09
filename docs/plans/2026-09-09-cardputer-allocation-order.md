@@ -74,3 +74,8 @@ geometry and reserve remain unchanged. Sixteen negative transcript controls
 reject incomplete journeys. Hearing/analog acceptance remains pending;
 the observed processing margin is only about 261 µs for this one-voice tone.
 No Product Build, Release, supported Host or normal material capacity is claimed.
+
+This is the original completion checkpoint, not current device inventory.
+Later external Host/tone changes and exact-image human confirmations are
+retained in the [audio follow-up](../research/2026-09-09-cardputer-audio-hearing.md);
+they do not turn this earlier image's pending hearing into a PASS.
