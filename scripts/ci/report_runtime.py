@@ -68,6 +68,18 @@ class ScopedReport(reporting.Report):
             self.comment_body(first=True)])
 
 
+class CommonInfrastructureReport(reporting.Report):
+    """One Issue report for one authenticated shared dependency event."""
+
+    def issue_body(self, assignee):
+        return "\n".join([self.key_marker, "## " + self.title, "",
+            "Filed from an authenticated incremental batch shared infrastructure event, not full-release evidence.",
+            "This report groups only the selected suite debt blocked by its exact failed control dependency.",
+            "Independent test failures, cancellations, unselected suites and unrelated debt remain separate.",
+            f"Default assignee `@{assignee}`. Severity **{self.severity}**.", "",
+            self.comment_body(first=True)])
+
+
 def plan_batch_reports(repository, state, inputs):
     """Pure reporting projection after complete authenticated historical replay."""
     reports = []
@@ -97,6 +109,50 @@ def plan_batch_reports(repository, state, inputs):
             require(result["outcomes"] == batch_verdict.scheduler_outcomes(verdict, policy, identity, selection),
                     "journal outcomes differ from the durable scoped verdict")
             suites, evidence_digest = verdict["suites"], verdict["evidence_digest"]
+            common_events = verdict.get("common_events", [])
+        if reference == f"missing:{request_id}":
+            common_events = []
+        by_suite = {suite["id"]: suite for suite in suites}
+        observations_by_suite = {}
+        if reference != f"missing:{request_id}":
+            for observation in verdict["observations"]:
+                observations_by_suite.setdefault(observation["suite"], []).append(observation)
+        event_suites = set()
+        for event in common_events:
+            affected = set(event["blocked_suites"])
+            require(affected and affected <= set(selection["suites"]),
+                    "common event lists an unselected or empty suite set")
+            for suite_id in affected:
+                suite = by_suite.get(suite_id)
+                blocked_rows = [row for row in observations_by_suite.get(suite_id, [])
+                                if row.get("blocked_by") == event["cause"]]
+                require(suite is not None and suite["selected"] and suite["verification_debt"]
+                        and blocked_rows,
+                        "common event is not bound to exact blocked job debt")
+            event_suites |= affected
+            event_observation = "batch/" + batch.digest({"epoch": state["epoch"],
+                "identity": identity, "event": event})
+            common = [f"- Request: `{reporting.sanitize(request_id, 200)}` ({request['kind']})",
+                f"- Base: `{request['base']}`; target: `{request['target']}`; control: `{request['control']}`",
+                f"- Run: https://github.com/{repository}/actions/runs/{run['run_id']}/attempts/{run['attempt']}",
+                f"- Scope: **{selection['kind']}**; selected: {', '.join(selection['suites'])}",
+                "- Not selected (not passes): " + (", ".join(sorted(set(policy.suite_ids) - set(selection['suites']))) or "none"),
+                f"- Policy: `{request['policy']}`; evidence: `{evidence_digest}`",
+                f"- Common event: `{event['event_id']}`; kind: **{event['kind']}**; cause: `{event['cause']}`",
+                f"- Source: needs job `{event['source']['job']}` result **{event['source']['result']}**; source digest: `{event['source']['digest']}`",
+                "- Affected suite debt: " + ", ".join(sorted(affected)),
+                "- Next step: repair the shared dependency and rerun the exact target; retain every suite's uncovered work."]
+            details = {suite_id: {"jobs": by_suite[suite_id]["jobs"],
+                                  "diagnostics": by_suite[suite_id]["diagnostics"]}
+                       for suite_id in sorted(affected)}
+            detail = "\n".join(["```text", reporting.sanitize(json.dumps({
+                "event": event, "suite_debt": details}, sort_keys=True), 5000), "```"])
+            reports.append(CommonInfrastructureReport(
+                key=reporting.common_event_report_key(event["event_id"]),
+                title=f"self-test: shared infrastructure event {event['cause']}",
+                observation=event_observation, severity="medium",
+                labels=(reporting.REPORT_LABEL, "type:bug", "area:ci-release"),
+                summary="\n".join(common), detail=detail))
         for suite in suites:
             if not suite["selected"]:
                 continue
@@ -107,6 +163,12 @@ def plan_batch_reports(repository, state, inputs):
                 classes.append({"infrastructure": "infrastructure_failure", "cancelled": "blocked",
                                 "blocked": "blocked", "missing": "missing"}[suite["scheduler_outcome"]])
             for failure_class in classes:
+                # A common event only accounts for rows explicitly blocked by
+                # its cause. A cancellation can map to the same report class
+                # for compatibility, but remains an independent debt.
+                if (failure_class == "blocked" and suite["id"] in event_suites
+                        and suite["scheduler_outcome"] == "blocked"):
+                    continue
                 key = f"self-test-{suite['id']}-{failure_class}".replace("_", "-")
                 # Digest the complete identity, not just a bucket or target. The
                 # plain exact identity remains visible in the human report body.

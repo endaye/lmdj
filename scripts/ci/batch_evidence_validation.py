@@ -58,8 +58,17 @@ def validate_bundle(bundle, request, run, policy):
         "lanes": {s.scope_lane: s.id in selected for s in policy.inventory.suites if s.scope_lane is not None},
         "suites": {s.id: s.id in selected for s in policy.inventory.suites}}
     require(bundle["execution.json"] == expected_execution, "execution artifact differs from frozen request")
-    rebuilt = batch_execution.from_needs(policy, identity, request["selection"], bundle["needs.json"],
-                                          aliases=ALIASES, dependencies=dependencies(policy))
+    verdict_document = bundle["verdict.json"]
+    require(isinstance(verdict_document, dict), "verdict artifact is not an object")
+    schema = verdict_document.get("evidence_schema")
+    require(schema in {batch_verdict.SCHEMA, batch_verdict.COMMON_EVENT_SCHEMA},
+            "verdict artifact uses an unsupported scoped schema")
+    # Historical v1 verdicts remain readable byte-for-byte. Only v2 bundles
+    # opt into rebuilding the source-bound event from raw needs; the workflow
+    # producer is the sole caller that publishes the new event family.
+    rebuilt = batch_execution.from_needs(
+        policy, identity, request["selection"], bundle["needs.json"], aliases=ALIASES,
+        dependencies=dependencies(policy), emit_common_events=(schema == batch_verdict.COMMON_EVENT_SCHEMA))
     checked = batch_verdict.validate(bundle["verdict.json"], policy, identity, request["selection"])
     require(checked == rebuilt, "verdict differs from actual retained needs context")
     return checked, identity
