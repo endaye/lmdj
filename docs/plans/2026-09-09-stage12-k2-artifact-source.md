@@ -86,9 +86,22 @@ snapshot. No tags, release, deployment or Channel promotion.
 
 ## Task K2b: immutable documentation snapshot
 
+Prerequisite repair Task K2b-0: the first official freeze failed because K1's
+two new Contract pages made the source inventory 43 while the frozen-completeness
+pin still said 41. Declared files: this plan,
+apps/docs-site/scripts/lib/snapshot-provenance.mjs,
+apps/docs-site/test/snapshot-provenance.test.mjs, and
+.agents/pitfalls/snapshot-page-pin-only-fires-at-freeze.md. Keep the exact count
+strict; add a current-tree regression so page additions cannot postpone failure
+until another Build allocation. Verify the provenance suite and current Portal,
+commit the repair, then rerun the official freeze. Version impact: none for this
+tool-only prerequisite. The incomplete generated outputs are retained outside
+the worktree at /tmp/lmdj-k2-incomplete-snapshot.
+
 After K2a is verified and committed, run scripts/docs-site.sh version with the
 allocated Build and canary on clean source. Commit only the exact generator
-output inventory under docs/site/versions and current versions metadata as a
+output inventory under apps/architecture-portal/{static/versions,versioned_docs,
+versioned_metadata,versioned_sidebars,versions.json} (the stable symlink targets) as a
 second Task in the same PR. Validate snapshot and post-squash provenance; publish
 a supported witness if required. Never merge K2a without its matching snapshot.
 

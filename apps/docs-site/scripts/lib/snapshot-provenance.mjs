@@ -444,7 +444,9 @@ function snapshotDocumentPath(sourcePath, version) {
 // in which no Product Build could be allocated at all, for as long as nobody
 // tried. That is the cost of a pin whose only trigger is a rare operation --
 // worth remembering before adding another one.
-const SOURCE_DOCUMENT_COUNT = 41;
+// K1 (#1049) added artifact-audio and slice-points. The current-tree regression
+// checks this independent inventory pin before the next rare freeze operation.
+export const SOURCE_DOCUMENT_COUNT = 43;
 
 export async function createSnapshotMetadata({
   repoRoot,
@@ -463,7 +465,7 @@ export async function createSnapshotMetadata({
   const projection = await projectionManifest(repoRoot, revision, projectionPaths);
   const sourcePaths = await sourceDocumentPaths(repoRoot, revision);
   if (sourcePaths.length !== expectedDocCount) {
-    throw new Error(`expected ${expectedDocCount} source documents, found ${sourcePaths.length}`);
+    throw new Error(`expected ${expectedDocCount} source documents, found ${sourcePaths.length}; remedy: reconcile the committed page inventory and SOURCE_DOCUMENT_COUNT before freezing`);
   }
   const sourceDocuments = [];
   for (const sourcePath of sourcePaths) {
