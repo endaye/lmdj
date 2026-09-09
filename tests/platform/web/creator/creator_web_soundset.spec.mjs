@@ -215,6 +215,21 @@ async function installProjectTap(page, catalogEndpoint) {
                 error: response?.error ?? null,
               });
             }
+            // #799. Every Sound Set operation, in order, so the audition leg
+            // can read the Host's own reply rather than inferring it from the
+            // surface -- an audition changes nothing visible on success, which
+            // is the defect that leg exists for.
+            if (typeof request?.operation === "string" &&
+                request.operation.startsWith("soundset.")) {
+              window.__soundsetOperations ??= [];
+              window.__soundsetOperations.push({
+                operation: request.operation,
+                payload: request.payload,
+                ok: response?.ok ?? null,
+                result: response?.result ?? null,
+                error: response?.error ?? null,
+              });
+            }
             if (request?.operation === "project.inspect" && response?.ok) {
               window.__lastProjectTruth = response.result?.project ?? null;
               // Counted so a leg can wait for a Project read that is newer
@@ -281,6 +296,27 @@ async function openSoundSets(page) {
   await page.getByRole("button", {name: "Sound Sets"}).click();
   await expect(page.getByRole("heading", {name: "Sound Sets", level: 2}))
     .toBeVisible();
+}
+
+// The Host's own last answer for one Sound Set operation. `null` until the
+// operation has crossed the tap, which is what the polls below wait for.
+async function lastSoundsetOperation(page, operation) {
+  return page.evaluate(
+    (name) =>
+      (window.__soundsetOperations ?? [])
+        .filter((entry) => entry.operation === name)
+        .at(-1) ?? null,
+    operation,
+  );
+}
+
+async function soundsetOperationCount(page, operation) {
+  return page.evaluate(
+    (name) =>
+      (window.__soundsetOperations ?? [])
+        .filter((entry) => entry.operation === name).length,
+    operation,
+  );
 }
 
 async function occupancyOf(page, bank) {
@@ -387,6 +423,96 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
     "no project.inspect reached the tap -- fix that before reading the rest",
   ).not.toBeNull();
   expect(Object.keys(before.pads)).toHaveLength(16);
+
+  // Leg 3b -- audition and stop. Until this leg existed, Web audition had
+  // never run in a browser at all: this file contained no occurrence of the
+  // word, and the only proof of `soundset.audition` was in-process.
+  //
+  // Far side: the Host's own reply, read off the transport rather than off the
+  // surface, because a successful audition changes nothing the surface shows.
+  // That is exactly the defect `played` fixes -- before it, "the preview
+  // played" and "the preview silently did not" were the same reply -- so the
+  // assertion is on `played` being present and boolean, and on the geometry
+  // that says which bytes it was.
+  const revisionBeforeAudition = (await lastSoundsetOperation(
+    page, "soundset.map.preview")).result.project_revision;
+  expect(typeof revisionBeforeAudition).toBe("number");
+  const previewsBeforeAudition = await soundsetOperationCount(
+    page, "soundset.map.preview");
+
+  await page.getByRole("button", {name: "Audition set demo"}).click();
+  await expect.poll(
+    async () => await lastSoundsetOperation(page, "soundset.audition"),
+    {timeout: REQUEST_TIMEOUT_MS},
+  ).not.toBeNull();
+  const auditioned = await lastSoundsetOperation(page, "soundset.audition");
+  expect(auditioned.ok).toBe(true);
+  // The set-level demo is addressed by identity alone; a `slot_index` here
+  // would mean the surface auditioned slot 0's Artifact instead.
+  expect(auditioned.payload.slot_index).toBeUndefined();
+  expect(auditioned.result.slot_index).toBeNull();
+  // The Attribution Kit's demo declares its slot 0 Artifact, so the bytes the
+  // Host reports playing are the ones this journey already fetched once.
+  expect(auditioned.result.artifact.sha256).toBe(ATTRIBUTION_SHARED_ARTIFACT);
+  expect(auditioned.result.audio.prepared_frames).toBeGreaterThan(0);
+  expect(auditioned.result.audio.sample_rate).toBe(48_000);
+  // The field this leg exists for, pinned to the state every Creator session
+  // starts in: a Project is open and its snapshot is published, but audio has
+  // never been activated, so the engine is stopped, `enqueue_control` refuses
+  // the voice, and nothing sounds. Before `played`, this reply was byte for
+  // byte the reply of an audition that did sound.
+  expect(auditioned.result.played).toBe(false);
+  // ACCEPTANCE GAP, and a live defect rather than a missing test. The other
+  // half of this field -- `played === true` after "Activate audio" -- is not
+  // exercised here because it terminates the Web Host. Driving it produces
+  // `{"ok":true,"result":{...,"played":true}}` and then, inside one second and
+  // with no page error, `creator-phase` goes to `failed`, the surface shows
+  // "formal Web Host transport is terminated", and every later leg is
+  // unmeasurable. Activating audio alone does not do it: a probe that
+  // activated, idled four seconds and read the phase found `running` with no
+  // alert, and only the audition that followed killed it.
+  //
+  // That is #799's byte path, not this field: `play_audition` is unchanged
+  // apart from returning its outcome, and the same sequence passes natively in
+  // `test_soundset_audition_reports_whether_a_voice_started`, which starts a
+  // voice and renders it. Closing this gap costs a fix to the Web audition
+  // path, after which the two lines below become `true` and this comment goes.
+  // Until then, do not weaken the assertion above to `typeof … === "boolean"`:
+  // that would pass either way and hide both halves.
+  // Auditioning is Workspace-scoped: the operation never learns a Project, so
+  // the Host reports no revision for it. This is the structural half of "the
+  // Project did not move" -- an operation with no Project cannot write one.
+  expect(auditioned.result.project_revision).toBeNull();
+
+  await page.getByRole("button", {name: "Stop audition"}).click();
+  await expect.poll(
+    async () => await lastSoundsetOperation(page, "soundset.audition.stop"),
+    {timeout: REQUEST_TIMEOUT_MS},
+  ).not.toBeNull();
+  const auditionStopped = await lastSoundsetOperation(
+    page, "soundset.audition.stop");
+  expect(auditionStopped.ok).toBe(true);
+  expect(auditionStopped.result.accepted).toBe(true);
+  // Stopping addresses this Host's engine and no Set, so it carries no
+  // identity at all.
+  expect(auditionStopped.payload).toEqual({});
+
+  // The measured half of "the Project did not move": a fresh Host read of the
+  // Project after the audition, not the projection cached before it. A second
+  // `soundset.map.preview` is Project-scoped, so its `project_revision` comes
+  // from Project Truth as it stands now.
+  await page.getByRole("button", {name: "Preview mapping into Bank A"})
+    .click();
+  // Wait for a *newer* preview than the one that produced the number above.
+  // Reading the revision straight away would read that same reply back and
+  // pass on the first tick without ever asking the Host anything.
+  await expect.poll(async () =>
+    await soundsetOperationCount(page, "soundset.map.preview"),
+  {timeout: REQUEST_TIMEOUT_MS}).toBeGreaterThan(previewsBeforeAudition);
+  const afterAudition = await lastSoundsetOperation(
+    page, "soundset.map.preview");
+  expect(afterAudition.ok).toBe(true);
+  expect(afterAudition.result.project_revision).toBe(revisionBeforeAudition);
 
   // Leg 4 -- install `keep`. The 64-Pad proof fixture fills every Bank, so
   // every one of this Set's four occupied slots collides and `keep` has

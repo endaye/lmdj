@@ -161,6 +161,9 @@ function fakeSession(overrides: Partial<CreatorSoundSetRuntimeSession> = {}) {
       ...FOUNDRY,
       slotIndex: request.slotIndex ?? null,
       artifact: artifact("0a"),
+      // #799. The Host reports whether a voice actually started; a fake that
+      // omitted it would model a reply the session cannot produce.
+      played: true,
       audio: {
         sampleRate: 48_000,
         channels: 1,

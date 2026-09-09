@@ -1475,7 +1475,14 @@ struct ControlRuntime::Impl {
   // #799. Publish the audition PCM the Facade decoded into the engine's
   // reserved audition pool and start a voice on it. Best effort by design: see
   // the call site for why a failure here is not an error on a query.
-  void play_audition(const Json& payload) {
+  //
+  // Returns whether a voice was actually started, so the call site can say so.
+  // Every `false` below is a real silence, and the two that a caller meets in
+  // practice are the last two: the pool holds two Banks and nothing in this
+  // Host reclaims them, and `enqueue_control` refuses every audition while the
+  // engine is stopped -- which is the whole life of a Host that has published
+  // a snapshot but never run `audio.activate`.
+  [[nodiscard]] bool play_audition(const Json& payload) {
     facade::SoundSetAuditionRequest request{
         payload.at("set_id").get<std::string>(),
         payload.at("version").get<std::string>(),
@@ -1490,12 +1497,19 @@ struct ControlRuntime::Impl {
     if (!audio.has_value()) {
       // The Facade already refused this request through the envelope the
       // caller is about to receive; there is nothing further to report.
-      return;
+      //
+      // Unreachable from the call site rather than merely unlikely: the same
+      // `audition_soundset` answered the JSON query a few lines above it, and
+      // this branch is only reached when that answer was `ok`. Kept as the
+      // contract check it is, and deliberately not counted as covered.
+      return false;
     }
     const auto& source = *audio.value().prepared;
     if (source.channels == 0 || source.interleaved.empty() ||
         source.interleaved.size() % source.channels != 0) {
-      return;
+      // Also unreachable through the Facade: `prepared_audition` refuses this
+      // exact shape with `cook_failed` before it can return success.
+      return false;
     }
     // Down-mix to the mono float the Bank stores, exactly as
     // `PreparedSampleBank::from_snapshot` does for a Project Pad.
@@ -1517,17 +1531,24 @@ struct ControlRuntime::Impl {
         audio::kAuditionBankProjectId(),
         audio::kAuditionBankProjectRevision);
     if (!bank.set_sample(audio::kAuditionSampleSlot, mono).has_value()) {
-      return;
+      // Unreachable for the same reason: `mono` is non-empty because `source`
+      // was, slot 0 is in range and unset on a fresh Bank, and a sample decoded
+      // from PCM16 is finite.
+      return false;
     }
     if (engine.publish_audition_bank(std::move(bank)) !=
         audio::PublishResult::accepted) {
       // Both audition slots are still draining an earlier preview. Dropping
       // this one is the honest outcome: the alternative is overwriting bytes a
       // voice is still reading, which is the defect this pool exists to avoid.
-      return;
+      return false;
     }
-    static_cast<void>(engine.enqueue_control(audio::PadControlEvent{
-        0, 0, 127, audio::PadControlKind::audition_start, {}}));
+    // Not discarded. A stopped engine refuses every control event, so this is
+    // the branch that makes an audition silent in a Host that never activated
+    // audio -- exactly the case the caller cannot see from the geometry.
+    return engine.enqueue_control(audio::PadControlEvent{
+               0, 0, 127, audio::PadControlKind::audition_start, {}}) ==
+           audio::EnqueueResult::accepted;
   }
 
   std::optional<Json> enqueue_sample_control(
@@ -2284,8 +2305,22 @@ Json ControlRuntime::dispatch(
       // already correct and useful, a Host with no running runtime is a normal
       // state rather than a refusal, and reporting a playback failure through
       // a query's envelope would need vocabulary the Stage has frozen.
-      if (operation == "soundset.audition" && impl_->runtime_ready) {
-        impl_->play_audition(payload);
+      //
+      // It is still reported. `played` says whether a voice started, on the
+      // successful result beside the geometry, so "it played" and "it silently
+      // did not" stop being the same answer. It is not a refusal and adds no
+      // `lmdj.error.v1` code and no `details.reason` token: a query that
+      // answers what happened is the shape the frozen vocabulary leaves open.
+      // Only the fact is reported, never which branch produced it -- a reason
+      // vocabulary here would be the very thing the Stage froze.
+      if (operation == "soundset.audition") {
+        const bool played =
+            impl_->runtime_ready && impl_->play_audition(payload);
+        auto normalized = normalized_facade_success(response);
+        if (normalized.value("ok", false)) {
+          normalized.at("result")["played"] = played;
+        }
+        return normalized;
       }
       return normalized_facade_success(response);
     }
