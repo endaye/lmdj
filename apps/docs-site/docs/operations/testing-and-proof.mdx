@@ -108,6 +108,25 @@ PR head，也没有 PR 写权限。短 publisher
 真实缺凭据、API/模型故障及人工 resolve 的远端验收仍分别记录，不从本地测试推导。
 若线上仍要求旧 required contexts 或 strict，报告切换未完成，不借普通 shipping 权限绕过。
 
+## 2026-09-10 集成验收记录
+
+[CI reliability, recovery and execution cost 集成报告](https://github.com/endaye/lmdj/blob/main/docs/quality/2026-09-10-ci-reliability-acceptance.md)
+记录报告验证基线 `main` exact revision `996a557357902dc447750dd94b32b568a9be36e0`（PR [#1145](https://github.com/endaye/lmdj/pull/1145)），汇总已合入
+Task 的 merge SHA、reviewed head、测试计数、T7a 相同 fixture 的请求数对照、T11 两台
+主机的只读 inventory，以及三次受限的 report-only 远端观察。T8c 合入后的 final CI contract discovery
+在 exact baseline 上通过（2167 tests、13 skips、966.154s）；13 个 skip 来自既有
+environment/platform 条件，不能一概视为 platform-only；该自动化集成结果仍与远端
+report/discovery 恢复验收分开，本次三次观察都保留为失败、忽略或取消证据，不能
+推出报告投递或积压恢复已通过。
+
+当前可用性结论是：PR advisory 仍是 change-selected、非 required；旧 admission、queue
+及每日产品触发已退役；Canary Planning 保持手动入口；控制工作可选择已登记的两台
+`ci-general` 主机，但 inventory、工具存在和 workflow 成功都不构成 host readiness。
+新 managed bucket 只有在认证因果／policy／suite／debt 条件和 success comment、close
+patch receipts 全部满足时才可机器恢复；历史、人工调查及独立缺陷继续单独分诊。报告同时
+保留 #666、#782、#939、#714、#914 和 #1089 等未完成范围，不产生 release、deploy、Channel
+或 Product Build 结论。
+
 ## 主干增量批次与手动全量
 
 main push 唤醒 `self-test-report.yml` 的轻量控制器。同一时间最多一个自动批次；
@@ -179,8 +198,12 @@ relay／idle 外壳，但父运行身份本身不能授权新 admission；空闲
 收集桶，不是已完成的根因级去重。目前尚未抽取真实 test ID 与日志错误指纹，不同缺陷
 可能进入同一桶，维护者可在分诊时拆成独立缺陷 Issue。首次创建、再现追加
 观察、关闭后再现重新打开；同一观察重送与写入响应丢失后的重试先重读 marker，不
-重复写入。一次绿色不自动关闭 Issue。`invalid` 为基础设施问题，合法 `superseded`
-不制造缺陷。共享证据校验失败与 API 故障显示 `reporting-error`，不改变测试 verdict。
+重复写入。只有新 managed bucket 同时满足完整因果／policy／suite／debt 条件，并且
+success comment 与 close patch 都有已确认的 durable receipt，后续实际绿色 suite 才
+可以执行机器恢复；历史、人工编辑、candidate/node 和独立缺陷 Issue 仍须人工分诊。
+绿色但 skipped、missing 或带 verification debt 的 suite 不足以 discharge debt。`invalid`
+为基础设施问题，合法 `superseded` 不制造缺陷。共享证据校验失败与 API 故障显示
+`reporting-error`，不改变测试 verdict。
 旧来源的 producer 下界是 [#757](https://github.com/endaye/lmdj/pull/757) 的 squash；
 每个 run 单独证明控制修订不早于该 producer 且属于 main 历史。旧控制修订即使新
 rerun 也明确跳过，部署后的启动失败仍可见，未知祖先关系不当作 legacy 吞掉。

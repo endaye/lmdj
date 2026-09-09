@@ -166,16 +166,22 @@ Only attempt 1 is accepted: repetition uses a new same-target dispatch, never
 an Actions partial rerun that can inherit successful jobs from another attempt.
 Early request records are unverified requests, not test evidence.
 
-Failures produce triage Issues, not a merge freeze. A single later green batch
-does not close a defect automatically. Incremental self-testing does not release or
-allocate a version; manual candidate selection consumes only evidence accepted
-by the canonical release verifier. Local, PR review, self-test, release, deploy,
-snapshot and physical acceptance facts stay separate. Manual exact-target full
-remains available, but even a new full result requires independent acceptance
-by the canonical release verifier. Focused/none or cross-SHA results cannot be
-promoted to legacy complete release evidence. Report recovery consumes verified
-results through a durable outbox; unknown Issue POST responses require positive
-receipt reconciliation or visible manual follow-up, not blind re-creation.
+Failures produce triage Issues, not a merge freeze. Recovery may discharge only
+a newly created managed bucket whose authenticated causal/policy identity is
+preserved, whose later same-policy result covers every required suite job and
+dependency, whose selected suite passed without verification debt, and whose
+success-comment and close-patch writes each have durable receipts. Historical,
+edited, human-investigated, candidate/node, and independent defect Issues stay
+under manual disposition; an unrelated green batch does not change them.
+Incremental self-testing does not release or allocate a version; manual
+candidate selection consumes only evidence accepted by the canonical release
+verifier. Local, PR review, self-test, release, deploy, snapshot and physical
+acceptance facts stay separate. Manual exact-target full remains available, but
+even a new full result requires independent acceptance by the canonical release
+verifier. Focused/none or cross-SHA results cannot be promoted to legacy complete
+release evidence. Report recovery consumes verified results through a durable
+outbox; unknown Issue POST responses require positive receipt reconciliation or
+visible manual follow-up, not blind re-creation.
 
 ### Advisory path selection and test ownership
 
