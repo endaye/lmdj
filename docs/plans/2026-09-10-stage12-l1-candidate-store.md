@@ -69,6 +69,8 @@ Modify:
 - packages/web-runtime-platform/module.json;
 - apps/core-cli/module.json;
 - apps/core-mcp/module.json;
+- apps/core-mcp/pyproject.toml (Python Host package identity);
+- apps/core-mcp/lmdj_core_mcp/__init__.py (Python Host runtime identity);
 - apps/native-host/module.json;
 - apps/web-runtime-host/module.json;
 - apps/creator-web/module.json;
