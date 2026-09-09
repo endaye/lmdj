@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   audit:
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 15
     steps:
       - name: Checkout protected main authority

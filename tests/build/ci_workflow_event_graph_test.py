@@ -159,7 +159,7 @@ class EventGraphTests(unittest.TestCase):
         job = block(source, jobs[0].job_id, 2)
         self.assertEqual(scalars(block(job, 'permissions', 4), 6), {'contents': 'read', 'actions': 'read'})
         self.assertIsNotNone(jobs[0].runs_on)
-        self.assertEqual(jobs[0].runs_on, '[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]')
+        self.assertEqual(jobs[0].runs_on, '[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]')
         self.assertNotIn('concurrency:', source)
         for forbidden in ('issues: write', 'contents: write', 'actions: write', 'pull-requests:',
                           'id-token:', 'scripts/core.sh', 'scripts/release.sh',

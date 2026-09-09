@@ -94,8 +94,8 @@ class CiHostedRunnerPolicyTest(unittest.TestCase):
             for name in names:
                 with self.subTest(workflow=workflow, job=name):
                     job = jobs[(workflow, name)]
-                    self.assertEqual(job.runs_on, "[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]",
-                        msg=f"why: {workflow}:{name} must not wait on heavy Netcup capacity or paid Linux; remedy: route to the verified Contabo general labels")
+                    self.assertEqual(job.runs_on, "[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]",
+                        msg=f"why: {workflow}:{name} must not wait on heavy capacity or paid Linux; remedy: route to the dual-node ci-general role")
 
     def test_macos_availability_fallback_remains_an_explicit_paid_exception(self) -> None:
         for name in ("macos-primary", "macos-fallback"):
