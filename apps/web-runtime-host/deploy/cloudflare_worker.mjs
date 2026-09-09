@@ -59,11 +59,13 @@
 // an origin the attacker chose, and the request grammar reaching it is the
 // narrow check below rather than anything a caller can widen.
 //
-// One thing the canonical-form rule buys beyond request-derived bytes, worth
-// claiming because it is easy to miss: `CATALOG_UPSTREAM` is now pinned to its
-// own canonical WHATWG serialization, so the configured base cannot be a
-// spelling the parser silently rewrites into a different host. That closes
-// operator-configuration surprise, not just caller influence.
+// One thing the canonical-form rule retains beyond request-derived bytes,
+// worth claiming because it is easy to miss: after explicit character
+// admission, `CATALOG_UPSTREAM` is pinned to its own canonical WHATWG
+// serialization, so the configured base cannot be a spelling the parser
+// silently rewrites into a different host. That closes operator-configuration
+// surprise, not just caller influence; WHATWG serialization alone is not the
+// admission policy.
 //
 // Whether the Workers runtime attaches the viewer's IP to a subrequest is NOT
 // established here and must not be assumed either way; if it does, that is a
@@ -90,12 +92,20 @@ const OBJECT_CONTENT_TYPES = Object.freeze({
   blob: "application/octet-stream",
 });
 
+// Character admission mirrors CANONICAL_UPSTREAM in serve_distribution.py,
+// with production restricted to HTTPS. URL serialization alone is insufficient:
+// Node 22 preserves a literal path caret while Node 26 encodes it. Keep this
+// grammar local so the standalone Worker needs no runtime imports. The final
+// negative lookahead is an absolute end assertion (unlike `$` before a newline).
+// This is admission only; retain the parsed canonical URL defenses below.
+const CANONICAL_UPSTREAM = /^https:\/\/(\[[^\[\]/?#%]+\]|[a-z0-9][a-z0-9._\-]*)(?::[1-9][0-9]{0,4})?((?:\/[A-Za-z0-9!$%&'()*+,\-.:;=@\[\]_|~]*)*\/)(?![\s\S])/;
+
 // A misconfigured binding fails closed rather than becoming a plaintext or
 // parameterised forwarder. Production Catalogs are https; the proof server has
 // its own loopback rule and does not share this code.
 function upstreamBase(env) {
   const configured = env?.CATALOG_UPSTREAM;
-  if (typeof configured !== "string" || configured.length === 0) return null;
+  if (typeof configured !== "string" || !CANONICAL_UPSTREAM.test(configured)) return null;
   let parsed;
   try {
     parsed = new URL(configured);
@@ -126,14 +136,11 @@ function upstreamBase(env) {
   // `a`. Every one of those is a way for the deployment to forward somewhere
   // the operator did not write.
   //
-  // On THIS side that is by construction: there is a WHATWG parser here, so
-  // the rule is one comparison and cannot fall behind the parser. The proof
-  // server has no such parser and cannot mirror it that way -- it decides the
-  // same question with a closed grammar, and the two agree only as far as that
-  // grammar is faithful. `CatalogUpstreamParityTest` drives both over one list
-  // for exactly that reason; enumerating WHATWG's behaviours instead was tried
-  // here first and two review passes kept finding spellings the enumeration
-  // had missed, which is what a list of parser behaviours always does.
+  // Character admission above fixes the common allowed alphabet; this
+  // comparison still refuses host, port and dot-segment rewrites within it.
+  // The Python proof server checks those canonical forms explicitly.
+  // CatalogUpstreamParityTest exercises both implementations on the same
+  // accepted/refused and generated corpus under Node 22 and Node 26.
   if (configured !== base) return null;
   return base;
 }
