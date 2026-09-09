@@ -1,0 +1,46 @@
+{
+  "why": "The one expectation every Host is measured against for the same Catalog. Stage 11's plan asked for a Web/Native refusal-consistency table; before this file each Host suite carried its own idea of the answer, so two Hosts could disagree and both stay green. Assert equality with the whole partition, never containment: a Set silently promoted from refused to published, or a refusal that changes its locked token, has to fail somewhere, and only equality makes it fail.",
+  "authority": "docs/plans/2026-09-06-lmdj-stage11-sound-set.md Locked Error Reasons, and docs/design/2026-08-31-lmdj-stage11-sound-set-design.md S11-D3. This file records what Core decides for tests/fixtures/soundset; it does not decide anything itself, and a disagreement with those documents is a bug here.",
+  "catalog": "tests/fixtures/soundset/catalog/index.json",
+  "published": [
+    "11111111-1111-4111-8111-111111111111",
+    "22222222-2222-4222-8222-222222222222",
+    "33333333-3333-4333-8333-333333333333"
+  ],
+  "refused": {
+    "44444444-4444-4444-8444-444444444444": {
+      "code": "IO_ERROR",
+      "reason": "soundset_content_mismatch",
+      "set": "Fixture Tampered Kit",
+      "why": "an Artifact blob whose bytes do not hash to the manifest's declared value"
+    },
+    "55555555-5555-4555-8555-555555555555": {
+      "code": "PERMISSION_DENIED",
+      "reason": "soundset_license_ineligible",
+      "set": "Fixture Mismatched Summary Kit",
+      "why": "the Catalog's license summary disagrees with the verified manifest"
+    },
+    "66666666-6666-4666-8666-666666666666": {
+      "code": "PERMISSION_DENIED",
+      "reason": "soundset_license_ineligible",
+      "set": "Fixture Unallowlisted License Kit",
+      "why": "an SPDX id outside the Host allowlist"
+    },
+    "77777777-7777-4777-8777-777777777777": {
+      "code": "PERMISSION_DENIED",
+      "reason": "soundset_license_ineligible",
+      "set": "Fixture Unattributed BY Kit",
+      "why": "a BY licence whose required attribution is absent"
+    }
+  },
+  "not_covered_here": "This file covers the soundset.catalog.list partition and one install refusal, so three of the seven locked reasons: soundset_content_mismatch and soundset_license_ineligible at list, soundset_audio_unsupported at install. soundset_manifest_invalid, soundset_slot_invalid and soundset_occupied_conflict are decided elsewhere and need Catalog entries this corpus does not yet publish; catalog_unavailable is a per-Set resolve failure, distinct from the catalog_available:false degradation the offline leg asserts. Two Hosts that agree on everything here can still disagree on those four.",
+  "install_refusal": {
+    "why": "Publishable is not installable. S11-D3 keeps this Set on the published side of the list partition above and refuses it at install, so it is the one Set that proves the two decisions are separate. slot_index names which slot decided it -- a Host that dropped that field would still carry the right token.",
+    "set_id": "33333333-3333-4333-8333-333333333333",
+    "version": "1.0.0",
+    "manifest_sha256": "57ab3bf8e01efe6a044639a53ee2e339627e3c3ee5a53b04e387ed640df2e64c",
+    "code": "UNSUPPORTED_AUDIO",
+    "reason": "soundset_audio_unsupported",
+    "slot_index": 0
+  }
+}

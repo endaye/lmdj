@@ -59,7 +59,7 @@
 // Pad under an occupied Set slot, which this Bundle does not contain, and is
 // proved natively in `tests/host/cli_test.py::soundset_acceptance_journey`.
 import {spawn} from "node:child_process";
-import {writeFileSync} from "node:fs";
+import {readFileSync, writeFileSync} from "node:fs";
 import {dirname, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
 
@@ -95,6 +95,17 @@ const UNSUPPORTED = "Fixture Unsupported Audio Kit";
 // four occupied slots and a demo are four objects on the wire, not five.
 const ATTRIBUTION_SHARED_ARTIFACT =
   "e51f446a04207989eea06f7206befd4306362d8a9bcd34b5638100062e2af29c";
+// The one expectation every Host is measured against for this Catalog. The
+// Native and CLI Hosts assert the same file in
+// `tests/host/soundset_catalog_partition_test.py`, so a Web Host that
+// disagrees with them now fails here rather than passing its own suite. Before
+// this, the browser only checked that the two reason strings appeared
+// *somewhere* in a list of four -- two refusals could swap their tokens and
+// nothing noticed.
+const CATALOG_PARTITION = JSON.parse(
+  readFileSync(resolve(fixtureRoot, "catalog-partition.json"), "utf8"),
+);
+
 const IMPORT_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 30_000 + 5_000;
 
@@ -353,9 +364,31 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   await expect(listing.getByRole("heading", {name: UNSUPPORTED})).toBeVisible();
   await expect(listing.getByRole("listitem")).toHaveCount(3);
   const refusals = page.getByRole("list", {name: "Unavailable Sound Sets"});
-  await expect(refusals.getByRole("listitem")).toHaveCount(4);
-  await expect(refusals).toContainText("soundset_content_mismatch");
-  await expect(refusals).toContainText("soundset_license_ineligible");
+  const expectedRefusals = CATALOG_PARTITION.refused;
+  const expectedSetIds = Object.keys(expectedRefusals).sort();
+  await expect(refusals.getByRole("listitem"))
+    .toHaveCount(expectedSetIds.length);
+  // Which Set carries which locked token, not just that the tokens appear.
+  // Each row renders `<setId> <version> — <CODE> (<reason>)`, so the surface
+  // can be read back into the same shape the Native and CLI Hosts answer with
+  // and compared as one object: a swap between two refusals, a changed code,
+  // or a Set moving across the eligible line all fail here.
+  const observedRefusals = Object.fromEntries(
+    (await refusals.getByRole("listitem").allInnerTexts()).map((row) => {
+      const match = row.match(
+        /^(\S+)\s+\S+\s+—\s+([A-Z_]+)\s+\(([a-z_]+)\)$/u,
+      );
+      expect(match, `unreadable refusal row: ${row}`).not.toBeNull();
+      return [match[1], {code: match[2], reason: match[3]}];
+    }),
+  );
+  expect(Object.keys(observedRefusals).sort()).toEqual(expectedSetIds);
+  for (const setId of expectedSetIds) {
+    expect(observedRefusals[setId], `refusal for ${setId}`).toEqual({
+      code: expectedRefusals[setId].code,
+      reason: expectedRefusals[setId].reason,
+    });
+  }
   // The CC-BY-4.0 credit comes from the verified manifest and reaches listing.
   await expect(listing.locator(".soundset-attribution")).toHaveText(
     "Fixture Attribution Kit by Bea Waveform (CC BY 4.0)",
