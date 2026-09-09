@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -20,6 +21,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <poll.h>
 #include <unistd.h>
@@ -710,10 +712,147 @@ class NativeHost final {
       return invalid_request(
           "Sound Set operation must target the Native Host Project");
     }
-    std::lock_guard lock(facade_mutex_);
-    return surface == FacadeSurface::command
-               ? application_.command(request)
-               : application_.query(request);
+    bool played = false;
+    Json response;
+    {
+      std::lock_guard lock(facade_mutex_);
+      response = surface == FacadeSurface::command
+                     ? application_.command(request)
+                     : application_.query(request);
+      // #799. The Facade has answered with the geometry; this Host owns an
+      // engine, so it also plays the bytes. A stopped Host is a normal state
+      // rather than a refusal, so `running_` gates the playback and never the
+      // answer.
+      //
+      // #1059 established `played` on the other engine-owning Host: without it
+      // "it played" and "it silently did not" are the same reply, and the
+      // branch a caller actually meets is a Host that has published a snapshot
+      // and never started its backend, where `enqueue_control` refuses every
+      // audition. This carries that field with the same meaning -- a voice was
+      // admitted -- and never a reason for `false`, because a reason
+      // vocabulary here is what Stage 11 froze. It is a Host field on the
+      // result, not a Facade one: `soundset.audition` through the CLI or
+      // core-mcp carries no `played`, because neither owns an engine to answer
+      // for.
+      //
+      // `find` rather than `operator[]`: on a non-const `Json` the subscript
+      // inserts a null member for a missing key, so probing `result` that way
+      // would edit the envelope it is only supposed to read.
+      const auto result = response.find("result");
+      if (response.value("ok", false) && result != response.end() &&
+          result->is_object() &&
+          request.at("operation").get<std::string>() == "soundset.audition") {
+        played = running_ && play_audition_locked(request);
+        (*result)["played"] = played;
+      }
+    }
+    if (played) {
+      // The deterministic backend has no clock of its own: nothing renders
+      // until this Host drives it, which is why `trigger` drains here too. In
+      // device mode this returns immediately and the audio callback owns the
+      // voice.
+      drain_no_device_trigger();
+    }
+    return response;
+  }
+
+  // #799. Publish the audition PCM the Facade decoded into the engine's
+  // reserved audition pool and start a voice on it.
+  //
+  // There is deliberately no native `soundset.audition.stop`. The Web Host has
+  // one because a browsing user interrupts a preview mid-playback; this Host
+  // is driven line by line over stdio, its auditions are `one_shot`, a second
+  // audition supersedes the first through the pool's replace semantics, and
+  // the deterministic backend has already rendered the preview to completion
+  // by the time the response is written. Adding one would mean a Host-owned
+  // operation outside `kSoundSetOperations` -- that table maps names to a
+  // `FacadeSurface`, and the Facade serves no stop, so an entry there would
+  // silently reach `dispatch()`'s `attempt_inspect` fallthrough. That is a new
+  // operation on this Host's surface, which the byte-path plan settled the
+  // other way for three Host tables and did not anticipate for this one; it
+  // belongs to #799 as a follow-up, not to this Task.
+  //
+  // `audition_soundset` is the typed Facade method the Web Host's
+  // `play_audition` also calls: the Facade resolves the Set, applies S11-D3's
+  // whole-Set audio decision and the locked refusal order, decodes and
+  // resamples, and hands back prepared PCM. This Host never reads the Set
+  // Store -- the relationship `sample.preview.set` already has with
+  // `inspect_sample` -- which is what keeps audition inside "Hosts use only
+  // the Application Facade".
+  //
+  // Not an error by design, exactly as in `control_runtime.cpp`: the metadata
+  // answer the caller is about to receive is already correct, and reporting a
+  // playback failure as a refusal would need error vocabulary Stage 11 has
+  // frozen. Returns whether a voice was actually admitted, which the caller
+  // reports as `played` rather than discarding.
+  //
+  // Called with `facade_mutex_` held.
+  [[nodiscard]] bool play_audition_locked(const Json& request) {
+    // The three identity fields are strings whenever the Facade answered `ok`:
+    // `soundset_audition` admits only the two exact key sets and type-checks
+    // each field before it resolves anything.
+    lmdj::facade::SoundSetAuditionRequest audition{
+        request.at("set_id").get<std::string>(),
+        request.at("version").get<std::string>(),
+        request.at("manifest_sha256").get<std::string>(),
+        std::nullopt,
+    };
+    if (request.contains("slot_index")) {
+      audition.slot_index = static_cast<std::uint8_t>(
+          request.at("slot_index").get<std::uint64_t>());
+    }
+    const auto audio = application_.audition_soundset(audition);
+    if (!audio.has_value()) {
+      // The Facade already refused this request through the envelope the
+      // caller is about to receive; there is nothing further to report.
+      return false;
+    }
+    const auto& source = *audio.value().prepared;
+    if (source.channels == 0 || source.interleaved.empty() ||
+        source.interleaved.size() % source.channels != 0) {
+      return false;
+    }
+    const auto frames = source.interleaved.size() / source.channels;
+    if (frames > std::numeric_limits<std::uint32_t>::max()) {
+      return false;
+    }
+    // Down-mix to the mono float a Bank stores through the same public helper
+    // `PreparedSampleBank::from_snapshot` uses for a Project Pad, so an
+    // audition and a Pad cannot disagree about what stereo means.
+    const lmdj::audio::PreparedSampleMaterialView material{
+        source.interleaved.data(),
+        static_cast<std::uint32_t>(frames),
+        source.channels,
+    };
+    std::vector<float> mono;
+    mono.reserve(frames);
+    for (std::uint32_t frame = 0; frame < frames; ++frame) {
+      mono.push_back(lmdj::audio::prepared_material_sample(material, frame));
+    }
+    auto bank = PreparedSampleBank::empty(
+        lmdj::audio::kAuditionBankProjectId(),
+        lmdj::audio::kAuditionBankProjectRevision);
+    if (!bank.set_sample(lmdj::audio::kAuditionSampleSlot, mono).has_value()) {
+      return false;
+    }
+    if (engine_.publish_audition_bank(std::move(bank)) !=
+        PublishResult::accepted) {
+      // Both reserved audition slots are still draining an earlier preview.
+      // Dropping this one is the honest outcome: the alternative is
+      // overwriting bytes a voice is still reading, which is the defect the
+      // two-slot pool exists to avoid. Retiring from here instead is not an
+      // option -- publication primes an `empty` slot and the audio thread
+      // applies and retires inside `render`, which is what serialises
+      // retirement against voice starts.
+      return false;
+    }
+    return engine_.enqueue_control(lmdj::audio::PadControlEvent{
+               0,
+               0,
+               127,
+               lmdj::audio::PadControlKind::audition_start,
+               {},
+           }) == EnqueueResult::accepted;
   }
 
   Json sample_quota(const Json& request) {

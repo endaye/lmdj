@@ -26,6 +26,13 @@ STARTUP_PATTERN_ID = "00000000-0000-4000-8000-000000000010"
 KICK_ASSET_ID = "00000000-0000-4000-8000-000000000101"
 SNARE_ASSET_ID = "00000000-0000-4000-8000-000000000102"
 RECORDED_SESSION_ID = "00000000-0000-4000-8000-000000000202"
+# The Sound Set fixture corpus, addressed exactly as `tests/host/cli_test.py`
+# addresses it. `tests/fixtures/soundset/README.md` is the authority for which
+# Set exercises which case.
+FOUNDRY_SET_ID = "11111111-1111-4111-8111-111111111111"
+FOUNDRY_MANIFEST = (
+    "33175f66912a9add3e4e551d19d85072adcd1f0331fcc9fed80ab0bc18dd9111"
+)
 DEFAULT_RESPONSE_TIMEOUT_SECONDS = 10.0
 DURABLE_RECORD_STOP_TIMEOUT_SECONDS = 30.0
 
@@ -667,6 +674,226 @@ def happy_path(
     assert len(inspected["patterns"][STARTUP_PATTERN_ID]["events"]) >= 2
 
 
+def publish_workspace_catalog(workspace: Path) -> None:
+    """Point this Workspace at the offline Sound Set fixture Catalog.
+
+    Byte for byte, and nothing injected: the Native Host wires its own
+    Workspace-local Catalog (`main.cpp`'s `make_workspace_soundset_catalog`),
+    so the Host process reads exactly the objects `tests/fixtures/soundset`
+    publishes. Same shape as `tests/host/cli_test.py`'s helper of this name.
+    """
+    fixtures = REPO_ROOT / "tests/fixtures/soundset"
+    catalog = workspace / ".lmdj-host/soundset-catalog"
+    (catalog / "objects").mkdir(parents=True)
+    for kind in ("manifest", "blob"):
+        for source in sorted((fixtures / kind).iterdir()):
+            if source.is_file():
+                (catalog / "objects" / source.name).write_bytes(
+                    source.read_bytes()
+                )
+    (catalog / "index.json").write_bytes(
+        (fixtures / "catalog/index.json").read_bytes()
+    )
+
+
+def soundset_audition_reaches_a_voice(
+    host: Path,
+    cli: Path,
+    workspace: Path,
+    assembly: Path,
+    project: Path,
+) -> None:
+    """A Native Host audition reaches a voice, not only a metadata answer.
+
+    #799's plan promises the byte path in "the two Hosts that own an engine".
+    Only the Web Host was wired: `soundset.audition` here forwarded to the
+    Facade and returned geometry, so the Set was inaudible on this Host. The
+    far-side observable is the engine's own telemetry, because a voice can only
+    start on the reserved audition Bank after the Facade decoded the Set's
+    bytes, this Host published them, and the audio thread applied that
+    publication inside `render`.
+
+    Each audition below asserts after the transition, and the refusals assert
+    the negative at the same place: the Facade decides, and a refused audition
+    must start nothing. `played` (#1059) is asserted on the Host's own reply
+    beside the engine telemetry, so a silent audition can no longer read
+    exactly like a sounding one -- true for the two accepted legs, false for
+    the stopped-backend leg.
+
+    WHAT THIS CANNOT EXPRESS -- audibility. It proves a voice started from the
+    audition Bank and ran to completion over the Set's decoded frame count; it
+    does not prove the samples leaving a device are the Set's, at the right
+    gain, or in the right order. That class needs a captured output buffer,
+    which this Host does not expose: `record.begin`/`record.stop` capture
+    Pattern events, not audio. It also cannot see a wrong-Set mix-up, because
+    every accepted audition looks the same from telemetry.
+    """
+    process = HostProcess(host, workspace, assembly, project)
+    ready = process.read()
+    assert ready["ok"] is True, ready
+
+    def engine_state() -> tuple[dict, dict, int]:
+        status = process.request({"operation": "status"})
+        assert status["ok"] is True, status
+        return (
+            status["result"]["engine"],
+            status["result"]["bank"],
+            status["result"]["snapshot"]["project_revision"],
+        )
+
+    engine, bank_before, revision_before = engine_state()
+    assert engine["started_voices"] == 0, engine
+    assert engine["completed_voices"] == 0, engine
+
+    # Leg 0 -- inspect materialises the Set into the Workspace Set Store,
+    # which is what audition reads. The Catalog is only the transport.
+    listed = process.request({"operation": "soundset.catalog.list"})
+    assert listed["ok"] is True, listed
+    assert listed["result"]["catalog_available"] is True, listed
+    assert FOUNDRY_SET_ID in {
+        entry["set_id"] for entry in listed["result"]["sets"]
+    }, listed
+    inspected = process.request(
+        {
+            "operation": "soundset.inspect",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        }
+    )
+    assert inspected["ok"] is True, inspected
+    assert len(inspected["result"]["slots"]) == 16, inspected
+    # `played` belongs to the one operation that plays. A Set-reading operation
+    # that grew it would be claiming an outcome it never produced.
+    assert "played" not in inspected["result"], inspected
+    engine, bank, revision = engine_state()
+    assert engine["started_voices"] == 0, engine
+    assert bank == bank_before, (bank_before, bank)
+
+    # Leg 1 -- the set-level demo. No `slot_index`, no Project, no
+    # `project_path`: S11-D5's audition is Workspace-scoped.
+    demo = process.request(
+        {
+            "operation": "soundset.audition",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        }
+    )
+    assert demo["ok"] is True, demo
+    assert demo["result"]["slot_index"] is None, demo
+    assert demo["result"]["audio"]["prepared_frames"] > 0, demo
+    assert demo["result"]["played"] is True, demo
+    engine, bank, revision = engine_state()
+    assert engine["started_voices"] == 1, (demo, engine)
+    assert engine["completed_voices"] == 1, (demo, engine)
+    assert engine["voice_drops"] == 0, engine
+    # The audition Bank lives outside the Project pool, so no Project
+    # publication happened, no Project slot was consumed, and the Pad
+    # availability a Project voice reads did not move. `bank` is the whole
+    # Project-pool observation this Host reports, so comparing it entire is
+    # stricter than naming one counter and cannot miss a new one.
+    assert bank == bank_before, (bank_before, bank)
+    assert revision == revision_before, (revision_before, revision)
+
+    # Leg 2 -- a slot Artifact rather than the demo, through the same path.
+    slot_audition = process.request(
+        {
+            "operation": "soundset.audition",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+            "slot_index": 0,
+        }
+    )
+    assert slot_audition["ok"] is True, slot_audition
+    assert slot_audition["result"]["slot_index"] == 0, slot_audition
+    assert slot_audition["result"]["played"] is True, slot_audition
+    assert (
+        slot_audition["result"]["artifact"]["sha256"]
+        != demo["result"]["artifact"]["sha256"]
+    ), (demo, slot_audition)
+    engine, bank, revision = engine_state()
+    assert engine["started_voices"] == 2, (slot_audition, engine)
+    assert engine["completed_voices"] == 2, (slot_audition, engine)
+    assert bank == bank_before, (bank_before, bank)
+
+    # Leg 3 -- an empty slot. The Facade refuses with the existing
+    # `MISSING_ASSET`, and this Host must start nothing.
+    empty = process.request(
+        {
+            "operation": "soundset.audition",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+            "slot_index": 10,
+        }
+    )
+    check_error(empty, "MISSING_ASSET")
+    engine, bank, revision = engine_state()
+    assert engine["started_voices"] == 2, (empty, engine)
+    assert bank == bank_before, (bank_before, bank)
+
+    # Leg 4 -- the Project's own Pads still play after two auditions, which
+    # is the far side of "an audition never consumes a Project bank slot".
+    triggered = process.request(
+        {"operation": "trigger", "slot": slot(0, 0), "velocity": 100}
+    )
+    assert triggered["ok"] is True, triggered
+    engine, bank, revision = engine_state()
+    assert engine["started_voices"] == 3, (triggered, engine)
+    assert engine["completed_voices"] == 3, (triggered, engine)
+    assert engine["voice_drops"] == 0, engine
+    assert bank == bank_before, (bank_before, bank)
+    assert revision == revision_before, (revision_before, revision)
+
+    # Leg 5 -- a stopped Host answers the query and plays nothing. Playback is
+    # gated on the backend, never the answer. Last, because `start` resets the
+    # engine's counters and every count above would restart from zero.
+    stopped = process.request({"operation": "stop"})
+    assert stopped["ok"] is True, stopped
+    stopped_audition = process.request(
+        {
+            "operation": "soundset.audition",
+            "set_id": FOUNDRY_SET_ID,
+            "version": "1.0.0",
+            "manifest_sha256": FOUNDRY_MANIFEST,
+        }
+    )
+    assert stopped_audition["ok"] is True, stopped_audition
+    assert stopped_audition["result"]["audio"]["prepared_frames"] > 0, (
+        stopped_audition
+    )
+    # The #1059 branch a caller actually meets: the geometry is right and no
+    # sound came out, and the reply says so instead of reading like the two
+    # accepted auditions above.
+    assert stopped_audition["result"]["played"] is False, stopped_audition
+    engine, bank, revision = engine_state()
+    assert engine["started_voices"] == 3, (stopped_audition, engine)
+    assert bank == bank_before, (bank_before, bank)
+
+    process.quit()
+
+    # Far side in Project Truth, read by a separate process: an audition is a
+    # query, so the Project it never named is byte-identical in revision and
+    # Asset table.
+    truth = cli_request(
+        cli,
+        workspace,
+        assembly,
+        "query",
+        {"operation": "project.inspect", "project_path": str(project)},
+    )
+    assert truth["ok"] is True, truth
+    assert truth["project_revision"] == revision_before, (
+        revision_before,
+        truth["project_revision"],
+    )
+    assert sorted(truth["result"]["project"]["assets"]) == sorted(
+        [KICK_ASSET_ID, SNARE_ASSET_ID]
+    ), truth["result"]["project"]["assets"]
+
+
 def sample_facade_snapshot_path(
     host: Path,
     cli: Path,
@@ -796,6 +1023,14 @@ def main() -> int:
         happy_path(host, cli, workspace, assembly, happy_project)
         sample_facade_snapshot_path(
             host, cli, workspace, assembly, sample_project
+        )
+        audition_workspace = temp_root / "audition-workspace"
+        audition_workspace.mkdir()
+        publish_workspace_catalog(audition_workspace)
+        audition_project = temp_root / "audition.lmdj"
+        author_project(cli, audition_workspace, assembly, audition_project)
+        soundset_audition_reaches_a_voice(
+            host, cli, audition_workspace, assembly, audition_project
         )
         non_apple_real_device_contract(
             host, workspace, assembly, base_project
