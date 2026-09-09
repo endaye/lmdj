@@ -351,7 +351,26 @@ Issues. Retain the postmerge live Issue-state audit below.
 
 ## 5. Current-head review and authorized merge
 
-1. **Check live state and authority**. Push and PR permission do not imply merge
+1. **Refresh the rules, then check live state and authority**. At the start of
+   the final premerge check pass, fetch main and record its full revision:
+   ```bash
+   git fetch origin main
+   git rev-parse origin/main
+   ```
+   Read the shipping skill and applicable governance from that exact main
+   revision, using `git show <revision>:<path>`; compare with the revisions
+   previously read for this Task. Include `AGENTS.md`, `CLAUDE.md`, this skill
+   and `docs/governance/git-workflow.md`, plus applicable version, portal or
+   pitfall policy when changed. If review, fixes or other work delays this
+   final check pass, refresh again before resuming it. A feature worktree can
+   retain replaced instructions even after its implementation is complete.
+   Run newly applicable checks before merging; a postmerge observation cannot
+   establish that a premerge check ran. This is a read-only workflow refresh:
+   no rebase, strict-update gate or protection change is required merely to
+   read current rules. Existing user authorization and explicit restrictions
+   still take precedence; refreshing rules does not request new permission.
+
+   **Check live state and authority**. Push and PR permission do not imply merge
    permission. Read the PR's current head SHA, open/draft state, conflicts,
    unresolved review threads and effective protection. Unknown mergeability is
    not proof of no conflict: reread with a bounded wait or report it.

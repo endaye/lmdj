@@ -1,12 +1,15 @@
 ---
 id: stale-task-worktree-shipping-rules
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-09
     occurrence: https://github.com/endaye/lmdj/pull/1113
     observed_by: Codex (GPT-6)
-exit: none
+  - date: 2026-09-09
+    occurrence: https://github.com/endaye/lmdj/pull/1126
+    observed_by: Codex (GPT-6)
+exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
 # A task worktree can retain shipping instructions that live main has replaced.
@@ -28,7 +31,13 @@ trusted current helper; a non-conflicting Task need not rebase merely to read
 them. Preserve genuine independent-review evidence and report a missed check
 honestly; do not invent prior eligibility or a waiver.
 
-This first occurrence remains open. No automated gate can establish which
-instructions an agent actually read; no new required check or protection change
-is introduced here. A future skill-level absorption can make the fresh-source
-inspection step explicit.
+The second occurrence happened when main added the live
+`closingIssuesReferences` inspection during L3's review/shipping interval.
+The postmerge audit found exactly the intended #1040 closure and retained
+#471/#472 open, but that does not prove a premerge inspection.
+
+Absorbed into `issue-done` section 5: refresh and record live-main governance at
+the start of the final premerge check pass, and refresh again when further work
+delays that pass. The mechanism is a skill step because a gate cannot establish
+which instructions an agent actually read. No new required CI check, strict
+update rule or protection change is introduced.
