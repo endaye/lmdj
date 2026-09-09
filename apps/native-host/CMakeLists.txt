@@ -122,4 +122,6 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:lmdj_core_c>"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     TIMEOUT 120)
+  set_tests_properties(host.provider_owner PROPERTIES
+    ENVIRONMENT "${lmdj_mcp_test_environment}")
 endif()

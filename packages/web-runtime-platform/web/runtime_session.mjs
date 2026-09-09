@@ -4409,6 +4409,11 @@ function createRuntimeSessionController(options = {}) {
         // The packaged Host already publishes this runtime namespace. Expose
         // the same session methods for trusted programmatic callers through
         // its ordinary control lane, with no private Wasm or test-only API.
+        Object.defineProperty(runtime, "candidates", {
+          value: Object.freeze({runCandidateJob, inspectCandidateJob, cancelCandidateJob,
+            discardCandidateSet, auditionCandidate, stopCandidateAudition, adoptCandidates}),
+          configurable: false, writable: false,
+        });
         Object.defineProperty(runtime, "providers", {
           value: Object.freeze({listProviders, configureProviderPermissions,
             selectProvider, runProvider, inspectAttempt}),
@@ -4832,10 +4837,70 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  async function candidateRequest(operation, request) {
+    if (!started || closing || ["closed", "failed", "restart-required"].includes(machine.state)) {
+      throw typedError("HOST_STATE_INVALID", "Candidate Host is unavailable");
+    }
+    const result = await boundedRequest(operation, request);
+    const mismatch = () => { throw protocolMismatch("Candidate response does not match the request"); };
+    if (request.job_id !== undefined && result.job_id !== undefined && result.job_id !== request.job_id) mismatch();
+    if (operation === "candidate.audition") {
+      if (result.set_id !== request.set_id || result.candidate_id !== request.candidate_id ||
+          result.project_revision !== request.expected_revision) mismatch();
+    }
+    if (operation === "candidate.job.run" && !result.history.some((entry) =>
+      entry.intent.attempt_id === request.attempt_id && entry.intent.source.project_id === request.project_id &&
+      entry.intent.source.asset_id === request.asset_id && entry.intent.source.project_revision === request.expected_revision)) mismatch();
+    if (operation === "candidate.set.discard" && !result.sets.some((set) => set.set_id === request.set_id && set.status === "discarded")) mismatch();
+    if (operation === "candidate.job.cancel" && !result.history.some((entry) => entry.intent.attempt_id === request.attempt_id && entry.status === "cancelled")) mismatch();
+    if (operation === "candidate.adopt") {
+      if (result.set_id !== request.set_id || result.project_revision !== request.expected_revision + 1 ||
+        result.adopted.length !== request.selections.length || !request.selections.every((selection) =>
+          result.adopted.some((entry) => entry.candidate_id === selection.candidate_id &&
+            entry.bank === selection.bank && entry.pad === selection.pad))) mismatch();
+    }
+    return result;
+  }
+  /** @param {import("./runtime_types.d.ts").CandidateRunRequest} request */
+  function runCandidateJob(request) {
+    return serializeProjectAction(() => candidateRequest("candidate.job.run", request));
+  }
+  function inspectCandidateJob(jobId) {
+    return candidateRequest("candidate.job.inspect", {job_id: jobId});
+  }
+  function cancelCandidateJob(jobId, attemptId) {
+    return serializeProjectAction(() => candidateRequest("candidate.job.cancel", {job_id: jobId, attempt_id: attemptId}));
+  }
+  function discardCandidateSet(jobId, setId) {
+    return serializeProjectAction(() => candidateRequest("candidate.set.discard", {job_id: jobId, set_id: setId}));
+  }
+  /** @param {import("./runtime_types.d.ts").CandidateAuditionRequest} request */
+  function auditionCandidate(request) {
+    return serializeProjectAction(() => candidateRequest("candidate.audition", request));
+  }
+  function stopCandidateAudition() {
+    return serializeProjectAction(() => candidateRequest("candidate.audition.stop", {}));
+  }
+  /** @param {import("./runtime_types.d.ts").CandidateAdoptRequest} request */
+  function adoptCandidates(request) {
+    // A lost response is an unknown commit: propagate it, never replay the command.
+    // The caller refreshes Project inspection before presenting another adoption.
+    return serializeProjectAction(() => candidateRequest("candidate.adopt", request));
+  }
+
   // Explicit Host settings and execution share the serialized control lane.
   // Payloads use the Facade names, except owner filesystem paths are forbidden.
-  function listProviders() {
-    return boundedRequest("provider.list", {});
+  async function listProviders() {
+    const result = await boundedRequest("provider.list", {});
+    if (!exactKeys(result, ["providers", "granted_permissions", "project_revision"]) ||
+        !Array.isArray(result.providers) || result.project_revision !== null ||
+        !Array.isArray(result.granted_permissions) ||
+        !result.granted_permissions.every((permission) => typeof permission === "string" &&
+          /^[A-Za-z0-9._-]{1,128}$/.test(permission) && permission !== "." && permission !== "..") ||
+        new Set(result.granted_permissions).size !== result.granted_permissions.length) {
+      throw protocolMismatch("Provider permission readback is invalid");
+    }
+    return result;
   }
   function configureProviderPermissions(grantedPermissions) {
     return serializeProjectAction(() => boundedRequest(
@@ -4854,6 +4919,8 @@ function createRuntimeSessionController(options = {}) {
   }
 
   const session = Object.freeze({
+    runCandidateJob, inspectCandidateJob, cancelCandidateJob, discardCandidateSet,
+    auditionCandidate, stopCandidateAudition, adoptCandidates,
     listProviders,
     configureProviderPermissions,
     selectProvider,

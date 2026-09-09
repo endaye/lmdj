@@ -354,6 +354,8 @@ PY
 run_browser_gate() {
   local bundle="$1"
   local sample_bundle="$2"
+  local candidate_bundle="$3"
+  export LMDJ_CREATOR_WEB_CANDIDATE_BUNDLE="$candidate_bundle"
   local requested_port="${LMDJ_CREATOR_WEB_PORT:-0}"
   local ready_file ready_nonce port="" status=0
   local specs=()
@@ -494,6 +496,10 @@ proof_creator() {
   proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-creator-proof.XXXXXX")"
   generate_project_fixture "$proof_root/creator-proof-bundle.lmdj"
   generate_sample_editor_fixture "$proof_root/creator-sample-proof-bundle.lmdj"
+  python3 "$web_test_root/creator/fixtures/make_candidate_fixture.py" \
+    "$repo_root/build/core/dev/bin/lmdj-core" \
+    "$repo_root/products/lmdj/assembly.json" \
+    "$proof_root/creator-candidate-proof-bundle.lmdj"
   clean_creator
   configure_creator
   build_creator
@@ -511,7 +517,8 @@ proof_creator() {
   test_creator
   run_browser_gate \
     "$proof_root/creator-proof-bundle.lmdj" \
-    "$proof_root/creator-sample-proof-bundle.lmdj"
+    "$proof_root/creator-sample-proof-bundle.lmdj" \
+    "$proof_root/creator-candidate-proof-bundle.lmdj"
   echo "Creator Web Proof: PASS"
 }
 

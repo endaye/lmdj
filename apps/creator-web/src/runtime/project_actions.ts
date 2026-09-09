@@ -77,7 +77,7 @@ function patternSlotsFor(
     return Object.freeze(Array<string | null>(16).fill(null));
   }
   const patterns = project.patterns;
-  if (project.contract !== "lmdj.project.v4" ||
+  if (!["lmdj.project.v4", "lmdj.project.v5"].includes(project.contract as string) ||
       !Array.isArray(project.pattern_slots) ||
       project.pattern_slots.length !== 16 ||
       !record(patterns)) {

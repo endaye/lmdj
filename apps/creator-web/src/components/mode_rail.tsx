@@ -3,7 +3,8 @@ export type CreatorMode =
   | "sample"
   | "sequence"
   | "perform"
-  | "soundset";
+  | "soundset"
+  | "slice";
 
 interface ModeRailProps {
   activeMode: CreatorMode;
@@ -11,6 +12,7 @@ interface ModeRailProps {
   sequenceEnabled?: boolean;
   performEnabled?: boolean;
   soundSetEnabled?: boolean;
+  sliceEnabled?: boolean;
 }
 
 export function ModeRail({
@@ -19,6 +21,7 @@ export function ModeRail({
   sequenceEnabled = false,
   performEnabled = false,
   soundSetEnabled = false,
+  sliceEnabled = false,
 }: ModeRailProps) {
   return (
     <nav className="mode-rail" aria-label="Creator modes">
@@ -50,6 +53,17 @@ export function ModeRail({
       >
         <span className="mode-glyph" aria-hidden="true">∿</span>
         <span className="mode-label">Sample</span>
+      </button>
+      <button
+        className={`mode-button${activeMode === "slice" ? " is-active" : ""}`}
+        type="button"
+        disabled={!sliceEnabled}
+        aria-current={activeMode === "slice" ? "page" : undefined}
+        aria-label={sliceEnabled ? "Slice" : "Slice — open a Project with candidate support"}
+        onClick={() => onSelect("slice")}
+      >
+        <span className="mode-glyph" aria-hidden="true">⋮</span>
+        <span className="mode-label">Slice</span>
       </button>
       <button
         className={`mode-button${activeMode === "soundset" ? " is-active" : ""}`}

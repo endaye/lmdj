@@ -184,11 +184,12 @@ describe("Project journeys", () => {
       .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
   });
 
-  test("preserves sixteen ordered v4 Pattern slots in a new immutable projection", async () => {
+  test.each(["lmdj.project.v4", "lmdj.project.v5"])("preserves sixteen ordered %s Pattern slots in a new immutable projection", async (contract) => {
     const slots = Array<string | null>(16).fill(null);
     slots[1] = SECOND_PATTERN_ID;
     slots[7] = PATTERN_ID;
     const inspected = inspectV4(slots);
+    inspected.project.contract = contract;
     const transportedSlots = inspected.project.pattern_slots;
     const view = await openProjectJourney(sessionFor(inspected), summary);
     expect(view.patternSlots).toEqual(slots);
@@ -206,14 +207,18 @@ describe("Project journeys", () => {
       name: "dangling Pattern",
       slots: [UNKNOWN_PATTERN_ID, ...Array<string | null>(15).fill(null)],
     },
-  ])("rejects v4 $name without returning stale slot truth", async ({slots}) => {
-    await expect(openProjectJourney(sessionFor(inspectV4(slots)), summary))
-      .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
+  ])("rejects v4/v5 $name without returning stale slot truth", async ({slots}) => {
+    for (const contract of ["lmdj.project.v4", "lmdj.project.v5"]) {
+      const inspected = inspectV4(slots);
+      inspected.project.contract = contract;
+      await expect(openProjectJourney(sessionFor(inspected), summary))
+        .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
+    }
   });
 
   test("rejects an unknown Project contract", async () => {
     const inspected = inspectV3();
-    inspected.project.contract = "lmdj.project.v5";
+    inspected.project.contract = "lmdj.project.v6";
     await expect(openProjectJourney(sessionFor(inspected), summary))
       .rejects.toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
   });

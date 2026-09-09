@@ -696,6 +696,42 @@ def publish_workspace_catalog(workspace: Path) -> None:
     )
 
 
+
+def candidate_audition_reaches_a_voice(process: HostProcess, request: dict) -> dict:
+    """Called by the real CLI/MCP/Native Candidate owner journey.
+
+    No-device mode renders to completion before replying, so counters prove
+    actual admission/completion, while stop proves its explicit Host route.
+    This does not claim physical-device output or mid-buffer interruption.
+    """
+    before = process.request({"operation": "status"})["result"]
+    preview = process.request(request)
+    assert preview["ok"] is True and preview["result"]["played"] is True, preview
+    after = process.request({"operation": "status"})["result"]
+    assert after["engine"]["started_voices"] == before["engine"]["started_voices"] + 1
+    assert after["engine"]["completed_voices"] == before["engine"]["completed_voices"] + 1
+    assert after["engine"]["voice_drops"] == before["engine"]["voice_drops"]
+    assert after["bank"] == before["bank"]
+    assert after["snapshot"] == before["snapshot"]
+    stopped = process.request({"operation": "candidate.audition.stop"})
+    assert stopped == {"ok": True, "operation": "candidate.audition.stop",
+                       "result": {"stopped": True}}, stopped
+    status = process.request({"operation": "status"})["result"]
+    assert status["engine"]["active_voices"] == 0
+    assert status["engine"]["started_voices"] == after["engine"]["started_voices"]
+    assert status["bank"] == before["bank"]
+    assert status["snapshot"] == before["snapshot"]
+    malformed = process.request({"operation": "candidate.audition.stop", "job_id": "slice"})
+    assert malformed["ok"] is False and malformed["error"]["code"] == "INVALID_ARGUMENT"
+    assert process.request({"operation": "stop"})["ok"] is True
+    silent = process.request(request)
+    assert silent["ok"] is True and silent["result"]["played"] is False, silent
+    assert process.request({"operation": "candidate.audition.stop"})["ok"] is True
+    status = process.request({"operation": "status"})["result"]
+    assert status["engine"]["started_voices"] == after["engine"]["started_voices"]
+    assert process.request({"operation": "start"})["ok"] is True
+    return preview
+
 def soundset_audition_reaches_a_voice(
     host: Path,
     cli: Path,

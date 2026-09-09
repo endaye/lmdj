@@ -601,6 +601,65 @@ def expected_output_schema() -> dict:
     return {"type": "object", "oneOf": [success, error]}
 
 
+def expected_candidate_input_schemas() -> dict[str, dict]:
+    file_id = {"type": "string", "minLength": 1, "maxLength": 128,
+               "pattern": FILE_ID_PATTERN}
+    uuid = {"type": "string", "pattern": UUID_PATTERN}
+    project = {"project_path": {"type": "string", "minLength": 1},
+               "project_id": uuid,
+               "expected_revision": {"type": "integer", "minimum": 0,
+                                     "maximum": 18446744073709551615}}
+    selector = {"job_id": file_id, "set_id": file_id}
+    fields = {
+        "candidate.job.run": {
+            **project, "job_id": file_id, "attempt_id": file_id, "asset_id": uuid,
+            "parameters": object_schema({
+                "threshold_pcm16": {"type": "integer", "minimum": 1, "maximum": 32767},
+                "refractory_frames": {"type": "integer", "minimum": 1, "maximum": 48000},
+            }, []),
+            "data_classification": file_id, "platform": file_id, "region": file_id,
+            "required_permissions": {"type": "array", "items": file_id, "uniqueItems": True},
+        },
+        "candidate.job.inspect": {"job_id": file_id},
+        "candidate.job.cancel": {"job_id": file_id, "attempt_id": file_id},
+        "candidate.set.discard": selector,
+        "candidate.audition": {**project, **selector, "candidate_id": file_id},
+        "candidate.adopt": {
+            **project, **selector, "command_id": uuid,
+            "selections": {"type": "array", "minItems": 1, "maxItems": 64,
+                "items": object_schema({
+                    "candidate_id": file_id,
+                    "bank": {"type": "integer", "minimum": 0, "maximum": 3},
+                    "pad": {"type": "integer", "minimum": 0, "maximum": 15},
+                }, ["candidate_id", "bank", "pad"])},
+        },
+    }
+    return {"lmdj." + name: object_schema(properties, list(properties))
+            for name, properties in fields.items()}
+
+
+def expected_candidate_audition_output_schema() -> dict:
+    schema = expected_output_schema()
+    success = schema["oneOf"][0]
+    file_id = {"type": "string", "minLength": 1, "maxLength": 128,
+               "pattern": FILE_ID_PATTERN}
+    fields = {
+        "job_id": file_id, "set_id": file_id, "candidate_id": file_id,
+        "artifact": object_schema({
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "byte_length": {"type": "integer", "minimum": 1, "maximum": 16777216},
+            "media_type": {"type": "string", "const": "audio/wav"},
+        }, ["sha256", "byte_length", "media_type"]),
+        "sample_rate": {"type": "integer", "enum": [44100, 48000]},
+        "channels": {"type": "integer", "minimum": 1, "maximum": 2},
+        "source_frames": {"type": "integer", "minimum": 1, "maximum": 8388608},
+    }
+    success["properties"]["result"] = object_schema(fields, list(fields))
+    success["properties"]["project_revision"] = {
+        "type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+    return schema
+
+
 class MCPProcess:
     def __init__(
         self,
@@ -1320,7 +1379,7 @@ def tools_list(library: Path, temp_root: Path) -> None:
     assert set(response) == {"jsonrpc", "id", "result"}
     assert set(response["result"]) == {"tools"}
     tools = response["result"]["tools"]
-    schemas = expected_schemas()
+    schemas = {**expected_schemas(), **expected_candidate_input_schemas()}
     performance_tools = expected_performance_tools()
     schemas.update(
         {
@@ -1329,6 +1388,7 @@ def tools_list(library: Path, temp_root: Path) -> None:
         }
     )
     performance_outputs = expected_performance_output_schemas()
+    performance_outputs["lmdj.candidate.audition"] = expected_candidate_audition_output_schema()
     expected_routes = (
         ("lmdj.project.create", "project.create", "command"),
         ("lmdj.project.inspect", "project.inspect", "query"),
@@ -1374,6 +1434,12 @@ def tools_list(library: Path, temp_root: Path) -> None:
         ("lmdj.provider.run", "provider.run", "command"),
         ("lmdj.provider.permissions.configure", "provider.permissions.configure", "command"),
         ("lmdj.attempt.inspect", "attempt.inspect", "query"),
+        ("lmdj.candidate.job.run", "candidate.job.run", "command"),
+        ("lmdj.candidate.job.inspect", "candidate.job.inspect", "query"),
+        ("lmdj.candidate.job.cancel", "candidate.job.cancel", "command"),
+        ("lmdj.candidate.set.discard", "candidate.set.discard", "command"),
+        ("lmdj.candidate.adopt", "candidate.adopt", "command"),
+        ("lmdj.candidate.audition", "candidate.audition", "query"),
     )
     assert tuple(
         (tool.name, tool.operation, tool.surface) for tool in server.TOOLS
@@ -1588,6 +1654,24 @@ def valid_arguments(temp_root: Path) -> dict[str, dict]:
             "required_permissions": [],
         },
         "lmdj.attempt.inspect": {"attempt_id": "attempt-1"},
+        "lmdj.candidate.job.run": {
+            "project_path": str(missing_project), "project_id": uuid, "expected_revision": 0,
+            "job_id": "slice", "attempt_id": "slice-1", "asset_id": uuid,
+            "parameters": {}, "data_classification": "public", "platform": "test",
+            "region": "local", "required_permissions": ["sample.slice.execute"],
+        },
+        "lmdj.candidate.job.inspect": {"job_id": "slice"},
+        "lmdj.candidate.job.cancel": {"job_id": "slice", "attempt_id": "slice-1"},
+        "lmdj.candidate.set.discard": {"job_id": "slice", "set_id": "set"},
+        "lmdj.candidate.adopt": {
+            "project_path": str(missing_project), "project_id": uuid, "expected_revision": 0,
+            "command_id": uuid, "job_id": "slice", "set_id": "set",
+            "selections": [{"candidate_id": "recipe", "bank": 0, "pad": 0}],
+        },
+        "lmdj.candidate.audition": {
+            "project_path": str(missing_project), "project_id": uuid, "expected_revision": 0,
+            "job_id": "slice", "set_id": "set", "candidate_id": "recipe",
+        },
     }
 
 
@@ -1605,6 +1689,31 @@ def tools_call_validation(library: Path, temp_root: Path) -> None:
             index,
         )
         assert isinstance(result["structuredContent"]["ok"], bool)
+    candidate_args = {name: arguments for name, arguments in valid_arguments(temp_root).items()
+                      if name.startswith("lmdj.candidate.")}
+    invalid_candidate_calls = [("lmdj.candidate.audition.stop", {})]
+    for name, arguments in candidate_args.items():
+        invalid_candidate_calls.append((name, {**arguments, "unexpected": True}))
+        for field in arguments:
+            missing = dict(arguments); missing.pop(field)
+            invalid_candidate_calls.append((name, missing))
+        if "expected_revision" in arguments:
+            for revision in (-1, True, 0.5, 2**64):
+                invalid_candidate_calls.append((name, {**arguments, "expected_revision": revision}))
+    adopt = candidate_args["lmdj.candidate.adopt"]
+    for selections in ([], adopt["selections"] * 65,
+        [{"candidate_id": "recipe", "bank": 4, "pad": 0}],
+        [{"candidate_id": "recipe", "bank": 0, "pad": 16}],
+        [{"candidate_id": "recipe", "bank": True, "pad": 0}],
+        [{"candidate_id": "recipe", "bank": 0, "pad": 0, "source_path": "x"}]):
+        invalid_candidate_calls.append(("lmdj.candidate.adopt", {**adopt, "selections": selections}))
+    run = candidate_args["lmdj.candidate.job.run"]
+    for parameters in ({"threshold_pcm16": 0}, {"threshold_pcm16": 32768},
+        {"refractory_frames": 48001}, {"refractory_frames": True}, {"path": "x"}):
+        invalid_candidate_calls.append(("lmdj.candidate.job.run", {**run, "parameters": parameters}))
+    for identifier, (name, arguments) in enumerate(invalid_candidate_calls, start=1000):
+        assert_error(host.tool_call(identifier, name, arguments), identifier, -32602, "Invalid params")
+
     assert_error(
         host.tool_call(
             30,
@@ -1804,7 +1913,7 @@ def result_contract(library: Path, temp_root: Path) -> None:
     assert success["isError"] is False
     assert success["structuredContent"] == {
         "ok": True,
-        "result": {"providers": []},
+        "result": {"providers": [], "granted_permissions": []},
         "project_revision": None,
     }
     failure = assert_tool_result(

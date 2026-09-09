@@ -1263,10 +1263,70 @@ class Tool:
     output_schema: dict
 
 
+def candidate_input_schemas() -> dict[str, dict]:
+    file_id = {"type": "string", "minLength": 1, "maxLength": 128,
+               "pattern": FILE_ID_PATTERN}
+    uuid = {"type": "string", "pattern": UUID_PATTERN}
+    project = {"project_path": {"type": "string", "minLength": 1},
+               "project_id": uuid,
+               "expected_revision": {"type": "integer", "minimum": 0,
+                                     "maximum": 18446744073709551615}}
+    selector = {"job_id": file_id, "set_id": file_id}
+    fields = {
+        "candidate.job.run": {
+            **project, "job_id": file_id, "attempt_id": file_id, "asset_id": uuid,
+            "parameters": object_schema({
+                "threshold_pcm16": {"type": "integer", "minimum": 1, "maximum": 32767},
+                "refractory_frames": {"type": "integer", "minimum": 1, "maximum": 48000},
+            }, []),
+            "data_classification": file_id, "platform": file_id, "region": file_id,
+            "required_permissions": {"type": "array", "items": file_id, "uniqueItems": True},
+        },
+        "candidate.job.inspect": {"job_id": file_id},
+        "candidate.job.cancel": {"job_id": file_id, "attempt_id": file_id},
+        "candidate.set.discard": selector,
+        "candidate.audition": {**project, **selector, "candidate_id": file_id},
+        "candidate.adopt": {
+            **project, **selector, "command_id": uuid,
+            "selections": {"type": "array", "minItems": 1, "maxItems": 64,
+                "items": object_schema({
+                    "candidate_id": file_id,
+                    "bank": {"type": "integer", "minimum": 0, "maximum": 3},
+                    "pad": {"type": "integer", "minimum": 0, "maximum": 15},
+                }, ["candidate_id", "bank", "pad"])},
+        },
+    }
+    return {"lmdj." + name: object_schema(properties, list(properties))
+            for name, properties in fields.items()}
+
+
+def candidate_audition_output_schema() -> dict:
+    schema = output_schema()
+    success = schema["oneOf"][0]
+    file_id = {"type": "string", "minLength": 1, "maxLength": 128,
+               "pattern": FILE_ID_PATTERN}
+    fields = {
+        "job_id": file_id, "set_id": file_id, "candidate_id": file_id,
+        "artifact": object_schema({
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "byte_length": {"type": "integer", "minimum": 1, "maximum": 16777216},
+            "media_type": {"type": "string", "const": "audio/wav"},
+        }, ["sha256", "byte_length", "media_type"]),
+        "sample_rate": {"type": "integer", "enum": [44100, 48000]},
+        "channels": {"type": "integer", "minimum": 1, "maximum": 2},
+        "source_frames": {"type": "integer", "minimum": 1, "maximum": 8388608},
+    }
+    success["properties"]["result"] = object_schema(fields, list(fields))
+    success["properties"]["project_revision"] = {
+        "type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+    return schema
+
+
 def tool_table() -> tuple[Tool, ...]:
-    schemas = input_schemas()
+    schemas = {**input_schemas(), **candidate_input_schemas()}
     default_output = output_schema()
     performance_outputs = performance_output_schemas()
+    performance_outputs["lmdj.candidate.audition"] = candidate_audition_output_schema()
     routes = (
         ("lmdj.project.create", "project.create", "command"),
         ("lmdj.project.inspect", "project.inspect", "query"),
@@ -1387,6 +1447,12 @@ def tool_table() -> tuple[Tool, ...]:
         ("lmdj.provider.run", "provider.run", "command"),
         ("lmdj.provider.permissions.configure", "provider.permissions.configure", "command"),
         ("lmdj.attempt.inspect", "attempt.inspect", "query"),
+        ("lmdj.candidate.job.run", "candidate.job.run", "command"),
+        ("lmdj.candidate.job.inspect", "candidate.job.inspect", "query"),
+        ("lmdj.candidate.job.cancel", "candidate.job.cancel", "command"),
+        ("lmdj.candidate.set.discard", "candidate.set.discard", "command"),
+        ("lmdj.candidate.adopt", "candidate.adopt", "command"),
+        ("lmdj.candidate.audition", "candidate.audition", "query"),
     )
     return tuple(
         Tool(
@@ -1457,6 +1523,15 @@ def validates(schema: dict, value: object) -> bool:
         if "minimum" in schema and value < schema["minimum"]:
             return False
         if "maximum" in schema and value > schema["maximum"]:
+            return False
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            return False
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            return False
+        if schema.get("uniqueItems") and any(
+            item in value[:index] for index, item in enumerate(value)
+        ):
             return False
     if isinstance(value, list) and "items" in schema:
         if not all(validates(schema["items"], item) for item in value):

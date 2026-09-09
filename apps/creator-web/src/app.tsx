@@ -1,3 +1,4 @@
+import {CandidateSurface, isCandidateSession} from "./components/candidate_surface";
 import {useCallback, useEffect, useReducer, useRef, useState} from "react";
 
 import {BankSelector} from "./components/bank_selector";
@@ -30,7 +31,7 @@ import {
   createCreatorInputController,
   type PerformancePadInputEvent,
 } from "./runtime/input_controller";
-import {retryPrepareJourney} from "./runtime/sample_actions";
+import {reloadPrepareJourney, retryPrepareJourney} from "./runtime/sample_actions";
 import {
   beginSequenceJourney,
   disarmSequenceCaptureJourney,
@@ -232,6 +233,11 @@ function Workspace({
   const [performController, setPerformController] =
     useState<PerformController | null>(null);
   const [performCaptureConfigured, setPerformCaptureConfigured] = useState(false);
+  const [candidateAudio, setCandidateAudio] = useState<Readonly<{
+    projectId: string; revision: number; preparing: boolean;
+  }> | null>(null);
+  const candidateAudioRef = useRef(candidateAudio);
+  candidateAudioRef.current = candidateAudio;
   const importController = useRef<AbortController | null>(null);
   const projectActions = useRef(createProjectActionLane()).current;
   const sequenceAuthoringTail = useRef<Promise<void>>(Promise.resolve());
@@ -324,6 +330,7 @@ function Workspace({
 
   useEffect(() => () => {
     projectActions.invalidate();
+    setCandidateAudio(null);
     const retiringImport = importController.current;
     sampleRetryAction.current = null;
     inputAdverseState.current = null;
@@ -358,7 +365,10 @@ function Workspace({
           isAvailable: () =>
             stateRef.current.project.phase === "ready" &&
             stateRef.current.transfer.phase === "idle" &&
-            stateRef.current.sample.pendingAction === null,
+            stateRef.current.sample.pendingAction === null &&
+            !(candidateAudioRef.current?.projectId === stateRef.current.project.current?.projectId &&
+              (candidateAudioRef.current?.preparing ||
+                stateRef.current.sample.savedRevision !== stateRef.current.sample.runtimeRevision)),
           isRuntimeCurrent: () =>
             stateRef.current.sample.savedRevision !== null &&
             stateRef.current.sample.savedRevision ===
@@ -551,6 +561,51 @@ function Workspace({
       if (projectProjectionRefreshRef.current === token) {
         projectProjectionRefreshRef.current = null;
       }
+    }
+  };
+
+  const refreshCandidateProject = async (projectId: string, committedRevision?: number) => {
+    if (!isSampleSession(session) || stateRef.current.project.current?.projectId !== projectId) {
+      throw new Error("Candidate Project is no longer open");
+    }
+    const token = projectActions.claim(session);
+    if (token === null) throw new Error("Another Project action is active");
+    const owns = () => projectActions.owns(token, session) &&
+      stateRef.current.project.current?.projectId === projectId;
+    try {
+      if (committedRevision !== undefined) {
+        dispatch({type: "candidate-audio-invalidated", projectId, revision: committedRevision});
+        setCandidateAudio({projectId, revision: committedRevision, preparing: true});
+      }
+      const project = await refreshPerformProject();
+      if (!owns()) return;
+      dispatch({type: "candidate-audio-invalidated", projectId, revision: project.revision});
+      setCandidateAudio({projectId, revision: project.revision, preparing: true});
+      const selectedPattern = sequenceRef.current.selectedPatternId;
+      const patternId = project.patterns.some(pattern => pattern.patternId === selectedPattern)
+        ? selectedPattern! : project.patternId;
+      try {
+        const publication = await reloadPrepareJourney(session, patternId);
+        if (!owns()) return;
+        if (publication.projectId !== projectId || publication.projectRevision !== project.revision) {
+          throw new Error("Candidate audio publication does not match the refreshed Project");
+        }
+        dispatch({type: "candidate-audio-published", projectId, revision: project.revision,
+          runtimeRevision: publication.runtimeRevision});
+        setCandidateAudio(publication.runtimeReady ? null : {
+          projectId, revision: project.revision, preparing: false,
+        });
+      } catch {
+        // The adoption is already durable. An unknown/failed publication never
+        // resends that command or marks the old Bank as current.
+        if (owns()) setCandidateAudio({projectId, revision: project.revision, preparing: false});
+      }
+    } catch (error) {
+      if (owns()) setCandidateAudio(current => current?.projectId === projectId
+        ? {...current, preparing: false} : current);
+      throw error;
+    } finally {
+      projectActions.finish(token);
     }
   };
 
@@ -1023,6 +1078,8 @@ function Workspace({
       <ModeRail
         activeMode={activeMode}
         soundSetEnabled={isSoundSetSession(session)}
+        sliceEnabled={isCandidateSession(session) && state.project.phase === "ready" &&
+          state.project.current !== null && sequence.phase === "stopped"}
         sequenceEnabled={isSequenceSession(session) &&
           state.project.phase === "ready" && state.project.current !== null}
         performEnabled={performController !== null && performCaptureConfigured &&
@@ -1049,6 +1106,18 @@ function Workspace({
           setActiveMode(mode);
         }}
       />
+      {candidateAudio !== null && candidateAudio.projectId === state.project.current?.projectId &&
+        (candidateAudio.preparing || state.sample.savedRevision !== state.sample.runtimeRevision) ? (
+        <section className="sample-runtime-stale" aria-label="Project audio status">
+          <p role="status">{candidateAudio.preparing
+            ? `Preparing audio at revision ${candidateAudio.revision}…`
+            : `Saved at revision ${candidateAudio.revision}; audio is not ready.`}</p>
+          <button type="button" disabled={candidateAudio.preparing || projectActions.busy || runtimePhase !== "ready"}
+            onClick={() => { void refreshCandidateProject(candidateAudio.projectId).catch(() => {}); }}>
+            Retry audio preparation
+          </button>
+        </section>
+      ) : null}
       {activeMode === "project" ? (
         <>
           <ProjectSurface
@@ -1140,6 +1209,11 @@ function Workspace({
               {...(inputController.current ? {controller: inputController.current} : {})} />
           </section>
         </>
+      ) : activeMode === "slice" && isCandidateSession(session) && state.project.current !== null ? (
+        <CandidateSurface key={state.project.current.projectId}
+          session={session} projectId={state.project.current.projectId}
+          projectRevision={state.project.current.revision}
+          onRefreshProject={(revision) => refreshCandidateProject(state.project.current!.projectId, revision)} />
       ) : activeMode === "soundset" && isSoundSetSession(session) ? (
         <SoundSetSurface
           session={session}

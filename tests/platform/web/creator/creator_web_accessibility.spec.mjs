@@ -211,6 +211,7 @@ for (const viewport of [
     }
     await expect(page.getByRole("button", {name: "Sample"})).toBeEnabled();
     await expect(page.getByRole("button", {name: "Sequence"})).toBeEnabled();
+    await expect(page.getByRole("button", {name: "Slice", exact: true})).toBeEnabled();
     // The walk below depends on Sound Sets being tabbable, and `mode_rail.tsx`
     // gives it `disabled={!soundSetEnabled}`. Without this line a regression
     // that disables it would surface as an off-by-one tab-order diff -- the
@@ -219,8 +220,12 @@ for (const viewport of [
     await expect(page.getByRole("button", {name: "Sound Sets"})).toBeEnabled();
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
     await page.getByRole("button", {name: "Activate audio"}).focus();
+    const expectedFocusOrder = [
+      "Enable MIDI", "Export report", "Project", "Sequence", "Sample",
+      "Slice", "Sound Sets", "Perform",
+    ];
     const focusOrder = [];
-    for (let index = 0; index < 7; index += 1) {
+    for (let index = 0; index < expectedFocusOrder.length; index += 1) {
       await page.keyboard.press("Tab");
       // Mode buttons carry a decorative glyph before their label; read the
       // label so the order does not depend on the glyph set.
@@ -237,10 +242,7 @@ for (const viewport of [
     // it expected `Perform`, and read as a Creator defect when the rail was
     // right. Asserting the full rail means the next insertion changes the
     // expected list rather than shifting what the loop can see (#977).
-    expect(focusOrder).toEqual([
-      "Enable MIDI", "Export report", "Project", "Sequence", "Sample",
-      "Sound Sets", "Perform",
-    ]);
+    expect(focusOrder).toEqual(expectedFocusOrder);
     await page.getByRole("button", {name: "Sample"}).click();
     await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
     const picker = page.locator("input.sample-file-input");

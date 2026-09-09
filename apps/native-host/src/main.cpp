@@ -146,6 +146,23 @@ constexpr std::array<std::pair<std::string_view, FacadeSurface>, 5>
         {"attempt.inspect", FacadeSurface::query},
     }};
 
+constexpr std::array<std::pair<std::string_view, FacadeSurface>, 6>
+    kCandidateOperations{{
+        {"candidate.job.run", FacadeSurface::command},
+        {"candidate.job.inspect", FacadeSurface::query},
+        {"candidate.job.cancel", FacadeSurface::command},
+        {"candidate.set.discard", FacadeSurface::command},
+        {"candidate.adopt", FacadeSurface::command},
+        {"candidate.audition", FacadeSurface::query},
+    }};
+
+std::optional<FacadeSurface> candidate_surface(std::string_view operation) {
+  for (const auto& [name, surface] : kCandidateOperations) {
+    if (name == operation) return surface;
+  }
+  return std::nullopt;
+}
+
 std::optional<FacadeSurface> provider_surface(std::string_view operation) {
   for (const auto& [name, surface] : kProviderOperations) {
     if (name == operation) return surface;
@@ -624,11 +641,14 @@ class NativeHost final {
         has_operation ? soundset_surface(name) : std::nullopt;
     const auto provider =
         has_operation ? provider_surface(name) : std::nullopt;
+    const auto candidate =
+        has_operation ? candidate_surface(name) : std::nullopt;
     const bool query_operation =
         name == "sample.quota" || name == "status" ||
         (performance.has_value() && *performance == FacadeSurface::query) ||
         (soundset.has_value() && *soundset == FacadeSurface::query) ||
-        (provider.has_value() && *provider == FacadeSurface::query);
+        (provider.has_value() && *provider == FacadeSurface::query) ||
+        (candidate.has_value() && *candidate == FacadeSurface::query);
     if (!has_operation || query_operation) {
       service_runtime_once();
     } else {
@@ -655,6 +675,12 @@ class NativeHost final {
       }
       if (provider.has_value()) {
         return provider_operation(request, *provider);
+      }
+      if (candidate.has_value()) {
+        return candidate_operation(request, *candidate);
+      }
+      if (name == "candidate.audition.stop") {
+        return stop_candidate_audition(request);
       }
       if (name == "trigger") {
         return trigger(request);
@@ -740,6 +766,56 @@ class NativeHost final {
         ? application_.command(request) : application_.query(request);
   }
 
+  Json candidate_operation(const Json& request, FacadeSurface surface) {
+    const auto project = request.find("project_path");
+    if (project != request.end() &&
+        (!project->is_string() ||
+         project->get<std::string>() != invocation_.project.generic_string())) {
+      return invalid_request("Candidate operation must target the Native Host Project");
+    }
+    Json response;
+    bool played = false;
+    {
+      std::lock_guard lock(facade_mutex_);
+      response = surface == FacadeSurface::command
+          ? application_.command(request) : application_.query(request);
+      if (response.value("ok", false) &&
+          request.at("operation") == "candidate.audition") {
+        // The JSON Facade validates the exact request shape before typed
+        // preparation. Propagate a preparation refusal, including external
+        // owner changes, instead of misreporting stale metadata as success.
+        const auto audio = application_.audition_candidate(
+            lmdj::facade::CandidateAuditionRequest{
+                invocation_.project,
+                lmdj::foundation::ProjectId{request.at("project_id").get<std::string>()},
+                request.at("expected_revision").get<std::uint64_t>(),
+                request.at("job_id").get<std::string>(),
+                request.at("set_id").get<std::string>(),
+                request.at("candidate_id").get<std::string>(),
+            });
+        if (!audio.has_value()) return error_response(audio.error());
+        played = running_ && publish_audition_locked(*audio.value().prepared);
+        response["result"]["played"] = played;
+      }
+    }
+    if (played) drain_no_device_trigger();
+    return response;
+  }
+
+  Json stop_candidate_audition(const Json& request) {
+    if (!exact_keys(request, {"operation"})) {
+      return invalid_request("Candidate audition stop takes no selectors");
+    }
+    std::lock_guard lock(facade_mutex_);
+    if (running_ && engine_.enqueue_control(lmdj::audio::PadControlEvent{
+            0, 0, 0, lmdj::audio::PadControlKind::audition_stop, {},
+        }) != EnqueueResult::accepted) {
+      return invalid_request("Candidate audition stop was not admitted");
+    }
+    drive_no_device_once();
+    return success_response("candidate.audition.stop", {{"stopped", true}});
+  }
+
   // Workspace-level Sound Set operations carry no `project_path` at all, and
   // the Project-scoped two must name this Host's Project, so the check is the
   // presence-conditional one rather than a required field.
@@ -798,19 +874,6 @@ class NativeHost final {
   // #799. Publish the audition PCM the Facade decoded into the engine's
   // reserved audition pool and start a voice on it.
   //
-  // There is deliberately no native `soundset.audition.stop`. The Web Host has
-  // one because a browsing user interrupts a preview mid-playback; this Host
-  // is driven line by line over stdio, its auditions are `one_shot`, a second
-  // audition supersedes the first through the pool's replace semantics, and
-  // the deterministic backend has already rendered the preview to completion
-  // by the time the response is written. Adding one would mean a Host-owned
-  // operation outside `kSoundSetOperations` -- that table maps names to a
-  // `FacadeSurface`, and the Facade serves no stop, so an entry there would
-  // silently reach `dispatch()`'s `attempt_inspect` fallthrough. That is a new
-  // operation on this Host's surface, which the byte-path plan settled the
-  // other way for three Host tables and did not anticipate for this one; it
-  // belongs to #799 as a follow-up, not to this Task.
-  //
   // `audition_soundset` is the typed Facade method the Web Host's
   // `play_audition` also calls: the Facade resolves the Set, applies S11-D3's
   // whole-Set audio decision and the locked refusal order, decodes and
@@ -846,7 +909,11 @@ class NativeHost final {
       // caller is about to receive; there is nothing further to report.
       return false;
     }
-    const auto& source = *audio.value().prepared;
+    return publish_audition_locked(*audio.value().prepared);
+  }
+
+  // Both typed Facade audition surfaces use this Host-owned reserved pool.
+  [[nodiscard]] bool publish_audition_locked(const lmdj::cooker::PcmSample& source) {
     if (source.channels == 0 || source.interleaved.empty() ||
         source.interleaved.size() % source.channels != 0) {
       return false;

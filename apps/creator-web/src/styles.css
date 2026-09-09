@@ -530,3 +530,25 @@ button:disabled { color: #737b87; }
   .soundset-list { grid-template-columns: 1fr; }
   .soundset-slots { grid-template-columns: 1fr; }
 }
+
+.candidate-surface {
+  grid-area: surface;
+  min-width: 0;
+  padding: clamp(1.25rem, 3vw, 3rem);
+}
+.candidate-surface h2 { margin-top: 0; }
+.candidate-surface select { min-width: 0; max-width: 100%; padding: .6rem; color: inherit; background: #242a33; border: 1px solid #586170; border-radius: .4rem; }
+.candidate-surface label { display: grid; gap: .4rem; }
+.candidate-settings, .candidate-plan { border: 1px solid #586170; border-radius: .6rem; padding: 1rem; margin-block: 1rem; }
+.candidate-source { max-width: 34rem; margin-block: 1rem; }
+.candidate-actions, .candidate-result-header { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
+.candidate-recipes { padding: 0; list-style: none; display: grid; gap: .5rem; max-height: 24rem; overflow: auto; }
+.candidate-recipes li { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; padding: .75rem; background: #242a33; border-radius: .4rem; }
+.candidate-interval { color: #b4beca; font-size: .85rem; }
+.candidate-target { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: .75rem; margin-block: .75rem; }
+.candidate-surface [role="alert"] { color: #ffb8b8; }
+.candidate-plan > button { margin-right: .75rem; }
+@media (max-width: 640px) {
+  .candidate-target { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+.candidate-surface .candidate-classification { display: flex; align-items: center; gap: .6rem; }

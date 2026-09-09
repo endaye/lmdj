@@ -80,6 +80,73 @@ if(APPLE AND TARGET lmdj_native_audio_probe)
   )
 endif()
 
+set(
+  lmdj_mcp_test_environment
+  "PYTHONPATH=${CMAKE_SOURCE_DIR}/apps/core-mcp"
+)
+if(LMDJ_SANITIZER STREQUAL "address")
+  if(APPLE)
+    set(lmdj_asan_runtime_name libclang_rt.asan_osx_dynamic.dylib)
+  elseif(UNIX)
+    set(lmdj_asan_runtime_name libasan.so)
+  endif()
+  if(DEFINED lmdj_asan_runtime_name)
+    execute_process(
+      COMMAND
+        "${CMAKE_CXX_COMPILER}"
+        "--print-file-name=${lmdj_asan_runtime_name}"
+      RESULT_VARIABLE lmdj_asan_runtime_status
+      OUTPUT_VARIABLE lmdj_asan_runtime
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(
+      NOT lmdj_asan_runtime_status EQUAL 0
+      OR NOT IS_ABSOLUTE "${lmdj_asan_runtime}"
+      OR NOT EXISTS "${lmdj_asan_runtime}"
+    )
+      message(
+        FATAL_ERROR
+        "Unable to locate the AddressSanitizer runtime for MCP Host tests"
+      )
+    endif()
+    if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      # CPython loads the C ABI with dlopen. Make the C++ exception runtime
+      # available when libasan initializes its __cxa_throw interceptor.
+      execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" "--print-file-name=libstdc++.so"
+        RESULT_VARIABLE lmdj_asan_cxx_runtime_status
+        OUTPUT_VARIABLE lmdj_asan_cxx_runtime
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+      if(NOT lmdj_asan_cxx_runtime_status EQUAL 0
+         OR NOT IS_ABSOLUTE "${lmdj_asan_cxx_runtime}"
+         OR NOT EXISTS "${lmdj_asan_cxx_runtime}")
+        message(FATAL_ERROR "Unable to locate the C++ runtime for MCP ASAN tests")
+      endif()
+      string(APPEND lmdj_asan_runtime ":${lmdj_asan_cxx_runtime}")
+    endif()
+    list(
+      APPEND lmdj_mcp_test_environment
+      "LMDJ_ASAN_RUNTIME=${lmdj_asan_runtime}"
+    )
+    if(APPLE)
+      list(
+        APPEND lmdj_mcp_test_environment
+        "ASAN_OPTIONS=verify_interceptors=0"
+      )
+    elseif(UNIX)
+      # libasan is preloaded into an otherwise uninstrumented CPython process
+      # for ctypes coverage. Ignore CPython's process-lifetime allocations in
+      # these Host tests only; native C++ sanitizer tests retain leak checks.
+      list(
+        APPEND lmdj_mcp_test_environment
+        "ASAN_OPTIONS=detect_leaks=0"
+      )
+    endif()
+  endif()
+endif()
+
+
 add_subdirectory(apps/core-cli)
 add_subdirectory(apps/native-host)
 add_subdirectory(products/lmdj)
@@ -154,6 +221,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_application_facade_tests
     lmdj_facade_candidate_store_tests
     lmdj_facade_candidate_job_tests
+    lmdj_facade_candidate_audition_tests
     lmdj_facade_runtime_content_export_tests
     lmdj_application_facade_failure_tests
     lmdj_facade_sequence_surface_tests
@@ -220,55 +288,6 @@ if(LMDJ_ENABLE_COVERAGE)
   )
 endif()
 
-set(
-  lmdj_mcp_test_environment
-  "PYTHONPATH=${CMAKE_SOURCE_DIR}/apps/core-mcp"
-)
-if(LMDJ_SANITIZER STREQUAL "address")
-  if(APPLE)
-    set(lmdj_asan_runtime_name libclang_rt.asan_osx_dynamic.dylib)
-  elseif(UNIX)
-    set(lmdj_asan_runtime_name libasan.so)
-  endif()
-  if(DEFINED lmdj_asan_runtime_name)
-    execute_process(
-      COMMAND
-        "${CMAKE_CXX_COMPILER}"
-        "--print-file-name=${lmdj_asan_runtime_name}"
-      RESULT_VARIABLE lmdj_asan_runtime_status
-      OUTPUT_VARIABLE lmdj_asan_runtime
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    if(
-      NOT lmdj_asan_runtime_status EQUAL 0
-      OR NOT IS_ABSOLUTE "${lmdj_asan_runtime}"
-      OR NOT EXISTS "${lmdj_asan_runtime}"
-    )
-      message(
-        FATAL_ERROR
-        "Unable to locate the AddressSanitizer runtime for MCP Host tests"
-      )
-    endif()
-    list(
-      APPEND lmdj_mcp_test_environment
-      "LMDJ_ASAN_RUNTIME=${lmdj_asan_runtime}"
-    )
-    if(APPLE)
-      list(
-        APPEND lmdj_mcp_test_environment
-        "ASAN_OPTIONS=verify_interceptors=0"
-      )
-    elseif(UNIX)
-      # libasan is preloaded into an otherwise uninstrumented CPython process
-      # for ctypes coverage. Ignore CPython's process-lifetime allocations in
-      # these Host tests only; native C++ sanitizer tests retain leak checks.
-      list(
-        APPEND lmdj_mcp_test_environment
-        "ASAN_OPTIONS=detect_leaks=0"
-      )
-    endif()
-  endif()
-endif()
 
 lmdj_add_test(
   NAME build.active_tree

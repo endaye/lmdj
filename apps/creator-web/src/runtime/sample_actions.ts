@@ -618,6 +618,24 @@ export function captureCommitJourney(
   return importAssignSampleJourney(session, file, options);
 }
 
+// Unlike retry, reload may establish a UI-selected Pattern as Runtime-current.
+// Its acknowledged public response omits runtime_revision because publication
+// has succeeded; never infer success from a fulfilled but malformed response.
+export async function reloadPrepareJourney(
+  session: Pick<CreatorSampleRuntimeSession, "reloadSnapshot">,
+  patternId: string,
+): Promise<Readonly<SnapshotPublication>> {
+  if (!UUID_PATTERN.test(patternId)) throw new TypeError("Snapshot Pattern identity is invalid");
+  const value = await session.reloadSnapshot(patternId);
+  if (!exactKeys(value, ["project_id", "project_revision", "pattern_id",
+    "runtime_ready", "generation", "snapshot_error"]) || value.runtime_ready !== true) {
+    throw protocolMismatch("Snapshot reload result is invalid");
+  }
+  return normalizePublication({projectId: value.project_id, projectRevision: value.project_revision,
+    patternId: value.pattern_id, runtimeReady: value.runtime_ready, generation: value.generation,
+    snapshotError: value.snapshot_error, runtimeRevision: value.project_revision}, patternId);
+}
+
 export async function retryPrepareJourney(
   session: CreatorSampleRuntimeSession,
   patternId: string,

@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import os
@@ -299,6 +300,9 @@ class MCP:
                 stderr,
             )
         line = self.process.stdout.readline()
+        if not line:
+            _, stderr = communicate_with_timeout(self.process)
+            raise AssertionError("MCP exited before responding", self.process.returncode, stderr.decode("utf-8", errors="replace"))
         response = json.loads(line)
         assert line == (canonical_json(response) + "\n").encode("utf-8")
         assert response["jsonrpc"] == "2.0"
@@ -942,7 +946,82 @@ def sequence_cross_host_observer(
     ) == 4
 
 
+
+def candidate_schema_checks() -> None:
+    # Independent of a native build: enforce the advertised and runtime MCP
+    # shape together, including nested bounds before the C ABI is called.
+    sys.path.insert(0, str(REPO_ROOT / "apps/core-mcp"))
+    from lmdj_core_mcp.server import TOOLS_BY_NAME, validates
+    project = {"project_path": "/tmp/candidate.lmdj", "project_id": PROJECT_ID,
+               "expected_revision": 1}
+    selector = {"job_id": "slice", "set_id": "set"}
+    cases = {
+        "candidate.job.run": {**project, "job_id": "slice", "attempt_id": "attempt",
+            "asset_id": KICK_ASSET_ID, "parameters": {"refractory_frames": 1},
+            "data_classification": "public", "platform": "test", "region": "local",
+            "required_permissions": ["sample.slice.execute"]},
+        "candidate.job.inspect": {"job_id": "slice"},
+        "candidate.job.cancel": {"job_id": "slice", "attempt_id": "attempt"},
+        "candidate.set.discard": selector,
+        "candidate.audition": {**project, **selector, "candidate_id": "recipe"},
+        "candidate.adopt": {**project, **selector, "command_id": uuid(21),
+            "selections": [{"candidate_id": "recipe", "bank": 0, "pad": 3}]},
+    }
+    assert "lmdj.candidate.audition.stop" not in TOOLS_BY_NAME
+    for operation, request in cases.items():
+        tool = TOOLS_BY_NAME["lmdj." + operation]
+        assert tool.surface == ("query" if operation in
+            {"candidate.job.inspect", "candidate.audition"} else "command")
+        schema = tool.input_schema
+        assert set(schema["required"]) == set(request)
+        assert schema["additionalProperties"] is False
+        assert validates(schema, request), operation
+        assert not validates(schema, {**request, "unexpected": True})
+        for field in request:
+            missing = dict(request); missing.pop(field)
+            assert not validates(schema, missing), (operation, field)
+        for field in ("job_id", "set_id", "candidate_id", "attempt_id"):
+            if field in request:
+                for value in ("", "x" * 129, "bad/path", 1, True):
+                    assert not validates(schema, {**request, field: value})
+        if "expected_revision" in request:
+            assert validates(schema, {**request, "expected_revision": 2**64 - 1})
+            for value in (-1, 2**64, True, 1.5, "1"):
+                assert not validates(schema, {**request, "expected_revision": value})
+    schema = TOOLS_BY_NAME["lmdj.candidate.adopt"].input_schema
+    request = cases["candidate.adopt"]
+    for selections in ([], request["selections"] * 65,
+        [{"candidate_id": "recipe", "bank": 4, "pad": 0}],
+        [{"candidate_id": "recipe", "bank": 0, "pad": 16}],
+        [{"candidate_id": "recipe", "bank": False, "pad": 0}],
+        [{"candidate_id": "recipe", "bank": 0, "pad": 0, "path": "x"}]):
+        assert not validates(schema, {**request, "selections": selections})
+    assert validates(schema, {**request, "selections": [
+        {"candidate_id": "recipe", "bank": bank, "pad": pad}
+        for bank in range(4) for pad in range(16)]})
+    schema = TOOLS_BY_NAME["lmdj.candidate.job.run"].input_schema
+    request = cases["candidate.job.run"]
+    for parameters in ({"threshold_pcm16": 0}, {"threshold_pcm16": 32768},
+        {"threshold_pcm16": True}, {"refractory_frames": 48001},
+        {"refractory_frames": 1.5}, {"source_path": "/tmp/source.wav"}):
+        assert not validates(schema, {**request, "parameters": parameters})
+    assert not validates(schema, {**request, "required_permissions": ["x", "x"]})
+    output = TOOLS_BY_NAME["lmdj.candidate.audition"].output_schema
+    good = {"ok": True, "project_revision": 1, "result": {
+        **selector, "candidate_id": "recipe",
+        "artifact": {"sha256": "a" * 64, "byte_length": 48, "media_type": "audio/wav"},
+        "sample_rate": 48000, "channels": 1, "source_frames": 2}}
+    assert validates(output, good)
+    for field in good["result"]:
+        bad = copy.deepcopy(good); bad["result"].pop(field)
+        assert not validates(output, bad)
+    for field, value in (("played", True), ("stop", True), ("channels", 0),
+                         ("source_frames", 0), ("sample_rate", 96000)):
+        bad = copy.deepcopy(good); bad["result"][field] = value
+        assert not validates(output, bad)
+
 def main() -> int:
+    candidate_schema_checks()
     if len(sys.argv) != 3:
         raise SystemExit(
             "usage: mcp_facade_parity_test.py "

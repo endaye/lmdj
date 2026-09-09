@@ -547,3 +547,52 @@ export interface CreatorSoundSetRuntimeSession extends CreatorRuntimeSession {
     }>,
   ): Promise<Readonly<SoundSetInstallReceipt>>;
 }
+
+export interface CandidateRecipe {
+  candidate_id: string;
+  kind: "slice_interval_v1";
+  start_frame: number;
+  end_frame: number;
+  frame_rate: number;
+}
+export interface CandidateSetView {
+  set_id: string;
+  status: "active" | "superseded" | "discarded";
+  attempt_id: string;
+  source: {project_id: string; asset_id: string; project_revision: number};
+  recipes: readonly CandidateRecipe[];
+}
+export interface CandidateJobView {
+  job_id: string;
+  active_set_id: string | null;
+  history: readonly {status: string; intent: {attempt_id: string}}[];
+  sets: readonly CandidateSetView[];
+}
+export interface CandidateSelection {candidate_id: string; bank: number; pad: number}
+export interface CandidateProviderList {
+  providers: readonly {id: string; capabilities: readonly {capability_id: string}[]}[];
+  granted_permissions: readonly string[];
+}
+export interface CreatorCandidateRuntimeSession extends CreatorRuntimeSession {
+  listProviders(): Promise<CandidateProviderList>;
+  configureProviderPermissions(permissions: readonly string[]): Promise<{granted_permissions: readonly string[]}>;
+  selectProvider(capability: string, providerId: string): Promise<unknown>;
+  runCandidateJob(request: {
+    job_id: string; attempt_id: string; project_id: string; asset_id: string;
+    expected_revision: number; parameters: Record<string, unknown>;
+    data_classification: string; platform: string; region: string;
+    required_permissions: readonly string[];
+  }): Promise<CandidateJobView>;
+  inspectCandidateJob(jobId: string): Promise<CandidateJobView>;
+  cancelCandidateJob(jobId: string, attemptId: string): Promise<CandidateJobView>;
+  discardCandidateSet(jobId: string, setId: string): Promise<CandidateJobView>;
+  auditionCandidate(request: {
+    project_id: string; expected_revision: number; job_id: string;
+    set_id: string; candidate_id: string;
+  }): Promise<{project_revision: number; played: boolean}>;
+  stopCandidateAudition(): Promise<unknown>;
+  adoptCandidates(request: {
+    project_id: string; expected_revision: number; command_id: string;
+    job_id: string; set_id: string; selections: readonly CandidateSelection[];
+  }): Promise<{project_revision: number; set_id: string; adopted: readonly (CandidateSelection & {asset_id: string})[]}>;
+}

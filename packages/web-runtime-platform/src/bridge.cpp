@@ -221,7 +221,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 79> operations{
+  static constexpr std::array<std::string_view, 86> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -295,6 +295,13 @@ bool supported_operation(std::string_view operation) {
       "soundset.inspect",
       "soundset.map.preview",
       "soundset.install",
+      "candidate.job.run",
+      "candidate.job.inspect",
+      "candidate.job.cancel",
+      "candidate.set.discard",
+      "candidate.audition",
+      "candidate.audition.stop",
+      "candidate.adopt",
       "provider.list",
       "provider.select",
       "provider.run",

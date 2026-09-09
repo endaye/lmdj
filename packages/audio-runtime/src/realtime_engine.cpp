@@ -1166,25 +1166,26 @@ ReclaimedBankTelemetry
 RealtimeEngine::reclaim_retired_bank_telemetry() noexcept {
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   ReclaimedBankTelemetry reclaimed{};
-  const auto sweep = [&reclaimed](BankSlot& slot) {
+  const auto sweep = [&reclaimed](BankSlot& slot, bool project_bank) {
     if (slot.state.load(std::memory_order_acquire) !=
         BankState::reclaimable) {
       return;
     }
-    reclaimed.decoded_pcm_bytes += slot.bank->decoded_pcm_bytes();
+    if (project_bank) reclaimed.decoded_pcm_bytes += slot.bank->decoded_pcm_bytes();
     slot.bank.reset();
     slot.generation = 0;
     slot.state.store(BankState::empty, std::memory_order_release);
     ++reclaimed.count;
   };
   for (auto& slot : bank_slots_) {
-    sweep(slot);
+    sweep(slot, true);
   }
   // Retired audition Banks are reclaimed by the same sweep; otherwise a
   // replaced audition would hold its slot forever and the second publication
-  // after it would report the pool full.
+  // after it would report the pool full. Their storage belongs to the reserved
+  // audition pool and must not refund the Host's Project Bank PCM reservation.
   for (auto& slot : audition_slots_) {
-    sweep(slot);
+    sweep(slot, false);
   }
   reclaimed_banks_ += reclaimed.count;
   return reclaimed;
