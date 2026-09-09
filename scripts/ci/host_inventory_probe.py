@@ -73,6 +73,14 @@ def sanitizer_pin(path: Path) -> str | None:
     return match.group(1) if match else None
 
 
+def mmap_observation(explicit_path: Path | None, proc_path: Path) -> tuple[str, str]:
+    """Read the pinned ASLR setting from an explicit fixture or procfs."""
+    source = explicit_path or proc_path
+    text = read_text(source)
+    value = text.strip() if text and text.strip() else "unavailable"
+    return value, str(source)
+
+
 def kernel_line(key: str) -> tuple[str, str]:
     for source in (Path(f"/boot/config-{platform.release()}"), Path("/proc/config.gz")):
         if not source.is_file() or not os.access(source, os.R_OK):
@@ -132,9 +140,9 @@ def markdown(data: dict) -> str:
         lines.append(f"blocked/unavailable: controller config is {config['status']}; parity is not claimed.")
     lines += ["", "### Sanitizer host parity"]
     sanitizer = data["sanitizer"]
-    lines.append(f"| Setting | Observed | Repository pin |")
-    lines.append("| --- | --- | --- |")
-    lines.append(f"| `vm.mmap_rnd_bits` | `{sanitizer['observed']}` | `{sanitizer['expected']}` |")
+    lines.append(f"| Setting | Observed | Repository pin | Source |")
+    lines.append("| --- | --- | --- | --- |")
+    lines.append(f"| `vm.mmap_rnd_bits` | `{sanitizer['observed']}` | `{sanitizer['expected']}` | `{sanitizer['source']}` |")
     if sanitizer["status"] == "mismatch":
         lines.append("**mismatch:** sanitizer ASLR setting differs from the repository pin.")
     elif sanitizer["status"] == "unavailable":
@@ -161,6 +169,7 @@ def main() -> int:
     parser.add_argument("--sanitizer-script", type=Path, required=True)
     parser.add_argument("--cgroup-file", type=Path, default=Path("/proc/self/cgroup"))
     parser.add_argument("--mmap-file", type=Path)
+    parser.add_argument("--mmap-proc-file", type=Path, default=Path("/proc/sys/vm/mmap_rnd_bits"))
     parser.add_argument("--accounting-seconds", type=int, default=0)
     parser.add_argument("--proc-stat-file", type=Path, default=Path("/proc/stat"))
     parser.add_argument("--tool-root", type=Path)
@@ -187,9 +196,7 @@ def main() -> int:
         config_status = "mismatch"
 
     expected_pin = sanitizer_pin(args.sanitizer_script)
-    mmap_text = read_text(args.mmap_file) if args.mmap_file else None
-    observed = mmap_text.strip() if mmap_text else (run("sysctl", "-n", "vm.mmap_rnd_bits") if not args.mmap_file else None)
-    observed = observed or "unavailable"
+    observed, observation_source = mmap_observation(args.mmap_file, args.mmap_proc_file)
     sanitizer_status = "unavailable" if expected_pin is None or observed == "unavailable" else ("match" if observed == expected_pin else "mismatch")
     service_unit = read_service_unit(args.cgroup_file) or "unavailable"
     server = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
@@ -217,7 +224,7 @@ def main() -> int:
             "service_unit": service_unit,
         },
         "controller_config": {"status": config_status, "expected_digest": expected_digest, "actual_digest": actual_digest},
-        "sanitizer": {"status": sanitizer_status, "expected": expected_pin or "unavailable", "observed": observed},
+        "sanitizer": {"status": sanitizer_status, "expected": expected_pin or "unavailable", "observed": observed, "source": observation_source},
         "tools": [],
         "capacity": {
             "cores": run("nproc") or "unavailable",
