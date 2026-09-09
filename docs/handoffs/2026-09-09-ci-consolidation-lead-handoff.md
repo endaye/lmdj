@@ -78,7 +78,7 @@ Rules the previous coordinator learned the hard way (all observed today):
 
 ## 3. State at last update
 
-Last updated: 2026-09-09 16:55 by Claude.
+Last updated: 2026-09-10 00:25 (2026-09-09 16:25 UTC) by Claude.
 
 ### Merged
 
@@ -93,7 +93,8 @@ Last updated: 2026-09-09 16:55 by Claude.
 
 | PR | Task | Head | State | Next step |
 | --- | --- | --- | --- | --- |
-| #1100 | P2.2 remove pre-heavy-gate | `cceba90b` (not rebased; base `c628f213`) | worker self-review only (not evidence); independent reviewer running | HOLD: worker told to rebase onto main, rerun full discovery to 0/0, push, ask again |
+| #1100 | P2.2 remove pre-heavy-gate | `cceba90b` (base `c628f213`), rebase pending | independent review done on `cceba90b`: no must-fix; declare the earlier-start scheduling effect in the PR body; two stale-prose nits | HOLD until the worker pushes the rebased head with the nits folded in and a 0/0 full discovery; then coordinator re-checks the delta, posts the takeover record, merges |
+| #1103 | P2.1 retire merge-queue/pr_gate | `9ed5a23b` (base `9d4bf083`) | independent review done: no must-fix; `scripts/ci/github_queue_api.py` has no live importer and must be deleted too; restore dropped `pr_gate` negative guards in two live-workflow tests; remove one duplicate test; stale "PR Gate" comments | HOLD until the worker's follow-up commit; then delta re-check, takeover record, merge. Plan row P5.1 names `github_queue_api.py`; correct it in the next plan docs Task (the controller's HTTP lives elsewhere) |
 | #1098 | this handoff | living | n/a | merge at handoff or a stable milestone |
 
 ### Worktrees and workers
@@ -144,6 +145,9 @@ the outcome in the plan's decision table via a `docs/` Task.
 - P1.2 worktree at `df7e71cc`: `ci_canary*_test.py` 320 OK, 1 skipped (755 s).
 - P2.2 worktree at `25988d2f`: full `ci_*` discovery with pinned actionlint:
   2208 run, failures=4, errors=7, skipped=12 (1451 s); see the P2.2b row.
+- P2.1 worktree at `9ed5a23b`: full discovery started 16:08 UTC; superseded
+  when the follow-up commit lands. Quick checks by the reviewer all green
+  (retired-mechanisms 2, topology 46, parity 5, change scope 66, ledger 15).
 
 ## 5. Task specs for re-dispatch
 
