@@ -928,19 +928,20 @@ UNSUPPORTED_MANIFEST = (
 # each refusal carries. Task 7 asserts the whole partition, not just that the
 # happy path is listed: a Set silently promoted from this side of the line
 # would be an eligibility regression no positive assertion can see.
+#
+# Read rather than restated. This used to be a literal here, which meant the
+# CLI Host was measured against one copy of the answer, the Native Host
+# against nothing, and the browser against a substring check -- so two Hosts
+# could disagree and every suite stay green. The file is now the single
+# expectation and `host.soundset_catalog_partition` compares the Hosts to each
+# other against it.
 INELIGIBLE_SETS = {
-    "44444444-4444-4444-8444-444444444444": (
-        "IO_ERROR", "soundset_content_mismatch",
-    ),
-    "55555555-5555-4555-8555-555555555555": (
-        "PERMISSION_DENIED", "soundset_license_ineligible",
-    ),
-    "66666666-6666-4666-8666-666666666666": (
-        "PERMISSION_DENIED", "soundset_license_ineligible",
-    ),
-    "77777777-7777-4777-8777-777777777777": (
-        "PERMISSION_DENIED", "soundset_license_ineligible",
-    ),
+    set_id: (value["code"], value["reason"])
+    for set_id, value in json.loads(
+        (REPO_ROOT / "tests/fixtures/soundset/catalog-partition.json").read_text(
+            encoding="utf-8"
+        )
+    )["refused"].items()
 }
 
 

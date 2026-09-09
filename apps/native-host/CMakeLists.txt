@@ -68,6 +68,22 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/tests/host/native_host_timeout_policy_test.py"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
+  # Cross-Host, but it needs this Host's binary, so it lives here rather than
+  # beside the source-scan gate. The defect it catches is the one no per-Host
+  # suite can see: two Hosts answering the same Catalog differently, each
+  # green against its own idea of the answer.
+  lmdj_add_test(
+    NAME host.soundset_catalog_partition
+    TIER host
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/host/soundset_catalog_partition_test.py"
+      "$<TARGET_FILE:lmdj_native_host>"
+      "$<TARGET_FILE:lmdj_core_cli>"
+      "${CMAKE_SOURCE_DIR}/products/lmdj/assembly.json"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120
+  )
   lmdj_add_test(
     NAME host.native
     TIER host
