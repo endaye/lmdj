@@ -694,9 +694,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         buy paid Ubuntu. Naming the literal label set makes them queue on a
         saturated or absent role rather than diverting a whole manifest to paid
         runners. Each retains direct Change Scope and trust dependencies, then
-        adds Pre-heavy Gate plus every earlier native-heavy predecessor. The
-        exact job set keeps a later lane from inheriting the route without its
-        own proof run.
+        waits only for every earlier native-heavy predecessor. The exact job
+        set keeps a later lane from inheriting the route without its own proof
+        run.
         """
         for job_name, lane in CORE_JOBS.items():
             with self.subTest(job=job_name):
