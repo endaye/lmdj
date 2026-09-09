@@ -111,13 +111,15 @@ canonical policy floor; no AI advice or debt clearance is represented here.
 
 
 def plan_after_result(repository_path, *, scheduler, source_request_id, main_sha,
-                      control_sha, progress, wakeup="result"):
+                      control_sha, progress, wakeup="result", baseline_receipt=None):
     """Consume caller-authenticated journal replay, never an Actions conclusion.
 
 The retained verdict is semantically revalidated, not remotely authenticated
 here. Recovery is transport, not a new request identity. Successful focused
 tests wake planning only: they do not cover every site's older interval or
 grant admission. This function leaves scheduler and independent progress alone.
+An optional caller-authenticated adopted receipt permits durable historical
+observations strictly before that initial baseline, never delivery coverage.
 """
     r.require(wakeup in ("result", "recovery"), "unsupported result wakeup",
               "use result or recovery with the original persisted request; direct previews are manual")
@@ -133,7 +135,7 @@ grant admission. This function leaves scheduler and independent progress alone.
         test_scope.collect_interval(repository_path, request["control"], main_sha)
         policy = inputs.policy_at(request["control"])
         incremental_batch._request(policy, request)
-        test_scope.collect_interval(repository_path, request["target"], main_sha)
+        target_to_main = test_scope.collect_interval(repository_path, request["target"], main_sha)
         if request["base"] is not None:
             test_scope.collect_interval(repository_path, request["base"], request["target"])
         r.require(isinstance(terminal, dict) and set(terminal) == {
@@ -163,6 +165,20 @@ grant admission. This function leaves scheduler and independent progress alone.
         source = {**identity, "status": status, "evidence_digest": evidence}
         if status != "passed" or request["kind"] not in ("auto", "bootstrap"):
             return {"action": "ignore", "source_role": "wakeup-only", "source": source, "plan": None}
+        if baseline_receipt is not None:
+            # The Journal owns the existing adoption receipt codec; import at
+            # call time because its decision validator also uses this planner.
+            from .planning_journal import initial_baseline_progress
+            initial = initial_baseline_progress(baseline_receipt)
+            baseline = initial['version_accounted']['revision']
+            test_scope.collect_interval(repository_path, control_sha, main_sha)
+            test_scope.collect_interval(repository_path, baseline, main_sha)
+            if any(commit['sha'] == baseline for commit in target_to_main['commits']):
+                r.require(r.validate_progress(progress, repository='endaye/lmdj') == initial,
+                          'historical wakeup requires initial adopted progress with null site/formal pointers',
+                          'reconcile changed progress explicitly; never use version history as deployment coverage')
+                return {"action": "historical", "source_role": "wakeup-only", "source": source,
+                        "plan": None, "baseline_receipt": deepcopy(baseline_receipt)}
         plan = plan_batch(repository_path, main_sha=main_sha, target_sha=request["target"],
             control_sha=control_sha, progress=progress, request_id="canary-result:" + r.digest(source))
         # The wakeup's run/attempt and evidence are bound into planning inputs,

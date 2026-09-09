@@ -262,8 +262,15 @@ Issue 六字段配置：`repository`、`issue_number`、`issue_node_id`、`bot_n
 未采用时，空版本基线保留 `None` 和 bootstrap/full 范围；采用后，实际版本区间从
 持久化的已批准基线开始，不能把某轮测试的 base 当作版本已记账的起点。站点 bootstrap
 的全量测试下限不会随版本采用缩小，也不能将 active 计划解释为评估执行许可。
-基线之前的历史目标仍拒绝反向版本区间；自动 `reconcile-next` 可能先遇到这些旧结果。
-启用自动发现前还须完成历史唤醒协调，不能重置 scheduler、丢弃旧观察或伪造站点进度。
+`reconcile-next` 遇到早于已采用首次版本基线的成功 auto/bootstrap 结果时，先完整核验
+测试来源、保留 verdict 和 main 第一父链，再保存 `historical` 观察及完整采用收据，
+不计算反向版本区间、不生成计划，也不占用 active/pending。只有版本进度仍等于该首次
+采用收据、所有站点及 formal 进度仍为空时适用；缺少收据、进度不符或证据损坏仍报错。
+等于基线的结果正常规划：版本区间为空，首次站点部署仍保留 bootstrap/full 下限。
+每次只持久化一个完整观察，下一次继续发现后续结果；丢响应时先恢复原 intent 和完整
+决策，不能重置 scheduler、丢弃来源、重复未知 POST 或伪造站点进度。历史观察不是
+测试覆盖、版本评估完成或部署收据。该源码策略不等于线上历史积压已协调完毕；
+真实存储、基线采用和自动 readiness 启用仍须单独验收。
 
 ## Web Runtime Host Proof
 `scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。

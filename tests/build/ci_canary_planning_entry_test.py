@@ -663,10 +663,11 @@ class BaselineEntryTests(unittest.TestCase):
         state = entry.scheduler_state(runtime, entry.source_storage(runtime))
         return r.canonical({'state': state, 'issue': j.api.scheduler.issue, 'comments': j.api.scheduler.comments})
 
-    def cli_process(self):
+    def cli_process(self, operation='adopt-version-baseline', request=None):
         """Actual main()/argparse/output path; only remote HTTP is fixture data."""
         j = self.journey
         snapshot = {'root': str(j.f.root), 'config': j.config, 'environment': j.env,
+                    'operation': operation, 'request': request or {},
                     'stores': {name: {key: getattr(getattr(j.api, name), key)
                         for key in ('sha', 'issue', 'comments', 'runs', 'jobs')} for name in ('scheduler', 'planner')}}
         code = '''
@@ -682,11 +683,11 @@ for name, document in value['stores'].items():
         setattr(getattr(api, name), key, {int(k): v for k, v in data.items()} if key in ('runs', 'jobs') else data)
 from tools.canary import assessment_runtime
 def forbidden(*args, **kwargs):
-    raise AssertionError('baseline adoption must not invoke a model')
+    raise AssertionError('planning must not invoke a model')
 assessment_runtime.execute = forbidden
 with tempfile.TemporaryDirectory() as directory:
-    env = {**value['environment'], 'PLANNING_OPERATION': 'adopt-version-baseline',
-           'PLANNING_STORAGE': json.dumps(value['config']), 'PLANNING_REQUEST': '{}',
+    env = {**value['environment'], 'PLANNING_OPERATION': value['operation'],
+           'PLANNING_STORAGE': json.dumps(value['config']), 'PLANNING_REQUEST': json.dumps(value['request']),
            'GITHUB_STEP_SUMMARY': directory + '/summary'}
     sys.argv = ['planning_entry', '--root', value['root'], '--directory', directory]
     with patch.dict(os.environ, env, clear=True), patch.object(entry.batch_runtime, 'UrllibGitHubApi', return_value=api):
@@ -851,17 +852,154 @@ with tempfile.TemporaryDirectory() as directory:
             self.adopt()
         self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
 
-    def test_older_green_discovery_stays_fail_closed_without_skipping_or_resetting_history(self):
+    def test_older_green_discovery_retains_historical_source_without_progress(self):
         j = self.journey
         adopted = self.adopt()
-        before = deepcopy((j.api.planner.issue, j.api.planner.comments))
         scheduler = self.scheduler_bytes()
-        with self.assertRaisesRegex(r.CanaryError, "baseline is not on target's first-parent history"):
-            j.control('reconcile-next', {})
-        self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
+        result = j.control('reconcile-next', {})
+        self.assertEqual(result['action'], 'historical')
+        self.assertEqual(result['slot'], 'historical')
+        self.assertEqual(result['decision']['source']['request_id'], j.request['id'])
+        self.assertEqual(result['decision']['source']['target_sha'], j.request['target'])
+        self.assertEqual(result['decision']['source']['status'], 'passed')
+        self.assertEqual(result['decision']['baseline_receipt'], adopted['receipt'])
+        self.assertIsNone(result['decision']['plan'])
+        self.assertFalse(result['admission_evidence'])
         self.assertEqual(self.scheduler_bytes(), scheduler)
         self.assertEqual(j.planning_state()['progress'], adopted['progress'])
+        self.assertEqual(set(j.planning_state()['observations']), {j.request['id']})
+        for key in ('active', 'pending', 'unfinished'):
+            self.assertIsNone(j.planning_state()[key])
+
+    def test_historical_restart_then_later_plan_preserves_full_bootstrap_and_all_version_commits(self):
+        j = self.journey
+        failed = j.next_batch('scripts/ci/historical-journey-failure.py', failed_job='core-ubuntu')
+        missing = j.next_batch('apps/creator-web/src/historical-journey-missing.ts', missing_verdict=True)
+        adopted = self.cli_process()['answer']
+        before = self.scheduler_bytes()
+        self.assertTrue(json.loads(before)['state']['failures'])
+        self.assertTrue(json.loads(before)['state']['debts'])
+        historic = self.cli_process('reconcile-next')['answer']
+        self.assertEqual(historic['action'], 'historical')
+        self.assertEqual(historic['decision']['baseline_receipt'], adopted['receipt'])
+        prefix = deepcopy(j.api.planner.comments)
+        j.move_main()
+        replay = self.cli_process('recover', {'source_request_id': j.request['id']})
+        self.assertEqual(r.canonical(replay['answer']), r.canonical(historic))
+        self.assertEqual(j.api.planner.comments, prefix)
+        self.assertFalse(any(method in ('PATCH', 'POST') and path != '/graphql'
+                             for method, path, body in replay['calls']))
+        for request, status in ((failed, 'failed'), (missing, 'missing')):
+            ignored = self.cli_process('reconcile-next')['answer']
+            self.assertEqual(ignored['action'], 'ignored')
+            self.assertEqual(ignored['intent']['source_request_id'], request['id'])
+            self.assertEqual(ignored['decision']['source']['status'], status)
+        self.assertEqual(self.scheduler_bytes(), before)
+        later = j.next_batch('apps/creator-web/src/historical-journey-later.ts')
+        before = self.scheduler_bytes()
+        planned = self.cli_process('reconcile-next')['answer']
+        self.assertEqual(planned['action'], 'planned')
+        self.assertEqual(planned['slot'], 'active')
+        self.assertEqual(planned['intent']['source_request_id'], later['id'])
+        plan = planned['decision']['plan']
+        self.assertEqual(plan['version_interval'], {'kind': 'complete',
+            **entry.test_scope.collect_interval(j.f.root, self.baseline, later['target'])})
+        for site in r.SITES:
+            self.assertEqual(plan['site_intervals'][site]['kind'], 'bootstrap')
+            self.assertEqual(plan['site_test_floors'][site]['kind'], 'full')
+        self.assertEqual(plan['test_floor']['kind'], 'full')
+        self.assertEqual(self.cli_process('reconcile-next')['answer']['action'], 'idle')
+        self.assertEqual(j.planning_state()['progress'], adopted['progress'])
+        self.assertEqual(self.scheduler_bytes(), before)
+
+    def historical_inputs(self):
+        j = self.journey
+        runtime = entry.PlanningRuntime(j.config, root=j.f.root, environment=j.env, api=j.api)
+        runtime.authenticate_current()
+        state = j.planning_state()
+        return dict(scheduler=entry.scheduler_state(runtime, entry.source_storage(runtime)),
+            source_request_id=j.request['id'], main_sha=runtime.inputs.main,
+            control_sha=runtime.control, progress=state['progress'], baseline_receipt=state['baseline_receipt'])
+
+    def test_direct_planner_without_adopted_receipt_still_refuses_reverse_interval(self):
+        self.adopt()
+        inputs = self.historical_inputs()
+        inputs.pop('baseline_receipt')
+        with self.assertRaisesRegex(r.CanaryError, "baseline is not on target's first-parent history"):
+            entry.planning.plan_after_result(self.journey.f.root, **inputs)
+
+    def test_historical_receipt_does_not_authorize_changed_progress(self):
+        self.adopt()
+        inputs = self.historical_inputs()
+        pointer = {'revision': self.baseline, 'receipt_digest': 'a' * 64}
+        for key in ('version_accounted', 'formal', *r.SITES):
+            progress = deepcopy(inputs['progress'])
+            if key in r.SITES:
+                progress['deployments'][key] = pointer
+            else:
+                progress[key] = pointer
+            with self.subTest(key=key), self.assertRaisesRegex(r.CanaryError, 'initial adopted progress'):
+                entry.planning.plan_after_result(self.journey.f.root, **{**inputs, 'progress': r.seal(progress)})
+
+    def test_corrupt_historical_verdict_is_not_a_skippable_observation(self):
+        j = self.journey
+        self.adopt()
+        inputs = self.historical_inputs()
+        inputs['scheduler']['results'][j.request['id']]['reference'] = 'invalid-retained-verdict'
+        before = deepcopy((j.api.planner.issue, j.api.planner.comments))
+        with patch.object(entry, 'scheduler_state', return_value=inputs['scheduler']), self.assertRaises(r.CanaryError):
+            j.control('reconcile-next', {})
+        self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
         self.assertFalse(j.planning_state()['observations'])
+
+    def test_target_equal_to_baseline_still_plans_first_site_bootstrap(self):
+        j = self.journey
+        request = j.next_batch('apps/creator-web/src/baseline-target.ts')
+        self.approval['revision'] = request['target']
+        self.write_approval(self.approval)
+        self.adopt()
+        result = j.control('observe-result', {'source_request_id': request['id']})
+        self.assertEqual(result['action'], 'planned')
+        self.assertEqual(result['slot'], 'active')
+        self.assertEqual(result['decision']['plan']['version_interval']['commits'], [])
+        self.assertEqual(result['decision']['plan']['test_floor']['kind'], 'full')
+
+    def test_historical_intent_lost_ack_recovers_original_bytes_in_new_process(self):
+        j = self.journey
+        self.adopt()
+        j.api.planner.lose = 'intent'
+        with self.assertRaisesRegex(r.CanaryError, 'append outcome is unresolved'):
+            j.control('reconcile-next', {})
+        intent = j.planning_state()['observations'][j.request['id']]['intent']
+        prefix = deepcopy(j.api.planner.comments)
+        j.move_main()
+        result = self.cli_process('reconcile-next')['answer']
+        self.assertEqual(result['action'], 'historical')
+        self.assertEqual(result['intent'], intent)
+        self.assertEqual(r.digest(result['decision']), intent['decision_digest'])
+        self.assertEqual(j.api.planner.comments[:len(prefix)], prefix)
+        self.assertIsNone(j.planning_state()['unfinished'])
+        self.assertIsNone(j.planning_state()['active'])
+
+    def test_historical_chunk_and_complete_ack_recover_without_duplicate_posts(self):
+        for kind in ('blob', 'complete'):
+            with self.subTest(kind=kind):
+                other = BaselineEntryTests()
+                other.setUp()
+                self.addCleanup(other.doCleanups)
+                j = other.journey
+                adopted = other.adopt()
+                j.api.planner.lose = kind
+                with self.assertRaisesRegex(r.CanaryError, 'append outcome is unresolved'):
+                    j.control('reconcile-next', {})
+                j.planning_state()
+                prefix = deepcopy(j.api.planner.comments)
+                recovered = other.cli_process('recover', {'source_request_id': j.request['id']})['answer']
+                self.assertEqual(recovered['action'], 'historical')
+                self.assertEqual(recovered['decision']['baseline_receipt'], adopted['receipt'])
+                self.assertEqual(j.api.planner.comments[:len(prefix)], prefix)
+                self.assertIsNone(j.planning_state()['unfinished'])
+                self.assertEqual(j.planning_state()['progress'], adopted['progress'])
 
     def test_lost_adoption_ack_recovers_in_new_cli_process_without_second_post(self):
         j = self.journey
