@@ -144,6 +144,26 @@ def capture(directory, backend):
         output.write("reviewed=" + str(history[-1]["status"] == "reviewed").lower() + "\n")
 
 
+def grok_failure_category(output):
+    """Finite diagnostic hint only; never echo provider data or grant authority.
+
+    The pinned CLI emits an error envelope even when it exits nonzero. Inspect
+    that bounded envelope before discarding it as an opaque process failure.
+    """
+    if not isinstance(output, str) or len(output.encode("utf-8")) > 65536:
+        return "process_failure"
+    try:
+        envelope = json.loads(output, object_pairs_hook=change_scope.reject_duplicates)
+    except (ValueError, RecursionError):
+        return "process_failure"
+    if not isinstance(envelope, dict) or envelope.get("type") != "error":
+        return "process_failure"
+    message = envelope.get("message")
+    if isinstance(message, str) and message.startswith("Not signed in. To authenticate without a browser, run:"):
+        return "authentication_required"
+    return "error_envelope"
+
+
 def grok(directory):
     # Reuse the pinned CLI's read-only invocation, but ask for the same strict
     # JSON as Claude. Never execute or check out the PR head.
@@ -163,8 +183,8 @@ def grok(directory):
     env["GROK_DISABLE_AUTOUPDATER"] = "1"
 
     def failed(category, returncode=None):
-        # Categories are fixed at the local failure boundary, never inferred from
-        # provider text. Keep stdout/stderr, exception strings and credentials private.
+        # Only finite categories leave this boundary. An error-envelope hint is
+        # not authenticated root-cause evidence. Raw output/credentials stay private.
         print(json.dumps({"schema": "lmdj.ci-review-diagnostic.v1", "backend": "grok",
                           "category": category, "returncode": returncode}), file=sys.stderr)
 
@@ -184,7 +204,7 @@ def grok(directory):
             failed("launch_failure")
             raise
         if result.returncode != 0:
-            failed("process_failure", result.returncode)
+            failed(grok_failure_category(result.stdout), result.returncode)
             raise review_scope.ReviewScopeError("why: Grok process failed; remedy: inspect bounded diagnostics")
         try:
             envelope = json.loads(result.stdout)
