@@ -9,8 +9,8 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/900
     observed_by: claude-code/opus-5
-  - date: 2026-09-10
-    occurrence: https://github.com/endaye/lmdj/issues/914
+  - date: 2026-09-09
+    occurrence: https://github.com/endaye/lmdj/pull/1117
     observed_by: Codex
 exit: gate:tests/build/ci_change_scope_test.py
 ---
