@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
+import {glob} from 'glob';
 import {
   createSquashWitness,
   createSnapshotMetadata,
@@ -15,10 +16,17 @@ import {
   readRepoFactsAtRevision,
   resolveIntroducingRevision,
   verifySnapshotProvenance,
+  SOURCE_DOCUMENT_COUNT,
 } from '../scripts/lib/snapshot-provenance.mjs';
 import {checkSnapshotProjection} from '../scripts/check-snapshot-projection.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+
+test('current page inventory agrees with the independent snapshot completeness pin', async () => {
+  const pages = await glob('**/*.mdx', {cwd: path.join(REPO_ROOT, 'apps/docs-site/docs')});
+  assert.equal(pages.length, SOURCE_DOCUMENT_COUNT,
+    'why: current pages would fail the snapshot completeness gate; remedy: reconcile the page inventory and SOURCE_DOCUMENT_COUNT in the same Task');
+});
 
 const execFileAsync = promisify(execFile);
 const VERSION = '1.0.14.0';

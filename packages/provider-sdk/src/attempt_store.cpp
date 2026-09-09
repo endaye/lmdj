@@ -1,4 +1,5 @@
 #include <lmdj/provider/attempt_store.hpp>
+#include "attempt_store_test_hooks.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -16,6 +17,7 @@
 #include <string_view>
 #include <system_error>
 #include <tuple>
+#include <thread>
 #include <utility>
 
 #ifndef __EMSCRIPTEN__
@@ -866,12 +868,18 @@ nlohmann::json error_json(
   if (!error.has_value()) {
     return nullptr;
   }
+  // Only a validated reason survives Provider redaction. Provider messages and
+  // arbitrary extra details never become durable Workspace evidence.
+  auto details = error->details;
+  if (redact_provider_error) {
+    details = nlohmann::json::object();
+    if (error->details.is_object() && error->details.contains("reason")) {
+      details["reason"] = error->details.at("reason");
+    }
+  }
   return {
       {"code", foundation::error_code_name(error->code)},
-      {"details",
-       redact_provider_error
-           ? nlohmann::json::object()
-           : error->details},
+      {"details", std::move(details)},
       {"message",
        redact_provider_error
            ? "provider execution failed"
@@ -961,7 +969,137 @@ Error invalid_provider_outcome() {
   return Error{
       ErrorCode::provider_failed,
       "provider returned an invalid terminal outcome",
+      {{"reason", "output_contract_invalid"}},
   };
+}
+
+Error execution_error(ErrorCode code, std::string reason) {
+  return Error{code, "Artifact execution boundary refused the operation",
+               {{"reason", std::move(reason)}}};
+}
+
+struct RunState {
+  std::mutex mutex;
+  bool active = true;
+  std::thread::id thread = std::this_thread::get_id();
+  std::optional<Error> first_error;
+  std::filesystem::path attempt_root;
+  CapabilityDescriptor capability;
+  std::shared_ptr<const CapabilityRequest> request;
+  std::shared_ptr<StagingBudget> global_budget;
+  StagingBudget local_budget;
+  std::uint64_t maximum_output_bytes;
+  std::uint64_t output_bytes = 0;
+  std::vector<ValidatedInput> inputs;
+  std::vector<ArtifactBinding> minted;
+  std::vector<ArtifactHandle> output_buffers;
+
+  RunState(std::filesystem::path root, CapabilityDescriptor descriptor,
+           const CapabilityRequest& value, const ExecutionOptions& options)
+      : attempt_root(std::move(root)), capability(std::move(descriptor)),
+        request(std::make_shared<const CapabilityRequest>(value)),
+        global_budget(options.staging_budget),
+        local_budget(capability.resources.memory_mib
+            ? (*capability.resources.memory_mib > UINT64_MAX / 1048576
+                ? UINT64_MAX : *capability.resources.memory_mib * 1048576)
+            : UINT64_MAX),
+        maximum_output_bytes(std::min(options.maximum_output_bytes,
+                                      capability.max_output_bytes)) {}
+
+  foundation::Result<std::shared_ptr<void>> reserve(std::uint64_t size) {
+    auto local = local_budget.reserve(size);
+    if (!local.has_value()) return local;
+    auto global = global_budget->reserve(size);
+    if (!global.has_value()) return global;
+    using Leases = std::pair<std::shared_ptr<void>, std::shared_ptr<void>>;
+    return foundation::Result<std::shared_ptr<void>>::success(
+        std::make_shared<Leases>(std::move(local.value()),
+                                std::move(global.value())));
+  }
+
+  std::optional<Error> check_call(bool output) {
+    if (active && thread == std::this_thread::get_id()) return std::nullopt;
+    auto error = execution_error(ErrorCode::invalid_argument,
+        output ? "output_contract_invalid" : "input_binding_invalid");
+    if (active && !first_error) {
+      first_error = error;
+      if (output) first_error->code = ErrorCode::provider_failed;
+    }
+    return error;
+  }
+};
+
+// Retained callbacks keep only the closed control block, not payload leases.
+struct ReleaseRunPayloads {
+  std::shared_ptr<RunState> state;
+  ~ReleaseRunPayloads() {
+    const std::lock_guard lock(state->mutex);
+    state->active = false;
+    state->inputs.clear();
+    state->output_buffers.clear();
+  }
+};
+
+foundation::Result<void> stage_inputs(
+    RunState& state, const ExecutionOptions& options) {
+  std::uint64_t total = 0;
+  for (const auto& binding : state.request->inputs) {
+    if (binding.artifact.byte_length > options.maximum_input_bytes - total ||
+        binding.artifact.byte_length > std::numeric_limits<std::size_t>::max()) {
+      return foundation::Result<void>::failure(execution_error(
+          ErrorCode::invalid_argument, "input_artifact_too_large"));
+    }
+    total += binding.artifact.byte_length;
+  }
+  auto lease = state.reserve(total);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(execution_error(
+        ErrorCode::invalid_argument, "input_artifact_too_large"));
+  }
+  for (const auto& binding : state.request->inputs) {
+    if (!options.resolve_input) {
+      return foundation::Result<void>::failure(execution_error(
+          ErrorCode::not_found, "input_artifact_unavailable"));
+    }
+    auto supplied = options.resolve_input(binding.artifact);
+    if (!supplied.has_value() || !supplied.value()) {
+      return foundation::Result<void>::failure(execution_error(
+          ErrorCode::not_found, "input_artifact_unavailable"));
+    }
+    if (supplied.value()->size() != binding.artifact.byte_length) {
+      return foundation::Result<void>::failure(execution_error(
+          ErrorCode::io_error, "input_artifact_mismatch"));
+    }
+    // Never transfer the owner's allocation: const shared_ptr is not a freeze.
+    std::vector<std::byte> bytes(*supplied.value());
+    std::string digest;
+    const auto* first = bytes.empty() ? "" : reinterpret_cast<const char*>(bytes.data());
+    picosha2::hash256_hex_string(first, first + bytes.size(), digest);
+    if (digest != binding.artifact.sha256) {
+      return foundation::Result<void>::failure(execution_error(
+          ErrorCode::io_error, "input_artifact_mismatch"));
+    }
+    state.inputs.push_back({binding, std::make_shared<const ArtifactBytes>(
+        binding.artifact, std::move(bytes), lease.value())});
+  }
+  return foundation::Result<void>::success();
+}
+
+bool declared_domain_error(const Error& error, const CapabilityDescriptor& cap,
+                           const std::vector<DomainErrorValidation>& domains) {
+  const auto code = std::string(foundation::error_code_name(error.code));
+  if (std::find(cap.error_codes.begin(), cap.error_codes.end(), code) ==
+      cap.error_codes.end()) return false;
+  // Existing opaque Proof failures have no reason; they retain their evidence.
+  if (error.code == ErrorCode::provider_failed && error.details.is_object() &&
+      !error.details.contains("reason")) return true;
+  if (!error.details.is_object() || !error.details.contains("reason") ||
+      !error.details.at("reason").is_string()) return false;
+  const auto reason = error.details.at("reason").get<std::string>();
+  return std::any_of(domains.begin(), domains.end(), [&](const auto& domain) {
+    return domain.capability == cap.id && domain.code == error.code &&
+           domain.reason == reason;
+  });
 }
 
 bool same_bindings(
@@ -1517,8 +1655,15 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
 
 foundation::Result<AttemptResult> AttemptStore::execute(
     foundation::AttemptId attempt_id,
-    const CapabilityRequest& request,
-    const Registry& registry) {
+    const CapabilityRequest& input_request,
+    const Registry& registry,
+    const ExecutionOptions& ingress_options) {
+  const CapabilityRequest request = input_request;
+  const ExecutionOptions options = ingress_options;
+  if (!options.staging_budget) {
+    return foundation::Result<AttemptResult>::failure(
+        invalid_argument("execution staging budget is required"));
+  }
   if (!valid_file_id(attempt_id.value())) {
     return foundation::Result<AttemptResult>::failure(
         invalid_argument("attempt id is not safe for persistence"));
@@ -1562,7 +1707,6 @@ foundation::Result<AttemptResult> AttemptStore::execute(
   }
   const auto started_at = timestamp_source_();
 
-  std::vector<ArtifactBinding> minted;
   const auto request_error =
       validate_request(request, capability, policy_);
   const auto reservation =
@@ -1572,145 +1716,216 @@ foundation::Result<AttemptResult> AttemptStore::execute(
         reservation.error());
   }
   const auto& attempt_root = reservation.value();
+  LMDJ_PROVIDER_CHECKPOINT("reserved");
+  auto state = std::make_shared<RunState>(attempt_root, capability, request, options);
+  const ReleaseRunPayloads payload_cleanup{state};
+  auto& minted = state->minted;
   AttemptResult terminal{
       attempt_id,
       std::nullopt,
       std::nullopt,
   };
   bool provider_invoked = false;
+  bool provider_returned = false;
   if (!validation_passed(request_error)) {
     terminal.error = request_error;
+    if (terminal.error->code == ErrorCode::invalid_argument) {
+      terminal.error->details["reason"] = "input_binding_invalid";
+    }
   } else {
-    const auto output = [
-                            &attempt_root,
-                            &capability,
-                            &minted](
+    try {
+      const auto staged = stage_inputs(*state, options);
+      if (!staged.has_value()) terminal.error = staged.error();
+    } catch (const std::bad_alloc&) {
+      terminal.error = execution_error(ErrorCode::invalid_argument,
+                                       "input_artifact_too_large");
+    } catch (...) {
+      terminal.error = execution_error(ErrorCode::not_found,
+                                       "input_artifact_unavailable");
+    }
+    LMDJ_PROVIDER_CHECKPOINT("inputs");
+    const ArtifactSource source = [state](std::string port, std::size_t occurrence)
+        -> foundation::Result<ArtifactHandle> {
+      const std::lock_guard lock(state->mutex);
+      if (const auto error = state->check_call(false)) {
+        return foundation::Result<ArtifactHandle>::failure(*error);
+      }
+      for (const auto& input : state->inputs) {
+        if (input.binding.port == port) {
+          if (occurrence == 0) {
+            return foundation::Result<ArtifactHandle>::success(input.handle);
+          }
+          --occurrence;
+        }
+      }
+      auto error = execution_error(ErrorCode::invalid_argument, "input_binding_invalid");
+      if (!state->first_error) state->first_error = error;
+      return foundation::Result<ArtifactHandle>::failure(std::move(error));
+    };
+    const auto output = [state](
                             std::string port_name,
                             std::span<const std::byte> bytes,
                             std::string media_type)
         -> foundation::Result<ArtifactRef> {
-      const auto* port = find_port(
-          capability.output_artifacts, port_name);
-      if (port == nullptr) {
-        return foundation::Result<ArtifactRef>::failure(
-            invalid_argument("output port is not declared by capability"));
+      const std::lock_guard lock(state->mutex);
+      if (const auto error = state->check_call(true)) {
+        return foundation::Result<ArtifactRef>::failure(*error);
       }
-      if (!valid_media_type(media_type)) {
-        return foundation::Result<ArtifactRef>::failure(
-            invalid_argument("output media type is invalid"));
-      }
-      if (!media_type_allowed(*port, media_type)) {
-        return foundation::Result<ArtifactRef>::failure(
-            invalid_argument(
-                "output media type is not declared by capability"));
-      }
-      if (bytes.size() > capability.max_output_bytes ||
-          bytes.size() >
-              static_cast<std::size_t>(
-                  std::numeric_limits<std::streamsize>::max())) {
-        return foundation::Result<ArtifactRef>::failure(
-            invalid_argument("output exceeds capability limit"));
-      }
-      for (const auto& directory :
-           {
-               attempt_root / "staging",
-               attempt_root / "staging/artifacts",
-           }) {
-        const auto ensured = ensure_directory(directory);
-        if (!ensured.has_value()) {
-          return foundation::Result<ArtifactRef>::failure(ensured.error());
-        }
-      }
-      const auto temp_path =
-          temporary_sibling(
-              attempt_root / "staging/artifacts/output");
-      const std::string_view payload{
-          reinterpret_cast<const char*>(bytes.data()),
-          bytes.size(),
+      const auto reject = [&]() {
+        if (!state->first_error) state->first_error = execution_error(
+            ErrorCode::provider_failed, "output_contract_invalid");
+        return foundation::Result<ArtifactRef>::failure(execution_error(
+            ErrorCode::invalid_argument, "output_contract_invalid"));
       };
-      const auto written =
-          detail::write_bytes_durable(temp_path, payload);
-      if (!written.has_value()) {
-        return foundation::Result<ArtifactRef>::failure(written.error());
+      try {
+        const auto& capability = state->capability;
+        const auto* declared = find_port(capability.output_artifacts, port_name);
+        if (!declared || bytes.size() > state->maximum_output_bytes - state->output_bytes ||
+            std::count_if(state->minted.begin(), state->minted.end(),
+                [&](const auto& value) { return value.port == port_name; }) >=
+                declared->max_count) return reject();
+        auto lease = state->reserve(bytes.size());
+        if (!lease.has_value()) return reject();
+        std::vector<std::byte> owned(bytes.begin(), bytes.end());
+        bytes = owned;
+        const auto write_output = [&]() -> foundation::Result<ArtifactRef> {
+          const auto& attempt_root = state->attempt_root;
+          auto& minted = state->minted;
+          const auto* port = find_port(
+              capability.output_artifacts, port_name);
+          if (port == nullptr) {
+            return foundation::Result<ArtifactRef>::failure(
+                invalid_argument("output port is not declared by capability"));
+          }
+          if (!valid_media_type(media_type)) {
+            return foundation::Result<ArtifactRef>::failure(
+                invalid_argument("output media type is invalid"));
+          }
+          if (!media_type_allowed(*port, media_type)) {
+            return foundation::Result<ArtifactRef>::failure(
+                invalid_argument(
+                    "output media type is not declared by capability"));
+          }
+          if (bytes.size() > capability.max_output_bytes ||
+              bytes.size() >
+                  static_cast<std::size_t>(
+                      std::numeric_limits<std::streamsize>::max())) {
+            return foundation::Result<ArtifactRef>::failure(
+                invalid_argument("output exceeds capability limit"));
+          }
+          for (const auto& directory :
+               {
+                   attempt_root / "staging",
+                   attempt_root / "staging/artifacts",
+               }) {
+            const auto ensured = ensure_directory(directory);
+            if (!ensured.has_value()) {
+              return foundation::Result<ArtifactRef>::failure(ensured.error());
+            }
+          }
+          const auto temp_path =
+              temporary_sibling(
+                  attempt_root / "staging/artifacts/output");
+          const std::string_view payload{
+              reinterpret_cast<const char*>(bytes.data()),
+              bytes.size(),
+          };
+          const auto written =
+              detail::write_bytes_durable(temp_path, payload);
+          if (!written.has_value()) {
+            return foundation::Result<ArtifactRef>::failure(written.error());
+          }
+          const auto described =
+              foundation::describe_artifact(temp_path, std::move(media_type));
+          if (!described.has_value()) {
+            std::error_code cleanup_error;
+            std::filesystem::remove(temp_path, cleanup_error);
+            return foundation::Result<ArtifactRef>::failure(
+                described.error());
+          }
+          if (std::any_of(
+                  minted.begin(),
+                  minted.end(),
+                  [&described](const auto& binding) {
+                    return binding.artifact.sha256 == described.value().sha256;
+                  })) {
+            std::error_code cleanup_error;
+            std::filesystem::remove(temp_path, cleanup_error);
+            return foundation::Result<ArtifactRef>::failure(
+                invalid_argument("output Artifact was already minted"));
+          }
+          const auto final_path =
+              attempt_root / "staging/artifacts" /
+              described.value().sha256;
+          std::error_code final_status_error;
+          const auto final_status =
+              std::filesystem::symlink_status(final_path, final_status_error);
+          if (final_status_error &&
+              final_status_error !=
+                  std::make_error_code(
+                      std::errc::no_such_file_or_directory)) {
+            std::error_code cleanup_error;
+            std::filesystem::remove(temp_path, cleanup_error);
+            return foundation::Result<ArtifactRef>::failure(
+                io_error(
+                    "output artifact destination could not be inspected",
+                    final_path,
+                    final_status_error));
+          }
+          if (!final_status_error &&
+              final_status.type() !=
+                  std::filesystem::file_type::not_found) {
+            if (std::filesystem::is_symlink(final_status) ||
+                !std::filesystem::is_regular_file(final_status)) {
+              std::error_code cleanup_error;
+              std::filesystem::remove(temp_path, cleanup_error);
+              return foundation::Result<ArtifactRef>::failure(
+                  io_error("output artifact destination is unsafe", final_path));
+            }
+            const auto existing = foundation::describe_artifact(
+                final_path, described.value().media_type);
+            if (!existing.has_value() ||
+                existing.value() != described.value()) {
+              std::error_code cleanup_error;
+              std::filesystem::remove(temp_path, cleanup_error);
+              return foundation::Result<ArtifactRef>::failure(
+                  io_error(
+                      "existing output artifact does not match its hash",
+                      final_path));
+            }
+            std::error_code cleanup_error;
+            std::filesystem::remove(temp_path, cleanup_error);
+          } else {
+            const auto published =
+                detail::publish_replace(temp_path, final_path);
+            if (!published.has_value()) {
+              return foundation::Result<ArtifactRef>::failure(published.error());
+            }
+          }
+          minted.push_back(ArtifactBinding{
+              std::move(port_name),
+              described.value(),
+          });
+          return foundation::Result<ArtifactRef>::success(described.value());
+        };
+        const auto result = write_output();
+        if (!result.has_value()) return reject();
+        state->output_bytes += bytes.size();
+        state->output_buffers.push_back(std::make_shared<const ArtifactBytes>(
+            result.value(), std::move(owned), std::move(lease.value())));
+        return result;
+      } catch (...) {
+        return reject();
       }
-      const auto described =
-          foundation::describe_artifact(temp_path, std::move(media_type));
-      if (!described.has_value()) {
-        std::error_code cleanup_error;
-        std::filesystem::remove(temp_path, cleanup_error);
-        return foundation::Result<ArtifactRef>::failure(
-            described.error());
-      }
-      if (std::any_of(
-              minted.begin(),
-              minted.end(),
-              [&described](const auto& binding) {
-                return binding.artifact.sha256 == described.value().sha256;
-              })) {
-        std::error_code cleanup_error;
-        std::filesystem::remove(temp_path, cleanup_error);
-        return foundation::Result<ArtifactRef>::failure(
-            invalid_argument("output Artifact was already minted"));
-      }
-      const auto final_path =
-          attempt_root / "staging/artifacts" /
-          described.value().sha256;
-      std::error_code final_status_error;
-      const auto final_status =
-          std::filesystem::symlink_status(final_path, final_status_error);
-      if (final_status_error &&
-          final_status_error !=
-              std::make_error_code(
-                  std::errc::no_such_file_or_directory)) {
-        std::error_code cleanup_error;
-        std::filesystem::remove(temp_path, cleanup_error);
-        return foundation::Result<ArtifactRef>::failure(
-            io_error(
-                "output artifact destination could not be inspected",
-                final_path,
-                final_status_error));
-      }
-      if (!final_status_error &&
-          final_status.type() !=
-              std::filesystem::file_type::not_found) {
-        if (std::filesystem::is_symlink(final_status) ||
-            !std::filesystem::is_regular_file(final_status)) {
-          std::error_code cleanup_error;
-          std::filesystem::remove(temp_path, cleanup_error);
-          return foundation::Result<ArtifactRef>::failure(
-              io_error("output artifact destination is unsafe", final_path));
-        }
-        const auto existing = foundation::describe_artifact(
-            final_path, described.value().media_type);
-        if (!existing.has_value() ||
-            existing.value() != described.value()) {
-          std::error_code cleanup_error;
-          std::filesystem::remove(temp_path, cleanup_error);
-          return foundation::Result<ArtifactRef>::failure(
-              io_error(
-                  "existing output artifact does not match its hash",
-                  final_path));
-        }
-        std::error_code cleanup_error;
-        std::filesystem::remove(temp_path, cleanup_error);
-      } else {
-        const auto published =
-            detail::publish_replace(temp_path, final_path);
-        if (!published.has_value()) {
-          return foundation::Result<ArtifactRef>::failure(published.error());
-        }
-      }
-      minted.push_back(ArtifactBinding{
-          std::move(port_name),
-          described.value(),
-      });
-      return foundation::Result<ArtifactRef>::success(described.value());
     };
 
     try {
-      provider_invoked = true;
-      terminal = selected.value().implementation->run(
-          attempt_id, request, output);
+      if (!terminal.error) {
+        provider_invoked = true;
+        terminal = selected.value().implementation->run(
+            ProviderRunContext{attempt_id, state->request, source, output});
+        provider_returned = true;
+      }
     } catch (...) {
       terminal = AttemptResult{
           attempt_id,
@@ -1718,16 +1933,24 @@ foundation::Result<AttemptResult> AttemptStore::execute(
           Error{
               ErrorCode::provider_failed,
               "provider execution failed",
+              {{"reason", "output_contract_invalid"}},
           },
       };
     }
 
+    {
+      const std::lock_guard lock(state->mutex);
+      state->active = false;
+    }
+    LMDJ_PROVIDER_CHECKPOINT("staged");
+
     const bool exactly_one =
         terminal.candidate.has_value() != terminal.error.has_value();
     bool valid = exactly_one && terminal.attempt_id == attempt_id;
-    if (valid && terminal.error.has_value()) {
+    if (valid && terminal.error.has_value() && provider_returned) {
       valid =
-          terminal.error->code == ErrorCode::provider_failed &&
+          declared_domain_error(*terminal.error, capability,
+                                selected.value().domain_errors) &&
           minted.empty();
     }
     if (valid && terminal.candidate.has_value()) {
@@ -1744,7 +1967,40 @@ foundation::Result<AttemptResult> AttemptStore::execute(
           std::nullopt,
           invalid_provider_outcome(),
       };
-    } else if (terminal.candidate.has_value()) {
+    }
+    if (state->first_error) {
+      terminal.candidate.reset();
+      terminal.error = state->first_error;
+    }
+    if (terminal.candidate) {
+      for (std::size_t i = 0; i < minted.size(); ++i) {
+        const auto& rules = selected.value().output_validation;
+        const auto validator = std::find_if(rules.begin(), rules.end(), [&](const auto& value) {
+          return value.capability == capability.id && value.port == minted[i].port;
+        });
+        try {
+          auto lease = state->reserve(validator->scratch_bytes);
+          if (!lease.has_value() || validator->scratch_bytes >
+              std::numeric_limits<std::size_t>::max()) {
+            terminal.error = execution_error(ErrorCode::provider_failed,
+                                              "output_contract_invalid");
+          } else {
+            std::vector<std::byte> scratch(static_cast<std::size_t>(validator->scratch_bytes));
+            const auto validated = validator->validate(*state->request, state->inputs,
+                minted[i], state->output_buffers[i]->bytes(), scratch);
+            if (!validated.has_value()) terminal.error = execution_error(
+                ErrorCode::provider_failed, "output_schema_invalid");
+          }
+        } catch (...) {
+          terminal.error = execution_error(ErrorCode::provider_failed, "output_schema_invalid");
+        }
+        if (terminal.error) {
+          terminal.candidate.reset();
+          break;
+        }
+      }
+    }
+    if (terminal.candidate.has_value()) {
       terminal.candidate->provenance = {
           {"capability", capability.id},
           {"contract", "lmdj.capability.v2"},
@@ -1764,6 +2020,7 @@ foundation::Result<AttemptResult> AttemptStore::execute(
   }
 
   if (terminal.candidate.has_value()) {
+    LMDJ_PROVIDER_CHECKPOINT("validated");
     if (minted.empty()) {
       const auto cleaned = cleanup_attempt_outputs(attempt_root);
       if (!cleaned.has_value()) {
@@ -1773,12 +2030,6 @@ foundation::Result<AttemptResult> AttemptStore::execute(
     } else {
       const auto published = publish_attempt_outputs(attempt_root);
       if (!published.has_value()) {
-        const auto cleaned = remove_tree(
-            attempt_root, "Attempt reservation cleanup failed");
-        if (!cleaned.has_value()) {
-          return foundation::Result<AttemptResult>::failure(
-              cleaned.error());
-        }
         return foundation::Result<AttemptResult>::failure(
             published.error());
       }
@@ -1793,6 +2044,7 @@ foundation::Result<AttemptResult> AttemptStore::execute(
   }
 
   terminal.attempt_id = attempt_id;
+  LMDJ_PROVIDER_CHECKPOINT("published");
   const auto ended_at = timestamp_source_();
   const auto persisted = persist_attempt(
       attempts_root,
@@ -1806,12 +2058,6 @@ foundation::Result<AttemptResult> AttemptStore::execute(
       minted,
       provider_invoked);
   if (!persisted.has_value()) {
-    const auto cleaned = remove_tree(
-        attempt_root, "Attempt reservation cleanup failed");
-    if (!cleaned.has_value()) {
-      return foundation::Result<AttemptResult>::failure(
-          cleaned.error());
-    }
     return foundation::Result<AttemptResult>::failure(persisted.error());
   }
   if (!terminal.candidate.has_value()) {
@@ -1822,6 +2068,7 @@ foundation::Result<AttemptResult> AttemptStore::execute(
           released.error());
     }
   }
+  LMDJ_PROVIDER_CHECKPOINT("terminal");
   return foundation::Result<AttemptResult>::success(std::move(terminal));
 }
 

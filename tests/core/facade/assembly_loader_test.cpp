@@ -17,6 +17,7 @@
 #include <lmdj/provider/provider.hpp>
 #include <lmdj/provider/registry.hpp>
 #include "tests/core/support/test.hpp"
+#include "tests/core/provider/byte_fixture.hpp"
 
 namespace {
 
@@ -71,10 +72,8 @@ class ProofProvider final : public Provider {
     return {"proof.candidate.v2"};
   }
 
-  AttemptResult run(
-      AttemptId attempt_id,
-      const CapabilityRequest&,
-      ArtifactSink) override {
+  AttemptResult run(lmdj::provider::ProviderRunContext context) override {
+    const auto attempt_id = context.attempt_id;
     return AttemptResult{
         std::move(attempt_id),
         std::nullopt,
@@ -130,13 +129,13 @@ CapabilityDescriptor proof_capability() {
 ProviderRegistration registration(
     std::string id,
     std::optional<ModelIdentity> model_identity = std::nullopt) {
-  return ProviderRegistration{
+  return byte_fixture::opaque(ProviderRegistration{
       std::make_shared<ProofProvider>(std::move(id)),
-      "1.0.5",
+      "2.0.0",
       std::string(64, 'a'),
       std::move(model_identity),
       {proof_capability()},
-  };
+   {}, {} });
 }
 
 std::optional<ModelIdentity> declared_model_identity(
@@ -180,7 +179,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
       {
           CompiledProvider{
               "local.proof.success",
-              "1.0.5",
+              "2.0.0",
               [success_model] {
                 return registration(
                     "local.proof.success", success_model);
@@ -189,7 +188,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
           },
           CompiledProvider{
               "local.proof.failure",
-              "1.0.5",
+              "2.0.0",
               [failure_model] {
                 return registration(
                     "local.proof.failure", failure_model);

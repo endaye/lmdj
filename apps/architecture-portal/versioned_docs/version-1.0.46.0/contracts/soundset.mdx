@@ -1,0 +1,106 @@
+---
+title: Sound Set Contract
+area: contracts
+status: implemented
+owners: [core, product, hosts]
+contracts: [lmdj.soundset.v1]
+source_paths:
+  - contracts/soundset/lmdj.soundset.v1.schema.json
+  - packages/foundation
+  - packages/project-io
+  - packages/application-facade
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="contracts" id="lmdj.soundset.v1" />
+
+## 权威内容
+
+`lmdj.soundset.v1 · 1.1.0` 是一个 Sound Set 的清单：`set_id`、`version`、`name`、
+`publisher`、`license` 与 `slots` 必填，`description`、`bpm`、`key` 与 `demo` 可选。
+`slots` 恰好覆盖一个 Bank 的 16 个槽位地址，每个槽位要么只带 `slot`（空槽），要么另
+带 `role`、`name` 与内容寻址的 `artifact`；`role` 是封闭枚举。清单本身是内容寻址的：
+Catalog 与 Set Store 都以其规范化字节的 SHA-256 指认它。
+
+`1.1.0` 相对 `1.0.0` 只追加可选的 `demo` Artifact——一整个 Set 的试听素材，与槽位
+Artifact 同为 `artifact_ref`，因此可以复用某个槽位已有的哈希；这是向后兼容的追加。
+
+## 与 Project Truth 的关系
+
+Set 不是 Project Truth。安装把槽位内容写成普通 Asset 与普通 Pad 指派，来源记录在既有
+的 Asset Lineage 载体上：`source.kind = soundset` 携带 `set_id`、`set_version`、
+`manifest_sha256`、`slot_index` 与 `artifact_sha256`，`derivation.kind =
+soundset_install` 不带负载。安装之后再编辑 Pad 是普通的创作动作，Set Store 的字节不
+随之改变。Catalog endpoint、缓存与 Set Store 是 Workspace/Host 状态，永不进入 Project
+Truth。
+
+## 安全与发布
+
+清单在成为可见的 Set 之前完整校验：Contract 形状、每个 Artifact 的哈希、`license` 的
+SPDX 允许清单与署名要求，以及四项 Host 容量上限——单个清单对象、单个 Artifact blob、
+一个 Set 去重后的总量，以及整个暂存区。任何一项不通过，该 Set 都不会变为可见，也不会
+产生任何分配或下载。哈希不符的字节以 `soundset_content_mismatch` 上报，不会退化为静默
+重试。
+
+## 使用方与证据
+
+Application Facade 暴露 `soundset.catalog.list`、`soundset.inspect`、
+`soundset.map.preview`、`soundset.install` 与 `soundset.audition`。前四个在五个 Host
+上都**已注册**；`soundset.audition` 现在在五个 Host 上都已注册——Web Host 的 bridge 与
+protocol 由 [#999](https://github.com/endaye/lmdj/pull/999) 补齐，Creator 的两个试听控件
+（set 级 demo 与每个已占用槽）与停止控件由
+[#1023](https://github.com/endaye/lmdj/pull/1023) 补齐。Host 只传递字节与展示 typed
+result，Core 保留全部 Contract、哈希与准入判定。Schema conformance、Set Store 单元测试、
+Facade 写集测试与 Creator surface 测试固定该边界。
+
+**注册不等于发声。** Web Host 把 Facade 交回的已重采样 PCM 发布进引擎保留的双槽 audition
+池并起声（[#1001](https://github.com/endaye/lmdj/pull/1001)、
+[#1003](https://github.com/endaye/lmdj/pull/1003)、
+[#1009](https://github.com/endaye/lmdj/pull/1009)）；原生 Host 现在走同一条路
+（[#1054](https://github.com/endaye/lmdj/pull/1054)）：同一个 typed Facade 方法
+`audition_soundset`、同一个双槽 audition 池。拥有引擎的就是这两个 Host；CLI 与 MCP 不拥有
+引擎，`soundset.audition` 在它们上只回报几何。停止只在 Web Host 上有对应操作——
+`soundset.audition.stop` 是幂等的 Host 操作，Facade 不服务它；原生 Host 没有，因为它的
+试听是 `one_shot`、后一次按池的替换语义取代前一次，而确定性后端在写出响应之前就已把预览
+渲染完毕。
+
+`played` 是这两个 Host 共有的回包字段：[#1059](https://github.com/endaye/lmdj/pull/1059)
+在 Web Host 上确立，[#1054](https://github.com/endaye/lmdj/pull/1054) 在原生 Host 上以
+同样语义携带——一次试听是否真的起了声。没有它，"起了声"和"悄无声息地没起"是同一个回包。
+它只报事实，不报原因，因为原因词表正是本 Stage 冻结的东西。
+
+**两侧的自动化验收现在都闭合了。** 原生侧：`tests/host/native_host_test.py` 的试听
+journey 在确定性后端上把一次试听渲染到结束，读回引擎自己的 `started_voices` /
+`completed_voices`，并断言回包 `played: true`，同时断言后端停止时 `played: false`。
+Web 侧：`creator_web_soundset.spec.mjs` 在真实浏览器里对打包后的 Creator 先钉住「会话刚
+起、音频未激活时 `played` 必须为 `false`」，再激活音频、驱动可发声的那一半，断言
+`played: true`，并在预览播完之后确认 Host 仍然站着——phase 仍是 `running`、没有 alert、
+第二次试听照样应答。
+
+Web 那一半此前是打不开的：驱动它会让 Host 在一秒内终止（`played: true` 之后 transport
+即断），无 page error、无 console error。原因在引擎而不在 `played`：
+`RealtimeEngine::render` 为试听抑制了 `started` 这条 voice-state 边，却没有抑制
+`completed`，于是一次试听发出一条没有 `started` 在前、且 `sequence == 0` 的完成事件——
+试听是以 `PadControlEvent{0, 0, 127, audition_start, {}}` 入队的，没有请求编号可用。
+`runtime_session.mjs` 要求 sequence 为正整数，于是拒收该事件并以
+`HOST_PROTOCOL_MISMATCH` 判整个 Host 失败。修复见
+[#799](https://github.com/endaye/lmdj/issues/799)：完成边加上与起始边对称的试听判断。
+它此前不出现在原生路径上，也不出现在任何进程内测试里，因为要触发它必须让一个试听声部
+**真正播完**，而在此之前没有测试渲染到那一步。
+
+不要把"操作已注册"读成"已听到"。
+
+**已注册不等于产品内可达。** Task 7 的验收在真实浏览器中对打包后的 Creator 实测出三个
+缺陷，各自阻断链路上的一段；三个都已修复。[#900](https://github.com/endaye/lmdj/issues/900)
+曾使本 Build 产出的任何 Project 都无法导入浏览器——浏览器侧 Bundle reader 的枚举停在
+`1.1.0` / `lmdj.project.v3`，而导入 Bundle 是浏览器获得 Project 的唯一途径；修复见
+`f1293997`。六腿浏览器 journey 自
+[#978](https://github.com/endaye/lmdj/pull/978)（`b5d8ca93`）起无援转绿。[#901](https://github.com/endaye/lmdj/issues/901) 的
+`connect-src 'self'` 曾拦截一切跨源 Catalog，而真实 Catalog 必然跨源：现在 Creator 通过
+同源前缀 `/soundset-catalog/` 取用 Catalog，由 Host 转发，该指令不再需要写入任何外部
+origin。它保护的不是 Creator 自己那两个同源 fetch，而是 OPFS 中 Project 与音频的外泄
+边界，因此保持原样。[#902](https://github.com/endaye/lmdj/issues/902) 使 Workspace Set
+Store 以裸 `IO_ERROR` 拒绝发布每一个合格 Set，也已修复。三者都是既有缺陷，不是本 Build
+引入。原生 Host 与 C ABI 侧的 list → inspect → map.preview → install `keep`/`replace`
+journey 已有跨 Host 黑盒验收；Safari 与 iPadOS 上的目录浏览仍无物理验收。

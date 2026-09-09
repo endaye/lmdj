@@ -24,10 +24,8 @@ class LocalProofFailureProvider final : public provider::Provider {
     return {"proof.candidate.v2"};
   }
 
-  provider::AttemptResult run(
-      foundation::AttemptId attempt_id,
-      const provider::CapabilityRequest&,
-      provider::ArtifactSink) override {
+  provider::AttemptResult run(lmdj::provider::ProviderRunContext context) override {
+    const auto attempt_id = context.attempt_id;
     return provider::AttemptResult{
         std::move(attempt_id),
         std::nullopt,
@@ -82,10 +80,19 @@ provider::CapabilityDescriptor proof_capability() {
 provider::ProviderRegistration local_proof_failure_registration() {
   return provider::ProviderRegistration{
       std::make_shared<LocalProofFailureProvider>(),
-      "1.0.5",
+      "2.0.0",
       LMDJ_LOCAL_PROOF_FAILURE_SOURCE_PACKAGE_SHA256,
       std::nullopt,
       {proof_capability()},
+      {{"proof.candidate.v2", "candidate",
+          [](const provider::CapabilityRequest&, std::span<const provider::ValidatedInput>,
+             const provider::ArtifactBinding&, std::span<const std::byte> bytes,
+             std::span<std::byte>) {
+            return bytes.empty() ? foundation::Result<void>::success()
+                : foundation::Result<void>::failure({foundation::ErrorCode::invalid_argument,
+                                                     "Proof output must be empty"});
+          }, 0}},
+      {},
   };
 }
 

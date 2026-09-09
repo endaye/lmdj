@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="f1c4ca261a78b9661e345550b9248cca622d757540f1e7f59d31025e7ab43bce">
+  <title id="title">Audio Runtime Module</title><desc id="description">不可变快照、pending overlay、整数 transport、固定 master FX 链与有界实时输出</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
+  <style>
+    :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    @media(prefers-color-scheme:dark){:root{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}}
+    [data-theme=dark]{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}
+    [data-theme=light]{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
+    .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
+  </style>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Audio Runtime Module</text><text class="page-summary" x="40" y="68">不可变快照、pending overlay、整数 transport、固定 master FX 链与有界实时输出</text>
+
+  <g class="connection"><path class="edge-mask" d="M 250 218 H 290 V 218 H 330"/><path class="edge" d="M 250 218 H 290 V 218 H 330" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 560 218 H 600 V 218 H 640"/><path class="edge" d="M 560 218 H 600 V 218 H 640" marker-end="url(#arrow)"/><text x="600" y="209">slot token + 64-bit identity</text></g>
+<g class="connection"><path class="edge-mask" d="M 530 428 H 585 V 218 H 640"/><path class="edge" d="M 530 428 H 585 V 218 H 640" marker-end="url(#arrow)"/><text x="585" y="314">bounded gesture / tempo</text></g>
+<g class="connection"><path class="edge-mask" d="M 870 218 H 910 V 218 H 950"/><path class="edge" d="M 870 218 H 910 V 218 H 950" marker-end="url(#arrow)"/><text x="910" y="209">mixed stereo bus</text></g>
+<g class="connection"><path class="edge-mask" d="M 1200 218 H 1240 V 218 H 1280"/><path class="edge" d="M 1200 218 H 1240 V 218 H 1280" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 870 218 H 910 V 428 H 950"/><path class="edge" d="M 870 218 H 910 V 428 H 950" marker-end="url(#arrow)"/><text x="910" y="314">captured starts</text></g>
+<g class="connection"><path class="edge-mask" d="M 1200 428 H 1240 V 428 H 1280"/><path class="edge" d="M 1200 428 H 1240 V 428 H 1280" marker-end="url(#arrow)"/></g>
+
+    <g class="component kind-host">
+      <rect class="node-mask" x="36" y="166" width="218" height="104" rx="18"/>
+      <rect class="node" x="40" y="170" width="210" height="96" rx="14"/>
+      <text class="node-title" x="56" y="202">Prepared Pattern</text>
+      <text class="node-detail" x="56" y="228">canonical snapshot / overlay</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="326" y="166" width="238" height="104" rx="18"/>
+      <rect class="node" x="330" y="170" width="230" height="96" rx="14"/>
+      <text class="node-title" x="346" y="202">Pattern Origin</text>
+      <text class="node-detail" x="346" y="228">PCM · BPM anchor</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="636" y="166" width="238" height="104" rx="18"/>
+      <rect class="node" x="640" y="170" width="230" height="96" rx="14"/>
+      <text class="node-title" x="656" y="202">Realtime Engine</text>
+      <text class="node-detail" x="656" y="228">atomic32 claim · Bar clock</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="946" y="166" width="258" height="104" rx="18"/>
+      <rect class="node" x="950" y="170" width="250" height="96" rx="14"/>
+      <text class="node-title" x="966" y="202">Master FX Chain</text>
+      <text class="node-detail" x="966" y="228">fixed 8 stages · Bar-relative</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="1276" y="166" width="238" height="104" rx="18"/>
+      <rect class="node" x="1280" y="170" width="230" height="96" rx="14"/>
+      <text class="node-title" x="1296" y="202">Audio + Status</text>
+      <text class="node-detail" x="1296" y="228">device · generation</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="276" y="376" width="258" height="104" rx="18"/>
+      <rect class="node" x="280" y="380" width="250" height="96" rx="14"/>
+      <text class="node-title" x="296" y="412">FX Control Lane</text>
+      <text class="node-detail" x="296" y="438">bounded gesture + tempo</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="946" y="376" width="258" height="104" rx="18"/>
+      <rect class="node" x="950" y="380" width="250" height="96" rx="14"/>
+      <text class="node-title" x="966" y="412">Capture Ring</text>
+      <text class="node-detail" x="966" y="438">4096 events · lazy storage</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="1276" y="376" width="238" height="104" rx="18"/>
+      <rect class="node" x="1280" y="380" width="230" height="96" rx="14"/>
+      <text class="node-title" x="1296" y="412">Capture Writer</text>
+      <text class="node-detail" x="1296" y="438">control drain · session</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="356" height="132" rx="14"/><text class="card-title" x="58" y="670">Concurrency</text><foreignObject x="58" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Atomic32 claim; 64-bit authority. Control reclaims; audio never waits. Compact Voice-state cells, same SPSC contract.</div></foreignObject></g>
+<g class="card"><rect x="414" y="638" width="356" height="132" rx="14"/><text class="card-title" x="432" y="670">Telemetry</text><foreignObject x="432" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Audio/control value snapshots; only non-realtime readers lock. Transport has a separate control reader. Drain callbacks before lifecycle handoff. Runtime-only Facade owns OPEN/BUSY drain; its audio-only consumed counter is not proof of a started Voice.</div></foreignObject></g>
+<g class="card"><rect x="788" y="638" width="356" height="132" rx="14"/><text class="card-title" x="806" y="670">Master FX</text><foreignObject x="806" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Fixed order filter, delay, reverb, stutter, gate, reverse, crush, cutter; values are 0..1000 and every period derives from the Bar, not wall clock.</div></foreignObject></g>
+<g class="card"><rect x="1162" y="638" width="356" height="132" rx="14"/><text class="card-title" x="1180" y="670">Forbidden boundary</text><foreignObject x="1180" y="684" width="320" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No allocation, destruction, lock, Project mutation, quantization, journal I/O or production test hook on the realtime thread.</div></foreignObject></g>
+</svg>

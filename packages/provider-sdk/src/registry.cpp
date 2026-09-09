@@ -230,6 +230,48 @@ foundation::Result<void> Registry::add(
         return left.id < right.id;
       });
 
+  std::set<std::pair<std::string, std::string>> validation_ports;
+  std::set<std::pair<std::string, std::string>> domain_reasons;
+  for (const auto& domain : registration.domain_errors) {
+    const auto cap = std::find_if(registration.capabilities.begin(),
+        registration.capabilities.end(),
+        [&](const auto& value) { return value.id == domain.capability; });
+    const auto code = std::string(foundation::error_code_name(domain.code));
+    if (cap == registration.capabilities.end() ||
+        (domain.code != ErrorCode::provider_failed &&
+         domain.code != ErrorCode::unsupported_audio &&
+         domain.code != ErrorCode::invalid_argument) ||
+        std::find(cap->error_codes.begin(), cap->error_codes.end(), code) ==
+            cap->error_codes.end() ||
+        !valid_port_name(domain.reason) || domain.reason.starts_with("input_") ||
+        domain.reason.starts_with("output_") ||
+        !domain_reasons.emplace(domain.capability, domain.reason).second) {
+      return foundation::Result<void>::failure(invalid_registration(
+          "consumer domain error must be declared and cannot claim SDK failures"));
+    }
+  }
+  for (const auto& validation : registration.output_validation) {
+    const auto capability = std::find_if(
+        registration.capabilities.begin(), registration.capabilities.end(),
+        [&](const auto& value) { return value.id == validation.capability; });
+    if (!validation.validate || capability == registration.capabilities.end() ||
+        std::none_of(capability->output_artifacts.begin(),
+                     capability->output_artifacts.end(),
+                     [&](const auto& port) { return port.name == validation.port; }) ||
+        !validation_ports.emplace(validation.capability, validation.port).second) {
+      return foundation::Result<void>::failure(invalid_registration(
+          "output validator must bind exactly one declared capability port"));
+    }
+  }
+  for (const auto& capability : registration.capabilities) {
+    for (const auto& port : capability.output_artifacts) {
+      if (!validation_ports.contains({capability.id, port.name})) {
+        return foundation::Result<void>::failure(invalid_registration(
+            "output port requires an explicit consumer validator"));
+      }
+    }
+  }
+
   auto implementation_capabilities =
       registration.implementation->capabilities();
   if (!unique_nonempty(implementation_capabilities)) {
@@ -260,6 +302,8 @@ foundation::Result<void> Registry::add(
       ProviderEntry{
           std::move(descriptor),
           std::move(registration.implementation),
+          std::move(registration.output_validation),
+          std::move(registration.domain_errors),
       });
   return foundation::Result<void>::success();
 }

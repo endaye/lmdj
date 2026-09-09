@@ -20,6 +20,30 @@ struct ModelIdentity {
   bool operator==(const ModelIdentity&) const = default;
 };
 
+struct ValidatedInput {
+  ArtifactBinding binding;
+  ArtifactHandle handle;
+};
+
+using OutputValidator = std::function<foundation::Result<void>(
+    const CapabilityRequest&, std::span<const ValidatedInput>,
+    const ArtifactBinding&, std::span<const std::byte>, std::span<std::byte>)>;
+
+// Every output port, including opaque Proof ports, declares a validation policy.
+// Scratch is reserved by execution before invoking consumer code.
+struct OutputValidation {
+  std::string capability;
+  std::string port;
+  OutputValidator validate;
+  std::uint64_t scratch_bytes;
+};
+
+struct DomainErrorValidation {
+  std::string capability;
+  foundation::ErrorCode code;
+  std::string reason;
+};
+
 struct ProviderRegistration {
   std::shared_ptr<Provider> implementation;
   std::string version;
@@ -28,6 +52,8 @@ struct ProviderRegistration {
   std::string artifact_sha256;
   std::optional<ModelIdentity> model_identity;
   std::vector<CapabilityDescriptor> capabilities;
+  std::vector<OutputValidation> output_validation;
+  std::vector<DomainErrorValidation> domain_errors;
 };
 
 struct ProviderDescriptor {
@@ -42,6 +68,8 @@ struct ProviderDescriptor {
 struct ProviderEntry {
   ProviderDescriptor descriptor;
   std::shared_ptr<Provider> implementation;
+  std::vector<OutputValidation> output_validation;
+  std::vector<DomainErrorValidation> domain_errors;
 };
 
 class Registry {

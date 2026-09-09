@@ -1,6 +1,9 @@
+find_package(Threads REQUIRED)
+
 add_library(
   lmdj_provider_sdk
   STATIC
+    src/provider.cpp
     src/capability.cpp
     src/registry.cpp
     src/attempt_store.cpp
@@ -19,6 +22,7 @@ target_link_libraries(
     lmdj::foundation
   PRIVATE
     lmdj_picosha2
+    Threads::Threads
 )
 lmdj_target_warnings(lmdj_provider_sdk)
 lmdj_target_sanitizers(lmdj_provider_sdk)
