@@ -159,6 +159,12 @@ state addenda and older-canary promotion presentation remain later T4 work.
 
 ## Acceptance ledger
 
+The [page-local common proof Task](2026-09-09-lmdj-journal-page-common-proof.md)
+shares validated workflow identity and an exact main SHA within one comment page,
+while preserving each distinct control's ancestry/source and every writer's
+run/jobs checks. Its different-control request-count fixture is not measured
+production savings; report capacity and post-merge delivery need live acceptance.
+
 The [durable planning coordinator](2026-09-09-lmdj-canary-plan-coordinator.md)
 connects the authenticated scheduler reader and a dedicated planning Journal to
 a manual Actions entry. Explicit bootstrap precedes observation; a small durable
