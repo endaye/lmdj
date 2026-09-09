@@ -159,6 +159,12 @@ state addenda and older-canary promotion presentation remain later T4 work.
 
 ## Acceptance ledger
 
+The [failed review receipt Task](2026-09-09-lmdj-failed-review-receipts.md)
+repairs the mismatch between the honestly failed all-backend finalizer and its
+success-only report consumer. Complete authenticated failure receipts can enter
+the existing outbox without treating arbitrary job failures as backend verdicts.
+Actual production recovery and retained Issue delivery remain live acceptance.
+
 The [page-local common proof Task](2026-09-09-lmdj-journal-page-common-proof.md)
 shares validated workflow identity and an exact main SHA within one comment page,
 while preserving each distinct control's ancestry/source and every writer's
