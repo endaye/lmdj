@@ -254,6 +254,47 @@ struct RuntimeVoiceStateTelemetry {
 
 namespace detail {
 
+template <std::size_t Capacity>
+class RuntimeVoiceStateQueue {
+  // Natural alignment removes per-cell padding without changing the public
+  // event's aggregate order, widths or ABI. Queue ownership remains SPSC.
+  struct Cell {
+    std::uint64_t sequence;
+    std::uint64_t runtime_frame;
+    std::uint32_t source_frame;
+    std::uint8_t slot;
+    RuntimeVoiceState state;
+  };
+  static_assert(sizeof(Cell) <= 24);
+  static_assert(std::is_trivially_copyable_v<Cell>);
+
+ public:
+  static consteval std::size_t capacity() noexcept { return Capacity; }
+
+  bool try_push(const RuntimeVoiceStateEvent& event) noexcept {
+    return queue_.try_push(Cell{
+        event.sequence, event.runtime_frame, event.source_frame,
+        event.slot, event.state});
+  }
+
+  bool try_pop(RuntimeVoiceStateEvent& event) noexcept {
+    Cell cell;
+    if (!queue_.try_pop(cell)) {
+      return false;
+    }
+    event = RuntimeVoiceStateEvent{
+        cell.sequence, cell.slot, cell.state,
+        cell.runtime_frame, cell.source_frame};
+    return true;
+  }
+
+  std::size_t size_approx() const noexcept { return queue_.size_approx(); }
+  std::size_t clear_quiescent() noexcept { return queue_.clear_quiescent(); }
+
+ private:
+  FixedSpscQueue<Cell, Capacity> queue_;
+};
+
 struct RealtimeEngineAudioAccess;
 
 template <typename TryPop>
@@ -584,9 +625,7 @@ class RealtimeEngine final {
       RuntimeTriggerOutcomeEvent,
       kRealtimeTriggerOutcomeCapacity>
       trigger_outcome_ring_;
-  detail::FixedSpscQueue<
-      RuntimeVoiceStateEvent,
-      kRealtimeVoiceStateCapacity>
+  detail::RuntimeVoiceStateQueue<kRealtimeVoiceStateCapacity>
       voice_state_ring_;
   std::array<Voice, kRealtimeVoiceCapacity> voices_{};
   std::array<cooker::ResolvedPlayback, kRealtimeSampleSlots> previews_{};
