@@ -52,9 +52,33 @@ PARTITION = json.loads(
         encoding="utf-8"
     )
 )
-RESPONSE_TIMEOUT_SECONDS = 30.0
+BASE_TIMEOUT_SECONDS = 30.0
 INSTALL_REFUSAL = PARTITION["install_refusal"]
 UNSUPPORTED_SET_ID = INSTALL_REFUSAL["set_id"]
+
+
+def scaled_timeout(executable: Path) -> float:
+    """`BASE_TIMEOUT_SECONDS`, multiplied for a sanitizer build.
+
+    Same shape and same multipliers as `cli_test.configured_timeout`. A fixed
+    deadline here would make the sanitizer lanes -- the ones where the timing
+    is actually stressed -- fail as timeouts rather than as whatever they
+    caught, which is the least readable failure this test could produce.
+    """
+    cache = (executable.parent.parent / "CMakeCache.txt").read_text(
+        encoding="utf-8"
+    )
+    sanitizer = next(
+        (
+            line.removeprefix("LMDJ_SANITIZER:STRING=")
+            for line in cache.splitlines()
+            if line.startswith("LMDJ_SANITIZER:STRING=")
+        ),
+        "none",
+    )
+    return BASE_TIMEOUT_SECONDS * {"address": 3.0, "thread": 4.0}.get(
+        sanitizer, 1.0
+    )
 
 
 def uuid_for(suffix: int) -> str:
@@ -143,6 +167,7 @@ def cli_request(
             canonical_json(request),
         ],
         cwd=REPO_ROOT, check=False, capture_output=True,
+        timeout=scaled_timeout(cli),
     )
     assert completed.returncode == expected_exit, (
         completed.returncode, completed.stdout, completed.stderr
@@ -244,7 +269,7 @@ def native_requests(
         # banner instead, whose `result` has none of the list fields -- which
         # looks exactly like a Host that answered a different shape.
         readable, _, _ = select.select(
-            [process.stdout], [], [], RESPONSE_TIMEOUT_SECONDS
+            [process.stdout], [], [], scaled_timeout(host)
         )
         assert readable, f"Native Host never became ready; returncode={process.poll()}"
         ready = json.loads(process.stdout.readline().decode("utf-8"))
@@ -254,7 +279,7 @@ def native_requests(
             process.stdin.write(canonical_json(request).encode("utf-8") + b"\n")
             process.stdin.flush()
             readable, _, _ = select.select(
-                [process.stdout], [], [], RESPONSE_TIMEOUT_SECONDS
+                [process.stdout], [], [], scaled_timeout(host)
             )
             assert readable, (
                 f"Native Host did not answer {request['operation']}; "
@@ -266,12 +291,12 @@ def native_requests(
             if request["operation"] != "quit":
                 replies.append(response)
         process.stdin.close()
-        assert process.wait(timeout=10) == 0
+        assert process.wait(timeout=scaled_timeout(host)) == 0
         return replies
     finally:
         if process.poll() is None:
             process.kill()
-            process.wait(timeout=10)
+            process.wait(timeout=scaled_timeout(host))
 
 
 def main() -> int:
