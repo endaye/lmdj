@@ -228,6 +228,7 @@
     {"match": {"kind": "exact", "value": ".github/workflows/incremental-completion.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-host-inventory.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/pr-review.yml"}, "lanes": ["ci_contract"]},
+    {"match": {"kind": "exact", "value": ".github/workflows/pr-contract.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-self-hosted-benchmark.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-self-hosted-core-benchmark.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/deploy-cloudflare-portal.yml"}, "lanes": ["portal", "ci_contract"]},
