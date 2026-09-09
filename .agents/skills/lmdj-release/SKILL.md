@@ -65,9 +65,11 @@ command is the exact read-only audit.
 Choose the single candidate from `scripts/release.sh prepare TAG`,
 `scripts/release.sh push-tag TAG`, or `scripts/release.sh create-draft TAG`.
 Use `scripts/release.sh verify-draft TAG RELEASE_ID PLAN_SHA256` only for
-read-only Draft verification. Use `scripts/release.sh verify-published TAG
-RELEASE_ID PLAN_SHA256` for the read-only post-publication Release check. The audit before and after a mutation is
-`scripts/release.sh audit --remote --tag TAG`.
+read-only Draft verification. Use
+`scripts/release.sh verify-published TAG RELEASE_ID PLAN_SHA256` for the
+read-only post-publication Release check. Audits before and after
+pre-publication mutations use `scripts/release.sh audit --remote --tag TAG`;
+publication is followed by `verify-published`.
 
 On a fresh clone or a fresh runner workspace, run `scripts/release.sh hydrate`
 before the first audit. It is the only stable subcommand that writes the local
@@ -135,10 +137,10 @@ inputs `tag`, `release_id`, and `plan_sha256`. Do not approve the protected
 Deployment and Channel promotion separate; report only independently verified
 status and never infer either from Release publication.
 
-If `publish-release.yml` exits non-zero for a reason other than its final
-`verify-published` check, read the live Release by numeric ID before
-concluding publication failed. Do not retry until the reported failure is
-understood; see
+If `publish-release.yml` fails at `verify-published`, read the live Release by
+numeric ID and compare it with the immutable plan before concluding publication
+failed. If it fails earlier, treat publication as not done and diagnose the
+failure before retrying; see
 [`post-publish-audit-releasable-ledger`](../../pitfalls/post-publish-audit-releasable-ledger.md).
 
 ## Pitfalls
@@ -167,8 +169,9 @@ contract is [`docs/governance/pitfall-ledger.md`](../../../docs/governance/pitfa
   protected-main ancestor and fails closed.
 - When diagnosing a failed `publish-release.yml` job —
   [`post-publish-audit-releasable-ledger`](../../pitfalls/post-publish-audit-releasable-ledger.md).
-  Read the live Release by numeric ID and compare it with the immutable plan
-  before concluding publication failed or retrying.
+  For a `verify-published` failure, read the live Release by numeric ID and
+  compare it with the immutable plan; for an earlier failure, treat publication
+  as not done and diagnose before retrying.
 - Before treating a failed Creator deploy as a failed signed-archive verify —
   [`manifest-role-validator-sync`](../../pitfalls/manifest-role-validator-sync.md).
   Prior identity discovery must accept the live Host's inventory. Creator 3.x

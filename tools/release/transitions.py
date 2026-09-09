@@ -187,7 +187,6 @@ def verify_published(
                 "remedy: investigate Release identity and immutable tag state"
             )
         verified = _verify_release_state(tag, release_id, plan_sha256, context)
-        release = verified.release
         return replace(verified.result, status="published")
     except TransitionError as error:
         message = str(error)

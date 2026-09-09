@@ -473,6 +473,26 @@ class ReleaseTransitionsTest(unittest.TestCase):
                 self.tag, created.release_id, created.plan_sha256, self.context(),
             )
 
+    def test_verify_published_rejects_a_noncanonical_html_url(self) -> None:
+        created = self._published_fixture()
+        assert created.release_id is not None and self.github.release is not None
+        self.github.release = GitHubRelease(**{
+            **self.github.release.__dict__,
+            "html_url": "https://github.com/endaye/lmdj/releases/tag/wrong-tag",
+        })
+        with self.assertRaisesRegex(TransitionError, r"exact tag URL"):
+            verify_published(
+                self.tag, created.release_id, created.plan_sha256, self.context(),
+            )
+
+    def test_verify_published_rejects_a_missing_numeric_release(self) -> None:
+        created = self._published_fixture()
+        assert created.release_id is not None
+        with self.assertRaisesRegex(TransitionError, r"numeric Release does not exist"):
+            verify_published(
+                self.tag, created.release_id + 1, created.plan_sha256, self.context(),
+            )
+
     def test_verify_published_rejects_a_renamed_asset(self) -> None:
         created = self._published_fixture()
         assert created.release_id is not None and self.github.release is not None
