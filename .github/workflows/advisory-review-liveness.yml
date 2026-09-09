@@ -44,7 +44,7 @@ jobs:
       - name: Report advisory review liveness
         env:
           # Read by urllib in the script, not by a CLI. The name matches what
-          # scripts/ci/github_queue_api.py and grok_review.py already read.
+          # grok_review.py already reads.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
           python3 .github/scripts/advisory_review_liveness.py

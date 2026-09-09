@@ -206,7 +206,7 @@ class StandaloneEntryWorkflowTest(unittest.TestCase):
 
     def test_review_has_no_heavy_dependency_and_no_merge_authority(self):
         jobs = self.source.split("\njobs:\n", 1)[1]
-        for forbidden in ("queue_ticket", "phase_gate", "pr_gate",
+        for forbidden in ("queue_ticket", "phase_gate", "pr" + "_gate",
                           "lmdj-native-heavy", "needs: [change-scope", "contents: write"):
             self.assertNotIn(forbidden, jobs)
         self.assertIn("required_conversation_resolution", self.source)

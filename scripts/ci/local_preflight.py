@@ -553,7 +553,7 @@ def execute(
 
 LEGACY_HOOK_TEMPLATE = """#!/usr/bin/env bash
 # Installed by scripts/ci/local_preflight.py --install-hook.
-# The pre-flight is advisory: PR Gate remains the only aggregate decision.
+# The pre-flight is advisory: the CI workflow remains the only aggregate decision.
 # Bypass with `git push --no-verify` when you intend to push anyway.
 set -euo pipefail
 exec "$(git rev-parse --show-toplevel)/scripts/local-ci.sh"

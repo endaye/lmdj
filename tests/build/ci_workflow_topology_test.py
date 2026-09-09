@@ -60,7 +60,7 @@ HOSTED_CONTROL_PLANE_JOBS = (
     "select-macos-runner",
     # Judges a self-test batch from `needs` and retains the verdict; runs the
     # control revision's scripts, never the target's, and must outlive the
-    # pool it judges for the same reason PR Gate must.
+    # pool it judges for the same reason batch verdict must.
     "batch-verdict",
 )
 # Hosted Ubuntu jobs that are not control plane: each republishes an already
@@ -615,13 +615,13 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertEqual(set(re.findall(r"lanes\.([a-z_]+)", job)), {"core_macos"})
         self.assertIn("if: ${{ !cancelled()", job)
 
-    def test_portal_is_same_run_reusable_job_and_pr_gate_needs_it(self):
+    def test_portal_is_same_run_reusable_job_and_batch_verdict_needs_it(self):
         portal = self.workflow_job("portal")
         for text in ("uses: ./.github/workflows/architecture-portal.yml", "check_documentation_impact:", "base_sha:", "head_sha:", "pull_request_body:"):
             self.assertIn(text, portal)
         self.assertIn("portal", self.job_needs("batch-verdict"))
 
-    def test_pr_gate_has_every_formal_lane_in_static_needs_and_runs_with_always(self):
+    def test_batch_verdict_has_every_formal_lane_in_static_needs_and_runs_with_always(self):
         job = self.workflow_job("batch-verdict")
         self.assertEqual(self.job_needs("batch-verdict"), {"change-scope", "macos-fallback", "nightly-tsan", "nightly-stress", *FORMAL_RESULTS})
         self.assertIn("always()", job)

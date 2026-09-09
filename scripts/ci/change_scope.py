@@ -104,10 +104,10 @@ _CANONICAL_LANE_JOBS = {
     "chameleon_lab": ("chameleon-lab",),
     "package": ("package",),
 }
-# The closed set of formal jobs a self-hosted role may ever execute. Change
-# Scope, the PR Gate and the surviving macOS runner selector stay on the
-# GitHub-hosted control plane, and the macOS lane keeps its own runner policy,
-# so none of them belong here.
+# The closed set of formal workload jobs a self-hosted role may execute.
+# Change Scope, the aggregate verdict, and the surviving macOS runner selector
+# are control-plane jobs on the shared ci-general capacity, not workload lanes;
+# the macOS lane keeps its own runner policy, so none belong here.
 _CANONICAL_SELF_HOSTED_JOBS = (
     "docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan",
     "core-coverage", "web-toolchain-conformance", "web-runtime-host",
@@ -762,7 +762,8 @@ def _validate_manifest(
             queue["ticket"], str(queue["pr_number"]),
             queue["base_sha"], queue["head_sha"],
         )
-        # Merge evidence is the classification, not a fixed breadth: PR Gate
+        # Historical queue compatibility evidence is the classification, not a
+        # fixed breadth or an active merge authority: the aggregate verdict
         # proves every selected lane succeeded and every unselected one was
         # skipped. Trust is still absolute -- an untrusted head may never
         # produce queue evidence at any breadth.
@@ -1000,7 +1001,7 @@ def read_git_inventory(repository: str | Path, base_sha: str, head_sha: str) -> 
     in reverse, everything that landed on the base branch after the branch was
     cut. The three-dot range is `merge-base(base, head)..head`, which is this
     change's own contribution and the same set GitHub's own
-    `/pulls/{number}/files` reports -- the set `merge_queue.py` already reads for
+    `/pulls/{number}/files` reports -- the set the former queue controller read for
     its control-plane check, and the range `scripts/ci/local_preflight.py`
     already measures locally. Issue #531 fixed the same defect in the
     Architecture Portal gate, where it failed a truthful declaration instead of

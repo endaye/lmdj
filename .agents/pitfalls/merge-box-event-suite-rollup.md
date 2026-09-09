@@ -18,7 +18,7 @@ recurrences:
   - date: 2026-08-31
     occurrence: https://github.com/endaye/lmdj/pull/506
     observed_by: grok-4.6
-exit: gate:tests/build/ci_merge_queue_test.py
+exit: gate:tests/build/ci_retired_queue_mechanisms_test.py
 escalation: https://github.com/endaye/lmdj/issues/394
 ---
 
@@ -50,3 +50,6 @@ enforcing tests are `tests/build/ci_merge_queue_test.py`. Do not restore
 See also [[pr-checks-omits-merge-ref-lanes]] for the observer side of the same
 GitHub behaviour: a head-SHA rollup omits these lanes, so `gh pr checks` reads
 green against zero of them.
+
+Retired 2026-09-09 (#1089 P2.1): the merge queue and its PR gate were removed;
+the exit now asserts their absence.

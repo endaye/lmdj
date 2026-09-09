@@ -8,7 +8,7 @@ name: Self-hosted Core Benchmark
 # to obtain them on a trusted runner. The 2026-09-06 move from Contabo to
 # netcup (#676, decided on #298) was measured with it.
 #
-# It never contributes a formal result. `PR Gate` does not read this workflow,
+# It never contributes a formal result. The aggregate CI verdict does not read this workflow,
 # it carries no lane manifest, and a benchmark run is not release evidence.
 
 on:

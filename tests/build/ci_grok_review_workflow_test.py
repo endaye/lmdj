@@ -18,7 +18,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # tests below remain unchanged when the retired Core CI copy is removed.
 WORKFLOW = REPO_ROOT / ".github/workflows/pr-review.yml"
 SCRIPT = REPO_ROOT / ".github/scripts/grok_review.py"
-MERGE_QUEUE = REPO_ROOT / "scripts/ci/merge_queue.py"
 SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
 CORE_CI = REPO_ROOT / ".github/workflows/ci.yml"
 
@@ -133,15 +132,12 @@ class GrokReviewWorkflowTest(unittest.TestCase):
 
     def test_grok_stays_outside_product_and_merge_evidence(self) -> None:
         core = CORE_CI.read_text(encoding="utf-8")
-        queue = MERGE_QUEUE.read_text(encoding="utf-8")
         self.assertNotIn("\n  grok-review:\n", core,
                          "why: retired model job keeps product write permissions; remedy: use the independent PR Review entry")
         self.assertNotIn("grok", str(self.policy["lane_jobs"]))
         self.assertNotIn("grok-review", self.policy["self_hosted_jobs"])
         self.assertNotIn("\n  pr-gate:\n", core)
         self.assertNotIn("grok-review", core)
-        self.assertNotIn("grok-review.yml", queue)
-        self.assertNotIn(".github/scripts/grok_review.py", queue)
 
     def test_scope_policy_classifies_review_files_as_ci_contract_only(self) -> None:
         paths = {".github/scripts/grok_review.py"}
