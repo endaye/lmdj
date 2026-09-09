@@ -4,6 +4,25 @@ Status: approved for execution on 2026-09-09; coordinator-led, one Task per
 Pull Request. No release, deployment, journal reset or readiness switch is part
 of this program.
 
+## Supersession and decisions — 2026-09-10
+
+The owner-approved [CI reliability, recovery and execution cost plan](2026-09-10-lmdj-ci-reliability-and-cost.md)
+is authoritative for current scope, task order, acceptance and authorization.
+Codex has taken over coordination of the same Orca Run and umbrella #1089.
+The observations, original exit criteria and phase ledger below are historical;
+they are not fresh verification or instructions to execute superseded choices.
+
+D1–D4 are decided in the table below. In particular, a label alone never
+waives independent exact-head review; only the owner can approve an exception
+with an exact SHA and reason. Quota recovery respects the existing operation
+budget and leaves debt for a later tick. New managed buckets require causal,
+authenticated same-suite recovery; historical buckets need individual review,
+not bulk closure. Checkpoint work is design-only, host inventory is read-only,
+and stress work measures a cause rather than changing concurrency or tolerance.
+P1.4 still awaits the next independently authorized genuine publication; this
+program does not initiate one. Historical green or not-selected results cannot
+satisfy that acceptance.
+
 ## Why
 
 A six-slice read-only review on 2026-09-09 (routing, incremental controller,
@@ -80,14 +99,17 @@ that violates any of them.
 
 ## Owner decision gates
 
-| Gate | Question | Coordinator recommendation | Outcome |
-| --- | --- | --- | --- |
-| D1 | Add a PR-triggered advisory lane that runs `ci_contract` and `docs_static` on `ci-general` (a few minutes, self-hosted, not a required check)? It would have caught all three current red-gate classes before merge. | Yes. It is advisory, names the defects it catches, and costs no hosted minutes. | pending |
-| D2 | Canary planning and assessment: freeze the trigger until a live storage Issue, Environment and isolated runner exist, or run one manual `init` now to validate real permissions? | Freeze the `workflow_run` trigger now (removes ~390 skipped runs/day); schedule one manual `init` after Phase 1. | pending |
-| D3 | Minimum review bar at merge: published current-head review, or `review:skipped` label with reason, or author self-review paragraph counts? | Published review or explicit label. Self-review paragraphs do not count. | pending |
-| D4 | #1056: the Catalog upstream parity harness uses the local Node `new URL` as a stand-in for workerd, and Node 22 and 26 disagree. Fix by (a) running the Worker leg under workerd, (b) pinning one Node and saying so, or (c) replacing rewrite-detection with an explicit shared character allowlist in the Worker and the proof server? | (c). It removes the runtime dependency the test itself calls unauthoritative, and both legs share one rule. It touches deployed Worker code, so it is the owner's call. | pending |
+The original alternatives were considered on 2026-09-09; the owner confirmed
+these outcomes on 2026-09-10. No decision in this table remains pending.
 
-## Phases and Tasks
+| Gate | Approved outcome | Correction to the original proposal |
+| --- | --- | --- |
+| D1 | Change-selected advisory CI contracts, static docs and documentation-impact checks on trusted self-hosted capacity; no new required check. | `ci_contract` and `docs_static` do not run Creator parity. The original “all three red-gate classes” and “a few minutes” claims were unsupported; measure cost and retain complete selected contracts. |
+| D2 | Freeze automatic Canary Planning `workflow_run`; retain manual entry. | The proposed later manual `init` is not authorized; no init/readiness activation in this program. |
+| D3 | Independent current-head review; only owner may waive with exact SHA and reason. | `review:skipped` is display only, never authority; author self-review is not independent evidence. |
+| D4 | Explicit common Catalog character admission in Worker and proof server, verified on Node 22 and 26. | Existing proof-server grammar/corpus is the semantic baseline; preserve Worker HTTPS and the proof server's explicit loopback HTTP exception. Source/tests only, no deployment. |
+
+## Historical phases and Tasks (superseded by T0–T12)
 
 Model and effort are suggestions for the coordinator when starting a Codex
 worker; the coordinator may change them per attempt.
@@ -144,7 +166,7 @@ are history and are never edited to satisfy this grep.
 
 | Task | Issue | Declared files | Verification | Effort |
 | --- | --- | --- | --- | --- |
-| P5.1 quota exhaustion is unknown, not dead | #979 | `scripts/ci/github_queue_api.py`, `scripts/ci/batch_runtime.py`, `scripts/ci/incremental_completion.py`, their `tests/build/ci_*_test.py` | red-first: a 403 with `x-ratelimit-remaining: 0` yields a retry until `x-ratelimit-reset` and an `unknown` classification, never `not live` | high |
+| P5.1 quota exhaustion is unknown, not dead | #979 | `scripts/ci/self_test_report.py` (`UrllibGitHubApi` HTTP runtime), `scripts/ci/batch_runtime.py`, `scripts/ci/incremental_completion.py`, `scripts/ci/batch_github_journal.py`, their matching HTTP/runtime tests (corrected 2026-09-10: the original `github_queue_api.py` named the retired queue adapter) | red-first: a 403 with `x-ratelimit-remaining: 0` yields a retry until `x-ratelimit-reset` and an `unknown` classification, never `not live` | high |
 | P5.2 journal checkpoint cursor | #979 root | design first as a plan document; implement only after coordinator acceptance | measured GET count per transaction before and after | high |
 | P5.3 report-only cron acceptance | #1048 | none unless the acceptance fails | coordinator reads three consecutive report-only runs | low |
 
@@ -171,7 +193,7 @@ journal reset or readiness switch. Adding hosted-runner spend is out of scope.
 
 ## Coordination
 
-Coordinator: the Claude session bound to Orca Run `run_71c2492cd783`. Workers
+Historical coordinator: the Claude session bound to Orca Run `run_71c2492cd783`. Workers
 are Codex agents started with `orca orchestration worker-start`, one per Task,
 each in a fresh top-level worktree from `origin/main`. The coordinator accepts a
 Task only after re-running its lowest-tier verification in the worker's
