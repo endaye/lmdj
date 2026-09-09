@@ -310,6 +310,31 @@ class PipelineTests(unittest.TestCase):
     def test_grok_process_failure_retains_actual_exit_code(self):
         self.assert_grok_diagnostic("process_failure", returncode=17)
 
+    def test_grok_nonzero_auth_envelope_is_not_lost_before_json_parsing(self):
+        self.assert_grok_diagnostic("authentication_required", returncode=1,
+            stdout=json.dumps({"type": "error", "message":
+                "Not signed in. To authenticate without a browser, run:\nPRIVATE_AUTH_SECRET"}))
+
+    def test_grok_nonzero_error_envelope_keeps_only_a_finite_category(self):
+        self.assert_grok_diagnostic("error_envelope", returncode=1,
+            stdout=json.dumps({"type": "error", "message": "PRIVATE_PROVIDER_SECRET"}))
+
+    def test_grok_nonzero_valid_review_cannot_become_success(self):
+        self.assert_grok_diagnostic("process_failure", returncode=1,
+            stdout=json.dumps({"text": json.dumps(self.model)}))
+
+    def test_grok_duplicate_error_keys_are_not_diagnostic_authority(self):
+        self.assert_grok_diagnostic("process_failure", returncode=1,
+            stdout='{"type":"result","type":"error","message":"Not signed in. SECRET"}')
+
+    def test_grok_oversized_error_envelope_is_not_parsed(self):
+        self.assert_grok_diagnostic("process_failure", returncode=1,
+            stdout=json.dumps({"type": "error", "message": "Not signed in. " + "SECRET" * 30000}))
+
+    def test_grok_embedded_auth_prose_does_not_claim_authentication_failure(self):
+        self.assert_grok_diagnostic("error_envelope", returncode=1,
+            stdout=json.dumps({"type": "error", "message": "PRIVATE_SECRET quotes Not signed in."}))
+
     def test_grok_non_json_envelope_does_not_expose_parse_input(self):
         self.assert_grok_diagnostic("invalid_envelope", returncode=0)
 
