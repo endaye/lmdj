@@ -14,6 +14,44 @@ import ci_canary_assessment_test as fixtures
 from tools.canary import records as r
 
 
+class SourcePathTests(unittest.TestCase):
+    def setUp(self):
+        self.m = importlib.import_module('tools.canary.metadata_proposal')
+
+    def test_readme_and_unrelated_contract_markdown_are_refused(self):
+        for path in ('contracts/project/README.md', 'contracts/project/notes.md'):
+            with self.subTest(path=path):
+                self.assertFalse(self.m.source_path(path), path)
+
+    def test_actual_assembly_markdown_profiles_are_admitted(self):
+        assembly = json.loads((ROOT / self.m.PRODUCT[1]).read_text())
+        profiles = [path for contract in assembly['contracts']
+                    for path in (ROOT / 'contracts').glob(f"*/{contract['id']}.md")]
+        self.assertTrue(profiles, 'assembly must exercise Markdown Contract profiles')
+        for path in profiles:
+            with self.subTest(path=path):
+                self.assertTrue(self.m.source_path(path.relative_to(ROOT).as_posix()))
+
+    def test_invalid_profile_nesting_is_refused(self):
+        for path in ('contracts/lmdj.project.v1.md',
+                     'contracts/project/nested/lmdj.project.v1.md'):
+            with self.subTest(path=path):
+                self.assertFalse(self.m.source_path(path), path)
+
+    def test_invalid_profile_name_or_version_is_refused(self):
+        for name in ('project.v1.md', 'lmdj.project.md', 'lmdj.project.v.md',
+                     'lmdj.project.vx.md', 'lmdj.project.v1.0.md', 'lmdj..v1.md'):
+            with self.subTest(name=name):
+                self.assertFalse(self.m.source_path(f'contracts/project/{name}'), name)
+
+    def test_schema_json_admission_is_preserved(self):
+        for path in ('contracts/project/lmdj.project.v1.schema.json',
+                     'contracts/example.schema.json',
+                     'contracts/project/nested/example.schema.json'):
+            with self.subTest(path=path):
+                self.assertTrue(self.m.source_path(path), path)
+
+
 class MetadataProposalTests(unittest.TestCase):
     def setUp(self):
         self.m = importlib.import_module('tools.canary.metadata_proposal')
