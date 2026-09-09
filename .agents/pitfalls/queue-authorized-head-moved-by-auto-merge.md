@@ -98,3 +98,6 @@ authorization.
   `synchronize` run GitHub then creates in `action_required` state with zero
   jobs is likewise the controller's to bind and approve; approving it by hand
   takes that step away from it.
+
+Retired 2026-09-09 (#1089 P2.1): the merge queue and its PR gate were removed;
+the exit now asserts their absence.

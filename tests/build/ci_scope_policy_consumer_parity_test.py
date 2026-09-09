@@ -18,13 +18,12 @@ sys.path.insert(0, str(ROOT / "tests/build"))
 
 import change_scope  # noqa: E402
 import local_preflight  # noqa: E402
-import pr_gate  # noqa: E402
 from ci_scope_policy_test_support import policy_transition  # noqa: E402
 
 
 PARITY_MESSAGE = (
     "why: a focused scope-policy proof must be independently revalidated by "
-    "the summary and PR Gate consumers; remedy: pass the complete "
+    "the summary consumer; remedy: pass the complete "
     "repository checkout to the shared manifest validator at every consumer"
 )
 LOCAL_PARITY_MESSAGE = (
@@ -63,18 +62,6 @@ class ScopePolicyConsumerParityTest(unittest.TestCase):
             policy_edit_preserving=True,
         )
 
-    @staticmethod
-    def formal_results(policy, manifest):
-        selected = set(manifest["required_jobs"])
-        jobs = {
-            job for lane_jobs in policy["lane_jobs"].values()
-            for job in lane_jobs
-        }
-        return {
-            job: "success" if job in selected else "skipped"
-            for job in jobs
-        }
-
     def assert_consumers(self, transition, *, accepted):
         manifest = self.manifest(transition)
         if accepted:
@@ -89,15 +76,6 @@ class ScopePolicyConsumerParityTest(unittest.TestCase):
                     repository=transition.root,
                 )
 
-        gate = pr_gate.validate_gate(
-            transition.head_policy,
-            manifest,
-            self.formal_results(transition.head_policy, manifest),
-            transition.head_sha,
-            expected_base_sha=transition.base_sha,
-            repository=transition.root,
-        )
-        self.assertIs(gate.ok, accepted, PARITY_MESSAGE)
 
     def test_all_repository_consumers_accept_the_same_preserving_proof(self):
         with policy_transition(self.policy, preserving=True) as transition:
@@ -126,18 +104,9 @@ class ScopePolicyConsumerParityTest(unittest.TestCase):
                 accepted["summary"] = True
             except ValueError:
                 accepted["summary"] = False
-            accepted["pr"] = pr_gate.validate_gate(
-                caller_policy,
-                manifest,
-                self.formal_results(caller_policy, manifest),
-                transition.head_sha,
-                expected_base_sha=transition.base_sha,
-                repository=transition.root,
-            ).ok
-
         self.assertEqual(
             accepted,
-            {"manifest": False, "summary": False, "pr": False},
+            {"manifest": False, "summary": False},
             PARITY_MESSAGE,
         )
 

@@ -148,8 +148,8 @@ new review of the current change. Empty/NEUTRAL check lists and a model's own
 completion marker are not review evidence. Resolving threads is not a way to
 erase findings without actually evaluating them.
 
-No full test matrix, sanitizer, coverage, portal build, `PR Gate` or Integration
-Queue ticket is a PR merge prerequisite. A non-conflicting branch need
+No full test matrix, sanitizer, coverage, or portal build is a PR merge
+prerequisite. A non-conflicting branch need
 not follow every main advancement. Unknown mergeability is not false or true:
 reread within a bounded interval, then report uncertainty. Resolve real conflicts
 and rerun affected Task checks; rebasing unshared work is preferred, but published
@@ -158,8 +158,7 @@ authority. A self-test failure does not prevent ordinary repair PRs merging.
 
 Read actual protection before merging. If retired required checks or strict
 up-to-date rules reappear, stop and report configuration drift. Shipping
-authority is not permission to bypass or edit protection. Legacy queue scripts
-or labels retained until T6 do not authorize new queue work.
+authority is not permission to bypass or edit protection.
 
 ### Scope diagnostics and batch evidence
 

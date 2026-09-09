@@ -30,7 +30,6 @@
     {"match": {"kind": "prefix", "value": "workers/"}, "reason": "worker ownership is not safely classified"},
     {"match": {"kind": "prefix", "value": "third_party/"}, "reason": "vendored build dependency affects every compiled artifact"},
     {"match": {"kind": "exact", "value": ".github/workflows/ci.yml"}, "reason": "central CI control plane"},
-    {"match": {"kind": "exact", "value": ".github/workflows/merge-queue.yml"}, "reason": "merge queue control plane"},
     {"match": {"kind": "prefix", "value": ".github/actions/web-ci-proof/"}, "reason": "shared Web CI control plane"},
     {"match": {"kind": "prefix", "value": "scripts/ci/"}, "reason": "central CI control plane"},
     {"match": {"kind": "prefix", "value": ".github/actions/configure-build-acceleration/"}, "reason": "shared build control plane"},

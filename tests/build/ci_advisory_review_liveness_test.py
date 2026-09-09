@@ -377,8 +377,7 @@ class ApiAccessTest(unittest.TestCase):
                      "self-hosted runner and nothing installs it there, so the "
                      "job would fail on every scheduled run — and a missing "
                      "binary raises FileNotFoundError, which a returncode check "
-                     "never sees; remedy: use urllib, as github_queue_api.py and "
-                     "grok_review.py already do"),
+                     "never sees; remedy: use urllib, as grok_review.py does"),
             )
         self.assertIn("urllib.request", directives)
 

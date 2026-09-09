@@ -72,7 +72,7 @@ class CiHostedRunnerPolicyTest(unittest.TestCase):
     def test_routine_control_cannot_buy_hosted_linux_capacity(self) -> None:
         """An allowlist entry cannot override the accepted cost boundary."""
         routine = {"ci.yml", "self-test-report.yml", "incremental-completion.yml",
-                   "release-audit.yml", "merge-queue.yml"}
+                   "release-audit.yml"}
         macos = {("ci.yml", "macos-primary"), ("ci.yml", "macos-fallback")}
         for job in all_jobs():
             key = (job.workflow, job.job_id)
@@ -88,7 +88,6 @@ class CiHostedRunnerPolicyTest(unittest.TestCase):
             "self-test-report.yml": {"controller", "cancel-probe-waiter"},
             "incremental-completion.yml": {"relay"},
             "release-audit.yml": {"audit"},
-            "merge-queue.yml": {"route", "finalize"},
         }
         jobs = {(j.workflow, j.job_id): j for j in all_jobs()}
         for workflow, names in control.items():

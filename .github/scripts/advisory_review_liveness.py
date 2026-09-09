@@ -242,9 +242,9 @@ def _api(path: str, context: str) -> object:
     self-hosted runner and nothing installs it there -- `claude-review.yml`'s
     `gh pr comment` calls run inside `claude-code-action`, on its own tooling,
     not on the host. A missing binary would also have escaped the failure
-    handling below, because `FileNotFoundError` is not a nonzero exit. Both
-    `scripts/ci/github_queue_api.py` and `.github/scripts/grok_review.py`
-    already reach the API this way.
+    handling below, because `FileNotFoundError` is not a nonzero exit. The
+    review adapter `.github/scripts/grok_review.py` already reaches the API
+    this way.
     """
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:

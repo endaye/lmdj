@@ -56,10 +56,10 @@ LANE_JOBS = {
     "package": ["package"],
 }
 
-# The closed set of formal jobs that a self-hosted role may ever execute.
-# Change Scope, PR Gate and the surviving macOS selector are the Hosted control
-# plane, and the macOS lane keeps its own runner policy, so none of them appear
-# here.
+# The closed set of formal workload jobs that a self-hosted role may execute.
+# Change Scope, the aggregate verdict and the surviving macOS selector are
+# control-plane jobs on shared ci-general capacity, while the macOS lane keeps
+# its own runner policy, so none of them appear here.
 SELF_HOSTED_JOBS = [
     "docs-static",
     "portal",
@@ -803,7 +803,7 @@ class ChangeScopeTest(unittest.TestCase):
     def test_central_ci_files_upgrade_to_full(self):
         for path in (
             ".github/workflows/ci.yml", "scripts/ci/change_scope.py",
-            "scripts/ci/pr_gate.py", "scripts/ci/scope_policy.json",
+            "scripts/ci/scope_policy.json",
             ".github/actions/web-ci-proof/action.yml",
         ):
             with self.subTest(path=path):
@@ -921,7 +921,7 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(plain["mode"], "focused")
         self.assertEqual(labeled["mode"], "full")
 
-    def test_merge_queue_label_authorizes_without_changing_scope(self):
+    def test_queue_label_authorizes_without_changing_scope(self):
         # The label authorizes a merge; it does not widen one. Merge evidence
         # is the classification, so a docs-only change carries the same
         # manifest whether or not it is queued.
@@ -1579,9 +1579,10 @@ class ChangeScopeTest(unittest.TestCase):
             self.module.validate_manifest(invalid, self.policy)
 
     def test_queue_manifest_may_be_focused_but_never_untrusted(self):
-        # Merge evidence is the classification; trust is not negotiable at any
-        # breadth. PR Gate proves each selected lane succeeded and each
-        # unselected one was skipped, which is what makes focused sufficient.
+        # Historical queue compatibility evidence is the classification; trust
+        # is not negotiable at any breadth. The aggregate verdict proves each
+        # selected lane succeeded and each unselected one was skipped, which is
+        # what made focused queue validation sufficient.
         queue = self.module.parse_queue_inputs(
             "mq:123:1", "220", "a" * 40, "b" * 40
         )

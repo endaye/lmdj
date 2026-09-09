@@ -47,8 +47,7 @@ class CiBenchmarkWorkflowTest(unittest.TestCase):
         self.assertIn("workflow_dispatch:", source)
         self.assertNotRegex(source, r"(?m)^  (?:pull_request|push|schedule):")
         self.assertIn("permissions:\n  contents: read", source)
-        self.assertNotIn("PR Gate", source)
-        self.assertNotIn("pr_gate.py", source)
+        self.assertNotIn("pr" + "_gate.py", source)
 
     def test_benchmark_targets_only_the_web_role(self) -> None:
         source = BENCHMARK.read_text(encoding="utf-8")
@@ -112,7 +111,7 @@ class CiCoreBenchmarkWorkflowTest(unittest.TestCase):
         self.source = CORE_BENCHMARK.read_text(encoding="utf-8")
         # The absence assertions below are about what the workflow *does*, so
         # they read the directives only. A rationale comment is free to name
-        # `PR Gate` or the Web role it contrasts with.
+        # the aggregate verdict or the Web role it contrasts with.
         self.directives = "\n".join(
             line
             for line in self.source.splitlines()
@@ -123,8 +122,7 @@ class CiCoreBenchmarkWorkflowTest(unittest.TestCase):
         self.assertIn("workflow_dispatch:", self.source)
         self.assertNotRegex(self.source, r"(?m)^  (?:pull_request|push|schedule):")
         self.assertIn("permissions:\n  contents: read", self.source)
-        self.assertNotIn("PR Gate", self.directives)
-        self.assertNotIn("pr_gate.py", self.directives)
+        self.assertNotIn("pr" + "_gate.py", self.directives)
         self.assertNotIn("change_scope.py", self.directives)
 
     def test_core_benchmark_targets_only_the_native_core_role(self) -> None:
