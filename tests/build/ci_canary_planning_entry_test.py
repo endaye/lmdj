@@ -20,7 +20,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'scripts/ci')]
 import ci_self_test_report_test  # Preserve the shared production exception identity.
 import ci_batch_runtime_test as fixture
 from tools.canary import planning_entry as entry, records as r
-from ci_self_test_report_workflow_test import block, field, scalars, wakeup_group
+from ci_self_test_report_workflow_test import block, field, scalars
 from workflow_inventory import jobs_in
 
 
@@ -1034,30 +1034,21 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(values), len(entry.OPERATIONS))
         self.assertIn('adopt-version-baseline', values)
 
-    def test_automatic_admission_coalesces_without_cancelling_running_or_manual_work(self):
+    def test_manual_admission_keeps_distinct_runs_and_writer_lock(self):
         admission = scalars(block(self.source, 'concurrency', 0), 2)
         self.assertEqual(admission, {
-            'group': "canary-planning-wakeup-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'automatic' }}",
+            'group': 'canary-planning-wakeup-${{ github.run_id }}',
             'cancel-in-progress': 'false', 'queue': 'single'})
-        self.assertEqual(wakeup_group(self.source, 'workflow_run', 100),
-                         wakeup_group(self.source, 'workflow_run', 101))
-        self.assertNotEqual(wakeup_group(self.source, 'workflow_dispatch', 100),
-                            wakeup_group(self.source, 'workflow_dispatch', 101))
-        self.assertNotEqual(wakeup_group(self.source, 'workflow_dispatch', 100),
-                            wakeup_group(self.source, 'workflow_run', 100))
         self.assertEqual(scalars(block(self.job, 'concurrency', 4), 6),
                          {'group': 'canary-planning', 'cancel-in-progress': 'false', 'queue': 'max'})
 
-    def test_manual_and_gated_completion_share_single_short_controller(self):
+    def test_manual_dispatch_is_the_only_trigger_and_keeps_controller_guards(self):
         triggers = block(self.source, 'on', 0)
-        self.assertEqual(re.findall(r'^  ([\w-]+):', triggers, re.M), ['workflow_run', 'workflow_dispatch'])
-        self.assertEqual(scalars(block(triggers, 'workflow_run', 2), 4),
-                         {'workflows': '["Self-test Report"]', 'types': '[completed]'})
+        self.assertEqual(re.findall(r'^  ([\w-]+):', triggers, re.M), ['workflow_dispatch'])
+        self.assertNotIn('workflow_run', triggers)
         self.assertEqual([job.job_id for job in jobs_in(self.path)], ['controller'])
         self.assertEqual(' '.join(field(self.job, 'if', 4).split()),
-            "github.ref == 'refs/heads/main' && github.run_attempt == '1' && "
-            "(github.event_name == 'workflow_dispatch' || "
-            "(github.event_name == 'workflow_run' && vars.CANARY_PLANNING_AUTOMATIC_READY == 'true'))")
+            "github.ref == 'refs/heads/main' && github.run_attempt == '1'")
         self.assertEqual(field(self.job, 'name', 4), entry.PlanningRuntime.controller_job)
         self.assertEqual(field(self.job, 'timeout-minutes', 4), '10')
         self.assertEqual(scalars(block(self.job, 'concurrency', 4), 6),
@@ -1070,12 +1061,11 @@ class WorkflowTests(unittest.TestCase):
                          {'contents': 'read', 'actions': 'read', 'issues': 'write'})
         self.assertEqual(set(scalars(block(self.job, 'env', 8), 10)),
                          {'GITHUB_TOKEN', 'BATCH_WRITER_LOCK', 'PLANNING_OPERATION', 'PLANNING_STORAGE',
-                          'PLANNING_REQUEST', 'CANARY_PLANNING_AUTOMATIC_READY'})
+                          'PLANNING_REQUEST'})
         values = scalars(block(self.job, 'env', 8), 10)
-        self.assertEqual(values['CANARY_PLANNING_AUTOMATIC_READY'], '${{ vars.CANARY_PLANNING_AUTOMATIC_READY }}')
-        self.assertEqual(values['PLANNING_OPERATION'], "${{ github.event_name == 'workflow_run' && 'reconcile-next' || inputs.operation }}")
-        self.assertEqual(values['PLANNING_STORAGE'], "${{ github.event_name == 'workflow_run' && vars.CANARY_PLANNING_STORAGE || inputs.storage }}")
-        self.assertEqual(values['PLANNING_REQUEST'], "${{ github.event_name == 'workflow_run' && '{}' || inputs.request }}")
+        self.assertEqual(values['PLANNING_OPERATION'], '${{ inputs.operation }}')
+        self.assertEqual(values['PLANNING_STORAGE'], '${{ inputs.storage }}')
+        self.assertEqual(values['PLANNING_REQUEST'], '${{ inputs.request }}')
         self.assertIn('ref: ${{ github.sha }}', self.job)
         self.assertIn('persist-credentials: false', self.job)
 

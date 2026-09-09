@@ -336,6 +336,22 @@ scheduler/progress readers and workflow integration before live activation.
 - Version assessment, candidate delivery, Netcup isolation and formal promotion:
   later Tasks, disabled/unimplemented as applicable.
 
+## T10 — Freeze unused automatic Canary Planning trigger
+
+The automatic `workflow_run` trigger in `canary-planning.yml` is intentionally
+frozen because it generated skipped planning runs before independent storage,
+readiness and live acceptance existed. The workflow remains manual-only through
+`workflow_dispatch`; its operation inventory, input defaults, controller
+provenance/readiness validation and writer-lock protections remain unchanged in
+`tools/canary`. This change preserves the historical skipped-run evidence and
+does not initialize storage, set readiness variables, execute a live canary, or
+enable scheduling.
+
+Future live acceptance of automatic planning is separately authorized work. It
+must prove independent storage/readiness, exact provenance and the complete
+recovery path before any automatic trigger is restored; this Task does not make
+that decision or claim that acceptance.
+
 ## Version Management
 
 Version impact: none
@@ -345,9 +361,9 @@ Host, Module, Contract, Assembly, version or snapshot allocation changes.
 
 ## Documentation Impact
 
-Documentation impact: none
+Documentation impact: required
 
-Reason: Task 1 changes an internal transport optimization, not operator commands,
-selection policy or current Portal facts. Later behavior cutovers must update
-`/operations/testing-and-proof/` and `/operations/version-and-release/`, their
-source diagrams, and the older daily-deployment proposal before activation.
+Affected portal route: `/operations/testing-and-proof/` — its Canary Planning
+wakeup description is updated in this Task to record the intentional
+manual-only freeze. No Product, Host, Module, Contract, Assembly, version or
+snapshot allocation changes.
