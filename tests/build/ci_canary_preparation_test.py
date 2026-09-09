@@ -19,6 +19,15 @@ class PreparationTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.p = importlib.import_module('tools.canary.preparation')
+        # Anchor independent expected values to the pinned input, not a past
+        # production version or the output of the code under test.
+        versions = [tuple(map(int, host['base_version'].split('.')))
+                    for host in self.fixture.context['components']]
+        self.patch_versions = [f'{major}.{minor}.{patch + 1}'
+                               for major, minor, patch in versions]
+        self.minor_versions = [f'{major}.{minor + 1}.0'
+                               for major, minor, _ in versions]
+        self.creator_baseline = versions[0]
 
     def prepare(self, advice=None, **kwargs):
         f = self.fixture
@@ -40,7 +49,8 @@ class PreparationTests(unittest.TestCase):
         advice = f.advice()
         advice['components'][1]['impact'] = 'minor'
         result = self.prepare(advice)
-        self.assertEqual([x['version'] for x in result['hosts']], ['4.0.1', '4.1.0'])
+        self.assertEqual([x['version'] for x in result['hosts']],
+                         [self.patch_versions[0], self.minor_versions[1]])
         self.assertFalse(result['admission_evidence'])
         self.assertEqual(result['state'], 'host-inputs-prepared')
         for edit in result['edits']:
@@ -72,7 +82,9 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(result['state'], 'no-host-change')
 
     def test_adequate_prebump_is_consumed_not_incremented(self):
-        for current in ('4.0.1', '4.0.7', '4.2.0'):
+        major, minor, patch = self.creator_baseline
+        for current in (self.patch_versions[0], f'{major}.{minor}.{patch + 7}',
+                        f'{major}.{minor + 2}.0'):
             with self.subTest(current=current):
                 self.change_version(current)
                 result = self.prepare()
@@ -81,21 +93,24 @@ class PreparationTests(unittest.TestCase):
                 self.assertNotIn('apps/creator-web/module.json', [x['path'] for x in result['edits']])
 
     def test_insufficient_minor_prebump_requires_correction(self):
-        self.change_version('4.0.1')
+        self.change_version(self.patch_versions[0])
         advice = self.fixture.advice()
         advice['components'][0]['impact'] = 'minor'
         with self.assertRaisesRegex(r.CanaryError, 'insufficient.*remedy:'):
             self.prepare(advice)
 
     def test_backwards_and_major_prebumps_are_not_consumed(self):
-        for current in ('3.9.9', '5.0.0'):
+        major, minor, patch = self.creator_baseline
+        backwards = (f'{major}.{minor}.{patch - 1}' if patch else
+                     f'{major}.{minor - 1}.0' if minor else f'{major - 1}.0.0')
+        for current in (backwards, f'{major + 1}.0.0'):
             with self.subTest(current=current):
                 self.change_version(current)
                 with self.assertRaisesRegex(r.CanaryError, 'pre-bump.*remedy:'):
                     self.prepare()
 
     def test_unexplained_prebump_does_not_disappear_as_none(self):
-        self.change_version('4.0.1')
+        self.change_version(self.patch_versions[0])
         advice = self.fixture.advice()
         advice['components'][0].update(impact='none', references=[], changelog=[])
         with self.assertRaisesRegex(r.CanaryError, 'unexplained'):
@@ -137,7 +152,8 @@ class PreparationTests(unittest.TestCase):
 
     def test_occupied_version_cannot_be_rewritten(self):
         f = self.fixture
-        f.write('apps/creator-web/CHANGELOG.md', '# Creator\n\n## [4.0.1] - already published\n')
+        f.write('apps/creator-web/CHANGELOG.md',
+                f'# Creator\n\n## [{self.patch_versions[0]}] - already published\n')
         f.target = f.commit()
         f.context = f.collect()
         with self.assertRaisesRegex(r.CanaryError, 'occupied'):

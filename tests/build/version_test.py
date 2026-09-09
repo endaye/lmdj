@@ -516,6 +516,10 @@ assert generator_spec is not None and generator_spec.loader is not None
 runtime_identity_generator = importlib.util.module_from_spec(generator_spec)
 generator_spec.loader.exec_module(runtime_identity_generator)
 
+# Fixture coverage below proves the generator, not the committed projections.
+# Check the actual tree too; IdentityError names the drift and regeneration remedy.
+runtime_identity_generator.write_or_check(repo_root, check=True)
+
 with tempfile.TemporaryDirectory() as temp_dir:
     fixture_root = Path(temp_dir) / "repo"
     for relative in (
