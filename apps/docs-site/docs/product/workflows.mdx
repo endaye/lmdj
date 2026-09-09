@@ -51,8 +51,9 @@ Pad、不推进 revision。拥有引擎的两个 Host——Web Host 与 Native H
 已重采样 PCM 发布进引擎保留的双槽 audition 池并起声（[#1009](https://github.com/endaye/lmdj/pull/1009)、
 [#1054](https://github.com/endaye/lmdj/pull/1054)），并在回包上带 `played` 说明这一次是否
 真的起了声。CLI 与 MCP 不拥有引擎，在它们上只回报几何。停止只在 Web Host 上有对应操作。
-自动化观察两侧不同：原生侧有一条 journey 把试听渲染到结束并断言 `played: true`，Web 侧只
-观察到过 `played: false`——详见 [Sound Set Contract](../contracts/soundset.mdx)。
+自动化观察两侧现在都闭合：原生侧有一条 journey 把试听渲染到结束并断言 `played: true`，
+Web 侧在真实浏览器里断言 `played: true` 并确认 Host 在预览播完后仍然站着——详见
+[Sound Set Contract](../contracts/soundset.mdx)。
 
 ## Cook 与演奏
 

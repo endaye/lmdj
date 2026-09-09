@@ -70,18 +70,26 @@ Facade 写集测试与 Creator surface 测试固定该边界。
 同样语义携带——一次试听是否真的起了声。没有它，"起了声"和"悄无声息地没起"是同一个回包。
 它只报事实，不报原因，因为原因词表正是本 Stage 冻结的东西。
 
-自动化验收的界线按 Host 分开写，因为两侧现在不一样。**原生侧已经闭合：**
-`tests/host/native_host_test.py` 的试听 journey 在确定性后端上把一次试听渲染到结束，读回
-引擎自己的 `started_voices` / `completed_voices`，并断言回包 `played: true`——这是本产品
-里**第一处观察到一次试听确实发出了声音**的自动化检查。同一条 journey 也断言后端停止时
-`played: false`。**Web 侧仍未闭合：** 真实浏览器里那条腿只钉住「会话刚起、音频未激活时
-`played` 必须为 `false`」，也就是**有自动化检查观察到一次 Web 试听没有发声，但没有任何
-自动化检查观察到一次 Web 试听发出了声音**。驱动可发声的那一半时，Web Host 会在一秒内终止
-（`played: true` 之后 transport 即断），这是
-[#799](https://github.com/endaye/lmdj/issues/799) 记录的字节通路缺陷，不是 `played`
-这个字段的问题，而且它不出现在原生路径上——同一套 publish-enqueue-render 在原生侧完整跑
-到底。不要把"操作已注册"读成"已听到"，也不要把 Creator lane 的绿读成 Web 试听这条腿已经
-闭合。
+**两侧的自动化验收现在都闭合了。** 原生侧：`tests/host/native_host_test.py` 的试听
+journey 在确定性后端上把一次试听渲染到结束，读回引擎自己的 `started_voices` /
+`completed_voices`，并断言回包 `played: true`，同时断言后端停止时 `played: false`。
+Web 侧：`creator_web_soundset.spec.mjs` 在真实浏览器里对打包后的 Creator 先钉住「会话刚
+起、音频未激活时 `played` 必须为 `false`」，再激活音频、驱动可发声的那一半，断言
+`played: true`，并在预览播完之后确认 Host 仍然站着——phase 仍是 `running`、没有 alert、
+第二次试听照样应答。
+
+Web 那一半此前是打不开的：驱动它会让 Host 在一秒内终止（`played: true` 之后 transport
+即断），无 page error、无 console error。原因在引擎而不在 `played`：
+`RealtimeEngine::render` 为试听抑制了 `started` 这条 voice-state 边，却没有抑制
+`completed`，于是一次试听发出一条没有 `started` 在前、且 `sequence == 0` 的完成事件——
+试听是以 `PadControlEvent{0, 0, 127, audition_start, {}}` 入队的，没有请求编号可用。
+`runtime_session.mjs` 要求 sequence 为正整数，于是拒收该事件并以
+`HOST_PROTOCOL_MISMATCH` 判整个 Host 失败。修复见
+[#799](https://github.com/endaye/lmdj/issues/799)：完成边加上与起始边对称的试听判断。
+它此前不出现在原生路径上，也不出现在任何进程内测试里，因为要触发它必须让一个试听声部
+**真正播完**，而在此之前没有测试渲染到那一步。
+
+不要把"操作已注册"读成"已听到"。
 
 **已注册不等于产品内可达。** Task 7 的验收在真实浏览器中对打包后的 Creator 实测出三个
 缺陷，各自阻断链路上的一段；三个都已修复。[#900](https://github.com/endaye/lmdj/issues/900)

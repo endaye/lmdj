@@ -495,23 +495,56 @@ test("Sound Sets browse, inspect, preview and install through the Web fetch tran
   // the voice, and nothing sounds. Before `played`, this reply was byte for
   // byte the reply of an audition that did sound.
   expect(auditioned.result.played).toBe(false);
-  // ACCEPTANCE GAP, and a live defect rather than a missing test. The other
-  // half of this field -- `played === true` after "Activate audio" -- is not
-  // exercised here because it terminates the Web Host. Driving it produces
-  // `{"ok":true,"result":{...,"played":true}}` and then, inside one second and
-  // with no page error, `creator-phase` goes to `failed`, the surface shows
-  // "formal Web Host transport is terminated", and every later leg is
-  // unmeasurable. Activating audio alone does not do it: a probe that
-  // activated, idled four seconds and read the phase found `running` with no
-  // alert, and only the audition that followed killed it.
+  // The other half, and the one that matters: `played === true` after audio is
+  // activated, with the Host still standing afterwards.
   //
-  // That is #799's byte path, not this field: `play_audition` is unchanged
-  // apart from returning its outcome, and the same sequence passes natively in
-  // `test_soundset_audition_reports_whether_a_voice_started`, which starts a
-  // voice and renders it. Closing this gap costs a fix to the Web audition
-  // path, after which the two lines below become `true` and this comment goes.
-  // Until then, do not weaken the assertion above to `typeof … === "boolean"`:
-  // that would pass either way and hide both halves.
+  // This used to be an acceptance gap rather than a missing test. Driving it
+  // answered `{"ok":true,...,"played":true}` and then, inside a second and
+  // with no page error and no console error, `creator-phase` went to `failed`
+  // with "formal Web Host transport is terminated". The cause was in the
+  // engine, not in this field: `RealtimeEngine::render` suppressed the
+  // `started` voice-state edge for auditions but not the `completed` one, so
+  // an audition published a completion carrying `sequence == 0` -- an audition
+  // is enqueued as `PadControlEvent{0, 0, 127, audition_start, {}}` and has no
+  // request to number. `runtime_session.mjs` requires a positive sequence,
+  // rejected the event and failed the whole Host with
+  // HOST_PROTOCOL_MISMATCH. `an_audition_publishes_no_voice_state_edge` pins
+  // the engine half; this leg is the one that would have caught it, because
+  // the defect needs a voice that actually finishes and no in-process test
+  // rendered one to completion.
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: REQUEST_TIMEOUT_MS,
+  });
+  const auditionsBefore = await soundsetOperationCount(page, "soundset.audition");
+  await page.getByRole("button", {name: "Audition set demo"}).click();
+  await expect.poll(
+    async () => await soundsetOperationCount(page, "soundset.audition"),
+    {timeout: REQUEST_TIMEOUT_MS},
+  ).toBeGreaterThan(auditionsBefore);
+  const audible = await lastSoundsetOperation(page, "soundset.audition");
+  expect(audible.ok).toBe(true);
+  // The far side of "a Set is audible on the Web Host": the engine was
+  // running, the voice started, and the Host says so.
+  expect(audible.result.played).toBe(true);
+  expect(audible.result.artifact.sha256).toBe(ATTRIBUTION_SHARED_ARTIFACT);
+
+  // and the Host is still alive well after the preview has finished playing.
+  // One second was the whole window in which it used to die, so this waits
+  // past it rather than reading the phase immediately.
+  await page.waitForTimeout(3000);
+  await expect(page.getByTestId("creator-phase")).toHaveText("running");
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  // A second audition still answers, which a terminated transport cannot do.
+  const secondBefore = await soundsetOperationCount(page, "soundset.audition");
+  await page.getByRole("button", {name: "Audition set demo"}).click();
+  await expect.poll(
+    async () => await soundsetOperationCount(page, "soundset.audition"),
+    {timeout: REQUEST_TIMEOUT_MS},
+  ).toBeGreaterThan(secondBefore);
+  expect((await lastSoundsetOperation(page, "soundset.audition")).ok).toBe(true);
+
   // Auditioning is Workspace-scoped: the operation never learns a Project, so
   // the Host reports no revision for it. This is the structural half of "the
   // Project did not move" -- an operation with no Project cannot write one.
