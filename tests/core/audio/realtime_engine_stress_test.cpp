@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <thread>
 #include <vector>
@@ -12,6 +13,43 @@
 #include "tests/core/support/test.hpp"
 
 namespace {
+
+void preserves_compact_voice_states_under_spsc_contention() {
+  constexpr std::uint64_t kEvents = 1'000'000;
+  // A small ring forces repeated wraparound under producer/consumer overlap.
+  lmdj::audio::detail::RuntimeVoiceStateQueue<7> queue;
+  std::thread producer([&] {
+    for (std::uint64_t index = 0; index < kEvents; ++index) {
+      const lmdj::audio::RuntimeVoiceStateEvent event{
+          std::numeric_limits<std::uint64_t>::max() - index,
+          static_cast<std::uint8_t>(index % 256),
+          static_cast<lmdj::audio::RuntimeVoiceState>(index % 3),
+          (std::uint64_t{1} << 63) + index,
+          std::numeric_limits<std::uint32_t>::max() -
+              static_cast<std::uint32_t>(index),
+      };
+      while (!queue.try_push(event)) {
+        std::this_thread::yield();
+      }
+    }
+  });
+  for (std::uint64_t index = 0; index < kEvents; ++index) {
+    lmdj::audio::RuntimeVoiceStateEvent event{};
+    while (!queue.try_pop(event)) {
+      std::this_thread::yield();
+    }
+    LMDJ_CHECK(event.sequence ==
+               std::numeric_limits<std::uint64_t>::max() - index);
+    LMDJ_CHECK(event.slot == index % 256);
+    LMDJ_CHECK(event.state ==
+               static_cast<lmdj::audio::RuntimeVoiceState>(index % 3));
+    LMDJ_CHECK(event.runtime_frame == (std::uint64_t{1} << 63) + index);
+    LMDJ_CHECK(event.source_frame ==
+               std::numeric_limits<std::uint32_t>::max() - index);
+  }
+  producer.join();
+  LMDJ_CHECK(queue.size_approx() == 0);
+}
 
 void preserves_all_trigger_events_under_spsc_contention() {
   constexpr std::uint64_t kEvents = 1'000'000;
@@ -312,6 +350,7 @@ void corrupted_voice_state_stream_never_returns_a_partial_drain() {
 }  // namespace
 
 int main() {
+  preserves_compact_voice_states_under_spsc_contention();
   preserves_all_trigger_events_under_spsc_contention();
   transports_all_voice_starts_to_concurrent_bounded_drains();
   corrupted_voice_state_stream_never_returns_a_partial_drain();

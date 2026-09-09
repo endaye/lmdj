@@ -29,6 +29,13 @@ atomic32 claimed marker 管理 callback ownership，外部 authority 仍校验�
 累计计数、帧位置与 epoch 保留 64 位。音频、控制各自发布固定三缓冲值快照；多个非实时遥测读者只在读者之间互斥，音频完全不接触该锁。调度使用独立的 control-only transport 读取通道，在原 callback 起始前沿与 Pattern origin 交接点发布，不被遥测读者占用。Pattern 遥测只读取值副本，以认领前沿和精确取消身份排除已应用／已取消的旧 pending 记录，不读取可回收槽。所有相关写操作静止并与读者正确同步后，最终统计精确，无需再来一次 callback；运行中跨域仍是 best effort。`start/stop` 沿用 callback 排空要求，不能只看 stopped；交接时正常发布新值，不重置读者可能仍持有的三缓冲槽。输入和 FX 占用以 32 位原子保留原先的预留／回滚顺序，上界包含队列 1024 项及各一项在途生产者、消费者，合计 1026。64-Pad mask 保持完整 64 位，由 Bank pending-zero 的 release/acquire 交接保护。
 
 发布按 current/pending/retiring/reclaimable 状态转移：实时线程只读不可变 Bank，最后一个 Voice 结束后才允许控制线程回收。publication owner 按 reclaim → reserve → publish 顺序核算 live、pending、retiring bytes。准备阶段按剩余字节的较小约束判定失败，约束相等时稳定返回 Bank failure；Bank、generation 与 transient residency 三类失败不互相冒充。Web Audio 的每个有效 callback（包括 paused callback）以 lock-free `uint32` heartbeat 表示活性；Browser Main 在 `AudioContext.resume()` 后必须先观察 heartbeat 前进，才请求打开 realtime gate。激活只在 accepted generation 已成为 current 且无 pending publication 时开启 gate；激活前锁存的 generation 由首个 open-gate callback 精确确认，避免 stop/start 或 suspend/resume 把旧的非零 acknowledgement 当作当前 Bank。
+Voice-state ring 内部使用自然对齐的紧凑 cell，入队／出队按字段复制，保留公开
+`RuntimeVoiceStateEvent` 的成员顺序和完整 64-bit sequence/runtime frame、32-bit
+source frame。容量仍为 10,240；通用 SPSC 索引与内存序、满队列损坏状态、拒绝新
+Voice 和 fail-closed drain 语义不变。只减少固定存储，不删除事件能力，也不分配
+动态队列。`RealtimeEngine` 的 C++ 对象大小变化要求所有二进制消费者一致重编；
+公开事件 ABI 不变不代表 Engine ABI 不变，后续 Package 分配须处理 MAJOR 影响。
+
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 
@@ -42,6 +49,11 @@ Engine 原来的 quiescence 前置条件没有弱化。该窄路径只准备 Pat
 Master FX prepare；嵌入 Engine 的固定 FX 对象仍计入固定成本。
 ## 8. 测试与证据
 Realtime、same-boundary overlay supersession、apply-point 精确 switch/Stop replacement authority、queued/audio-owned/stop cancellation、two-pending `accepted = applied + superseded + canceled + pending_publications` conservation stress、offline、sample bank、queue 与 CoreAudio output 测试；`audio.realtime_engine` 覆盖 16,777,216 帧高位 trim/loop/ramp，`audio.long_sample_publication_stress` 在并发渲染下覆盖 64 MiB 单 Pad、128 MiB generation、256 MiB resident 边界与字节精确回收。Web Audio conformance 还覆盖 live Bank exact acknowledgement 与最新 generation 的 suspend/reactivate acknowledgement。master FX 由 `audio.master_fx`、`audio.master_fx_determinism` 与 `audio.master_fx_allocation_guard` 覆盖链顺序、值域、HOLD、Bar 相对周期、相同输入相同输出与实时路径的无分配保证；`audio.master_fx_stress` 属于 stress tier，覆盖控制通道在并发渲染下的有界行为。该 busy-spin 用例仅属于 stress tier，并从 coverage preset 排除。`audio.value_channel` 验证 64 位进位、读者半途暂停时连续发布与重置、最终值及多读者串行；Realtime component 的确定性交错覆盖 Q/P/C 占用、Pad 0/63 handoff、同槽高位 generation 复用、无下一 callback 的取消结果及 admission 重算边界。Snapshot stress 同时运行四个观察者并覆盖 start/stop 写者交接。物理延迟与 Safari 内存验收单列。
+`audio.realtime_queue` 另行锁定紧凑 Voice-state 存储、完整字段边界、精确容量、
+FIFO、wraparound、失败 pop 不修改输出与静止 clear/reuse；既有
+`audio.realtime_spsc_stress` 增加一百万次紧凑事件并发传输而不减少原有工作量。
+目标对象大小只属于编译器布局证据，不是板上可用堆或完整运行时适配通过。
+
 ## 9. 限制与下一门禁
 自动化绿色不证明 MIDI/iPad/扬声器体验；需保留设备视频和测量证据。无锁 atomic32 与对象级 Xtensa 编译不等于完整 ESP-IDF 链接或目标实时支持；ESP32 的 map/size、VFS、真机输出、deadline、jitter 与 underrun 证据分别验证，不能由主机测试推断。
 ## 10. 版本身份
