@@ -1,0 +1,35 @@
+---
+title: Slice 参考 Provider
+area: providers
+status: implemented
+owners: [providers, core]
+source_paths: [providers/local-sample-slice, contracts/capability/sample.slice.v1.json, tests/core/provider/sample_slice_test.cpp]
+---
+
+## 来源与装配边界
+
+`local.sample.slice` 是尚未注册到 Product Assembly 的确定性参考实现。
+版本、SDK 依赖和 API 身份以源目录的 `module.json` 为准；当前产品仍仅装配两个 Proof Provider。
+本实现的测试平台声明不代表任何 Host 已提供 Slice 功能。
+
+## 算法与输入
+
+输入必须是完整的 RIFF/WAVE PCM16，单声道或双声道，采样率为 44100 或 48000 Hz。
+解析器验证 chunk 边界、填充、格式与帧几何，不做重采样。
+每帧取各声道绝对振幅最大值，在由低于阈值变为达到阈值时检测起点。
+默认整数阈值为 4096，默认不应期为 240 帧；不应期内抑制的上升沿不会延迟补发。
+超过 4096 个起点会失败，不截断输出。
+
+## Artifact 与失败边界
+
+Provider 只访问 SDK 所有的 source handle 和 output sink。独立的流式消费校验器检查输出 JSON 的形状、重复键、源摘要、采样率、帧边界及严格递增顺序。
+输出是紧凑、键排序的确定性 JSON；相同音频和有效参数产生相同字节。
+失败和重试证据属于 Attempt；Project Truth 与源音频保持原样。
+SDK 的输入、输出和 staging 限制不是进程 RSS 或强制超时保证。
+
+## 已验证的能力与限制
+
+测试经过真实 Registry、AttemptStore、输出落盘及重新打开后的检查，并覆盖未见脉冲、静音、立体声、异常 WAV 和全部 Slice Contract JSON 向量。
+未修改的 smoke corpus 中，基础三个起点全部检出；重叠尾音案例漏掉一个起点，静音无误报。
+该整数上升沿算法提供可复现基线，尚不构成生产质量选择。
+产品注册、平台集成及新的 Product 身份由后续任务处理。

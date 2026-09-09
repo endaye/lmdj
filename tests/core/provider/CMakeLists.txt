@@ -1,5 +1,14 @@
 if(BUILD_TESTING)
   find_package(Threads REQUIRED)
+  add_executable(lmdj_provider_sample_slice_tests sample_slice_test.cpp)
+  target_include_directories(lmdj_provider_sample_slice_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_provider_sample_slice_tests PRIVATE lmdj_provider_local_sample_slice)
+  target_compile_definitions(lmdj_provider_sample_slice_tests PRIVATE
+    LMDJ_SLICE_SOURCE_PACKAGE_MANIFEST="${CMAKE_BINARY_DIR}/providers/local-sample-slice/local.sample.slice.source-package.json")
+  lmdj_target_warnings(lmdj_provider_sample_slice_tests)
+  lmdj_target_sanitizers(lmdj_provider_sample_slice_tests)
+  lmdj_add_test(NAME provider.sample_slice TIER component COMMAND lmdj_provider_sample_slice_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" LABELS provider)
   add_executable(lmdj_provider_callback_stress_tests callback_stress_test.cpp)
   target_include_directories(lmdj_provider_callback_stress_tests PRIVATE "${CMAKE_SOURCE_DIR}")
   target_link_libraries(lmdj_provider_callback_stress_tests PRIVATE lmdj_provider_local_proof_success Threads::Threads)

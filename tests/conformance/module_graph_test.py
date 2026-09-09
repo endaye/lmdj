@@ -218,10 +218,14 @@ assert inventory(assembly, "hosts") == {
     module_id: manifest["version"]
     for module_id, (_, manifest) in host_manifests.items()
 }
+assert "local.sample.slice" in provider_manifests, (
+    "K3 reference Provider is missing; remedy: restore its source manifest or update the approved Task boundary"
+)
 assert inventory(assembly, "providers") == {
     module_id: manifest["version"]
     for module_id, (_, manifest) in provider_manifests.items()
-}
+    if module_id != "local.sample.slice"  # K3 reference source; K4 owns registration.
+}, "Assembly must contain all Providers except K3 reference; remedy: reconcile manifests under the approved registration Task"
 
 product_cmake = (
     REPO_ROOT / "products/lmdj/CMakeLists.txt"

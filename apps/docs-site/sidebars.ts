@@ -14,7 +14,7 @@ const sidebars: SidebarsConfig = {
       'hosts/overview', 'hosts/core-cli', 'hosts/core-mcp', 'hosts/native-host',
       'hosts/web-runtime', 'hosts/creator-web',
     ]},
-    {type: 'category', label: 'Providers', items: ['providers/overview', 'providers/local-proof']},
+    {type: 'category', label: 'Providers', items: ['providers/overview', 'providers/local-proof', 'providers/local-sample-slice']},
     {type: 'category', label: 'Contracts', items: [
       'contracts/overview', 'contracts/project', 'contracts/project-bundle',
       'contracts/runtime-snapshot', 'contracts/capability',
