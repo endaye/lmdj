@@ -26,6 +26,7 @@ namespace {
 std::atomic<bool> g_track_allocations{false};
 std::atomic<std::uint64_t> g_allocations{0};
 std::atomic<std::uint64_t> g_deallocations{0};
+thread_local bool g_fail_allocations = false;
 
 void count_allocation() noexcept {
   if (g_track_allocations.load(std::memory_order_relaxed)) {
@@ -42,6 +43,9 @@ void ordinary_deallocation(void* memory) noexcept {
 
 void* ordinary_allocation(std::size_t size) {
   count_allocation();
+  if (g_fail_allocations) {
+    throw std::bad_alloc{};
+  }
   if (void* memory = std::malloc(size == 0 ? 1 : size)) {
     return memory;
   }
@@ -50,6 +54,9 @@ void* ordinary_allocation(std::size_t size) {
 
 void* aligned_allocation(std::size_t size, std::size_t alignment) {
   count_allocation();
+  if (g_fail_allocations) {
+    throw std::bad_alloc{};
+  }
   void* memory = nullptr;
   if (posix_memalign(&memory, alignment, size == 0 ? 1 : size) == 0) {
     return memory;
@@ -1659,6 +1666,94 @@ void preserves_high_frame_trim_loop_and_ramp_arithmetic() {
       loop_states.at(1).source_frame == kMaximumBankPadFrames - 1);
 }
 
+void capture_storage_is_allocated_only_on_first_arm() {
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.start().has_value());
+  g_allocations.store(0);
+  g_track_allocations.store(true);
+  const auto armed = engine.arm_capture();
+  g_track_allocations.store(false);
+  LMDJ_CHECK(armed.has_value());
+  LMDJ_CHECK(g_allocations.load() == 1);
+}
+
+void capture_allocation_failure_leaves_playback_running_and_retryable() {
+  RealtimeEngine engine;
+  const std::array<float, 2> sample{0.25F, 0.25F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  g_allocations.store(0);
+  g_track_allocations.store(true);
+  // Fail every subsequent allocation, not just the ring. Error formatting
+  // inside noexcept must not allocate again or terminate the process.
+  g_fail_allocations = true;
+  const bool prepared = engine.prepare_capture();
+  const auto armed = engine.arm_capture();
+  g_fail_allocations = false;
+  g_track_allocations.store(false);
+  LMDJ_CHECK(!prepared);
+  LMDJ_CHECK(!armed.has_value());
+  LMDJ_CHECK(armed.error().code == ErrorCode::internal_error);
+  LMDJ_CHECK(armed.error().message.empty());
+  LMDJ_CHECK(armed.error().details.is_null());
+  LMDJ_CHECK(g_allocations.load() == 2);
+  LMDJ_CHECK(engine.capture_telemetry().state == CaptureState::idle);
+  LMDJ_CHECK(engine.telemetry().state == RealtimeState::running);
+  std::array<CapturedTriggerEvent, 1> captured{};
+  captured[0].sequence = 99;
+  LMDJ_CHECK(engine.drain_capture(captured) == 0);
+  LMDJ_CHECK(captured[0].sequence == 99);
+  LMDJ_CHECK(engine.enqueue({1, 0, 100}) == EnqueueResult::accepted);
+  std::array<float, 1> left{}, right{};
+  engine.render(left.data(), right.data(), 1);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left[0] > 0.0F && right[0] == left[0]);
+  LMDJ_CHECK(engine.telemetry().started_voices == 1);
+  LMDJ_CHECK(engine.capture_telemetry().captured_events == 0);
+  LMDJ_CHECK(engine.arm_capture().has_value());
+  LMDJ_CHECK(engine.enqueue({2, 0, 100}) == EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(engine.drain_capture(captured) == 1);
+  LMDJ_CHECK(captured[0].sequence == 2);
+}
+
+void capture_storage_survives_stop_and_restart_without_reallocation() {
+  RealtimeEngine engine;
+  const std::array<float, 1> sample{0.25F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.prepare_capture());
+  LMDJ_CHECK(engine.capture_telemetry().state == CaptureState::idle);
+  LMDJ_CHECK(engine.start().has_value());
+  g_allocations.store(0);
+  g_deallocations.store(0);
+  g_track_allocations.store(true);
+  LMDJ_CHECK(engine.prepare_capture());
+  LMDJ_CHECK(engine.arm_capture().has_value());
+  LMDJ_CHECK(engine.enqueue({42, 0, 100}) == EnqueueResult::accepted);
+  std::array<float, 1> left{}, right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(engine.disarm_capture().has_value());
+  engine.render(left.data(), right.data(), 1);
+  engine.stop();
+  std::array<CapturedTriggerEvent, 1> captured{};
+  LMDJ_CHECK(engine.drain_capture(captured) == 1);
+  LMDJ_CHECK(captured[0].sequence == 42);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.arm_capture().has_value());
+  LMDJ_CHECK(engine.enqueue({43, 0, 100}) == EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  engine.stop();
+  // Existing start semantics discard unread events, unlike stop/disarm.
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.drain_capture(captured) == 0);
+  LMDJ_CHECK(engine.arm_capture().has_value());
+  engine.render(left.data(), right.data(), 1);
+  engine.stop();
+  g_track_allocations.store(false);
+  LMDJ_CHECK(g_allocations.load() == 0);
+  LMDJ_CHECK(g_deallocations.load() == 0);
+}
+
 void captures_voice_starts_at_exact_runtime_frames_and_disarms_at_end() {
   RealtimeEngine engine;
   const std::array<float, 1> sample{0.25F};
@@ -3081,6 +3176,9 @@ void render_and_adapter_status_finish_while_observer_holds_reader_lock() {
 }  // namespace
 
 int main() {
+  capture_storage_is_allocated_only_on_first_arm();
+  capture_allocation_failure_leaves_playback_running_and_retryable();
+  capture_storage_survives_stop_and_restart_without_reallocation();
   capture_handoff_exposes_origin_and_final_count_before_callback_return();
   render_and_adapter_status_finish_while_observer_holds_reader_lock();
   admission_retry_recomputes_boundary_without_audio_waiting(false);

@@ -170,6 +170,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_application_dynamic_load_tests
     lmdj_core_cli
     lmdj_native_host
+    lmdj_native_capture_allocation_failure
     lmdj_core_c
     lmdj_sequence_journal_tests
     lmdj_performance_journal_tests

@@ -1133,6 +1133,12 @@ class NativeHost final {
     Json begun;
     {
       std::lock_guard lock(facade_mutex_);
+      // Prepare before creating any durable Sequence session or writer. A
+      // failed optional allocation must leave the current playback untouched.
+      if (!engine_.prepare_capture()) {
+        return error_response(
+            "INTERNAL_ERROR", "Insufficient memory for Capture recording buffer");
+      }
       const auto result = application_.begin_sequence({
           invocation_.project,
           SequenceSessionId{*session},

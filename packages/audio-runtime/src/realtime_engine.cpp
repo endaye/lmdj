@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <new>
 #include <string>
 #include <utility>
 
@@ -552,7 +553,7 @@ void RealtimeEngine::capture_voice_start(
   const auto offset = absolute_start_frame - origin;
   if (absolute_start_frame < origin ||
       offset > std::numeric_limits<std::uint32_t>::max() ||
-      !capture_ring_.try_push(CapturedTriggerEvent{
+      !capture_ring_->try_push(CapturedTriggerEvent{
           event.sequence,
           event.slot,
           event.velocity,
@@ -1193,12 +1194,33 @@ std::size_t RealtimeEngine::reclaim_retired_banks() noexcept {
   return reclaim_retired_bank_telemetry().count;
 }
 
+bool RealtimeEngine::prepare_capture() noexcept {
+  if (capture_ring_) {
+    return true;
+  }
+  try {
+    capture_ring_ = std::make_unique<CaptureRing>();
+    return true;
+  } catch (const std::bad_alloc&) {
+    return false;
+  }
+}
+
 foundation::Result<void> RealtimeEngine::arm_capture() noexcept {
   if (state_.load(std::memory_order_acquire) != RealtimeState::running) {
     return invalid_argument(
         "realtime capture may only be armed while running");
   }
   auto expected = CaptureState::idle;
+  if (capture_state_.load(std::memory_order_acquire) != expected) {
+    return invalid_argument("realtime capture is not idle");
+  }
+  if (!prepare_capture()) {
+    // Error's default details object and a descriptive string may allocate.
+    // Do not attempt a second allocation while reporting exhausted storage.
+    return foundation::Result<void>::failure(
+        {foundation::ErrorCode::internal_error, {}, nullptr});
+  }
   if (!capture_state_.compare_exchange_strong(
           expected,
           CaptureState::arm_pending,
@@ -1233,8 +1255,8 @@ std::size_t RealtimeEngine::drain_capture(
     std::span<CapturedTriggerEvent> output) noexcept {
   const PublishOnReturn publish{*this, &RealtimeEngine::publish_control_observation};
   std::size_t drained = 0;
-  while (drained < output.size() &&
-         capture_ring_.try_pop(output[drained])) {
+  while (capture_ring_ && drained < output.size() &&
+         capture_ring_->try_pop(output[drained])) {
     ++drained;
   }
   drained_events_ += drained;
@@ -1282,7 +1304,9 @@ foundation::Result<void> RealtimeEngine::start() {
   master_fx_.reset();
   publish_queue_.clear_quiescent();
   audio_pending_pattern_.reset();
-  capture_ring_.clear_quiescent();
+  if (capture_ring_) {
+    capture_ring_->clear_quiescent();
+  }
   trigger_outcome_ring_.clear_quiescent();
   voice_state_ring_.clear_quiescent();
   pending_publications_.store(0, std::memory_order_relaxed);
