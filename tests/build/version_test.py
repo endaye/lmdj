@@ -351,6 +351,11 @@ for relative, contract_version in expected_contract_sources.items():
     )
 
 expected_provider_manifests = {
+    "providers/local-sample-slice/module.json": {
+        "contract": "lmdj.module.v1", "module": "local.sample.slice",
+        "version": "1.0.0", "api_version": 3,
+        "dependencies": {"provider-sdk": "2.0.0"},
+    },
     "providers/local-proof-failure/module.json": {
         "contract": "lmdj.module.v1",
         "module": "local.proof.failure",

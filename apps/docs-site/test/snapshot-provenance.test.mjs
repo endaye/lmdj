@@ -787,3 +787,19 @@ test('the squash witness remedy derives its introducing revision from HEAD', asy
     await rm(fixture.repoRoot, {recursive: true, force: true});
   }
 });
+
+test('historical page inventory is bound to its source rather than the current freeze count', async () => {
+  const fixture = await initializeFixture();
+  try {
+    const metadata = await generateWorkingSnapshot(fixture);
+    const options = verifierOptions(fixture, metadata, fixture.revision);
+    delete options.expectedDocCount;
+    assert.deepEqual(await verifySnapshotProvenance(options), []);
+    const incomplete = structuredClone(metadata);
+    incomplete.source_documents.pop();
+    assert.match((await verifySnapshotProvenance({...options, metadata: incomplete})).join('\n'),
+      /source document inventory does not match source revision/);
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});

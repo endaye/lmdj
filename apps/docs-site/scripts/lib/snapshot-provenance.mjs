@@ -446,7 +446,7 @@ function snapshotDocumentPath(sourcePath, version) {
 // worth remembering before adding another one.
 // K1 (#1049) added artifact-audio and slice-points. The current-tree regression
 // checks this independent inventory pin before the next rare freeze operation.
-export const SOURCE_DOCUMENT_COUNT = 43;
+export const SOURCE_DOCUMENT_COUNT = 44;
 
 export async function createSnapshotMetadata({
   repoRoot,
@@ -645,7 +645,7 @@ export async function verifySnapshotProvenance({
   portalRoot,
   metadata,
   headRevision,
-  expectedDocCount = SOURCE_DOCUMENT_COUNT,
+  expectedDocCount,
   diagramIds = DIAGRAM_IDS,
   projectionPaths,
   readFactsAtRevision: factsReader = readRepoFactsAtRevision,
@@ -730,8 +730,12 @@ export async function verifySnapshotProvenance({
   const expectedIds = validateDiagramIds(diagramIds);
   if (!sameJson(metadata.diagrams?.ids, expectedIds)) errors.push('diagram id inventory does not match expected validated IDs');
   if (metadata.diagrams?.asset_base !== `/versions/${version}/diagrams`) errors.push('diagram asset base is invalid');
-  if (!Array.isArray(metadata.source_documents) || metadata.source_documents.length !== expectedDocCount) {
-    errors.push(`snapshot metadata must contain ${expectedDocCount} source documents`);
+  // Historical archives bind to their recorded source inventory below; only
+  // new freezes use the independent current-page completeness pin.
+  if (!Array.isArray(metadata.source_documents)) {
+    errors.push('snapshot metadata source_documents must be an array; remedy: restore the authenticated source inventory');
+  } else if (expectedDocCount !== undefined && metadata.source_documents.length !== expectedDocCount) {
+    errors.push(`snapshot metadata must contain ${expectedDocCount} source documents; remedy: restore the authenticated source inventory`);
   }
   try {
     const expectedSources = await sourceDocumentPaths(repoRoot, contentRevision);
