@@ -209,6 +209,8 @@
     {"match": {"kind": "prefix", "value": "tests/distribution/"}, "lanes": ["package"]},
     {"match": {"kind": "prefix", "value": "tests/fixtures/audio/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_runtime_host", "creator"]},
     {"match": {"kind": "prefix", "value": "tests/fixtures/provider-benchmark/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
+    {"match": {"kind": "prefix", "value": "tests/fixtures/cardputer/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
+    {"match": {"kind": "exact", "value": "tests/build/cardputer_music_fixture_test.py"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
     {"match": {"kind": "prefix", "value": "tests/fixtures/long-material/"}, "lanes": ["creator"]},
     {"match": {"kind": "prefix", "value": "tests/fixtures/projects/"}, "lanes": ["core_ubuntu"]},
     {"match": {"kind": "prefix", "value": "tests/fixtures/soundset/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
