@@ -35,6 +35,7 @@ operations. Two Hosts that agree here can still disagree at install.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 from pathlib import Path
 import select
@@ -52,7 +53,13 @@ PARTITION = json.loads(
         encoding="utf-8"
     )
 )
-BASE_TIMEOUT_SECONDS = 30.0
+# The house base, matching `cli_test.SUBPROCESS_TIMEOUT_SECONDS` and
+# `native_host_test.DEFAULT_RESPONSE_TIMEOUT_SECONDS`. 30s here would let a
+# single slow call eat most of the 120s CTest budget on the sanitizer
+# lanes, where the multiplier applies and this test spawns roughly two
+# dozen CLI processes -- turning a readable per-call timeout into an
+# opaque ctest one.
+BASE_TIMEOUT_SECONDS = 10.0
 INSTALL_REFUSAL = PARTITION["install_refusal"]
 UNSUPPORTED_SET_ID = INSTALL_REFUSAL["set_id"]
 
@@ -237,7 +244,7 @@ def native_requests(
     workspace: Path,
     assembly: Path,
     project: Path,
-    requests: tuple[dict, ...],
+    requests: "tuple[dict, ...] | Callable[[dict], tuple[dict, ...]]",
 ) -> list[dict]:
     """Drive requests through the long-lived Native Host and return the replies.
 
@@ -275,7 +282,12 @@ def native_requests(
         ready = json.loads(process.stdout.readline().decode("utf-8"))
         assert ready["ok"] is True and ready["operation"] == "ready", ready
         replies: list[dict] = [ready]
-        for request in (*requests, {"operation": "quit"}):
+        # Requests may depend on the revision this session opened at, and only
+        # this session's own banner states it. Taking it from another session's
+        # banner happened to work only because `author_project` lands every
+        # fresh Project on the same revision -- a coincidence, not a contract.
+        planned = requests(ready) if callable(requests) else requests
+        for request in (*planned, {"operation": "quit"}):
             process.stdin.write(canonical_json(request).encode("utf-8") + b"\n")
             process.stdin.flush()
             readable, _, _ = select.select(
@@ -347,17 +359,17 @@ def main() -> int:
         # The Native Host holds the Project open and announces the revision it
         # opened at. Guessing one instead would make this leg fail on a
         # revision conflict rather than on the audio decision it compares.
-        ready, native_listed = native_requests(
+        _, native_listed = native_requests(
             host, cli, native_workspace, assembly, native_project,
             ({"operation": "soundset.catalog.list"},),
         )
         assert_partition("Native Host", native_listed)
+        native_install_project = temp_root / "native-install.lmdj"
         _, native_install = native_requests(
-            host, cli, native_workspace, assembly,
-            temp_root / "native-install.lmdj",
-            (
+            host, cli, native_workspace, assembly, native_install_project,
+            lambda ready: (
                 install_request(
-                    temp_root / "native-install.lmdj",
+                    native_install_project,
                     ready["result"]["project_revision"],
                     uuid_for(929),
                 ),
