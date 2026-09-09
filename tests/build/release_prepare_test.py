@@ -33,7 +33,23 @@ def current_product_build() -> str:
     )
 
 
+def current_module_identity(module_id: str) -> str:
+    """`<module>@<version>` read from the module's own manifest.
+
+    Pinning a literal here made this test fail whenever the module was bumped,
+    for a reason that has nothing to do with what it checks: that the real
+    exact-target validator accepts every supported identity kind. The manifest
+    is the same authority the validator itself resolves against, so reading it
+    removes that failure reason without weakening the check.
+    """
+    manifest = json.loads(
+        (ROOT / "apps" / module_id / "module.json").read_text(encoding="utf-8")
+    )
+    return f"{manifest['module']}@{manifest['version']}"
+
+
 CURRENT_PRODUCT_BUILD = current_product_build()
+CURRENT_CORE_CLI_IDENTITY = current_module_identity("core-cli")
 
 from tools.release.commands import CommandError, CommandRunner, sanitize_diagnostic  # noqa: E402
 from tools.release.github_api import (  # noqa: E402
@@ -1252,7 +1268,7 @@ class ReleaseTargetValidationIntegrationTest(unittest.TestCase):
                 ReleaseKind.PRODUCT, CURRENT_PRODUCT_BUILD,
                 "web-runtime-host", "canary", CURRENT_PRODUCT_BUILD,
             ),
-            (ReleaseKind.MODULE, "core-cli@3.1.0", "source-only", None, None),
+            (ReleaseKind.MODULE, CURRENT_CORE_CLI_IDENTITY, "source-only", None, None),
             (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
             (ReleaseKind.PROVIDER, "local.proof.success@1.0.5", "source-only", None, None),
         )

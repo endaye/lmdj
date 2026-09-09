@@ -310,6 +310,11 @@ expected_contract_sources = {
     "contracts/soundset/lmdj.soundset.v1.schema.json": "1.1.0",
     "contracts/soundset-catalog/lmdj.soundset-catalog.v1.schema.json": "1.0.0",
     "contracts/runtime-content/lmdj.runtime-content.v1.schema.json": "1.0.0",
+    # Formalized by #1049 ahead of the Stage 12 slice work: it has
+    # conformance fixtures but no consumer and no Assembly entry yet.
+    # This gate tracks Contract identity on disk, not Assembly
+    # membership, so it belongs here from the moment the file exists.
+    "contracts/slice-points/lmdj.slice-points.v1.schema.json": "1.0.0",
     "contracts/version/lmdj.product-version.v1.schema.json": "1.0.0",
 }
 actual_contract_sources = sorted(
