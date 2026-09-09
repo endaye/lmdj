@@ -47,10 +47,12 @@ Rules the previous coordinator learned the hard way (all observed today):
   cannot be missed.
 - Orca creates worker branches as `endaye/<name>`. Governance requires
   `fix/<task>`, `feat/<task>`, `docs/<task>`. Tell each worker to
-  `git branch -m fix/<task>` before its first push. For an already-open PR,
-  rename on GitHub with
-  `gh api -X POST repos/endaye/lmdj/branches/<old, url-encoded>/rename -f new_name=fix/<task>`
-  (the PR follows), then rename locally and reset the upstream.
+  `git branch -m fix/<task>` before its first push. Do NOT rename a branch
+  that already has an open PR: on 2026-09-09 the GitHub rename API did not
+  retarget PR #1095 (it stayed bound to the old name and could not receive
+  the next push) and PR #1097 was closed by the worker in the confusion.
+  Instead push under the new name, open a new PR with the same body and a
+  "Supersedes #N" line, and close the old PR with a comment.
 - Workers merge autonomously unless told otherwise. Every spec now says: stop
   before `gh pr merge`, `ask` the coordinator with PR number, head SHA, review
   evidence and full `ci_*` counts, and merge only on "merge" with
@@ -76,7 +78,7 @@ Rules the previous coordinator learned the hard way (all observed today):
 
 ## 3. State at last update
 
-Last updated: 2026-09-09 16:10 by Claude.
+Last updated: 2026-09-09 16:55 by Claude.
 
 ### Merged
 
@@ -85,12 +87,13 @@ Last updated: 2026-09-09 16:10 by Claude.
 | #1090 | plan | `8d7c79fc` | independent takeover on `fcc874ef` | automated runs 34367092851, 34368503521 failed |
 | #1092 | P1.2 #1088 | `dae1cac2` | none at merge; post-merge independent review posted 15:47 (one low should-fix: `source_path` also admits `contracts/<family>/README.md`; follow-up P1.2b) | worker merged before the merge-gate instruction reached it; branch kept `endaye/` prefix; coordinator re-ran `ci_canary*` discovery in the worktree: 320 OK, 1 skipped |
 | #1099 | P1.1 #1078 | `9d4bf083` | automated GLM review published on `83d591e8`, no findings | supersedes #1097, which the worker closed while renaming its branch; #1078 closed |
+| #1101 | P1.4 verify-published | `0ecfb282` | independent takeover on `ef5e71e4` + delta `6d7dffc6` (4 should-fix applied) | supersedes #1095, which stayed bound to the renamed `endaye/` branch. Coordinator counts on `6d7dffc6`: release 439 OK, actionlint OK, whitespace OK, 11 declared files |
 
 ### Open PRs
 
 | PR | Task | Head | State | Next step |
 | --- | --- | --- | --- | --- |
-| #1095 | P1.4 publish-release verify-published | `ef5e71e4` + P1.4b fix commit pending | independent review done: no must-fix, 4 should-fix (missing `html_url`/missing-Release fixtures; stale pitfall body and no new recurrence; exit should point at `release_publish_workflow_test.py`; SKILL wording inverted) | P1.4b (task_80d177d14ee5, same terminal `term_c6287103-fef3-473d-808c-8e7f89bdf0f7`) applies them, then asks merge/hold; coordinator re-reviews the delta, posts the takeover record, merges |
+| #1100 | P2.2 remove pre-heavy-gate | `cceba90b` (not rebased; base `c628f213`) | worker self-review only (not evidence); independent reviewer running | HOLD: worker told to rebase onto main, rerun full discovery to 0/0, push, ask again |
 | #1098 | this handoff | living | n/a | merge at handoff or a stable milestone |
 
 ### Worktrees and workers
@@ -99,7 +102,7 @@ Last updated: 2026-09-09 16:10 by Claude.
 | --- | --- | --- | --- | --- | --- |
 | P1.1 | task_aed1e9070a16 | ctx_dcd339eb39ac | `/Users/endaye/orca/workspaces/lmdj/fix-pitfall-snapshot-area` | `fix/pitfall-snapshot-area` | completed (merged #1099); terminal released |
 | P1.2 | task_5e703ee98cef | ctx_f1d946aa4b92 | `.../fix-canary-fixture-contract-profiles` | `endaye/fix-canary-fixture-contract-profiles` | completed; terminal released |
-| P1.4 | task_3302700a491d | ctx_5f70e14ca726 | `.../fix-publish-release-post-publish-verify` | `fix/publish-release-post-publish-verify` (renamed 15:30) | completed; P1.4b task_80d177d14ee5 dispatched on the same terminal for review fixes |
+| P1.4 | task_3302700a491d / P1.4b task_80d177d14ee5 | ctx_5f70e14ca726 / ctx_101604f8d332 | `.../fix-publish-release-post-publish-verify` | `fix/publish-release-post-publish-verify` | completed (merged #1101); dispatches released |
 | P2.1 | task_3294ba685655 | ctx_5e43ec6ab4f6 | `.../fix-retire-merge-queue-gates` | `endaye/fix-retire-merge-queue-gates` (rename before push) | dispatched; scope widened, see §5; ruling on four absorbed queue pitfalls: keep entries, add `tests/build/ci_retired_queue_mechanisms_test.py` asserting the removed files stay absent, re-point `gate:` exits to it, append a retirement paragraph |
 | P2.2 | task_abf0a27a954f | ctx_9bc8f6bb130d | `.../fix-remove-pre-heavy-gate` | `endaye/fix-remove-pre-heavy-gate` | completed without shipping (commit `25988d2f`) |
 | P2.2b | task_ce9ed533144d | ctx_a1fcf060ffb4 (terminal `term_b3f2a29d-0b7a-47f1-907a-72ac25091cba`) | same as P2.2 | rename to `fix/remove-pre-heavy-gate` | dispatched: full discovery, ship, ask before merge. Coordinator's own discovery on `25988d2f`: 2208 run, 4 failures, 7 errors (canary, gone after rebase); two failures are in `ci_runner_fallback_test.py` (fork-PR fallback assertion, mac gate routing) and were sent to the worker |
