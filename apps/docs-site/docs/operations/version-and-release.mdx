@@ -68,7 +68,8 @@ epoch 分别以 `canary-assessment-inputs-`、`canary-assessment-outbox-` 开头
 
 ## Assembly Lock
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
-当前 source candidate 是 Product Build `1.0.44.0 · canary · g<short-sha>`，在 Build 43 之上装配 Stage 11 的 Sound Set 能力。Contract 侧新增 `lmdj.soundset.v1 · 1.1.0` 与 `lmdj.soundset-catalog.v1 · 1.0.0`，并把 `lmdj.project-bundle.v1` 由 `1.1.0` 升到 `1.2.0`——`project_contract` 枚举补齐 `lmdj.project.v4`，这是 backward-compatible addition，也是必需的：自 Build 43 起本 Build 写出的每一个 Project 都是 v4，枚举不补齐则它们全都无法打包为 Bundle。`lmdj.project.v4` 保持 `4.1.0`，active Contract 由八个增至十个。Module 侧 Foundation `0.4.0`、Authoring Domain `3.0.0`、Project I/O `3.0.0`、Application Facade `3.1.0`、Web Runtime Platform `4.0.0`；Project Cooker `1.1.0`、Audio Runtime `3.0.0` 与 Provider SDK `1.1.4` 不变。Host 侧 CLI/MCP/Native Test Host `3.1.0`，Formal Web Runtime Host 与 Creator Web `4.0.0`。`resource_limits` 由九项增至十三项，两个本地 Proof Provider、Provider policy、Bank 共享配额与两份分发清单的资产计数都不动。这些身份同时写入 `products/lmdj/assembly.json`，因此 Assembly source hash 与 Assembly Lock hash 一并改变，本 Build 的不可变门户快照按 Build-cut 规则随分配在同一 Pull Request 内冻结。当前 source 可以没有 active Product intent；candidate、快照、tag、Release、部署与 Channel promotion 仍是独立状态。
+当前 source candidate 是 Product Build `1.0.45.0 · canary · g<short-sha>`，在 Build 44 之上装配 Stage 11 的 Sound Set 试听字节通路。Contract 侧不动：试听不持久化任何东西，也不跨新的进程边界，`lmdj.soundset.v1` 保持 `1.1.0`。Module 侧 Audio Runtime 升到 `3.1.0`（保留 audition Bank 池、audition 控制种类与哨兵身份，纯追加）、Application Facade 升到 `3.2.0`（交回已重采样 PCM 的类型化试听方法，纯追加）、Web Runtime Platform 升到 `4.1.0`（追加操作面）；Foundation `0.4.0`、Authoring Domain `3.0.0`、Project I/O `3.0.0`、Project Cooker `1.1.0` 与 Provider SDK `1.1.4` 不变。Host 侧 CLI、MCP 与 Native Host 升到 `3.2.0`，Formal Web Runtime Host 与 Creator Web 升到 `4.1.0`——其中只有 Creator Web 有源码改动，其余四个是依赖 pin 跟随，与 Build 44 同一先例。这些身份同时写入 `products/lmdj/assembly.json`，因此 Assembly source hash 与 Assembly Lock hash 一并改变，本 Build 的不可变门户快照按 Build-cut 规则随分配在同一 Pull Request 内冻结。当前 source 可以没有 active Product intent；candidate、快照、tag、Release、部署与 Channel promotion 仍是独立状态。
+Product Build `1.0.44.0 · canary · g<short-sha>` 曾是 Stage 11 Sound Set 安装能力的 source candidate，装配在 Build 43 之上。Contract 侧新增 `lmdj.soundset.v1 · 1.1.0` 与 `lmdj.soundset-catalog.v1 · 1.0.0`，并把 `lmdj.project-bundle.v1` 由 `1.1.0` 升到 `1.2.0`——`project_contract` 枚举补齐 `lmdj.project.v4`，这是 backward-compatible addition，也是必需的：自 Build 43 起本 Build 写出的每一个 Project 都是 v4，枚举不补齐则它们全都无法打包为 Bundle。`lmdj.project.v4` 保持 `4.1.0`，active Contract 由八个增至十个。Module 侧 Foundation `0.4.0`、Authoring Domain `3.0.0`、Project I/O `3.0.0`、Application Facade `3.1.0`、Web Runtime Platform `4.0.0`；Project Cooker `1.1.0`、Audio Runtime `3.0.0` 与 Provider SDK `1.1.4` 不变。Host 侧 CLI/MCP/Native Test Host `3.1.0`，Formal Web Runtime Host 与 Creator Web `4.0.0`。`resource_limits` 由九项增至十三项，两个本地 Proof Provider、Provider policy、Bank 共享配额与两份分发清单的资产计数都不动。这些身份同时写入 `products/lmdj/assembly.json`，因此 Assembly source hash 与 Assembly Lock hash 一并改变，该 Build 的不可变门户快照也按 Build-cut 规则在同一 Pull Request 内冻结。
 Product Build `1.0.42.0 · canary · g<short-sha>` 曾是 Stage 10 Perform 集成的 source candidate：它引入 `lmdj.project.v4 · 4.0.0`，把 Authoring Domain 与 Project I/O 升至 `2.0.0`、Project Cooker 升至 `1.1.0`，Audio Runtime、Application Facade、Web Runtime Platform 与五个 Host 升至 `3.0.0`，并为 `resource_limits` 新增 `perform_recording_frames` 与 `perform_recording_queue_batches`、为 Creator 分发新增唯一的 `perform_master_tap_worklet` 资产。
 Product Build `1.0.41.0 · canary · g<short-sha>` 曾是双 Web Host 六资产 Release 与独立部署控制面的 source candidate。
 Product Build `1.0.26.0 · canary · g<short-sha>` 曾是 G3 Host settings crash-recovery/identity source candidate。
@@ -101,15 +102,15 @@ gate 会报告 authority、expected、found 与 consumer path；生成物 stale 
 | Authoring Domain | `3.0.0` | Project v4、Asset Lineage 的封闭 variant、`create_project` 直接产出 v4 |
 | Project I/O | `3.0.0` | v4-only writer、Sequence journal/receipt/recovery、Set Store、Bundle 1.2 |
 | Project Cooker | `1.1.0` | Project v4 确定性 Runtime Snapshot |
-| Audio Runtime | `3.0.0` | Pattern origin、整数 BPM anchor 与 Bar boundary |
+| Audio Runtime | `3.1.0` | Pattern origin、整数 BPM anchor 与 Bar boundary |
 | Provider SDK | `1.1.4` | Provider/Attempt boundary 不变 |
-| Application Facade | `3.1.0` | Host-neutral Sequence/Performance/Sound Set 操作集 |
-| Web Runtime Platform | `4.0.0` | frame-stamped unified input、Sequence bridge、十三项 manifest 上限 |
-| Core CLI | `3.1.0` | Project v4、Sequence 与 Sound Set Facade surface |
-| Core MCP | `3.1.0` | 长生命周期 Sequence owner 与 CLI parity，含 Sound Set 工具 |
-| Native Host | `3.1.0` | Audio-frame CaptureWriter、Sequence lifecycle 与 Sound Set 转发 |
-| Web Runtime Host | `4.0.0` | Diagnostic Sequence/cross-window evidence，十三项上限分发清单 |
-| Creator Web | `4.0.0` | Sequence Surface、Perform、Sound Set 目录与安装 surface |
+| Application Facade | `3.2.0` | Host-neutral Sequence/Performance/Sound Set 操作集 |
+| Web Runtime Platform | `4.1.0` | frame-stamped unified input、Sequence bridge、十三项 manifest 上限 |
+| Core CLI | `3.2.0` | Project v4、Sequence 与 Sound Set Facade surface |
+| Core MCP | `3.2.0` | 长生命周期 Sequence owner 与 CLI parity，含 Sound Set 工具 |
+| Native Host | `3.2.0` | Audio-frame CaptureWriter、Sequence lifecycle 与 Sound Set 转发 |
+| Web Runtime Host | `4.1.0` | Diagnostic Sequence/cross-window evidence，十三项上限分发清单 |
+| Creator Web | `4.1.0` | Sequence Surface、Perform、Sound Set 目录与安装 surface |
 | Project Contract | `lmdj.project.v4 · 4.1.0` | 唯一写入真相；v1/v2/v3 仅迁移读取 |
 | Project Bundle | `lmdj.project-bundle.v1 · 1.2.0` | 打包 head checkpoint 的 Contract 级别，可命名 v4；1.0/1.1 容器兼容读取 |
 | Sound Set | `lmdj.soundset.v1 · 1.1.0` | Set 清单，含可选 `demo` Artifact |
@@ -188,7 +189,37 @@ PATCH may not change Product Assembly identity or `assembly.lock`. Any module/pr
 权威链必须逐环核验并分别记录：Product Build -> signed tag -> tag revision -> merged PR -> source revision -> snapshot provenance/witness -> merged-main Proof revision -> evidence-only documentation revision。branch-local Proof、快照、CI、tag 或后写的证据文档都不能替代链中其他一环。
 ## 不可变性
 已发布 tag 不移动；交付测试或正式发布的文档快照按 Product Build 冻结，current 文档持续跟随 main。普通 PR Preview 不创建永久快照。
-schema-2 快照冻结 39 页源码、sidebar、十张图的 20 个 HTML/SVG 资产、源提交与 source projection；后续 current 或 diagram 变化不能改写已冻结版本。生成前允许的脏路径仅限该 Product Build 的精确生成边界，提交后还必须验证 introducing commit、时间顺序以及 direct-parent 或获准的 squash-equivalent projection。
+schema-2 快照冻结 41 页源码、sidebar、十张图的 20 个 HTML/SVG 资产、源提交与 source projection；后续 current 或 diagram 变化不能改写已冻结版本。生成前允许的脏路径仅限该 Product Build 的精确生成边界，提交后还必须验证 introducing commit、时间顺序以及 direct-parent 或获准的 squash-equivalent projection。
+### 已冻结快照的已知错误（勘误）
+
+不可变性是双向的：快照保存的是冻结那一刻 current 页面所说的话，**包括当时已经为假的话**。
+快照文件不得改写，因此已知错误记录在这里。
+
+**`1.0.45.0`（canary）** 冻结时携带了三处当时已被合并代码推翻的陈述，来源是 Build 44 之后
+未被同步的 current 页面：
+
+- `contracts/soundset.mdx`：称 `soundset.audition` 只由三个原生 Host 服务、Web Host 的
+  bridge 与 protocol 尚未注册它、Creator 还没有试听控制。三者在 `45756035`(#999) 与
+  `917decee`(#1023) 之后均为假。
+- `contracts/soundset.mdx`：称 [#900](https://github.com/endaye/lmdj/issues/900) 仍阻断
+  Web Host 浏览与安装。该缺陷在 `f1293997` 修复，六腿浏览器 journey 自 `b5d8ca93`(#978)
+  起无援转绿。
+- `product/workflows.mdx`：同一条"只由三个原生 Host 服务、Creator 尚无试听控制"。
+
+同一次冻结还保存了 Build 44 的版本号：`core/modules/*`、`hosts/*` 与
+`operations/version-and-release.mdx` 当时仍写 Application Facade `3.1.0`、Audio Runtime
+`3.0.0`、Web Runtime Platform `4.0.0` 与各 Host 的 Build 44 版本，而 `1.0.45.0` 的
+Assembly 已分别 pin 到 `3.2.0`、`3.1.0`、`4.1.0` 与 `3.2.0`/`4.1.0`。
+
+**为什么门禁没拦住。** 门禁按页固定内容，而它固定的是子集——`overview/index.mdx`、
+`core/overview.mdx`、`product/capability-map.mdx` 与 `operations/testing-and-proof.mdx`
+在 `content-inventory` 与 `repo-facts` 里有内容断言，上述页面没有。分配 Build 45 时只有
+被固定的四页被同步，其余静默留在 Build 44 的叙述上，并被原样冻结。**门禁通过只证明机械
+一致，不证明叙述为真**；这一条同时记在
+`.agents/pitfalls/portal-gate-pins-a-subset-of-pages.md`。
+
+current 页面已在同一变更中更正。`1.0.45.0` 快照按政策保持不变。
+
 ## 发布门禁
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 

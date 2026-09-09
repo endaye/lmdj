@@ -44,7 +44,7 @@ Cloudflare 迁移将诊断 Host 的固定入口设为 `https://lab.lmdj.workers.
 
 ## 状态
 
-<StatusBadge status="implemented" /> Formal Web Runtime Host `4.0.0` 已进入 Product Build `1.0.44.0` Assembly。Host 只依赖 Web Runtime Platform `4.0.0`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。`sample.import.begin.byte_length` 接受 manifest 约束内的完整选区 WAV，`sample.import.chunk` 继续把每个 sidecar 限制为 1 MiB。Diagnostic flow 继续覆盖 revision-bound `sample.quota`、Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。
+<StatusBadge status="implemented" /> Formal Web Runtime Host `4.1.0` 已进入 Product Build `1.0.45.0` Assembly。Host 只依赖 Web Runtime Platform `4.1.0`，不直接依赖 Facade、Audio Runtime 或 Project I/O；私有协议仍为 `1`。`sample.import.begin.byte_length` 接受 manifest 约束内的完整选区 WAV，`sample.import.chunk` 继续把每个 sidecar 限制为 1 MiB。Diagnostic flow 继续覆盖 revision-bound `sample.quota`、Sequence status、frame-stamped recording、next-Bar acknowledgement、跨窗口 observer/busy 与 owner-loss recovery。
 Formal Web Runtime Host `1.2.10` 已进入 Product Build `1.0.24.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.3.1`。
 
 ControlBridge 先于 audio readiness 发布；Host 只转发 Runtime Session authority state。它不解析 Project/bundle/journal、不执行 quantization/fingerprint，也没有 JavaScript fallback sequencer。

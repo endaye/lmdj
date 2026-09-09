@@ -47,15 +47,35 @@ SPDX 允许清单与署名要求，以及四项 Host 容量上限——单个清
 
 Application Facade 暴露 `soundset.catalog.list`、`soundset.inspect`、
 `soundset.map.preview`、`soundset.install` 与 `soundset.audition`。前四个在五个 Host
-上都**已注册**；**`soundset.audition` 目前只由三个原生 Host 服务**，Web Host 的 bridge
-与 protocol 尚未注册它，Creator 也还没有试听控制，两者都是已记录的后续工作。Host 只传递
-字节与展示 typed result，Core 保留全部 Contract、哈希与准入判定。Schema conformance、
-Set Store 单元测试、Facade 写集测试与 Creator surface 测试固定该边界。
+上都**已注册**；`soundset.audition` 现在在五个 Host 上都已注册——Web Host 的 bridge 与
+protocol 由 [#999](https://github.com/endaye/lmdj/pull/999) 补齐，Creator 的两个试听控件
+（set 级 demo 与每个已占用槽）与停止控件由
+[#1023](https://github.com/endaye/lmdj/pull/1023) 补齐。Host 只传递字节与展示 typed
+result，Core 保留全部 Contract、哈希与准入判定。Schema conformance、Set Store 单元测试、
+Facade 写集测试与 Creator surface 测试固定该边界。
+
+**注册不等于发声。** Web Host 把 Facade 交回的已重采样 PCM 发布进引擎保留的双槽 audition
+池并起声（[#1001](https://github.com/endaye/lmdj/pull/1001)、
+[#1003](https://github.com/endaye/lmdj/pull/1003)、
+[#1009](https://github.com/endaye/lmdj/pull/1009)）；原生 Host 的播放接线仍未完成，
+[#799](https://github.com/endaye/lmdj/issues/799) 追踪它。
+
+Web 侧的自动化验收现在走到了一半，这一半的界线值得写清楚：
+[#1059](https://github.com/endaye/lmdj/pull/1059) 起，`soundset.audition` 的回包带
+`played`，说明这一次试听是否真的起了声；真实浏览器里有一条腿观察这个回包，并钉住
+「会话刚起、音频未激活时 `played` 必须为 `false`」。也就是说，**有自动化检查观察到一次
+Web 试听没有发声，但没有任何自动化检查观察到一次 Web 试听发出了声音。** 驱动可发声的
+那一半时，Host 会在一秒内终止（`played: true` 之后 transport 即断），这是
+[#799](https://github.com/endaye/lmdj/issues/799) 记录的字节通路缺陷，不是 `played`
+这个字段的问题。不要把"操作已注册"读成"已听到"，也不要把 Creator lane 的绿读成试听
+这条腿已经闭合。
 
 **已注册不等于产品内可达。** Task 7 的验收在真实浏览器中对打包后的 Creator 实测出三个
-缺陷，各自阻断链路上的一段；其中两个已修复，[#900](https://github.com/endaye/lmdj/issues/900)
-仍使本 Build 产出的任何 Project 都无法导入浏览器，因此当前 Build 的 Web Host 仍无法浏览
-或安装任何 Sound Set。[#901](https://github.com/endaye/lmdj/issues/901) 的
+缺陷，各自阻断链路上的一段；三个都已修复。[#900](https://github.com/endaye/lmdj/issues/900)
+曾使本 Build 产出的任何 Project 都无法导入浏览器——浏览器侧 Bundle reader 的枚举停在
+`1.1.0` / `lmdj.project.v3`，而导入 Bundle 是浏览器获得 Project 的唯一途径；修复见
+`f1293997`。六腿浏览器 journey 自
+[#978](https://github.com/endaye/lmdj/pull/978)（`b5d8ca93`）起无援转绿。[#901](https://github.com/endaye/lmdj/issues/901) 的
 `connect-src 'self'` 曾拦截一切跨源 Catalog，而真实 Catalog 必然跨源：现在 Creator 通过
 同源前缀 `/soundset-catalog/` 取用 Catalog，由 Host 转发，该指令不再需要写入任何外部
 origin。它保护的不是 Creator 自己那两个同源 fetch，而是 OPFS 中 Project 与音频的外泄
