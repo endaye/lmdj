@@ -200,6 +200,19 @@ state addenda and older-canary promotion presentation remain later T4 work.
 
 ## Acceptance ledger
 
+The [approved baseline adoption Task](2026-09-09-lmdj-canary-baseline-adoption.md)
+adds the manual `adopt-version-baseline` operation to the existing authenticated
+planning entry. It records the reviewed exact baseline and complete approval/Host
+manifest bytes in the planning Journal, changing version-accounted progress only.
+Same-receipt recovery is idempotent; test/site/formal progress and scheduler
+failures/debt are untouched. Live reserved storage and actual adoption remain
+unaccepted. Historical successful targets older than this baseline still need
+separate reconciliation before automatic discovery can be enabled; no scheduler
+reset or synthetic site receipt is introduced.
+Local planning coverage passes 107 tests; complete CI-contract discovery executes
+2,213 tests with one unrelated inherited ledger failure tracked in
+[Issue #1078](https://github.com/endaye/lmdj/issues/1078). This is not full-CI green.
+
 The [result discovery integration Task](2026-09-09-lmdj-canary-result-discovery.md)
 connects bounded automatic/manual discovery to the existing planning entry,
 prioritizing unfinished recovery and retaining complete observations as receipts.

@@ -1,0 +1,19 @@
+{
+  "schema": "lmdj.canary-first-version-baseline.v1",
+  "repository": "endaye/lmdj",
+  "revision": "a81faad3b85d362e3e44541cd28ee21dac6848a4",
+  "decision_ref": "https://github.com/endaye/lmdj/pull/1071",
+  "historical_changelog": "preserve-no-backfill",
+  "hosts": [
+    {
+      "module": "creator-web",
+      "path": "apps/creator-web/module.json",
+      "version": "4.1.0"
+    },
+    {
+      "module": "web-runtime-host",
+      "path": "apps/web-runtime-host/module.json",
+      "version": "4.1.0"
+    }
+  ]
+}
