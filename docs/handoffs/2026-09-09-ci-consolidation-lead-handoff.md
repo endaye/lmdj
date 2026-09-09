@@ -29,6 +29,50 @@ Coordinator goal, verbatim from the owner:
 > owner 拍板。禁止任何 release、deploy、journal reset、readiness 开关、增加
 > hosted 花费。
 
+## 1a. Immediate next actions for the incoming lead (in order)
+
+1. Bind: `orca orchestration run-use --run run_71c2492cd783 --json`, then
+   `orca orchestration inbox --json` and
+   `orca orchestration check --wait --types worker_done,escalation,question --timeout-ms 570000 --json`.
+   Five unread messages exist; the two pending `question`s from P2.2b
+   (`ask` on PR #1100 at `cceba90b`) were already answered "hold" by Claude
+   and are superseded by the worker's newer push; treat any new `ask` as live.
+2. P2.2 (PR #1100, dispatch `ctx_a1fcf060ffb4`, worktree
+   `.../fix-remove-pre-heavy-gate`): the remote head is now `71ddb7de`
+   (worker rebased and pushed after the hold). Independent review of
+   `cceba90b` found no must-fix; required follow-ups were sent (stale prose at
+   `ci_workflow_topology_test.py` ~697 and `.github/scripts/retire_clean_review_threads.py:5`;
+   PR body must declare the earlier-start scheduling effect and the now
+   constant-false `check_documentation_impact`). When the worker asks:
+   (a) `git -C <wt> status --short` clean and HEAD == PR head;
+   (b) run `python3 tests/build/ci_workflow_topology_test.py`,
+   `ci_runner_fallback_test.py`, `ci_hosted_runner_policy_test.py`, and the
+   full `ci_*` discovery with `LMDJ_ACTIONLINT` (expect 0 failures / 0 errors
+   on a head rebased past `9d4bf083`); (c) have an independent read-only agent
+   diff `cceba90b..<head>` and confirm the follow-ups; (d) post the takeover
+   record on #1100 citing run 34371885127 as failed; (e) merge with
+   `--squash --match-head-commit`; (f) `worker-release --dispatch ctx_a1fcf060ffb4`.
+3. P2.1 (PR #1103, dispatch `ctx_5e43ec6ab4f6`, worktree
+   `.../fix-retire-merge-queue-gates`): head `9ed5a23b` reviewed, no must-fix;
+   the worker is landing one follow-up commit (delete the now-dead
+   `scripts/ci/github_queue_api.py` and update its two prose references;
+   restore the `pr_gate` negative guards in `ci_pr_review_workflow_test.py:209`
+   and `ci_benchmark_workflow_test.py:51,127`; drop the duplicate test in
+   `ci_hosted_runner_policy_test.py:100`; fix stale "PR Gate" comments; correct
+   the PR body). Same acceptance sequence as step 2; the automated run
+   34373918902 on `9ed5a23b` failed. Whichever of #1100/#1103 merges second
+   must rebase and rerun the full discovery before merge (both touch
+   `ci_scope_policy_consumer_parity_test.py`).
+4. Merge order matters: #1103 deletes `ci_merge_queue_workflow_test.py`, which
+   asserted `ACTIONLINT_VERSION: 1.7.12`; that fact is still asserted by
+   `ci_runner_fallback_test.py:304`, so nothing is lost.
+5. After both merge: update the umbrella #1089 checklist (P2.1, P2.2), close
+   nothing else automatically, and dispatch the next wave from §5
+   (recommended: P2.4 stale prose, P3.1, P3.2, P4.1, P5.1 with the plan row
+   corrected to name the controller's real HTTP module, and P1.2b).
+6. Owner decisions D1 to D4 are still pending; ask the owner once, then record
+   the outcomes in the plan via a `docs/` Task.
+
 ## 2. Take the lead (commands)
 
 ```bash
@@ -78,7 +122,7 @@ Rules the previous coordinator learned the hard way (all observed today):
 
 ## 3. State at last update
 
-Last updated: 2026-09-10 00:25 (2026-09-09 16:25 UTC) by Claude.
+Last updated: 2026-09-10 00:45 (2026-09-09 16:45 UTC) by Claude. **Handoff executed at this time: the owner invoked the 90 percent trigger. Claude stopped dispatching; the Codex lead takes over from here.**
 
 ### Merged
 
@@ -93,7 +137,7 @@ Last updated: 2026-09-10 00:25 (2026-09-09 16:25 UTC) by Claude.
 
 | PR | Task | Head | State | Next step |
 | --- | --- | --- | --- | --- |
-| #1100 | P2.2 remove pre-heavy-gate | `cceba90b` (base `c628f213`), rebase pending | independent review done on `cceba90b`: no must-fix; declare the earlier-start scheduling effect in the PR body; two stale-prose nits | HOLD until the worker pushes the rebased head with the nits folded in and a 0/0 full discovery; then coordinator re-checks the delta, posts the takeover record, merges |
+| #1100 | P2.2 remove pre-heavy-gate | `71ddb7de` pushed 16:40 UTC (was `cceba90b`, base `c628f213`); not yet re-verified | independent review done on `cceba90b`: no must-fix; declare the earlier-start scheduling effect in the PR body; two stale-prose nits | HOLD until the worker pushes the rebased head with the nits folded in and a 0/0 full discovery; then coordinator re-checks the delta, posts the takeover record, merges |
 | #1103 | P2.1 retire merge-queue/pr_gate | `9ed5a23b` (base `9d4bf083`) | independent review done: no must-fix; `scripts/ci/github_queue_api.py` has no live importer and must be deleted too; restore dropped `pr_gate` negative guards in two live-workflow tests; remove one duplicate test; stale "PR Gate" comments | HOLD until the worker's follow-up commit; then delta re-check, takeover record, merge. Plan row P5.1 names `github_queue_api.py`; correct it in the next plan docs Task (the controller's HTTP lives elsewhere) |
 | #1098 | this handoff | living | n/a | merge at handoff or a stable milestone |
 
