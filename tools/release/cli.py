@@ -57,6 +57,7 @@ from tools.release.transitions import (  # noqa: E402
     publish_draft,
     push_tag,
     verify_draft,
+    verify_published,
 )
 
 
@@ -74,6 +75,10 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     verified.add_argument("tag")
     verified.add_argument("release_id", type=int)
     verified.add_argument("plan_sha256")
+    published_verified = commands.add_parser("verify-published")
+    published_verified.add_argument("tag")
+    published_verified.add_argument("release_id", type=int)
+    published_verified.add_argument("plan_sha256")
     published = commands.add_parser("publish-draft")
     published.add_argument("tag")
     published.add_argument("release_id", type=int)
@@ -278,6 +283,11 @@ def main(argv: list[str] | None = None) -> int:
             _print_release_result(result)
         elif options.command == "verify-draft":
             result = verify_draft(
+                options.tag, options.release_id, options.plan_sha256, context,
+            )
+            _print_release_result(result)
+        elif options.command == "verify-published":
+            result = verify_published(
                 options.tag, options.release_id, options.plan_sha256, context,
             )
             _print_release_result(result)

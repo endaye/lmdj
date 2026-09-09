@@ -55,6 +55,7 @@ from tools.release.transitions import (  # noqa: E402
     publish_draft,
     push_tag,
     verify_draft,
+    verify_published,
 )
 from tools.release import cli  # noqa: E402
 
@@ -433,6 +434,78 @@ class ReleaseTransitionsTest(unittest.TestCase):
     def _push_and_create(self):
         push_tag(self.tag, self.context())
         return create_draft(self.tag, self.context())
+
+    def _published_fixture(self):
+        created = self._push_and_create()
+        assert self.github.release is not None
+        self.github.release = GitHubRelease(**{
+            **self.github.release.__dict__,
+            "draft": False,
+            "html_url": _published_html_url(self.tag),
+        })
+        return created
+
+    def test_verify_published_accepts_a_published_release(self) -> None:
+        created = self._published_fixture()
+        assert created.release_id is not None
+        result = verify_published(
+            self.tag, created.release_id, created.plan_sha256, self.context(),
+        )
+        self.assertEqual(result.status, "published")
+        self.assertGreaterEqual(self.github.release_reads, 1)
+
+    def test_verify_published_rejects_a_still_draft_release(self) -> None:
+        created = self._push_and_create()
+        assert created.release_id is not None
+        with self.assertRaisesRegex(TransitionError, r"why:.*Draft.*remedy:"):
+            verify_published(
+                self.tag, created.release_id, created.plan_sha256, self.context(),
+            )
+
+    def test_verify_published_rejects_wrong_prerelease(self) -> None:
+        created = self._published_fixture()
+        assert created.release_id is not None and self.github.release is not None
+        self.github.release = GitHubRelease(**{
+            **self.github.release.__dict__, "prerelease": False,
+        })
+        with self.assertRaisesRegex(TransitionError, r"prerelease.*Channel policy"):
+            verify_published(
+                self.tag, created.release_id, created.plan_sha256, self.context(),
+            )
+
+    def test_verify_published_rejects_a_renamed_asset(self) -> None:
+        created = self._published_fixture()
+        assert created.release_id is not None and self.github.release is not None
+        original = self.github.release.assets[0]
+        renamed = GitHubAsset(**{**original.__dict__, "name": "renamed-asset.zip"})
+        self.github.release = GitHubRelease(**{
+            **self.github.release.__dict__, "assets": (renamed,) + self.github.release.assets[1:],
+        })
+        with self.assertRaisesRegex(TransitionError, r"why:.*immutable release plan.*remedy:"):
+            verify_published(
+                self.tag, created.release_id, created.plan_sha256, self.context(),
+            )
+
+    def test_verify_published_rejects_an_asset_digest_mismatch(self) -> None:
+        created = self._published_fixture()
+        assert created.release_id is not None and self.github.release is not None
+        original = self.github.release.assets[0]
+        self.github.payloads[original.id] = b"bad"
+        with self.assertRaisesRegex(TransitionError, r"why:.*immutable release plan.*remedy:"):
+            verify_published(
+                self.tag, created.release_id, created.plan_sha256, self.context(),
+            )
+
+    def test_verify_published_rejects_a_moved_signed_tag(self) -> None:
+        created = self._published_fixture()
+        assert created.release_id is not None
+        self.git.remote = LocalTag(
+            "c" * 40, "c" * 40, self.policy.product_fingerprint,
+        )
+        with self.assertRaisesRegex(TransitionError, r"why:.*remedy:.*signed tag"):
+            verify_published(
+                self.tag, created.release_id, created.plan_sha256, self.context(),
+            )
 
     def test_noncanonical_origin_is_rejected_before_exact_tag_mutation(self) -> None:
         repository = self.root / "origin-guard"
@@ -1618,6 +1691,8 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertEqual(cli.parse_arguments(root + ["create-draft", self.tag]).command, "create-draft")
         verified = cli.parse_arguments(root + ["verify-draft", self.tag, "17", "a" * 64])
         self.assertEqual((verified.release_id, verified.plan_sha256), (17, "a" * 64))
+        published_verified = cli.parse_arguments(root + ["verify-published", self.tag, "17", "a" * 64])
+        self.assertEqual((published_verified.release_id, published_verified.plan_sha256), (17, "a" * 64))
         published = cli.parse_arguments(root + ["publish-draft", self.tag, "17", "a" * 64])
         self.assertEqual((published.release_id, published.plan_sha256), (17, "a" * 64))
         rehearsed = cli.parse_arguments(root + ["rehearsal", "cleanup", "release-rehearsal/20260813T091011Z-012345abcdef"])

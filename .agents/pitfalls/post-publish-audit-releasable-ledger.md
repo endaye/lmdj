@@ -6,7 +6,7 @@ recurrences:
   - date: 2026-09-06
     occurrence: https://github.com/endaye/lmdj/actions/runs/34017371873
     observed_by: grok-4.6
-exit: skill:.agents/skills/lmdj-release/SKILL.md
+exit: gate:tests/build/release_transitions_test.py
 ---
 
 # The in-workflow post-publish remote audit reads canonical `main`'s still-`releasable` ledger against a GitHub Release that `publish-draft` has already published, so `publish-release.yml` exits non-zero after a genuine publication.

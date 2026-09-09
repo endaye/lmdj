@@ -65,7 +65,8 @@ command is the exact read-only audit.
 Choose the single candidate from `scripts/release.sh prepare TAG`,
 `scripts/release.sh push-tag TAG`, or `scripts/release.sh create-draft TAG`.
 Use `scripts/release.sh verify-draft TAG RELEASE_ID PLAN_SHA256` only for
-read-only Draft verification. The audit before and after a mutation is
+read-only Draft verification. Use `scripts/release.sh verify-published TAG
+RELEASE_ID PLAN_SHA256` for the read-only post-publication Release check. The audit before and after a mutation is
 `scripts/release.sh audit --remote --tag TAG`.
 
 On a fresh clone or a fresh runner workspace, run `scripts/release.sh hydrate`
@@ -134,13 +135,10 @@ inputs `tag`, `release_id`, and `plan_sha256`. Do not approve the protected
 Deployment and Channel promotion separate; report only independently verified
 status and never infer either from Release publication.
 
-If `publish-release.yml` exits non-zero after the `publish-draft` step printed
-`release status: published`, read the live Release by numeric ID before
-concluding publication failed. Canonical `audit --remote` loads the still-
-`releasable` ledger from protected `main`, so
-`non-published intent identifies an already published GitHub Release` is the
-expected post-PATCH finding until a docs Pull Request records
-`disposition: published`. Do not retry the workflow. See
+If `publish-release.yml` exits non-zero for a reason other than its final
+`verify-published` check, read the live Release by numeric ID before
+concluding publication failed. Do not retry until the reported failure is
+understood; see
 [`post-publish-audit-releasable-ledger`](../../pitfalls/post-publish-audit-releasable-ledger.md).
 
 ## Pitfalls
@@ -167,10 +165,10 @@ contract is [`docs/governance/pitfall-ledger.md`](../../../docs/governance/pitfa
   Allocation needs no intent. Bind the intent only after the exact
   protected-main squash SHA exists; a pre-squash or branch SHA is not a
   protected-main ancestor and fails closed.
-- Before treating a red `publish-release.yml` job as an unpublished Release —
+- When diagnosing a failed `publish-release.yml` job —
   [`post-publish-audit-releasable-ledger`](../../pitfalls/post-publish-audit-releasable-ledger.md).
-  After `publish-draft` succeeds, the in-workflow `audit --remote` still reads
-  canonical `main`'s `releasable` row. Read the live Release; do not retry.
+  Read the live Release by numeric ID and compare it with the immutable plan
+  before concluding publication failed or retrying.
 - Before treating a failed Creator deploy as a failed signed-archive verify —
   [`manifest-role-validator-sync`](../../pitfalls/manifest-role-validator-sync.md).
   Prior identity discovery must accept the live Host's inventory. Creator 3.x
