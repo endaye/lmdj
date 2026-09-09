@@ -709,15 +709,14 @@ void stop_slot_targets_one_pad_and_stop_all_clears_latched_voices() {
   LMDJ_CHECK(states.at(5).state == RuntimeVoiceState::stopped);
 }
 
-void voice_state_overflow_raises_the_existing_fail_closed_signal() {
-  RealtimeEngine engine;
+void check_voice_state_overflow(RealtimeEngine& engine, std::size_t capacity) {
   const std::array<float, 1> sample{0.1F};
   LMDJ_CHECK(engine.load_sample(0, sample).has_value());
   LMDJ_CHECK(engine.start().has_value());
   std::array<float, 1> left{};
   std::array<float, 1> right{};
   for (std::uint64_t sequence = 1;
-       sequence <= lmdj::audio::kRealtimeVoiceStateCapacity / 2;
+       sequence <= capacity / 2;
        ++sequence) {
     LMDJ_CHECK(engine.enqueue(TriggerEvent{sequence, 0, 127}) ==
                EnqueueResult::accepted);
@@ -733,19 +732,19 @@ void voice_state_overflow_raises_the_existing_fail_closed_signal() {
   LMDJ_CHECK(
       states.state == lmdj::audio::RuntimeVoiceStateStreamState::corrupted);
   LMDJ_CHECK(
-      states.published_voice_states == lmdj::audio::kRealtimeVoiceStateCapacity);
+      states.published_voice_states == capacity);
   LMDJ_CHECK(states.drained_voice_states == 0);
   LMDJ_CHECK(states.voice_state_drops == 1);
   const auto outcomes = engine.trigger_outcome_telemetry();
   LMDJ_CHECK(
       outcomes.published_outcomes ==
-      lmdj::audio::kRealtimeVoiceStateCapacity / 2);
+      capacity / 2);
   LMDJ_CHECK(
       outcomes.drained_outcomes ==
-      lmdj::audio::kRealtimeVoiceStateCapacity / 2);
+      capacity / 2);
   LMDJ_CHECK(outcomes.runtime_outcome_drops == 0);
   LMDJ_CHECK(engine.telemetry().started_voices ==
-             lmdj::audio::kRealtimeVoiceStateCapacity / 2);
+             capacity / 2);
   LMDJ_CHECK(engine.telemetry().voice_drops == 1);
 
   std::array<RuntimeVoiceStateEvent, 1> first{};
@@ -759,6 +758,15 @@ void voice_state_overflow_raises_the_existing_fail_closed_signal() {
   LMDJ_CHECK(reset.drained_voice_states == 0);
   LMDJ_CHECK(reset.voice_state_drops == 0);
   LMDJ_CHECK(engine.drain_voice_states(first) == 0);
+}
+
+void voice_state_overflow_raises_the_existing_fail_closed_signal() {
+  RealtimeEngine engine;
+  check_voice_state_overflow(engine, lmdj::audio::kRealtimeVoiceStateCapacity);
+  RealtimeEngine bounded(RealtimeEngine::ReceiptBoundedVoiceStates{});
+  // Deliberately violate the opt-in caller's receipt/drain obligation. A smaller
+  // profile still corrupts/refuses rather than dropping history silently.
+  check_voice_state_overflow(bounded, lmdj::audio::kRealtimeReceiptVoiceStateCapacity);
 }
 
 void plays_a_sample_and_reports_render_telemetry() {

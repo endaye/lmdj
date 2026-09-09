@@ -95,7 +95,8 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
     const auto& footprint = inspected.value();
     RuntimeBudget budget;
     budget.fixed_bytes = sizeof(RuntimeFacade) + sizeof(Impl) +
-                         sizeof(audio::RealtimeEngine);
+                         sizeof(audio::RealtimeEngine) +
+                         audio::RealtimeEngine::receipt_bounded_voice_state_storage_bytes();
     budget.encoded_bytes = footprint.encoded_bytes;
     budget.pcm_bytes = footprint.pcm_bytes;
     budget.prepared_float_bytes = footprint.prepared_float_bytes;
@@ -151,7 +152,8 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
     }
     auto pattern = audio::PreparedPatternView::from_canonical_snapshot(*snapshot);
     if (!pattern.has_value()) return RuntimeResult::preparation_failed;
-    auto engine = std::make_unique<audio::RealtimeEngine>();
+    auto engine = std::make_unique<audio::RealtimeEngine>(
+        audio::RealtimeEngine::ReceiptBoundedVoiceStates{});
     if (engine->publish_sample_bank(std::move(bank)) != audio::PublishResult::accepted ||
         engine->publish_pattern_view(std::move(pattern.value())).result !=
             audio::PatternPublishResult::accepted) {
@@ -226,6 +228,9 @@ RuntimeResult RuntimeFacade::submit(const RuntimeCommand& command) noexcept {
 
 std::size_t RuntimeFacade::poll(std::span<RuntimeReceipt> receipts) noexcept {
   auto& self = *impl_;
+  // Capacity proof: acquire completed render before draining its state edges;
+  // retire pending slots only afterward. Moving this load after drain could
+  // acknowledge a start whose edge is still queued and invalidate 2*N + Voices.
   const auto consumed = self.consumed.load(std::memory_order_acquire);
   self.drain_events();
   std::size_t count = 0;

@@ -21,14 +21,14 @@ RuntimeConfig config() {
   return {{65'536, 32'768, 16'384, 64, 1024},
           16'777'216, 65'536, 128, 10'000, 10'000};
 }
-cooker::EncodedRuntimeContent content() {
+cooker::EncodedRuntimeContent content(std::uint32_t frames = 4096) {
   auto pcm = std::make_shared<const cooker::PcmSample>(
-      cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(4096, 16384)});
+      cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(frames, 16384)});
   cooker::RuntimeSnapshot snapshot{
       foundation::ProjectId{"00000000-0000-4000-8000-000000000001"},
       foundation::PatternId{"00000000-0000-4000-8000-000000000002"},
       1, 120, 1, 960, 3840,
-      {{{0, 0}, {}, pcm, {0, 4096, domain::TriggerMode::one_shot, 1.0F, false}}}, {}};
+      {{{0, 0}, {}, pcm, {0, frames, domain::TriggerMode::one_shot, 1.0F, false}}}, {}};
   auto result = cooker::encode_runtime_content(snapshot, config().content_limits);
   LMDJ_CHECK(result.has_value());
   return std::move(result.value());
@@ -148,10 +148,82 @@ void lifecycle_stress() {
   LMDJ_CHECK(std::all_of(left.begin(), left.end(), [](float v) { return v == 0; }));
   LMDJ_CHECK(std::all_of(right.begin(), right.end(), [](float v) { return v == 0; }));
 }
+
+void max_pending_partial_poll_races_render() {
+  constexpr std::uint32_t commands = 32'768;
+  auto limits = config();
+  limits.maximum_pending_commands = 1024;
+  limits.maximum_sequence = commands;
+  const auto bytes = content(4);
+  RuntimeFacade runtime(limits);
+  LMDJ_CHECK(runtime.load(bytes.bytes, bytes.identity) == RuntimeResult::ok);
+  RuntimeEpoch epoch;
+  LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
+  std::uint32_t submitted = 0;
+  for (; submitted < 1024; ++submitted) {
+    LMDJ_CHECK(runtime.submit({epoch, submitted + 1}) == RuntimeResult::accepted);
+  }
+  LMDJ_CHECK(runtime.submit({epoch, submitted + 1}) == RuntimeResult::queue_full);
+  // One full quantum deterministically gives 128 starts and 896 refusals.
+  // Consumption alone must not release any of the 1024 pending receipt slots.
+  std::array<float, 4> initial_left{}, initial_right{};
+  runtime.render(initial_left.data(), initial_right.data(), initial_left.size());
+  LMDJ_CHECK(runtime.submit({epoch, submitted + 1}) == RuntimeResult::queue_full);
+  std::atomic<bool> done{};
+  std::atomic<std::uint32_t> calls{};
+  std::thread callback([&] {
+    std::array<float, 4> left{}, right{};
+    while (!done.load(std::memory_order_acquire)) {
+      runtime.render(left.data(), right.data(), left.size());
+      calls.fetch_add(1, std::memory_order_release);
+      std::this_thread::yield();
+    }
+  });
+  std::uint32_t retired = 0, started = 0, refused = 0;
+  std::size_t turn = 0;
+  std::array<RuntimeReceipt, 31> receipts;
+  while (retired < commands) {
+    while (submitted < commands) {
+      const auto result = runtime.submit({epoch, submitted + 1});
+      if (result == RuntimeResult::queue_full) break;
+      LMDJ_CHECK(result == RuntimeResult::accepted);
+      ++submitted;
+    }
+    // Empty polls drain events but retire no commands. Odd partial spans
+    // repeatedly wrap pending storage while render publishes more edges.
+    const auto length = (++turn % 4 == 0) ? 0 : (turn % 2 == 0 ? 1 : receipts.size());
+    const auto count = runtime.poll(std::span(receipts).first(length));
+    for (std::size_t index = 0; index < count; ++index) {
+      const auto& receipt = receipts[index];
+      LMDJ_CHECK(receipt.epoch == epoch && receipt.sequence == retired + 1);
+      LMDJ_CHECK(receipt.outcome == RuntimeCommandOutcome::voice_started ||
+                 receipt.outcome == RuntimeCommandOutcome::voice_capacity);
+      started += receipt.outcome == RuntimeCommandOutcome::voice_started;
+      refused += receipt.outcome == RuntimeCommandOutcome::voice_capacity;
+      ++retired;
+    }
+    std::this_thread::yield();
+  }
+  done.store(true, std::memory_order_release);
+  callback.join();
+  LMDJ_CHECK(calls.load() > 0);
+  LMDJ_CHECK(submitted == commands && started + refused == commands);
+  LMDJ_CHECK(started >= 128 && refused >= 896);
+  LMDJ_CHECK(runtime.poll(receipts) == 0);
+  runtime.stop();
+  LMDJ_CHECK(runtime.unload() == RuntimeResult::ok);
+  initial_left.fill(1); initial_right.fill(1);
+  runtime.render(initial_left.data(), initial_right.data(), initial_left.size());
+  LMDJ_CHECK(std::all_of(initial_left.begin(), initial_left.end(), [](float v) { return v == 0; }));
+  LMDJ_CHECK(std::all_of(initial_right.begin(), initial_right.end(), [](float v) { return v == 0; }));
+}
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc == 2 && std::string_view(argv[1]) == "--stress") lifecycle_stress();
+  if (argc == 2 && std::string_view(argv[1]) == "--stress") {
+    max_pending_partial_poll_races_render();
+    lifecycle_stress();
+  }
   else {
     LMDJ_CHECK(argc == 1);
 #if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
