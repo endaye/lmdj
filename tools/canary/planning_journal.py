@@ -69,6 +69,12 @@ def validate_baseline_receipt(value):
     return deepcopy(value)
 
 
+def initial_baseline_progress(receipt):
+    receipt = validate_baseline_receipt(receipt)
+    return r.seal({**r.initial_progress('endaye/lmdj'), 'version_accounted': {
+        'revision': receipt['approval']['revision'], 'receipt_digest': receipt['digest']}})
+
+
 def source_id(value):
     return r.identifier(value)
 
@@ -95,7 +101,7 @@ def validate_intent(value):
         'planning intent scheduler storage identity differs')
     r.require(type(value['target_rank']) is int and value['target_rank'] > 0,
               'planning target rank is not a positive first-parent position')
-    r.require(value['decision_action'] in ('plan', 'ignore'), 'unknown planning decision action')
+    r.require(value['decision_action'] in ('plan', 'ignore', 'historical'), 'unknown planning decision action')
     r.verify_seal(value)
     r.require(len(r.canonical(value)) <= codec.MAX_EVENT_BYTES - 1024,
               'planning intent exceeds the small pre-chunk record budget')
@@ -105,7 +111,10 @@ def validate_intent(value):
 def validate_decision(intent, value):
     """Check retained decision identity; Git/verdict provenance belongs to entry."""
     intent = validate_intent(intent)
-    r.require(isinstance(value, dict) and set(value) == {'action', 'source_role', 'source', 'plan'}
+    keys = {'action', 'source_role', 'source', 'plan'}
+    if intent['decision_action'] == 'historical':
+        keys |= {'baseline_receipt'}
+    r.require(isinstance(value, dict) and set(value) == keys
               and value['action'] == intent['decision_action'] and value['source_role'] == 'wakeup-only',
               'planning decision is not a closed wakeup-only result')
     source = value['source']
@@ -134,8 +143,14 @@ def validate_decision(intent, value):
         # retained verdict with zero selected suites (its real digest).
         r.exact_digest(source['evidence_digest'])
     eligible = source['status'] == 'passed' and source['request_kind'] in ('auto', 'bootstrap')
-    r.require((value['action'] == 'plan') == eligible, 'planning action contradicts source eligibility')
-    if eligible:
+    if value['action'] == 'historical':
+        r.require(eligible and intent['progress'] == initial_baseline_progress(value['baseline_receipt'])
+                  and source['target_sha'] != value['baseline_receipt']['approval']['revision'],
+                  'historical wakeup lacks the initial adopted baseline or names the baseline itself',
+                  'retain the authenticated adoption receipt and null delivery progress; do not discard later work')
+    else:
+        r.require((value['action'] == 'plan') == eligible, 'planning action contradicts source eligibility')
+    if value['action'] == 'plan':
         plan = value['plan']
         r.require(isinstance(plan, dict) and set(plan) == {
             'schema', 'purpose', 'admission_evidence', 'request_id', 'repository', 'channel',
@@ -153,7 +168,7 @@ def validate_decision(intent, value):
                   'retained plan differs from frozen input or claims admission')
         r.verify_seal(plan)
     else:
-        r.require(value['plan'] is None, 'ignored source contains a plan')
+        r.require(value['plan'] is None, 'non-planning source contains a plan')
     r.require(r.digest(source) == intent['source_digest'] and r.digest(value) == intent['decision_digest'],
               'planning source or complete decision differs from frozen intent')
     return deepcopy(value)
@@ -170,6 +185,8 @@ def _slot(state, intent):
                   'one target has inconsistent first-parent ranks')
     if intent['decision_action'] == 'ignore':
         return 'ignored'
+    if intent['decision_action'] == 'historical':
+        return 'historical'
     if state['active'] is None:
         return 'active'
     newest = max(state['observations'][key]['intent']['target_rank']
@@ -213,6 +230,11 @@ def reduce(state, event):
         key = intent['source_request_id']
         r.require(key not in state['observations'] and intent['progress'] == state['progress'],
                   'planning intent replaces an observation or changes independent progress')
+        if intent['decision_action'] == 'historical':
+            r.require(state['baseline_receipt'] is not None
+                      and intent['progress'] == initial_baseline_progress(state['baseline_receipt']),
+                      'historical intent lacks the journal adopted baseline',
+                      'retain original adoption history; caller progress is not adoption authority')
         r.require(data['slot'] == _slot(state, intent), 'planning intent slot contradicts pinned target ordering')
         answer['observations'][key] = {'intent': intent, 'slot': data['slot'], 'blob': None, 'decision': None}
         answer['unfinished'] = key
@@ -238,6 +260,10 @@ def reduce(state, event):
         r.require(row['blob'] == data['decision'], 'planning completion changed its stored payload')
         decision = codec._blob(state, data['decision'])
         validate_decision(row['intent'], decision)
+        if decision['action'] == 'historical':
+            r.require(decision['baseline_receipt'] == state['baseline_receipt'],
+                      'historical decision changed the journal adopted receipt',
+                      'recover the original receipt and frozen decision bytes')
         row['decision'] = data['decision']
         if row['slot'] in ('active', 'pending'):
             answer[row['slot']] = key

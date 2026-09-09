@@ -206,9 +206,14 @@ planning entry. It records the reviewed exact baseline and complete approval/Hos
 manifest bytes in the planning Journal, changing version-accounted progress only.
 Same-receipt recovery is idempotent; test/site/formal progress and scheduler
 failures/debt are untouched. Live reserved storage and actual adoption remain
-unaccepted. Historical successful targets older than this baseline still need
-separate reconciliation before automatic discovery can be enabled; no scheduler
-reset or synthetic site receipt is introduced.
+unaccepted. The [historical-wakeup reconciliation Task](2026-09-09-lmdj-canary-historical-wakeups.md)
+adds durable non-planning observations for authenticated successful targets
+strictly before that adopted initial baseline. Complete source and adoption
+receipts survive replay without occupying active/pending or changing progress;
+subsequent planning retains the full initial site floor. The target equal to
+the baseline still plans normally. Source implementation is not live backlog
+reconciliation or automatic activation; no scheduler reset or synthetic site
+receipt is introduced.
 Local planning coverage passes 107 tests; complete CI-contract discovery executes
 2,213 tests with one unrelated inherited ledger failure tracked in
 [Issue #1078](https://github.com/endaye/lmdj/issues/1078). This is not full-CI green.

@@ -29,9 +29,9 @@ class PlanningJournalTests(unittest.TestCase):
     def fresh(self):
         return storage.Plans(self.memory.journal(), lambda: self.memory.lock, 'canary-planning-fixture')
 
-    def baseline_receipt(self):
+    def baseline_receipt(self, revision=None):
         approval = {'schema': 'lmdj.canary-first-version-baseline.v1', 'repository': 'endaye/lmdj',
-            'revision': self.fixture.base, 'decision_ref': 'https://github.com/endaye/lmdj/pull/1071',
+            'revision': revision or self.fixture.base, 'decision_ref': 'https://github.com/endaye/lmdj/pull/1071',
             'historical_changelog': 'preserve-no-backfill', 'hosts': [
                 {'module': module, 'path': f'apps/{module}/module.json', 'version': '4.1.0'}
                 for module in ('creator-web', 'web-runtime-host')]}
@@ -267,6 +267,65 @@ print(json.dumps({'pid': os.getpid(), 'state': state, 'comments': memory.comment
     def complete(self, intent, value):
         self.fresh().begin(intent)
         return self.fresh().finish(intent['source_request_id'], value)
+
+    def historical(self):
+        intent, original = self.decision()
+        baseline = self.fixture.change('docs/design/approved-fixture-baseline.md')
+        receipt = self.baseline_receipt(baseline)
+        self.fresh().bootstrap()
+        self.progress = self.fresh().adopt_version_baseline(receipt)
+        value = {**original, 'action': 'historical', 'plan': None, 'baseline_receipt': receipt}
+        intent = r.seal({**intent, 'main_sha': baseline, 'progress': self.progress,
+                         'decision_action': 'historical', 'decision_digest': r.digest(value)})
+        return intent, value
+
+    def test_historical_observation_cannot_take_or_replace_active_and_pending_slots(self):
+        intent, value = self.historical()
+        active, plan = self.decision(2)
+        self.complete(active, plan)
+        pending, plan = self.decision(3)
+        self.complete(pending, plan)
+        before = self.fresh().load()
+        result = self.complete(intent, value)
+        self.assertEqual(result['slot'], 'historical')
+        after = self.fresh().load()
+        for key in ('active', 'pending', 'progress', 'baseline_receipt'):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(self.restart_process(intent['source_request_id'])['row'], result)
+
+    def test_historical_decision_rejects_missing_changed_receipt_and_plan(self):
+        intent, value = self.historical()
+        mutations = [{**value, 'plan': {}}, {**value, 'extra': True},
+                     {key: item for key, item in value.items() if key != 'baseline_receipt'},
+                     {**value, 'baseline_receipt': {**value['baseline_receipt'], 'digest': 'a' * 64}}]
+        for changed in mutations:
+            frozen = r.seal({**intent, 'decision_digest': r.digest(changed)})
+            with self.subTest(changed=changed), self.assertRaises(r.CanaryError):
+                storage.validate_decision(frozen, changed)
+
+    def test_historical_decision_cannot_hide_ineligible_or_baseline_target(self):
+        intent, value = self.historical()
+        for update in ({'status': 'failed'}, {'request_kind': 'candidate'},
+                       {'target_sha': value['baseline_receipt']['approval']['revision']}):
+            changed = {**value, 'source': {**value['source'], **update}}
+            frozen = r.seal({**intent, 'source_digest': r.digest(changed['source']),
+                'decision_digest': r.digest(changed), 'target_sha': changed['source']['target_sha']})
+            with self.subTest(update=update), self.assertRaises(r.CanaryError):
+                storage.validate_decision(frozen, changed)
+
+    def test_historical_intent_cannot_import_adoption_authority(self):
+        intent, _ = self.historical()
+        state = self.fresh().load()
+        event = {'id': 'plan:2', 'epoch': state['epoch'], 'generation': state['generation'],
+                 'type': 'intent', 'data': {'intent': intent, 'slot': 'historical'}}
+        for receipt in (None, self.baseline_receipt()):
+            with self.subTest(receipt=receipt), self.assertRaises(r.CanaryError):
+                storage.reduce({**state, 'baseline_receipt': receipt}, event)
+        # Existing rank checks also protect historical records from aliasing a
+        # different revision or being assigned a different active/pending slot.
+        for slot in ('active', 'pending', 'ignored'):
+            with self.subTest(slot=slot), self.assertRaises(r.CanaryError):
+                storage.reduce(state, {**event, 'data': {'intent': intent, 'slot': slot}})
 
     def restart_process(self, source_request_id, decision=None):
         # Only serialized remote transport state crosses this boundary. The

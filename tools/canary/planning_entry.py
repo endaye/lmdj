@@ -72,10 +72,11 @@ def scheduler_state(runtime, config):
     return report_runtime.scheduler_state(reader)
 
 
-def decision_for(runtime, intent, scheduler):
+def decision_for(runtime, intent, scheduler, baseline=None):
     decision = planning.plan_after_result(runtime.root, scheduler=scheduler,
         source_request_id=intent['source_request_id'], main_sha=intent['main_sha'],
-        control_sha=intent['control_sha'], progress=intent['progress'], wakeup='recovery')
+        control_sha=intent['control_sha'], progress=intent['progress'], wakeup='recovery',
+        baseline_receipt=baseline)
     r.require(r.digest(decision['source']) == intent['source_digest']
               and r.digest(decision) == intent['decision_digest'],
               'original planning source or complete decision changed',
@@ -93,7 +94,7 @@ def rank(runtime, target, main):
 
 def answer(row):
     r.require(row['decision'] is not None, 'planning observation is not completely persisted')
-    return {'action': 'ignored' if row['decision']['action'] == 'ignore' else 'planned',
+    return {'action': {'ignore': 'ignored', 'plan': 'planned', 'historical': 'historical'}[row['decision']['action']],
             'admission_evidence': False, **deepcopy(row)}
 
 
@@ -220,7 +221,7 @@ def control(operation, config, request, *, root, environment, api=None):
         if row['decision'] is None:
             intent = row['intent']
             state = scheduler_state(runtime, intent['scheduler_storage'])
-            row = plans.finish(source_id, decision_for(runtime, intent, state))
+            row = plans.finish(source_id, decision_for(runtime, intent, state, plans.load()['baseline_receipt']))
         return answer(row)
     r.require(operation != 'recover', 'recovery has no original persisted intent',
               'observe the exact retained result once; recovery cannot invent a new plan')
@@ -231,7 +232,8 @@ def control(operation, config, request, *, root, environment, api=None):
     source_config = source_config if source_config is not None else source_storage(runtime)
     state = state if state is not None else scheduler_state(runtime, source_config)
     decision = planning.plan_after_result(runtime.root, scheduler=state, source_request_id=source_id,
-        main_sha=runtime.inputs.main, control_sha=runtime.control, progress=current['progress'])
+        main_sha=runtime.inputs.main, control_sha=runtime.control, progress=current['progress'],
+        baseline_receipt=current['baseline_receipt'])
     target = decision['source']['target_sha']
     target_rank = rank(runtime, target, runtime.inputs.main)
     # Counts alone are not ancestry. Every retained slot must still lie on the
