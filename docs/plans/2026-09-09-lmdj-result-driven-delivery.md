@@ -159,6 +159,15 @@ state addenda and older-canary promotion presentation remain later T4 work.
 
 ## Acceptance ledger
 
+The [durable planning coordinator](2026-09-09-lmdj-canary-plan-coordinator.md)
+connects the authenticated scheduler reader and a dedicated planning Journal to
+a manual Actions entry. Explicit bootstrap precedes observation; a small durable
+intent freezes complete input identities before chunk storage, and recovery
+preserves original decision bytes. One active plan stays pinned while newer
+results coalesce pending. This does not execute assessments, retire active work,
+advance version/site progress or enable automatic delivery. Live reserved storage
+setup, automatic result wiring and downstream completion still require acceptance.
+
 The [shared-client API observation Task](2026-09-09-lmdj-ci-api-observation.md)
 adds bounded actual HTTP-attempt counters to controller, reporting, discovery
 and relay CLI processes. It enables remote cost measurement without equating

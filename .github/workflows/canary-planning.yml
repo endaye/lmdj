@@ -1,0 +1,60 @@
+name: Canary Planning
+
+# Manual source entry only. No result subscription, scheduled work or delivery.
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Initialize reserved storage, explicitly bootstrap progress, observe a retained result, or recover its frozen plan.
+        type: choice
+        options: [init, bootstrap, observe-result, recover]
+        required: true
+      storage:
+        description: Reviewed dedicated planning journal JSON with exact Issue, bot, workflow and epoch identities.
+        type: string
+        required: true
+      request:
+        description: Observe/recover requires source_request_id; init/bootstrap requires an empty object. No caller evidence is accepted.
+        type: string
+        default: "{}"
+
+permissions: {}
+
+jobs:
+  controller:
+    name: Canary planning controller
+    if: github.ref == 'refs/heads/main' && github.run_attempt == '1'
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
+    timeout-minutes: 10
+    concurrency:
+      group: canary-planning
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Persist or recover the exact result-driven plan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATCH_WRITER_LOCK: canary-planning
+          PLANNING_OPERATION: ${{ inputs.operation }}
+          PLANNING_STORAGE: ${{ inputs.storage }}
+          PLANNING_REQUEST: ${{ inputs.request }}
+        run: python3 -m tools.canary.planning_entry --directory "$RUNNER_TEMP/canary-planning-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: Retain complete planning observation
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-planning-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canary-planning-${{ github.run_id }}-${{ github.run_attempt }}/planning.json
+          if-no-files-found: error
+          retention-days: 30
