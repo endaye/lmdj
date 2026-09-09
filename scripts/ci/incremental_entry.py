@@ -63,6 +63,16 @@ def http_diagnostic(error):
                         if type(value) is str and 1 <= len(value) <= 12 and value.isascii() and value.isdecimal():
                             result[key] = int(value)
             return result
+        if type(error) is GitHubApiError:
+            result = {}
+            if type(error.status) is int and 100 <= error.status <= 599:
+                result['status'] = error.status
+            for attr, key in (('remaining', 'remaining'), ('reset', 'reset'), ('retry_after', 'retry_after')):
+                value = getattr(error, attr, None)
+                if type(value) is int and 0 <= value <= 10**12:
+                    result[key] = value
+            if len(result) > 1:
+                return result
         if type(error) not in (batch.BatchError, JournalBlocked, GitHubApiError):
             break
         error = error.__context__

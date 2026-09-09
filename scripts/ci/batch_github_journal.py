@@ -18,6 +18,8 @@ from threading import Lock
 
 from incremental_batch_journal import JournalBlocked
 from self_test_report import UrllibGitHubApi
+from self_test_report import RetryBudget, with_retry
+import time
 
 SCHEMA = "lmdj.ci-journal-object.v1"
 LIMIT = 60000
@@ -96,7 +98,7 @@ class _PageControlProofs:
 
 class GitHubJournalTransport:
     def __init__(self, *, repository, issue_number, issue_node_id, bot_node_id,
-                 workflows, writer, api=None, token=None, lock_held):
+                 workflows, writer, api=None, token=None, lock_held, retry_budget=None, clock=time.time):
         require(isinstance(repository, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository), "invalid fixed repository")
         require(positive(issue_number), "invalid fixed Issue number")
         require(all(isinstance(value, str) and value for value in (issue_node_id, bot_node_id)), "missing stable Issue/Bot node ID")
@@ -106,6 +108,8 @@ class GitHubJournalTransport:
         self.repository, self.number, self.issue_node_id = repository, issue_number, issue_node_id
         self.bot_node_id, self.workflows = bot_node_id, deepcopy(workflows)
         self.writer, self.lock_held = deepcopy(writer), lock_held
+        self.retry_budget = retry_budget if retry_budget is not None else RetryBudget()
+        self.clock = clock
         try:
             self.api = api if api is not None else UrllibGitHubApi(repository, token)
         except Exception:
@@ -117,9 +121,16 @@ class GitHubJournalTransport:
         try:
             # raw=False is intentional: reporter raw downloads allow artifact
             # redirects. Normal JSON requests use its NoRedirect opener.
-            return self.api._request(method, path, body=body, raw=False)
-        except Exception:
-            raise JournalBlocked("why: GitHub journal request unavailable or write outcome unknown; remedy: reconcile existing intent without repeating a write") from None
+            call = lambda: self.api._request(method, path, body=body, raw=False)
+            # Journal writes and GraphQL reads are POSTs: never replay an
+            # unknown POST. Only an idempotent REST GET may be retried.
+            if method == "GET":
+                if self.lock_held():
+                    return call()
+                return with_retry(call, sleep=time.sleep, clock=self.clock, budget=self.retry_budget)
+            return call()
+        except Exception as error:
+            raise JournalBlocked("why: GitHub journal request unavailable or write outcome unknown; remedy: reconcile existing intent without repeating a write") from error
 
     def _repo(self, suffix):
         return f"/repos/{self.repository}{suffix}"

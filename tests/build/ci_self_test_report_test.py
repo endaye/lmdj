@@ -466,6 +466,20 @@ class DedupeTest(unittest.TestCase):
         self.assertIn(("set_issue_state", creator["number"], "open"), api.calls)
         self.assertEqual(len(api.comments[creator["number"]]), 1)
 
+    def test_unknown_reopen_patch_is_attempted_once_and_not_retried(self) -> None:
+        api = FakeGitHubApi().with_batch(100)
+        report(api, 100)
+        creator = next(issue for issue in api.issues if "creator" in issue["title"])
+        api.set_issue_state(creator["number"], "closed")
+        api.calls.clear()
+        api.failures["set_issue_state"] = [500, 500]
+        api.with_batch(200, document=verdict_document(run_id=200, suites=[
+            {"id": "creator", "status": "test_failure", "jobs": {"creator-web": "failure"}, "diagnostics": []}]),
+            run=run_document(200))
+        with self.assertRaises(rep.GitHubApiError):
+            report(api, 200)
+        self.assertEqual(sum(call[0] == "set_issue_state" for call in api.calls), 1)
+
     def test_a_green_batch_closes_nothing(self) -> None:
         api = FakeGitHubApi().with_batch(100)
         report(api, 100)
@@ -737,6 +751,37 @@ class WriteVisibilityTest(unittest.TestCase):
 
 
 class ReportingErrorTest(unittest.TestCase):
+    def test_primary_quota_read_recovers_at_reset_with_fake_clock(self) -> None:
+        clock = [100.0]
+        sleeps = []
+        calls = [0]
+
+        def read():
+            calls[0] += 1
+            if calls[0] == 1:
+                raise rep.GitHubApiError(403, "quota", remaining=0, reset=105)
+            return "ok"
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        self.assertEqual(rep.with_retry(read, sleep=sleep, clock=lambda: clock[0]), "ok")
+        self.assertEqual(sleeps, [5.0])
+
+    def test_primary_quota_reset_beyond_budget_is_deferred_and_auth_forbidden_is_final(self) -> None:
+        sleeps = []
+        deferred = rep.GitHubApiError(403, "quota", remaining=0, reset=1000)
+        with self.assertRaises(rep.GitHubApiError):
+            rep.with_retry(lambda: (_ for _ in ()).throw(deferred), sleep=sleeps.append,
+                            clock=lambda: 100.0, deadline=110.0)
+        self.assertEqual(sleeps, [])
+        forbidden = rep.GitHubApiError(403, "forbidden", remaining=10, reset=105)
+        with self.assertRaises(rep.GitHubApiError):
+            rep.with_retry(lambda: (_ for _ in ()).throw(forbidden), sleep=sleeps.append,
+                            clock=lambda: 100.0)
+        self.assertEqual(sleeps, [])
+
     def test_transient_read_429_and_5xx_are_retried_with_the_injected_sleep(self) -> None:
         api = FakeGitHubApi().with_batch()
         api.failures["list_issues"] = [429, 503]

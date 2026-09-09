@@ -75,6 +75,19 @@ class ObservationTests(unittest.TestCase):
                 self.assertEqual(rows[-1]['transport_errors'], transport)
                 self.assertNotIn('secret', json.dumps(rows))
 
+    def test_primary_quota_http_failure_keeps_numeric_reset_metadata(self):
+        headers = HTTPMessage()
+        headers['X-RateLimit-Remaining'] = '0'
+        headers['X-RateLimit-Reset'] = '1234567890'
+        opener = mock.Mock()
+        opener.open.side_effect = [HTTPError('https://private', 403, 'secret', headers, None)]
+        api = reporting.UrllibGitHubApi('endaye/lmdj', 'secret')
+        with mock.patch.object(reporting.urllib.request, 'build_opener', return_value=opener):
+            with self.assertRaises(reporting.GitHubApiError) as caught:
+                api.get_run(1)
+        self.assertEqual((caught.exception.status, caught.exception.remaining, caught.exception.reset),
+                         (403, 0, 1234567890))
+
     def test_existing_retry_is_counted_per_real_attempt_without_new_retries(self):
         api = reporting.UrllibGitHubApi('endaye/lmdj', 'secret')
         sleeps = []
