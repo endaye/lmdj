@@ -67,11 +67,11 @@ def decode(body):
 
 
 class _PageControlProofs:
-    """Single-flight verification, discarded with the page, never API data.
+    """Single-flight proofs, discarded with the page, never raw API responses.
 
-    Only validated control identities enter here. Both success and failure are
-    shared for this page; a retry/new page redoes the verification. Individual
-    run/jobs and the transport's all-or-nothing writer trust set remain separate.
+    Results are successful identity checks or a validated exact main SHA. Both
+    success and failure are shared for this page; a retry/new page redoes the
+    verification. Individual run/jobs and atomic writer trust remain separate.
     """
 
     def __init__(self):
@@ -86,12 +86,12 @@ class _PageControlProofs:
             proof = self._proofs[key]
         if owner:
             try:
-                check()
+                result = check()
             except BaseException as error:
                 proof.set_exception(error)
             else:
-                proof.set_result(None)
-        proof.result()
+                proof.set_result(result)
+        return proof.result()
 
 
 class GitHubJournalTransport:
@@ -157,16 +157,29 @@ class GitHubJournalTransport:
         else:
             require(self._bot(node["author"]), "checkpoint author is not the trusted bot")
 
-    def _control(self, writer):
-        """Prove exact workflow/control provenance, not any writer's execution."""
-        path, control = writer['workflow_path'], writer['control_sha']
+    def _workflow(self, writer):
         workflow = self._call("GET", self._repo(f"/actions/workflows/{writer['workflow_id']}"))
         require(isinstance(workflow, dict) and type(workflow.get("id")) is int
-                and workflow["id"] == writer["workflow_id"] and workflow.get("path") == path, "workflow API identity differs")
+                and workflow["id"] == writer["workflow_id"]
+                and workflow.get("path") == writer["workflow_path"], "workflow API identity differs")
+
+    def _main(self):
         ref = self._call("GET", self._repo("/git/ref/heads/main"))
         ref_object = ref.get("object") if isinstance(ref, dict) else None
         main = ref_object.get("sha") if isinstance(ref_object, dict) else None
         require(isinstance(main, str) and re.fullmatch(r"[0-9a-f]{40}", main), "main ref is unavailable")
+        return main
+
+    def _control(self, writer, control_proofs=None):
+        """Prove each control against one page-local main, not writer execution."""
+        path, control = writer['workflow_path'], writer['control_sha']
+        if control_proofs is None:
+            self._workflow(writer)
+            main = self._main()
+        else:
+            control_proofs.verify(('workflow', self.repository, path, writer['workflow_id']),
+                                  lambda: self._workflow(writer))
+            main = control_proofs.verify(('main', self.repository), self._main)
         # Only ancestry metadata is used here. Changed files appear on page 1;
         # page 2 avoids that payload and is never a scope/commit inventory.
         comparison = self._call("GET", self._repo(f"/compare/{control}...{main}?per_page=1&page=2"))
@@ -216,8 +229,8 @@ class GitHubJournalTransport:
         if control_proofs is None:
             self._control(writer)
         else:
-            control_proofs.verify((self.repository, path, writer['workflow_id'], control),
-                                  lambda: self._control(writer))
+            control_proofs.verify(('control', self.repository, path, writer['workflow_id'], control),
+                                  lambda: self._control(writer, control_proofs))
         jobs, total, seen = [], None, set()
         for page in range(1, 101):
             document = self._call("GET", self._repo(f"/actions/runs/{writer['run_id']}/attempts/1/jobs?per_page=100&page={page}"))
@@ -304,8 +317,9 @@ class GitHubJournalTransport:
         if unchecked:
             # The production HTTP client creates a separate Request/opener/response
             # per call. Workers use only _writer's GET path, never pagination,
-            # anchors, writes or the trust-cache mutation. Only the common
-            # control proof is single-flight; no mutable API responses are cached.
+            # anchors, writes or the trust-cache mutation. Only control and
+            # common identity proofs are single-flight; no raw mutable
+            # responses are cached. All controls compare to the same page main.
             # Exiting the context joins all readers even when one future fails.
             control_proofs = _PageControlProofs()
             with ThreadPoolExecutor(max_workers=min(4, len(unchecked))) as readers:
