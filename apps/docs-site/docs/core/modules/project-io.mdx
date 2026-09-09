@@ -43,3 +43,8 @@ ArtifactRef。在一个 writer lease 内检查元数据所有权、完整引用�
 错误身份在读取 Artifact 前拒绝；缺失文件与内容不匹配可区分，后者使用显式 storage
 condition，由 Facade 归一化为 `IO_ERROR/input_artifact_mismatch`。
 既有普通 Project load 仍校验全部 Asset 字节。Host 不直接调用这一存储 API。
+
+`ProjectStore::inspect_committed` 在 owner lease 内返回已提交的 Project 状态，
+不执行 authoring recovery 或清理未发布文件。Candidate 分析使用这个入口取得
+Project/Asset/revision 绑定，再通过上述 verified owner read 获取音频；成功或拒绝
+都保留中断创作留下的文件，由显式 authoring load 负责处理。

@@ -7661,6 +7661,11 @@ struct Application::Impl {
       require(permission.is_string() && safe_file_id(permission.get<std::string>()), "permission is invalid");
       require(unique.insert(permission.get<std::string>()).second, "permissions must be unique");
     }
+    const auto admitted = attempts.validate_execution_policy(
+        provider::CapabilityRequest{"sample.slice.v1", {}, request.at("parameters"),
+            classification, platform, region, permissions.get<std::vector<std::string>>()},
+        *registry);
+    if (!admitted.has_value()) return error_envelope(admitted.error());
     // Inspect first so an interrupted prior run can be explicitly retried with
     // a fresh Attempt ID; a live executor's Job lease still refuses begin.
     const auto prior = candidates.inspect(job_id, attempts);
@@ -7671,7 +7676,7 @@ struct Application::Impl {
         if (entry.at("status") == "pending") return error_envelope(Error{
             ErrorCode::invalid_argument, "Candidate Job is already running", {{"reason", "job_busy"}}});
     }
-    const auto loaded = projects.load(path);
+    const auto loaded = projects.inspect_committed(path);
     if (!loaded.has_value()) return error_envelope(loaded.error());
     if (loaded.value().id != project_id || loaded.value().revision != revision)
       return error_envelope(Error{ErrorCode::revision_conflict, "Analysis Project identity or revision changed"});
@@ -7684,11 +7689,6 @@ struct Application::Impl {
     if (!bytes.has_value()) return error_envelope(bytes.error());
     const auto metadata = cooker::inspect_wav(bytes.value());
     if (!metadata.has_value()) return error_envelope(metadata.error());
-    const auto existing_attempt = attempts.inspect(foundation::AttemptId{attempt_id});
-    if (existing_attempt.has_value()) return error_envelope(Error{
-        ErrorCode::duplicate_id, "Candidate Job requires a fresh Attempt ID"});
-    if (existing_attempt.error().code != ErrorCode::not_found)
-      return error_envelope(existing_attempt.error());
     nlohmann::json intent{{"attempt_id", attempt_id},
       {"source", {{"project_path", path.generic_string()}, {"project_id", project_id.value()},
                    {"asset_id", asset_id.value()}, {"project_revision", revision}, {"artifact", artifact},
@@ -7696,22 +7696,32 @@ struct Application::Impl {
       {"parameters_sha256", picosha2::hash256_hex_string(foundation::canonical_json(request.at("parameters")))},
       {"data_classification", classification}, {"platform", platform}, {"region", region},
       {"required_permissions", permissions}};
-    auto run = candidates.begin(job_id, intent);
-    if (!run.has_value()) return error_envelope(run.error());
+    std::optional<detail::CandidateStore::Run> run;
+    const auto reserved = [&]() -> foundation::Result<void> {
+      auto begun = candidates.begin(job_id, intent);
+      if (!begun.has_value()) return foundation::Result<void>::failure(begun.error());
+      run.emplace(std::move(begun.value()));
+      return foundation::Result<void>::success();
+    };
     const auto executed = provider_run({{"operation", "provider.run"}, {"attempt_id", attempt_id},
         {"capability", "sample.slice.v1"},
         {"inputs", nlohmann::json::array({{{"port", "source_audio"}, {"artifact", artifact}}})},
         {"input_owners", nlohmann::json::array({{{"port", "source_audio"}, {"occurrence", 0},
             {"project_path", path.generic_string()}, {"project_id", project_id.value()}, {"asset_id", asset_id.value()}}})},
         {"parameters", request.at("parameters")}, {"data_classification", classification},
-        {"platform", platform}, {"region", region}, {"required_permissions", permissions}});
-    const auto finished = candidates.finish(run.value(), attempts);
+        {"platform", platform}, {"region", region}, {"required_permissions", permissions}}, reserved);
+    // No owner intent exists unless this execution won the immutable SDK
+    // reservation. In particular, a duplicate raw Provider run cannot donate
+    // its terminal to this Job, including after process restart.
+    if (!run) return executed;
+    const auto finished = candidates.finish(*run, attempts);
     if (!finished.has_value()) return error_envelope(finished.error());
     if (!executed.at("ok").get<bool>()) return executed;
     return success_envelope(finished.value(), std::nullopt);
   }
 
-  nlohmann::json provider_run(const nlohmann::json& request) {
+  nlohmann::json provider_run(const nlohmann::json& request,
+      const std::function<foundation::Result<void>()>& after_reservation = {}) {
     require(
         exact_keys(
             request,
@@ -7871,7 +7881,7 @@ struct Application::Impl {
         *registry,
         provider::ExecutionOptions{
             std::move(resolver), 16777216, 262144,
-            std::make_shared<provider::StagingBudget>(67108864)});
+            std::make_shared<provider::StagingBudget>(67108864)}, after_reservation);
     if (!executed.has_value()) {
       return error_envelope(executed.error());
     }

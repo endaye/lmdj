@@ -6982,4 +6982,20 @@ foundation::Result<std::vector<std::byte>> ProjectStore::read_asset_artifact(
   return read_verified_artifact(*platform_, bundle, artifact);
 }
 
+foundation::Result<domain::ProjectState> ProjectStore::inspect_committed(
+    const std::filesystem::path& bundle) const {
+  using Result = foundation::Result<domain::ProjectState>;
+  if (bundle.extension() != ".lmdj")
+    return Result::failure(invalid_project("project bundle extension is invalid", bundle));
+  auto tree = platform_->validate_managed_tree(bundle);
+  if (!tree.has_value()) return Result::failure(tree.error());
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) return Result::failure(lease.error());
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) return Result::failure(tree.error());
+  auto loaded = load_project(*platform_, bundle, false);
+  if (!loaded.has_value()) return Result::failure(loaded.error());
+  return Result::success(std::move(loaded.value().state));
+}
+
 }  // namespace lmdj::project_io

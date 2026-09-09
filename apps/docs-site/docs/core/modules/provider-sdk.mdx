@@ -72,3 +72,9 @@ hard link，Artifact 目录按文件发布后才写 terminal；中断的 reserva
 验证 Workspace Candidate Sets。空输出仍按完整 Artifact identity 校验。
 `provider.attempt_output_read` 覆盖绑定、大小限制、空输出、损坏、缺失及符号链接拒绝。
 新 Workspace 尚无 Attempt 目录时，inspect 返回 `NOT_FOUND`，不创建目录或伪造终端。
+
+`validate_execution_policy` 与 execute 共享 selection/policy 校验，用于读取 owner 数据前
+的预检；它不替代 execute 对实际输入的完整校验。execute 的附加 overload 在取得
+不可复用的 Attempt reservation 后、读取输入和运行 Provider 前调用 owner admission
+回调。重复 ID 不调用回调；回调失败保留 reservation，不生成 terminal。Facade 在该
+回调中写入 Job intent，因而 crash recovery 只能观察本次执行拥有的 Attempt。

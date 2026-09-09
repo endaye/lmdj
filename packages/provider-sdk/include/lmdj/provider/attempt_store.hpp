@@ -105,11 +105,26 @@ class AttemptStore {
       const foundation::ArtifactRef& artifact,
       std::uint64_t maximum_bytes) const;
 
+  // Checks the selected Provider and policy without resolving or validating inputs.
+  foundation::Result<void> validate_execution_policy(
+      const CapabilityRequest& request,
+      const Registry& registry) const;
+
   foundation::Result<AttemptResult> execute(
       foundation::AttemptId attempt_id,
       const CapabilityRequest& request,
       const Registry& registry,
       const ExecutionOptions& options);
+
+  // Runs once after atomic reservation and before owner input reads or Provider
+  // execution. Failure retains the reservation without writing a terminal;
+  // exceptions become outer IO errors. An empty callback is a no-op.
+  foundation::Result<AttemptResult> execute(
+      foundation::AttemptId attempt_id,
+      const CapabilityRequest& request,
+      const Registry& registry,
+      const ExecutionOptions& options,
+      const std::function<foundation::Result<void>()>& after_reservation);
 
  private:
   std::filesystem::path workspace_root_;

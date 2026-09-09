@@ -776,45 +776,25 @@ const CapabilityDescriptor& selected_capability(
       });
 }
 
-Error validate_request(
+bool validation_passed(const Error& error) {
+  return error.code == ErrorCode::internal_error && error.message.empty();
+}
+
+Error validate_request_metadata(
     const CapabilityRequest& request,
-    const CapabilityDescriptor& capability,
-    const ProviderPolicy& policy) {
+    const CapabilityDescriptor& capability) {
   if (request.capability != capability.id ||
       request.data_classification.empty() ||
       request.platform.empty() || request.region.empty()) {
     return invalid_argument("capability request metadata is invalid");
   }
-  std::set<std::string> input_hashes;
-  for (const auto& input : request.inputs) {
-    if (!valid_port_name(input.port)) {
-      return invalid_argument("capability request port name is invalid");
-    }
-    const auto* port = find_port(
-        capability.input_artifacts, input.port);
-    if (port == nullptr) {
-      return invalid_argument(
-          "capability request names a port the Capability does not declare");
-    }
-    if (!valid_artifact(input.artifact) ||
-        !media_type_allowed(*port, input.artifact.media_type) ||
-        !input_hashes.insert(input.artifact.sha256).second) {
-      return invalid_argument("capability request artifacts are invalid");
-    }
-  }
-  for (const auto& port : capability.input_artifacts) {
-    const auto count = static_cast<std::size_t>(std::count_if(
-        request.inputs.begin(),
-        request.inputs.end(),
-        [&port](const auto& input) {
-          return input.port == port.name;
-        }));
-    const auto minimum =
-        port.required ? std::size_t{1} : std::size_t{0};
-    if (count < minimum || count > port.max_count) {
-      return invalid_argument("capability request input count is invalid");
-    }
-  }
+  return Error{ErrorCode::internal_error, ""};
+}
+
+Error validate_policy(
+    const CapabilityRequest& request,
+    const CapabilityDescriptor& capability,
+    const ProviderPolicy& policy) {
   if (!unique_nonempty(request.required_permissions)) {
     return invalid_argument("required permissions are invalid");
   }
@@ -855,8 +835,43 @@ Error validate_request(
   return Error{ErrorCode::internal_error, ""};
 }
 
-bool validation_passed(const Error& error) {
-  return error.code == ErrorCode::internal_error && error.message.empty();
+Error validate_request(
+    const CapabilityRequest& request,
+    const CapabilityDescriptor& capability,
+    const ProviderPolicy& policy) {
+  const auto metadata = validate_request_metadata(request, capability);
+  if (!validation_passed(metadata)) return metadata;
+  std::set<std::string> input_hashes;
+  for (const auto& input : request.inputs) {
+    if (!valid_port_name(input.port)) {
+      return invalid_argument("capability request port name is invalid");
+    }
+    const auto* port = find_port(
+        capability.input_artifacts, input.port);
+    if (port == nullptr) {
+      return invalid_argument(
+          "capability request names a port the Capability does not declare");
+    }
+    if (!valid_artifact(input.artifact) ||
+        !media_type_allowed(*port, input.artifact.media_type) ||
+        !input_hashes.insert(input.artifact.sha256).second) {
+      return invalid_argument("capability request artifacts are invalid");
+    }
+  }
+  for (const auto& port : capability.input_artifacts) {
+    const auto count = static_cast<std::size_t>(std::count_if(
+        request.inputs.begin(),
+        request.inputs.end(),
+        [&port](const auto& input) {
+          return input.port == port.name;
+        }));
+    const auto minimum =
+        port.required ? std::size_t{1} : std::size_t{0};
+    if (count < minimum || count > port.max_count) {
+      return invalid_argument("capability request input count is invalid");
+    }
+  }
+  return validate_policy(request, capability, policy);
 }
 
 foundation::Result<std::string> hash_parameters(
@@ -1797,11 +1812,44 @@ foundation::Result<std::vector<std::byte>> AttemptStore::read_candidate_artifact
   return Result::success(std::move(bytes));
 }
 
+foundation::Result<void> AttemptStore::validate_execution_policy(
+    const CapabilityRequest& request,
+    const Registry& registry) const {
+  const auto provider_id = selected_provider(request.capability);
+  if (!provider_id.has_value()) {
+    return foundation::Result<void>::failure(provider_id.error());
+  }
+  const auto selected = registry.select(provider_id.value(), request.capability);
+  if (!selected.has_value()) {
+    return foundation::Result<void>::failure(selected.error());
+  }
+  const auto& capability = selected_capability(
+      selected.value().descriptor, request.capability);
+  const auto metadata = validate_request_metadata(request, capability);
+  if (!validation_passed(metadata)) {
+    return foundation::Result<void>::failure(metadata);
+  }
+  const auto policy = validate_policy(request, capability, policy_);
+  if (!validation_passed(policy)) {
+    return foundation::Result<void>::failure(policy);
+  }
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<AttemptResult> AttemptStore::execute(
+    foundation::AttemptId attempt_id,
+    const CapabilityRequest& request,
+    const Registry& registry,
+    const ExecutionOptions& options) {
+  return execute(std::move(attempt_id), request, registry, options, {});
+}
+
 foundation::Result<AttemptResult> AttemptStore::execute(
     foundation::AttemptId attempt_id,
     const CapabilityRequest& input_request,
     const Registry& registry,
-    const ExecutionOptions& ingress_options) {
+    const ExecutionOptions& ingress_options,
+    const std::function<foundation::Result<void>()>& after_reservation) {
   const CapabilityRequest request = input_request;
   const ExecutionOptions options = ingress_options;
   if (!options.staging_budget) {
@@ -1866,6 +1914,17 @@ foundation::Result<AttemptResult> AttemptStore::execute(
   }
   const auto& attempt_root = reservation.value();
   LMDJ_PROVIDER_CHECKPOINT("reserved");
+  if (after_reservation) {
+    try {
+      const auto completed = after_reservation();
+      if (!completed.has_value()) {
+        return foundation::Result<AttemptResult>::failure(completed.error());
+      }
+    } catch (...) {
+      return foundation::Result<AttemptResult>::failure(
+          io_error("after-reservation callback failed", attempt_root));
+    }
+  }
   auto state = std::make_shared<RunState>(attempt_root, capability, request, options);
   const ReleaseRunPayloads payload_cleanup{state};
   auto& minted = state->minted;

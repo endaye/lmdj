@@ -30,7 +30,12 @@ void crash_recovery(int boundary, bool has_prior) {
   const auto raw = Json::parse(read(f.root / ".lmdj-host/candidates/state.json"));
   const auto index = has_prior ? 1 : 0;
   const auto set_id = raw.at("jobs").at("slice").at("history")[index].at("set_id");
-  f.restart();
+  f.restart(); f.grant();
+  if (boundary == 1) {
+    // The child persisted its intent only after owning the SDK reservation.
+    // A raw execution after its death cannot donate a new terminal to recovery.
+    error(f.app->command(f.request("first")), "DUPLICATE_ID");
+  }
   const auto recovered = job(f);
   LMDJ_CHECK(recovered.at("history").size() == (has_prior ? 2 : 1));
   if (boundary == 1) {
@@ -79,6 +84,7 @@ void live_job_is_not_recovered_or_reentered() {
   f.restart(); f.grant();
   const auto pending = job(f);
   const auto refused = f.app->command(job_request(f, "racing"));
+  const auto raw_refused = f.app->command(f.request("first"));
   // Release the child before assertions, so a failed assertion cannot strand it.
   LMDJ_CHECK(::write(resume[1], "r", 1) == 1);
   close(ready[0]); close(resume[1]);
@@ -87,6 +93,7 @@ void live_job_is_not_recovered_or_reentered() {
   LMDJ_CHECK(pending.at("history")[0].at("status") == "pending");
   LMDJ_CHECK(pending.at("sets").empty());
   error(refused, "INVALID_ARGUMENT");
+  error(raw_refused, "DUPLICATE_ID");
   LMDJ_CHECK(refused.at("error").at("details").at("reason") == "job_busy");
   const auto completed = job(f);
   LMDJ_CHECK(completed.at("history").size() == 1);

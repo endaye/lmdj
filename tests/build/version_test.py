@@ -48,7 +48,7 @@ expected_modules = {
     ),
     "packages/project-io/module.json": (
         "project-io",
-        "3.1.0",
+        "3.2.0",
         1,
         {
             "foundation": "0.4.0",
@@ -71,7 +71,7 @@ expected_modules = {
         {
             "foundation": "0.4.0",
             "authoring-domain": "3.0.0",
-            "project-io": "3.1.0",
+            "project-io": "3.2.0",
             "project-cooker": "1.1.0",
             "audio-runtime": "4.0.0",
             "provider-sdk": "2.2.0",

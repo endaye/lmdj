@@ -156,7 +156,10 @@ identity、失败终态和重启；无 owner、错误身份、损坏及 busy 不
 
 `candidate.job.run` 接受显式 Job/新 Attempt ID、source Project/Asset、
 `expected_revision`、参数与执行策略。Facade 读取并绑定完整 source Artifact 与原始
-revision，将 intent 和预分配 Set ID 耐久保存后调用已注册的 `sample.slice.v1`。
+revision。先通过 SDK selection/policy 预检，再以不触发恢复清理的 committed inspection
+读取绑定；SDK 原子取得 Attempt reservation 后，回调耐久保存 intent 和预分配 Set ID，
+最后调用已注册的 `sample.slice.v1`。普通 Provider 调用无法抢占这个 reservation，
+重复 ID 的拒绝不会把别人的 terminal 发布到 Job。
 `candidate.job.inspect` 返回有序 history、active Set 及其稳定 interval recipe IDs。
 这些记录只属于 Workspace，不写入 Project Truth，也不增加 SDK terminal Candidate 数量。
 

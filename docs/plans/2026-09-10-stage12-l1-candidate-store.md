@@ -111,6 +111,23 @@ and post-squash witness procedure.
 
 ## Verification and defect mapping
 
+Current-head review corrections: persist Job intent only inside an SDK callback
+after atomic Attempt reservation and before Provider invocation. Preserve the old
+execute overload and add a policy-only preflight sharing execute's policy checks.
+Read committed Project metadata without recovery/scavenging. Add regressions for
+raw Provider/Job Attempt collisions, interrupted-authoring file preservation and
+permission refusal before owner reads. The additional declared files are
+`packages/project-io/include/lmdj/project_io/project_store.hpp`,
+`packages/project-io/src/project_store.cpp`, and `packages/project-io/module.json`;
+Project I/O receives an additive MINOR bump with exact dependent closure before
+the corrected source snapshot is finalized.
+Also declare `apps/docs-site/docs/core/modules/project-io.mdx`,
+`apps/docs-site/diagrams/project-io.architecture.json` and its generated
+`apps/docs-site/static/diagrams/project-io.{html,svg}` outputs. Project I/O moves
+3.1.0 -> 3.2.0; the existing Facade 4.2.0 allocation includes its exact dependency
+update. Preserve frozen Build 1.0.49.0 and allocate corrected Build 1.0.50.0 with
+its own official canary snapshot, without rewriting the prior snapshot.
+
 Baseline: existing facade.provider_owner component suite.
 New component suites cover stable recipes, no-onset, leading/tail intervals,
 failed retry retention, identity/context refusals, corrupt output bytes,
@@ -130,13 +147,17 @@ complete shipped browser journey. No new general merge gate is introduced.
 
 ## Version Management
 
-Version impact: required. SDK 2.1.0 -> 2.2.0 adds a nonvirtual verified output
-read; Facade 4.1.0 -> 4.2.0 adds Job operations. Preserve C ABI version and the
+Version impact: required. SDK 2.1.0 -> 2.2.0 adds nonvirtual verified output read,
+policy preflight and an additive reservation callback overload; Project I/O
+3.1.0 -> 3.2.0 adds nonrecovering committed inspection. Facade 4.1.0 -> 4.2.0
+adds Job operations. Preserve C ABI version and the
 singular SDK result. Exact dependents receive patch bumps: proof Providers
 2.0.1 -> 2.0.2, slice Provider 1.0.1 -> 1.0.2, Web platform 5.1.0 -> 5.1.1,
 CLI/MCP/native Hosts 3.3.0 -> 3.3.1, Web/Creator Hosts 4.2.0 -> 4.2.1.
-Product 1.0.48.0 -> 1.0.49.0 with canary documentation snapshot; recheck remote
-allocation before freezing. No Project Contract or model changes. Workspace
+Product 1.0.48.0 -> 1.0.50.0 with canary documentation snapshot. Retain the
+already-frozen intermediate 1.0.49.0 snapshot; reviewed corrections allocate 50
+instead of rewriting 49. Recheck remote allocation before freezing.
+No Project Contract or model changes. Workspace
 state is new and private, not Project Truth or a cross-language Contract.
 No tags, release, deployment or Channel promotion in this Task; rollback uses
 the prior immutable build, never a moved tag.
@@ -144,7 +165,7 @@ the prior immutable build, never a moved tag.
 ## Documentation Impact
 
 Documentation impact: required.
-Affected portal pages: /core/modules/application-facade/ /core/modules/provider-sdk/ /operations/creator-changelog/ /operations/runtime-changelog/
+Affected portal pages: /core/modules/application-facade/ /core/modules/provider-sdk/ /core/modules/project-io/ /operations/creator-changelog/ /operations/runtime-changelog/
 Update current availability and generated identities with the implementation;
 freeze the allocated Build and verify provenance at the actual merged revision.
 
@@ -166,3 +187,14 @@ freeze the allocated Build and verify provenance at the actual merged revision.
   release checks cannot pass before the allocated Build snapshot exists.
 - No new pitfall ledger entry: output/store refusal defects are expressed by
   regression tests; no new shared process invariant was discovered.
+
+## Accepted review corrections
+
+Independent review of PR1113 identified Attempt ownership, authoring recovery,
+and policy-before-read defects. Regression tests now cover a raw Provider
+collision during intent publication, raw retry after an intent crash, live raw
+collision in a separate process, retained interrupted-authoring files on success
+and stale refusal, and denied permission/region with present or missing audio.
+SDK reservation callback tests cover duplicate suppression, callback refusal and
+exceptions with no terminal or Provider execution. The previous clean Build49
+head passed full Core proof; corrected Build50 must repeat it after its snapshot.

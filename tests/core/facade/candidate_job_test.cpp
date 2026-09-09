@@ -93,6 +93,52 @@ void stale_revision_refuses_before_intent() {
   LMDJ_CHECK(!std::filesystem::exists(f.root / ".lmdj-host/candidates/state.json"));
   LMDJ_CHECK(f.snapshot() == before);
 }
+void policy_refusal_precedes_source_reads() {
+  for (const bool missing : {false, true}) for (const bool disallowed_region : {false, true}) {
+    Fixture f;
+    auto request = job_request(f);
+    if (disallowed_region) { f.grant(); request["region"] = "remote"; }
+    if (missing) std::filesystem::remove(f.blob());
+    const auto before = f.snapshot();
+    f.storage->owner_leases = 0; f.storage->owner_reads = 0;
+    error(f.app->command(request), "PERMISSION_DENIED");
+    LMDJ_CHECK(f.storage->owner_leases == 0);
+    LMDJ_CHECK(f.storage->owner_reads == 0);
+    LMDJ_CHECK(f.snapshot() == before);
+  }
+}
+void analysis_preserves_interrupted_authoring_files() {
+  for (const bool stale : {false, true}) {
+    Fixture f; f.grant();
+    write(f.project / "history/checkpoints/2.json", "{}\n");
+    const auto before = f.snapshot();
+    auto request = job_request(f);
+    if (stale) request["expected_revision"] = 0;
+    const auto response = f.app->command(request);
+    if (stale) error(response, "REVISION_CONFLICT"); else ok(response);
+    LMDJ_CHECK(f.snapshot() == before);
+  }
+}
+void intent_reservation_excludes_raw_provider_collision() {
+  Fixture f; f.grant(); ok(f.app->command(job_request(f)));
+  const auto truth = f.snapshot(); const auto prior = job(f);
+  bool collided = false;
+  f.storage->replace_hook = [&](const auto& path, bool after) {
+    if (collided || !after || path != f.root / ".lmdj-host/candidates/state.json") return;
+    collided = true;
+    error(f.app->command(f.request("second")), "DUPLICATE_ID");
+  };
+  ok(f.app->command(job_request(f, "second")));
+  LMDJ_CHECK(collided);
+  f.storage->replace_hook = {};
+  const auto result = job(f);
+  LMDJ_CHECK(result.at("history").size() == 2);
+  LMDJ_CHECK(result.at("sets").size() == 2);
+  LMDJ_CHECK(result.at("active_set_id") != prior.at("active_set_id"));
+  LMDJ_CHECK(result.at("sets")[1].at("attempt_id") == "second");
+  f.restart(); LMDJ_CHECK(job(f) == result);
+  LMDJ_CHECK(f.snapshot() == truth);
+}
 }
 int main() {
   try {
@@ -100,6 +146,9 @@ int main() {
     stale_revision_refuses_before_intent();
     existing_terminal_cannot_be_attached();
     corrupt_output_refuses_after_restart(); tampered_recipe_refuses(); duplicate_state_key_refuses();
+    policy_refusal_precedes_source_reads();
+    analysis_preserves_interrupted_authoring_files();
+    intent_reservation_excludes_raw_provider_collision();
     std::cout << "candidate Job integration: PASS\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
