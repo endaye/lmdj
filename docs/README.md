@@ -34,6 +34,8 @@
 - 产品决策：`prd/decision-log.md` 与 `prd/decisions/`；
   架构决策在 `architecture/`，两者只记录已确认结论。
 - 项目状态：根目录 `README.md` 的 Current status。
+- ESP32 固件开发与测试经验：[`deploy/esp32-firmware.md`](deploy/esp32-firmware.md)，
+  包含环境、构建留证、烧录恢复、音频验收与历史实验入口。
 
 ## 约定
 
