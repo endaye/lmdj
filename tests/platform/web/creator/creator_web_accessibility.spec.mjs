@@ -200,7 +200,7 @@ for (const viewport of [
     await expect(page.getByRole("button", {name: /^Perform/})).toBeEnabled();
     await page.getByRole("button", {name: "Activate audio"}).focus();
     const focusOrder = [];
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < 7; index += 1) {
       await page.keyboard.press("Tab");
       // Mode buttons carry a decorative glyph before their label; read the
       // label so the order does not depend on the glyph set.
@@ -209,10 +209,17 @@ for (const viewport of [
         return (active?.querySelector(".mode-label") ?? active)?.textContent?.trim();
       }));
     }
-    // Product Build 1.0.42.0 activates Perform, so the mode button leaves
-    // tabIndex -1 and joins the rail's tab order after Sample.
+    // The window is the whole rail, not a prefix of it. Product Build
+    // 1.0.42.0 activated Perform, which joined the tab order after Sample;
+    // Stage 11 Task 5 (#846) then inserted Sound Sets between them, and the
+    // six-stop window read at Stage 10 by #664 (`0ffa77c0`) silently dropped
+    // Perform off the end -- so the case failed reporting `Sound Sets` where
+    // it expected `Perform`, and read as a Creator defect when the rail was
+    // right. Asserting the full rail means the next insertion changes the
+    // expected list rather than shifting what the loop can see (#977).
     expect(focusOrder).toEqual([
-      "Enable MIDI", "Export report", "Project", "Sequence", "Sample", "Perform",
+      "Enable MIDI", "Export report", "Project", "Sequence", "Sample",
+      "Sound Sets", "Perform",
     ]);
     await page.getByRole("button", {name: "Sample"}).click();
     await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
