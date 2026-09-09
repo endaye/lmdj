@@ -47,7 +47,8 @@ current policy。整个 reference 和实际 executor event 绑定永久 v3 marke
 `scripts/release.sh push-tag TAG`、`scripts/release.sh create-draft TAG` 与 dispatch-only
 `publish-release.yml`。每段只证明自己的 postcondition；Draft verification、publication 和后续
 deployment 不能由前一段推断。每个 mutation 前后都以
-`scripts/release.sh audit --remote --tag TAG` 读取 live state；audit 报告中的 historical exception
+`scripts/release.sh audit --remote --tag TAG` 读取 live state，publication 后则由
+`scripts/release.sh verify-published TAG RELEASE_ID PLAN_SHA256` 按 numeric Release ID 验证 live Release；audit 报告中的 historical exception
 只是显式旧事实，不是当前 gate PASS。
 
 Publication job 在显式 dispatch 进入 exact-main-only `release` Environment 后，仍须重新验证

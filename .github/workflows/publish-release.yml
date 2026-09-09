@@ -165,7 +165,7 @@ jobs:
           scripts/release.sh publish-draft \
             "$RELEASE_TAG" "$RELEASE_ID" "$PLAN_SHA256"
 
-      - name: Audit the exact published tag
+      - name: Verify the exact published Release
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -173,6 +173,9 @@ jobs:
           GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
           GIT_CONFIG_VALUE_0: https://github.com/
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
         run: |
           set -euo pipefail
-          scripts/release.sh audit --remote --tag "$RELEASE_TAG"
+          scripts/release.sh verify-published \
+            "$RELEASE_TAG" "$RELEASE_ID" "$PLAN_SHA256"

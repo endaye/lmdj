@@ -64,7 +64,8 @@ proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WAS
 Runtime Host Release 使用同一个四段控制面：`scripts/release.sh prepare TAG` 生成并验证本地
 候选，`scripts/release.sh push-tag TAG` 只推一个 exact tag，
 `scripts/release.sh create-draft TAG` 只创建或 reconcile Draft，dispatch-only
-`publish-release.yml` 再发布同一个已验证 Draft。每次 mutation 后运行
+`publish-release.yml` 再发布同一个已验证 Draft。publication 后由
+`scripts/release.sh verify-published TAG RELEASE_ID PLAN_SHA256` 按 numeric Release ID 验证 live Release；其他 mutation 后运行
 `scripts/release.sh audit --remote --tag TAG`；historical exception 只能解释旧控制面事实，不能
 代替当前 tag、资产、签名或 profile 验证。
 

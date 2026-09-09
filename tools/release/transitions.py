@@ -153,6 +153,51 @@ def verify_draft(
     return _verify_release_state(tag, release_id, plan_sha256, context).result
 
 
+def verify_published(
+    tag: str, release_id: int, plan_sha256: str, context: PrepareContext,
+) -> TransitionResult:
+    """Verify the live published Release without consulting the lagging ledger state."""
+    try:
+        authority = _formal_authority(tag, context, require_local=False, require_remote=True)
+        release = authority.context.github.get_release(
+            authority.context.policy.repository, release_id,
+        )
+        if release is None:
+            raise TransitionError(
+                "why: the numeric Release does not exist; "
+                "remedy: use the Release ID from the protected publication inputs"
+            )
+        if release.draft:
+            raise TransitionError(
+                "why: the live Release is still a Draft; "
+                "remedy: publish the exact verified Draft before post-publish verification"
+            )
+        expected_prerelease, _ = _publication_fields(authority)
+        if release.prerelease is not expected_prerelease:
+            raise TransitionError(
+                "why: the live Release prerelease flag does not match the Channel policy; "
+                "remedy: investigate Release metadata and the immutable release plan"
+            )
+        expected_url = _published_html_url(
+            authority.context.policy.repository, tag,
+        )
+        if release.html_url != expected_url:
+            raise TransitionError(
+                "why: the live Release URL is not the exact tag URL; "
+                "remedy: investigate Release identity and immutable tag state"
+            )
+        verified = _verify_release_state(tag, release_id, plan_sha256, context)
+        return replace(verified.result, status="published")
+    except TransitionError as error:
+        message = str(error)
+        if not message.startswith("why:"):
+            message = (
+                "why: the live published Release does not match the immutable release plan; "
+                f"remedy: inspect the numeric Release, its assets, and the signed tag ({message})"
+            )
+        raise TransitionError(message) from None
+
+
 def _verify_release_state(
     tag: str, release_id: int, plan_sha256: str, context: PrepareContext,
 ) -> _VerifiedRelease:

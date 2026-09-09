@@ -135,8 +135,9 @@ exact-target、merged-main Proof、完整 CI 与 protected-main ancestry 门禁�
 仓库已实现四段正常路径：`scripts/release.sh prepare TAG` 只准备并验证本地状态，
 `scripts/release.sh push-tag TAG` 只 push/reconcile 一个 exact tag，
 `scripts/release.sh create-draft TAG` 只创建或补全一个 Draft，最后由 dispatch-only
-`publish-release.yml` 发布同一个已验证 Draft。每段是独立授权；每次 mutation 后停止并重新运行
-`scripts/release.sh audit --remote --tag TAG`。Audit 从 policy、release intent ledger 与 live
+`publish-release.yml` 发布同一个已验证 Draft。每段是独立授权；发布 job 在 publication 后以
+`scripts/release.sh verify-published TAG RELEASE_ID PLAN_SHA256` 按 numeric Release ID 读取并验证 live
+Release，其他 mutation 后停止并重新运行 `scripts/release.sh audit --remote --tag TAG`。Audit 从 policy、release intent ledger 与 live
 Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，不能满足新的 prospective gate。
 
 当前 `complete-test-v2` 要求 Owner 在 reviewed intent 中恰好引用一种来源：旧

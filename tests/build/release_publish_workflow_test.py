@@ -124,19 +124,17 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
         self.assertLess(verify_index, publish_index)
         self.assertLess(audit_index, publish_index)
 
-    def test_exact_tag_audit_runs_in_preflight_immediately_before_publish_and_afterward(self) -> None:
+    def test_exact_tag_audit_runs_in_preflight_and_immediately_before_publish(self) -> None:
         preflight = self.job("preflight")
         publish = self.job("publish")
         audit_command = "scripts/release.sh audit --remote --tag"
         self.assertEqual(preflight.count(audit_command), 1)
-        self.assertEqual(publish.count(audit_command), 2)
+        self.assertEqual(publish.count(audit_command), 1)
         verify_index = publish.index("scripts/release.sh verify-draft")
         prepublication_audit = publish.index(audit_command)
         publication = publish.index("scripts/release.sh publish-draft")
-        postpublication_audit = publish.rindex(audit_command)
         self.assertLess(verify_index, prepublication_audit)
         self.assertLess(prepublication_audit, publication)
-        self.assertLess(publication, postpublication_audit)
 
     def test_both_jobs_use_pinned_protected_main_checkouts_without_credentials(self) -> None:
         source = self.source()
@@ -203,12 +201,15 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
                     )
                     self.assertEqual(env.get("GIT_CONFIG_VALUE_0"), "https://github.com/")
 
-    def test_publication_finishes_with_exact_tag_read_only_audit(self) -> None:
+    def test_publication_finishes_with_numeric_id_post_publish_verification(self) -> None:
         publish = self.job("publish")
         publish_index = publish.index("scripts/release.sh publish-draft")
-        audit_index = publish.rindex("scripts/release.sh audit --remote --tag")
-        self.assertLess(publish_index, audit_index)
-        self.assertIn('"$RELEASE_TAG"', publish[audit_index:])
+        verification_index = publish.index("scripts/release.sh verify-published")
+        final_verification = publish[verification_index:]
+        self.assertLess(publish_index, verification_index)
+        self.assertNotIn("scripts/release.sh audit --remote", final_verification)
+        for identifier in ('"$RELEASE_TAG"', '"$RELEASE_ID"', '"$PLAN_SHA256"'):
+            self.assertIn(identifier, final_verification)
 
 
 if __name__ == "__main__":
