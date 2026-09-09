@@ -33,5 +33,14 @@
       "why": "a BY licence whose required attribution is absent"
     }
   },
-  "not_covered_here": "Published is not installable. soundset_audio_unsupported (Fixture Unsupported Audio Kit, 33333333-...) is decided at install, not at list, so it appears in `published` above and its refusal belongs to an install leg. soundset_manifest_invalid, soundset_slot_invalid and soundset_occupied_conflict are likewise decided elsewhere: this file is the list partition only, and a Host that agreed here could still disagree at install."
+  "not_covered_here": "This file covers the soundset.catalog.list partition and one install refusal, so three of the seven locked reasons: soundset_content_mismatch and soundset_license_ineligible at list, soundset_audio_unsupported at install. soundset_manifest_invalid, soundset_slot_invalid and soundset_occupied_conflict are decided elsewhere and need Catalog entries this corpus does not yet publish; catalog_unavailable is a per-Set resolve failure, distinct from the catalog_available:false degradation the offline leg asserts. Two Hosts that agree on everything here can still disagree on those four.",
+  "install_refusal": {
+    "why": "Publishable is not installable. S11-D3 keeps this Set on the published side of the list partition above and refuses it at install, so it is the one Set that proves the two decisions are separate. slot_index names which slot decided it -- a Host that dropped that field would still carry the right token.",
+    "set_id": "33333333-3333-4333-8333-333333333333",
+    "version": "1.0.0",
+    "manifest_sha256": "57ab3bf8e01efe6a044639a53ee2e339627e3c3ee5a53b04e387ed640df2e64c",
+    "code": "UNSUPPORTED_AUDIO",
+    "reason": "soundset_audio_unsupported",
+    "slot_index": 0
+  }
 }

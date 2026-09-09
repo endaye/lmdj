@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import select
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,12 @@ PARTITION = json.loads(
     )
 )
 RESPONSE_TIMEOUT_SECONDS = 30.0
+INSTALL_REFUSAL = PARTITION["install_refusal"]
+UNSUPPORTED_SET_ID = INSTALL_REFUSAL["set_id"]
+
+
+def uuid_for(suffix: int) -> str:
+    return f"00000000-0000-4000-8000-{suffix:012d}"
 
 
 def canonical_json(value: object) -> str:
@@ -118,28 +125,101 @@ def assert_partition(host_name: str, listed: dict) -> None:
     )
 
 
-def cli_list(cli: Path, workspace: Path, assembly: Path) -> dict:
+def cli_request(
+    cli: Path,
+    workspace: Path,
+    assembly: Path,
+    surface: str,
+    request: dict,
+    expected_exit: int = 0,
+) -> dict:
     completed = subprocess.run(
         [
             str(cli),
             "--workspace", str(workspace),
             "--assembly", str(assembly),
-            "query",
+            surface,
             "--request",
-            canonical_json({"operation": "soundset.catalog.list"}),
+            canonical_json(request),
         ],
         cwd=REPO_ROOT, check=False, capture_output=True,
     )
-    assert completed.returncode == 0, (
+    assert completed.returncode == expected_exit, (
         completed.returncode, completed.stdout, completed.stderr
     )
     return json.loads(completed.stdout.decode("utf-8"))
 
 
-def native_list(
-    host: Path, cli: Path, workspace: Path, assembly: Path, project: Path
-) -> dict:
-    """Drive the same operation through the long-lived Native Host process."""
+def cli_list(cli: Path, workspace: Path, assembly: Path) -> dict:
+    return cli_request(
+        cli, workspace, assembly, "query",
+        {"operation": "soundset.catalog.list"},
+    )
+
+
+def install_request(project: Path, revision: int, command_id: str) -> dict:
+    """Install the Set that lists as publishable and refuses at install.
+
+    S11-D3 keeps the Unsupported Audio Kit on the published side of the list
+    partition, so this is the leg that proves publishable is not installable --
+    and that both Hosts say so with the same locked token and the same
+    `slot_index`, which is the field that names *why*.
+    """
+    return {
+        "operation": "soundset.install",
+        "project_path": str(project),
+        "command_id": command_id,
+        "expected_revision": revision,
+        "bank_id": 2,
+        "set_id": UNSUPPORTED_SET_ID,
+        "version": INSTALL_REFUSAL["version"],
+        "manifest_sha256": INSTALL_REFUSAL["manifest_sha256"],
+    }
+
+
+def assert_install_refusal(host_name: str, refused: dict) -> None:
+    assert refused["ok"] is False, (host_name, refused)
+    assert refused["error"]["code"] == INSTALL_REFUSAL["code"], (
+        f"{host_name} install code: expected {INSTALL_REFUSAL['code']}, "
+        f"observed {refused['error']['code']}"
+    )
+    assert refused["error"]["details"] == {
+        "reason": INSTALL_REFUSAL["reason"],
+        "slot_index": INSTALL_REFUSAL["slot_index"],
+    }, (
+        f"{host_name} install details: expected "
+        f"{{'reason': {INSTALL_REFUSAL['reason']!r}, "
+        f"'slot_index': {INSTALL_REFUSAL['slot_index']}}}, "
+        f"observed {refused['error']['details']}"
+    )
+
+
+def assert_offline_degradation(host_name: str, listed: dict) -> None:
+    """A Catalog that has gone away degrades; it does not refuse Set by Set.
+
+    The distinction matters because `catalog_unavailable` is a per-Set refusal
+    token, and answering with four of them here instead of an empty `refused`
+    would be a Host inventing a refusal the Facade did not make.
+    """
+    assert listed["ok"] is True, (host_name, listed)
+    assert listed["result"]["catalog_available"] is False, (host_name, listed)
+    assert listed["result"]["refused"] == [], (host_name, listed["result"])
+
+
+def native_requests(
+    host: Path,
+    cli: Path,
+    workspace: Path,
+    assembly: Path,
+    project: Path,
+    requests: tuple[dict, ...],
+) -> list[dict]:
+    """Drive requests through the long-lived Native Host and return the replies.
+
+    One process for the whole sequence, because that is what the Native Host
+    is: a session, not a command. A refusal that only reproduces on a fresh
+    process would be a different defect from the one this looks for.
+    """
     import native_host_test
 
     native_host_test.author_project(cli, workspace, assembly, project)
@@ -169,10 +249,8 @@ def native_list(
         assert readable, f"Native Host never became ready; returncode={process.poll()}"
         ready = json.loads(process.stdout.readline().decode("utf-8"))
         assert ready["ok"] is True and ready["operation"] == "ready", ready
-        for request in (
-            {"operation": "soundset.catalog.list"},
-            {"operation": "quit"},
-        ):
+        replies: list[dict] = [ready]
+        for request in (*requests, {"operation": "quit"}):
             process.stdin.write(canonical_json(request).encode("utf-8") + b"\n")
             process.stdin.flush()
             readable, _, _ = select.select(
@@ -185,11 +263,11 @@ def native_list(
             line = process.stdout.readline()
             assert line, (process.poll(),)
             response = json.loads(line.decode("utf-8"))
-            if request["operation"] == "soundset.catalog.list":
-                listed = response
+            if request["operation"] != "quit":
+                replies.append(response)
         process.stdin.close()
         assert process.wait(timeout=10) == 0
-        return listed
+        return replies
     finally:
         if process.poll() is None:
             process.kill()
@@ -214,13 +292,61 @@ def main() -> int:
         cli_listed = cli_list(cli, cli_workspace, assembly)
         assert_partition("CLI Host", cli_listed)
 
+        # Leg 2 -- the same Set that lists as publishable is refused at
+        # install, with the same code, the same locked token and the same
+        # slot_index on both Hosts.
+        cli_project = temp_root / "cli.lmdj"
+        import native_host_test
+
+        native_host_test.author_project(cli, cli_workspace, assembly, cli_project)
+        cli_revision = cli_request(
+            cli, cli_workspace, assembly, "query",
+            {"operation": "project.inspect", "project_path": str(cli_project)},
+        )["project_revision"]
+        cli_install = cli_request(
+            cli, cli_workspace, assembly, "command",
+            install_request(cli_project, cli_revision, uuid_for(928)),
+            expected_exit=2,
+        )
+        assert_install_refusal("CLI Host", cli_install)
+
+        # Leg 3 -- a Catalog that has gone away degrades rather than refusing
+        # Set by Set.
+        shutil.rmtree(cli_workspace / ".lmdj-host/soundset-catalog")
+        assert_offline_degradation("CLI Host", cli_list(cli, cli_workspace, assembly))
+
         native_workspace = temp_root / "native-workspace"
         native_workspace.mkdir()
         publish_workspace_catalog(native_workspace)
-        native_listed = native_list(
-            host, cli, native_workspace, assembly, temp_root / "native.lmdj"
+        native_project = temp_root / "native.lmdj"
+        # The Native Host holds the Project open and announces the revision it
+        # opened at. Guessing one instead would make this leg fail on a
+        # revision conflict rather than on the audio decision it compares.
+        ready, native_listed = native_requests(
+            host, cli, native_workspace, assembly, native_project,
+            ({"operation": "soundset.catalog.list"},),
         )
         assert_partition("Native Host", native_listed)
+        _, native_install = native_requests(
+            host, cli, native_workspace, assembly,
+            temp_root / "native-install.lmdj",
+            (
+                install_request(
+                    temp_root / "native-install.lmdj",
+                    ready["result"]["project_revision"],
+                    uuid_for(929),
+                ),
+            ),
+        )
+        assert_install_refusal("Native Host", native_install)
+
+        shutil.rmtree(native_workspace / ".lmdj-host/soundset-catalog")
+        _, native_offline = native_requests(
+            host, cli, native_workspace, assembly,
+            temp_root / "native-offline.lmdj",
+            ({"operation": "soundset.catalog.list"},),
+        )
+        assert_offline_degradation("Native Host", native_offline)
 
         # The pairwise assertion, not just two independent ones against the
         # file. Both Hosts drifting the same way would satisfy the two checks
@@ -230,11 +356,16 @@ def main() -> int:
             observed_partition(cli_listed), observed_partition(native_listed)
         )
 
-    reasons = sorted({v["reason"] for v in PARTITION["refused"].values()})
+    reasons = sorted(
+        {v["reason"] for v in PARTITION["refused"].values()}
+        | {INSTALL_REFUSAL["reason"]}
+    )
     print(
         "sound set catalog partition: CLI and Native Host agree on "
         f"{len(PARTITION['published'])} published and "
-        f"{len(PARTITION['refused'])} refused Sets carrying {reasons}"
+        f"{len(PARTITION['refused'])} refused Sets, on the install refusal of "
+        "the one publishable Set that is not installable, and on degrading "
+        f"rather than refusing when the Catalog is gone; reasons {reasons}"
     )
     return 0
 
