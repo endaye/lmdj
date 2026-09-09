@@ -614,11 +614,287 @@ print(json.dumps({'pid': os.getpid(), 'original': original, 'next': next_result,
         self.assertEqual(before, self.api.planner.comments)
 
 
+class BaselineEntryTests(unittest.TestCase):
+    def setUp(self):
+        self.journey = JourneyTests()
+        self.journey.setUp()
+        self.addCleanup(self.journey.doCleanups)
+        j = self.journey
+        j.f.git('config', 'core.filemode', 'true')
+        # This complete temporary Git repository has its own reviewed fixture
+        # control/config. It is not an adoption of the real approved main SHA.
+        self.approval = json.loads((ROOT / entry.BASELINE_PATH).read_text())
+        for host in self.approval['hosts']:
+            path = j.f.root / host['path']
+            manifest = json.loads(path.read_text())
+            manifest['version'] = host['version']
+            path.write_text(json.dumps(manifest))
+        (j.f.root / 'apps/creator-web/CHANGELOG.md').write_text('Existing history must not be backfilled.\n')
+        self.baseline = self.commit_control('Approved fixture version baseline')
+        self.approval['revision'] = self.baseline
+        self.write_approval(self.approval)
+
+    def commit_control(self, message):
+        j = self.journey
+        j.f.git('add', '.')
+        j.f.git('commit', '-qm', message)
+        sha = j.f.git('rev-parse', 'HEAD')
+        j.api.scheduler.sha = j.api.planner.sha = sha
+        observer = max(j.api.planner.runs) + 1
+        j.api.planner.add_run(observer)
+        j.env.update(GITHUB_SHA=sha, GITHUB_RUN_ID=str(observer))
+        return sha
+
+    def write_approval(self, document):
+        (self.journey.f.root / entry.BASELINE_PATH).write_text(json.dumps(document, indent=2) + '\n')
+        return self.commit_control('Reviewed fixture approval configuration')
+
+    def adopt(self, **env):
+        return self.journey.control('adopt-version-baseline', {}, **env)
+
+    def assert_no_delivery_progress(self, progress):
+        self.assertEqual(progress['deployments'], dict.fromkeys(r.SITES))
+        self.assertIsNone(progress['formal'])
+
+    def scheduler_bytes(self):
+        j = self.journey
+        runtime = entry.PlanningRuntime(j.config, root=j.f.root, environment=j.env, api=j.api)
+        runtime.authenticate_current()
+        state = entry.scheduler_state(runtime, entry.source_storage(runtime))
+        return r.canonical({'state': state, 'issue': j.api.scheduler.issue, 'comments': j.api.scheduler.comments})
+
+    def cli_process(self):
+        """Actual main()/argparse/output path; only remote HTTP is fixture data."""
+        j = self.journey
+        snapshot = {'root': str(j.f.root), 'config': j.config, 'environment': j.env,
+                    'stores': {name: {key: getattr(getattr(j.api, name), key)
+                        for key in ('sha', 'issue', 'comments', 'runs', 'jobs')} for name in ('scheduler', 'planner')}}
+        code = '''
+import json, os, sys, tempfile
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, 'tests/build')
+from ci_canary_planning_entry_test import PairHttp, entry
+value = json.load(sys.stdin)
+api = PairHttp(value['environment']['GITHUB_SHA'])
+for name, document in value['stores'].items():
+    for key, data in document.items():
+        setattr(getattr(api, name), key, {int(k): v for k, v in data.items()} if key in ('runs', 'jobs') else data)
+from tools.canary import assessment_runtime
+def forbidden(*args, **kwargs):
+    raise AssertionError('baseline adoption must not invoke a model')
+assessment_runtime.execute = forbidden
+with tempfile.TemporaryDirectory() as directory:
+    env = {**value['environment'], 'PLANNING_OPERATION': 'adopt-version-baseline',
+           'PLANNING_STORAGE': json.dumps(value['config']), 'PLANNING_REQUEST': '{}',
+           'GITHUB_STEP_SUMMARY': directory + '/summary'}
+    sys.argv = ['planning_entry', '--root', value['root'], '--directory', directory]
+    with patch.dict(os.environ, env, clear=True), patch.object(entry.batch_runtime, 'UrllibGitHubApi', return_value=api):
+        entry.main()
+    answer = json.loads((Path(directory) / 'planning.json').read_text())
+    assert not any(method in ('PATCH', 'POST') and path != '/graphql' for method, path, body in api.scheduler.calls)
+    print(json.dumps({'pid': os.getpid(), 'answer': answer, 'issue': api.planner.issue,
+                     'comments': api.planner.comments, 'calls': api.planner.calls}))
+'''
+        child = subprocess.run([sys.executable, '-c', code], cwd=ROOT, input=json.dumps(snapshot),
+                               text=True, capture_output=True, timeout=30)
+        self.assertEqual(child.returncode, 0,
+            'why: actual CLI baseline journey failed; remedy: preserve complete Git/journal evidence: ' + child.stderr)
+        result = json.loads(child.stdout)
+        self.assertNotEqual(result['pid'], os.getpid())
+        j.api.planner.issue, j.api.planner.comments = result['issue'], result['comments']
+        return result
+
+    def test_baseline_adoption_is_an_actual_manual_control_operation(self):
+        self.assertEqual(entry.request_for('adopt-version-baseline', {}), {},
+            'why: approved baseline has no integrated entry; remedy: wire the existing planning command')
+
+    def test_actual_cli_adoption_restart_and_real_result_plan_keep_independent_baselines(self):
+        j = self.journey
+        j.next_batch('scripts/ci/pre-adoption-failure.py', failed_job='core-ubuntu')
+        missing = j.next_batch('apps/creator-web/src/before-adoption.ts', missing_verdict=True)
+        before = self.scheduler_bytes()
+        self.assertTrue(json.loads(before)['state']['debts'])
+        self.assertTrue(json.loads(before)['state']['failures'])
+        history = (j.f.root / 'apps/creator-web/CHANGELOG.md').read_bytes()
+        first = self.cli_process()['answer']
+        self.assertEqual(first['action'], 'baseline-adopted')
+        self.assertFalse(first['admission_evidence'])
+        self.assertEqual(first['progress']['version_accounted'],
+                         {'revision': self.baseline, 'receipt_digest': first['receipt']['digest']})
+        self.assertEqual(first['receipt']['approval'], self.approval)
+        self.assert_no_delivery_progress(first['progress'])
+        self.assertEqual(self.scheduler_bytes(), before)
+        j.move_main()
+        replay = self.cli_process()
+        self.assertEqual(r.canonical(replay['answer']), r.canonical(first))
+        self.assertFalse(any(method in ('PATCH', 'POST') and path != '/graphql'
+                             for method, path, body in replay['calls']))
+        self.assertEqual((j.f.root / 'apps/creator-web/CHANGELOG.md').read_bytes(), history)
+        later = j.next_batch('apps/creator-web/src/after-adoption.ts')
+        self.assertEqual(later['base'], missing['target'])
+        self.assertNotEqual(later['base'], self.baseline)
+        before = self.scheduler_bytes()
+        result = j.control('observe-result', {'source_request_id': later['id']})
+        version_interval = result['decision']['plan']['version_interval']
+        expected = entry.test_scope.collect_interval(j.f.root, self.baseline, later['target'])
+        self.assertEqual(version_interval, {'kind': 'complete', **expected})
+        self.assertIn(missing['target'], [commit['sha'] for commit in version_interval['commits']])
+        self.assertEqual(result['intent']['progress'], first['progress'])
+        self.assertEqual(result['decision']['plan']['test_floor']['kind'], 'full')
+        for site in r.SITES:
+            self.assertEqual(result['decision']['plan']['site_intervals'][site]['kind'], 'bootstrap')
+            self.assertEqual(result['decision']['plan']['site_test_floors'][site]['kind'], 'full')
+        self.assertEqual(self.scheduler_bytes(), before)
+        self.assertEqual(self.adopt(), first)
+        self.assertEqual(j.control('recover', {'source_request_id': later['id']}), result)
+
+    def test_approval_is_only_frozen_git_and_historical_manifest_not_dirty_or_current_bytes(self):
+        j = self.journey
+        for host in self.approval['hosts']:
+            path = j.f.root / host['path']
+            document = json.loads(path.read_text())
+            document['version'] = '9.9.9'
+            path.write_text(json.dumps(document))
+        self.commit_control('Current versions do not rewrite the approved baseline')
+        (j.f.root / entry.BASELINE_PATH).write_text('{"revision":"unreviewed"}')
+        first = self.adopt()
+        self.assertEqual(first['receipt']['approval'], self.approval)
+        self.assertEqual([item['version'] for item in first['receipt']['manifests']], ['4.1.0', '4.1.0'])
+        self.assertEqual([json.loads(item['bytes'])['version'] for item in first['receipt']['manifests']],
+                         ['4.1.0', '4.1.0'])
+
+    def test_missing_bootstrap_and_existing_observations_are_not_migrated(self):
+        j = self.journey
+        j.control('observe-result', {'source_request_id': j.next_batch('apps/creator-web/src/observed.ts')['id']})
+        before = deepcopy((j.api.planner.issue, j.api.planner.comments))
+        with self.assertRaises(r.CanaryError):
+            self.adopt()
+        self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
+        # A separate fixture state immediately after explicit init, not a reset operation.
+        document = json.loads(j.api.planner.issue['body'])
+        document['payload'] = {'head': None, 'pending': None}
+        j.api.planner.issue['body'] = json.dumps(document)
+        j.api.planner.comments.clear()
+        before = deepcopy((j.api.planner.issue, j.api.planner.comments))
+        with self.assertRaises(r.CanaryError):
+            self.adopt()
+        self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
+
+    def test_caller_evidence_automatic_attempt_ref_and_lock_cannot_adopt(self):
+        j = self.journey
+        before = deepcopy((j.api.planner.issue, j.api.planner.comments))
+        for request in ({'revision': self.baseline}, {'progress': {}}, {'receipt': {}}, {'manifests': []}):
+            with self.subTest(request=request), self.assertRaises(r.CanaryError):
+                j.control('adopt-version-baseline', request)
+        for key, value in (('GITHUB_RUN_ATTEMPT', '2'), ('GITHUB_RUN_ID', '17'),
+                           ('GITHUB_REF', 'refs/heads/topic'), ('BATCH_WRITER_LOCK', 'self-test-report')):
+            with self.subTest(key=key), self.assertRaises(Exception):
+                self.adopt(**{key: value})
+        j.automatic()
+        with self.assertRaisesRegex(r.CanaryError, 'readiness or operation'):
+            self.adopt()
+        self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
+
+    def test_changed_unapproved_policy_or_host_inventory_never_writes(self):
+        j = self.journey
+        for key, value in (('decision_ref', 'https://github.com/endaye/lmdj/pull/1'),
+                           ('repository', 'attacker/lmdj'), ('historical_changelog', 'backfill'),
+                           ('hosts', self.approval['hosts'][:1])):
+            with self.subTest(key=key):
+                self.write_approval({**self.approval, key: value})
+                before = deepcopy((j.api.planner.issue, j.api.planner.comments))
+                with self.assertRaises(r.CanaryError):
+                    self.adopt()
+                self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
+
+    def test_wrong_manifest_version_and_symlink_or_executable_sources_never_write(self):
+        j = self.journey
+        path = j.f.root / self.approval['hosts'][0]['path']
+        manifest = json.loads(path.read_text())
+        manifest['version'] = '4.0.0'
+        path.write_text(json.dumps(manifest))
+        wrong = self.commit_control('Wrong historical Host manifest')
+        self.write_approval({**self.approval, 'revision': wrong})
+        before = deepcopy((j.api.planner.issue, j.api.planner.comments))
+        with self.assertRaisesRegex(r.CanaryError, 'manifest differs'):
+            self.adopt()
+        self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
+        self.write_approval(self.approval)
+        config = j.f.root / entry.BASELINE_PATH
+        config.chmod(0o755)
+        self.commit_control('Executable config is not canonical evidence')
+        with self.assertRaisesRegex(r.CanaryError, 'regular nonexecutable'):
+            self.adopt()
+        config.unlink()
+        config.symlink_to('policy.json')
+        self.commit_control('Symlink config is not canonical evidence')
+        with self.assertRaisesRegex(r.CanaryError, 'regular nonexecutable'):
+            self.adopt()
+        self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
+
+    def test_baseline_must_be_on_main_first_parent_even_when_side_commit_was_merged(self):
+        j = self.journey
+        j.f.git('checkout', '-qb', 'fix/baseline-side-fixture', self.baseline)
+        (j.f.root / 'side-only.txt').write_text('Side branch is not a first-parent baseline.\n')
+        j.f.git('add', '.')
+        j.f.git('commit', '-qm', 'Side branch candidate')
+        side = j.f.git('rev-parse', 'HEAD')
+        j.f.git('checkout', '-q', 'main')
+        self.write_approval({**self.approval, 'revision': side})
+        before = deepcopy((j.api.planner.issue, j.api.planner.comments))
+        with self.assertRaisesRegex(entry.test_scope.ScopeError, "baseline is not on target's first-parent history"):
+            self.adopt()
+        j.f.git('merge', '--no-ff', '-qm', 'Merge side candidate without making it first-parent', 'fix/baseline-side-fixture')
+        j.move_main()
+        with self.assertRaisesRegex(entry.test_scope.ScopeError, "baseline is not on target's first-parent history"):
+            self.adopt()
+        self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
+
+    def test_older_green_discovery_stays_fail_closed_without_skipping_or_resetting_history(self):
+        j = self.journey
+        adopted = self.adopt()
+        before = deepcopy((j.api.planner.issue, j.api.planner.comments))
+        scheduler = self.scheduler_bytes()
+        with self.assertRaisesRegex(r.CanaryError, "baseline is not on target's first-parent history"):
+            j.control('reconcile-next', {})
+        self.assertEqual(before, (j.api.planner.issue, j.api.planner.comments))
+        self.assertEqual(self.scheduler_bytes(), scheduler)
+        self.assertEqual(j.planning_state()['progress'], adopted['progress'])
+        self.assertFalse(j.planning_state()['observations'])
+
+    def test_lost_adoption_ack_recovers_in_new_cli_process_without_second_post(self):
+        j = self.journey
+        j.api.planner.lose = 'adopt-version-baseline'
+        with self.assertRaisesRegex(r.CanaryError, 'append outcome is unresolved'):
+            self.adopt()
+        comments = deepcopy(j.api.planner.comments)
+        recovered = self.cli_process()
+        self.assertEqual(recovered['comments'], comments)
+        self.assertFalse(any(method == 'POST' and path != '/graphql' for method, path, body in recovered['calls']))
+        self.assertEqual(recovered['answer']['receipt']['approval'], self.approval)
+        self.assertEqual(recovered['answer'], self.adopt())
+
+    def test_shipped_config_preserves_the_exact_owner_approved_revision_and_versions(self):
+        approval = entry.storage.validate_baseline_approval(json.loads((ROOT / entry.BASELINE_PATH).read_text()))
+        self.assertEqual(approval['revision'], 'a81faad3b85d362e3e44541cd28ee21dac6848a4')
+        self.assertEqual([host['version'] for host in approval['hosts']], ['4.1.0', '4.1.0'])
+        # Historical Git authentication belongs to the complete temporary Git
+        # journeys above; ordinary CI-contract checkout may legitimately be shallow.
+
+
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
         self.path = ROOT / entry.PlanningRuntime.workflow
         self.source = self.path.read_text()
         self.job = block(self.source, 'controller', 2)
+
+    def test_manual_operation_inventory_includes_the_integrated_baseline_entry(self):
+        options = field(block(self.source, 'operation', 6), 'options', 8)
+        values = [value.strip() for value in options.removeprefix('[').removesuffix(']').split(',')]
+        self.assertEqual(set(values), set(entry.OPERATIONS))
+        self.assertEqual(len(values), len(entry.OPERATIONS))
+        self.assertIn('adopt-version-baseline', values)
 
     def test_automatic_admission_coalesces_without_cancelling_running_or_manual_work(self):
         admission = scalars(block(self.source, 'concurrency', 0), 2)

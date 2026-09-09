@@ -17,7 +17,9 @@ import incremental_entry
 import report_runtime
 import test_scope
 
-OPERATIONS = ('init', 'bootstrap', 'observe-result', 'recover', 'reconcile-next')
+OPERATIONS = ('init', 'bootstrap', 'observe-result', 'recover', 'reconcile-next', 'adopt-version-baseline')
+BASELINE_PATH = 'tools/canary/first_version_baseline.json'
+MAX_BASELINE_FILE_BYTES = 16384
 STORAGE_KEYS = {'repository', 'issue_number', 'issue_node_id', 'bot_node_id', 'workflow_id', 'epoch'}
 
 
@@ -104,6 +106,41 @@ def source_storage(runtime):
     return config
 
 
+def baseline_blob(runtime, revision, path):
+    """Read only an exact regular nonexecutable Git blob, never worktree bytes."""
+    rows = runtime.git('ls-tree', '-z', revision, '--', path).split(b'\0')
+    r.require(len(rows) == 2 and rows[1] == b'' and b'\t' in rows[0],
+              'baseline evidence is not one exact Git entry')
+    metadata, actual_path = rows[0].split(b'\t', 1)
+    fields = metadata.split(b' ')
+    r.require(len(fields) == 3 and fields[:2] == [b'100644', b'blob']
+              and actual_path == path.encode('utf-8'),
+              'baseline evidence must be a regular nonexecutable Git blob')
+    oid = r.exact_sha(fields[2].decode('ascii'))
+    # Check before reading the object, not only after allocating its bytes.
+    size = runtime.git('cat-file', '-s', oid).decode('ascii').strip()
+    r.require(size.isascii() and size.isdecimal() and 0 < int(size) <= MAX_BASELINE_FILE_BYTES,
+              'baseline evidence exceeds the bounded file budget')
+    raw = runtime.git('cat-file', 'blob', oid)
+    r.require(len(raw) == int(size), 'baseline Git blob size differs')
+    return oid, raw.decode('utf-8')
+
+
+def baseline_receipt(runtime):
+    approval_blob, approval_bytes = baseline_blob(runtime, runtime.control, BASELINE_PATH)
+    approval = storage.validate_baseline_approval(batch_runtime.strict_json(approval_bytes))
+    test_scope.collect_interval(runtime.root, approval['revision'], runtime.inputs.main)
+    manifests = []
+    for host in approval['hosts']:
+        oid, raw = baseline_blob(runtime, approval['revision'], host['path'])
+        manifests.append({**host, 'blob': oid, 'bytes': raw})
+    # Run/control authenticate this writer but are deliberately not receipt
+    # identity: unchanged approved Git bytes survive later manual recovery.
+    return storage.validate_baseline_receipt(r.seal({
+        'schema': 'lmdj.canary-version-baseline-receipt.v1', 'approval': approval,
+        'approval_blob': approval_blob, 'approval_bytes': approval_bytes, 'manifests': manifests}))
+
+
 def authenticate_wakeup(runtime, operation):
     kind = runtime.env.get('GITHUB_EVENT_NAME')
     r.require(runtime.get_run(runtime.current['run_id'], 1).get('event') == kind,
@@ -158,6 +195,10 @@ def control(operation, config, request, *, root, environment, api=None):
     if operation == 'bootstrap':
         return {'action': 'bootstrapped', 'admission_evidence': False,
                 'progress': plans.bootstrap(config['repository'])}
+    if operation == 'adopt-version-baseline':
+        progress = plans.adopt_version_baseline(baseline_receipt(runtime))
+        return {'action': 'baseline-adopted', 'admission_evidence': False,
+                'progress': progress, 'receipt': plans.load()['baseline_receipt']}
     state = source_config = current = None
     if operation == 'reconcile-next':
         current = plans.load()

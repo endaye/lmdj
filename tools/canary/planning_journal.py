@@ -2,14 +2,71 @@
 
 The caller proves source/progress provenance and first-parent target ordering.
 This reducer preserves that evidence, one unfinished write and a pinned active
-plan. It cannot retire work, advance progress, allocate or execute anything.
+plan. It can adopt one approved version-history baseline into an empty journal;
+it cannot retire work, advance delivery progress, allocate or execute anything.
 """
 from copy import deepcopy
+import hashlib
 
 from . import assessment_journal as codec, planning, records as r
 
 SCHEMA = 'lmdj.canary-planning-journal.v1'
 INTENT_SCHEMA = 'lmdj.canary-plan-intent.v1'
+BASELINE_SCHEMA = 'lmdj.canary-version-baseline-receipt.v1'
+
+
+def validate_baseline_approval(value):
+    """Validate policy shape only; entry authenticates its frozen Git source."""
+    r.require(isinstance(value, dict) and set(value) == {
+        'schema', 'repository', 'revision', 'decision_ref', 'historical_changelog', 'hosts'}
+        and value['schema'] == 'lmdj.canary-first-version-baseline.v1'
+        and value['repository'] == 'endaye/lmdj'
+        and value['decision_ref'] == 'https://github.com/endaye/lmdj/pull/1071'
+        and value['historical_changelog'] == 'preserve-no-backfill',
+        'first version baseline approval schema or policy differs')
+    r.exact_sha(value['revision'])
+    expected = [{'module': module, 'path': f'apps/{module}/module.json', 'version': '4.1.0'}
+                for module in ('creator-web', 'web-runtime-host')]
+    r.require(value['hosts'] == expected, 'first version baseline Host inventory differs')
+    return deepcopy(value)
+
+
+def _baseline_blob(text, blob):
+    r.require(isinstance(text, str), 'baseline source is not complete UTF-8 text')
+    r.exact_sha(blob)
+    try:
+        raw = text.encode('utf-8')
+    except UnicodeError:
+        raise r.CanaryError('why: baseline source is not valid UTF-8; remedy: restore exact Git bytes') from None
+    r.require(len(raw) <= codec.MAX_EVENT_BYTES, 'baseline source exceeds small receipt budget')
+    r.require(hashlib.sha1(b'blob ' + str(len(raw)).encode('ascii') + b'\0' + raw).hexdigest() == blob,
+              'baseline Git blob identity differs from exact source bytes')
+    return r.decode(raw)
+
+
+def validate_baseline_receipt(value):
+    """Replay complete evidence, not an unauthenticated caller approval."""
+    r.require(isinstance(value, dict) and set(value) == {
+        'schema', 'approval', 'approval_blob', 'approval_bytes', 'manifests', 'digest'}
+        and value['schema'] == BASELINE_SCHEMA, 'baseline receipt schema is not closed')
+    r.verify_seal(value)
+    r.require(len(r.canonical(value)) <= codec.MAX_EVENT_BYTES - 1024,
+              'baseline receipt exceeds the small event budget')
+    approval = validate_baseline_approval(value['approval'])
+    r.require(_baseline_blob(value['approval_bytes'], value['approval_blob']) == approval,
+              'baseline approval differs from retained Git bytes')
+    manifests = value['manifests']
+    r.require(isinstance(manifests, list) and len(manifests) == 2,
+              'baseline receipt manifest inventory is incomplete')
+    for source, host in zip(manifests, approval['hosts']):
+        r.require(isinstance(source, dict) and set(source) == {'module', 'path', 'version', 'blob', 'bytes'}
+                  and all(source[key] == host[key] for key in host),
+                  'baseline receipt manifest identity differs')
+        manifest = _baseline_blob(source['bytes'], source['blob'])
+        r.require(isinstance(manifest, dict) and manifest.get('contract') == 'lmdj.module.v1'
+                  and manifest.get('module') == host['module'] and manifest.get('version') == host['version'],
+                  'baseline retained Host manifest differs from approved identity')
+    return deepcopy(value)
 
 
 def source_id(value):
@@ -138,6 +195,17 @@ def reduce(state, event):
                   and state['generation'] == 0 and state['progress'] is None,
                   'planning progress bootstrap is not an explicit first event')
         answer['progress'] = r.initial_progress(data['repository'])
+    elif event['type'] == 'adopt-version-baseline':
+        r.require(set(data) == {'receipt'} and state['baseline_receipt'] is None
+                  and state['progress'] == r.initial_progress('endaye/lmdj')
+                  and not state['observations']
+                  and all(state[key] is None for key in ('active', 'pending', 'unfinished')),
+                  'version baseline adoption requires an empty explicitly bootstrapped journal')
+        receipt = validate_baseline_receipt(data['receipt'])
+        answer['baseline_receipt'] = receipt
+        answer['progress'] = r.seal({**state['progress'], 'version_accounted': {
+            'revision': receipt['approval']['revision'], 'receipt_digest': receipt['digest']}})
+        r.validate_progress(answer['progress'], repository='endaye/lmdj')
     elif event['type'] == 'intent':
         r.require(set(data) == {'intent', 'slot'} and state['progress'] is not None
                   and state['unfinished'] is None, 'planning intent lacks bootstrap or overtakes unfinished work')
@@ -189,7 +257,8 @@ class Plans:
     def load(self):
         r.require(self.lock_held() is True, 'planning storage lacks its shared writer lock')
         state = {'schema': SCHEMA, 'epoch': self.epoch, 'generation': 0, 'events': {}, 'blobs': {},
-                 'progress': None, 'observations': {}, 'active': None, 'pending': None, 'unfinished': None}
+                 'progress': None, 'baseline_receipt': None, 'observations': {},
+                 'active': None, 'pending': None, 'unfinished': None}
         try:
             for event in self.journal.load():
                 state = reduce(state, event)
@@ -214,6 +283,15 @@ class Plans:
         state = self.load()
         if state['progress'] is None:
             state = self._persist(state, 'bootstrap', {'repository': repository})
+        return deepcopy(state['progress'])
+
+    def adopt_version_baseline(self, receipt):
+        receipt = validate_baseline_receipt(receipt)
+        state = self.load()
+        if state['baseline_receipt'] is None:
+            state = self._persist(state, 'adopt-version-baseline', {'receipt': receipt})
+        else:
+            r.require(state['baseline_receipt'] == receipt, 'adopted version baseline receipt cannot be replaced')
         return deepcopy(state['progress'])
 
     @staticmethod

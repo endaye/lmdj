@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Initialize reserved storage, bootstrap progress, observe/recover an exact result, or discover one pending result.
+        description: Initialize reserved storage, bootstrap/adopt approved version progress, or observe/recover/discover a retained result.
         type: choice
-        options: [init, bootstrap, observe-result, recover, reconcile-next]
+        options: [init, bootstrap, adopt-version-baseline, observe-result, recover, reconcile-next]
         required: true
       storage:
         description: Reviewed dedicated planning journal JSON with exact Issue, bot, workflow and epoch identities.
