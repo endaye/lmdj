@@ -18,6 +18,7 @@ sys.path[:0] = [str(ROOT / "scripts/ci"), str(ROOT / "tests/build")]
 import report_runtime as module
 import batch_runtime
 import batch_verdict
+import batch_execution
 import incremental_batch as batch
 import report_outbox
 import review_scope
@@ -69,6 +70,36 @@ def result(memory, *, kind="bootstrap", selection=None, target=B, control=A, pol
     return request, verdict
 
 
+def common_result(memory, *, independent=None):
+    run = {"run_id": 100 + len(memory.comments), "attempt": 1}
+    selection = test_scope._selection(POLICY, POLICY.suite_ids, ["shared control failure"])
+    request = batch.make_request(POLICY, request_id="request-" + str(run["run_id"]), kind="bootstrap",
+        base_sha=None, target_sha=B, control_sha=A, selection=selection, origin_run=run)
+    append(memory, "observe", {"target": B, "descends_pending": True})
+    append(memory, "admit", dict(request=request, executor_run=run, history_complete=True, ancestor=True, old_runs_terminal=True))
+    append(memory, "claim", dict(request_id=request["id"], run=run))
+    identity = dict(request_id=request["id"], request_kind="bootstrap", base_sha=None, target_sha=B,
+        control_sha=A, policy_digest=POLICY.digest, run_id=run["run_id"], run_attempt=1)
+    needs = {"change-scope": {"result": "failure", "outputs": {"reason": "shared control failure"}}}
+    needs.update({{"core-tsan": "nightly-tsan", "core-stress": "nightly-stress"}.get(job, job):
+                  {"result": "skipped", "outputs": {}}
+                  for job in POLICY.inventory.job_owner})
+    needs["macos-fallback"] = {"result": "skipped", "outputs": {}}
+    if independent == "missing":
+        del needs["core-macos"]
+    elif independent == "cancelled":
+        needs["core-macos"] = {"result": "cancelled", "outputs": {}}
+    elif independent == "infrastructure":
+        needs["core-macos"] = {"result": "failure", "outputs": {"infrastructure_failure": "true"}}
+    verdict = batch_execution.from_needs(POLICY, identity, selection, needs,
+        aliases={"core-tsan": "nightly-tsan", "core-stress": "nightly-stress"},
+        dependencies={job: ["change-scope"] for job in POLICY.inventory.job_owner})
+    outcomes = batch_verdict.scheduler_outcomes(verdict, POLICY, identity, selection)
+    append(memory, "result", dict(request_id=request["id"], run=run, target=B,
+        policy=POLICY.digest, outcomes=outcomes, reference=batch_runtime.encode_reference(verdict), terminal=True))
+    return request, verdict
+
+
 class ProjectionTests(unittest.TestCase):
     def setUp(self):
         self.scheduler, self.outbox = Memory(), Memory()
@@ -84,6 +115,31 @@ class ProjectionTests(unittest.TestCase):
     def planned(self):
         state = module.scheduler_state(self.runtime)
         return module.plan_batch_reports("endaye/lmdj", state, self.inputs)
+
+    def validated_common_result(self):
+        """Feed the planner the exact reference accepted by the real runtime."""
+        fixture = runtime_fixture.RuntimeTests("test_explicit_init_is_empty_not_a_tested_baseline")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        start = fixture.start()
+        fixture.evidence(start["request"], shared_dependency_failure=True)
+        executor = fixture.make()
+        executor.inputs.refresh()
+        receipt = executor.result_for(start["request"], start["executor"])
+        self.assertEqual(receipt["status"], "ready")
+        verdict = batch_runtime.decode_reference(receipt["reference"])
+        request = start["request"]
+        self.inputs.policies[request["control"]] = POLICY
+        run = start["executor"]
+        append(self.scheduler, "observe", {"target": request["target"], "descends_pending": True})
+        append(self.scheduler, "admit", dict(request=request, executor_run=run, history_complete=True,
+                                              ancestor=True, old_runs_terminal=True))
+        append(self.scheduler, "claim", dict(request_id=request["id"], run=run))
+        append(self.scheduler, "result", dict(request_id=request["id"], run=run, target=request["target"],
+            policy=request["policy"], outcomes=batch_verdict.scheduler_outcomes(
+                verdict, POLICY, verdict["identity"], request["selection"]),
+            reference=receipt["reference"], terminal=True))
+        return request, verdict
 
     def posts(self):
         return [call for call in self.api.calls if call[0] in {"create_issue", "create_comment"}]
@@ -176,6 +232,70 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(len(planned), 16)
         self.assertTrue(all(r.key.endswith("-missing") for r in planned))
         self.assertTrue(all("no product verdict" in r.detail for r in planned))
+
+    def test_authenticated_shared_event_reaches_one_durable_report_with_all_suite_debt(self):
+        request, verdict = common_result(self.scheduler)
+        self.assertEqual(verdict["evidence_schema"], batch_verdict.COMMON_EVENT_SCHEMA)
+        reports = self.planned()
+        self.assertEqual(len(reports), 1)
+        report = reports[0]
+        event = verdict["common_events"][0]
+        self.assertEqual(report.key, module.reporting.common_event_report_key(event["event_id"]))
+        self.assertIn(event["event_id"], report.summary)
+        for suite in POLICY.suite_ids:
+            self.assertIn(suite, report.detail)
+        first = self.adapter.deliver(reports, 32)
+        self.assertEqual(first["outcomes"][0]["status"], "delivered")
+        self.assertEqual(len(self.posts()), 1)
+        second = self.adapter.deliver(reports, 32)
+        self.assertEqual(second["outcomes"], [])
+        self.assertEqual(len(self.posts()), 1)
+        stored = self.adapter.outbox().load()
+        delivery = next(iter(stored["deliveries"].values()))
+        self.assertEqual(delivery["status"], "delivered")
+        self.assertIn(request["id"], delivery["payload"]["issue_body"])
+
+    def test_common_event_keeps_independent_mixed_suite_debt_separate(self):
+        request, verdict = common_result(self.scheduler, independent="missing")
+        self.assertEqual(verdict["evidence_schema"], batch_verdict.COMMON_EVENT_SCHEMA)
+        reports = self.planned()
+        keys = {report.key for report in reports}
+        event = verdict["common_events"][0]
+        self.assertIn(module.reporting.common_event_report_key(event["event_id"]), keys)
+        self.assertIn("self-test-core-macos-missing", keys)
+        common = next(report for report in reports
+                      if report.key == module.reporting.common_event_report_key(event["event_id"]))
+        self.assertIn("core_macos", common.detail)
+        independent = next(report for report in reports if report.key == "self-test-core-macos-missing")
+        self.assertIn("Verification debt: missing", independent.summary)
+        self.assertIn(request["id"], independent.summary)
+
+    def test_common_event_keeps_independent_cancellation_separate(self):
+        _, verdict = common_result(self.scheduler, independent="cancelled")
+        reports = self.planned()
+        event_key = module.reporting.common_event_report_key(verdict["common_events"][0]["event_id"])
+        self.assertIn(event_key, {report.key for report in reports})
+        cancellation = next(report for report in reports if report.key == "self-test-core-macos-blocked")
+        self.assertIn("Verification debt: cancelled", cancellation.summary)
+
+    def test_common_event_keeps_independent_infrastructure_separate(self):
+        _, verdict = common_result(self.scheduler, independent="infrastructure")
+        reports = self.planned()
+        event_key = module.reporting.common_event_report_key(verdict["common_events"][0]["event_id"])
+        self.assertIn(event_key, {report.key for report in reports})
+        infrastructure = next(report for report in reports
+                              if report.key == "self-test-core-macos-infrastructure-failure")
+        self.assertIn("Verification debt: infrastructure", infrastructure.summary)
+
+    def test_validated_v2_artifact_reaches_planner_and_outbox(self):
+        request, verdict = self.validated_common_result()
+        self.assertEqual(verdict["evidence_schema"], batch_verdict.COMMON_EVENT_SCHEMA)
+        reports = self.planned()
+        self.assertEqual(len(reports), 1)
+        answer = self.adapter.deliver(reports, 1)
+        self.assertEqual(answer["outcomes"][0]["status"], "delivered")
+        self.assertEqual(len(self.posts()), 1)
+        self.assertIn(request["id"], self.api.issues[0]["body"])
 
     def test_wrong_special_reference_is_rejected(self):
         result(self.scheduler)

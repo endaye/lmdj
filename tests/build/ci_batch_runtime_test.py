@@ -258,19 +258,27 @@ class RuntimeTests(unittest.TestCase):
         instance.initialize()
         return instance.reconcile(execute=True)
 
-    def evidence(self, request, *, missing_job=None, failed_job=None, run=17):
+    def evidence(self, request, *, missing_job=None, failed_job=None, run=17,
+                 shared_dependency_failure=False, emit_common_events=True):
         executor = {"run_id": run, "attempt": 1}
         self.git("checkout", "-q", "--detach", request["control"])
         prepared = batch_execution.prepare(self.policy, request, executor, repo=self.root,
             run_id=run, run_attempt=1, control_sha=request["control"], main_sha=self.api.sha)
         self.git("checkout", "-q", "main")
-        needs = {runtime.ALIASES.get(job, job): {"result": "success"} for job in runtime.JOB_NAMES}
-        if missing_job:
-            del needs[runtime.ALIASES.get(missing_job, missing_job)]
-        if failed_job:
-            needs[runtime.ALIASES.get(failed_job, failed_job)] = {"result": "failure"}
+        if shared_dependency_failure:
+            needs = {"change-scope": {"result": "failure", "outputs": {"reason": "shared control failure"}}}
+            needs.update({runtime.ALIASES.get(job, job): {"result": "skipped", "outputs": {}}
+                          for job in runtime.JOB_NAMES})
+            needs["macos-fallback"] = {"result": "skipped", "outputs": {}}
+        else:
+            needs = {runtime.ALIASES.get(job, job): {"result": "success"} for job in runtime.JOB_NAMES}
+            if missing_job:
+                del needs[runtime.ALIASES.get(missing_job, missing_job)]
+            if failed_job:
+                needs[runtime.ALIASES.get(failed_job, failed_job)] = {"result": "failure"}
         verdict = batch_execution.from_needs(self.policy, prepared["identity"], request["selection"], needs,
-                                            aliases=runtime.ALIASES, dependencies=runtime.dependencies(self.policy))
+                                            aliases=runtime.ALIASES, dependencies=runtime.dependencies(self.policy),
+                                            emit_common_events=emit_common_events)
         self.api.runs[run].update(status="completed", conclusion="success" if verdict["status"] == "passed" else "failure")
         self.api.jobs[run][0].update(status="completed", conclusion="success")
         for index, (job, name) in enumerate(runtime.JOB_NAMES.items()):
@@ -359,6 +367,33 @@ class RuntimeTests(unittest.TestCase):
         stored = result["state"]["results"][start["request"]["id"]]
         self.assertEqual(runtime.decode_reference(stored["reference"]), verdict)
         self.assertIn("core_macos", result["state"]["debts"])
+
+    def test_historical_v1_shared_dependency_bundle_replays_from_raw_needs(self):
+        start = self.start()
+        verdict = self.evidence(start["request"], shared_dependency_failure=True,
+                                emit_common_events=False)
+        self.assertEqual(verdict["evidence_schema"], batch_verdict.SCHEMA)
+        self.assertNotIn("common_events", verdict)
+        instance = self.make()
+        instance.inputs.refresh()
+        self.assertEqual(instance.result_for(start["request"], start["executor"])["status"], "ready")
+
+    def test_forged_v2_common_event_is_rejected_after_authenticated_bundle(self):
+        start = self.start()
+        verdict = self.evidence(start["request"], shared_dependency_failure=True)
+        with zipfile.ZipFile(io.BytesIO(self.api.downloads[40])) as archive:
+            documents = {name: json.loads(archive.read(name)) for name in archive.namelist()}
+        source = documents["verdict.json"]["common_events"][0]["source"]
+        source["outputs"]["reason"] = "forged"
+        source["digest"] = batch.digest({"result": source["result"], "outputs": source["outputs"]})
+        verdict_document = documents["verdict.json"]
+        verdict_document["evidence_digest"] = batch.digest({
+            key: value for key, value in verdict_document.items() if key != "evidence_digest"})
+        self.api.downloads[40] = zipped(documents)
+        instance = self.make()
+        instance.inputs.refresh()
+        self.assertEqual(instance.result_for(start["request"], start["executor"]), {"status": "missing"})
+        self.assertEqual(verdict["evidence_schema"], batch_verdict.COMMON_EVENT_SCHEMA)
 
     def test_artifact_visibility_lag_is_pending_not_missing(self):
         start = self.start()

@@ -14,10 +14,13 @@ import self_test
 import test_scope
 
 SCHEMA = "lmdj.ci-batch-verdict.v1"
+COMMON_EVENT_SCHEMA = "lmdj.ci-batch-verdict.v2"
 IDENTITY_KEYS = {"request_id", "request_kind", "base_sha", "target_sha", "control_sha",
                  "policy_digest", "run_id", "run_attempt"}
 REQUIRED_OBSERVATION_KEYS = {"suite", "job", "run_id", "run_attempt", "target_revision", "conclusion"}
 OPTIONAL_OBSERVATION_KEYS = {"artifact", "blocked_by", "started_at", "completed_at", "infrastructure_failure"}
+COMMON_EVENT_KEYS = {"event_id", "kind", "request_id", "run_id", "run_attempt", "cause", "source", "blocked_suites"}
+COMMON_SOURCE_KEYS = {"job", "result", "outputs", "digest"}
 
 
 class VerdictError(ValueError):
@@ -70,6 +73,50 @@ def _observations(observations):
     return rows
 
 
+def _common_events(identity, selection, events):
+    """Validate source-bound shared dependency events without inventing causes.
+
+    The workflow producer supplies these from its real ``needs`` context. This
+    validator checks the closed shape and exact request/run identity; the
+    producer adapter additionally rebuilds the event from authenticated raw
+    needs, so a rehashed or fixture-only event cannot become evidence.
+    """
+    require(isinstance(events, list), "common events must be a complete list")
+    selected = set(selection["suites"])
+    seen_causes = set()
+    checked = []
+    for event in events:
+        require(isinstance(event, dict) and set(event) == COMMON_EVENT_KEYS,
+                "common event schema is not closed")
+        require(event["kind"] == "shared_dependency_failure",
+                "unsupported common event kind")
+        require(event["request_id"] == identity["request_id"]
+                and type(event["run_id"]) is int and event["run_id"] == identity["run_id"]
+                and type(event["run_attempt"]) is int and event["run_attempt"] == identity["run_attempt"],
+                "common event identity differs from the exact request/run/attempt")
+        require(isinstance(event["cause"], str) and bool(event["cause"])
+                and event["cause"] not in seen_causes, "common event cause is missing or duplicated")
+        source = event["source"]
+        require(isinstance(source, dict) and set(source) == COMMON_SOURCE_KEYS
+                and source["job"] == event["cause"] and source["result"] == "failure"
+                and isinstance(source["outputs"], dict)
+                and all(isinstance(key, str) and isinstance(value, str) for key, value in source["outputs"].items())
+                and source["digest"] == self_test.digest_of({"result": source["result"], "outputs": source["outputs"]}),
+                "common event source is not an exact authenticated failed dependency")
+        blocked = event["blocked_suites"]
+        require(isinstance(blocked, list) and bool(blocked) and blocked == sorted(set(blocked))
+                and all(isinstance(suite, str) and suite in selected for suite in blocked),
+                "common event has invalid selected blocked suites")
+        expected_id = self_test.digest_of({"request_id": identity["request_id"],
+                                           "run_id": identity["run_id"],
+                                           "run_attempt": identity["run_attempt"],
+                                           "cause": event["cause"]})
+        require(event["event_id"] == expected_id, "common event ID is not keyed by exact request/run/attempt/cause")
+        seen_causes.add(event["cause"])
+        checked.append(deepcopy(event))
+    return checked
+
+
 def _debt(suite, by_job):
     """Keep uncovered work even when another required job has a test failure."""
     outcomes = []
@@ -93,7 +140,7 @@ def _debt(suite, by_job):
     return None
 
 
-def build(policy, identity, selection, observations):
+def build(policy, identity, selection, observations, *, common_events=None):
     """Build new-schema evidence from strictly typed original observations.
 
 Only selected-suite rows are accepted. A needs-context adapter must omit rows
@@ -101,6 +148,7 @@ for unselected jobs, not convert their skips into success. All policy suites
 still appear in the report. Missing selected rows become uncovered obligations.
 """
     _identity(policy, identity)
+    common_events = [] if common_events is None else _common_events(identity, selection, common_events)
     try:
         normalized = test_scope.union_selections(policy, [selection])
         require(selection == normalized, "frozen selection omits transitive consumers")
@@ -149,9 +197,12 @@ still appear in the report. Missing selected rows become uncovered obligations.
                        "failures": failures, "jobs": dict(sorted(result.jobs.items())), "diagnostics": diagnostics})
     status = "not-required" if not selected else (
         "passed" if all(suite["status"] == "passed" for suite in suites if suite["selected"]) else "failed")
-    document = {"evidence_schema": SCHEMA, "identity": deepcopy(identity), "selection": selection,
+    document = {"evidence_schema": COMMON_EVENT_SCHEMA if common_events else SCHEMA,
+                "identity": deepcopy(identity), "selection": selection,
                 "inventory_digest": policy.inventory.revision, "status": status, "suites": suites,
                 "observations": deepcopy(sorted(observations, key=lambda row: (row["suite"], row["job"])))}
+    if common_events:
+        document["common_events"] = common_events
     document["evidence_digest"] = self_test.digest_of(document)
     return document
 
@@ -162,13 +213,23 @@ def validate(document, policy, expected_identity, expected_selection):
 Rehashing edited statuses cannot make them valid. Replacing observations with
 invented results is prevented by caller provenance verification, not this hash.
 """
-    require(isinstance(document, dict) and set(document) == {
-        "evidence_schema", "identity", "selection", "inventory_digest", "status", "suites",
-        "observations", "evidence_digest"}, "verdict schema is not closed")
-    require(document["evidence_schema"] == SCHEMA, "unsupported scoped verdict schema")
+    base_keys = {"evidence_schema", "identity", "selection", "inventory_digest", "status", "suites",
+                 "observations", "evidence_digest"}
+    require(isinstance(document, dict) and base_keys <= set(document)
+            and set(document) <= base_keys | {"common_events"}, "verdict schema is not closed")
+    schema = document["evidence_schema"]
+    require(schema in {SCHEMA, COMMON_EVENT_SCHEMA}, "unsupported scoped verdict schema")
+    if schema == SCHEMA:
+        require("common_events" not in document, "legacy verdict cannot carry common events")
+    else:
+        require("common_events" in document, "common-event verdict lacks its event list")
     require(document["identity"] == expected_identity, "verdict differs from independently resolved executor identity")
     require(document["selection"] == expected_selection, "verdict differs from frozen request scope")
-    rebuilt = build(policy, expected_identity, expected_selection, document["observations"])
+    common_events = _common_events(expected_identity, expected_selection, document.get("common_events", []))
+    require((schema == COMMON_EVENT_SCHEMA) == bool(common_events),
+            "common-event schema does not match its event list")
+    rebuilt = build(policy, expected_identity, expected_selection, document["observations"],
+                    common_events=common_events)
     try:
         matches = self_test.canonical_json(document) == self_test.canonical_json(rebuilt)
     except (TypeError, ValueError):

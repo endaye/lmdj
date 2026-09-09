@@ -91,6 +91,9 @@ FAILURE_CLASSES = ("test_failure", "infrastructure_failure", "blocked", "missing
 #: Batch-level keys that are not a suite.
 BATCH_INVALID_KEY = "self-test-batch-invalid"
 MISSING_KEY = "self-test-missing"
+#: Common infrastructure reports are keyed by the source event, not by a
+#: suite or a coincident run timestamp.
+COMMON_EVENT_REPORT_PREFIX = "self-test-infrastructure-event-"
 #: Bound on any log or diagnostic text copied into an Issue. The text is data
 #: from a test run, not prose written for the Issue.
 TEXT_LIMIT = 1200
@@ -130,6 +133,13 @@ _KEY = re.compile(r"^[a-z][a-z0-9_-]*$")
 _KEY_MARKER = "<!-- lmdj-self-test: key={key} -->"
 _OBS_MARKER = "<!-- lmdj-self-test: key={key} obs={obs} -->"
 _MARKER_SCAN = re.compile(r"<!-- lmdj-self-test: key=(?P<key>[a-z0-9_-]+)(?: obs=(?P<obs>[^ >]+))? -->")
+_COMMON_EVENT_ID = re.compile(r"^[0-9a-f]{64}$")
+
+
+def common_event_report_key(event_id: str) -> str:
+    if not isinstance(event_id, str) or not _COMMON_EVENT_ID.fullmatch(event_id):
+        raise ValueError("common event ID is not an exact digest")
+    return COMMON_EVENT_REPORT_PREFIX + event_id
 
 #: Which suites carry a candidate-blocking severity when they fail as tests.
 #: Everything else is medium; infrastructure and blocked are never high on

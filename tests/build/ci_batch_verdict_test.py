@@ -239,6 +239,35 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(document["observations"][0]["conclusion"], "success",
                          "why: returned data aliased evidence; remedy: defensive copies")
 
+    def common_event(self, cause="change-scope", suites=None):
+        suites = sorted(suites or self.selection["suites"])
+        source = {"result": "failure", "outputs": {"reason": "quota"}}
+        event = {"kind": "shared_dependency_failure", "request_id": self.identity["request_id"],
+                 "run_id": self.identity["run_id"], "run_attempt": self.identity["run_attempt"],
+                 "cause": cause,
+                 "source": {"job": cause, **source,
+                            "digest": self_test.digest_of(source)},
+                 "blocked_suites": suites}
+        event["event_id"] = self_test.digest_of({"request_id": self.identity["request_id"],
+                                                  "run_id": self.identity["run_id"],
+                                                  "run_attempt": self.identity["run_attempt"], "cause": cause})
+        return event
+
+    def test_common_event_is_v2_and_exactly_identity_bound(self):
+        event = self.common_event()
+        document = verdict.build(self.policy, self.identity, self.selection, [], common_events=[event])
+        self.assertEqual(document["evidence_schema"], verdict.COMMON_EVENT_SCHEMA)
+        self.assertEqual(verdict.validate(document, self.policy, self.identity, self.selection)["common_events"], [event])
+
+    def test_common_event_rejects_identity_or_source_mismatch(self):
+        event = self.common_event()
+        for changes in ({"request_id": "other"}, {"source": {**event["source"], "result": "success"}}):
+            with self.subTest(changes=changes):
+                forged = deepcopy(event)
+                forged.update(changes) if "request_id" in changes else forged["source"].update(changes["source"])
+                with self.assertRaisesRegex(verdict.VerdictError, "common event"):
+                    verdict.build(self.policy, self.identity, self.selection, [], common_events=[forged])
+
     def test_legacy_complete_validator_rejects_new_full_schema(self):
         self.selection = test_scope._selection(self.policy, self.policy.suite_ids, ["full"])
         rows = [self.row(suite.id, job) for suite in self.policy.inventory.suites for job in suite.jobs]

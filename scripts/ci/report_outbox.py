@@ -24,6 +24,10 @@ def require(ok, why):
 
 
 def freeze(report, assignee):
+    if report.key.startswith(reporting.COMMON_EVENT_REPORT_PREFIX):
+        event_id = report.key[len(reporting.COMMON_EVENT_REPORT_PREFIX):]
+        require(event_id in report.summary,
+                "common event identity is not retained in the frozen report")
     fields = asdict(report)
     fields["labels"] = list(fields["labels"])
     payload = {"fields": fields, "assignee": assignee, "issue_body": report.issue_body(assignee),
