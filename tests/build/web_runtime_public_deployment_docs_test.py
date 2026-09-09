@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import re
 import unittest
@@ -23,13 +22,6 @@ TAG = "lmdj-v1.0.15.2"
 TAG_TARGET = "72ae40074620cc5681c462ba04a31a666449734f"
 FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
 CHECKSUM_FINGERPRINT = "CB928A6E89DE498851688EF1AAC3E7019FC1478B"
-_CURRENT_VERSION = json.loads(
-    (REPO_ROOT / "products/lmdj/version.json").read_text(encoding="utf-8")
-)
-CURRENT_PRODUCT = ".".join(
-    str(_CURRENT_VERSION[field])
-    for field in ("milestone", "minor", "build", "patch")
-)
 
 
 class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
@@ -42,7 +34,8 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
             with self.subTest(path=path):
                 source = self.read(path)
                 compact = re.sub(r"\s+", "", source)
-                self.assertIn(CURRENT_PRODUCT, source)
+                self.assertIn("import {BuildIdentity}", source)
+                self.assertRegex(source, r"<BuildIdentity(?:\s[^>]*)?\s*/>")
                 self.assertIn("evidence", source)
                 self.assertIn("不自动", compact)
                 self.assertNotIn(TAG_TARGET, source)
@@ -66,7 +59,6 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
                     "audit --remote",
                     "historical exception",
                     "manual-only",
-                    CURRENT_PRODUCT,
                     "released",
                     "deployed",
                     "promoted",

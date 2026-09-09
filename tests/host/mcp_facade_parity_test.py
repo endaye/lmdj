@@ -173,6 +173,7 @@ def cli_request(
     surface: str,
     request: dict,
     assembly: Path | None = None,
+    expected_returncode: int = 0,
 ) -> dict:
     command = [
         str(executable),
@@ -195,7 +196,7 @@ def cli_request(
         capture_output=True,
         timeout=TIMEOUT_SECONDS,
     )
-    assert completed.returncode == 0, (
+    assert completed.returncode == expected_returncode, (
         completed.returncode,
         completed.stdout,
         completed.stderr,
@@ -649,16 +650,7 @@ def provider_binding_parity(
     arguments = {
         "attempt_id": "attempt-binding-parity",
         "capability": capability,
-        "inputs": [
-            {
-                "port": "inputs",
-                "artifact": {
-                    "sha256": "a" * 64,
-                    "media_type": "application/octet-stream",
-                    "byte_length": 1,
-                },
-            }
-        ],
+        "inputs": [],
         "parameters": {},
         "data_classification": "public",
         "platform": "test",
@@ -701,7 +693,6 @@ def provider_binding_parity(
         None,
     )
     mcp_result = mcp.tool("lmdj.provider.run", arguments)
-    mcp.close()
 
     assert mcp_result == cli_result
     assert cli_result["result"]["outputs"][0]["port"] == "candidate"
@@ -709,6 +700,47 @@ def provider_binding_parity(
         "port",
         "artifact",
     }
+
+    bound = {
+        **arguments,
+        "attempt_id": "attempt-missing-owner-parity",
+        "inputs": [
+            {
+                "port": "inputs",
+                "artifact": {
+                    "sha256": "a" * 64,
+                    "media_type": "application/octet-stream",
+                    "byte_length": 1,
+                },
+            }
+        ],
+    }
+    cli_denied = cli_request(
+        cli, cli_workspace, "command", {"operation": "provider.run", **bound},
+        assembly, expected_returncode=2,
+    )
+    mcp_denied = mcp.tool("lmdj.provider.run", bound)
+    assert cli_denied == mcp_denied
+    assert cli_denied["ok"] is False
+    assert cli_denied["error"]["code"] == "NOT_FOUND"
+    assert cli_denied["error"]["details"]["reason"] == "input_artifact_unavailable"
+    mcp.close()
+
+    for workspace in (cli_workspace, mcp_workspace):
+        reopened = MCP(library, workspace, assembly)
+        cli_terminal = cli_request(
+            cli, workspace, "query",
+            {"operation": "attempt.inspect", "attempt_id": bound["attempt_id"]}, assembly,
+        )
+        mcp_terminal = reopened.tool("lmdj.attempt.inspect", {"attempt_id": bound["attempt_id"]})
+        assert cli_terminal == mcp_terminal
+        terminal = cli_terminal["result"]
+        assert terminal["status"] == "failed"
+        assert terminal["error"]["details"]["reason"] == "input_artifact_unavailable"
+        assert terminal["request"]["inputs"] == bound["inputs"]
+        assert terminal["candidate_outputs"] == []
+        assert terminal["minted_outputs"] == []
+        reopened.close()
 
 
 def sequence_cross_host_observer(

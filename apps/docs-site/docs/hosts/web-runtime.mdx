@@ -72,7 +72,7 @@ Runtime Host Release 使用同一个四段控制面：`scripts/release.sh prepar
 单人维护者模式不设置 reviewer，但 Environment 仍只允许 exact `main`。它不触发下方
 Runtime deployment：该部署仍是 manual-only exact-tag dispatch，使用独立 Environment、凭据、
 smoke/recovery 与 evidence；Channel promotion 继续是后续独立边界。因此 release/deploy tooling
-已经 implemented 也不表示当前 Product Build `1.0.44.0` 已经 released、deployed 或 promoted。
+已经 implemented 也不表示当前 Product Build（身份见上方 Build Identity） 已经 released、deployed 或 promoted。
 
 ## 公共发布边界
 
@@ -105,7 +105,7 @@ reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior�
 evidence v1。official site response 的 `disabled: true` 被规范化为 `state: disabled` 并在
 smoke/Draft 前拒绝自动 enable；publication projection 接受并保留 Netlify UTC `Z`
 时间戳中的可选小数秒。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
-自动证明当前 Product Build `1.0.44.0` 或任何历史 Product Build 已获得 remote verified tag、Release、Deploy ID、
+自动证明当前 Product Build（身份见上方 Build Identity） 或任何历史 Product Build 已获得 remote verified tag、Release、Deploy ID、
 immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
 工具测试或 PR Preview 上升为当前候选的公开部署结论。
 
@@ -168,3 +168,5 @@ browser, audio, storage migration or manual acceptance.
 当前 Host 随 Facade/Platform 的 owned Provider 字节 ABI 集成更新依赖身份，transport
 操作保持原形状。无绑定 Proof 可运行；带输入绑定的 Provider 请求在 owner 尚未接线时
 返回可查询的 `input_artifact_unavailable` Attempt，Slice 工作流仍待后续集成。
+
+本次集成已为 Audio Runtime 的 Engine ABI 变更及其依赖重建分配匹配版本，当前身份以上方 Build Identity 为准。Slice 参考注册不增加此 Host 的切片操作或默认执行权限。

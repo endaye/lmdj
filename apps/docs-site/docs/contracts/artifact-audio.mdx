@@ -3,6 +3,7 @@ title: PCM16 WAV Artifact Profile
 area: contracts
 status: partial
 owners: [core, providers]
+contracts: [lmdj.audio.pcm16-wav.v1]
 source_paths:
   - contracts/artifact-audio/lmdj.audio.pcm16-wav.v1.md
   - contracts/capability/sample.slice.v1.json
@@ -10,12 +11,15 @@ decision_paths:
   - docs/prd/decisions/2026-09-09-stage12-contract-candidate.md
 ---
 
-## 定义与状态
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
-二进制 profile 已定义，生产执行的 WAV validator 与畸形音频矩阵由 K2/K3 实现。
-当前 Product Assembly 尚未注册 Slice Provider；此页不代表可在 Host 中执行切片。
-profile 身份和版本以 source_paths 指向的 Contract 文件为准；K4 注册前不作为
-Assembly Lock 的已集成 Contract 身份展示。
+<BuildIdentity kind="contracts" id="lmdj.audio.pcm16-wav.v1" />
+
+## 已集成的 Contract
+
+此 Contract 已随 Slice 参考 Provider 注册，完整源文件字节和版本绑定到 Assembly Lock。
+C++ 独立消费校验、JSON conformance 和字节回放已验证；Host owner 接线与用户执行流程留给 K5。
+音频 profile 是二进制格式规范，不是验证 WAV 字节的 JSON Schema。
 
 ## 音频边界
 

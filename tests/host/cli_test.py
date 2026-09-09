@@ -294,7 +294,7 @@ def assembly_contract(executable: Path, temp_root: Path) -> None:
     check_success(response, None)
     assert [
         provider["id"] for provider in response["result"]["providers"]
-    ] == ["local.proof.failure", "local.proof.success"]
+    ] == ["local.proof.failure", "local.proof.success", "local.sample.slice"]
 
     invalid = temp_root / "invalid-assembly.json"
     invalid.write_text("{}", encoding="utf-8")

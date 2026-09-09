@@ -365,9 +365,10 @@ class ReleaseAuditFixture:
             *ROOT.glob("packages/*/module.json"),
             *ROOT.glob("apps/*/module.json"),
             *ROOT.glob("providers/*/module.json"),
-            *ROOT.glob("providers/*/include/**/factory.hpp"),
-            *ROOT.glob("providers/*/src/provider.cpp"),
+            *ROOT.glob("providers/*/include/**/*.hpp"),
+            *ROOT.glob("providers/*/src/**/*.cpp"),
             *ROOT.glob("contracts/*/*.schema.json"),
+            *ROOT.glob("contracts/*/*.md"),
         ]
         for source in paths:
             destination = root / source.relative_to(ROOT)
@@ -1705,6 +1706,32 @@ class ReleaseAuditTest(ReleaseAuditFixture, unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("{prepare,push-tag,create-draft", completed.stdout)
         self.assertIn("audit", completed.stdout)
+
+
+    def test_current_product_component_inventory(self):
+        audit_module._verify_active_components(
+            ROOT, json.loads((ROOT / "products/lmdj/assembly.json").read_text()),
+            json.loads((ROOT / "products/lmdj/assembly.lock.json").read_text()),
+        )
+
+    def test_binary_profile_identity_and_bytes_are_both_authenticated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "contracts/artifact-audio/lmdj.audio.pcm16-wav.v1.md"
+            profile.parent.mkdir(parents=True)
+            original = (ROOT / "contracts/artifact-audio" / profile.name).read_bytes()
+            profile.write_bytes(original)
+            assembly = {key: [] for key in ("modules", "hosts", "providers", "contracts")}
+            assembly["contracts"] = [{"id": "lmdj.audio.pcm16-wav.v1", "version": "1.0.0"}]
+            lock = {**assembly, "contracts": [{**assembly["contracts"][0], "sha256": hashlib.sha256(original).hexdigest()}]}
+            audit_module._verify_active_components(root, assembly, lock)
+            profile.write_bytes(original + b"\nchanged profile bytes\n")
+            with self.assertRaisesRegex(ValueError, "source digest does not match"):
+                audit_module._verify_active_components(root, assembly, lock)
+            profile.write_bytes(original.replace(b"contract_version: 1.0.0", b"contract_version: 9.0.0"))
+            lock["contracts"][0]["sha256"] = hashlib.sha256(profile.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(ValueError, "profile identity mismatch"):
+                audit_module._verify_active_components(root, assembly, lock)
 
 
 class ReleaseAuditIntegrationTest(ReleaseAuditFixture, unittest.TestCase):

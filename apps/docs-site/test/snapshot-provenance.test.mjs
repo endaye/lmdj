@@ -803,3 +803,22 @@ test('historical page inventory is bound to its source rather than the current f
     await rm(fixture.repoRoot, {recursive: true, force: true});
   }
 });
+
+
+test('binary profile projection follows registration at the recorded revision', async () => {
+  const fixture = await initializeFixture();
+  try {
+    const profile = 'contracts/artifact-audio/lmdj.audio.pcm16-wav.v1.md';
+    await put(fixture.repoRoot, profile, 'binary profile bytes');
+    await put(fixture.repoRoot, 'products/lmdj/assembly.json', JSON.stringify({contracts: []}));
+    const before = await commit(fixture.repoRoot, 'unregistered profile', SOURCE_DATE);
+    assert.equal((await projectionManifest(fixture.repoRoot, before)).files.some(({path}) => path === profile), false);
+    await put(fixture.repoRoot, 'products/lmdj/assembly.json', JSON.stringify({contracts: [{id: 'lmdj.audio.pcm16-wav.v1', version: '1.0.0'}]}));
+    const after = await commit(fixture.repoRoot, 'register profile', INTRO_DATE);
+    assert.equal((await projectionManifest(fixture.repoRoot, after)).files.some(({path}) => path === profile), true);
+    assert.equal((await projectionManifest(fixture.repoRoot, before)).files.some(({path}) => path === profile), false,
+      'historical projection must not absorb a later registration; remedy: select using the recorded Assembly');
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});

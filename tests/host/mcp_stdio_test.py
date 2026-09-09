@@ -943,6 +943,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
     assert [provider["id"] for provider in result["providers"]] == [
         "local.proof.failure",
         "local.proof.success",
+        "local.sample.slice",
     ]
     assert assembled.close() == (0, b"", b"")
 

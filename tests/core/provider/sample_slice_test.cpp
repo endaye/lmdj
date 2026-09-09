@@ -346,7 +346,8 @@ void identity() {
   LMDJ_CHECK(registration.artifact_sha256 ==
       describe_artifact(LMDJ_SLICE_SOURCE_PACKAGE_MANIFEST, "application/json").value().sha256);
   const auto assembly = Json::parse(read("products/lmdj/assembly.json"));
-  for (const auto& provider : assembly.at("providers")) LMDJ_CHECK(provider.at("id") != "local.sample.slice");
+  LMDJ_CHECK(std::count_if(assembly.at("providers").begin(), assembly.at("providers").end(),
+      [](const auto& provider) { return provider.at("id") == "local.sample.slice"; }) == 1);
 }
 }  // namespace
 int main(int argc, char** argv) {

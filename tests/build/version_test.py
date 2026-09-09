@@ -57,8 +57,8 @@ expected_modules = {
     ),
     "packages/audio-runtime/module.json": (
         "audio-runtime",
-        "3.1.0",
-        1,
+        "4.0.0",
+        2,
         {
             "foundation": "0.4.0",
             "project-cooker": "1.1.0",
@@ -66,58 +66,58 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "4.0.0",
+        "4.0.1",
         3,
         {
             "foundation": "0.4.0",
             "authoring-domain": "3.0.0",
             "project-io": "3.0.0",
             "project-cooker": "1.1.0",
-            "audio-runtime": "3.1.0",
+            "audio-runtime": "4.0.0",
             "provider-sdk": "2.0.0",
         },
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "5.0.0",
+        "5.0.1",
         2,
         {
-            "application-facade": "4.0.0",
-            "audio-runtime": "3.1.0",
+            "application-facade": "4.0.1",
+            "audio-runtime": "4.0.0",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "3.2.1",
+        "3.2.2",
         2,
-        {"application-facade": "4.0.0"},
+        {"application-facade": "4.0.1"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "3.2.1",
+        "3.2.2",
         2,
-        {"application-facade": "4.0.0"},
+        {"application-facade": "4.0.1"},
     ),
     "apps/native-host/module.json": (
         "native-host",
-        "3.2.1",
+        "3.2.2",
         2,
         {
-            "application-facade": "4.0.0",
-            "audio-runtime": "3.1.0",
+            "application-facade": "4.0.1",
+            "audio-runtime": "4.0.0",
         },
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "4.1.1",
+        "4.1.2",
         2,
-        {"web-runtime-platform": "5.0.0"},
+        {"web-runtime-platform": "5.0.1"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "4.1.1",
+        "4.1.2",
         2,
-        {"web-runtime-platform": "5.0.0"},
+        {"web-runtime-platform": "5.0.1"},
     ),
 }
 for relative, (
@@ -265,7 +265,9 @@ assert assembly["providers"] == [
         ],
         "model_identity": None,
     },
+    {"id": "local.sample.slice", "version": "1.0.0", "capabilities": [{"id": "sample.slice.v1", "version": "1.0.0"}], "model_identity": None},
 ]
+
 provider_module = repo_root / "providers/local-proof-success/module.json"
 provider_digest = _provider_source_package_sha256(
     "local.proof.success", "2.0.0", provider_module,
@@ -293,6 +295,8 @@ assert assembly["contracts"] == [
     {"id": "lmdj.error.v1", "version": "1.1.0"},
     {"id": "lmdj.module.v1", "version": "1.0.0"},
     {"id": "lmdj.product-version.v1", "version": "1.0.0"},
+    {"id": "lmdj.audio.pcm16-wav.v1", "version": "1.0.0"},
+    {"id": "lmdj.slice-points.v1", "version": "1.0.0"},
 ]
 
 expected_contract_sources = {
@@ -703,3 +707,38 @@ assert re.search(
 ) is None
 
 print("product version tests: PASS")
+
+# Validator inputs are part of the registered Provider identity, not optional
+# implementation details that may change beneath an unchanged Assembly lock.
+with tempfile.TemporaryDirectory() as directory:
+    authority = Path(directory)
+    target = authority / "providers/local-sample-slice"
+    shutil.copytree(repo_root / "providers/local-sample-slice", target)
+    original = _provider_source_package_sha256("local.sample.slice", "1.0.0", target / "module.json", repo_root=authority)
+    for relative in ["include/lmdj/providers/local_sample_slice/validation.hpp", "src/validation.cpp"]:
+        source = target / relative
+        saved = source.read_bytes()
+        source.write_bytes(saved + b"\n// identity mutation\n")
+        assert _provider_source_package_sha256("local.sample.slice", "1.0.0", target / "module.json", repo_root=authority) != original, "validator change escaped source identity; remedy: include every Provider source/header"
+        source.write_bytes(saved)
+    required_source = target / "src/provider.cpp"
+    saved_source = required_source.read_bytes()
+    required_source.unlink()
+    try:
+        _provider_source_package_sha256("local.sample.slice", "1.0.0", target / "module.json", repo_root=authority)
+    except ValueError as error:
+        assert "source-package file is unavailable" in str(error)
+    else:
+        raise AssertionError("missing required Provider source accepted; remedy: retain required package members")
+    required_source.write_bytes(saved_source)
+    from scripts.version import _validate_component_source
+    profile = authority / "lmdj.audio.pcm16-wav.v1.md"
+    raw = (repo_root / "contracts/artifact-audio" / profile.name).read_text()
+    for contents in [raw.replace("contract_version: 1.0.0", "contract_version: 9.0.0"), raw.replace("contract_id:", "unknown:")]:
+        profile.write_text(contents)
+        try:
+            _validate_component_source("contracts", "lmdj.audio.pcm16-wav.v1", "1.0.0", profile)
+        except ValueError as error:
+            assert "profile identity mismatch" in str(error)
+        else:
+            raise AssertionError("invalid profile identity accepted; remedy: authenticate formal frontmatter")

@@ -82,7 +82,7 @@ message 为空、details 为 null，避免 `noexcept` 错误路径再次分配�
 quiescent start 沿用清空旧队列的语义，最终由 quiescent Engine 析构释放。
 回调仍然不申请或释放内存。启用录制后的完整缓冲成本未减少；冷态节省不等于
 ESP32 可用堆、整机适配或实时 deadline 通过。该 additive API 与 B2 T2/T3 一同
-暂存于 source，分发前按 integration 边界分配 Module/Assembly 身份。
+现已在本次 integration 分配匹配的 Module/Assembly 身份。
 
 ## 8. 测试与证据
 Realtime、same-boundary overlay supersession、apply-point 精确 switch/Stop replacement authority、queued/audio-owned/stop cancellation、two-pending `accepted = applied + superseded + canceled + pending_publications` conservation stress、offline、sample bank、queue 与 CoreAudio output 测试；`audio.realtime_engine` 覆盖 16,777,216 帧高位 trim/loop/ramp，`audio.long_sample_publication_stress` 在并发渲染下覆盖 64 MiB 单 Pad、128 MiB generation、256 MiB resident 边界与字节精确回收。Web Audio conformance 还覆盖 live Bank exact acknowledgement 与最新 generation 的 suspend/reactivate acknowledgement。master FX 由 `audio.master_fx`、`audio.master_fx_determinism` 与 `audio.master_fx_allocation_guard` 覆盖链顺序、值域、HOLD、Bar 相对周期、相同输入相同输出与实时路径的无分配保证；`audio.master_fx_stress` 属于 stress tier，覆盖控制通道在并发渲染下的有界行为。该 busy-spin 用例仅属于 stress tier，并从 coverage preset 排除。`audio.value_channel` 验证 64 位进位、读者半途暂停时连续发布与重置、最终值及多读者串行；Realtime component 的确定性交错覆盖 Q/P/C 占用、Pad 0/63 handoff、同槽高位 generation 复用、无下一 callback 的取消结果及 admission 重算边界。Snapshot stress 同时运行四个观察者并覆盖 start/stop 写者交接。物理延迟与 Safari 内存验收单列。
@@ -99,3 +99,5 @@ allocator interposition 验证失败不创建 session、播放继续及相同身
 自动化绿色不证明 MIDI/iPad/扬声器体验；需保留设备视频和测量证据。无锁 atomic32 与对象级 Xtensa 编译不等于完整 ESP-IDF 链接或目标实时支持；ESP32 的 map/size、VFS、真机输出、deadline、jitter 与 underrun 证据分别验证，不能由主机测试推断。
 ## 10. 版本身份
 Module 版本由清单生成，Product Build 由 Assembly 固定。
+
+本次集成已为 Audio Runtime 的 Engine ABI 变更及其依赖重建分配匹配版本，当前身份以上方 Build Identity 为准。Slice 参考注册不改变 Audio Runtime 的实时职责或默认执行权限。

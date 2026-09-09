@@ -30,7 +30,7 @@ Product Build `1.0.24.0` 曾分配八个 Core Module、五个 Host、两个本�
 Product CMake 只在 Emscripten `lmdj_web_runtime_host` target 存在时链接 compiled catalog object，并注入 Product Build、Platform version 以及 Creator/Diagnostic 两组精确 distribution-contract/Host identity。两个 Web Host 只声明 Web Runtime Platform 依赖；Platform 声明 Facade/Audio 依赖，Provider wiring 仍只属于 Product Assembly。
 Platform CMake 从生成的 Runtime identity 注入全部九个资源上限，其中 `perform_recording_frames` 与 `perform_recording_queue_batches` 是 Stage 10 新增项；native manifest gate 逐个校验精确值，并要求声明 `compatible_hosts` 的 Creator 清单恰好携带一个 `perform_master_tap_worklet`、Diagnostic Host 清单为零，重复或游离条目按 inventory 缺陷 fail closed。Creator 打包工具在 Vite 产物中定位唯一的 Perform master-tap 模块、按内容哈希写入 `assets/perform-master-tap.<sha256>.js` 并只重写主包中那一处引用；零匹配或多匹配都拒绝打包。
 ## Policy
-当前 Provider policy 仅允许 local/public/proof.execute 范围，与 Proof-only Provider 相符。
+当前 Provider policy 仍仅允许 local/public/proof.execute。Slice 参考实现已注册，但默认策略不授予 sample.slice.execute，也不自动选择；Host owner 接线由 K5 处理。
 ## 身份与完整性
 Product Build、每个组件版本和 source hash 被锁定；门户事实生成会拒绝任何漂移。
 `tests/build/version_test.py` 还直接校验真实仓库中两份生成的 Web Runtime identity（JSON 与 MJS）是否与 active manifests 一致；合成 fixture 只验证生成器行为，不能替代这项实际输入检查。漂移时先用 `python3 tools/web-runtime/generate_runtime_identity.py --repo-root .` 同步生成文件，再以 `--check` 验证；这不会分配新 Product Build，也不修改既有不可变快照。
@@ -41,3 +41,8 @@ Sequence recording 与 Perform 演奏录制、重放、resample 提交已实现�
 本次 Assembly 集成 owned Provider 字节 ABI，协调 SDK、Proof Providers、Facade、
 Web Runtime Platform 及依赖 Host 身份；上方身份来自 active manifests。对应 Product Build
 保留 canary 文档快照；该集成不触发 Release 或运行环境部署。
+
+## Slice 参考注册与依赖重建
+
+当前 Assembly 新增 Slice 参考 Provider、PCM16 WAV profile 与 Slice Points Contract，身份均从清单和完整源字节生成。Provider 保留 test 平台，默认权限与用户选择不变。注册一致性不证明 Host 切片已可用。
+同时为已合入的 Audio Runtime ABI 变更分配 MAJOR 身份，并更新 Facade、Platform 与 Host 的精确依赖重建版本；上方 Build Identity 是当前身份依据。
