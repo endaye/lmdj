@@ -93,7 +93,7 @@ class WorkflowContracts(unittest.TestCase):
     def test_stress_is_selected_per_suite_not_per_batch(self):
         for job, suite in (("nightly-tsan", "core_tsan_stress"), ("nightly-stress", "core_release_stress")):
             self.assertIn(f"fromJSON(needs.change-scope.outputs.batch-execution).suites.{suite}", job_body(SOURCE, job))
-            self.assertIn("needs.change-scope.outputs.batch-mode == 'false' ||", job_body(SOURCE, job))
+            self.assertNotIn("needs.change-scope.outputs.batch-mode == 'false'", job_body(SOURCE, job))
 
     def test_verdict_reads_all_actual_product_jobs_and_retains_raw_needs(self):
         needed = set(job_needs(job_body(SOURCE, "batch-verdict")))

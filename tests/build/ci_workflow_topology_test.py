@@ -57,7 +57,6 @@ SELF_HOSTED_JOBS = (
 )
 HOSTED_CONTROL_PLANE_JOBS = (
     "change-scope",
-    "pre-heavy-gate",
     "select-macos-runner",
     # Judges a self-test batch from `needs` and retains the verdict; runs the
     # control revision's scripts, never the target's, and must outlive the
@@ -145,13 +144,8 @@ RELEASE_NODE_CONSUMERS = (
 )
 FORMAL_RESULTS = FORMAL_LANE_JOBS + SUPPORT_JOBS
 # Review is exclusively in pr-review.yml; Core CI has no non-lane reviewers.
-GENERAL_ROLE_NON_LANE_JOBS = ("change-scope", "pre-heavy-gate", "select-macos-runner",
+GENERAL_ROLE_NON_LANE_JOBS = ("change-scope", "select-macos-runner",
                               "core-macos", "core-asan-macos", "batch-verdict")
-GATING_PREFLIGHT_JOBS = (
-    "docs-static", "ci-contract", "deploy-contract", "chameleon-lab",
-    "web-toolchain-conformance", "web-runtime-host", "creator-web",
-    "web-runtime-lab",
-)
 HEAVY_JOBS = (
     "portal", "core-ubuntu", "package", "core-coverage", "core-asan",
 )
@@ -515,9 +509,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         for job_name in GENERAL_REUSABLE_JOBS:
             with self.subTest(job=job_name):
                 caller = self.workflow_job(job_name)
-                self.assertEqual(
-                    self.job_needs(job_name), {"change-scope", "pre-heavy-gate"}
-                )
+                self.assertEqual(self.job_needs(job_name), {"change-scope"})
                 self.assertIn(TRUST_CONDITION, caller)
                 self.assertNotIn("runs-on:", caller)
         called = self.workflow_job("portal", portal=True)
@@ -636,36 +628,40 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("NEEDS_JSON: ${{ toJSON(needs) }}", job)
         self.assertIn("batch_execution.from_needs", job)
 
-    def test_pre_heavy_gate_is_closed_self_hosted_preflight_admission(self) -> None:
-        job = self.workflow_job("pre-heavy-gate")
-        self.assertIn("fetch-depth: 0", job)
-        self.assertEqual(
-            self.job_needs("pre-heavy-gate"),
-            {"change-scope", *GATING_PREFLIGHT_JOBS},
-            msg=("why: product preflight must not wait for advisory review; "
-                 "remedy: keep only actual product dependencies in pre-heavy-gate"),
+    def test_no_job_depends_on_an_always_false_admission_gate(self) -> None:
+        """Heavy lanes must not depend on a dead batch-mode admission job.
+
+        `change-scope` hard-codes batch mode true, so a `batch-mode == 'false'`
+        condition can never admit a job. This catches reintroducing either the
+        retired gate itself or a new always-false prerequisite of a lane.
+        """
+        directives = "\n".join(
+            line for line in self.main_source.splitlines()
+            if not line.lstrip().startswith("#")
         )
-        self.assertIn("if: ${{ !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}", job)
-        self.assertIn("runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]", job)
-        self.assertIn("timeout-minutes: 3", job)
-        for forbidden in (
-            "ci-web-heavy", "ci-core", "runs-on: ubuntu-24.04",
-            "permissions:",
-        ):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, job)
-        result_keys = set(re.findall(
-            r'"([a-z0-9-]+)":\{"result":"\$\{\{ needs\.[a-z0-9-]+\.result \}\}"\}',
-            job,
-        ))
-        self.assertEqual(result_keys, set(GATING_PREFLIGHT_JOBS))
-        for job_name in (
-            "select-macos-runner", "macos-primary", "macos-fallback",
-            "core-macos", "core-asan-macos",
-        ):
-            with self.subTest(job=job_name):
-                self.assertNotIn(job_name, self.job_needs("pre-heavy-gate"))
-                self.assertNotIn(f"needs.{job_name}.result", job)
+        self.assertNotIn("pre-heavy-gate", directives)
+        self.assertNotIn(
+            "batch-mode == 'false'", directives,
+            "why: a batch-mode false admission condition is unreachable; "
+            "remedy: remove the dead gate and keep only live lane selection",
+        )
+        for job_name in re.findall(r"^  ([a-z0-9-]+):\n", self.main_source, re.MULTILINE):
+            body = self.workflow_job(job_name)
+            needs_match = re.search(r"^    needs: (?P<needs>\[[^\n]+\]|[a-z0-9-]+)$", body, re.MULTILINE)
+            if not needs_match:
+                continue
+            needs = needs_match.group("needs")
+            self.assertNotRegex(
+                body,
+                r"batch-mode == 'false'",
+                msg=f"why: {job_name} has an unreachable admission condition; "
+                    "remedy: remove the dead prerequisite and condition",
+            )
+            self.assertNotIn(
+                "pre-heavy-gate", needs,
+                msg=f"why: {job_name} depends on a retired dead admission job; "
+                    "remedy: keep only live product dependencies",
+            )
 
     def test_heavy_jobs_form_the_sparse_predecessor_chain(self) -> None:
         for index, job_name in enumerate(HEAVY_JOBS):
@@ -674,9 +670,9 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 earlier = HEAVY_JOBS[:index]
                 self.assertEqual(
                     self.job_needs(job_name),
-                    {"change-scope", "pre-heavy-gate", *earlier},
+                    {"change-scope", *earlier},
                 )
-                self.assertIn("needs.pre-heavy-gate.result == 'success'", job)
+                self.assertIn("needs.change-scope.outputs.self-test == 'true'", job)
                 self.assertIn(TRUST_CONDITION, job)
                 for predecessor in earlier:
                     self.assertIn(
@@ -698,16 +694,16 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         buy paid Ubuntu. Naming the literal label set makes them queue on a
         saturated or absent role rather than diverting a whole manifest to paid
         runners. Each retains direct Change Scope and trust dependencies, then
-        adds Pre-heavy Gate plus every earlier native-heavy predecessor. The
-        exact job set keeps a later lane from inheriting the route without its
-        own proof run.
+        waits only for every earlier native-heavy predecessor. The exact job
+        set keeps a later lane from inheriting the route without its own proof
+        run.
         """
         for job_name, lane in CORE_JOBS.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertEqual(
                     self.job_needs(job_name),
-                    {"change-scope", "pre-heavy-gate", *HEAVY_JOBS[:HEAVY_JOBS.index(job_name)]},
+                    {"change-scope", *HEAVY_JOBS[:HEAVY_JOBS.index(job_name)]},
                 )
                 self.assertIn(CORE_ROLE, job)
                 self.assertNotIn("runs-on: ubuntu-24.04", job)
@@ -722,7 +718,6 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_scope_and_gate_timeouts_are_three_minutes_and_lane_limits_match_policy(self) -> None:
         expected = {
             "change-scope": 3,
-            "pre-heavy-gate": 3,
             "batch-verdict": 5,
             "docs-static": 10,
             "ci-contract": 10,

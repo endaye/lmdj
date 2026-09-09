@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Resolve a review thread that carries nothing but a clean review.
 
-`main` requires every review thread to be resolved before a merge, and
-`Pre-heavy Gate` counts unresolved threads as an admission condition (#659).
-Both rules assume a thread means "a reviewer found something a human must
+`main` requires every review thread to be resolved before a merge. The former
+product admission gate counted unresolved threads as an admission condition
+(#659), but that gate is retired. Both rules assume a thread means "a reviewer found something a human must
 answer". A reviewer that posts "No issues found" as a *thread* therefore
 blocks the merge it just approved.
 

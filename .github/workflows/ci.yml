@@ -227,11 +227,11 @@ jobs:
     # `workflow_call`-only with this as its single caller, so the role there
     # reroutes Portal and nothing else.
     name: Architecture Portal
-    needs: [change-scope, pre-heavy-gate]
+    needs: change-scope
     if: >-
       ${{
         !cancelled()
-        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
+        && needs.change-scope.outputs.self-test == 'true'
         && fromJSON(needs.change-scope.outputs.manifest).lanes.portal
         && needs.change-scope.outputs.trusted-head == 'true'
       }}
@@ -241,7 +241,7 @@ jobs:
       cancel-in-progress: false
     uses: ./.github/workflows/architecture-portal.yml
     with:
-      check_documentation_impact: ${{ github.event_name == 'pull_request' || needs.change-scope.outputs.queue-mode == 'true' }}
+      check_documentation_impact: ${{ needs.change-scope.outputs.queue-mode == 'true' }}
       base_sha: ${{ needs.change-scope.outputs.resolved-base-sha }}
       head_sha: ${{ needs.change-scope.outputs.resolved-head-sha }}
       checkout_ref: ${{ needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target || '' }}
@@ -385,13 +385,13 @@ jobs:
     # job instead of buying paid Ubuntu capacity for it. Trust therefore
     # cannot come from a selector's fork branch and stays on the job itself.
     name: Core package
-    # Direct needs: change-scope is preserved; admission also requires the
-    # Pre-heavy Gate and each earlier selected native-heavy predecessor.
-    needs: [change-scope, pre-heavy-gate, portal, core-ubuntu]
+    # Direct needs: change-scope is preserved, followed by each earlier
+    # selected native-heavy predecessor.
+    needs: [change-scope, portal, core-ubuntu]
     if: >-
       ${{
         !cancelled()
-        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
+        && needs.change-scope.outputs.self-test == 'true'
         && fromJSON(needs.change-scope.outputs.manifest).lanes.package
         && needs.change-scope.outputs.trusted-head == 'true'
         && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
@@ -439,7 +439,7 @@ jobs:
       - name: Retain the packaging comparison evidence
         uses: actions/upload-artifact@v4
         with:
-          name: package-evidence-${{ (needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target) || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
+          name: package-evidence-${{ (needs.change-scope.outputs.self-test == 'true' && needs.change-scope.outputs.self-test-target) || github.sha }}
           path: |
             build/core/dist/*.build-manifest.json
             build/core/dist/*.zip.sha256
@@ -581,32 +581,6 @@ jobs:
           node-version: "22"
       - run: scripts/web-runtime-lab.sh test
 
-  pre-heavy-gate:
-    name: Pre-heavy Gate
-    # Product preflight only. PR review and conversation protection belong
-    # to the independent PR workflow, never this product execution token.
-    needs: [change-scope, docs-static, ci-contract, deploy-contract, chameleon-lab, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab]
-    if: ${{ !cancelled() && needs.change-scope.outputs.batch-mode == 'false' }}
-    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general, contabo]
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Admit native-heavy work after selected preflight success
-        env:
-          PREFLIGHT_RESULTS_JSON: >-
-            {"docs-static":{"result":"${{ needs.docs-static.result }}"},"ci-contract":{"result":"${{ needs.ci-contract.result }}"},"deploy-contract":{"result":"${{ needs.deploy-contract.result }}"},"chameleon-lab":{"result":"${{ needs.chameleon-lab.result }}"},"web-toolchain-conformance":{"result":"${{ needs.web-toolchain-conformance.result }}"},"web-runtime-host":{"result":"${{ needs.web-runtime-host.result }}"},"creator-web":{"result":"${{ needs.creator-web.result }}"},"web-runtime-lab":{"result":"${{ needs.web-runtime-lab.result }}"}}
-          SCOPE_MANIFEST: ${{ needs.change-scope.outputs.manifest }}
-          CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
-        run: >-
-          python3 scripts/ci/phase_gate.py
-          --policy scripts/ci/scope_policy.json
-          --manifest-json "$SCOPE_MANIFEST"
-          --results-json "$PREFLIGHT_RESULTS_JSON"
-          --change-scope-result "$CHANGE_SCOPE_RESULT"
-          --summary "$GITHUB_STEP_SUMMARY"
-
   core-ubuntu:
     # First of the three native Core lanes on the shared host's role. The
     # persistent native ccache and the coverage toolchain are host state, so
@@ -615,13 +589,13 @@ jobs:
     # busy or absent role queues these lanes rather than diverting a whole
     # manifest to paid runners, so trust stays on each job itself.
     name: core (ubuntu-latest)
-    # Direct needs: change-scope is preserved; admission also requires the
-    # Pre-heavy Gate and each earlier selected native-heavy predecessor.
-    needs: [change-scope, pre-heavy-gate, portal]
+    # Direct needs: change-scope is preserved, followed by each earlier
+    # selected native-heavy predecessor.
+    needs: [change-scope, portal]
     if: >-
       ${{
         !cancelled()
-        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
+        && needs.change-scope.outputs.self-test == 'true'
         && fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu
         && needs.change-scope.outputs.trusted-head == 'true'
         && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
@@ -701,8 +675,6 @@ jobs:
         id: select
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
           TARGET_RUNNER_NAME: endaye-mbp-m1
           RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
@@ -717,12 +689,6 @@ jobs:
             } >>"$GITHUB_OUTPUT"
             echo "Using GitHub-hosted macOS: $1"
           }
-
-          if [[ "$EVENT_NAME" == "pull_request" && \
-                "$HEAD_REPOSITORY" != "$REPOSITORY" ]]; then
-            select_hosted 'untrusted fork pull request'
-            exit 0
-          fi
 
           if [[ -z "$RUNNER_READ_TOKEN" ]]; then
             select_hosted 'runner status token is unavailable'
@@ -948,13 +914,13 @@ jobs:
 
   core-asan:
     # Same native Core role, same reasoning as core-ubuntu.
-    # Direct needs: change-scope is preserved; admission also requires the
-    # Pre-heavy Gate and each earlier selected native-heavy predecessor.
-    needs: [change-scope, pre-heavy-gate, portal, core-ubuntu, package, core-coverage]
+    # Direct needs: change-scope is preserved, followed by each earlier
+    # selected native-heavy predecessor.
+    needs: [change-scope, portal, core-ubuntu, package, core-coverage]
     if: >-
       ${{
         !cancelled()
-        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
+        && needs.change-scope.outputs.self-test == 'true'
         && fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan
         && needs.change-scope.outputs.trusted-head == 'true'
         && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
@@ -1006,13 +972,13 @@ jobs:
 
   core-coverage:
     # Same native Core role, same reasoning as core-ubuntu.
-    # Direct needs: change-scope is preserved; admission also requires the
-    # Pre-heavy Gate and each earlier selected native-heavy predecessor.
-    needs: [change-scope, pre-heavy-gate, portal, core-ubuntu, package]
+    # Direct needs: change-scope is preserved, followed by each earlier
+    # selected native-heavy predecessor.
+    needs: [change-scope, portal, core-ubuntu, package]
     if: >-
       ${{
         !cancelled()
-        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
+        && needs.change-scope.outputs.self-test == 'true'
         && fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage
         && needs.change-scope.outputs.trusted-head == 'true'
         && (needs.change-scope.outputs.self-test == 'true' || !fromJSON(needs.change-scope.outputs.manifest).lanes.portal || needs.portal.result == 'success')
@@ -1095,14 +1061,13 @@ jobs:
   # suite; the called jobs keep their own native-heavy capacity queue.
   nightly-tsan:
     name: Self-test TSan stress
-    needs: [change-scope, pre-heavy-gate]
+    needs: change-scope
     if: >-
       ${{
         !cancelled()
         && needs.change-scope.outputs.self-test == 'true'
         && needs.change-scope.outputs.self-test-action == 'run'
-        && (needs.change-scope.outputs.batch-mode == 'false' || fromJSON(needs.change-scope.outputs.batch-execution).suites.core_tsan_stress)
-        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
+        && fromJSON(needs.change-scope.outputs.batch-execution).suites.core_tsan_stress
         && needs.change-scope.outputs.trusted-head == 'true'
       }}
     uses: ./.github/workflows/core-nightly.yml
@@ -1112,14 +1077,13 @@ jobs:
 
   nightly-stress:
     name: Self-test Release stress
-    needs: [change-scope, pre-heavy-gate]
+    needs: change-scope
     if: >-
       ${{
         !cancelled()
         && needs.change-scope.outputs.self-test == 'true'
         && needs.change-scope.outputs.self-test-action == 'run'
-        && (needs.change-scope.outputs.batch-mode == 'false' || fromJSON(needs.change-scope.outputs.batch-execution).suites.core_release_stress)
-        && (needs.change-scope.outputs.self-test == 'true' || needs.pre-heavy-gate.result == 'success')
+        && fromJSON(needs.change-scope.outputs.batch-execution).suites.core_release_stress
         && needs.change-scope.outputs.trusted-head == 'true'
       }}
     uses: ./.github/workflows/core-nightly.yml
