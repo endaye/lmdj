@@ -228,7 +228,7 @@ void test_module_manifests_are_exact() {
            {"contract", "lmdj.module.v1"},
            {"dependencies", {{"foundation", "0.4.0"}}},
            {"module", "provider-sdk"},
-           {"version", "2.1.0"},
+           {"version", "2.2.0"},
        }));
   for (const auto& manifest : {success, failure}) {
     LMDJ_CHECK(manifest.size() == 5);
@@ -236,8 +236,8 @@ void test_module_manifests_are_exact() {
     LMDJ_CHECK(manifest.at("contract") == "lmdj.module.v1");
     LMDJ_CHECK(
         (manifest.at("dependencies") ==
-         nlohmann::json{{"provider-sdk", "2.1.0"}}));
-    LMDJ_CHECK(manifest.at("version") == "2.0.1");
+         nlohmann::json{{"provider-sdk", "2.2.0"}}));
+    LMDJ_CHECK(manifest.at("version") == "2.0.2");
   }
   LMDJ_CHECK(success.at("module") == "local.proof.success");
   LMDJ_CHECK(failure.at("module") == "local.proof.failure");
@@ -259,7 +259,7 @@ void test_registry_lists_capabilities_and_rejects_unknown_provider() {
   LMDJ_CHECK(success != providers.end());
   LMDJ_CHECK(failure != providers.end());
   for (const auto* descriptor : {&*success, &*failure}) {
-    LMDJ_CHECK(descriptor->version == "2.0.1");
+    LMDJ_CHECK(descriptor->version == "2.0.2");
     LMDJ_CHECK(descriptor->model_identity == std::nullopt);
     LMDJ_CHECK(descriptor->capabilities.size() == 1);
     LMDJ_CHECK(descriptor->capabilities.front().id == kCapability);
@@ -342,7 +342,7 @@ void test_success_provider_emits_scoped_empty_artifact_and_canonical_attempt() {
        {
            {"artifact_sha256", provider_sha256},
            {"id", "local.proof.success"},
-           {"version", "2.0.1"},
+           {"version", "2.0.2"},
        }},
       {"contract_version", kSchemaVersion},
   };
@@ -366,7 +366,7 @@ void test_success_provider_emits_scoped_empty_artifact_and_canonical_attempt() {
              nlohmann::json::array({"attempt-success"}));
   LMDJ_CHECK(attempt.at("artifacts").size() == 2);
   LMDJ_CHECK(attempt.at("provider").at("id") == "local.proof.success");
-  LMDJ_CHECK(attempt.at("provider").at("version") == "2.0.1");
+  LMDJ_CHECK(attempt.at("provider").at("version") == "2.0.2");
   LMDJ_CHECK(
       attempt.at("provider").at("artifact_sha256") ==
       provider_sha256);

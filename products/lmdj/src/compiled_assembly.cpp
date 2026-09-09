@@ -13,24 +13,24 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
   using lmdj::facade::CompiledProvider;
   return lmdj::facade::CompiledAssemblyCatalog{
       "lmdj",
-      "1.0.48.0",
+      "1.0.50.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       {
           CompiledComponent{"foundation", "0.4.0"},
           CompiledComponent{"authoring-domain", "3.0.0"},
-          CompiledComponent{"project-io", "3.1.0"},
+          CompiledComponent{"project-io", "3.2.0"},
           CompiledComponent{"project-cooker", "1.1.0"},
           CompiledComponent{"audio-runtime", "4.0.0"},
-          CompiledComponent{"provider-sdk", "2.1.0"},
-          CompiledComponent{"application-facade", "4.1.0"},
-          CompiledComponent{"web-runtime-platform", "5.1.0"},
+          CompiledComponent{"provider-sdk", "2.2.0"},
+          CompiledComponent{"application-facade", "4.2.0"},
+          CompiledComponent{"web-runtime-platform", "5.1.1"},
       },
       {
-          CompiledComponent{"core-cli", "3.3.0"},
-          CompiledComponent{"core-mcp", "3.3.0"},
-          CompiledComponent{"native-host", "3.3.0"},
-          CompiledComponent{"web-runtime-host", "4.2.0"},
-          CompiledComponent{"creator-web", "4.2.0"},
+          CompiledComponent{"core-cli", "3.3.1"},
+          CompiledComponent{"core-mcp", "3.3.1"},
+          CompiledComponent{"native-host", "3.3.1"},
+          CompiledComponent{"web-runtime-host", "4.2.1"},
+          CompiledComponent{"creator-web", "4.2.1"},
       },
       {
           CompiledComponent{"lmdj.project.v3", "3.0.0"},
@@ -49,19 +49,19 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
       {
           CompiledProvider{
               "local.proof.success",
-              "2.0.1",
+              "2.0.2",
               lmdj::providers::local_proof_success_registration,
               std::nullopt,
           },
           CompiledProvider{
               "local.proof.failure",
-              "2.0.1",
+              "2.0.2",
               lmdj::providers::local_proof_failure_registration,
               std::nullopt,
           },
           CompiledProvider{
               "local.sample.slice",
-              "1.0.1",
+              "1.0.2",
               lmdj::providers::local_sample_slice_registration,
               std::nullopt,
           },

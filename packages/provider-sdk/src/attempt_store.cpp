@@ -776,45 +776,25 @@ const CapabilityDescriptor& selected_capability(
       });
 }
 
-Error validate_request(
+bool validation_passed(const Error& error) {
+  return error.code == ErrorCode::internal_error && error.message.empty();
+}
+
+Error validate_request_metadata(
     const CapabilityRequest& request,
-    const CapabilityDescriptor& capability,
-    const ProviderPolicy& policy) {
+    const CapabilityDescriptor& capability) {
   if (request.capability != capability.id ||
       request.data_classification.empty() ||
       request.platform.empty() || request.region.empty()) {
     return invalid_argument("capability request metadata is invalid");
   }
-  std::set<std::string> input_hashes;
-  for (const auto& input : request.inputs) {
-    if (!valid_port_name(input.port)) {
-      return invalid_argument("capability request port name is invalid");
-    }
-    const auto* port = find_port(
-        capability.input_artifacts, input.port);
-    if (port == nullptr) {
-      return invalid_argument(
-          "capability request names a port the Capability does not declare");
-    }
-    if (!valid_artifact(input.artifact) ||
-        !media_type_allowed(*port, input.artifact.media_type) ||
-        !input_hashes.insert(input.artifact.sha256).second) {
-      return invalid_argument("capability request artifacts are invalid");
-    }
-  }
-  for (const auto& port : capability.input_artifacts) {
-    const auto count = static_cast<std::size_t>(std::count_if(
-        request.inputs.begin(),
-        request.inputs.end(),
-        [&port](const auto& input) {
-          return input.port == port.name;
-        }));
-    const auto minimum =
-        port.required ? std::size_t{1} : std::size_t{0};
-    if (count < minimum || count > port.max_count) {
-      return invalid_argument("capability request input count is invalid");
-    }
-  }
+  return Error{ErrorCode::internal_error, ""};
+}
+
+Error validate_policy(
+    const CapabilityRequest& request,
+    const CapabilityDescriptor& capability,
+    const ProviderPolicy& policy) {
   if (!unique_nonempty(request.required_permissions)) {
     return invalid_argument("required permissions are invalid");
   }
@@ -855,8 +835,43 @@ Error validate_request(
   return Error{ErrorCode::internal_error, ""};
 }
 
-bool validation_passed(const Error& error) {
-  return error.code == ErrorCode::internal_error && error.message.empty();
+Error validate_request(
+    const CapabilityRequest& request,
+    const CapabilityDescriptor& capability,
+    const ProviderPolicy& policy) {
+  const auto metadata = validate_request_metadata(request, capability);
+  if (!validation_passed(metadata)) return metadata;
+  std::set<std::string> input_hashes;
+  for (const auto& input : request.inputs) {
+    if (!valid_port_name(input.port)) {
+      return invalid_argument("capability request port name is invalid");
+    }
+    const auto* port = find_port(
+        capability.input_artifacts, input.port);
+    if (port == nullptr) {
+      return invalid_argument(
+          "capability request names a port the Capability does not declare");
+    }
+    if (!valid_artifact(input.artifact) ||
+        !media_type_allowed(*port, input.artifact.media_type) ||
+        !input_hashes.insert(input.artifact.sha256).second) {
+      return invalid_argument("capability request artifacts are invalid");
+    }
+  }
+  for (const auto& port : capability.input_artifacts) {
+    const auto count = static_cast<std::size_t>(std::count_if(
+        request.inputs.begin(),
+        request.inputs.end(),
+        [&port](const auto& input) {
+          return input.port == port.name;
+        }));
+    const auto minimum =
+        port.required ? std::size_t{1} : std::size_t{0};
+    if (count < minimum || count > port.max_count) {
+      return invalid_argument("capability request input count is invalid");
+    }
+  }
+  return validate_policy(request, capability, policy);
 }
 
 foundation::Result<std::string> hash_parameters(
@@ -1206,7 +1221,7 @@ bool valid_output_bindings(
 }
 
 foundation::Result<std::filesystem::path> existing_attempts_root(
-    const std::filesystem::path& workspace_root) {
+    const std::filesystem::path& workspace_root, bool missing_is_not_found = false) {
   if (workspace_root.empty() ||
       workspace_root.extension() == ".lmdj") {
     return foundation::Result<std::filesystem::path>::failure(
@@ -1224,6 +1239,12 @@ foundation::Result<std::filesystem::path> existing_attempts_root(
     std::error_code status_error;
     const auto status =
         std::filesystem::symlink_status(directory, status_error);
+    if (missing_is_not_found && directory != workspace_root &&
+        status.type() == std::filesystem::file_type::not_found &&
+        (!status_error || status_error == std::errc::no_such_file_or_directory)) {
+      return foundation::Result<std::filesystem::path>::failure(
+          Error{ErrorCode::not_found, "Workspace has no persisted Attempts"});
+    }
     if (status_error || std::filesystem::is_symlink(status) ||
         !std::filesystem::is_directory(status)) {
       return foundation::Result<std::filesystem::path>::failure(
@@ -1450,7 +1471,7 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
     return foundation::Result<TerminalAttempt>::failure(
         invalid_argument("attempt id is not safe for inspection"));
   }
-  const auto attempts = existing_attempts_root(workspace_root_);
+  const auto attempts = existing_attempts_root(workspace_root_, true);
   if (!attempts.has_value()) {
     return foundation::Result<TerminalAttempt>::failure(attempts.error());
   }
@@ -1729,11 +1750,106 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
   }
 }
 
+foundation::Result<std::vector<std::byte>> AttemptStore::read_candidate_artifact(
+    foundation::AttemptId attempt_id,
+    const foundation::ArtifactRef& artifact,
+    std::uint64_t maximum_bytes) const {
+  using Result = foundation::Result<std::vector<std::byte>>;
+  const auto unavailable = [](ErrorCode code, const char* message) {
+    return Result::failure(Error{code, message,
+        {{"reason", "candidate_artifact_unavailable"}}});
+  };
+  if (!valid_artifact(artifact) || artifact.byte_length > maximum_bytes ||
+      artifact.byte_length > std::numeric_limits<std::size_t>::max() ||
+      artifact.byte_length > static_cast<std::uint64_t>(
+          std::numeric_limits<std::streamsize>::max())) {
+    return Result::failure(invalid_argument("Candidate output exceeds the reader byte bound"));
+  }
+  const auto terminal = inspect(attempt_id);
+  if (!terminal.has_value()) return Result::failure(terminal.error());
+  if (terminal.value().status != AttemptStatus::succeeded ||
+      std::none_of(terminal.value().candidate_outputs.begin(),
+                   terminal.value().candidate_outputs.end(),
+                   [&](const auto& binding) { return binding.artifact == artifact; })) {
+    return Result::failure(invalid_argument("Artifact is not a successful Candidate output binding"));
+  }
+  const auto root = existing_attempts_root(workspace_root_);
+  if (!root.has_value()) return Result::failure(root.error());
+  const auto attempt_root = root.value() / attempt_id.value();
+  const auto artifacts = attempt_root / "artifacts";
+  for (const auto& directory : {attempt_root, artifacts}) {
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status(directory, error);
+    if (error || std::filesystem::is_symlink(status) ||
+        !std::filesystem::is_directory(status)) {
+      return unavailable(ErrorCode::not_found, "Candidate output directory is unavailable");
+    }
+  }
+  const auto path = artifacts / artifact.sha256;
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error || std::filesystem::is_symlink(status) ||
+      !std::filesystem::is_regular_file(status)) {
+    return unavailable(ErrorCode::not_found, "Candidate output is unavailable");
+  }
+  if (std::filesystem::file_size(path, error) != artifact.byte_length || error) {
+    return unavailable(ErrorCode::io_error, "Candidate output byte length changed");
+  }
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream) return unavailable(ErrorCode::not_found, "Candidate output cannot be opened");
+  std::vector<std::byte> bytes(static_cast<std::size_t>(artifact.byte_length));
+  stream.read(reinterpret_cast<char*>(bytes.data()),
+              static_cast<std::streamsize>(bytes.size()));
+  if (stream.gcount() != static_cast<std::streamsize>(bytes.size()) ||
+      stream.peek() != std::char_traits<char>::eof() || stream.bad()) {
+    return unavailable(ErrorCode::io_error, "Candidate output could not be read completely");
+  }
+  const unsigned char empty = 0;
+  const auto* begin = bytes.empty() ? &empty : reinterpret_cast<const unsigned char*>(bytes.data());
+  if (picosha2::hash256_hex_string(begin, begin + bytes.size()) != artifact.sha256) {
+    return unavailable(ErrorCode::io_error, "Candidate output digest changed");
+  }
+  return Result::success(std::move(bytes));
+}
+
+foundation::Result<void> AttemptStore::validate_execution_policy(
+    const CapabilityRequest& request,
+    const Registry& registry) const {
+  const auto provider_id = selected_provider(request.capability);
+  if (!provider_id.has_value()) {
+    return foundation::Result<void>::failure(provider_id.error());
+  }
+  const auto selected = registry.select(provider_id.value(), request.capability);
+  if (!selected.has_value()) {
+    return foundation::Result<void>::failure(selected.error());
+  }
+  const auto& capability = selected_capability(
+      selected.value().descriptor, request.capability);
+  const auto metadata = validate_request_metadata(request, capability);
+  if (!validation_passed(metadata)) {
+    return foundation::Result<void>::failure(metadata);
+  }
+  const auto policy = validate_policy(request, capability, policy_);
+  if (!validation_passed(policy)) {
+    return foundation::Result<void>::failure(policy);
+  }
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<AttemptResult> AttemptStore::execute(
+    foundation::AttemptId attempt_id,
+    const CapabilityRequest& request,
+    const Registry& registry,
+    const ExecutionOptions& options) {
+  return execute(std::move(attempt_id), request, registry, options, {});
+}
+
 foundation::Result<AttemptResult> AttemptStore::execute(
     foundation::AttemptId attempt_id,
     const CapabilityRequest& input_request,
     const Registry& registry,
-    const ExecutionOptions& ingress_options) {
+    const ExecutionOptions& ingress_options,
+    const std::function<foundation::Result<void>()>& after_reservation) {
   const CapabilityRequest request = input_request;
   const ExecutionOptions options = ingress_options;
   if (!options.staging_budget) {
@@ -1798,6 +1914,17 @@ foundation::Result<AttemptResult> AttemptStore::execute(
   }
   const auto& attempt_root = reservation.value();
   LMDJ_PROVIDER_CHECKPOINT("reserved");
+  if (after_reservation) {
+    try {
+      const auto completed = after_reservation();
+      if (!completed.has_value()) {
+        return foundation::Result<AttemptResult>::failure(completed.error());
+      }
+    } catch (...) {
+      return foundation::Result<AttemptResult>::failure(
+          io_error("after-reservation callback failed", attempt_root));
+    }
+  }
   auto state = std::make_shared<RunState>(attempt_root, capability, request, options);
   const ReleaseRunPayloads payload_cleanup{state};
   auto& minted = state->minted;

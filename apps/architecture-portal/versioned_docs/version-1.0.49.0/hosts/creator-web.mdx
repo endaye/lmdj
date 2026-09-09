@@ -1,0 +1,175 @@
+---
+title: Creator Web Host
+area: hosts
+status: implemented
+host: creator-web
+owners: [product, hosts, web]
+source_paths:
+  - apps/creator-web
+  - apps/creator-web/module.json
+  - packages/web-runtime-platform
+  - products/lmdj/assembly.json
+  - docs/quality/2026-08-07-stage7-creator-editor-acceptance.md
+  - docs/quality/2026-08-09-stage8-sample-editor-acceptance.md
+  - docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md
+  - docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md
+  - docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md
+  - docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md
+  - docs/quality/2026-08-16-stage8b-pad-capture-acceptance.md
+  - docs/quality/2026-08-24-creator-capture-precommit-crop.md
+  - docs/design/2026-08-23-creator-capture-precommit-crop-design.md
+  - docs/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md
+  - docs/plans/2026-08-29-lmdj-stage9-switch-boundary-flush.md
+  - docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md
+  - docs/quality/2026-08-27-stage9-sequence-recording-review.md
+  - docs/prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md
+  - docs/prd/decisions/2026-08-24-capture-input-gate-and-identity.md
+  - docs/plans/2026-08-24-lmdj-capture-input-gate-and-identity.md
+  - scripts/creator-web.sh
+  - scripts/creator-web-deploy.sh
+  - docs/deploy/creator-web.md
+  - .github/workflows/deploy-creator-web.yml
+  - tests/platform/web/creator
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+Cloudflare 迁移使用固定入口 `https://creator.lmdj.workers.dev/`。
+部署版本来自独立验证的签名 Release，不由本页 current Assembly 推断；配置、
+平台响应差异与迁移验收见 [Creator 部署手册](https://github.com/endaye/lmdj/blob/main/docs/deploy/creator-web.md)。
+
+## 状态
+
+<StatusBadge status="implemented" /> Creator Web Host `4.1.0` 已进入 Product Build `1.0.45.0` Assembly，并只依赖 Web Runtime Platform `4.1.0`。Project Truth 的当前写出契约是 `lmdj.project.v4`（含 16 个 Pattern Slot 与 `performances`），v1/v2/v3 仅作为只读迁移输入。Creator 支持 WAV、MP3、M4A/AAC 与 FLAC 的内容嗅探摄入，在 48 kHz `OfflineAudioContext` 中把长源解码到 Wasm 外的单一 Host 缓冲，随后提供波形、试听、revision-bound 配额显示和选区提交。Capture 在完整波形上直接显示可独立移动的 Start/End grips，遮暗选区外区域，并以秒显示只读 Duration；内部与提交边界仍使用 `selectionStart + selectionFrames`。提交选区时 1 MiB 只作为单 chunk 上限，选区 WAV 总量仍由已验证 manifest 上限约束；非 quota 协议诊断会在 operation boundary 被收敛为空 details，不再击穿 reducer，Bank/Project quota details 仍严格校验。既有 Sequence Surface、Sample Editor、Pad Capture、pre-commit Crop、输入电平门与可恢复 `DUPLICATE_ID` 行为继续保留。本 Build 新增 Sound Set 目录与安装 surface：浏览 Catalog、检查单个 Set、预览映射，并以 `keep` 或 `replace` 安装到用户选定的 Bank；浏览器侧执行 `fetch` 并把字节交给 Core 暂存，Core 保留全部 Contract、哈希与准入判定。本 Build 起 Set 内音频可以试听：surface 上那两个自 Task 5 就写明的接入点现在各带一个控件——set 级 demo 与每个已占用槽——外加一个停止控件。Facade 解析、把关、解码后交回**已重采样**的 PCM，Host 只把它发布进引擎保留的双槽 audition 池并起声；浏览器侧从不触碰 Set Store 字节，跨边界的只有它播放了什么的几何信息。停止是幂等的 Host 操作，所以控件不判断此刻是否有声音在响——那个判断归引擎，而在渲染与点击之间声音结束时它一定会判错。试听对 Project Truth 是 query：不建 Asset、不动 Pad、不推进 revision，由原生验收 journey 第 10 腿在事情发生之后读回断言。
+
+阻断该 surface 的三个缺陷都已修复并合并。[#900](https://github.com/endaye/lmdj/issues/900) 曾使本 Build 产出的任何 Project 都无法导入——浏览器侧 Bundle reader 的枚举停在 `1.1.0` / `lmdj.project.v3`，而导入 Bundle 是浏览器获得 Project 的唯一途径；[#901](https://github.com/endaye/lmdj/issues/901) 的 `connect-src 'self'` 曾拦截一切跨源 Catalog，Creator 现在通过同源前缀 `/soundset-catalog/` 取用，由 Host 转发到部署配置的上游，页面不再获得任何外部 origin，该指令对 OPFS 中 Project 与音频的外泄保护保持原样；[#902](https://github.com/endaye/lmdj/issues/902) 曾使 Workspace Set Store 在浏览器存储平台上从不发布。`tests/platform/web/creator/creator_web_soundset.spec.mjs` 的六腿 journey 现已无援转绿，并在两台独立搭建的环境上各跑通一次；其断言经逐条扰动验证，包括一次零写入 `keep` 安装不得推进 revision。
+
+## 创作边界
+
+当前 UI 提供 browser-local Project discovery/open、portable Project Bundle import、64 个稳定 Pad Slot、Sample Surface 与 Sequence Surface。长素材在读内容前检查 100 MiB source ceiling，可判定的声道/时长在 decode 前拒绝，decode 后再精确验证最多 2 声道和 43,200,000 帧；取消、替换、提交成功、Project 切换和后台恢复都会释放完整源缓冲。Capture 与导入选区都使用 `sample.quota` 返回的 target-exclusive effective headroom，不再有固定单 Pad 帧数上限；冲突或配额拒绝保留源与选区。Pointer、Keyboard、MIDI 经同一 Input Controller 同时进入 live trigger 和 frame-stamped Sequence admission；accepted pending event 通过共享 Platform 的 immutable Runtime overlay 从下一 Bar 重复，Stop 后切回 clean committed view。切换 Pattern 时旧 Pattern 保持播放/录制，直到共享 Runtime Session 已在下一 Bar acknowledgement 上完成 Facade flush。Creator 只在随后查询到目标 Pattern 的 active authority时更新选择和 recording 状态，不根据原始通知预测成功；继续输入因此进入新 Pattern。开始 Sequence 前已在空 Pad 上进行的 Capture 可继续录制；敲击该 armed Pad 只停采并进入 trim overlay，Sequence underlay 保持 active/switching。armed 期间其他 Pad 仍是普通演奏/Sequence 输入，但不能改写 Capture 所拥有的 Sample selection。匹配提交由 Core rebase 后，同一 Pad 才恢复为正常演奏/录音输入；失败或取消请求 Core 在 writer lease 下判定 exact receipt/Project Truth：已提交则完成 rebase，未发布且 Truth 未变则 durable abort/disarm，冲突则 fail closed；原会话与 pending events 均保留。Sequence recovery 只允许 fingerprint 匹配的原 Pattern、用户明确选择的有效新 Pattern或 discard。Host 不解析 Bundle、Project、journal、quantizer 或 fingerprint，Project Truth、revision、receipt 与 Runtime publication 均由 Core 决定。
+
+Open local 在已有 Project 时仍保持可达；list/import/open/reopen 属于同一串行 Project action 边界，后发 action 不得与旧 action 重叠或提交过期结果。ready Session 的 diagnostics 更新只同步 Runtime 呈现，不得重新进入 Project inventory/reopen；inventory 只随 Session、Runtime phase 或明确 list retry 变化。Suspend audio 进入显式 `suspending` 屏障：Runtime 发布 `audio-suspended` 只负责输入清理，Project actions 必须等 `session.suspendAudio()` 的 safety cleanup 与 transport response 全部 settle 后才重新开放；拒绝但 Runtime 仍 running 时恢复 running surface。旧 Runtime generation 的 import 被 replacement 取消时，过期 action 不能提交 Project 结果，但它拥有的 transfer UI 必须独立回到 `idle`，避免新 Session 已 ready 而 Creator 永久显示 `importing`。persisted `pagehide` retains the shared Runtime 并进入受控恢复契约；non-persisted terminal `pagehide` performs close。新 Runtime generation 只能在旧 generation 的资源清理完成后接管，Project 会自动 reopen，但 Audio 必须保持 inactive，直到用户再次按下 Activate audio。
+
+状态栏显示由生成的 Product Assembly identity 派生的 build 身份（Product Build、Host、Platform 与 protocol 版本），启动时同一身份写入浏览器 console 并暴露为只读的 `window.__LMDJ_CREATOR_BUILD__`；该显示只做呈现，不替代 Runtime Session 对部署 manifest 的验证。状态栏同时显示 Project revision 与 MIDI 授权/输入数；Project Surface 显示 import 传输进度，Local Projects 列表可返回已打开的 Project；Runtime `ready` 时的 advisory 错误可被 Dismiss，`restart-required`、`unsupported`、`failed` 与 `closed` 的 Runtime 错误则保留到 Runtime 自身改变 phase。
+
+## 演奏边界
+
+Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
+
+Stage 10 在 mode rail 上新增 Perform 入口（`project` / `sample` / `sequence` / `perform`）：它只在 Project 可演奏、audio `running` 且 capture 存储可用时启用，否则保持 disabled 并以 aria-label 说明缺少的前置条件。Perform surface 由 Pattern launch strip、FX slider bank、HOLD、Pad surface、录制面板与回放面板组成。
+
+FX 使用固定的八段链路顺序 `filter → delay → reverb → stutter → gate → reverse → crush → cutter`，与 Audio Runtime 的 `kFxChainOrder` 同一份真相；每个 slider 是 `0..1000` 整数范围、中性起点 `500`。滑杆按 engage/move/release 手势成对记录，disabled 或卸载时强制释放未闭合手势。HOLD 是链路级开关，只在 `recording` 或 `flushing` 阶段可操作。
+
+Pattern launch strip 呈现 16 个 Pattern Slot（v4 的可发射地址空间），槽位状态为 `idle` / `pending` / `acknowledged`：Creator 发出 `requestPerformancePatternLaunch` 后进入 pending，然后轮询 `performance.record.status`，直到该 `requestId` 出现在 authority 的 `lastLaunchAck` 才标记为已确认；空槽被确认时显式显示 silent gap。Pattern 的 assign/clear/move 只在录制 `idle` 时开放。状态输出中的 open Pad 手势数、open FX 手势数、HOLD 与最后一次 acknowledged launch 全部取自 Facade authority，不做本地预测。
+
+录制阶段机为 `idle → starting → recording → flushing → stopping → stopped → saving | discarding`。录制面板提供 Record / Flush / Stop / Performance 名称 / Save / Discard / Export Performance WAV，并在 `bindingStatus === "retry"` 时额外提供 Retry WAV bind。WAV 绑定词汇是 `unbound | binding | retry | bound`；bind 或随后的 Project truth 刷新失败会回到 `stopped` 并保留 retry，不丢弃已落盘的 WAV 前缀。master tap 以每批最多 4,800 帧喂入流式 WAV writer，背压、写入失败、tap 投递失败与 30 分钟上限都以明确原因封存，durable WAV 前缀仍可保存。
+
+回放面板列出已保存的 Performance，可对其一发起 replay，并显示 `replay.state`、解析出的 revision 与 `neutral` 标记；同一面板提供 start frame / end frame / 目标 Pad Slot（`0..63`）的 resample commit，以及 Performance recovery 候选的 Apply recovery / Discard recovery。
+
+Host 只渲染 Facade 返回的 authority：录制状态、pending/acknowledged launch、replay 状态与 recovery 候选都来自 Core 查询结果。演奏输入本身不改写 Project Truth；只有显式的 Save、Discard 与 WAV bind 会带 `expected_revision` 经 Facade 提交 Project mutation，Creator 随后重读 Project truth，不自行推断 revision。
+
+`1.0.40.0` 的 macOS Chrome M2 实体听感 8 个检查组全部通过：非零裁剪、One Shot、Gate release、Loop Gate、Loop Toggle、Volume/Mute、16 Pads 与 Replace/reload 均无可闻异常。约 40 ms 选区的快速重复纹理一度被描述为接缝咔哒；同一候选复听后，操作者明确修正为短片段高速循环的正常声音、没有明显独立接缝爆音。该 `PASS` 只适用于已记录的 Chrome 实体听感行，不表示其他浏览器或设备通过。
+
+同一 Build 的 macOS Chrome M3 Pointer 实体旅程也已通过：内置 MacBook 触控板逐一完成 A1–A16、B/C/D Bank 两端 Pad、十次分离点击与一次双击、drag-off/空隙/禁用控件、模式切换、Suspend→Activate→recovery probe 和报告导出。精确 packaged Creator revision `3aeba5c5` 的报告记录 115 admissions / 115 outcomes / 0 rejections，SHA-256 为 `80895963d297f304d85db5d2e8726bea1d85726e40231f473872c4acd1f4dc41`。该 `PASS` 只升级 Creator 的 M3 macOS Chrome Pointer 行，不替代其他浏览器、设备或输入方式。
+
+`1.0.41.0` 的 macOS Safari M8 Pointer + 实体听感旅程已在部署地址通过：MacBook Pro `Mac16,8` 的内置触控板逐项覆盖全部 Pad/Bank、分离与双击、drag-off/错误目标、模式导航、focus interruption 与显式 Suspend/Activate recovery probe；A1 的严格 `0.505–0.545 s` 非零选区、四种 trigger mode、`0.0 dB` / `-11.7 dB`、Mute 及 A15/A16 reload 持久化均由操作者实听确认。刷新后的最终报告绑定 Project/Runtime revision 83、Audio `running`、2 admissions / 2 outcomes / 0 rejections、无错误，SHA-256 为 `fb87f54f31196cc01211b9c7da8aec34f5f7659b7f7392bdeffd3f5ba1fcc340`。该 [M8 evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md) 只升级 Creator macOS Safari M8，不替代 Safari capture M7、Web Runtime Lab 或 Stage 9 Safari Sequence 行。
+
+同一部署 Build 的 macOS Safari M7 Capture 旅程未通过：正常录音、提交和实听成功，但 Command-Tab focus loss 后，约两秒的录音帧仍被保留，trim dialog 与全部恢复控件却一起消失，Sample 区域只剩空白；导出的报告同时记录 `recovering`、Project/Runtime revision 84，以及没有 Sequence session 的 `trim-overlay`。该 [M7 failure evidence](https://github.com/endaye/lmdj/blob/main/docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md) 绑定 [#625](https://github.com/endaye/lmdj/issues/625)，修复部署后必须从头重跑 #244，当前没有可继承的通过前缀。
+
+#625 的 current-source 修复门要求 Sequence reducer 拒绝没有 active session 的
+`trim-overlay`，并由 packaged Chromium 的确定性非零 Capture journey 验证
+focus loss 后 retained waveform、stop reason、selection、Commit/Discard/Close
+仍可见，导出报告保持 Sequence `stopped` / `session_id: null`。Playwright WebKit
+仍只证明既有 packaged `UNSUPPORTED_WEB_RUNTIME` capability boundary，不能作为
+Capture 渲染证据。
+
+在已部署 `1.0.42.0` 上重跑 M7 证实该 reducer 门生效：Sample 区域完整可见，导出
+报告读到 Sequence `stopped` / `session_id: null`。同一次重跑暴露出第二个、机制
+不同的缺陷 [#738](https://github.com/endaye/lmdj/issues/738)：真实 focus loss
+同时中断 AudioContext，Runtime 进入 audio recovery，而 Sample 区域此前会在
+recovery 时清空 capture target，把面板连同保留的录音一起卸载。修复后 audio
+recovery 只释放 decoded long-source 内存，capture 面板仅由自身的
+Close/Commit/Discard 关闭，与 Runtime session 替换时的既有行为一致。
+
+两个门覆盖各自的一半：packaged Chromium journey 用合成 `blur` 证明面板自身的
+stop 与 retained take，`apps/creator-web/test/workspace_shell.test.tsx` 的
+"audio recovery keeps an open capture panel instead of discarding it" 证明
+audio recovery 不会重建或卸载该面板。合成 `blur` 不会中断 AudioContext，而驱动
+recovery 需要 packaged app 不应存在的 Runtime 状态 seam，这正是 #738 能在
+journey 全绿的情况下逃逸的原因。该自动化只证明状态与渲染边界；在 #738 的修复
+进入已部署 Product Build 并从头重跑 #244 前，M7 仍为 `FAIL`，不能升级为物理
+Safari `PASS`。
+
+## 分发与身份
+
+`scripts/creator-web.sh package` 生成内容哈希资产和 canonical Creator distribution manifest；manifest 绑定 Product Build、Host、Platform、协议、固定 Emscripten 身份、heap 与资源上限，并显式声明兼容的诊断 Host 身份。共享 native manifest gate 只接受 Product Assembly 注入的精确 Host/contract/version 组合。该同构建 manifest ownership 协议不是公开跨版本 Contract。
+
+`1.0.44.0` 的 Creator 同构建 distribution manifest 声明六个 expected asset：`host_main`（`assets/main.*.js`）、`runtime_script`（`assets/runtime.*.js`）、`runtime_wasm`（`assets/runtime.*.wasm`）、`host_style`（`assets/styles.*.css`）、`capture_worklet`（`assets/capture-worklet.*.js`），以及新增的 `perform_master_tap_worklet`（`assets/perform-master-tap.*.js`）；兼容的诊断 Host 身份为 `web-runtime-host 4.0.0`。`apps/creator-web/tools/package.py` 定位 Vite 产出的 master tap processor，按内容哈希为 `assets/perform-master-tap.<sha256>.js`，改写主 bundle 中唯一一处引用，并在匹配为零或多于一个时拒绝打包。共享 native manifest gate 对声明 `compatible_hosts` 的 Creator manifest 要求恰好一个 tap 资产（诊断 Host 为零个），并校验十三项资源上限——既有九项之外，本 Build 新增四项 Sound Set Set Store 上限 `maximum_soundset_manifest_bytes` 1 MiB、`maximum_soundset_blob_bytes` 65 MiB、`maximum_soundset_unique_bytes` 256 MiB 与 `maximum_soundset_staging_bytes` 512 MiB，每一项都必须是正 safe integer 并逐值比对。清单形状改变是 Creator Host 本次取 MAJOR 的依据。多余默认值、重复 role、缺失或错误的前后缀、digest 不匹配，以及无法解析到精确哈希资产的主 bundle URL 都 fail closed。更早的不可变包保持各自的精确身份，不被追溯要求携带 Stage 10 字段。私有协议版本仍为 `1`。
+
+## 公共部署边界
+
+后续 Web 产品使用 `web-hosts` profile：同一 Product Release 精确包含 Creator 与 Runtime
+各自的 ZIP、checksum、detached checksum signature，共六资产。Creator verifier 在闭合验证
+六资产后只选择 Creator triplet。当前固定入口由 Creator 和 Runtime 各自的 Cloudflare
+部署配置定义，分别为 `https://creator.lmdj.workers.dev/` 和 `https://lab.lmdj.workers.dev/`。
+两者独立部署、验证和恢复，使用 `scripts/cloudflare-host.sh` 消费已签名发布归档；
+Release publication 不 fan-out deployment。
+
+2026-09-08 用户授权删除两个旧 Host Netlify 站点，旧手动 workflow 已停用。
+历史 Netlify 工具源码与证据保留供审计，旧站点不再是回滚或数据迁移入口。
+删除远端托管内容未清除用户浏览器本地 Project；正式导出/导入另由 #961 设计。
+Cloudflare 自动化部署验证通过，Safari、真实听感及稳定观察仍由 #925 追踪。
+
+## 自动化证据
+
+Vitest 覆盖长素材容器嗅探、pre/post-decode boundary、单一缓冲、配额选区/拒绝保留，以及 Sequence stopped/recording/switch-pending/flushing/recovery/trim-overlay 状态、边界后的 active authority 校验、统一输入、Capture 互操作与 privacy-safe acceptance report；Capture 单测另固定 full-buffer 初态、两端点独立操作、midpoint 命中区、grab offset、middle inert、越界/交叉限制、键盘/辅助技术秒值、Escape/cancel 回滚和精确 commit frame range。A9 的七个物理 fixture 由仓库脚本可复现并记录 SHA-256。packaged Playwright 使用真实 Facade 验证组合旅程，并在完整 Capture 波形上移动 Start/End 后核对提交 artifact 的精确 byte length；armed-Pad journey 在 Capture commit 前录 A2、以 armed A1 stop（不入 journal）、commit 后再录 A1，随后 Stop、reload/reopen 并检查 exact event delta/order/count、revision、Pad/Asset 以及 WAV media type/SHA-256/byte length Project Truth。Core fault journey另覆盖 pre-publication prepare failure 后的 Discard/disarm、continued flush/Stop 与 restart。自动化不替代 #359 的 macOS/iPadOS Safari 内存证据或物理 MIDI/Touch/音频验收，也不证明远端 CI、merge、tag、Release、部署或 Channel promotion。
+
+自动化结论本身不是物理验收；M3 的 Chrome Pointer 与 M8 的 Safari Pointer/听感 `PASS` 均来自上述实体记录。Safari capture M7 已在 `1.0.41.0` 实体测试中失败并由 #625 阻塞；其他通过项不替代其完整重跑、Stage 9 Safari Sequence、Chrome MIDI 或 iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
+
+## 非能力
+
+当前不宣称离线安装/PWA、云同步、协作、素材智能、生产部署已执行、`beta`/`stable` 或未执行的物理设备体验已完成。Sequence recording 已交付，但通用 Sequence event editor、Undo/redo、持久化 Asset DSP 与自动 slicing 仍不在当前能力内。Perform surface 已进入 `1.0.42.0` 源码，但 Stage 10 尚无任何物理验收：没有 Perform 的实体听感、实体输入或延迟结论，自动化只证明状态机、authority 归属与分发身份边界。同样不宣称当前 Product Build `1.0.44.0` 已获得 tag、Release、部署或 Channel promotion——匹配该 Build 的不可变门户快照随分配在同一 Pull Request 内冻结，而 tag、Release、部署与 Channel promotion 各自仍是独立的后续授权与验证边界。历史 `1.0.42.0` 自身的 tag、Release、快照、部署与 `dev` 晋级证据不自动升级为当前 Build 的结论。
+
+## Cloudflare 隔离恢复验证
+
+共享 HTTP 检查工具支持显式 `--recovery-target`，分别限制到
+`creator-recovery` 和 `lab-recovery` 的 workers.dev 地址。版本 URL 同时要求
+`--preview` 与实际版本短前缀；正式地址和恢复地址不会因标志缺省而混用。
+输入仍须先独立验证 Release 签名，检查包含完整已验证文件字节与响应规则。
+该命令只读取远端响应，不代表恢复演练或物理浏览器验收已经完成。
+
+## Cloudflare operator workflow
+
+The stable `scripts/cloudflare-host.sh` entry point provides signed candidate
+upload, exact-version HTTP verification, promotion, recovery and explicit
+reconciliation. Operations are requested by an operator; these Hosts do not
+automatically deploy on main pushes. The shared runbook at
+`docs/deploy/cloudflare-hosts.md` records command inputs, the common private
+journal directory, credential isolation and unknown-outcome handling.
+
+Promotion rechecks candidate and prior signed bytes. Recovery selects the exact
+retained prior version, while first publication failure disables its stable
+route. Reconciliation checks current live state and closes the pending local
+operation without a cloud write. Local locks require one coordinated operator
+host and do not lock dashboard changes. These HTTP checks do not establish
+browser, audio, storage migration or manual acceptance.
+
+## Provider 输入 owner 与会话权限
+
+Host 通过 Facade 提供 `provider.list`、`provider.permissions.configure`、
+`provider.select`、`provider.run` 和 `attempt.inspect`。输入必须先成为 Project Asset；
+owner 绑定完整 Artifact identity，读取与完整性检查由 Core 在 writer lease 内完成。
+权限配置替换当前会话的 grant，重启恢复默认 Proof 权限；选择 Provider 不自动授权。
+Slice 参考运行使用显式 `sample.slice.execute` grant 和既有 `test` 平台 token。
+成功或失败保存在 Attempt，重启后可检查；执行不改写 Project Truth。
+用户切片界面、结果采纳与生产质量选择仍未交付。当前身份由上方 Build Identity 派生。
+
+可信程序调用方使用 `window.lmdjWebRuntimeHost.providers` 中的 `listProviders()`、
+`configureProviderPermissions(grantedPermissions)`、`selectProvider(capability, providerId)`、
+`runProvider(request)` 与 `inspectAttempt(attemptId)`。
+Web `input_owners` 每项仅接受 `port/occurrence/project_id/asset_id`；路径由 ControlRuntime
+从当前 retained Project 注入，调用方传路径会被拒绝。无打开 Project 或其他窗口持有
+writer lease 时不能取得输入 owner；没有隐式授权或私有 Wasm 调用要求。

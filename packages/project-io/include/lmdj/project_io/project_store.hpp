@@ -203,6 +203,10 @@ class ProjectStore {
       const domain::ProjectState& initial);
   foundation::Result<domain::ProjectState> load(
       const std::filesystem::path& bundle) const;
+  // Reads only committed authoring state under the owner lease. Unlike load,
+  // this never recovers interrupted writes or scavenges unpublished files.
+  foundation::Result<domain::ProjectState> inspect_committed(
+      const std::filesystem::path& bundle) const;
   foundation::Result<domain::AppliedCommand> execute(
       const std::filesystem::path& bundle,
       const domain::Command& command);

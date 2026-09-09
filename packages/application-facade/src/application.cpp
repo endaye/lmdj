@@ -1,4 +1,5 @@
 #include <lmdj/facade/application.hpp>
+#include <lmdj/facade/candidate_store.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -158,6 +159,8 @@ const std::map<std::string, OperationKind>& operations() {
   static const std::map<std::string, OperationKind> value{
       {"asset.import", OperationKind::command},
       {"attempt.inspect", OperationKind::query},
+      {"candidate.job.run", OperationKind::command},
+      {"candidate.job.inspect", OperationKind::query},
       {"pad.assign", OperationKind::command},
       {"pattern.slot.assign", OperationKind::command},
       {"pattern.slot.clear", OperationKind::command},
@@ -2209,6 +2212,7 @@ struct Application::Impl {
             config.soundset_store_limits.value_or(
                 kDefaultSoundSetStoreLimits)),
         soundset_sets(workspace_root, soundset_limits, storage_platform),
+        candidates(workspace_root, storage_platform),
         projects(storage_platform),
         sequence_journals(storage_platform),
         bundle_transfers(storage_platform),
@@ -3920,6 +3924,8 @@ struct Application::Impl {
     if (operation == "provider.select") {
       return provider_select(request);
     }
+    if (operation == "candidate.job.run") return candidate_job_run(request);
+    if (operation == "candidate.job.inspect") return candidate_job_inspect(request);
     if (operation == "provider.run") {
       return provider_run(request);
     }
@@ -7625,7 +7631,97 @@ struct Application::Impl {
         std::nullopt);
   }
 
-  nlohmann::json provider_run(const nlohmann::json& request) {
+  nlohmann::json candidate_job_inspect(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "job_id"}),
+            "candidate.job.inspect request shape is invalid");
+    const auto result = candidates.inspect(file_id_field(request, "job_id"), attempts);
+    if (!result.has_value()) return error_envelope(result.error());
+    return success_envelope(result.value(), std::nullopt);
+  }
+
+  nlohmann::json candidate_job_run(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "job_id", "attempt_id", "project_path",
+        "project_id", "asset_id", "expected_revision", "parameters", "data_classification",
+        "platform", "region", "required_permissions"}),
+        "candidate.job.run request shape is invalid");
+    const auto job_id = file_id_field(request, "job_id");
+    const auto attempt_id = file_id_field(request, "attempt_id");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto project_id = foundation::ProjectId{uuid_field(request, "project_id")};
+    const auto asset_id = foundation::AssetId{uuid_field(request, "asset_id")};
+    const auto revision = unsigned_field(request, "expected_revision");
+    require(request.at("parameters").is_object(), "parameters must be an object");
+    const auto classification = file_id_field(request, "data_classification");
+    const auto platform = file_id_field(request, "platform");
+    const auto region = file_id_field(request, "region");
+    const auto& permissions = request.at("required_permissions");
+    require(permissions.is_array(), "required_permissions must be an array");
+    std::set<std::string> unique;
+    for (const auto& permission : permissions) {
+      require(permission.is_string() && safe_file_id(permission.get<std::string>()), "permission is invalid");
+      require(unique.insert(permission.get<std::string>()).second, "permissions must be unique");
+    }
+    const auto admitted = attempts.validate_execution_policy(
+        provider::CapabilityRequest{"sample.slice.v1", {}, request.at("parameters"),
+            classification, platform, region, permissions.get<std::vector<std::string>>()},
+        *registry);
+    if (!admitted.has_value()) return error_envelope(admitted.error());
+    // Inspect first so an interrupted prior run can be explicitly retried with
+    // a fresh Attempt ID; a live executor's Job lease still refuses begin.
+    const auto prior = candidates.inspect(job_id, attempts);
+    if (!prior.has_value() && prior.error().details.value("reason", "") != "job_not_found")
+      return error_envelope(prior.error());
+    if (prior.has_value()) {
+      for (const auto& entry : prior.value().at("history"))
+        if (entry.at("status") == "pending") return error_envelope(Error{
+            ErrorCode::invalid_argument, "Candidate Job is already running", {{"reason", "job_busy"}}});
+    }
+    const auto loaded = projects.inspect_committed(path);
+    if (!loaded.has_value()) return error_envelope(loaded.error());
+    if (loaded.value().id != project_id || loaded.value().revision != revision)
+      return error_envelope(Error{ErrorCode::revision_conflict, "Analysis Project identity or revision changed"});
+    const auto found = loaded.value().assets.find(asset_id);
+    if (found == loaded.value().assets.end()) return error_envelope(Error{
+        ErrorCode::not_found, "Analysis source Asset is missing", {{"reason", "source_asset_missing"}}});
+    const auto& artifact = found->second.artifact;
+    require(artifact.byte_length <= 16777216, "Slice source exceeds input byte bound");
+    const auto bytes = projects.read_asset_artifact(path, project_id, asset_id, artifact);
+    if (!bytes.has_value()) return error_envelope(bytes.error());
+    const auto metadata = cooker::inspect_wav(bytes.value());
+    if (!metadata.has_value()) return error_envelope(metadata.error());
+    nlohmann::json intent{{"attempt_id", attempt_id},
+      {"source", {{"project_path", path.generic_string()}, {"project_id", project_id.value()},
+                   {"asset_id", asset_id.value()}, {"project_revision", revision}, {"artifact", artifact},
+                   {"frame_rate", metadata.value().sample_rate}, {"frame_count", metadata.value().source_frames}}},
+      {"parameters_sha256", picosha2::hash256_hex_string(foundation::canonical_json(request.at("parameters")))},
+      {"data_classification", classification}, {"platform", platform}, {"region", region},
+      {"required_permissions", permissions}};
+    std::optional<detail::CandidateStore::Run> run;
+    const auto reserved = [&]() -> foundation::Result<void> {
+      auto begun = candidates.begin(job_id, intent);
+      if (!begun.has_value()) return foundation::Result<void>::failure(begun.error());
+      run.emplace(std::move(begun.value()));
+      return foundation::Result<void>::success();
+    };
+    const auto executed = provider_run({{"operation", "provider.run"}, {"attempt_id", attempt_id},
+        {"capability", "sample.slice.v1"},
+        {"inputs", nlohmann::json::array({{{"port", "source_audio"}, {"artifact", artifact}}})},
+        {"input_owners", nlohmann::json::array({{{"port", "source_audio"}, {"occurrence", 0},
+            {"project_path", path.generic_string()}, {"project_id", project_id.value()}, {"asset_id", asset_id.value()}}})},
+        {"parameters", request.at("parameters")}, {"data_classification", classification},
+        {"platform", platform}, {"region", region}, {"required_permissions", permissions}}, reserved);
+    // No owner intent exists unless this execution won the immutable SDK
+    // reservation. In particular, a duplicate raw Provider run cannot donate
+    // its terminal to this Job, including after process restart.
+    if (!run) return executed;
+    const auto finished = candidates.finish(*run, attempts);
+    if (!finished.has_value()) return error_envelope(finished.error());
+    if (!executed.at("ok").get<bool>()) return executed;
+    return success_envelope(finished.value(), std::nullopt);
+  }
+
+  nlohmann::json provider_run(const nlohmann::json& request,
+      const std::function<foundation::Result<void>()>& after_reservation = {}) {
     require(
         exact_keys(
             request,
@@ -7785,7 +7881,7 @@ struct Application::Impl {
         *registry,
         provider::ExecutionOptions{
             std::move(resolver), 16777216, 262144,
-            std::make_shared<provider::StagingBudget>(67108864)});
+            std::make_shared<provider::StagingBudget>(67108864)}, after_reservation);
     if (!executed.has_value()) {
       return error_envelope(executed.error());
     }
@@ -8619,6 +8715,7 @@ struct Application::Impl {
   std::shared_ptr<SoundSetCatalogSource> soundset_source;
   project_io::SoundSetStoreLimits soundset_limits;
   project_io::SoundSetStore soundset_sets;
+  detail::CandidateStore candidates;
   project_io::ProjectStore projects;
   project_io::SequenceJournal sequence_journals;
   project_io::ProjectBundleTransfer bundle_transfers;

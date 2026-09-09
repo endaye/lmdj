@@ -104,3 +104,12 @@ if(TARGET lmdj_web_control_runtime_tests)
   target_compile_definitions(lmdj_web_control_runtime_tests PRIVATE
     LMDJ_TEST_ASSEMBLY_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assembly.json")
 endif()
+
+if(TARGET lmdj_facade_candidate_job_tests)
+  target_link_libraries(lmdj_facade_candidate_job_tests PRIVATE
+    lmdj_product_lmdj_assembly)
+endif()
+
+if(TARGET lmdj_facade_candidate_store_tests)
+  target_link_libraries(lmdj_facade_candidate_store_tests PRIVATE lmdj_product_lmdj_assembly)
+endif()

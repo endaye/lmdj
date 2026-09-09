@@ -1,5 +1,13 @@
 if(BUILD_TESTING)
   find_package(Threads REQUIRED)
+  add_executable(lmdj_provider_attempt_output_read_tests attempt_output_read_test.cpp)
+  target_include_directories(lmdj_provider_attempt_output_read_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(lmdj_provider_attempt_output_read_tests PRIVATE lmdj_provider_local_proof_success Threads::Threads)
+  lmdj_target_warnings(lmdj_provider_attempt_output_read_tests)
+  lmdj_target_sanitizers(lmdj_provider_attempt_output_read_tests)
+  lmdj_add_test(NAME provider.attempt_output_read TIER component COMMAND lmdj_provider_attempt_output_read_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" LABELS provider)
+
   add_executable(lmdj_provider_sample_slice_tests sample_slice_test.cpp)
   target_include_directories(lmdj_provider_sample_slice_tests PRIVATE "${CMAKE_SOURCE_DIR}")
   target_link_libraries(lmdj_provider_sample_slice_tests PRIVATE lmdj_provider_local_sample_slice)

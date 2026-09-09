@@ -1,0 +1,54 @@
+---
+title: Web Runtime Platform
+area: core
+status: implemented
+owners: [core, web, audio]
+module: web-runtime-platform
+source_paths:
+  - packages/web-runtime-platform
+  - tests/platform/web
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity kind="modules" id="web-runtime-platform" />
+
+<DiagramFrame title="Web Runtime Platform Module" diagramId="web-runtime-platform" />
+
+## 1. 目的与非职责
+为浏览器 Host 提供共享 Runtime Session、输入 adapter、Control bridge、manifest gate 与 Web Audio 接线；不拥有 Creator UI、诊断 UI、Project Truth 或产品专属身份。
+## 2. 当前实现状态
+Creator Web 与诊断 Web Runtime Host 共用 Platform `4.0.0` 和同一 Wasm Runtime。Platform 除 Sample surface 外，还桥接 revision-bound `sample.quota`、Sequence begin/event/flush/stop/next-Bar switch/status/settings/recovery，以及 Stage 10 的 Pattern Slot assign/clear/move 与整套 Performance 操作；当前 source 在 accepted event 后读取 Facade typed overlay projection，发布 committed snapshot + overlay；active-session BPM 更新保留同一 overlay/boundary，owner-loss seal 与 flush/Stop 发布 clean committed view，Stop publication failure 可由 exact replay 恢复。若 owner-loss clean publication 自身失败，Host 使用已安装 quiescence contract 停止并清空 Runtime Pattern 后才释放 owner。pointer、keyboard、MIDI admission 统一使用 Audio Runtime frame clock 与单调 `input_sequence`，JavaScript 不计算 musical time。本版新增 Platform 自有的 master tap 与录制通道。`web/performance_master_tap_worklet.js` 是注册为 `lmdj-perform-master-tap` 的 AudioWorklet processor：它把 master bus 直通到输出，同时按 4800 帧成批向控制侧投递。`web/performance_master_capture.mjs` 是唯一消费者，对每条消息做精确键校验：批次为 `{type:"batch", channels:[Float32Array, Float32Array], generation, sequence}`，两个声道等长且不超过 `MAX_BATCH_FRAMES = 4800`，`sequence` 必须严格递增一格；停止确认为 `{type:"stopped", finalSequence, generation}`，失败为 `{type:"failed", reason:"post-message-failed", droppedFrames, generation}`；停止确认的等待上限是 `STOP_ACK_TIMEOUT_MS = 30000`，超时按失败结算。generation 不匹配的消息一律丢弃，Host 无法用陈旧 generation 复活已结束的录制。
+## 3. 所有权与依赖
+只依赖 Application Facade `3.2.0` 与 Audio Runtime `3.1.0`。Product CMake 注入 Product Build、Platform 版本、完整资源上限及精确 Host allowlist。
+## 4. 架构与数据流
+Creator/Diagnostic Host → Runtime Session → Application Facade；Project/Sample/Sequence actions 共享有界 Host lane，Pointer、Keyboard、MIDI 汇入同一 frame-stamped admission。Control bridge 把 typed overlay projection 合成 immutable Prepared Pattern，AudioWorklet 在下一 Bar 消费并发布 Voice/Bar state；Project Truth 仍只在 flush/Stop commit 后变化。
+## 5. API 与 Contract 边界
+Platform 校验 canonical distribution manifest，但该同构建协议不是公开跨版本 Contract。`1.0.44.0` 的 manifest gate 要求恰好十三项 resource limit：`decoded_float_pcm_bytes_per_bank` 67108864、`decoded_float_pcm_bytes_total` 134217728、`decoded_float_pcm_bytes_resident` 268435456、`imported_wav_bytes` 68157440、`ingest_channels` 2、`ingest_decoded_frames` 43200000、`ingest_source_bytes` 104857600、`perform_recording_frames` 86400000、`perform_recording_queue_batches` 32，以及本 Build 新增的四项 Sound Set Set Store 上限 `maximum_soundset_manifest_bytes` 1048576、`maximum_soundset_blob_bytes` 68157440、`maximum_soundset_unique_bytes` 268435456 与 `maximum_soundset_staging_bytes` 536870912；键集是精确匹配，多一项默认值即拒绝，每一项都必须是正的安全整数并逐值比对。这正是 Platform 本次取 MAJOR 的依据：一份在 `1.0.43.0` 下合法的分发清单，在本 Build 的 gate 下被拒绝。四项上限是 Host 容量事实，经 `ApplicationConfig` 到达 Core；浏览器侧 Catalog 对象的暂存缓冲是另一回事，不在 manifest 内。资产清单同样精确：声明 `compatible_hosts` 的 Creator 分发必须恰好携带一个 `perform_master_tap_worklet` 角色的资产，诊断 Host 分发必须为零；重复路径、缺失或错误的角色计数、非法 digest 与资产路径，都是 fail-closed 的 inventory 缺陷而不是可容忍的默认值；resource limit、Emscripten 身份与 host allowlist 也逐项精确比对。更早的不可变分发包保留各自的精确身份，不被回溯要求携带 Stage 10 字段。Project Bundle 与 WAV sidecar 只通过 Facade 的 bounded streaming API 进入 Core，Browser 不解析 Project/WAV。
+## 6. 状态、错误与并发
+Manifest mismatch、生命周期失效和 terminal failure 均 fail closed；Main、Control、Worker 与 AudioWorklet 的职责和消息上限固定。Runtime Session 另行发布 master capture 状态，状态字为 `unconfigured` → `configured` → `ready`，失败时进入带 typed error 的 `unavailable`；只有 `ready` 才允许开始一次录制，同一时刻不允许并发录制。状态经 `subscribePerformanceMasterCaptureStatus` 订阅、`performanceMasterCaptureStatus()` 读取，观察者抛错不影响录制生命周期归属；Host 不得从 `AudioContext` 状态、计时器或页面可见性推断 capture readiness。Control bridge 在控制线程上严格逐个 dispatch 请求：Facade 经 Asyncify 等待 OPFS 期间到达的请求按 FIFO 等待，待前一次 dispatch 完整返回（含 rewind）后才重新代理，因此同一线程不会重入 Asyncify；该保证对直接提交到 transport 的调用方同样成立，而 OPFS 存储层在检测到重入时 fail closed 而非破坏内存。Control 侧将 generation quota rejection 与 publication residency rejection 分开：前者保留 Bank/Project 类型和安全筛选后的账本 payload，后者继续使用 transient Web Runtime resource failure，且任一拒绝都保留当前 live generation。启动时先以 release ordering 发布 ControlBridge，再发布 audio adapter；pre-JS 的 audio readiness 因而同时构成 ControlBridge publication barrier。`recovery_probe_ready` 仅在 Runtime 为 `recovering`、当前 epoch 的 probe window 已 armed 且没有已保留 Probe 时为真；Probe 被保留或 window 关闭后立即回到 false，Host 不得从 timer、Context 状态或页面可见性推断 readiness。
+
+Runtime Session 启动只运行一次真实 Control Worker/OPFS capability probe，默认等待预算为 15 秒。明确缺少 Worker/Blob、Worker 返回 negative 或 Worker error 继续 fail closed 为 `UNSUPPORTED_WEB_RUNTIME`；纯调度预算耗尽精确进入 `HOST_TIMEOUT`，不能伪造 `opfs`、`opfsSyncAccessHandle` 或 `opfsWritableReplace` 缺失。message、error 与 timeout 三条 settlement 路径都由同一 `finally` terminate Worker 并 revoke Blob URL。显式暂停期间 Project 操作保持禁用，Host suspend 响应与浏览器 Context suspend 严格串行。
+## 7. 产品使用方
+`creator-web 4.0.0` 与 `web-runtime-host 4.0.0`。Platform `4.0.0` 把 `MAX_ASSET_BYTES` 保持为 1 MiB sidecar/chunk 边界，并以 `MAX_SAMPLE_IMPORT_BYTES` 接受 manifest 锁定的完整选区 WAV 总量；协议创建失败不再被误当成 quota/snapshot truth。Sequence UI 只展示 Facade 返回的 authority state；pending switch 在 Bar acknowledgement 前保持旧 Pattern，recovery artifact、长素材解码缓冲与 CaptureBuffer 都不冒充 Project Truth。master tap 采集到的 PCM 批次同样只是瞬态 Host 资源：Runtime Session 的 capture 配置由 manifest 锁定的 `perform_recording_frames` 与 `perform_recording_queue_batches` 派生，两者缺失或不是正整数时状态停留在 `unconfigured`；这些批次在被 Facade 提交为 Artifact 之前都不是创作真相。
+## 8. 测试与证据
+C++ manifest/control/realtime tests、Node Runtime Session tests、Chromium/WebKit browser proof 与分发验证覆盖共享边界；C++ 生产路径精确验证 live hit 后 pending event 从下一 Bar 重复、BPM rebuild 不丢 overlay、owner loss 清理 active overlay、cleanup publication failure 停止/清空 engine、Stop exact replay 恢复一次 clean-publication failure，且无重复/空洞/陈旧 overlay。failure hook 只编入 private testable target，production archive symbol/marker gate 阻止泄漏。Node 精确断言 Host suspend 未完成时 `AudioContext` 仍为 running，Creator packaged Proof 覆盖真实 Sample Cook split 后的 suspend→activate→Retry Prepare，并继续覆盖 recovery readiness 的 `false -> true -> false -> running` 序列。Stage 10 的新增覆盖：`performance_master_tap_worklet.test.mjs` 覆盖 tap 的分批、控制消息精确形状与停止确认；`performance_master_capture.test.mjs` 覆盖消费侧的精确键校验、generation 隔离、sequence 连续性与停止超时结算；`performance_protocol.test.mjs` 覆盖 Pattern Slot 与 Performance 操作在 Host 协议上的注册与信封校验；`performance_bridge_test.cpp` 覆盖 Control 侧的 Performance 桥接；`manifest_gate_test.cpp` 覆盖九项 resource limit 与 `perform_master_tap_worklet` 角色计数门禁。
+## 9. 限制与下一门禁
+自动化不替代物理 MIDI、Safari/iPad Touch、声学延迟或主观听感验收；Perform 录制与 master tap 的自动化绿色只证明消息形状、状态机与分发身份，物理验收仍为 deferred。分发门禁通过也不代表已经产生不可变快照、标签、Release、部署或 Channel 提升，这些是各自独立的后续授权边界。
+## 10. 版本身份
+版本和依赖由 `module.json` 与 Product Assembly Lock 派生。
+
+## Provider 控制面
+
+生产 Wasm 从嵌入的 Product Assembly 与 schema 加载实际注册和默认策略，缺失或漂移
+fail closed。五个 Provider/Attempt 操作通过严格协议和 ControlRuntime 进入 Facade；
+输入 owner 不接受调用方路径，只绑定 retained Project。Provider 操作不接受 sidecar。
+Runtime Session 的公开五个方法共用有界请求，权限、选择与执行使用既有串行 action lane。
+两个 packaged Host 暴露同一 `window.lmdjWebRuntimeHost.providers` namespace。
+
+SDK 读取复用 retained writer lease；跨窗口竞争在 Project open 阶段拒绝，不创建 Attempt。
+拒绝详情只保留可信 owner/ingress reason 与匹配 attempt ID。重启后仍可在打开 Project
+之前检查终态；新运行需要重新显式授权。Slice 的平台声明仍为 `test`。
+
+SDK 的标准文件系统 workspace 与 Project I/O adapter 映射同一 OPFS 根目录；挂载由既有 Project I/O Web platform factory 完成，Host 不直接调用 OPFS。Attempt、输出与 Provider 选择耐久保留，会话 grant 不落盘。
