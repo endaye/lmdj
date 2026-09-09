@@ -71,8 +71,8 @@ class CiHostedRunnerPolicyTest(unittest.TestCase):
 
     def test_routine_control_cannot_buy_hosted_linux_capacity(self) -> None:
         """An allowlist entry cannot override the accepted cost boundary."""
-        routine = {"ci.yml", "self-test-report.yml", "incremental-completion.yml",
-                   "release-audit.yml"}
+        routine = {"ci.yml", "pr-contract.yml", "self-test-report.yml",
+                   "incremental-completion.yml", "release-audit.yml"}
         macos = {("ci.yml", "macos-primary"), ("ci.yml", "macos-fallback")}
         for job in all_jobs():
             key = (job.workflow, job.job_id)
@@ -81,6 +81,21 @@ class CiHostedRunnerPolicyTest(unittest.TestCase):
             with self.subTest(workflow=job.workflow, job=job.job_id):
                 self.assertTrue(job.is_self_hosted and not job.is_dynamic,
                     msg=f"why: {key} can buy routine hosted capacity; remedy: use literal self-hosted roles, keeping only the authorized macOS availability fallback")
+
+    def test_pr_contract_is_entirely_on_the_trusted_self_hosted_role(self) -> None:
+        jobs = [job for job in all_jobs() if job.workflow == "pr-contract.yml"]
+        self.assertEqual(
+            {job.job_id for job in jobs},
+            {"change-scope", "ci-contract", "docs-static", "documentation-impact"},
+        )
+        for job in jobs:
+            with self.subTest(job=job.job_id):
+                self.assertTrue(job.is_self_hosted)
+                self.assertFalse(job.needs_host_justification)
+                self.assertEqual(
+                    job.runs_on,
+                    "[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]",
+                )
 
     def test_control_jobs_use_the_pool_separate_from_heavy_executors(self) -> None:
         control = {

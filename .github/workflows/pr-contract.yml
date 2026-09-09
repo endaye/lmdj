@@ -1,0 +1,162 @@
+name: PR Contract
+run-name: "PR Contract / #${{ github.event.pull_request.number }} @ ${{ github.event.pull_request.head.sha }}"
+
+# This is an advisory PR signal. It deliberately has no pull_request_target
+# entry: a fork must never execute its head on a persistent self-hosted host.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-contract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  ACTIONLINT_VERSION: 1.7.12
+  ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+
+jobs:
+  change-scope:
+    name: Select PR contract lanes
+    # This condition is evaluated before GitHub allocates the self-hosted
+    # runner. Same-repository is the trust boundary; draft PRs wait for the
+    # ready_for_review event instead of consuming capacity.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 5
+    outputs:
+      manifest: ${{ steps.scope.outputs.manifest }}
+      trusted-head: ${{ steps.scope.outputs.trusted-head }}
+      base-sha: ${{ steps.scope.outputs.resolved-base-sha }}
+      head-sha: ${{ steps.scope.outputs.resolved-head-sha }}
+      pull-request-body: ${{ steps.scope.outputs.pull-request-body }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the exact tested PR head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Select the deterministic CI floor
+        id: scope
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/change_scope.py \
+            --policy scripts/ci/scope_policy.json \
+            --event pull_request \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --head-repository "$HEAD_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --manifest-out "$RUNNER_TEMP/pr-contract-manifest.json" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$RUNNER_TEMP/pr-contract-scope.md"
+
+  ci-contract:
+    name: CI contract
+    needs: change-scope
+    if: >-
+      !cancelled() &&
+      needs.change-scope.outputs.trusted-head == 'true' &&
+      fromJSON(needs.change-scope.outputs.manifest).lanes.ci_contract
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.change-scope.outputs.head-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the exact tested PR head
+        env:
+          EXPECTED_HEAD: ${{ needs.change-scope.outputs.head-sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Validate workflows with pinned actionlint
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl --fail --silent --show-error --location --output "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" \
+            | sha256sum --check --strict -
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" \
+            -ignore 'unexpected key "queue" for "concurrency" section'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Run every CI-control contract
+        run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'
+
+  docs-static:
+    name: Docs / static
+    needs: change-scope
+    if: >-
+      !cancelled() &&
+      needs.change-scope.outputs.trusted-head == 'true' &&
+      fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.change-scope.outputs.head-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the exact tested PR head
+        env:
+          EXPECTED_HEAD: ${{ needs.change-scope.outputs.head-sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Validate the exact selected revision range
+        env:
+          BASE_SHA: ${{ needs.change-scope.outputs.base-sha }}
+          HEAD_SHA: ${{ needs.change-scope.outputs.head-sha }}
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"
+
+  documentation-impact:
+    name: Documentation impact
+    needs: change-scope
+    if: >-
+      !cancelled() &&
+      needs.change-scope.outputs.trusted-head == 'true'
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.change-scope.outputs.head-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the exact tested PR head
+        env:
+          EXPECTED_HEAD: ${{ needs.change-scope.outputs.head-sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Check Pull Request documentation impact
+        env:
+          PORTAL_PR_BODY: ${{ needs.change-scope.outputs.pull-request-body }}
+          PORTAL_BASE_SHA: ${{ needs.change-scope.outputs.base-sha }}
+          PORTAL_HEAD_SHA: ${{ needs.change-scope.outputs.head-sha }}
+        run: node apps/docs-site/scripts/check-doc-impact.mjs

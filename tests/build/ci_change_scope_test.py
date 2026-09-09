@@ -198,6 +198,7 @@ CASES = {
     },
     ".github/actions/web-ci-proof/action.yml": set(LANES),
     ".github/workflows/ci-self-hosted-benchmark.yml": {"ci_contract"},
+    ".github/workflows/pr-contract.yml": {"ci_contract"},
     ".github/scripts/grok_review.py": {"ci_contract"},
     ".gitattributes": set(LANES),
 }
@@ -835,6 +836,11 @@ class ChangeScopeTest(unittest.TestCase):
         unknown = self.classify([".github/workflows/grok-review-control.yml"])
         self.assertEqual(unknown["mode"], "full")
         self.assertEqual(self.true_lanes(unknown), LANES)
+
+    def test_pr_contract_workflow_is_ci_contract_only(self):
+        manifest = self.classify([".github/workflows/pr-contract.yml"])
+        self.assertEqual(manifest["mode"], "focused")
+        self.assertEqual(self.true_lanes(manifest), {"ci_contract"})
 
     def test_a_scheduled_sweep_of_main_is_full_and_trusted(self):
         """#543: the daily sweep runs the complete manifest-selected set.

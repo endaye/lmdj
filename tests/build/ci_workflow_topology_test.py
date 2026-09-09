@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
 MAIN_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 PORTAL_WORKFLOW = REPO_ROOT / ".github/workflows/architecture-portal.yml"
+PR_CONTRACT_WORKFLOW = REPO_ROOT / ".github/workflows/pr-contract.yml"
 WEB_PROOF_ACTION = REPO_ROOT / ".github/actions/web-ci-proof/action.yml"
 
 FORMAL_LANE_JOBS = (
@@ -182,6 +183,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.main_source = MAIN_WORKFLOW.read_text(encoding="utf-8")
         cls.portal_source = PORTAL_WORKFLOW.read_text(encoding="utf-8")
+        cls.pr_contract_source = PR_CONTRACT_WORKFLOW.read_text(encoding="utf-8")
         cls.web_proof_source = WEB_PROOF_ACTION.read_text(encoding="utf-8")
 
     def workflow_job(self, job_name: str, *, portal: bool = False) -> str:
@@ -217,6 +219,16 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         raw = match.group("needs").strip("[]")
         return {value.strip() for value in raw.split(",") if value.strip()}
 
+    def pr_contract_job(self, job_name: str) -> str:
+        match = re.search(
+            rf"^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:|\Z)",
+            self.pr_contract_source,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match, f"PR contract job is missing: {job_name}")
+        assert match is not None
+        return match.group("body")
+
     def called_impact_step(self) -> str:
         match = re.search(
             r"^      - name: Check Pull Request documentation impact\n"
@@ -250,6 +262,72 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         default: ""
 '''
         self.assertIn(expected, self.portal_source)
+
+    def test_pr_contract_is_pull_request_only_and_never_executes_forks_or_drafts(self) -> None:
+        events = self.event_block(self.pr_contract_source)
+        self.assertIn("pull_request:", events)
+        self.assertIn("types: [opened, synchronize, reopened, edited, ready_for_review]", events)
+        directives = "\n".join(
+            line for line in self.pr_contract_source.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        self.assertNotIn("pull_request_target:", directives)
+        change_scope = self.pr_contract_job("change-scope")
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", change_scope)
+        self.assertIn("github.event.pull_request.draft == false", change_scope)
+        for job_name in ("ci-contract", "docs-static", "documentation-impact"):
+            with self.subTest(job=job_name):
+                self.assertIn("needs.change-scope.outputs.trusted-head == 'true'", self.pr_contract_job(job_name))
+
+    def test_pr_contract_selects_only_the_deterministic_floor(self) -> None:
+        scope = self.pr_contract_job("change-scope")
+        self.assertIn("--event pull_request", scope)
+        self.assertIn("--base-sha \"$BASE_SHA\"", scope)
+        self.assertIn("--head-sha \"$HEAD_SHA\"", scope)
+        self.assertIn("--head-repository \"$HEAD_REPOSITORY\"", scope)
+        self.assertNotIn("--lanes", scope)
+        self.assertNotIn("AI", scope)
+        self.assertIn("fromJSON(needs.change-scope.outputs.manifest).lanes.ci_contract", self.pr_contract_job("ci-contract"))
+        self.assertIn("fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static", self.pr_contract_job("docs-static"))
+        impact = self.pr_contract_job("documentation-impact")
+        self.assertNotIn("lanes.portal", impact)
+        self.assertNotIn("uses: ./.github/workflows/ci.yml", self.pr_contract_source)
+
+    def test_pr_contract_checks_every_selected_job_at_the_exact_head(self) -> None:
+        for job_name in ("change-scope", "ci-contract", "docs-static", "documentation-impact"):
+            with self.subTest(job=job_name):
+                job = self.pr_contract_job(job_name)
+                self.assertIn("uses: actions/checkout@v6", job)
+                self.assertIn("fetch-depth: 0", job)
+                self.assertIn("ref: ${{", job)
+                self.assertIn('test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"', job)
+        self.assertIn('git diff --check "$BASE_SHA...$HEAD_SHA"', self.pr_contract_job("docs-static"))
+
+    def test_pr_contract_runs_complete_ci_contract_and_exact_impact_checker(self) -> None:
+        ci = self.pr_contract_job("ci-contract")
+        self.assertIn("ACTIONLINT_VERSION: 1.7.12", self.pr_contract_source)
+        self.assertIn("ACTIONLINT_SHA256:", self.pr_contract_source)
+        self.assertIn("python3 -m unittest discover -s tests/build -p 'ci_*_test.py'", ci)
+        impact = self.pr_contract_job("documentation-impact")
+        for text in (
+            "PORTAL_PR_BODY: ${{ needs.change-scope.outputs.pull-request-body }}",
+            "PORTAL_BASE_SHA: ${{ needs.change-scope.outputs.base-sha }}",
+            "PORTAL_HEAD_SHA: ${{ needs.change-scope.outputs.head-sha }}",
+            "run: node apps/docs-site/scripts/check-doc-impact.mjs",
+        ):
+            self.assertIn(text, impact)
+
+    def test_pr_contract_documentation_impact_installs_node_before_checker(self) -> None:
+        impact = self.pr_contract_job("documentation-impact")
+        setup = impact.index("- uses: actions/setup-node@v6")
+        checker = impact.index("run: node apps/docs-site/scripts/check-doc-impact.mjs")
+        self.assertIn('node-version: "22"', impact)
+        self.assertLess(
+            setup,
+            checker,
+            "why: documentation-impact needs Node before invoking its checker; "
+            "remedy: keep actions/setup-node@v6 with Node 22 before the checker",
+        )
 
     def test_portal_impact_check_uses_explicit_base_and_head_inputs(self) -> None:
         step = self.called_impact_step()
