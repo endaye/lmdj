@@ -274,6 +274,9 @@ Issue 六字段配置：`repository`、`issue_number`、`issue_node_id`、`bot_n
 真实存储、基线采用和自动 readiness 启用仍须单独验收。
 
 ## Web Runtime Host Proof
+
+`apps/creator-web/test/server_test.py` 的 `CatalogUpstreamParityTest` 将相同 accepted/refused corpus、固定种子的生成 corpus 与 ASCII host/path 字符样本交给 Python proof server 和独立 Worker 模块，比较接受、拒绝、崩溃及最终 base。Catalog 字符准入由显式共同 grammar 决定，保留两端的规范 URL 检查；Node 22 与 Node 26 都须运行完整 parity 测试，literal `^` 均被拒绝。唯一预期差异是 proof-only loopback HTTP；生产 Worker 保持 HTTPS。此测试验证源码语义，不是线上 workerd 部署收据。
+
 `scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。
 
 Packaged Chromium 还用真实 capability Worker 覆盖 2.5 秒 delayed result 与 test-only shortened deadline：前者必须保留三项 OPFS capability 并进入 `audio-suspended`，后者必须精确报告 `HOST_TIMEOUT`，两者都验证 Worker/Blob cleanup。Issue #166 的 branch/PR proof 之外还要求一个 pinned Linux runner 在同一固定 CPU + file-I/O contention session 中连续三次完整 `scripts/web-runtime-host.sh proof` 全部通过；不得从更大样本挑选成功运行。
