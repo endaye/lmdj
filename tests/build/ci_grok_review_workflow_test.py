@@ -53,8 +53,6 @@ class GrokReviewWorkflowTest(unittest.TestCase):
         core = CORE_CI.read_text()
         self.assertNotIn("\n  grok-review:\n", core,
                          "why: Core CI still executes advisory review; remedy: use pr-review.yml only")
-        self.assertNotIn("pre-heavy-gate", self.job,
-                         "why: review depends on product admission; remedy: keep independent DAGs")
 
     def test_workflow_skips_drafts_and_forks(self) -> None:
         target = (REPO_ROOT / ".github/scripts/pr_review_target.py").read_text()

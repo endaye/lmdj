@@ -18,14 +18,13 @@ sys.path.insert(0, str(ROOT / "tests/build"))
 
 import change_scope  # noqa: E402
 import local_preflight  # noqa: E402
-import phase_gate  # noqa: E402
 import pr_gate  # noqa: E402
 from ci_scope_policy_test_support import policy_transition  # noqa: E402
 
 
 PARITY_MESSAGE = (
     "why: a focused scope-policy proof must be independently revalidated by "
-    "the summary, Phase Gate, and PR Gate consumers; remedy: pass the complete "
+    "the summary and PR Gate consumers; remedy: pass the complete "
     "repository checkout to the shared manifest validator at every consumer"
 )
 LOCAL_PARITY_MESSAGE = (
@@ -65,14 +64,6 @@ class ScopePolicyConsumerParityTest(unittest.TestCase):
         )
 
     @staticmethod
-    def phase_results(manifest):
-        selected = set(manifest["required_jobs"])
-        return {
-            job: "success" if job in selected else "skipped"
-            for job in phase_gate.GATING_JOBS
-        }
-
-    @staticmethod
     def formal_results(policy, manifest):
         selected = set(manifest["required_jobs"])
         jobs = {
@@ -98,12 +89,6 @@ class ScopePolicyConsumerParityTest(unittest.TestCase):
                     repository=transition.root,
                 )
 
-        phase = phase_gate.validate_phase_gate(
-            transition.head_policy,
-            manifest,
-            self.phase_results(manifest),
-            repository=transition.root,
-        )
         gate = pr_gate.validate_gate(
             transition.head_policy,
             manifest,
@@ -112,7 +97,6 @@ class ScopePolicyConsumerParityTest(unittest.TestCase):
             expected_base_sha=transition.base_sha,
             repository=transition.root,
         )
-        self.assertIs(phase.ok, accepted, PARITY_MESSAGE)
         self.assertIs(gate.ok, accepted, PARITY_MESSAGE)
 
     def test_all_repository_consumers_accept_the_same_preserving_proof(self):
@@ -142,12 +126,6 @@ class ScopePolicyConsumerParityTest(unittest.TestCase):
                 accepted["summary"] = True
             except ValueError:
                 accepted["summary"] = False
-            accepted["phase"] = phase_gate.validate_phase_gate(
-                caller_policy,
-                manifest,
-                self.phase_results(manifest),
-                repository=transition.root,
-            ).ok
             accepted["pr"] = pr_gate.validate_gate(
                 caller_policy,
                 manifest,
@@ -159,7 +137,7 @@ class ScopePolicyConsumerParityTest(unittest.TestCase):
 
         self.assertEqual(
             accepted,
-            {"manifest": False, "summary": False, "phase": False, "pr": False},
+            {"manifest": False, "summary": False, "pr": False},
             PARITY_MESSAGE,
         )
 

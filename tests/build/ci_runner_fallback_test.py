@@ -52,7 +52,7 @@ GENERAL_JOBS = {
 # path verbatim. Pinning the command per job keeps the cutover a change of
 # where they run and not of what they run.
 # Reviews use a separate workflow and are not product jobs on this role.
-GENERAL_ROLE_NON_LANE_JOBS = ("change-scope", "pre-heavy-gate", "select-macos-runner",
+GENERAL_ROLE_NON_LANE_JOBS = ("change-scope", "select-macos-runner",
                               "core-macos", "core-asan-macos", "batch-verdict")
 GENERAL_PROOFS = {
     "docs-static": 'run: git diff --check "$BASE_SHA...$HEAD_SHA"',

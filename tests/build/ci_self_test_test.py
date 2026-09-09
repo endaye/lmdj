@@ -473,12 +473,12 @@ class ObservationsFromNeedsTest(unittest.TestCase):
 
     def test_a_skip_behind_a_failed_upstream_is_blocked_by_that_upstream(self) -> None:
         ident = identity()
-        needs = self.needs(**{"pre-heavy-gate": "success", "core-ubuntu": "failure",
+        needs = self.needs(**{"core-ubuntu": "failure",
                               "package": "skipped", "core-coverage": "skipped", "portal": "success"})
         rows, _ = st.observations_from_needs(
             ident, POLICY, needs,
-            dependencies={"package": ["pre-heavy-gate", "portal", "core-ubuntu"],
-                          "core-coverage": ["pre-heavy-gate", "portal", "core-ubuntu", "package"]})
+            dependencies={"package": ["portal", "core-ubuntu"],
+                          "core-coverage": ["portal", "core-ubuntu", "package"]})
         by_job = {r.job: r for r in rows}
         self.assertEqual(by_job["package"].blocked_by, "core-ubuntu")
         self.assertEqual(by_job["core-coverage"].blocked_by, "core-ubuntu",
@@ -557,11 +557,11 @@ class CommandLineTest(unittest.TestCase):
             (root / "identity.json").write_text(json.dumps(ident.as_document()), encoding="utf-8")
             (root / "needs.json").write_text(json.dumps(
                 {"core-ubuntu": {"result": "failure"}, "package": {"result": "skipped"},
-                 "nightly-stress": {"result": "success"}, "pre-heavy-gate": {"result": "success"}}),
+                 "nightly-stress": {"result": "success"}}),
                 encoding="utf-8")
             out = self.run_cli("observations", "--identity", "identity.json", "--needs", "needs.json",
                                "--alias", "core-stress=nightly-stress",
-                               "--dependency", "package=pre-heavy-gate,core-ubuntu",
+                               "--dependency", "package=core-ubuntu",
                                "--out", "observations.json", cwd=root)
             self.assertEqual(out.returncode, 0, out.stderr)
             rows = {r["job"]: r for r in json.loads((root / "observations.json").read_text(encoding="utf-8"))}
