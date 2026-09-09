@@ -23,6 +23,49 @@ Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 Sem
 将静态页面一起提交，再按 Product 分配规则冻结快照。构建仅检查投影是否一致，
 不会自动改写源码或历史快照。此展示功能不启动版本准备、部署或发布。
 
+## 手动 canary 版本评估入口
+
+`Canary Assessment`（`.github/workflows/canary-assessment.yml`）提供独立的手动
+评估路径，不按日期运行，也不阻塞 PR 合入或主干自测。它只产生 Host 版本与
+changelog 建议及失败报告，**不分配 Product Build、不创建版本 PR、不发布、不部署**。
+自动的结果驱动调度、版本进度和后续交付仍是单独的实施与验收任务。
+
+新评估默认禁用。启用 `CANARY_ASSESSMENT_EXECUTION_READY=true` 前，运营方必须验收
+专用 disposable VM/microVM、受保护的 `canary-assessment` Environment，以及
+`tools/canary/executor_policy.json` 中固定 SHA-256 的 root-owned 原生工具。
+执行器使用 `lmdj-ai-isolated` 标签，不能同时承担普通 CI/pool 或部署任务；标签、
+私有目录、单独用户或 readiness 变量本身都不是隔离证据。工作流不安装工具，
+不读取机器上的登录态，只使用显式配置的 GLM/Kimi coding key 与 Grok coding auth。
+工具缺失或校验失败不会运行 PATH 中的替代程序。GLM → Kimi → Grok 全部失败时保留
+blocked 结果，由后续报告步骤提 Issue，不在 CI 内修复。
+
+所有操作只能从 `main` 发起新的第一次运行。每次 dispatch 都必须提供完整 `storage`
+JSON：顶层恰好是 `assessment`、`outbox`；两项各包含 `repository`、`issue_number`、
+`issue_node_id`、`bot_node_id`、`workflow_id`、`epoch`。ID 必须从实际 GitHub API
+读取；两项使用相同仓库、工作流及 Bot 身份，但 Issue number/node ID 不同。
+epoch 分别以 `canary-assessment-inputs-`、`canary-assessment-outbox-` 开头。
+不能复用现有 scheduler、report 或 review journal，也不会自动新建或初始化存储。
+
+- `init-assessment` / `init-outbox`：一次只初始化一个已明确预留的独立 Issue，
+  `request` 为 `{}`；Issue 必须没有评论，正文精确为
+  `<!-- lmdj-ci-journal-uninitialized-v1 -->` 加一个换行。不是清空或重置命令。
+- `claim`：`request` 为 `{"base_sha":"<完整 SHA>","target_sha":"<完整 SHA>"}`。
+  检查完整 main 历史后，先持久领取并保留完整输入 artifact，再释放短写锁执行 AI。
+  `base_sha` 是明确选择的版本评估起点，不会自动采用主干测试进度。单次输入超限会
+  拒绝，不截断或假装全覆盖；后续协调器仍需实现大区间的完整覆盖方案。
+- 原运行终止后，在**新 dispatch** 中使用 `settle`，`request` 为
+  `{"input_digest":"<原控制器摘要中的完整 digest>"}`。它校验原 run/attempt/control、
+  producer job、上传步骤和完整结果，再持久记录；不会重新调用模型。
+- `report` 使用同一个 digest 和 storage，先 reconcile 原结果，再通过独立 durable
+  outbox 提 Issue 或恢复已有回执。未知 POST 不能盲目重发；不自动修复、关闭 Issue。
+  已持久结果不依赖 artifact 继续存活。原结果缺失、损坏或过期则报告待核对义务，
+  不能重置领取、用新 control 重新 claim 来冒充恢复。
+
+恢复与报告不受新任务 readiness 开关影响。原执行中的结果保持 pending；原终止运行
+没有成功上传时保留领取并要求核对。有效 blocked 结果先成功上传，由独立可见性 job
+标红，这不代表结果遗失。Artifact 保留 30 天，应及时 settle/report；本手动入口
+尚不自动接收完成回调或排空报告积压。源码和本地夹具测试不代表上述远端前置条件已验收。
+
 ## Assembly Lock
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
 当前 source candidate 是 Product Build `1.0.44.0 · canary · g<short-sha>`，在 Build 43 之上装配 Stage 11 的 Sound Set 能力。Contract 侧新增 `lmdj.soundset.v1 · 1.1.0` 与 `lmdj.soundset-catalog.v1 · 1.0.0`，并把 `lmdj.project-bundle.v1` 由 `1.1.0` 升到 `1.2.0`——`project_contract` 枚举补齐 `lmdj.project.v4`，这是 backward-compatible addition，也是必需的：自 Build 43 起本 Build 写出的每一个 Project 都是 v4，枚举不补齐则它们全都无法打包为 Bundle。`lmdj.project.v4` 保持 `4.1.0`，active Contract 由八个增至十个。Module 侧 Foundation `0.4.0`、Authoring Domain `3.0.0`、Project I/O `3.0.0`、Application Facade `3.1.0`、Web Runtime Platform `4.0.0`；Project Cooker `1.1.0`、Audio Runtime `3.0.0` 与 Provider SDK `1.1.4` 不变。Host 侧 CLI/MCP/Native Test Host `3.1.0`，Formal Web Runtime Host 与 Creator Web `4.0.0`。`resource_limits` 由九项增至十三项，两个本地 Proof Provider、Provider policy、Bank 共享配额与两份分发清单的资产计数都不动。这些身份同时写入 `products/lmdj/assembly.json`，因此 Assembly source hash 与 Assembly Lock hash 一并改变，本 Build 的不可变门户快照按 Build-cut 规则随分配在同一 Pull Request 内冻结。当前 source 可以没有 active Product intent；candidate、快照、tag、Release、部署与 Channel promotion 仍是独立状态。

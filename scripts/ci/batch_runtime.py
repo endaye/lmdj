@@ -107,6 +107,11 @@ def decode_reference(reference):
 
 
 class Runtime:
+    # Fixed by trusted code, never dispatch/config input. Other journal users
+    # can reuse authentication without accepting this scheduler's producers.
+    workflow = WORKFLOW
+    controller_job = CONTROLLER_JOB
+
     def __init__(self, config, *, root, environment=None, api=None):
         require(isinstance(config, dict) and set(config) == {
             "repository", "issue_number", "issue_node_id", "bot_node_id", "workflow_id", "epoch"}, "invalid runtime config")
@@ -122,10 +127,10 @@ class Runtime:
         self.api = api if api is not None else UrllibGitHubApi(config["repository"], self.env.get("GITHUB_TOKEN", ""))
         self.writer = {"repository": config["repository"], "issue_number": config["issue_number"],
                        "run_id": self.current["run_id"], "run_attempt": 1, "control_sha": self.control,
-                       "workflow_path": WORKFLOW, "workflow_id": config["workflow_id"], "job_name": CONTROLLER_JOB}
+                       "workflow_path": self.workflow, "workflow_id": config["workflow_id"], "job_name": self.controller_job}
         self.transport = storage.GitHubJournalTransport(repository=config["repository"],
             issue_number=config["issue_number"], issue_node_id=config["issue_node_id"], bot_node_id=config["bot_node_id"],
-            workflows={WORKFLOW: config["workflow_id"]}, writer=self.writer, api=self.api, lock_held=self.lock_held)
+            workflows={self.workflow: config["workflow_id"]}, writer=self.writer, api=self.api, lock_held=self.lock_held)
         self.inputs = batch_controller.GitInputs(self.root, self.control, self.read_main)
         self.inputs.advice = self.advice
         self.advice_diagnostics = []
@@ -201,7 +206,7 @@ class Runtime:
         document = self.call("GET", self.repo(f"/actions/runs/{run_id}/attempts/{attempt}"))
         require(isinstance(document, dict) and type(document.get("id")) is int and document["id"] == identity["run_id"]
                 and type(document.get("run_attempt")) is int and document["run_attempt"] == 1
-                and type(document.get("workflow_id")) is int and document["workflow_id"] == self.config["workflow_id"] and document.get("path") == WORKFLOW
+                and type(document.get("workflow_id")) is int and document["workflow_id"] == self.config["workflow_id"] and document.get("path") == self.workflow
                 and document.get("head_branch") == "main" and document.get("event") in {"push", "workflow_dispatch", "workflow_run", "schedule"}
                 and isinstance(document.get("repository"), dict) and document["repository"].get("full_name") == self.config["repository"]
                 and isinstance(document.get("head_repository"), dict) and document["head_repository"].get("full_name") == self.config["repository"],
@@ -234,7 +239,7 @@ class Runtime:
         self.transport._writer(self.writer)
         self.diagnostic_stage = "auth-current-job"
         jobs = self.pages(f"/actions/runs/{self.current['run_id']}/attempts/1/jobs", "jobs")
-        own = [j for j in jobs if j.get("name") == CONTROLLER_JOB]
+        own = [j for j in jobs if j.get("name") == self.controller_job]
         require(len(own) == 1 and own[0].get("status") == "in_progress", "current controller job is not active")
         self.diagnostic_stage = None
 

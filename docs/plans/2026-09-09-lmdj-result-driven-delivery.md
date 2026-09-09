@@ -137,8 +137,19 @@ metadata preparation and existing Issue outbox delivery. Recovery retains the
 original claim; active/invisible output is pending, and terminal missing or
 invalid output reports a reconciliation obligation without fabricating advice.
 An already persisted terminal result survives artifact expiry. Independent live
-storage, the matching reviewed executor workflow/binaries and automatic/manual
-coordinator wiring still require implementation and remote acceptance.
+storage and automatic coordinator wiring still require implementation and
+remote acceptance.
+
+The [T2h manual assessment entry](2026-09-09-lmdj-canary-assessment-entry.md)
+connects explicit init/claim/settle/report commands in a separate manual-only
+workflow. A short authenticated controller persists the claim and input before
+the credential-isolated bounded producer runs; a fresh observer settles the
+original terminal artifact and reports through a separate authenticated outbox.
+New claims remain disabled pending accepted disposable VM/microVM isolation,
+protected Environment, pinned root-owned binaries and dedicated live storage.
+Recovery does not depend on that execution switch. This source entry does not
+prove live provider execution, provisioning, storage initialization or automatic
+coordinator activation, and does not admit Product allocation or delivery.
 
 The [Host changelog Portal Task](2026-09-09-lmdj-host-changelog-portal.md), merged
 in PR #1024 at `262985b6d340b10abe7a978ba3c0ce0174c0619d`, adds independent
