@@ -1,0 +1,36 @@
+---
+title: Authoring Domain
+area: core
+status: implemented
+owners: [core, product]
+module: authoring-domain
+source_paths: [packages/authoring-domain, tests/core/domain]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity kind="modules" id="authoring-domain" />
+
+<DiagramFrame title="Authoring Domain Module" diagramId="authoring-domain" />
+
+## 1. 目的与非职责
+维护 Project Truth、序列与命令语义；不执行存储、Cook、音频或 Provider 调用。
+## 2. 当前实现状态
+Authoring Domain `3.0.0` 以 Project v4 为当前领域 Contract：每个 Pad 的完整 playback value、PPQ 960 tick-native Pattern event、BPM/Quantize/Swing，以及 assign/update/reset/replace/create-pattern 命令语义继续有效；v1/v2/v3 只作为迁移输入。v4 额外定义两块权威结构。其一是 `pattern_slots`：恰好 16 项的定长数组，每项是 Pattern UUID 或 `null`，构成可发射（launchable）的 Pattern 地址空间；`AssignPatternSlot`/`ClearPatternSlot`/`MovePatternSlot` 是其命令语义，同一 Pattern 不得同时占用两个 Slot，Slot 也不得引用不存在的 Pattern。其二是 `performances`：每个 Performance 由 `performance_id`、`name`（1..64 字符）、`created_bpm`（40..240）、`recording_revision`（>= 0）、`recording_artifact`（artifact_ref 或 `null`）与 `events` 组成。`performance_event` 是恰好七种的封闭 union：`pad_hit`（`slot` 0..63、`onset_tick`、`duration_tick` >= 1、`velocity` 1..127）、`pattern_launch`（`pattern_slot` 0..15、`effective_tick`）、`fx_engage` 与 `fx_move`（`fx` 0..7、`value` 0..1000、`tick`）、`fx_release`（`fx`、`tick`）、`hold_on`、`hold_off`。v4 同时承载 Asset Lineage：`asset_lineage` 的 `source` 与 `derivation` 各是一组由常量 `kind` 判别的封闭并集，`source` 记录 source Artifact 或安装来源的 Sound Set 槽位，`derivation` 记录带帧范围的 resample 或空负载的 `soundset_install`。这是本 Build 的 MAJOR 依据：`AssetLineage::source` 与 `::derivation` 由具体结构体变为 `std::variant`，`create_project` 也改为直接产出 v4，两者都不向后兼容 `2.0.0` 的调用方与持久化语义。
+## 3. 所有权与依赖
+Core/产品共同维护语义，仅依赖 Foundation。
+## 4. 架构与数据流
+命令进入 Handler，经 `expected_revision` 验证后产生新的权威创作状态；playback 属于 Pad Slot，Pattern event 只引用 Pad Slot。整数 quantizer 是唯一量化与 Swing 权威。Performance event 沿用同一间接层：`pad_hit` 只引用 Pad Slot，`pattern_launch` 只引用 Pattern Slot 序号，两者都不直接引用 Asset；tick 仍是 PPQ 960 tick-native，不引入墙钟时间。Performance 的 canonical 事件顺序由领域自身定义，Host 不得自行重排。
+## 5. API 与 Contract 边界
+领域对象遵循 active `lmdj.project.v4 · 4.1.0` Contract，不接受 Host 私有 JSON 形状；v4 顶层必需键为 `contract, project_id, revision, bpm, sequence_settings, banks, assets, patterns, pattern_slots, performances`。v1/v2/v3 只是只读迁移输入，migration 不重新解释已退休字段，也不为旧 Contract 追加 Performance 或 Pattern Slot 语义。
+## 6. 状态、错误与生命周期
+Project Truth 可演进但不包含 Runtime Snapshot、Provider 选择或 Attempt failure。Performance 与 Pattern Slot 属于创作真相；Performance 的 replay 投影、实时 FX 状态与录音会话进度都是派生或瞬态状态，不回写领域模型。
+## 7. 产品使用方
+Project I/O、Project Cooker 和 Application Facade 使用领域模型。
+## 8. 测试与证据
+`project_test.cpp`、`command_handler_test.cpp`、`model_sequence_test.cpp` 覆盖 playback defaults、四模式、边界、冲突与 revision；`performance_test.cpp` 覆盖七种 event 的边界与封闭性、Pattern Slot 校验与 Performance 字段约束，`migration_v4_test.cpp` 覆盖 v1/v2/v3 → v4 迁移。
+## 9. 限制与下一门禁
+通用 Undo/Redo、协同编辑、Time-stretch 与 Artifact GC 不在当前实现声明内。领域层只定义 Performance 的结构与取值域，不声明任何听感、设备或物理演奏验收。
+## 10. 版本身份
+版本和依赖由模块清单及 Assembly Lock 生成。
