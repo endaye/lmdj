@@ -10,6 +10,8 @@ source_paths:
   - tests/core/audio/coreaudio_output_test.cpp
   - docs/design/2026-08-02-native-realtime-coreaudio-probe-design.md
   - docs/research/2026-09-09-cardputer-audio-hearing.md
+  - docs/prd/decisions/2026-09-10-cardputer-runtime-host-first-slice.md
+  - docs/design/2026-09-10-cardputer-runtime-host.md
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -40,8 +42,23 @@ Engine 的完整 64 位 telemetry 值通过固定三缓冲发布，多个非实�
 stop 后零块、先 mute 再排空 DMA／disable／quiesce，最后回收。
 保持 PCM 格式显式配置与寄存器读回；I2S 阻塞写和 codec 操作不进入 Core render。
 不能将一个配置项独自判为根因，或把独立发生器的长音能力视为 Core 长素材能力。
-没有选择正式默认音量；物理 I2S／模拟波形、声压／失真、p99.9／underrun、
+该探针没有确定正式默认音量；物理 I2S／模拟波形、声压／失真、p99.9／underrun、
 端到端延迟、持续音乐负载和完整 Host 断连／替换／恢复旅程仍待验证。
+
+### 首版设计与待测目标
+
+[首版 Decision](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-09-10-cardputer-runtime-host-first-slice.md)
+已批准 USB 装载后本地演奏的四 Pad 鼓机范围；
+[工程设计](https://github.com/endaye/lmdj/blob/main/docs/design/2026-09-10-cardputer-runtime-host.md)
+固定了合计 1 秒 PCM16 鼓音、至少 4 声部和 30 分钟运行的验收口径。256-frame／
+48 kHz 输出的最差 CPU 服务目标保留 20% 周期余量，同时独立记录调度、DMA deadline
+与实际 underrun；物理输入到模拟输出以同步测量证明，软件注入不替代完整时延。
+音量由 Host 输出档位与静音控制，不改变 Project；默认低档与增益 ramp 是待实现
+策略，不是已经通过的扬声器质量或声压结论。
+
+先完成真实资源测量，再接入音频 Driver/Host、键盘/显示与 USB；正式物理验收前
+必须有可追溯测试 Build 及其不可变快照。未测的 I2S、声音质量、容量和恢复旅程
+仍保持待验证，不能用设计批准或新一轮单音 PASS 填入产品验收行。
 
 ## 下一门禁
 正式产品 Host 需要保留设备矩阵、测量数据与可复核录制。

@@ -1,21 +1,22 @@
-# Cardputer ADV 最小 Runtime Host：待批准设计
+# Cardputer ADV 最小 Runtime Host
 
-日期：2026-09-10。状态：提案，尚未形成产品 Decision。
+日期：2026-09-10。状态：产品范围已批准；工程设计接受当前提交评审，尚未实现。
 GitHub Issue: [D1 #1105](https://github.com/endaye/lmdj/issues/1105)，隶属
 [Umbrella #1104](https://github.com/endaye/lmdj/issues/1104)。
-配套[实施草案](../plans/2026-09-10-cardputer-runtime-host.md)。
+配套[实施计划](../plans/2026-09-10-cardputer-runtime-host.md)。
 
-## 1. 已批准事实与本次提案
+## 1. 已批准事实与首版范围
 
 [首切片 Decision](../prd/decisions/2026-09-08-runtime-content-first-slice.md)
 已经固定：电脑保留 Project Truth；派生内容包含单 Pattern 与实时 Pad 所需材料；
 PCM16；不做 Pattern 切换；换内容走 stop → unload → load；失败 empty；不做掉电续播。
-本提案不改变这些规则，也不重新设计已实现的
+本设计不改变这些规则，也不重新设计已实现的
 [Runtime Facade 生命周期](../plans/2026-09-09-runtime-facade-lifecycle.md)。
 
-以下是**请求用户批准的整体首版方案**，不是已实现能力或硬件容量承诺：
+以下是[已确认的整体首版范围](../prd/decisions/2026-09-10-cardputer-runtime-host-first-slice.md)，
+不是已实现能力或硬件容量承诺：
 
-| 选择 | 建议 | 首版明确不包含 |
+| 选择 | 首版方案 | 首版明确不包含 |
 | --- | --- | --- |
 | 电脑到设备 | USB 有线传输完整派生内容；电脑命令行导出与发送 | Wi-Fi、蓝牙、SD 卡导入、Creator 新 UI |
 | 信任边界 | 用户选择物理连接的设备，并在设备上确认进入接收模式；无密码学发送者认证 | 网络远程控制、把 SHA-256 当鉴权 |
@@ -24,8 +25,8 @@ PCM16；不做 Pattern 切换；换内容走 stop → unload → load；失败 e
 | 设备交互 | 4 个 One Shot Pad；播放/停止、音量与静音、装载确认、状态显示 | 设备编辑 Project、录音、采样、菜单式文件管理 |
 | 音乐目标 | 4 个不同鼓音，样本合计 1 秒，至少 4 个同时发声，单个两小节 Pattern | 用单音或 50 ms 短夹具替代正常演奏 |
 
-用户可以修改此组合。批准后才在 `docs/prd/decisions/` 写入确认日期与结论；该目录
-不存放“待批准 Decision”。D1 Issue 承载当前讨论，本文件不维护 live issue status。
+用户于 2026-09-10 批准本组合，确认记录进入上述 Decision。D1 Issue 承载当前讨论，
+本文件不维护 live issue status。后续改变产品范围必须有新的明确决定。
 
 ## 2. 为什么容量验证仍是硬前置
 
@@ -47,9 +48,9 @@ R1 必须先按下节目标固定 fixture，再测当前 exact revision 的完�
 若真实目标不满足，保留负结果、建立有最小回归的修复 Task，再以同口径复测。
 R1 作为研究结案也不能自动解除 H1 的正向容量前置条件。
 
-## 3. 请求批准的验收口径
+## 3. 固定验收口径
 
-以下数值是先于测量提出的**产品目标**，不是已经测得的上限；获批后不得为通过而
+以下数值是先于测量固定的**验收目标**，不是已经测得的上限；不得为通过而
 缩短素材、降低并发、削减 reserve、扩大 deadline 或省略旅程。
 
 ### 3.1 音乐 fixture 与内容容量
@@ -88,7 +89,7 @@ R1 作为研究结案也不能自动解除 H1 的正向容量前置条件。
 
 ## 4. Host 边界与音频生命周期
 
-建议新增独立 `apps/cardputer-host/`，不要把桌面 Native Host 改名或复用为设备身份。
+新增独立 `apps/cardputer-host/`，不把桌面 Native Host 改名或复用为设备身份。
 Host 只使用窄 Application Facade，负责硬件 I/O、有限缓冲与 UI；Product wiring
 归 `products/lmdj/`。设备不读 Project Bundle、不加载 Provider、不保存 Project Truth。
 R1 探针仍是研究工具，不被正式产品 include/link。
@@ -104,23 +105,24 @@ Driver 建立 MCLK/BCLK/LRCK 与静音预热，准备好后才放出有效 PCM�
 按驱动顺序停钟/停 DMA。Facade stopped 不单独证明 DMA 已空。销毁 Facade 之前
 Host 必须保证再无 `render` 调用。启动/停止/复位及设备错误都不自动播放。
 
-音量属于 Host 输出设置，不改 Project 和样本内容；建议 0–10 档、默认 2、最大数字
+音量属于 Host 输出设置，不改 Project 和样本内容；0–10 档、默认 2、最大数字
 增益不超过 unity，静音独立、增益变化有短 ramp。启动不恢复旧音量或播放状态。
 ES8311 模拟增益/输出限幅由 H1 记录并固定；历史 tone 没有破音不等于真实音乐
 声学验收。首版验收内置扬声器，不默认覆盖耳机、外接功放或声压安全认证。
 
 ## 5. USB 事务与失败行为
 
-建议 USB Serial/JTAG 的有界二进制 framing；它是串口传输，不是 USB 音频或 U 盘。
+使用 USB Serial/JTAG 的有界二进制 framing；它是串口传输，不是 USB 音频或 U 盘。
 Espressif 明确说明该硬件为固定串口/JTAG 功能，且无电脑读取时日志缓冲可能造成
 等待，因此协议与诊断不得阻塞音频或 control executor。
 [ESP-IDF v6.0.2 文档](https://docs.espressif.com/projects/esp-idf/en/v6.0.2/esp32s3/api-guides/usb-serial-jtag-console.html)
 只作为机制依据，不替代 H1/C1 对 EIM 管理的实际 SDK revision 的构建与设备验证。
 
-建议事务操作为 HELLO / STATUS / BEGIN / DATA / COMMIT / ABORT；wire version、
+事务操作为 HELLO / STATUS / BEGIN / DATA / COMMIT / ABORT；wire version、
 boot/session nonce、transfer ID、offset/length 与完整内容身份相互独立。
-nonce 用于隔离过期事务，不宣称身份认证。C1 的工程规范必须固定字节序、封包上限、
-校验范围、未知版本/操作拒绝、重复包规则及正反例，并作为跨语言 Contract 评审。
+nonce 用于隔离过期事务，不宣称身份认证。配套
+[USB 传输工程规范](2026-09-10-cardputer-usb-transfer.md)固定字节序、封包上限、
+校验范围、未知版本/操作拒绝、重复包规则与正反例责任；C1 将它落实为跨语言 Contract。
 不得直接暴露 Facade epoch、C++ struct 布局或指针。
 
 1. 开机 empty、静音，屏幕提示连接电脑；电脑显式选择设备端口并查询 Host/Build/
@@ -128,7 +130,8 @@ nonce 用于隔离过期事务，不宣称身份认证。C1 的工程规范必�
 2. 用户在设备确认接收模式；若已有内容，屏幕先提示本操作将停止并丢弃它。
    确认后 stop → physical silence/drain → unload → empty，再允许 BEGIN。
 3. BEGIN 校验总长度及目标 profile 后分配有界接收区；DATA 必须按确认 offset
-   顺序接收，精确重复已确认 chunk 可重发确认，内容冲突/越界/错会话立即拒绝并清空。
+   顺序接收，精确重复已确认 chunk 可重发确认；本事务内容冲突/越界立即拒绝并清空。
+   错会话包不能改变新的有效事务，只返回 stale-session；不能借过期包清空新内容。
 4. 默认 5 秒无有效进展取消事务；USB 断开未被立即检测到时也由该超时回收。
    重复包不延长“有效进展”。该超时是用户可见传输策略，不是放宽音频 deadline。
 5. COMMIT 只有在收到全部 bytes、核对 SHA-256 + byte length 且 Core load 成功后
@@ -144,9 +147,14 @@ nonce 用于隔离过期事务，不宣称身份认证。C1 的工程规范必�
 
 ## 6. 最小键盘与显示
 
-建议 A/S/D/F 映射 4 个 Pad，Space 播放/停止，M 静音，减号/等号调音量，Enter
+A/S/D/F 映射 4 个 Pad，Space 播放/停止，M 静音，减号/等号调音量，Enter
 确认接收，Esc 取消接收。Pad 只在 running 接受，按下沿触发一次，自动重复不连发；
 释放仍传给 Facade。ready/stopped 按 Pad 显示“先播放”，不隐式 start。
+映射依 Core 返回的 canonical Pad Slot 顺序，不把物理第一个键误当 Asset 或固定
+Bank 0。H1 补充控制侧 `content_summary()`，返回有界 Pad Slot/trigger-mode 摘要；
+Host 不自己解码 Runtime Content。profile 只接纳 1–4 个 One Shot Pad，R1/A1 的
+达标内容必须用满 4 个；其余格式即使通用 Core 合法也报本设备不支持并卸载到 empty。
+Host 的 ready 只能在 profile 检查完成后公布，中间 Core ready 不暴露为装载成功。
 本轮只承诺 One Shot 操作；键盘 FIFO overflow 或丢失释放事件必须停止/清除本地
 按键状态并给出错误，不能靠猜测补按键。
 
@@ -171,4 +179,4 @@ M5 官方说明确认 ADV 使用 ES8311、56 键键盘和显示屏；
 B1 必须在正式 A1 验收前提供精确 Product Build、Assembly、firmware hash、source
 revision 和同 Build 不可变门户快照；R1/H1 研究镜像不能代替它。A1 需要真实物理
 操作、人耳音乐质量和量化仪器证据。缺任一腿或性能测量，Umbrella 仍未完成。
-本提案不授权 Release、tag、部署、Channel 晋级或删除旧备份。
+本设计不启动 Release、tag、部署、Channel 晋级或删除旧备份。
