@@ -33,6 +33,14 @@ def current_product_build() -> str:
     )
 
 
+# Every root a `module.json` may live under, in the order the source
+# boundaries in CLAUDE.md list them. Hardcoding `apps` would have made
+# `current_module_identity("application-facade")` raise FileNotFoundError for
+# `apps/application-facade/module.json`, a path that was never valid for that
+# module, instead of saying the module is not there.
+MODULE_ROOTS = ("apps", "packages", "providers")
+
+
 def current_module_identity(module_id: str) -> str:
     """`<module>@<version>` read from the module's own manifest.
 
@@ -42,10 +50,15 @@ def current_module_identity(module_id: str) -> str:
     is the same authority the validator itself resolves against, so reading it
     removes that failure reason without weakening the check.
     """
-    manifest = json.loads(
-        (ROOT / "apps" / module_id / "module.json").read_text(encoding="utf-8")
+    for root in MODULE_ROOTS:
+        path = ROOT / root / module_id / "module.json"
+        if path.is_file():
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            return f"{manifest['module']}@{manifest['version']}"
+    raise AssertionError(
+        f"no module.json for {module_id!r} under any of "
+        f"{', '.join(MODULE_ROOTS)}"
     )
-    return f"{manifest['module']}@{manifest['version']}"
 
 
 CURRENT_PRODUCT_BUILD = current_product_build()
