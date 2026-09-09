@@ -13,7 +13,7 @@ HOST_ROOT = REPO_ROOT / "apps"
 PROVIDER_ROOT = REPO_ROOT / "providers"
 FORBIDDEN_PACKAGE_REFERENCES = ("products/lmdj/", "apps/creator-web/")
 EXPECTED_WEB_HOST_DEPENDENCIES = {
-    "web-runtime-platform": "5.0.0",
+    "web-runtime-platform": "5.0.1",
 }
 
 
@@ -171,7 +171,7 @@ assert web_host_path == REPO_ROOT / "apps/web-runtime-host/module.json"
 assert web_host_manifest == {
     "contract": "lmdj.module.v1",
     "module": "web-runtime-host",
-    "version": "4.1.1",
+    "version": "4.1.2",
     "api_version": 2,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }
@@ -180,7 +180,7 @@ assert creator_path == REPO_ROOT / "apps/creator-web/module.json"
 assert creator_manifest == {
     "contract": "lmdj.module.v1",
     "module": "creator-web",
-    "version": "4.1.1",
+    "version": "4.1.2",
     "api_version": 2,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }
@@ -218,14 +218,11 @@ assert inventory(assembly, "hosts") == {
     module_id: manifest["version"]
     for module_id, (_, manifest) in host_manifests.items()
 }
-assert "local.sample.slice" in provider_manifests, (
-    "K3 reference Provider is missing; remedy: restore its source manifest or update the approved Task boundary"
-)
 assert inventory(assembly, "providers") == {
     module_id: manifest["version"]
     for module_id, (_, manifest) in provider_manifests.items()
-    if module_id != "local.sample.slice"  # K3 reference source; K4 owns registration.
-}, "Assembly must contain all Providers except K3 reference; remedy: reconcile manifests under the approved registration Task"
+}, "registered Provider inventory differs; remedy: reconcile source manifests and approved Assembly"
+
 
 product_cmake = (
     REPO_ROOT / "products/lmdj/CMakeLists.txt"

@@ -85,9 +85,10 @@ async function recursiveNamedPaths(root, name) {
 async function componentSource(repoRoot, field, componentId) {
   let matches;
   if (field === 'contracts') {
-    matches = await directChildPaths(
-      path.join(repoRoot, 'contracts'), `${componentId}.schema.json`,
-    );
+    matches = [
+      ...await directChildPaths(path.join(repoRoot, 'contracts'), `${componentId}.schema.json`),
+      ...await directChildPaths(path.join(repoRoot, 'contracts'), `${componentId}.md`),
+    ];
   } else {
     const root = {modules: 'packages', hosts: 'apps', providers: 'providers'}[field];
     if (!root) fail(`unknown component field ${field}`);
@@ -105,6 +106,13 @@ async function componentSource(repoRoot, field, componentId) {
 }
 
 async function validateSourceIdentity(field, entry, source) {
+  if (field === 'contracts' && source.endsWith('.md')) {
+    const match = (await readFile(source, 'utf8')).match(/^---\ncontract_id: ([a-z0-9.-]+)\ncontract_version: ([0-9]+\.[0-9]+\.[0-9]+)\nmedia_type: ([a-z0-9.+/-]+)\n---\n/);
+    if (!match || match[1] !== entry.id || match[2] !== entry.version || path.basename(source, '.md') !== entry.id) {
+      fail(`contract profile identity mismatch for ${entry.id}; remedy: restore the approved profile frontmatter`);
+    }
+    return;
+  }
   const document = await readJson(source);
   if (field === 'contracts') {
     if (path.basename(source, '.schema.json') !== entry.id) fail(`contract source id mismatch for ${entry.id}`);
@@ -133,6 +141,16 @@ async function sourcePackageSha256(repoRoot, format, identity, files) {
     .digest('hex');
 }
 
+async function providerSources(root, suffix) {
+  const result = [];
+  for (const entry of await readdir(root, {withFileTypes: true})) {
+    const file = path.join(root, entry.name);
+    if (entry.isDirectory()) result.push(...await providerSources(file, suffix));
+    else if (entry.name.endsWith(suffix)) result.push(file);
+  }
+  return result;
+}
+
 async function expectedComponentSha(repoRoot, field, entry, source) {
   if (field !== 'providers') return sha256(source);
   const providerRoot = path.dirname(source);
@@ -142,7 +160,9 @@ async function expectedComponentSha(repoRoot, field, entry, source) {
     repoRoot,
     'provider-source-package',
     {provider_id: entry.id, provider_version: entry.version},
-    [headers[0], source, path.join(providerRoot, 'src/provider.cpp')],
+    [...new Set([headers[0], source, path.join(providerRoot, 'src/provider.cpp'),
+      ...await providerSources(path.join(providerRoot, 'include'), '.hpp'),
+      ...await providerSources(path.join(providerRoot, 'src'), '.cpp')])],
   );
 }
 

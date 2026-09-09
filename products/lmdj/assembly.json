@@ -2,7 +2,7 @@
   "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
-    "version": "1.0.46.0"
+    "version": "1.0.47.0"
   },
   "provider_policy": {
     "allowed_regions": [
@@ -34,7 +34,7 @@
     },
     {
       "id": "audio-runtime",
-      "version": "3.1.0"
+      "version": "4.0.0"
     },
     {
       "id": "provider-sdk",
@@ -42,33 +42,33 @@
     },
     {
       "id": "application-facade",
-      "version": "4.0.0"
+      "version": "4.0.1"
     },
     {
       "id": "web-runtime-platform",
-      "version": "5.0.0"
+      "version": "5.0.1"
     }
   ],
   "hosts": [
     {
       "id": "core-cli",
-      "version": "3.2.1"
+      "version": "3.2.2"
     },
     {
       "id": "core-mcp",
-      "version": "3.2.1"
+      "version": "3.2.2"
     },
     {
       "id": "native-host",
-      "version": "3.2.1"
+      "version": "3.2.2"
     },
     {
       "id": "web-runtime-host",
-      "version": "4.1.1"
+      "version": "4.1.2"
     },
     {
       "id": "creator-web",
-      "version": "4.1.1"
+      "version": "4.1.2"
     }
   ],
   "providers": [
@@ -90,6 +90,17 @@
         {
           "id": "proof.candidate.v2",
           "version": "2.0.0"
+        }
+      ],
+      "model_identity": null
+    },
+    {
+      "id": "local.sample.slice",
+      "version": "1.0.0",
+      "capabilities": [
+        {
+          "id": "sample.slice.v1",
+          "version": "1.0.0"
         }
       ],
       "model_identity": null
@@ -134,6 +145,14 @@
     },
     {
       "id": "lmdj.product-version.v1",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.audio.pcm16-wav.v1",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.slice-points.v1",
       "version": "1.0.0"
     }
   ]

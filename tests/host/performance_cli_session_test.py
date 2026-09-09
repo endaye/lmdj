@@ -183,6 +183,7 @@ def framing_and_ordering(executable: Path, root: Path) -> None:
     assert [provider["id"] for provider in providers] == [
         "local.proof.failure",
         "local.proof.success",
+        "local.sample.slice",
     ]
     assembled.close()
 

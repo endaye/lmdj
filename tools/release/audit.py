@@ -36,7 +36,7 @@ from .profiles import (
     ProfileError,
     canonical_product_asset_names,
 )
-from scripts.version import _provider_source_package_sha256
+from scripts.version import _provider_source_package_sha256, _validate_component_source
 
 
 _REPORT_SCHEMA = "lmdj.release-audit.v1"
@@ -706,7 +706,7 @@ def _verify_active_components(root: Path, assembly: object, lock: object) -> Non
             if not all(isinstance(value, str) and value for value in (identifier, version, digest)):
                 raise ValueError(f"locked {source_kind} entry has a non-string identity or digest")
             path = _component_path(root, source_kind, identifier)
-            document = _json_file(path)
+            document = _json_file(path) if path.suffix != ".md" else None
             if source_kind == "provider":
                 observed_digest = _provider_source_package_sha256(
                     identifier, version, path, repo_root=root,
@@ -716,8 +716,7 @@ def _verify_active_components(root: Path, assembly: object, lock: object) -> Non
             if observed_digest != digest:
                 raise ValueError(f"{source_kind} {identifier} source digest does not match the lock")
             if source_kind == "contract":
-                if not isinstance(document, dict) or document.get("x-lmdj-contract-version") != version:
-                    raise ValueError(f"contract {identifier} does not declare version {version}")
+                _validate_component_source("contracts", identifier, version, path)
             elif not isinstance(document, dict) or document.get("module") != identifier or document.get("version") != version:
                 raise ValueError(f"{source_kind} {identifier} does not declare version {version}")
 
@@ -737,8 +736,9 @@ def _component_path(root: Path, kind: str, identifier: str) -> Path:
         path = candidates[0]
     else:
         candidates = list((root / "contracts").glob(f"*/{identifier}.schema.json"))
+        candidates += list((root / "contracts").glob(f"*/{identifier}.md"))
         if len(candidates) != 1:
-            raise ValueError(f"contract {identifier} does not have exactly one schema")
+            raise ValueError(f"contract {identifier} does not have exactly one source; remedy: reconcile schema/profile inventory")
         path = candidates[0]
     if not path.is_file() or path.is_symlink():
         raise ValueError(f"{kind} {identifier} manifest is unavailable")

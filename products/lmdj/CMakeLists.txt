@@ -8,6 +8,7 @@ target_link_libraries(
   PRIVATE
     lmdj_provider_local_proof_success
     lmdj_provider_local_proof_failure
+    lmdj_provider_local_sample_slice
 )
 target_include_directories(
   lmdj_product_lmdj_assembly
@@ -80,4 +81,9 @@ if(TARGET lmdj_web_runtime_host)
     PRIVATE
       lmdj_product_lmdj_assembly
   )
+endif()
+
+if(TARGET lmdj_assembly_loader_tests)
+  target_link_libraries(lmdj_assembly_loader_tests PRIVATE
+    lmdj_product_lmdj_assembly lmdj_provider_local_sample_slice)
 endif()

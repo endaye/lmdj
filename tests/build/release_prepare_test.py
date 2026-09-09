@@ -1283,7 +1283,7 @@ class ReleaseTargetValidationIntegrationTest(unittest.TestCase):
             ),
             (ReleaseKind.MODULE, CURRENT_CORE_CLI_IDENTITY, "source-only", None, None),
             (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
-            (ReleaseKind.PROVIDER, "local.proof.success@1.0.5", "source-only", None, None),
+            (ReleaseKind.PROVIDER, current_module_identity("local-proof-success"), "source-only", None, None),
         )
         for kind, identity, profile, channel, snapshot in cases:
             with self.subTest(kind=kind.value):

@@ -543,11 +543,13 @@ def _provider_source_package_sha256(
             "provider_id": provider_id,
             "provider_version": provider_version,
         },
-        [
+        sorted({
             factory_header,
             module_path,
             provider_root / "src/provider.cpp",
-        ],
+            *provider_root.glob("include/**/*.hpp"),
+            *provider_root.glob("src/**/*.cpp"),
+        }),
         repo_root=resolved_repo_root,
     )
 
@@ -600,9 +602,10 @@ def _component_source(field: str, component_id: str) -> Path:
                 f"*/{component_id}.schema.json"
             )
         )
+        matches += sorted((REPO_ROOT / "contracts").glob(f"*/{component_id}.md"))
         if len(matches) != 1:
             raise ValueError(
-                f"contract {component_id} must resolve to exactly one schema"
+                f"contract {component_id} must resolve to exactly one source; remedy: reconcile schema/profile inventory"
             )
         path = matches[0]
     else:
@@ -618,6 +621,11 @@ def _validate_component_source(
     component_version: str,
     path: Path,
 ) -> None:
+    if field == "contracts" and path.suffix == ".md":
+        match = re.match(r"\A---\ncontract_id: ([a-z0-9.-]+)\ncontract_version: ([0-9]+\.[0-9]+\.[0-9]+)\nmedia_type: ([a-z0-9.+/-]+)\n---\n", path.read_text(encoding="utf-8"))
+        if not match or match[1] != component_id or match[2] != component_version or path.stem != component_id:
+            raise ValueError(f"contract profile identity mismatch for {component_id}; remedy: restore the approved profile frontmatter")
+        return
     source = _load_object(path, f"{field} source")
     if field == "contracts":
         source_id = path.name.removesuffix(".schema.json")
