@@ -772,12 +772,24 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
     module = json.loads(
         (REPO_ROOT / "apps/core-mcp/module.json").read_text(encoding="utf-8")
     )
+    # The manifest is this Host's version authority and the Facade's manifest
+    # is the Facade's. Literals here made the test fail on every bump for a
+    # reason unrelated to what it checks -- that the Python package metadata
+    # follows the manifest, which is exactly what #1025's bump to 3.2.0 left
+    # undone. The shape stays pinned: these keys and no others, this contract,
+    # api_version 2, and exactly one dependency.
+    host_version = module["version"]
+    facade_version = json.loads(
+        (REPO_ROOT / "packages/application-facade/module.json").read_text(
+            encoding="utf-8"
+        )
+    )["version"]
     assert module == {
         "contract": "lmdj.module.v1",
         "module": "core-mcp",
-        "version": "3.1.0",
+        "version": host_version,
         "api_version": 2,
-        "dependencies": {"application-facade": "3.1.0"},
+        "dependencies": {"application-facade": facade_version},
     }
     pyproject = tomllib.loads(
         (REPO_ROOT / "apps/core-mcp/pyproject.toml").read_text(
@@ -785,8 +797,8 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         )
     )
     assert pyproject["project"]["name"] == "lmdj-core-mcp"
-    assert pyproject["project"]["version"] == "3.1.0"
-    assert __version__ == "3.1.0"
+    assert pyproject["project"]["version"] == host_version
+    assert __version__ == host_version
     assert pyproject["project"]["dependencies"] == []
     assert pyproject["tool"]["lmdj"]["c-abi"] == "lmdj_core_c@1"
     host_paths = sorted(
@@ -961,7 +973,10 @@ def lifecycle(library: Path, temp_root: Path) -> None:
         "result": {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "lmdj-core-mcp", "version": "3.1.0"},
+            # The wire must report what the package declares;
+            # `startup_and_platform` separately pins that against the
+            # manifest, so the two together still chain manifest to wire.
+            "serverInfo": {"name": "lmdj-core-mcp", "version": __version__},
         },
     }
     assert host.request(4, "ping")["result"] == {}
