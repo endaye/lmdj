@@ -86,6 +86,24 @@ class ScopeTests(unittest.TestCase):
     def test_ai_cannot_subtract_floor(self):
         self.assertEqual(scope.select(self.policy, ["contracts/a"], ["test:none"])["kind"], "full")
 
+    def test_bundle_e2e_paths_keep_the_executor_floor_under_ai_selection(self):
+        # These are CTest-registered e2e suites. Their source-level executor
+        # contract is derived by ci_change_scope_test from CMake and the
+        # runner scripts; this test keeps the public selector from dropping
+        # that floor when an AI label is present.
+        paths = (
+            "tests/e2e/project_bundle_writer_level_test.py",
+            "tests/e2e/project_bundle_browser_reader_test.py",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                selected = set(scope.select(self.policy, [path])["suites"])
+                self.assertTrue({"core_asan", "core_coverage"} <= selected)
+                ai_selected = set(scope.select(self.policy, [path], ["test:none"])["suites"])
+                self.assertTrue(selected <= ai_selected,
+                                "why: AI selection removed an executor floor; "
+                                "remedy: union AI lanes with deterministic routing")
+
     def test_full_dominates_none(self):
         self.assertEqual(scope.select(self.policy, ["docs/notes/a.md"], ["test:none", "test:full"])["kind"], "full")
 

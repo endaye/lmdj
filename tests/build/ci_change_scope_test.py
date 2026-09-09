@@ -12,11 +12,13 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+import fnmatch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -470,6 +472,183 @@ class ChangeScopeTest(unittest.TestCase):
             "additive, so the rule needs only the lanes the document does not "
             "already get.",
         )
+
+    def test_registered_e2e_tests_reach_an_executor_that_runs_them(self):
+        """Bind CTest e2e registrations to the lanes whose commands execute them.
+
+        The lane-to-command entries below are intentionally limited to
+        runtime-generated invocations: the lane's shell script builds the
+        CTest command at runtime, so its source cannot be represented as a
+        literal test path.  Literal paths are discovered from CMake and the
+        scripts instead of being copied into an expected-lanes table.  This
+        closes the common registration/routing gap; generated paths and
+        invocations in other scripts remain outside this check.
+        """
+        runtime_ctest_invocations = {
+            "scripts/core.sh": {
+                # `proof` excludes CTest e2e tests, but its literal Python
+                # invocations are checked separately below.
+                "core_ubuntu": (r"-E '[^']*e2e\\.[^']*'", False),
+                "core_macos": (r"-E '[^']*e2e\\.[^']*'", False),
+                # `test ... full` runs every non-stress CTest tier.
+                "core_asan": (r"ctest --preset \"\$test_preset\" -LE '\^stress\$'", True),
+            },
+            "scripts/core-coverage.sh": {
+                "core_coverage": (r"ctest --preset coverage", True),
+            },
+        }
+        direct_invocations = {}
+        ctest_lanes = set()
+        for runner, lanes in runtime_ctest_invocations.items():
+            text = (ROOT / runner).read_text(encoding="utf-8")
+            for lane, (command_pattern, runs_ctest_e2e) in lanes.items():
+                self.assertRegex(
+                    text, command_pattern,
+                    f"{runner} no longer contains the mapped {lane} executor",
+                )
+                if runs_ctest_e2e:
+                    ctest_lanes.add(lane)
+            for path in re.findall(r"tests/e2e/[A-Za-z0-9_./-]+\.py", text):
+                direct_invocations.setdefault(path, set()).update(
+                    lane for lane, (_, runs_ctest_e2e) in lanes.items()
+                    if not runs_ctest_e2e
+                )
+
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        registrations = re.findall(
+            r"lmdj_add_test\(\s*NAME\s+(\S+)(.*?\n\s*\))",
+            cmake, re.DOTALL,
+        )
+        e2e_paths = []
+        for name, block in registrations:
+            if re.search(r"\bTIER\s+e2e\b", block):
+                paths = re.findall(r"tests/e2e/[A-Za-z0-9_./-]+\.py", block)
+                e2e_paths.extend((name, path) for path in paths)
+        self.assertTrue(e2e_paths, "CMake no longer exposes any e2e registration to inspect")
+
+        gaps = []
+        for test_name, path in e2e_paths:
+            routed = self.lanes_for_path(path)
+            executor_lanes = direct_invocations.get(path, set()) | ctest_lanes
+            executed = routed & executor_lanes
+            if not executed:
+                source = next(
+                    (runner for runner in runtime_ctest_invocations
+                     if path in direct_invocations or runner == "scripts/core-coverage.sh"),
+                    "CMakeLists.txt",
+                )
+                gaps.append(
+                    f"{path}: missing executor lane; source runner {source} "
+                    f"(CTest registration {test_name})"
+                )
+        self.assertEqual(
+            gaps, [],
+            "registered e2e test is routed away from every command that runs it.\n"
+            "why: a CTest registration or literal runner path is not coverage "
+            "unless its owning lane invokes that test.\n"
+            "remedy: add the executing lane to the additive rule for the test "
+            "path, or register a literal invocation in the owning runner.\n"
+            + "\n".join(gaps),
+        )
+
+    def test_literal_runner_globs_reach_their_lane(self):
+        # The Creator runner owns a literal shell glob rather than CTest.
+        # Discover executable node/python arguments and expand them against
+        # the tracked inventory; do not copy the current glob into the gate.
+        literal_glob_invocations = {
+            "scripts/creator-web.sh": {
+                "creator": (
+                    ".github/actions/web-ci-proof/action.yml",
+                ),
+            },
+        }
+        inventory = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True,
+        ).stdout.decode("utf-8").split("\0")
+
+        def discover(source):
+            executable = "\n".join(
+                line for line in source.splitlines()
+                if not line.lstrip().startswith("#")
+            )
+            paths = []
+            for line in executable.splitlines():
+                if "node --test" not in line and "python3" not in line:
+                    continue
+                try:
+                    tokens = shlex.split(line, comments=True, posix=True)
+                except ValueError:
+                    continue
+                for token in tokens:
+                    token = token.removeprefix("$repo_root/")
+                    if token.startswith(("packages/", "tests/")) and (
+                        "*" in token or token.endswith((".py", ".mjs"))
+                    ):
+                        paths.append(token)
+            return paths
+
+        self.assertEqual(discover("# node --test packages/example/test/*.test.mjs"), [])
+        self.assertEqual(
+            discover('node --test "$repo_root"/packages/example/test/*.test.mjs'),
+            ["packages/example/test/*.test.mjs"],
+        )
+        glob_gaps = []
+        for runner, lanes in literal_glob_invocations.items():
+            text = (ROOT / runner).read_text(encoding="utf-8")
+            executable_lines = "\n".join(
+                line for line in text.splitlines()
+                if not line.lstrip().startswith("#")
+            )
+            self.assertRegex(executable_lines, r"node --test",
+                             f"{runner} has no executable test command")
+            for lane, metadata in lanes.items():
+                for token in discover(text):
+                    for path in sorted(p for p in inventory if p and fnmatch.fnmatch(p, token)):
+                        if lane not in self.lanes_for_path(path):
+                            glob_gaps.append(
+                                f"{path}: missing executor lane {lane}; source runner {runner}"
+                            )
+                lane_source = metadata[0]
+            action = (ROOT / lane_source).read_text(encoding="utf-8")
+            self.assertRegex(action, r"creator\) scripts/creator-web\.sh proof",
+                             f"{lane_source} no longer connects creator to {runner}")
+        self.assertEqual(
+            glob_gaps, [],
+            "literal runner glob reaches a file without its executor lane.\n"
+            "why: a matched test file is not coverage unless its policy route "
+            "reaches the runner that expands the glob.\n"
+            "remedy: add the runner lane to the file's additive policy rule.\n"
+            + "\n".join(glob_gaps),
+        )
+
+    def test_e2e_executor_gate_has_a_red_case_for_removed_bundle_routes(self):
+        original = self.lanes_for_path
+
+        def without_bundle_executors(path):
+            lanes = original(path)
+            if path.startswith("tests/e2e/project_bundle_"):
+                lanes -= {"core_asan", "core_coverage"}
+            return lanes
+
+        self.lanes_for_path = without_bundle_executors
+        try:
+            with self.assertRaisesRegex(AssertionError, "project_bundle_.*missing executor lane"):
+                self.test_registered_e2e_tests_reach_an_executor_that_runs_them()
+        finally:
+            self.lanes_for_path = original
+
+    def test_glob_gate_has_a_red_case_for_removed_creator_route(self):
+        original = self.lanes_for_path
+
+        def without_creator(path):
+            return original(path) - {"creator"}
+
+        self.lanes_for_path = without_creator
+        try:
+            with self.assertRaisesRegex(AssertionError, "missing executor lane creator"):
+                self.test_literal_runner_globs_reach_their_lane()
+        finally:
+            self.lanes_for_path = original
 
     def test_every_tracked_top_level_is_admitted_by_the_policy(self):
         # `_evaluate_ready_paths` checks the top-level segment against

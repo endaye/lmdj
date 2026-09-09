@@ -204,6 +204,8 @@
     {"match": {"kind": "exact", "value": "tests/conformance/version_lock_test.py"}, "lanes": ["package"]},
     {"match": {"kind": "prefix", "value": "tests/host/"}, "lanes": ["core_ubuntu", "core_macos"]},
     {"match": {"kind": "prefix", "value": "tests/e2e/"}, "lanes": ["core_ubuntu"]},
+    {"match": {"kind": "exact", "value": "tests/e2e/project_bundle_writer_level_test.py"}, "lanes": ["core_asan", "core_coverage"], "note": "CTest registers this e2e suite; core_ubuntu/core_macos proof exclude e2e.*, while core_asan full and core_coverage execute it"},
+    {"match": {"kind": "exact", "value": "tests/e2e/project_bundle_browser_reader_test.py"}, "lanes": ["core_asan", "core_coverage"], "note": "CTest registers this e2e suite; core_ubuntu/core_macos proof exclude e2e.*, while core_asan full and core_coverage execute it"},
     {"match": {"kind": "prefix", "value": "tests/distribution/"}, "lanes": ["package"]},
     {"match": {"kind": "prefix", "value": "tests/fixtures/audio/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_runtime_host", "creator"]},
     {"match": {"kind": "prefix", "value": "tests/fixtures/provider-benchmark/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},

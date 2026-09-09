@@ -1,7 +1,7 @@
 ---
 id: unregistered-test-file-reads-as-coverage
 area: ci-release
-status: open
+status: absorbed
 recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/784
@@ -9,7 +9,10 @@ recurrences:
   - date: 2026-09-08
     occurrence: https://github.com/endaye/lmdj/issues/900
     observed_by: claude-code/opus-5
-exit: none
+  - date: 2026-09-10
+    occurrence: https://github.com/endaye/lmdj/issues/914
+    observed_by: Codex
+exit: gate:tests/build/ci_change_scope_test.py
 ---
 
 # A test file that exists but is not registered in CTest never runs, and reads to everyone as coverage
