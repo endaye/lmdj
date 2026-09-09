@@ -132,6 +132,40 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual({'status': 'idle'}, self.fixture.make().execute('drain'))
         self.assertEqual(1, len(self.api.issues))
 
+    def test_actual_failed_finalizer_queues_and_fresh_drain_delivers_exact_body(self):
+        self.review.finalize_with_current_producer()
+        retained = deepcopy(self.review.artifacts)
+        self.review.artifacts.clear()
+        self.run_adapter(limit=1)
+        self.assertEqual(self.make().load()['runs']['51/1']['status'], 'unresolved')
+        self.assertFalse(self.make().outbox.load()['deliveries'])
+        self.review.artifacts[:] = retained
+        self.run_adapter(limit=1)
+        state = self.make().load()
+        row = state['runs']['51/1']
+        self.assertEqual(row['status'], 'failure-queued',
+            'why: complete failed-review receipt was stranded unresolved; remedy: admit authenticated all-backend failure')
+        key = row['proof']['outbox_key']
+        before = self.make().outbox.load()['deliveries'][key]
+        self.assertEqual(before['status'], 'queued')
+        self.assertFalse(self.api.issues)
+        self.review.artifacts.clear()  # Frozen failure can report after source loss.
+        delivered = self.fixture.make().execute('drain')
+        after = self.make().outbox.load()['deliveries'][key]
+        self.assertEqual(delivered['status'], 'delivered')
+        self.assertEqual(after['status'], 'delivered')
+        self.assertEqual(after['receipt'], delivered['receipt'])
+        self.assertEqual(after['payload'], before['payload'])
+        self.assertEqual(self.api.issues[0]['number'], after['receipt']['issue_number'])
+        self.assertIsNone(after['receipt']['comment_id'])
+        self.assertEqual(self.api.issues[0]['body'].encode(), before['payload']['issue_body'].encode())
+        posts = [call for call in self.api.calls if call[0] in {'create_issue', 'create_comment'}]
+        self.run_adapter(limit=1)
+        self.assertEqual(self.make().load()['runs']['51/1']['status'], 'failure-queued')
+        self.assertEqual(self.fixture.make().execute('drain'), {'status': 'idle'})
+        self.assertEqual([call for call in self.api.calls if call[0] in {'create_issue', 'create_comment'}], posts)
+        self.assertEqual(1, len(self.api.issues))
+
     def two_new_obligations(self, *, live=False):
         self.seed_terminal_backlog()
         values = [{**self.review.run, 'id': n} for n in (50, 51)]

@@ -201,9 +201,18 @@ def collect(api, repository, run_id, attempt):
                 raise reporting.ReportingError('why: historical mapping receipt or API shape cannot be authenticated; '
                     'remedy: restore the exact retained mapping evidence; do not infer a review or backend failure') from error
         return None
-    producer = job("Review fallback", "success")
-    for name in ("Collect complete fixed input without executing PR files", "Save honest final result", "Run actions/upload-artifact@v4"):
+    conclusion = producers[0].get("conclusion")
+    require(conclusion in {"success", "failure"}, "review producer did not retain a completed result")
+    producer = job("Review fallback", conclusion)
+    for name in ("Collect complete fixed input without executing PR files", "Run actions/upload-artifact@v4"):
         _step(producer, name)
+    _step(producer, "Save honest final result", conclusion)
+    if conclusion == "failure":
+        # The current finalizer saves complete failure receipts before exiting 1.
+        # A cancelled/otherwise broken producer is not an all-backend verdict.
+        require(all(step.get("conclusion") in {"success", "skipped"}
+                    for step in producer["steps"] if step.get("name") != "Save honest final result"),
+                "failed review producer has an additional incomplete or failed step")
     # Explicit total_count check: the shared convenience artifact method reads
     # one page; truncation must not silently select an incomplete receipt set.
     inventory = api._request("GET", prefix + f"/actions/runs/{run_id}/artifacts?per_page=100")
@@ -254,6 +263,8 @@ def collect(api, repository, run_id, attempt):
         final_identity["backend"] = history[-1]["backend"]
     expected = review_scope.prepare_result(policy, final_identity, changed_paths=context["changed_paths"], history=history)
     require(documents["result.json"] == expected, "saved review result differs from independent history/policy recomputation")
+    require(conclusion != "failure" or expected["status"] == "not-reviewed",
+            "failed review finalizer contradicts the recomputed review result")
     if expected["status"] == "reviewed":
         require(documents.get("review.json") == history[-1]["review"] and "failure.json" not in documents,
                 "valid review has conflicting failure evidence")

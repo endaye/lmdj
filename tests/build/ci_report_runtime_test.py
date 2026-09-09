@@ -447,6 +447,32 @@ class RuntimeJourneyTests(unittest.TestCase):
         self.assertFalse(self.api.issues)
         self.assertFalse(self.outbox_http.comments)
 
+    def test_failed_finalizer_lost_post_response_recovers_without_source_or_second_post(self):
+        self.review.finalize_with_current_producer()
+        self.initialize()
+        original = self.api.create_issue
+        def lost(**kwargs):
+            original(**kwargs)
+            raise Crash('response lost after Issue creation')
+        self.api.create_issue = lost
+        with self.assertRaises(Crash):
+            self.make().execute('review', run_id=51, attempt=1)
+        state = self.make().outbox().load()
+        key, claimed = next(iter(state['deliveries'].items()))
+        self.assertEqual(claimed['status'], 'claimed')
+        self.assertIsNone(claimed['ack'])
+        self.assertEqual(len(self.api.issues), 1)
+        self.assertEqual(self.api.issues[0]['body'].encode(), claimed['payload']['issue_body'].encode())
+        self.review.artifacts.clear()
+        posts = [call for call in self.api.calls if call[0] in {'create_issue', 'create_comment'}]
+        self.assertEqual(self.make().execute('drain'), {'status': 'idle'})
+        recovered = self.make().outbox().load()['deliveries'][key]
+        self.assertEqual(recovered['status'], 'delivered')
+        self.assertEqual(recovered['payload'], claimed['payload'])
+        self.assertEqual(recovered['receipt'], {'issue_number': self.api.issues[0]['number'], 'comment_id': None})
+        self.assertEqual(self.make().execute('drain'), {'status': 'idle'})
+        self.assertEqual([call for call in self.api.calls if call[0] in {'create_issue', 'create_comment'}], posts)
+
     def settled_batch(self):
         self.initialize()
         start = self.fixture.start()
