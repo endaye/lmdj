@@ -91,6 +91,18 @@ class MetadataProposalTests(unittest.TestCase):
             self.assertIn('State: **prepared**', (self.f.root / name).read_text())
         self.assertEqual((self.f.root / 'docs/frozen-manual.txt').read_text(), 'Frozen bytes never change.\n')
 
+    def test_fixture_contains_exactly_one_source_for_each_assembly_contract(self):
+        assembly = json.loads((self.f.root / self.m.PRODUCT[1]).read_text())
+        for contract in assembly['contracts']:
+            contract_id = contract['id']
+            sources = sorted((self.f.root / 'contracts').glob(f'*/{contract_id}.schema.json'))
+            sources += sorted((self.f.root / 'contracts').glob(f'*/{contract_id}.md'))
+            with self.subTest(contract=contract_id):
+                self.assertEqual(
+                    len(sources), 1,
+                    f'fixture contract inventory must resolve {contract_id} to exactly one source',
+                )
+
     def test_product_only_proposal_preserves_host_versions_and_does_not_invent_logs(self):
         advice = self.f.advice()
         for item in advice['components']:
