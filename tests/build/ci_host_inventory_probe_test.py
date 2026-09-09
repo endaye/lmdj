@@ -8,6 +8,7 @@ import importlib.util
 from pathlib import Path
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -22,12 +23,13 @@ SPEC.loader.exec_module(PROBE_MODULE)
 
 
 class HostInventoryProbeTest(unittest.TestCase):
-    def run_probe(self, expected: dict, actual: str | dict | None, *, mmap: str = "28", mmap_missing: bool = False, cgroup: str = "0::/system.slice/actions.runner.example.service\n", sanitizer: Path = SANITIZER, proc_stat: str | None = None, proc_stat_missing: bool = False, tool_root: Path | None = None, output_format: str = "json", summary_path: Path | None = None, free_text: str | None = None, df_text: str | None = None, host: str = "netcup", role: str = "ci-core"):
+    def run_probe(self, expected: dict, actual: str | dict | None, *, mmap: str = "28", mmap_missing: bool = False, mmap_proc: str | None = None, mmap_proc_missing: bool = False, path: str | None = None, cgroup: str = "0::/system.slice/actions.runner.example.service\n", sanitizer: Path = SANITIZER, proc_stat: str | None = None, proc_stat_missing: bool = False, tool_root: Path | None = None, output_format: str = "json", summary_path: Path | None = None, free_text: str | None = None, df_text: str | None = None, host: str = "netcup", role: str = "ci-core"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             expected_path = root / "expected.json"
             actual_path = root / "actual.json"
             mmap_path = root / "mmap"
+            mmap_proc_path = root / "proc" / "sys" / "vm" / "mmap_rnd_bits"
             cgroup_path = root / "cgroup"
             proc_stat_path = root / "proc-stat"
             free_path = root / "free"
@@ -41,6 +43,9 @@ class HostInventoryProbeTest(unittest.TestCase):
                 actual_path.write_text(actual, encoding="utf-8")
             if not mmap_missing:
                 mmap_path.write_text(mmap, encoding="utf-8")
+            if not mmap_proc_missing and mmap_proc is not None:
+                mmap_proc_path.parent.mkdir(parents=True, exist_ok=True)
+                mmap_proc_path.write_text(mmap_proc, encoding="utf-8")
             cgroup_path.write_text(cgroup, encoding="utf-8")
             if not proc_stat_missing:
                 proc_stat_path.write_text(proc_stat or "cpu 1 2 3 4 5 6 11 13 17 19\n", encoding="utf-8")
@@ -63,22 +68,30 @@ class HostInventoryProbeTest(unittest.TestCase):
             if summary_path:
                 environment["GITHUB_STEP_SUMMARY"] = str(summary_path)
             command = [
-                    "python3", str(PROBE), "--host", host, "--role", role,
+                    sys.executable, str(PROBE), "--host", host, "--role", role,
                     "--expected-config", str(expected_path), "--actual-config", str(actual_path),
-                    "--sanitizer-script", str(sanitizer), "--mmap-file", str(mmap_path),
+                    "--sanitizer-script", str(sanitizer),
                     "--cgroup-file", str(cgroup_path), "--proc-stat-file", str(proc_stat_path),
                     "--format", output_format,
                 ]
+            if mmap_proc is None and not mmap_proc_missing:
+                command += ["--mmap-file", str(mmap_path)]
+            if mmap_proc is not None or mmap_proc_missing:
+                command += ["--mmap-proc-file", str(mmap_proc_path)]
             if tool_root:
                 command += ["--tool-root", str(tool_root)]
             if free_text is not None:
                 command += ["--free-file", str(free_path)]
             if df_text is not None:
                 command += ["--df-file", str(df_path)]
+            if path is not None:
+                environment["PATH"] = path
             result = subprocess.run(
                 command,
                 cwd=ROOT, env=environment, text=True, capture_output=True, check=False,
             )
+            if output_format == "json" and not result.stdout:
+                raise AssertionError(result.stderr)
             return result, (json.loads(result.stdout) if output_format == "json" else result.stdout)
 
     def test_matching_config_and_sanitizer_are_measured_with_exact_provenance(self):
@@ -131,6 +144,25 @@ class HostInventoryProbeTest(unittest.TestCase):
         config = {"host": "netcup", "baseline": [], "elastic": []}
         result, evidence = self.run_probe(config, config, mmap_missing=True)
         self.assertEqual(result.returncode, 0)
+        self.assertEqual(evidence["sanitizer"]["status"], "unavailable")
+
+    def test_default_mmap_source_reads_proc_without_sysctl_on_path(self):
+        config = {"host": "netcup", "baseline": [], "elastic": []}
+        with tempfile.TemporaryDirectory() as directory:
+            result, evidence = self.run_probe(
+                config, config, mmap_missing=True, mmap_proc="28", path=directory,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(evidence["sanitizer"]["status"], "match")
+        self.assertEqual(evidence["sanitizer"]["observed"], "28")
+        self.assertTrue(evidence["sanitizer"]["source"].endswith("/proc/sys/vm/mmap_rnd_bits"))
+
+    def test_unreadable_default_mmap_source_is_unavailable(self):
+        config = {"host": "netcup", "baseline": [], "elastic": []}
+        result, evidence = self.run_probe(
+            config, config, mmap_missing=True, mmap_proc_missing=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(evidence["sanitizer"]["status"], "unavailable")
 
     def test_proc_stat_distinct_counters_and_short_or_missing_inputs(self):
