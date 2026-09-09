@@ -20,7 +20,7 @@ properties hold but whose signal has degraded:
 | Dead code kept in live workflows | `pre-heavy-gate`, `merge-queue.yml` (199), `pr_gate.py` (435), `phase_gate.py` (264) |
 | Documentation-impact gate | condition can no longer be true; only `local-ci.sh --pr-body` checks it |
 | Actions runs per day | ~1,380; about half cancelled or skipped |
-| Canary planning wakeups executed | 0 of 129 (all skipped); `workflow_dispatch` never run |
+| Canary planning wakeups executed | 0 of 129 at review time, 0 of 175 at plan commit (all skipped); `workflow_dispatch` never run |
 | CI infrastructure + its tests vs product source | 54.6k vs 113.6k lines |
 
 The governing defect is not any single item. It is that a red gate no longer
@@ -94,14 +94,14 @@ worker; the coordinator may change them per attempt.
 
 ### Phase 1: clear red gates on `main`
 
-Independent; run in parallel.
+P1.1, P1.2 and P1.4 are independent and run in parallel. P1.3 waits for D4.
 
 | Task | Issue | Declared files | Lowest-tier verification | Effort |
 | --- | --- | --- | --- | --- |
 | P1.1 pitfall area label | #1078 | `.agents/pitfalls/snapshot-page-pin-only-fires-at-freeze.md` | `python3 tests/build/ci_pitfall_ledger_test.py` | low |
-| P1.2 canary fixture inventory | #1088 | `tools/canary/metadata_proposal.py`, `tests/build/ci_canary_metadata_proposal_test.py` (+ handoff test if it shares the inventory) | `python3 -m unittest discover -s tests/build -p 'ci_canary*_test.py'` | medium |
-| P1.3 Node parity | #1056, D4 | per D4: (c) `apps/web-runtime-host/deploy/cloudflare_worker.mjs`, `apps/creator-web/test/server_test.py` and the proof server's matching rule; the fix must not fork behavior by Node version | `scripts/creator-web.sh test` under the toolchain Node and the system Node | medium |
-| P1.4 post-publish audit | pitfall `post-publish-audit-releasable-ledger` | `.github/workflows/publish-release.yml`, `tools/release/audit.py` or the ledger reader, matching `tests/build/release_*` | `python3 -m unittest discover -s tests/build -p 'release_*_test.py'`; no live publication | high |
+| P1.2 canary fixture inventory | #1088 | `tools/canary/metadata_proposal.py`, `tests/build/ci_canary_metadata_proposal_test.py`; `tests/build/ci_canary_assessment_handoff_test.py` only if the coordinator confirms it shares the inventory | `python3 -m unittest discover -s tests/build -p 'ci_canary*_test.py'` | medium |
+| P1.3 Node parity | #1056, D4 | per D4: (c) `apps/web-runtime-host/deploy/cloudflare_worker.mjs`, `apps/creator-web/test/server_test.py` and the proof server's matching rule; the fix must not fork behavior by Node version. The Worker change lands in source only; no deployment is part of this program, and parity is proven by the existing two-leg harness passing under both Node versions plus the Worker unit tests | `scripts/creator-web.sh test` under the toolchain Node and the system Node | medium |
+| P1.4 post-publish audit | pitfall `post-publish-audit-releasable-ledger` | `.github/workflows/publish-release.yml`, `tools/release/cli.py`, one new or extended module under `tools/release/` for the published-Release verification, the matching `tests/build/release_*_test.py`, the pitfall entry, `.agents/skills/lmdj-release/SKILL.md` | `python3 -m unittest discover -s tests/build -p 'release_*_test.py'`; no live publication | high |
 
 Acceptance: the next main batch after all four merge reports `ci_contract`
 green; P1.4 is accepted on evidence from the next real publication.
@@ -117,32 +117,34 @@ Depends on nothing; P2.2 and P2.3 touch `ci.yml` and must be sequential.
 | P2.3 documentation-impact gate | depends on D1. If D1 is yes: new `.github/workflows/pr-contract.yml` plus `hosted_runner_policy.json` entry and topology test; the doc-impact check moves there. If D1 is no: delete `check_documentation_impact` input plumbing from `ci.yml` and `architecture-portal.yml`, and change `AGENTS.md`/`CLAUDE.md`/`issue-done` to say the declaration is checked locally only | topology tests; `scripts/local-ci.sh --pr-body` still works | medium |
 | P2.4 stale prose | `scripts/ci/change_scope.py` header comments, `docs/governance/git-workflow.md` run-specific history, `docs/quality/core-test-policy.md` lane/suite vocabulary note | `python3 tests/build/ci_change_scope_test.py`; `scripts/docs-site.sh check` if portal pages change | low |
 
-Acceptance: `git grep -n "pre-heavy-gate\|merge_queue\|pr_gate\|phase_gate"` returns
-only historical plan documents.
+Acceptance: `git grep -n "pre-heavy-gate\|merge_queue\|pr_gate\|phase_gate" -- .github scripts tests AGENTS.md CLAUDE.md docs/governance apps/docs-site/docs`
+returns nothing. Immutable Portal snapshots under `apps/*/versioned_docs` and
+`versioned_provenance`, pitfall ledger entries, `docs/design` and `docs/plans`
+are history and are never edited to satisfy this grep.
 
 ### Phase 3: self-test Issue lifecycle
 
 | Task | Issue | Declared files | Verification | Effort |
 | --- | --- | --- | --- | --- |
-| P3.1 auto-close on green | new | `scripts/ci/self_test_report.py`, `scripts/ci/report_runtime.py`, tests | red-first test: a bucket with an open Issue and a later green result for the same suite closes with a comment naming the batch; a green unrelated suite does not | high |
-| P3.2 one infrastructure event, one Issue | new | `scripts/ci/batch_verdict.py`, `scripts/ci/report_runtime.py`, tests | red-first test: a skipped candidate run yields one `missing` Issue listing suites, not sixteen | medium |
-| P3.3 storage Issue labeling | manual + `.agents/skills/issue-list/SKILL.md` | coordinator labels #807 #817 #849 #824 #825 #826 #840 #857 `ci:storage`, pins them, and the skill excludes the label | skill text review | low |
-| P3.4 bulk close | manual | after P3.1 merges, coordinator closes #874–#890 and fixed buckets with the batch SHA that proves green | none | low |
+| P3.1 auto-close on green | new | `scripts/ci/self_test_report.py`, `scripts/ci/report_runtime.py`, `tests/build/ci_self_test_report_test.py`, `tests/build/ci_report_runtime_test.py` | red-first test: a bucket with an open Issue and a later green result for the same suite closes with a comment naming the batch; a green unrelated suite does not | high |
+| P3.2 one infrastructure event, one Issue | new | `scripts/ci/batch_verdict.py`, `scripts/ci/report_runtime.py`, `tests/build/ci_batch_verdict_test.py`, `tests/build/ci_report_runtime_test.py` | red-first test: a skipped candidate run yields one `missing` Issue listing suites, not sixteen | medium |
+| P3.3 storage Issue labeling | manual + `.agents/skills/issue-list/SKILL.md` | coordinator labels #807 #817 #849 #824 #825 #826 #840 #857 `ci:storage` (no pinning; GitHub allows three pinned Issues) and the skill excludes the label | skill text review | low |
+| P3.4 bulk close | manual | after P3.1 merges, coordinator closes the sixteen `missing` Issues #874–#879, #881–#890 and fixed buckets with the batch SHA that proves green | none | low |
 
 ### Phase 4: review evidence
 
 | Task | Issue | Declared files | Verification | Effort |
 | --- | --- | --- | --- | --- |
 | P4.1 placeholder rejection | #1062 | `scripts/ci/review_scope.py`, `tests/build/ci_review_scope_test.py` | red-first: the exact Kimi stub payload is refused as `not-reviewed`; a real review still validates | medium |
-| P4.2 wait-for-review before merge | #939, D3 | `.agents/skills/issue-done/SKILL.md`, optional helper `scripts/ci/review_wait.py` with test | skill dry-run on a real open PR; helper exits non-zero while the current-head run is in progress | medium |
+| P4.2 wait-for-review before merge | #939, D3 | `.agents/skills/issue-done/SKILL.md`; if a helper is needed, `scripts/ci/review_wait.py` and `tests/build/ci_review_wait_test.py` | skill dry-run on a real open PR; helper exits non-zero while the current-head run is in progress | medium |
 | P4.3 backend timeout diagnosis | #939 | investigation report as a plan document; code only if the cause is in-repo | reproduce the 5-minute cap against one provider with the pinned action; report | high |
-| P4.4 retire unsigned inline clean reviews | #714 | `.github/scripts/retire_clean_review_threads.py`, tests | red-first | low |
+| P4.4 retire unsigned inline clean reviews | #714 | `.github/scripts/retire_clean_review_threads.py`, its test under `tests/build/` | red-first | low |
 
 ### Phase 5: controller robustness
 
 | Task | Issue | Declared files | Verification | Effort |
 | --- | --- | --- | --- | --- |
-| P5.1 quota exhaustion is unknown, not dead | #979 | `scripts/ci/github_queue_api.py`, `scripts/ci/batch_runtime.py`, `scripts/ci/incremental_completion.py`, tests | red-first: a 403 with `x-ratelimit-remaining: 0` yields a retry until `x-ratelimit-reset` and an `unknown` classification, never `not live` | high |
+| P5.1 quota exhaustion is unknown, not dead | #979 | `scripts/ci/github_queue_api.py`, `scripts/ci/batch_runtime.py`, `scripts/ci/incremental_completion.py`, their `tests/build/ci_*_test.py` | red-first: a 403 with `x-ratelimit-remaining: 0` yields a retry until `x-ratelimit-reset` and an `unknown` classification, never `not live` | high |
 | P5.2 journal checkpoint cursor | #979 root | design first as a plan document; implement only after coordinator acceptance | measured GET count per transaction before and after | high |
 | P5.3 report-only cron acceptance | #1048 | none unless the acceptance fails | coordinator reads three consecutive report-only runs | low |
 
@@ -150,9 +152,9 @@ only historical plan documents.
 
 | Task | Issue | Declared files | Verification | Effort |
 | --- | --- | --- | --- | --- |
-| P6.1 host configuration parity check | pitfall `sanitizer-runtime-silent-start-failure` | `.github/workflows/ci-host-inventory.yml`, `scripts/ci/host/`, tests | inventory run fails when `vm.mmap_rnd_bits` or the elastic controller config differs from the repository pin | medium |
-| P6.2 control jobs on either general host | `core-test-policy.md` §recovery gap | `.github/workflows/ci.yml`, `self-test-report.yml`, `hosted_runner_policy.json`, topology tests | the first job of each workflow schedules when `contabo` is offline | medium |
-| P6.3 load-sensitive stress | #666 | `core-nightly.yml` or the stress lane concurrency group; never the overrun threshold | three consecutive nightly stress runs green while a web lane executes | medium |
+| P6.1 host configuration parity check | pitfall `sanitizer-runtime-silent-start-failure` | `.github/workflows/ci-host-inventory.yml`, `scripts/ci/host/`, `tests/build/ci_host_inventory_workflow_test.py` | inventory run fails when `vm.mmap_rnd_bits` or the elastic controller config differs from the repository pin | medium |
+| P6.2 control jobs on either general host | `docs/quality/core-test-policy.md` recovery-gap paragraph (about line 288-295) | `.github/workflows/ci.yml`, `self-test-report.yml`, `hosted_runner_policy.json`, topology tests | the first job of each workflow schedules when `contabo` is offline | medium |
+| P6.3 load-sensitive stress | #666 | `.github/workflows/core-nightly.yml` concurrency group for the stress lane and `tests/build/ci_nightly_workflow_test.py`; never the overrun threshold | three consecutive nightly stress runs green while a web lane executes | medium |
 
 ### Phase 7: canary decision
 
@@ -173,8 +175,7 @@ Coordinator: the Claude session bound to Orca Run `run_71c2492cd783`. Workers
 are Codex agents started with `orca orchestration worker-start`, one per Task,
 each in a fresh top-level worktree from `origin/main`. The coordinator accepts a
 Task only after re-running its lowest-tier verification in the worker's
-worktree and reading the merged PR. Tracking Issue: see the umbrella Issue
-linked from this plan's Pull Request.
+worktree and reading the merged PR. Tracking Issue: #1089.
 
 ## Version Management
 
