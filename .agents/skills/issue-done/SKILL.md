@@ -493,9 +493,15 @@ a PR never authorizes automatic release.
 
 The report runtime collects authenticated review-infrastructure and selected
 batch failures into durable outboxes and stable Issue buckets;
-these are not proven root-cause fingerprints, and one green batch does not
-close an Issue automatically. Unknown business POST outcomes require an exact
-positive receipt or explicit manual reconciliation, never a blind duplicate POST.
+these are not proven root-cause fingerprints. A newly created managed bucket may
+be discharged only when its authenticated causal and policy identity is
+preserved, all required suite/dependency coverage is present, a later selected
+PASS has no verification debt, and durable receipts confirm both the success
+comment and close patch. Historical, edited, human-investigated, candidate/node,
+and independent defect Issues remain under manual disposition; an unrelated
+green batch does not change them. Unknown business POST outcomes require an
+exact positive receipt or explicit manual reconciliation, never a blind
+duplicate POST.
 Report retries do not execute tests, and processed progress is not full health
 or release evidence. Remote O1 acceptance and automatic activation remain separate.
 It does not automatically release a version. Release preparation, publication,

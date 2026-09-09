@@ -200,6 +200,15 @@ for the activation and recovery requirements. Daily product triggers and their
 daily-missing alert are retired together; the independent lightweight health
 tick recovers existing pending work and never creates a date-based test request.
 
+The managed-report exception is deliberately narrower than the historical
+failure rule: only a newly created managed bucket with authenticated causal and
+policy identity, complete required suite/dependency coverage, a later selected
+PASS with no verification debt, and durable success-comment plus close-patch
+receipts may be discharged by recovery. Historical, edited, human-investigated,
+candidate/node, and independent defect Issues remain under manual disposition;
+an unrelated green batch never changes them. Unknown write outcomes remain
+unresolved until positively reconciled.
+
 ### Post-merge provenance and cleanup
 
 A merged PR is not evidence that uncommitted or later local work is retained.
