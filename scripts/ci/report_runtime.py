@@ -55,12 +55,20 @@ PATCH here as well as all event appends. The outbox has its own writable anchor.
         run_state=forbidden, result_for=forbidden, old_runs_terminal=forbidden,
         lock_held=runtime.lock_held, epoch=runtime.config["epoch"])
     replay.policy = runtime.inputs.policy_at(runtime.control)
-    return replay._replay(events)
+    state = replay._replay(events)
+    result_order = [event["data"]["request_id"] for event in events if event.get("type") == "result"]
+    require(len(result_order) == len(state["results"]) and set(result_order) == set(state["results"]),
+            "scheduler result order is not a complete unique journal projection")
+    state["_result_order"] = result_order
+    return state
 
 
 class ScopedReport(reporting.Report):
     def issue_body(self, assignee):
-        return "\n".join([self.key_marker, "## " + self.title, "",
+        markers = [self.key_marker]
+        if self.management is not None:
+            markers.extend([self.managed_marker, self.provenance_marker])
+        return "\n".join([*markers, "## " + self.title, "",
             "Filed from an authenticated incremental batch journal result, not full-release evidence.",
             "This is a suite/class bucket; observations may represent different defects.",
             "Unselected suites are not passes. Reporting neither blocks PR merges nor closes existing defects.",
@@ -80,10 +88,29 @@ class CommonInfrastructureReport(reporting.Report):
             self.comment_body(first=True)])
 
 
+def _managed_identity(request, suite, failure_class, order, *, epoch, run):
+    """Machine management is opt-in for automatic/bootstrap suite reports."""
+    if request["kind"] not in {"auto", "bootstrap"}:
+        return None
+    key = reporting.managed_bucket_key(epoch, request["policy"], suite, failure_class)
+    return {"schema": reporting.MANAGED_BUCKET_SCHEMA, "epoch": epoch,
+            "key": key,
+            "suite": suite, "failure_class": failure_class,
+            "policy": request["policy"], "selection": batch.digest(request["selection"]),
+            "target": request["target"], "request": request["id"],
+            "run": run["run_id"], "attempt": run["attempt"],
+            "order": order}
+
+
 def plan_batch_reports(repository, state, inputs):
     """Pure reporting projection after complete authenticated historical replay."""
     reports = []
-    for request_id, result in state["results"].items():
+    ordered = state.get("_result_order")
+    require(isinstance(ordered, list) and len(ordered) == len(state["results"])
+            and set(ordered) == set(state["results"]),
+            "causal order must come from complete authenticated scheduler journal results")
+    for order, request_id in enumerate(ordered, 1):
+        result = state["results"][request_id]
         request = state["requests"][request_id]
         policy = inputs.policy_at(request["control"])
         run = result["run"]
@@ -169,7 +196,10 @@ def plan_batch_reports(repository, state, inputs):
                 if (failure_class == "blocked" and suite["id"] in event_suites
                         and suite["scheduler_outcome"] == "blocked"):
                     continue
-                key = f"self-test-{suite['id']}-{failure_class}".replace("_", "-")
+                management = _managed_identity(request, suite["id"], failure_class, order,
+                                                epoch=state["epoch"], run=run)
+                key = (management["key"] if management is not None
+                       else f"self-test-{suite['id']}-{failure_class}".replace("_", "-"))
                 # Digest the complete identity, not just a bucket or target. The
                 # plain exact identity remains visible in the human report body.
                 observation = "batch/" + batch.digest({"epoch": state["epoch"], "identity": identity,
@@ -189,8 +219,78 @@ def plan_batch_reports(repository, state, inputs):
                 reports.append(ScopedReport(key=key, title=f"self-test: {suite['id']} {failure_class.replace('_', ' ')}",
                     observation=observation, severity=reporting.severity_of(suite["id"], failure_class),
                     labels=(reporting.REPORT_LABEL, "type:bug", "area:core" if failure_class == "test_failure" else "area:ci-release"),
-                    summary="\n".join(common), detail=detail))
+                    summary="\n".join(common), detail=detail,
+                    management=management, causal_order=(order if management is not None else None)))
     return tuple(reports)
+
+
+def plan_bucket_recoveries(state, inputs):
+    """Project only authenticated, actual, debt-free successes.
+
+    The outbox decides whether the corresponding bucket is a new managed
+    bucket. This planner never treats Issue prose or historical numbers as
+    evidence and never emits recovery for explicit human/candidate requests.
+    """
+    recoveries = []
+    ordered = state.get("_result_order")
+    require(isinstance(ordered, list) and len(ordered) == len(state["results"])
+            and set(ordered) == set(state["results"]),
+            "causal order must come from complete authenticated scheduler journal results")
+    for order, request_id in enumerate(ordered, 1):
+        result = state["results"][request_id]
+        request = state["requests"][request_id]
+        if request["kind"] not in {"auto", "bootstrap"}:
+            continue
+        reference = result["reference"]
+        if reference.startswith("missing:") or reference.startswith("not-required:"):
+            continue
+        policy = inputs.policy_at(request["control"])
+        identity = dict(request_id=request_id, request_kind=request["kind"], base_sha=request["base"],
+                        target_sha=request["target"], control_sha=request["control"], policy_digest=request["policy"],
+                        run_id=result["run"]["run_id"], run_attempt=result["run"]["attempt"])
+        verdict = batch_verdict.validate(batch_runtime.decode_reference(reference), policy, identity, request["selection"])
+        for suite in verdict["suites"]:
+            if not suite["selected"] or suite["status"] != "passed" or suite["verification_debt"]:
+                continue
+            for failure_class in reporting.FAILURE_CLASSES:
+                key = reporting.managed_bucket_key(state["epoch"], request["policy"], suite["id"], failure_class)
+                observation = "recovery/" + batch.digest({"epoch": state["epoch"], "identity": identity,
+                    "suite": suite["id"], "class": failure_class, "evidence_digest": verdict["evidence_digest"]})
+                recoveries.append(reporting.Recovery(
+                    key=key, suite=suite["id"], failure_class=failure_class,
+                    observation=observation, target=request["target"], request=request_id,
+                    run=result["run"]["run_id"], attempt=result["run"]["attempt"],
+                    policy=request["policy"], selection=batch.digest(request["selection"]), order=order,
+                    epoch=state["epoch"],
+                    evidence=verdict["evidence_digest"], summary="\n".join([
+                        f"- Request: `{reporting.sanitize(request_id, 200)}` ({request['kind']})",
+                        f"- Target: `{request['target']}`; run: `{result['run']['run_id']}/{result['run']['attempt']}`",
+                        f"- Suite: `{suite['id']}`; class: **{failure_class}**",
+                        f"- Policy: `{request['policy']}`; selection: `{batch.digest(request['selection'])}`",
+                        f"- Evidence digest: `{verdict['evidence_digest']}`",
+                        "- Actual result: **passed** with no remaining verification debt."])) )
+    return tuple(recoveries)
+
+
+def causal_floor(state, inputs):
+    """Latest authenticated debt ordinal for every managed suite namespace."""
+    ordered = state.get("_result_order")
+    require(isinstance(ordered, list) and len(ordered) == len(state["results"])
+            and set(ordered) == set(state["results"]),
+            "causal order must come from complete authenticated scheduler journal results")
+    floor = {}
+    for order, request_id in enumerate(ordered, 1):
+        request = state["requests"][request_id]
+        if request["kind"] not in {"auto", "bootstrap"}:
+            continue
+        policy = inputs.policy_at(request["control"])
+        for suite, outcome in state["results"][request_id]["outcomes"].items():
+            if outcome == "passed":
+                continue
+            for failure_class in reporting.FAILURE_CLASSES:
+                key = reporting.managed_bucket_key(state["epoch"], request["policy"], suite, failure_class)
+                floor[key] = max(floor.get(key, 0), order)
+    return floor
 
 
 class ReportRuntime:
@@ -208,28 +308,79 @@ class ReportRuntime:
     def outbox(self):
         return report_outbox.Outbox(self.storage.journal(), self.storage.lock_held, self.storage.config["epoch"])
 
-    def deliver(self, planned, limit):
+    def deliver(self, planned, limit, *, recoveries=(), causal_floor=None):
         require(type(limit) is int and 1 <= limit <= 32, "report limit must be 1..32")
         outbox = self.outbox()
         state = outbox.load()
+        managed_keys = {(delivery["payload"]["fields"].get("management") or {}).get("key")
+                        for delivery in state["deliveries"].values()
+                        if delivery["status"] == "delivered"
+                        and delivery["payload"]["fields"].get("management") is not None}
+        # Only the latest authenticated success per managed key can do useful
+        # recovery work; irrelevant historical successes do not cause API
+        # lookups or consume the bounded report operation.
+        latest_recovery = {}
+        for recovery in recoveries:
+            # Choose the newest success for each relevant managed key before
+            # applying the operation budget. A terminal old success must not
+            # occupy the first slot forever while later keys wait.
+            if recovery.key in managed_keys and recovery.order >= latest_recovery.get(recovery.key, (0,))[0]:
+                latest_recovery[recovery.key] = (recovery.order, recovery)
+        terminal = {"closed", "stale", "not-applicable"}
+        recoveries = [item[1] for item in latest_recovery.values()
+                      if ((row := state["recoveries"].get(item[1].recovery_id)) is None
+                          or row["status"] not in terminal)][:limit]
+        floor = dict(causal_floor or {})
+        if (causal_floor is None and (recoveries or any(
+                row["status"] not in {"closed", "stale", "not-applicable"}
+                for row in state["recoveries"].values()))):
+            floor.update(self._authenticated_causal_floor())
+        # A pre-T8b outbox delivery is intentionally unmanaged and uses the
+        # historical suite/class key. Match its complete observation before
+        # applying the new namespace, so a full replay does not duplicate the
+        # old Issue or delivery identity. New observations have no such alias.
+        effective_planned = []
+        for report in planned:
+            legacy = None
+            if report.management is not None:
+                legacy_key = f"self-test-{report.management['suite']}-{report.management['failure_class']}".replace("_", "-")
+                matches = [delivery for delivery in state["deliveries"].values()
+                           if delivery["payload"]["fields"].get("key") == legacy_key
+                           and delivery["payload"]["fields"].get("observation") == report.observation
+                           and delivery["payload"]["fields"].get("management") is None]
+                require(len(matches) <= 1, "historical v1 observation has duplicate frozen deliveries")
+                legacy = matches[0] if matches else None
+            effective_planned.append(report_outbox.FrozenReport(legacy["payload"]) if legacy else report)
         # Validate every body before the first business write. Existing entries
         # never consume the new-observation budget, including ambiguous claims.
         missing = []
-        for report in planned:
+        for report in effective_planned:
             key = batch.digest({"key": report.key, "observation": report.observation})
             payload = report_outbox.freeze(report, reporting.DEFAULT_ASSIGNEE)
             if key in state["deliveries"]:
-                require(state["deliveries"][key]["payload"] == payload, "report body changed under an existing observation")
+                require(report_outbox.frozen_payload_equal(state["deliveries"][key]["payload"], payload),
+                        "report body changed under an existing observation")
             else:
                 missing.append(report)
         outcomes = [outbox.deliver(self.api, report) for report in missing[:limit]]
         # Resume one previously queued payload even if its source artifact has
         # expired. Replayed POST claims only authorize receipt reads.
-        tail = outbox.drain_once(self.api)
-        blocked = next((item for item in [*outcomes, tail] if item["status"] == "needs-reconciliation"), None)
+        for report in planned:
+            if report.management is not None and report.causal_order is not None:
+                floor[report.key] = max(floor.get(report.key, 0), report.causal_order)
+        recovery_outcomes = [outbox.recover_success(self.api, recovery, causal_floor=floor) for recovery in recoveries]
+        tail = outbox.drain_once(self.api, causal_floor=floor)
+        blocked = next((item for item in [*outcomes, *recovery_outcomes, tail]
+                        if item["status"] == "needs-reconciliation"), None)
         return {"status": "needs-reconciliation" if blocked else "ready", "queued": min(len(missing), limit),
-                "remaining": max(0, len(missing) - limit), "outcomes": outcomes, "drain": tail,
+                "remaining": max(0, len(missing) - limit), "outcomes": outcomes,
+                "recoveries": recovery_outcomes, "drain": tail,
                 **({"why": blocked["why"], "remedy": blocked["remedy"]} if blocked else {})}
+
+    def _authenticated_causal_floor(self):
+        self.scheduler.inputs.refresh()
+        state = scheduler_state(self.scheduler)
+        return causal_floor(state, self.scheduler.inputs)
 
     def execute(self, operation, *, run_id=None, attempt=None, limit=8):
         require(operation in {"init-outbox", "review", "legacy", "batches", "drain"}, "unknown report operation")
@@ -237,7 +388,23 @@ class ReportRuntime:
             return self.storage.initialize()
         self.storage.authenticate_current()
         if operation == "drain":
-            return self.outbox().drain_once(self.api)
+            outbox = self.outbox()
+            stored = outbox.load()
+            has_recovery = any(row["status"] not in {"closed", "stale", "not-applicable"}
+                               for row in stored["recoveries"].values())
+            if not has_recovery:
+                # Legacy queued reports have no scheduler causal namespace;
+                # keep their v1 replay reachable when the scheduler Issue is
+                # not provisioned in this runtime configuration.
+                return outbox.drain_once(self.api)
+            # Recovery is a write-adjacent operation: refresh the complete
+            # authenticated scheduler projection so a stale queued success
+            # cannot close a newer failure while draining old outbox work.
+            self.scheduler.inputs.refresh()
+            state = scheduler_state(self.scheduler)
+            planned = plan_batch_reports(self.repository, state, self.scheduler.inputs)
+            floor = causal_floor(state, self.scheduler.inputs)
+            return outbox.drain_once(self.api, causal_floor=floor)
         if operation == "review":
             planned = review_failure_report.collect(self.api, self.repository, run_id, attempt)
             return self.deliver((planned,), limit) if planned else {"status": "not-applicable"}
@@ -254,7 +421,9 @@ class ReportRuntime:
         # inputs are a separate object and must independently resolve main.
         self.scheduler.inputs.refresh()
         state = scheduler_state(self.scheduler)
-        return self.deliver(plan_batch_reports(self.repository, state, self.scheduler.inputs), limit)
+        return self.deliver(plan_batch_reports(self.repository, state, self.scheduler.inputs), limit,
+                            recoveries=plan_bucket_recoveries(state, self.scheduler.inputs),
+                            causal_floor=causal_floor(state, self.scheduler.inputs))
 
 
 @observe('report')

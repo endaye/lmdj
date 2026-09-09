@@ -123,6 +123,8 @@ processed 只是处理进度：none／focused 成功不能清除历史失败或�
 
 增量批次的 Scoped batch verdict 只在实际 `needs` 证明某个非产品控制依赖失败、且选中的 suite job 因该精确依赖被阻断时，生成带 exact request/run/attempt/cause 身份的 source-bound common event；它不从同时发生的产品失败或时间相关性推断 quota 或其他根因。artifact 校验器从保留的 raw `needs` 重建该事件；历史 v1 verdict 仍按 v1 模式重放，不因新事件协议被改写。报告 planner 对同一事件生成一个 durable common-infrastructure report，并列出所有受影响 suite 的未执行债务；同一 suite 中独立的 test failure、cancellation、missing 或 infrastructure debt 仍分别报告，不被共有原因吞并。该行为和报告链的测试通过不等于当前远端 CI、runner 或完整 Product Proof 已验收。
 
+自动恢复只处理由同一 report runtime 以 scheduler epoch、policy、suite、class 稳定身份创建、并保留独立创建 provenance 的新 managed bucket；历史同键 Issue、人工评论或编辑过的 bucket，以及显式 candidate／node 结果，都不会被采用。后续结果必须来自完整认证的 scheduler journal 顺序，并在相同 policy 下实际覆盖该 suite 的 required jobs／dependencies、selected PASS 且无 verification debt；selection digest 仅作 provenance，不阻断合法扩展 scope。恢复先持久化并确认 success comment，再持久化并确认 close PATCH；未知写入只读协调、不重放，新的失败按 journal 因果顺序重新打开 bucket。绿色但 skipped、missing 或有 debt 的 suite 不会 discharge debt。
+
 自动 push／完成回调／健康检查只是一条“重新观察持久状态”的通知，不是独立测试命令。
 它们在 workflow 层共用 `self-test-report-wakeup-automatic`，保留当前运行和最新一个
 pending；后续通知只替换尚未运行的通知，不取消正在执行的控制器或产品测试。
