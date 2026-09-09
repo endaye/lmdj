@@ -186,6 +186,18 @@ main push、原 scheduler health tick 的非执行轮仍可恢复报告，实际
 relay 可以独立恢复真实的新 main 工作；不能把“报告巡检本身不运行测试”解释成整个间接链
 永远不会唤醒 scheduler。调度延迟、runner 或来源不可用时不承诺严格 15 分钟送达。
 源码回归不替代远端调度和完整积压验收。
+控制器、报告、review discovery 和 completion relay 的 Python 入口输出
+API observation 脱敏诊断行（不是产品 Contract）：`rest`、`graphql` 是共享客户端真实的
+GitHub opener 请求尝试，`artifact` 是不带凭据的下载起始次数，不包含其内部所有重定向。
+每完成 100 次 opener 尝试输出累计 checkpoint，正常退出（包括返回错误）输出 final；
+按 run/attempt/job/step/process 区分进程，每个进程只取最后一条，不能累加累计 checkpoint。
+`responses` 表示 HTTP 连接响应类别，不表示业务 JSON、证据或写入已通过校验；
+`transport_errors` 表示 opener 的传输错误，响应体读取或解析错误仍按原入口报错。
+`minimum_remaining` 只保留合法数值的 core/GraphQL/search 配额低点；配额重置、共享 token
+的其他工作使它不能直接代表本次消耗。未发请求的入口没有计数；强制终止可能只有部分
+checkpoint，缺少 final 不能当成零成本。日志不包含 URL、请求正文、凭据或异常原文。
+这些数字不包含 Git checkout、其他 Actions、模型 API、存储重定向全链或账单；
+结合真实 relay 来源、job 时间及 runner 类型做成本验收，不能据此声称总账单为零。
 报告器不合并 PR、不创建版本、不发布或部署。
 
 分配 Product Build 或引入 snapshot 的 Task 在合并后核验实际 introducing SHA 的

@@ -159,6 +159,12 @@ state addenda and older-canary promotion presentation remain later T4 work.
 
 ## Acceptance ledger
 
+The [shared-client API observation Task](2026-09-09-lmdj-ci-api-observation.md)
+adds bounded actual HTTP-attempt counters to controller, reporting, discovery
+and relay CLI processes. It enables remote cost measurement without equating
+run duration or fixture call counts to live quota usage; no measured production
+saving or whole-chain zero-cost conclusion is claimed by the source change.
+
 The [independent report-progress Task](2026-09-09-lmdj-report-progress.md)
 addresses #1048: continuous execution can skip every opportunistic report step.
 A separate report-only health admission retains scheduler recovery, current writer

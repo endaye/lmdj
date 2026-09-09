@@ -16,6 +16,7 @@ import subprocess
 from urllib.error import HTTPError
 
 import batch_runtime
+from api_observation import observe
 import incremental_completion
 import incremental_batch as batch
 import report_runtime
@@ -281,6 +282,7 @@ class Entry:
         return {"schema": REPORT_SCHEMA, "status": "error" if failed else "ready", "source": source, "outcomes": outcomes}
 
 
+@observe('entry')
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("control", "reports"))
