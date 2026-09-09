@@ -347,6 +347,36 @@ void validate_performance_gesture(const Json& event) {
 // The Web Host's mirror of the plan's Locked Facade Surface. The three
 // Workspace-level operations carry no `project_path`, so unlike a Performance
 // operation the Host does not inject the retained Project into them.
+void validate_provider_operation_payload(std::string_view operation, const Json& payload) {
+  if (operation == "provider.list") {
+    require(exact_keys(payload, {}));
+  } else if (operation == "provider.select") {
+    require(exact_keys(payload, {"capability", "provider_id"}));
+  } else if (operation == "provider.permissions.configure") {
+    require(exact_keys(payload, {"granted_permissions"}));
+  } else if (operation == "attempt.inspect") {
+    require(exact_keys(payload, {"attempt_id"}));
+  } else {
+    require(operation == "provider.run");
+    require(exact_keys(payload, {"attempt_id", "capability", "inputs", "parameters",
+                                "data_classification", "platform", "region", "required_permissions"}) ||
+            exact_keys(payload, {"attempt_id", "capability", "inputs", "parameters",
+                                "data_classification", "platform", "region", "required_permissions", "input_owners"}));
+    if (payload.contains("input_owners")) {
+      require(payload.at("input_owners").is_array());
+      for (const auto& owner : payload.at("input_owners")) {
+        // Browser callers never supply a filesystem path, even one matching
+        // the current Project. Only this retained-session boundary adds it.
+        require(exact_keys(owner, {"port", "occurrence", "project_id", "asset_id"}));
+        (void)string_field(owner, "port");
+        (void)safe_unsigned_field(owner, "occurrence");
+        (void)uuid_field(owner, "project_id");
+        (void)uuid_field(owner, "asset_id");
+      }
+    }
+  }
+}
+
 void validate_soundset_operation_payload(
     std::string_view operation,
     const Json& payload) {
@@ -2233,6 +2263,49 @@ Json ControlRuntime::dispatch(
       }
       return success({{"staged", staged.value()}});
     }
+    static const std::map<std::string_view, bool> provider_operations{
+        {"provider.list", true}, {"provider.select", false},
+        {"provider.run", false}, {"provider.permissions.configure", false},
+        {"attempt.inspect", true},
+    };
+    if (const auto found = provider_operations.find(operation);
+        found != provider_operations.end()) {
+      require(sidecar.empty());
+      validate_provider_operation_payload(operation, payload);
+      auto request = payload;
+      request["operation"] = operation;
+      if (request.contains("input_owners") && !request.at("input_owners").empty()) {
+        if (!impl_->session_available()) return state_error();
+        for (auto& owner : request.at("input_owners")) {
+          owner["project_path"] = impl_->retained_project_path->generic_string();
+        }
+      }
+      impl_->service_performance_adapter();
+      const auto response = found->second
+          ? impl_->application.query(request) : impl_->application.command(request);
+      if (!response.value("ok", false)) {
+        auto normalized = normalized_facade_error(response);
+        const auto& failure = response.at("error");
+        const auto& details = failure.at("details");
+        if (details.is_object()) {
+          const auto reason = details.value("reason", Json{});
+          const auto code = failure.at("code");
+          if ((code == "NOT_FOUND" && reason == "input_artifact_unavailable") ||
+              (code == "IO_ERROR" && reason == "input_artifact_mismatch") ||
+              (code == "INVALID_ARGUMENT" &&
+               (reason == "input_binding_invalid" || reason == "input_artifact_too_large"))) {
+            normalized["error"]["details"]["reason"] = reason;
+          }
+          if (operation == "provider.run" &&
+              details.value("attempt_id", Json{}) == request.at("attempt_id")) {
+            normalized["error"]["details"]["attempt_id"] = request.at("attempt_id");
+          }
+        }
+        return normalized;
+      }
+      return normalized_facade_success(response);
+    }
+
     // The value is `is_query`, read only by the Facade forwarding at the end
     // of this block. Membership is load-bearing for every entry -- it gates
     // `require(sidecar.empty())` and the payload validation -- but the value

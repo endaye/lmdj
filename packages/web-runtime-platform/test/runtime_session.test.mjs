@@ -9,6 +9,11 @@ import {createRuntimeSession} from "../web/runtime_session.mjs";
 const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const API = [
+  "listProviders",
+  "configureProviderPermissions",
+  "selectProvider",
+  "runProvider",
+  "inspectAttempt",
   "activateAudio",
   "applyPerformanceRecovery",
   "applySequenceRecovery",
@@ -5205,4 +5210,59 @@ test("a Set slot that disagrees with itself about being empty is refused", async
     stray.inspectSoundSet(identity),
     (error) => error.code === "HOST_PROTOCOL_MISMATCH",
   );
+});
+
+test("Provider commands retain explicit grant-select-run order on the existing lane", async () => {
+  const operations = [];
+  let release;
+  const blocked = new Promise((resolve) => {release = resolve;});
+  const {session} = fixture({send: async (envelope) => {
+    const {operation, payload} = envelope;
+    if (operation.startsWith("provider.") || operation === "attempt.inspect") {
+      operations.push({operation, payload: structuredClone(payload)});
+      if (operation === "provider.permissions.configure") await blocked;
+      return success(envelope, {operation});
+    }
+    return success(envelope, defaultResult(operation));
+  }});
+  await session.start();
+  await session.listProviders();
+  const grant = session.configureProviderPermissions(["sample.slice.execute"]);
+  const selection = session.selectProvider("sample.slice.v1", "local.sample.slice");
+  const request = {
+    attempt_id: "owned", capability: "sample.slice.v1", inputs: [], parameters: {},
+    data_classification: "public", platform: "test", region: "local", required_permissions: ["sample.slice.execute"],
+  };
+  const execution = session.runProvider(request);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(operations.map((entry) => entry.operation), ["provider.list", "provider.permissions.configure"]);
+  release(); await Promise.all([grant, selection, execution]);
+  await session.inspectAttempt("owned");
+  assert.deepEqual(operations.map((entry) => entry.operation), [
+    "provider.list", "provider.permissions.configure", "provider.select", "provider.run", "attempt.inspect"]);
+  assert.deepEqual(operations[3].payload, request);
+  assert.deepEqual(operations[1].payload, {granted_permissions: ["sample.slice.execute"]});
+  await session.close();
+});
+
+test("Provider run does not grant permissions and preserves the owner's safe failure category", async () => {
+  const operations = [];
+  const {session} = fixture({send: async (envelope) => {
+    if (envelope.operation.startsWith("provider.")) operations.push(envelope.operation);
+    if (envelope.operation === "provider.run") {
+      return {protocol_version: 1, request_id: envelope.request_id, ok: false,
+        error: {code: "IO_ERROR", message: "input rejected", details: {reason: "input_artifact_mismatch", attempt_id: "owned"}}};
+    }
+    return success(envelope, defaultResult(envelope.operation));
+  }});
+  await session.start();
+  const request = {attempt_id: "owned", capability: "sample.slice.v1", inputs: [], parameters: {},
+    data_classification: "public", platform: "test", region: "local", required_permissions: ["sample.slice.execute"]};
+  await assert.rejects(session.runProvider(request), (error) => {
+    assert.equal(error.code, "IO_ERROR");
+    assert.deepEqual(error.details, {reason: "input_artifact_mismatch", attempt_id: "owned"});
+    return true;
+  });
+  assert.deepEqual(operations, ["provider.run"]);
+  await session.close();
 });

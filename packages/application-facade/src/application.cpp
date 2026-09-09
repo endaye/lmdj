@@ -44,6 +44,7 @@
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/project_bundle_transfer.hpp>
 #include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 #include <lmdj/project_io/sequence_journal.hpp>
 #include <lmdj/project_io/workspace_cache.hpp>
 #include <lmdj/provider/capability.hpp>
@@ -185,6 +186,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"project.create", OperationKind::command},
       {"project.inspect", OperationKind::query},
       {"provider.list", OperationKind::query},
+      {"provider.permissions.configure", OperationKind::command},
       {"provider.run", OperationKind::command},
       {"provider.select", OperationKind::command},
       {"provider.selected", OperationKind::query},
@@ -2213,12 +2215,13 @@ struct Application::Impl {
         waveform_cache(
             workspace_root / ".lmdj-host/workspace-cache",
             storage_platform),
-        attempts(
-            workspace_root,
-            std::move(config.provider_policy),
+        provider_policy(std::move(config.provider_policy)),
+        provider_timestamp_source(
             config.timestamp_source
                 ? std::move(config.timestamp_source)
-                : default_timestamp_source()) {
+                : default_timestamp_source()),
+        attempts(workspace_root, provider_policy,
+                 [this] { return provider_timestamp_source(); }) {
     if (!workspace_root.is_absolute()) {
       throw std::invalid_argument("workspace_root must be absolute");
     }
@@ -3910,6 +3913,9 @@ struct Application::Impl {
     }
     if (operation == "render.offline") {
       return render_offline(request);
+    }
+    if (operation == "provider.permissions.configure") {
+      return provider_permissions_configure(request);
     }
     if (operation == "provider.select") {
       return provider_select(request);
@@ -7568,6 +7574,37 @@ struct Application::Impl {
         loaded.value().revision);
   }
 
+  nlohmann::json provider_permissions_configure(const nlohmann::json& request) {
+    require(exact_keys(request, {"operation", "granted_permissions"}),
+            "provider.permissions.configure request shape is invalid");
+    const auto& encoded = request.at("granted_permissions");
+    require(encoded.is_array(), "granted_permissions must be an array");
+    std::set<std::string> known;
+    for (const auto& descriptor : registry->list()) {
+      for (const auto& capability : descriptor.capabilities) {
+        known.insert(capability.policy.required_permissions.begin(),
+                     capability.policy.required_permissions.end());
+      }
+    }
+    std::set<std::string> unique;
+    std::vector<std::string> permissions;
+    for (const auto& value : encoded) {
+      require(value.is_string(), "permission must be a string");
+      const auto permission = value.get<std::string>();
+      require(known.contains(permission), "permission is not registered");
+      require(unique.insert(permission).second, "permissions must be unique");
+      permissions.push_back(permission);
+    }
+    auto policy = provider_policy;
+    policy.granted_permissions = permissions;
+    // Policy is session-local; selections and terminal Attempts remain in the
+    // existing Workspace store. Preserve the timestamp callable's state too.
+    attempts = provider::AttemptStore{
+        workspace_root, policy, [this] { return provider_timestamp_source(); }};
+    provider_policy = std::move(policy);
+    return success_envelope({{"granted_permissions", permissions}}, std::nullopt);
+  }
+
   nlohmann::json provider_select(const nlohmann::json& request) {
     require(
         exact_keys(
@@ -7602,7 +7639,10 @@ struct Application::Impl {
                 "platform",
                 "region",
                 "required_permissions",
-            }),
+            }) ||
+        exact_keys(request, {"operation", "attempt_id", "capability", "inputs",
+                             "parameters", "data_classification", "platform",
+                             "region", "required_permissions", "input_owners"}),
         "provider.run request shape is invalid");
     const auto attempt_id = file_id_field(request, "attempt_id");
     const auto capability = file_id_field(request, "capability");
@@ -7657,6 +7697,61 @@ struct Application::Impl {
           std::move(artifact),
       });
     }
+    provider::ArtifactResolver resolver;
+    if (request.contains("input_owners")) {
+      const auto& encoded_owners = request.at("input_owners");
+      require(encoded_owners.is_array() && encoded_owners.size() == inputs.size(),
+              "input_owners must name every input occurrence exactly once");
+      struct Owner {
+        foundation::ArtifactRef artifact;
+        std::filesystem::path path;
+        foundation::ProjectId project;
+        foundation::AssetId asset;
+      };
+      std::map<std::string, std::uint64_t> occurrences;
+      std::map<std::pair<std::string, std::uint64_t>, foundation::ArtifactRef> bindings;
+      for (const auto& input : inputs) {
+        bindings.emplace(std::pair{input.port, occurrences[input.port]++}, input.artifact);
+      }
+      std::map<std::string, Owner> owners;
+      for (const auto& encoded : encoded_owners) {
+        require(exact_keys(encoded, {"port", "occurrence", "project_path",
+                                     "project_id", "asset_id"}),
+                "input owner shape is invalid");
+        const auto key = std::pair{string_field(encoded, "port"),
+                                   unsigned_field(encoded, "occurrence")};
+        const auto bound = bindings.find(key);
+        require(bound != bindings.end(), "input owner occurrence is unbound or duplicated");
+        const auto artifact = bound->second;
+        owners.emplace(artifact.sha256,
+            Owner{artifact, absolute_path_field(encoded, "project_path"),
+                  foundation::ProjectId{uuid_field(encoded, "project_id")},
+                  foundation::AssetId{uuid_field(encoded, "asset_id")}});
+        bindings.erase(bound);
+      }
+      resolver = [this, owners = std::move(owners)](const foundation::ArtifactRef& artifact) {
+        using OwnedBytes = foundation::Result<std::shared_ptr<const std::vector<std::byte>>>;
+        const auto found = owners.find(artifact.sha256);
+        if (found == owners.end() || found->second.artifact != artifact) {
+          return OwnedBytes::failure(Error{ErrorCode::not_found, "input owner unavailable"});
+        }
+        const auto& owner = found->second;
+        auto bytes = projects.read_asset_artifact(
+            owner.path, owner.project, owner.asset, artifact);
+        if (!bytes.has_value()) {
+          const bool mismatch = bytes.error().details.is_object() &&
+              bytes.error().details.value("storage_condition", nlohmann::json{}) ==
+                  project_io::kStorageConditionArtifactMismatch;
+          return OwnedBytes::failure(Error{
+              mismatch ? ErrorCode::io_error : ErrorCode::not_found,
+              "input Artifact owner read failed",
+              {{"reason", mismatch ? "input_artifact_mismatch" : "input_artifact_unavailable"}},
+          });
+        }
+        return OwnedBytes::success(
+            std::make_shared<const std::vector<std::byte>>(std::move(bytes.value())));
+      };
+    }
     const auto& encoded_permissions = request.at("required_permissions");
     require(
         encoded_permissions.is_array(),
@@ -7689,7 +7784,7 @@ struct Application::Impl {
         },
         *registry,
         provider::ExecutionOptions{
-            {}, 16777216, 262144,
+            std::move(resolver), 16777216, 262144,
             std::make_shared<provider::StagingBudget>(67108864)});
     if (!executed.has_value()) {
       return error_envelope(executed.error());
@@ -8528,6 +8623,8 @@ struct Application::Impl {
   project_io::SequenceJournal sequence_journals;
   project_io::ProjectBundleTransfer bundle_transfers;
   project_io::WorkspaceCacheStore waveform_cache;
+  provider::ProviderPolicy provider_policy;
+  provider::TimestampSource provider_timestamp_source;
   provider::AttemptStore attempts;
   mutable std::mutex sample_mutex;
   mutable std::mutex replay_mutex;

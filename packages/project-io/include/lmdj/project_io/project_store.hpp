@@ -317,6 +317,14 @@ class ProjectStore {
       const std::filesystem::path& bundle,
       const foundation::SequenceSessionId& session_id,
       domain::PadSlotId slot);
+  // Read only committed ownership and bytes under one writer lease. Does not
+  // recover authoring transactions or scavenge staging.
+  foundation::Result<std::vector<std::byte>> read_asset_artifact(
+      const std::filesystem::path& bundle,
+      const foundation::ProjectId& project_id,
+      const foundation::AssetId& asset_id,
+      const foundation::ArtifactRef& artifact) const;
+
   foundation::Result<std::vector<std::byte>> read_artifact(
       const std::filesystem::path& bundle,
       const foundation::ArtifactRef& artifact) const;

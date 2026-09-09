@@ -335,7 +335,7 @@ void verify_source_package(
       bytes == lmdj::foundation::canonical_json(manifest) + "\n");
   LMDJ_CHECK(manifest.at("format") == "provider-source-package");
   LMDJ_CHECK(manifest.at("provider_id") == expected_provider_id);
-  LMDJ_CHECK(manifest.at("provider_version") == "2.0.0");
+  LMDJ_CHECK(manifest.at("provider_version") == "2.0.1");
   LMDJ_CHECK(manifest.at("files").size() == 3);
   for (const auto& file : manifest.at("files")) {
     const auto source_path =

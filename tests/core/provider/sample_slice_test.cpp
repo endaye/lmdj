@@ -332,7 +332,7 @@ void identity() {
   for (const auto& file : manifest.at("files"))
     LMDJ_CHECK(describe_artifact(file.at("path").get<std::string>(), "application/octet-stream").value().sha256 == file.at("sha256").get<std::string>());
   const auto registration = local_sample_slice_registration();
-  LMDJ_CHECK(registration.version == "1.0.0");
+  LMDJ_CHECK(registration.version == "1.0.1");
   LMDJ_CHECK(registration.capabilities.size() == 1);
   const auto& capability = registration.capabilities.front();
   auto expected_contract = Json::parse(read("contracts/capability/sample.slice.v1.json"));

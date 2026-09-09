@@ -30,6 +30,7 @@
 #include <emscripten/threading.h>
 
 #include <lmdj/audio/web/realtime_audio_worklet.hpp>
+#include <lmdj/facade/assembly_loader.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
 #endif
@@ -220,7 +221,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 74> operations{
+  static constexpr std::array<std::string_view, 79> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -294,6 +295,11 @@ bool supported_operation(std::string_view operation) {
       "soundset.inspect",
       "soundset.map.preview",
       "soundset.install",
+      "provider.list",
+      "provider.select",
+      "provider.run",
+      "provider.permissions.configure",
+      "attempt.inspect",
       "host.close",
   };
   return std::find(operations.begin(), operations.end(), operation) !=
@@ -1761,8 +1767,6 @@ using lmdj::audio::web::RealtimeAudioWorkletHooks;
 using lmdj::audio::web::RealtimeAudioWorkletStart;
 using lmdj::audio::web::RealtimeAudioWorkletState;
 using lmdj::facade::ApplicationConfig;
-using lmdj::provider::ProviderPolicy;
-using lmdj::provider::Registry;
 using lmdj::web_runtime::ControlRuntime;
 using lmdj::web_runtime::ManifestExpectation;
 using lmdj::web_runtime::ManifestGate;
@@ -2882,12 +2886,14 @@ int main() {
   auto catalog = lmdj::facade::make_supplied_soundset_catalog(
       kWebSoundSetStagingBytes,
       kWebSoundSetStagingObjects);
+  auto assembly = lmdj::facade::load_installed_assembly("/lmdj-product/assembly.json");
+  if (!assembly.has_value()) return 1;
   auto created = ControlRuntime::create(
       workspace,
       ApplicationConfig{
           workspace,
-          std::make_shared<Registry>(),
-          ProviderPolicy{},
+          std::move(assembly.value().providers),
+          std::move(assembly.value().provider_policy),
           {},
           limits,
           nullptr,

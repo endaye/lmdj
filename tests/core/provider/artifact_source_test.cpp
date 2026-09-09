@@ -175,9 +175,35 @@ void overlapping_attempts() {
   f.reason(second.value(), ErrorCode::invalid_argument, "input_artifact_too_large");
   LMDJ_CHECK(config.staging_budget->used_bytes() == 0);
 }
+void resolver_error_mapping(int mode) {
+  Fixture f;
+  bool ran = false;
+  f.install(f.registration([&](auto context) { ran = true; return success(context); }));
+  auto config = options();
+  config.resolve_input = [mode](const auto&) {
+    auto details = nlohmann::json{{"reason", "input_artifact_mismatch"},
+                                 {"path", "/private/owner.lmdj"}};
+    if (mode == 2) details["reason"] = "other_reason";
+    if (mode == 3) details["reason"] = 3;
+    if (mode == 4) details = nullptr;
+    return Result<std::shared_ptr<const std::vector<std::byte>>>::failure(
+        {mode == 1 ? ErrorCode::not_found : ErrorCode::io_error,
+         "private owner details", details});
+  };
+  const auto result = f.execute(request(), config);
+  f.reason(result, mode == 0 ? ErrorCode::io_error : ErrorCode::not_found,
+           mode == 0 ? "input_artifact_mismatch" : "input_artifact_unavailable");
+  LMDJ_CHECK(!ran);
+  LMDJ_CHECK(!result.error->details.contains("path"));
+  const auto terminal = f.store.inspect(result.attempt_id);
+  LMDJ_CHECK(terminal.has_value());
+  LMDJ_CHECK(terminal.value().error->details == result.error->details);
+  LMDJ_CHECK(terminal.value().minted_outputs.empty());
+}
 int main() {
   try {
     source_ownership();
+    for (int mode = 0; mode < 5; ++mode) resolver_error_mapping(mode);
     for (int mode = 0; mode < 5; ++mode) ingress_failure(mode);
     wrong_thread(false); wrong_thread(true);
     retained_budget(); occurrence_order();

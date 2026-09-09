@@ -98,7 +98,7 @@ provider::CapabilityDescriptor proof_capability() {
 provider::ProviderRegistration local_proof_success_registration() {
   return provider::ProviderRegistration{
       std::make_shared<LocalProofSuccessProvider>(),
-      "2.0.0",
+      "2.0.1",
       LMDJ_LOCAL_PROOF_SUCCESS_SOURCE_PACKAGE_SHA256,
       std::nullopt,
       {proof_capability()},

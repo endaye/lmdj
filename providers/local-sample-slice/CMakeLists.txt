@@ -13,7 +13,7 @@ foreach(relative IN LISTS lmdj_slice_package_files)
   list(APPEND lmdj_slice_entries "{\"path\":\"providers/local-sample-slice/${relative}\",\"sha256\":\"${digest}\"}")
 endforeach()
 list(JOIN lmdj_slice_entries "," lmdj_slice_files_json)
-set(lmdj_slice_manifest "{\"files\":[${lmdj_slice_files_json}],\"format\":\"provider-source-package\",\"provider_id\":\"local.sample.slice\",\"provider_version\":\"1.0.0\"}\n")
+set(lmdj_slice_manifest "{\"files\":[${lmdj_slice_files_json}],\"format\":\"provider-source-package\",\"provider_id\":\"local.sample.slice\",\"provider_version\":\"1.0.1\"}\n")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/local.sample.slice.source-package.json" "${lmdj_slice_manifest}")
 string(SHA256 lmdj_slice_package_sha256 "${lmdj_slice_manifest}")
 

@@ -1,10 +1,13 @@
 # Stage 12 K5: Project Asset owner resolution and Host reference execution
 
-Status: owner-API/Host-surface proposal confirmed by the user on 2026-09-09;
-implementation and acceptance pending.
+Status: owner API and Host source implemented after user confirmation on
+2026-09-09; clean-source packaging, immutable snapshot and full acceptance
+are the remaining K5b verification boundaries.
 Relates to #1037, #467, #472. This document does not complete those Issues.
 Observed implementation baseline: `9b404548` after K4 #1084 and #1085.
-Product identity is read from `products/lmdj/version.json`; no Build is reserved.
+Implementation allocation: `1.0.48.0`, canary. At allocation, fresh main was
+`9b404548`; open PRs #1086/#1082/#1076/#1031 had no competing Product allocation, and
+the exact remote `lmdj-v1.0.48.*` tag query returned no refs on 2026-09-09.
 
 ## Confirmed decision
 
@@ -58,6 +61,9 @@ foundation::Result<std::vector<std::byte>> read_asset_artifact(
 Use one existing `ProjectWriterLease` for reading committed metadata, checking
 Project ID, Asset ID and the entire ArtifactRef, and reading/verifying bytes.
 Do not call public `load`, run recovery, scavenge, import, or mutate Project Truth.
+The internal metadata read omits the ordinary full-Project blob scan; verify
+only the selected owned Artifact after checking metadata identity. Ordinary
+authoring loads retain their existing full-asset verification.
 Reuse an internal verified-byte reader with `read_artifact`; do not acquire a
 second nested lease. Refuse busy/missing/unowned inputs. Release the lease when
 owned bytes have been returned; SDK then independently copies, checks hash and
@@ -142,6 +148,9 @@ by later UI/agent flows. Default `proof.execute` remains the sole Product grant.
   for owned execution, and no sidecar. Operations use the existing serialized
   control lane. Expose a small RuntimeSession method for these programmatic
   operations so packaged tests need no private Wasm export or test-only backdoor.
+  The existing published `window.lmdjWebRuntimeHost` namespace gains a read-only
+  `providers` object containing those five Session methods in both packaged Hosts;
+  standalone Session consumers continue to call the same methods directly.
   No Creator controls, preview or adoption behavior are added.
 
 Every positive Slice journey explicitly configures `sample.slice.execute`,
@@ -161,7 +170,7 @@ must exist and be discovered with `ctest --preset dev -N`, not only named here.
 | Facade reads before SDK authorization/budget/binding gates, or leaks owner paths | New `facade.provider_owner` in `tests/core/facade/provider_owner_test.cpp`, registered in Facade CMake and linked to Product in Product CMake |
 | CLI/MCP/native disagree on success/refusal/reopen | New `host.provider_owner` in `tests/host/provider_owner_test.py`, registered in Native CMake with CLI/native/C ABI binary arguments; reuse existing MCP transport harness |
 | Web payload bypasses retained Project or grants implicitly | Extend `host.web_control_runtime`, `protocol.test.mjs`, `runtime_session.test.mjs`; test real registry supplied through Product linking |
-| Packaged Web never routes owner bytes or loses terminal on restart | New `tests/platform/web/host/web_runtime_provider_owner.spec.mjs` through `scripts/web-runtime-host.sh proof`, and `tests/platform/web/creator/creator_web_provider_owner.spec.mjs` through `scripts/creator-web.sh proof` |
+| Packaged Web never routes owner bytes or loses terminal on restart | New `tests/platform/web/host/web_runtime_host_provider_owner.spec.mjs` through `scripts/web-runtime-host.sh proof`, and `tests/platform/web/creator/creator_web_provider_owner.spec.mjs` through `scripts/creator-web.sh proof` |
 | Source identities, lock, Package identities or snapshots disagree | Version/lock/module/schema checks, `scripts/core.sh proof`, full Portal check and exact post-squash provenance |
 
 For each Host, execute: import actual PCM16 WAV through Facade -> inspect source
@@ -179,6 +188,14 @@ changed byte length and busy Project. Snapshot Project JSON/revision/Assets/Pad
 assignments before each run and assert unchanged afterward. For execution
 refusals, restart and inspect the immutable failed terminal and empty outputs.
 Shape errors rejected before Attempt creation must remain absent after restart.
+Native startup validates every Project Asset; for missing/corrupt-file refusal
+fixtures, assert no changes first, then restore the original input bytes before
+Native restart. The failed terminal must remain byte-for-byte unchanged after
+that repair. Web Attempt inspection works after restart without reopening the
+corrupt Project. Web holds its Project writer lease for the retained session;
+a competing Host is refused at Project open before owned execution, with no
+Attempt. Pair that real admission leg with the owner-read busy component and
+CLI/MCP/Native refusal legs; do not inject a fake release of Web's live lease.
 After restart, a new Slice run without regrant must fail permission checks.
 
 Run both existing complete Web proofs after shared bridge changes (pinned
@@ -189,7 +206,7 @@ No stress tier is newly introduced merely for synchronous owner reads; if the
 implementation changes lock-free/shared concurrent code, its stress/TSan
 requirements apply and this inventory must be revised before that change.
 
-## K5a proposed exact source inventory
+## K5a exact source inventory
 
 The implementation must start with a fresh main/collision audit and reconcile
 this inventory before editing. No wildcard authorizes additional production files.
@@ -199,6 +216,7 @@ this inventory before editing. No wildcard authorizes additional production file
 - `packages/project-io/src/project_store.cpp`
 - `packages/project-io/module.json`
 - `packages/provider-sdk/src/attempt_store.cpp`
+- `packages/provider-sdk/src/durable_file.cpp` (Web immutable publication under workspace lock)
 - `packages/provider-sdk/module.json`
 - `packages/application-facade/src/application.cpp`
 - `packages/application-facade/module.json`
@@ -254,9 +272,16 @@ this inventory before editing. No wildcard authorizes additional production file
 - `tests/host/mcp_stdio_test.py`
 - `tests/host/mcp_facade_parity_test.py`
 - `tests/host/native_host_source_boundary_test.py`
-- `tests/platform/web/host/web_runtime_provider_owner.spec.mjs` (new)
+- `tests/platform/web/host/web_runtime_host_provider_owner.spec.mjs` (new)
 - `tests/platform/web/creator/creator_web_provider_owner.spec.mjs` (new)
+- `tests/platform/web/provider_owner_journey.mjs` (new; shared packaged Host assertions)
 - `tests/build/version_test.py`
+- `tests/conformance/module_graph_test.py` (exact allocated Host dependencies)
+- `tests/conformance/version_lock_test.py` (allocated Provider identity fixture)
+- `apps/docs-site/test/repo-facts.test.mjs` (exact allocated Host identities)
+- `scripts/ci/scope_policy.json` (shared browser journey owns both Host lanes)
+- `.agents/skills/issue-done/SKILL.md` (absorb repeated pristine-symlink preflight)
+- `.agents/pitfalls/worktree-checkout-flattens-symlinks.md` (record recurrence and skill exit)
 - `apps/docs-site/docs/core/modules/project-io.mdx`
 - `apps/docs-site/docs/core/modules/provider-sdk.mdx`
 - `apps/docs-site/docs/core/modules/application-facade.mdx`
@@ -282,6 +307,25 @@ pass the staged ownership suite; do not silently widen CI scope rules.
 
 ## K5b immutable snapshot
 
+### Creator regression fixture prerequisite
+
+The full Creator proof exposed a baseline test classification error, reproduced
+with both Node 22.16.0 and 22.23.1: WHATWG leaves `^` unchanged in a path, while
+the proof server's intentionally narrower grammar refuses it. This separate
+verification-repair Task declares only
+`apps/creator-web/test/server_test.py`,
+`tests/platform/web/creator/creator_web_capture.spec.mjs` and this plan. Move that input to the
+existing proof-server-stricter corpus, retain server-start refusal for both
+refused corpora, and require the Worker's complete unchanged base in the stricter
+corpus. No input, refusal assertion, or acceptance journey is removed.
+The complete capture journey also exposed a stale expected Asset shape after
+reopen: Project v4 includes `lineage: null` for raw capture. Add that explicit
+field to the complete equality assertion, retaining the full Artifact identity,
+revision, Pattern events and restart boundary checks.
+Verify the complete server suite and both complete Web proofs before freeze.
+Version impact: none; test expectations only, no shipped behavior or identity.
+Documentation impact: none; no Portal fact changes.
+
 After K5a source/tests pass and the one source commit is clean, use
 `scripts/docs-site.sh version PRODUCT_BUILD canary`. Stage only its exact
 generated inventory under `apps/architecture-portal/` in a second Task/commit,
@@ -292,26 +336,38 @@ No frozen snapshot is edited to fit a later source change.
 
 ## Version Management
 
-Version impact: none for this review-plan Task. No active identity is allocated.
-Reason: this Task records the confirmed design; implementation has not changed
-active Product or Module identities.
+Version impact: required for K5a implementation. Exact manifest dependency
+closure was inspected against main before edits:
 
-For implementation, allocate against fresh main, then record exact identities
-before K5a edits: Project I/O and Facade MINOR for additive public operations;
-SDK PATCH for retaining the already specified trusted mismatch error; Provider
-PATCH for exact SDK dependency rebuilds; Web Platform and all Hosts MINOR for
-new supported command surfaces. Assess actual ABI changes before assigning
-numbers; a breaking implementation requires MAJOR instead. Contract IDs and
-Slice Capability/profile/output versions remain unchanged. Product receives a
-fresh BUILD with PATCH 0 plus a canary snapshot. No number is reserved here.
+| Identity | Baseline | Target | Reason |
+| --- | --- | --- | --- |
+| Project I/O | 3.0.0 | 3.1.0 | Add nonvirtual owned Artifact read |
+| Facade | 4.0.1 | 4.1.0 | Add optional owners and session permission command |
+| Provider SDK | 2.0.0 | 2.1.0 | Add Web durable execution and preserve trusted owner corruption classification; no ABI change |
+| Proof success/failure Providers | 2.0.0 | 2.0.1 | Exact SDK dependency rebuild |
+| Slice Provider | 1.0.0 | 1.0.1 | Exact SDK dependency rebuild |
+| Web Runtime Platform | 5.0.1 | 5.1.0 | Add Provider transport methods |
+| CLI / MCP / Native Hosts | 3.2.2 | 3.3.0 | Add owner execution and permission surfaces |
+| Web Runtime / Creator Hosts | 4.1.2 | 4.2.0 | Forward programmatic Provider operations |
+| Product | 1.0.47.0 | 1.0.48.0 | Changed Assembly identities; canary snapshot in K5b |
+
+No Contract, model or descriptor platform changes. Existing Project data needs
+no migration. Public C ABI version and existing SDK ABI remain unchanged;
+Facade policy state stays private, with the AttemptStore reconstructed using
+its existing constructor on explicit configuration. All exact consumers appear
+in the declared inventory. Lock and runtime identities are regenerated through
+their supported tools.
+
+No tag, Release, deployment or Channel promotion is initiated. Any future
+`lmdj-v1.0.48.0` tag requires the exact merged-main candidate, its complete
+verified release evidence and separate overall release authorization. A rollback
+uses an explicitly selected, previously verified immutable deployment; it never
+moves or reuses an allocated identity.
 
 ## Documentation Impact
 
-Documentation impact: none for this review-plan Task. Reason: retained proposal
-and dependency links do not change current Portal availability. Run Portal check
-because the proposal makes concrete current-source observations.
-
-Implementation Documentation impact: required. Affected portal pages:
+Documentation impact: required for this implementation. The earlier planning-only
+PR #1086 changed no Portal availability. Affected portal pages:
 `/core/modules/project-io/`, `/core/modules/provider-sdk/`,
 `/core/modules/application-facade/`, `/core/modules/web-runtime-platform/`,
 `/hosts/core-cli/`, `/hosts/core-mcp/`, `/hosts/native-host/`, `/hosts/web-runtime/`,
@@ -328,3 +384,41 @@ with source, `scripts/docs-site.sh check`, staged ownership suite, PR declaratio
 and closing-directive lint. Pitfall impact: none; this preserves the existing
 explicit owner review gate and names the complete Host journeys rather than
 claiming that documenting a gap discharges it.
+
+### Packaged Web storage implementation finding
+
+The first actual browser Provider run returned IO_ERROR before a terminal:
+the SDK native hard-link publication is not supported by the pinned WasmFS
+OPFS backend. The existing Project I/O Web platform factory already mounts
+the workspace on OPFS; retain that single mount and reuse it for SDK files.
+SDK Web mutations
+hold one origin-scoped Web Lock for the workspace across selection or complete
+execution. Native publication remains unchanged. Under that lock, Web immutable
+files use checked file moves; artifact directories publish files individually,
+then the existing terminal publishes last. Interrupted reservations remain
+unavailable for reuse, and an incomplete directory is never a successful
+terminal. This adds no public SDK API or persisted format. Browser restart and
+competing-writer tests validate the actual backend, not a memory substitute.
+
+The SDK allocation is MINOR for the additional Web durable-execution capability;
+its public C++ ABI and terminal format are unchanged. Consumers pin that exact
+identity. This replaces the earlier PATCH estimate for resolver normalization alone.
+
+### K5a verification and clean-source sequencing
+
+K5a verification includes the native Project I/O/SDK/Facade/Host regressions,
+all 518 Creator unit tests, current Portal validation, version/lock/module-graph
+checks and the packaged Web Runtime's 11 Provider owner journeys. The shared
+journeys also assert real output bytes after restart, failed terminal identity,
+Project file identity, and workspace-lock refusal followed by same-ID retry.
+
+Creator's packager and full proof require a clean Git source tree. Therefore
+commit K5a after those source checks, then package and run the Creator journeys
+and both complete Web proofs before freezing K5b. Any source correction stays
+in K5a before the immutable snapshot. Run complete Core proof and Portal check
+with the K5b snapshot before shipping either Task. Missing snapshot failures
+before K5b are retained prerequisites, not waived gates.
+
+The shipping-skill tests and changed pitfall entry pass. The whole existing
+ledger suite also reports a baseline failure in
+`snapshot-page-pin-only-fires-at-freeze.md` (`area: docs`); that entry is unchanged.

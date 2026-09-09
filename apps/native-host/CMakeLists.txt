@@ -115,4 +115,11 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     TIMEOUT 120
   )
+  lmdj_add_test(NAME host.provider_owner TIER host
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/host/provider_owner_test.py"
+      "$<TARGET_FILE:lmdj_core_cli>" "$<TARGET_FILE:lmdj_native_host>"
+      "$<TARGET_FILE:lmdj_core_c>"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    TIMEOUT 120)
 endif()

@@ -1,0 +1,36 @@
+---
+title: Runtime Snapshot
+area: contracts
+status: implemented
+owners: [core, audio]
+source_paths: [packages/project-cooker, packages/audio-runtime, contracts/runtime-content, tests/core/cooker, tests/conformance/runtime_content_contract_test.py]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 定义
+Runtime Snapshot 是 Project Cooker 从 Project Truth 与 Artifact 确定性派生的不可变运行状态。
+## 生命周期
+Cook 成功后发布完整快照；Audio Runtime 只读消费。新 Project 变化产生新快照，不在原对象上修改。
+## 持久化规则
+Snapshot 可作为运行证据或临时 Artifact，但绝不能持久化回 Project Truth 成为创作权威。
+## 并发与错误
+构建错误发生在非实时路径；实时线程只消费准备完成的状态。
+## 可移植派生内容
+当前 source 新增可移植派生内容 Contract：单个 Pattern、事件所需 Pad 与显式额外
+live Pad 的不可变编码。规范位于 `contracts/runtime-content/README.md`，JSON schema
+只描述解码后的元数据，不是传输格式。固定 little-endian header、Pad/event 表及
+未压缩 48 kHz mono/stereo PCM16 sample bodies 不包含 Project Bundle、路径或 URL。
+完整 SHA-256 与 byte length 单独传入；sample identity 同时绑定 PCM 格式和数据。
+
+Core decoder 验证精确版本、能力集合、完整身份、顺序、引用、playback、所有 sample
+body 及调用方限额后才分配 PCM，返回独立拥有数据的 Snapshot；失败不返回部分状态。
+`cooker.runtime_content` 与独立 Python `conformance.runtime_content` 共享固定向量，
+覆盖真实 C++ 输出、异常 framing、整数边界、显式限额及校验前禁止大块分配。
+
+## 下一门禁
+该新 Contract 尚未被当前 desktop Assembly 选中；Module MINOR、消费者 lock 与新
+Product Build/snapshot 留给 B2 Assembly 集成。内容可读不等于设备 ready：设备总峰值
+admission、Runtime Facade、传输、ESP32 编译和物理声音仍是后续任务。

@@ -420,6 +420,7 @@ test("armed Pad capture commits without stopping the active Sequence", async ({p
   expect(assignedAsset).toBe(committedAsset);
   expect(persisted.project.assets[assignedAsset]).toEqual({
     artifact: committedArtifact,
+    lineage: null,
   });
 
   const expectedFinalRevision = initialTruth.project_revision + 2;

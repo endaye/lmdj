@@ -36,6 +36,12 @@ target_link_libraries(
     lmdj_product_lmdj_assembly
 )
 if(TARGET lmdj_web_runtime_host)
+  target_link_options(lmdj_web_runtime_host PRIVATE
+    "SHELL:--embed-file ${CMAKE_CURRENT_SOURCE_DIR}/assembly.json@/lmdj-product/assembly.json"
+    "SHELL:--embed-file ${CMAKE_SOURCE_DIR}/contracts/assembly/lmdj.assembly.v2.schema.json@/lmdj-product/contracts/assembly/lmdj.assembly.v2.schema.json")
+  set_property(TARGET lmdj_web_runtime_host APPEND PROPERTY LINK_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/assembly.json"
+    "${CMAKE_SOURCE_DIR}/contracts/assembly/lmdj.assembly.v2.schema.json")
   file(READ "${CMAKE_CURRENT_SOURCE_DIR}/version.json" lmdj_web_version_json)
   file(
     READ
@@ -86,4 +92,15 @@ endif()
 if(TARGET lmdj_assembly_loader_tests)
   target_link_libraries(lmdj_assembly_loader_tests PRIVATE
     lmdj_product_lmdj_assembly lmdj_provider_local_sample_slice)
+endif()
+
+if(TARGET lmdj_facade_provider_owner_tests)
+  target_link_libraries(lmdj_facade_provider_owner_tests PRIVATE
+    lmdj_product_lmdj_assembly lmdj_provider_local_sample_slice)
+endif()
+
+if(TARGET lmdj_web_control_runtime_tests)
+  target_link_libraries(lmdj_web_control_runtime_tests PRIVATE lmdj_product_lmdj_assembly)
+  target_compile_definitions(lmdj_web_control_runtime_tests PRIVATE
+    LMDJ_TEST_ASSEMBLY_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assembly.json")
 endif()

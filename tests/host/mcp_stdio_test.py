@@ -522,6 +522,10 @@ def expected_schemas() -> dict[str, dict]:
             {"capability": file_id, "provider_id": file_id},
             ["capability", "provider_id"],
         ),
+        "lmdj.provider.permissions.configure": object_schema(
+            {"granted_permissions": {"type": "array", "items": file_id, "uniqueItems": True}},
+            ["granted_permissions"],
+        ),
         "lmdj.provider.run": object_schema(
             {
                 "attempt_id": file_id,
@@ -529,6 +533,15 @@ def expected_schemas() -> dict[str, dict]:
                 "inputs": {
                     "type": "array",
                     "items": artifact_binding,
+                },
+                "input_owners": {
+                    "type": "array",
+                    "items": object_schema(
+                        {"port": {"type": "string", "pattern": PORT_NAME_PATTERN},
+                         "occurrence": uint, "project_path": path,
+                         "project_id": uuid, "asset_id": uuid},
+                        ["port", "occurrence", "project_path", "project_id", "asset_id"],
+                    ),
                 },
                 "parameters": {"type": "object"},
                 "data_classification": file_id,
@@ -1359,6 +1372,7 @@ def tools_list(library: Path, temp_root: Path) -> None:
         ("lmdj.provider.list", "provider.list", "query"),
         ("lmdj.provider.select", "provider.select", "command"),
         ("lmdj.provider.run", "provider.run", "command"),
+        ("lmdj.provider.permissions.configure", "provider.permissions.configure", "command"),
         ("lmdj.attempt.inspect", "attempt.inspect", "query"),
     )
     assert tuple(

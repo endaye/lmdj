@@ -1,14 +1,14 @@
 {
   "contract": "lmdj.module.v1",
   "module": "application-facade",
-  "version": "4.0.1",
+  "version": "4.1.0",
   "api_version": 3,
   "dependencies": {
     "foundation": "0.4.0",
     "authoring-domain": "3.0.0",
-    "project-io": "3.0.0",
+    "project-io": "3.1.0",
     "project-cooker": "1.1.0",
     "audio-runtime": "4.0.0",
-    "provider-sdk": "2.0.0"
+    "provider-sdk": "2.1.0"
   }
 }

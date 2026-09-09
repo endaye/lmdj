@@ -133,7 +133,7 @@ ProviderRegistration registration(
     std::optional<ModelIdentity> model_identity = std::nullopt) {
   return byte_fixture::opaque(ProviderRegistration{
       std::make_shared<ProofProvider>(std::move(id)),
-      "2.0.0",
+      "2.0.1",
       std::string(64, 'a'),
       std::move(model_identity),
       {proof_capability()},
@@ -181,7 +181,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
       {
           CompiledProvider{
               "local.proof.success",
-              "2.0.0",
+              "2.0.1",
               [success_model] {
                 return registration(
                     "local.proof.success", success_model);
@@ -190,14 +190,14 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
           },
           CompiledProvider{
               "local.proof.failure",
-              "2.0.0",
+              "2.0.1",
               [failure_model] {
                 return registration(
                     "local.proof.failure", failure_model);
               },
               failure_model,
           },
-          CompiledProvider{"local.sample.slice", "1.0.0",
+          CompiledProvider{"local.sample.slice", "1.0.1",
               lmdj::providers::local_sample_slice_registration, std::nullopt},
       },
   };

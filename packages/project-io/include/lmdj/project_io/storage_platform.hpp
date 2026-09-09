@@ -24,6 +24,9 @@ inline constexpr std::string_view kStorageConditionQuotaExceeded =
 inline constexpr std::string_view kStorageConditionInvalidState =
     "invalid_state";
 
+inline constexpr std::string_view kStorageConditionArtifactMismatch =
+    "artifact_mismatch";
+
 class ProjectWriterLease {
  public:
   virtual ~ProjectWriterLease() = default;
