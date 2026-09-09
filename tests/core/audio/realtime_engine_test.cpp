@@ -1234,6 +1234,78 @@ void audition_renders_its_own_bytes_while_the_project_bank_stays_current() {
   LMDJ_CHECK(left.at(1) > 0.25F * ramp_part(3));
 }
 
+// #799. The defect this catches: an audition publishing anything at all onto
+// the voice-state stream. The start edge is already suppressed for auditions
+// where the voice is created; the completion edge was not, so an audition
+// emitted a `completed` with no `started` before it and with `sequence == 0`,
+// because an audition is enqueued as
+// `PadControlEvent{0, 0, 127, audition_start, {}}` and has no request to
+// number. The Web session requires a positive sequence, so it rejected the
+// event and failed the whole Host with HOST_PROTOCOL_MISMATCH roughly a second
+// after an audition that had already answered `played: true` -- silently, with
+// no page error and no console error.
+//
+// Rendering to completion is the whole point: one callback reproduces nothing,
+// which is why the in-process audition legs never saw this and only a browser
+// did.
+void an_audition_publishes_no_voice_state_edge() {
+  RealtimeEngine engine;
+  const std::array<float, 256> project_sample = [] {
+    std::array<float, 256> filled{};
+    filled.fill(0.5F);
+    return filled;
+  }();
+  LMDJ_CHECK(
+      engine.publish_sample_bank(bank_with_sample(1, project_sample)) ==
+      PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+
+  const std::array<float, 64> audition_sample = [] {
+    std::array<float, 64> filled{};
+    filled.fill(0.25F);
+    return filled;
+  }();
+  LMDJ_CHECK(
+      engine.publish_audition_bank(audition_bank_with_sample(audition_sample))
+      == PublishResult::accepted);
+
+  // Exactly the event the Web Host enqueues, sequence and all. A test that
+  // numbered it would pass while the product still failed.
+  PadControlEvent audition{};
+  audition.sequence = 0;
+  audition.slot = 0;
+  audition.velocity = 127;
+  audition.kind = PadControlKind::audition_start;
+  LMDJ_CHECK(engine.enqueue_control(audition) == EnqueueResult::accepted);
+
+  std::array<float, 128> left{};
+  std::array<float, 128> right{};
+  // Well past the 64-frame preview, so the voice starts, finishes and is
+  // accounted for.
+  for (int callback = 0; callback < 8; ++callback) {
+    engine.render(left.data(), right.data(), 128);
+  }
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.telemetry().completed_voices == 1);
+
+  // The far side: nothing reached the stream. Not a started, not a completed.
+  std::array<RuntimeVoiceStateEvent, 16> states{};
+  LMDJ_CHECK(engine.drain_voice_states(states) == 0);
+
+  // and the stream is still usable -- a Pad trigger after the audition still
+  // publishes its own pair, so this suppresses auditions rather than the
+  // stream.
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{7, 0, 127}) ==
+             EnqueueResult::accepted);
+  for (int callback = 0; callback < 8; ++callback) {
+    engine.render(left.data(), right.data(), 128);
+  }
+  const auto pad_states = drain_voice_states(engine, 2);
+  LMDJ_CHECK(pad_states.at(0).sequence == 7);
+  LMDJ_CHECK(pad_states.at(0).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(pad_states.at(1).state == RuntimeVoiceState::completed);
+}
+
 // The defect this catches: an audition consuming or freeing a Project Bank
 // slot. This is the regression the "reserve a slot" decision creates, and the
 // named test the Issue asked for -- it fails if a fourth concurrent Project
@@ -3045,6 +3117,7 @@ int main() {
   rejects_publication_until_trigger_queue_is_empty();
   applies_explicit_bank_slot_backpressure_until_reclaimed();
   audition_renders_its_own_bytes_while_the_project_bank_stays_current();
+  an_audition_publishes_no_voice_state_edge();
   audition_never_consumes_a_project_bank_slot();
   replacing_an_audition_drains_the_outgoing_bank();
   audition_never_becomes_current_and_never_moves_availability();

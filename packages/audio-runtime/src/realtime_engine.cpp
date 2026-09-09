@@ -1966,7 +1966,17 @@ void RealtimeEngine::render(
         deactivate_voice(voice);
         continue;
       }
+      // An audition is outside the voice-state stream, and the start edge
+      // already says so: `!replay && !audition` guards it where the voice is
+      // created. This edge had no such guard, so an audition published a
+      // `completed` with no `started` before it -- and carrying
+      // `sequence == 0`, because an audition is enqueued as
+      // `PadControlEvent{0, 0, 127, audition_start, {}}` and has no request
+      // to number. The Web session requires a positive sequence, rejected the
+      // event, and failed the whole Host with HOST_PROTOCOL_MISMATCH about a
+      // second after an audition that had answered `played: true` (#799).
       if (!voice.pattern_voice &&
+          !is_audition_bank_slot(voice.bank_slot) &&
           voice.origin == PadControlOrigin::host_input) {
         static_cast<void>(publish_voice_state(
             voice,
