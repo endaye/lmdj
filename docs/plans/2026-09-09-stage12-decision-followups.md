@@ -9,6 +9,13 @@ Authority: [confirmed decision](../prd/decisions/2026-09-09-stage12-byte-boundar
 [Candidate design](../design/2026-08-31-lmdj-stage12-candidate-adoption-lineage-design.md).
 This dated addendum controls readiness over the older drafts.
 
+R1/R2 now have a [complete review proposal](../design/2026-09-09-stage12-contract-candidate-review.md)
+and [current K1 inventory / L handoff](2026-09-09-stage12-review-delivery.md).
+They remain proposed pending confirmation. In particular, the new R2-A proposal
+replaces the earlier SDK-owned/plural-candidate direction with a Facade-owned
+Workspace view over the singular SDK result; do not implement either alternative
+before that decision. The older L table below records the pre-review boundaries.
+
 ## Baseline and scope corrections
 
 Inspected base: 07fead58. Project v4 schema and domain project.hpp already contain
