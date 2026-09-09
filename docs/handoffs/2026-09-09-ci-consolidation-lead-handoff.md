@@ -5,6 +5,65 @@ milestone so that another coordinator can take the lead at any moment. Dates
 are Asia/Shanghai, 2026-09-09 unless stated. Verify every state claim live
 before acting; this file records what was true when it was written.
 
+## Current takeover and authority — 2026-09-10
+
+Codex is now coordinator of Orca Run `run_71c2492cd783`, terminal
+`term_c779b7f3-8bd5-49b9-bf87-5d2ae3fa4d8c`. The owner approved the
+[CI reliability, recovery and execution cost plan](../plans/2026-09-10-lmdj-ci-reliability-and-cost.md)
+for implementation on 2026-09-10. Read it first: its T0–T12 scope, dependencies,
+acceptance and authority supersede the old next actions and dispatch specs below.
+The original plan and Claude observations remain historical evidence.
+
+| Decision | Owner-approved outcome |
+| --- | --- |
+| D1 | Add change-selected advisory CI contracts, static docs and documentation-impact checks on trusted self-hosted capacity, with measured cost and no required check. `ci_contract`/`docs_static` do not execute Creator parity; no few-minute promise. |
+| D2 | Freeze automatic Canary Planning `workflow_run`, keep manual entry; no init or readiness activation. |
+| D3 | Independent exact-head review required; only owner may waive with SHA and reason. `review:skipped` is display, not approval. |
+| D4 | Common explicit Catalog admission semantics in Worker/proof server, tested on Node 22/26; source/test only, no deployment. |
+
+### Fresh remote snapshot for T0
+
+Read on 2026-09-10 with `git fetch origin` and `gh pr view`:
+
+| Ref | Full SHA | State at inspection |
+| --- | --- | --- |
+| `origin/main` | `5b1db20980280b7e9ce0088939c2baea88426ef8` | fetched baseline |
+| #1098 `docs/ci-consolidation-handoff` | `b1b3d453fef7c9f6b351b1fb65ca2aa62aa1d0e6` | open, mergeable before T0 edit |
+| #1100 | `4453911ed964ad88c97b5271ff05e7e195d3a937` | open; requires fresh independent acceptance |
+| #1103 | `2c4795d36c5098727713cd7df9c8147dedf7ffdb` | open; requires fresh independent acceptance |
+
+This snapshot is not review of those heads. Prior-head review and successful
+workflow status do not establish current-head independent review. Refresh
+remote evidence before acceptance; #1098's T0 push necessarily changes its head.
+No main integration is needed for T0: GitHub reports it mergeable and main has
+no intervening changes to these existing declared documents.
+
+### Current next actions
+
+1. Resume existing #1098 without branch rename or duplicate PR; record this
+   plan/handoff Task, run staged ownership, whitespace and PR-body checks,
+   commit/push, then ask coordinator once with exact SHA, files and counts.
+   Coordinator owns independent acceptance and merge; workers hold before merge.
+2. Resume #1100 (T1a), then #1103 (T1b), applying the new plan's boundaries
+   and exact-head verification. Historical holds/reviews below do not approve
+   new heads. Use current Dispatch identities, not the old table.
+3. Follow T0–T12 dependencies for subsequent dispatch. P5.1's HTTP target is
+   `scripts/ci/self_test_report.py` (`UrllibGitHubApi`), with batch runtime,
+   incremental completion and GitHub journal consumers; the retired
+   `github_queue_api.py` is not the controller HTTP implementation.
+4. Coordinator updates #1089 and owns Issue hygiene. Historical missing buckets
+   need individual proving evidence; no bulk closure by number range.
+5. Retain failed review runs and failed local counts below. P1.4 acceptance
+   remains pending the next independently authorized real publication, and
+   three genuine report-only ticks remain an acceptance requirement. No release,
+   deploy, canary init, readiness change or new hosted spend is authorized.
+
+## Historical handoff record
+
+The remainder records Claude's 2026-09-09/10 handoff, including superseded
+instructions, pending-at-the-time decisions and exact failed evidence. Do not
+execute these old commands/specs verbatim: use the active Dispatch and new plan.
+
 ## 1. Who takes over and why
 
 Trigger: the owner's weekly Claude token budget reaches 90 percent. The current
@@ -29,7 +88,7 @@ Coordinator goal, verbatim from the owner:
 > owner 拍板。禁止任何 release、deploy、journal reset、readiness 开关、增加
 > hosted 花费。
 
-## 1a. Immediate next actions for the incoming lead (in order)
+## 1a. Historical immediate next actions (superseded)
 
 1. Bind: `orca orchestration run-use --run run_71c2492cd783 --json`, then
    `orca orchestration inbox --json` and
@@ -70,8 +129,8 @@ Coordinator goal, verbatim from the owner:
    nothing else automatically, and dispatch the next wave from §5
    (recommended: P2.4 stale prose, P3.1, P3.2, P4.1, P5.1 with the plan row
    corrected to name the controller's real HTTP module, and P1.2b).
-6. Owner decisions D1 to D4 are still pending; ask the owner once, then record
-   the outcomes in the plan via a `docs/` Task.
+6. At this historical handoff D1–D4 were pending; all were approved on
+   2026-09-10 as recorded above. Do not ask again.
 
 ## 2. Take the lead (commands)
 
@@ -158,12 +217,9 @@ re-dispatch a Task verbatim.
 
 ### Owner decisions
 
-D1 (PR advisory `ci_contract`+`docs_static` lane), D2 (freeze canary
-`workflow_run` trigger), D3 (merge requires published review or explicit
-`review:skipped` label), D4 (#1056 shared character allowlist): all
-**pending**. Coordinator recommendations are in the plan. Do not start P1.3,
-P2.3, P4.2 or Phase 7 until the owner answers. When the owner answers, record
-the outcome in the plan's decision table via a `docs/` Task.
+At the Claude handoff D1–D4 were pending. The owner approved all four on
+2026-09-10; the current outcomes above and the new plan replace that pending
+state and the former label-based review alternative.
 
 ### Issue hygiene owed by the coordinator (not workers)
 
@@ -193,7 +249,7 @@ the outcome in the plan's decision table via a `docs/` Task.
   when the follow-up commit lands. Quick checks by the reviewer all green
   (retired-mechanisms 2, topology 46, parity 5, change scope 66, ledger 15).
 
-## 5. Task specs for re-dispatch
+## 5. Historical Task specs (do not re-dispatch verbatim)
 
 Common rules block (append to every spec):
 
@@ -239,8 +295,9 @@ P4.1, P5.1. Keep at most five workers live; this Mac runs their test suites.
 ## 6. Process findings so far
 
 - Two of the first three shipped Tasks (#1092, and #1090's own review) had no
-  usable automated review. The program's D3 exists because of this; until the
-  owner decides, the coordinator supplies independent takeover reviews.
+  usable automated review. The program's D3 exists because of this; at that
+  time the coordinator supplied independent takeover reviews. D3 is now decided
+  above and retains that independence requirement.
 - Worker #1092 merged without review evidence and without the merge gate; the
   gate was added to every spec afterwards.
 - `worker_done` with `--outcome succeeded` was used by P2.2 for an unshipped
