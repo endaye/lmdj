@@ -2,7 +2,7 @@
   "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
-    "version": "1.0.52.0"
+    "version": "1.0.53.0"
   },
   "provider_policy": {
     "allowed_regions": [
@@ -42,33 +42,33 @@
     },
     {
       "id": "application-facade",
-      "version": "5.1.0"
+      "version": "5.2.0"
     },
     {
       "id": "web-runtime-platform",
-      "version": "5.2.1"
+      "version": "5.2.2"
     }
   ],
   "hosts": [
     {
       "id": "core-cli",
-      "version": "3.3.3"
+      "version": "3.3.4"
     },
     {
       "id": "core-mcp",
-      "version": "3.3.3"
+      "version": "3.3.4"
     },
     {
       "id": "native-host",
-      "version": "3.3.3"
+      "version": "3.3.4"
     },
     {
       "id": "web-runtime-host",
-      "version": "4.2.3"
+      "version": "4.2.4"
     },
     {
       "id": "creator-web",
-      "version": "4.2.3"
+      "version": "4.2.4"
     }
   ],
   "providers": [

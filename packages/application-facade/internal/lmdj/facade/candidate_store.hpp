@@ -43,9 +43,16 @@ class CandidateStore {
   foundation::Result<nlohmann::json> inspect(const std::string& job_id,
                                             const provider::AttemptStore& attempts);
 
-  // Pure eligibility: retain ownership through Project commit; no recovery.
+  foundation::Result<nlohmann::json> cancel(const std::string& job_id,
+                                           const std::string& attempt_id);
+  foundation::Result<nlohmann::json> discard(const std::string& job_id,
+                                            const std::string& set_id);
+  // Pure eligibility check: no pending recovery. Retain this move-only result
+  // until Project commit completes; lifecycle/publication uses the same lease.
+  // Caller owns Project identity/revision/source-byte validation under this lease.
   foundation::Result<Eligibility> lease_active(const std::string& job_id,
-      const std::string& set_id, const provider::AttemptStore& attempts);
+                                               const std::string& set_id,
+                                               const provider::AttemptStore& attempts);
 
  private:
   foundation::Result<Lease> acquire(const std::filesystem::path& path) const;

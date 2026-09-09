@@ -65,13 +65,24 @@ class ObservedStorage final : public ProjectStoragePlatform {
   std::size_t writes = 0;
   std::function<void(const std::filesystem::path&, bool)> replace_hook;
   std::function<void(const std::filesystem::path&)> acquire_hook;
+  std::function<void(const std::filesystem::path&)> release_hook;
   std::function<bool(const std::filesystem::path&)> fail_replace;
   std::function<bool(const std::filesystem::path&)> fail_create;
   std::function<void(const std::filesystem::path&)> read_hook;
   Result<std::unique_ptr<ProjectWriterLease>> acquire_writer(const std::filesystem::path& p) override {
     if (p == owner) ++owner_leases;
     if (acquire_hook) acquire_hook(p);
-    return inner->acquire_writer(p);
+    auto acquired = inner->acquire_writer(p);
+    if (!acquired.has_value() || !release_hook) return acquired;
+    struct ObservedLease final : ProjectWriterLease {
+      std::unique_ptr<ProjectWriterLease> inner;
+      std::function<void()> released;
+      ~ObservedLease() override { inner.reset(); released(); }
+    };
+    auto lease = std::make_unique<ObservedLease>();
+    lease->inner = std::move(acquired.value());
+    lease->released = [this, p] { release_hook(p); };
+    return Result<std::unique_ptr<ProjectWriterLease>>::success(std::move(lease));
   }
   Result<void> ensure_directory(const std::filesystem::path& p) override { ++writes; return inner->ensure_directory(p); }
   Result<bool> exists(const std::filesystem::path& p) const override { return inner->exists(p); }

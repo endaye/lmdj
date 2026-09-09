@@ -235,7 +235,7 @@ Result<Json> CandidateStore::read_state() const {
         check(attempts.insert(entry.at("intent").at("attempt_id").get<std::string>()).second);
         check(id(entry.at("set_id").get<std::string>()) && sets.insert(entry.at("set_id").get<std::string>()).second);
         const auto status = entry.at("status").get<std::string>();
-        check(status == "pending" || status == "succeeded" || status == "failed" || status == "interrupted");
+        check(status == "pending" || status == "succeeded" || status == "failed" || status == "interrupted" || status == "cancelled");
         if (status == "pending") ++pending;
         if (status == "succeeded") {
           const auto& set = state.at("sets").at(entry.at("set_id").get<std::string>());
@@ -259,7 +259,7 @@ Result<Json> CandidateStore::read_state() const {
                        "output_artifact", "capability", "provider", "model_identity",
                        "parameters_sha256", "recipes"}));
       check(sets.contains(set_id) && set.at("set_id") == set_id);
-      check(set.at("status") == "active" || set.at("status") == "superseded");
+      check(set.at("status") == "active" || set.at("status") == "superseded" || set.at("status") == "discarded");
       validate_source(set.at("source")); validate_artifact(set.at("output_artifact"));
       check(set.at("recipes").is_array() && set.at("recipes").size() <= 4097);
     }
@@ -374,6 +374,49 @@ Result<Json> CandidateStore::finish(const Run& run, const provider::AttemptStore
     if (!saved.has_value()) return Result<Json>::failure(saved.error());
   }
   return Result<Json>::success(view(state, run.job_id));
+}
+Result<Json> CandidateStore::cancel(const std::string& job_id, const std::string& attempt_id) {
+  if (!id(job_id) || !id(attempt_id)) return Result<Json>::failure(invalid("Job or Attempt ID is invalid"));
+  // Do not acquire the execution lease: direct execution may still be running.
+  // The durable owner decision wins over even a subsequently successful terminal.
+  auto mutation = acquire(root_);
+  if (!mutation.has_value()) return Result<Json>::failure(mutation.error());
+  auto loaded = read_state();
+  if (!loaded.has_value()) return loaded;
+  auto& state = loaded.value();
+  if (!state.at("jobs").contains(job_id)) return Result<Json>::failure(
+      Error{ErrorCode::not_found, "Candidate Job does not exist", {{"reason", "job_not_found"}}});
+  auto& history = state["jobs"][job_id]["history"];
+  auto found = std::find_if(history.begin(), history.end(),
+      [&](const auto& e) { return e.at("intent").at("attempt_id") == attempt_id; });
+  if (found == history.end()) return Result<Json>::failure(
+      Error{ErrorCode::not_found, "Job Attempt does not exist", {{"reason", "attempt_not_found"}}});
+  if (found->at("status") == "succeeded" || found->at("status") == "failed")
+    return Result<Json>::failure(Error{ErrorCode::invalid_argument,
+        "Job Attempt has already completed", {{"reason", "job_already_completed"}}});
+  if (found->at("status") != "cancelled") {
+    (*found)["status"] = "cancelled";
+    const auto saved = write_state(state);
+    if (!saved.has_value()) return Result<Json>::failure(saved.error());
+  }
+  return Result<Json>::success(view(state, job_id));
+}
+Result<Json> CandidateStore::discard(const std::string& job_id, const std::string& set_id) {
+  if (!id(job_id) || !id(set_id)) return Result<Json>::failure(invalid("Job or Set ID is invalid"));
+  auto mutation = acquire(root_);
+  if (!mutation.has_value()) return Result<Json>::failure(mutation.error());
+  auto loaded = read_state();
+  if (!loaded.has_value()) return loaded;
+  auto& state = loaded.value();
+  if (!state.at("jobs").contains(job_id) ||
+      state.at("jobs").at(job_id).at("active_set_id") != set_id)
+    return Result<Json>::failure(Error{ErrorCode::not_found,
+        "Candidate Set is unavailable", {{"reason", "candidate_unavailable"}}});
+  state["sets"][set_id]["status"] = "discarded";
+  state["jobs"][job_id]["active_set_id"] = nullptr;
+  const auto saved = write_state(state);
+  if (!saved.has_value()) return Result<Json>::failure(saved.error());
+  return Result<Json>::success(view(state, job_id));
 }
 Result<CandidateStore::Eligibility> CandidateStore::lease_active(
     const std::string& job_id, const std::string& set_id, const provider::AttemptStore& attempts) {
