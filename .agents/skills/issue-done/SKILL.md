@@ -287,6 +287,29 @@ recurrences is `tests/build/ci_pr_body_lint_test.py`. Run it again after any
 later edit to the body, including an edit made in the GitHub web editor: the
 lint reads the text you give it and cannot see a directive added afterwards.
 
+Because the lint cannot emulate GitHub's external parser, inspect the live
+Pull Request closing relation before a guarded merge. Read the complete,
+paginated `closingIssuesReferences` connection through the authenticated
+GraphQL API (the cursor variable is required for `--paginate`):
+
+```bash
+gh api graphql --paginate \
+  -f query='query($endCursor:String){repository(owner:"endaye",name:"lmdj"){pullRequest(number:<number>){closingIssuesReferences(first:100,after:$endCursor){nodes{number repository{nameWithOwner}}pageInfo{hasNextPage endCursor}}}}}' \
+  --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[] | "\(.repository.nameWithOwner)#\(.number)"'
+```
+
+Compare the complete result with every Issue explicitly retained or deferred
+in the live PR body, using qualified identities (`owner/repository#number`) for
+cross-repository references and `endaye/lmdj#number` for this repository. If
+any retained/deferred Issue appears in
+`closingIssuesReferences`, this is a failed premerge check: `why: GitHub's
+live parser has a closing relation for an Issue that the PR declares retained;
+remedy: remove the closing directive from the PR body, rerun the deterministic
+body lint, and re-query the complete connection until the unintended relation
+is absent.` This is a read-only skill inspection, not a new required CI check,
+and it does not infer intent from fuzzy prose or authorize closing unrelated
+Issues. Retain the postmerge live Issue-state audit below.
+
 1. **Push branch to origin**:
    ```bash
    BRANCH=$(git branch --show-current)
