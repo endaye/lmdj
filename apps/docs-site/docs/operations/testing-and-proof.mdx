@@ -224,20 +224,18 @@ provenance。缺失 squash witness 时用官方 `architecture-portal.sh witness`
 
 ## 测试结果驱动的 Canary 规划入口
 
-`Canary Planning`（`canary-planning.yml`）支持 main 首次 attempt 的手动
-`workflow_dispatch`，以及默认关闭的 `Self-test Report` 完成唤醒。
+`Canary Planning`（`canary-planning.yml`）目前仅支持 main 首次 attempt 的手动
+`workflow_dispatch`；原本会产生 skipped planning runs 的 `Self-test Report`
+完成唤醒已按 T10 有意冻结。
 它连接真实 scheduler 的只读历史重放与独立规划 journal，
 不运行 AI 或产品测试，不分配版本、不创建版本 PR，也不发布、部署或晋升。
 后续评估／交付协调和真实环境启用仍未完成；入口源码不代表线上自动流程已验收。
 
-自动入口须经独立验收后显式设置 `CANARY_PLANNING_AUTOMATIC_READY=true`，并提供
-`CANARY_PLANNING_STORAGE` 的已审查存储配置。没有开关时不分配 runner；没有配置、
-初始化或 bootstrap 时拒绝写入，不创建 Issue 或猜测首次基线。完成事件只是唤醒提示，
-入口核对真实来源身份后仍读取完整持久 scheduler 结果，不根据 callback 的绿／红状态
-决定部署。重复或漏掉事件由下一次唤醒或手动 `reconcile-next` 恢复；现有报告健康巡检
-也提供后续唤醒机会，但多层 `workflow_run` 链不保证每次投递。没有新增每日测试或部署。
-自动提示只保留最新待处理唤醒且不取消正在运行的工作；手动命令使用独立准入身份，
-不会被自动提示替换。两类入口仍共用 controller 的短写锁，不给产品测试加锁。
+自动入口的恢复是另一个必须单独授权的 live acceptance Task：它须先证明独立验收、
+`CANARY_PLANNING_AUTOMATIC_READY=true`、已审查的 `CANARY_PLANNING_STORAGE`、完整
+来源身份核验和 recovery path。在此之前不分配自动 runner；手动输入缺少配置、初始化
+或 bootstrap 时仍拒绝写入，不创建 Issue 或猜测首次基线。手动 `reconcile-next`
+继续恢复持久结果；入口不根据 callback 的绿／红状态决定部署，也没有新增每日测试或部署。
 
 手动输入 `operation`、`storage` 和 `request`。`storage` 是事先审查的独立规划
 Issue 六字段配置：`repository`、`issue_number`、`issue_node_id`、`bot_node_id`、
