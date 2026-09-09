@@ -46,7 +46,7 @@ Two conditions have to hold at once, and both are normal here:
   next main batch, no human and no agent is running the one command that would
   fail.
 
-## What to do
+## How to apply
 
 Before trusting any local evidence about a JavaScript lane, and always after
 pulling a branch that changed a `package.json` or `package-lock.json`, run
@@ -60,6 +60,21 @@ builds, not a revert and not a lowered check. #1053's advisory
 to `4.1.10` would have restored the vulnerability, and adding `skipLibCheck` to
 silence the third-party declarations would have retired the check for every
 dependency at once.
+
+## Why there is no exit yet
+
+An exit needs a mechanism that makes the stale tree impossible or loud, and
+the two obvious ones each need a decision this entry cannot make. Running
+`npm ci` unconditionally inside `scripts/creator-web.sh` would add a full
+reinstall to every local build, which is a cost the lane's owners should
+weigh, not something a pitfall entry imposes. Making the `npm ls` mismatch
+name the remedy is cheaper, but it changes a shared script's diagnostics and
+still leaves the window between a bump merging and the next main batch. The
+window itself closes only by running the owning lane on the PR, and
+`.github/workflows/ci.yml` being `workflow_call`-only is a deliberate,
+separately authorized batching design (`CLAUDE.md`, Git workflow) that this
+entry has no standing to reverse. So: `exit: none`, and the entry stays open
+as the thing a reader consults instead.
 
 ## What this entry cannot tell you
 
