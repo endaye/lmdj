@@ -59,6 +59,45 @@ class ReviewTests(unittest.TestCase):
         self.payload["test_scope"]["labels"] = []
         self.assertEqual(self.attempt("glm")["error_class"], "invalid_output")
 
+    def test_issue_1062_placeholder_is_invalid_output(self):
+        self.payload = {"findings": [], "schema": "lmdj.ci-review-output.v1",
+                        "summary": "placeholder",
+                        "test_scope": {"labels": ["test:core_ubuntu"], "reason": "placeholder"}}
+        self.assertEqual(self.attempt("kimi"), {
+            "backend": "kimi", "status": "failed", "error_class": "invalid_output", "review": None})
+
+    def test_placeholder_in_either_field_is_invalid_output(self):
+        for field in ("summary", "reason"):
+            for value in ("placeholder", "PLACEHOLDER", " \tPlAcEhOlDeR\n"):
+                with self.subTest(field=field, value=value):
+                    payload = copy.deepcopy(self.payload)
+                    target = payload if field == "summary" else payload["test_scope"]
+                    target[field] = value
+                    result = review.observe_attempt(self.policy, backend="glm", returncode=0,
+                                                    output=json.dumps(payload))
+                    self.assertEqual(result, {"backend": "glm", "status": "failed",
+                                              "error_class": "invalid_output", "review": None})
+
+    def test_placeholder_diagnostic_names_field_and_remedy(self):
+        for field in ("summary", "reason"):
+            with self.subTest(field=field):
+                payload = copy.deepcopy(self.payload)
+                target = payload if field == "summary" else payload["test_scope"]
+                target[field] = "placeholder"
+                with self.assertRaisesRegex(review.ReviewScopeError,
+                                            rf"why: .*{field}.*placeholder; remedy: .+"):
+                    review.validate_review(self.policy, payload)
+
+    def test_clean_review_with_no_findings_is_reviewed(self):
+        self.assertEqual(self.attempt("glm"), {
+            "backend": "glm", "status": "reviewed", "error_class": None, "review": self.payload})
+
+    def test_substantive_placeholder_mentions_are_reviewed(self):
+        self.payload["summary"] = "Reviewed the placeholder rejection in review_scope.py; no defects found."
+        self.payload["test_scope"]["reason"] = "CI protocol tests cover placeholder rejection and clean reviews."
+        self.assertEqual(self.attempt("glm"), {
+            "backend": "glm", "status": "reviewed", "error_class": None, "review": self.payload})
+
     def test_partial_findings_are_not_a_valid_review(self):
         self.payload["findings"] = [{"path": "a"}]
         self.assertEqual(self.attempt("glm")["status"], "failed")

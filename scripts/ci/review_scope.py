@@ -36,6 +36,10 @@ def validate_review(policy, payload):
     require(payload["schema"] == REVIEW_SCHEMA, "unsupported review output schema")
     require(isinstance(payload["summary"], str) and 0 < len(payload["summary"].strip()) <= 12000,
             "review summary is empty or oversized")
+    # Reject the known empty stub, not substantive text discussing placeholders.
+    # This exact-token check does not establish semantic review quality.
+    require(payload["summary"].strip().casefold() != "placeholder",
+            "review summary is a known placeholder", "provide a summary of the current diff review")
     findings = payload["findings"]
     require(isinstance(findings, list) and len(findings) <= 30, "invalid findings array")
     for finding in findings:
@@ -60,6 +64,8 @@ def validate_review(policy, payload):
         raise ReviewScopeError(str(error)) from error
     require(isinstance(advice["reason"], str) and 0 < len(advice["reason"].strip()) <= 4000,
             "test scope reason is empty or oversized")
+    require(advice["reason"].strip().casefold() != "placeholder",
+            "test scope reason is a known placeholder", "explain the recommended test scope for the current diff")
     return payload
 
 
