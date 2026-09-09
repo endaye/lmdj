@@ -24,8 +24,19 @@ thread_local bool forbid_allocation{};
 thread_local bool count_allocations{};
 thread_local std::size_t allocation_count{};
 thread_local std::size_t fail_at{};
+thread_local bool observe_load_order{};
+thread_local std::size_t observed_order{};
+thread_local std::size_t engine_order{}, voice_storage_order{}, pcm_order{};
 void before_allocate(std::size_t bytes) {
   if (forbid_allocation) std::abort();
+  if (observe_load_order) {
+    ++observed_order;
+    if (bytes == sizeof(audio::RealtimeEngine)) engine_order = observed_order;
+    if (bytes == audio::RealtimeEngine::receipt_bounded_voice_state_storage_bytes())
+      voice_storage_order = observed_order;
+    if (bytes == 4096 * sizeof(std::int16_t) && pcm_order == 0)
+      pcm_order = observed_order;
+  }
   if (count_allocations) {
     ++allocation_count;
     if (allocation_count == fail_at) throw std::bad_alloc{};
@@ -268,6 +279,25 @@ void load_uses_and_accounts_for_the_receipt_bounded_storage() {
       audio::RealtimeEngine::receipt_bounded_voice_state_storage_bytes());
 }
 
+void load_allocates_fixed_storage_before_pcm() {
+  // Observe actual allocations through the public load boundary. This guards
+  // ordering, not a simulation of ESP-IDF's multi-region allocator: the real
+  // fragmented-heap and DMA journey is retained in the Cardputer evidence.
+  const auto bytes = content(false);
+  RuntimeFacade runtime(config());
+  observed_order = engine_order = voice_storage_order = pcm_order = 0;
+  observe_load_order = true;
+  const auto result = runtime.load(bytes.bytes, bytes.identity);
+  observe_load_order = false;
+  LMDJ_CHECK(result == RuntimeResult::ok);
+  test::check(engine_order != 0 && voice_storage_order != 0 && pcm_order != 0 &&
+                  engine_order < pcm_order && voice_storage_order < pcm_order,
+              "why: variable PCM fragments the heap before fixed storage; "
+              "remedy: allocate candidate Engine and queue before decoding PCM; "
+              "Engine=" + std::to_string(engine_order) + " queue=" +
+                  std::to_string(voice_storage_order) + " PCM=" + std::to_string(pcm_order));
+}
+
 void old_voice_terminals_and_full_pending_batch_preserve_receipts() {
   auto source = snapshot(false);
   auto short_pcm = std::make_shared<const cooker::PcmSample>(
@@ -463,6 +493,7 @@ void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept { op
 void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept { operator delete(pointer); }
 
 int main() {
+  load_allocates_fixed_storage_before_pcm();
   load_uses_and_accounts_for_the_receipt_bounded_storage();
   old_voice_terminals_and_full_pending_batch_preserve_receipts();
   lifecycle_journey();

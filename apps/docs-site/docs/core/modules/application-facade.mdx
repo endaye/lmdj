@@ -82,6 +82,10 @@ load 在分配 PCM 前复用完整内容校验，报告固定对象（含 Engine
 bytes、去重 PCM、per-Pad float 展开、metadata 和准备临时空间，溢出或超总额度拒绝。
 配置还必须显式提供 platform reserve，覆盖 allocator/control-block/capacity rounding、
 平台 stack、Host buffers 等；数值必须由平台测量，不是 Core 推断的可用 RAM。
+完整校验与预算通过后，先构造候选 Engine 及其固定队列，再分配解码 PCM 与准备数据，
+避免变量存储先切碎大块空闲区。所有候选仍在控制线程局部持有，全部准备成功才提交；
+后续分配失败会完整回收并保持 empty/静音/可重试。总量 admission 不保证任意碎片化
+平台都有足够大的连续块，实际分配失败仍返回 allocation_failed。
 已取走并由 Host 保留的历史 epoch/回执内存属于 Host。此入口不准备 Master FX 动态
 缓冲，不提供 FX 命令；资源报告不是 ESP32 map/stack/heap、DMA 或实时性能验收。
 
