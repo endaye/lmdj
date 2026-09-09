@@ -222,6 +222,7 @@
     {"match": {"kind": "exact", "value": ".github/workflows/advisory-review-liveness.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/self-test-report.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/canary-assessment.yml"}, "lanes": ["ci_contract"]},
+    {"match": {"kind": "exact", "value": ".github/workflows/canary-planning.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/incremental-completion.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/ci-host-inventory.yml"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/pr-review.yml"}, "lanes": ["ci_contract"]},

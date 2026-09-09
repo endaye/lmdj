@@ -205,6 +205,39 @@ provenance。缺失 squash witness 时用官方 `architecture-portal.sh witness`
 独立授权的 commit/PR 补交；不可手改冻结数据。只在受影响 Task 承担该条件性责任，
 不能把完整门户构建变成所有 PR 的隐形 pre-push 门禁。
 
+## 测试结果驱动的 Canary 规划入口
+
+`Canary Planning`（`canary-planning.yml`）目前仅支持 main 首次 attempt 的手动
+`workflow_dispatch`。它连接真实 scheduler 的只读历史重放与独立规划 journal，
+不运行 AI 或产品测试，不分配版本、不创建版本 PR，也不发布、部署或晋升。
+自动结果唤醒、后续交付协调和真实环境启用仍未完成。
+
+手动输入 `operation`、`storage` 和 `request`。`storage` 是事先审查的独立规划
+Issue 六字段配置：`repository`、`issue_number`、`issue_node_id`、`bot_node_id`、
+`workflow_id`、`epoch`，epoch 使用 `canary-planning-` 前缀；不得复用 scheduler、
+报告或评审发现存储。配置中的身份仍须通过实际 API 验证，不是用户填写就获得信任。
+
+- `init`：仅初始化精确预留、无评论且 body 匹配空模板的 Issue；不能重置已有 journal。
+- `bootstrap`：显式保存初始独立进度，`request={}`。空基线保守选择 bootstrap/full，
+  不表示历史站点从未部署；本入口不接受缺少真实 receipt 的非空进度导入。
+- `observe-result`：`request={"source_request_id":"<exact-scheduler-request-id>"}`，
+  从可信 main 配置读取 scheduler，完整核验已持久结果；失败、缺证据、无需测试及
+  非自动来源不产生计划。成功的局部测试只是唤醒，不能缩减各站点累计测试范围。
+- `recover`：使用同一个 `source_request_id`，恢复已存在的原始 intent；不存在则拒绝，
+  不偷偷建立新计划。初始化／bootstrap 都不会自动发生在读取失败的处理分支。
+
+完整决策先通过大小检查，再把 main、control、scheduler 身份、独立进度和预期结果
+摘要写入小 intent，随后保存完整分块计划。中途失败只按冻结输入重建并核对原摘要；
+写入结果未知时先核验原请求，不能盲目重复 POST。scheduler 有未完成 append 时，
+规划器拒绝修复其 checkpoint，交由原 scheduler 恢复。完整计划已保存后，恢复不再
+读取 scheduler 或已过期 artifact，更新后的 main／control 不能覆盖原计划。
+
+一个 active 计划保持固定，新成功目标只合并为较新的 pending；迟到旧结果不覆盖它们。
+返回记录的 `slot` 是观察当时的位置，不代表该记录此刻仍占有 pending。此阶段没有
+完成 active、推进版本／站点进度的命令，须等后续协调器能验证真实完成证据。
+`planning.json` 保留完整观察且 `admission_evidence=false`；artifact 存在不是交付许可。
+本地重启／丢响应测试不证明线上锁、凭据、配额、存储启用或部署验收已完成。
+
 ## Web Runtime Host Proof
 `scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。
 
