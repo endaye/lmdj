@@ -302,6 +302,11 @@ verified immutable deployment; never reuse or move allocated identities.
 
 ## Task K5 — real owner resolver wiring and Host acceptance
 
+Post-K4 owner API, permission surface, exact-file proposal and per-Host journey
+review: [K5 owner-resolution proposal](2026-09-09-stage12-k5-owner-resolution.md).
+The user confirmed the complete proposal on 2026-09-09. Implementation and
+acceptance remain pending.
+
 Readiness: K4 plus reviewed ownership API and Stage 11 Facade/Creator file
 coordination. This is a separately planned follow-up, not hidden in K2.
 
@@ -340,10 +345,9 @@ regex alone does not prove every Host was exercised.
 Version impact: required at future integration; allocate against the actual
 post-K4 baseline. Documentation impact: required. Affected portal pages:
 `/core/modules/application-facade/` plus actual owner and affected Host routes.
-The owner-read API and all new production Host wiring remain separately
-unapproved; C-Q1–C-Q5 do not authorize that integration. K5 is deliberately
-gated; an exact-file plan is a prerequisite,
-not a claim of current executability.
+The owner-read API and new Host wiring received their separate user approval
+on 2026-09-09 through the linked exact-file proposal. This approval does not
+claim implementation or acceptance; the complete Host journeys remain required.
 
 ## Version Management
 
