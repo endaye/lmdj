@@ -1,0 +1,323 @@
+# PR-Agent review migration implementation plan
+
+Date: 2026-09-10
+Status: T1 drafting; no engine implementation, deployment or paid API validation.
+Umbrella: #1149. Task issues: #1150–#1155.
+
+## Authority and coordination
+
+The user authorized the complete umbrella implementation, task-local commit,
+push, PR, independent current-head review and squash merge, plus deployment to
+the existing Netcup server. The owner supplied a USD 20 monthly API cap on 2026-09-10. The design records
+calendar-month accounting, a USD 20 cumulative first-pilot cap and a USD 1
+per-PR cap. Credentials and supplier funding/eligibility remain unverified.
+No server purchase, paid hosted fallback, branch-protection change, product
+release or unrelated cleanup is authorized.
+
+The lead writes this plan and the [design](../design/2026-09-10-pr-agent-review-migration.md),
+coordinates Orca workers, and accepts final evidence. Luna workers perform
+implementation and focused verification; separate workers review exact heads.
+Use high effort for bounded implementation and xhigh for provenance, coverage,
+publication or adversarial review. Escalate uncertain choices to the lead, who
+asks the user only when authority, credentials, budget or product decisions
+cannot be resolved from evidence. Do not expand nested worker fanout.
+
+Create each implementation worktree from fresh main. Use `feat/`, `fix/` or
+`docs/` branch names, including renaming Orca's default agent-prefixed branch
+before any edit. One Task is one reviewable Conventional Commit; split a Task
+before implementation if its independent behaviors require multiple commits.
+Read `issue-done` for staging, path ownership, review and exact-head merge.
+
+## Dependencies and file ownership
+
+T1 → T2 → T3; T1 + T2 → T4; T3 + T4 → T5 → T6.
+T3 and T4 can run concurrently once interfaces are fixed, in isolated worktrees.
+T3 owns review protocol/consumers; T4 owns host deployment/limits. Changes to
+shared policy or Portal files must be assigned to one owner and integrated
+before another editor begins. Parallel readiness is not permission to write
+shared files. No worker changes product source or unrelated control-plane state.
+
+Current explicit source pin: PR-Agent
+`53072488e4c3b5a6c9ae730fe6fb52fc5f09d06c`. T2 records the immutable Linux amd64 bundle SHA-256 and hash-locked transitive
+dependencies; an optional container image has its own digest. The upstream
+hook audit and read-only Netcup inventory are retained; T4 owns fresh access,
+capacity and deployment acceptance. Declared file lists below are explicit.
+No wildcard is an implementation mandate. T1 freezes the inactive supplier
+activation contract; actual supplier health and deployment are T4/T5 evidence,
+and must not be claimed by closing the design task.
+
+## T1 — 制定 PR-Agent 接入设计、验收口径与费用预算 (#1150)
+
+Dependencies: none.
+
+将 umbrella 方案落为仓库设计和实施计划。确认固定 PR-Agent commit、部署 bundle SHA-256 的生成/验证契约、依赖锁定、API 端点/具体模型、主备顺序、总重试预算、单 PR token/费用上限和批次总预算。用户授权每月 20 美元按量 API 消费；DeepSeek Secret 已于 2026-09-10T03:45:18Z 配置，鉴权和余额尚未验证。DeepSeek 约 10 美元预充值余额未核实；Kimi 本周额度耗尽，暂不调用。订阅额度与通用 API 账户分别核对，只记录 secret 名称，不读取/输出密钥值。
+明确 fixed base/head 输入、只读文件内容、上下文重建、禁止执行 PR 文件、trusted config、schema/覆盖回执、test_scope 建议和发布隔离。评估上游 plain-diff 内部异常/空输出不能被 exit 0 掩盖，以及嵌套重试倍增。
+预先确定代表性历史样本和真实 PR 观察方案：至少包含 #1127/#1132 的固定 head、正常/删除/大 diff/文档治理/已知缺陷/干净样本；固定至少 6 个独立已知缺陷样本和 6 个干净对照；真实 current-head 观察集固定 20 次、至少 5 个不同 head，至少 19/20 在执行开始后 10 分钟内完整完成，排队 p95 不超过 5 分钟。所有准入 attempt 均计入分母，取消/过期/全失败不得删除或算成功，重复 head 相关性单列。样本/费用不足为验收缺口，不在看到结果后下调。明确定义分母、取消/过期/失败分类；样本不足不宣称生产稳定。
+确定单机故障 RTO、排队/扩并发触发条件、何时才需要第二台独立主机。补明确切换、回滚和后续维护责任。
+
+Declared files:
+
+- `docs/design/2026-09-10-pr-agent-review-migration.md`
+- `docs/plans/2026-09-10-pr-agent-review-migration.md`
+
+Verification and caught defects:
+
+设计逐条对照现有 producer/consumer；核实上游固定版本的能力与依赖；运行 scripts/docs-site.sh check。此 Task 不新增产品测试或生产 gate。
+
+## T2 — 实现固定版本 PR-Agent 引擎、完整输入与有界 API fallback (#1151)
+
+Dependencies: T1.
+
+建立独立 runner/沙箱入口，通过供应商 API 调用，不再经 Claude Code/Grok 登录型 CLI。支持配置 GLM/Kimi/xAI/DeepSeek；实际主备按 T1 已验证配置执行，不四路同时付费评审。
+输入固定 diff 和经核对的文件内容；解决 plain-diff 在 base checkout 下错误反向重建；不读取 PR 自带配置、skills、hooks 或执行 PR 代码。只读/隔离运行，不给 GitHub 写 token。
+保留完整文件/hunk 覆盖清单；删除、二进制和无法覆盖的内容必须可见，不静默裁剪后宣称完整。首期只允许完整单 prompt；超预算大 diff 显式失败，付费分块试验后续另定完整覆盖与跨文件质量 oracle。
+输出原始结构化结果、实际模型/版本、脱敏错误类别、HTTP/重试/耗时/token/费用、覆盖清单。认证/参数错误不盲重试；429/暂态网络按预算退避；消除框架与外层重试乘积。空预测/无 JSON/内部吞错/不完整覆盖不得伪造 reviewed。
+
+Declared files:
+
+- `scripts/ci/pr_agent_review.py`
+- `scripts/ci/pr-agent/Dockerfile`
+- `scripts/ci/pr-agent/requirements.in`
+- `scripts/ci/pr-agent/requirements.lock`
+- `scripts/ci/pr-agent/config.toml`
+- `tests/build/ci_pr_agent_review_test.py`
+- `scripts/ci/pr-agent/build-bundle.sh`
+- `tests/fixtures/ci/pr-agent/valid-native-review.yaml`
+- `tests/fixtures/ci/pr-agent/clean-native-review.yaml`
+- `tests/fixtures/ci/pr-agent/complete-input.json`
+
+Other minimal malformed variants are generated by tests in temporary directories.
+Acceptance quality fixtures are separately frozen in T5 before evaluation; these
+adapter fixtures cannot serve as their independent quality oracle.
+
+Verification and caught defects:
+
+python3 tests/build/ci_pr_agent_review_test.py：固定输入、删除/超长 diff、base/head 重建、注入配置、401/429/超时/无效输出、重试总预算、脱敏、覆盖缺失分别有最小反例；构建固定 Linux amd64 bundle 验证依赖；Dockerfile 仅为可选可复现构建工具，不要求 Netcup 安装 Docker。付费 live probe 只在预算明确后执行。
+
+At the real PR-Agent handler seam, assert that all required hunks and deleted
+content reach the fake handler, immutable base/head bytes are used, and hostile
+CWD content/config is never read. T2 owns RIGHT-side validation in
+`pr_agent_review.py`: clean, deletion, rename, binary/unreadable, wrong-side and
+outside-diff cases live in `ci_pr_agent_review_test.py`; invalid anchors fail
+the entire attempt. Patch actual LiteLLM `acompletion` and assert at most two
+calls per provider/eight total, per-call ledger admission, no nested retry,
+unknown price denial and uncertain timeout reservation retention. Coverage
+receipt/history fields follow the design's Receipt and compatibility interface.
+Any chunk support must be offline-tested for union and missing-result failure;
+it is not enabled for paid pilot evaluation.
+
+## T3 — 适配 LMDJ 评审协议、测试范围与所有下游消费者 (#1152)
+
+Dependencies: T2.
+
+将 PR-Agent 结构化输出映射为 LMDJ 当前协议，保留 summary/findings/test_scope、exact head、run/attempt、实际供应商与模型身份；不能将引擎名称冒充实际模型。
+统一调整 backend 白名单/历史解析/评论 marker/等待器/liveness/scope policy/相关 canary 消费者；兼容读取历史 glm/kimi/grok 回执，不重写旧证据。测试范围缺失必须按正式协议显式保守处理，不能编造模型建议或错误缩减测试。
+继续独立 publisher 鉴权和 source provenance，验证 changed RIGHT-side 行号，clean review 不创建虚假行内问题，重复事件幂等，过期 head 不发布。生产 workflow 仍使用旧入口；本 Task 交付可测试适配接口，切换归 T6。
+
+Declared files:
+
+- `scripts/ci/review_pipeline.py`
+- `scripts/ci/review_scope.py`
+- `scripts/ci/review_scope_codec.py`
+- `scripts/ci/review_wait.py`
+- `scripts/ci/test_scope.py`
+- `.github/scripts/pr_review_target.py`
+- `.github/scripts/advisory_review_liveness.py`
+- `scripts/ci/review_failure_report.py`
+- `scripts/ci/review_merge_map.py`
+- `scripts/ci/review_merge_map_reader.py`
+- `scripts/ci/review_discovery_runtime.py`
+- `tools/canary/assessment.py`
+- `tools/canary/assessment_runtime.py`
+- `tools/canary/assessment_entry.py`
+- `tools/canary/assessment_journal.py`
+- `tools/canary/assessment_handoff.py`
+- `tests/build/ci_review_pipeline_test.py`
+- `tests/build/ci_review_scope_test.py`
+- `tests/build/ci_review_scope_codec_test.py`
+- `tests/build/ci_review_wait_test.py`
+- `tests/build/ci_test_scope_test.py`
+- `tests/build/ci_advisory_review_liveness_test.py`
+- `tests/build/ci_review_failure_report_test.py`
+- `tests/build/ci_review_merge_map_test.py`
+- `tests/build/ci_review_merge_map_reader_test.py`
+- `tests/build/ci_review_discovery_runtime_test.py`
+- `tests/build/ci_canary_assessment_test.py`
+- `tests/build/ci_canary_assessment_runtime_test.py`
+- `tests/build/ci_canary_assessment_entry_test.py`
+- `tests/build/ci_canary_assessment_journal_test.py`
+- `tests/build/ci_canary_assessment_handoff_test.py`
+
+T3 changes canary schema consumers only for compatibility; it preserves their
+existing opt-in execution and model configuration. `tools/canary/executor_policy.json`
+and `.github/workflows/canary-assessment.yml` remain unchanged. No automatic
+assessment, host preparation or release becomes authorized by this migration.
+`.github/workflows/advisory-review-liveness.yml` remains unchanged: its existing
+trigger/routing stays in place; T3 changes the invoked reader only, covered by
+`ci_advisory_review_liveness_test.py` and T6 workflow graph/topology regression.
+`scripts/ci/review_discovery.py` remains unchanged: the pure reducer keeps its
+existing event schema; receipt authentication belongs in the T3-owned runtime,
+with `ci_review_discovery_test.py` as regression coverage. Any later change to
+these boundaries requires an explicit file-ownership update before editing.
+Regression-only files: `tests/build/ci_review_discovery_test.py`,
+`tests/build/ci_review_discovery_storage_test.py`,
+`tests/build/ci_review_discovery_workflow_test.py`,
+`tests/build/ci_canary_preparation_test.py`,
+`tests/build/ci_change_scope_test.py`,
+`tests/build/ci_scope_policy_consumer_parity_test.py`, and
+`tests/build/ci_scope_policy_differential_test.py`.
+
+Verification and caught defects:
+
+运行本 Task 列出的协议 Python test 文件及上述 scope/canary 最低层回归；真实路径覆盖 stale head、伪造来源、重复发布、错误行号、missing scope、旧回执兼容、全后端失败。不得把多个相同桩之间一致当跨边界验证。
+
+## T4 — 部署 Netcup 单机专用评审槽位并验证资源与恢复 (#1153)
+
+Dependencies: T1, T2.
+
+先刷新 Netcup inventory、runner 标签、elastic controller/资源配置与当前负载；现有记录 16 cores/62 GiB 不等于空闲容量。设计并部署一个不抢占 heavy CI 所需预算的评审专用槽位，不能直接增加无资源预算的 runner 服务。主机修改使用仓库拥有的可审查部署入口，记录 exact targets、前后状态与回滚命令。
+固定 bundle SHA-256 的 Python 环境以 systemd 隔离运行；现有主机不使用 Docker，不为此安装 daemon 或增加 Docker group 权限。运行用户、临时目录与凭据隔离；不暴露公网 webhook，不引入 Kubernetes/数据库。初期 1 并发，1 vCPU/2 GiB 硬上限，独立 sibling slice，保留 heavy slice 的 14 vCPU/48 GiB 和 elastic ceiling；仍需测量确认系统与同机业务余量。仅对已满足 trusted activation 条件的启用供应商验证 API 可达性、鉴权和具体模型，并使用 T1 已批准费用预算；disabled/null 供应商只记录缺失条件，不激活或探测。四家 API 成功运行与真实 fallback 仍须在 T5 通过，未通过不得进入 T6。
+测量冷启动/峰值 RSS/CPU/磁盘/排队/重 CI 共存；验证进程退出后可恢复和任务可追踪，不得中断其他工作来模拟整机故障。同机双实例只算并发，不算主机冗余；第二主机/采购列后续触发，不实际执行。
+Host mutation stops until approved operator access, runner 04 classification,
+execution user, actual sibling/heavy slice CPUQuota/MemoryMax, current available
+memory/pressure/swap and runtime filesystem isolation are read back. Record
+normal co-running heavy jobs and peak review RSS/CPU/disk without disrupting
+those jobs. Inventory total memory alone cannot satisfy admission.
+
+所有评审相关 job 明确 self-hosted/Netcup 路由；保留 GitHub Actions 调度，不新增 hosted 计费执行。
+
+Declared files:
+
+- `scripts/ci/pr-agent/deploy-runner.sh`
+- `scripts/ci/pr-agent/netcup-review.json`
+- `tests/build/ci_pr_agent_runner_test.py`
+- `docs/quality/2026-09-10-pr-agent-netcup-operations.md`
+- `apps/docs-site/docs/operations/testing-and-proof.mdx`
+
+Existing elastic configuration is read-only input; no modification is declared.
+T4 renders its own systemd unit from the deployment script and does not alter
+heavy runner services. Reconcile runner 04 label drift through read-only receipts
+and operator confirmation before host mutation.
+
+Verification and caught defects:
+
+部署脚本静态检查与 dry-run/幂等/回滚 fixture 测试；Netcup 只读 inventory、批准预算的连通性实测、受控进程恢复；验证专用槽位和 heavy 预算未互相超卖。记录 Actions 执行位置和存储开销。
+
+## T5 — 运行 PR-Agent 影子评审并裁定质量、可靠性与成本 (#1154)
+
+Dependencies: T3, T4.
+
+创建显式手动触发的 shadow workflow，运行 T1 预注册样本/真实 PR 观察，不修改正式评审结果、labels 或 merge authority，不给模型写 token。旧三路继续作为现有正式路径。
+回放 #1127 head 91f28ee2039a95d7c6c91e5943668e91c0e6cc14、#1132 head 85c129208f858bb1a8c3efc6100e8bd5f9cd8403；历史 head 只算回放，不冒充 current-head 评审。已知缺陷与干净样本有独立 oracle，发现质量不能用 JSON 合法性替代。
+按原定分母报告有效评审率、覆盖、模型失败/备用恢复、端到端耗时与排队、token/费用、峰值内存、误报/漏报、取消/过期。故障注入与真实模型结果分开；记录读回/发布路径验证，可用专门 canary PR 验证 publisher，不写入无关 PR。
+达到 T1 所有切换标准才 PASS；预算耗尽、样本不足、某 API 不可用或质量失败明确阻塞，并转入最小修复子项，不能为结案降低标准。
+
+Declared files:
+
+- `.github/workflows/pr-review-shadow.yml`
+- `scripts/ci/pr_agent_shadow.py`
+- `tests/build/ci_pr_agent_shadow_test.py`
+- `docs/quality/2026-09-10-pr-agent-shadow-acceptance.md`
+
+Verification and caught defects:
+
+python3 tests/build/ci_pr_agent_shadow_test.py 验证只读/不改变正式 scope、分母/错误分类、费用与取消边界；实际 Netcup shadow runs 回读 artifact/source SHA/model/token，独立核验发现。运行 scripts/docs-site.sh check。
+
+## T6 — 切换正式 AI review、验证回滚并交接运维 (#1155)
+
+Dependencies: T5.
+
+在 T5 正向验收后，刷新 main/保护/相关开放 PR，按 issue-done 将正式 PR Review 切到已验证 PR-Agent 引擎，移除生产 GLM/Kimi Claude Code 和 Grok CLI 调用。只保留必要历史回执兼容，不删除历史运行/失败证据或无关功能。
+三个 job 的 exact input→review→publisher 和 merged-PR scope mapping 全链路验证；四家 API 支持与实际主备策略有清楚身份。正常/新 push/重跑/备用恢复/过期 head/重复发布/全失败均可观察；不放宽保护/独立评审/测试范围。
+切换前准备明确的 revert/routing 回滚入口；原旧路径已知不稳定，回滚只能声明恢复旧配置，不能声称恢复健康，必要时进入可追溯 current-head 人工/agent 接管。受控验证回滚后恢复新路径，保留每次 exact evidence。
+按 T1 观察窗口取得正式端到端证据，交接 secret 名称/轮换、费用告警、重试/恢复/更新 pin/扩容条件。关联 #939/#819/#836/#849/#712/#1089，但不自动关闭：逐项对照各自验收与遗留范围。umbrella 仅在整体交付和验收完成后结案。
+
+Declared files:
+
+- `.github/workflows/pr-review.yml`
+- `tests/build/ci_review_pipeline_test.py`
+- `tests/build/ci_pr_agent_cutover_test.py`
+- `docs/quality/core-test-policy.md`
+- `docs/quality/2026-09-10-pr-agent-netcup-operations.md`
+- `docs/quality/2026-09-10-pr-agent-shadow-acceptance.md`
+- `tests/build/ci_pr_review_workflow_test.py`
+- `tests/build/ci_claude_review_workflow_test.py`
+- `tests/build/ci_grok_review_workflow_test.py`
+- `apps/docs-site/docs/operations/testing-and-proof.mdx`
+
+Retain `.github/scripts/grok_review.py`: the publisher still imports its transport
+helpers. Remove production CLI invocation in the workflow, without deleting
+this shared helper or rewriting historical evidence. T3 completes before T6
+owns any cutover-specific edits to `ci_review_pipeline_test.py`. Preserve producer
+job names and artifact naming; changing them requires declaring the affected
+readers again. Run the T3 protocol suite as regression plus workflow event-graph
+and topology checks; do not equate static workflow tests with real acceptance.
+
+The four repeated paths have sequential ownership, never concurrent editors.
+Before T6 dispatch, record the merged T3/T4/T5 heads and transfer these exact
+paths to the T6 worker:
+
+- `tests/build/ci_review_pipeline_test.py`: T3 owns protocol/history validation;
+  T6 adds only production-routing integration and keeps T3 regression cases.
+- `docs/quality/2026-09-10-pr-agent-netcup-operations.md`: T4 owns installation,
+  capacity and isolated-slot evidence; T6 appends cutover, rollback and operator
+  handoff receipts without replacing T4 measurements.
+- `apps/docs-site/docs/operations/testing-and-proof.mdx`: T4 documents the
+  installed shadow slot and source paths; after T4 merge, T6 alone updates the
+  active production route and source paths after verified cutover.
+- `docs/quality/2026-09-10-pr-agent-shadow-acceptance.md`: T5 owns the frozen
+  cohort and all outcomes; after T5 merge, T6 appends links to cutover receipts
+  without changing samples, denominator, thresholds or the T5 verdict.
+
+The lead verifies these ownership transfers before dispatch; upstream Task
+workers must have settled and stopped editing the transferred paths.
+
+Verification and caught defects:
+
+最低层 workflow/协议/cutover 回归与 scripts/docs-site.sh check；Netcup 正式 current-head 真实评审和发布读回、保守失败、scope mapping、幂等、受控回滚/恢复。无自动产品 release 或 full self-test 扩展。
+
+## Acceptance and handoff
+
+The design owns the preregistered quality oracle, cohort and thresholds. Freeze
+input hashes, engine/config identity and budget before evaluation. Every Task
+records passing and failed commands, exact revisions, limitations and artifact
+identity. Read back GitHub state; a worker summary or an Issue closing is not
+completion evidence. Verify all journey legs after each transition.
+
+T5 cannot authorize T6 with an incomplete cohort or negative quality evidence.
+T6 cannot close the umbrella with only mock API, static workflow or schema
+checks. Production review, publication, scope propagation, failure recovery and
+rollback/restoration need their own exact receipts. Historical failures remain.
+
+## Version Management
+
+Version impact: none — these Tasks concern CI tooling and operation, not product
+or module manifests. Engine pin, dependency lock and container digest identify
+the tool build. No Product Build, Portal snapshot or Release is allocated.
+
+## Documentation Impact
+
+Documentation impact: none
+Reason: T1 is proposed design/plan only, with no current Portal behavior change.
+Its declared verification still includes `scripts/docs-site.sh check`.
+
+T2/T3 internal adapters remain inactive until explicitly wired. Reassess their
+Portal impact against their final diff. T4 and T6 own documentation of actual
+operation and must include `apps/docs-site/docs/operations/testing-and-proof.mdx`
+and route `/operations/testing-and-proof/` when deployed behavior is documented.
+Update page source_paths and run the check in that same Task. A docs/quality
+file alone does not justify claiming that a Portal page was changed.
+
+## Progress
+
+- T1: independent audit found B1 activation wording and B2 sequential ownership ambiguity; both now have explicit dispositions below and await shipping review.
+- Initial docs-site check failed due to missing locked dependencies; retained as setup evidence.
+- After locked dependency setup, docs-site check exited 0: 116 tests passed, build and 44 routes validated.
+- The initial follow-up worker reached its Codex usage limit; after the owner reset usage, a replacement delivered the bounded disposition review.
+- F2/F4/F6/F8 and technical F5 were independently resolved; the lead added explicit unchanged dispositions for the remaining two F3 paths.
+- USD 20/month budget is authorized; DeepSeek secret presence is verified. Live authentication/funding and deployment access remain T4/T5 prerequisites; T1 final readiness review is pending.
+- Fresh host inventory run `34426814461/1` passed at `66edc6559eef898005c82b300c95e353310607d1`; capacity acceptance remains open.
+- T2–T6: not started.
+- Key entry contract: GitHub Actions Secrets `PR_AGENT_DEEPSEEK_API_KEY`, `PR_AGENT_ZAI_API_KEY`, `PR_AGENT_KIMI_API_KEY`, `PR_AGENT_XAI_API_KEY`; DeepSeek presence confirmed, other three dedicated names not observed.
+- DeepSeek is the first live candidate; Kimi is temporarily disabled, and subscription-only access is not counted as general API availability.
+- Existing production review configuration and server services: unchanged.
