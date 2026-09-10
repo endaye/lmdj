@@ -570,6 +570,31 @@ Version impact: none — CI operation only; no Product or Contract identity chan
 Documentation impact: required
 Affected portal pages: /operations/testing-and-proof/
 
+## T4 prerequisite: deterministic protected installation modes
+
+Correct the permissive-umask failure observed in PR #1184 contract runs
+34517124144/1 and 34517599417/1. The installer sets `umask 022` for newly
+created parents; existing unsafe owner/mode boundaries still fail without
+repair. Positive test fixtures model protected installation bytes instead of
+inheriting a checkout's writable mode. No engine/config/bundle identity changes.
+
+Declared files: `scripts/ci/pr-agent/deploy-runner.sh`,
+`tests/build/ci_pr_agent_runner_test.py`,
+`tests/build/ci_pr_agent_review_test.py`, this plan,
+`docs/quality/2026-09-10-pr-agent-netcup-operations.md`, and
+`apps/docs-site/docs/operations/testing-and-proof.mdx`.
+
+Lowest-tier verification: both focused Python suites under normal and `0002`
+umasks, including clean `python3 -S` execution, `bash -n` on the installer,
+and `scripts/docs-site.sh check`. Regression assertions cover new-parent
+`0755` modes, repeat-install idempotence and rejection without mutation of
+existing writable paths. No gate, timeout or security validation is relaxed;
+real bundle/systemd/provider/coexistence acceptance remains separate.
+
+Version impact: none — internal deployment behavior, no versioned identity.
+Documentation impact: required
+Affected portal pages: /operations/testing-and-proof/
+
 ## Progress
 
 - T1 was merged through PR #1161 at `409a1a4d`; the earlier audit and failed

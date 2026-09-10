@@ -32,6 +32,12 @@ the future Netcup slot. It has four explicit modes:
   records (including `uncertain` records) are retained, and service activation
   remains pending.
 
+The installer fixes its creation mask to `022`, so newly created intermediate
+parents are `0755` even when the operator's caller uses a permissive mask.
+Explicit private modes remain unchanged. Existing group/world-writable paths
+still fail admission without chmod/chown repair. Positive test fixtures use
+protected installation modes; separate negative cases retain unsafe paths.
+
 The committed `scripts/ci/pr-agent/netcup-review.json` is intentionally
 `active: false`. Its inventory binds the T2 Linux/amd64 bundle
 `4359addd2521847509b61c655a346e1a59e49ebec87934024f35c066eb3f26d3` /

@@ -480,6 +480,10 @@ T2 引擎使用的 monetary ledger。工具不会调用
 `systemctl`，不会启动 runner，不会读取 API key，不会执行 PR checkout、
 PR config 或 hooks，也不持有 GitHub write token。
 
+部署入口固定创建 mask 为 `022`，新建中间父目录保持 `0755`，不受调用者宽松
+umask 影响；显式私有权限不变。既有 group/world-writable 路径仍拒绝准入，
+不会隐式 chmod/chown 修复；测试分别验证新建权限、重复安装和既有不安全路径拒绝。
+
 首次 install 只有在 target 确实 pristine 时才允许没有 runtime state；已有
 release、current link、unit、receipt、operator config 或 slot lock 却缺少 state，
 以及 closed v2 state/transition 语义不完整，都会保留现有数据并要求人工恢复。中断
