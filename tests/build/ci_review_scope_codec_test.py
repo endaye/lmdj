@@ -41,6 +41,25 @@ class CodecTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ambiguous"):
             codec.decode(codec.encode({}) + "\n" + codec.encode({}))
 
+    def test_history_v2_roundtrip_binds_complete_digest(self):
+        history = {"schema": "lmdj.ci-review-history.v2", "attempts": [{
+            "backend": "deepseek", "status": "failed", "error_class": "timeout", "review": None,
+            "engine": None, "provider": None, "model": None, "coverage_sha256": None,
+        }]}
+        marker = codec.encode_history(history)
+        self.assertEqual(codec.decode_history(marker), history)
+
+    def test_history_v2_marker_tamper_is_rejected(self):
+        history = {"schema": "lmdj.ci-review-history.v2", "attempts": [{
+            "backend": "deepseek", "status": "failed", "error_class": "timeout", "review": None,
+            "engine": None, "provider": None, "model": None, "coverage_sha256": None,
+        }]}
+        marker = codec.encode_history(history)
+        digest, encoded = codec.HISTORY_PATTERN.findall(marker)[0]
+        forged = marker.replace(digest, "0" * 64)
+        with self.assertRaisesRegex(ValueError, "digest"):
+            codec.decode_history(forged)
+
 
 if __name__ == "__main__":
     unittest.main()

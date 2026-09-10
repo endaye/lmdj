@@ -269,7 +269,9 @@ def _identity(identity):
         _sha(identity[key])
     for key in ("pr_number", "run_id", "run_attempt"):
         require(type(identity[key]) is int and identity[key] > 0, f"{key} must be a positive integer")
-    require(identity["backend"] in ("glm", "kimi", "grok", "deterministic"), "unknown review backend")
+    # DeepSeek is the new engine route; deterministic remains the explicit
+    # publisher/failure identity.  Historical GLM/Kimi/Grok records stay valid.
+    require(identity["backend"] in ("deepseek", "glm", "kimi", "grok", "deterministic"), "unknown review backend")
 
 
 def build_record(policy, *, changed_paths, ai_labels=(), complete=True, **identity):
