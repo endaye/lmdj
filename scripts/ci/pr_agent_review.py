@@ -124,6 +124,14 @@ _SAFE_ERROR_CLASSES = {
 }
 _PATH_RE = re.compile(r"^[^\x00\r\n]+$")
 _HUNK_ID_RE = re.compile(r"^[A-Za-z0-9._:/#-]{1,240}$")
+_DIFF_HUNK_HEADER_RE = re.compile(
+    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@[^\r\n]*(?:\n)?$"
+)
+_DIFF_METADATA_PREFIXES = (
+    "old mode ", "new mode ", "deleted file mode ", "new file mode ",
+    "copy from ", "copy to ", "rename from ", "rename to ",
+    "similarity index ", "dissimilarity index ", "index ", "--- ", "+++ ",
+)
 
 
 class EngineError(Exception):
@@ -281,7 +289,144 @@ def _parse_patch_right_lines(patch: str) -> list[tuple[int, str]]:
     return result
 
 
-def _verify_hunk(path: str, hunk: dict[str, Any], file_patch: str) -> dict[str, Any]:
+def _diff_partition_error(reason: str) -> EngineError:
+    return EngineError(
+        "input_invalid",
+        "authenticated diff is not exactly partitioned by its file and hunk inventory; "
+        f"why: {reason}; remedy: regenerate the complete immutable collector input",
+    )
+
+
+def _split_diff_files(diff_text: str) -> dict[str, str]:
+    """Split a canonical Git diff into complete, non-overlapping file records."""
+    lines = diff_text.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if line.startswith("diff --git ")]
+    if not starts or starts[0] != 0:
+        raise _diff_partition_error("the full diff has content outside a file record")
+    sections: dict[str, str] = {}
+    for position, start in enumerate(starts):
+        stop = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        header = lines[start].removesuffix("\n")
+        if header in sections:
+            raise _diff_partition_error("the full diff contains a duplicate file header")
+        sections[header] = "".join(lines[start:stop])
+    return sections
+
+
+def _parse_diff_hunks(section: str) -> list[str]:
+    """Return each complete unified hunk and reject unpartitioned hunk payload."""
+    lines = section.splitlines(keepends=True)
+    hunks: list[str] = []
+    old_ranges: list[tuple[int, int]] = []
+    new_ranges: list[tuple[int, int]] = []
+    index = 1
+    saw_hunk = False
+    while index < len(lines):
+        line = lines[index]
+        if not line.startswith("@@"):
+            if saw_hunk and line not in ("\n", ""):
+                raise _diff_partition_error("a diff file has content outside its declared hunks")
+            if not saw_hunk and line not in ("\n", "") and not line.startswith(_DIFF_METADATA_PREFIXES):
+                # Non-hunk binary/unreadable payload is checked against its exact
+                # supplied patch by the caller instead of being discarded here.
+                return []
+            index += 1
+            continue
+        match = _DIFF_HUNK_HEADER_RE.fullmatch(line)
+        if match is None:
+            raise _diff_partition_error("a diff file contains a malformed hunk header")
+        saw_hunk = True
+        start = index
+        old_start = int(match.group(1))
+        old_required = int(match.group(2)) if match.group(2) is not None else 1
+        new_start = int(match.group(3))
+        new_required = int(match.group(4)) if match.group(4) is not None else 1
+        for range_start, range_count, prior_ranges, side in (
+            (old_start, old_required, old_ranges, "old"),
+            (new_start, new_required, new_ranges, "new"),
+        ):
+            range_stop = range_start + range_count
+            if range_count and any(range_start < prior_stop and prior_start < range_stop
+                                   for prior_start, prior_stop in prior_ranges):
+                raise _diff_partition_error(f"a diff file contains overlapping {side}-side hunk ranges")
+            if range_count:
+                prior_ranges.append((range_start, range_stop))
+        old_seen = 0
+        new_seen = 0
+        previous_was_payload = False
+        index += 1
+        while old_seen < old_required or new_seen < new_required:
+            if index >= len(lines):
+                raise _diff_partition_error("a diff hunk ends before its declared line counts")
+            payload = lines[index]
+            if payload.removesuffix("\n") == "\\ No newline at end of file":
+                if not previous_was_payload:
+                    raise _diff_partition_error("a no-newline marker does not follow a diff payload line")
+                previous_was_payload = False
+                index += 1
+                continue
+            if payload.startswith(" "):
+                old_seen += 1
+                new_seen += 1
+            elif payload.startswith("-"):
+                old_seen += 1
+            elif payload.startswith("+"):
+                new_seen += 1
+            else:
+                raise _diff_partition_error("a diff hunk contains an invalid payload line")
+            previous_was_payload = True
+            if old_seen > old_required or new_seen > new_required:
+                raise _diff_partition_error("a diff hunk exceeds its declared line counts")
+            index += 1
+        if (index < len(lines)
+                and lines[index].removesuffix("\n") == "\\ No newline at end of file"):
+            if not previous_was_payload:
+                raise _diff_partition_error("a no-newline marker does not follow a diff payload line")
+            index += 1
+        hunks.append("".join(lines[start:index]))
+    return hunks
+
+
+def _verify_diff_semantics(section: str, *, path: str, old_path: str | None, kind: str) -> None:
+    lines = set(section.splitlines())
+    has_hunks = any(line.startswith("@@") for line in lines)
+    if kind == "renamed":
+        if f"rename from {old_path}" not in lines or f"rename to {path}" not in lines:
+            raise _diff_partition_error("a rename record does not match its explicit old and new paths")
+        if has_hunks and not ({f"--- a/{old_path}", f"+++ b/{path}"} <= lines):
+            raise _diff_partition_error("a renamed text record does not match its old and new patch paths")
+    elif any(line.startswith(("rename from ", "rename to ")) for line in lines):
+        raise _diff_partition_error("rename metadata is labeled with a different change kind")
+    if any(line.startswith(("copy from ", "copy to ")) for line in lines):
+        raise _diff_partition_error("copied diff records are unsupported by the closed change-kind inventory")
+    if kind == "modified" and not ({f"--- a/{path}", f"+++ b/{path}"} <= lines):
+        raise _diff_partition_error("a modified record does not match its patch paths")
+    if kind == "added" and not ({"--- /dev/null", f"+++ b/{path}"} <= lines):
+        raise _diff_partition_error("an added record does not have explicit /dev/null semantics")
+    if kind == "deleted" and not ({f"--- a/{path}", "+++ /dev/null"} <= lines):
+        raise _diff_partition_error("a deleted record does not have explicit /dev/null semantics")
+    binary = any(line == "GIT binary patch" or line.startswith("Binary files ") for line in lines)
+    if kind == "binary" and not binary:
+        raise _diff_partition_error("a binary record has no explicit binary diff marker")
+    if kind == "binary" and "GIT binary patch" not in lines:
+        expected_marker = f"Binary files a/{path} and b/{path} differ"
+        if expected_marker not in lines:
+            raise _diff_partition_error("a binary record does not match its explicit path")
+    if kind not in ("binary", "unreadable") and binary:
+        raise _diff_partition_error("binary diff content is labeled with a text change kind")
+
+
+def _verify_non_hunk_patch(section: str, patch: str) -> None:
+    body = section.split("\n", 1)[1] if "\n" in section else ""
+    if body.count(patch) != 1:
+        raise _diff_partition_error("a non-text patch is not represented exactly once")
+    remaining = body.replace(patch, "", 1)
+    for line in remaining.splitlines(keepends=True):
+        if line not in ("\n", "") and not line.startswith(_DIFF_METADATA_PREFIXES):
+            raise _diff_partition_error("a non-text diff has payload outside its supplied patch")
+
+
+def _verify_hunk(path: str, hunk: dict[str, Any], expected_patch: str) -> dict[str, Any]:
     required = {"id", "patch", "patch_sha256", "right_lines"}
     if not isinstance(hunk, dict) or set(hunk) != required:
         raise EngineError("input_invalid", "input hunk metadata is incomplete")
@@ -295,8 +440,8 @@ def _verify_hunk(path: str, hunk: dict[str, Any], file_patch: str) -> dict[str, 
         raise EngineError("input_invalid", "input hunk is empty or oversized")
     if not isinstance(patch_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", patch_hash):
         raise EngineError("input_invalid", "input hunk hash is invalid")
-    if _sha256(patch.encode("utf-8")) != patch_hash or patch not in file_patch:
-        raise EngineError("input_invalid", "input hunk hash or parent patch does not match")
+    if _sha256(patch.encode("utf-8")) != patch_hash or patch != expected_patch:
+        raise _diff_partition_error(f"hunk {hunk_id!r} is not the exact authenticated diff fragment for {path!r}")
     parsed = _parse_patch_right_lines(patch)
     if not isinstance(right_lines, list):
         raise EngineError("input_invalid", "input RIGHT-side line inventory is invalid")
@@ -365,6 +510,7 @@ def authenticate_input(document: Any) -> dict[str, Any]:
         raise EngineError("input_invalid", "input diff is oversized")
     if diff["byte_length"] != len(diff_bytes) or _sha256(diff_bytes) != diff["sha256"]:
         raise EngineError("input_invalid", "input diff hash or length does not match")
+    diff_sections = _split_diff_files(diff_text)
 
     files = document.get("files")
     if not isinstance(files, list) or not files or len(files) > MAX_FILES:
@@ -392,6 +538,13 @@ def authenticate_input(document: Any) -> dict[str, Any]:
             old_path = _safe_path(old_path)
         if kind == "renamed" and not old_path:
             raise EngineError("input_invalid", "rename input has no old path")
+        if kind != "renamed" and old_path is not None:
+            raise EngineError("input_invalid", "non-rename input unexpectedly contains an old path")
+        diff_old_path = old_path if kind == "renamed" else path
+        diff_header = f"diff --git a/{diff_old_path} b/{path}"
+        section = diff_sections.pop(diff_header, None)
+        if section is None:
+            raise _diff_partition_error(f"file record {path!r} has no exact diff file section")
         patch = file.get("patch")
         patch_hash = file.get("patch_sha256")
         if not isinstance(patch, str) or not patch or len(patch.encode("utf-8")) > MAX_PATCH_BYTES:
@@ -417,12 +570,24 @@ def authenticate_input(document: Any) -> dict[str, Any]:
             # review input.  It remains visible in the receipt and always fails closed.
             if file.get("base") is not None or file.get("head") is not None:
                 raise EngineError("input_invalid", "unreadable input must not carry guessed bytes")
+        _verify_diff_semantics(section, path=path, old_path=old_path, kind=kind)
         hunks = file.get("hunks")
         if not isinstance(hunks, list) or not hunks:
             raise EngineError("input_invalid", "input file has no hunk coverage record")
+        parsed_hunks = _parse_diff_hunks(section)
+        supplied_hunks = [hunk.get("patch") if isinstance(hunk, dict) else None for hunk in hunks]
+        if parsed_hunks:
+            if patch != "".join(parsed_hunks) or supplied_hunks != parsed_hunks:
+                raise _diff_partition_error(f"file record {path!r} does not exactly cover every diff hunk")
+            expected_hunks = parsed_hunks
+        else:
+            if kind not in ("renamed", "binary", "unreadable") or supplied_hunks != [patch]:
+                raise _diff_partition_error(f"file record {path!r} has unsupported zero-hunk content")
+            _verify_non_hunk_patch(section, patch)
+            expected_hunks = [patch]
         normalized_hunks: list[dict[str, Any]] = []
-        for hunk in hunks:
-            normalized = _verify_hunk(path, hunk, patch)
+        for hunk, expected_patch in zip(hunks, expected_hunks, strict=True):
+            normalized = _verify_hunk(path, hunk, expected_patch)
             if normalized["id"] in seen_hunks:
                 raise EngineError("input_invalid", "input contains duplicate hunk identities")
             seen_hunks.add(normalized["id"])
@@ -451,6 +616,8 @@ def authenticate_input(document: Any) -> dict[str, Any]:
             "head_encoding": head_encoding,
             "hunks": normalized_hunks,
         })
+    if diff_sections:
+        raise _diff_partition_error("the full diff contains a file omitted from the supplied inventory")
     if represented_bytes > MAX_INPUT_BYTES * 2:
         raise EngineError("input_invalid", "authenticated input representation is oversized")
     return {
@@ -1195,6 +1362,19 @@ def _make_coverage(authenticated: dict[str, Any], *, provider: str, model: dict[
     }
 
 
+def _attempt_usage_evidence(usage: dict[str, Any] | None, *, num_ai_calls: int,
+                            duration_ms: int) -> dict[str, Any]:
+    tokens = copy.deepcopy(usage) if usage is not None else {
+        "prompt_tokens": None, "completion_tokens": None, "total_tokens": None,
+    }
+    return {
+        **tokens,
+        "num_ai_calls": num_ai_calls,
+        "cost_status": "known" if usage is not None else "unavailable",
+        "duration_ms": duration_ms,
+    }
+
+
 def _validate_coverage_receipt(receipt: Any) -> dict[str, Any]:
     if not isinstance(receipt, dict) or set(receipt) != COVERAGE_KEYS:
         raise EngineError("incomplete_coverage", "coverage receipt keys do not match the closed schema")
@@ -1274,7 +1454,20 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
             raise
         usage = _usage_from_response(response)
         context["usage"] = usage
-        actual_model, response_version = _response_model_identity(response)
+        try:
+            actual_model, response_version = _response_model_identity(response)
+        except EngineError:
+            # Retain any independently valid half of the observed identity and
+            # the response usage in attempt evidence.  The ledger keeps the
+            # conservative reservation because malformed identity is unpriceable.
+            raw_model = _response_field(response, "model")
+            raw_version = _response_field(response, "model_version")
+            if isinstance(raw_model, str) and raw_model.strip() and len(raw_model) <= 200:
+                context["response_model"] = raw_model.strip()
+            if isinstance(raw_version, str) and raw_version.strip() and len(raw_version) <= 200:
+                context["response_version"] = raw_version.strip()
+            ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
+            raise
         context["response_model"] = actual_model
         context["response_version"] = response_version
         if actual_model != provider["priced_response_model"]:
@@ -1326,9 +1519,14 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
                 original_tenacity_retry = retrying.retry
                 original_tenacity_wait = getattr(retrying, "wait", None)
                 try:
-                    from tenacity import retry_if_exception, wait_fixed
+                    from tenacity import retry_if_exception
+
+                    def bounded_retry_wait(_retry_state):
+                        remaining = max(0.0, deadline_monotonic - time.monotonic())
+                        return min(float(budget["backoff_seconds"]), remaining)
+
                     retrying.retry = retry_if_exception(bounded_retry_policy)
-                    retrying.wait = wait_fixed(budget["backoff_seconds"])
+                    retrying.wait = bounded_retry_wait
                 except Exception:
                     retrying.retry = original_tenacity_retry
                     original_tenacity_wait = None
@@ -1779,11 +1977,13 @@ def _attempt_model_identity(provider: dict[str, Any], context: dict[str, Any] | 
 
 async def _run_provider(upstream: dict[str, Any], authenticated: dict[str, Any], config: dict[str, Any], provider: dict[str, Any],
                         *, ledger: Ledger, attempt_id: str, engine_cwd: Path,
-                        deadline_monotonic: float, engine_identity: dict[str, Any]) -> dict[str, Any]:
+                        deadline_monotonic: float, engine_identity: dict[str, Any],
+                        attempt_evidence: dict[str, Any]) -> dict[str, Any]:
     adapter = PROVIDER_ADAPTERS[provider["provider_id"]]
     started = time.monotonic()
     last_prompt = None
     last_usage = None
+    reviewed_result = None
     try:
         with _isolated_environment(
             engine_cwd, provider["credential_ref"], adapter["secret_env"],
@@ -1816,9 +2016,12 @@ async def _run_provider(upstream: dict[str, Any], authenticated: dict[str, Any],
                     raise EngineError("invalid_output", "PR-Agent did not produce a structured review capture")
                 prompt = "\n".join(str(message.get("content", "")) for message in context["messages"] if isinstance(message, dict))
                 last_prompt = prompt
-                usage = context.get("usage") or {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None}
-                last_usage = usage
-                usage = {**usage, "num_ai_calls": context.get("num_ai_calls", 0), "cost_status": "known" if context.get("usage") else "unavailable", "duration_ms": int((time.monotonic() - started) * 1000)}
+                last_usage = context.get("usage")
+                usage = _attempt_usage_evidence(
+                    last_usage,
+                    num_ai_calls=context.get("num_ai_calls", 0),
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
                 model_identity = _attempt_model_identity(provider, context)
                 coverage = _validate_coverage_receipt(_make_coverage(
                     authenticated, provider=provider["provider_id"], model=model_identity,
@@ -1827,7 +2030,7 @@ async def _run_provider(upstream: dict[str, Any], authenticated: dict[str, Any],
                 if not coverage["complete"]:
                     raise EngineError("incomplete_coverage", "actual handler prompt did not contain complete input coverage")
                 mapped = _validate_native_mapping(native, authenticated)
-                return {
+                reviewed_result = {
                     "status": "reviewed",
                     "error_class": None,
                     "error": None,
@@ -1846,35 +2049,68 @@ async def _run_provider(upstream: dict[str, Any], authenticated: dict[str, Any],
                     for message in context["messages"] if isinstance(message, dict)
                 ) or last_prompt
                 last_usage = context.get("usage") or last_usage
+                attempt_evidence.update({
+                    "prompt": last_prompt,
+                    "usage": copy.deepcopy(last_usage),
+                    "num_ai_calls": context.get("num_ai_calls", 0),
+                    "model": _attempt_model_identity(provider, context),
+                })
                 _REQUEST_CONTEXT.reset(token)
                 _PROVIDER_INPUT.reset(provider_input_token)
                 _restore_admission(upstream["litellm_ai_handler"], originals, upstream["LiteLLMAIHandler"])
+        # asyncio can only deliver the surrounding timeout at an await point.
+        # Parsing, structured capture, and context/environment cleanup are
+        # synchronous, so enforce the far side after all of them have exited.
+        if time.monotonic() >= deadline_monotonic:
+            raise EngineError("deadline_exceeded", "engine deadline expired during provider result processing")
+        if reviewed_result is None:
+            raise EngineError("internal_error", "PR-Agent provider attempt produced no terminal result")
+        duration_ms = int((time.monotonic() - started) * 1000)
+        reviewed_result["usage"]["duration_ms"] = duration_ms
+        reviewed_result["duration_ms"] = duration_ms
+        return reviewed_result
+    except asyncio.CancelledError:
+        # The enclosing total-attempt deadline owns this cancellation.  Do not
+        # turn it into an ordinary provider result and thereby suppress timeout.
+        raise
     except EngineError as exc:
         model_identity = _attempt_model_identity(provider, locals().get("context"))
+        duration_ms = int((time.monotonic() - started) * 1000)
+        usage = _attempt_usage_evidence(
+            last_usage,
+            num_ai_calls=locals().get("context", {}).get("num_ai_calls", 0),
+            duration_ms=duration_ms,
+        )
         coverage = _validate_coverage_receipt(_make_coverage(
             authenticated, provider=provider["provider_id"], model=model_identity,
-            prompt=last_prompt, usage=last_usage, complete=False, engine=engine_identity,
+            prompt=last_prompt, usage=usage, complete=False, engine=engine_identity,
         ))
         return {
             "status": "not-reviewed", "error_class": exc.error_class, "error": exc.safe_message,
             "provider": provider["provider_id"], "model": model_identity,
             "engine": copy.deepcopy(engine_identity),
             "review": None, "native_review": None, "coverage": coverage,
-            "usage": coverage["usage"], "duration_ms": int((time.monotonic() - started) * 1000),
+            "usage": coverage["usage"], "duration_ms": duration_ms,
         }
     except BaseException as exc:
         category = _error_class(exc)
         model_identity = _attempt_model_identity(provider, locals().get("context"))
+        duration_ms = int((time.monotonic() - started) * 1000)
+        usage = _attempt_usage_evidence(
+            last_usage,
+            num_ai_calls=locals().get("context", {}).get("num_ai_calls", 0),
+            duration_ms=duration_ms,
+        )
         coverage = _validate_coverage_receipt(_make_coverage(
             authenticated, provider=provider["provider_id"], model=model_identity,
-            prompt=last_prompt, usage=last_usage, complete=False, engine=engine_identity,
+            prompt=last_prompt, usage=usage, complete=False, engine=engine_identity,
         ))
         return {
             "status": "not-reviewed", "error_class": category, "error": "PR-Agent request failed; see finite diagnostics",
             "provider": provider["provider_id"], "model": model_identity,
             "engine": copy.deepcopy(engine_identity),
             "review": None, "native_review": None, "coverage": coverage,
-            "usage": coverage["usage"], "duration_ms": int((time.monotonic() - started) * 1000),
+            "usage": coverage["usage"], "duration_ms": duration_ms,
         }
 
 
@@ -1906,11 +2142,39 @@ async def _run_async(authenticated: dict[str, Any], config: dict[str, Any], *, s
                 break
             await asyncio.sleep(config["budget"]["backoff_seconds"])
         attempt_id = f"{authenticated['identity']['run_id']}:{authenticated['identity']['run_attempt']}"
-        result = await _run_provider(
-            upstream, authenticated, config, provider, ledger=ledger,
-            attempt_id=attempt_id, engine_cwd=engine_cwd,
-            deadline_monotonic=deadline_monotonic, engine_identity=engine_identity,
-        )
+        attempt_started = time.monotonic()
+        remaining = deadline_monotonic - attempt_started
+        attempt_evidence: dict[str, Any] = {}
+        try:
+            async with asyncio.timeout(remaining):
+                result = await _run_provider(
+                    upstream, authenticated, config, provider, ledger=ledger,
+                    attempt_id=attempt_id, engine_cwd=engine_cwd,
+                    deadline_monotonic=deadline_monotonic, engine_identity=engine_identity,
+                    attempt_evidence=attempt_evidence,
+                )
+        except TimeoutError:
+            duration_ms = int((time.monotonic() - attempt_started) * 1000)
+            usage = _attempt_usage_evidence(
+                attempt_evidence.get("usage"),
+                num_ai_calls=attempt_evidence.get("num_ai_calls", 0),
+                duration_ms=duration_ms,
+            )
+            model_identity = attempt_evidence.get("model", _attempt_model_identity(provider))
+            coverage = _validate_coverage_receipt(_make_coverage(
+                authenticated, provider=provider["provider_id"],
+                model=model_identity, prompt=attempt_evidence.get("prompt"), usage=usage,
+                complete=False, engine=engine_identity,
+            ))
+            result = {
+                "status": "not-reviewed", "error_class": "deadline_exceeded",
+                "error": "engine deadline expired during the provider attempt",
+                "provider": provider["provider_id"], "model": model_identity,
+                "engine": copy.deepcopy(engine_identity),
+                "review": None, "native_review": None, "coverage": coverage,
+                "usage": coverage["usage"],
+                "duration_ms": duration_ms,
+            }
         attempts.append(result)
         if result["status"] == "reviewed":
             break

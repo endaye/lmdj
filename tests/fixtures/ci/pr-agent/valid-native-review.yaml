@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:202921906b9b7f7077c5172693099c22be5364daf30a7014879af5009393ea0f
-size 335
+review:
+  general_comments: |
+    The changed code has one concrete correctness issue.
+  key_issues_to_review:
+    - relevant_file: src/example.py
+      issue_header: Possible Bug
+      issue_content: >-
+        The new value is not persisted when the function returns through the changed branch.
+      start_line: 2
+      end_line: 2

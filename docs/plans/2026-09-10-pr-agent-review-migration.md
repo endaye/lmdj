@@ -76,6 +76,7 @@ Dependencies: T1.
 
 Declared files:
 
+- `.gitattributes` (only the two exact PR-Agent semantic YAML fixture exceptions)
 - `scripts/ci/pr_agent_review.py`
 - `scripts/ci/pr-agent/Dockerfile`
 - `scripts/ci/pr-agent/requirements.in`
@@ -236,6 +237,40 @@ case. Require a model-supplied summary for clean output and bound the whole raw
 prediction before parsing, including all retained native fields. Run the
 affected focused tests, staged ownership checks, required clean-CI proof, new
 bundle proof and `scripts/docs-site.sh check` for this plan amendment.
+
+### T2 second independent-review correction contract
+
+The independent review of `5c0c0dd0` found four additional defects. Preserve
+its negative probes and the previously accepted v11 artifact as historical
+source-bound evidence; changed adapter bytes require a new final bundle.
+
+- Authenticate an exact one-to-one partition of every diff file and hunk,
+  rather than substring membership. Extra, omitted, duplicate or overlapping
+  records fail before admission. Rename, deletion, binary and unreadable cases
+  remain explicit; do not silently discard unsupported records.
+- Enforce the engine deadline around the whole provider attempt, including
+  upstream retry backoff, parsing and cleanup. Cancel/clamp waits to remaining
+  time and prove no late dispatch or continued work after return.
+- Store the two tiny native YAML fixtures as ordinary Git text via exact-path
+  `.gitattributes` exceptions, following the existing actionlint exception.
+  Renormalize only those two files. Prove the staged/committed Git blobs contain
+  actual YAML, then run the real integration command from a checkout without
+  LFS smudging. Do not enable repository-wide LFS hydration or rely on runner
+  cache state; the workflows' existing invocation stays unchanged.
+- Every post-dispatch malformed model/version identity must finalize the
+  reservation exactly once as uncertain when trusted pricing is unavailable,
+  retaining observed usage and conservative cost. A completed unpriceable
+  response must not remain indistinguishable from an in-flight reservation.
+
+Correction scope: `.gitattributes`, `scripts/ci/pr_agent_review.py`,
+`tests/build/ci_pr_agent_review_test.py`, the two declared native YAML fixtures,
+and this plan. Run focused partition/ledger tests, actual pinned-handler
+backoff/cancellation/identity tests, the no-smudge clean integration proof,
+staged scope/ownership and declaration checks, the final identity-bound Linux
+bundle proof, and `scripts/docs-site.sh check`. A passing earlier broad suite
+is retained with its exact scope; these new defects need their own negative
+and far-side assertions. No provider admission mode is changed. The production
+counter registry remains empty and T2/its Draft PR remain incomplete.
 
 ## T3 — 适配 LMDJ 评审协议、测试范围与所有下游消费者 (#1152)
 
@@ -440,6 +475,16 @@ Update page source_paths and run the check in that same Task. A docs/quality
 file alone does not justify claiming that a Portal page was changed.
 
 ## Progress
+
+- T1 was merged through PR #1161 at `409a1a4d`; the earlier audit and failed
+  receipts below remain historical evidence.
+- T2 has an inactive baseline in Draft PR #1175. The second independent review
+  requests the four corrections specified above; no current-head approval or
+  live supplier acceptance is claimed.
+- T3–T6 have not started. The separate proposal to change the 100K pre-dispatch
+  check requires the pending user decision and is not implemented.
+
+### Initial planning evidence (historical)
 
 - T1: independent audit found B1 activation wording and B2 sequential ownership ambiguity; both now have explicit dispositions below and await shipping review.
 - Initial docs-site check failed due to missing locked dependencies; retained as setup evidence.

@@ -331,3 +331,5 @@ workers/audio/config/** -filter text=auto
 
 # GitHub Actions tooling must be available before checkout can hydrate LFS.
 .github/actionlint.yaml !filter !diff !merge text
+tests/fixtures/ci/pr-agent/valid-native-review.yaml !filter !diff !merge text
+tests/fixtures/ci/pr-agent/clean-native-review.yaml !filter !diff !merge text

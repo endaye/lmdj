@@ -52,6 +52,52 @@ def signed_input(mutator=None):
     return document
 
 
+def refresh_diff_identity(document):
+    diff_bytes = document["diff"]["text"].encode("utf-8")
+    document["diff"]["byte_length"] = len(diff_bytes)
+    document["diff"]["sha256"] = hashlib.sha256(diff_bytes).hexdigest()
+
+
+def add_rename_second_hunk(document):
+    base_bytes = (
+        b"def value():\n    return 1\nline 3\nline 4\nline 5\n"
+        b"line 6\nline 7\nline 8\nline 9\nline 10\n"
+    )
+    head_bytes = (
+        b"def value():\n    return 2\n    # changed\nline 3\nline 4\n"
+        b"line 5\nline 6\nline 7\nline 8\nline 9\nline 10\ntail\n"
+    )
+    second_hunk = "@@ -10,0 +12 @@\n+tail\n"
+    document["diff"]["text"] = document["diff"]["text"].replace(
+        "diff --git a/src/example.py b/src/example.py\n",
+        "diff --git a/src/old-example.py b/src/example.py\n"
+        "similarity index 80%\n"
+        "rename from src/old-example.py\n"
+        "rename to src/example.py\n",
+        1,
+    ).replace(
+        "--- a/src/example.py\n", "--- a/src/old-example.py\n", 1,
+    ).replace("\ndiff --git a/obsolete.txt", second_hunk + "\ndiff --git a/obsolete.txt", 1)
+    file = document["files"][0]
+    file["old_path"] = "src/old-example.py"
+    file["change_kind"] = "renamed"
+    file["base"] = blob(base_bytes)
+    file["head"] = blob(head_bytes)
+    file["patch"] += second_hunk
+    file["patch_sha256"] = hashlib.sha256(file["patch"].encode("utf-8")).hexdigest()
+    file["hunks"].append({
+        "id": "src-example-h2",
+        "patch": second_hunk,
+        "patch_sha256": hashlib.sha256(second_hunk.encode("utf-8")).hexdigest(),
+        "right_lines": [{
+            "line": 12,
+            "text": "tail",
+            "sha256": hashlib.sha256(b"tail").hexdigest(),
+        }],
+    })
+    refresh_diff_identity(document)
+
+
 def blob(data: bytes, encoding="utf-8"):
     return {
         "object_id": hashlib.sha1(f"blob {len(data)}\0".encode("ascii") + data).hexdigest(),
@@ -265,6 +311,143 @@ class InputAndPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(adapter.EngineError, "input authentication digest"):
             adapter.authenticate_input(tampered)
 
+    def test_diff_partition_accepts_multi_file_multi_hunk_rename_and_deletion(self):
+        authenticated = adapter.authenticate_input(signed_input(add_rename_second_hunk))
+        self.assertEqual([file["change_kind"] for file in authenticated["files"]], ["renamed", "deleted"])
+        self.assertEqual([hunk["id"] for hunk in authenticated["files"][0]["hunks"]], [
+            "src-example-h1", "src-example-h2",
+        ])
+        self.assertEqual(len(adapter.expected_coverage(authenticated)), 3)
+
+        def mismatched_old_patch_path(document):
+            add_rename_second_hunk(document)
+            document["diff"]["text"] = document["diff"]["text"].replace(
+                "--- a/src/old-example.py\n", "--- a/src/example.py\n", 1,
+            )
+            refresh_diff_identity(document)
+
+        with self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
+            adapter.authenticate_input(signed_input(mismatched_old_patch_path))
+
+    def test_diff_partition_rejects_extra_or_omitted_files_and_hunks(self):
+        def extra_file(document):
+            document["diff"]["text"] += (
+                "\ndiff --git a/unlisted.py b/unlisted.py\n"
+                "new file mode 100644\n--- /dev/null\n+++ b/unlisted.py\n"
+                "@@ -0,0 +1 @@\n+unlisted\n"
+            )
+            refresh_diff_identity(document)
+
+        def omitted_file(document):
+            document["files"].pop()
+
+        def extra_hunk(document):
+            unlisted_hunk = "@@ -10,0 +11 @@\n+unlisted\n"
+            document["diff"]["text"] = document["diff"]["text"].replace(
+                "\ndiff --git a/obsolete.txt", unlisted_hunk + "\ndiff --git a/obsolete.txt", 1,
+            )
+            refresh_diff_identity(document)
+
+        def omitted_hunk(document):
+            add_rename_second_hunk(document)
+            second = document["files"][0]["hunks"].pop()
+            document["files"][0]["patch"] = document["files"][0]["patch"].removesuffix(second["patch"])
+            document["files"][0]["patch_sha256"] = hashlib.sha256(
+                document["files"][0]["patch"].encode("utf-8")
+            ).hexdigest()
+
+        for name, mutator in (
+            ("extra-file", extra_file), ("omitted-file", omitted_file),
+            ("extra-hunk", extra_hunk), ("omitted-hunk", omitted_hunk),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
+                adapter.authenticate_input(signed_input(mutator))
+
+    def test_diff_partition_rejects_duplicate_and_overlapping_fragments(self):
+        def duplicate(document):
+            duplicate_hunk = copy.deepcopy(document["files"][0]["hunks"][0])
+            duplicate_hunk["id"] = "src-example-duplicate"
+            document["files"][0]["hunks"].append(duplicate_hunk)
+
+        def append_hunk(document, patch, hunk_id, line):
+            document["diff"]["text"] = document["diff"]["text"].replace(
+                "\ndiff --git a/obsolete.txt", patch + "\ndiff --git a/obsolete.txt", 1,
+            )
+            file = document["files"][0]
+            file["patch"] += patch
+            file["patch_sha256"] = hashlib.sha256(file["patch"].encode()).hexdigest()
+            file["hunks"].append({
+                "id": hunk_id,
+                "patch": patch,
+                "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(),
+                "right_lines": [{
+                    "line": line, "text": "tail", "sha256": hashlib.sha256(b"tail").hexdigest(),
+                }],
+            })
+            refresh_diff_identity(document)
+
+        def old_overlap(document):
+            append_hunk(document, "@@ -2 +4 @@\n-    return 1\n+tail\n", "old-overlap", 4)
+
+        def new_overlap(document):
+            append_hunk(document, "@@ -3,0 +3 @@\n+tail\n", "new-overlap", 3)
+
+        for name, mutator in (
+            ("duplicate", duplicate), ("old-overlap", old_overlap), ("new-overlap", new_overlap),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(adapter.EngineError, "exactly partitioned"):
+                adapter.authenticate_input(signed_input(mutator))
+
+    def test_diff_partition_accepts_no_newline_markers_after_removed_and_added_lines(self):
+        def no_newline(document):
+            patch = (
+                "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n"
+                "+new\n\\ No newline at end of file\n"
+            )
+            first_section, second_section = document["diff"]["text"].split(
+                "\ndiff --git a/obsolete.txt", 1,
+            )
+            metadata = first_section.split("@@", 1)[0]
+            document["diff"]["text"] = metadata + patch + "\ndiff --git a/obsolete.txt" + second_section
+            file = document["files"][0]
+            file["patch"] = patch
+            file["patch_sha256"] = hashlib.sha256(patch.encode()).hexdigest()
+            file["base"] = blob(b"old")
+            file["head"] = blob(b"new")
+            file["hunks"] = [{
+                "id": "src-example-h1", "patch": patch,
+                "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(),
+                "right_lines": [{
+                    "line": 1, "text": "new", "sha256": hashlib.sha256(b"new").hexdigest(),
+                }],
+            }]
+            refresh_diff_identity(document)
+
+        authenticated = adapter.authenticate_input(signed_input(no_newline))
+        self.assertEqual(authenticated["files"][0]["hunks"][0]["right_lines"], [1])
+
+    def test_binary_diff_record_remains_explicit_and_authenticated(self):
+        def add_binary(document):
+            patch = "Binary files a/image.bin and b/image.bin differ\n"
+            document["diff"]["text"] += (
+                "\ndiff --git a/image.bin b/image.bin\n"
+                "index 1111111..2222222 100644\n" + patch
+            )
+            document["files"].append({
+                "path": "image.bin", "old_path": None, "change_kind": "binary",
+                "patch": patch, "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(),
+                "base": blob(b"old-binary", "binary"), "head": blob(b"new-binary", "binary"),
+                "hunks": [{
+                    "id": "image-binary", "patch": patch,
+                    "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(), "right_lines": [],
+                }],
+            })
+            refresh_diff_identity(document)
+
+        authenticated = adapter.authenticate_input(signed_input(add_binary))
+        self.assertEqual(authenticated["files"][-1]["change_kind"], "binary")
+        self.assertEqual(authenticated["files"][-1]["hunks"][0]["right_lines"], [])
+
     def test_blob_object_id_and_closed_metadata_are_verified(self):
         def malformed_id(document):
             document["files"][0]["base"]["object_id"] = "not-a-git-object"
@@ -332,9 +515,8 @@ class InputAndPolicyTests(unittest.TestCase):
     def test_unreadable_content_is_visible_but_never_complete(self):
         def add_unreadable(document):
             marker = "@@ -0,0 +0,0 @@\n"
-            document["diff"]["text"] += marker
-            document["diff"]["byte_length"] = len(document["diff"]["text"].encode())
-            document["diff"]["sha256"] = hashlib.sha256(document["diff"]["text"].encode()).hexdigest()
+            document["diff"]["text"] += "\ndiff --git a/secret.bin b/secret.bin\n" + marker
+            refresh_diff_identity(document)
             document["files"].append({
                 "path": "secret.bin",
                 "old_path": None,
@@ -357,6 +539,35 @@ class InputAndPolicyTests(unittest.TestCase):
                                           prompt=adapter.render_prompt_input(authenticated), usage=None)
         self.assertFalse(coverage["complete"])
         self.assertIn("secret.bin", {hunk["path"] for hunk in coverage["expected_hunks"]})
+
+    def test_native_yaml_fixtures_bypass_lfs_and_hash_as_plain_git_bytes(self):
+        for relative in (
+            "tests/fixtures/ci/pr-agent/valid-native-review.yaml",
+            "tests/fixtures/ci/pr-agent/clean-native-review.yaml",
+        ):
+            with self.subTest(path=relative):
+                data = (ROOT / relative).read_bytes()
+                self.assertTrue(data.startswith(b"review:\n"))
+                self.assertNotIn(b"git-lfs.github.com/spec", data)
+                attributes = subprocess.run(
+                    ["git", "check-attr", "filter", "diff", "merge", "text", "--", relative],
+                    cwd=ROOT, text=True, capture_output=True, check=True,
+                ).stdout
+                for expected in ("filter: unspecified", "diff: unspecified", "merge: unspecified", "text: set"):
+                    self.assertIn(
+                        expected, attributes,
+                        "why: a semantic PR-Agent YAML fixture is still selected for LFS; "
+                        "remedy: keep the exact-path !filter !diff !merge text exception",
+                    )
+                stored_oid = subprocess.run(
+                    ["git", "hash-object", f"--path={relative}", "--stdin"],
+                    cwd=ROOT, input=data, capture_output=True, check=True,
+                ).stdout.decode().strip()
+                self.assertEqual(
+                    stored_oid, blob(data)["object_id"],
+                    "why: Git clean filtering would replace semantic YAML with another object; "
+                    "remedy: store this exact tiny fixture as ordinary Git text",
+                )
 
     def test_oversized_diff_is_rejected_before_engine_import(self):
         def enlarge(document):
@@ -959,6 +1170,45 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertIsNone(final["actual_amount_usd"])
         self.assertIsNone(final["usage"])
 
+    def test_malformed_model_and_version_finalize_one_uncertain_ledger_record(self):
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+        malformed = (7, "", "x" * 201)
+        for field in ("model", "model_version"):
+            for value in malformed:
+                with self.subTest(field=field, value_type=type(value).__name__, value_length=len(value) if isinstance(value, str) else None):
+                    calls = []
+
+                    async def fake_acompletion(**kwargs):
+                        calls.append(kwargs)
+                        response = {
+                            "model": "fixture-deepseek-served", "model_version": "fixture-version-1",
+                            "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                        }
+                        response[field] = value
+                        return FakeCompletion(response)
+
+                    result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+                    attempt = result["attempts"][0]
+                    self.assertEqual(result["status"], "not-reviewed")
+                    self.assertEqual(attempt["error_class"], "unsupported_model")
+                    self.assertEqual(attempt["usage"]["prompt_tokens"], 10)
+                    self.assertEqual(attempt["usage"]["completion_tokens"], 5)
+                    self.assertEqual(len(calls), 1)
+                    if field == "model":
+                        self.assertIsNone(attempt["model"]["actual"])
+                        self.assertEqual(attempt["model"]["response_version"], "fixture-version-1")
+                    else:
+                        self.assertEqual(attempt["model"]["actual"], "fixture-deepseek-served")
+                        self.assertIsNone(attempt["model"]["response_version"])
+                    records = [json.loads(line) for line in ledger.read_text().splitlines()]
+                    self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
+                    self.assertEqual(records[-1]["reserved_amount_usd"], 0.01005)
+                    self.assertIsNone(records[-1]["actual_amount_usd"])
+                    self.assertIsNone(records[-1]["usage"])
+                    shutil.rmtree(self.root / "engine")
+                    ledger.unlink()
+
     def test_rendered_message_input_cap_rejects_before_admission_or_dispatch(self):
         self.config_path.write_text(self.config_path.read_text().replace("input_token_cap = 10000", "input_token_cap = 1"))
         calls = []
@@ -1004,6 +1254,65 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(result["status"], "reviewed")
         self.assertGreater(calls[0]["timeout"], 0)
         self.assertLessEqual(calls[0]["timeout"], 1)
+
+    def test_total_deadline_rejects_success_after_synchronous_parse_or_cleanup(self):
+        self.config_path.write_text(
+            self.config_path.read_text().replace("engine_deadline_seconds = 600", "engine_deadline_seconds = 1")
+        )
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+
+        async def fake_acompletion(**_kwargs):
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            })
+
+        for phase in ("parse", "cleanup"):
+            with self.subTest(phase=phase):
+                completed = []
+                if phase == "parse":
+                    original = adapter._strict_native_yaml
+
+                    def delayed(*args, **kwargs):
+                        time.sleep(1.2)
+                        value = original(*args, **kwargs)
+                        completed.append("parse")
+                        return value
+
+                    delay_patch = mock.patch.object(adapter, "_strict_native_yaml", side_effect=delayed)
+                else:
+                    original = adapter._restore_admission
+
+                    def delayed(*args, **kwargs):
+                        original(*args, **kwargs)
+                        time.sleep(1.2)
+                        completed.append("cleanup")
+
+                    delay_patch = mock.patch.object(adapter, "_restore_admission", side_effect=delayed)
+
+                started = time.monotonic()
+                with delay_patch:
+                    result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+                elapsed = time.monotonic() - started
+                completed_at_return = list(completed)
+                time.sleep(0.2)
+                self.assertLess(elapsed, 3.5)
+                self.assertGreaterEqual(result["elapsed_ms"], 1000)
+                self.assertEqual(result["status"], "not-reviewed")
+                self.assertEqual(result["error_class"], "deadline_exceeded")
+                self.assertEqual(result["attempts"][0]["error_class"], "deadline_exceeded")
+                self.assertEqual(result["attempts"][0]["usage"]["num_ai_calls"], 1)
+                self.assertEqual(result["attempts"][0]["usage"]["prompt_tokens"], 10)
+                self.assertEqual(result["attempts"][0]["coverage"]["usage"], result["attempts"][0]["usage"])
+                self.assertEqual(completed, [phase])
+                self.assertEqual(completed, completed_at_return, "deadline work continued after return")
+                self.assertEqual(
+                    [json.loads(line)["status"] for line in ledger.read_text().splitlines()],
+                    ["reserved", "reconciled"],
+                )
+                shutil.rmtree(self.root / "engine")
+                ledger.unlink()
 
     def test_semantically_empty_and_unknown_native_actual_outputs_fail(self):
         calls = []
@@ -1157,6 +1466,40 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(len(records), 4)
         self.assertEqual({record["request_id"] for record in records},
                          {"t2-fixture-run:1:deepseek:1", "t2-fixture-run:1:deepseek:2"})
+
+    def test_total_deadline_cancels_stock_backoff_without_late_second_dispatch(self):
+        self.config_path.write_text(
+            self.config_path.read_text()
+            .replace("backoff_seconds = 0", "backoff_seconds = 5")
+            .replace("engine_deadline_seconds = 600", "engine_deadline_seconds = 1")
+        )
+        calls = []
+
+        async def fake_acompletion(**kwargs):
+            calls.append({"called_at": time.monotonic(), "timeout": kwargs["timeout"]})
+            raise RuntimeError("503 temporary network fixture")
+
+        started = time.monotonic()
+        result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+        elapsed = time.monotonic() - started
+        calls_at_return = list(calls)
+        time.sleep(0.2)
+        self.assertLess(
+            elapsed, 6,
+            "why: stock retry backoff escaped the one-second engine deadline; "
+            "remedy: keep the complete provider attempt in the total cancellation scope",
+        )
+        self.assertLess(result["elapsed_ms"], 2000)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["error_class"], "deadline_exceeded")
+        self.assertEqual(result["attempts"][0]["error_class"], "deadline_exceeded")
+        self.assertEqual(result["attempts"][0]["usage"]["num_ai_calls"], 1)
+        self.assertIsNone(result["attempts"][0]["usage"]["prompt_tokens"])
+        self.assertEqual(result["attempts"][0]["coverage"]["usage"], result["attempts"][0]["usage"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls, calls_at_return, "cancelled backoff continued work after the engine returned")
+        records = [json.loads(line) for line in ledger.read_text().splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
 
     def test_rate_limit_failure_uses_one_bounded_retry(self):
         calls = []
