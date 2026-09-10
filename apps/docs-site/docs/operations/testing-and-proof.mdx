@@ -1,9 +1,9 @@
 ---
 title: Testing 与 Proof
 area: operations
-status: implemented
+status: partial
 owners: [core, quality]
-source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/quality/2026-08-24-creator-capture-precommit-crop.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md, docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md, docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md, docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md, docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md, docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/creator-web-deploy.sh, scripts/web-toolchain-conformance.sh, .github/workflows/pr-review.yml, .github/workflows/pr-contract.yml, .github/workflows/self-test-report.yml, apps/docs-site/scripts/check-doc-impact.mjs, scripts/ci/self_test.py, scripts/ci/self_test_report.py, scripts/ci/batch_verdict.py, scripts/ci/batch_execution.py, scripts/ci/batch_evidence_validation.py, scripts/ci/report_outbox.py, scripts/ci/elastic_runner.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, scripts/ci/incremental_entry.py, scripts/ci/incremental_storage.json, scripts/ci/test_scope.py, scripts/ci/batch_runtime.py, scripts/ci/report_runtime.py, scripts/ci/review_discovery_runtime.py, scripts/ci/review_wait.py, .github/workflows/incremental-completion.yml, scripts/ci/incremental_completion.py, docs/plans/2026-09-08-lmdj-ci-completion-relay.md]
+source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/quality/2026-08-24-creator-capture-precommit-crop.md, docs/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/2026-09-01-stage8-m2-macos-chrome-hearing-1.0.40.0.md, docs/release-evidence/2026-09-01-stage7-m3-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-09-04-stage8-m8-macos-safari-pointer-hearing-1.0.41.0.md, docs/release-evidence/2026-09-04-stage8b-m7-macos-safari-capture-1.0.41.0.md, docs/release-evidence/2026-08-27-web-runtime-l1-macos-safari-pointer-1.0.36.0.md, docs/release-evidence/2026-08-31-web-runtime-l2-macos-chrome-pointer-1.0.40.0.md, docs/release-evidence/2026-08-31-web-runtime-l3-macos-chrome-midi-1.0.40.0.md, docs/release-evidence/2026-09-01-web-runtime-l4-ipados-safari-touch-1.0.40.0.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/creator-web-deploy.sh, scripts/web-toolchain-conformance.sh, .github/workflows/pr-review.yml, .github/workflows/pr-contract.yml, .github/workflows/self-test-report.yml, apps/docs-site/scripts/check-doc-impact.mjs, scripts/ci/self_test.py, scripts/ci/self_test_report.py, scripts/ci/batch_verdict.py, scripts/ci/batch_execution.py, scripts/ci/batch_evidence_validation.py, scripts/ci/report_outbox.py, scripts/ci/elastic_runner.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, .github/workflows/deploy-creator-web.yml, scripts/ci/incremental_entry.py, scripts/ci/incremental_storage.json, scripts/ci/test_scope.py, scripts/ci/batch_runtime.py, scripts/ci/report_runtime.py, scripts/ci/review_discovery_runtime.py, scripts/ci/review_wait.py, .github/workflows/incremental-completion.yml, scripts/ci/incremental_completion.py, docs/plans/2026-09-08-lmdj-ci-completion-relay.md, scripts/ci/pr-agent/deploy-runner.sh, scripts/ci/pr-agent/netcup-review.json, tests/build/ci_pr_agent_runner_test.py, docs/quality/2026-09-10-pr-agent-netcup-operations.md]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -455,6 +455,79 @@ Linux CI 现按角色标签路由，取代共享的 `contabo` 来源标签：兼
 `ci-general` 角色现同时承担五个通用 Linux job：Docs/static、Architecture Portal、CI Contract、Deploy Contract 与 Chameleon Lab，各自以字面标签集合 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`lmdj-linux-pool`、`ci-general` 直接路由，角色满载或缺失时排队而不转向付费 runner。这五个 job 短小、廉价且不共享任何 toolchain contract，因此审阅单位是整组而非逐条 lane；它们各自保留原有的 proof 步骤，切换只改变执行位置。Architecture Portal 是其中唯一以 reusable workflow 运行的 lane：GitHub 不允许 `uses:` job 声明 `runs-on`，因此角色写在被调用的 `architecture-portal.yml` 的 job 上，caller 只保留 lane 条件与 trust 条件；该 workflow 只有 `workflow_call` 触发器且只有这一个 caller，所以角色写在那里不会波及其他路径。
 
 `ci-core` 角色承担四个原生 Core job：Ubuntu Core、Linux ASan、Coverage 与 Core Package，各自以字面标签集合 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`lmdj-linux-pool`、`ci-core` 直接路由。该角色刻意不跨两台主机：持久原生 `ccache` 与预装的 clang-22/llvm-22 覆盖率工具链是共享主机上的机器状态，不是池状态；两台主机现都预装同版本 Clang/LLVM 22 工具链（noble 自带归档止于 18.1.3，22 来自 apt.llvm.org 的精确主版本套件 `llvm-toolchain-noble-22`，由 `scripts/ci/host/install-llvm-toolchain.sh` 以固定密钥指纹与 apt 优先级 100 安装；#693），角色可放在任一台，但同一时刻只注册在一台上。2026-09-06 起该角色由 Contabo 迁至 netcup：同一 revision 的实测（#676，决定记录于 #298）显示四条原生 Core lane 在 netcup 上冷缓存即已快于 Contabo 热缓存（`core_ubuntu` 热 60 s 对 126 s，`package` 318 s 对 566 s），且 netcup 无 staging 共租户。因此三条原生 Core lane 的 `use-ccache` 不再取决于 selector 输出而恒为 `true`，ccache 统计步骤也变为无条件；Coverage 在角色上不安装任何工具链——此前为 hosted fallback 而存在的 `apt-get install` 步骤已删除，保留下来只会在多个 runner service 共享的机器状态上反复写入；每条 Core lane 都只以 `command -v` 校验 pin 存在。Package 依旧禁用 ccache。
+
+### PR-Agent Netcup 评审槽位（T4，工具已实现，尚未部署）
+
+仓库现在包含 `scripts/ci/pr-agent/deploy-runner.sh` 与其 inactive
+`netcup-review.json`。`dry-run`/`verify` 是只读身份校验；`install` 只将
+固定 T2 bundle 的归档、五个 detached member identities、实际提取文件、
+受保护 inventory、单独绑定的 operator runtime TOML 和 systemd
+service/sibling slice 单元 stage 到 operator-owned 路径。发布目录以
+`0755` 供 service user 穿越，文件以 `0444` 固定；只有独立的 state、attempt
+和 output 根为 service-writable，不能回写受信代码或 `/etc` 配置；`rollback`
+只切换精确的上一 immutable release，并在 current/previous 两侧保留 archive
+长度、SHA-256、detached identity 和成员身份。重复 install 与重复 rollback
+都是幂等的，部署 receipt 为 append-only 并保留 `uncertain` 记录，绝不污染
+T2 引擎使用的 monetary ledger。工具不会调用
+`systemctl`，不会启动 runner，不会读取 API key，不会执行 PR checkout、
+PR config 或 hooks，也不持有 GitHub write token。
+
+首次 install 只有在 target 确实 pristine 时才允许没有 runtime state；已有
+release、current link、unit、receipt、operator config 或 slot lock 却缺少 state，
+以及 closed v2 state/transition 语义不完整，都会保留现有数据并要求人工恢复。中断
+transition 的 receipt 必须是与 pending record 完全相等的一条 canonical closed record；
+同一 ID 的 malformed、identity/action/status/target mismatch 或冲突 duplicate 都不会
+清除 transition。每个新的实际 transition 仍分配新的 UUID。
+
+真实 `--target-root /` install 在任何 target write 前要求 root EUID、已 provision 的
+service UID/GID，以及 root-owned operator state/inventory、runtime source/target、
+control/install parents 的安全 owner/group/mode。它拒绝 symlink、path substitution、
+parent 可写和 owner drift，且不会把既有非 operator-owned 路径静默 chown；runtime TOML
+是 root:`lmdj-pr-agent` `0440`。fixture 用显式
+`PR_AGENT_DEPLOY_FIXTURE_IDENTITIES` 模拟身份，只覆盖本地 contract，并非 Linux
+service-account/systemd proof。
+
+service 是固定的 `lmdj-pr-agent.service`，不是可多开的 template；真实
+执行命令使用 T2 v14 的 `/usr/bin/python3.12`、vendor `PYTHONPATH`、tokenizer
+cache、专用 engine cwd、固定 input/output 根以及由 operator-controlled
+`/etc/lmdj/pr-agent/runtime.toml` digest-bound 后复制到 service-owned release
+的 `runtime.toml`，不会使用归档内 inactive 的默认 TOML。这样同时满足
+T2 的非 symlink source-root 与 runtime-UID ownership guards。
+`/usr/bin/flock --nonblock --exclusive /run/lmdj-pr-agent/slot.lock` 是唯一
+review slot admission；dispatcher 在同一锁下原子写入 input 后，才由未来的
+lead-authorized operator invocation 启动 service。未来 invocation 需要先以
+`lmdj-pr-agent:lmdj-pr-agent` 预置 engine-state/attempt/output 根的 `0750`
+权限、以 root-only `0700` 预置 operator-state，并设置 `slot.lock` 的 `0660`
+权限，再
+以 `root:lmdj-pr-agent`、`0440` 安装 runtime TOML，并以 root-only `0600`
+安装 operator inventory，最后运行：
+
+```bash
+sudo install -o root -g root -m 0600 scripts/ci/pr-agent/netcup-review.json /etc/lmdj/pr-agent/netcup-review.json
+sudo scripts/ci/pr-agent/deploy-runner.sh install --config /etc/lmdj/pr-agent/netcup-review.json --bundle /srv/lmdj/t2-v14.tar --identity /srv/lmdj/DEPLOYMENT_IDENTITY.json --runtime-config /etc/lmdj/pr-agent/runtime.toml
+```
+
+此处只描述已实现的 entrypoint 和未来 invocation；本 Task 没有执行 host
+mutation、systemd activation、co-running resource/process-recovery 或 API
+证据。actual-v14 opt-in 只证明 archive bytes/vendor tree/direct canonical
+paths 与 rendered command contract；不证明非 root Linux T2 CLI startup 或
+systemd admission。T3 仍只负责协议 consumer，T5 负责 shadow Actions route，
+T6 负责 production；T4/T1153 仍 open。
+
+目标槽位的静态 envelope 是 one review slot、1 vCPU (`CPUQuota=100%`)、
+2 GiB (`MemoryMax=2G`)、low CPU weight 的 sibling
+`lmdj-pr-review.slice`；现有 heavy slice 的 14 vCPU/48 GiB 与 elastic
+ceiling 是只读保护条件。工具进入仓库不代表 host mutation、systemd
+activation、available-memory/pressure/swap headroom、co-running recovery、
+runner-04 classification、operator sudo/admin access、provider API
+authentication/model health、shadow quality 或 T5/T6 cutover 已通过。
+这些仍需 lead-authorized、read-back 的真实证据；当前 route 仍是
+self-hosted Netcup，不能推导 hosted fallback 或生产评审质量。
+
+后续 strict BatchMode receipt
+`/tmp/lmdj-pr-agent-plan/t4-readonly-host-access.md`（22:41+08）已证明
+`en@netcup01` 的 SSH read-only access，取代之前「未尝试 SSH」的 readiness 说法；
+`sudo -n true` 失败，因此 admin access、host capacity 和 admission 仍未证明。
 
 常规受信控制与裁决任务使用现有 Netcup、Contabo 主机上的字面
 self-hosted `ci-general` 角色。角色资格本身不授予写入、发布或部署权限；
