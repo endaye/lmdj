@@ -7,6 +7,7 @@ using namespace byte_fixture;
 
 class OldProvider : public Provider {
  public:
+  using Provider::run;
   std::string id() const override { return "old"; }
   std::vector<std::string> capabilities() const override { return {}; }
   AttemptResult run(AttemptId, const CapabilityRequest&, const ArtifactSink&);
