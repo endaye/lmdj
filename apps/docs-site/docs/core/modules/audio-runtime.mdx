@@ -78,6 +78,13 @@ Master FX prepare；嵌入 Engine 的固定 FX 对象仍计入固定成本。
 
 ### Voice-state 的回执有界存储
 
+实时逐帧 release 与 mix 扫描使用音频线程独占的最高活跃槽加一作为上界；
+不是活跃 Voice 数量。中间空洞保留，仍按槽号升序混音、按首个空槽准入，
+128 Voice 容量不变。live 与 Pattern 启动扩展上界，完成或取消收缩尾部空槽，
+静止 start/stop 重置；不增加 callback 分配、锁或跨线程共享状态。
+这项 source 优化及其 Engine 布局变化与 M1/M2 一同等待后续身份分配和消费者
+重编；减少扫描工作不证明 Cardputer CPU 余量已通过，仍需原 R2 目标复测。
+
 默认 Engine 构造的控制/结果/Voice-state 容量保持 `1024/4096/10240`；旧无参数
 `ReceiptBoundedVoiceStates` 构造保持 `1024/4096/2176`。新增显式额度 N 构造
 选择 `N/N/(2 × N + 128)`，N 必须处于 1..1024，且构造后不能调整。

@@ -434,10 +434,18 @@ bool RealtimeEngine::publish_voice_state(
 
 void RealtimeEngine::deactivate_voice(Voice& voice) noexcept {
   voice.active = false;
+  trim_voice_scan_extent();
   release_voice_bank(voice);
   release_voice_pattern(voice);
   cancelled_voices_ += 1;
   active_voices_ -= 1;
+}
+
+void RealtimeEngine::trim_voice_scan_extent() noexcept {
+  while (voice_scan_extent_ != 0 &&
+         !voices_[voice_scan_extent_ - 1].active) {
+    --voice_scan_extent_;
+  }
 }
 
 void RealtimeEngine::apply_published_pattern(
@@ -511,6 +519,8 @@ void RealtimeEngine::start_pattern_voice(
   voice->origin = PadControlOrigin::performance_replay;
   voice->pattern_slot = current_pattern_slot_.load(std::memory_order_relaxed);
   voice->active = true;
+  voice_scan_extent_ = std::max(
+      voice_scan_extent_, static_cast<std::size_t>(voice - voices_.data()) + 1);
   ++pattern_slots_[voice->pattern_slot].active_voices;
   started_voices_ += 1;
   active_voices_ += 1;
@@ -1350,6 +1360,7 @@ foundation::Result<void> RealtimeEngine::start() {
   pattern_origin_frame_ = 0;
   pattern_event_index_ = 0;
   std::fill(voices_.begin(), voices_.end(), Voice{});
+  voice_scan_extent_ = 0;
   preview_mask_ = 0;
   enqueued_events_ = 0;
   queued_host_input_events_.store(0, std::memory_order_relaxed);
@@ -1424,6 +1435,7 @@ void RealtimeEngine::stop() noexcept {
     voice = Voice{};
   }
   cancelled_voices_ += active;
+  voice_scan_extent_ = 0;
   active_voices_ = 0;
   preview_mask_ = 0;
 
@@ -1911,6 +1923,8 @@ void RealtimeEngine::render(
       continue;
     }
     voice->active = true;
+    voice_scan_extent_ = std::max(
+        voice_scan_extent_, static_cast<std::size_t>(voice - voices_.data()) + 1);
     if (auto* const owner = bank_slot_for(bank_slot); owner != nullptr) {
       ++owner->active_voices;
     }
@@ -1952,7 +1966,8 @@ void RealtimeEngine::render(
       audio_pending_pattern_.reset();
       observed_audio_pending_ = {};
     }
-    for (auto& voice : voices_) {
+    for (std::size_t index = 0; index < voice_scan_extent_; ++index) {
+      auto& voice = voices_[index];
       if (voice.active && !voice.releasing &&
           voice.scheduled_release_frame != 0 &&
           runtime_frame >= voice.scheduled_release_frame) {
@@ -1961,7 +1976,8 @@ void RealtimeEngine::render(
     }
     schedule_pattern_events(runtime_frame);
 
-    for (auto& voice : voices_) {
+    for (std::size_t index = 0; index < voice_scan_extent_; ++index) {
+      auto& voice = voices_[index];
       if (!voice.active) {
         continue;
       }
@@ -2037,6 +2053,7 @@ void RealtimeEngine::render(
             voice.end_frame));
       }
       voice.active = false;
+      trim_voice_scan_extent();
       release_voice_bank(voice);
       release_voice_pattern(voice);
       completed_voices_ += 1;

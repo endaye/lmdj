@@ -673,6 +673,7 @@ class RealtimeEngine final {
       std::uint32_t source_frame) noexcept;
   void stop_voice(Voice& voice, std::uint64_t runtime_frame) noexcept;
   void deactivate_voice(Voice& voice) noexcept;
+  void trim_voice_scan_extent() noexcept;
   void apply_published_pattern(
       const PatternPublishEntry& publication,
       std::uint64_t runtime_frame) noexcept;
@@ -719,6 +720,8 @@ class RealtimeEngine final {
       trigger_outcome_ring_{kRealtimeTriggerOutcomeCapacity};
   detail::RuntimeVoiceStateStorage voice_state_ring_;
   std::array<Voice, kRealtimeVoiceCapacity> voices_{};
+  // Audio-owned upper bound, not a count: inactive holes retain slot order.
+  std::size_t voice_scan_extent_ = 0;
   std::array<cooker::ResolvedPlayback, kRealtimeSampleSlots> previews_{};
   std::uint64_t preview_mask_ = 0;
   // Full 64-Pad mask, read only by control after acquire pending == 0. The
