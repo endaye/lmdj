@@ -71,7 +71,6 @@ MAX_FINDINGS = 20
 MAX_FINDING_BODY_BYTES = 8192
 MAX_SUMMARY_BYTES = 32 * 1024
 MAX_NATIVE_OUTPUT_BYTES = 128 * 1024
-MAX_INPUT_TOKENS = 100_000
 MAX_OUTPUT_TOKENS = 4_096
 DEFAULT_REQUEST_TIMEOUT = 60
 DEFAULT_ENGINE_DEADLINE = 600
@@ -81,13 +80,12 @@ DEFAULT_MAX_PROVIDER_REQUESTS = 2
 MAX_MONTHLY_USD = 20.0
 MAX_PILOT_USD = 20.0
 MAX_PER_PR_USD = 1.0
-# A production binding is added here only after supplier evidence establishes
-# its exact message counter and protocol overhead.  The initial registry is
-# intentionally empty: tokenizer_verified=true in configuration cannot turn an
-# unproved tokenizer guess into an admitted provider route.  Tests inject
-# explicitly fixture-only counters at this code-owned boundary.
-SUPPORTED_TOKENIZERS: dict[str, dict[str, Any]] = {}
 STOCK_TOKENIZER_CACHE_FILE = "tokenizer-cache/fb374d419588a4632f3f557e76b4b70aebbca790"
+BOUNDED_BILLABLE_CATEGORIES = ("input_tokens", "output_tokens", "fixed_request")
+DISABLED_OPTIONAL_CHARGE_KEYS = frozenset({
+    "functions", "function_call", "reasoning_effort", "service_tier",
+    "tool_choice", "tools", "web_search_options",
+})
 
 COVERAGE_KEYS = frozenset({
     "schema", "identity", "engine", "provider", "model", "input_sha256",
@@ -711,11 +709,12 @@ def _safe_config(document: Any) -> dict[str, Any]:
         "request_timeout_seconds": DEFAULT_REQUEST_TIMEOUT,
         "backoff_seconds": DEFAULT_BACKOFF,
         "engine_deadline_seconds": DEFAULT_ENGINE_DEADLINE,
-        "input_token_cap": MAX_INPUT_TOKENS,
         "output_token_cap": MAX_OUTPUT_TOKENS,
         "timezone": "Asia/Shanghai",
         "approval_id": "",
     }
+    if set(budget) - set(defaults):
+        raise EngineError("configuration_invalid", "trusted budget configuration contains obsolete or unknown keys")
     merged_budget = {**defaults, **budget}
     for key in ("monthly_usd", "pilot_usd", "per_pr_usd"):
         if not _finite_number(merged_budget[key]) or float(merged_budget[key]) <= 0:
@@ -727,7 +726,7 @@ def _safe_config(document: Any) -> dict[str, Any]:
             or float(merged_budget["per_pr_usd"]) > float(merged_budget["pilot_usd"])):
         raise EngineError("configuration_invalid", "trusted dollar budget exceeds the approved caps or has invalid ordering")
     for key, minimum in (("max_requests", 1), ("max_requests_per_provider", 1), ("request_timeout_seconds", 1),
-                         ("backoff_seconds", 0), ("engine_deadline_seconds", 1), ("input_token_cap", 1),
+                         ("backoff_seconds", 0), ("engine_deadline_seconds", 1),
                          ("output_token_cap", 1)):
         if not _strict_int(merged_budget[key]) or merged_budget[key] < minimum:
             raise EngineError("configuration_invalid", "trusted budget bound is invalid")
@@ -735,8 +734,8 @@ def _safe_config(document: Any) -> dict[str, Any]:
         raise EngineError("configuration_invalid", "trusted request bound exceeds the pilot maximum")
     if merged_budget["request_timeout_seconds"] > DEFAULT_REQUEST_TIMEOUT or merged_budget["engine_deadline_seconds"] > DEFAULT_ENGINE_DEADLINE:
         raise EngineError("configuration_invalid", "trusted timeout bound exceeds the pilot maximum")
-    if merged_budget["backoff_seconds"] > DEFAULT_BACKOFF or merged_budget["input_token_cap"] > MAX_INPUT_TOKENS or merged_budget["output_token_cap"] > MAX_OUTPUT_TOKENS:
-        raise EngineError("configuration_invalid", "trusted request size or backoff bound exceeds the pilot maximum")
+    if merged_budget["backoff_seconds"] > DEFAULT_BACKOFF or merged_budget["output_token_cap"] > MAX_OUTPUT_TOKENS:
+        raise EngineError("configuration_invalid", "trusted output or backoff bound exceeds the pilot maximum")
     if merged_budget["timezone"] != "Asia/Shanghai" or not isinstance(merged_budget["approval_id"], str) or not merged_budget["approval_id"]:
         raise EngineError("configuration_invalid", "trusted budget timezone or approval identity is invalid")
 
@@ -748,9 +747,9 @@ def _safe_config(document: Any) -> dict[str, Any]:
         "enabled", "endpoint", "model", "priced_response_model", "credential_ref",
         "pricing_revision", "input_price_usd_per_token", "output_price_usd_per_token",
         "pricing_verified", "funding_ref", "funding_verified", "context_token_limit",
-        "tokenizer_id", "tokenizer_verified",
+        "fixed_request_charge_usd", "billable_categories",
     }
-    activation_keys = provider_keys - {"enabled", "pricing_verified", "funding_verified", "tokenizer_verified"}
+    activation_keys = provider_keys - {"enabled", "pricing_verified", "funding_verified"}
     for provider_id in SUPPORTED_PROVIDERS:
         entry = providers[provider_id]
         if not isinstance(entry, dict) or set(entry) - provider_keys:
@@ -766,17 +765,16 @@ def _safe_config(document: Any) -> dict[str, Any]:
         required = (
             "endpoint", "model", "priced_response_model", "credential_ref",
             "pricing_revision", "input_price_usd_per_token", "output_price_usd_per_token",
-            "funding_ref", "context_token_limit", "tokenizer_id",
+            "funding_ref", "context_token_limit", "fixed_request_charge_usd", "billable_categories",
         )
         if (any(entry.get(key) is None for key in required)
                 or entry.get("pricing_verified") is not True
-                or entry.get("funding_verified") is not True
-                or entry.get("tokenizer_verified") is not True):
+                or entry.get("funding_verified") is not True):
             raise EngineError("configuration_invalid", "enabled provider lacks trusted activation evidence")
-        endpoint, model, priced_model, credential_ref, revision, funding_ref, tokenizer_id = (
+        endpoint, model, priced_model, credential_ref, revision, funding_ref = (
             entry[key] for key in (
                 "endpoint", "model", "priced_response_model", "credential_ref",
-                "pricing_revision", "funding_ref", "tokenizer_id",
+                "pricing_revision", "funding_ref",
             )
         )
         if not isinstance(endpoint, str) or not endpoint.startswith("https://") or any(ch.isspace() for ch in endpoint):
@@ -788,20 +786,19 @@ def _safe_config(document: Any) -> dict[str, Any]:
             raise EngineError("configuration_invalid", "enabled provider model or credential reference is invalid")
         if not isinstance(revision, str) or not revision or not isinstance(funding_ref, str) or not funding_ref:
             raise EngineError("configuration_invalid", "enabled provider pricing or funding identity is invalid")
-        if not _finite_number(entry["input_price_usd_per_token"]) or not _finite_number(entry["output_price_usd_per_token"]):
+        if (not _finite_number(entry["input_price_usd_per_token"])
+                or not _finite_number(entry["output_price_usd_per_token"])
+                or not _finite_number(entry["fixed_request_charge_usd"])):
             raise EngineError("configuration_invalid", "enabled provider pricing is invalid")
-        if float(entry["input_price_usd_per_token"]) < 0 or float(entry["output_price_usd_per_token"]) < 0:
+        if (float(entry["input_price_usd_per_token"]) < 0
+                or float(entry["output_price_usd_per_token"]) < 0
+                or float(entry["fixed_request_charge_usd"]) < 0):
             raise EngineError("configuration_invalid", "enabled provider pricing is negative")
-        tokenizer = SUPPORTED_TOKENIZERS.get(tokenizer_id)
-        if (not isinstance(tokenizer_id, str) or not isinstance(tokenizer, dict)
-                or set(tokenizer) != {"provider", "evidence_revision", "count_messages"}
-                or tokenizer.get("provider") != provider_id
-                or not isinstance(tokenizer.get("evidence_revision"), str)
-                or not tokenizer["evidence_revision"]
-                or not callable(tokenizer.get("count_messages"))):
-            raise EngineError("configuration_invalid", "enabled provider tokenizer binding is unsupported")
+        if entry["billable_categories"] != list(BOUNDED_BILLABLE_CATEGORIES):
+            raise EngineError("configuration_invalid", "enabled provider has unknown or unbounded billable categories")
         context_limit = entry["context_token_limit"]
-        if not _strict_int(context_limit) or context_limit < 2:
+        if (not _strict_int(context_limit) or context_limit < 2
+                or merged_budget["output_token_cap"] >= context_limit):
             raise EngineError("configuration_invalid", "enabled provider context token limit is invalid")
         normalized_providers[provider_id] = {
             "provider_id": provider_id,
@@ -815,7 +812,8 @@ def _safe_config(document: Any) -> dict[str, Any]:
             "input_price_usd_per_token": float(entry["input_price_usd_per_token"]),
             "output_price_usd_per_token": float(entry["output_price_usd_per_token"]),
             "context_token_limit": context_limit,
-            "tokenizer_id": tokenizer_id,
+            "fixed_request_charge_usd": float(entry["fixed_request_charge_usd"]),
+            "billable_categories": list(entry["billable_categories"]),
         }
     order = document.get("provider_order", ["deepseek", "glm", "xai", "kimi"])
     if not isinstance(order, list) or any(provider not in SUPPORTED_PROVIDERS for provider in order) or len(set(order)) != len(order):
@@ -933,7 +931,8 @@ class Ledger:
                 if previous["status"] != "reserved" or record["status"] == "reserved":
                     raise ValueError("ledger record has a duplicate or illegal state transition")
                 for key in ("schema", "approval_id", "currency", "attempt_id", "request_id", "provider",
-                            "effective_model", "price_revision", "reserved_amount_usd", "month", "created_at"):
+                            "effective_model", "price_revision", "reservation_basis",
+                            "reserved_amount_usd", "month", "created_at"):
                     if record[key] != previous[key]:
                         raise ValueError("ledger finalization identity does not match its reservation")
                 records[request_id] = record
@@ -948,7 +947,7 @@ class Ledger:
         required = {
             "schema", "approval_id", "currency", "attempt_id", "request_id", "provider",
             "effective_model", "price_revision", "reserved_amount_usd", "actual_amount_usd",
-            "status", "month", "created_at",
+            "reservation_basis", "envelope_breach", "status", "month", "created_at",
         }
         optional = {"usage", "reconciled_at"}
         if set(record) - required - optional or not required.issubset(record):
@@ -962,6 +961,23 @@ class Ledger:
             raise ValueError("ledger record month is invalid")
         if record["status"] not in ("reserved", "reconciled", "uncertain"):
             raise ValueError("ledger record status is invalid")
+        basis = record["reservation_basis"]
+        if (not isinstance(basis, dict) or set(basis) != {
+                "context_token_limit", "output_token_cap", "input_price_usd_per_token",
+                "output_price_usd_per_token", "fixed_request_charge_usd", "billable_categories",
+        }):
+            raise ValueError("ledger reservation basis is invalid")
+        if (not _strict_int(basis["context_token_limit"]) or basis["context_token_limit"] < 2
+                or not _strict_int(basis["output_token_cap"]) or basis["output_token_cap"] < 1
+                or basis["output_token_cap"] >= basis["context_token_limit"]):
+            raise ValueError("ledger reservation token bounds are invalid")
+        for key in ("input_price_usd_per_token", "output_price_usd_per_token", "fixed_request_charge_usd"):
+            if not _finite_number(basis[key]) or float(basis[key]) < 0:
+                raise ValueError("ledger reservation pricing is invalid")
+        if basis["billable_categories"] != list(BOUNDED_BILLABLE_CATEGORIES):
+            raise ValueError("ledger reservation categories are invalid")
+        if not isinstance(record["envelope_breach"], bool):
+            raise ValueError("ledger envelope breach marker is invalid")
         _conservative_amount(record["reserved_amount_usd"])
         actual = record["actual_amount_usd"]
         if actual is not None:
@@ -972,10 +988,10 @@ class Ledger:
         if "reconciled_at" in record and (not isinstance(record["reconciled_at"], str) or not record["reconciled_at"]):
             raise ValueError("ledger reconciliation timestamp is invalid")
         if record["status"] == "reserved":
-            if actual is not None or usage is not None or "reconciled_at" in record:
+            if actual is not None or usage is not None or "reconciled_at" in record or record["envelope_breach"]:
                 raise ValueError("reserved ledger record has finalization fields")
         elif record["status"] == "uncertain":
-            if actual is not None or usage is not None or "reconciled_at" not in record:
+            if actual is not None or usage is not None or "reconciled_at" not in record or record["envelope_breach"]:
                 raise ValueError("uncertain ledger record has invalid finalization fields")
         elif actual is None or usage is None or "reconciled_at" not in record:
             raise ValueError("reconciled ledger record lacks validated usage and amount")
@@ -999,18 +1015,23 @@ class Ledger:
         return sum(self._record_amount(record) for record in records.values() if predicate(record))
 
     def admit(self, *, approval_id: str, attempt_id: str, request_id: str, provider: str, model: str,
-              input_price: float, output_price: float, input_token_cap: int, output_token_cap: int,
+              input_price: float, output_price: float, context_token_limit: int, output_token_cap: int,
+              fixed_request_charge: float, billable_categories: list[str],
               max_requests: int, max_provider_requests: int, per_pr_usd: float, monthly_usd: float,
               pilot_usd: float, price_revision: str) -> dict[str, Any]:
         if not all(isinstance(value, str) and value for value in (approval_id, attempt_id, request_id, provider, model)):
             raise AdmissionDenied("request admission identity is incomplete")
         if (not _finite_number(input_price) or not _finite_number(output_price)
-                or float(input_price) < 0 or float(output_price) < 0):
+                or not _finite_number(fixed_request_charge)
+                or float(input_price) < 0 or float(output_price) < 0
+                or float(fixed_request_charge) < 0):
             raise AdmissionDenied("request admission pricing is invalid")
-        if (not _strict_int(input_token_cap) or not _strict_int(output_token_cap)
-                or input_token_cap < 1 or output_token_cap < 1
-                or input_token_cap > MAX_INPUT_TOKENS or output_token_cap > MAX_OUTPUT_TOKENS):
+        if (not _strict_int(context_token_limit) or not _strict_int(output_token_cap)
+                or context_token_limit < 2 or output_token_cap < 1
+                or output_token_cap >= context_token_limit or output_token_cap > MAX_OUTPUT_TOKENS):
             raise AdmissionDenied("request admission token cap is invalid")
+        if billable_categories != list(BOUNDED_BILLABLE_CATEGORIES):
+            raise AdmissionDenied("request admission billable categories are unknown or unbounded")
         if (not _strict_int(max_requests) or not _strict_int(max_provider_requests)
                 or max_requests < 1 or max_provider_requests < 1):
             raise AdmissionDenied("request admission count bound is invalid")
@@ -1020,7 +1041,9 @@ class Ledger:
             raise AdmissionDenied("request admission budget is invalid")
         try:
             reserved = _conservative_amount(
-                float(input_token_cap) * float(input_price) + float(output_token_cap) * float(output_price)
+                float(context_token_limit) * float(input_price)
+                + float(output_token_cap) * float(output_price)
+                + float(fixed_request_charge)
             )
         except (OverflowError, ValueError):
             reserved = 0.0
@@ -1032,6 +1055,14 @@ class Ledger:
         except Exception as exc:  # pragma: no cover - Python 3.12 includes zoneinfo data.
             raise AdmissionDenied("request admission timezone is unavailable") from exc
         month = local_now.strftime("%Y-%m")
+        reservation_basis = {
+            "context_token_limit": context_token_limit,
+            "output_token_cap": output_token_cap,
+            "input_price_usd_per_token": float(input_price),
+            "output_price_usd_per_token": float(output_price),
+            "fixed_request_charge_usd": float(fixed_request_charge),
+            "billable_categories": list(billable_categories),
+        }
         with self._locked():
             records = self._records()
             if request_id in records:
@@ -1042,6 +1073,15 @@ class Ledger:
                 return record.get("attempt_id") == attempt_id
             def same_provider(record: dict[str, Any]) -> bool:
                 return same_attempt(record) and record.get("provider") == provider
+            def same_envelope(record: dict[str, Any]) -> bool:
+                return (record.get("provider") == provider
+                        and record.get("effective_model") == model
+                        and record.get("price_revision") == price_revision)
+            envelope_records = [record for record in records.values() if same_envelope(record)]
+            if any(record["reservation_basis"] != reservation_basis for record in envelope_records):
+                raise AdmissionDenied("trusted pricing revision reservation basis does not match durable history")
+            if any(record["envelope_breach"] for record in envelope_records):
+                raise AdmissionDenied("trusted pricing envelope is held for operator review")
             committed_month = self._committed(records, current_month)
             committed_pilot = self._committed(records, lambda _record: True)
             committed_pr = self._committed(records, same_attempt)
@@ -1062,8 +1102,10 @@ class Ledger:
                 "provider": provider,
                 "effective_model": model,
                 "price_revision": price_revision,
+                "reservation_basis": reservation_basis,
                 "reserved_amount_usd": reserved,
                 "actual_amount_usd": None,
+                "envelope_breach": False,
                 "status": "reserved",
                 "month": month,
                 "created_at": now,
@@ -1071,7 +1113,8 @@ class Ledger:
             self._append(record)
             return record
 
-    def reconcile(self, reservation: dict[str, Any], *, status: str, actual_amount: float | None, usage: dict[str, Any] | None) -> None:
+    def reconcile(self, reservation: dict[str, Any], *, status: str, actual_amount: float | None,
+                  usage: dict[str, Any] | None, envelope_breach: bool = False) -> None:
         if status not in ("reconciled", "uncertain"):
             raise ValueError(status)
         if not isinstance(reservation, dict) or reservation.get("status") != "reserved":
@@ -1088,11 +1131,12 @@ class Ledger:
             if stored["status"] != "reserved":
                 raise AdmissionDenied("request reconciliation was already finalized")
             for key in ("schema", "approval_id", "currency", "attempt_id", "request_id", "provider",
-                        "effective_model", "price_revision", "reserved_amount_usd", "month", "created_at"):
+                        "effective_model", "price_revision", "reservation_basis",
+                        "reserved_amount_usd", "month", "created_at"):
                 if reservation[key] != stored[key]:
                     raise AdmissionDenied("request reconciliation reservation identity does not match its stored reservation")
             if status == "uncertain":
-                if actual_amount is not None or usage is not None:
+                if actual_amount is not None or usage is not None or envelope_breach:
                     raise AdmissionDenied("uncertain reconciliation must retain the reservation without usage")
             else:
                 if actual_amount is None:
@@ -1106,6 +1150,7 @@ class Ledger:
             record["status"] = status
             record["actual_amount_usd"] = actual_amount
             record["usage"] = usage
+            record["envelope_breach"] = envelope_breach
             record["reconciled_at"] = _utc_now()
             try:
                 self._validate_record(record)
@@ -1144,6 +1189,34 @@ def _response_model_identity(response: Any) -> tuple[str | None, str | None]:
     return model.strip() if isinstance(model, str) else None, version.strip() if isinstance(version, str) else None
 
 
+def _authoritative_actual_charge(response: Any) -> float | None:
+    """Read only LiteLLM's explicit upstream-provider charge header."""
+    hidden = _response_field(response, "_hidden_params")
+    if hidden is None:
+        return None
+    if not isinstance(hidden, dict):
+        dumper = getattr(hidden, "model_dump", None)
+        hidden = dumper() if callable(dumper) else None
+    if not isinstance(hidden, dict):
+        raise EngineError("invalid_output", "provider response charge metadata is malformed")
+    headers = hidden.get("additional_headers")
+    if headers is None:
+        return None
+    if not isinstance(headers, dict):
+        raise EngineError("invalid_output", "provider response charge metadata is malformed")
+    header = "llm_provider-x-litellm-response-cost"
+    if header not in headers:
+        return None
+    value = headers[header]
+    try:
+        amount = float(value) if isinstance(value, (int, float, str)) and not isinstance(value, bool) else math.nan
+    except (OverflowError, ValueError):
+        amount = math.nan
+    if not math.isfinite(amount) or amount < 0:
+        raise EngineError("invalid_output", "provider response actual charge is invalid")
+    return _conservative_amount(amount)
+
+
 def _require_complete_response(response: Any) -> None:
     choices = _response_field(response, "choices")
     if not isinstance(choices, list) or len(choices) != 1:
@@ -1153,31 +1226,21 @@ def _require_complete_response(response: Any) -> None:
         raise EngineError("invalid_output", "provider response did not terminate normally")
 
 
-def _count_rendered_messages(messages: Any, tokenizer_id: str) -> int:
-    binding = SUPPORTED_TOKENIZERS.get(tokenizer_id)
-    if (not isinstance(binding, dict)
-            or set(binding) != {"provider", "evidence_revision", "count_messages"}
-            or not callable(binding.get("count_messages"))):
-        raise EngineError("configuration_invalid", "request tokenizer binding is unsupported")
+def _complete_rendered_messages(messages: Any) -> list[dict[str, Any]]:
+    """Validate and capture the complete rendered request without counting it."""
     if not isinstance(messages, list) or not messages:
-        raise EngineError("invalid_parameter", "actual LiteLLM request has no countable messages")
+        raise EngineError("invalid_parameter", "actual LiteLLM request has no complete rendered messages")
     for message in messages:
         if not isinstance(message, dict) or set(message) - {"role", "content", "name"}:
-            raise EngineError("invalid_parameter", "actual LiteLLM message shape is unsupported")
+            raise EngineError("invalid_parameter", "actual LiteLLM rendered message shape is unsupported")
         role = message.get("role")
         content = message.get("content")
         name = message.get("name")
         if not isinstance(role, str) or not role or not isinstance(content, str):
-            raise EngineError("invalid_parameter", "actual LiteLLM message content is not countable")
+            raise EngineError("invalid_parameter", "actual LiteLLM rendered message content is invalid")
         if name is not None and (not isinstance(name, str) or not name):
-            raise EngineError("invalid_parameter", "actual LiteLLM message name is not countable")
-    try:
-        total = binding["count_messages"](copy.deepcopy(messages))
-    except Exception as exc:
-        raise EngineError("engine_unavailable", "approved request tokenizer failed") from exc
-    if not _strict_int(total) or total < 1:
-        raise EngineError("engine_unavailable", "approved request tokenizer returned an invalid count")
-    return total
+            raise EngineError("invalid_parameter", "actual LiteLLM rendered message name is invalid")
+    return copy.deepcopy(messages)
 
 
 def _is_timeout(exc: BaseException) -> bool:
@@ -1418,16 +1481,10 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
 
     async def admitted_acompletion(**kwargs):
         context = _REQUEST_CONTEXT.get() or {}
-        messages = kwargs.get("messages")
-        if isinstance(messages, list):
-            context["messages"] = copy.deepcopy(messages)
-        input_tokens = _count_rendered_messages(messages, provider["tokenizer_id"])
-        context["input_tokens"] = input_tokens
+        context["messages"] = _complete_rendered_messages(kwargs.get("messages"))
+        if any(kwargs.get(key) not in (None, False, [], {}) for key in DISABLED_OPTIONAL_CHARGE_KEYS):
+            raise EngineError("invalid_parameter", "optional charged request features are disabled")
         output_tokens = budget["output_token_cap"]
-        if input_tokens > budget["input_token_cap"]:
-            raise EngineError("invalid_parameter", "rendered messages exceed the trusted input token cap")
-        if input_tokens + output_tokens > provider["context_token_limit"]:
-            raise EngineError("invalid_parameter", "rendered messages and allowed output exceed the verified context limit")
         remaining = deadline_monotonic - time.monotonic()
         if remaining <= 0:
             raise EngineError("deadline_exceeded", "engine deadline expired before request dispatch")
@@ -1440,7 +1497,9 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
             approval_id=budget["approval_id"], attempt_id=attempt_id, request_id=request_id,
             provider=provider["provider_id"], model=str(kwargs.get("model", provider["model"])),
             input_price=provider["input_price_usd_per_token"], output_price=provider["output_price_usd_per_token"],
-            input_token_cap=budget["input_token_cap"], output_token_cap=budget["output_token_cap"],
+            context_token_limit=provider["context_token_limit"], output_token_cap=budget["output_token_cap"],
+            fixed_request_charge=provider["fixed_request_charge_usd"],
+            billable_categories=provider["billable_categories"],
             max_requests=budget["max_requests"], max_provider_requests=budget["max_requests_per_provider"],
             per_pr_usd=budget["per_pr_usd"], monthly_usd=budget["monthly_usd"], pilot_usd=budget["pilot_usd"],
             price_revision=provider["pricing_revision"],
@@ -1479,16 +1538,31 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
         if usage is None:
             ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
             raise EngineError("invalid_output", "provider response usage is missing or invalid")
-        actual = usage["prompt_tokens"] * provider["input_price_usd_per_token"] + usage["completion_tokens"] * provider["output_price_usd_per_token"]
-        ledger.reconcile(reservation, status="reconciled", actual_amount=actual, usage=usage)
+        try:
+            authoritative_charge = _authoritative_actual_charge(response)
+        except EngineError:
+            ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
+            raise
+        actual = (authoritative_charge if authoritative_charge is not None else
+                  usage["prompt_tokens"] * provider["input_price_usd_per_token"]
+                  + usage["completion_tokens"] * provider["output_price_usd_per_token"]
+                  + provider["fixed_request_charge_usd"])
+        output_breach = usage["completion_tokens"] > output_tokens
+        context_breach = usage["total_tokens"] > provider["context_token_limit"]
+        charge_breach = _conservative_amount(actual) > reservation["reserved_amount_usd"]
+        envelope_breach = output_breach or context_breach or charge_breach
+        ledger.reconcile(
+            reservation, status="reconciled", actual_amount=actual, usage=usage,
+            envelope_breach=envelope_breach,
+        )
+        context["envelope_breach"] = envelope_breach
         _require_complete_response(response)
-        if usage is not None:
-            if usage["prompt_tokens"] > budget["input_token_cap"]:
-                raise EngineError("invalid_parameter", "provider usage exceeds the allowed input token cap")
-            if usage["completion_tokens"] > output_tokens:
-                raise EngineError("invalid_parameter", "provider usage exceeds the allowed output token cap")
-            if usage["total_tokens"] > provider["context_token_limit"]:
-                raise EngineError("invalid_parameter", "provider usage exceeds the verified context limit")
+        if output_breach:
+            raise EngineError("invalid_parameter", "provider usage exceeds the allowed output token cap")
+        if context_breach:
+            raise EngineError("invalid_parameter", "provider usage exceeds the verified context limit")
+        if charge_breach:
+            raise EngineError("invalid_parameter", "provider actual charge exceeds the trusted monetary envelope")
         return response
 
     handler_module.acompletion = admitted_acompletion
@@ -2054,6 +2128,7 @@ async def _run_provider(upstream: dict[str, Any], authenticated: dict[str, Any],
                     "usage": copy.deepcopy(last_usage),
                     "num_ai_calls": context.get("num_ai_calls", 0),
                     "model": _attempt_model_identity(provider, context),
+                    "envelope_breach": bool(context.get("envelope_breach")),
                 })
                 _REQUEST_CONTEXT.reset(token)
                 _PROVIDER_INPUT.reset(provider_input_token)
@@ -2176,7 +2251,7 @@ async def _run_async(authenticated: dict[str, Any], config: dict[str, Any], *, s
                 "duration_ms": duration_ms,
             }
         attempts.append(result)
-        if result["status"] == "reviewed":
+        if result["status"] == "reviewed" or attempt_evidence.get("envelope_breach"):
             break
     for provider_id in SUPPORTED_PROVIDERS:
         if not config["providers"][provider_id]["enabled"]:

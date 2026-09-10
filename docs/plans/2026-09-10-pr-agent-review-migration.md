@@ -51,7 +51,7 @@ and must not be claimed by closing the design task.
 
 Dependencies: none.
 
-将 umbrella 方案落为仓库设计和实施计划。确认固定 PR-Agent commit、部署 bundle SHA-256 的生成/验证契约、依赖锁定、API 端点/具体模型、主备顺序、总重试预算、单 PR token/费用上限和批次总预算。用户授权每月 20 美元按量 API 消费；DeepSeek Secret 已于 2026-09-10T03:45:18Z 配置，鉴权和余额尚未验证。DeepSeek 约 10 美元预充值余额未核实；Kimi 本周额度耗尽，暂不调用。订阅额度与通用 API 账户分别核对，只记录 secret 名称，不读取/输出密钥值。
+将 umbrella 方案落为仓库设计和实施计划。确认固定 PR-Agent commit、部署 bundle SHA-256 的生成/验证契约、依赖锁定、API 端点/具体模型、主备顺序、总重试预算、单 PR 输出/费用上限和批次总预算。用户授权每月 20 美元按量 API 消费；DeepSeek Secret 已于 2026-09-10T03:45:18Z 配置，鉴权和余额尚未验证。DeepSeek 约 10 美元预充值余额未核实；Kimi 本周额度耗尽，暂不调用。订阅额度与通用 API 账户分别核对，只记录 secret 名称，不读取/输出密钥值。
 明确 fixed base/head 输入、只读文件内容、上下文重建、禁止执行 PR 文件、trusted config、schema/覆盖回执、test_scope 建议和发布隔离。评估上游 plain-diff 内部异常/空输出不能被 exit 0 掩盖，以及嵌套重试倍增。
 预先确定代表性历史样本和真实 PR 观察方案：至少包含 #1127/#1132 的固定 head、正常/删除/大 diff/文档治理/已知缺陷/干净样本；固定至少 6 个独立已知缺陷样本和 6 个干净对照；真实 current-head 观察集固定 20 次、至少 5 个不同 head，至少 19/20 在执行开始后 10 分钟内完整完成，排队 p95 不超过 5 分钟。所有准入 attempt 均计入分母，取消/过期/全失败不得删除或算成功，重复 head 相关性单列。样本/费用不足为验收缺口，不在看到结果后下调。明确定义分母、取消/过期/失败分类；样本不足不宣称生产稳定。
 确定单机故障 RTO、排队/扩并发触发条件、何时才需要第二台独立主机。补明确切换、回滚和后续维护责任。
@@ -184,32 +184,62 @@ fixed base/head collector inventory. Deletion and required zero-hunk content
 remain represented. T2 does not gain GitHub access or execute PR code; T3 owns
 authentication of the collector and control provenance at its consumers.
 
-Trusted activation includes `context_token_limit`, `tokenizer_id`,
-`tokenizer_verified` and `priced_response_model`, in addition to the existing
-endpoint, model, pricing, credential and funding evidence. A tokenizer ID must
-resolve to an explicitly supported pinned provider-approved counter, including
-message overhead. A boolean alone does not approve an arbitrary counter or a
-library fallback. Count the actual complete rendered messages; enforce their
-input cap, the allowed output cap, the combined context limit, the configured
-request timeout and the total deadline at the real request boundary. Unknown
-bindings deny dispatch. Runtime tokenization cannot fetch mutable metadata or
-download unpinned assets. Synthetic activation fixtures do not verify a live
-supplier. The actual committed TOML must parse and load with all unverified
-suppliers disabled, omitting bindings that TOML cannot represent as null.
-Until supplier-specific tokenization and message-overhead evidence is accepted,
-keep the production counter registry empty and deny enabled production routes.
-Synthetic fixture counters prove the real handler boundary only; they are not
-selectable through production configuration. The pinned upstream reviewer also
-constructs its own `TokenHandler` using `o200k_base`; that internal estimate does
-not establish supplier-specific admission counts. If retaining that stock path,
-bundle and verify its fixed asset with an isolated cache and no runtime download.
-Prove actual handler startup with an empty ambient tokenizer cache and blocked
-unexpected metadata/asset requests. A follow-up in T2-owned adapter paths must establish an
-evidence-backed counter before live supplier activation; T4 consumes supported
-bindings and does not silently take ownership of adapter implementation. This
-inactive correction is not proof of live supplier usability or T5 acceptance.
-T2 and its PR remain open/incomplete until that counter prerequisite is met;
-a verified corrective baseline may be committed without declaring T2 complete.
+### T2 owner scope amendment: provider counting excluded
+
+The owner's 2026-09-10 scope decision supersedes the earlier supplier-counter
+prerequisite, including its 100,000-input-token gate. Remove `input_token_cap`,
+`tokenizer_id`, `tokenizer_verified`, the custom counter registry and local
+rendered-message counting preflight; reject obsolete config keys. Do not replace
+these with another provider counting scheme or require counter certification.
+Keep the pinned stock `o200k_base` asset only for upstream startup, with isolated
+cache and no unexpected metadata/asset request. Complete unchanged rendered
+messages, byte/file/hunk limits, output/request/deadline/retry caps, strict finish
+reason, model identity, typed output and complete coverage remain required.
+
+Implement the design's single-ledger monetary envelope before every physical
+HTTP request, including the stock retry:
+`context_token_limit * peak_input_rate + output_token_cap * peak_output_rate + fixed_request_charge`,
+rounded upward. The trusted context ceiling bounds every possibly billed input
+unit, including overhead and billed context rejection, without local counting.
+Require `0 < output_token_cap < context_token_limit`; the output cap covers all
+enabled charged output classes. Unknown/unbounded categories deny admission;
+optional charged features stay disabled unless bounded. Price revision binds
+these limits, rates, fixed charge and billable categories. Preserve USD 1 attempt,
+USD 20 cumulative pilot and USD 20 Asia/Shanghai monthly caps and funding checks.
+
+Reconcile complete authoritative priced usage/model identity or authoritative
+actual charge; otherwise finalize exactly once uncertain and retain reservation.
+Known higher actual liability must be recorded. Output, total-context or monetary
+envelope breach fails the review, stops all fallback in that attempt and poisons
+later admission for that same `(provider, effective_model, price_revision)` until
+operator review replaces/disposes it. Reuse existing append-only records and only
+minimal internal basis data, with no second ledger or public receipt extension.
+
+Declared corrective paths: this plan, the existing migration design,
+`scripts/ci/pr_agent_review.py`, `scripts/ci/pr-agent/config.toml`, and
+`tests/build/ci_pr_agent_review_test.py`. Preserve the published 8148a1ec baseline
+and its genuine failed evidence; make a new corrective commit. No workflow,
+bundle machinery, dependency lock or receipt schema change is authorized absent
+a concrete source-coupled need reviewed by the lead.
+
+Tests must prove no supplier counter is needed; complete messages reach the real
+pinned handler; an affordable context above 100,000 admits; unknown/unaffordable
+or unbounded pricing denies before network; each retry reserves separately;
+malformed/missing usage and model identity finalize uncertain once; and each
+envelope breach preserves liability, stops fallback and holds future admission.
+Retain all F7-F10 regression assertions and the original strict deadline bounds;
+do not widen a host timeout to pass emulation. Run focused adapter tests, clean
+Python 3.11 / pinned LiteLLM 1.100.0 Python 3.12 shared integration, declared-scope
+checks and `scripts/docs-site.sh check`. Freeze source before one final Linux
+bundle, bind its adapter/config/archive identities to the new commit, and obtain
+independent current-head review. Documentation impact: none; unreleased internal
+review infrastructure and design/plan only, no Portal route/projected identity
+change. Version impact: none; no Product/Module/Contract identity changes.
+
+T2 may complete when the adjusted engine works with eligible trusted config and
+these technical gates pass. Supplier counting, live funding proof, host access,
+shadow qualification and T3-T6 acceptance are not additional T2 gates. Defaults
+remain inactive; this amendment is not proof of live supplier usability.
 
 Use a detached `DEPLOYMENT_IDENTITY.json` to bind the final archive SHA-256 and
 byte length, manifest, adapter, bundled default config and dependency lock.
@@ -269,8 +299,10 @@ backoff/cancellation/identity tests, the no-smudge clean integration proof,
 staged scope/ownership and declaration checks, the final identity-bound Linux
 bundle proof, and `scripts/docs-site.sh check`. A passing earlier broad suite
 is retained with its exact scope; these new defects need their own negative
-and far-side assertions. No provider admission mode is changed. The production
-counter registry remains empty and T2/its Draft PR remain incomplete.
+and far-side assertions. For that historical correction, no provider admission mode changed and the
+registry stayed empty. Its supplier-counter completion prerequisite is superseded
+by the owner scope amendment above; retain the baseline evidence without treating
+the removed counter as an outstanding Task gate.
 
 ## T3 — 适配 LMDJ 评审协议、测试范围与所有下游消费者 (#1152)
 
