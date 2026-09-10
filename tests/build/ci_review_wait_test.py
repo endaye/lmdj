@@ -1,5 +1,6 @@
 """Current-head admission through real publisher/collector with read-only API fixtures."""
 from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -51,6 +52,60 @@ class AdmissionTests(unittest.TestCase):
         self.inline = [{"id": 70 + i, "user": self.bot, "pull_request_review_id": 60, "original_commit_id": A,
                         "path": c["path"], "original_line": c["line"], "body": c["body"]}
                        for i, c in enumerate(payloads[0]["comments"])]
+
+    def render_v2(self):
+        document = json.loads((ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text())
+        document["identity"].update(pull_request=7, base_sha=B, head_sha=A, control_sha=B, run_id="51")
+        unsigned = deepcopy(document)
+        unsigned.pop("input_sha256")
+        document["input_sha256"] = hashlib.sha256(
+            json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        authenticated = wait.pipeline.t2.authenticate_input(document)
+        collector = wait.pipeline.collector_witness(document)
+        engine = {"name": "pr-agent", "source_commit": "1" * 40, "version": "0.45.0",
+                  "bundle": {"archive_sha256": "2" * 64, "archive_byte_length": 7,
+                             "manifest_sha256": "3" * 64, "adapter_sha256": "4" * 64,
+                             "default_config_sha256": "5" * 64, "requirements_lock_sha256": "6" * 64,
+                             "stock_tokenizer_asset_sha256": "7" * 64},
+                  "runtime_config": {"sha256": "8" * 64, "byte_length": 7}}
+        trusted = {"schema": review_scope.TRUSTED_CONFIG_SCHEMA, "provider_order": ["deepseek"],
+                   "providers": {"deepseek": {"enabled": True, "model": "fixture-model"},
+                                 "glm": {"enabled": False}, "xai": {"enabled": False}, "kimi": {"enabled": False}},
+                   "engine": engine}
+        coverage = wait.pipeline.t2._validate_coverage_receipt(wait.pipeline.t2._make_coverage(
+            authenticated, provider="deepseek",
+            model={"requested": "fixture-model", "actual": "fixture-served",
+                   "response_version": "fixture-v1", "pricing_revision": "fixture-v1"},
+            prompt=wait.pipeline.t2.render_prompt_input(authenticated), usage=None, engine=engine))
+        review = {"schema": review_scope.REVIEW_SCHEMA, "summary": "Reviewed the complete v2 input.",
+                  "findings": [], "test_scope": {"labels": ["test:full"], "reason": "Complete engine review retains the deterministic floor."}}
+        history = {"schema": review_scope.HISTORY_SCHEMA_V2, "attempts": [{
+            "backend": "deepseek", "status": "reviewed", "error_class": None, "review": review,
+            "engine": engine, "provider": "deepseek", "model": coverage["model"],
+            "coverage_sha256": review_scope.coverage_digest(coverage),
+        }]}
+        changed_paths = sorted({hunk["path"] for hunk in collector["expected_hunks"]})
+        wait.pipeline.review_scope.validate_history_v2(fixtures.POLICY, history, identity=self.source.identity,
+            coverages={review_scope.coverage_digest(coverage): coverage}, changed_paths=changed_paths,
+            collector=collector, trusted_config=trusted)
+        publication = review_scope.prepare_result(fixtures.POLICY, {**self.source.identity, "backend": "deepseek"},
+            changed_paths=changed_paths, history=history, coverages={review_scope.coverage_digest(coverage): coverage},
+            collector=collector, trusted_config=trusted)
+        self.source.history = history
+        self.source.documents = {"context.json": {"identity": self.source.identity, "changed_paths": changed_paths},
+                                 "history.json": history, "result.json": publication, "review.json": review,
+                                 "collector.json": collector, "t2-config-witness.json": trusted,
+                                 "coverage-" + review_scope.coverage_digest(coverage) + ".json": coverage}
+        marker = wait.pipeline.codec.encode_history(history)
+        payloads = []
+        wait.pipeline.pr_review_target.publish_review(REPO, 7, A, "51", "1", "deepseek",
+            publication["publication"]["review"], api=lambda p: self.pull, coverage=coverage,
+            history_digest=review_scope.history_digest(history), history_marker=marker,
+            write=lambda p, data: payloads.append(data))
+        self.reviews = [{"id": 60, "user": self.bot, "state": "COMMENTED", "commit_id": A,
+                         "submitted_at": "2026-09-10T01:00:00Z", "body": payloads[0]["body"] + "\n\nScope reason: Complete engine review retains the deterministic floor."}]
+        self.inline = []
 
     def _request(self, method, path, *, raw=False):
         self.assertEqual(method, "GET", "helper must never mutate GitHub")
@@ -111,6 +166,34 @@ class AdmissionTests(unittest.TestCase):
         self.assertTrue(result["eligible"], result)
         self.assertEqual(result["conversation_protection"], "not_evaluated")
         self.assertFalse(result["merge_authorized"])
+
+    def test_authentic_v2_review_is_eligible_after_full_artifact_validation(self):
+        self.render_v2()
+        result = self.check()
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["evidence"][0]["backend"], "deepseek")
+
+    def test_v2_foreign_malformed_and_duplicate_markers_are_invalid(self):
+        self.render_v2()
+        for name, mutate in (
+            ("foreign", lambda body: body.replace("endaye/lmdj", "other/repo", 1)),
+            ("malformed", lambda body: body.replace("sha256=", "sha256=not-a-digest", 1)),
+            ("duplicate", lambda body: body + "\n" + body.splitlines()[1]),
+        ):
+            with self.subTest(name=name):
+                original = self.reviews[0]["body"]
+                self.reviews[0]["body"] = mutate(original)
+                result = self.check()
+                self.assertFalse(result["eligible"], result)
+                self.assertEqual(result["status"], "invalid")
+                self.reviews[0]["body"] = original
+
+    def test_v2_wrong_head_is_not_current_head_evidence(self):
+        self.render_v2()
+        self.reviews[0]["commit_id"] = B
+        result = self.check()
+        self.assertFalse(result["eligible"], result)
+        self.assertEqual(result["status"], "pending")
 
     def test_authentic_findings_are_retained_for_disposition(self):
         review = self.source.history[0]["review"]

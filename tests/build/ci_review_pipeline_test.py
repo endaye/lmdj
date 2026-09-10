@@ -155,7 +155,7 @@ class PipelineTests(unittest.TestCase):
                 or not runtime.is_file() or not (source_root / "pr_agent").is_dir()):
             self.skipTest("offline T2 actual-handler proof requires PR_AGENT_RUN_INTEGRATION=1 and pinned runtime/source")
         script = textwrap.dedent(f"""
-            import asyncio, copy, importlib.util, json, os, sys
+            import asyncio, copy, importlib.util, json, os, sys, tempfile
             from pathlib import Path
             root = Path({str(ROOT)!r})
             sys.path.insert(0, str(root / "scripts/ci"))
@@ -178,21 +178,36 @@ class PipelineTests(unittest.TestCase):
                 result, _upstream, _ledger = test.run_with_fake(fake_acompletion)
                 document = json.loads(test.input_path.read_text(encoding="utf-8"))
                 authenticated = t2.authenticate_input(document)
-                collector = pipeline.collector_witness(document)
                 import tomllib
                 config = t2._safe_config(tomllib.loads(test.config_path.read_text(encoding="utf-8")))
                 trusted = {{"schema": review_scope.TRUSTED_CONFIG_SCHEMA, "provider_order": config["provider_order"], "providers": config["providers"], "engine": result["engine"]}}
                 identity = dict(repository=authenticated["identity"]["repository"],
                     pr_number=authenticated["identity"]["pull_request"], base_sha=authenticated["identity"]["base_sha"],
                     head_sha=authenticated["identity"]["head_sha"], control_sha=authenticated["identity"]["control_sha"],
-                    run_id=99, run_attempt=authenticated["identity"]["run_attempt"], backend="deepseek")
-                history, inventory = pipeline.adapt_t2_result(result, identity=identity,
-                    changed_paths=sorted({{h["path"] for h in collector["expected_hunks"]}}),
-                    collector=collector, trusted_config=trusted)
-                policy = pipeline.test_scope.load_policy(pipeline.ROOT)
-                publication = review_scope.prepare_result(policy, identity,
-                    changed_paths=sorted({{h["path"] for h in collector["expected_hunks"]}}), history=history,
-                    coverages=inventory, collector=collector, trusted_config=trusted)
+                    run_id=99, run_attempt=authenticated["identity"]["run_attempt"], backend="deterministic")
+                with tempfile.TemporaryDirectory(prefix="lmdj-t2-capture-") as temporary:
+                    directory = Path(temporary)
+                    (directory / "context.json").write_text(json.dumps({{"identity": identity,
+                        "changed_paths": sorted({{h["path"] for h in t2.expected_coverage(authenticated)}})}}), encoding="utf-8")
+                    (directory / "history.json").write_text("[]", encoding="utf-8")
+                    (directory / "t2-input.json").write_text(json.dumps(document), encoding="utf-8")
+                    (directory / "t2-config-witness.json").write_text(json.dumps(trusted), encoding="utf-8")
+                    (directory / "t2-result.json").write_text(json.dumps(result), encoding="utf-8")
+                    os.environ["GITHUB_OUTPUT"] = str(directory / "output")
+                    pipeline.capture(directory, "deepseek")
+                    history = json.loads((directory / "history.json").read_text(encoding="utf-8"))
+                    collector = json.loads((directory / "collector.json").read_text(encoding="utf-8"))
+                    persisted_config = json.loads((directory / "t2-config-witness.json").read_text(encoding="utf-8"))
+                    coverage_digest = history["attempts"][-1]["coverage_sha256"]
+                    coverage = json.loads((directory / ("coverage-" + coverage_digest + ".json")).read_text(encoding="utf-8"))
+                    pipeline.finalize(directory)
+                    publication = json.loads((directory / "result.json").read_text(encoding="utf-8"))
+                    review = json.loads((directory / "review.json").read_text(encoding="utf-8"))
+                    assert history["schema"] == review_scope.HISTORY_SCHEMA_V2
+                    assert collector == pipeline.collector_witness(document)
+                    assert persisted_config == trusted and coverage["complete"] is True
+                    assert review["test_scope"]["labels"] == ["test:full"]
+                    assert publication["status"] == "reviewed" and publication["publication"]["review"] == {{"summary": review["summary"], "findings": review["findings"]}}
                 marker = codec.encode_history(history)
                 assert codec.decode_history(marker) == history
                 target = {{"number": identity["pr_number"], "state": "open", "draft": False, "merged": False,
@@ -201,7 +216,7 @@ class PipelineTests(unittest.TestCase):
                 writes = []
                 pr_review_target.publish_review(identity["repository"], identity["pr_number"], identity["head_sha"], "99", "1", "deepseek",
                     publication["publication"]["review"], api=lambda path: target,
-                    coverage=inventory[history["attempts"][-1]["coverage_sha256"]], history_digest=review_scope.history_digest(history),
+                    coverage=coverage, history_digest=review_scope.history_digest(history),
                     history_marker=marker, write=lambda path, payload: writes.append(payload))
                 assert result["status"] == "reviewed" and publication["status"] == "reviewed" and len(writes) == 1
                 print("actual-t2-v2-publisher-proof")

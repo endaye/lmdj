@@ -217,7 +217,13 @@ def check(reader, repository, number, head):
         reviews = reader.pages(prefix + f"/pulls/{number}/reviews")
         comments = reader.pages(prefix + f"/issues/{number}/comments")
         for posted in reviews:
-            if posted.get("commit_id") != head or "lmdj-review-v1" not in posted.get("body", ""):
+            body = posted.get("body", "")
+            # Route both protocol generations to the strict closed-marker
+            # parser below.  A malformed or duplicate candidate must reach
+            # automated() and become invalid evidence, never be mistaken for
+            # an absent review; unrelated reviews remain out of scope.
+            if posted.get("commit_id") != head or not isinstance(body, str) \
+                    or ("lmdj-review-v1" not in body and "lmdj-review-v2" not in body):
                 continue
             try:
                 result["evidence"].append(automated(reader, posted, repo, number, head, bot))

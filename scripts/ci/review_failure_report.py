@@ -15,6 +15,7 @@ import time
 import zipfile
 
 import change_scope
+import review_pipeline as pipeline
 import review_scope
 import review_merge_map as mapping
 import self_test_report as reporting

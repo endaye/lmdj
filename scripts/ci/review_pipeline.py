@@ -303,10 +303,11 @@ def capture(directory, backend):
         t2 = read(t2_path)
         collector = trusted_collector(directory)
         trusted = trusted_config(directory)
-        review_scope.require(sorted(set(changed_paths)) == sorted({hunk["path"] for hunk in collector["expected_hunks"]}),
+        changed_paths = test_scope._paths(context.get("changed_paths"))
+        review_scope.require(changed_paths == sorted({hunk["path"] for hunk in collector["expected_hunks"]}),
                              "collector full hunk partition differs from the independently fetched changed-path inventory")
         history, inventory = adapt_t2_result(t2, identity=context["identity"],
-                                              changed_paths=context["changed_paths"], collector=collector,
+                                              changed_paths=changed_paths, collector=collector,
                                               trusted_config=trusted)
         save(directory / "collector.json", collector)
         save(directory / "t2-config-witness.json", trusted)
