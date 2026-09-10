@@ -26,13 +26,17 @@ thread_local std::size_t allocation_count{};
 thread_local std::size_t fail_at{};
 thread_local bool observe_load_order{};
 thread_local std::size_t observed_order{};
-thread_local std::size_t engine_order{}, voice_storage_order{}, pcm_order{};
+thread_local std::size_t engine_order{}, control_storage_order{}, outcome_storage_order{};
+thread_local std::size_t voice_storage_order{}, pcm_order{};
+thread_local std::size_t live_allocations{};
 void before_allocate(std::size_t bytes) {
   if (forbid_allocation) std::abort();
   if (observe_load_order) {
     ++observed_order;
     if (bytes == sizeof(audio::RealtimeEngine)) engine_order = observed_order;
-    if (bytes == audio::RealtimeEngine::receipt_bounded_voice_state_storage_bytes())
+    if (bytes == 129 * sizeof(audio::PadControlEvent)) control_storage_order = observed_order;
+    if (bytes == 129 * sizeof(audio::RuntimeTriggerOutcomeEvent)) outcome_storage_order = observed_order;
+    if (bytes == 385 * sizeof(audio::detail::RuntimeVoiceStateCell))
       voice_storage_order = observed_order;
     if (bytes == 4096 * sizeof(std::int16_t) && pcm_order == 0)
       pcm_order = observed_order;
@@ -45,13 +49,19 @@ void before_allocate(std::size_t bytes) {
 }
 void* allocate(std::size_t bytes) {
   before_allocate(bytes);
-  if (auto* memory = std::malloc(bytes == 0 ? 1 : bytes)) return memory;
+  if (auto* memory = std::malloc(bytes == 0 ? 1 : bytes)) {
+    ++live_allocations;
+    return memory;
+  }
   throw std::bad_alloc{};
 }
 void* allocate_aligned(std::size_t bytes, std::size_t alignment) {
   before_allocate(bytes);
   void* memory{};
-  if (posix_memalign(&memory, alignment, bytes == 0 ? alignment : bytes) == 0) return memory;
+  if (posix_memalign(&memory, alignment, bytes == 0 ? alignment : bytes) == 0) {
+    ++live_allocations;
+    return memory;
+  }
   throw std::bad_alloc{};
 }
 
@@ -174,6 +184,31 @@ void receipts_and_retry() {
   LMDJ_CHECK(receipts[0].outcome == RuntimeCommandOutcome::applied);
 }
 
+void fixed_budget_tracks_pending_admission() {
+  const auto bytes = content(false);
+  std::uint64_t previous = 0;
+  for (const std::uint32_t pending : {1U, 128U, 1024U}) {
+    auto limits = config();
+    limits.maximum_pending_commands = pending;
+    RuntimeFacade runtime(limits);
+    LMDJ_CHECK(runtime.load(bytes.bytes, bytes.identity) == RuntimeResult::ok);
+    const auto fixed = runtime.budget().fixed_bytes;
+    if (previous != 0) {
+      const auto previous_pending = pending == 128 ? 1U : 128U;
+      const auto expected_growth = (pending - previous_pending) *
+          (sizeof(audio::PadControlEvent) + sizeof(audio::RuntimeTriggerOutcomeEvent) +
+           2 * sizeof(audio::detail::RuntimeVoiceStateCell));
+      LMDJ_CHECK(fixed - previous == expected_growth);
+    }
+    test::check(fixed > previous,
+                "why: pending admission does not size fixed queue storage; "
+                "remedy: construct and account for the explicit N profile; N=" +
+                    std::to_string(pending) + " fixed=" + std::to_string(fixed) +
+                    " previous=" + std::to_string(previous));
+    previous = fixed;
+  }
+}
+
 void budget_and_allocation_retry() {
   const auto bytes = content();
   auto limits = config();
@@ -237,19 +272,35 @@ void counters_and_receipt_retention() {
   LMDJ_CHECK(another.submit({epoch, 1}) == RuntimeResult::stale_epoch);
 }
 
-void every_load_allocation_failure_stays_empty() {
+void allocator_controls_cover_ordinary_and_aligned_storage() {
+  const auto before = live_allocations;
+  allocation_count = 0; count_allocations = true;
+  auto* ordinary = ::operator new(37);
+  auto* aligned = ::operator new(129, std::align_val_t{64});
+  count_allocations = false;
+  LMDJ_CHECK(allocation_count == 2 && live_allocations == before + 2);
+  LMDJ_CHECK(reinterpret_cast<std::uintptr_t>(aligned) % 64 == 0);
+  ::operator delete(ordinary);
+  ::operator delete(aligned, std::align_val_t{64});
+  LMDJ_CHECK(live_allocations == before);
+}
+
+void every_load_allocation_failure_stays_empty(std::uint32_t pending) {
   const auto bytes = content();
-  RuntimeFacade measuring(config());
+  auto limits = config(); limits.maximum_pending_commands = pending;
+  RuntimeFacade measuring(limits);
   allocation_count = 0; fail_at = 0; count_allocations = true;
   const auto measured = measuring.load(bytes.bytes, bytes.identity);
   count_allocations = false;
   const auto allocation_sites = allocation_count;
   LMDJ_CHECK(measured == RuntimeResult::ok && allocation_sites > 0);
   for (std::size_t site = 1; site <= allocation_sites; ++site) {
-    RuntimeFacade runtime(config());
+    RuntimeFacade runtime(limits);
+    const auto live_before = live_allocations;
     allocation_count = 0; fail_at = site; count_allocations = true;
     const auto result = runtime.load(bytes.bytes, bytes.identity);
     count_allocations = false; fail_at = 0;
+    LMDJ_CHECK(live_allocations == live_before);
     test::check(result == RuntimeResult::allocation_failed,
                 "allocation failure site " + std::to_string(site) +
                     " of " + std::to_string(allocation_sites) +
@@ -276,7 +327,7 @@ void load_uses_and_accounts_for_the_receipt_bounded_storage() {
   LMDJ_CHECK(loaded == RuntimeResult::ok);
   LMDJ_CHECK(runtime.budget().fixed_bytes >=
       sizeof(RuntimeFacade) + sizeof(audio::RealtimeEngine) +
-      audio::RealtimeEngine::receipt_bounded_voice_state_storage_bytes());
+      *audio::RealtimeEngine::receipt_bounded_storage_bytes(config().maximum_pending_commands));
 }
 
 void load_allocates_fixed_storage_before_pcm() {
@@ -286,19 +337,22 @@ void load_allocates_fixed_storage_before_pcm() {
   const auto bytes = content(false);
   RuntimeFacade runtime(config());
   observed_order = engine_order = voice_storage_order = pcm_order = 0;
+  control_storage_order = outcome_storage_order = 0;
   observe_load_order = true;
   const auto result = runtime.load(bytes.bytes, bytes.identity);
   observe_load_order = false;
   LMDJ_CHECK(result == RuntimeResult::ok);
-  test::check(engine_order != 0 && voice_storage_order != 0 && pcm_order != 0 &&
-                  engine_order < pcm_order && voice_storage_order < pcm_order,
+  test::check(engine_order != 0 && control_storage_order != 0 &&
+                  outcome_storage_order != 0 && voice_storage_order != 0 && pcm_order != 0 &&
+                  engine_order < pcm_order && control_storage_order < pcm_order &&
+                  outcome_storage_order < pcm_order && voice_storage_order < pcm_order,
               "why: variable PCM fragments the heap before fixed storage; "
               "remedy: allocate candidate Engine and queue before decoding PCM; "
               "Engine=" + std::to_string(engine_order) + " queue=" +
                   std::to_string(voice_storage_order) + " PCM=" + std::to_string(pcm_order));
 }
 
-void old_voice_terminals_and_full_pending_batch_preserve_receipts() {
+void old_voice_terminals_and_full_pending_batch_preserve_receipts(std::uint32_t pending) {
   auto source = snapshot(false);
   auto short_pcm = std::make_shared<const cooker::PcmSample>(
       cooker::PcmSample{48'000, 1, {16384, 16384, 16384, 16384}});
@@ -307,24 +361,26 @@ void old_voice_terminals_and_full_pending_batch_preserve_receipts() {
   const auto encoded = cooker::encode_runtime_content(source, config().content_limits);
   LMDJ_CHECK(encoded.has_value());
   const auto& bytes = encoded.value();
-  auto limits = config(); limits.maximum_pending_commands = 1024;
+  auto limits = config(); limits.maximum_pending_commands = pending;
   RuntimeFacade runtime(limits);
   LMDJ_CHECK(runtime.load(bytes.bytes, bytes.identity) == RuntimeResult::ok);
   RuntimeEpoch epoch;
   LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
+  std::array<RuntimeReceipt, 1> initial;
   for (std::uint32_t sequence = 1; sequence <= 128; ++sequence) {
     LMDJ_CHECK(runtime.submit({epoch, sequence}) == RuntimeResult::accepted);
-  }
-  Output output; output.render(runtime);
-  std::array<RuntimeReceipt, 128> initial;
-  LMDJ_CHECK(runtime.poll(initial) == initial.size());
-  for (std::size_t index = 0; index < initial.size(); ++index) {
-    LMDJ_CHECK(initial[index].sequence == index + 1);
-    LMDJ_CHECK(initial[index].outcome == RuntimeCommandOutcome::voice_started);
+    float left{}, right{};
+    forbid_allocation = true;
+    runtime.render(&left, &right, 1);
+    forbid_allocation = false;
+    LMDJ_CHECK(runtime.poll(initial) == 1);
+    LMDJ_CHECK(initial[0].sequence == sequence);
+    LMDJ_CHECK(initial[0].outcome == RuntimeCommandOutcome::voice_started);
   }
   // The starts have been acknowledged/drained. All 128 old voices now end
   // without another poll, accounting for the + Voices term of 2*N + Voices.
-  for (int block = 0; block < 15; ++block) output.render(runtime);
+  Output output;
+  for (int block = 0; block < 16; ++block) output.render(runtime);
   std::array<float, 4> left{}, right{};
   const auto render_short = [&] {
     forbid_allocation = true;
@@ -332,13 +388,15 @@ void old_voice_terminals_and_full_pending_batch_preserve_receipts() {
     forbid_allocation = false;
     LMDJ_CHECK(left[1] > 0 && right[1] > 0);
   };
-  for (std::uint32_t sequence = 129; sequence <= 1152; ++sequence) {
+  for (std::uint32_t sequence = 129; sequence <= 128 + pending; ++sequence) {
     LMDJ_CHECK(runtime.submit({epoch, sequence, RuntimeCommandKind::press, 1}) ==
                RuntimeResult::accepted);
     render_short();
   }
-  // 128 terminals + 1024 * (started, completed) = exactly 2176 unread states.
-  const RuntimeCommand retry{epoch, 1153, RuntimeCommandKind::press, 1};
+  // Exactly 128 old terminals + N * (started, completed) unread states.
+  const RuntimeCommand retry{epoch, 129 + pending, RuntimeCommandKind::press, 1};
+  LMDJ_CHECK(runtime.submit(retry) == RuntimeResult::queue_full);
+  LMDJ_CHECK(runtime.poll({}) == 0);
   LMDJ_CHECK(runtime.submit(retry) == RuntimeResult::queue_full);
   std::array<RuntimeReceipt, 1> receipt;
   LMDJ_CHECK(runtime.poll(receipt) == 1);
@@ -346,7 +404,7 @@ void old_voice_terminals_and_full_pending_batch_preserve_receipts() {
   LMDJ_CHECK(receipt[0].outcome == RuntimeCommandOutcome::voice_started);
   LMDJ_CHECK(runtime.submit(retry) == RuntimeResult::accepted);
   render_short();
-  for (std::uint32_t sequence = 130; sequence <= 1153; ++sequence) {
+  for (std::uint32_t sequence = 130; sequence <= 129 + pending; ++sequence) {
     LMDJ_CHECK(runtime.poll(receipt) == 1);
     LMDJ_CHECK(receipt[0].epoch == epoch && receipt[0].sequence == sequence);
     LMDJ_CHECK(receipt[0].outcome == RuntimeCommandOutcome::voice_started);
@@ -482,6 +540,7 @@ void* operator new[](std::size_t bytes, std::align_val_t alignment) {
 }
 void operator delete(void* pointer) noexcept {
   if (forbid_allocation) std::abort();
+  if (pointer) --live_allocations;
   std::free(pointer);
 }
 void operator delete[](void* pointer) noexcept { operator delete(pointer); }
@@ -493,14 +552,18 @@ void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept { op
 void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept { operator delete(pointer); }
 
 int main() {
+  allocator_controls_cover_ordinary_and_aligned_storage();
+  fixed_budget_tracks_pending_admission();
   load_allocates_fixed_storage_before_pcm();
   load_uses_and_accounts_for_the_receipt_bounded_storage();
-  old_voice_terminals_and_full_pending_batch_preserve_receipts();
+  for (const std::uint32_t pending : {1U, 128U, 1024U}) {
+    old_voice_terminals_and_full_pending_batch_preserve_receipts(pending);
+    every_load_allocation_failure_stays_empty(pending);
+  }
   lifecycle_journey();
   receipts_and_retry();
   budget_and_allocation_retry();
   counters_and_receipt_retention();
-  every_load_allocation_failure_stays_empty();
   canonical_preparation_rejects_duplicate_order();
   voice_refusal_is_not_a_started_receipt();
   muted_apply_is_not_a_started_receipt();

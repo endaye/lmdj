@@ -10,6 +10,7 @@
 #include <memory>
 #include <new>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -26,11 +27,13 @@ namespace {
 std::atomic<bool> g_track_allocations{false};
 std::atomic<std::uint64_t> g_allocations{0};
 std::atomic<std::uint64_t> g_deallocations{0};
+std::atomic<std::uint64_t> g_allocation_bytes{0};
 thread_local bool g_fail_allocations = false;
 
-void count_allocation() noexcept {
+void count_allocation(std::size_t bytes) noexcept {
   if (g_track_allocations.load(std::memory_order_relaxed)) {
     g_allocations.fetch_add(1, std::memory_order_relaxed);
+    g_allocation_bytes.fetch_add(bytes, std::memory_order_relaxed);
   }
 }
 
@@ -42,7 +45,7 @@ void ordinary_deallocation(void* memory) noexcept {
 }
 
 void* ordinary_allocation(std::size_t size) {
-  count_allocation();
+  count_allocation(size);
   if (g_fail_allocations) {
     throw std::bad_alloc{};
   }
@@ -53,7 +56,7 @@ void* ordinary_allocation(std::size_t size) {
 }
 
 void* aligned_allocation(std::size_t size, std::size_t alignment) {
-  count_allocation();
+  count_allocation(size);
   if (g_fail_allocations) {
     throw std::bad_alloc{};
   }
@@ -101,6 +104,68 @@ constexpr float kRampScale = 1.0F / static_cast<float>(kRampFrames);
 constexpr std::uint32_t kMaximumBankPadFrames = 16'777'216;
 static_assert(
     lmdj::audio::kRealtimeMaximumSampleFrames >= kMaximumBankPadFrames);
+
+void engine_queue_profiles_account_for_all_allocated_payloads() {
+  using namespace lmdj::audio;
+  // 0 is the unchanged default, -1 the unchanged tag-only constructor.
+  for (const int profile : {0, -1, 1, 128, 1024}) {
+    g_allocations.store(0); g_deallocations.store(0); g_allocation_bytes.store(0);
+    g_track_allocations.store(true);
+    auto engine = profile == 0 ? std::make_unique<RealtimeEngine>()
+        : profile == -1 ? std::make_unique<RealtimeEngine>(RealtimeEngine::ReceiptBoundedVoiceStates{})
+        : std::make_unique<RealtimeEngine>(RealtimeEngine::ReceiptBoundedVoiceStates{},
+                                           static_cast<std::size_t>(profile));
+    g_track_allocations.store(false);
+    const auto controls = profile > 0 ? static_cast<std::size_t>(profile) : 1024;
+    const auto outcomes = profile > 0 ? static_cast<std::size_t>(profile) : 4096;
+    const auto states = profile > 0 ? static_cast<std::size_t>(2 * profile + 128)
+                                    : (profile == 0 ? 10240U : 2176U);
+    const auto payload = (controls + 1) * sizeof(PadControlEvent) +
+        (outcomes + 1) * sizeof(RuntimeTriggerOutcomeEvent) +
+        (states + 1) * sizeof(detail::RuntimeVoiceStateCell);
+    LMDJ_CHECK(g_allocations.load() == 4); // Engine plus three fixed cell arrays.
+    LMDJ_CHECK(g_deallocations.load() == 0);
+    LMDJ_CHECK(g_allocation_bytes.load() == sizeof(RealtimeEngine) + payload);
+    if (profile > 0) {
+      LMDJ_CHECK(RealtimeEngine::receipt_bounded_storage_bytes(controls) == payload);
+    }
+
+    LMDJ_CHECK(engine->start().has_value());
+    for (std::size_t index = 0; index < controls; ++index) {
+      LMDJ_CHECK(engine->enqueue_control(PadControlEvent{
+          index + 1, 0, 0, PadControlKind::stop_all, {}}) == EnqueueResult::accepted);
+    }
+    LMDJ_CHECK(engine->enqueue_control(PadControlEvent{
+        controls + 1, 0, 0, PadControlKind::stop_all, {}}) == EnqueueResult::queue_full);
+    LMDJ_CHECK(engine->telemetry().queued_events == controls);
+    float left{}, right{};
+    g_allocations.store(0); g_deallocations.store(0);
+    g_track_allocations.store(true);
+    engine->render(&left, &right, 1);
+    g_track_allocations.store(false);
+    LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+    LMDJ_CHECK(left == 0 && right == 0);
+    LMDJ_CHECK(engine->telemetry().queued_events == 0);
+    LMDJ_CHECK(engine->telemetry().dequeued_events == controls);
+    engine->stop();
+    g_deallocations.store(0); g_track_allocations.store(true);
+    engine.reset();
+    g_track_allocations.store(false);
+    LMDJ_CHECK(g_deallocations.load() == 4);
+  }
+}
+
+void receipt_profile_rejects_invalid_capacity() {
+  using namespace lmdj::audio;
+  for (const auto invalid : {std::size_t{0}, std::size_t{1025},
+                             std::numeric_limits<std::size_t>::max()}) {
+    LMDJ_CHECK(!RealtimeEngine::receipt_bounded_storage_bytes(invalid));
+    bool rejected = false;
+    try { RealtimeEngine engine(RealtimeEngine::ReceiptBoundedVoiceStates{}, invalid); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    LMDJ_CHECK(rejected);
+  }
+}
 
 // Mirrors the engine's ramp arithmetic exactly (same operands, same order):
 // one ramp component is `frames * (1/96)` and components multiply into a
@@ -3212,6 +3277,8 @@ void render_and_adapter_status_finish_while_observer_holds_reader_lock() {
 }  // namespace
 
 int main() {
+  engine_queue_profiles_account_for_all_allocated_payloads();
+  receipt_profile_rejects_invalid_capacity();
   capture_storage_is_allocated_only_on_first_arm();
   capture_allocation_failure_leaves_playback_running_and_retryable();
   capture_storage_survives_stop_and_restart_without_reallocation();

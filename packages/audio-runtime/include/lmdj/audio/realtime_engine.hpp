@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <lmdj/audio/detail/fixed_spsc_queue.hpp>
+#include <lmdj/audio/detail/runtime_spsc_storage.hpp>
 #include <lmdj/audio/detail/value_channel.hpp>
 #include <lmdj/audio/master_fx.hpp>
 #include <lmdj/audio/prepared_sample_bank.hpp>
@@ -260,19 +261,22 @@ struct RuntimeVoiceStateTelemetry {
 
 namespace detail {
 
+// Natural alignment removes padding without changing the public event ABI.
+struct RuntimeVoiceStateCell {
+  std::uint64_t sequence;
+  std::uint64_t runtime_frame;
+  std::uint32_t source_frame;
+  std::uint8_t slot;
+  RuntimeVoiceState state;
+};
+static_assert(sizeof(RuntimeVoiceStateCell) <= 24);
+static_assert(std::is_trivially_copyable_v<RuntimeVoiceStateCell>);
+
 template <std::size_t Capacity>
 class RuntimeVoiceStateQueue {
   // Natural alignment removes per-cell padding without changing the public
   // event's aggregate order, widths or ABI. Queue ownership remains SPSC.
-  struct Cell {
-    std::uint64_t sequence;
-    std::uint64_t runtime_frame;
-    std::uint32_t source_frame;
-    std::uint8_t slot;
-    RuntimeVoiceState state;
-  };
-  static_assert(sizeof(Cell) <= 24);
-  static_assert(std::is_trivially_copyable_v<Cell>);
+  using Cell = RuntimeVoiceStateCell;
 
  public:
   static consteval std::size_t capacity() noexcept { return Capacity; }
@@ -302,32 +306,53 @@ class RuntimeVoiceStateQueue {
 };
 
 // Construct once on the control side; selection and pointees never change.
-// Both alternatives retain the same SPSC publication and compact-cell format.
+// All capacities retain the same SPSC publication and compact-cell format.
 class RuntimeVoiceStateStorage {
  public:
   using Full = RuntimeVoiceStateQueue<kRealtimeVoiceStateCapacity>;
   using ReceiptBounded = RuntimeVoiceStateQueue<kRealtimeReceiptVoiceStateCapacity>;
 
-  explicit RuntimeVoiceStateStorage(bool receipt_bounded = false)
-      : full_(receipt_bounded ? nullptr : std::make_unique<Full>()),
-        bounded_(receipt_bounded ? std::make_unique<ReceiptBounded>() : nullptr) {}
+  static constexpr std::optional<std::size_t> receipt_capacity(
+      std::size_t pending) noexcept {
+    if (pending == 0 || pending > kRealtimeQueueCapacity) return std::nullopt;
+    return pending * 2 + kRealtimeVoiceCapacity;
+  }
+  static constexpr std::optional<std::size_t> receipt_allocation_bytes(
+      std::size_t pending) noexcept {
+    const auto capacity = receipt_capacity(pending);
+    return capacity ? RuntimeSpscStorage<RuntimeVoiceStateCell>::allocation_bytes(*capacity)
+                    : std::nullopt;
+  }
+
+  explicit RuntimeVoiceStateStorage(
+      bool receipt_bounded = false,
+      std::size_t pending = kRealtimeQueueCapacity)
+      : queue_(receipt_bounded ? checked_receipt_capacity(pending)
+                               : kRealtimeVoiceStateCapacity) {}
 
   bool try_push(const RuntimeVoiceStateEvent& event) noexcept {
-    return full_ ? full_->try_push(event) : bounded_->try_push(event);
+    return queue_.try_push(RuntimeVoiceStateCell{
+        event.sequence, event.runtime_frame, event.source_frame,
+        event.slot, event.state});
   }
   bool try_pop(RuntimeVoiceStateEvent& event) noexcept {
-    return full_ ? full_->try_pop(event) : bounded_->try_pop(event);
+    RuntimeVoiceStateCell cell;
+    if (!queue_.try_pop(cell)) return false;
+    event = RuntimeVoiceStateEvent{
+        cell.sequence, cell.slot, cell.state, cell.runtime_frame, cell.source_frame};
+    return true;
   }
-  std::size_t size_approx() const noexcept {
-    return full_ ? full_->size_approx() : bounded_->size_approx();
-  }
-  std::size_t clear_quiescent() noexcept {
-    return full_ ? full_->clear_quiescent() : bounded_->clear_quiescent();
-  }
+  std::size_t capacity() const noexcept { return queue_.capacity(); }
+  std::size_t size_approx() const noexcept { return queue_.size_approx(); }
+  std::size_t clear_quiescent() noexcept { return queue_.clear_quiescent(); }
 
  private:
-  std::unique_ptr<Full> full_;
-  std::unique_ptr<ReceiptBounded> bounded_;
+  static std::size_t checked_receipt_capacity(std::size_t pending) {
+    const auto capacity = receipt_capacity(pending);
+    if (!capacity) throw std::bad_array_new_length{};
+    return *capacity;
+  }
+  RuntimeSpscStorage<RuntimeVoiceStateCell> queue_;
 };
 
 struct RealtimeEngineAudioAccess;
@@ -391,9 +416,17 @@ class RealtimeEngine final {
   // then retire receipts, in that order. No switching after construction.
   struct ReceiptBoundedVoiceStates {};
   explicit RealtimeEngine(ReceiptBoundedVoiceStates) : voice_state_ring_(true) {}
+  // Explicit N profile: control/outcomes N, Voice states 2*N + 128. The old
+  // tag-only overload retains 1024 controls / 4096 outcomes / 2176 states.
+  // N outside 1..1024 throws invalid_argument before allocating queues.
+  RealtimeEngine(ReceiptBoundedVoiceStates, std::size_t maximum_pending_commands);
   static constexpr std::size_t receipt_bounded_voice_state_storage_bytes() noexcept {
-    return sizeof(detail::RuntimeVoiceStateStorage::ReceiptBounded);
+    return *detail::RuntimeVoiceStateStorage::receipt_allocation_bytes(kRealtimeQueueCapacity);
   }
+  // Exact independent queue payloads for the N profile; add sizeof(Engine)
+  // once for the wrappers. nullopt rejects invalid capacity or byte overflow.
+  static std::optional<std::uint64_t> receipt_bounded_storage_bytes(
+      std::size_t maximum_pending_commands) noexcept;
   // Control thread, quiescent. May reallocate sample storage.
   foundation::Result<void> load_sample(
       std::uint8_t slot, std::span<const float> mono_pcm);
@@ -647,7 +680,7 @@ class RealtimeEngine final {
       std::uint64_t loop_origin_frame) noexcept;
 
   std::array<std::vector<float>, kRealtimeSampleSlots> samples_;
-  detail::FixedSpscQueue<PadControlEvent, kRealtimeQueueCapacity> queue_;
+  detail::RuntimeSpscStorage<PadControlEvent> queue_{kRealtimeQueueCapacity};
   detail::FixedSpscQueue<MasterFxControlEvent, kRealtimeQueueCapacity>
       fx_queue_;
   MasterFxChain master_fx_;
@@ -675,10 +708,8 @@ class RealtimeEngine final {
   // only dereferences after acquiring an admitted CaptureState. Never replaced
   // or freed on disarm/stop: unread events still belong to the control drain.
   std::unique_ptr<CaptureRing> capture_ring_;
-  detail::FixedSpscQueue<
-      RuntimeTriggerOutcomeEvent,
-      kRealtimeTriggerOutcomeCapacity>
-      trigger_outcome_ring_;
+  detail::RuntimeSpscStorage<RuntimeTriggerOutcomeEvent>
+      trigger_outcome_ring_{kRealtimeTriggerOutcomeCapacity};
   detail::RuntimeVoiceStateStorage voice_state_ring_;
   std::array<Voice, kRealtimeVoiceCapacity> voices_{};
   std::array<cooker::ResolvedPlayback, kRealtimeSampleSlots> previews_{};

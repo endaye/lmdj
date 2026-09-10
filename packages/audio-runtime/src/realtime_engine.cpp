@@ -7,6 +7,7 @@
 #include <iterator>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -14,6 +15,31 @@
 #include "testing_hooks.hpp"
 
 namespace lmdj::audio {
+namespace {
+std::size_t checked_receipt_pending(std::size_t pending) {
+  if (!RealtimeEngine::receipt_bounded_storage_bytes(pending)) {
+    throw std::invalid_argument("receipt-bounded pending capacity must be 1..1024");
+  }
+  return pending;
+}
+}  // namespace
+
+RealtimeEngine::RealtimeEngine(ReceiptBoundedVoiceStates, std::size_t pending)
+    : queue_(checked_receipt_pending(pending)),
+      trigger_outcome_ring_(pending),
+      voice_state_ring_(true, pending) {}
+
+std::optional<std::uint64_t> RealtimeEngine::receipt_bounded_storage_bytes(
+    std::size_t pending) noexcept {
+  const auto voices = detail::RuntimeVoiceStateStorage::receipt_allocation_bytes(pending);
+  const auto controls = detail::RuntimeSpscStorage<PadControlEvent>::allocation_bytes(pending);
+  const auto outcomes =
+      detail::RuntimeSpscStorage<RuntimeTriggerOutcomeEvent>::allocation_bytes(pending);
+  if (!voices || !controls || !outcomes) return std::nullopt;
+  const auto first = checked_runtime_byte_sum(*controls, *outcomes);
+  return first ? checked_runtime_byte_sum(*first, *voices) : std::nullopt;
+}
+
 #if defined(LMDJ_AUDIO_RUNTIME_TESTING) && LMDJ_AUDIO_RUNTIME_TESTING
 namespace testing {
 namespace {
