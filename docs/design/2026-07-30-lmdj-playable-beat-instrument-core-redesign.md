@@ -954,7 +954,22 @@ Headless Test 代替。
 9. Sequence；
 10. Perform；
 11. Sound Set；
-12. Stem / Slice / Pattern Intelligence Providers。
+12. Intelligence Providers 总追踪（[#472](https://github.com/endaye/lmdj/issues/472)），
+    分成三个可独立交付、分别验收的工作项：
+    - **12A Slice**：参考切片与 Candidate 采纳链路的验收、质量评测和交付收口
+      （[#1163](https://github.com/endaye/lmdj/issues/1163)）；优先推进。
+    - **12B Stem**：独立的分离场景、执行环境、候选评测、Contract 与产品接入
+      （[#1164](https://github.com/endaye/lmdj/issues/1164)）；先做可行性设计。
+    - **12C Pattern Intelligence**：独立的候选生成、预览、采纳与音乐性验收
+      （[#1165](https://github.com/endaye/lmdj/issues/1165)）；先裁定产品语义。
+
+上述拆分依据 [2026-09-10 范围决策](../prd/decisions/2026-09-10-stage12-independent-delivery.md)，
+具体任务、依赖、文件和验收见
+[Stage 12 独立交付计划](../plans/2026-09-10-stage12-independent-delivery.md)。
+12A 可独立验收，不以此宣布整个 Stage 12 完成；Stem 与 Pattern 的原始目标
+继续保留。Stem/Pattern 复用 Provider、Attempt、Artifact 基础设施，新增结果
+及采纳语义分别设计；模型选型、Pattern Merge 和模型事件生成不由拆分决定。
+后两项的设计研究可与 Slice 验收并行，实施须先有获评审的精确 Task 边界。
 
 与第 1 步同期启动 **Web 实时音频 Spike**：最小化验证
 AudioWorklet + WASM 线程、SharedArrayBuffer 所需的 Cross-Origin Isolation、

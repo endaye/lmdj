@@ -1,5 +1,9 @@
 # LMDJ Headless Core Proof Implementation Plan
 
+后续整体交付顺序见[核心重设计 §23](../design/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md#23-交付顺序)。
+Stage 12 的当前任务入口为 [Slice / Stem / Pattern 独立交付计划](2026-09-10-stage12-independent-delivery.md)；
+本文件继续保留首个 Headless Proof 的原始实施范围，不作为后续 Intelligence 的施工单。
+
 > **For agentic workers:** Follow repository `AGENTS.md` and execute the approved plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the first UI-free LMDJ proof that creates a 64-pad project, imports fixed audio, records a user-played pattern, cooks an immutable runtime snapshot, renders deterministic WAV audio, exposes identical state through CLI and MCP, switches a test Provider, and proves that a failed Attempt cannot mutate Project Truth.

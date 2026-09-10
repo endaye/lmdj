@@ -1,5 +1,17 @@
 # Human TODO — 2026-08-17
 
+## Stage 12 当前入口（2026-09-10）
+
+完整列表与验收腿见[独立交付计划](../plans/2026-09-10-stage12-independent-delivery.md)。
+S2 Windows Creator 操作/听感 [#1167](https://github.com/endaye/lmdj/issues/1167) 等待 S1 验收包；
+实际浏览器能力、OS/音频设备与固定候选身份必须记录，WSL 自动化不代替 Windows 听音。
+S4 Slice 适用性决策 [#1169](https://github.com/endaye/lmdj/issues/1169) 等待 S2/S3；
+T1/T2 的 Stem 环境/候选选择、P1 的 Pattern 首版与采纳语义需要各自评审。
+模型生成事件继续由 [#535](https://github.com/endaye/lmdj/issues/535) 承接；
+当前拆分不提前解决该问题。Windows 记录不覆盖 macOS/iPadOS Safari 或 Native 物理音频。
+
+## 历史台账范围
+
 Everything in this repository that **a human being has to do**: verifications
 automation cannot convert, and decisions a coding agent must not settle alone.
 

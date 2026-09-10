@@ -1,5 +1,19 @@
 # Machine Task TODO — 2026-08-17
 
+## Stage 12 当前入口（2026-09-10）
+
+完整列表与精确文件/验证见[独立交付计划](../plans/2026-09-10-stage12-independent-delivery.md)。
+可开始准备：S1 验收包 [#1166](https://github.com/endaye/lmdj/issues/1166)、
+T1 Stem 范围/评测设计 [#1171](https://github.com/endaye/lmdj/issues/1171)、
+P1 Pattern 产品设计 [#1173](https://github.com/endaye/lmdj/issues/1173)。
+设计准备不自动裁定未决产品问题；人工/决策入口见对应 Human TODO。
+后续：S3 质量/耗时评测 [#1168](https://github.com/endaye/lmdj/issues/1168) 等待 S1；
+T2 Stem 实测与实施拆分 [#1172](https://github.com/endaye/lmdj/issues/1172) 等待获评审的 T1；
+S5 文档与验收核销 [#1170](https://github.com/endaye/lmdj/issues/1170) 等待 S4 及阻塞修复重验。
+总追踪 #472；12A/12B/12C 可分别交付，未执行的平台和生产缺口继续保留。
+
+## 历史台账范围
+
 Everything a coding agent can complete without a human in the loop. Its
 companion is [`2026-08-17-manual-verification-todo.md`](2026-08-17-manual-verification-todo.md),
 which holds the verifications and decisions that require a person. Between them
