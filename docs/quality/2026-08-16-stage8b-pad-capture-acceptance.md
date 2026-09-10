@@ -68,7 +68,12 @@ Both projects passed on two consecutive full Proof runs at
 
 ### Coverage this record does not claim
 
-- **The 60 s buffer cap has unit coverage only.** `capture_buffer.test.ts`
+- **The 60 s buffer cap has unit coverage plus one retained Windows browser
+  observation.** `capture_buffer.test.ts` proves the batch crossing 2,880,000
+  frames is truncated and capacity is reported; the retained Windows Chrome
+  session is recorded in
+  [`2026-09-10-stage8b-m4-windows-chrome-1.0.42.0.md`](../release-evidence/2026-09-10-stage8b-m4-windows-chrome-1.0.42.0.md).
+  This does not replace the historical macOS Chrome platform row.
   proves the batch crossing 2,880,000 frames is truncated and capacity is
   reported; the end-to-end journeys assert the 5 s commit clamp instead of
   elapsing a real minute, so no browser journey reaches the cap.

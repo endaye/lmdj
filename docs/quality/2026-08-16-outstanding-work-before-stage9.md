@@ -360,13 +360,12 @@ recorded with D4 above.
 
 ## E. Known-good, tracked for awareness
 
-### E1. 60 s capture buffer cap has unit coverage only
+### E1. 60 s capture buffer cap has unit coverage plus Windows observation
 
-`capture_buffer.test.ts` proves truncation at 2,880,000 frames. The browser
-journeys assert the 5 s commit clamp rather than elapsing a real minute, so no
-end-to-end journey reaches the cap. Deliberate — waiting out a real minute
-proves nothing the clamp does not — but it means the cap's browser behaviour is
-unobserved.
+`capture_buffer.test.ts` proves truncation at 2,880,000 frames. A retained
+Windows Chrome session reached the real 60-second boundary and is recorded in
+[`2026-09-10-stage8b-m4-windows-chrome-1.0.42.0.md`](../release-evidence/2026-09-10-stage8b-m4-windows-chrome-1.0.42.0.md).
+The historical macOS Chrome row remains a separate platform claim.
 
 ### E2. `envelope()` has no zoom window
 
