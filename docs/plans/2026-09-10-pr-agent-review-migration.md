@@ -531,6 +531,45 @@ and route `/operations/testing-and-proof/` when deployed behavior is documented.
 Update page source_paths and run the check in that same Task. A docs/quality
 file alone does not justify claiming that a Portal page was changed.
 
+## T4 prerequisite: dedicated credential preflight
+
+The owner authorized completion of deployment admission and credential
+verification on 2026-09-11 after selecting DeepSeek-V4.1-Flash (API name
+`deepseek-flash`) instead of Pro. This does not waive a technical admission
+condition or authorize other suppliers, larger budgets or production cutover.
+
+One reviewable prerequisite Task adds owner-dispatched, main-only
+`pr-agent-credential-preflight.yml` on existing Netcup `ci-general` capacity.
+It performs only `GET https://api.deepseek.com/user/balance`, with no inference,
+redirect, proxy environment, retry, secret export, artifact, host provisioning
+or production review write. Its finite receipt establishes API authentication
+and current supplier availability, not USD funding admission, model health,
+runtime credential injection, full deployment or T5/T6 acceptance. Actual
+balances and raw HTTP bodies/errors never enter the workflow log.
+
+Declared files: `.github/workflows/pr-agent-credential-preflight.yml`,
+`.github/actionlint.yaml` (register the live Netcup label),
+`scripts/ci/pr_agent_credential_preflight.py`,
+`tests/build/ci_pr_agent_credential_preflight_test.py`,
+`scripts/ci/scope_policy.json`, this plan,
+`docs/design/2026-09-10-pr-agent-review-migration.md`,
+`docs/quality/2026-09-10-pr-agent-netcup-operations.md`, and
+`apps/docs-site/docs/operations/testing-and-proof.mdx`.
+
+Lowest-tier verification: the dedicated mocked-HTTP contract suite,
+`python3 tests/build/ci_change_scope_test.py` after new-file staging, workflow
+syntax validation, and `scripts/docs-site.sh check`. No new required merge gate.
+The tests catch credential/response disclosure, redirected authentication,
+malformed or unavailable balance accepted as passed, and automatic/untrusted
+workflow execution. Live far-side evidence requires the merged workflow's
+exact run/attempt and sanitized receipt; a local mocked response is not API
+authentication. Subsequent paid model requests still use the existing engine,
+full monetary reservation and durable ledger, never this read-only helper.
+
+Version impact: none — CI operation only; no Product or Contract identity change.
+Documentation impact: required
+Affected portal pages: /operations/testing-and-proof/
+
 ## Progress
 
 - T1 was merged through PR #1161 at `409a1a4d`; the earlier audit and failed
