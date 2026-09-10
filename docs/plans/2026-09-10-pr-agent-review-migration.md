@@ -595,6 +595,30 @@ Version impact: none — internal deployment behavior, no versioned identity.
 Documentation impact: required
 Affected portal pages: /operations/testing-and-proof/
 
+## T2 follow-up: protected real-handler preparation
+
+PR #1185 fixed the ordinary contract fixtures, but its exact-head run
+34519528135/1 subsequently reached the pinned real-handler stage and failed
+on generated source metadata and runtime fixture configuration modes under
+the runner's permissive umask. Fix those preparation boundaries, preserving
+all loader protection, timeout and actual-handler assertions. No runtime
+engine, provider configuration, dependency or bundle identity change.
+
+Declared files: `scripts/ci/pr-agent/integration-test.sh`,
+`tests/build/ci_pr_agent_review_test.py`, and this plan.
+
+Lowest-tier verification: reproduce the real shared integration entrypoint
+under `0002`, then run corrected clean Python 3.12 preparation under both
+`0022` and `0002` with every real-handler case enabled, plus clean `python3 -S`
+ordinary adapter tests, shell syntax and `scripts/docs-site.sh check`. Keep
+generated installation metadata protected without modifying original checkout
+modes; do not suppress failures or omit the actual-handler leg. Retain the
+original failed run and record exact source/runtime identities and counts.
+
+Version impact: none — test preparation only, unchanged shipped engine.
+Documentation impact: none
+Reason: implementation plan and test-only preparation, no changed Portal facts.
+
 ## Progress
 
 - T1 was merged through PR #1161 at `409a1a4d`; the earlier audit and failed

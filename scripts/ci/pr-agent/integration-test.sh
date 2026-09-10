@@ -122,6 +122,10 @@ PY
 cp "$ROOT_DIR/scripts/ci/pr_agent_review.py" "$SOURCE_ROOT/pr_agent_review.py"
 cp "$ROOT_DIR/scripts/ci/pr-agent/config.toml" "$SOURCE_ROOT/config.toml"
 cp "$ROOT_DIR/scripts/ci/pr-agent/requirements.lock" "$SOURCE_ROOT/requirements.lock"
+chmod 0644 \
+  "$SOURCE_ROOT/pr_agent_review.py" \
+  "$SOURCE_ROOT/config.toml" \
+  "$SOURCE_ROOT/requirements.lock"
 
 "$RUNTIME" -m venv "$VENV"
 BOOTSTRAP_REQUIREMENTS="$WORK_DIR/bootstrap-requirements.txt"
@@ -141,7 +145,9 @@ TOKENIZER_ASSET_SHA256=446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0
 TOKENIZER_ASSET_BYTES=3613922
 TOKENIZER_PACKAGE_ASSET="$VENV/lib/python3.12/site-packages/litellm/litellm_core_utils/tokenizers/$TOKENIZER_CACHE_KEY"
 mkdir -p "$SOURCE_ROOT/tokenizer-cache"
+chmod 0755 "$SOURCE_ROOT/tokenizer-cache"
 cp "$TOKENIZER_PACKAGE_ASSET" "$SOURCE_ROOT/tokenizer-cache/$TOKENIZER_CACHE_KEY"
+chmod 0644 "$SOURCE_ROOT/tokenizer-cache/$TOKENIZER_CACHE_KEY"
 "$RUNTIME" - "$SOURCE_ROOT" "$ARCHIVE" "$TOKENIZER_ASSET_SHA256" "$TOKENIZER_ASSET_BYTES" <<'PY'
 import hashlib
 import json
@@ -174,6 +180,7 @@ source_lines.extend([
     f"stock_tokenizer_asset_sha256={tokenizer_identity['sha256']}",
 ])
 manifest.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
+manifest.chmod(0o644)
 files = {}
 for name, relative in {
     "manifest": "IDENTITY",
@@ -188,6 +195,7 @@ for name, relative in {
     "archive": identity(archive),
     "files": files,
 }, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+(root / "DEPLOYMENT_IDENTITY.json").chmod(0o644)
 PY
 
 env \
