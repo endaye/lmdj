@@ -149,7 +149,9 @@ value, authentication and balance were not read or verified. Allocate these
 GitHub Actions Secret names for operator entry: `PR_AGENT_DEEPSEEK_API_KEY`,
 `PR_AGENT_ZAI_API_KEY`, `PR_AGENT_KIMI_API_KEY`, `PR_AGENT_XAI_API_KEY`.
 The first candidate endpoint/model is `https://api.deepseek.com` /
-`deepseek-v4-pro`; the documented effective version is DeepSeek-V4-Pro-0813.
+`deepseek-flash`; the owner selected DeepSeek-V4.1-Flash on 2026-09-11,
+explicitly replacing the earlier Pro candidate. The official pricing page
+confirms this API name and effective version. No Pro fallback is configured.
 This model alias can change upstream, so retain the actual response model and
 source/pricing observation in every cohort. Do not claim live health before a
 budget-admitted request succeeds. The initial enabled candidate order is
@@ -298,8 +300,8 @@ Sources: [Z.AI supported tools](https://docs.z.ai/devpack/tool/others),
 [xAI API billing](https://docs.x.ai/developers/faq/billing),
 [OpenAI pricing modes](https://learn.chatgpt.com/docs/pricing), and
 [DeepSeek API pricing](https://api-docs.deepseek.com/quick_start/pricing/).
-For initial DeepSeek reservation, use observed peak cache-miss USD 1.32/M input
-and USD 3.96/M output, without assuming off-peak or cache discounts. Refresh
+For initial Flash reservation, use observed peak cache-miss USD 0.30/M input
+and USD 1.20/M output (refreshed 2026-09-11), without assuming off-peak or cache discounts. Refresh
 pricing before admission and fail closed on unknown/changed pricing.
 
 ## Netcup capacity and availability

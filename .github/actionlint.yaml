@@ -6,4 +6,5 @@ self-hosted-runner:
     - ci-web-heavy
     - ci-core
     - contabo
+    - netcup
     - lmdj-ai-isolated

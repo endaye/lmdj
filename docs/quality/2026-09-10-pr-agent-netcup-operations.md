@@ -145,6 +145,40 @@ redundancy. API authentication, balance, model health, supplier success,
 fallback quality, the 20-PR shadow cohort, and production publisher/cutover
 remain T5/T6 acceptance, not T4 implementation evidence.
 
+## Dedicated credential preflight
+
+The owner selected DeepSeek-V4.1-Flash (`deepseek-flash`, no Pro fallback) and
+authorized deployment admission and credential verification on 2026-09-11.
+The earlier sudo failure above is historical: a fresh `visudo -c` and
+noninteractive `sudo -n whoami` now pass after correcting the exact sudoers
+file mode to `0440`. Runner 04's policy was independently read back as baseline
+on both host and current main; its extra GitHub `elastic` label was removed and
+the other ten labels plus online status read back unchanged. Neither change
+proves runtime isolation, resource coexistence or T4 completion.
+
+The manual `PR-Agent Credential Preflight` workflow runs only for the repository
+owner at main, on existing Netcup `ci-general` capacity. It consumes only the
+dedicated `PR_AGENT_DEEPSEEK_API_KEY` in its check step, uses a fixed HTTPS
+balance endpoint and no redirects/proxy environment/retries, and outputs only
+finite authentication/availability metadata. It never outputs the key, raw
+supplier body/error or balance amounts, copies a secret to the host, performs
+inference, publishes review/scope, or activates the review service.
+
+After this Task is merged, the authorized operation is:
+
+```bash
+gh workflow run pr-agent-credential-preflight.yml --ref main
+```
+
+Read back the exact run/attempt and successful job plus its sanitized receipt.
+Secret metadata alone and mocked tests do not prove authentication. A successful
+balance check is not USD funding admission or model health: the actual engine
+still requires its reviewed price/context bounds, verified monetary funding,
+durable ledger, restricted runtime credential injection and measured host
+admission before any paid request. Other suppliers remain disabled; full
+four-supplier health/fallback acceptance, T5 cohorts and T6 cutover remain open.
+Budgets remain USD 1 per attempt, USD 20 pilot and USD 20/calendar month.
+
 ## Verification performed by this Task
 
 `tests/build/ci_pr_agent_runner_test.py` uses small meaningful tar fixtures to
