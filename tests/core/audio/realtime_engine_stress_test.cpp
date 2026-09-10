@@ -5,7 +5,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <new>
 #include <span>
 #include <thread>
 #include <vector>
@@ -13,6 +15,177 @@
 #include "tests/core/support/test.hpp"
 
 namespace {
+
+thread_local bool callback_active{};
+thread_local bool track_allocators{};
+thread_local std::size_t allocator_calls{};
+void allocator_boundary() {
+  if (callback_active) std::abort();
+  if (track_allocators) ++allocator_calls;
+}
+void* ordinary_allocate(std::size_t bytes) {
+  allocator_boundary();
+  if (auto* result = std::malloc(bytes == 0 ? 1 : bytes)) return result;
+  throw std::bad_alloc{};
+}
+void* aligned_allocate(std::size_t bytes, std::size_t alignment) {
+  allocator_boundary();
+  void* result{};
+  if (posix_memalign(&result, alignment, bytes == 0 ? alignment : bytes) == 0)
+    return result;
+  throw std::bad_alloc{};
+}
+void release_allocation(void* memory) noexcept {
+  if (!memory) return;
+  allocator_boundary();
+  std::free(memory);
+}
+
+void pcm_publication_retirement_races_real_render_without_owner_destruction() {
+  using namespace lmdj;
+  using namespace lmdj::audio;
+  track_allocators = true;
+  allocator_calls = 0;
+  auto* ordinary = ::operator new(37);
+  auto* aligned = ::operator new(129, std::align_val_t{64});
+  ::operator delete(ordinary);
+  ::operator delete(aligned, std::align_val_t{64});
+  track_allocators = false;
+  LMDJ_CHECK(allocator_calls == 4);
+
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.start().has_value());
+  std::atomic<bool> done{};
+  std::thread callback([&] {
+    std::array<float, 64> left{}, right{};
+    while (!done.load(std::memory_order_acquire)) {
+      callback_active = true;
+      engine.render(left.data(), right.data(), left.size());
+      callback_active = false;
+      std::this_thread::yield();
+    }
+  });
+  std::uint64_t sequence = 0;
+  for (std::uint64_t generation = 1; generation <= 1000; ++generation) {
+    auto owner = std::make_shared<const cooker::PcmSample>(cooker::PcmSample{
+        48'000, 1, std::vector<std::int16_t>(256, 16'384)});
+    std::weak_ptr<const cooker::PcmSample> lifetime = owner;
+    auto bank = PreparedSampleBank::empty(
+        foundation::ProjectId{"00000000-0000-4000-8000-000000000001"}, generation);
+    LMDJ_CHECK(bank.set_pcm_sample(0, owner,
+        {0, 256, domain::TriggerMode::loop_gate, 1, false}).has_value());
+    owner.reset();
+    LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+    while (engine.bank_telemetry().current_generation != generation * 2 - 1)
+      std::this_thread::yield();
+    (void)engine.reclaim_retired_banks();
+    LMDJ_CHECK(engine.enqueue_control(
+        {++sequence, 0, 127, PadControlKind::press, {}}) == EnqueueResult::accepted);
+    while (engine.telemetry().started_voices != generation)
+      std::this_thread::yield();
+
+    auto next = PreparedSampleBank::empty(
+        foundation::ProjectId{"00000000-0000-4000-8000-000000000001"}, generation + 1);
+    LMDJ_CHECK(next.set_pcm_sample(0,
+        std::make_shared<const cooker::PcmSample>(cooker::PcmSample{
+            48'000, 2, std::vector<std::int16_t>(512, -16'384)}),
+        {0, 256, domain::TriggerMode::one_shot, 1, false}).has_value());
+    LMDJ_CHECK(engine.publish_sample_bank(std::move(next)) == PublishResult::accepted);
+    while (engine.bank_telemetry().current_generation != generation * 2)
+      std::this_thread::yield();
+    LMDJ_CHECK(!lifetime.expired());
+    LMDJ_CHECK(engine.reclaim_retired_banks() == 0);
+    LMDJ_CHECK(engine.enqueue_control(
+        {++sequence, 0, 0, PadControlKind::stop_all, {}}) == EnqueueResult::accepted);
+    for (;;) {
+      const auto telemetry = engine.telemetry();
+      if (telemetry.dequeued_events == sequence && telemetry.active_voices == 0) break;
+      std::this_thread::yield();
+    }
+    LMDJ_CHECK(!lifetime.expired());
+    const auto reclaimed = engine.reclaim_retired_bank_telemetry();
+    LMDJ_CHECK(reclaimed.count == 1 && reclaimed.decoded_pcm_bytes == 512);
+    LMDJ_CHECK(lifetime.expired());
+    std::array<RuntimeVoiceStateEvent, 8> states{};
+    std::array<RuntimeTriggerOutcomeEvent, 8> outcomes{};
+    LMDJ_CHECK(engine.drain_voice_states(states) == 2);
+    LMDJ_CHECK(engine.drain_trigger_outcomes(outcomes) == 1);
+  }
+  done.store(true, std::memory_order_release);
+  callback.join();
+  engine.stop();
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
+
+void pcm_audition_replacement_keeps_both_owners_until_audio_release() {
+  using namespace lmdj;
+  using namespace lmdj::audio;
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.start().has_value());
+  const auto make_bank = [](std::shared_ptr<const cooker::PcmSample> owner) {
+    auto bank = PreparedSampleBank::empty(kAuditionBankProjectId(),
+                                           kAuditionBankProjectRevision);
+    LMDJ_CHECK(bank.set_pcm_sample(0, std::move(owner),
+        {0, 256, domain::TriggerMode::loop_gate, 0.5F, false}).has_value());
+    return bank;
+  };
+  std::atomic<bool> done{};
+  std::thread callback([&] {
+    std::array<float, 64> left{}, right{};
+    while (!done.load(std::memory_order_acquire)) {
+      callback_active = true;
+      engine.render(left.data(), right.data(), left.size());
+      callback_active = false;
+      std::this_thread::yield();
+    }
+  });
+  std::uint64_t sequence = 0;
+  std::size_t full_refusals = 0;
+  for (std::uint64_t generation = 1; generation <= 1000; ++generation) {
+    auto owner = std::make_shared<const cooker::PcmSample>(cooker::PcmSample{
+        48'000, 1, std::vector<std::int16_t>(256, 16'384)});
+    std::weak_ptr<const cooker::PcmSample> lifetime = owner;
+    auto old = make_bank(std::move(owner));
+    LMDJ_CHECK(engine.publish_audition_bank(std::move(old)) == PublishResult::accepted);
+    LMDJ_CHECK(engine.enqueue_control(
+        {++sequence, 0, 127, PadControlKind::audition_start, {}}) == EnqueueResult::accepted);
+    while (engine.telemetry().started_voices != generation * 2 - 1)
+      std::this_thread::yield();
+    (void)engine.reclaim_retired_banks();
+    const auto next_owner = std::make_shared<const cooker::PcmSample>(cooker::PcmSample{
+        48'000, 2, std::vector<std::int16_t>(512, 8192)});
+    LMDJ_CHECK(engine.publish_audition_bank(make_bank(next_owner)) == PublishResult::accepted);
+    LMDJ_CHECK(engine.enqueue_control(
+        {++sequence, 0, 127, PadControlKind::audition_start, {}}) == EnqueueResult::accepted);
+    while (engine.telemetry().started_voices != generation * 2)
+      std::this_thread::yield();
+    LMDJ_CHECK(engine.telemetry().active_voices == 2);
+    LMDJ_CHECK(!lifetime.expired());
+    LMDJ_CHECK(engine.reclaim_retired_banks() == 0);
+    LMDJ_CHECK(engine.publish_audition_bank(make_bank(next_owner)) == PublishResult::bank_slots_full);
+    ++full_refusals;
+    LMDJ_CHECK(engine.enqueue_control(
+        {++sequence, 0, 0, PadControlKind::audition_stop, {}}) == EnqueueResult::accepted);
+    for (;;) {
+      const auto telemetry = engine.telemetry();
+      if (telemetry.dequeued_events == sequence && telemetry.active_voices == 0) break;
+      std::this_thread::yield();
+    }
+    LMDJ_CHECK(!lifetime.expired());
+    const auto reclaimed = engine.reclaim_retired_bank_telemetry();
+    LMDJ_CHECK(reclaimed.count == 1 && reclaimed.decoded_pcm_bytes == 0);
+    LMDJ_CHECK(lifetime.expired());
+    std::array<RuntimeVoiceStateEvent, 8> states{};
+    std::array<RuntimeTriggerOutcomeEvent, 8> outcomes{};
+    LMDJ_CHECK(engine.drain_voice_states(states) == 0);
+    LMDJ_CHECK(engine.drain_trigger_outcomes(outcomes) == 0);
+  }
+  done.store(true, std::memory_order_release);
+  callback.join();
+  engine.stop();
+  LMDJ_CHECK(full_refusals == 1000);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
 
 template <typename Queue>
 void check_voice_state_contention(Queue& queue) {
@@ -379,7 +552,26 @@ void corrupted_voice_state_stream_never_returns_a_partial_drain() {
 
 }  // namespace
 
+void* operator new(std::size_t bytes) { return ordinary_allocate(bytes); }
+void* operator new[](std::size_t bytes) { return ordinary_allocate(bytes); }
+void* operator new(std::size_t bytes, std::align_val_t alignment) {
+  return aligned_allocate(bytes, static_cast<std::size_t>(alignment));
+}
+void* operator new[](std::size_t bytes, std::align_val_t alignment) {
+  return aligned_allocate(bytes, static_cast<std::size_t>(alignment));
+}
+void operator delete(void* p) noexcept { release_allocation(p); }
+void operator delete[](void* p) noexcept { release_allocation(p); }
+void operator delete(void* p, std::size_t) noexcept { release_allocation(p); }
+void operator delete[](void* p, std::size_t) noexcept { release_allocation(p); }
+void operator delete(void* p, std::align_val_t) noexcept { release_allocation(p); }
+void operator delete[](void* p, std::align_val_t) noexcept { release_allocation(p); }
+void operator delete(void* p, std::size_t, std::align_val_t) noexcept { release_allocation(p); }
+void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { release_allocation(p); }
+
 int main() {
+  pcm_audition_replacement_keeps_both_owners_until_audio_release();
+  pcm_publication_retirement_races_real_render_without_owner_destruction();
   preserves_compact_voice_states_under_spsc_contention();
   preserves_all_trigger_events_under_spsc_contention();
   transports_all_voice_starts_to_concurrent_bounded_drains();

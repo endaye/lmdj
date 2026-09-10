@@ -29,8 +29,14 @@ thread_local std::size_t observed_order{};
 thread_local std::size_t engine_order{}, control_storage_order{}, outcome_storage_order{};
 thread_local std::size_t voice_storage_order{}, pcm_order{};
 thread_local std::size_t live_allocations{};
+thread_local bool observe_sample_payloads{};
+thread_local std::size_t pcm_payload_allocations{}, float_payload_allocations{};
 void before_allocate(std::size_t bytes) {
   if (forbid_allocation) std::abort();
+  if (observe_sample_payloads) {
+    if (bytes == 8192) ++pcm_payload_allocations;
+    if (bytes == 16384 || bytes == 32768) ++float_payload_allocations;
+  }
   if (observe_load_order) {
     ++observed_order;
     if (bytes == sizeof(audio::RealtimeEngine)) engine_order = observed_order;
@@ -209,6 +215,54 @@ void fixed_budget_tracks_pending_admission() {
   }
 }
 
+void shared_pcm_load_has_one_payload_and_no_float_allocation() {
+  observe_sample_payloads = true;
+  pcm_payload_allocations = float_payload_allocations = 0;
+  auto* ordinary = ::operator new(8192);
+  auto* aligned = ::operator new(16384, std::align_val_t{64});
+  ::operator delete(ordinary);
+  ::operator delete(aligned, std::align_val_t{64});
+  observe_sample_payloads = false;
+  LMDJ_CHECK(pcm_payload_allocations == 1 && float_payload_allocations == 1);
+
+  auto source = snapshot(false);
+  auto second = source.pads[0];
+  second.slot = {0, 1};
+  second.playback = {128, 2048, domain::TriggerMode::gate, 0.5F, false};
+  source.pads.push_back(std::move(second));
+  const auto bytes = cooker::encode_runtime_content(source, config().content_limits);
+  LMDJ_CHECK(bytes.has_value());
+  const auto footprint = cooker::inspect_runtime_content(
+      bytes.value().bytes, bytes.value().identity, config().content_limits);
+  LMDJ_CHECK(footprint.has_value());
+  LMDJ_CHECK(footprint.value().pcm_bytes == 8192);
+  LMDJ_CHECK(footprint.value().prepared_float_bytes == 32768);
+  RuntimeFacade runtime(config());
+  pcm_payload_allocations = float_payload_allocations = 0;
+  observe_sample_payloads = true;
+  const auto loaded = runtime.load(bytes.value().bytes, bytes.value().identity);
+  observe_sample_payloads = false;
+  LMDJ_CHECK(loaded == RuntimeResult::ok);
+  LMDJ_CHECK(pcm_payload_allocations == 1 && float_payload_allocations == 0);
+  LMDJ_CHECK(runtime.budget().pcm_bytes == 8192);
+  LMDJ_CHECK(runtime.budget().prepared_float_bytes == 0);
+  RuntimeEpoch epoch;
+  LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
+  LMDJ_CHECK(runtime.submit({epoch, 1, RuntimeCommandKind::press, 0}) == RuntimeResult::accepted);
+  LMDJ_CHECK(runtime.submit({epoch, 2, RuntimeCommandKind::press, 1}) == RuntimeResult::accepted);
+  Output output;
+  output.render(runtime);
+  LMDJ_CHECK(!output.silent());
+  std::array<RuntimeReceipt, 2> receipts;
+  LMDJ_CHECK(runtime.poll(receipts) == 2);
+  LMDJ_CHECK(receipts[0].outcome == RuntimeCommandOutcome::voice_started);
+  LMDJ_CHECK(receipts[1].outcome == RuntimeCommandOutcome::voice_started);
+  runtime.reset();
+  LMDJ_CHECK(!runtime.content_identity());
+  output.render(runtime);
+  LMDJ_CHECK(output.silent());
+}
+
 void budget_and_allocation_retry() {
   const auto bytes = content();
   auto limits = config();
@@ -217,8 +271,11 @@ void budget_and_allocation_retry() {
   const auto budget = measuring.budget();
   LMDJ_CHECK(budget.fixed_bytes > 0 && budget.metadata_bytes > 0);
   LMDJ_CHECK(budget.encoded_bytes == bytes.bytes.size());
-  LMDJ_CHECK(budget.pcm_bytes == 8192 && budget.prepared_float_bytes == 16384);
-  LMDJ_CHECK(budget.preparation_workspace_bytes > 16384);
+  LMDJ_CHECK(budget.pcm_bytes == 8192);
+  LMDJ_CHECK(budget.prepared_float_bytes == 0);
+  LMDJ_CHECK(budget.preparation_workspace_bytes ==
+      sizeof(lmdj::audio::PreparedSampleBank) +
+      sizeof(lmdj::audio::PreparedPatternView) + sizeof(domain::PatternEvent));
   limits.maximum_admitted_bytes = budget.admitted_bytes;
   RuntimeFacade exact(limits);
   LMDJ_CHECK(exact.load(bytes.bytes, bytes.identity) == RuntimeResult::ok);
@@ -554,6 +611,7 @@ void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept { 
 int main() {
   allocator_controls_cover_ordinary_and_aligned_storage();
   fixed_budget_tracks_pending_admission();
+  shared_pcm_load_has_one_payload_and_no_float_allocation();
   load_allocates_fixed_storage_before_pcm();
   load_uses_and_accounts_for_the_receipt_bounded_storage();
   for (const std::uint32_t pending : {1U, 128U, 1024U}) {

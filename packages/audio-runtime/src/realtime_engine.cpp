@@ -322,9 +322,17 @@ RealtimeEngine::BankSlot* RealtimeEngine::bank_slot_for(
   return &bank_slots_[bank_slot];
 }
 
-const std::vector<float>& RealtimeEngine::audition_sample(
+RealtimeEngine::SampleView RealtimeEngine::bank_sample(
+    const PreparedSampleBank& bank, std::uint8_t slot) noexcept {
+  const auto material = bank.material(slot);
+  const auto& floats = bank.sample(slot);
+  return {material.interleaved ? nullptr : floats.data(), material,
+          material.interleaved ? material.frame_count : floats.size()};
+}
+
+RealtimeEngine::SampleView RealtimeEngine::audition_sample(
     std::uint8_t slot) const noexcept {
-  return audition_slots_[slot].bank->sample(kAuditionSampleSlot);
+  return bank_sample(*audition_slots_[slot].bank, kAuditionSampleSlot);
 }
 
 // Audition retirement mirrors `retire_current_bank` but never touches
@@ -370,12 +378,12 @@ void RealtimeEngine::release_voice_pattern(Voice& voice) noexcept {
   voice.pattern_slot = kNoPatternSlot;
 }
 
-const std::vector<float>& RealtimeEngine::current_sample(
+RealtimeEngine::SampleView RealtimeEngine::current_sample(
     std::uint8_t slot) const noexcept {
   const auto bank_slot = current_bank_slot_.load(std::memory_order_relaxed);
   return bank_slot == kLegacyBankSlot
-             ? samples_[slot]
-             : bank_slots_[bank_slot].bank->sample(slot);
+             ? SampleView{samples_[slot].data(), {}, samples_[slot].size()}
+             : bank_sample(*bank_slots_[bank_slot].bank, slot);
 }
 
 cooker::ResolvedPlayback RealtimeEngine::published_playback(
@@ -1551,7 +1559,7 @@ EnqueueResult RealtimeEngine::enqueue_control(PadControlEvent event) noexcept {
     }
   }
   if (!replay && event.kind == PadControlKind::preview_set &&
-      !valid_playback(event.playback, current_sample(event.slot).size())) {
+      !valid_playback(event.playback, current_sample(event.slot).frame_count)) {
     invalid_events_ += 1;
     return EnqueueResult::invalid_velocity;
   }
@@ -1824,14 +1832,13 @@ void RealtimeEngine::render(
                      ? previews_[event.slot]
                      : published_playback(event.slot);
     }
-    const auto frame_count =
+    const auto sample =
         audition ? audition_sample(
                        static_cast<std::uint8_t>(
                            audition_slot - kAuditionBankSlotBase))
-                       .size()
-        : replay ? static_cast<std::size_t>(event.material.frame_count)
-                 : current_sample(event.slot).size();
-    if (!valid_playback(playback, frame_count)) {
+        : replay ? SampleView{nullptr, event.material, event.material.frame_count}
+                 : current_sample(event.slot);
+    if (!valid_playback(playback, sample.frame_count)) {
       audio_invalid_events_ += 1;
       continue;
     }
@@ -1878,15 +1885,9 @@ void RealtimeEngine::render(
     *voice = Voice{};
     voice->sequence = event.sequence;
     voice->slot = event.slot;
-    voice->samples =
-        audition ? audition_sample(
-                       static_cast<std::uint8_t>(
-                           audition_slot - kAuditionBankSlotBase))
-                       .data()
-        : replay ? nullptr
-                 : current_sample(event.slot).data();
-    voice->material = replay ? event.material : PreparedSampleMaterialView{};
-    voice->frame_count = frame_count;
+    voice->samples = sample.samples;
+    voice->material = sample.material;
+    voice->frame_count = sample.frame_count;
     voice->start_frame = playback.start_frame;
     voice->end_frame = playback.end_frame;
     voice->cursor = playback.start_frame;

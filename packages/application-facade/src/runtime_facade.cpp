@@ -101,7 +101,9 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
                          sizeof(audio::RealtimeEngine) + *queue_bytes;
     budget.encoded_bytes = footprint.encoded_bytes;
     budget.pcm_bytes = footprint.pcm_bytes;
-    budget.prepared_float_bytes = footprint.prepared_float_bytes;
+    // This narrow runtime reuses decoded immutable PCM for both live Pads and
+    // Pattern voices. The codec's generic float footprint remains unchanged.
+    budget.prepared_float_bytes = 0;
     // Payload accounting; allocator/control-block overhead and capacity
     // rounding belong to the explicit platform reserve, not hidden constants.
     budget.metadata_bytes = sizeof(cooker::RuntimeSnapshot) +
@@ -112,7 +114,7 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
         static_cast<std::uint64_t>(footprint.events) *
             (sizeof(cooker::ResolvedEvent) + sizeof(audio::PreparedPatternEvent)) +
         6 * 37 + 65 + sizeof(std::uint32_t);
-    budget.preparation_workspace_bytes = footprint.largest_float_sample_bytes +
+    budget.preparation_workspace_bytes =
         static_cast<std::uint64_t>(footprint.events) * sizeof(domain::PatternEvent) +
         sizeof(audio::PreparedSampleBank) + sizeof(audio::PreparedPatternView);
     budget.platform_reserve_bytes = self.config.platform_reserve_bytes;
@@ -143,18 +145,12 @@ RuntimeResult RuntimeFacade::load(std::span<const std::byte> bytes,
     auto bank = audio::PreparedSampleBank::empty(snapshot->project_id,
                                                 snapshot->project_revision);
     // The complete decoder already validated Pad order, PCM, playback and
-    // identity. Avoid the desktop quota-diagnostic JSON workspace here.
+    // identity. Its internally owned PCM has no Host-visible mutable alias.
+    // Avoid desktop float conversion and quota-diagnostic JSON workspace here.
     for (const auto& pad : snapshot->pads) {
-      const auto& sample = *pad.sample;
-      const auto frames = sample.interleaved.size() / sample.channels;
-      std::vector<float> mono(frames);
-      const audio::PreparedSampleMaterialView material{
-          sample.interleaved.data(), static_cast<std::uint32_t>(frames), sample.channels};
-      for (std::uint32_t frame = 0; frame < frames; ++frame) {
-        mono[frame] = audio::prepared_material_sample(material, frame);
-      }
-      if (!bank.set_sample(static_cast<std::uint8_t>(pad.slot.bank * 16 + pad.slot.pad),
-                           mono, pad.playback).has_value()) {
+      if (!bank.set_pcm_sample(
+              static_cast<std::uint8_t>(pad.slot.bank * 16 + pad.slot.pad),
+              pad.sample, pad.playback).has_value()) {
         return RuntimeResult::preparation_failed;
       }
     }

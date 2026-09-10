@@ -118,6 +118,109 @@ RuntimeSnapshot snapshot_with_frame_counts(
   };
 }
 
+PreparedSampleBank pcm_bank(const RuntimeSnapshot& snapshot) {
+  auto bank = PreparedSampleBank::empty(snapshot.project_id,
+                                         snapshot.project_revision);
+  for (const auto& pad : snapshot.pads) {
+    LMDJ_CHECK(bank.set_pcm_sample(
+        static_cast<std::uint8_t>(pad.slot.bank * 16 + pad.slot.pad),
+        pad.sample, pad.playback).has_value());
+  }
+  return bank;
+}
+
+void pcm_owners_survive_external_release_and_share_payload() {
+  std::weak_ptr<const PcmSample> lifetime;
+  {
+    auto sample = pcm(48'000, 1, {-32'768, 32'767, 0, 1});
+    lifetime = sample;
+    auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 9);
+    LMDJ_CHECK(bank.set_pcm_sample(0, sample,
+        {0, 4, TriggerMode::one_shot, 1.0F, false}).has_value());
+    LMDJ_CHECK(bank.set_pcm_sample(63, sample,
+        {1, 3, TriggerMode::loop_gate, 0.5F, false}).has_value());
+    sample.reset();
+    LMDJ_CHECK(!lifetime.expired());
+    LMDJ_CHECK(bank.sample_count() == 2);
+    LMDJ_CHECK(bank.availability_mask() == ((std::uint64_t{1} << 63) | 1));
+    LMDJ_CHECK(bank.decoded_pcm_bytes() == 8);
+  }
+  LMDJ_CHECK(lifetime.expired());
+}
+
+void pcm_replacement_keeps_one_representation_and_exact_unique_bytes() {
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 9);
+  const std::array<float, 4> floats{0, 0.25F, 0.5F, 1};
+  LMDJ_CHECK(bank.set_sample(0, floats).has_value());
+  LMDJ_CHECK(bank.decoded_pcm_bytes() == 16);
+  auto first = pcm(48'000, 1, {1, 2, 3, 4});
+  std::weak_ptr<const PcmSample> first_lifetime = first;
+  const ResolvedPlayback playback{0, 4, TriggerMode::one_shot, 1, false};
+  LMDJ_CHECK(bank.set_pcm_sample(0, first, playback).has_value());
+  LMDJ_CHECK(bank.decoded_pcm_bytes() == 8);
+  LMDJ_CHECK(bank.set_pcm_sample(1, first, playback).has_value());
+  LMDJ_CHECK(bank.decoded_pcm_bytes() == 8);
+  first.reset();
+  auto second = pcm(48'000, 2, {1, 2, 3, 4, 5, 6, 7, 8});
+  LMDJ_CHECK(bank.set_pcm_sample(0, second, playback).has_value());
+  LMDJ_CHECK(!first_lifetime.expired());
+  LMDJ_CHECK(bank.decoded_pcm_bytes() == 24);
+  LMDJ_CHECK(bank.set_pcm_sample(1, second, playback).has_value());
+  LMDJ_CHECK(first_lifetime.expired());
+  LMDJ_CHECK(bank.decoded_pcm_bytes() == 16);
+  LMDJ_CHECK(bank.set_pcm_sample(1, second, playback).has_value());
+  LMDJ_CHECK(bank.decoded_pcm_bytes() == 16);
+  LMDJ_CHECK(bank.sample_count() == 2);
+  LMDJ_CHECK(bank.availability_mask() == 3);
+  // Legacy float insertion keeps its original occupied-slot rejection.
+  LMDJ_CHECK(!bank.set_sample(0, floats).has_value());
+  LMDJ_CHECK(bank.decoded_pcm_bytes() == 16);
+}
+
+void invalid_pcm_replacement_preserves_prior_playback_and_payload() {
+  const ResolvedPlayback playback{0, 4, TriggerMode::one_shot, 1, false};
+  auto original = pcm(48'000, 1, {-32'768, 32'767, 16'384, -16'384});
+  const std::array<std::shared_ptr<const PcmSample>, 6> invalid{
+      nullptr, pcm(44'100, 1, {1}), pcm(48'000, 0, {1}),
+      pcm(48'000, 3, {1, 2, 3}), pcm(48'000, 1, {}),
+      pcm(48'000, 2, {1, 2, 3})};
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 9);
+  LMDJ_CHECK(bank.set_pcm_sample(0, original, playback).has_value());
+  for (const auto& candidate : invalid) {
+    const auto rejected = bank.set_pcm_sample(0, candidate, playback);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+    LMDJ_CHECK(bank.sample_count() == 1);
+    LMDJ_CHECK(bank.availability_mask() == 1);
+    LMDJ_CHECK(bank.decoded_pcm_bytes() == 8);
+  }
+  for (const auto candidate : {
+           ResolvedPlayback{1, 1, TriggerMode::gate, 1, false},
+           ResolvedPlayback{0, 5, TriggerMode::gate, 1, false},
+           ResolvedPlayback{0, 4, TriggerMode::gate, -1, false},
+           ResolvedPlayback{0, 4, TriggerMode::gate,
+                            std::numeric_limits<float>::infinity(), false},
+           ResolvedPlayback{0, 4, static_cast<TriggerMode>(255), 1, false}}) {
+    LMDJ_CHECK(!bank.set_pcm_sample(0, original, candidate).has_value());
+  }
+  LMDJ_CHECK(!bank.set_pcm_sample(64, original, playback).has_value());
+  auto expected = PreparedSampleBank::empty(ProjectId{kProjectId}, 9);
+  LMDJ_CHECK(expected.set_pcm_sample(0, original, playback).has_value());
+  RealtimeEngine actual_engine;
+  RealtimeEngine expected_engine;
+  LMDJ_CHECK(actual_engine.publish_sample_bank(std::move(bank)) == PublishResult::accepted);
+  LMDJ_CHECK(expected_engine.publish_sample_bank(std::move(expected)) == PublishResult::accepted);
+  LMDJ_CHECK(actual_engine.start().has_value());
+  LMDJ_CHECK(expected_engine.start().has_value());
+  LMDJ_CHECK(actual_engine.enqueue({1, 0, 127}) == EnqueueResult::accepted);
+  LMDJ_CHECK(expected_engine.enqueue({1, 0, 127}) == EnqueueResult::accepted);
+  std::array<float, 16> left{}, right{}, expected_left{}, expected_right{};
+  actual_engine.render(left.data(), right.data(), left.size());
+  expected_engine.render(expected_left.data(), expected_right.data(), expected_left.size());
+  LMDJ_CHECK(left == expected_left && right == expected_right);
+  LMDJ_CHECK(left[1] != 0);
+}
+
 void prepares_all_snapshot_slots_and_metadata() {
   const auto snapshot = valid_snapshot();
 
@@ -131,16 +234,18 @@ void prepares_all_snapshot_slots_and_metadata() {
              ((std::uint64_t{1} << 0U) | (std::uint64_t{1} << 63U)));
 }
 
-void renders_exact_mono_and_stereo_pcm16_conversion() {
+void renders_exact_mono_and_stereo_pcm16_conversion(bool owned_pcm) {
   constexpr float kRampScale =
       1.0F / static_cast<float>(lmdj::audio::kRealtimeRampFrames);
   const auto ramp_part = [](std::uint32_t frames) {
     return static_cast<float>(frames) * kRampScale;
   };
-  auto prepared = PreparedSampleBank::from_snapshot(valid_snapshot());
-  LMDJ_CHECK(prepared.has_value());
+  auto converted = PreparedSampleBank::from_snapshot(valid_snapshot());
+  LMDJ_CHECK(converted.has_value());
+  auto prepared = owned_pcm ? pcm_bank(valid_snapshot())
+                            : std::move(converted.value());
   RealtimeEngine engine;
-  LMDJ_CHECK(engine.publish_sample_bank(std::move(prepared.value())) ==
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(prepared)) ==
              PublishResult::accepted);
   LMDJ_CHECK(engine.start().has_value());
 
@@ -518,8 +623,12 @@ void admits_decided_boundaries_and_rejects_one_mono_frame_over() {
 }  // namespace
 
 int main() {
+  pcm_owners_survive_external_release_and_share_payload();
+  pcm_replacement_keeps_one_representation_and_exact_unique_bytes();
+  invalid_pcm_replacement_preserves_prior_playback_and_payload();
   prepares_all_snapshot_slots_and_metadata();
-  renders_exact_mono_and_stereo_pcm16_conversion();
+  renders_exact_mono_and_stereo_pcm16_conversion(false);
+  renders_exact_mono_and_stereo_pcm16_conversion(true);
   rejects_invalid_snapshot_sample_shapes_before_publication();
   validates_control_thread_float_sample_builder();
   validates_resolved_playback_before_storing_fixed_values();

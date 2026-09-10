@@ -119,6 +119,10 @@ void lifecycle_stress() {
   constexpr std::uint32_t generations = 300;
   for (std::uint32_t generation = 0; generation < generations; ++generation) {
     LMDJ_CHECK(runtime.load(bytes.bytes, bytes.identity) == RuntimeResult::ok);
+    // Every generation races the new PCM-only ownership path, not an old
+    // float fixture that merely shares the same Facade lifecycle.
+    LMDJ_CHECK(runtime.budget().prepared_float_bytes == 0);
+    LMDJ_CHECK(runtime.budget().pcm_bytes > 0);
     RuntimeEpoch epoch;
     LMDJ_CHECK(runtime.start(epoch) == RuntimeResult::ok);
     LMDJ_CHECK(runtime.submit({previous, 1}) == RuntimeResult::stale_epoch);
@@ -135,6 +139,7 @@ void lifecycle_stress() {
     }
     runtime.reset();
     LMDJ_CHECK(runtime.phase() == RuntimePhase::empty);
+    LMDJ_CHECK(!runtime.content_identity());
     // Callback thread continues calling the closed gate during unload/load.
     // No forced state replaces the actual callback or ownership transfer.
     previous = epoch;
