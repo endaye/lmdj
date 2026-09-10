@@ -151,6 +151,7 @@ void failures() {
 }
 void crash_recovery() {
 #if defined(__unix__) || defined(__APPLE__)
+  std::size_t completed = 0;
   for (auto fail : {FaultPoint::sample_after_artifact_creation,
       FaultPoint::sample_after_manifest_preparation, FaultPoint::sample_after_manifest_publication}) {
     Fixture f;
@@ -179,8 +180,9 @@ void crash_recovery() {
       LMDJ_CHECK(loaded.value() == f.before);
       f.verify(f.adopt());
     }
+    ++completed;
   }
-  std::cout << "candidate adoption crash recovery: 3 crash points PASS\n";
+  std::cout << "candidate adoption crash recovery: " << completed << " crash points PASS\n";
 #else
   std::cout << "candidate adoption crash recovery: SKIP (requires POSIX fork)\n";
 #endif
