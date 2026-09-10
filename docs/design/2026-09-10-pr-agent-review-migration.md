@@ -241,19 +241,30 @@ allowance deny admission. A context above 100,000 is eligible under this formula
 without a supplier counter. Available balance subtracts reconciled spend plus
 outstanding reservations. Never reset or clear the ledger when replacing a worker.
 
-The trusted price revision binds context limit, output cap, rates, fixed charge
-and enabled billable categories; any change requires a new reviewed revision.
+The trusted price revision binds context limit, output cap, rates, fixed charge,
+enabled billable categories and priced response-model identity; any change
+requires a new reviewed revision, enforced by the durable reservation basis.
 Reconcile a successful response only from complete authoritative supplier usage
-with the priced response-model identity, or an authoritative actual monetary
-charge. Otherwise finalize exactly once as uncertain and retain the reservation.
-A timeout is not refunded merely because no response was observed. Preserve a
-known actual charge above the reservation rather than clamping its liability.
-Output-usage, total-context-usage or known-charge envelope breaches fail the
+with the priced response-model identity. Direct monetary charge reconciliation
+is unsupported: LiteLLM response-cost headers are not authoritative billing
+evidence and must not override priced usage, refund reservations, or create a
+hold by themselves. Otherwise finalize exactly once as uncertain and retain the
+reservation.
+A timeout is not refunded merely because no response was observed. Preserve
+liability derived from complete trusted priced usage above the reservation
+rather than clamping it. Output-usage, total-context-usage or priced-usage
+monetary envelope breaches fail the
 review, suppress all remaining provider fallback in that attempt, and deny
 future admission for the same `(provider, effective_model, price_revision)`
 until operator review replaces/disposes that envelope. Reuse the append-only
 ledger's finalized records for this durable hold; add only necessary internal
 reservation-basis data, not a second ledger or public coverage schema. Record
+valid output/context usage breaches before model-identity validation or monetary
+conversion. An unpriceable response, including a model mismatch or a cost too
+large to represent, retains its reservation and observed attempt usage, finalizes
+once as uncertain, and still records a durable breach hold when its valid usage
+exceeds the envelope. Such a breach permits neither stock retry nor fallback.
+Never fabricate a finite actual charge for unpriceable usage. Record
 estimates separately from supplier billing. Supplier counter certification is
 not a T2 completion prerequisite; funding, live qualification and model selection
 remain in their existing later Tasks without increased dollar caps.

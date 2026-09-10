@@ -629,6 +629,7 @@ class InputAndPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
             kwargs = dict(approval_id="fixture-approval", attempt_id="run:1", model="fixture-model",
+                          priced_response_model="fixture-served-model",
                           input_price=0.000001, output_price=0.000001, context_token_limit=100,
                           output_token_cap=50, fixed_request_charge=0.0,
                           billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
@@ -645,7 +646,8 @@ class InputAndPolicyTests(unittest.TestCase):
             ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
             reservation = ledger.admit(
                 approval_id="fixture-approval", attempt_id="run:2", request_id="run:2:deepseek:1",
-                provider="deepseek", model="fixture-model", input_price=0.000001, output_price=0.000001,
+                provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                input_price=0.000001, output_price=0.000001,
                 context_token_limit=100, output_token_cap=50, fixed_request_charge=0.0,
                 billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
                 max_requests=8, max_provider_requests=2,
@@ -654,7 +656,8 @@ class InputAndPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(adapter.AdmissionDenied, "request cost budget exhausted"):
                 ledger.admit(
                     approval_id="fixture-approval", attempt_id="run:2", request_id="run:2:glm:1",
-                    provider="glm", model="fixture-model", input_price=0.000001, output_price=0.000001,
+                    provider="glm", model="fixture-model", priced_response_model="fixture-served-model",
+                    input_price=0.000001, output_price=0.000001,
                     context_token_limit=100, output_token_cap=50, fixed_request_charge=0.0,
                     billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
                     max_requests=8, max_provider_requests=2,
@@ -669,7 +672,8 @@ class InputAndPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(adapter.AdmissionDenied, "invalid record"):
                 ledger.admit(
                     approval_id="fixture-approval", attempt_id="run:3", request_id="run:3:deepseek:1",
-                    provider="deepseek", model="fixture-model", input_price=0.000001,
+                    provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                    input_price=0.000001,
                     output_price=0.000001, context_token_limit=100, output_token_cap=50,
                     fixed_request_charge=0.0,
                     billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
@@ -680,14 +684,21 @@ class InputAndPolicyTests(unittest.TestCase):
         config = test_config()["budget"]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.jsonl"
-            path.write_text(json.dumps({
-                "schema": adapter.LEDGER_SCHEMA, "approval_id": "fixture-approval", "currency": "USD",
-                "attempt_id": "run:4", "request_id": "run:4:deepseek:1", "provider": "deepseek",
-                "effective_model": "fixture-model", "price_revision": "fixture-price-v1",
-                "reserved_amount_usd": float("nan"), "actual_amount_usd": None, "status": "reserved",
-                "month": "2026-09", "created_at": "2026-09-10T00:00:00Z",
-            }) + "\n", encoding="utf-8")
             ledger = adapter.Ledger(path, config)
+            ledger.admit(
+                approval_id="fixture-approval", attempt_id="run:4", request_id="run:4:deepseek:1",
+                provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                input_price=0.001, output_price=0.0, context_token_limit=100, output_token_cap=50,
+                fixed_request_charge=0.0,
+                billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
+                max_requests=8, max_provider_requests=2, per_pr_usd=1.0,
+                monthly_usd=20.0, pilot_usd=20.0, price_revision="fixture-price-v1",
+            )
+            finite = ledger._records()
+            self.assertEqual(finite["run:4:deepseek:1"]["reserved_amount_usd"], 0.1)
+            record = json.loads(path.read_text(encoding="utf-8"))
+            record["reserved_amount_usd"] = float("nan")
+            path.write_text(json.dumps(record) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(adapter.AdmissionDenied, "invalid record"):
                 ledger._records()
 
@@ -697,7 +708,8 @@ class InputAndPolicyTests(unittest.TestCase):
             ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
             reservation = ledger.admit(
                 approval_id="fixture-approval", attempt_id="run:5", request_id="run:5:deepseek:1",
-                provider="deepseek", model="fixture-model", input_price=0.0000000000001,
+                provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                input_price=0.0000000000001,
                 output_price=0.0000000000001, context_token_limit=2, output_token_cap=1,
                 fixed_request_charge=0.0000000000011,
                 billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
@@ -715,7 +727,8 @@ class InputAndPolicyTests(unittest.TestCase):
             ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
             reservation = ledger.admit(
                 approval_id="fixture-approval", attempt_id="run:6", request_id="run:6:deepseek:1",
-                provider="deepseek", model="fixture-model", input_price=0.000001,
+                provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                input_price=0.000001,
                 output_price=0.000001, context_token_limit=100, output_token_cap=50,
                 fixed_request_charge=0.0,
                 billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
@@ -726,7 +739,8 @@ class InputAndPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(adapter.AdmissionDenied, "request cost budget exhausted"):
                 ledger.admit(
                     approval_id="fixture-approval", attempt_id="run:6", request_id="run:6:deepseek:2",
-                    provider="deepseek", model="fixture-model", input_price=0.000001,
+                    provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                    input_price=0.000001,
                     output_price=0.000001, context_token_limit=100, output_token_cap=50,
                     fixed_request_charge=0.0,
                     billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
@@ -740,7 +754,8 @@ class InputAndPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(adapter.AdmissionDenied, "pricing is invalid"):
                 ledger.admit(
                     approval_id="fixture-approval", attempt_id="run:7", request_id="run:7:deepseek:1",
-                    provider="deepseek", model="fixture-model", input_price=float("nan"),
+                    provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                    input_price=float("nan"),
                     output_price=0.000001, context_token_limit=100, output_token_cap=50,
                     fixed_request_charge=0.0,
                     billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
@@ -752,6 +767,7 @@ class InputAndPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
             kwargs = dict(approval_id="fixture-approval", attempt_id="run:duplicate", model="fixture-model",
+                          priced_response_model="fixture-served-model",
                           input_price=0.000001, output_price=0.000001, context_token_limit=100,
                           output_token_cap=50, fixed_request_charge=0.0,
                           billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
@@ -774,7 +790,8 @@ class InputAndPolicyTests(unittest.TestCase):
             ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
             reservation = ledger.admit(
                 approval_id="fixture-approval", attempt_id="run:unknown", request_id="run:unknown:deepseek:1",
-                provider="deepseek", model="fixture-model", input_price=0.000001, output_price=0.000001,
+                provider="deepseek", model="fixture-model", priced_response_model="fixture-served-model",
+                input_price=0.000001, output_price=0.000001,
                 context_token_limit=100, output_token_cap=50, fixed_request_charge=0.0,
                 billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES),
                 max_requests=8, max_provider_requests=2,
@@ -788,7 +805,8 @@ class InputAndPolicyTests(unittest.TestCase):
         config = test_config()["budget"]
         with tempfile.TemporaryDirectory() as directory:
             ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", config)
-            kwargs = dict(approval_id="fixture-approval", model="fixture-model", input_price=0.000001,
+            kwargs = dict(approval_id="fixture-approval", model="fixture-model",
+                          priced_response_model="fixture-served-model", input_price=0.000001,
                           output_price=0.000001, context_token_limit=2, output_token_cap=1,
                           fixed_request_charge=0.0,
                           billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES), max_requests=2,
@@ -830,7 +848,6 @@ class InputAndPolicyTests(unittest.TestCase):
     def test_upstream_import_does_not_leave_source_path_in_process_path(self):
         if not SOURCE_ROOT.joinpath("pr_agent").is_dir():
             self.skipTest(f"pinned PR-Agent source is unavailable: {SOURCE_ROOT}")
-        before = list(sys.path)
         with tempfile.TemporaryDirectory() as directory:
             source = bound_source(SOURCE_ROOT, Path(directory) / "source")
             with adapter._isolated_environment(Path(directory) / "engine", "__never_read__", "__never_read__"):
@@ -839,7 +856,12 @@ class InputAndPolicyTests(unittest.TestCase):
                         adapter._import_upstream(source)
                 except adapter.EngineError as exc:
                     self.assertEqual(exc.error_class, "engine_unavailable")
-        self.assertEqual(sys.path, before)
+            remaining = {
+                str(Path(entry).resolve())
+                for entry in sys.path
+                if isinstance(entry, str) and entry
+            }
+            self.assertNotIn(str(source.resolve()), remaining)
 
     def test_upstream_import_rejects_unbound_source(self):
         if not SOURCE_ROOT.joinpath("pr_agent").is_dir():
@@ -974,6 +996,38 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             return adapter.run_engine(self.input_path, config_path=self.config_path, source_root=self.source_root,
                                       engine_cwd=hostile, ledger_path=ledger), upstream, ledger
 
+    @staticmethod
+    def with_glm_fallback(config: str) -> str:
+        glm = (
+            "[providers.glm]\nenabled = true\nendpoint = \"https://glm.invalid.example/v1\"\n"
+            "model = \"fixture-glm-model\"\npriced_response_model = \"fixture-glm-served\"\n"
+            "context_token_limit = 16384\ncredential_ref = \"PR_AGENT_ZAI_API_KEY\"\n"
+            "pricing_revision = \"fixture-price-v1\"\ninput_price_usd_per_token = 0.000001\n"
+            "output_price_usd_per_token = 0.000001\nfixed_request_charge_usd = 0.0\n"
+            "billable_categories = [\"input_tokens\", \"output_tokens\", \"fixed_request\"]\n"
+            "pricing_verified = true\nfunding_ref = \"fixture-funding-v1\"\nfunding_verified = true"
+        )
+        return config.replace(
+            'provider_order = ["deepseek"]', 'provider_order = ["deepseek", "glm"]',
+        ).replace("[providers.glm]\nenabled = false", glm)
+
+    def assert_envelope_held(self, ledger_path: Path, records: list[dict], label: str) -> None:
+        basis = records[0]["reservation_basis"]
+        ledger = adapter.Ledger(ledger_path, test_config()["budget"])
+        with self.assertRaisesRegex(adapter.AdmissionDenied, "held for operator review"):
+            ledger.admit(
+                approval_id="fixture-approval", attempt_id=f"future-{label}",
+                request_id=f"future-{label}:deepseek:1", provider="deepseek",
+                model=records[0]["effective_model"], priced_response_model=basis["priced_response_model"],
+                input_price=basis["input_price_usd_per_token"],
+                output_price=basis["output_price_usd_per_token"],
+                context_token_limit=basis["context_token_limit"], output_token_cap=basis["output_token_cap"],
+                fixed_request_charge=basis["fixed_request_charge_usd"],
+                billable_categories=basis["billable_categories"], max_requests=8,
+                max_provider_requests=2, per_pr_usd=1.0, monthly_usd=20.0,
+                pilot_usd=20.0, price_revision=records[0]["price_revision"],
+            )
+
     def test_stock_reviewer_receives_every_authenticated_segment_and_captures_native_output(self):
         calls = []
         response_text = (FIXTURES / "valid-native-review.yaml").read_text(encoding="utf-8")
@@ -1020,6 +1074,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             "output_price_usd_per_token": 0.000001,
             "fixed_request_charge_usd": 0.0,
             "billable_categories": list(adapter.BOUNDED_BILLABLE_CATEGORIES),
+            "priced_response_model": "fixture-deepseek-served",
         })
         self.assertNotIn("fixture-secret", ledger.read_text(encoding="utf-8"))
         self.assertEqual(
@@ -1099,6 +1154,9 @@ class RealHandlerIntegrationTests(unittest.TestCase):
                     response = FakeCompletion({
                         "model": "fixture-deepseek-served",
                         "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                        "_hidden_params": {"additional_headers": {
+                            "llm_provider-x-litellm-response-cost": "0.25",
+                        }},
                     })
                     if usage is not None:
                         response["usage"] = usage
@@ -1115,6 +1173,34 @@ class RealHandlerIntegrationTests(unittest.TestCase):
                 self.assertEqual(final["reserved_amount_usd"], 0.016434)
                 self.assertIsNone(final["actual_amount_usd"])
                 self.assertIsNone(final["usage"])
+                shutil.rmtree(self.root / "engine")
+                ledger.unlink()
+
+    def test_litellm_estimated_charge_headers_cannot_override_priced_usage(self):
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+        estimates = (0, "0.000001", "0.25", "not-a-number")
+        for estimate in estimates:
+            with self.subTest(estimate=estimate):
+                calls = []
+
+                async def fake_acompletion(**kwargs):
+                    calls.append(kwargs)
+                    return FakeCompletion({
+                        "model": "fixture-deepseek-served",
+                        "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                        "_hidden_params": {"additional_headers": {
+                            "llm_provider-x-litellm-response-cost": estimate,
+                        }},
+                    })
+
+                result, _upstream, ledger = self.run_with_fake(fake_acompletion)
+                self.assertEqual(result["status"], "reviewed")
+                self.assertEqual(len(calls), 1)
+                records = [json.loads(line) for line in ledger.read_text().splitlines()]
+                self.assertEqual([record["status"] for record in records], ["reserved", "reconciled"])
+                self.assertEqual(records[-1]["actual_amount_usd"], 0.000015)
+                self.assertFalse(records[-1]["envelope_breach"])
                 shutil.rmtree(self.root / "engine")
                 ledger.unlink()
 
@@ -1395,27 +1481,14 @@ class RealHandlerIntegrationTests(unittest.TestCase):
     def test_provider_envelope_breaches_preserve_liability_stop_fallback_and_hold_future_admission(self):
         response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
         base_config = self.config_path.read_text()
-        glm = (
-            "[providers.glm]\nenabled = true\nendpoint = \"https://glm.invalid.example/v1\"\n"
-            "model = \"fixture-glm-model\"\npriced_response_model = \"fixture-glm-served\"\n"
-            "context_token_limit = 16384\ncredential_ref = \"PR_AGENT_ZAI_API_KEY\"\n"
-            "pricing_revision = \"fixture-price-v1\"\ninput_price_usd_per_token = 0.000001\n"
-            "output_price_usd_per_token = 0.000001\nfixed_request_charge_usd = 0.0\n"
-            "billable_categories = [\"input_tokens\", \"output_tokens\", \"fixed_request\"]\n"
-            "pricing_verified = true\nfunding_ref = \"fixture-funding-v1\"\nfunding_verified = true\n"
-        )
         cases = {
-            "output": ({"prompt_tokens": 10, "completion_tokens": 51, "total_tokens": 61}, None, 0.000061),
-            "context": ({"prompt_tokens": 16_384, "completion_tokens": 1, "total_tokens": 16_385}, None, 0.016385),
-            "charge": ({"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}, "0.25", 0.25),
+            "output": ({"prompt_tokens": 10, "completion_tokens": 51, "total_tokens": 61}, 0.000061),
+            "context": ({"prompt_tokens": 16_384, "completion_tokens": 1, "total_tokens": 16_385}, 0.016385),
         }
-        for kind, (usage, charge, expected_actual) in cases.items():
+        for kind, (usage, expected_actual) in cases.items():
             with self.subTest(kind=kind):
                 calls = []
-                self.config_path.write_text(
-                    base_config.replace('provider_order = ["deepseek"]', 'provider_order = ["deepseek", "glm"]')
-                    .replace("[providers.glm]\nenabled = false", glm)
-                )
+                self.config_path.write_text(self.with_glm_fallback(base_config))
 
                 async def fake_acompletion(**kwargs):
                     calls.append(kwargs)
@@ -1424,10 +1497,6 @@ class RealHandlerIntegrationTests(unittest.TestCase):
                         "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
                         "usage": usage,
                     })
-                    if charge is not None:
-                        response["_hidden_params"] = {"additional_headers": {
-                            "llm_provider-x-litellm-response-cost": charge,
-                        }}
                     return response
 
                 result, _upstream, ledger_path = self.run_with_fake(fake_acompletion)
@@ -1439,21 +1508,96 @@ class RealHandlerIntegrationTests(unittest.TestCase):
                 self.assertEqual([record["status"] for record in records], ["reserved", "reconciled"])
                 self.assertTrue(records[-1]["envelope_breach"])
                 self.assertEqual(records[-1]["actual_amount_usd"], expected_actual)
-                basis = records[0]["reservation_basis"]
-                ledger = adapter.Ledger(ledger_path, test_config()["budget"])
-                with self.assertRaisesRegex(adapter.AdmissionDenied, "held for operator review"):
-                    ledger.admit(
-                        approval_id="fixture-approval", attempt_id=f"future-{kind}",
-                        request_id=f"future-{kind}:deepseek:1", provider="deepseek",
-                        model=records[0]["effective_model"], input_price=basis["input_price_usd_per_token"],
-                        output_price=basis["output_price_usd_per_token"],
-                        context_token_limit=basis["context_token_limit"],
-                        output_token_cap=basis["output_token_cap"],
-                        fixed_request_charge=basis["fixed_request_charge_usd"],
-                        billable_categories=basis["billable_categories"], max_requests=8,
-                        max_provider_requests=2, per_pr_usd=1.0, monthly_usd=20.0,
-                        pilot_usd=20.0, price_revision=records[0]["price_revision"],
-                    )
+                self.assert_envelope_held(ledger_path, records, kind)
+                shutil.rmtree(self.root / "engine")
+                ledger_path.unlink()
+
+    def test_over_cap_usage_with_wrong_model_retains_observation_and_durable_hold(self):
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+        self.config_path.write_text(self.with_glm_fallback(self.config_path.read_text()))
+        calls = []
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "model": "wrong-served-model",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 51, "total_tokens": 61},
+            })
+
+        result, _upstream, ledger_path = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "unsupported_model")
+        self.assertEqual(len(result["attempts"]), 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result["attempts"][0]["usage"]["completion_tokens"], 51)
+        records = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
+        final = records[-1]
+        self.assertTrue(final["envelope_breach"])
+        self.assertIsNone(final["actual_amount_usd"])
+        self.assertIsNone(final["usage"])
+        self.assert_envelope_held(ledger_path, records, "wrong-model")
+
+    def test_arbitrarily_large_valid_usage_finalizes_uncertain_breach_without_fallback(self):
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+        self.config_path.write_text(self.with_glm_fallback(self.config_path.read_text()))
+        calls = []
+        huge = 10 ** 400
+
+        async def fake_acompletion(**kwargs):
+            calls.append(kwargs)
+            return FakeCompletion({
+                "model": "fixture-deepseek-served",
+                "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": huge, "completion_tokens": 1, "total_tokens": huge + 1},
+            })
+
+        result, _upstream, ledger_path = self.run_with_fake(fake_acompletion)
+        self.assertEqual(result["status"], "not-reviewed")
+        self.assertEqual(result["attempts"][0]["error_class"], "invalid_parameter")
+        self.assertEqual(len(result["attempts"]), 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result["attempts"][0]["usage"]["prompt_tokens"], huge)
+        records = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+        self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
+        self.assertTrue(records[-1]["envelope_breach"])
+        self.assertIsNone(records[-1]["actual_amount_usd"])
+        self.assertIsNone(records[-1]["usage"])
+        self.assert_envelope_held(ledger_path, records, "huge")
+
+    def test_usage_breaches_precede_missing_or_malformed_model_identity(self):
+        response_text = (FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+        self.config_path.write_text(self.with_glm_fallback(self.config_path.read_text()))
+        cases = {
+            "missing-context": (None, {"prompt_tokens": 16_384, "completion_tokens": 1, "total_tokens": 16_385}),
+            "malformed-output": (7, {"prompt_tokens": 10, "completion_tokens": 51, "total_tokens": 61}),
+        }
+        for name, (response_model, usage) in cases.items():
+            with self.subTest(name=name):
+                calls = []
+
+                async def fake_acompletion(**kwargs):
+                    calls.append(kwargs)
+                    response = {
+                        "choices": [{"message": {"content": response_text}, "finish_reason": "stop"}],
+                        "usage": usage,
+                    }
+                    if response_model is not None:
+                        response["model"] = response_model
+                    return FakeCompletion(response)
+
+                result, _upstream, ledger_path = self.run_with_fake(fake_acompletion)
+                self.assertEqual(result["status"], "not-reviewed")
+                self.assertEqual(result["attempts"][0]["error_class"], "unsupported_model")
+                self.assertEqual(len(result["attempts"]), 1)
+                self.assertEqual(len(calls), 1)
+                records = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+                self.assertEqual([record["status"] for record in records], ["reserved", "uncertain"])
+                self.assertTrue(records[-1]["envelope_breach"])
+                self.assertIsNone(records[-1]["actual_amount_usd"])
+                self.assertIsNone(records[-1]["usage"])
+                self.assert_envelope_held(ledger_path, records, name)
                 shutil.rmtree(self.root / "engine")
                 ledger_path.unlink()
 
@@ -1462,6 +1606,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             ledger = adapter.Ledger(Path(directory) / "ledger.jsonl", test_config()["budget"])
             common = dict(
                 approval_id="fixture-approval", provider="deepseek", model="fixture-model",
+                priced_response_model="fixture-served-model",
                 input_price=0.000001, output_price=0.000001, output_token_cap=50,
                 fixed_request_charge=0.0,
                 billable_categories=list(adapter.BOUNDED_BILLABLE_CATEGORIES), max_requests=8,
@@ -1473,6 +1618,11 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(adapter.AdmissionDenied, "reservation basis"):
                 ledger.admit(attempt_id="basis-b", request_id="basis-b:deepseek:1",
                              context_token_limit=101, **common)
+            with self.assertRaisesRegex(adapter.AdmissionDenied, "reservation basis"):
+                ledger.admit(
+                    attempt_id="basis-c", request_id="basis-c:deepseek:1", context_token_limit=100,
+                    **{**common, "priced_response_model": "fixture-other-served-model"},
+                )
 
     def test_configured_request_timeout_cancels_the_actual_seam_without_late_work(self):
         self.config_path.write_text(self.config_path.read_text().replace("request_timeout_seconds = 7", "request_timeout_seconds = 1"))
@@ -1480,7 +1630,7 @@ class RealHandlerIntegrationTests(unittest.TestCase):
         cancelled = []
 
         async def fake_acompletion(**kwargs):
-            calls.append(kwargs)
+            calls.append({"called_at": time.monotonic(), "kwargs": kwargs})
             try:
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
@@ -1488,13 +1638,16 @@ class RealHandlerIntegrationTests(unittest.TestCase):
                 raise
             raise AssertionError("cancelled request resumed as late untracked work")
 
-        started = time.monotonic()
         result, _upstream, ledger = self.run_with_fake(fake_acompletion)
-        self.assertLess(time.monotonic() - started, 3)
+        returned_at = time.monotonic()
+        calls_at_return = list(calls)
+        time.sleep(0.2)
+        self.assertLess(returned_at - calls[0]["called_at"], 3)
         self.assertEqual(result["status"], "not-reviewed")
         self.assertEqual(result["attempts"][0]["error_class"], "timeout")
         self.assertEqual(len(calls), 1)
         self.assertEqual(cancelled, [True])
+        self.assertEqual(calls, calls_at_return, "cancelled request continued work after the engine returned")
         self.assertEqual({json.loads(line)["status"] for line in ledger.read_text().splitlines()}, {"reserved", "uncertain"})
 
     def test_authentication_failure_is_not_retried_by_the_stock_decorator(self):
@@ -1546,13 +1699,12 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             calls.append({"called_at": time.monotonic(), "timeout": kwargs["timeout"]})
             raise RuntimeError("503 temporary network fixture")
 
-        started = time.monotonic()
         result, _upstream, ledger = self.run_with_fake(fake_acompletion)
-        elapsed = time.monotonic() - started
+        returned_at = time.monotonic()
         calls_at_return = list(calls)
         time.sleep(0.2)
         self.assertLess(
-            elapsed, 3,
+            returned_at - calls[0]["called_at"], 3,
             "why: stock retry backoff escaped the one-second engine deadline; "
             "remedy: keep the complete provider attempt in the total cancellation scope",
         )

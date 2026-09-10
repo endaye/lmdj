@@ -965,8 +965,11 @@ class Ledger:
         if (not isinstance(basis, dict) or set(basis) != {
                 "context_token_limit", "output_token_cap", "input_price_usd_per_token",
                 "output_price_usd_per_token", "fixed_request_charge_usd", "billable_categories",
+                "priced_response_model",
         }):
             raise ValueError("ledger reservation basis is invalid")
+        if not isinstance(basis["priced_response_model"], str) or not basis["priced_response_model"]:
+            raise ValueError("ledger priced response model is invalid")
         if (not _strict_int(basis["context_token_limit"]) or basis["context_token_limit"] < 2
                 or not _strict_int(basis["output_token_cap"]) or basis["output_token_cap"] < 1
                 or basis["output_token_cap"] >= basis["context_token_limit"]):
@@ -991,7 +994,7 @@ class Ledger:
             if actual is not None or usage is not None or "reconciled_at" in record or record["envelope_breach"]:
                 raise ValueError("reserved ledger record has finalization fields")
         elif record["status"] == "uncertain":
-            if actual is not None or usage is not None or "reconciled_at" not in record or record["envelope_breach"]:
+            if actual is not None or usage is not None or "reconciled_at" not in record:
                 raise ValueError("uncertain ledger record has invalid finalization fields")
         elif actual is None or usage is None or "reconciled_at" not in record:
             raise ValueError("reconciled ledger record lacks validated usage and amount")
@@ -1015,11 +1018,13 @@ class Ledger:
         return sum(self._record_amount(record) for record in records.values() if predicate(record))
 
     def admit(self, *, approval_id: str, attempt_id: str, request_id: str, provider: str, model: str,
+              priced_response_model: str,
               input_price: float, output_price: float, context_token_limit: int, output_token_cap: int,
               fixed_request_charge: float, billable_categories: list[str],
               max_requests: int, max_provider_requests: int, per_pr_usd: float, monthly_usd: float,
               pilot_usd: float, price_revision: str) -> dict[str, Any]:
-        if not all(isinstance(value, str) and value for value in (approval_id, attempt_id, request_id, provider, model)):
+        if not all(isinstance(value, str) and value for value in (
+                approval_id, attempt_id, request_id, provider, model, priced_response_model)):
             raise AdmissionDenied("request admission identity is incomplete")
         if (not _finite_number(input_price) or not _finite_number(output_price)
                 or not _finite_number(fixed_request_charge)
@@ -1062,6 +1067,7 @@ class Ledger:
             "output_price_usd_per_token": float(output_price),
             "fixed_request_charge_usd": float(fixed_request_charge),
             "billable_categories": list(billable_categories),
+            "priced_response_model": priced_response_model,
         }
         with self._locked():
             records = self._records()
@@ -1136,7 +1142,7 @@ class Ledger:
                 if reservation[key] != stored[key]:
                     raise AdmissionDenied("request reconciliation reservation identity does not match its stored reservation")
             if status == "uncertain":
-                if actual_amount is not None or usage is not None or envelope_breach:
+                if actual_amount is not None or usage is not None:
                     raise AdmissionDenied("uncertain reconciliation must retain the reservation without usage")
             else:
                 if actual_amount is None:
@@ -1187,34 +1193,6 @@ def _response_model_identity(response: Any) -> tuple[str | None, str | None]:
     if version is not None and (not isinstance(version, str) or not version.strip() or len(version) > 200):
         raise EngineError("unsupported_model", "provider returned an invalid model version")
     return model.strip() if isinstance(model, str) else None, version.strip() if isinstance(version, str) else None
-
-
-def _authoritative_actual_charge(response: Any) -> float | None:
-    """Read only LiteLLM's explicit upstream-provider charge header."""
-    hidden = _response_field(response, "_hidden_params")
-    if hidden is None:
-        return None
-    if not isinstance(hidden, dict):
-        dumper = getattr(hidden, "model_dump", None)
-        hidden = dumper() if callable(dumper) else None
-    if not isinstance(hidden, dict):
-        raise EngineError("invalid_output", "provider response charge metadata is malformed")
-    headers = hidden.get("additional_headers")
-    if headers is None:
-        return None
-    if not isinstance(headers, dict):
-        raise EngineError("invalid_output", "provider response charge metadata is malformed")
-    header = "llm_provider-x-litellm-response-cost"
-    if header not in headers:
-        return None
-    value = headers[header]
-    try:
-        amount = float(value) if isinstance(value, (int, float, str)) and not isinstance(value, bool) else math.nan
-    except (OverflowError, ValueError):
-        amount = math.nan
-    if not math.isfinite(amount) or amount < 0:
-        raise EngineError("invalid_output", "provider response actual charge is invalid")
-    return _conservative_amount(amount)
 
 
 def _require_complete_response(response: Any) -> None:
@@ -1496,6 +1474,7 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
         reservation = ledger.admit(
             approval_id=budget["approval_id"], attempt_id=attempt_id, request_id=request_id,
             provider=provider["provider_id"], model=str(kwargs.get("model", provider["model"])),
+            priced_response_model=provider["priced_response_model"],
             input_price=provider["input_price_usd_per_token"], output_price=provider["output_price_usd_per_token"],
             context_token_limit=provider["context_token_limit"], output_token_cap=budget["output_token_cap"],
             fixed_request_charge=provider["fixed_request_charge_usd"],
@@ -1513,6 +1492,9 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
             raise
         usage = _usage_from_response(response)
         context["usage"] = usage
+        output_breach = usage is not None and usage["completion_tokens"] > output_tokens
+        context_breach = usage is not None and usage["total_tokens"] > provider["context_token_limit"]
+        usage_breach = output_breach or context_breach
         try:
             actual_model, response_version = _response_model_identity(response)
         except EngineError:
@@ -1525,7 +1507,11 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
                 context["response_model"] = raw_model.strip()
             if isinstance(raw_version, str) and raw_version.strip() and len(raw_version) <= 200:
                 context["response_version"] = raw_version.strip()
-            ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
+            ledger.reconcile(
+                reservation, status="uncertain", actual_amount=None, usage=None,
+                envelope_breach=usage_breach,
+            )
+            context["envelope_breach"] = usage_breach
             raise
         context["response_model"] = actual_model
         context["response_version"] = response_version
@@ -1533,23 +1519,33 @@ def _install_admission(upstream_litellm: Any, ledger: Ledger, *, attempt_id: str
             # Usage and served identity remain visible in the attempt evidence,
             # but unpriced or mismatched service cannot release a reservation
             # using the requested model's configured prices.
-            ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
+            ledger.reconcile(
+                reservation, status="uncertain", actual_amount=None, usage=None,
+                envelope_breach=usage_breach,
+            )
+            context["envelope_breach"] = usage_breach
             raise EngineError("unsupported_model", "provider response model does not match trusted priced identity")
         if usage is None:
             ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
             raise EngineError("invalid_output", "provider response usage is missing or invalid")
         try:
-            authoritative_charge = _authoritative_actual_charge(response)
-        except EngineError:
-            ledger.reconcile(reservation, status="uncertain", actual_amount=None, usage=None)
-            raise
-        actual = (authoritative_charge if authoritative_charge is not None else
-                  usage["prompt_tokens"] * provider["input_price_usd_per_token"]
-                  + usage["completion_tokens"] * provider["output_price_usd_per_token"]
-                  + provider["fixed_request_charge_usd"])
-        output_breach = usage["completion_tokens"] > output_tokens
-        context_breach = usage["total_tokens"] > provider["context_token_limit"]
-        charge_breach = _conservative_amount(actual) > reservation["reserved_amount_usd"]
+            actual = _conservative_amount(
+                usage["prompt_tokens"] * provider["input_price_usd_per_token"]
+                + usage["completion_tokens"] * provider["output_price_usd_per_token"]
+                + provider["fixed_request_charge_usd"]
+            )
+        except (OverflowError, ValueError):
+            ledger.reconcile(
+                reservation, status="uncertain", actual_amount=None, usage=None,
+                envelope_breach=True,
+            )
+            context["envelope_breach"] = True
+            if output_breach:
+                raise EngineError("invalid_parameter", "provider usage exceeds the allowed output token cap")
+            if context_breach:
+                raise EngineError("invalid_parameter", "provider usage exceeds the verified context limit")
+            raise EngineError("invalid_output", "provider response usage cost is not representable")
+        charge_breach = actual > reservation["reserved_amount_usd"]
         envelope_breach = output_breach or context_breach or charge_breach
         ledger.reconcile(
             reservation, status="reconciled", actual_amount=actual, usage=usage,

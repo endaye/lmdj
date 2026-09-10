@@ -204,16 +204,35 @@ unit, including overhead and billed context rejection, without local counting.
 Require `0 < output_token_cap < context_token_limit`; the output cap covers all
 enabled charged output classes. Unknown/unbounded categories deny admission;
 optional charged features stay disabled unless bounded. Price revision binds
-these limits, rates, fixed charge and billable categories. Preserve USD 1 attempt,
+these limits, rates, fixed charge, billable categories and priced response-model
+identity in the durable reservation basis. Preserve USD 1 attempt,
 USD 20 cumulative pilot and USD 20 Asia/Shanghai monthly caps and funding checks.
 
-Reconcile complete authoritative priced usage/model identity or authoritative
-actual charge; otherwise finalize exactly once uncertain and retain reservation.
-Known higher actual liability must be recorded. Output, total-context or monetary
+Reconcile complete authoritative priced usage/model identity; otherwise finalize
+exactly once uncertain and retain reservation. Direct monetary charge
+reconciliation is unsupported. Ignore ambiguous LiteLLM response-cost headers:
+they cannot override usage, refund reservations, fill missing usage, or create
+an envelope hold by themselves.
+Higher liability derived from complete trusted priced usage must be recorded.
+Output, total-context or priced-usage monetary
 envelope breach fails the review, stops all fallback in that attempt and poisons
 later admission for that same `(provider, effective_model, price_revision)` until
 operator review replaces/disposes it. Reuse existing append-only records and only
 minimal internal basis data, with no second ledger or public receipt extension.
+Detect valid integer output/context usage breaches before response-model checks
+or monetary conversion. Model mismatch and nonrepresentable cost retain the
+reservation and observed attempt usage with an uncertain terminal record and a
+durable breach hold; they cannot escape finalization into stock retry or fallback.
+Do not invent a finite actual charge; preserve higher priced liability whenever
+it is representable.
+
+The follow-up to rejected local commit `9e837bde` also fixes two test defects:
+both strict deadline assertions measure the external interval from first actual
+dispatch to return, retaining the 3-second bound, copied-at-return call snapshot
+and delayed no-late-work assertions; the non-finite-ledger test starts from a
+current-schema finite record proven valid and mutates only its amount to NaN.
+Keep the native and emulated failures as historical evidence. Independently
+review corrected source before authorizing the next bundle build.
 
 Declared corrective paths: this plan, the existing migration design,
 `scripts/ci/pr_agent_review.py`, `scripts/ci/pr-agent/config.toml`, and
@@ -510,11 +529,14 @@ file alone does not justify claiming that a Portal page was changed.
 
 - T1 was merged through PR #1161 at `409a1a4d`; the earlier audit and failed
   receipts below remain historical evidence.
-- T2 has an inactive baseline in Draft PR #1175. The second independent review
-  requests the four corrections specified above; no current-head approval or
-  live supplier acceptance is claimed.
-- T3–T6 have not started. The separate proposal to change the 100K pre-dispatch
-  check requires the pending user decision and is not implemented.
+- T2 has an inactive baseline in Draft PR #1175 at `8148a1ec`. Local corrective
+  commit `9e837bde` implements the monetary envelope without supplier counting,
+  but independent review requests the follow-up corrections above. Push is held;
+  no current-head approval or live supplier acceptance is claimed. The v13 build
+  completed, while extracted-bundle verification remains failed/pending and its
+  source is superseded by these requested corrections.
+- T3–T6 have not started. AI-provider token counting is outside the entire
+  migration scope by the owner's decision; there is no pending counting decision.
 
 ### Initial planning evidence (historical)
 
