@@ -96,6 +96,13 @@ CLAUDE_BACKENDS = (
 # until its switch is flipped, so its lanes read "too few to judge", not DOWN.
 REVIEW_WORKFLOWS = ("ci.yml", "pr-review.yml")
 GROK_MARKER = "<!-- lmdj-grok-review -->"
+V2_IDENTITY = re.compile(
+    r"^<!-- lmdj-review-v2 (?P<repo>[\w.-]+/[\w.-]+) (?P<number>[1-9][0-9]*) "
+    r"(?P<head>[0-9a-f]{40}) (?P<run>[1-9][0-9]*) (?P<attempt>[1-9][0-9]*) "
+    r"(?P<backend>deepseek|glm|kimi|grok) sha256=(?P<digest>[0-9a-f]{64}) -->$"
+)
+V2_HISTORY_DIGEST = re.compile(r"^<!-- lmdj-review-history-digest-v2 sha256=([0-9a-f]{64}) -->$")
+V2_HISTORY_MARKER = re.compile(r"^<!-- lmdj-review-history-v2 codec=zlib-base64 sha256=([0-9a-f]{64}) [A-Za-z0-9+/=]+ -->$")
 
 
 def claude_lane(backend: str, workflow: str = "ci.yml") -> "Lane":
@@ -394,9 +401,24 @@ def exact_review_posted(repository: str, number: int, run: str, attempt: str,
         for review in reviews:
             lines = (review.get("body") or "").splitlines()
             match = identity.fullmatch(lines[1]) if len(lines) > 1 else None
-            if (match and review.get("commit_id") == match.group(1)
+            v2 = V2_IDENTITY.fullmatch(lines[1]) if len(lines) > 1 else None
+            if v2:
+                match = v2
+            if v2 and (v2.group("repo") != repository or v2.group("number") != str(number)
+                       or v2.group("head") != (review.get("commit_id") or "")
+                       or v2.group("run") != run or v2.group("attempt") != attempt
+                       or v2.group("backend") != backend):
+                continue
+            commit = v2.group("head") if v2 else (match.group(1) if match else None)
+            if (match and review.get("commit_id") == commit
                     and review.get("state") == "COMMENTED"
                     and (review.get("user") or {}).get("login") == "github-actions[bot]"):
+                if v2:
+                    digest = v2.group("digest")
+                    history_lines = [V2_HISTORY_DIGEST.fullmatch(line) or V2_HISTORY_MARKER.fullmatch(line)
+                                     for line in lines]
+                    if not any(item and item.group(1) == digest for item in history_lines):
+                        continue
                 return True
         if len(reviews) < 100:
             return False
@@ -406,7 +428,7 @@ def exact_review_posted(repository: str, number: int, run: str, attempt: str,
 def collect_standalone_observations(repository: str, lane: Lane, *, limit: int,
                                    api: Request = _api) -> list[Observation]:
     backend = "grok" if lane.marker == GROK_MARKER else lane.marker.removeprefix("<!-- lmdj-review: ").removesuffix(" -->")
-    if backend not in {"glm", "kimi", "grok"}:
+    if backend not in {"glm", "kimi", "grok", "deepseek"}:
         raise LivenessUnavailable("why: unknown standalone backend marker; remedy: restore the finite review lane configuration")
     publisher = "Publish review and scope"
     observations = []

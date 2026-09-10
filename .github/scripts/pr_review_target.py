@@ -148,15 +148,19 @@ def _write_outputs(path: Path, target: Mapping[str, str]) -> None:
 
 
 def review_identity(repository: str, number: int, head: str, run: str,
-                    attempt: str, backend: str) -> str:
+                    attempt: str, backend: str, *, history_digest: str | None = None) -> str:
     if (not re.fullmatch(r"[0-9a-f]{40}", head) or not run.isdigit()
-            or not attempt.isdigit() or backend not in {"glm", "kimi", "grok"}
+            or not attempt.isdigit() or backend not in {"glm", "kimi", "grok", "deepseek"}
             or number < 1 or not re.fullmatch(r"[\w.-]+/[\w.-]+", repository)):
         raise TargetUnavailable("why: invalid review identity; remedy: use trusted resolver outputs")
+    if history_digest is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", history_digest):
+            raise TargetUnavailable("why: invalid v2 history digest; remedy: use the complete authenticated history")
+        return f"<!-- lmdj-review-v2 {repository} {number} {head} {run} {attempt} {backend} sha256={history_digest} -->"
     return f"<!-- lmdj-review-v1 {repository} {number} {head} {run} {attempt} {backend} -->"
 
 
-def validate_review(payload: object) -> dict:
+def validate_review(payload: object, *, coverage: Mapping | None = None) -> dict:
     """Validate model data, never treat it as a command or merge decision."""
     if not isinstance(payload, dict) or set(payload) != {"summary", "findings"}:
         raise TargetUnavailable("why: missing structured review; remedy: inspect the model output or review manually")
@@ -173,20 +177,29 @@ def validate_review(payload: object) -> dict:
                 or not isinstance(line, int) or isinstance(line, bool) or line < 1
                 or not isinstance(body, str) or not body.strip() or len(body) > 12000):
             raise TargetUnavailable("why: invalid inline finding; remedy: rerun or review manually")
+        if coverage is not None:
+            right = {(hunk.get("path"), item)
+                     for hunk in coverage.get("observed_hunks", [])
+                     for item in hunk.get("right_lines", [])}
+            if (path, line) not in right:
+                raise TargetUnavailable("why: inline finding is outside observed changed RIGHT-side lines; remedy: emit a clean review or cite an observed line")
     return payload
 
 
 def publish_review(repository: str, number: int, head: str, run: str, attempt: str,
                    backend: str, payload: object, *, api: Request | None = None,
-                   write: Callable[[str, dict], object] | None = None) -> str:
+                   write: Callable[[str, dict], object] | None = None,
+                   coverage: Mapping | None = None, history_digest: str | None = None,
+                   history_marker: str | None = None) -> str:
     """Only trusted publisher holds PR write permission; reject stale before mutation.
 
     COMMENT reviews (not APPROVE/REQUEST_CHANGES) keep model text advisory.
     A clean summary has no inline comments, so creates no blocking thread (#707).
     Each attempt gets its own immutable review; later runs cannot rewrite evidence.
     """
-    model = validate_review(payload)
-    identity = review_identity(repository, number, head, run, attempt, backend)
+    model = validate_review(payload, coverage=coverage)
+    identity = review_identity(repository, number, head, run, attempt, backend,
+                               history_digest=history_digest)
     target = resolve_target(repository, number, api=api)
     if target["review"] != "true" or target["base_ref"] != "main":
         raise TargetUnavailable("why: target is no longer reviewable; remedy: inspect the PR and take over manually")
@@ -194,7 +207,14 @@ def publish_review(repository: str, number: int, head: str, run: str, attempt: s
     if diagnostic:
         raise TargetUnavailable(diagnostic)
     marker = "<!-- lmdj-grok-review -->" if backend == "grok" else f"<!-- lmdj-review: {backend} -->"
-    body = (f"{marker}\n{identity}\n## {backend} advisory review\n\n"
+    if history_marker is not None:
+        if not history_marker.startswith("<!-- lmdj-review-history-v2 ") or not history_marker.endswith(" -->"):
+            raise TargetUnavailable("why: invalid v2 history marker; remedy: encode the complete authenticated history")
+        history_marker = "\n" + history_marker
+    else:
+        history_marker = (f"\n<!-- lmdj-review-history-digest-v2 sha256={history_digest} -->"
+                          if history_digest is not None else "")
+    body = (f"{marker}\n{identity}{history_marker}\n## {backend} advisory review\n\n"
             + model["summary"] + "\n\nHuman takeover: inspect this exact revision and reply to or resolve each finding. "
             "This COMMENT review does not approve, reject or merge the PR.")
     comments = [{"path": item["path"], "line": item["line"], "side": "RIGHT",

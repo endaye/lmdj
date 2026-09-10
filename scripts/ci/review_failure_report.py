@@ -228,9 +228,13 @@ def collect(api, repository, run_id, attempt):
     require(isinstance(payload, bytes) and len(payload) <= LIMIT, "review archive exceeds budget")
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = archive.namelist()
-        require(len(names) == len(set(names)) and set(names) in (
-            {"context.json", "history.json", "result.json", "failure.json"},
-            {"context.json", "history.json", "result.json", "review.json"}), "review archive schema is not closed")
+        required = [{"context.json", "history.json", "result.json", "failure.json"},
+                    {"context.json", "history.json", "result.json", "review.json"}]
+        base_names = {name for name in names if not name.startswith("coverage-")}
+        coverage_names = {name for name in names if name.startswith("coverage-")}
+        require(len(names) == len(set(names)) and base_names in required
+                and all(name.endswith(".json") and name != "coverage-.json" for name in coverage_names),
+                "review archive schema is not closed")
         require(sum(i.file_size for i in archive.infolist()) <= LIMIT, "expanded review archive exceeds budget")
         documents = {name: json.loads(archive.read(name), object_pairs_hook=change_scope.reject_duplicates) for name in names}
     context = documents["context.json"]
@@ -256,17 +260,20 @@ def collect(api, repository, run_id, attempt):
                                                object_pairs_hook=change_scope.reject_duplicates)
         for name in ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")])
     history = documents["history.json"]
+    coverages = {review_scope.coverage_digest(documents[name]): documents[name] for name in coverage_names}
     review_scope.validate_history(policy, history)
-    require(bool(history), "review history is empty")
+    attempts = history.get("attempts", []) if isinstance(history, dict) else history
+    require(bool(attempts), "review history is empty")
     final_identity = dict(identity)
-    if history[-1]["status"] == "reviewed":
-        final_identity["backend"] = history[-1]["backend"]
-    expected = review_scope.prepare_result(policy, final_identity, changed_paths=context["changed_paths"], history=history)
+    if attempts[-1]["status"] == "reviewed":
+        final_identity["backend"] = attempts[-1]["backend"]
+    expected = review_scope.prepare_result(policy, final_identity, changed_paths=context["changed_paths"], history=history,
+                                           coverages=coverages if isinstance(history, dict) else None)
     require(documents["result.json"] == expected, "saved review result differs from independent history/policy recomputation")
     require(conclusion != "failure" or expected["status"] == "not-reviewed",
             "failed review finalizer contradicts the recomputed review result")
     if expected["status"] == "reviewed":
-        require(documents.get("review.json") == history[-1]["review"] and "failure.json" not in documents,
+        require(documents.get("review.json") == attempts[-1]["review"] and "failure.json" not in documents,
                 "valid review has conflicting failure evidence")
         return None
     failure = expected["failure"]

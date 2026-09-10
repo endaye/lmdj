@@ -27,8 +27,10 @@ from datetime import datetime, timezone
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / ".github/scripts"))
+sys.path.insert(0, str(REPO_ROOT / "scripts/ci"))
 
 import advisory_review_liveness as liveness  # noqa: E402
+import review_scope_codec as codec  # noqa: E402
 from advisory_review_liveness import (  # noqa: E402
     CLAUDE_BACKENDS,
     REVIEW_LANES,
@@ -769,6 +771,24 @@ class StandaloneExactEvidenceTest(unittest.TestCase):
         self.assertFalse(check(good, run="122"))
         self.assertFalse(check(good, attempt="1"))
         self.assertFalse(check(good, backend="kimi"))
+
+    def test_v2_publisher_marker_binds_full_history_and_requested_identity(self):
+        history = {"schema": "lmdj.ci-review-history.v2", "attempts": [{
+            "backend": "deepseek", "status": "failed", "error_class": "timeout", "review": None,
+            "engine": None, "provider": None, "model": None, "coverage_sha256": None,
+        }]}
+        marker = codec.encode_history(history)
+        digest = liveness.V2_HISTORY_MARKER.fullmatch(marker).group(1)
+        body = ("<!-- lmdj-review: deepseek -->\n"
+                "<!-- lmdj-review-v2 o/r 7 " + "a" * 40 + " 123 2 deepseek sha256=" + digest + " -->\n"
+                + marker + "\nclean")
+        review = {"body": body, "commit_id": "a" * 40, "state": "COMMENTED",
+                  "user": {"login": "github-actions[bot]"}}
+        api = lambda path, context: [review]
+        self.assertTrue(liveness.exact_review_posted("o/r", 7, "123", "2", "deepseek", api=api))
+        forged = dict(review, body=body.replace(" o/r 7 ", " other/r 7 "))
+        self.assertFalse(liveness.exact_review_posted("o/r", 7, "123", "2", "deepseek",
+                                                       api=lambda path, context: [forged]))
 
     def collect(self, *, publisher="success", event="workflow_dispatch", model="success", step=None, posted=True):
         run = {"id": 123, "run_attempt": 2, "event": event, "head_branch": "main", "head_sha": "b" * 40,

@@ -9,6 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 import review_scope as review
+import pr_agent_review as producer
 import test_scope
 
 
@@ -25,8 +26,80 @@ class ReviewTests(unittest.TestCase):
         return review.observe_attempt(self.policy, backend=backend, returncode=0,
                                       output=json.dumps(self.payload), **kwargs)
 
+    def coverage(self):
+        blob = {"object_id": "e" * 40, "sha256": "f" * 64, "byte_length": 7}
+        hunk = {"id": "h1", "path": "apps/creator-web/a.ts", "old_path": None,
+                "change_kind": "modified", "old_blob": blob, "new_blob": blob,
+                "patch": {"sha256": "0" * 64, "byte_length": 7}, "right_lines": [1]}
+        return {
+            "schema": review.COVERAGE_SCHEMA,
+            "identity": {"repository": self.identity["repository"], "pull_request": self.identity["pr_number"],
+                          "base_sha": self.identity["base_sha"], "head_sha": self.identity["head_sha"],
+                          "control_sha": self.identity["control_sha"], "run_id": str(self.identity["run_id"]),
+                          "run_attempt": self.identity["run_attempt"]},
+            "engine": {"name": "pr-agent", "source_commit": "1" * 40, "version": "0.45.0",
+                        "bundle": {"archive_sha256": "2" * 64, "archive_byte_length": 7,
+                                   "manifest_sha256": "3" * 64, "adapter_sha256": "4" * 64,
+                                   "default_config_sha256": "5" * 64, "requirements_lock_sha256": "6" * 64,
+                                   "stock_tokenizer_asset_sha256": "7" * 64},
+                        "runtime_config": {"sha256": "8" * 64, "byte_length": 7}},
+            "provider": "deepseek",
+            "model": {"requested": "deepseek-v4-pro", "actual": "DeepSeek-V4-Pro-0813",
+                       "response_version": "v1", "pricing_revision": "fixture-v1"},
+            "input_sha256": "9" * 64, "expected_hunks": [hunk], "observed_hunks": [hunk],
+            "remaining_files": [], "failed_chunks": [], "complete": True, "usage": {},
+        }
+
+    def v2_attempt(self, coverage=None, *, findings=None):
+        payload = copy.deepcopy(self.payload)
+        payload["findings"] = findings or []
+        return review.observe_attempt_v2(self.policy, identity=self.identity, backend="deepseek",
+                                         returncode=0, output=json.dumps(payload), coverage=coverage)
+
     def test_first_choice_is_glm(self):
         self.assertEqual(review.next_backend(self.policy, []), "glm")
+
+    def test_v2_starts_deepseek_and_preserves_engine_provider_model_identity(self):
+        coverage = self.coverage()
+        attempt = self.v2_attempt(coverage)
+        history = {"schema": review.HISTORY_SCHEMA_V2, "attempts": [attempt]}
+        inventory = {review.coverage_digest(coverage): coverage}
+        self.assertIsNone(review.next_backend(self.policy, history, identity=self.identity, coverages=inventory))
+        self.assertEqual(history["attempts"][0]["provider"], "deepseek")
+        self.assertEqual(history["attempts"][0]["model"]["actual"], "DeepSeek-V4-Pro-0813")
+        result = review.prepare_result(self.policy, {**self.identity, "backend": "deepseek"},
+                                       changed_paths=["apps/creator-web/a.ts"], history=history,
+                                       coverages=inventory)
+        self.assertEqual(result["status"], "reviewed")
+
+    def test_v2_digest_mismatch_and_out_of_diff_finding_are_refused(self):
+        coverage = self.coverage()
+        attempt = self.v2_attempt(coverage, findings=[{"path": "apps/creator-web/a.ts", "line": 99, "body": "bad"}])
+        history = {"schema": review.HISTORY_SCHEMA_V2, "attempts": [attempt]}
+        inventory = {review.coverage_digest(coverage): coverage}
+        with self.assertRaisesRegex(review.ReviewScopeError, "RIGHT-side"):
+            review.prepare_result(self.policy, {**self.identity, "backend": "deepseek"},
+                                  changed_paths=["apps/creator-web/a.ts"], history=history,
+                                  coverages=inventory)
+        tampered = copy.deepcopy(coverage)
+        tampered["model"]["actual"] = "forged-model"
+        with self.assertRaisesRegex(review.ReviewScopeError, "digest mismatch"):
+            review.validate_history_v2(self.policy, {"schema": review.HISTORY_SCHEMA_V2, "attempts": [self.v2_attempt(coverage)]},
+                                       identity=self.identity,
+                                       coverages={review.coverage_digest(coverage): tampered})
+        with self.assertRaisesRegex(review.ReviewScopeError, "identity is required"):
+            review.validate_history_v2(self.policy, history, coverages=inventory)
+
+    def test_v2_consumer_accepts_actual_t2_coverage_receipt_shape(self):
+        document = json.loads((ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text())
+        authenticated = producer.authenticate_input(document)
+        receipt = producer._validate_coverage_receipt(producer._make_coverage(
+            authenticated, provider="deepseek",
+            model={"requested": "fixture-model", "actual": None,
+                   "response_version": None, "pricing_revision": "fixture-v1"},
+            prompt=producer.render_prompt_input(authenticated), usage=None))
+        self.assertEqual(review.validate_coverage(None, receipt), receipt)
+        self.assertTrue(all(type(line) is int for hunk in receipt["expected_hunks"] for line in hunk["right_lines"]))
 
     def test_glm_rate_limit_uses_kimi_and_stops(self):
         history = [self.attempt("glm", error_class="rate_limited")]

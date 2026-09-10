@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 import review_pipeline as pipeline
 import review_scope
+import pr_agent_review as t2
 import test_scope
 
 
@@ -54,6 +55,32 @@ class PipelineTests(unittest.TestCase):
             with self.subTest(label=label):
                 model = dict(self.model, test_scope={"labels": [label], "reason": "Scope rationale."})
                 self.assertEqual(review_scope.validate_review(policy, model), model)
+
+    def test_t2_result_adapter_consumes_actual_coverage_without_outer_fallback(self):
+        source = json.loads((ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text())
+        authenticated = t2.authenticate_input(source)
+        coverage = t2._validate_coverage_receipt(t2._make_coverage(
+            authenticated, provider="deepseek",
+            model={"requested": "fixture-model", "actual": None,
+                   "response_version": None, "pricing_revision": "fixture-v1"},
+            prompt=t2.render_prompt_input(authenticated), usage=None))
+        identity = {"repository": "endaye/lmdj", "pr_number": authenticated["identity"]["pull_request"],
+                    "head_sha": authenticated["identity"]["head_sha"], "base_sha": authenticated["identity"]["base_sha"],
+                    "control_sha": authenticated["identity"]["control_sha"], "backend": "deterministic",
+                    "run_id": authenticated["identity"]["run_id"], "run_attempt": authenticated["identity"]["run_attempt"]}
+        attempt = {"status": "not-reviewed", "error_class": "rate_limited", "error": "bounded",
+                   "provider": "deepseek", "model": coverage["model"], "engine": coverage["engine"],
+                   "review": None, "native_review": None, "coverage": coverage,
+                   "usage": coverage["usage"], "duration_ms": 1}
+        result = {"schema": "lmdj.pr-agent-result.v1", "status": "not-reviewed", "error_class": "rate_limited",
+                  "identity": authenticated["identity"], "input_sha256": authenticated["input_sha256"],
+                  "engine": coverage["engine"], "selected_attempt": None, "attempts": [attempt],
+                  "skipped_providers": [{"provider": "glm", "status": "disabled"}], "elapsed_ms": 1}
+        paths = sorted({hunk["path"] for hunk in coverage["expected_hunks"]})
+        history, inventory = pipeline.adapt_t2_result(result, identity=identity, changed_paths=paths)
+        self.assertEqual(history["attempts"][0]["backend"], "deepseek")
+        self.assertIsNone(review_scope.next_backend(test_scope.load_policy(ROOT), history, identity=identity,
+                                                    coverages=inventory, changed_paths=paths))
 
     def test_observed_bare_kimi_labels_still_trigger_fallback(self):
         self.capture("glm", BACKEND_OUTCOME="failure")

@@ -7,15 +7,19 @@ Issue, sends a business POST, edits scheduler state or treats hashes as identity
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import argparse
+import io
 import json
 import os
 from pathlib import Path
 from urllib.parse import urlencode
+import zipfile
 
 import batch_runtime
+import change_scope
 import report_outbox
 import review_discovery as protocol
 import review_failure_report as collector
+import review_scope
 import self_test_report as reporting
 from api_observation import observe
 
@@ -40,6 +44,7 @@ class EvidenceReads:
     """
     def __init__(self, api):
         self.api, self.reads, self.jobs, self.artifacts = api, [], None, None
+        self.review_history_digest = None
 
     def _record(self, name, arguments, value):
         encoded = value if isinstance(value, bytes) else protocol.canonical(value)
@@ -63,7 +68,19 @@ class EvidenceReads:
         return self._record("compare", [base, head], self.api.compare(base, head))
 
     def download_artifact(self, artifact_id):
-        return self._record("artifact", [artifact_id], self.api.download_artifact(artifact_id))
+        value = self.api.download_artifact(artifact_id)
+        # Keep the discovery proof bound to the complete v2 receipt, not merely
+        # the set of API reads used to find it.  Collector validation remains
+        # authoritative; this is only the durable digest copied into journal
+        # evidence after the archive has crossed that boundary.
+        try:
+            with zipfile.ZipFile(io.BytesIO(value)) as archive:
+                history = json.loads(archive.read("history.json"), object_pairs_hook=change_scope.reject_duplicates)
+            if isinstance(history, dict) and history.get("schema") == review_scope.HISTORY_SCHEMA_V2:
+                self.review_history_digest = review_scope.history_digest(history)
+        except (KeyError, TypeError, ValueError, zipfile.BadZipFile):
+            self.review_history_digest = None
+        return self._record("artifact", [artifact_id], value)
 
 
 class DiscoveryRuntime:
@@ -244,7 +261,8 @@ class DiscoveryRuntime:
                 self.disposition(ident, "unresolved", {"why": "exact review source or receipt unavailable",
                     "remedy": "restore and authenticate the original attempt receipt; API errors are not absence or backend failure"})
             return
-        proof = {"identity": ident, "control_sha": self.runtime.control, "receipt_digest": protocol.digest(evidence.reads)}
+        proof = {"identity": ident, "control_sha": self.runtime.control,
+                 "receipt_digest": evidence.review_history_digest or protocol.digest(evidence.reads)}
         if report is None:
             skipped = any(job.get("name") == "Review fallback" and job.get("conclusion") == "skipped" for job in evidence.jobs)
             self.disposition(ident, "closed-mapping" if skipped else "valid-review", proof)

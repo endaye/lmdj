@@ -18,6 +18,8 @@ import self_test_report as reporting
 SCHEMA = "lmdj.current-head-review.v1"
 ATTESTATION = "lmdj.owner-review-attestation.v1"
 MARKER = re.compile(r"^<!-- lmdj-review-v1 ([\w.-]+/[\w.-]+) ([1-9][0-9]*) ([0-9a-f]{40}) ([1-9][0-9]*) ([1-9][0-9]*) (glm|kimi|grok) -->$", re.M)
+MARKER_V2 = re.compile(r"^<!-- lmdj-review-v2 ([\w.-]+/[\w.-]+) ([1-9][0-9]*) ([0-9a-f]{40}) ([1-9][0-9]*) ([1-9][0-9]*) (deepseek|glm|kimi|grok) sha256=([0-9a-f]{64}) -->$", re.M)
+HISTORY_DIGEST_V2 = re.compile(r"^<!-- lmdj-review-history-digest-v2 sha256=([0-9a-f]{64}) -->$", re.M)
 
 
 class Refused(ValueError):
@@ -120,8 +122,14 @@ def manual(reader, comment, repo, head):
 
 def automated(reader, posted, repo, number, head, bot):
     matches = MARKER.findall(posted.get("body", ""))
-    require(len(matches) == 1, "missing or ambiguous publisher identity")
-    repository, pr, sha, run, attempt, backend = matches[0]
+    v2_matches = MARKER_V2.findall(posted.get("body", ""))
+    require(len(matches) + len(v2_matches) == 1, "missing or ambiguous publisher identity")
+    v2 = bool(v2_matches)
+    if v2:
+        repository, pr, sha, run, attempt, backend, history_digest = v2_matches[0]
+    else:
+        repository, pr, sha, run, attempt, backend = matches[0]
+        history_digest = None
     run, attempt = int(run), int(attempt)
     require((repository, int(pr), sha) == (repo["full_name"], number, head), "publisher identity is stale or mismatched")
     require(posted.get("user", {}).get("id") == bot["id"] and bot.get("type") == "Bot"
@@ -143,10 +151,29 @@ def automated(reader, posted, repo, number, head, bot):
         context = json.loads(archive.read("context.json"))
         model = json.loads(archive.read("review.json"))
         history = json.loads(archive.read("history.json"))
-    require(context["identity"]["pr_number"] == number and history[-1]["backend"] == backend, "review source targets another PR or backend")
+        coverages = {}
+        for name in archive.namelist():
+            if name.startswith("coverage-") and name.endswith(".json"):
+                receipt = json.loads(archive.read(name))
+                coverages[pipeline.review_scope.coverage_digest(receipt)] = receipt
+    attempts = history.get("attempts", []) if isinstance(history, dict) else history
+    require(context["identity"]["pr_number"] == number and attempts[-1]["backend"] == backend, "review source targets another PR or backend")
+    if v2:
+        require(isinstance(history, dict) and pipeline.review_scope.history_digest(history) == history_digest,
+                "publisher history digest differs from immutable artifact")
+        policy = pipeline.test_scope.load_policy(pipeline.ROOT)
+        pipeline.review_scope.validate_history_v2(policy, history, identity=context["identity"], coverages=coverages,
+                                                 changed_paths=context["changed_paths"])
+        require(any(a["status"] == "reviewed" and a["backend"] == backend for a in attempts),
+                "v2 publisher marker does not identify the reviewed attempt")
+        coverage = coverages[attempts[-1]["coverage_sha256"]]
+    else:
+        coverage = None
+    history_marker = pipeline.codec.encode_history(history) if v2 else None
     payloads = []
     pipeline.pr_review_target.publish_review(repository, number, head, str(run), str(attempt), backend,
         {"summary": model["summary"], "findings": model["findings"]}, api=reader.get,
+        coverage=coverage, history_digest=history_digest, history_marker=history_marker,
         write=lambda path, data: payloads.append(data))
     expected = payloads[0]
     require(posted["body"].startswith(expected["body"] + "\n\nScope "), "published summary differs from authentic model artifact")
