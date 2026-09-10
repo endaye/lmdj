@@ -1,0 +1,36 @@
+# Trusted operator configuration.  This file is loaded only from the engine
+# installation; it is never read from a pull request checkout.
+schema = "lmdj.pr-agent-config.v1"
+provider_order = ["deepseek", "glm", "xai", "kimi"]
+
+[budget]
+approval_id = "pr-agent-pilot-2026-09-10"
+timezone = "Asia/Shanghai"
+monthly_usd = 20.0
+pilot_usd = 20.0
+per_pr_usd = 1.0
+max_requests = 8
+max_requests_per_provider = 2
+request_timeout_seconds = 60
+backoff_seconds = 5
+engine_deadline_seconds = 600
+output_token_cap = 4096
+
+# The DeepSeek endpoint/model and peak cache-miss prices are observations from
+# the design, not fresh implementation verification.  Activation remains
+# closed until an operator supplies reviewed pricing and funding evidence.
+# An enabled provider must also bind its full context ceiling, peak input/output
+# rates, fixed request charge, and the closed billable category inventory to one
+# reviewed pricing revision.  The adapter does not perform supplier token counting.
+# Candidate observation only: https://api.deepseek.com / deepseek-v4-pro.
+[providers.deepseek]
+enabled = false
+
+[providers.glm]
+enabled = false
+
+[providers.xai]
+enabled = false
+
+[providers.kimi]
+enabled = false

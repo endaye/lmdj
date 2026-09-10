@@ -88,7 +88,7 @@ review, not a clean result. Include deleted contents, not just deleted names.
 The coverage witness must describe the prompt actually handed to the model,
 not just a collector's inventory. PR-Agent's default compression can omit
 patches and deletion-only hunks. Reject that path or replace it through a
-narrow audited adapter that retains all required bytes within the token budget.
+narrow audited adapter that retains all required bytes within the admitted monetary and request limits.
 Split oversized input only with explicit per-chunk identities, complete union
 coverage and cross-file context limits. A lost chunk invalidates completion.
 
@@ -208,25 +208,67 @@ invalid-parameter and unsupported-model failures receive no same-provider
 retry. The pilot uses one complete prompt per provider; oversized input fails
 closed. Chunked paid evaluation is deferred until its complete union and
 cross-file quality oracle is explicitly added, without relaxing acceptance.
-Cap required prompt input at 100,000 tokens and requested output at 4,096,
-further bounded by the verified model context limit. These technical caps are subordinate to the approved USD 20 monthly/pilot
-limits and the USD 1 per-PR cap; they do not bypass supplier quota or pricing checks.
+The owner excluded supplier-specific token counting from this development scope
+on 2026-09-10. Remove the custom counter registry, tokenizer activation fields,
+local rendered-message counting gate and former 100,000-input-token cap.
+Do not introduce a replacement counter framework. Preserve complete rendered
+messages and existing byte/file/hunk limits; never trim or split a prompt to
+force success. A provider context rejection is an explicit failed attempt.
+Requested output remains at most 4,096 tokens, enforced at each actual request.
+The pinned stock startup tokenizer asset remains an upstream dependency only,
+not evidence of supplier-specific counts or admission eligibility.
 
 The durable ledger is operator-owned outside runner workspaces. Each append-only
 record carries schema, approval ID, currency, attempt/request ID, effective
 model, price revision, reserved amount, actual amount if known, and status
 (reserved, reconciled, uncertain). Serialize admission with an exclusive lock;
-lock failure or duplicate request admission denies the request. Reserve
-`input_token_cap * input_price + output_token_cap * output_price` (prices per
-token), including required cache/request surcharges; unknown charges deny
-admission. Available balance subtracts reconciled spend plus outstanding
-reservations. Never reset or clear the ledger when replacing a worker.
+lock failure or duplicate request admission denies the request. Before EVERY
+physical HTTP request, including the one stock transient retry, reserve with
+upward conservative monetary rounding:
 
-Reserve the worst-case priced input/output allowance before each request from
-a durable single-writer pilot ledger. Unknown price or insufficient funds
-blocks admission. A timeout with uncertain billed usage keeps its reservation;
-it is not refunded merely because no response was observed. Reconcile actual
-usage when available. Record estimates separately from supplier billing.
+`context_token_limit * peak_input_rate + output_token_cap * peak_output_rate + fixed_request_charge`
+
+Rates are per token. The trusted context limit is a monetary upper bound on all
+billable input units, including provider-added request overhead and any billed
+context-rejected request; it is not a locally measured prompt size. Require
+`0 < output_token_cap < context_token_limit`. Peak rates cover every enabled
+billable input/output class. Reasoning, tools, search, priority and other charged
+features must be disabled unless their charges fall within these same enforced
+bounds. A zero fixed charge requires reviewed pricing evidence. Unknown or
+unbounded charges, unverified funding, non-finite bounds, or a reservation above
+remaining USD 1 attempt / USD 20 cumulative pilot / USD 20 Asia/Shanghai monthly
+allowance deny admission. A context above 100,000 is eligible under this formula
+without a supplier counter. Available balance subtracts reconciled spend plus
+outstanding reservations. Never reset or clear the ledger when replacing a worker.
+
+The trusted price revision binds context limit, output cap, rates, fixed charge,
+enabled billable categories and priced response-model identity; any change
+requires a new reviewed revision, enforced by the durable reservation basis.
+Reconcile a successful response only from complete authoritative supplier usage
+with the priced response-model identity. Direct monetary charge reconciliation
+is unsupported: LiteLLM response-cost headers are not authoritative billing
+evidence and must not override priced usage, refund reservations, or create a
+hold by themselves. Otherwise finalize exactly once as uncertain and retain the
+reservation.
+A timeout is not refunded merely because no response was observed. Preserve
+liability derived from complete trusted priced usage above the reservation
+rather than clamping it. Output-usage, total-context-usage or priced-usage
+monetary envelope breaches fail the
+review, suppress all remaining provider fallback in that attempt, and deny
+future admission for the same `(provider, effective_model, price_revision)`
+until operator review replaces/disposes that envelope. Reuse the append-only
+ledger's finalized records for this durable hold; add only necessary internal
+reservation-basis data, not a second ledger or public coverage schema. Record
+valid output/context usage breaches before model-identity validation or monetary
+conversion. An unpriceable response, including a model mismatch or a cost too
+large to represent, retains its reservation and observed attempt usage, finalizes
+once as uncertain, and still records a durable breach hold when its valid usage
+exceeds the envelope. Such a breach permits neither stock retry nor fallback.
+Never fabricate a finite actual charge for unpriceable usage. Record
+estimates separately from supplier billing. Supplier counter certification is
+not a T2 completion prerequisite; funding, live qualification and model selection
+remain in their existing later Tasks without increased dollar caps.
+
 Only finite error categories, HTTP status, safe request IDs and aggregate usage
 leave the engine boundary; raw provider errors and keys do not enter artifacts.
 

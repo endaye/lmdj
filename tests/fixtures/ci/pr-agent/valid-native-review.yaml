@@ -1,0 +1,10 @@
+review:
+  general_comments: |
+    The changed code has one concrete correctness issue.
+  key_issues_to_review:
+    - relevant_file: src/example.py
+      issue_header: Possible Bug
+      issue_content: >-
+        The new value is not persisted when the function returns through the changed branch.
+      start_line: 2
+      end_line: 2
