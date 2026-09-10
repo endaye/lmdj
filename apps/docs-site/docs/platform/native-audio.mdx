@@ -68,5 +68,13 @@ stop 后零块、先 mute 再排空 DMA／disable／quiesce，最后回收。
 存储重设计由 [#1124](https://github.com/endaye/lmdj/issues/1124) 接管，原音乐
 目标与 reserve 不降低，完成研究本身不意味着容量准入。
 
+[R2 同口径复测](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-10-cardputer-music-capacity-retest.md)
+已在 M1/M2 后的指定 merged source 上完成实际短程 I2S，目标 admission 模型
+302383 bytes，最低 free heap 58568 bytes；240 MHz/O2 的第三次旅程仍出现
+CPU 余量失败：服务加观测发布保守最大值 4284 µs，高于原定 4266.666… µs。
+原阈值不变，R2 和 H1/B1 正向容量前置仍未完成。3 次/3016 music blocks 不是
+100 次 I2S 替换或 30 分钟运行；codec 全程静音。EOF/DMA readback 与 generation
+计数未见错误，不证明物理 underrun 为零，亦无完整 Host I/O、物理时延或听感 PASS。
+
 ## 下一门禁
 正式产品 Host 需要保留设备矩阵、测量数据与可复核录制。
