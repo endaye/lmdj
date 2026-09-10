@@ -255,6 +255,166 @@ std::array<RuntimeVoiceStateEvent, 16> drain_voice_states(
   return states;
 }
 
+PreparedSampleBank bank_with_pcm_snapshot(const RuntimeSnapshot& snapshot) {
+  auto bank = PreparedSampleBank::empty(snapshot.project_id,
+                                         snapshot.project_revision);
+  for (const auto& pad : snapshot.pads) {
+    LMDJ_CHECK(bank.set_pcm_sample(
+        static_cast<std::uint8_t>(pad.slot.bank * 16 + pad.slot.pad),
+        pad.sample, pad.playback).has_value());
+  }
+  return bank;
+}
+
+void pcm_and_float_banks_render_identical_live_pattern_and_audition() {
+  for (const auto channels : {std::uint16_t{1}, std::uint16_t{2}}) {
+    for (const auto mode : {TriggerMode::one_shot, TriggerMode::gate,
+                           TriggerMode::loop_gate, TriggerMode::loop_toggle}) {
+      for (const bool muted : {false, true}) {
+        auto snapshot = pattern_snapshot(kPatternA, {0, 0}, 79);
+        std::vector<std::int16_t> values(512 * channels);
+        constexpr std::array<std::int16_t, 7> extremes{
+            -32'768, 32'767, -16'384, 16'384, -1, 1, 0};
+        for (std::size_t index = 0; index < values.size(); ++index)
+          values[index] = extremes[index % extremes.size()];
+        const auto pcm = std::make_shared<const lmdj::cooker::PcmSample>(
+            lmdj::cooker::PcmSample{48'000, channels, std::move(values)});
+        snapshot.pads[0].sample = pcm;
+        snapshot.pads[0].playback = {3, 410, mode, 0.25F, muted};
+        snapshot.events[0].sample = pcm;
+        auto second = snapshot.pads[0];
+        second.slot = {0, 1};
+        second.playback = {5, 380, mode, 0.5F, muted};
+        snapshot.pads.push_back(std::move(second));
+        auto floats = PreparedSampleBank::from_snapshot(snapshot);
+        LMDJ_CHECK(floats.has_value());
+        RealtimeEngine reference, actual;
+        LMDJ_CHECK(reference.publish_sample_bank(std::move(floats.value())) ==
+                   PublishResult::accepted);
+        LMDJ_CHECK(actual.publish_sample_bank(bank_with_pcm_snapshot(snapshot)) ==
+                   PublishResult::accepted);
+        for (auto* engine : {&reference, &actual}) {
+          auto pattern = PreparedPatternView::from_snapshot(snapshot);
+          LMDJ_CHECK(pattern.has_value());
+          LMDJ_CHECK(engine->publish_pattern_view(std::move(pattern.value())).result ==
+                     PatternPublishResult::accepted);
+          LMDJ_CHECK(engine->start().has_value());
+        }
+        const auto submit = [&](PadControlEvent event) {
+          LMDJ_CHECK(reference.enqueue_control(event) == EnqueueResult::accepted);
+          LMDJ_CHECK(actual.enqueue_control(event) == EnqueueResult::accepted);
+        };
+        const auto compare = [&](std::uint32_t frames) {
+          std::array<float, 256> left{}, right{}, expected_left{}, expected_right{};
+          g_allocations.store(0);
+          g_deallocations.store(0);
+          g_track_allocations.store(true);
+          reference.render(expected_left.data(), expected_right.data(), frames);
+          actual.render(left.data(), right.data(), frames);
+          g_track_allocations.store(false);
+          LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+          LMDJ_CHECK(left == expected_left && right == expected_right);
+          LMDJ_CHECK(actual.telemetry().active_voices ==
+                     reference.telemetry().active_voices);
+          return std::any_of(left.begin(), left.end(), [](float value) {
+            return value != 0;
+          });
+        };
+        submit(control(1, 1, PadControlKind::press, 103));
+        LMDJ_CHECK(compare(127) == !muted);
+        submit(control(2, 1, PadControlKind::preview_set, 0,
+                       {7, 300, mode, 0.375F, muted}));
+        submit(control(3, 1, PadControlKind::press, 91));
+        (void)compare(127);
+        submit(control(4, 1, PadControlKind::release));
+        (void)compare(256);
+        submit(control(5, 1, PadControlKind::stop_slot));
+        (void)compare(256);
+        submit(control(6, 1, PadControlKind::preview_clear));
+        snapshot.pads.erase(snapshot.pads.begin() + 1, snapshot.pads.end());
+        snapshot.pads[0].playback = {3, 410, mode, 0.25F, false};
+        auto audition_float = PreparedSampleBank::from_snapshot(snapshot);
+        LMDJ_CHECK(audition_float.has_value());
+        LMDJ_CHECK(reference.publish_audition_bank(std::move(audition_float.value())) ==
+                   PublishResult::accepted);
+        LMDJ_CHECK(actual.publish_audition_bank(bank_with_pcm_snapshot(snapshot)) ==
+                   PublishResult::accepted);
+        submit(control(7, 0, PadControlKind::audition_start, 127));
+        LMDJ_CHECK(compare(127));
+        submit(control(8, 0, PadControlKind::audition_stop));
+        (void)compare(256);
+        reference.stop();
+        actual.stop();
+        LMDJ_CHECK(!compare(256));
+      }
+    }
+  }
+}
+
+void pcm_replacement_releases_the_actual_float_allocation() {
+  g_allocations.store(0);
+  g_deallocations.store(0);
+  g_track_allocations.store(true);
+  auto* ordinary = ::operator new(37);
+  auto* aligned = ::operator new(129, std::align_val_t{64});
+  ::operator delete(ordinary);
+  ::operator delete(aligned, std::align_val_t{64});
+  g_track_allocations.store(false);
+  LMDJ_CHECK(g_allocations.load() == 2 && g_deallocations.load() == 2);
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+  const std::array<float, 4> floats{0, 0.25F, 0.5F, 1};
+  LMDJ_CHECK(bank.set_sample(0, floats).has_value());
+  const auto pcm = std::make_shared<const lmdj::cooker::PcmSample>(
+      lmdj::cooker::PcmSample{48'000, 1, {0, 8192, 16384, 32767}});
+  g_allocations.store(0);
+  g_deallocations.store(0);
+  g_track_allocations.store(true);
+  const auto assigned = bank.set_pcm_sample(0, pcm,
+      {0, 4, TriggerMode::one_shot, 1, false});
+  g_track_allocations.store(false);
+  LMDJ_CHECK(assigned.has_value());
+  LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 1);
+  LMDJ_CHECK(bank.decoded_pcm_bytes() == 8);
+}
+
+void pcm_old_bank_lives_until_control_reclaims_after_voice_completion() {
+  RealtimeEngine engine;
+  auto owner = std::make_shared<const lmdj::cooker::PcmSample>(
+      lmdj::cooker::PcmSample{48'000, 1, std::vector<std::int16_t>(1024, 16'384)});
+  std::weak_ptr<const lmdj::cooker::PcmSample> lifetime = owner;
+  auto old_bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 1);
+  LMDJ_CHECK(old_bank.set_pcm_sample(0, owner,
+      {0, 1024, TriggerMode::one_shot, 1, false}).has_value());
+  owner.reset();
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(old_bank)) == PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue({1, 0, 127}) == EnqueueResult::accepted);
+  render_frames(engine, 1);
+  const std::array<float, 1> next{0.25F};
+  LMDJ_CHECK(engine.publish_sample_bank(bank_with_sample(2, next)) == PublishResult::accepted);
+  std::array<float, 128> left{}, right{};
+  g_allocations.store(0);
+  g_deallocations.store(0);
+  g_track_allocations.store(true);
+  engine.render(left.data(), right.data(), left.size());
+  g_track_allocations.store(false);
+  LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+  LMDJ_CHECK(engine.bank_telemetry().current_generation == 2);
+  LMDJ_CHECK(left.back() == lmdj::audio::prepared_pcm16_to_float(16'384));
+  LMDJ_CHECK(!lifetime.expired());
+  LMDJ_CHECK(engine.reclaim_retired_banks() == 0);
+  g_track_allocations.store(true);
+  render_frames(engine, 1024);
+  g_track_allocations.store(false);
+  LMDJ_CHECK(g_allocations.load() == 0 && g_deallocations.load() == 0);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(!lifetime.expired());
+  const auto reclaimed = engine.reclaim_retired_bank_telemetry();
+  LMDJ_CHECK(reclaimed.count == 1 && reclaimed.decoded_pcm_bytes == 2048);
+  LMDJ_CHECK(lifetime.expired());
+  LMDJ_CHECK(engine.reclaim_retired_banks() == 0);
+}
+
 void fixed_control_and_voice_messages_are_realtime_safe_values() {
   static_assert(std::is_trivially_copyable_v<PadControlEvent>);
   static_assert(std::is_trivially_copyable_v<RuntimeVoiceStateEvent>);
@@ -3279,6 +3439,9 @@ void render_and_adapter_status_finish_while_observer_holds_reader_lock() {
 int main() {
   engine_queue_profiles_account_for_all_allocated_payloads();
   receipt_profile_rejects_invalid_capacity();
+  pcm_replacement_releases_the_actual_float_allocation();
+  pcm_and_float_banks_render_identical_live_pattern_and_audition();
+  pcm_old_bank_lives_until_control_reclaims_after_voice_completion();
   capture_storage_is_allocated_only_on_first_arm();
   capture_allocation_failure_leaves_playback_running_and_retryable();
   capture_storage_survives_stop_and_restart_without_reallocation();

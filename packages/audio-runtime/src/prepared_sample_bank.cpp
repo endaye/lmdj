@@ -589,6 +589,55 @@ foundation::Result<void> PreparedSampleBank::set_sample(
   return foundation::Result<void>::success();
 }
 
+foundation::Result<void> PreparedSampleBank::set_pcm_sample(
+    std::uint8_t slot,
+    std::shared_ptr<const cooker::PcmSample> pcm,
+    cooker::ResolvedPlayback playback) {
+  if (slot >= samples_.size() || !pcm ||
+      pcm->sample_rate != kTransportSampleRate ||
+      (pcm->channels != 1 && pcm->channels != 2) ||
+      pcm->interleaved.empty() ||
+      pcm->interleaved.size() % pcm->channels != 0) {
+    return invalid_argument("prepared Sample Bank PCM shape is invalid");
+  }
+  const auto frames = pcm->interleaved.size() / pcm->channels;
+  if (frames > std::numeric_limits<std::uint32_t>::max() ||
+      !valid_playback(playback, frames)) {
+    return invalid_argument("prepared Sample Bank playback is invalid");
+  }
+  // Count each shared PCM payload once, even when several Pads have different
+  // playback selections. Float payloads remain per-slot, as on the old path.
+  bool old_shared = false;
+  bool new_shared = false;
+  for (std::size_t index = 0; index < pcm_owners_.size(); ++index) {
+    if (index == slot) continue;
+    old_shared |= pcm_owners_[index] &&
+                  pcm_owners_[index].get() == pcm_owners_[slot].get();
+    new_shared |= pcm_owners_[index].get() == pcm.get();
+  }
+  auto retained_bytes = decoded_pcm_bytes_ -
+      static_cast<std::uint64_t>(samples_[slot].size()) * sizeof(float);
+  if (pcm_owners_[slot] && !old_shared) {
+    retained_bytes -= static_cast<std::uint64_t>(
+        pcm_owners_[slot]->interleaved.size()) * sizeof(std::int16_t);
+  }
+  const auto prospective = checked_runtime_byte_sum(
+      retained_bytes,
+      new_shared ? 0 : static_cast<std::uint64_t>(pcm->interleaved.size()) *
+                           sizeof(std::int16_t));
+  if (!prospective) {
+    return invalid_argument("prepared Sample Bank byte length overflowed");
+  }
+  // All validation precedes this non-throwing commit. Release the entire float
+  // allocation, not merely its size; neither representation hides a duplicate.
+  std::vector<float>{}.swap(samples_[slot]);
+  pcm_owners_[slot] = std::move(pcm);
+  playbacks_[slot] = playback;
+  availability_mask_ |= std::uint64_t{1} << slot;
+  decoded_pcm_bytes_ = *prospective;
+  return foundation::Result<void>::success();
+}
+
 const foundation::ProjectId& PreparedSampleBank::project_id() const noexcept {
   return project_id_;
 }
@@ -612,6 +661,15 @@ std::uint64_t PreparedSampleBank::decoded_pcm_bytes() const noexcept {
 const std::vector<float>& PreparedSampleBank::sample(
     std::uint8_t slot) const noexcept {
   return samples_[slot];
+}
+
+PreparedSampleMaterialView PreparedSampleBank::material(
+    std::uint8_t slot) const noexcept {
+  const auto* pcm = pcm_owners_[slot].get();
+  if (!pcm) return {};
+  return {pcm->interleaved.data(),
+          static_cast<std::uint32_t>(pcm->interleaved.size() / pcm->channels),
+          pcm->channels};
 }
 
 const cooker::ResolvedPlayback& PreparedSampleBank::playback(

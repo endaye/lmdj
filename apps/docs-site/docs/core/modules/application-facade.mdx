@@ -57,10 +57,10 @@ codec limits 不限制此前电脑端 source load/WAV Cook 的内存峰值。
 
 Cardputer 的 [R1 研究 #1127](https://github.com/endaye/lmdj/pull/1127) 得到负容量
 结论：[紧凑存储设计 #1124](https://github.com/endaye/lmdj/issues/1124) 的 M1 source
-已让显式队列 storage 随既有 pending 准入额度收敛；复用 Core 拥有的只读 PCM16
-仍待 [M2 #1130](https://github.com/endaye/lmdj/issues/1130)，当前仍有 per-Pad float 展开。
-M1 的 Engine 布局是待后续 MAJOR 身份分配的 staged source，不分配 Product Build。
-设计 Closed、native
+已让显式队列 storage 随既有 pending 准入额度收敛。
+M2 source 已让窄 Runtime 的 live Pad 与 Pattern 共享 decoded PCM16，完整 float
+展开不再存在；桌面通用 Bank/codec 路径不变。Engine/Bank 布局是待后续 MAJOR
+身份分配的 staged source，不分配 Product Build。设计 Closed、native
 测试通过或修复合并都不能解除设备容量门槛，必须取得同口径的正向目标证据。
 
 `runtime_facade.hpp` 只暴露不透明字节、完整内容身份、资源配置、进程内 opaque
@@ -87,7 +87,12 @@ Core render 退出；`finish_stop` 在 BUSY 清除前只返回 draining，不调
 Host 仍须负责自己的设备/DMA 回调生命周期，并在析构 Facade 前停止再次调用 render。
 
 load 在分配 PCM 前复用完整内容校验，报告固定对象（含 Engine 与三个独立队列 cell block）、借入 encoded
-bytes、去重 PCM、per-Pad float 展开、metadata 和准备临时空间，溢出或超总额度拒绝。
+bytes、去重 PCM、metadata 和准备临时空间，溢出或超总额度拒绝。
+窄路径 `prepared_float_bytes` 为 0；codec 通用 footprint 仍报告其他消费者的
+per-Pad float 需求。Bank owner table 包含在实际 `sizeof(PreparedSampleBank)` 中；
+准备空间保留 Pattern event workspace、Bank/View 对象与解码重叠，只移除已消失的
+largest-float 临时副本。现有 Snapshot 和 Pattern 的 PCM ownership 仍保留，不把
+共享 owner 当作又一份 PCM，也不把移除 float 副本误报成移除 PCM。
 配置还必须显式提供 platform reserve，覆盖 allocator/control-block/capacity rounding、
 平台 stack、Host buffers 等；数值必须由平台测量，不是 Core 推断的可用 RAM。
 完整校验与预算通过后，先构造候选 Engine 及其固定队列，再分配解码 PCM 与准备数据，

@@ -650,11 +650,18 @@ class RealtimeEngine final {
   void capture_voice_start(
       const PadControlEvent& event,
       std::uint64_t absolute_start_frame) noexcept;
-  const std::vector<float>& current_sample(std::uint8_t slot) const noexcept;
+  struct SampleView {
+    const float* samples{};
+    PreparedSampleMaterialView material{};
+    std::size_t frame_count{};
+  };
+  static SampleView bank_sample(const PreparedSampleBank& bank,
+                                std::uint8_t slot) noexcept;
+  SampleView current_sample(std::uint8_t slot) const noexcept;
   // Resolves `Voice::bank_slot` to the slot that owns the voice's samples,
   // across both pools. Returns nullptr for `kLegacyBankSlot`, which owns none.
   BankSlot* bank_slot_for(std::uint8_t bank_slot) noexcept;
-  const std::vector<float>& audition_sample(std::uint8_t slot) const noexcept;
+  SampleView audition_sample(std::uint8_t slot) const noexcept;
   void retire_audition(std::uint8_t slot) noexcept;
   void apply_published_audition(std::uint8_t slot) noexcept;
   cooker::ResolvedPlayback published_playback(

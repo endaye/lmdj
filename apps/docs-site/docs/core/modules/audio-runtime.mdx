@@ -39,16 +39,33 @@ Voice 和 fail-closed drain 语义不变。当前队列存储在 Engine 构造�
 ## 7. 产品使用方
 Native Host 与未来正式平台 Host 通过 Facade/适配层使用。
 
-### Cardputer 紧凑存储实施状态
+### Cardputer 紧凑存储与只读 PCM Bank
 
 [设计工作项 #1124](https://github.com/endaye/lmdj/issues/1124) 依据
-[R1 负容量研究 #1127](https://github.com/endaye/lmdj/pull/1127)，分开实施队列与 PCM。
-当前 M1 source 已实现按回执额度一次配置的控制/结果/Voice-state 存储；
-live Pad 复用只读 PCM16 仍由 [M2 #1130](https://github.com/endaye/lmdj/issues/1130) 承接。
+[R1 负容量研究 #1127](https://github.com/endaye/lmdj/pull/1127)，分开实施队列与 PCM 改动。
+当前 source 已实现按回执额度一次配置的控制/结果/Voice-state 存储（M1），
+以及 live Pad 复用只读 PCM16（M2）。
 默认桌面容量和既有 float Bank 路径保持不变，callback 不分配、不释放，原
-publication ownership 与 quiescence 不变。M1 是 staged source：Engine 布局变化须
-在后续身份分配时处理 Audio Runtime MAJOR，不能作为旧 ABI 的二进制替换。
+publication ownership 与 quiescence 不变。M1/M2 是 staged source：Engine/Bank
+布局变化须在后续身份分配时处理 Audio Runtime MAJOR，不代表已分配的 Product
+Build，不能作为旧 ABI 的二进制替换。
 设计或修复合并均不能替代同素材、同 reserve 的目标容量复测和完整 Host 验收。
+
+`PreparedSampleBank::set_pcm_sample` 在控制侧持有 `shared_ptr<const PcmSample>`，
+多个 Pad 可共享同一 PCM payload 并保留各自 playback。ESP32 窄 Runtime 使用此
+只读 PCM16 路径，不生成完整 float 副本；上文桌面 per-Pad float 配额与
+`set_sample/from_snapshot` 路径保留。旧 float setter 仍拒绝 occupied slot；新
+PCM setter 支持 float → PCM 和 PCM → PCM 替换。校验失败完整保留旧样本、
+playback、availability 与字节账本；成功替换释放整个旧 float allocation，
+PCM payload 在 Bank 内按唯一 owner 对象计数，不因多个 Pad 重复收费。
+
+发布后所有 mutable alias 都必须停止修改 PCM；const shared_ptr 本身不强制这一点。
+窄 Facade 的 decoder 不向 Host 暴露 alias，能建立该条件。live Pad、preview 与
+audition 通过 raw material view 使用与 Pattern 相同的 PCM16 转换函数；逐帧浮点
+换算、混音和原 ramp/loop/release 语义不变，不是 fixed-point DSP 改写。
+Voice 不复制 shared_ptr，旧 Bank 在最后一个 Voice 完成前保持 owner，只由
+控制侧 reclamation 释放。Bank C++ 布局变化要求所有消费者一致重编；下一 Audio
+Runtime MAJOR 及相关 identity allocation 仍留给 B1，不允许旧 ABI 二进制替换。
 
 Runtime-only Facade 的 T3 source 使用 `PreparedPatternView::from_canonical_snapshot`：
 严格拒绝重复或乱序 event key，保留全部 timing/material 验证，不建立桌面 overlay

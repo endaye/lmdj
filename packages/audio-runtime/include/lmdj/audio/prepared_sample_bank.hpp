@@ -214,6 +214,16 @@ class PreparedSampleBank final {
       std::span<const float> mono_pcm,
       cooker::ResolvedPlayback playback);
 
+  // Control-local builder only. Unlike the legacy float setter, this replaces
+  // an occupied slot. Failure preserves all prior samples, playback and bytes.
+  // The owner and every mutable alias must remain immutable after publication;
+  // a const shared_ptr alone does not enforce that precondition. Audio retains
+  // only a raw view under the existing Bank generation/claim lifetime.
+  foundation::Result<void> set_pcm_sample(
+      std::uint8_t slot,
+      std::shared_ptr<const cooker::PcmSample> pcm,
+      cooker::ResolvedPlayback playback);
+
   // Diagnostic only. Nothing in the engine reads this to make a decision; it
   // exists so a Bank in a debugger can be traced back to what produced it.
   //
@@ -234,6 +244,7 @@ class PreparedSampleBank final {
 
   friend class RealtimeEngine;
   const std::vector<float>& sample(std::uint8_t slot) const noexcept;
+  PreparedSampleMaterialView material(std::uint8_t slot) const noexcept;
   const cooker::ResolvedPlayback& playback(std::uint8_t slot) const noexcept;
 
   foundation::ProjectId project_id_;
@@ -241,6 +252,7 @@ class PreparedSampleBank final {
   std::uint64_t availability_mask_ = 0;
   std::uint64_t decoded_pcm_bytes_ = 0;
   std::array<std::vector<float>, 64> samples_;
+  std::array<std::shared_ptr<const cooker::PcmSample>, 64> pcm_owners_{};
   std::array<cooker::ResolvedPlayback, 64> playbacks_{};
 };
 

@@ -86,8 +86,12 @@ Bank 成为不可变 publication 后，只在 control 回收；audio Voice 持�
 并沿用 Bank generation/claim 生命周期，不在 callback 复制 shared_ptr。
 Pattern 保留自身原有 sample ownership，不能仅删除 Facade snapshot 就宣称省掉 PCM。
 
-slot 只选择一种表示；重复 set 必须原子地替换 control-local 数据并更新 availability、
-sample count、字节账本。校验 PCM channel/frame、播放范围和空值，失败不半更新。
+slot 只选择一种表示。2026-09-10 owner 确认：ESP32 窄 Runtime 样本存储统一走
+只读 PCM16；保留旧 float setter 的 occupied-slot 拒绝行为。新增 PCM setter
+允许 float → PCM 或 PCM → PCM 替换，不隐式扩张旧 float API 的语义。
+PCM 替换必须整体更新 control-local 数据、availability、sample count 与字节账本；
+这里的整体更新不是音频线程并发修改已发布 Bank。校验 PCM channel/frame、
+播放范围和空值，失败不半更新。播放时逐帧浮点转换/混音保留，不新增 fixed-point DSP。
 sample frame 数、preview 校验、Voice material/data 选择需统一处理两种表示。
 释放尾音、旧 Bank Voice、audition、Pattern、mute、loop 与 Bank 替换均保留现有语义。
 

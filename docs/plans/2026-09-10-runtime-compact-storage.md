@@ -70,6 +70,9 @@ drain → retire 顺序；callback allocator guard 同时检测 new/delete 和 a
 ## M2 #1130：只读 PCM Bank 路径
 
 前置：D2 评审通过；可独立验证表示变更，按 M1 → M2 顺序落地以减少集成冲突。
+2026-09-10 owner 确认的补充范围：ESP32 窄 Runtime 使用只读 PCM16 存储，保留
+旧 float setter 拒绝重复设置；新增 PCM setter 支持替换。同步修正设计歧义，
+因此本 Task 额外声明本计划及 `docs/design/2026-09-10-runtime-compact-storage.md`。
 封闭文件：
 
 - `packages/audio-runtime/include/lmdj/audio/prepared_sample_bank.hpp`
