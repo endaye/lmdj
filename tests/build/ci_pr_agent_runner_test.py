@@ -72,6 +72,10 @@ def make_bundle(directory: Path, marker: str) -> tuple[Path, Path, dict]:
 
 class RunnerDeploymentTests(unittest.TestCase):
     def setUp(self):
+        # Positive fixtures model operator-protected deployment paths, not the
+        # checkout runner's ambient umask. Restore the caller after each case;
+        # dedicated subprocess tests below exercise permissive caller masks.
+        self.addCleanup(os.umask, os.umask(0o022))
         self.tmp = tempfile.TemporaryDirectory(prefix="lmdj-runner-test-")
         self.directory = Path(self.tmp.name)
         self.target = self.directory / "target"
@@ -110,7 +114,7 @@ class RunnerDeploymentTests(unittest.TestCase):
         return environment
 
     def invoke(self, mode: str, config: Path, archive: Path | None = None, identity: Path | None = None,
-               *, overrides: dict[str, dict[str, int]] | None = None):
+               *, overrides: dict[str, dict[str, int]] | None = None, child_umask: int = -1):
         command = [str(SCRIPT), mode, "--config", str(config), "--target-root", str(self.target)]
         if archive is not None:
             command += ["--bundle", str(archive)]
@@ -118,7 +122,8 @@ class RunnerDeploymentTests(unittest.TestCase):
             command += ["--identity", str(identity)]
         if mode in {"verify", "install"}:
             command += ["--runtime-config", str(self.runtime_config)]
-        return subprocess.run(command, text=True, capture_output=True, check=False, env=self.fixture_env(overrides))
+        return subprocess.run(command, text=True, capture_output=True, check=False,
+                              env=self.fixture_env(overrides), umask=child_umask)
 
     def target_snapshot(self) -> dict[str, tuple]:
         snapshot = {}
@@ -139,6 +144,29 @@ class RunnerDeploymentTests(unittest.TestCase):
         self.assertEqual(BASE_CONFIG["resources"]["cpu_quota"], "100%")
         self.assertEqual(BASE_CONFIG["resources"]["memory_max"], "2G")
         self.assertTrue(BASE_CONFIG["resources"]["heavy_slice_untouched"])
+
+    def test_permissive_caller_umask_cannot_create_unsafe_install_parents(self):
+        config = self.config()
+        first = self.invoke("install", config, self.archive, self.identity, child_umask=0o000)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        for parent in (self.target / "var", self.target / "var/lib", self.target / "var/lib/lmdj",
+                       self.target / "etc", self.target / "etc/lmdj", self.target / "etc/lmdj/pr-agent"):
+            with self.subTest(parent=parent):
+                self.assertEqual(parent.stat().st_mode & 0o777, 0o755)
+        before = self.target_snapshot()
+        repeat = self.invoke("install", config, self.archive, self.identity, child_umask=0o002)
+        self.assertEqual(repeat.returncode, 0, repeat.stderr)
+        self.assertEqual(self.target_snapshot(), before)
+
+    def test_permissive_caller_does_not_repair_existing_unsafe_parent(self):
+        config = self.config()
+        self.target.chmod(0o775)
+        before = self.target_snapshot()
+        result = self.invoke("install", config, self.archive, self.identity, child_umask=0o000)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("group/world writable", result.stderr)
+        self.assertEqual(self.target.stat().st_mode & 0o777, 0o775)
+        self.assertEqual(self.target_snapshot(), before)
 
     def test_bash_syntax_and_staged_script_do_not_depend_on_docker_or_systemctl(self):
         syntax = subprocess.run(["bash", "-n", str(SCRIPT)], capture_output=True, text=True)

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Newly created parent directories must be traversable, but never group/world
+# writable. Existing unsafe paths still fail the ownership boundary unchanged.
+umask 022
+
 # Repository-owned deployment boundary for the PR-Agent Netcup review slot.
 # This command stages and verifies an immutable release; it never invokes
 # systemctl.  Activation, host admission, and supplier/API checks remain

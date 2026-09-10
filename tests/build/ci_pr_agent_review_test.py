@@ -232,6 +232,13 @@ def bound_source(source_root: Path, destination: Path) -> Path:
         "archive": {"sha256": hashlib.sha256(b"fixture-archive").hexdigest(), "byte_length": 15},
         "files": files,
     }, sort_keys=True) + "\n", encoding="utf-8")
+    # This is an installation fixture, not a writable checkout. Normalize only
+    # the copied fixture before a test deliberately tampers with it; never
+    # modify original source files or relax the real loader's mode checks.
+    for path in (destination, *destination.rglob("*")):
+        if path.is_symlink():
+            raise AssertionError("unexpected symlink in controlled source fixture")
+        path.chmod(0o755 if path.is_dir() else 0o644)
     return destination
 
 
@@ -573,12 +580,18 @@ class InputAndPolicyTests(unittest.TestCase):
             }}, self.authenticated)
 
     def test_actual_repository_config_is_valid_and_inactive_before_engine_import(self):
-        config_path = ROOT / "scripts/ci/pr-agent/config.toml"
-        with mock.patch.object(adapter, "TRUSTED_CONFIG_ROOT", config_path.parent):
-            config = adapter.load_trusted_config(config_path)
-            self.assertFalse(any(provider["enabled"] for provider in config["providers"].values()))
-            with tempfile.TemporaryDirectory() as directory, \
+        source_bytes = (ROOT / "scripts/ci/pr-agent/config.toml").read_bytes()
+        # The real loader consumes protected installation bytes, never a
+        # checkout's ambient group-writable mode. Preserve the exact repository
+        # bytes while giving this positive fixture that required boundary.
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_bytes(source_bytes)
+            config_path.chmod(0o444)
+            with mock.patch.object(adapter, "TRUSTED_CONFIG_ROOT", config_path.parent), \
                     mock.patch.object(adapter, "_import_upstream") as import_upstream:
+                config = adapter.load_trusted_config(config_path)
+                self.assertFalse(any(provider["enabled"] for provider in config["providers"].values()))
                 with self.assertRaisesRegex(adapter.EngineError, "no provider has trusted activation"):
                     adapter.run_engine(
                         FIXTURES / "complete-input.json", config_path=config_path,
@@ -586,6 +599,20 @@ class InputAndPolicyTests(unittest.TestCase):
                         ledger_path=Path(directory) / "unused-ledger.jsonl",
                     )
                 import_upstream.assert_not_called()
+
+    def test_group_or_world_writable_config_is_rejected_without_repair(self):
+        source_bytes = (ROOT / "scripts/ci/pr-agent/config.toml").read_bytes()
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_bytes(source_bytes)
+            for mode in (0o664, 0o646):
+                with self.subTest(mode=oct(mode)):
+                    config_path.chmod(mode)
+                    with mock.patch.object(adapter, "TRUSTED_CONFIG_ROOT", config_path.parent):
+                        with self.assertRaisesRegex(adapter.EngineError, "not owned and protected"):
+                            adapter.load_trusted_config(config_path)
+                    self.assertEqual(config_path.stat().st_mode & 0o777, mode)
+                    self.assertEqual(config_path.read_bytes(), source_bytes)
 
     def test_trusted_config_requires_verified_activation_and_rejects_counting_or_unbounded_keys(self):
         config = test_config()
@@ -914,6 +941,7 @@ class InputAndPolicyTests(unittest.TestCase):
             forged = json.loads(original)
             forged["files"]["default_config"]["sha256"] = "0" * 64
             deployment_path.write_text(json.dumps(forged), encoding="utf-8")
+            deployment_path.chmod(0o644)
             with mock.patch.object(adapter, "TRUSTED_ENGINE_ROOT", source):
                 with self.assertRaisesRegex(adapter.EngineError, "does not match trusted identity"):
                     adapter._import_upstream(source)
@@ -924,8 +952,10 @@ class InputAndPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = bound_source(SOURCE_ROOT, Path(directory) / "source")
             cache = source / "pr_agent" / "__pycache__"
-            cache.mkdir()
-            (cache / "forged.cpython-312.pyc").write_bytes(b"not verified")
+            cache.mkdir(mode=0o755)
+            bytecode = cache / "forged.cpython-312.pyc"
+            bytecode.write_bytes(b"not verified")
+            bytecode.chmod(0o644)
             with mock.patch.object(adapter, "TRUSTED_ENGINE_ROOT", source):
                 with self.assertRaisesRegex(adapter.EngineError, "unverified bytecode"):
                     adapter._import_upstream(source)
