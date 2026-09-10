@@ -535,17 +535,48 @@ file alone does not justify claiming that a Portal page was changed.
 
 - T1 was merged through PR #1161 at `409a1a4d`; the earlier audit and failed
   receipts below remain historical evidence.
-- T2 has an inactive baseline in Draft PR #1175 at `8148a1ec`. The monetary
-  envelope and follow-up runtime/test corrections are implemented locally in
-  `0c196687`, following the rejected checkpoint `9e837bde`. Independent review
-  verified all six runtime/test corrections; the remaining plan scope/Progress
-  correction is reflected here and awaits independent readback on its new
-  committed tree. Push is held; final source approval, a matching Linux bundle,
-  remote-head review and live supplier acceptance remain pending. The v13 build
-  completed, but its extracted-bundle failures remain historical evidence and
-  its rejected source has been superseded.
-- T3–T6 have not started. AI-provider token counting is outside the entire
-  migration scope by the owner's decision; there is no pending counting decision.
+- T2 merged through [PR #1175](https://github.com/endaye/lmdj/pull/1175) at
+  `ccda4381dfc25c75c1fa7d4f82056e216943b881` on 2026-09-10T15:06:42Z;
+  #1151 is closed. The independently reviewed source head was
+  `23cfb9f0a072cc5cc3bb16b080937d56a4317236`, tree
+  `82ffb3f19e4f50edab449f69925a639a1e875bf9`, covering all 18 declared paths.
+  The final v14 Linux amd64 archive is 361820160 bytes, SHA-256
+  `4359addd2521847509b61c655a346e1a59e49ebec87934024f35c066eb3f26d3`;
+  its detached identity SHA-256 is
+  `a1f7f67b6ae9390a3a4117f0bf1bb96a7269306aef5b12433d06b6e62dc3d2c3`.
+  Independent archive/member/source checks, the sole supported build exit 0
+  and exactly one matching Linux clean-base marker bind it to the accepted
+  source. Native pinned-handler 27/27 and shared entrypoint 42/42 passed;
+  ordinary discovery was 69 cases with 40 passed and 29 explicit integration
+  skips, not 69 passes. The independent ordinary script run was separately
+  42 cases with 40 passed and 2 skips.
+- Current-head takeover [record 5620843576](https://github.com/endaye/lmdj/pull/1175#issuecomment-5620843576)
+  records distinct author/reviewer sessions and finding dispositions; the
+  trusted review helper returned `eligible: true` before guarded squash merge.
+  Live review threads were empty and protection unchanged. PR Review run
+  `34492480810/1` failed during collection before provider execution; publisher
+  was skipped. PR Contract `34492480824` subsequently ended cancelled. Neither
+  is recorded as a pass. Rejected `9e837bde`, v13 extracted-suite failure/timeout,
+  earlier timing/LFS/runtime failures and diagnostic audit-script errors remain
+  historical evidence; clean-base import is not Linux extracted full-suite proof.
+- T3 and the repository-tooling portion of T4 are in progress in separate
+  supervised worktrees from merged main. T3 owns its protocol/consumer paths;
+  T4 owns its five deployment/documentation paths. The lead alone owns these
+  design/plan status updates. Each implementation still requires its declared
+  verification and independent current-head review before shipping.
+- T4's strict read-only SSH refresh succeeded as `en` on `netcup01`; noninteractive
+  sudo failed password-required. Runner 04 configuration matched baseline
+  policy despite the extra API elastic label; operator classification remains
+  pending. The observed heavy slice is 14 vCPU/48 GiB, but idle resource
+  snapshots do not satisfy co-running admission. No host mutation or supplier
+  activation has occurred. Administrator execution, isolation, headroom,
+  process recovery and enabled-supplier qualification remain open T4 evidence.
+- T5/T6 have not started, and #1149 remains open. Defaults keep all providers
+  inactive. Four-supplier live success/fallback, independently frozen quality
+  samples, 20 admitted current-head attempts across at least five heads,
+  production publication/scope mapping and rollback/restoration remain required.
+  AI-provider token counting is outside the entire migration scope by the
+  owner's decision; there is no pending counting decision.
 
 ### Initial planning evidence (historical)
 

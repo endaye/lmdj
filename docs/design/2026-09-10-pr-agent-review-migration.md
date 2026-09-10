@@ -1,7 +1,7 @@
 # PR-Agent review migration
 
 Date: 2026-09-10
-Status: design in progress; production remains on the existing review workflow.
+Status: design accepted and inactive engine merged; production remains on the existing review workflow.
 Owner: project lead; implementation and independent verification use supervised
 Orca workers. Umbrella: #1149. Design Task: #1150.
 
@@ -318,9 +318,15 @@ A dedicated slot should avoid queueing behind builds while preserving heavy
 CI's existing allocation. T4 must prove the resulting controller configuration,
 cgroup limits, launch identity, immutable environment and rollback. The
 read-only audit found runner 04 carrying an elastic label despite its baseline
-policy role; reconcile that observation before deployment. The documented SSH
-alias is unavailable locally and Tailscale requests additional authentication;
-operator access remains pending. Do not add a Docker daemon or Docker-group
+policy role; reconcile that observation before deployment. The earlier audit
+could not use the documented SSH alias. A strict known-host, BatchMode read-only
+refresh on 2026-09-10 succeeded through `vienna` as `en` on `netcup01`;
+`sudo -n true` failed because a password is required. The runner 04 unit/config
+matched the baseline policy while its API elastic label remained discrepant.
+The heavy slice read back as 14 vCPU/48 GiB; idle memory and pressure
+observations are not co-running capacity acceptance. Administrator execution,
+operator confirmation of classification, isolation and measured headroom remain
+deployment prerequisites. Do not add a Docker daemon or Docker-group
 privilege to bypass the existing host boundary.
 No new server, GPU, public webhook, database or Kubernetes is in this scope.
 
