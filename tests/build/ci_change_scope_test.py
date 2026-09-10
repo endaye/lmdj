@@ -177,6 +177,15 @@ CASES = {
     "tests/fixtures/provider-benchmark/sample-slice/manifest.json": {
         "core_ubuntu", "core_asan", "core_coverage", "core_macos"
     },
+    "tests/fixtures/cardputer/music_fixture.py": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/fixtures/cardputer/music_fixture.json": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/build/cardputer_music_fixture_test.py": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
     "tools/release/model.py": {"deploy_contract", "ci_contract"},
     "tools/canary/planning.py": {"ci_contract"},
     "tools/canary/records.py": {"ci_contract"},

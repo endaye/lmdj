@@ -716,6 +716,15 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME fixtures.cardputer_music
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/cardputer_music_fixture_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+lmdj_add_test(
   NAME fixtures.soundset_corpus
   TIER contract
   COMMAND

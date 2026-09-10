@@ -113,6 +113,13 @@ Application、Sample quota exact/+1-frame、target replacement、revision bindin
 未修改 Core 增益或产品默认音量；四次 Core 旅程最小处理余量仅约 48 µs。
 完整 Cardputer Host、新内容替换、传输／断连、正常音乐容量和模拟测量仍未验收。
 
+2026-09-10 的[真实音乐容量研究](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-10-cardputer-music-capacity.md)
+以 4 Pad、合计 48000 frames 和 32 events 检查指定源码：目标 ABI 的常驻
+payload 下界 549860 bytes，准备 admission 模型 763071 bytes，已经无法装入
+无 PSRAM 目标的片上 SRAM。桌面 A/B 编码与参考通过不改变这个 BLOCKED 裁决。
+本轮未刷机，目标 heap/stack high-water、时限和正常音乐听测没有执行；
+独立存储重设计与同口径正向复测是正式 Host 的前置，不按研究 Issue Closed 解锁。
+
 ## 9. 限制与下一门禁
 Facade 不授权 Host 绕过 Project/Provider/Assembly 不变量。Performance 操作集的自动化绿色只证明状态与边界，不构成任何设备、听感或物理演奏验收。
 

@@ -1,0 +1,536 @@
+{
+  "schema": "lmdj.cardputer-music-fixture.v1",
+  "license": "CC0-1.0",
+  "sample_rate": 48000,
+  "channels": 1,
+  "format": "pcm16le",
+  "tempo_bpm": 120,
+  "ppq": 960,
+  "length_ticks": 7680,
+  "variants": {
+    "A": {
+      "samples": [
+        {
+          "name": "kick",
+          "bank": 0,
+          "pad": 0,
+          "frames": 12000,
+          "byte_length": 24000,
+          "sha256": "0f77997151513ff8a64294c5d497e736aa02b0e797c5e54da01f6911e0a0d875"
+        },
+        {
+          "name": "snare",
+          "bank": 0,
+          "pad": 1,
+          "frames": 12000,
+          "byte_length": 24000,
+          "sha256": "c966c791ac722b40c87df494631c1ff9f63ca6401ac8ba06d9f40df5a015fa31"
+        },
+        {
+          "name": "hat",
+          "bank": 0,
+          "pad": 2,
+          "frames": 4800,
+          "byte_length": 9600,
+          "sha256": "638b110248614940300c87e3e5fe8f74ef3a1c8ff88daf3626c260287b45b754"
+        },
+        {
+          "name": "clap",
+          "bank": 0,
+          "pad": 3,
+          "frames": 19200,
+          "byte_length": 38400,
+          "sha256": "2f407a942aa8f706e03998e432597f693a5a5f537fdb755a48b44257e14a1871"
+        }
+      ],
+      "events": [
+        {
+          "bank": 0,
+          "pad": 0,
+          "tick": 0,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 0,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 480,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 720,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 1,
+          "tick": 960,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 960,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 1440,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 1680,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 0,
+          "tick": 1920,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 1920,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 2400,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 2640,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 1,
+          "tick": 2880,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 2880,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 3360,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 3600,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 0,
+          "tick": 3840,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 3840,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 4320,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 4560,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 1,
+          "tick": 4800,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 4800,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 5280,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 5520,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 0,
+          "tick": 5760,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 5760,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 6240,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 6480,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 1,
+          "tick": 6720,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 6720,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 7200,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 7440,
+          "duration_ticks": 120,
+          "velocity": 112
+        }
+      ]
+    },
+    "B": {
+      "samples": [
+        {
+          "name": "kick",
+          "bank": 0,
+          "pad": 0,
+          "frames": 12000,
+          "byte_length": 24000,
+          "sha256": "78210cee0366d68cb7e842ae7906976054e40a4c48f541cedb8efb298e1c2b3d"
+        },
+        {
+          "name": "snare",
+          "bank": 0,
+          "pad": 1,
+          "frames": 12000,
+          "byte_length": 24000,
+          "sha256": "a6ac3aaae1fa697e4fcdabdc9e64f2dd448af8d3f1d3b63f4d17296d21070aa5"
+        },
+        {
+          "name": "hat",
+          "bank": 0,
+          "pad": 2,
+          "frames": 4800,
+          "byte_length": 9600,
+          "sha256": "41f103f41074f6122153b953f738f7cde46e4a238f7b7f7f16030d981e9f2f2f"
+        },
+        {
+          "name": "clap",
+          "bank": 0,
+          "pad": 3,
+          "frames": 19200,
+          "byte_length": 38400,
+          "sha256": "5dcdf43bc87964f818c2eee21536c50b351f68974486b17fef651d2a58623112"
+        }
+      ],
+      "events": [
+        {
+          "bank": 0,
+          "pad": 0,
+          "tick": 0,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 0,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 480,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 720,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 1,
+          "tick": 960,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 960,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 1440,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 1680,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 0,
+          "tick": 1920,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 1920,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 2400,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 2640,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 1,
+          "tick": 2880,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 2880,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 3360,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 3600,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 0,
+          "tick": 3840,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 3840,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 4320,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 4560,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 1,
+          "tick": 4800,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 4800,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 5280,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 5520,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 0,
+          "tick": 5760,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 5760,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 6240,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 6480,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 1,
+          "tick": 6720,
+          "duration_ticks": 120,
+          "velocity": 112
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 6720,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 2,
+          "tick": 7200,
+          "duration_ticks": 120,
+          "velocity": 100
+        },
+        {
+          "bank": 0,
+          "pad": 3,
+          "tick": 7440,
+          "duration_ticks": 120,
+          "velocity": 112
+        }
+      ]
+    }
+  }
+}
