@@ -559,11 +559,39 @@ file alone does not justify claiming that a Portal page was changed.
   is recorded as a pass. Rejected `9e837bde`, v13 extracted-suite failure/timeout,
   earlier timing/LFS/runtime failures and diagnostic audit-script errors remain
   historical evidence; clean-base import is not Linux extracted full-suite proof.
-- T3 and the repository-tooling portion of T4 are in progress in separate
-  supervised worktrees from merged main. T3 owns its protocol/consumer paths;
-  T4 owns its five deployment/documentation paths. The lead alone owns these
-  design/plan status updates. Each implementation still requires its declared
-  verification and independent current-head review before shipping.
+- T3 merged through [PR #1181](https://github.com/endaye/lmdj/pull/1181) at
+  `5034f0dad60895333b389789c081e44a32533ca7` on 2026-09-10T17:15:00Z;
+  #1152 is closed. Independently accepted source
+  `0e8e3560fb926b11f056e578d5a68bf4e86c8a49`, tree
+  `ba4fef7565599518d1c5ccddd968fb02770dd52a`, covers the complete 17-path
+  protocol/consumer diff. The independent 22-suite run discovered 701 tests:
+  699 passed, 2 existing environment guards skipped, 0 failed. The opt-in
+  actual T2 `run_engine` integration separately passed under Python 3.12,
+  with only completion injected; it traverses actual capture and finalize,
+  checks persisted history/collector/config/coverage, and reaches publisher
+  preparation. This is offline source integration, not real-provider review.
+- T3's actual capture NameError, missing v2 waiter route and failure-collector
+  import were corrected with far-side regression tests before acceptance.
+  Distinct implementation/reviewer sessions and complete remote blob parity
+  are adopted in [record 5622571018](https://github.com/endaye/lmdj/pull/1181#issuecomment-5622571018).
+  The trusted helper returned `eligible: true` before guarded squash merge;
+  live review threads were empty and protection unchanged. PR Review
+  `34506513250/1` and PR Contract `34506513403/1` were still running at the
+  recorded remote review; Cloudflare preview `34506513217` was skipped and
+  Cursor checks were neutral. None of these is recorded as full CI or
+  automated review success. Historical rejected heads and the corrected
+  exploratory test-selector/shell-variable errors remain distinct evidence.
+- T4 remains open; source development and local fixtures do not satisfy
+  operational acceptance. Independent review of
+  `537528ce3ba53fc08cf61b0f3a90bb56aa5de921` accepted the closed-state and
+  receipt-semantic repairs, but rejected release-root mode/member-GID drift:
+  changing the root to `0777` or a member GID still let repeat install return
+  `idempotent`. Its ordinary runner result (30 passed, 1 skipped), opt-in v14
+  result (31 passed), scope/parity results (71/5), and Portal result
+  (116 tests/44 routes) did not discharge that reproduced defect. A later
+  source head requires an explicit verified disposition and fresh independent
+  review. The lead alone owns these design/plan status updates; T4 retains
+  ownership of its five deployment/documentation paths.
 - T4's strict read-only SSH refresh succeeded as `en` on `netcup01`; noninteractive
   sudo failed password-required. Runner 04 configuration matched baseline
   policy despite the extra API elastic label; operator classification remains
