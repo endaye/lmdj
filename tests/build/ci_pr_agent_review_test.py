@@ -1004,6 +1004,10 @@ class RealHandlerIntegrationTests(unittest.TestCase):
             "[providers.kimi]\nenabled = false\n",
             encoding="utf-8",
         )
+        # This is an installation fixture, not a writable checkout. Keep the
+        # generated runtime configuration protected under permissive umasks so
+        # the actual loader exercises its normal trust boundary.
+        self.config_path.chmod(0o644)
 
     def run_with_fake(self, fake, *, reset_stock_tokenizer=False):
         hostile = self.root / "engine"
