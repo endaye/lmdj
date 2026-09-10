@@ -39,6 +39,7 @@
     {"match": {"kind": "exact", "value": "tests/build/test_test_taxonomy.py"}, "reason": "test taxonomy"}
   ],
   "rules": [
+    {"match": {"kind": "prefix", "value": "tests/fixtures/ci/pr-agent/"}, "lanes": ["ci_contract"], "note": "PR-Agent adapter contract fixtures"},
     {"match": {"kind": "exact", "value": ".codex/config.toml"}, "lanes": ["ci_contract"], "note": "project agent configuration ownership"},
     {"match": {"kind": "exact", "value": "LICENSE"}, "lanes": ["docs_static"]},
     {"match": {"kind": "suffix", "value": ".md"}, "lanes": ["docs_static"]},

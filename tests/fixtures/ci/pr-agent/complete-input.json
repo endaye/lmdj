@@ -1,0 +1,72 @@
+{
+  "schema": "lmdj.pr-agent-input.v1",
+  "identity": {
+    "repository": "endaye/lmdj",
+    "pull_request": 1151,
+    "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "control_sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "run_id": "t2-fixture-run",
+    "run_attempt": 1
+  },
+  "diff": {
+    "text": "diff --git a/src/example.py b/src/example.py\nindex 1111111..2222222 100644\n--- a/src/example.py\n+++ b/src/example.py\n@@ -1,2 +1,3 @@\n def value():\n-    return 1\n+    return 2\n+    # changed\n\ndiff --git a/obsolete.txt b/obsolete.txt\ndeleted file mode 100644\nindex 3333333..0000000\n--- a/obsolete.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-removed content\n",
+    "sha256": "01dcf0ca7197dcb6651a86c7349857cb33666c2a5c3e657efb3e5633bdb094ee",
+    "byte_length": 344
+  },
+  "files": [
+    {
+      "path": "src/example.py",
+      "old_path": null,
+      "change_kind": "modified",
+      "patch": "@@ -1,2 +1,3 @@\n def value():\n-    return 1\n+    return 2\n+    # changed\n",
+      "patch_sha256": "a6abc87878de2c06eacd737b7a35294466612ac629b916fbb37bd5c5cd8b0f8d",
+      "base": {
+        "sha256": "5d080563b57287276f589c2b2714ef499269efe7405a288b3c1474f5a92bf271",
+        "byte_length": 26,
+        "data_b64": "ZGVmIHZhbHVlKCk6CiAgICByZXR1cm4gMQo=",
+        "encoding": "utf-8"
+      },
+      "head": {
+        "sha256": "f14b49da9458aa1a20171e93b2d164a5456dbf44a2d989cb45efe15b7ed1fea1",
+        "byte_length": 40,
+        "data_b64": "ZGVmIHZhbHVlKCk6CiAgICByZXR1cm4gMgogICAgIyBjaGFuZ2VkCg==",
+        "encoding": "utf-8"
+      },
+      "hunks": [
+        {
+          "id": "src-example-h1",
+          "patch": "@@ -1,2 +1,3 @@\n def value():\n-    return 1\n+    return 2\n+    # changed\n",
+          "patch_sha256": "a6abc87878de2c06eacd737b7a35294466612ac629b916fbb37bd5c5cd8b0f8d",
+          "right_lines": [
+            {"line": 2, "text": "    return 2", "sha256": "52974f3e79016933d24fec4f609419b0db8cc2311a45b72cbea024c7671a6e43"},
+            {"line": 3, "text": "    # changed", "sha256": "9829db70a2f40846f5662b3ac529a7bd8be1f558b83f9f9ec7f4046c7d4b5b8d"}
+          ]
+        }
+      ]
+    },
+    {
+      "path": "obsolete.txt",
+      "old_path": null,
+      "change_kind": "deleted",
+      "patch": "@@ -1 +0,0 @@\n-removed content\n",
+      "patch_sha256": "29aae3fd628a2828f8bb40f3c274931aab81021281a2e0eb623a89dcbf0da894",
+      "base": {
+        "sha256": "483f57e9a0d99bf0f72a327684278f5d06fb89221b081e37d341db086ee27d22",
+        "byte_length": 16,
+        "data_b64": "cmVtb3ZlZCBjb250ZW50Cg==",
+        "encoding": "utf-8"
+      },
+      "head": null,
+      "hunks": [
+        {
+          "id": "obsolete-h1",
+          "patch": "@@ -1 +0,0 @@\n-removed content\n",
+          "patch_sha256": "29aae3fd628a2828f8bb40f3c274931aab81021281a2e0eb623a89dcbf0da894",
+          "right_lines": []
+        }
+      ]
+    }
+  ],
+  "input_sha256": "a288ccb0975b640e0329ee7f173649b5f5fa5f7b8159beba9ecd3a98266abc73"
+}

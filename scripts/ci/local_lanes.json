@@ -21,12 +21,16 @@
       ]
     },
     "ci_contract": {
-      "requires": {},
+      "requires": {
+        "commands": ["curl", "python3.12"]
+      },
       "commands": [
-        "python3 -m unittest discover -s tests/build -p 'ci_*_test.py'"
+        "python3 -m unittest discover -s tests/build -p 'ci_*_test.py'",
+        "scripts/ci/pr-agent/integration-test.sh"
       ],
       "ci_only": [
-        "actionlint runs from a pinned release archive the lane downloads"
+        "actionlint runs from a pinned release archive the lane downloads",
+        "the real PR-Agent seam proof downloads its fixed upstream archive and installs the hash-locked Python 3.12 environment"
       ]
     },
     "core_ubuntu": {

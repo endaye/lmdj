@@ -1,0 +1,69 @@
+# Trusted operator configuration.  This file is loaded only from the engine
+# installation; it is never read from a pull request checkout.
+schema = "lmdj.pr-agent-config.v1"
+provider_order = ["deepseek", "glm", "xai", "kimi"]
+
+[budget]
+approval_id = "pr-agent-pilot-2026-09-10"
+timezone = "Asia/Shanghai"
+monthly_usd = 20.0
+pilot_usd = 20.0
+per_pr_usd = 1.0
+max_requests = 8
+max_requests_per_provider = 2
+request_timeout_seconds = 60
+backoff_seconds = 5
+engine_deadline_seconds = 600
+input_token_cap = 100000
+output_token_cap = 4096
+
+# The DeepSeek endpoint/model and peak cache-miss prices are observations from
+# the design, not fresh implementation verification.  Activation remains
+# closed until an operator supplies reviewed pricing and funding evidence.
+[providers.deepseek]
+enabled = true
+endpoint = "https://api.deepseek.com"
+model = "deepseek-v4-pro"
+credential_ref = "PR_AGENT_DEEPSEEK_API_KEY"
+pricing_revision = "design-observed-2026-09-10"
+input_price_usd_per_token = 0.00000132
+output_price_usd_per_token = 0.00000396
+pricing_verified = false
+funding_ref = "owner-confirmation-unverified"
+funding_verified = false
+
+[providers.glm]
+enabled = false
+endpoint = null
+model = null
+credential_ref = null
+pricing_revision = null
+input_price_usd_per_token = null
+output_price_usd_per_token = null
+pricing_verified = false
+funding_ref = null
+funding_verified = false
+
+[providers.xai]
+enabled = false
+endpoint = null
+model = null
+credential_ref = null
+pricing_revision = null
+input_price_usd_per_token = null
+output_price_usd_per_token = null
+pricing_verified = false
+funding_ref = null
+funding_verified = false
+
+[providers.kimi]
+enabled = false
+endpoint = null
+model = null
+credential_ref = null
+pricing_revision = null
+input_price_usd_per_token = null
+output_price_usd_per_token = null
+pricing_verified = false
+funding_ref = null
+funding_verified = false

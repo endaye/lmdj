@@ -107,6 +107,11 @@ jobs:
           node-version: "22"
       - name: Run every CI-control contract
         run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Run the pinned PR-Agent real-handler seam proof
+        run: scripts/ci/pr-agent/integration-test.sh
 
   docs-static:
     name: Docs / static
