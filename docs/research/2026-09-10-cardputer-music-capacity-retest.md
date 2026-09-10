@@ -1,8 +1,22 @@
-# Cardputer 真实音乐容量 R2：存储可装入，CPU 余量仍未通过
+# Cardputer 真实音乐容量 R2：保留旧失败与扫描修复后复测
 
 日期：2026-09-10。Relates to #1131；Parent umbrella: #1104。
 
-## 1. 裁决与边界
+## 当前结论
+
+下文 §1–§6 保留 `22a62ada` 的原 CPU 负结果；它不是当前源码的重复测量。
+§7 新增已合入扫描修复 `6d4c6804` 的证据：同素材 native、完整目标 ABI 预算、
+两轮各 100 次实际 I2S 生命周期均通过对应检查，最差服务加发布开销分别为
+1876 / 1874 µs，低于未改变的 4266.666… µs 限额。另一次绑定独立镜像的
+6 段音乐试听获操作者确认清楚、逐档变响，但有可接受的轻微“刺啦”声。
+
+这些补齐了最低存储/短程 CPU/生命周期的正向技术证据，不是完整产品 PASS。
+R2 的前置独立评审证据仍有缺口（§2、§7.1），本报告不自行豁免或按 merge 状态
+补造批准；#1131 / #1176 的结案及 H1 进入条件须与评审证据分别核实。
+完整 Host 的 USB/LCD/键盘成本、30 分钟、物理 underrun 和输入到模拟输出时延
+仍未完成，不能因报告列出这些 gap 就视为风险已消除。
+
+## 1. 原负结果裁决与边界
 
 **PARTIAL / CPU_MARGIN_FAIL，不是正向容量准入。** M1/M2 后同一组原创 A/B
 音乐可以在实际无 PSRAM 目标上完成装载、演奏、停止和卸载；但 240 MHz、O2、
@@ -172,10 +186,13 @@ music finished、Draining、Stopped、静音、audio quiescent、zero tail、unl
 卸载/释放。第三次记录 CPU FAIL 后安全结束，不继续把未运行的余下 97 次记为通过。
 控制线程触发 Pad 受实际调度影响，不要求与桌面固定触发 block 的整段输出相同。
 
-Codec 全程 volume 0；mute readback 和退出清理通过。实际 I2S 数字数据确已发送，
-没有进行可听音乐测试，更没有声压或音质 PASS。刷写前重新验证同一设备身份和
+原探针全程写 `0x32=0`，其 `mute_readback` 名称只证明该寄存器值回读成功，
+不能证明显式 DAC mute 位已设置；先前把这一结果写成“codec 全程静音”并不严谨。
+退出清理通过，实际 I2S 数字数据确已发送；该轮没有人工可听音乐确认，更没有
+声压或音质 PASS。刷写前重新验证同一设备身份和
 原 8 MiB 备份，前镜像三段比对通过；本镜像 bootloader/partition/app 三段回读
-验证通过。设备留在这份静音研究镜像，复位会重放研究测试，尚无 Product UI。
+验证通过。当时设备留在这份低音量研究镜像，复位会重放研究测试，尚无 Product UI；
+后续试听镜像与退出状态另见 §7.4，不把原始回执改写成新的 mute 证明。
 
 ## 6. 复核、后续与完成条件
 
@@ -194,6 +211,121 @@ R2 正向准入之外，H1 的完整输入/显示/USB/I2S 开销与恢复旅程�
 Product Build 和 immutable Portal snapshot、A1 的完整 30 分钟/替换/物理时延/
 主观听感仍是独立待办。本 Task 不分配版本、不发布 Release、不部署或提升 Channel。
 
+## 7. 扫描修复后的 exact-source 复测
+
+### 7.1 身份、源码闭包与评审边界
+
+被测源码为 `6d4c68042eaf53bbfdc5f16c2398694fbf1c7dfb`，即
+[PR #1178](https://github.com/endaye/lmdj/pull/1178) 的实际 main 合入提交。
+96-file 闭包相对原负结果只有 `realtime_engine.hpp/.cpp` 改变；没有 fixture、
+产品增益或其它 Core overlay。沿用 EIM SDK/GCC、240 MHz/O2、48 kHz、
+6×256-frame DMA、原 128-voice 公共容量及原 reserve。严格编译再次覆盖 18 个
+真实 translation units 与 17 个 Facade public roots，保持 C++20 与 warnings-as-errors。
+报告工作树后来快进到 `1dcaf5621c06dcc908a222373a5e5b6bb2b19784`，仅增加
+原 R2 报告及两页门户；`evidence-audit-01` 逐项核对 Git 中被测 revision 的全部
+96 文件与当前实际字节相等，不冒称报告 HEAD 就是烧录源码。
+
+PR #1178 的实际合入不等于独立评审 PASS：head
+`e5e5eb0bf582224137866b5c1c9508baecfec77e` 的 review run `34456258170`
+attempt 1 保留 `not-reviewed` / backend `runtime_failure`；本次 live 查询没有
+review 或 owner 采纳记录。实现的归因与定向回归见该 PR 和
+[扫描预算计划](../plans/2026-09-10-runtime-voice-scan-budget.md)。这些前置证据缺口
+与下列新的实际技术结果分别陈述，不通过本报告追认评审，也不重复实现已合入的修复。
+
+新本机证据目录：`/Users/endaye/esp/lmdj-spike/cardputer-capacity-postscan.bIfER9`。
+命令均经 `run.py` 保留 argv、完整输出、退出码和 SHA-256；`strict-verification-01`
+绑定 SDK/config/compile commands/ELF/map，`budget-01` 绑定 native/ABI，
+`evidence-audit-01` 核对已有命令回执与原始日志，旧失败目录不删除、不覆盖。
+
+| 新 I2S 证据 | bytes | SHA-256 |
+| --- | ---: | --- |
+| ELF | 36627392 | `3ece476fc5c9371b62c3f2402806cbce966aa4673c4571a0b267632a29955809` |
+| app bin | 746240 | `50aa6771402412f50c33b3274b7516ab3736022e56d4c9502303786cd3c9bd19` |
+| map | 13092556 | `37e1a23393b9fd2513144bb6fb76ed4f1c837aae0bab01acedef3cef7c0cfdfc` |
+| 96-file source inventory | 18197 | `25c0c6386a0c9d783c2b63661bff9fb23789359b1f26acc0a9d7fed6037139c6` |
+| `run-01.serial.log` | 2922448 | `48e0be7e3deb6f810d11c53f57ef48b46376d2c43a33b3920306c7aad27debff` |
+| `run-02.serial.log` | 2922766 | `b5b9db718ca7c8a71c8a1838b9ee8b6a92c2e8aad4e291556fe6c682cb79c52f` |
+
+### 7.2 Native、预算与目标实际资源
+
+重新编译实际 Core producer 后，native 再执行 3536405 个 assertions，包括 §3
+全部远端断言、ordinary/aligned allocator positive control 与同实例 100 次旅程。
+新生成的 A/B RuntimeContent 和整段 reference 均逐字节等于设备实际嵌入的旧
+fixture/reference；不是只对短 digest 做相等检查。独立 wire reader 34 项通过，
+prepared 181248、准备峰值 181688、循环峰值 181720 bytes，卸载 8464、析构 0，
+测量范围仍是 C++ requested allocation，不冒充目标 heap 或 C malloc 覆盖。
+
+新 ELF 的 ABI 与 §4 完整模型相同，admission 仍为 302383 bytes，prepared float
+为 0。两轮设备的全部 100 次装载都实测 cap 328664、admitted 302383，保留完整
+96808-byte RAM 编码输入。每轮最低 free heap 58556，loaded free 59000–59040，
+loaded largest block 31744 bytes。100 个卸载端点在 319992/320000 之间波动，
+每轮首末净差 0；largest block 为 159744–180224，不能从总空闲推断连续分配能力。
+最终 cleanup free 351096、largest 286720；全部 heap integrity 为 1、PSRAM 为 0。
+最小 audio stack 剩余 3344/8192、control 剩余 13420/24576 bytes。
+这些是有驱动、任务和观测开销的短程实测，仍不包括完整 USB/显示/键盘 Host 成本。
+
+### 7.3 两轮实际 I2S 生命周期与时限
+
+每轮均完成 100 次 A/B 交替：前两次各 1500 music blocks（各 8 秒），后 98 次
+各 16 blocks，共 4568 music blocks；采集约 122.4 秒，含 warmup、静音尾部和
+清理。第二轮独立复位重跑，不将它拼成一个连续 30 分钟旅程。
+
+| 轮次 | music blocks / 全部 timing rows | Core max / p99.9 µs | EOF→DMA verify max / p99.9 µs | 加发布的保守 max µs |
+| --- | ---: | ---: | ---: | ---: |
+| run-01 | 4568 / 17670 | 1649 / 1647 | 1869 / 1868 | 1876 |
+| run-02 | 4568 / 17672 | 1649 / 1647 | 1870 / 1868 | 1874 |
+
+本表 p99.9 对各轮全部 4568 music blocks 取 nearest-rank；逐 cycle 的原统计保留在
+`analysis-01/02.log`。所有 200 cycles 的 CPU 余量检查通过，未观察到 EOF→refill
+超过一个周期；短写、PCM mismatch、rotation/witness、event/raw drops、driver
+overflow、nonfinite 和 I2S 错误均为 0。每 cycle 实际 active voice 采样下界至少 6。
+沿用 §5 的观测盲区：以上不是物理 underrun=0，不测 IRQ 前段或模拟输出。
+
+两轮每次均验证坏 length/digest 拒绝 → 正确重试/load → warmup → start →
+Pad 命令与回执 → music finished → Draining → Stopped → 零输出/尾部 →
+audio quiescent/join → unload；旧 epoch 拒绝与最终 I2S/codec/bus cleanup 通过。
+native 另覆盖 running reset 清空 identity；设备复位是另一次完整启动，不混称
+同实例的 running-reset 断言。`analyze-i2s.py` 对两轮都通过，原采集器的
+`capacity_acceptance=NOT_ESTABLISHED` 保持原样，采集成功不自行产生全产品批准。
+`analysis-controls-01` 的 14 个坏证据反例均拒绝，覆盖完整性、hash/length、丢失/
+重复 timing、短写、DMA 错误、低声部数、缺 stop/unload、伪造 CPU verdict 和
+终结计数；只在内存修改反例，不改写原始证据。
+
+### 7.4 独立短时音乐试听与残留杂音
+
+容量探针 `0x32=0` 的读回不作为硬静音或音乐清晰度证明。后续试听在独立目录
+`/Users/endaye/esp/lmdj-spike/cardputer-music-listen.krVCjm` 保留新严格构建和
+bootloader/partition/app 三段烧录读回；Core 96-file 闭包与素材不变。
+探针显式设置 DAC mute 位，等待操作者启动，具有独立停止输入；先做零播放的
+stop-control 验证，再依次以 codec −12/−6/0 dB 各播放 A/B 两段 8 秒音乐，
+PCM 输出 scale 固定 0.25。这是试听配置，不是正式 Host 默认档位或声压认证。
+
+该镜像 ELF SHA-256 为
+`4428a99d7ec4b1c93217daebe9824e9e19ad1cda20ce343f257a1ae5f5692ef1`；
+`run-01.serial.log` 为 1506619 bytes / SHA-256
+`9cf1d1eb5ce6a688bf3c8b3bd31ef4c92c4e93d9ad7b116c7890aba84a5c8d74`。
+6 cycles / 9000 music blocks / 9786 timing rows 均通过数字检查，服务加发布最大
+1710 µs、最低 free heap 58556 bytes；不与上表两轮容量镜像混算。
+
+操作者确认逐渐变响、各段均能听清、后几段较洪亮，没有很强的破音，但有微弱
+“刺啦”声，认为可以接受。完整原话单独绑定于 `run-01.human-feedback.md`
+（SHA-256 `36071885bce42fff2bef39a6a4ae6dea2fd255ea4f8f44ba117b7e759a873979`）。
+轻微杂音确实存在，原因未确定；不能把操作者对喇叭的推测写成硬件诊断。
+结束的显式 mute、I2S/codec/bus cleanup 通过，当前设备不播放；复位等待启动输入。
+
+### 7.5 复核与未完成交付
+
+本轮重新执行 fixture generator `--check`、fixture Python 12/12，以及
+`fixtures.cardputer_music`、`cooker.runtime_content`、`facade.runtime_facade`
+定向 CTest；报告 Task 不修改产品并发代码，不声称重跑全部 sanitizer 或全量 CI。
+文档的 docs_static/portal 检查与提交回执属于本 Task 的独立验证边界。
+
+后续仍须完成前置和本报告的独立评审证据；H1 的 Facade-only Host、显式音量与
+静音/错误恢复，I1 的真实输入显示，C1 的完整 USB 事务，B1 的正式 Build/快照，
+以及 A1 的完整旅程、30 分钟/约 337500 blocks、1000 次物理按键到模拟输出测量
+和真实音乐质量验收。轻微杂音须在完整 Host 验收中复查，不能仅凭本次主观可接受
+关闭音质风险。本报告不分配版本、不发布、不部署，也不将任一原生子任务记为完成。
+
 ## Version Management
 
 Version impact: none — 仅追加指定源码的研究证据，无产品源码、fixture、manifest、
@@ -204,5 +336,5 @@ ABI 或 Product Build 身份变更；不创建版本快照。
 Documentation impact: required
 Affected portal pages: /core/modules/application-facade/ /platform/native-audio/
 
-Reason: 两页同步区分存储改善、实际 CPU 负结果和未完成产品验收；不以 Issue 状态
-替代正向容量证据。
+Reason: 两页同步区分旧 CPU 负结果、修复后短程正向实测、人工试听反馈、评审缺口
+和未完成产品验收；不以 Issue/merge 状态替代技术或批准证据。

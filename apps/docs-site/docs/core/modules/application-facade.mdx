@@ -138,12 +138,17 @@ payload 下界 549860 bytes，准备 admission 模型 763071 bytes，已经无�
 独立存储重设计与同口径正向复测是正式 Host 的前置，不按研究 Issue Closed 解锁。
 
 [R2 同口径复测](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-10-cardputer-music-capacity-retest.md)
-记录 M1/M2 后指定 merged source 的目标 admission 模型降至 302383 bytes，
-同素材 native 100 次替换通过；实际 I2S 三次短程可装载/停止/卸载，最低 free heap
-58568 bytes。但第三次的 CPU 服务加观测发布保守最大值 4284 µs，超过原定
-4266.666… µs。R2 保持未完成，H1/B1 容量前置仍阻塞。实际声部采样观察到至少
-6 声部，不把回执数当并发声部；完整 Host 30 分钟、100 次 I2S 替换、物理 underrun、
-按键时延与听感仍未验收，数字 DMA 零错误不替代这些证据。
+保留 M1/M2 后第三次短程的 4284 µs CPU 负结果，并追加已合入扫描修复的
+exact-source 复测：同素材 native 再次通过，目标 admission 仍为 302383 bytes；
+实际 I2S 两轮各 100 次装载/演奏/停止/卸载通过对应检查，最低 free heap
+58556 bytes，服务加观测发布保守最大值 1876 / 1874 µs，低于原定
+4266.666… µs。每轮 4568 music blocks，不是连续 30 分钟。实际声部采样下界
+至少 6，不把回执数当并发声部。
+
+独立六段音乐试听获操作者确认清楚、逐档变响，同时报告可接受的轻微“刺啦”声；
+原因未确定。最低资源/短程 CPU 正向技术证据不补造前置 PR 的独立评审批准，
+R2 结案与 H1 进入条件仍需核实该缺口。完整 Host USB/LCD/输入成本、30 分钟、
+物理 underrun 和按键到模拟输出时延仍待验收，数字 DMA 零错误不替代这些证据。
 
 ## 9. 限制与下一门禁
 Facade 不授权 Host 绕过 Project/Provider/Assembly 不变量。Performance 操作集的自动化绿色只证明状态与边界，不构成任何设备、听感或物理演奏验收。

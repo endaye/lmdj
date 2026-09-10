@@ -69,12 +69,18 @@ stop 后零块、先 mute 再排空 DMA／disable／quiesce，最后回收。
 目标与 reserve 不降低，完成研究本身不意味着容量准入。
 
 [R2 同口径复测](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-10-cardputer-music-capacity-retest.md)
-已在 M1/M2 后的指定 merged source 上完成实际短程 I2S，目标 admission 模型
-302383 bytes，最低 free heap 58568 bytes；240 MHz/O2 的第三次旅程仍出现
-CPU 余量失败：服务加观测发布保守最大值 4284 µs，高于原定 4266.666… µs。
-原阈值不变，R2 和 H1/B1 正向容量前置仍未完成。3 次/3016 music blocks 不是
-100 次 I2S 替换或 30 分钟运行；codec 全程静音。EOF/DMA readback 与 generation
-计数未见错误，不证明物理 underrun 为零，亦无完整 Host I/O、物理时延或听感 PASS。
+保留原 4284 µs CPU 余量失败。扫描修复后的指定 merged source 在相同
+240 MHz/O2、音乐、DMA 和 4266.666… µs 限额下，完成两轮各 100 次实际 I2S
+生命周期：服务加观测发布最大 1876 / 1874 µs，最低 free heap 58556 bytes，
+目标 admission 302383 bytes。每轮 4568 music blocks，不代替完整 Host 的
+30 分钟。前置 PR 的独立评审缺口单列，实测改善不等于批准或自动完成 R2。
+
+旧探针 `0x32=0` 的读回只证明音量寄存器值，不能证明显式 DAC mute。
+后续独立镜像验证显式 mute 与停止控制，再按 −12/−6/0 dB 各播两段音乐；
+操作者确认清楚且逐档变响，有轻微可接受的“刺啦”声，原因未确定。
+这些是绑定镜像的短时听感，不是无杂音、声压或完整音质认证。
+EOF/DMA readback 与 generation 零错误不证明物理 underrun 为零；完整
+Host I/O、物理时延、30 分钟和正式 Build/快照仍未验收。
 
 ## 下一门禁
 正式产品 Host 需要保留设备矩阵、测量数据与可复核录制。
