@@ -4,6 +4,8 @@
 Backend network/authentication and GitHub writes are explicitly O1 gaps. The
 tests do not turn a mocked write into evidence of platform permissions.
 """
+import copy
+import hashlib
 import json
 import os
 import re
@@ -12,6 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 import contextlib
@@ -61,8 +64,8 @@ class PipelineTests(unittest.TestCase):
         authenticated = t2.authenticate_input(source)
         coverage = t2._validate_coverage_receipt(t2._make_coverage(
             authenticated, provider="deepseek",
-            model={"requested": "fixture-model", "actual": None,
-                   "response_version": None, "pricing_revision": "fixture-v1"},
+            model={"requested": "fixture-model", "actual": "fixture-served",
+                   "response_version": "fixture-v1", "pricing_revision": "fixture-v1"},
             prompt=t2.render_prompt_input(authenticated), usage=None))
         identity = {"repository": "endaye/lmdj", "pr_number": authenticated["identity"]["pull_request"],
                     "head_sha": authenticated["identity"]["head_sha"], "base_sha": authenticated["identity"]["base_sha"],
@@ -77,10 +80,138 @@ class PipelineTests(unittest.TestCase):
                   "engine": coverage["engine"], "selected_attempt": None, "attempts": [attempt],
                   "skipped_providers": [{"provider": "glm", "status": "disabled"}], "elapsed_ms": 1}
         paths = sorted({hunk["path"] for hunk in coverage["expected_hunks"]})
-        history, inventory = pipeline.adapt_t2_result(result, identity=identity, changed_paths=paths)
+        collector = pipeline.collector_witness(source)
+        trusted = {"schema": review_scope.TRUSTED_CONFIG_SCHEMA, "provider_order": ["deepseek"],
+                   "providers": {"deepseek": {"enabled": True, "model": "fixture-model"},
+                                 "glm": {"enabled": False}, "xai": {"enabled": False}, "kimi": {"enabled": False}},
+                   "engine": coverage["engine"]}
+        history, inventory = pipeline.adapt_t2_result(result, identity=identity, changed_paths=paths,
+                                                       collector=collector, trusted_config=trusted)
         self.assertEqual(history["attempts"][0]["backend"], "deepseek")
         self.assertIsNone(review_scope.next_backend(test_scope.load_policy(ROOT), history, identity=identity,
                                                     coverages=inventory, changed_paths=paths))
+
+    def test_same_path_two_hunk_drop_is_rejected_by_independent_collector(self):
+        source = json.loads((ROOT / "tests/fixtures/ci/pr-agent/complete-input.json").read_text())
+        second_hunk = "@@ -4,0 +5 @@\n+tail\n"
+        source["diff"]["text"] = source["diff"]["text"].replace(
+            "\ndiff --git a/obsolete.txt", second_hunk + "\ndiff --git a/obsolete.txt", 1)
+        source["files"][0]["patch"] += second_hunk
+        source["files"][0]["patch_sha256"] = hashlib.sha256(source["files"][0]["patch"].encode()).hexdigest()
+        source["files"][0]["hunks"].append({
+            "id": "src-example-h2", "patch": second_hunk,
+            "patch_sha256": hashlib.sha256(second_hunk.encode()).hexdigest(),
+            "right_lines": [{"line": 5, "text": "tail", "sha256": hashlib.sha256(b"tail").hexdigest()}],
+        })
+        diff_bytes = source["diff"]["text"].encode()
+        source["diff"]["byte_length"] = len(diff_bytes)
+        source["diff"]["sha256"] = hashlib.sha256(diff_bytes).hexdigest()
+        unsigned = copy.deepcopy(source)
+        unsigned.pop("input_sha256", None)
+        source["input_sha256"] = hashlib.sha256(
+            json.dumps(unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        authenticated = t2.authenticate_input(source)
+        collector = pipeline.collector_witness(source)
+        engine = {"name": "pr-agent", "source_commit": "1" * 40, "version": "0.45.0",
+                  "bundle": {key: value for key, value in {
+                      "archive_sha256": "2" * 64, "archive_byte_length": 7,
+                      "manifest_sha256": "3" * 64, "adapter_sha256": "4" * 64,
+                      "default_config_sha256": "5" * 64, "requirements_lock_sha256": "6" * 64,
+                      "stock_tokenizer_asset_sha256": "7" * 64}.items()},
+                  "runtime_config": {"sha256": "8" * 64, "byte_length": 7}}
+        trusted = {"schema": review_scope.TRUSTED_CONFIG_SCHEMA, "provider_order": ["deepseek"],
+                   "providers": {"deepseek": {"enabled": True, "model": "fixture-model"},
+                                 "glm": {"enabled": False}, "xai": {"enabled": False}, "kimi": {"enabled": False}},
+                   "engine": engine}
+        coverage = t2._validate_coverage_receipt(t2._make_coverage(
+            authenticated, provider="deepseek",
+            model={"requested": "fixture-model", "actual": "fixture-served",
+                   "response_version": "fixture-v1", "pricing_revision": "fixture-v1"},
+            prompt=t2.render_prompt_input(authenticated), usage=None, engine=engine))
+        identity = {**authenticated["identity"], "pr_number": authenticated["identity"]["pull_request"],
+                    "backend": "deterministic"}
+        attempt = {"status": "reviewed", "error_class": None, "error": None,
+                   "provider": "deepseek", "model": coverage["model"], "engine": engine,
+                   "review": {"summary": "Reviewed.", "findings": []}, "native_review": {},
+                   "coverage": coverage, "usage": coverage["usage"], "duration_ms": 1}
+        result = {"schema": "lmdj.pr-agent-result.v1", "status": "reviewed", "error_class": None,
+                  "identity": authenticated["identity"], "input_sha256": authenticated["input_sha256"],
+                  "engine": engine, "selected_attempt": 0, "attempts": [attempt],
+                  "skipped_providers": [{"provider": "glm", "status": "disabled"}], "elapsed_ms": 1}
+        forged = copy.deepcopy(result)
+        forged_coverage = forged["attempts"][0]["coverage"]
+        forged_coverage["expected_hunks"].pop(1)
+        forged_coverage["observed_hunks"].pop(1)
+        with self.assertRaisesRegex(review_scope.ReviewScopeError, "independently authenticated collector"):
+            pipeline.adapt_t2_result(forged, identity=identity,
+                                     changed_paths=sorted({h["path"] for h in collector["expected_hunks"]}),
+                                     collector=collector, trusted_config=trusted)
+
+    def test_actual_t2_run_engine_reviewed_output_reaches_v2_publisher(self):
+        runtime = Path(os.environ.get("PR_AGENT_TEST_PYTHON", ""))
+        source_root = Path(os.environ.get("PR_AGENT_TEST_SOURCE_ROOT", ""))
+        if (os.environ.get("PR_AGENT_RUN_INTEGRATION") != "1"
+                or not runtime.is_file() or not (source_root / "pr_agent").is_dir()):
+            self.skipTest("offline T2 actual-handler proof requires PR_AGENT_RUN_INTEGRATION=1 and pinned runtime/source")
+        script = textwrap.dedent(f"""
+            import asyncio, copy, importlib.util, json, os, sys
+            from pathlib import Path
+            root = Path({str(ROOT)!r})
+            sys.path.insert(0, str(root / "scripts/ci"))
+            spec = importlib.util.spec_from_file_location("t2tests", root / "tests/build/ci_pr_agent_review_test.py")
+            t2tests = importlib.util.module_from_spec(spec); spec.loader.exec_module(t2tests)
+            import pr_agent_review as t2
+            import review_pipeline as pipeline
+            import review_scope
+            import review_scope_codec as codec
+            import pr_review_target
+            test = t2tests.RealHandlerIntegrationTests("test_stock_reviewer_receives_every_authenticated_segment_and_captures_native_output")
+            test.setUp()
+            try:
+                test.input_path.write_text(json.dumps(t2tests.signed_input(lambda d: d["identity"].update(run_id="99"))), encoding="utf-8")
+                response = (t2tests.FIXTURES / "clean-native-review.yaml").read_text(encoding="utf-8")
+                async def fake_acompletion(**kwargs):
+                    return t2tests.FakeCompletion(dict(model="fixture-deepseek-served",
+                        choices=[dict(message=dict(content=response), finish_reason="stop")],
+                        usage=dict(prompt_tokens=10, completion_tokens=5, total_tokens=15)))
+                result, _upstream, _ledger = test.run_with_fake(fake_acompletion)
+                document = json.loads(test.input_path.read_text(encoding="utf-8"))
+                authenticated = t2.authenticate_input(document)
+                collector = pipeline.collector_witness(document)
+                import tomllib
+                config = t2._safe_config(tomllib.loads(test.config_path.read_text(encoding="utf-8")))
+                trusted = {{"schema": review_scope.TRUSTED_CONFIG_SCHEMA, "provider_order": config["provider_order"], "providers": config["providers"], "engine": result["engine"]}}
+                identity = dict(repository=authenticated["identity"]["repository"],
+                    pr_number=authenticated["identity"]["pull_request"], base_sha=authenticated["identity"]["base_sha"],
+                    head_sha=authenticated["identity"]["head_sha"], control_sha=authenticated["identity"]["control_sha"],
+                    run_id=99, run_attempt=authenticated["identity"]["run_attempt"], backend="deepseek")
+                history, inventory = pipeline.adapt_t2_result(result, identity=identity,
+                    changed_paths=sorted({{h["path"] for h in collector["expected_hunks"]}}),
+                    collector=collector, trusted_config=trusted)
+                policy = pipeline.test_scope.load_policy(pipeline.ROOT)
+                publication = review_scope.prepare_result(policy, identity,
+                    changed_paths=sorted({{h["path"] for h in collector["expected_hunks"]}}), history=history,
+                    coverages=inventory, collector=collector, trusted_config=trusted)
+                marker = codec.encode_history(history)
+                assert codec.decode_history(marker) == history
+                target = {{"number": identity["pr_number"], "state": "open", "draft": False, "merged": False,
+                    "head": {{"sha": identity["head_sha"], "repo": {{"full_name": identity["repository"]}}}},
+                    "base": {{"ref": "main"}}}}
+                writes = []
+                pr_review_target.publish_review(identity["repository"], identity["pr_number"], identity["head_sha"], "99", "1", "deepseek",
+                    publication["publication"]["review"], api=lambda path: target,
+                    coverage=inventory[history["attempts"][-1]["coverage_sha256"]], history_digest=review_scope.history_digest(history),
+                    history_marker=marker, write=lambda path, payload: writes.append(payload))
+                assert result["status"] == "reviewed" and publication["status"] == "reviewed" and len(writes) == 1
+                print("actual-t2-v2-publisher-proof")
+            finally:
+                test.doCleanups()
+        """)
+        completed = subprocess.run([str(runtime), "-c", script], cwd=ROOT, text=True,
+                                   capture_output=True, timeout=180)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("actual-t2-v2-publisher-proof", completed.stdout)
 
     def test_observed_bare_kimi_labels_still_trigger_fallback(self):
         self.capture("glm", BACKEND_OUTCOME="failure")

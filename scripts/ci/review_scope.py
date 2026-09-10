@@ -24,6 +24,8 @@ V2_BACKENDS = ("deepseek", "glm", "grok", "kimi")
 BACKEND_PROVIDERS = {"deepseek": "deepseek", "glm": "zai", "grok": "xai", "kimi": "moonshot"}
 HISTORY_SCHEMA_V2 = "lmdj.ci-review-history.v2"
 COVERAGE_SCHEMA = "lmdj.pr-agent-coverage.v1"
+COLLECTOR_SCHEMA = "lmdj.pr-agent-collector.v1"
+TRUSTED_CONFIG_SCHEMA = "lmdj.pr-agent-config-witness.v1"
 REVIEW_SCHEMA = "lmdj.ci-review-output.v1"
 FAILURE_SCHEMA = "lmdj.ci-review-failure.v1"
 ERRORS = frozenset({"missing_credential", "rate_limited", "service_error", "timeout",
@@ -99,7 +101,114 @@ def _validate_engine(engine):
     return engine
 
 
-def _validate_coverage(identity, receipt, *, require_complete=False, changed_paths=None):
+def _identity_matches(source, identity):
+    return (source["repository"] == identity["repository"]
+            and source["pull_request"] == identity["pr_number"]
+            and source["base_sha"] == identity["base_sha"]
+            and source["head_sha"] == identity["head_sha"]
+            and source["control_sha"] == identity["control_sha"]
+            and str(source["run_id"]) == str(identity["run_id"])
+            and source["run_attempt"] == identity["run_attempt"])
+
+
+def _validate_hunk_collection(values, label):
+    require(isinstance(values, list), f"{label} hunk inventory is invalid")
+    for hunk in values:
+        require(isinstance(hunk, dict) and set(hunk) == {
+            "id", "path", "old_path", "change_kind", "old_blob", "new_blob", "patch", "right_lines"
+        }, f"{label} hunk identity is not closed")
+        require(isinstance(hunk["id"], str) and isinstance(hunk["path"], str)
+                and isinstance(hunk["change_kind"], str) and isinstance(hunk["right_lines"], list),
+                f"{label} hunk fields are invalid")
+        for blob_key in ("old_blob", "new_blob"):
+            blob = hunk[blob_key]
+            if blob is not None:
+                require(isinstance(blob, dict) and set(blob) == {"object_id", "sha256", "byte_length"},
+                        f"{label} blob identity is not closed")
+                require(isinstance(blob["object_id"], str) and re.fullmatch(r"[0-9a-f]{40}", blob["object_id"])
+                        and isinstance(blob["sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", blob["sha256"])
+                        and type(blob["byte_length"]) is int and blob["byte_length"] >= 0,
+                        f"{label} blob identity is invalid")
+        patch = hunk["patch"]
+        require(isinstance(patch, dict) and set(patch) == {"sha256", "byte_length"}
+                and re.fullmatch(r"[0-9a-f]{64}", patch["sha256"])
+                and type(patch["byte_length"]) is int and patch["byte_length"] >= 0,
+                f"{label} patch identity is invalid")
+        for line in hunk["right_lines"]:
+            require(type(line) is int and line > 0, f"{label} RIGHT-side line identity is invalid")
+
+
+def validate_collector(collector, *, identity=None):
+    """Validate the independently authenticated T2 collector witness."""
+    require(isinstance(collector, dict) and set(collector) == {
+        "schema", "identity", "input_sha256", "expected_hunks", "right_inventory"
+    }, "collector witness schema is not closed")
+    require(collector["schema"] == COLLECTOR_SCHEMA, "unsupported collector witness schema")
+    source = collector["identity"]
+    require(isinstance(source, dict) and set(source) == {
+        "repository", "pull_request", "base_sha", "head_sha", "control_sha", "run_id", "run_attempt"
+    }, "collector identity is not closed")
+    if identity is not None:
+        require(_identity_matches(source, identity), "collector identity differs from the exact run")
+    _digest(collector["input_sha256"], "collector input")
+    _validate_hunk_collection(collector["expected_hunks"], "collector")
+    inventory = collector["right_inventory"]
+    require(isinstance(inventory, list) and all(isinstance(item, dict) and set(item) == {"path", "line"}
+                                                for item in inventory),
+            "collector RIGHT-side inventory is not closed")
+    expected_inventory = [{"path": hunk["path"], "line": line}
+                         for hunk in collector["expected_hunks"] for line in hunk["right_lines"]]
+    require(inventory == expected_inventory, "collector RIGHT-side inventory differs from its full hunk partition")
+    return collector
+
+
+def trusted_provider_order(trusted_config=None):
+    """Return backend order from the separately authenticated T2 config."""
+    if trusted_config is None:
+        return list(V2_BACKENDS)
+    require(isinstance(trusted_config, dict) and set(trusted_config) == {
+        "schema", "provider_order", "providers", "engine"
+    }, "trusted T2 configuration witness is not closed")
+    require(trusted_config["schema"] == TRUSTED_CONFIG_SCHEMA, "unsupported trusted T2 configuration witness")
+    provider_order = trusted_config["provider_order"]
+    providers = trusted_config["providers"]
+    allowed = {"deepseek", "glm", "xai", "kimi"}
+    require(isinstance(provider_order, list) and len(provider_order) == len(set(provider_order))
+            and all(provider in allowed for provider in provider_order),
+            "trusted T2 provider order is invalid")
+    require(isinstance(providers, dict) and set(providers) == {"deepseek", "glm", "xai", "kimi"},
+            "trusted T2 provider registry is not closed")
+    enabled = []
+    for provider in provider_order:
+        config = providers[provider]
+        require(isinstance(config, dict) and isinstance(config.get("enabled"), bool),
+                "trusted T2 provider activation is invalid")
+        if config["enabled"]:
+            require(isinstance(config.get("model"), str) and bool(config["model"].strip()),
+                    "trusted T2 provider model identity is missing")
+            enabled.append(provider)
+    require(enabled and enabled[0] == "deepseek", "trusted T2 provider order must start with DeepSeek")
+    _validate_engine(trusted_config["engine"])
+    reverse = {"deepseek": "deepseek", "glm": "glm", "xai": "grok", "kimi": "kimi"}
+    return [reverse[provider] for provider in enabled]
+
+
+def _validate_trusted_binding(receipt, *, trusted_config=None):
+    if trusted_config is None:
+        return
+    order = trusted_provider_order(trusted_config)
+    backend = next((backend for backend, provider in BACKEND_PROVIDERS.items()
+                    if provider == receipt["provider"]), None)
+    require(backend in order, "coverage provider is not enabled in the trusted T2 configuration")
+    configured = trusted_config["providers"][BACKEND_PROVIDERS[backend]]
+    require(receipt["model"]["requested"] == configured["model"],
+            "coverage requested model differs from the trusted T2 configuration")
+    require(receipt["engine"] == trusted_config["engine"],
+            "coverage bundle or runtime identity differs from the trusted T2 configuration")
+
+
+def _validate_coverage(identity, receipt, *, require_complete=False, changed_paths=None,
+                       collector=None, trusted_config=None):
     """Validate T2's closed coverage receipt at the first consumer boundary."""
     require(isinstance(receipt, dict) and set(receipt) == {
         "schema", "identity", "engine", "provider", "model", "input_sha256",
@@ -143,32 +252,7 @@ def _validate_coverage(identity, receipt, *, require_complete=False, changed_pat
             "coverage pricing revision is missing")
     _digest(receipt["input_sha256"], "coverage input")
     for collection in ("expected_hunks", "observed_hunks"):
-        values = receipt[collection]
-        require(isinstance(values, list), "coverage hunk inventory is invalid")
-        for hunk in values:
-            require(isinstance(hunk, dict) and set(hunk) == {
-                "id", "path", "old_path", "change_kind", "old_blob", "new_blob", "patch", "right_lines"
-            }, "coverage hunk identity is not closed")
-            require(isinstance(hunk["id"], str) and isinstance(hunk["path"], str)
-                    and isinstance(hunk["change_kind"], str) and isinstance(hunk["right_lines"], list),
-                    "coverage hunk fields are invalid")
-            for blob_key in ("old_blob", "new_blob"):
-                blob = hunk[blob_key]
-                if blob is not None:
-                    require(isinstance(blob, dict) and set(blob) == {"object_id", "sha256", "byte_length"},
-                            "coverage blob identity is not closed")
-                    require(isinstance(blob["object_id"], str) and re.fullmatch(r"[0-9a-f]{40}", blob["object_id"])
-                            and isinstance(blob["sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", blob["sha256"])
-                            and type(blob["byte_length"]) is int and blob["byte_length"] >= 0,
-                            "coverage blob identity is invalid")
-            patch = hunk["patch"]
-            require(isinstance(patch, dict) and set(patch) == {"sha256", "byte_length"}
-                    and re.fullmatch(r"[0-9a-f]{64}", patch["sha256"])
-                    and type(patch["byte_length"]) is int and patch["byte_length"] >= 0,
-                    "coverage patch identity is invalid")
-            for line in hunk["right_lines"]:
-                require(type(line) is int and line > 0,
-                        "coverage RIGHT-side line identity is invalid")
+        _validate_hunk_collection(receipt[collection], "coverage")
     require(isinstance(receipt["remaining_files"], list) and all(isinstance(p, str) for p in receipt["remaining_files"])
             and isinstance(receipt["failed_chunks"], list) and all(isinstance(c, str) for c in receipt["failed_chunks"])
             and type(receipt["complete"]) is bool and isinstance(receipt["usage"], dict),
@@ -185,20 +269,35 @@ def _validate_coverage(identity, receipt, *, require_complete=False, changed_pat
     if changed_paths is not None:
         require(sorted(set(changed_paths)) == sorted({hunk["path"] for hunk in receipt["expected_hunks"]}),
                 "coverage expected partition does not bind the authenticated changed-path inventory")
+    if collector is not None:
+        validate_collector(collector, identity=identity)
+        require(receipt["input_sha256"] == collector["input_sha256"],
+                "coverage input digest differs from the independently authenticated collector")
+        require(receipt["expected_hunks"] == collector["expected_hunks"],
+                "coverage expected partition differs from the independently authenticated collector")
+        expected_inventory = [{"path": hunk["path"], "line": line}
+                              for hunk in receipt["expected_hunks"] for line in hunk["right_lines"]]
+        require(expected_inventory == collector["right_inventory"],
+                "coverage RIGHT-side inventory differs from the independently authenticated collector")
+    _validate_trusted_binding(receipt, trusted_config=trusted_config)
     return receipt
 
 
-def validate_coverage(identity, receipt, *, require_complete=False, changed_paths=None):
+def validate_coverage(identity, receipt, *, require_complete=False, changed_paths=None,
+                      collector=None, trusted_config=None):
     """Public consumer entry point for T2's immutable coverage witness."""
-    return _validate_coverage(identity, receipt, require_complete=require_complete, changed_paths=changed_paths)
+    return _validate_coverage(identity, receipt, require_complete=require_complete, changed_paths=changed_paths,
+                              collector=collector, trusted_config=trusted_config)
 
 
-def validate_history_v2(policy, history, *, identity=None, coverages=None, changed_paths=None):
+def validate_history_v2(policy, history, *, identity=None, coverages=None, changed_paths=None,
+                        collector=None, trusted_config=None):
     """Validate closed v2 history and re-bind every referenced receipt digest."""
     require(isinstance(history, dict) and set(history) == {"schema", "attempts"}
             and history["schema"] == HISTORY_SCHEMA_V2, "history v2 schema is not closed")
     attempts = history["attempts"]
-    require(isinstance(attempts, list) and len(attempts) <= len(V2_BACKENDS), "invalid v2 fallback history")
+    backend_order = trusted_provider_order(trusted_config)
+    require(isinstance(attempts, list) and len(attempts) <= len(backend_order), "invalid v2 fallback history")
     coverage_inventory_supplied = coverages is not None
     coverages = coverages or {}
     previous_backend_index = -1
@@ -207,8 +306,8 @@ def validate_history_v2(policy, history, *, identity=None, coverages=None, chang
             "backend", "status", "error_class", "review", "engine", "provider", "model", "coverage_sha256"
         }, "v2 attempt schema is not closed")
         backend = attempt["backend"]
-        require(backend in V2_BACKENDS, "v2 attempt uses an unknown backend")
-        backend_index = V2_BACKENDS.index(backend)
+        require(backend in backend_order, "v2 attempt uses a disabled or unknown trusted backend")
+        backend_index = backend_order.index(backend)
         require(backend_index > previous_backend_index, "v2 attempts are not in the trusted enabled-provider order")
         previous_backend_index = backend_index
         status = attempt["status"]
@@ -238,10 +337,14 @@ def validate_history_v2(policy, history, *, identity=None, coverages=None, chang
                 require(identity is not None, "v2 history consumer identity is required to authenticate coverage")
                 require(receipt is not None, "history references an absent coverage receipt")
                 require(coverage_digest(receipt) == attempt["coverage_sha256"], "coverage receipt digest mismatch")
-                _validate_coverage(identity, receipt, require_complete=status == "reviewed", changed_paths=changed_paths)
+                _validate_coverage(identity, receipt, require_complete=status == "reviewed", changed_paths=changed_paths,
+                                   collector=collector, trusted_config=trusted_config)
                 require(attempt["engine"] == receipt["engine"] and attempt["provider"] == receipt["provider"]
                         and attempt["model"] == receipt["model"],
                         "history does not preserve the referenced bundle/provider/model identity")
+                if status == "reviewed" and policy is not None:
+                    validate_review(policy, attempt["review"], coverage=receipt, collector=collector,
+                                    trusted_config=trusted_config)
     return history
 
 
@@ -250,7 +353,7 @@ def require(condition, why, remedy="regenerate review from the current trusted r
         raise ReviewScopeError(f"why: {why}; remedy: {remedy}")
 
 
-def validate_review(policy, payload, *, coverage=None, changed_paths=None):
+def validate_review(policy, payload, *, coverage=None, changed_paths=None, collector=None, trusted_config=None):
     require(isinstance(payload, dict) and set(payload) == {"schema", "summary", "findings", "test_scope"},
             "review output schema is not closed")
     require(payload["schema"] == REVIEW_SCHEMA, "unsupported review output schema")
@@ -264,7 +367,8 @@ def validate_review(policy, payload, *, coverage=None, changed_paths=None):
     require(isinstance(findings, list) and len(findings) <= 30, "invalid findings array")
     right_lines = set()
     if coverage is not None:
-        _validate_coverage(None, coverage, require_complete=True, changed_paths=changed_paths)
+        _validate_coverage(None, coverage, require_complete=True, changed_paths=changed_paths,
+                           collector=collector, trusted_config=trusted_config)
         for hunk in coverage["observed_hunks"]:
             right_lines.update((hunk["path"], line) for line in hunk["right_lines"])
     for finding in findings:
@@ -328,16 +432,17 @@ def observe_attempt(policy, *, backend, returncode, output=None, error_class=Non
 
 
 def observe_attempt_v2(policy, *, identity, backend, returncode, output=None,
-                       error_class=None, coverage=None):
+                       error_class=None, coverage=None, collector=None, trusted_config=None):
     """Capture one PR-Agent attempt without treating its engine as its model."""
     require(isinstance(identity, dict) and set(identity) == test_scope.IDENTITY_KEYS,
             "v2 capture identity is not closed")
-    require(backend in V2_BACKENDS, "unknown v2 backend")
+    require(backend in trusted_provider_order(trusted_config), "unknown or disabled v2 backend")
     require(type(returncode) is int, "adapter must supply actual process return code")
     require(error_class is None or (isinstance(error_class, str) and error_class in ERRORS),
             "unknown backend error category")
     if coverage is not None:
-        _validate_coverage(identity, coverage, require_complete=False)
+        _validate_coverage(identity, coverage, require_complete=False, collector=collector,
+                           trusted_config=trusted_config)
         require(coverage["provider"] == BACKEND_PROVIDERS[backend],
                 "coverage provider does not match the selected backend")
         digest = coverage_digest(coverage)
@@ -361,9 +466,9 @@ def observe_attempt_v2(policy, *, identity, backend, returncode, output=None,
             "engine": engine, "provider": provider, "model": model, "coverage_sha256": digest}
 
 
-def validate_history(policy, history):
+def validate_history(policy, history, **kwargs):
     if isinstance(history, dict) and history.get("schema") == HISTORY_SCHEMA_V2:
-        return validate_history_v2(policy, history)
+        return validate_history_v2(policy, history, **kwargs)
     require(isinstance(history, list) and len(history) <= len(BACKENDS), "invalid fallback history")
     for index, attempt in enumerate(history):
         require(isinstance(attempt, dict) and set(attempt) == {"backend", "status", "error_class", "review"},
@@ -380,9 +485,11 @@ def validate_history(policy, history):
     return history
 
 
-def next_backend(policy, history, *, identity=None, coverages=None, changed_paths=None):
+def next_backend(policy, history, *, identity=None, coverages=None, changed_paths=None,
+                 collector=None, trusted_config=None):
     if isinstance(history, dict) and history.get("schema") == HISTORY_SCHEMA_V2:
-        validate_history_v2(policy, history, identity=identity, coverages=coverages, changed_paths=changed_paths)
+        validate_history_v2(policy, history, identity=identity, coverages=coverages, changed_paths=changed_paths,
+                            collector=collector, trusted_config=trusted_config)
         # T2 owns provider fallback and returns one complete bounded attempt
         # history.  T3 must never select an outer provider or fabricate a
         # disabled attempt; a nonempty v2 object is already terminal.
@@ -393,16 +500,18 @@ def next_backend(policy, history, *, identity=None, coverages=None, changed_path
     return BACKENDS[len(history)]
 
 
-def failure_document(policy, identity, history, *, coverages=None, changed_paths=None):
+def failure_document(policy, identity, history, *, coverages=None, changed_paths=None,
+                     collector=None, trusted_config=None):
     """Only the independent issues-capable reporter consumes this artifact.
 
     No finding text, backend stderr, token, PR body or diff enters the failure
     artifact. A failed review remains failed even when deterministic scope exists.
     """
     if isinstance(history, dict) and history.get("schema") == HISTORY_SCHEMA_V2:
-        validate_history_v2(policy, history, identity=identity, coverages=coverages, changed_paths=changed_paths)
+        validate_history_v2(policy, history, identity=identity, coverages=coverages, changed_paths=changed_paths,
+                            collector=collector, trusted_config=trusted_config)
         attempts = history["attempts"]
-        backend_order = V2_BACKENDS
+        backend_order = trusted_provider_order(trusted_config)
     else:
         validate_history(policy, history)
         attempts = history
@@ -490,7 +599,8 @@ def _previous_labels(policy, identity, changed_paths, previous_records):
     return labels
 
 
-def prepare_publication(policy, identity, *, changed_paths, review, previous_records=(), coverage=None):
+def prepare_publication(policy, identity, *, changed_paths, review, previous_records=(), coverage=None,
+                        collector=None, trusted_config=None):
     """Create data for a separately guarded publisher, after authentication.
 
     previous_records are independently authenticated same-head records validated
@@ -498,7 +608,8 @@ def prepare_publication(policy, identity, *, changed_paths, review, previous_rec
     records here; policy changes belong to the main interval consumer, not model
     evidence merging. Labels are only a display projection, never authority.
     """
-    validate_review(policy, review, coverage=coverage, changed_paths=changed_paths)
+    validate_review(policy, review, coverage=coverage, changed_paths=changed_paths,
+                    collector=collector, trusted_config=trusted_config)
     labels = _previous_labels(policy, identity, changed_paths, previous_records)
     labels.update(review["test_scope"]["labels"])
     record = test_scope.build_record(policy, changed_paths=changed_paths, ai_labels=sorted(labels), **identity)
@@ -509,16 +620,19 @@ def prepare_publication(policy, identity, *, changed_paths, review, previous_rec
     return {"record": record, "labels": projection, "review": legacy_review}
 
 
-def prepare_result(policy, identity, *, changed_paths, history, previous_records=(), coverages=None):
+def prepare_result(policy, identity, *, changed_paths, history, previous_records=(), coverages=None,
+                   collector=None, trusted_config=None):
     """Bind the publisher result to the actual stopped fallback history."""
     if isinstance(history, dict) and history.get("schema") == HISTORY_SCHEMA_V2:
-        validate_history_v2(policy, history, identity=identity, coverages=coverages, changed_paths=changed_paths)
+        validate_history_v2(policy, history, identity=identity, coverages=coverages, changed_paths=changed_paths,
+                            collector=collector, trusted_config=trusted_config)
         attempts = history["attempts"]
     else:
         validate_history(policy, history)
         attempts = history
     require(bool(attempts) and next_backend(policy, history, identity=identity, coverages=coverages,
-                                            changed_paths=changed_paths) is None,
+                                            changed_paths=changed_paths, collector=collector,
+                                            trusted_config=trusted_config) is None,
             "fallback is not terminal", "finish the bounded backend chain before publishing")
     last = attempts[-1]
     if last["status"] == "reviewed":
@@ -531,8 +645,10 @@ def prepare_result(policy, identity, *, changed_paths, history, previous_records
         return {"status": "reviewed", "failure": None,
                 "publication": prepare_publication(policy, identity, changed_paths=changed_paths,
                                                      review=last["review"], previous_records=previous_records,
-                                                     coverage=coverage)}
-    failure = failure_document(policy, identity, history, coverages=coverages, changed_paths=changed_paths)
+                                                     coverage=coverage, collector=collector,
+                                                     trusted_config=trusted_config)}
+    failure = failure_document(policy, identity, history, coverages=coverages, changed_paths=changed_paths,
+                               collector=collector, trusted_config=trusted_config)
     labels = _previous_labels(policy, identity, changed_paths, previous_records)
     fallback = test_scope.build_record(policy, changed_paths=changed_paths,
                                       ai_labels=sorted(labels), **identity)

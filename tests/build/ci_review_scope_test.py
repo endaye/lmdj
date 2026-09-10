@@ -101,6 +101,33 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(review.validate_coverage(None, receipt), receipt)
         self.assertTrue(all(type(line) is int for hunk in receipt["expected_hunks"] for line in hunk["right_lines"]))
 
+    def test_v2_order_model_and_engine_bind_to_trusted_t2_config(self):
+        coverage = self.coverage()
+        trusted = {"schema": review.TRUSTED_CONFIG_SCHEMA, "provider_order": ["deepseek", "glm"],
+                   "providers": {"deepseek": {"enabled": True, "model": coverage["model"]["requested"]},
+                                 "glm": {"enabled": True, "model": "glm-fixture"},
+                                 "xai": {"enabled": False}, "kimi": {"enabled": False}},
+                   "engine": coverage["engine"]}
+        history = {"schema": review.HISTORY_SCHEMA_V2, "attempts": [self.v2_attempt(coverage)]}
+        inventory = {review.coverage_digest(coverage): coverage}
+        review.validate_history_v2(self.policy, history, identity=self.identity, coverages=inventory,
+                                   changed_paths=["apps/creator-web/a.ts"], trusted_config=trusted)
+        reordered = copy.deepcopy(history)
+        reordered["attempts"][0]["backend"] = "glm"
+        with self.assertRaisesRegex(review.ReviewScopeError, "provider identity"):
+            review.validate_history_v2(self.policy, reordered, identity=self.identity, coverages=inventory,
+                                       changed_paths=["apps/creator-web/a.ts"], trusted_config=trusted)
+        forged = copy.deepcopy(coverage)
+        forged["model"]["requested"] = "forged-model"
+        forged_inventory = {review.coverage_digest(forged): forged}
+        forged_history = copy.deepcopy(history)
+        forged_history["attempts"][0]["coverage_sha256"] = review.coverage_digest(forged)
+        forged_history["attempts"][0]["model"] = forged["model"]
+        with self.assertRaisesRegex(review.ReviewScopeError, "trusted T2 configuration"):
+            review.validate_history_v2(self.policy, forged_history, identity=self.identity,
+                                       coverages=forged_inventory,
+                                       changed_paths=["apps/creator-web/a.ts"], trusted_config=trusted)
+
     def test_glm_rate_limit_uses_kimi_and_stops(self):
         history = [self.attempt("glm", error_class="rate_limited")]
         self.assertEqual(review.next_backend(self.policy, history), "kimi")

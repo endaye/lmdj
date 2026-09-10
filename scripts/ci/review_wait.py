@@ -151,6 +151,10 @@ def automated(reader, posted, repo, number, head, bot):
         context = json.loads(archive.read("context.json"))
         model = json.loads(archive.read("review.json"))
         history = json.loads(archive.read("history.json"))
+        collector_witness = (json.loads(archive.read("collector.json"))
+                             if "collector.json" in archive.namelist() else None)
+        trusted_config = (json.loads(archive.read("t2-config-witness.json"))
+                          if "t2-config-witness.json" in archive.namelist() else None)
         coverages = {}
         for name in archive.namelist():
             if name.startswith("coverage-") and name.endswith(".json"):
@@ -159,11 +163,16 @@ def automated(reader, posted, repo, number, head, bot):
     attempts = history.get("attempts", []) if isinstance(history, dict) else history
     require(context["identity"]["pr_number"] == number and attempts[-1]["backend"] == backend, "review source targets another PR or backend")
     if v2:
+        require(collector_witness is not None and trusted_config is not None,
+                "v2 archive lacks the independently authenticated collector/config witnesses")
+        pipeline.review_scope.validate_collector(collector_witness, identity=context["identity"])
+        trusted_config = pipeline._trusted_config_witness(trusted_config)
         require(isinstance(history, dict) and pipeline.review_scope.history_digest(history) == history_digest,
                 "publisher history digest differs from immutable artifact")
         policy = pipeline.test_scope.load_policy(pipeline.ROOT)
         pipeline.review_scope.validate_history_v2(policy, history, identity=context["identity"], coverages=coverages,
-                                                 changed_paths=context["changed_paths"])
+                                                 changed_paths=context["changed_paths"], collector=collector_witness,
+                                                 trusted_config=trusted_config)
         require(any(a["status"] == "reviewed" and a["backend"] == backend for a in attempts),
                 "v2 publisher marker does not identify the reviewed attempt")
         coverage = coverages[attempts[-1]["coverage_sha256"]]

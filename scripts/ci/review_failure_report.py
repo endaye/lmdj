@@ -228,8 +228,13 @@ def collect(api, repository, run_id, attempt):
     require(isinstance(payload, bytes) and len(payload) <= LIMIT, "review archive exceeds budget")
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = archive.namelist()
+        history_document = (json.loads(archive.read("history.json"), object_pairs_hook=change_scope.reject_duplicates)
+                            if "history.json" in names else None)
+        v2_archive = isinstance(history_document, dict) and history_document.get("schema") == review_scope.HISTORY_SCHEMA_V2
         required = [{"context.json", "history.json", "result.json", "failure.json"},
                     {"context.json", "history.json", "result.json", "review.json"}]
+        if v2_archive:
+            required = [{*entry, "collector.json", "t2-config-witness.json"} for entry in required]
         base_names = {name for name in names if not name.startswith("coverage-")}
         coverage_names = {name for name in names if name.startswith("coverage-")}
         require(len(names) == len(set(names)) and base_names in required
@@ -261,14 +266,25 @@ def collect(api, repository, run_id, attempt):
         for name in ("scope_policy.json", "self_test_policy.json", "test_scope_policy.json")])
     history = documents["history.json"]
     coverages = {review_scope.coverage_digest(documents[name]): documents[name] for name in coverage_names}
-    review_scope.validate_history(policy, history)
+    collector_witness = documents.get("collector.json") if isinstance(history, dict) else None
+    trusted_config = documents.get("t2-config-witness.json") if isinstance(history, dict) else None
+    if isinstance(history, dict) and history.get("schema") == review_scope.HISTORY_SCHEMA_V2:
+        require(collector_witness is not None and trusted_config is not None,
+                "v2 archive lacks the independently authenticated collector/config witnesses")
+        review_scope.validate_collector(collector_witness, identity=identity)
+        trusted_config = pipeline._trusted_config_witness(trusted_config)
+    review_scope.validate_history(policy, history, identity=identity,
+                                  coverages=coverages if isinstance(history, dict) else None,
+                                  changed_paths=context["changed_paths"], collector=collector_witness,
+                                  trusted_config=trusted_config)
     attempts = history.get("attempts", []) if isinstance(history, dict) else history
     require(bool(attempts), "review history is empty")
     final_identity = dict(identity)
     if attempts[-1]["status"] == "reviewed":
         final_identity["backend"] = attempts[-1]["backend"]
     expected = review_scope.prepare_result(policy, final_identity, changed_paths=context["changed_paths"], history=history,
-                                           coverages=coverages if isinstance(history, dict) else None)
+                                           coverages=coverages if isinstance(history, dict) else None,
+                                           collector=collector_witness, trusted_config=trusted_config)
     require(documents["result.json"] == expected, "saved review result differs from independent history/policy recomputation")
     require(conclusion != "failure" or expected["status"] == "not-reviewed",
             "failed review finalizer contradicts the recomputed review result")

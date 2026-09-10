@@ -16,6 +16,7 @@ import change_scope
 import review_scope
 import review_scope_codec as codec
 import test_scope
+import pr_agent_review as t2
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".github/scripts"))
@@ -60,12 +61,61 @@ def coverage_from_environment(directory):
     return read(path) if path.exists() else None
 
 
+def collector_witness(document):
+    """Authenticate the complete T2 input and retain its full hunk partition."""
+    try:
+        authenticated = t2.authenticate_input(document)
+    except t2.EngineError as error:
+        raise review_scope.ReviewScopeError(
+            "why: T2 collector input failed its authentication contract; remedy: retain the complete immutable input"
+        ) from error
+    expected = t2.expected_coverage(authenticated)
+    return {
+        "schema": review_scope.COLLECTOR_SCHEMA,
+        "identity": authenticated["identity"],
+        "input_sha256": authenticated["input_sha256"],
+        "expected_hunks": expected,
+        "right_inventory": [{"path": hunk["path"], "line": line}
+                             for hunk in expected for line in hunk["right_lines"]],
+    }
+
+
+def _trusted_config_witness(document):
+    """Normalize a separately retained T2 config/engine identity witness."""
+    review_scope.require(isinstance(document, dict) and set(document) == {
+        "schema", "provider_order", "providers", "engine"
+    }, "trusted T2 configuration witness is not closed")
+    review_scope.require(document["schema"] == review_scope.TRUSTED_CONFIG_SCHEMA,
+                         "unsupported trusted T2 configuration witness")
+    review_scope.trusted_provider_order(document)
+    return document
+
+
+def trusted_collector(directory):
+    source = os.environ.get("T2_INPUT_JSON", "")
+    path = Path(source) if source else directory / "t2-input.json"
+    review_scope.require(path.exists(),
+                         "v2 result has no separately trusted T2 collector input; retain t2-input.json")
+    return collector_witness(read(path))
+
+
+def trusted_config(directory):
+    source = os.environ.get("T2_TRUSTED_CONFIG_JSON", "")
+    path = Path(source) if source else directory / "t2-config-witness.json"
+    review_scope.require(path.exists(),
+                         "v2 result has no separately trusted T2 config witness; retain t2-config-witness.json")
+    return _trusted_config_witness(read(path))
+
+
 def is_v2_history(history):
     return isinstance(history, dict) and history.get("schema") == review_scope.HISTORY_SCHEMA_V2
 
 
-def adapt_t2_result(result, *, identity, changed_paths):
+def adapt_t2_result(result, *, identity, changed_paths, collector, trusted_config):
     """Map one complete T2 engine result; never create a second fallback loop."""
+    review_scope.validate_collector(collector, identity=identity)
+    backend_order = review_scope.trusted_provider_order(trusted_config)
+    review_scope._validate_engine(trusted_config["engine"])
     review_scope.require(isinstance(result, dict) and result.get("schema") == "lmdj.pr-agent-result.v1"
                          and set(result) == {"schema", "status", "error_class", "identity", "input_sha256",
                                             "engine", "selected_attempt", "attempts", "skipped_providers", "elapsed_ms"},
@@ -82,6 +132,10 @@ def adapt_t2_result(result, *, identity, changed_paths):
                                  for key, value in expected_t2_identity.items()),
                          "T2 result identity differs from the exact run")
     review_scope._digest(result["input_sha256"], "T2 input")
+    review_scope.require(result["input_sha256"] == collector["input_sha256"],
+                         "T2 result input digest differs from the independently authenticated collector")
+    review_scope.require(result["engine"] == trusted_config["engine"],
+                         "T2 result bundle or runtime identity differs from the trusted engine witness")
     attempts = result["attempts"]
     review_scope.require(isinstance(attempts, list) and attempts, "T2 result has no bounded provider attempts")
     provider_backend = {provider: backend for backend, provider in review_scope.BACKEND_PROVIDERS.items()}
@@ -93,16 +147,20 @@ def adapt_t2_result(result, *, identity, changed_paths):
             "coverage", "usage", "duration_ms"}, "T2 attempt schema is not closed")
         backend = provider_backend.get(attempt["provider"])
         review_scope.require(backend is not None, "T2 result uses an unsupported provider identity")
-        index = review_scope.V2_BACKENDS.index(backend)
+        review_scope.require(backend in backend_order, "T2 result uses a disabled provider or untrusted order")
+        index = backend_order.index(backend)
         review_scope.require(index > previous_index, "T2 attempts are not in trusted provider order")
         previous_index = index
         coverage = attempt["coverage"]
         coverage_digest = None
         if coverage is not None:
             review_scope._validate_coverage(identity, coverage, require_complete=attempt["status"] == "reviewed",
-                                             changed_paths=changed_paths)
-            review_scope.require(coverage["input_sha256"] == result["input_sha256"],
-                                 "T2 coverage input digest differs from result")
+                                             changed_paths=changed_paths, collector=collector,
+                                             trusted_config=trusted_config)
+            review_scope.require(attempt["engine"] == coverage["engine"]
+                                 and attempt["provider"] == coverage["provider"]
+                                 and attempt["model"] == coverage["model"],
+                                 "T2 attempt identity differs from its coverage receipt")
             coverage_digest = review_scope.coverage_digest(coverage)
             coverages[coverage_digest] = coverage
         if attempt["status"] == "reviewed":
@@ -114,7 +172,8 @@ def adapt_t2_result(result, *, identity, changed_paths):
                       "test_scope": {"labels": ["test:full"],
                                      "reason": "T2 supplies no LMDJ test-scope advice; retain the deterministic full floor."}}
             review_scope.validate_review(test_scope.load_policy(ROOT), mapped, coverage=coverage,
-                                         changed_paths=changed_paths)
+                                         changed_paths=changed_paths, collector=collector,
+                                         trusted_config=trusted_config)
             status, error_class = "reviewed", None
         else:
             review_scope.require(attempt["review"] is None and isinstance(attempt["error_class"], str),
@@ -139,7 +198,8 @@ def adapt_t2_result(result, *, identity, changed_paths):
                          "T2 selected attempt contradicts its terminal status")
     history = {"schema": review_scope.HISTORY_SCHEMA_V2, "attempts": history_attempts}
     review_scope.validate_history_v2(test_scope.load_policy(ROOT), history, identity=identity,
-                                     coverages=coverages, changed_paths=changed_paths)
+                                     coverages=coverages, changed_paths=changed_paths,
+                                     collector=collector, trusted_config=trusted_config)
     return history, coverages
 
 
@@ -241,8 +301,15 @@ def capture(directory, backend):
     t2_path = Path(t2_source) if t2_source else directory / "t2-result.json"
     if t2_path.exists():
         t2 = read(t2_path)
+        collector = trusted_collector(directory)
+        trusted = trusted_config(directory)
+        review_scope.require(sorted(set(changed_paths)) == sorted({hunk["path"] for hunk in collector["expected_hunks"]}),
+                             "collector full hunk partition differs from the independently fetched changed-path inventory")
         history, inventory = adapt_t2_result(t2, identity=context["identity"],
-                                              changed_paths=context["changed_paths"])
+                                              changed_paths=context["changed_paths"], collector=collector,
+                                              trusted_config=trusted)
+        save(directory / "collector.json", collector)
+        save(directory / "t2-config-witness.json", trusted)
         if backend is not None:
             selected = history["attempts"][t2["selected_attempt"]]["backend"] if t2["selected_attempt"] is not None else None
             review_scope.require(selected is None or backend == selected,
@@ -258,12 +325,15 @@ def capture(directory, backend):
         return
     coverage = coverage_from_environment(directory)
     inventory = coverage_inventory(directory)
+    collector = trusted_collector(directory) if coverage is not None else None
+    trusted = trusted_config(directory) if coverage is not None else None
     provider_backend = {provider: backend for backend, provider in review_scope.BACKEND_PROVIDERS.items()}
     expected_backend = (provider_backend.get(coverage["provider"]) if coverage is not None and isinstance(history, list) and not history
                         else review_scope.next_backend(
                             policy, history, identity=context["identity"],
                             coverages=inventory if is_v2_history(history) else None,
-                            changed_paths=context["changed_paths"]))
+                            changed_paths=context["changed_paths"], collector=collector,
+                            trusted_config=trusted))
     review_scope.require(expected_backend == backend, "backend ran outside fallback order")
     outcome = os.environ.get("BACKEND_OUTCOME", "failure")
     error = None if outcome == "success" else "runtime_failure"
@@ -282,7 +352,7 @@ def capture(directory, backend):
         attempt = review_scope.observe_attempt_v2(
             policy, identity=context["identity"], backend=backend,
             returncode=0 if outcome == "success" else 1, output=raw,
-            error_class=error, coverage=coverage)
+            error_class=error, coverage=coverage, collector=collector, trusted_config=trusted)
         history["attempts"].append(attempt)
         save(directory / f"coverage-{backend}.json", coverage)
         save(directory / "history.json", history)
@@ -391,17 +461,24 @@ def finalize(directory):
     policy = test_scope.load_policy(ROOT)
     context, history = read(directory / "context.json"), read(directory / "history.json")
     inventory = coverage_inventory(directory)
-    review_scope.validate_history(policy, history)
+    collector = trusted_collector(directory) if is_v2_history(history) else None
+    trusted = trusted_config(directory) if is_v2_history(history) else None
+    review_scope.validate_history(policy, history, identity=context["identity"],
+                                  coverages=inventory if is_v2_history(history) else None,
+                                  changed_paths=context["changed_paths"], collector=collector,
+                                  trusted_config=trusted)
     review_scope.require(review_scope.next_backend(
         policy, history, identity=context["identity"],
         coverages=inventory if is_v2_history(history) else None,
-        changed_paths=context["changed_paths"]) is None, "review chain did not finish")
+        changed_paths=context["changed_paths"], collector=collector, trusted_config=trusted) is None,
+                         "review chain did not finish")
     identity = dict(context["identity"])
     attempts = history["attempts"] if is_v2_history(history) else history
     if attempts[-1]["status"] == "reviewed":
         identity["backend"] = attempts[-1]["backend"]
     result = review_scope.prepare_result(policy, identity, changed_paths=context["changed_paths"], history=history,
-                                         coverages=inventory if is_v2_history(history) else None)
+                                         coverages=inventory if is_v2_history(history) else None,
+                                         collector=collector, trusted_config=trusted)
     save(directory / "result.json", result)
     if result["failure"]:
         save(directory / "failure.json", result["failure"])
@@ -491,6 +568,8 @@ def publish(directory):
     context, result = read(directory / "context.json"), read(directory / "result.json")
     history = read(directory / "history.json")
     coverages = coverage_inventory(directory)
+    collector = trusted_collector(directory) if is_v2_history(history) else None
+    trusted = trusted_config(directory) if is_v2_history(history) else None
     record = result["publication"]["record"]
     identity = {key: record[key] for key in test_scope.IDENTITY_KEYS}
     # The workflow's environment, not downloaded files, fixes this publication.
@@ -507,12 +586,14 @@ def publish(directory):
     paths = sorted({p for changed in actual for p in changed.paths})
     review_scope.require(paths == context["changed_paths"] and paths == record["changed_paths"], "artifact changed inventory mismatch")
     expected = review_scope.prepare_result(policy, identity, changed_paths=paths, history=history,
-                                           coverages=coverages if is_v2_history(history) else None)
+                                           coverages=coverages if is_v2_history(history) else None,
+                                           collector=collector, trusted_config=trusted)
     review_scope.require(result == expected, "producer result is inconsistent with actual input and validated history")
     prior, scope_unavailable = previous_records(identity, policy)
     result = review_scope.prepare_result(policy, identity, changed_paths=paths,
                                         history=history, previous_records=prior,
-                                        coverages=coverages if is_v2_history(history) else None)
+                                        coverages=coverages if is_v2_history(history) else None,
+                                        collector=collector, trusted_config=trusted)
     record = result["publication"]["record"]
     try:
         codec.encode(record)
@@ -529,7 +610,7 @@ def publish(directory):
     original = read(directory / "review.json")
     attempts = history["attempts"] if is_v2_history(history) else history
     coverage = coverages.get(attempts[-1]["coverage_sha256"]) if is_v2_history(history) else None
-    review_scope.validate_review(policy, original, coverage=coverage)
+    review_scope.validate_review(policy, original, coverage=coverage, collector=collector, trusted_config=trusted)
     review_scope.require(original == attempts[-1]["review"], "original review artifact mismatch")
     token = os.environ["GITHUB_TOKEN"]
     # Immutable COMMENT review stores the complete scope record beyond artifact

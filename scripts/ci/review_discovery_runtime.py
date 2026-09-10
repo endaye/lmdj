@@ -76,8 +76,14 @@ class EvidenceReads:
         try:
             with zipfile.ZipFile(io.BytesIO(value)) as archive:
                 history = json.loads(archive.read("history.json"), object_pairs_hook=change_scope.reject_duplicates)
-            if isinstance(history, dict) and history.get("schema") == review_scope.HISTORY_SCHEMA_V2:
-                self.review_history_digest = review_scope.history_digest(history)
+                if isinstance(history, dict) and history.get("schema") == review_scope.HISTORY_SCHEMA_V2:
+                    collector_witness = json.loads(archive.read("collector.json"), object_pairs_hook=change_scope.reject_duplicates)
+                    trusted_config = json.loads(archive.read("t2-config-witness.json"), object_pairs_hook=change_scope.reject_duplicates)
+                    review_scope.validate_collector(collector_witness)
+                    review_scope.trusted_provider_order(trusted_config)
+                    review_scope.validate_history_v2(None, history, identity=collector_witness["identity"],
+                                                     collector=collector_witness, trusted_config=trusted_config)
+                    self.review_history_digest = review_scope.history_digest(history)
         except (KeyError, TypeError, ValueError, zipfile.BadZipFile):
             self.review_history_digest = None
         return self._record("artifact", [artifact_id], value)

@@ -40,12 +40,20 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import NamedTuple
 import argparse
+import binascii
 import json
 import os
+from pathlib import Path
 import re
 import sys
 import urllib.error
 import urllib.request
+import zlib
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/ci"))
+import review_scope
+import review_scope_codec as history_codec
 
 
 @dataclass(frozen=True)
@@ -415,9 +423,29 @@ def exact_review_posted(repository: str, number: int, run: str, attempt: str,
                     and (review.get("user") or {}).get("login") == "github-actions[bot]"):
                 if v2:
                     digest = v2.group("digest")
-                    history_lines = [V2_HISTORY_DIGEST.fullmatch(line) or V2_HISTORY_MARKER.fullmatch(line)
-                                     for line in lines]
-                    if not any(item and item.group(1) == digest for item in history_lines):
+                    # A digest-only marker is not a receipt. Decode the complete
+                    # canonical history with the shared codec and require its
+                    # terminal selected attempt to be a reviewed attempt for
+                    # this exact backend. Failed-only history must never look
+                    # like a clean posted review.
+                    if any(V2_HISTORY_DIGEST.fullmatch(line) for line in lines):
+                        continue
+                    if len(history_codec.HISTORY_PATTERN.findall(review.get("body") or "")) != 1:
+                        continue
+                    try:
+                        history = history_codec.decode_history(review.get("body") or "")
+                        review_scope.validate_history_v2(None, history)
+                    except (review_scope.ReviewScopeError, ValueError, TypeError, json.JSONDecodeError,
+                            binascii.Error, zlib.error):
+                        continue
+                    attempts = history.get("attempts", []) if isinstance(history, dict) else []
+                    if not attempts or review_scope.history_digest(history) != digest:
+                        continue
+                    terminal = attempts[-1]
+                    if (terminal.get("status") != "reviewed" or terminal.get("backend") != backend
+                            or terminal.get("error_class") is not None
+                            or not isinstance(terminal.get("review"), dict)
+                            or not isinstance(terminal.get("coverage_sha256"), str)):
                         continue
                 return True
         if len(reviews) < 100:
