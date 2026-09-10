@@ -137,6 +137,14 @@ payload 下界 549860 bytes，准备 admission 模型 763071 bytes，已经无�
 本轮未刷机，目标 heap/stack high-water、时限和正常音乐听测没有执行；
 独立存储重设计与同口径正向复测是正式 Host 的前置，不按研究 Issue Closed 解锁。
 
+[R2 同口径复测](https://github.com/endaye/lmdj/blob/main/docs/research/2026-09-10-cardputer-music-capacity-retest.md)
+记录 M1/M2 后指定 merged source 的目标 admission 模型降至 302383 bytes，
+同素材 native 100 次替换通过；实际 I2S 三次短程可装载/停止/卸载，最低 free heap
+58568 bytes。但第三次的 CPU 服务加观测发布保守最大值 4284 µs，超过原定
+4266.666… µs。R2 保持未完成，H1/B1 容量前置仍阻塞。实际声部采样观察到至少
+6 声部，不把回执数当并发声部；完整 Host 30 分钟、100 次 I2S 替换、物理 underrun、
+按键时延与听感仍未验收，数字 DMA 零错误不替代这些证据。
+
 ## 9. 限制与下一门禁
 Facade 不授权 Host 绕过 Project/Provider/Assembly 不变量。Performance 操作集的自动化绿色只证明状态与边界，不构成任何设备、听感或物理演奏验收。
 
