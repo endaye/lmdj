@@ -1214,6 +1214,58 @@ void caps_simultaneous_voices_and_mixes_each_admitted_voice() {
   LMDJ_CHECK(telemetry.voice_drops == 1);
 }
 
+void sparse_high_voice_survives_lower_completion_and_slot_reuse() {
+  RealtimeEngine engine;
+  const std::array<float, 1> short_sample{};
+  std::array<float, 512> long_sample{};
+  long_sample.fill(1.0F / 1024.0F);
+  LMDJ_CHECK(engine.load_sample(0, short_sample).has_value());
+  LMDJ_CHECK(engine.load_sample(1, long_sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  for (std::uint64_t sequence = 1; sequence < 128; ++sequence) {
+    LMDJ_CHECK(engine.enqueue(TriggerEvent{sequence, 0, 127}) ==
+               EnqueueResult::accepted);
+  }
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{128, 1, 127}) ==
+             EnqueueResult::accepted);
+  std::array<float, 128> left{};
+  std::array<float, 128> right{};
+  engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  LMDJ_CHECK(engine.telemetry().completed_voices == 127);
+  for (std::size_t frame = 96; frame < left.size(); ++frame) {
+    LMDJ_CHECK(left[frame] == long_sample[0]);
+    LMDJ_CHECK(right[frame] == long_sample[0]);
+  }
+  // A new voice reuses the first hole while the highest slot stays active.
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{129, 1, 127}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(engine.telemetry().active_voices == 2);
+  for (std::size_t frame = 96; frame < left.size(); ++frame) {
+    LMDJ_CHECK(left[frame] == 2.0F * long_sample[0]);
+    LMDJ_CHECK(right[frame] == 2.0F * long_sample[0]);
+  }
+  for (int block = 0; block < 3; ++block) {
+    engine.render(left.data(), right.data(), left.size());
+  }
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.telemetry().completed_voices == 129);
+  engine.render(left.data(), right.data(), left.size());
+  for (std::size_t frame = 0; frame < left.size(); ++frame) {
+    LMDJ_CHECK(left[frame] == 0.0F && right[frame] == 0.0F);
+  }
+  engine.stop();
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{130, 1, 127}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), left.size());
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  LMDJ_CHECK(left[96] == long_sample[0]);
+  LMDJ_CHECK(right[96] == long_sample[0]);
+  engine.stop();
+}
+
 void publishes_ordered_mixed_outcomes_at_128_frame_boundaries() {
   RealtimeEngine engine;
   const std::array<float, 256> sample{};
@@ -3474,6 +3526,7 @@ int main() {
   applies_velocity_gain_and_clamps_after_mixing();
   reports_queue_capacity_and_drops();
   caps_simultaneous_voices_and_mixes_each_admitted_voice();
+  sparse_high_voice_survives_lower_completion_and_slot_reuse();
   publishes_ordered_mixed_outcomes_at_128_frame_boundaries();
   outcome_ring_reports_capacity_drop_and_restart_resets_it();
   completes_a_sample_across_callback_blocks();
