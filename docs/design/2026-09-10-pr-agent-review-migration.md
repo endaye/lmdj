@@ -1,7 +1,7 @@
 # PR-Agent review migration
 
 Date: 2026-09-10
-Status: design accepted and inactive engine merged; production remains on the existing review workflow.
+Status: design accepted; inactive engine and review protocol merged; production remains on the existing review workflow.
 Owner: project lead; implementation and independent verification use supervised
 Orca workers. Umbrella: #1149. Design Task: #1150.
 
