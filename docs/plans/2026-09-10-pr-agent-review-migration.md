@@ -234,12 +234,18 @@ current-schema finite record proven valid and mutates only its amount to NaN.
 Keep the native and emulated failures as historical evidence. Independently
 review corrected source before authorizing the next bundle build.
 
-Declared corrective paths: this plan, the existing migration design,
-`scripts/ci/pr_agent_review.py`, `scripts/ci/pr-agent/config.toml`, and
-`tests/build/ci_pr_agent_review_test.py`. Preserve the published 8148a1ec baseline
+Declared runtime/test follow-up paths (implemented in `0c196687`): this plan, the existing migration design,
+`scripts/ci/pr_agent_review.py`, and `tests/build/ci_pr_agent_review_test.py`.
+`scripts/ci/pr-agent/config.toml` was conditional on a concrete source-coupled
+need; none arose and it is unchanged by this follow-up. Preserve the published 8148a1ec baseline
 and its genuine failed evidence; make a new corrective commit. No workflow,
 bundle machinery, dependency lock or receipt schema change is authorized absent
 a concrete source-coupled need reviewed by the lead.
+
+The subsequent scope/Progress coherence correction changes only this plan.
+Verify its documentation and staged path inventory; runtime/test bytes and their
+independent verification at `0c196687` remain unchanged. Bind the plan readback
+to the new committed tree before authorizing the final bundle.
 
 Tests must prove no supplier counter is needed; complete messages reach the real
 pinned handler; an affordable context above 100,000 admits; unknown/unaffordable
@@ -529,12 +535,15 @@ file alone does not justify claiming that a Portal page was changed.
 
 - T1 was merged through PR #1161 at `409a1a4d`; the earlier audit and failed
   receipts below remain historical evidence.
-- T2 has an inactive baseline in Draft PR #1175 at `8148a1ec`. Local corrective
-  commit `9e837bde` implements the monetary envelope without supplier counting,
-  but independent review requests the follow-up corrections above. Push is held;
-  no current-head approval or live supplier acceptance is claimed. The v13 build
-  completed, while extracted-bundle verification remains failed/pending and its
-  source is superseded by these requested corrections.
+- T2 has an inactive baseline in Draft PR #1175 at `8148a1ec`. The monetary
+  envelope and follow-up runtime/test corrections are implemented locally in
+  `0c196687`, following the rejected checkpoint `9e837bde`. Independent review
+  verified all six runtime/test corrections; the remaining plan scope/Progress
+  correction is reflected here and awaits independent readback on its new
+  committed tree. Push is held; final source approval, a matching Linux bundle,
+  remote-head review and live supplier acceptance remain pending. The v13 build
+  completed, but its extracted-bundle failures remain historical evidence and
+  its rejected source has been superseded.
 - T3–T6 have not started. AI-provider token counting is outside the entire
   migration scope by the owner's decision; there is no pending counting decision.
 
