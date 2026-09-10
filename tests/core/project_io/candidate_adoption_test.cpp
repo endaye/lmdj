@@ -6,7 +6,7 @@
 #include <lmdj/project_io/project_store.hpp>
 #include "packages/project-io/src/testing_hooks.hpp"
 #include "tests/core/support/candidate_adoption.hpp"
-#if defined(__unix__)
+#if defined(__unix__) || defined(__APPLE__)
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -78,11 +78,13 @@ struct Fixture {
 };
 FaultPoint point;
 int calls = 0;
+#if defined(__unix__) || defined(__APPLE__)
 bool crash = false;
+#endif
 Result<void> inject(FaultPoint observed, const std::filesystem::path&) {
   if (observed != point) return Result<void>::success();
   ++calls;
-#if defined(__unix__)
+#if defined(__unix__) || defined(__APPLE__)
   if (crash) _exit(71);
 #endif
   return Result<void>::failure(Error{ErrorCode::io_error, "adoption fault"});
@@ -148,7 +150,8 @@ void failures() {
   }
 }
 void crash_recovery() {
-#if defined(__unix__)
+#if defined(__unix__) || defined(__APPLE__)
+  std::size_t completed = 0;
   for (auto fail : {FaultPoint::sample_after_artifact_creation,
       FaultPoint::sample_after_manifest_preparation, FaultPoint::sample_after_manifest_publication}) {
     Fixture f;
@@ -177,7 +180,11 @@ void crash_recovery() {
       LMDJ_CHECK(loaded.value() == f.before);
       f.verify(f.adopt());
     }
+    ++completed;
   }
+  std::cout << "candidate adoption crash recovery: " << completed << " crash points PASS\n";
+#else
+  std::cout << "candidate adoption crash recovery: SKIP (requires POSIX fork)\n";
 #endif
 }
 void legacy_promotion_and_model_evidence() {
